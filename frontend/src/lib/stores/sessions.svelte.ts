@@ -58,8 +58,10 @@ class SessionsStore {
   private loadVersion: number = 0;
   private projectsLoaded: boolean = false;
   private projectsPromise: Promise<void> | null = null;
+  private projectsVersion: number = 0;
   private agentsLoaded: boolean = false;
   private agentsPromise: Promise<void> | null = null;
+  private agentsVersion: number = 0;
 
   get activeSession(): Session | undefined {
     return this.sessions.find((s) => s.id === this.activeSessionId);
@@ -239,13 +241,18 @@ class SessionsStore {
   async loadProjects() {
     if (this.projectsLoaded) return;
     if (this.projectsPromise) return this.projectsPromise;
+    const ver = this.projectsVersion;
     this.projectsPromise = (async () => {
       try {
         const res = await api.getProjects();
-        this.projects = res.projects;
-        this.projectsLoaded = true;
+        if (ver === this.projectsVersion) {
+          this.projects = res.projects;
+          this.projectsLoaded = true;
+        }
       } finally {
-        this.projectsPromise = null;
+        if (ver === this.projectsVersion) {
+          this.projectsPromise = null;
+        }
       }
     })();
     return this.projectsPromise;
@@ -254,13 +261,18 @@ class SessionsStore {
   async loadAgents() {
     if (this.agentsLoaded) return;
     if (this.agentsPromise) return this.agentsPromise;
+    const ver = this.agentsVersion;
     this.agentsPromise = (async () => {
       try {
         const res = await api.getAgents();
-        this.agents = res.agents;
-        this.agentsLoaded = true;
+        if (ver === this.agentsVersion) {
+          this.agents = res.agents;
+          this.agentsLoaded = true;
+        }
       } finally {
-        this.agentsPromise = null;
+        if (ver === this.agentsVersion) {
+          this.agentsPromise = null;
+        }
       }
     })();
     return this.agentsPromise;
@@ -391,8 +403,10 @@ class SessionsStore {
   }
 
   invalidateFilterCaches() {
+    this.projectsVersion++;
     this.projectsLoaded = false;
     this.projectsPromise = null;
+    this.agentsVersion++;
     this.agentsLoaded = false;
     this.agentsPromise = null;
     this.loadProjects();
