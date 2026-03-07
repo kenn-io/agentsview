@@ -113,10 +113,12 @@ class StarredStore {
           this.ids = new Set(refreshed.session_ids);
         }
       } catch {
-        // Refresh failed — merge migrated IDs so they're visible.
-        const merged = new Set(this.ids);
-        for (const id of toMigrate) merged.add(id);
-        this.ids = merged;
+        // Refresh failed — don't merge toMigrate IDs because
+        // the server silently skips stale session IDs during
+        // bulk star. Merging unverified IDs would introduce
+        // phantom stars. Schedule a reconcile so the correct
+        // server state is fetched once connectivity recovers.
+        this.reconcileIfIdle();
       }
     } else {
       clearLocalStorage();

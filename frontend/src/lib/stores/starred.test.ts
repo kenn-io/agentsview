@@ -115,6 +115,39 @@ describe("StarredStore localStorage seeding", () => {
     expect(store.count).toBe(2);
   });
 
+  it("does not merge stale IDs when migration refresh fails", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(["exists", "stale"]),
+    );
+
+    // Initial listStarred returns server state (no stars yet)
+    vi.mocked(api.listStarred)
+      .mockResolvedValueOnce({ session_ids: [] });
+
+    // bulkStarSessions succeeds (server silently skips "stale")
+    vi.mocked(api.bulkStarSessions).mockResolvedValueOnce(undefined);
+
+    // Post-migration refresh fails
+    vi.mocked(api.listStarred)
+      .mockRejectedValueOnce(new Error("network"))
+      // reconcileIfIdle re-fetch returns only the actually-applied ID
+      .mockResolvedValueOnce({ session_ids: ["exists"] });
+
+    const store = createStarredStore();
+    expect(store.isStarred("exists")).toBe(true);
+    expect(store.isStarred("stale")).toBe(true);
+
+    await store.load();
+
+    // "stale" must not be re-introduced as a phantom star
+    expect(store.isStarred("stale")).toBe(false);
+    // "exists" is visible after reconcileIfIdle resolves
+    await vi.waitFor(() => {
+      expect(store.isStarred("exists")).toBe(true);
+    });
+  });
+
   it("toggle unstars a localStorage-seeded session", () => {
     localStorage.setItem(
       STORAGE_KEY,
