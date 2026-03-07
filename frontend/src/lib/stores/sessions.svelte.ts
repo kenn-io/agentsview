@@ -392,7 +392,9 @@ class SessionsStore {
 
   invalidateFilterCaches() {
     this.projectsLoaded = false;
+    this.projectsPromise = null;
     this.agentsLoaded = false;
+    this.agentsPromise = null;
     this.loadProjects();
     this.loadAgents();
   }
