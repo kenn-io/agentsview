@@ -43,6 +43,7 @@
       await api.permanentDeleteSession(id);
       trashedSessions = trashedSessions.filter((s) => s.id !== id);
       sessions.clearRecentlyDeleted(id);
+      sessions.invalidateFilterCaches();
     } catch {
       // silently fail
     }
@@ -54,6 +55,7 @@
       await api.emptyTrash();
       trashedSessions = [];
       sessions.clearRecentlyDeleted();
+      sessions.invalidateFilterCaches();
     } catch {
       // Silently ignore — button resets to allow retry.
     } finally {
@@ -88,7 +90,7 @@
   </div>
 
   <p class="trash-desc">
-    Deleted sessions are kept for 30 days. You can restore them or permanently delete them.
+    Deleted sessions are kept until you permanently delete them or empty the trash.
   </p>
 
   {#if loading}

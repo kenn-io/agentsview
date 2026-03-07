@@ -380,12 +380,21 @@ class SessionsStore {
       );
     }, 10_000);
     this.recentlyDeleted = [...this.recentlyDeleted, { id, timer }];
+    this.invalidateFilterCaches();
   }
 
   async restoreSession(id: string) {
     await api.restoreSession(id);
     this.clearRecentlyDeleted(id);
+    this.invalidateFilterCaches();
     await this.load();
+  }
+
+  invalidateFilterCaches() {
+    this.projectsLoaded = false;
+    this.agentsLoaded = false;
+    this.loadProjects();
+    this.loadAgents();
   }
 
   /** Remove one or all entries from the undo toast list. */

@@ -3665,45 +3665,80 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 	}
 }
 
-func TestCopySessionMetadataPreservesNewerValues(t *testing.T) {
+func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 
-	// Source DB: session with old display_name and deleted_at.
+	// Source DB: session with display_name and deleted_at set.
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB, err := Open(srcPath)
 	requireNoError(t, err, "Open src")
 	insertSession(t, srcDB, "s1", "proj")
-	oldName := "old-name"
-	requireNoError(t, srcDB.RenameSession("s1", &oldName), "Rename src")
+	name := "my-name"
+	requireNoError(t, srcDB.RenameSession("s1", &name), "Rename src")
 	requireNoError(t, srcDB.SoftDeleteSession("s1"), "SoftDelete src")
 	srcDB.Close()
 
-	// Destination DB: same session but with newer display_name
-	// already set (simulates a user rename during resync).
+	// Destination DB: same session, freshly synced (NULL metadata).
 	dstPath := filepath.Join(dir, "dst.db")
 	dstDB, err := Open(dstPath)
 	requireNoError(t, err, "Open dst")
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "proj")
-	newerName := "newer-name"
-	requireNoError(t, dstDB.RenameSession("s1", &newerName), "Rename dst")
 
-	// Copy metadata — should NOT overwrite the newer display_name.
 	requireNoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
 
-	// display_name should be the newer value, not the old one.
 	sf, err := dstDB.GetSessionFull(ctx, "s1")
 	requireNoError(t, err, "GetSessionFull")
 	if sf == nil {
 		t.Fatal("session should exist")
 	}
-	if sf.DisplayName == nil || *sf.DisplayName != newerName {
-		t.Errorf("display_name = %v, want %q (newer value preserved)", sf.DisplayName, newerName)
+	if sf.DisplayName == nil || *sf.DisplayName != name {
+		t.Errorf("display_name = %v, want %q", sf.DisplayName, name)
 	}
-	// deleted_at should be filled from old_db since dst had NULL.
 	if sf.DeletedAt == nil {
-		t.Error("deleted_at should be set from old_db (was NULL in dst)")
+		t.Error("deleted_at should be set from source")
+	}
+}
+
+func TestCopySessionMetadataPreservesClears(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	// Source DB: session was renamed and trashed, then user
+	// cleared the name and restored (both columns now NULL).
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB, err := Open(srcPath)
+	requireNoError(t, err, "Open src")
+	insertSession(t, srcDB, "s1", "proj")
+	srcDB.Close()
+	// Session has NULL display_name and NULL deleted_at.
+
+	// Destination DB: freshly synced — also NULL.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB, err := Open(dstPath)
+	requireNoError(t, err, "Open dst")
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "proj")
+
+	requireNoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
+
+	sf, err := dstDB.GetSessionFull(ctx, "s1")
+	requireNoError(t, err, "GetSessionFull")
+	if sf == nil {
+		t.Fatal("session should exist")
+	}
+	if sf.DisplayName != nil {
+		t.Errorf(
+			"display_name = %v, want nil (clear preserved)",
+			sf.DisplayName,
+		)
+	}
+	if sf.DeletedAt != nil {
+		t.Errorf(
+			"deleted_at = %v, want nil (restore preserved)",
+			sf.DeletedAt,
+		)
 	}
 }
 
