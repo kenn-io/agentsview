@@ -18,6 +18,8 @@ class StarredStore {
   private queues: Map<string, Promise<void>> = new Map();
   private retryCount = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconcileRetries = 0;
 
   async load() {
     if (this.loaded) return;
@@ -116,9 +118,10 @@ class StarredStore {
         // Refresh failed — don't merge toMigrate IDs because
         // the server silently skips stale session IDs during
         // bulk star. Merging unverified IDs would introduce
-        // phantom stars. Schedule a reconcile so the correct
-        // server state is fetched once connectivity recovers.
-        this.reconcileIfIdle();
+        // phantom stars. Schedule retried reconciliation so
+        // the correct server state is fetched once connectivity
+        // recovers.
+        this.scheduleReconcile();
       }
     } else {
       clearLocalStorage();
@@ -192,6 +195,35 @@ class StarredStore {
     }).catch(() => {
       // Server unavailable; keep optimistic state.
     });
+  }
+
+  /**
+   * Retried reconciliation for post-migration refresh failures.
+   * Unlike reconcileIfIdle (single fire-and-forget), this retries
+   * with backoff so migrated IDs eventually appear even if the
+   * server is still temporarily unavailable.
+   */
+  private scheduleReconcile() {
+    if (this.reconcileTimer !== null) return;
+    if (this.reconcileRetries >= 3) return;
+    const delay = 2000 * 2 ** this.reconcileRetries;
+    this.reconcileRetries++;
+    this.reconcileTimer = setTimeout(() => {
+      this.reconcileTimer = null;
+      const mutVer = this.mutationVersion;
+      const rid = ++this.refreshId;
+      api.listStarred().then((res) => {
+        if (
+          this.mutationVersion === mutVer &&
+          this.refreshId === rid
+        ) {
+          this.ids = new Set(res.session_ids);
+        }
+        this.reconcileRetries = 0;
+      }).catch(() => {
+        this.scheduleReconcile();
+      });
+    }, delay);
   }
 
   get count(): number {

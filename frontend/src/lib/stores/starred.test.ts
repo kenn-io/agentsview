@@ -115,39 +115,6 @@ describe("StarredStore localStorage seeding", () => {
     expect(store.count).toBe(2);
   });
 
-  it("does not merge stale IDs when migration refresh fails", async () => {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(["exists", "stale"]),
-    );
-
-    // Initial listStarred returns server state (no stars yet)
-    vi.mocked(api.listStarred)
-      .mockResolvedValueOnce({ session_ids: [] });
-
-    // bulkStarSessions succeeds (server silently skips "stale")
-    vi.mocked(api.bulkStarSessions).mockResolvedValueOnce(undefined);
-
-    // Post-migration refresh fails
-    vi.mocked(api.listStarred)
-      .mockRejectedValueOnce(new Error("network"))
-      // reconcileIfIdle re-fetch returns only the actually-applied ID
-      .mockResolvedValueOnce({ session_ids: ["exists"] });
-
-    const store = createStarredStore();
-    expect(store.isStarred("exists")).toBe(true);
-    expect(store.isStarred("stale")).toBe(true);
-
-    await store.load();
-
-    // "stale" must not be re-introduced as a phantom star
-    expect(store.isStarred("stale")).toBe(false);
-    // "exists" is visible after reconcileIfIdle resolves
-    await vi.waitFor(() => {
-      expect(store.isStarred("exists")).toBe(true);
-    });
-  });
-
   it("toggle unstars a localStorage-seeded session", () => {
     localStorage.setItem(
       STORAGE_KEY,
@@ -158,6 +125,77 @@ describe("StarredStore localStorage seeding", () => {
 
     store.toggle("legacy-1");
     expect(store.isStarred("legacy-1")).toBe(false);
+  });
+});
+
+describe("StarredStore migration reconcile", () => {
+  beforeEach(() => {
+    localStorage.removeItem(STORAGE_KEY);
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.removeItem(STORAGE_KEY);
+  });
+
+  it("does not merge stale IDs when migration refresh fails", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(["exists", "stale"]),
+    );
+
+    vi.mocked(api.listStarred)
+      // Initial load
+      .mockResolvedValueOnce({ session_ids: [] })
+      // Post-migration refresh fails
+      .mockRejectedValueOnce(new Error("network"))
+      // Retried reconcile succeeds with only the applied ID
+      .mockResolvedValueOnce({ session_ids: ["exists"] });
+    vi.mocked(api.bulkStarSessions).mockResolvedValueOnce(undefined);
+
+    const store = createStarredStore();
+    await store.load();
+
+    // "stale" must not be re-introduced as a phantom star
+    expect(store.isStarred("stale")).toBe(false);
+
+    // Reconcile retry at 2s recovers the migrated ID
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(store.isStarred("exists")).toBe(true);
+    expect(store.isStarred("stale")).toBe(false);
+  });
+
+  it("recovers migrated IDs after multiple reconcile failures", async () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(["migrated"]),
+    );
+
+    vi.mocked(api.listStarred)
+      // Initial load
+      .mockResolvedValueOnce({ session_ids: [] })
+      // Post-migration refresh fails
+      .mockRejectedValueOnce(new Error("network"))
+      // Reconcile retry 1 fails (2s)
+      .mockRejectedValueOnce(new Error("network"))
+      // Reconcile retry 2 succeeds (4s)
+      .mockResolvedValueOnce({ session_ids: ["migrated"] });
+    vi.mocked(api.bulkStarSessions).mockResolvedValueOnce(undefined);
+
+    const store = createStarredStore();
+    await store.load();
+
+    expect(store.isStarred("migrated")).toBe(false);
+
+    // First reconcile retry at 2s — still fails
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(store.isStarred("migrated")).toBe(false);
+
+    // Second reconcile retry at 4s — recovers
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(store.isStarred("migrated")).toBe(true);
   });
 });
 
