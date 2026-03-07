@@ -52,6 +52,9 @@ class SessionsStore {
   loading: boolean = $state(false);
   filters: Filters = $state(defaultFilters());
 
+  /** Set before router.navigate() to survive initFromParams() reset. */
+  pendingNavTarget: string | null = null;
+
   private loadVersion: number = 0;
   private projectsLoaded: boolean = false;
   private projectsPromise: Promise<void> | null = null;
@@ -135,7 +138,12 @@ class SessionsStore {
         ? minUserMsgs
         : 0,
     };
-    this.activeSessionId = null;
+    if (this.pendingNavTarget) {
+      this.activeSessionId = this.pendingNavTarget;
+      this.pendingNavTarget = null;
+    } else {
+      this.activeSessionId = null;
+    }
     this.resetPagination();
   }
 
@@ -349,6 +357,59 @@ class SessionsStore {
     this.activeSessionId = null;
     this.resetPagination();
     this.load();
+  }
+
+  /** Recently deleted session IDs for undo toast. */
+  recentlyDeleted: { id: string; timer: ReturnType<typeof setTimeout> }[] =
+    $state([]);
+
+  async deleteSession(id: string) {
+    await api.deleteSession(id);
+    const before = this.sessions.length;
+    this.sessions = this.sessions.filter((s) => s.id !== id);
+    const removed = before - this.sessions.length;
+    if (removed > 0) {
+      this.total = Math.max(0, this.total - removed);
+    }
+    if (this.activeSessionId === id) {
+      this.activeSessionId = null;
+    }
+    const timer = setTimeout(() => {
+      this.recentlyDeleted = this.recentlyDeleted.filter(
+        (d) => d.id !== id,
+      );
+    }, 10_000);
+    this.recentlyDeleted = [...this.recentlyDeleted, { id, timer }];
+  }
+
+  async restoreSession(id: string) {
+    await api.restoreSession(id);
+    this.clearRecentlyDeleted(id);
+    await this.load();
+  }
+
+  /** Remove one or all entries from the undo toast list. */
+  clearRecentlyDeleted(id?: string) {
+    if (id) {
+      this.recentlyDeleted = this.recentlyDeleted.filter((d) => {
+        if (d.id === id) {
+          clearTimeout(d.timer);
+          return false;
+        }
+        return true;
+      });
+    } else {
+      for (const d of this.recentlyDeleted) clearTimeout(d.timer);
+      this.recentlyDeleted = [];
+    }
+  }
+
+  async renameSession(id: string, displayName: string | null) {
+    const updated = await api.renameSession(id, displayName);
+    const idx = this.sessions.findIndex((s) => s.id === id);
+    if (idx !== -1) {
+      this.sessions[idx] = { ...this.sessions[idx]!, ...updated };
+    }
   }
 }
 

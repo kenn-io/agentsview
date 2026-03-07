@@ -45,7 +45,7 @@ func (db *DB) Search(
 		f.Limit = DefaultSearchLimit
 	}
 
-	whereClauses := []string{"messages_fts MATCH ?"}
+	whereClauses := []string{"messages_fts MATCH ?", "s.deleted_at IS NULL"}
 	args := []any{f.Query}
 
 	if f.Project != "" {

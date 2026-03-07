@@ -15,9 +15,10 @@ type Stats struct {
 }
 
 // rootSessionFilter is the WHERE clause shared by session list
-// and stats to exclude sub-agent, fork, and empty sessions.
+// and stats to exclude sub-agent, fork, and trashed sessions.
 const rootSessionFilter = `message_count > 0
-	AND relationship_type NOT IN ('subagent', 'fork')`
+	AND relationship_type NOT IN ('subagent', 'fork')
+	AND deleted_at IS NULL`
 
 // FileBackedSessionCount returns the number of root sessions
 // synced from files (excludes OpenCode, which is DB-backed).

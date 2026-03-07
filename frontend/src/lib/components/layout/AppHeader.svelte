@@ -109,6 +109,18 @@
 
     <button
       class="nav-btn"
+      class:active={router.route === "pinned"}
+      onclick={() => router.navigate("pinned")}
+      title="Pinned Messages"
+    >
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M4.146.146A.5.5 0 014.5 0h7a.5.5 0 01.5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 01-.5.5H8.5v5.5a.5.5 0 01-1 0V10H3.5a.5.5 0 01-.5-.5c0-.973.64-1.725 1.17-2.189A6 6 0 015 6.708V2.277a3 3 0 01-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 01.146-.354z"/>
+      </svg>
+      Pinned
+    </button>
+
+    <button
+      class="nav-btn"
       class:active={router.route === "insights"}
       onclick={() => router.navigate("insights")}
       title="Insights"
@@ -118,6 +130,19 @@
         <path d="M3 5.5a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9a.5.5 0 01-.5-.5zM3 8a.5.5 0 01.5-.5h9a.5.5 0 010 1h-9A.5.5 0 013 8zm0 2.5a.5.5 0 01.5-.5h6a.5.5 0 010 1h-6a.5.5 0 01-.5-.5z"/>
       </svg>
       Insights
+    </button>
+
+    <button
+      class="nav-btn"
+      class:active={router.route === "trash"}
+      onclick={() => router.navigate("trash")}
+      title="Trash"
+    >
+      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
+        <path fill-rule="evenodd" d="M14.5 3a1 1 0 01-1 1H13v9a2 2 0 01-2 2H5a2 2 0 01-2-2V4h-.5a1 1 0 01-1-1V2a1 1 0 011-1H5.5l1-1h3l1 1h2.5a1 1 0 011 1v1zM4.118 4L4 4.059V13a1 1 0 001 1h6a1 1 0 001-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+      </svg>
+      Trash
     </button>
   </div>
 

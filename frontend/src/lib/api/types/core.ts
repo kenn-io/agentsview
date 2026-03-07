@@ -12,12 +12,14 @@ export interface Session {
   machine: string;
   agent: string;
   first_message: string | null;
+  display_name?: string | null;
   started_at: string | null;
   ended_at: string | null;
   message_count: number;
   user_message_count: number;
   parent_session_id?: string;
   relationship_type?: string;
+  deleted_at?: string | null;
   file_path?: string;
   file_size?: number;
   file_mtime?: number;
@@ -122,4 +124,29 @@ export interface AgentInfo {
 
 export interface AgentsResponse {
   agents: AgentInfo[];
+}
+
+/** Matches Go PinnedMessage struct in internal/db/pins.go */
+export interface PinnedMessage {
+  id: number;
+  session_id: string;
+  message_id: number;
+  ordinal: number;
+  note?: string;
+  content?: string | null;
+  role?: string | null;
+  created_at: string;
+  // Session metadata — populated for the "all pins" query.
+  session_project?: string | null;
+  session_agent?: string | null;
+  session_display_name?: string | null;
+  session_first_message?: string | null;
+}
+
+export interface PinsResponse {
+  pins: PinnedMessage[];
+}
+
+export interface TrashResponse {
+  sessions: Session[];
 }

@@ -12,12 +12,15 @@
   import ResyncModal from "./lib/components/modals/ResyncModal.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
+  import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
+  import TrashPage from "./lib/components/trash/TrashPage.svelte";
   import { sessions } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
   import { ui } from "./lib/stores/ui.svelte.js";
   import { router } from "./lib/stores/router.svelte.js";
   import { starred } from "./lib/stores/starred.svelte.js";
+  import { pins } from "./lib/stores/pins.svelte.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import type { DisplayItem } from "./lib/utils/display-items.js";
   import {
@@ -55,9 +58,11 @@
       if (id) {
         messages.loadSession(id);
         sync.watchSession(id, () => messages.reload());
+        pins.loadForSession(id);
       } else {
         messages.clear();
         sync.unwatchSession();
+        pins.clearSession();
       }
     });
   });
@@ -174,7 +179,17 @@
 <AppHeader />
 
 {#if router.route === "insights"}
-  <InsightsPage />
+  <div class="page-scroll">
+    <InsightsPage />
+  </div>
+{:else if router.route === "pinned"}
+  <div class="page-scroll">
+    <PinnedPage />
+  </div>
+{:else if router.route === "trash"}
+  <div class="page-scroll">
+    <TrashPage />
+  </div>
 {:else}
   <ThreeColumnLayout>
     {#snippet sidebar()}
@@ -213,3 +228,81 @@
 {#if ui.activeModal === "resync"}
   <ResyncModal />
 {/if}
+
+{#if sessions.recentlyDeleted.length > 0}
+  <div class="undo-toast">
+    <span>Session deleted</span>
+    <button
+      class="undo-btn"
+      onclick={async (e) => {
+        const btn = e.currentTarget;
+        if (btn.disabled) return;
+        const last = sessions.recentlyDeleted[sessions.recentlyDeleted.length - 1];
+        if (!last) return;
+        btn.disabled = true;
+        try {
+          await sessions.restoreSession(last.id);
+        } catch {
+          // restore failed — toast will remain
+        } finally {
+          btn.disabled = false;
+        }
+      }}
+    >
+      Undo
+    </button>
+  </div>
+{/if}
+
+<style>
+  .page-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .undo-toast {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    padding: 10px 18px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+    z-index: 10000;
+    font-size: 13px;
+    color: var(--text-primary);
+    animation: slide-up 0.2s ease-out;
+  }
+
+  @keyframes slide-up {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+
+  .undo-btn {
+    background: none;
+    border: none;
+    color: var(--accent-blue);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .undo-btn:hover {
+    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  }
+</style>

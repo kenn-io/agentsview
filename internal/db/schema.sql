@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     machine     TEXT NOT NULL DEFAULT 'local',
     agent       TEXT NOT NULL DEFAULT 'claude',
     first_message TEXT,
+    display_name TEXT,
     started_at  TEXT,
     ended_at    TEXT,
     message_count INTEGER NOT NULL DEFAULT 0,
@@ -15,6 +16,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_hash   TEXT,
     parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',
+    deleted_at  TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
@@ -134,12 +136,34 @@ CREATE INDEX IF NOT EXISTS idx_insights_lookup
 CREATE INDEX IF NOT EXISTS idx_insights_created
     ON insights(created_at DESC);
 
+-- Pinned messages table
+CREATE TABLE IF NOT EXISTS pinned_messages (
+    id          INTEGER PRIMARY KEY,
+    session_id  TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    ordinal     INTEGER NOT NULL,
+    note        TEXT,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(session_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pinned_session
+    ON pinned_messages(session_id);
+CREATE INDEX IF NOT EXISTS idx_pinned_created
+    ON pinned_messages(created_at DESC);
+
 -- Starred sessions: persists user star/unstar decisions
 CREATE TABLE IF NOT EXISTS starred_sessions (
     session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Excluded sessions: tracks session IDs that were permanently
+-- deleted by the user so the sync engine does not re-import them.
+CREATE TABLE IF NOT EXISTS excluded_sessions (
+    id         TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
 -- Skipped files cache: persists skip decisions for files that
 -- produced no session (non-interactive, parse errors) so they
 -- survive process restarts without re-parsing.

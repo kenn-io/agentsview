@@ -96,6 +96,7 @@ func (f AnalyticsFilter) buildWhere(
 	preds := []string{
 		"message_count > 0",
 		"relationship_type NOT IN ('subagent', 'fork')",
+		"deleted_at IS NULL",
 	}
 	var args []any
 

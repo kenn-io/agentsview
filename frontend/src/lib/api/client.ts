@@ -30,6 +30,8 @@ import type {
   Insight,
   InsightsResponse,
   GenerateInsightRequest,
+  PinsResponse,
+  TrashResponse,
 } from "./types.js";
 
 const BASE = "/api/v1";
@@ -599,4 +601,98 @@ function processInsightFrame(
     throw new Error(parsed.message);
   }
   return undefined;
+}
+
+/* Session Management */
+
+export function renameSession(
+  id: string,
+  displayName: string | null,
+): Promise<Session> {
+  return fetchJSON(`/sessions/${id}/rename`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
+export async function deleteSession(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+  }
+}
+
+export async function restoreSession(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${id}/restore`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+  }
+}
+
+export async function permanentDeleteSession(
+  id: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/sessions/${id}/permanent`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+  }
+}
+
+export function listTrash(): Promise<TrashResponse> {
+  return fetchJSON("/trash");
+}
+
+export async function emptyTrash(): Promise<{ deleted: number }> {
+  return fetchJSON("/trash", { method: "DELETE" });
+}
+
+/* Pins */
+
+export function listPins(): Promise<PinsResponse> {
+  return fetchJSON("/pins");
+}
+
+export function listSessionPins(
+  sessionId: string,
+): Promise<PinsResponse> {
+  return fetchJSON(`/sessions/${sessionId}/pins`);
+}
+
+export function pinMessage(
+  sessionId: string,
+  messageId: number,
+  note?: string,
+): Promise<{ id: number }> {
+  return fetchJSON(
+    `/sessions/${sessionId}/messages/${messageId}/pin`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note: note ?? null }),
+    },
+  );
+}
+
+export async function unpinMessage(
+  sessionId: string,
+  messageId: number,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/sessions/${sessionId}/messages/${messageId}/pin`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.text();
+    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+  }
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -132,6 +133,9 @@ func (s *Server) saveSessionToDB(
 	}
 
 	if err := s.db.UpsertSession(dbSess); err != nil {
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return nil // silently skip excluded sessions
+		}
 		return fmt.Errorf("storing session: %w", err)
 	}
 

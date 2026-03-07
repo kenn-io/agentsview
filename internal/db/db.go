@@ -134,6 +134,11 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 
+	if err := d.migrateColumns(); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrating columns: %w", err)
+	}
+
 	if dataStale && !schemaStale {
 		d.dataStale = true
 		log.Printf(
@@ -244,6 +249,58 @@ func needsDataResync(conn *sql.DB) (bool, error) {
 		)
 	}
 	return version < dataVersion, nil
+}
+
+// migrateColumns adds columns introduced by this branch to
+// databases created by older releases. Each migration is
+// idempotent — it only runs when the column is missing.
+func (db *DB) migrateColumns() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	w := db.getWriter()
+
+	migrations := []struct {
+		table  string
+		column string
+		ddl    string
+	}{
+		{
+			"sessions", "display_name",
+			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
+		},
+		{
+			"sessions", "deleted_at",
+			"ALTER TABLE sessions ADD COLUMN deleted_at TEXT",
+		},
+	}
+
+	for _, m := range migrations {
+		var count int
+		err := w.QueryRow(fmt.Sprintf(
+			"SELECT count(*) FROM pragma_table_info('%s')"+
+				" WHERE name = '%s'",
+			m.table, m.column,
+		)).Scan(&count)
+		if err != nil {
+			return fmt.Errorf(
+				"probing %s.%s: %w",
+				m.table, m.column, err,
+			)
+		}
+		if count == 0 {
+			if _, err := w.Exec(m.ddl); err != nil {
+				return fmt.Errorf(
+					"adding %s.%s: %w",
+					m.table, m.column, err,
+				)
+			}
+			log.Printf(
+				"migration: added column %s.%s",
+				m.table, m.column,
+			)
+		}
+	}
+	return nil
 }
 
 // NeedsResync reports whether the database was opened with a

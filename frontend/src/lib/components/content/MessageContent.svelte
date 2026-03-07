@@ -10,6 +10,7 @@
   import ToolBlock from "./ToolBlock.svelte";
   import CodeBlock from "./CodeBlock.svelte";
   import { ui } from "../../stores/ui.svelte.js";
+  import { pins } from "../../stores/pins.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
 
   interface Props {
@@ -42,7 +43,11 @@
     isUser ? "var(--user-bg)" : "var(--assistant-bg)",
   );
 
+  let pinned = $derived(pins.isPinned(message.id));
+  let pinFeedback = $state("");
+
   let copyTimer: ReturnType<typeof setTimeout>;
+  let pinTimer: ReturnType<typeof setTimeout>;
 
   async function handleCopy() {
     const ok = await copyToClipboard(message.content);
@@ -50,6 +55,22 @@
       clearTimeout(copyTimer);
       copied = true;
       copyTimer = setTimeout(() => { copied = false; }, 1500);
+    }
+  }
+
+  async function handleTogglePin() {
+    const wasPinned = pinned;
+    try {
+      await pins.togglePin(
+        message.session_id,
+        message.id,
+        message.ordinal,
+      );
+      clearTimeout(pinTimer);
+      pinFeedback = wasPinned ? "Unpinned" : "Pinned";
+      pinTimer = setTimeout(() => { pinFeedback = ""; }, 1500);
+    } catch {
+      // silently fail
     }
   }
 </script>
@@ -93,6 +114,20 @@
         </svg>
       {/if}
     </button>
+    <button
+      type="button"
+      class="pin-btn"
+      class:pinned
+      title={pinned ? "Unpin message" : "Pin message"}
+      onclick={handleTogglePin}
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M4.146.146A.5.5 0 014.5 0h7a.5.5 0 01.5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 01-.5.5H8.5v5.5a.5.5 0 01-1 0V10H3.5a.5.5 0 01-.5-.5c0-.973.64-1.725 1.17-2.189A6 6 0 015 6.708V2.277a3 3 0 01-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 01.146-.354z"/>
+      </svg>
+    </button>
+    {#if pinFeedback}
+      <span class="pin-feedback">{pinFeedback}</span>
+    {/if}
   </div>
 
   <div class="message-body">
@@ -198,6 +233,60 @@
 
   .copy-btn:active {
     transform: scale(0.92);
+  }
+
+  .pin-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: none;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .message:hover .pin-btn,
+  .pin-btn:focus-visible,
+  .pin-btn.pinned {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    .pin-btn {
+      opacity: 1;
+    }
+  }
+
+  .pin-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+  }
+
+  .pin-btn.pinned {
+    color: var(--accent-blue);
+  }
+
+  .pin-btn:active {
+    transform: scale(0.92);
+  }
+
+  .pin-feedback {
+    font-size: 11px;
+    color: var(--text-muted);
+    animation: fade-in-out 1.5s ease-in-out;
+  }
+
+  @keyframes fade-in-out {
+    0% { opacity: 0; }
+    15% { opacity: 1; }
+    75% { opacity: 1; }
+    100% { opacity: 0; }
   }
 
   .text-content {

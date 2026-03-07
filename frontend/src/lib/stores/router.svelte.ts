@@ -1,8 +1,10 @@
-type Route = "sessions" | "insights";
+type Route = "sessions" | "insights" | "pinned" | "trash";
 
 const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
   "sessions",
   "insights",
+  "pinned",
+  "trash",
 ]);
 
 const DEFAULT_ROUTE: Route = "sessions";
@@ -39,6 +41,7 @@ export class RouterStore {
   route: Route = $state("sessions");
   params: Record<string, string> = $state({});
   #onHashChange: () => void;
+  #lastHash: string = "";
 
   constructor() {
     const initial = parseHash();
@@ -46,6 +49,12 @@ export class RouterStore {
     this.params = initial.params;
 
     this.#onHashChange = () => {
+      const currentHash = window.location.hash;
+      if (currentHash === this.#lastHash) {
+        this.#lastHash = "";
+        return;
+      }
+      this.#lastHash = "";
       const parsed = parseHash();
       this.route = parsed.route;
       this.params = parsed.params;
@@ -63,6 +72,10 @@ export class RouterStore {
   navigate(route: Route, params: Record<string, string> = {}) {
     const qs = new URLSearchParams(params).toString();
     const hash = qs ? `#/${route}?${qs}` : `#/${route}`;
+    if (hash === window.location.hash) return;
+    this.route = route;
+    this.params = params;
+    this.#lastHash = hash;
     window.location.hash = hash;
   }
 }

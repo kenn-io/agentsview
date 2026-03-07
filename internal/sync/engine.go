@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -560,6 +561,14 @@ func (e *Engine) ResyncAll(
 		return stats
 	}
 
+	// 2b. Copy excluded session IDs from the old DB so that
+	// UpsertSession skips permanently deleted sessions during
+	// the sync. This must happen before syncAllLocked.
+	if err := newDB.CopyExcludedSessionsFrom(origPath); err != nil {
+		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
+		// Non-fatal: worst case, deleted sessions reappear.
+	}
+
 	// 3. Point engine at newDB and sync into it.
 	e.db = newDB
 	stats := e.syncAllLocked(onProgress)
@@ -623,8 +632,19 @@ func (e *Engine) ResyncAll(
 		return stats
 	}
 
-	// origDB connections are now closed; copy insights into
-	// newDB (still open) from the quiesced old DB file.
+	// Re-copy excluded session IDs now that origDB is quiesced.
+	// This catches any permanent deletes that occurred during
+	// the sync window (between the pre-sync copy and now).
+	// Also purge any sessions that were synced into newDB
+	// before the exclusion was recorded.
+	if err := newDB.CopyExcludedSessionsFrom(origPath); err != nil {
+		log.Printf("resync: post-sync copy excluded sessions: %v", err)
+	}
+	if err := newDB.PurgeExcludedSessions(); err != nil {
+		log.Printf("resync: purge excluded sessions: %v", err)
+	}
+
+	// Copy insights into newDB from the quiesced old DB file.
 	tInsights := time.Now()
 	if err := newDB.CopyInsightsFrom(origPath); err != nil {
 		log.Printf("resync: copy insights: %v", err)
@@ -672,6 +692,14 @@ func (e *Engine) ResyncAll(
 		return stats
 	}
 	stats.OrphanedCopied = orphaned
+
+	// Merge user-managed data (display_name, deleted_at,
+	// starred_sessions, pinned_messages) from the old DB
+	// so renames, soft-deletes, stars, and pins survive.
+	if err := newDB.CopySessionMetadataFrom(origPath); err != nil {
+		log.Printf("resync: copy session metadata: %v", err)
+		// Non-fatal: worst case, renames/soft-deletes are lost.
+	}
 
 	// 5. Close newDB and swap files, then reopen origDB.
 	newDB.Close()
@@ -1450,6 +1478,14 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		s.MessageCount, s.UserMessageCount =
 			postFilterCounts(msgs)
 		if err := e.db.UpsertSession(s); err != nil {
+			if errors.Is(err, db.ErrSessionExcluded) {
+				// Cache as skipped so excluded files are not
+				// re-parsed on subsequent syncs.
+				if pw.sess.File.Path != "" {
+					e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
+				}
+				continue
+			}
 			log.Printf("upsert session %s: %v", s.ID, err)
 			continue
 		}
@@ -1510,7 +1546,13 @@ func (e *Engine) writeSessionFull(pw pendingWrite) {
 	s.MessageCount, s.UserMessageCount =
 		postFilterCounts(msgs)
 	if err := e.db.UpsertSession(s); err != nil {
-		log.Printf("upsert session %s: %v", s.ID, err)
+		if errors.Is(err, db.ErrSessionExcluded) {
+			if pw.sess.File.Path != "" {
+				e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
+			}
+		} else {
+			log.Printf("upsert session %s: %v", s.ID, err)
+		}
 		return
 	}
 	if err := e.db.ReplaceSessionMessages(
