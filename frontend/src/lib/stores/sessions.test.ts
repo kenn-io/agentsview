@@ -711,23 +711,28 @@ describe("SessionsStore", () => {
     });
 
     it("discards stale agents response after invalidation", async () => {
-      let resolveStale!: (v: { agents: string[] }) => void;
-      const stalePromise = new Promise<{ agents: string[] }>(
+      type AgentsRes = { agents: { name: string; session_count: number }[] };
+      let resolveStale!: (v: AgentsRes) => void;
+      const stalePromise = new Promise<AgentsRes>(
         (r) => { resolveStale = r; },
       );
       vi.mocked(api.getAgents)
         .mockReturnValueOnce(stalePromise)
-        .mockResolvedValueOnce({ agents: ["fresh-agent"] });
+        .mockResolvedValueOnce({
+          agents: [{ name: "fresh-agent", session_count: 3 }],
+        });
 
       sessions.loadAgents();
       sessions.invalidateFilterCaches();
 
-      resolveStale({ agents: ["stale-agent"] });
+      resolveStale({
+        agents: [{ name: "stale-agent", session_count: 1 }],
+      });
       await vi.waitFor(() => {
         expect(sessions.agents).toHaveLength(1);
       });
 
-      expect(sessions.agents[0]).toBe("fresh-agent");
+      expect(sessions.agents[0]!.name).toBe("fresh-agent");
     });
   });
 });
