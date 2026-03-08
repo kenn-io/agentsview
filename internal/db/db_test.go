@@ -1703,6 +1703,24 @@ func TestDeleteSessionNonExistentNoGhostExclusion(t *testing.T) {
 	}
 }
 
+func TestDeleteSessionsMixedBatchNoGhostExclusion(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "real", "p")
+
+	deleted, err := d.DeleteSessions([]string{"real", "bogus"})
+	requireNoError(t, err, "DeleteSessions mixed")
+	if deleted != 1 {
+		t.Errorf("deleted = %d, want 1", deleted)
+	}
+	if !d.IsSessionExcluded("real") {
+		t.Error("real should be excluded after bulk delete")
+	}
+	if d.IsSessionExcluded("bogus") {
+		t.Error("bogus should not be excluded (never existed)")
+	}
+}
+
 func TestSessionFileInfo(t *testing.T) {
 	d := testDB(t)
 

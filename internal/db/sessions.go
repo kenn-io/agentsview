@@ -925,6 +925,15 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 		}
 		placeholders := strings.Repeat(",?", len(batch))[1:]
 
+		// Exclude only IDs that exist before we delete them.
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO excluded_sessions (id) "+
+				"SELECT id FROM sessions WHERE id IN ("+placeholders+")",
+			args...,
+		); err != nil {
+			return 0, fmt.Errorf("excluding batch: %w", err)
+		}
+
 		res, err := tx.Exec(
 			"DELETE FROM sessions WHERE id IN ("+placeholders+")",
 			args...,
@@ -934,16 +943,6 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 		}
 		n, _ := res.RowsAffected()
 		total += int(n)
-
-		// Record exclusions so sync doesn't re-import.
-		for _, id := range batch {
-			if _, err := tx.Exec(
-				"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)",
-				id,
-			); err != nil {
-				return 0, fmt.Errorf("excluding session %s: %w", id, err)
-			}
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
