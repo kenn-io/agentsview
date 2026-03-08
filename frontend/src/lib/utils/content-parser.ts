@@ -40,7 +40,21 @@ const TOOL_ALIASES: Record<string, string> = {
   write_stdin: "Bash",
   shell: "Bash",
   apply_patch: "Edit",
+  // Pi tool names
+  str_replace: "Edit",
+  run_command: "Bash",
+  create_file: "Write",
+  read_file: "Read",
+  // Lowercase pi/OpenCode bare tool names
+  bash: "Bash",
+  read: "Read",
+  write: "Write",
+  edit: "Edit",
+  grep: "Grep",
+  glob: "Glob",
+  find: "Read",
 };
+
 
 const TOOL_RE = new RegExp(
   `\\[(${TOOL_NAMES})([^\\]]*)\\]([\\s\\S]*?)(?=\\n\\[|\\n\\n|$)`,
@@ -381,6 +395,48 @@ export function enrichSegments(
       result.push(enriched);
     } else {
       result.push(seg);
+    }
+  }
+
+  // Append any remaining tool calls that weren't paired with text-based
+  // tool segments. This covers both structured-only agents (pi/omp) where
+  // no text markers exist, and mixed/edge cases where there are more
+  // tool calls than text-based segments (e.g. false-positive text matches).
+  if (tcIdx < toolCalls.length) {
+    while (tcIdx < toolCalls.length) {
+      const tc = toolCalls[tcIdx]!;
+      tcIdx++;
+      let content = "";
+      if (tc.category === "Bash" && tc.input_json) {
+        try {
+          const input = JSON.parse(tc.input_json);
+          const fullCmd = input.command ?? input.cmd;
+          if (fullCmd) {
+            content = `$ ${fullCmd}`;
+          }
+        } catch {
+          /* leave empty, ToolBlock will use fallbackContent */
+        }
+      } else if (tc.category === "Read" && tc.input_json) {
+        try {
+          const input = JSON.parse(tc.input_json);
+          const filePath = input.path ?? input.file_path;
+          if (filePath) {
+            content = String(filePath);
+          } else if (input.pattern) {
+            // Pi "find" tool mapped to Read — show the glob pattern
+            content = String(input.pattern);
+          }
+        } catch {
+          /* leave empty */
+        }
+      }
+      result.push({
+        type: "tool",
+        content,
+        label: TOOL_ALIASES[tc.tool_name] ?? tc.tool_name,
+        toolCall: tc,
+      });
     }
   }
 

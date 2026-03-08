@@ -161,6 +161,38 @@ describe("extractToolParamMeta", () => {
     expect(meta![0]!.value.length).toBeLessThanOrEqual(81);
     expect(meta![0]!.value).toContain("\u2026");
   });
+
+  it("extracts Read file path from pi 'path' field", () => {
+    const meta = extractToolParamMeta("Read", { path: "/src/app.ts" });
+    expect(meta).toEqual([{ label: "file", value: "/src/app.ts" }]);
+  });
+
+  it("prefers file_path over path for Read", () => {
+    const meta = extractToolParamMeta("Read", {
+      file_path: "/a.ts",
+      path: "/b.ts",
+    });
+    expect(meta![0]!.value).toBe("/a.ts");
+  });
+
+  it("extracts Edit file path from pi 'path' field", () => {
+    const meta = extractToolParamMeta("Edit", { path: "/src/app.ts" });
+    expect(meta).toEqual([{ label: "file", value: "/src/app.ts" }]);
+  });
+
+  it("extracts Edit file path from opencode 'filePath' field", () => {
+    const meta = extractToolParamMeta("Edit", {
+      filePath: "/src/app.ts",
+      oldString: "x",
+      newString: "y",
+    });
+    expect(meta).toEqual([{ label: "file", value: "/src/app.ts" }]);
+  });
+
+  it("extracts Write file path from pi 'path' field", () => {
+    const meta = extractToolParamMeta("Write", { path: "/src/new.ts" });
+    expect(meta).toEqual([{ label: "file", value: "/src/new.ts" }]);
+  });
 });
 
 describe("generateFallbackContent", () => {
@@ -181,6 +213,17 @@ describe("generateFallbackContent", () => {
     );
   });
 
+  it("shows diff for Edit tool using pi old_str/new_str field names", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "/src/app.ts",
+      old_str: "const x = 1;",
+      new_str: "const x = 2;",
+    });
+    expect(result).toBe(
+      "--- old\nconst x = 1;\n+++ new\nconst x = 2;",
+    );
+  });
+
   it("shows only new_string when old_string is empty", () => {
     const result = generateFallbackContent("Edit", {
       file_path: "/src/app.ts",
@@ -190,6 +233,161 @@ describe("generateFallbackContent", () => {
     expect(result).toBe(
       "--- old\n\n+++ new\nconst x = 1;",
     );
+  });
+
+  it("shows diff for Edit tool using opencode camelCase field names", () => {
+    const result = generateFallbackContent("Edit", {
+      filePath: "/src/styles.css",
+      oldString: ".foo { color: red; }",
+      newString: ".foo { color: blue; }",
+    });
+    expect(result).toBe(
+      "--- old\n.foo { color: red; }\n+++ new\n.foo { color: blue; }",
+    );
+  });
+
+  it("shows pi edits array with set_line", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/styles.css",
+      edits: [
+        {
+          set_line: {
+            anchor: "12:0",
+            new_text: ".foo { color: blue; }",
+          },
+        },
+      ],
+    });
+    expect(result).toBe("@ 12:0\n.foo { color: blue; }");
+  });
+
+  it("shows pi edits array with replace_lines", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/data/site.ts",
+      edits: [
+        {
+          replace_lines: {
+            start_anchor: "31:b4",
+            end_anchor: "37:f6",
+            new_text: "const updated = true;",
+          },
+        },
+      ],
+    });
+    expect(result).toBe("@ 31:b4..37:f6\nconst updated = true;");
+  });
+
+  it("shows pi edits replace_lines deletion (empty new_text)", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/data/site.ts",
+      edits: [
+        {
+          replace_lines: {
+            start_anchor: "31:b4",
+            end_anchor: "37:f6",
+            new_text: "",
+          },
+        },
+      ],
+    });
+    expect(result).toBe("@ 31:b4..37:f6\n(delete)");
+  });
+
+  it("shows pi edits array with insert_after", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/styles.css",
+      edits: [
+        {
+          insert_after: {
+            anchor: "248:18",
+            text: ".new-class { color: red; }",
+          },
+        },
+      ],
+    });
+    expect(result).toBe(
+      "insert after 248:18\n.new-class { color: red; }",
+    );
+  });
+
+  it("shows pi edits insert_after with empty text", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/styles.css",
+      edits: [
+        {
+          insert_after: {
+            anchor: "248:18",
+            text: "",
+          },
+        },
+      ],
+    });
+    expect(result).toBe("insert after 248:18\n(empty)");
+  });
+
+  it("shows pi edits set_line deletion (empty new_text)", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/pages/index.astro",
+      edits: [
+        {
+          set_line: {
+            anchor: "17:0b",
+            new_text: "",
+          },
+        },
+      ],
+    });
+    expect(result).toBe("@ 17:0b\n(delete)");
+  });
+
+  it("shows pi edits array with op/tag/content", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "content.js",
+      edits: [
+        {
+          op: "set",
+          tag: "384#BH",
+          content: ["line1", "line2"],
+        },
+      ],
+    });
+    expect(result).toBe("tag: 384#BH\nline1\nline2");
+  });
+
+  it("shows pi edits array with op/pos/lines (real Pi agent format)", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/styles.css",
+      edits: [
+        {
+          op: "replace",
+          pos: "846#VH",
+          end: "851#WT",
+          lines: [".foo {", "  color: blue;", "}"],
+        },
+      ],
+      agent__intent: "Update styles",
+    });
+    expect(result).toBe("replace @ 846#VH\n.foo {\n  color: blue;\n}");
+  });
+
+  it("shows pi edits op/pos/lines without end field", () => {
+    const result = generateFallbackContent("Edit", {
+      path: "src/app.ts",
+      edits: [
+        {
+          op: "insert",
+          pos: "10#AB",
+          lines: ["const x = 1;"],
+        },
+      ],
+    });
+    expect(result).toBe("insert @ 10#AB\nconst x = 1;");
+  });
+
+  it("returns null for Edit with no recognized diff fields", () => {
+    expect(
+      generateFallbackContent("Edit", { file_path: "/src/app.ts" }),
+    ).toBeNull();
   });
 
   it("truncates long Edit strings", () => {
@@ -278,5 +476,51 @@ describe("generateFallbackContent", () => {
     expect(
       generateFallbackContent("CustomTool", {}),
     ).toBeNull();
+  });
+});
+
+describe("generateFallbackContent - agent__intent filtering", () => {
+  it("does not include agent__intent in generic key-value output", () => {
+    const result = generateFallbackContent("CustomTool", {
+      command: "ls -la",
+      agent__intent: "Listing files in directory",
+    });
+    expect(result).not.toContain("agent__intent");
+    expect(result).toContain("command: ls -la");
+  });
+
+  it("does not include agent__intent for bash tool", () => {
+    const result = generateFallbackContent("Bash", {
+      command: "npm test",
+      agent__intent: "Running test suite",
+    });
+    // Bash has no special handler for command; falls to generic loop
+    // agent__intent must not appear; command may appear
+    expect(result).not.toContain("agent__intent");
+  });
+
+  it("does not include agent__intent for read tool (generic path)", () => {
+    const result = generateFallbackContent("Read", {
+      path: "/src/app.ts",
+      agent__intent: "Reading auth module",
+    });
+    expect(result).not.toContain("agent__intent");
+  });
+
+  it("returns null when only agent__intent is present", () => {
+    const result = generateFallbackContent("CustomTool", {
+      agent__intent: "Doing something",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("shows other params when agent__intent is mixed in", () => {
+    const result = generateFallbackContent("CustomTool", {
+      foo: "bar",
+      agent__intent: "Something",
+      baz: "qux",
+    });
+    expect(result).toBe("foo: bar\nbaz: qux");
+    expect(result).not.toContain("agent__intent");
   });
 });

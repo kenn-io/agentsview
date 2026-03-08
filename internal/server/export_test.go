@@ -547,6 +547,29 @@ func TestExportTemplateValid(t *testing.T) {
 	}
 }
 
+func TestExportTemplateAccentColors(t *testing.T) {
+	t.Parallel()
+	// Every accent color used by the frontend must be defined in
+	// the export template so exported HTML renders agent colors.
+	required := []string{
+		"--accent-blue",
+		"--accent-rose",
+		"--accent-purple",
+		"--accent-amber",
+		"--accent-green",
+		"--accent-coral",
+		"--accent-black",
+		"--accent-teal",
+		"--accent-red",
+		"--accent-indigo",
+	}
+	for _, v := range required {
+		if !strings.Contains(exportTemplateStr, v) {
+			t.Errorf("export template missing CSS variable %s", v)
+		}
+	}
+}
+
 // --- GitHub API mock tests ---
 
 func TestCreateGist(t *testing.T) {

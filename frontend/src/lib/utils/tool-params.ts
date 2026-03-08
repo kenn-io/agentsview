@@ -21,10 +21,11 @@ export function extractToolParamMeta(
   if (skip.includes(toolName)) return null;
   const meta: MetaTag[] = [];
   if (toolName === "Read") {
-    if (params.file_path)
+    const filePath = params.file_path ?? params.path;
+    if (filePath)
       meta.push({
         label: "file",
-        value: truncate(String(params.file_path), 80),
+        value: truncate(String(filePath), 80),
       });
     if (params.offset != null)
       meta.push({
@@ -42,18 +43,20 @@ export function extractToolParamMeta(
         value: String(params.pages),
       });
   } else if (toolName === "Edit") {
-    if (params.file_path)
+    const filePath = params.file_path ?? params.path ?? params.filePath;
+    if (filePath)
       meta.push({
         label: "file",
-        value: truncate(String(params.file_path), 80),
+        value: truncate(String(filePath), 80),
       });
     if (params.replace_all)
       meta.push({ label: "mode", value: "replace_all" });
   } else if (toolName === "Write") {
-    if (params.file_path)
+    const filePath = params.file_path ?? params.path;
+    if (filePath)
       meta.push({
         label: "file",
-        value: truncate(String(params.file_path), 80),
+        value: truncate(String(filePath), 80),
       });
   } else if (toolName === "Grep") {
     if (params.pattern)
@@ -100,6 +103,10 @@ export function extractToolParamMeta(
   return meta.length ? meta : null;
 }
 
+/** Parameter keys that are pi-internal metadata, not tool input.
+ *  These should not appear in the expanded content display. */
+const INTERNAL_PARAMS = new Set(["agent__intent", "_i"]);
+
 /** Generate displayable content from input params when
  *  the regex-captured content is empty. */
 export function generateFallbackContent(
@@ -109,13 +116,63 @@ export function generateFallbackContent(
   if (toolName === "Task" || toolName === "Agent") return null;
   if (toolName === "Edit") {
     const lines: string[] = [];
-    if (params.old_string != null) {
+    // Claude Code: old_string/new_string; OpenCode: oldString/newString (camelCase)
+    const oldStr =
+      params.old_string ?? params.old_str ?? params.oldString;
+    const newStr =
+      params.new_string ?? params.new_str ?? params.newString;
+    if (oldStr != null) {
       lines.push("--- old");
-      lines.push(truncate(String(params.old_string), 500));
+      lines.push(truncate(String(oldStr), 500));
     }
-    if (params.new_string != null) {
+    if (newStr != null) {
       lines.push("+++ new");
-      lines.push(truncate(String(params.new_string), 500));
+      lines.push(truncate(String(newStr), 500));
+    }
+    // Pi: edits[] array with set_line, replace_lines, insert_after, or op-based operations
+    if (!lines.length && Array.isArray(params.edits)) {
+      for (const edit of params.edits as Record<string, unknown>[]) {
+        const setLine = edit.set_line as
+          | Record<string, unknown>
+          | undefined;
+        const replaceLines = edit.replace_lines as
+          | Record<string, unknown>
+          | undefined;
+        const insertAfter = edit.insert_after as
+          | Record<string, unknown>
+          | undefined;
+        if (setLine) {
+          // {set_line: {anchor, new_text}} format
+          if (setLine.anchor) lines.push(`@ ${setLine.anchor}`);
+          if (setLine.new_text != null) {
+            const text = String(setLine.new_text);
+            lines.push(text ? truncate(text, 400) : "(delete)");
+          }
+        } else if (replaceLines) {
+          // {replace_lines: {start_anchor, end_anchor, new_text}} format
+          const start = replaceLines.start_anchor;
+          const end = replaceLines.end_anchor;
+          if (start && end) lines.push(`@ ${start}..${end}`);
+          else if (start) lines.push(`@ ${start}`);
+          const text = String(replaceLines.new_text ?? "");
+          lines.push(text ? truncate(text, 400) : "(delete)");
+        } else if (insertAfter) {
+          // {insert_after: {anchor, text}} format
+          if (insertAfter.anchor) lines.push(`insert after ${insertAfter.anchor}`);
+          const text = String(insertAfter.text ?? "");
+          lines.push(text ? truncate(text, 400) : "(empty)");
+        } else if (Array.isArray(edit.lines)) {
+          // {op, pos, end, lines} format — real Pi agent format
+          if (edit.op) lines.push(`${edit.op}${edit.pos ? ` @ ${edit.pos}` : ""}`);
+          lines.push(truncate((edit.lines as string[]).join("\n"), 400));
+        } else {
+          // {op, tag, content} format — legacy/alternative Pi format
+          if (edit.tag) lines.push(`tag: ${edit.tag}`);
+          const content = edit.content;
+          if (Array.isArray(content))
+            lines.push(truncate(content.join("\n"), 400));
+        }
+      }
     }
     return lines.length ? lines.join("\n") : null;
   }
@@ -125,6 +182,7 @@ export function generateFallbackContent(
   }
   const lines: string[] = [];
   for (const [key, value] of Object.entries(params)) {
+    if (INTERNAL_PARAMS.has(key)) continue;
     if (value == null || value === "") continue;
     const strVal =
       typeof value === "string"

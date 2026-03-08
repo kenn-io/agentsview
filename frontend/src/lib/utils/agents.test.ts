@@ -16,6 +16,7 @@ describe("KNOWN_AGENTS", () => {
       "cursor",
       "amp",
       "vscode-copilot",
+      "pi",
       "openclaw",
     ]);
   });
@@ -50,6 +51,9 @@ describe("agentColor", () => {
     expect(agentColor("amp")).toBe(
       "var(--accent-coral)",
     );
+    expect(agentColor("pi")).toBe(
+      "var(--accent-indigo)",
+    );
     expect(agentColor("vscode-copilot")).toBe(
       "var(--accent-teal)",
     );
@@ -62,3 +66,4 @@ describe("agentColor", () => {
     expect(agentColor("")).toBe("var(--accent-blue)");
   });
 });
+

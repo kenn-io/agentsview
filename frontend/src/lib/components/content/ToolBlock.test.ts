@@ -134,3 +134,170 @@ describe("ToolBlock output section", () => {
     expect(preview!.textContent).toBe("first line");
   });
 });
+
+describe("ToolBlock fallback content", () => {
+  let component: ReturnType<typeof mount>;
+
+  afterEach(() => {
+    if (component) unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("renders fallback content when content is empty and category matches", async () => {
+    // Edit category should show file path from input_json
+    const toolCall: ToolCall = {
+      tool_name: "custom_edit",
+      category: "Edit",
+      input_json: JSON.stringify({ file_path: "/path/to/file.txt" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    // Expand to see content
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).not.toBeNull();
+    expect(toolContent!.textContent).toContain("file_path: /path/to/file.txt");
+  });
+
+  it("renders fallback content for Write tools", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "custom_write",
+      category: "Write",
+      input_json: JSON.stringify({ file_path: "/output.txt", content: "Hello World" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).not.toBeNull();
+    expect(toolContent!.textContent).toContain("Hello World");
+  });
+
+  it("falls back to tool_name when category has no specific pattern", async () => {
+    // apply_patch doesn't match Edit pattern (which expects old_string/new_string)
+    // so it should fall back to generic key-value output
+    const toolCall: ToolCall = {
+      tool_name: "apply_patch",
+      category: "Edit",
+      input_json: JSON.stringify({ patch_file: "/path/to/patch.diff" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).not.toBeNull();
+    // Should show the generic key-value output with exact format
+    expect(toolContent!.textContent).toContain("patch_file: /path/to/patch.diff");
+  });
+
+  it("renders fallback content when no category is provided", async () => {
+    // Tool without category - should use tool_name directly
+    const toolCall: ToolCall = {
+      tool_name: "apply_patch",
+      input_json: JSON.stringify({ patch_file: "/path/to/patch.diff" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).not.toBeNull();
+    // apply_patch doesn't have specific handling, so should show generic output
+    expect(toolContent!.textContent).toContain("patch_file: /path/to/patch.diff");
+  });
+
+  it("falls back to tool_name when category is empty string", async () => {
+    // Empty string category should be treated same as no category
+    const toolCall: ToolCall = {
+      tool_name: "apply_patch",
+      category: "",
+      input_json: JSON.stringify({ patch_file: "/path/to/patch.diff" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).not.toBeNull();
+    // Should fall back to tool_name and show generic output
+    expect(toolContent!.textContent).toContain("patch_file: /path/to/patch.diff");
+  });
+
+  it("does not render fallback content when content is provided", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "custom_tool",
+      input_json: JSON.stringify({ param: "value" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "Explicit content here", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).not.toBeNull();
+    expect(toolContent!.textContent).toBe("Explicit content here");
+  });
+
+  it("does not render fallback content when input_json is empty", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "custom_tool",
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).toBeNull();
+  });
+
+  it("does not render fallback content when no toolCall is provided", async () => {
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "" },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).toBeNull();
+  });
+});

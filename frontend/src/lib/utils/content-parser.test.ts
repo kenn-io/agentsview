@@ -607,7 +607,7 @@ describe("enrichSegments", () => {
     expect(result[1]!.toolCall).toBe(tc);
   });
 
-  it("handles more tool_calls than tool segments gracefully", () => {
+  it("appends remaining tool_calls when more exist than tool segments", () => {
     const segments = parseContent("[Bash]\n$ echo hi");
     const tc1: ToolCall = {
       tool_name: "Bash",
@@ -620,7 +620,284 @@ describe("enrichSegments", () => {
     };
     const result = enrichSegments(segments, [tc1, tc2]);
     expect(result[0]!.toolCall).toBe(tc1);
+    expect(result).toHaveLength(2);
+    expect(result[1]!.toolCall).toBe(tc2);
+    expect(result[1]!.type).toBe("tool");
+  });
+
+  it("creates tool segments from structured tool_calls when no text markers exist (pi/omp style)", () => {
+    // Pi/omp sessions: content is plain text, tool calls are structured JSON
+    const segments = parseContent("I'll read the file.");
+    const tc1: ToolCall = { tool_name: "read", category: "Read", input_json: '{"path":"/foo.ts"}' };
+    const tc2: ToolCall = { tool_name: "write", category: "Write", input_json: '{"path":"/bar.ts","content":"x"}' };
+    const result = enrichSegments(segments, [tc1, tc2]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(2);
+    expect(toolSegs[0]!.toolCall).toBe(tc1);
+    expect(toolSegs[0]!.label).toBe("Read");
+    expect(toolSegs[1]!.toolCall).toBe(tc2);
+    expect(toolSegs[1]!.label).toBe("Write");
+  });
+
+  it("creates tool segments from structured tool_calls when content is empty (pi/omp tool-only message)", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = { tool_name: "bash", category: "Bash", input_json: '{"command":"ls"}' };
+    const result = enrichSegments(segments, [tc]);
     expect(result).toHaveLength(1);
+    expect(result[0]!.type).toBe("tool");
+    expect(result[0]!.toolCall).toBe(tc);
+    expect(result[0]!.label).toBe("Bash");
+  });
+});
+
+describe("enrichSegments - pi tool aliasing", () => {
+  function makeStructuredSegments(toolCalls: ToolCall[]): ReturnType<typeof enrichSegments> {
+    // Pi sessions have plain text content; tool calls come from structured JSON
+    const segments = parseContent("I'll work on the file.");
+    return enrichSegments(segments, toolCalls);
+  }
+
+  it("aliases str_replace to Edit label", () => {
+    const tc: ToolCall = {
+      tool_name: "str_replace",
+      category: "Edit",
+      input_json: '{"path":"/src/app.ts","old_string":"x","new_string":"y"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Edit");
+  });
+
+  it("aliases run_command to Bash label", () => {
+    const tc: ToolCall = {
+      tool_name: "run_command",
+      category: "Bash",
+      input_json: '{"command":"npm test"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Bash");
+  });
+
+  it("aliases create_file to Write label", () => {
+    const tc: ToolCall = {
+      tool_name: "create_file",
+      category: "Write",
+      input_json: '{"path":"/src/new.ts","content":"export const x = 1;"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Write");
+  });
+
+  it("aliases read_file to Read label", () => {
+    const tc: ToolCall = {
+      tool_name: "read_file",
+      category: "Read",
+      input_json: '{"path":"/src/app.ts"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Read");
+  });
+
+  it("expands multi-line run_command to $ command format", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "run_command",
+      category: "Bash",
+      input_json: JSON.stringify({ command: "line1\nline2" }),
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.content).toBe("$ line1\nline2");
+  });
+
+  it("expands single-line run_command to $ command format", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "run_command",
+      category: "Bash",
+      input_json: JSON.stringify({ command: "mkdir -p dist" }),
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result).toHaveLength(1);
+    expect(result[0]!.content).toBe("$ mkdir -p dist");
+  });
+
+  it("sets empty content for non-Bash pi tools so ToolBlock uses fallbackContent", () => {
+    const tc: ToolCall = {
+      tool_name: "str_replace",
+      category: "Edit",
+      input_json: '{"path":"/src/app.ts","old_str":"x","new_str":"y"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs[0]!.content).toBe("");
+  });
+});
+
+describe("enrichSegments - pi lowercase native tool aliases", () => {
+  function makeStructuredSegments(toolCalls: ToolCall[]): ReturnType<typeof enrichSegments> {
+    const segments = parseContent("Working on files.");
+    return enrichSegments(segments, toolCalls);
+  }
+
+  it("aliases lowercase bash to Bash label", () => {
+    const tc: ToolCall = {
+      tool_name: "bash",
+      category: "Bash",
+      input_json: '{"command":"ls -la","agent__intent":"List files"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Bash");
+  });
+
+  it("aliases lowercase read to Read label", () => {
+    const tc: ToolCall = {
+      tool_name: "read",
+      category: "Read",
+      input_json: '{"path":"/src/app.ts"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Read");
+  });
+
+  it("aliases lowercase write to Write label", () => {
+    const tc: ToolCall = {
+      tool_name: "write",
+      category: "Write",
+      input_json: '{"path":"/src/new.ts","content":"x"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Write");
+  });
+
+  it("aliases lowercase edit to Edit label", () => {
+    const tc: ToolCall = {
+      tool_name: "edit",
+      category: "Edit",
+      input_json: '{"path":"/src/app.ts","edits":[]}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Edit");
+  });
+
+  it("aliases lowercase grep to Grep label", () => {
+    const tc: ToolCall = {
+      tool_name: "grep",
+      category: "Grep",
+      input_json: '{"pattern":"TODO","path":"/src"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Grep");
+  });
+
+  it("aliases lowercase glob to Glob label", () => {
+    const tc: ToolCall = {
+      tool_name: "glob",
+      category: "Glob",
+      input_json: '{"pattern":"**/*.ts"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Glob");
+  });
+
+  it("aliases find to Read label and extracts pattern preview", () => {
+    const tc: ToolCall = {
+      tool_name: "find",
+      category: "Read",
+      input_json: '{"pattern":"*.go"}',
+    };
+    const result = makeStructuredSegments([tc]);
+    const toolSegs = result.filter((s) => s.type === "tool");
+    expect(toolSegs).toHaveLength(1);
+    expect(toolSegs[0]!.label).toBe("Read");
+    expect(toolSegs[0]!.content).toBe("*.go");
+  });
+
+  it("expands lowercase bash command to $ format", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "bash",
+      category: "Bash",
+      input_json: '{"command":"npm test","agent__intent":"Run tests"}',
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result[0]!.content).toBe("$ npm test");
+  });
+
+  it("expands multi-line lowercase bash to $ format", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "bash",
+      category: "Bash",
+      input_json: JSON.stringify({ command: "git commit -m \"$(cat <<'EOF')\nMessage\nEOF\n)\"" }),
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result[0]!.content).toContain("$ git commit");
+  });
+});
+
+describe("enrichSegments - Read path preview", () => {
+  it("sets content to file path for lowercase read tool", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "read",
+      category: "Read",
+      input_json: '{"path":"/src/auth.go","agent__intent":"Reading auth module"}',
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result[0]!.content).toBe("/src/auth.go");
+  });
+
+  it("sets content to file path for read_file tool", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "read_file",
+      category: "Read",
+      input_json: '{"path":"/src/main.go"}',
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result[0]!.content).toBe("/src/main.go");
+  });
+
+  it("prefers path over file_path for read tool (pi field name)", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "read",
+      category: "Read",
+      input_json: '{"path":"/src/app.ts","file_path":"/src/other.ts"}',
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result[0]!.content).toBe("/src/app.ts");
+  });
+
+  it("leaves content empty for read tool with no path", () => {
+    const segments = parseContent("");
+    const tc: ToolCall = {
+      tool_name: "read",
+      category: "Read",
+      input_json: '{"agent__intent":"reading something"}',
+    };
+    const result = enrichSegments(segments, [tc]);
+    expect(result[0]!.content).toBe("");
   });
 });
 

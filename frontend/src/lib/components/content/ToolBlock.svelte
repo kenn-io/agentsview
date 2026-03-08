@@ -8,10 +8,7 @@
     generateFallbackContent,
   } from "../../utils/tool-params.js";
 
-  /** Returns true for tool names that represent a subagent call ("Task" or "Agent"). */
-  function isSubagentTool(name: string | undefined): boolean {
-    return name === "Task" || name === "Agent";
-  }
+
 
   interface Props {
     content: string;
@@ -30,10 +27,6 @@
     return (nl === -1 ? rc : rc.slice(0, nl)).slice(0, 100);
   });
 
-  let previewLine = $derived(
-    content.split("\n")[0]?.slice(0, 100) ?? "",
-  );
-
   /** Parsed input parameters from structured tool call data */
   let inputParams = $derived.by(() => {
     if (!toolCall?.input_json) return null;
@@ -44,9 +37,21 @@
     }
   });
 
+  let previewLine = $derived.by(() => {
+    const line = content.split("\n")[0]?.slice(0, 100) ?? "";
+    if (line) return line;
+    // For Edit/Write/Read with no content, show file path as preview
+    const filePath =
+      inputParams?.file_path ?? inputParams?.path ?? inputParams?.filePath;
+    if (filePath) return String(filePath).slice(0, 100);
+    // For glob/search tools, show pattern
+    if (inputParams?.pattern) return String(inputParams.pattern).slice(0, 100);
+    return "";
+  });
+
   /** For Task tool calls, extract key metadata fields */
   let taskMeta = $derived.by(() => {
-    if (!isSubagentTool(toolCall?.tool_name) || !inputParams)
+    if (!isTask || !inputParams)
       return null;
     const meta: { label: string; value: string }[] = [];
     if (inputParams.subagent_type) {
@@ -98,7 +103,9 @@
   /** Extract metadata tags for common tool types */
   let toolParamMeta = $derived.by(() => {
     if (!inputParams || !toolCall) return null;
-    return extractToolParamMeta(toolCall.tool_name, inputParams);
+    const cat = toolCall.category || null;
+    const result = cat ? extractToolParamMeta(cat, inputParams) : null;
+    return result ?? extractToolParamMeta(toolCall.tool_name, inputParams);
   });
 
   /** Combined metadata for any tool type */
@@ -110,25 +117,29 @@
       null,
   );
 
-  /** Generate content from input_json when regex content is empty */
+  /** Generate content from input_json when regex content is empty.
+   *  Try category first (e.g. "Edit"), then fall back to raw tool_name
+   *  (e.g. "apply_patch") so tools that don't match their category's
+   *  specific field patterns still get the generic key-value output. */
   let fallbackContent = $derived.by(() => {
     if (content || !inputParams || !toolCall) return null;
-    return generateFallbackContent(
-      toolCall.tool_name,
-      inputParams,
-    );
+    const cat = toolCall.category || null;
+    const result = cat ? generateFallbackContent(cat, inputParams) : null;
+    return result ?? generateFallbackContent(toolCall.tool_name, inputParams);
   });
 
+  let isTask = $derived(
+    toolCall?.tool_name === "Task" ||
+      toolCall?.tool_name === "Agent" ||
+      toolCall?.category === "Task",
+  );
+
   let taskPrompt = $derived(
-    isSubagentTool(toolCall?.tool_name)
-      ? inputParams?.prompt ?? null
-      : null,
+    isTask ? inputParams?.prompt ?? null : null,
   );
 
   let subagentSessionId = $derived(
-    isSubagentTool(toolCall?.tool_name)
-      ? toolCall?.subagent_session_id ?? null
-      : null,
+    isTask ? toolCall?.subagent_session_id ?? null : null,
   );
 </script>
 

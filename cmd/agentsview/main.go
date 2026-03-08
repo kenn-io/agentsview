@@ -409,7 +409,6 @@ func startFileWatcher(
 			}
 		}
 	}
-
 	var totalWatched int
 	for _, r := range roots {
 		watched, uw, _ := watcher.WatchRecursive(r.root)

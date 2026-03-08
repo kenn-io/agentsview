@@ -1265,3 +1265,67 @@ func TestFindCursorSourceFile(t *testing.T) {
 		}
 	})
 }
+
+func TestIsPiSessionFile(t *testing.T) {
+	t.Run("ValidSession", func(t *testing.T) {
+		f, err := os.CreateTemp(t.TempDir(), "pi-*.jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.WriteString(`{"type":"session","id":"abc"}` + "\n")
+		f.Close()
+		if !isPiSessionFile(f.Name()) {
+			t.Error("expected true for valid session file")
+		}
+	})
+
+	t.Run("LongHeaderLine", func(t *testing.T) {
+		// Header line longer than 1 MiB — the old 1 MiB buffer would fail.
+		padding := strings.Repeat("x", 2*1024*1024)
+		line := `{"type":"session","id":"abc","pad":"` + padding + `"}` + "\n"
+		f, err := os.CreateTemp(t.TempDir(), "pi-*.jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.WriteString(line)
+		f.Close()
+		if !isPiSessionFile(f.Name()) {
+			t.Error("expected true for session file with long header line (>1 MiB)")
+		}
+	})
+
+	t.Run("LeadingBlankLines", func(t *testing.T) {
+		f, err := os.CreateTemp(t.TempDir(), "pi-*.jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.WriteString("\n\n" + `{"type":"session","id":"abc"}` + "\n")
+		f.Close()
+		if !isPiSessionFile(f.Name()) {
+			t.Error("expected true for session file with leading blank lines")
+		}
+	})
+
+	t.Run("NonSessionJSON", func(t *testing.T) {
+		f, err := os.CreateTemp(t.TempDir(), "pi-*.jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = f.WriteString(`{"type":"message","id":"abc"}` + "\n")
+		f.Close()
+		if isPiSessionFile(f.Name()) {
+			t.Error("expected false for non-session JSON")
+		}
+	})
+
+	t.Run("EmptyFile", func(t *testing.T) {
+		f, err := os.CreateTemp(t.TempDir(), "pi-*.jsonl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		if isPiSessionFile(f.Name()) {
+			t.Error("expected false for empty file")
+		}
+	})
+}

@@ -26,6 +26,7 @@ type testEnv struct {
 	geminiDir   string
 	opencodeDir string
 	ampDir      string
+	piDir       string
 	db          *db.DB
 	engine      *sync.Engine
 }
@@ -71,6 +72,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		geminiDir:   t.TempDir(),
 		opencodeDir: t.TempDir(),
 		ampDir:      t.TempDir(),
+		piDir:       t.TempDir(),
 		db:          dbtest.OpenTestDB(t),
 	}
 
@@ -106,6 +108,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentGemini:   {env.geminiDir},
 			parser.AgentOpenCode: {env.opencodeDir},
 			parser.AgentAmp:      {env.ampDir},
+			parser.AgentPi:       {env.piDir},
 		},
 		Machine: "local",
 	})
@@ -2760,4 +2763,80 @@ func TestSyncPathsVSCodeCopilotJSONLPriority(t *testing.T) {
 			len(page.Sessions),
 		)
 	}
+}
+
+func TestPiSessionIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	// Build a temp pi session directory:
+	//   <piDir>/<encoded-cwd>/<session-id>.jsonl
+	piDir := t.TempDir()
+	cwdSubdir := filepath.Join(piDir, "--Users-alice-code-my-project")
+	if err := os.MkdirAll(cwdSubdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use the existing pi session fixture from the parser testdata.
+	// The fixture has id="pi-test-session-uuid".
+	_, callerFile, _, _ := runtime.Caller(0)
+	fixtureDir := filepath.Join(
+		filepath.Dir(callerFile), "..", "parser", "testdata", "pi",
+	)
+	fixtureContent, err := os.ReadFile(
+		filepath.Join(fixtureDir, "session.jsonl"),
+	)
+	if err != nil {
+		t.Fatalf("reading pi fixture: %v", err)
+	}
+
+	sessionFile := filepath.Join(cwdSubdir, "pi-test-session-uuid.jsonl")
+	dbtest.WriteTestFile(t, sessionFile, fixtureContent)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPi: {piDir},
+		},
+		Machine: "local",
+	})
+
+	stats := engine.SyncAll(nil)
+	if stats.Synced != 1 {
+		t.Fatalf("expected 1 synced session, got %d (failed=%d)",
+			stats.Synced, stats.Failed)
+	}
+
+	assertSessionState(t, database, "pi:pi-test-session-uuid",
+		func(sess *db.Session) {
+			if sess.Agent != "pi" {
+				t.Errorf("agent = %q, want %q", sess.Agent, "pi")
+			}
+			// The fixture has 2 real user messages. model_change and
+			// compaction entries must not inflate the count after
+			// postFilterCounts re-counts role="user" messages.
+			if sess.UserMessageCount != 2 {
+				t.Errorf("UserMessageCount = %d, want 2", sess.UserMessageCount)
+			}
+		},
+	)
+
+	// FindSourceFile should locate pi sessions via the "pi:" prefix.
+	src := engine.FindSourceFile("pi:pi-test-session-uuid")
+	if src == "" {
+		t.Error("FindSourceFile returned empty for pi session")
+	}
+
+	// SyncSingleSession should work for pi sessions.
+	if err := engine.SyncSingleSession("pi:pi-test-session-uuid"); err != nil {
+		t.Fatalf("SyncSingleSession pi: %v", err)
+	}
+	assertSessionState(t, database, "pi:pi-test-session-uuid",
+		func(sess *db.Session) {
+			if sess.Agent != "pi" {
+				t.Errorf("after SyncSingleSession: agent = %q, want %q", sess.Agent, "pi")
+			}
+		},
+	)
 }

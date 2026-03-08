@@ -17,6 +17,7 @@ const (
 	AgentCursor        AgentType = "cursor"
 	AgentAmp           AgentType = "amp"
 	AgentVSCodeCopilot AgentType = "vscode-copilot"
+	AgentPi            AgentType = "pi"
 	AgentOpenClaw      AgentType = "openclaw"
 )
 
@@ -147,6 +148,16 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverVSCodeCopilotSessions,
 		FindSourceFunc: FindVSCodeCopilotSourceFile,
+	},
+	{
+		Type:           AgentPi,
+		DisplayName:    "Pi",
+		EnvVar:         "PI_DIR",
+		DefaultDirs:    []string{".pi/agent/sessions"},
+		IDPrefix:       "pi:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverPiSessions,
+		FindSourceFunc: FindPiSourceFile,
 	},
 	{
 		Type:           AgentOpenClaw,

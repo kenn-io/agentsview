@@ -52,6 +52,10 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"read_web_page", "Read"},
 		{"skill", "Tool"},
 
+		// Pi tools
+		{"str_replace", "Edit"},
+		{"find", "Read"},
+
 		// Copilot tools
 		{"view", "Read"},
 		{"report_intent", "Tool"},

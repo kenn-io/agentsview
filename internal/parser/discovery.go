@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/tidwall/gjson"
 )
 
 // uuidRe matches a standard UUID (8-4-4-4-12 hex) at the end of a rollout filename stem.
@@ -874,6 +877,102 @@ func FindCopilotSourceFile(
 		return bare
 	}
 
+	return ""
+}
+
+// isPiSessionFile reads the first non-blank line of path and returns true
+// when the JSON type field equals "session". The scanner buffer grows up to
+// 64 MiB to match parser.maxLineSize. Leading blank lines are skipped to
+// match lineReader behavior.
+func isPiSessionFile(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 0, 64*1024), 64*1024*1024) // up to 64 MiB, matches parser.maxLineSize
+	for s.Scan() {
+		line := strings.TrimSpace(s.Text())
+		if line == "" {
+			continue
+		}
+		return gjson.Get(line, "type").Str == "session"
+	}
+	return false
+}
+
+// DiscoverPiSessions finds JSONL files under piDir that are
+// valid pi sessions. Pi sessions live in
+// <piDir>/<encoded-cwd>/<session-id>.jsonl; the encoded-cwd
+// format is ambiguous between pi versions, so discovery
+// validates by reading the session header rather than parsing
+// the directory name. Project is left empty so ParsePiSession
+// can derive it from the header cwd field.
+func DiscoverPiSessions(piDir string) []DiscoveredFile {
+	if piDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(piDir)
+	if err != nil {
+		return nil
+	}
+	var files []DiscoveredFile
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, piDir) {
+			continue
+		}
+		cwdDir := filepath.Join(piDir, entry.Name())
+		sessionFiles, err := os.ReadDir(cwdDir)
+		if err != nil {
+			continue
+		}
+		for _, sf := range sessionFiles {
+			if sf.IsDir() {
+				continue
+			}
+			if !strings.HasSuffix(sf.Name(), ".jsonl") {
+				continue
+			}
+			path := filepath.Join(cwdDir, sf.Name())
+			if !isPiSessionFile(path) {
+				continue
+			}
+			files = append(files, DiscoveredFile{
+				Path:  path,
+				Agent: AgentPi,
+				// Project intentionally empty; ParsePiSession
+				// derives project from the header cwd field.
+			})
+		}
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	return files
+}
+
+// FindPiSourceFile finds the original JSONL file for a pi
+// session ID by searching all encoded-cwd subdirectories
+// under piDir for a file named <sessionID>.jsonl.
+func FindPiSourceFile(piDir, sessionID string) string {
+	if piDir == "" || !IsValidSessionID(sessionID) {
+		return ""
+	}
+	entries, err := os.ReadDir(piDir)
+	if err != nil {
+		return ""
+	}
+	target := sessionID + ".jsonl"
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, piDir) {
+			continue
+		}
+		candidate := filepath.Join(piDir, entry.Name(), target)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
 	return ""
 }
 

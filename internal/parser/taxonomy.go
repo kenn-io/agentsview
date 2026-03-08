@@ -72,6 +72,7 @@ func NormalizeToolCategory(rawName string) string {
 		return "Read"
 
 	// Amp tools (not already covered above)
+	// Note: "create_file" is also used by Pi.
 	case "create_file":
 		return "Write"
 	case "look_at":
@@ -84,6 +85,13 @@ func NormalizeToolCategory(rawName string) string {
 		return "Read"
 	case "skill":
 		return "Tool"
+
+	// Pi tools (not already covered above)
+	// Note: "grep", "run_command", "read_file", "create_file" are handled above.
+	case "find":
+		return "Read"
+	case "str_replace":
+		return "Edit"
 
 	// OpenClaw tools
 	case "exec":
