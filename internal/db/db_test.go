@@ -1675,10 +1675,31 @@ func TestDeleteSessions(t *testing.T) {
 		t.Errorf("message_count = %d, want 1", stats.MessageCount)
 	}
 
+	// Deleted sessions must be excluded.
+	if !d.IsSessionExcluded("s1") {
+		t.Error("s1 should be excluded after DeleteSessions")
+	}
+	if !d.IsSessionExcluded("s3") {
+		t.Error("s3 should be excluded after DeleteSessions")
+	}
+	if d.IsSessionExcluded("s2") {
+		t.Error("s2 should not be excluded (not deleted)")
+	}
+
 	deleted, err = d.DeleteSessions(nil)
 	requireNoError(t, err, "DeleteSessions empty")
 	if deleted != 0 {
 		t.Errorf("deleted empty = %d, want 0", deleted)
+	}
+}
+
+func TestDeleteSessionNonExistentNoGhostExclusion(t *testing.T) {
+	d := testDB(t)
+
+	// Deleting a non-existent ID should not create an exclusion.
+	requireNoError(t, d.DeleteSession("bogus"), "DeleteSession bogus")
+	if d.IsSessionExcluded("bogus") {
+		t.Error("bogus should not be excluded (no row deleted)")
 	}
 }
 

@@ -532,8 +532,9 @@ func (db *DB) ResetAllMtimes() error {
 // DeleteSession removes a session and its messages (cascading).
 // The session ID is recorded in excluded_sessions so the sync
 // engine does not re-import it from disk. Both operations run
-// in a single transaction to prevent ghost exclusions when the
-// delete fails.
+// in a single transaction. The exclusion is only written when
+// a session row was actually deleted, preventing ghost entries
+// for non-existent IDs.
 func (db *DB) DeleteSession(id string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -545,15 +546,20 @@ func (db *DB) DeleteSession(id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(
-		"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)", id,
-	); err != nil {
-		return fmt.Errorf("excluding session %s: %w", id, err)
-	}
-	if _, err := tx.Exec(
+	res, err := tx.Exec(
 		"DELETE FROM sessions WHERE id = ?", id,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("deleting session %s: %w", id, err)
+	}
+	n, _ := res.RowsAffected()
+	if n > 0 {
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)",
+			id,
+		); err != nil {
+			return fmt.Errorf("excluding session %s: %w", id, err)
+		}
 	}
 	return tx.Commit()
 }
@@ -889,8 +895,10 @@ func (db *DB) EmptyTrash() (int, error) {
 }
 
 // DeleteSessions removes multiple sessions by ID in a single
-// transaction. Batches DELETEs in groups of 500 to stay under
-// SQLite variable limits. Returns count of deleted rows.
+// transaction. Batches operations in groups of 500 to stay
+// under SQLite variable limits. Deleted IDs are recorded in
+// excluded_sessions so the sync engine does not re-import
+// them. Returns count of deleted rows.
 func (db *DB) DeleteSessions(ids []string) (int, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -926,6 +934,16 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 		}
 		n, _ := res.RowsAffected()
 		total += int(n)
+
+		// Record exclusions so sync doesn't re-import.
+		for _, id := range batch {
+			if _, err := tx.Exec(
+				"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)",
+				id,
+			); err != nil {
+				return 0, fmt.Errorf("excluding session %s: %w", id, err)
+			}
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
