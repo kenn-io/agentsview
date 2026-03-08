@@ -183,19 +183,15 @@ func formatToolUse(block gjson.Result) string {
 		return fmt.Sprintf("[Web: %s]", input.Get("url").Str)
 	// Pi tools (lowercase variants)
 	case "read":
-		path := input.Get("file_path").Str
-		if path == "" {
-			path = input.Get("path").Str
-		}
-		return fmt.Sprintf("[Read: %s]", path)
+		return fmt.Sprintf("[Read: %s]", resolveFilePath(input))
 	case "read_file":
-		return fmt.Sprintf("[Read: %s]", input.Get("file_path").Str)
+		return fmt.Sprintf("[Read: %s]", resolveFilePath(input))
 	case "write":
-		return fmt.Sprintf("[Write: %s]", input.Get("file_path").Str)
+		return fmt.Sprintf("[Write: %s]", resolveFilePath(input))
 	case "edit":
-		return fmt.Sprintf("[Edit: %s]", input.Get("file_path").Str)
+		return fmt.Sprintf("[Edit: %s]", resolveFilePath(input))
 	case "str_replace":
-		return fmt.Sprintf("[Edit: %s]", input.Get("file_path").Str)
+		return fmt.Sprintf("[Edit: %s]", resolveFilePath(input))
 	case "bash":
 		cmd := input.Get("command").Str
 		if cmd == "" {
@@ -309,6 +305,19 @@ func formatTask(input gjson.Result) string {
 	desc := input.Get("description").Str
 	agentType := input.Get("subagent_type").Str
 	return fmt.Sprintf("[Task: %s (%s)]", desc, agentType)
+}
+
+// resolveFilePath extracts a file path from tool input, trying
+// file_path, path, and filePath in order. Covers Claude Code,
+// Amp, and Pi payload shapes.
+func resolveFilePath(input gjson.Result) string {
+	if p := input.Get("file_path").Str; p != "" {
+		return p
+	}
+	if p := input.Get("path").Str; p != "" {
+		return p
+	}
+	return input.Get("filePath").Str
 }
 
 func orDefault(s, def string) string {

@@ -576,6 +576,32 @@ func TestFormatToolUseVariants(t *testing.T) {
 			`{"type":"tool_use","name":"find","input":{"pattern":"*.go"}}`,
 			"[Find: *.go]",
 		},
+		// Pi path fallback variants
+		{
+			"read with path fallback (Pi)",
+			`{"type":"tool_use","name":"read","input":{"path":"src/main.go"}}`,
+			"[Read: src/main.go]",
+		},
+		{
+			"write with path fallback (Pi)",
+			`{"type":"tool_use","name":"write","input":{"path":"out.txt"}}`,
+			"[Write: out.txt]",
+		},
+		{
+			"edit with filePath fallback (Pi)",
+			`{"type":"tool_use","name":"edit","input":{"filePath":"app.ts"}}`,
+			"[Edit: app.ts]",
+		},
+		{
+			"str_replace with path fallback (Pi)",
+			`{"type":"tool_use","name":"str_replace","input":{"path":"server.go"}}`,
+			"[Edit: server.go]",
+		},
+		{
+			"read_file with path fallback (Pi)",
+			`{"type":"tool_use","name":"read_file","input":{"path":"README.md"}}`,
+			"[Read: README.md]",
+		},
 	}
 
 	for _, tt := range tests {
