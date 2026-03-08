@@ -146,7 +146,6 @@ class SessionsStore {
     } else {
       this.activeSessionId = null;
     }
-    this.resetPagination();
   }
 
   async load() {
