@@ -1274,7 +1274,7 @@ func TestIsPiSessionFile(t *testing.T) {
 		}
 		_, _ = f.WriteString(`{"type":"session","id":"abc"}` + "\n")
 		f.Close()
-		if !isPiSessionFile(f.Name()) {
+		if !IsPiSessionFile(f.Name()) {
 			t.Error("expected true for valid session file")
 		}
 	})
@@ -1289,7 +1289,7 @@ func TestIsPiSessionFile(t *testing.T) {
 		}
 		_, _ = f.WriteString(line)
 		f.Close()
-		if !isPiSessionFile(f.Name()) {
+		if !IsPiSessionFile(f.Name()) {
 			t.Error("expected true for session file with long header line (>1 MiB)")
 		}
 	})
@@ -1301,7 +1301,7 @@ func TestIsPiSessionFile(t *testing.T) {
 		}
 		_, _ = f.WriteString("\n\n" + `{"type":"session","id":"abc"}` + "\n")
 		f.Close()
-		if !isPiSessionFile(f.Name()) {
+		if !IsPiSessionFile(f.Name()) {
 			t.Error("expected true for session file with leading blank lines")
 		}
 	})
@@ -1313,7 +1313,7 @@ func TestIsPiSessionFile(t *testing.T) {
 		}
 		_, _ = f.WriteString(`{"type":"message","id":"abc"}` + "\n")
 		f.Close()
-		if isPiSessionFile(f.Name()) {
+		if IsPiSessionFile(f.Name()) {
 			t.Error("expected false for non-session JSON")
 		}
 	})
@@ -1324,7 +1324,7 @@ func TestIsPiSessionFile(t *testing.T) {
 			t.Fatal(err)
 		}
 		f.Close()
-		if isPiSessionFile(f.Name()) {
+		if IsPiSessionFile(f.Name()) {
 			t.Error("expected false for empty file")
 		}
 	})

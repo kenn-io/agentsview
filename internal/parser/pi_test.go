@@ -101,6 +101,12 @@ func TestParsePiSession_AssistantMessages(t *testing.T) {
 	assert.Equal(t, "toolu_01", tc.ToolUseID, "PRSR-04: tool use ID")
 	assert.Contains(t, tc.InputJSON, "auth.go", "PRSR-04: input JSON contains file path")
 	assert.Contains(t, assistantMsg.Content, "Looking at the auth module.", "assistant text content")
+
+	// Thinking and tool markers are now emitted inline in Content.
+	assert.Contains(t, assistantMsg.Content, "[Thinking]", "thinking marker in Content")
+	assert.Contains(t, assistantMsg.Content, "[/Thinking]", "thinking end marker in Content")
+	assert.Contains(t, assistantMsg.Content, "Let me analyze this carefully.", "thinking text in Content")
+	assert.Contains(t, assistantMsg.Content, "[Read: auth.go]", "tool use marker in Content")
 }
 
 // TestParsePiSession_ToolResults verifies tool result entries are parsed
@@ -180,6 +186,8 @@ func TestParsePiSession_ThinkingBlocks(t *testing.T) {
 		}
 		require.NotNil(t, msg, "expected explicit-thinking assistant message")
 		assert.True(t, msg.HasThinking, "PRSR-06: HasThinking for explicit block")
+		assert.Contains(t, msg.Content, "[Thinking]\nLet me analyze this carefully.\n[/Thinking]",
+			"explicit thinking text emitted as inline marker")
 	})
 
 	t.Run("redacted thinking", func(t *testing.T) {
@@ -303,6 +311,115 @@ func TestParsePiSession_IOError(t *testing.T) {
 	})
 }
 
+// TestParsePiAssistantMessage_BlockOrder verifies that interleaved thinking,
+// text, and tool blocks preserve their order in Content.
+func TestParsePiAssistantMessage_BlockOrder(t *testing.T) {
+	header := `{"type":"session","id":"order-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
+	// Assistant message with thinking -> text -> toolCall -> text order.
+	assistant := `{"type":"message","id":"e1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":[` +
+		`{"type":"thinking","thinking":"step one"},` +
+		`{"type":"text","text":"first text"},` +
+		`{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}},` +
+		`{"type":"text","text":"second text"}` +
+		`],"model":"claude-opus-4-5","provider":"anthropic","stopReason":"stop","timestamp":1735725601000}}`
+
+	_, msgs := runPiParserTest(t, header+assistant)
+	require.Len(t, msgs, 1)
+
+	content := msgs[0].Content
+	// Verify ordering: thinking marker comes before first text,
+	// tool marker comes between first and second text.
+	thinkIdx := strings.Index(content, "[Thinking]")
+	firstTextIdx := strings.Index(content, "first text")
+	toolIdx := strings.Index(content, "[Bash]")
+	secondTextIdx := strings.Index(content, "second text")
+
+	require.NotEqual(t, -1, thinkIdx, "thinking marker present")
+	require.NotEqual(t, -1, firstTextIdx, "first text present")
+	require.NotEqual(t, -1, toolIdx, "tool marker present")
+	require.NotEqual(t, -1, secondTextIdx, "second text present")
+
+	assert.Less(t, thinkIdx, firstTextIdx, "thinking before first text")
+	assert.Less(t, firstTextIdx, toolIdx, "first text before tool")
+	assert.Less(t, toolIdx, secondTextIdx, "tool before second text")
+}
+
+func TestFormatPiToolUse(t *testing.T) {
+	tests := []struct {
+		name    string
+		tool    string
+		argsRaw string
+		want    string
+	}{
+		{
+			name:    "read with file_path",
+			tool:    "read",
+			argsRaw: `{"file_path":"main.go"}`,
+			want:    "[Read: main.go]",
+		},
+		{
+			name:    "bash with command",
+			tool:    "bash",
+			argsRaw: `{"command":"ls -la"}`,
+			want:    "[Bash]\n$ ls -la",
+		},
+		{
+			name:    "edit with file_path",
+			tool:    "edit",
+			argsRaw: `{"file_path":"config.yaml"}`,
+			want:    "[Edit: config.yaml]",
+		},
+		{
+			name:    "write with file_path",
+			tool:    "write",
+			argsRaw: `{"file_path":"out.txt"}`,
+			want:    "[Write: out.txt]",
+		},
+		{
+			name:    "find with pattern",
+			tool:    "find",
+			argsRaw: `{"pattern":"*.go"}`,
+			want:    "[Find: *.go]",
+		},
+		{
+			name:    "str_replace maps to Edit",
+			tool:    "str_replace",
+			argsRaw: `{"file_path":"server.go"}`,
+			want:    "[Edit: server.go]",
+		},
+		{
+			name:    "run_command maps to Bash",
+			tool:    "run_command",
+			argsRaw: `{"command":"go test"}`,
+			want:    "[Bash]\n$ go test",
+		},
+		{
+			name:    "read_file maps to Read",
+			tool:    "read_file",
+			argsRaw: `{"file_path":"README.md"}`,
+			want:    "[Read: README.md]",
+		},
+		{
+			name:    "unknown tool",
+			tool:    "custom_tool",
+			argsRaw: `{}`,
+			want:    "[Tool: custom_tool]",
+		},
+		{
+			name:    "empty arguments",
+			tool:    "bash",
+			argsRaw: "",
+			want:    "[Bash]\n$ ",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatPiToolUse(tt.tool, tt.argsRaw)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestParsePiSession_ErrorCases verifies error handling for missing, empty,
 // and invalid session files.
 func TestNormalizePiIntent(t *testing.T) {
@@ -384,7 +501,7 @@ func TestParsePiSession_ErrorCases(t *testing.T) {
 	})
 
 	t.Run("leading whitespace-only lines", func(t *testing.T) {
-		// Matches isPiSessionFile behavior which uses TrimSpace to skip
+		// Matches IsPiSessionFile behavior which uses TrimSpace to skip
 		// whitespace-only lines before the session header.
 		header := `{"type":"session","id":"ws-sess","timestamp":"2025-06-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`
 		msg := `{"type":"message","id":"m1","timestamp":"2025-06-01T10:01:00Z","message":{"role":"user","content":"hello"}}`

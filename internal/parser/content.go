@@ -181,6 +181,39 @@ func formatToolUse(block gjson.Result) string {
 		return fmt.Sprintf("[Find: %s]", input.Get("query").Str)
 	case "read_web_page":
 		return fmt.Sprintf("[Web: %s]", input.Get("url").Str)
+	// Pi tools (lowercase variants)
+	case "read":
+		path := input.Get("file_path").Str
+		if path == "" {
+			path = input.Get("path").Str
+		}
+		return fmt.Sprintf("[Read: %s]", path)
+	case "read_file":
+		return fmt.Sprintf("[Read: %s]", input.Get("file_path").Str)
+	case "write":
+		return fmt.Sprintf("[Write: %s]", input.Get("file_path").Str)
+	case "edit":
+		return fmt.Sprintf("[Edit: %s]", input.Get("file_path").Str)
+	case "str_replace":
+		return fmt.Sprintf("[Edit: %s]", input.Get("file_path").Str)
+	case "bash":
+		cmd := input.Get("command").Str
+		if cmd == "" {
+			cmd = input.Get("cmd").Str
+		}
+		desc := input.Get("description").Str
+		if desc != "" {
+			return fmt.Sprintf("[Bash: %s]\n$ %s", desc, cmd)
+		}
+		return fmt.Sprintf("[Bash]\n$ %s", cmd)
+	case "run_command":
+		return fmt.Sprintf("[Bash]\n$ %s", input.Get("command").Str)
+	case "find":
+		pattern := input.Get("pattern").Str
+		if pattern == "" {
+			pattern = input.Get("query").Str
+		}
+		return fmt.Sprintf("[Find: %s]", pattern)
 	case "skill":
 		skill := input.Get("skill").Str
 		if skill == "" {

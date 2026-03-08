@@ -880,11 +880,11 @@ func FindCopilotSourceFile(
 	return ""
 }
 
-// isPiSessionFile reads the first non-blank line of path and returns true
+// IsPiSessionFile reads the first non-blank line of path and returns true
 // when the JSON type field equals "session". The scanner buffer grows up to
 // 64 MiB to match parser.maxLineSize. Leading blank lines are skipped to
 // match lineReader behavior.
-func isPiSessionFile(path string) bool {
+func IsPiSessionFile(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -935,7 +935,7 @@ func DiscoverPiSessions(piDir string) []DiscoveredFile {
 				continue
 			}
 			path := filepath.Join(cwdDir, sf.Name())
-			if !isPiSessionFile(path) {
+			if !IsPiSessionFile(path) {
 				continue
 			}
 			files = append(files, DiscoveredFile{

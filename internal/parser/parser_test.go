@@ -535,6 +535,47 @@ func TestFormatToolUseVariants(t *testing.T) {
 			json: `{"type":"tool_use","name":"empty_tool","input":{}}`,
 			want: "[Tool: empty_tool]",
 		},
+		// Pi tools (lowercase variants)
+		{
+			"read (Pi)",
+			`{"type":"tool_use","name":"read","input":{"file_path":"auth.go"}}`,
+			"[Read: auth.go]",
+		},
+		{
+			"read_file (Pi)",
+			`{"type":"tool_use","name":"read_file","input":{"file_path":"README.md"}}`,
+			"[Read: README.md]",
+		},
+		{
+			"write (Pi)",
+			`{"type":"tool_use","name":"write","input":{"file_path":"out.txt"}}`,
+			"[Write: out.txt]",
+		},
+		{
+			"edit (Pi)",
+			`{"type":"tool_use","name":"edit","input":{"file_path":"config.yaml"}}`,
+			"[Edit: config.yaml]",
+		},
+		{
+			"str_replace (Pi)",
+			`{"type":"tool_use","name":"str_replace","input":{"file_path":"server.go"}}`,
+			"[Edit: server.go]",
+		},
+		{
+			"bash (Pi)",
+			`{"type":"tool_use","name":"bash","input":{"command":"ls -la"}}`,
+			"[Bash]\n$ ls -la",
+		},
+		{
+			"run_command (Pi)",
+			`{"type":"tool_use","name":"run_command","input":{"command":"go test"}}`,
+			"[Bash]\n$ go test",
+		},
+		{
+			"find (Pi)",
+			`{"type":"tool_use","name":"find","input":{"pattern":"*.go"}}`,
+			"[Find: *.go]",
+		},
 	}
 
 	for _, tt := range tests {

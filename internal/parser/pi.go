@@ -32,7 +32,7 @@ func ParsePiSession(
 
 	// --- Parse session header (first non-whitespace line) ---
 	// Skip whitespace-only lines to stay consistent with
-	// isPiSessionFile in discovery.go which uses TrimSpace.
+	// IsPiSessionFile in discovery.go which uses TrimSpace.
 	var headerLine string
 	for {
 		line, ok := lr.next()
@@ -253,18 +253,23 @@ func parsePiAssistantMessage(line string, ordinal int) *ParsedMessage {
 					parts = append(parts, t)
 				}
 			case "thinking":
-				// Set hasThinking regardless of whether the thinking field is
-				// empty — redacted thinking blocks have an empty field but the
-				// block type presence is sufficient to mark the message.
+				// Set hasThinking regardless of whether the thinking
+				// field is empty -- redacted thinking blocks have an
+				// empty field but the block type presence is sufficient
+				// to mark the message.
 				hasThinking = true
+				if thinking := block.Get("thinking").Str; thinking != "" {
+					parts = append(parts,
+						"[Thinking]\n"+thinking+"\n[/Thinking]")
+				}
 			case "toolCall":
 				hasToolUse = true
 				id := block.Get("id").Str
 				name := block.Get("name").Str
 				argsRaw := block.Get("arguments").Raw
-				// Normalize Pi's agent__intent / _i field to "description"
-				// so the frontend can use a single params.description check
-				// across all agents.
+				// Normalize Pi's agent__intent / _i field to
+				// "description" so the frontend can use a single
+				// params.description check across all agents.
 				argsRaw = normalizePiIntent(argsRaw)
 				toolCalls = append(toolCalls, ParsedToolCall{
 					ToolUseID: id,
@@ -272,6 +277,9 @@ func parsePiAssistantMessage(line string, ordinal int) *ParsedMessage {
 					Category:  NormalizeToolCategory(name),
 					InputJSON: argsRaw,
 				})
+				parts = append(parts, formatPiToolUse(
+					name, block.Get("arguments").Raw,
+				))
 			}
 			return true
 		})
@@ -313,6 +321,26 @@ func parsePiToolResultMessage(line string, ordinal int) *ParsedMessage {
 			},
 		},
 	}
+}
+
+// formatPiToolUse constructs a synthetic block with "input" mapped from
+// Pi's "arguments" field and delegates to formatToolUse. This avoids
+// duplicating the tool-name switch logic.
+func formatPiToolUse(name, argsRaw string) string {
+	// Build {"name":"<name>","input":<args>} so formatToolUse can
+	// read input.* paths as usual.
+	var sb strings.Builder
+	sb.WriteString(`{"name":`)
+	nameJSON, _ := json.Marshal(name)
+	sb.Write(nameJSON)
+	sb.WriteString(`,"input":`)
+	if argsRaw == "" {
+		sb.WriteString("{}")
+	} else {
+		sb.WriteString(argsRaw)
+	}
+	sb.WriteByte('}')
+	return formatToolUse(gjson.Parse(sb.String()))
 }
 
 // normalizePiIntent rewrites Pi's agent__intent or _i argument field to

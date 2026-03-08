@@ -453,6 +453,9 @@ func (e *Engine) classifyOnePath(
 			if !strings.HasSuffix(parts[1], ".jsonl") {
 				continue
 			}
+			if !parser.IsPiSessionFile(path) {
+				continue
+			}
 			return parser.DiscoveredFile{
 				Path:  path,
 				Agent: parser.AgentPi,
