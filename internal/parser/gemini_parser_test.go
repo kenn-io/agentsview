@@ -54,6 +54,89 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{ToolName: "read_file", Category: "Read"}})
 	})
 
+	t.Run("tool calls with results", func(t *testing.T) {
+		content := loadFixture(t, "gemini/tool_calls_with_results.json")
+		_, msgs := runGeminiParserTest(t, content)
+
+		require.Equal(t, 2, len(msgs))
+		assistantMsg := msgs[1]
+		assert.True(t, assistantMsg.HasToolUse)
+
+		// Verify ToolUseID and InputJSON are extracted
+		require.Equal(t, 2, len(assistantMsg.ToolCalls))
+		assertToolCalls(t, assistantMsg.ToolCalls, []ParsedToolCall{
+			{
+				ToolName:  "read_file",
+				Category:  "Read",
+				ToolUseID: "read_file_1772747340739_0",
+				InputJSON: `{"file_path":".planning/ONE-PAGER.md"}`,
+			},
+			{
+				ToolName:  "run_command",
+				Category:  "Bash",
+				ToolUseID: "run_command_1772747340739_1",
+				InputJSON: `{"command":"ls -la"}`,
+			},
+		})
+
+		// Verify tool results are extracted
+		require.Equal(t, 2, len(assistantMsg.ToolResults))
+		assert.Equal(t, "read_file_1772747340739_0", assistantMsg.ToolResults[0].ToolUseID)
+		assert.Equal(t, len("# Agentstrove -- One-Pager\n\nDraft: 2026-03-04"), assistantMsg.ToolResults[0].ContentLength)
+		// Verify DecodeContent works on the raw content
+		assert.Equal(t, "# Agentstrove -- One-Pager\n\nDraft: 2026-03-04", DecodeContent(assistantMsg.ToolResults[0].ContentRaw))
+
+		assert.Equal(t, "run_command_1772747340739_1", assistantMsg.ToolResults[1].ToolUseID)
+		assert.Equal(t, "total 42\ndrwxr-xr-x  5 user user 160 Mar  4 10:00 .", DecodeContent(assistantMsg.ToolResults[1].ContentRaw))
+	})
+
+	t.Run("programmatic tool call with result", func(t *testing.T) {
+		content := testjsonl.GeminiSessionJSON("sess-tc-result", "hash", tsEarly, tsEarlyS5, []map[string]any{
+			testjsonl.GeminiUserMsg("u1", tsEarly, "list files"),
+			testjsonl.GeminiAssistantMsg("a1", tsEarlyS5, "Running command.", &testjsonl.GeminiMsgOpts{
+				ToolCalls: []testjsonl.GeminiToolCall{
+					{
+						ID:           "run_cmd_1",
+						Name:         "run_command",
+						DisplayName:  "RunCommand",
+						Args:         map[string]string{"command": "ls"},
+						ResultOutput: "file1.go\nfile2.go",
+					},
+				},
+			}),
+		})
+		_, msgs := runGeminiParserTest(t, content)
+		require.Equal(t, 2, len(msgs))
+		require.Equal(t, 1, len(msgs[1].ToolCalls))
+		assert.Equal(t, "run_cmd_1", msgs[1].ToolCalls[0].ToolUseID)
+
+		require.Equal(t, 1, len(msgs[1].ToolResults))
+		assert.Equal(t, "run_cmd_1", msgs[1].ToolResults[0].ToolUseID)
+		assert.Equal(t, len("file1.go\nfile2.go"), msgs[1].ToolResults[0].ContentLength)
+		assert.Equal(t, "file1.go\nfile2.go", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
+	})
+
+	t.Run("tool call without result", func(t *testing.T) {
+		content := testjsonl.GeminiSessionJSON("sess-tc-no-result", "hash", tsEarly, tsEarlyS5, []map[string]any{
+			testjsonl.GeminiUserMsg("u1", tsEarly, "read it"),
+			testjsonl.GeminiAssistantMsg("a1", tsEarlyS5, "Reading.", &testjsonl.GeminiMsgOpts{
+				ToolCalls: []testjsonl.GeminiToolCall{
+					{
+						ID:          "read_1",
+						Name:        "read_file",
+						DisplayName: "ReadFile",
+						Args:        map[string]string{"file_path": "main.go"},
+					},
+				},
+			}),
+		})
+		_, msgs := runGeminiParserTest(t, content)
+		require.Equal(t, 2, len(msgs))
+		require.Equal(t, 1, len(msgs[1].ToolCalls))
+		assert.Equal(t, "read_1", msgs[1].ToolCalls[0].ToolUseID)
+		assert.Equal(t, 0, len(msgs[1].ToolResults))
+	})
+
 	t.Run("empty tool name skipped", func(t *testing.T) {
 		content := testjsonl.GeminiSessionJSON("sess-uuid-empty-tc", "hash", tsEarly, tsEarlyS5, []map[string]any{
 			testjsonl.GeminiUserMsg("u1", tsEarly, "do it"),

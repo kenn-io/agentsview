@@ -60,7 +60,7 @@ func ParseGeminiSession(
 				role = RoleAssistant
 			}
 
-			content, hasThinking, hasToolUse, tcs :=
+			content, hasThinking, hasToolUse, tcs, trs :=
 				extractGeminiContent(msg)
 			if strings.TrimSpace(content) == "" {
 				return true
@@ -82,6 +82,7 @@ func ParseGeminiSession(
 				HasToolUse:    hasToolUse,
 				ContentLength: len(content),
 				ToolCalls:     tcs,
+				ToolResults:   trs,
 			})
 			ordinal++
 			return true
@@ -119,10 +120,11 @@ func ParseGeminiSession(
 // message, including its content, thoughts, and tool calls.
 func extractGeminiContent(
 	msg gjson.Result,
-) (string, bool, bool, []ParsedToolCall) {
+) (string, bool, bool, []ParsedToolCall, []ParsedToolResult) {
 	var (
 		parts       []string
 		parsed      []ParsedToolCall
+		results     []ParsedToolResult
 		hasThinking bool
 		hasToolUse  bool
 	)
@@ -167,17 +169,42 @@ func extractGeminiContent(
 		})
 	}
 
-	// Extract tool calls
+	// Extract tool calls and inline results
 	toolCalls := msg.Get("toolCalls")
 	if toolCalls.IsArray() {
 		toolCalls.ForEach(func(_, tc gjson.Result) bool {
 			hasToolUse = true
 			name := tc.Get("name").Str
+			tcID := tc.Get("id").Str
 			if name != "" {
 				parsed = append(parsed, ParsedToolCall{
-					ToolName: name,
-					Category: NormalizeToolCategory(name),
+					ToolName:  name,
+					Category:  NormalizeToolCategory(name),
+					ToolUseID: tcID,
+					InputJSON: tc.Get("args").Raw,
 				})
+				// Extract inline tool results from
+				// result[].functionResponse.response.output
+				tc.Get("result").ForEach(
+					func(_, r gjson.Result) bool {
+						output := r.Get(
+							"functionResponse.response.output",
+						)
+						if !output.Exists() {
+							return true
+						}
+						rid := r.Get("functionResponse.id").Str
+						if rid == "" {
+							rid = tcID
+						}
+						results = append(results, ParsedToolResult{
+							ToolUseID:     rid,
+							ContentLength: toolResultContentLength(output),
+							ContentRaw:    output.Raw,
+						})
+						return true
+					},
+				)
 			}
 			parts = append(parts, formatGeminiToolCall(tc))
 			return true
@@ -185,7 +212,7 @@ func extractGeminiContent(
 	}
 
 	return strings.Join(parts, "\n\n"),
-		hasThinking, hasToolUse, parsed
+		hasThinking, hasToolUse, parsed, results
 }
 
 func formatGeminiToolCall(tc gjson.Result) string {
@@ -198,23 +225,31 @@ func formatGeminiToolCall(tc gjson.Result) string {
 		return fmt.Sprintf(
 			"[Read: %s]", args.Get("file_path").Str,
 		)
-	case "write_file", "edit_file":
+	case "write_file":
 		return fmt.Sprintf(
 			"[Write: %s]", args.Get("file_path").Str,
 		)
-	case "run_command", "execute_command":
+	case "edit_file", "replace":
+		return fmt.Sprintf(
+			"[Edit: %s]", args.Get("file_path").Str,
+		)
+	case "run_command", "execute_command", "run_shell_command":
 		cmd := args.Get("command").Str
 		return fmt.Sprintf("[Bash]\n$ %s", cmd)
 	case "list_directory":
 		return fmt.Sprintf(
 			"[List: %s]", args.Get("dir_path").Str,
 		)
-	case "search_files", "grep":
+	case "search_files", "grep", "grep_search":
 		query := args.Get("query").Str
 		if query == "" {
 			query = args.Get("pattern").Str
 		}
 		return fmt.Sprintf("[Grep: %s]", query)
+	case "glob":
+		return fmt.Sprintf(
+			"[Glob: %s]", args.Get("pattern").Str,
+		)
 	default:
 		label := displayName
 		if label == "" {

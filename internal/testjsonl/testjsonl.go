@@ -385,9 +385,11 @@ func (b *SessionBuilder) StringNoTrailingNewline() string {
 
 // GeminiToolCall defines a tool call for Gemini test fixtures.
 type GeminiToolCall struct {
-	Name        string
-	DisplayName string
-	Args        map[string]string
+	ID           string
+	Name         string
+	DisplayName  string
+	Args         map[string]string
+	ResultOutput string // if set, generates inline functionResponse result
 }
 
 // GeminiThought defines a thought for Gemini test fixtures.
@@ -452,8 +454,24 @@ func GeminiAssistantMsg(
 				"displayName": tc.DisplayName,
 				"status":      "success",
 			}
+			if tc.ID != "" {
+				entry["id"] = tc.ID
+			}
 			if tc.Args != nil {
 				entry["args"] = tc.Args
+			}
+			if tc.ResultOutput != "" {
+				entry["result"] = []map[string]any{
+					{
+						"functionResponse": map[string]any{
+							"id":   tc.ID,
+							"name": tc.Name,
+							"response": map[string]any{
+								"output": tc.ResultOutput,
+							},
+						},
+					},
+				}
 			}
 			tcs = append(tcs, entry)
 		}

@@ -31,13 +31,15 @@ func NormalizeToolCategory(rawName string) string {
 		return "Edit"
 
 	// Gemini tools
-	case "read_file":
+	case "read_file", "list_directory":
 		return "Read"
-	case "write_file", "edit_file":
+	case "write_file":
 		return "Write"
-	case "run_command", "execute_command":
+	case "edit_file", "replace":
+		return "Edit"
+	case "run_command", "execute_command", "run_shell_command":
 		return "Bash"
-	case "search_files", "grep":
+	case "search_files", "grep", "grep_search":
 		return "Grep"
 
 	// OpenCode tools (lowercase variants)
@@ -56,7 +58,7 @@ func NormalizeToolCategory(rawName string) string {
 		return "Task"
 
 	// Copilot tools
-	// Note: "edit_file" (Write), "shell" (Bash), "grep" (Grep),
+	// Note: "edit_file" (Edit), "shell" (Bash), "grep" (Grep),
 	// and "glob" (Glob) are handled in earlier sections.
 	case "view":
 		return "Read"

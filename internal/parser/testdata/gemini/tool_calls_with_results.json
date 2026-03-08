@@ -1,0 +1,66 @@
+{
+  "lastUpdated": "2024-01-01T10:00:05Z",
+  "messages": [
+    {
+      "content": "Read the planning doc",
+      "id": "u1",
+      "timestamp": "2024-01-01T10:00:00Z",
+      "type": "user"
+    },
+    {
+      "content": "Let me read that file.",
+      "id": "a1",
+      "model": "gemini-2.5-pro",
+      "thoughts": [
+        {
+          "description": "I need to read the planning document.",
+          "subject": "Planning",
+          "timestamp": "2024-01-01T10:00:01Z"
+        }
+      ],
+      "timestamp": "2024-01-01T10:00:05Z",
+      "toolCalls": [
+        {
+          "id": "read_file_1772747340739_0",
+          "name": "read_file",
+          "displayName": "ReadFile",
+          "args": {"file_path":".planning/ONE-PAGER.md"},
+          "status": "success",
+          "result": [
+            {
+              "functionResponse": {
+                "id": "read_file_1772747340739_0",
+                "name": "read_file",
+                "response": {
+                  "output": "# Agentstrove -- One-Pager\n\nDraft: 2026-03-04"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "run_command_1772747340739_1",
+          "name": "run_command",
+          "displayName": "RunCommand",
+          "args": {"command":"ls -la"},
+          "status": "success",
+          "result": [
+            {
+              "functionResponse": {
+                "id": "run_command_1772747340739_1",
+                "name": "run_command",
+                "response": {
+                  "output": "total 42\ndrwxr-xr-x  5 user user 160 Mar  4 10:00 ."
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "type": "gemini"
+    }
+  ],
+  "projectHash": "abc123def456",
+  "sessionId": "sess-uuid-tool-results",
+  "startTime": "2024-01-01T10:00:00Z"
+}

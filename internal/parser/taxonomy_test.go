@@ -29,11 +29,15 @@ func TestNormalizeToolCategory(t *testing.T) {
 		// Gemini tools
 		{"read_file", "Read"},
 		{"write_file", "Write"},
-		{"edit_file", "Write"},
+		{"edit_file", "Edit"},
+		{"replace", "Edit"},
+		{"list_directory", "Read"},
 		{"run_command", "Bash"},
 		{"execute_command", "Bash"},
+		{"run_shell_command", "Bash"},
 		{"search_files", "Grep"},
 		{"grep", "Grep"},
+		{"grep_search", "Grep"},
 
 		// OpenCode tools (lowercase)
 		// "grep" already tested above in Gemini section.
