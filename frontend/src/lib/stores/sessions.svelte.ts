@@ -409,8 +409,8 @@ class SessionsStore {
     this.agentsVersion++;
     this.agentsLoaded = false;
     this.agentsPromise = null;
-    this.loadProjects();
-    this.loadAgents();
+    this.loadProjects().catch(() => {});
+    this.loadAgents().catch(() => {});
   }
 
   /** Remove one or all entries from the undo toast list. */
