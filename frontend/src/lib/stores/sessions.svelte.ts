@@ -186,6 +186,8 @@ class SessionsStore {
           break;
         }
       }
+    } catch {
+      // Network errors are non-fatal; session list stays stale.
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
@@ -249,6 +251,8 @@ class SessionsStore {
           this.projects = res.projects;
           this.projectsLoaded = true;
         }
+      } catch {
+        // Non-fatal; projects list stays stale.
       } finally {
         if (ver === this.projectsVersion) {
           this.projectsPromise = null;
@@ -269,6 +273,8 @@ class SessionsStore {
           this.agents = res.agents;
           this.agentsLoaded = true;
         }
+      } catch {
+        // Non-fatal; agents list stays stale.
       } finally {
         if (ver === this.agentsVersion) {
           this.agentsPromise = null;
@@ -409,8 +415,8 @@ class SessionsStore {
     this.agentsVersion++;
     this.agentsLoaded = false;
     this.agentsPromise = null;
-    this.loadProjects().catch(() => {});
-    this.loadAgents().catch(() => {});
+    this.loadProjects();
+    this.loadAgents();
   }
 
   /** Remove one or all entries from the undo toast list. */

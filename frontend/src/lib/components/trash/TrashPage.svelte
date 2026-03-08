@@ -31,7 +31,7 @@
       trashedSessions = trashedSessions.filter((s) => s.id !== id);
       sessions.clearRecentlyDeleted(id);
       sessions.invalidateFilterCaches();
-      sessions.load().catch(() => {});
+      sessions.load();
     } catch {
       // silently fail
     }

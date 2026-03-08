@@ -654,16 +654,50 @@ describe("SessionsStore", () => {
       expect(sessions.projects[0]!.name).toBe("proj");
     });
 
-    it("should propagate rejection to all concurrent callers", async () => {
+    it("should resolve without throwing when API rejects", async () => {
       vi.mocked(api.getProjects).mockRejectedValueOnce(
         new Error("network"),
       );
 
-      const p1 = sessions.loadProjects();
-      const p2 = sessions.loadProjects();
+      await expect(
+        sessions.loadProjects(),
+      ).resolves.toBeUndefined();
+      // Projects stay at default (empty).
+      expect(sessions.projects).toHaveLength(0);
+    });
 
-      await expect(p1).rejects.toThrow("network");
-      await expect(p2).rejects.toThrow("network");
+    it("should allow retry after a failed load", async () => {
+      vi.mocked(api.getProjects).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await sessions.loadProjects();
+
+      // Second attempt should succeed.
+      mockGetProjects();
+      await sessions.loadProjects();
+      expect(sessions.projects).toHaveLength(1);
+    });
+  });
+
+  describe("non-throwing background loads", () => {
+    it("load resolves when API rejects", async () => {
+      vi.mocked(api.listSessions).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await expect(
+        sessions.load(),
+      ).resolves.toBeUndefined();
+      expect(sessions.loading).toBe(false);
+    });
+
+    it("loadAgents resolves when API rejects", async () => {
+      vi.mocked(api.getAgents).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await expect(
+        sessions.loadAgents(),
+      ).resolves.toBeUndefined();
+      expect(sessions.agents).toHaveLength(0);
     });
   });
 
