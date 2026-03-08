@@ -278,7 +278,7 @@ func parsePiAssistantMessage(line string, ordinal int) *ParsedMessage {
 					InputJSON: argsRaw,
 				})
 				parts = append(parts, formatPiToolUse(
-					name, block.Get("arguments").Raw,
+					name, argsRaw,
 				))
 			}
 			return true
