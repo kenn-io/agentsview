@@ -12,15 +12,19 @@ export function truncate(s: string, max: number): string {
 type Params = Record<string, unknown>;
 
 /** Extract metadata tags for common tool types.
+ *  Dispatches on normalized category so all agents (Claude,
+ *  Gemini, Codex, etc.) render consistently.
  *  Returns null for Task/TaskCreate/TaskUpdate (handled separately). */
 export function extractToolParamMeta(
   toolName: string,
   params: Params,
+  category?: string,
 ): MetaTag[] | null {
   const skip = ["Task", "TaskCreate", "TaskUpdate"];
   if (skip.includes(toolName)) return null;
+  const cat = category ?? toolName;
   const meta: MetaTag[] = [];
-  if (toolName === "Read") {
+  if (cat === "Read") {
     const filePath = params.file_path ?? params.path;
     if (filePath)
       meta.push({
@@ -42,7 +46,7 @@ export function extractToolParamMeta(
         label: "pages",
         value: String(params.pages),
       });
-  } else if (toolName === "Edit") {
+  } else if (cat === "Edit") {
     const filePath = params.file_path ?? params.path ?? params.filePath;
     if (filePath)
       meta.push({
@@ -51,18 +55,19 @@ export function extractToolParamMeta(
       });
     if (params.replace_all)
       meta.push({ label: "mode", value: "replace_all" });
-  } else if (toolName === "Write") {
+  } else if (cat === "Write") {
     const filePath = params.file_path ?? params.path;
     if (filePath)
       meta.push({
         label: "file",
         value: truncate(String(filePath), 80),
       });
-  } else if (toolName === "Grep") {
-    if (params.pattern)
+  } else if (cat === "Grep") {
+    const pattern = params.pattern ?? params.query;
+    if (pattern)
       meta.push({
         label: "pattern",
-        value: truncate(String(params.pattern), 60),
+        value: truncate(String(pattern), 60),
       });
     if (params.path)
       meta.push({
@@ -76,7 +81,7 @@ export function extractToolParamMeta(
         label: "mode",
         value: String(params.output_mode),
       });
-  } else if (toolName === "Glob") {
+  } else if (cat === "Glob") {
     if (params.pattern)
       meta.push({
         label: "pattern",
@@ -87,17 +92,26 @@ export function extractToolParamMeta(
         label: "path",
         value: truncate(String(params.path), 80),
       });
-  } else if (toolName === "Bash") {
+  } else if (cat === "Bash") {
     if (params.description)
       meta.push({
         label: "description",
         value: truncate(String(params.description), 80),
       });
-  } else if (toolName === "Skill") {
-    if (params.skill)
+    const cmd = params.command ?? params.cmd;
+    if (cmd) {
+      const firstLine = String(cmd).split("\n")[0];
+      meta.push({
+        label: "cmd",
+        value: truncate(firstLine, 80),
+      });
+    }
+  } else if (toolName === "Skill" || toolName === "skill") {
+    const skill = params.skill ?? params.name;
+    if (skill)
       meta.push({
         label: "skill",
-        value: String(params.skill),
+        value: String(skill),
       });
   }
   return meta.length ? meta : null;

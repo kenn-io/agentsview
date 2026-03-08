@@ -109,20 +109,33 @@ describe("extractToolParamMeta", () => {
     ]);
   });
 
-  it("extracts Bash description", () => {
+  it("extracts Bash description and cmd", () => {
     const meta = extractToolParamMeta("Bash", {
       command: "npm test",
       description: "Run test suite",
     });
     expect(meta).toEqual([
       { label: "description", value: "Run test suite" },
+      { label: "cmd", value: "npm test" },
     ]);
   });
 
-  it("returns null for Bash without description", () => {
-    expect(
-      extractToolParamMeta("Bash", { command: "ls" }),
-    ).toBeNull();
+  it("extracts Bash cmd without description", () => {
+    const meta = extractToolParamMeta("Bash", {
+      command: "ls -la",
+    });
+    expect(meta).toEqual([
+      { label: "cmd", value: "ls -la" },
+    ]);
+  });
+
+  it("shows only first line of multiline Bash command", () => {
+    const meta = extractToolParamMeta("Bash", {
+      command: "echo hello\necho world",
+    });
+    expect(meta).toEqual([
+      { label: "cmd", value: "echo hello" },
+    ]);
   });
 
   it("extracts Skill name", () => {
@@ -131,6 +144,39 @@ describe("extractToolParamMeta", () => {
     });
     expect(meta).toEqual([
       { label: "skill", value: "commit" },
+    ]);
+  });
+
+  it("dispatches on category for Gemini read_file", () => {
+    const meta = extractToolParamMeta(
+      "read_file",
+      { file_path: "/src/main.go" },
+      "Read",
+    );
+    expect(meta).toEqual([
+      { label: "file", value: "/src/main.go" },
+    ]);
+  });
+
+  it("dispatches on category for Gemini run_command", () => {
+    const meta = extractToolParamMeta(
+      "run_command",
+      { command: "go test ./..." },
+      "Bash",
+    );
+    expect(meta).toEqual([
+      { label: "cmd", value: "go test ./..." },
+    ]);
+  });
+
+  it("dispatches on category for Gemini grep_search", () => {
+    const meta = extractToolParamMeta(
+      "grep_search",
+      { query: "TODO" },
+      "Grep",
+    );
+    expect(meta).toEqual([
+      { label: "pattern", value: "TODO" },
     ]);
   });
 
