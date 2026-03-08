@@ -420,6 +420,21 @@ func TestFormatPiToolUse(t *testing.T) {
 	}
 }
 
+// TestParsePiAssistantMessage_IntentInToolMarker verifies that
+// agent__intent is normalized to description before being passed
+// to formatPiToolUse, so the Bash description line renders correctly.
+func TestParsePiAssistantMessage_IntentInToolMarker(t *testing.T) {
+	header := `{"type":"session","id":"intent-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
+	assistant := `{"type":"message","id":"e1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":[` +
+		`{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls","agent__intent":"List files"}}` +
+		`],"model":"claude-opus-4-5","provider":"anthropic","stopReason":"toolUse","timestamp":1735725601000}}`
+
+	_, msgs := runPiParserTest(t, header+assistant)
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Content, "[Bash: List files]",
+		"agent__intent must be normalized to description for tool marker")
+}
+
 // TestParsePiSession_ErrorCases verifies error handling for missing, empty,
 // and invalid session files.
 func TestNormalizePiIntent(t *testing.T) {
