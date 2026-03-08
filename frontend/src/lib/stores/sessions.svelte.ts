@@ -328,7 +328,6 @@ class SessionsStore {
   setProjectFilter(project: string) {
     this.filters = { ...defaultFilters(), project, agent: this.filters.agent };
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
@@ -339,21 +338,18 @@ class SessionsStore {
       this.filters.agent = agent;
     }
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
   setRecentlyActiveFilter(active: boolean) {
     this.filters.recentlyActive = active;
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
   setMinUserMessagesFilter(n: number) {
     this.filters.minUserMessages = n;
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
@@ -363,7 +359,6 @@ class SessionsStore {
       this.filters.project = "";
     }
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
@@ -384,7 +379,6 @@ class SessionsStore {
     const project = this.filters.project;
     this.filters = { ...defaultFilters(), project };
     this.activeSessionId = null;
-    this.resetPagination();
     this.load();
   }
 
