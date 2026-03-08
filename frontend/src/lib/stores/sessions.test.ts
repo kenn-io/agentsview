@@ -16,6 +16,7 @@ import type { ListSessionsParams } from "../api/client.js";
 vi.mock("../api/client.js", () => ({
   listSessions: vi.fn(),
   getProjects: vi.fn(),
+  getAgents: vi.fn(),
 }));
 
 function mockListSessions(
@@ -663,6 +664,70 @@ describe("SessionsStore", () => {
 
       await expect(p1).rejects.toThrow("network");
       await expect(p2).rejects.toThrow("network");
+    });
+  });
+
+  describe("invalidateFilterCaches version guard", () => {
+    beforeEach(() => {
+      // Both loadProjects and loadAgents fire inside
+      // invalidateFilterCaches, so supply defaults for the
+      // API the test isn't explicitly controlling.
+      vi.mocked(api.getProjects).mockResolvedValue({
+        projects: [],
+      });
+      vi.mocked(api.getAgents).mockResolvedValue({
+        agents: [],
+      });
+    });
+
+    it("discards stale projects response after invalidation", async () => {
+      let resolveStale!: (v: { projects: { name: string; session_count: number }[] }) => void;
+      const stalePromise = new Promise<{ projects: { name: string; session_count: number }[] }>(
+        (r) => { resolveStale = r; },
+      );
+      vi.mocked(api.getProjects)
+        .mockReturnValueOnce(stalePromise)
+        .mockResolvedValueOnce({
+          projects: [{ name: "fresh-proj", session_count: 5 }],
+        });
+
+      // Start first load (will hang on stalePromise).
+      sessions.loadProjects();
+
+      // Invalidate before stale resolves — bumps version,
+      // clears promise, and starts a fresh load.
+      sessions.invalidateFilterCaches();
+
+      // Now resolve the stale request.
+      resolveStale({
+        projects: [{ name: "stale-proj", session_count: 1 }],
+      });
+      await vi.waitFor(() => {
+        expect(sessions.projects).toHaveLength(1);
+      });
+
+      // Fresh response should win.
+      expect(sessions.projects[0]!.name).toBe("fresh-proj");
+    });
+
+    it("discards stale agents response after invalidation", async () => {
+      let resolveStale!: (v: { agents: string[] }) => void;
+      const stalePromise = new Promise<{ agents: string[] }>(
+        (r) => { resolveStale = r; },
+      );
+      vi.mocked(api.getAgents)
+        .mockReturnValueOnce(stalePromise)
+        .mockResolvedValueOnce({ agents: ["fresh-agent"] });
+
+      sessions.loadAgents();
+      sessions.invalidateFilterCaches();
+
+      resolveStale({ agents: ["stale-agent"] });
+      await vi.waitFor(() => {
+        expect(sessions.agents).toHaveLength(1);
+      });
+
+      expect(sessions.agents[0]).toBe("fresh-agent");
     });
   });
 });
