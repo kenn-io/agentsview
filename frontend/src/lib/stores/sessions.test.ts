@@ -680,14 +680,30 @@ describe("SessionsStore", () => {
   });
 
   describe("non-throwing background loads", () => {
-    it("load resolves when API rejects", async () => {
+    it("load preserves previous sessions on failure", async () => {
+      const existing = [makeSession({ id: "s1" })];
+      sessions.sessions = existing;
+      sessions.total = 1;
+
       vi.mocked(api.listSessions).mockRejectedValueOnce(
         new Error("network"),
       );
-      await expect(
-        sessions.load(),
-      ).resolves.toBeUndefined();
+      await sessions.load();
+
       expect(sessions.loading).toBe(false);
+      expect(sessions.sessions).toHaveLength(1);
+      expect(sessions.sessions[0]!.id).toBe("s1");
+      expect(sessions.total).toBe(1);
+    });
+
+    it("loadProjects resolves when API rejects", async () => {
+      vi.mocked(api.getProjects).mockRejectedValueOnce(
+        new Error("network"),
+      );
+      await expect(
+        sessions.loadProjects(),
+      ).resolves.toBeUndefined();
+      expect(sessions.projects).toHaveLength(0);
     });
 
     it("loadAgents resolves when API rejects", async () => {

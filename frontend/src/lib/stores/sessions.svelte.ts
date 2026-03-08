@@ -152,6 +152,11 @@ class SessionsStore {
   async load() {
     const version = ++this.loadVersion;
     this.loading = true;
+    const prev = {
+      sessions: this.sessions,
+      nextCursor: this.nextCursor,
+      total: this.total,
+    };
     this.resetPagination();
     try {
       let cursor: string | undefined = undefined;
@@ -187,7 +192,13 @@ class SessionsStore {
         }
       }
     } catch {
-      // Network errors are non-fatal; session list stays stale.
+      // Restore previous state so a transient failure
+      // doesn't wipe the visible session list.
+      if (this.loadVersion === version) {
+        this.sessions = prev.sessions;
+        this.nextCursor = prev.nextCursor;
+        this.total = prev.total;
+      }
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
