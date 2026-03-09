@@ -22,7 +22,7 @@ export function extractToolParamMeta(
 ): MetaTag[] | null {
   const skip = ["Task", "TaskCreate", "TaskUpdate"];
   if (skip.includes(toolName)) return null;
-  const cat = category ?? toolName;
+  const cat = category || toolName;
   const meta: MetaTag[] = [];
   if (cat === "Read") {
     const filePath = params.file_path ?? params.path;

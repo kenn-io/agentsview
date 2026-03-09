@@ -180,6 +180,17 @@ describe("extractToolParamMeta", () => {
     ]);
   });
 
+  it("falls back to toolName when category is empty string", () => {
+    const meta = extractToolParamMeta(
+      "Read",
+      { file_path: "/src/app.ts" },
+      "",
+    );
+    expect(meta).toEqual([
+      { label: "file", value: "/src/app.ts" },
+    ]);
+  });
+
   it("returns null for unknown tool with no matching params", () => {
     expect(
       extractToolParamMeta("CustomTool", { foo: "bar" }),
