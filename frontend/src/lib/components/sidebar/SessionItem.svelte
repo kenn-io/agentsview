@@ -17,8 +17,8 @@
     expanded?: boolean;
     /** Callback to toggle continuation chain expand/collapse. */
     onToggleExpand?: () => void;
-    /** Whether this is a child session (subagent/team member). */
-    isChild?: boolean;
+    /** Nesting depth: 0 = root, 1 = child, 2 = grandchild. */
+    depth?: number;
   }
 
   let {
@@ -30,7 +30,7 @@
     compact = false,
     expanded = false,
     onToggleExpand,
-    isChild = false,
+    depth = 0,
   }: Props = $props();
 
   let isActive = $derived(
@@ -83,12 +83,22 @@
     continuationCount > 1 ? continuationCount - 1 : 0,
   );
 
+  let hasChildren = $derived(childCount > 0 && !!onToggleExpand);
+
+  /** The color for the left accent bar on child/grandchild items. */
+  let accentBarColor = $derived.by(() => {
+    if (depth === 0) return "transparent";
+    if (isTeamSession) return "var(--accent-blue)";
+    if (isSubagentSession) return "var(--accent-green)";
+    return "var(--text-muted)";
+  });
+
   function handleStar(e: MouseEvent) {
     e.stopPropagation();
     starred.toggle(session.id);
   }
 
-  function handleExpand(e: MouseEvent) {
+  function handleToggle(e: MouseEvent) {
     e.stopPropagation();
     onToggleExpand?.();
   }
@@ -101,10 +111,6 @@
   let renameValue = $state("");
   let renameInput: HTMLInputElement | undefined = $state(undefined);
 
-  /**
-   * Svelte action: portal — moves a DOM node to document.body,
-   * escaping overflow/transform stacking contexts.
-   */
   function portal(node: HTMLElement) {
     document.body.appendChild(node);
     return {
@@ -131,14 +137,13 @@
   }
 
   async function submitRename() {
-    // Guard against blur firing after Escape already cancelled.
     if (!renaming) return;
     renaming = false;
     const name = renameValue.trim() || null;
     try {
       await sessions.renameSession(session.id, name);
     } catch {
-      // silently fail — name reverts in UI
+      // silently fail
     }
   }
 
@@ -156,13 +161,11 @@
     startRename();
   }
 
-  // Close context menu on outside click
   $effect(() => {
     if (!contextMenu) return;
     function handler() {
       contextMenu = null;
     }
-    // Use setTimeout to avoid closing from the same right-click event.
     const id = setTimeout(() => {
       document.addEventListener("click", handler, { once: true });
       document.addEventListener("contextmenu", handler, {
@@ -176,7 +179,6 @@
     };
   });
 
-  // Close context menu on Escape
   $effect(() => {
     if (!contextMenu) return;
     function handler(e: KeyboardEvent) {
@@ -192,14 +194,47 @@
   class="session-item"
   class:active={isActive}
   class:compact
-  class:child-session={isChild}
+  class:depth-1={depth === 1}
+  class:depth-2={depth >= 2}
   data-session-id={session.id}
   role="button"
   tabindex="0"
+  style:padding-left="{10 + depth * 14}px"
   onclick={() => sessions.selectSession(session.id)}
   onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
 >
+  <!-- Colored accent bar for child/grandchild items -->
+  {#if depth > 0}
+    <span class="accent-bar" style:background={accentBarColor}></span>
+  {/if}
+
+  <!-- Expand triangle or bullet dot -->
+  {#if hasChildren}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <span
+      class="tree-toggle"
+      onclick={handleToggle}
+      role="button"
+      tabindex="-1"
+    >
+      <svg
+        class="tree-arrow"
+        class:expanded
+        width="8"
+        height="8"
+        viewBox="0 0 8 8"
+        fill="currentColor"
+      >
+        <path d="M2 1l4 3-4 3z"/>
+      </svg>
+    </span>
+  {:else if depth > 0}
+    <span class="tree-bullet"></span>
+  {:else}
+    <span class="tree-spacer"></span>
+  {/if}
+
   {#if !hideAgent}
     <div class="agent-indicator" style:--agent-c={agentColor}>
       <span
@@ -211,8 +246,9 @@
       {/if}
     </div>
   {:else if recentlyActive}
-    <span class="agent-dot recently-active" style:background={agentColor}></span>
+    <span class="agent-dot recently-active standalone" style:background={agentColor}></span>
   {/if}
+
   <div class="session-info">
     {#if renaming}
       <!-- svelte-ignore a11y_autofocus -->
@@ -245,32 +281,21 @@
       <span class="session-time">{timeStr}</span>
       <span class="session-count">{session.user_message_count}</span>
       {#if isSubagentSession}
-        <svg class="type-icon" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" title="Subagent">
+        <svg class="type-icon" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
           <path d="M10.56 7.01A3.5 3.5 0 108 0a3.5 3.5 0 002.56 7.01zM8 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
         </svg>
       {:else if isTeamSession}
-        <svg class="type-icon type-icon-team" width="11" height="9" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true" title="Team member">
+        <svg class="type-icon type-icon-team" width="11" height="9" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
           <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
           <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
         </svg>
       {/if}
-      {#if childCount > 0}
-        {#if onToggleExpand}
-          <button
-            class="expand-badge"
-            class:expanded
-            onclick={handleExpand}
-            title={expanded ? "Collapse" : `Expand ${childCount} sub-sessions`}
-            aria-label={expanded ? "Collapse" : `Expand ${childCount} sub-sessions`}
-          >
-            {expanded ? "\u2212" : "+"}{childCount}
-          </button>
-        {:else}
-          <span class="continuation-badge">x{continuationCount}</span>
-        {/if}
+      {#if childCount > 0 && !onToggleExpand}
+        <span class="continuation-badge">x{continuationCount}</span>
       {/if}
     </div>
   </div>
+
   {#if !compact}
     <button
       class="star-btn"
@@ -311,41 +336,101 @@
   .session-item {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     width: 100%;
     height: 42px;
-    padding: 0 14px;
+    padding: 0 10px;
+    padding-right: 10px;
     text-align: left;
     border-left: 2px solid transparent;
     transition: background 0.1s;
     user-select: none;
     -webkit-user-select: none;
     cursor: pointer;
+    position: relative;
   }
 
   .session-item.compact {
-    height: 36px;
-    gap: 6px;
-    padding: 0 8px;
+    height: 34px;
+    gap: 5px;
   }
 
-  .session-item.child-session {
+  .session-item.depth-1 {
+    background: color-mix(in srgb, var(--bg-inset) 50%, transparent);
+  }
+
+  .session-item.depth-2 {
     background: var(--bg-inset);
-    padding-left: 22px;
-    border-left-color: var(--border-muted);
   }
 
   .session-item:hover {
     background: var(--bg-surface-hover);
   }
 
-  .session-item.child-session:hover {
-    background: color-mix(in srgb, var(--bg-surface-hover) 80%, var(--bg-inset));
-  }
-
   .session-item.active {
     background: var(--bg-surface-hover);
     border-left-color: var(--accent-blue);
+  }
+
+  /* Colored accent bar for children */
+  .accent-bar {
+    position: absolute;
+    left: 0;
+    top: 4px;
+    bottom: 4px;
+    width: 2px;
+    border-radius: 1px;
+  }
+
+  /* Tree toggle (▶/▼) */
+  .tree-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    border-radius: 3px;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: color 0.1s;
+  }
+
+  .tree-toggle:hover {
+    color: var(--text-primary);
+  }
+
+  .tree-arrow {
+    transition: transform 0.12s ease;
+  }
+
+  .tree-arrow.expanded {
+    transform: rotate(90deg);
+  }
+
+  /* Bullet dot for non-expandable children */
+  .tree-bullet {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .tree-bullet::after {
+    content: "";
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    opacity: 0.5;
+  }
+
+  /* Empty spacer for root items without children */
+  .tree-spacer {
+    width: 14px;
+    flex-shrink: 0;
   }
 
   .agent-indicator {
@@ -362,6 +447,10 @@
     border-radius: 50%;
     background: var(--agent-c);
     flex-shrink: 0;
+  }
+
+  .agent-dot.standalone {
+    background: var(--agent-c, currentColor);
   }
 
   .agent-dot.recently-active {
@@ -475,33 +564,6 @@
     opacity: 0.8;
   }
 
-  .expand-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 9px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-    color: var(--accent-blue);
-    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
-    border-radius: 8px;
-    padding: 0 5px;
-    height: 15px;
-    line-height: 15px;
-    white-space: nowrap;
-    flex-shrink: 0;
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s;
-  }
-
-  .expand-badge:hover {
-    background: color-mix(in srgb, var(--accent-blue) 22%, transparent);
-  }
-
-  .expand-badge.expanded {
-    background: color-mix(in srgb, var(--accent-blue) 20%, transparent);
-  }
-
   .continuation-badge {
     font-size: 9px;
     font-weight: 600;
@@ -544,7 +606,6 @@
     background: var(--bg-surface-hover);
   }
 
-  /* Context menu uses :global since it's portaled to document.body */
   :global(.context-menu) {
     position: fixed;
     z-index: 9999;

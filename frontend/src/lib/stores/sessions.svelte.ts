@@ -566,7 +566,6 @@ function findRoot(
     visited.add(cur);
     const s = byId.get(cur);
     if (!s?.parent_session_id) break;
-    if (s.relationship_type === "fork") break;
     const parent = s.parent_session_id;
     if (!byId.has(parent)) break; // missing link
     cur = parent;

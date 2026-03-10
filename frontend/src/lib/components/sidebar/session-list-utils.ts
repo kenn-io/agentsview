@@ -28,6 +28,8 @@ export interface DisplayItem {
   session?: Session;
   /** True when this is a child session inside an expanded group. */
   isChild?: boolean;
+  /** Nesting depth: 0 = root, 1 = child, 2 = grandchild. */
+  depth?: number;
   height: number;
   top: number;
 }
@@ -111,8 +113,19 @@ function emitGroupItems(
 
   // Child sessions when expanded
   if (isExpanded) {
+    // Build a set of session IDs in this group for depth calculation.
+    const groupIds = new Set(g.sessions.map((s) => s.id));
     for (const s of g.sessions) {
       if (s.id === g.primarySessionId) continue;
+      // Compute depth: if parent is another non-primary member, depth=2.
+      let depth = 1;
+      if (
+        s.parent_session_id &&
+        s.parent_session_id !== g.primarySessionId &&
+        groupIds.has(s.parent_session_id)
+      ) {
+        depth = 2;
+      }
       items.push({
         id: `child:${s.id}`,
         type: "session",
@@ -121,6 +134,7 @@ function emitGroupItems(
         group: g,
         session: s,
         isChild: true,
+        depth,
         height: CHILD_ITEM_HEIGHT,
         top: y.value,
       });

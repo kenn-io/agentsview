@@ -498,7 +498,7 @@
             hideAgent={groupMode === "agent"}
             hideProject={groupMode === "project"}
             compact
-            isChild
+            depth={item.depth ?? 1}
           />
         {:else if item.group}
           {@const primary = item.group.sessions.find(
@@ -517,6 +517,7 @@
               onToggleExpand={item.group.sessions.length > 1
                 ? () => toggleChainExpand(item.group!.key)
                 : undefined}
+              depth={0}
             />
           {/if}
         {/if}
