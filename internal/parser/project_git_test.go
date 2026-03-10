@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -116,6 +117,47 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 				t.Fatalf("ExtractProjectFromCwdWithBranch(%q, %q) = %q, want %q", tt.cwd, tt.branch, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestForeignWindowsPathSkipsGitRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test is for non-Windows hosts only")
+	}
+
+	// On non-Windows, a Windows-style path like C:\repo\subdir
+	// should NOT trigger findGitRepoRoot (which would walk the
+	// process CWD). It should fall back to the basename.
+	got := ExtractProjectFromCwdWithBranch(
+		`C:\Users\dev\projects\my-app`, "",
+	)
+	if got != "my_app" {
+		t.Errorf(
+			"foreign Windows path: got %q, want %q",
+			got, "my_app",
+		)
+	}
+}
+
+func TestNativeWindowsPathUsesGitRoot(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("test is for Windows hosts only")
+	}
+
+	// On Windows, a drive-letter path inside a git repo should
+	// still resolve to the repo root name, not the leaf dir.
+	root := t.TempDir()
+	repo := filepath.Join(root, "my-repo")
+	subdir := filepath.Join(repo, "cmd", "server")
+	mustMkdirAll(t, filepath.Join(repo, ".git"))
+	mustMkdirAll(t, subdir)
+
+	got := ExtractProjectFromCwd(subdir)
+	if got != "my_repo" {
+		t.Errorf(
+			"native Windows git path: got %q, want %q",
+			got, "my_repo",
+		)
 	}
 }
 

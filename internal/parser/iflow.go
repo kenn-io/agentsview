@@ -24,8 +24,10 @@ type dagEntryIflow struct {
 }
 
 // ParseIflowSession parses an iFlow JSONL session file.
-// Returns one or more ParseResult structs (multiple when forks
-// are detected in the uuid/parentUuid DAG).
+// Returns a single ParseResult. Unlike Claude, iFlow's
+// uuid/parentUuid DAG represents streaming incremental updates
+// (sliding-window snapshots), not conversation forks, so fork
+// splitting is intentionally not applied.
 func ParseIflowSession(
 	path, project, machine string,
 ) ([]ParseResult, error) {

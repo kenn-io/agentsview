@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unicode"
 )
@@ -86,8 +87,11 @@ func ExtractProjectFromCwdWithBranch(
 	// On non-Windows, a converted Windows path like "C:/Users/..."
 	// is treated as relative by filepath and would cause
 	// findGitRepoRoot to walk up from the process CWD. Skip git
-	// root detection for foreign Windows paths.
-	if !winPath {
+	// root detection only for foreign Windows paths on POSIX;
+	// on actual Windows hosts, drive-letter paths are native and
+	// git root detection must still run.
+	foreignWinPath := winPath && runtime.GOOS != "windows"
+	if !foreignWinPath {
 		if root := findGitRepoRoot(cleaned); root != "" {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
