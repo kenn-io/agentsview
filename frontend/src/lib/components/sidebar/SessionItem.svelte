@@ -211,13 +211,10 @@
   class:depth-1={depth === 1}
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
-  class:has-connector={depth > 0}
-  class:last-child={isLastChild}
   data-session-id={session.id}
   role="button"
   tabindex="0"
   style:padding-left="{8 + depth * 16}px"
-  style:--connector-left="{depth * 16}px"
   onclick={() => sessions.selectSession(session.id)}
   onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
@@ -233,12 +230,12 @@
       <svg
         class="tree-arrow"
         class:expanded
-        width="8"
-        height="8"
-        viewBox="0 0 8 8"
+        width="10"
+        height="10"
+        viewBox="0 0 16 16"
         fill="currentColor"
       >
-        <path d="M2 1l4 3-4 3z"/>
+        <path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z"/>
       </svg>
     </span>
   {:else if depth > 0}
@@ -382,50 +379,17 @@
     opacity: 0.6;
   }
 
-  /* ── Tree connector lines ────────────────────────────── */
-
-  /* Vertical line running alongside children.
-     Positioned at the parent's indent level. */
-  .session-item.has-connector::before {
-    content: "";
-    position: absolute;
-    left: calc(var(--connector-left) + 5px);
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: var(--border-muted);
-  }
-
-  /* For the last child, stop the vertical line at the center. */
-  .session-item.has-connector.last-child::before {
-    bottom: 50%;
-  }
-
-  /* Horizontal tee from the vertical line to the item. */
-  .session-item.has-connector::after {
-    content: "";
-    position: absolute;
-    left: calc(var(--connector-left) + 5px);
-    top: 50%;
-    width: 10px;
-    height: 1px;
-    background: var(--border-muted);
-  }
-
   /* Tree toggle (▶/▼) */
   .tree-toggle {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 100%;
     flex-shrink: 0;
-    border-radius: 3px;
     cursor: pointer;
     color: var(--text-muted);
     transition: color 0.1s;
-    position: relative;
-    z-index: 1;
   }
 
   .tree-toggle:hover {
@@ -433,23 +397,22 @@
   }
 
   .tree-arrow {
-    transition: transform 0.12s ease;
+    transition: transform 150ms ease;
   }
 
   .tree-arrow.expanded {
     transform: rotate(90deg);
   }
 
-  /* Horizontal dash for child leaf nodes (replaces bullet) */
+  /* Spacer for leaf nodes — same width as toggle to align text */
   .tree-dash {
-    width: 14px;
-    height: 14px;
+    width: 16px;
     flex-shrink: 0;
   }
 
   /* Empty spacer for root items without children */
   .tree-spacer {
-    width: 14px;
+    width: 16px;
     flex-shrink: 0;
   }
 
