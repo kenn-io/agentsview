@@ -1,0 +1,113 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/wesm/agentsview/internal/config"
+)
+
+func TestBrowserURLUsesPublicURL(t *testing.T) {
+	cfg := config.Config{
+		Host:      "127.0.0.1",
+		Port:      8080,
+		PublicURL: "https://viewer.example.test",
+	}
+	if got := browserURL(cfg); got != "https://viewer.example.test" {
+		t.Fatalf("browserURL = %q, want %q", got, "https://viewer.example.test")
+	}
+}
+
+func TestValidateServeConfigManagedCaddyAllowsHTTPS(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "viewer.crt")
+	keyPath := filepath.Join(dir, "viewer.key")
+	if err := os.WriteFile(certPath, []byte("cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{
+		Host:      "127.0.0.1",
+		Port:      8080,
+		PublicURL: "https://viewer.example.test",
+		Proxy: config.ProxyConfig{
+			Mode:           "caddy",
+			Bin:            os.Args[0],
+			TLSCert:        certPath,
+			TLSKey:         keyPath,
+			AllowedSubnets: []string{"10.0.0.0/16"},
+		},
+	}
+	if err := validateServeConfig(cfg); err != nil {
+		t.Fatalf("validateServeConfig returned error: %v", err)
+	}
+}
+
+func TestValidateServeConfigManagedCaddyRejectsNonLoopbackHost(t *testing.T) {
+	cfg := config.Config{
+		Host:      "0.0.0.0",
+		Port:      8080,
+		PublicURL: "http://viewer.example.test:8004",
+		Proxy: config.ProxyConfig{
+			Mode: "caddy",
+			Bin:  os.Args[0],
+		},
+	}
+	err := validateServeConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for non-loopback backend host")
+	}
+	if !strings.Contains(err.Error(), "loopback backend host") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateServeConfigManagedCaddyRejectsHTTPWithTLS(t *testing.T) {
+	cfg := config.Config{
+		Host:      "127.0.0.1",
+		Port:      8080,
+		PublicURL: "http://viewer.example.test:8004",
+		Proxy: config.ProxyConfig{
+			Mode:    "caddy",
+			Bin:     os.Args[0],
+			TLSCert: "/tmp/viewer.crt",
+			TLSKey:  "/tmp/viewer.key",
+		},
+	}
+	err := validateServeConfig(cfg)
+	if err == nil {
+		t.Fatal("expected HTTP-with-TLS error")
+	}
+	if !strings.Contains(err.Error(), "HTTP mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBuildManagedCaddyfileIncludesAllowlistAndTLS(t *testing.T) {
+	got := buildManagedCaddyfile(
+		"https://viewer.example.test",
+		"127.0.0.1:8080",
+		"/tmp/viewer.crt",
+		"/tmp/viewer.key",
+		[]string{"10.0.0.0/16", "192.168.1.0/24"},
+	)
+
+	for _, want := range []string{
+		"admin off",
+		"auto_https off",
+		"https://viewer.example.test {",
+		"@blocked not remote_ip 10.0.0.0/16 192.168.1.0/24",
+		"respond @blocked \"Forbidden\" 403",
+		"tls \"/tmp/viewer.crt\" \"/tmp/viewer.key\"",
+		"reverse_proxy 127.0.0.1:8080",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated caddyfile missing %q:\n%s", want, got)
+		}
+	}
+}

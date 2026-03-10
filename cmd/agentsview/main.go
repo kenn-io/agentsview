@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"flag"
@@ -9,8 +10,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"syscall"
 	"time"
 	_ "time/tzdata"
 
@@ -82,7 +85,13 @@ Usage:
 Server flags:
   -host string        Host to bind to (default "127.0.0.1")
   -port int           Port to listen on (default 8080)
+  -public-url str     Public URL to trust and open for hostname/proxy access
   -public-origin str  Trusted browser origin to allow for remote/proxied access
+  -proxy string       Managed reverse proxy mode (currently: caddy)
+  -caddy-bin string   Caddy binary to use when -proxy=caddy
+  -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
+  -tls-key string     TLS key path for managed Caddy HTTPS mode
+  -allowed-subnet str Client CIDR allowed to connect to the managed proxy
   -no-browser         Don't open browser on startup
 
 Sync flags:
@@ -152,6 +161,9 @@ func runServe(args []string) {
 	start := time.Now()
 	cfg := mustLoadConfig(args)
 	setupLogFile(cfg.DataDir)
+	if err := validateServeConfig(cfg); err != nil {
+		fatal("invalid serve config: %v", err)
+	}
 	database := mustOpenDB(cfg)
 	defer database.Close()
 
@@ -203,20 +215,89 @@ func runServe(args []string) {
 		server.WithDataDir(cfg.DataDir),
 	)
 
-	url := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
-	fmt.Printf(
-		"agentsview %s listening at %s (started in %s)\n",
-		version, url,
-		time.Since(start).Round(time.Millisecond),
-	)
-
-	if !cfg.NoBrowser {
-		go openBrowser(url)
+	localURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	publicURL := browserURL(cfg)
+	if publicURL == localURL {
+		fmt.Printf(
+			"agentsview %s listening at %s (started in %s)\n",
+			version, localURL,
+			time.Since(start).Round(time.Millisecond),
+		)
+	} else {
+		fmt.Printf(
+			"agentsview %s backend at %s, public at %s (started in %s)\n",
+			version, localURL, publicURL,
+			time.Since(start).Round(time.Millisecond),
+		)
 	}
 
-	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
-	if err := http.ListenAndServe(addr, srv.Handler()); err != nil {
-		fatal("server error: %v", err)
+	ctx, stop := signal.NotifyContext(
+		context.Background(), os.Interrupt, syscall.SIGTERM,
+	)
+	defer stop()
+
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- srv.ListenAndServe()
+	}()
+	if err := waitForLocalPort(cfg.Host, cfg.Port, 5*time.Second); err != nil {
+		fatal("server failed to start: %v", err)
+	}
+
+	var caddy *managedCaddy
+	if cfg.Proxy.Mode == "caddy" {
+		var err error
+		caddy, err = startManagedCaddy(ctx, cfg)
+		if err != nil {
+			shutdownCtx, cancel := context.WithTimeout(
+				context.Background(), 5*time.Second,
+			)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+			fatal("managed caddy error: %v", err)
+		}
+		defer caddy.Stop()
+	}
+
+	if !cfg.NoBrowser {
+		go openBrowser(publicURL)
+	}
+
+	var caddyErrCh <-chan error
+	if caddy != nil {
+		caddyErrCh = caddy.Err()
+	}
+
+	select {
+	case err := <-serveErrCh:
+		if err != nil && err != http.ErrServerClosed {
+			caddy.Stop()
+			fatal("server error: %v", err)
+		}
+	case err := <-caddyErrCh:
+		shutdownCtx, cancel := context.WithTimeout(
+			context.Background(), 5*time.Second,
+		)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		if err != nil {
+			fatal("managed caddy error: %v", err)
+		}
+		fatal("managed caddy exited unexpectedly")
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(
+			context.Background(), 5*time.Second,
+		)
+		defer cancel()
+		caddy.Stop()
+		if err := srv.Shutdown(shutdownCtx); err != nil &&
+			err != http.ErrServerClosed {
+			fatal("server shutdown error: %v", err)
+		}
+		if err := <-serveErrCh; err != nil &&
+			err != http.ErrServerClosed {
+			fatal("server error: %v", err)
+		}
 	}
 }
 

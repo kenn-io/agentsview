@@ -180,6 +180,95 @@ func TestLoad_PublicOriginsRejectInvalid(t *testing.T) {
 	}
 }
 
+func TestLoad_PublicURLMergedIntoOrigins(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"public_url": "https://viewer.example.test/",
+	})
+
+	cfg, err := LoadMinimal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.PublicURL != "https://viewer.example.test" {
+		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test")
+	}
+	if got := strings.Join(cfg.PublicOrigins, ","); got != "https://viewer.example.test" {
+		t.Fatalf("PublicOrigins = %q, want %q", got, "https://viewer.example.test")
+	}
+}
+
+func TestLoad_ProxyConfigFromFile(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"proxy": map[string]any{
+			"mode":            "caddy",
+			"tls_cert":        "/tmp/viewer.crt",
+			"tls_key":         "/tmp/viewer.key",
+			"allowed_subnets": []string{"10.1.2.3/16", "192.168.1.0/24"},
+		},
+	})
+
+	cfg, err := LoadMinimal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Proxy.Mode != "caddy" {
+		t.Fatalf("Proxy.Mode = %q, want %q", cfg.Proxy.Mode, "caddy")
+	}
+	if cfg.Proxy.Bin != "caddy" {
+		t.Fatalf("Proxy.Bin = %q, want %q", cfg.Proxy.Bin, "caddy")
+	}
+	if got := strings.Join(cfg.Proxy.AllowedSubnets, ","); got != "10.1.0.0/16,192.168.1.0/24" {
+		t.Fatalf("AllowedSubnets = %q, want %q", got, "10.1.0.0/16,192.168.1.0/24")
+	}
+}
+
+func TestLoad_ProxyFlags(t *testing.T) {
+	cfg, err := loadConfigFromFlags(
+		t,
+		"-public-url", "https://viewer.example.test/",
+		"-proxy", "caddy",
+		"-tls-cert", "/tmp/viewer.crt",
+		"-tls-key", "/tmp/viewer.key",
+		"-allowed-subnet", "10.0/16",
+		"-allowed-subnet", "192.168.0.0/24",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.PublicURL != "https://viewer.example.test" {
+		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test")
+	}
+	if cfg.Proxy.Mode != "caddy" {
+		t.Fatalf("Proxy.Mode = %q, want %q", cfg.Proxy.Mode, "caddy")
+	}
+	if got := strings.Join(cfg.Proxy.AllowedSubnets, ","); got != "10.0.0.0/16,192.168.0.0/24" {
+		t.Fatalf("AllowedSubnets = %q, want %q", got, "10.0.0.0/16,192.168.0.0/24")
+	}
+}
+
+func TestLoad_AllowedSubnetsRejectInvalid(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"proxy": map[string]any{
+			"mode":            "caddy",
+			"allowed_subnets": []string{"10.0.0.0/not-a-mask"},
+		},
+	})
+
+	_, err := LoadMinimal()
+	if err == nil {
+		t.Fatal("expected invalid allowed subnets error")
+	}
+	if !strings.Contains(err.Error(), "invalid allowed subnets") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSaveGithubToken_RejectsCorruptConfig(t *testing.T) {
 	tmp := setupTestEnv(t)
 	cfg := Config{DataDir: tmp}

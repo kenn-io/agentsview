@@ -72,30 +72,53 @@ On startup, agentsview discovers sessions from all supported
 agents, syncs them into a local SQLite database with FTS5
 full-text search, and opens a web UI at `http://127.0.0.1:8080`.
 
-For hostname or reverse-proxy access, explicitly allow the browser
-origin you expect. This preserves the default DNS-rebinding and CSRF
-protections while enabling remote or TLS-terminated access.
+For hostname or reverse-proxy access, set a `public_url`. This
+preserves the default DNS-rebinding and CSRF protections while
+explicitly trusting the external browser origin you expect.
 
 ```bash
 # Direct HTTP on a custom hostname/port
 agentsview -host 0.0.0.0 -port 8004 \
-  -public-origin http://viewer.example.test:8004
+  -public-url http://viewer.example.test:8004
 
-# HTTPS behind a reverse proxy such as Caddy
+# HTTPS behind your own reverse proxy
 agentsview -host 127.0.0.1 -port 8004 \
-  -public-origin https://viewer.example.test
+  -public-url https://viewer.example.test
 ```
 
-You can also persist the same setting in `~/.agentsview/config.json`:
+agentsview can also manage a Caddy frontend for you. In managed-Caddy
+mode, keep the backend on loopback and let Caddy terminate TLS and
+optionally restrict client IP ranges:
+
+```bash
+agentsview -host 127.0.0.1 -port 8080 \
+  -public-url https://viewer.example.test \
+  -proxy caddy \
+  -tls-cert ~/.certs/viewer.crt \
+  -tls-key ~/.certs/viewer.key \
+  -allowed-subnet 10.0.0.0/16 \
+  -allowed-subnet 192.168.1.0/24
+```
+
+You can persist the same settings in `~/.agentsview/config.json`:
 
 ```json
 {
-  "public_origins": [
-    "https://viewer.example.test",
-    "http://viewer.example.test:8004"
-  ]
+  "public_url": "https://viewer.example.test",
+  "proxy": {
+    "mode": "caddy",
+    "tls_cert": "/home/user/.certs/viewer.crt",
+    "tls_key": "/home/user/.certs/viewer.key",
+    "allowed_subnets": [
+      "10.0.0.0/16",
+      "192.168.1.0/24"
+    ]
+  }
 }
 ```
+
+`public_origins` remains available as an advanced override when you
+need to allow additional browser origins beyond the main `public_url`.
 
 ## Screenshots
 
