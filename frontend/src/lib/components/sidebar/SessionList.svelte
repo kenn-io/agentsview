@@ -546,7 +546,9 @@
         {:else if item.type === "team-group" && item.group}
           <button
             class="team-group-header"
-            style:padding-left="{10 + (item.depth ?? 1) * 14}px"
+            class:last-child={item.isLastChild}
+            style:padding-left="{8 + (item.depth ?? 1) * 16}px"
+            style:--connector-left="{(item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(`team:${item.group!.key}`)}
           >
             <svg
@@ -559,7 +561,7 @@
             >
               <path d="M2 1l4 3-4 3z"/>
             </svg>
-            <svg class="team-icon" width="11" height="9" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
+            <svg class="team-icon" width="12" height="10" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
               <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
               <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
             </svg>
@@ -574,6 +576,7 @@
             hideProject={groupMode === "project"}
             compact
             depth={item.depth ?? 1}
+            isLastChild={item.isLastChild ?? false}
           />
         {:else if item.group}
           {@const primary = item.group.sessions.find(
@@ -977,7 +980,7 @@
   .team-group-header {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: 4px;
     width: 100%;
     height: 28px;
     font-size: 11px;
@@ -987,6 +990,32 @@
     background: transparent;
     border: none;
     transition: background 0.1s, color 0.1s;
+    position: relative;
+  }
+
+  /* Tree connector lines for team-group (same as SessionItem) */
+  .team-group-header::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-left) + 5px);
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border-muted);
+  }
+
+  .team-group-header.last-child::before {
+    bottom: 50%;
+  }
+
+  .team-group-header::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-left) + 5px);
+    top: 50%;
+    width: 10px;
+    height: 1px;
+    background: var(--border-muted);
   }
 
   .team-group-header:hover {
@@ -997,7 +1026,9 @@
   .tree-arrow {
     flex-shrink: 0;
     transition: transform 0.15s ease;
-    opacity: 0.6;
+    color: var(--text-muted);
+    position: relative;
+    z-index: 1;
   }
 
   .tree-arrow.expanded {
@@ -1006,15 +1037,14 @@
 
   .team-icon {
     flex-shrink: 0;
-    color: var(--accent-blue, #58a6ff);
-    opacity: 0.8;
+    color: var(--text-muted);
+    opacity: 0.7;
   }
 
   .team-label {
     font-weight: 600;
     font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
+    letter-spacing: 0.02em;
   }
 
   .team-count {
