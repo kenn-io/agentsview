@@ -39,8 +39,8 @@ func ParseIflowSession(
 	// Extract session ID from filename: session-<uuid>.jsonl
 	filename := filepath.Base(path)
 	sessionID := strings.TrimSuffix(filename, ".jsonl")
-	if strings.HasPrefix(sessionID, "session-") {
-		sessionID = strings.TrimPrefix(sessionID, "session-")
+	if trimmed, ok := strings.CutPrefix(sessionID, "session-"); ok {
+		sessionID = trimmed
 	}
 	// Normalize iFlow IDs with namespace prefix
 	sessionID = "iflow:" + sessionID

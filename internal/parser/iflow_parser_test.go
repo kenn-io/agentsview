@@ -428,8 +428,8 @@ func TestIflowSessionIDExtraction(t *testing.T) {
 		t.Run(tt.filename, func(t *testing.T) {
 			sessionID := filepath.Base(tt.filename)
 			sessionID = strings.TrimSuffix(sessionID, ".jsonl")
-			if strings.HasPrefix(sessionID, "session-") {
-				sessionID = strings.TrimPrefix(sessionID, "session-")
+			if trimmed, ok := strings.CutPrefix(sessionID, "session-"); ok {
+				sessionID = trimmed
 			}
 
 			if sessionID != tt.expectID {
