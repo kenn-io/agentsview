@@ -31,6 +31,11 @@ export interface DisplayItem {
   isChild?: boolean;
   /** Nesting depth: 0 = root, 1 = child/team-group, 2 = teammate. */
   depth?: number;
+  /** True when this is the last sibling at its depth level. */
+  isLastChild?: boolean;
+  /** True when this depth-1 item has a following depth-1 sibling
+   *  (used to draw the vertical connector line through this row). */
+  hasNextSiblingAtDepth1?: boolean;
   height: number;
   top: number;
 }
@@ -139,8 +144,14 @@ function emitGroupItems(
     }
   }
 
+  // Count total depth-1 items for isLastChild calculation.
+  const hasTeamGroup = teammates.length > 0;
+  const depth1Count = regulars.length + (hasTeamGroup ? 1 : 0);
+
   // Emit regular subagent children at depth 1.
-  for (const s of regulars) {
+  for (let i = 0; i < regulars.length; i++) {
+    const s = regulars[i]!;
+    const depth1Index = i;
     items.push({
       id: `child:${s.id}`,
       type: "session",
@@ -150,6 +161,7 @@ function emitGroupItems(
       session: s,
       isChild: true,
       depth: 1,
+      isLastChild: depth1Index === depth1Count - 1,
       height: CHILD_ITEM_HEIGHT,
       top: y.value,
     });
@@ -157,7 +169,7 @@ function emitGroupItems(
   }
 
   // Emit synthetic "Team" group node + teammate children at depth 2.
-  if (teammates.length > 0) {
+  if (hasTeamGroup) {
     const teamKey = `team:${g.key}`;
     const teamExpanded = expandedGroups.has(teamKey);
 
@@ -168,13 +180,15 @@ function emitGroupItems(
       count: teammates.length,
       group: g,
       depth: 1,
+      isLastChild: true, // Team group is always last at depth 1
       height: TEAM_HEADER_HEIGHT,
       top: y.value,
     });
     y.value += TEAM_HEADER_HEIGHT;
 
     if (teamExpanded) {
-      for (const s of teammates) {
+      for (let i = 0; i < teammates.length; i++) {
+        const s = teammates[i]!;
         items.push({
           id: `child:${s.id}`,
           type: "session",
@@ -184,6 +198,7 @@ function emitGroupItems(
           session: s,
           isChild: true,
           depth: 2,
+          isLastChild: i === teammates.length - 1,
           height: CHILD_ITEM_HEIGHT,
           top: y.value,
         });

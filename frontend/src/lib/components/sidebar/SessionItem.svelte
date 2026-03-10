@@ -19,6 +19,8 @@
     onToggleExpand?: () => void;
     /** Nesting depth: 0 = root, 1 = child, 2 = grandchild. */
     depth?: number;
+    /** Whether this is the last sibling at its depth level. */
+    isLastChild?: boolean;
   }
 
   let {
@@ -31,6 +33,7 @@
     expanded = false,
     onToggleExpand,
     depth = 0,
+    isLastChild = false,
   }: Props = $props();
 
   let isActive = $derived(
@@ -187,6 +190,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   class="session-item"
   class:active={isActive}
@@ -194,17 +198,19 @@
   class:depth-1={depth === 1}
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
+  class:has-connector={depth > 0}
+  class:last-child={isLastChild}
   data-session-id={session.id}
   role="button"
   tabindex="0"
-  style:padding-left="{10 + depth * 14}px"
+  style:padding-left="{8 + depth * 16}px"
+  style:--connector-left="{depth * 16}px"
   onclick={() => sessions.selectSession(session.id)}
   onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
 >
-  <!-- Expand triangle or bullet dot -->
+  <!-- Tree expand/collapse or connector -->
   {#if hasChildren}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
     <span
       class="tree-toggle"
       onclick={handleToggle}
@@ -223,7 +229,7 @@
       </svg>
     </span>
   {:else if depth > 0}
-    <span class="tree-bullet"></span>
+    <span class="tree-dash"></span>
   {:else}
     <span class="tree-spacer"></span>
   {/if}
@@ -329,7 +335,7 @@
   .session-item {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     width: 100%;
     height: 42px;
     padding: 0 10px;
@@ -344,15 +350,12 @@
 
   .session-item.compact {
     height: 34px;
-    gap: 5px;
+    gap: 4px;
   }
 
-  .session-item.depth-1 {
-    background: color-mix(in srgb, var(--bg-inset) 50%, transparent);
-  }
-
+  .session-item.depth-1,
   .session-item.depth-2 {
-    background: var(--bg-inset);
+    background: transparent;
   }
 
   .session-item:hover {
@@ -365,7 +368,37 @@
 
   /* Orphaned teammate at root level — dim it slightly */
   .session-item.orphaned-teammate {
-    opacity: 0.65;
+    opacity: 0.6;
+  }
+
+  /* ── Tree connector lines ────────────────────────────── */
+
+  /* Vertical line running alongside children.
+     Positioned at the parent's indent level. */
+  .session-item.has-connector::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-left) + 5px);
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border-muted);
+  }
+
+  /* For the last child, stop the vertical line at the center. */
+  .session-item.has-connector.last-child::before {
+    bottom: 50%;
+  }
+
+  /* Horizontal tee from the vertical line to the item. */
+  .session-item.has-connector::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-left) + 5px);
+    top: 50%;
+    width: 10px;
+    height: 1px;
+    background: var(--border-muted);
   }
 
   /* Tree toggle (▶/▼) */
@@ -380,6 +413,8 @@
     cursor: pointer;
     color: var(--text-muted);
     transition: color 0.1s;
+    position: relative;
+    z-index: 1;
   }
 
   .tree-toggle:hover {
@@ -394,23 +429,11 @@
     transform: rotate(90deg);
   }
 
-  /* Bullet dot for non-expandable children */
-  .tree-bullet {
+  /* Horizontal dash for child leaf nodes (replaces bullet) */
+  .tree-dash {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .tree-bullet::after {
-    content: "";
-    width: 3px;
-    height: 3px;
-    border-radius: 50%;
-    background: var(--text-muted);
-    opacity: 0.5;
   }
 
   /* Empty spacer for root items without children */
