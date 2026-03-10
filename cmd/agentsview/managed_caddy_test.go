@@ -113,3 +113,60 @@ func TestBuildManagedCaddyfileIncludesAllowlistAndTLS(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteConfiguredPublicURLPort_RewritesMatchingExplicitPort(t *testing.T) {
+	updatedURL, updatedOrigins, changed, err := rewriteConfiguredPublicURLPort(
+		"http://viewer.example.test:8004",
+		[]string{"http://viewer.example.test:8004"},
+		8004,
+		8005,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected public URL rewrite")
+	}
+	if updatedURL != "http://viewer.example.test:8005" {
+		t.Fatalf("updatedURL = %q, want %q", updatedURL, "http://viewer.example.test:8005")
+	}
+	if got := strings.Join(updatedOrigins, ","); got != "http://viewer.example.test:8005" {
+		t.Fatalf("updatedOrigins = %q, want %q", got, "http://viewer.example.test:8005")
+	}
+}
+
+func TestRewriteConfiguredPublicURLPort_PreservesExternalProxyPort(t *testing.T) {
+	updatedURL, updatedOrigins, changed, err := rewriteConfiguredPublicURLPort(
+		"https://viewer.example.test",
+		[]string{"https://viewer.example.test"},
+		8080,
+		8081,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("expected public URL to remain unchanged")
+	}
+	if updatedURL != "https://viewer.example.test" {
+		t.Fatalf("updatedURL = %q, want %q", updatedURL, "https://viewer.example.test")
+	}
+	if got := strings.Join(updatedOrigins, ","); got != "https://viewer.example.test" {
+		t.Fatalf("updatedOrigins = %q, want %q", got, "https://viewer.example.test")
+	}
+}
+
+func TestReadinessProbeHost(t *testing.T) {
+	tests := map[string]string{
+		"":          "127.0.0.1",
+		"0.0.0.0":   "127.0.0.1",
+		"::":        "::1",
+		"127.0.0.1": "127.0.0.1",
+		"10.0.60.2": "10.0.60.2",
+	}
+	for input, want := range tests {
+		if got := readinessProbeHost(input); got != want {
+			t.Fatalf("readinessProbeHost(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

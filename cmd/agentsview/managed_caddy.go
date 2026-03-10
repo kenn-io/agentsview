@@ -29,6 +29,56 @@ func browserURL(cfg config.Config) string {
 	return fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 }
 
+func rewriteConfiguredPublicURLPort(
+	publicURL string,
+	publicOrigins []string,
+	fromPort int,
+	toPort int,
+) (string, []string, bool, error) {
+	if publicURL == "" || fromPort == toPort {
+		return publicURL, publicOrigins, false, nil
+	}
+	u, err := url.Parse(publicURL)
+	if err != nil {
+		return publicURL, publicOrigins, false, err
+	}
+	if u == nil || u.Host == "" {
+		return publicURL, publicOrigins, false, fmt.Errorf(
+			"%q must include a host", publicURL,
+		)
+	}
+
+	shouldRewrite := false
+	if port := u.Port(); port != "" {
+		explicitPort, err := strconv.Atoi(port)
+		if err != nil {
+			return publicURL, publicOrigins, false, err
+		}
+		shouldRewrite = explicitPort == fromPort
+	} else {
+		shouldRewrite = defaultSchemePort(u.Scheme) == fromPort
+	}
+	if !shouldRewrite {
+		return publicURL, publicOrigins, false, nil
+	}
+
+	updatedURL := withURLPort(u, toPort)
+	updatedOrigins := make([]string, 0, len(publicOrigins))
+	replaced := false
+	for _, origin := range publicOrigins {
+		if origin == publicURL {
+			updatedOrigins = append(updatedOrigins, updatedURL)
+			replaced = true
+			continue
+		}
+		updatedOrigins = append(updatedOrigins, origin)
+	}
+	if !replaced {
+		updatedOrigins = append(updatedOrigins, updatedURL)
+	}
+	return updatedURL, updatedOrigins, true, nil
+}
+
 func validateServeConfig(cfg config.Config) error {
 	if cfg.Proxy.Mode == "" {
 		return nil
@@ -248,7 +298,7 @@ func buildManagedCaddyfile(
 
 func waitForLocalPort(host string, port int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	address := net.JoinHostPort(host, strconv.Itoa(port))
+	address := net.JoinHostPort(readinessProbeHost(host), strconv.Itoa(port))
 	var lastErr error
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
@@ -263,4 +313,42 @@ func waitForLocalPort(host string, port int, timeout time.Duration) error {
 		lastErr = fmt.Errorf("timed out waiting for %s", address)
 	}
 	return lastErr
+}
+
+func readinessProbeHost(host string) string {
+	switch host {
+	case "", "0.0.0.0":
+		return "127.0.0.1"
+	case "::":
+		return "::1"
+	default:
+		return host
+	}
+}
+
+func defaultSchemePort(scheme string) int {
+	if strings.EqualFold(scheme, "https") {
+		return 443
+	}
+	return 80
+}
+
+func withURLPort(u *url.URL, port int) string {
+	host := u.Hostname()
+	if host == "" {
+		return u.String()
+	}
+	scheme := strings.ToLower(u.Scheme)
+	defaultPort := defaultSchemePort(scheme)
+	if port == defaultPort {
+		return scheme + "://" + hostLiteral(host)
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func hostLiteral(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }

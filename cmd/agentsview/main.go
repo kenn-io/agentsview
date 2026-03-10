@@ -202,11 +202,27 @@ func runServe(args []string) {
 		go startUnwatchedPoll(engine)
 	}
 
+	requestedPort := cfg.Port
 	port := server.FindAvailablePort(cfg.Host, cfg.Port)
 	if port != cfg.Port {
 		fmt.Printf("Port %d in use, using %d\n", cfg.Port, port)
 	}
 	cfg.Port = port
+	if cfg.Proxy.Mode == "" && cfg.PublicURL != "" {
+		updatedURL, updatedOrigins, changed, err := rewriteConfiguredPublicURLPort(
+			cfg.PublicURL,
+			cfg.PublicOrigins,
+			requestedPort,
+			cfg.Port,
+		)
+		if err != nil {
+			fatal("invalid public url: %v", err)
+		}
+		if changed {
+			cfg.PublicURL = updatedURL
+			cfg.PublicOrigins = updatedOrigins
+		}
+	}
 
 	srv := server.New(cfg, database, engine,
 		server.WithVersion(server.VersionInfo{
