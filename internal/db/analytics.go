@@ -118,8 +118,24 @@ func (f AnalyticsFilter) buildWhere(
 	}
 
 	if f.Agent != "" {
-		preds = append(preds, "agent = ?")
-		args = append(args, f.Agent)
+		agents := strings.Split(f.Agent, ",")
+		if len(agents) == 1 {
+			preds = append(preds, "agent = ?")
+			args = append(args, agents[0])
+		} else {
+			placeholders := make(
+				[]string, len(agents),
+			)
+			for i, a := range agents {
+				placeholders[i] = "?"
+				args = append(args, a)
+			}
+			preds = append(preds,
+				"agent IN ("+
+					strings.Join(placeholders, ",")+
+					")",
+			)
+		}
 	}
 
 	if f.MinUserMessages > 0 {

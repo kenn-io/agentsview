@@ -375,6 +375,27 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// iFlow: <iflowDir>/<project>/session-<uuid>.jsonl
+	for _, iflowDir := range e.agentDirs[parser.AgentIflow] {
+		if iflowDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(iflowDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 2 {
+				continue
+			}
+			if !strings.HasPrefix(parts[1], "session-") || !strings.HasSuffix(parts[1], ".jsonl") {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parts[0],
+				Agent:   parser.AgentIflow,
+			}, true
+		}
+	}
+
 	// Amp: <ampDir>/T-*.json
 	for _, ampDir := range e.agentDirs[parser.AgentAmp] {
 		if ampDir == "" {
@@ -808,7 +829,7 @@ func (e *Engine) syncAllLocked(
 
 	if verbose {
 		log.Printf(
-			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d vscode-copilot, %d pi) in %s",
+			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d iflow, %d vscode-copilot, %d pi) in %s",
 			len(all),
 			counts[parser.AgentClaude],
 			counts[parser.AgentCodex],
@@ -816,6 +837,7 @@ func (e *Engine) syncAllLocked(
 			counts[parser.AgentGemini],
 			counts[parser.AgentCursor],
 			counts[parser.AgentAmp],
+			counts[parser.AgentIflow],
 			counts[parser.AgentVSCodeCopilot],
 			counts[parser.AgentPi],
 			time.Since(t0).Round(time.Millisecond),
@@ -1100,6 +1122,8 @@ func (e *Engine) processFile(
 		res = e.processGemini(file, info)
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
+	case parser.AgentIflow:
+		res = e.processIflow(file, info)
 	case parser.AgentAmp:
 		res = e.processAmp(file, info)
 	case parser.AgentVSCodeCopilot:
@@ -1525,6 +1549,55 @@ func validateCursorContainment(
 	return nil
 }
 
+func (e *Engine) processIflow(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	// Extract session ID from filename: session-<uuid>.jsonl
+	sessionID := "iflow:" + strings.TrimPrefix(strings.TrimSuffix(info.Name(), ".jsonl"), "session-")
+
+	if e.shouldSkipFile(sessionID, info) {
+		sess, _ := e.db.GetSession(
+			context.Background(), sessionID,
+		)
+		if sess != nil &&
+			sess.Project != "" &&
+			!parser.NeedsProjectReparse(sess.Project) {
+			return processResult{skip: true}
+		}
+	}
+
+	// Determine project name from cwd if possible
+	project := parser.GetProjectName(file.Project)
+	cwd, gitBranch := parser.ExtractIflowProjectHints(
+		file.Path,
+	)
+	if cwd != "" {
+		if p := parser.ExtractProjectFromCwdWithBranch(
+			cwd, gitBranch,
+		); p != "" {
+			project = p
+		}
+	}
+
+	results, err := parser.ParseIflowSession(
+		file.Path, project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		for i := range results {
+			results[i].Session.File.Hash = hash
+		}
+	}
+
+	parser.InferRelationshipTypes(results)
+
+	return processResult{results: results}
+}
+
 type pendingWrite struct {
 	sess parser.ParsedSession
 	msgs []parser.ParsedMessage
@@ -1763,6 +1836,16 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 			filepath.Dir(filepath.Dir(path)),
 		)
 		file.Project = parser.DecodeCursorProjectDir(projDir)
+	case parser.AgentIflow:
+		// path is <iflowDir>/<project>/session-<uuid>.jsonl
+		// Extract project dir name from parent directory
+		if sess, _ := e.db.GetSession(context.Background(), sessionID); sess != nil &&
+			sess.Project != "" &&
+			!parser.NeedsProjectReparse(sess.Project) {
+			file.Project = sess.Project
+		} else {
+			file.Project = filepath.Base(filepath.Dir(path))
+		}
 	}
 
 	res := e.processFile(file)

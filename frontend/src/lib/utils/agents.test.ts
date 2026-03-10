@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   KNOWN_AGENTS,
   agentColor,
+  agentLabel,
 } from "./agents.js";
 
 describe("KNOWN_AGENTS", () => {
@@ -18,6 +19,7 @@ describe("KNOWN_AGENTS", () => {
       "vscode-copilot",
       "pi",
       "openclaw",
+      "iflow",
     ]);
   });
 
@@ -64,6 +66,21 @@ describe("agentColor", () => {
       "var(--accent-blue)",
     );
     expect(agentColor("")).toBe("var(--accent-blue)");
+  });
+});
+
+describe("agentLabel", () => {
+  it("returns explicit labels for hyphenated agents", () => {
+    expect(agentLabel("vscode-copilot")).toBe(
+      "VS Code Copilot",
+    );
+    expect(agentLabel("openclaw")).toBe("OpenClaw");
+    expect(agentLabel("iflow")).toBe("iFlow");
+  });
+
+  it("capitalizes simple agent names", () => {
+    expect(agentLabel("claude")).toBe("Claude");
+    expect(agentLabel("gemini")).toBe("Gemini");
   });
 });
 

@@ -107,6 +107,7 @@ Environment variables:
   GEMINI_DIR              Gemini CLI directory
   OPENCODE_DIR            OpenCode data directory
   CURSOR_PROJECTS_DIR     Cursor projects directory
+  IFLOW_DIR               iFlow projects directory
   AMP_DIR                 Amp threads directory
   AGENT_VIEWER_DATA_DIR   Data directory (database, config)
 

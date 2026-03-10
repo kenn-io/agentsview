@@ -360,6 +360,31 @@ class SessionsStore {
     this.load();
   }
 
+  toggleAgentFilter(agent: string) {
+    const current = this.filters.agent
+      ? this.filters.agent.split(",")
+      : [];
+    const idx = current.indexOf(agent);
+    if (idx >= 0) {
+      current.splice(idx, 1);
+    } else {
+      current.push(agent);
+    }
+    this.filters.agent = current.join(",");
+    this.activeSessionId = null;
+    this.load();
+  }
+
+  isAgentSelected(agent: string): boolean {
+    if (!this.filters.agent) return false;
+    return this.filters.agent.split(",").includes(agent);
+  }
+
+  get selectedAgents(): string[] {
+    if (!this.filters.agent) return [];
+    return this.filters.agent.split(",");
+  }
+
   setRecentlyActiveFilter(active: boolean) {
     this.filters.recentlyActive = active;
     this.activeSessionId = null;

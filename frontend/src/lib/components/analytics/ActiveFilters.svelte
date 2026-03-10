@@ -1,6 +1,13 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { agentColor } from "../../utils/agents.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
+  import { agentColor, agentLabel } from "../../utils/agents.js";
+
+  const selectedAgents = $derived(
+    analytics.agent
+      ? analytics.agent.split(",")
+      : [],
+  );
 
   const DAY_LABELS = [
     "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
@@ -37,7 +44,7 @@
   const filterCount = $derived(
     (analytics.selectedDate !== null ? 1 : 0) +
     (analytics.project !== "" ? 1 : 0) +
-    (analytics.agent !== "" ? 1 : 0) +
+    selectedAgents.length +
     (analytics.minUserMessages > 0 ? 1 : 0) +
     (analytics.includeOneShot ? 1 : 0) +
     (analytics.recentlyActive ? 1 : 0) +
@@ -91,20 +98,20 @@
       </button>
     {/if}
 
-    {#if analytics.agent}
+    {#each selectedAgents as agent (agent)}
       <button
         class="filter-chip"
-        onclick={() => analytics.clearAgent()}
-        title="Clear agent filter"
+        onclick={() => sessions.toggleAgentFilter(agent)}
+        title="Remove {agentLabel(agent)} filter"
       >
         <span
           class="agent-chip-dot"
-          style:background={agentColor(analytics.agent)}
+          style:background={agentColor(agent)}
         ></span>
-        {analytics.agent}
+        {agentLabel(agent)}
         <span class="chip-x">&times;</span>
       </button>
-    {/if}
+    {/each}
 
     {#if analytics.minUserMessages > 0}
       <button

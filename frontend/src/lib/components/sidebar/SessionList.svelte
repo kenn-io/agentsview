@@ -5,8 +5,8 @@
   import SessionItem from "./SessionItem.svelte";
   import { formatNumber } from "../../utils/format.js";
   import {
-    KNOWN_AGENTS,
     agentColor,
+    agentLabel,
   } from "../../utils/agents.js";
   import {
     ITEM_HEIGHT,
@@ -27,6 +27,27 @@
     $state(undefined);
   let dropdownRef: HTMLDivElement | undefined =
     $state(undefined);
+  let agentSearch = $state("");
+
+  // Agents sorted by frequency, filtered by search.
+  let sortedAgents = $derived.by(() => {
+    const agents = [...sessions.agents].sort(
+      (a, b) => b.session_count - a.session_count,
+    );
+    if (!agentSearch) return agents;
+    const q = agentSearch.toLowerCase();
+    return agents.filter((a) =>
+      agentLabel(a.name).toLowerCase().includes(q),
+    );
+  });
+
+  // Ensure agents are loaded when dropdown opens.
+  $effect(() => {
+    if (showFilterDropdown) {
+      sessions.loadAgents();
+      agentSearch = "";
+    }
+  });
 
   let groupByAgent = $state(
     typeof localStorage !== "undefined" &&
@@ -319,32 +340,53 @@
         </div>
         <div class="filter-section">
           <div class="filter-section-label">Agent</div>
-          <div class="agent-buttons">
-            {#each KNOWN_AGENTS as agent}
-              {@const isSelected =
-                sessions.filters.agent === agent.name}
+          {#if sessions.agents.length > 5}
+            <input
+              class="agent-search"
+              type="text"
+              placeholder="Search agents..."
+              bind:value={agentSearch}
+            />
+          {/if}
+          <div class="agent-select-list">
+            {#each sortedAgents as agent (agent.name)}
+              {@const selected =
+                sessions.isAgentSelected(agent.name)}
               <button
-                class="agent-filter-btn"
-                class:active={isSelected}
-                style:--agent-color={agent.color}
+                class="agent-select-row"
+                class:selected
+                style:--agent-color={agentColor(agent.name)}
                 onclick={() =>
-                  sessions.setAgentFilter(agent.name)}
+                  sessions.toggleAgentFilter(agent.name)}
               >
                 <span
-                  class="agent-dot-mini"
-                  style:background={agent.color}
+                  class="agent-check"
+                  class:on={selected}
                 ></span>
-                {agent.name}
+                <span
+                  class="agent-dot-mini"
+                  style:background={agentColor(agent.name)}
+                ></span>
+                <span class="agent-select-name">
+                  {agentLabel(agent.name)}
+                </span>
+                <span class="agent-select-count">
+                  {agent.session_count}
+                </span>
               </button>
+            {:else}
+              <span class="agent-select-empty">
+                {agentSearch ? "No match" : "No agents"}
+              </span>
             {/each}
           </div>
         </div>
         <div class="filter-section">
           <div class="filter-section-label">Min Prompts</div>
-          <div class="agent-buttons">
+          <div class="pill-buttons">
             {#each [2, 3, 5, 10] as n}
               <button
-                class="agent-filter-btn"
+                class="pill-btn"
                 class:active={sessions.filters.minUserMessages === n}
                 onclick={() =>
                   sessions.setMinUserMessagesFilter(n)}
@@ -491,7 +533,7 @@
     top: 100%;
     right: 0;
     margin-top: 4px;
-    width: 200px;
+    width: 220px;
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-md);
@@ -571,13 +613,114 @@
     border-color: var(--accent-green);
   }
 
-  .agent-buttons {
+  .agent-search {
+    width: 100%;
+    height: 24px;
+    padding: 0 8px;
+    margin-bottom: 4px;
+    font-size: 10px;
+    color: var(--text-primary);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+    border-radius: 4px;
+    outline: none;
+    transition: border-color 0.1s;
+  }
+
+  .agent-search::placeholder {
+    color: var(--text-muted);
+  }
+
+  .agent-search:focus {
+    border-color: var(--accent-blue);
+  }
+
+  .agent-select-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 180px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    gap: 1px;
+  }
+
+  .agent-select-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 3px 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    text-align: left;
+    border-radius: 3px;
+    transition: background 0.08s, color 0.08s;
+    flex-shrink: 0;
+  }
+
+  .agent-select-row:hover {
+    background: var(--bg-surface-hover);
+  }
+
+  .agent-select-row.selected {
+    color: var(--agent-color);
+    font-weight: 500;
+  }
+
+  .agent-check {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1.5px solid var(--border-default);
+    flex-shrink: 0;
+    transition: background 0.1s, border-color 0.1s;
+  }
+
+  .agent-check.on {
+    background: var(--agent-color);
+    border-color: var(--agent-color);
+  }
+
+  .agent-dot-mini {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .agent-select-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .agent-select-count {
+    flex-shrink: 0;
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--text-muted);
+    min-width: 14px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .agent-select-empty {
+    display: block;
+    padding: 6px 8px;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+
+  .pill-buttons {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
   }
 
-  .agent-filter-btn {
+  .pill-btn {
     display: flex;
     align-items: center;
     gap: 4px;
@@ -592,23 +735,16 @@
       color 0.1s;
   }
 
-  .agent-filter-btn:hover {
+  .pill-btn:hover {
     background: var(--bg-surface-hover);
     border-color: var(--border-default);
   }
 
-  .agent-filter-btn.active {
+  .pill-btn.active {
     background: var(--bg-surface-hover);
-    border-color: var(--agent-color);
-    color: var(--agent-color);
+    border-color: var(--accent-green);
+    color: var(--accent-green);
     font-weight: 500;
-  }
-
-  .agent-dot-mini {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    flex-shrink: 0;
   }
 
   .clear-filters-btn {

@@ -67,19 +67,21 @@ func TestExtractProjectFromCwd(t *testing.T) {
 		{cwd: ".."},
 	}
 
-	// Platform-specific behavior for Windows paths
+	// Windows drive-letter paths are normalized cross-platform.
+	tests = append(tests, []struct{ cwd, want string }{
+		{cwd: `C:\Users\me\my-app`, want: "my_app"},
+		{cwd: `D:\projects\frontend`, want: "frontend"},
+	}...)
+	// Mixed path: on Windows filepath treats \ as separator,
+	// on POSIX it is a literal filename character.
 	if runtime.GOOS == "windows" {
-		tests = append(tests, []struct{ cwd, want string }{
-			{cwd: `C:\Users\me\my-app`, want: "my_app"},
-			{cwd: `D:\projects\frontend`, want: "frontend"},
-			{cwd: `/mixed\path/to\project`, want: "project"},
-		}...)
+		tests = append(tests, struct{ cwd, want string }{
+			cwd: `/mixed\path/to\project`, want: "project",
+		})
 	} else {
-		tests = append(tests, []struct{ cwd, want string }{
-			{cwd: `C:\Users\me\my-app`},
-			{cwd: `D:\projects\frontend`},
-			{cwd: `/mixed\path/to\project`},
-		}...)
+		tests = append(tests, struct{ cwd, want string }{
+			cwd: `/mixed\path/to\project`,
+		})
 	}
 
 	for _, tt := range tests {

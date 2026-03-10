@@ -217,8 +217,24 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		args = append(args, f.Machine)
 	}
 	if f.Agent != "" {
-		preds = append(preds, "agent = ?")
-		args = append(args, f.Agent)
+		agents := strings.Split(f.Agent, ",")
+		if len(agents) == 1 {
+			preds = append(preds, "agent = ?")
+			args = append(args, agents[0])
+		} else {
+			placeholders := make(
+				[]string, len(agents),
+			)
+			for i, a := range agents {
+				placeholders[i] = "?"
+				args = append(args, a)
+			}
+			preds = append(preds,
+				"agent IN ("+
+					strings.Join(placeholders, ",")+
+					")",
+			)
+		}
 	}
 	if f.Date != "" {
 		preds = append(preds,
@@ -652,7 +668,8 @@ func (db *DB) GetAgents(
 	q := `SELECT agent, COUNT(*) as session_count
 		FROM sessions
 		WHERE message_count > 0 AND agent <> ''
-		  AND deleted_at IS NULL`
+		  AND deleted_at IS NULL
+		  AND relationship_type NOT IN ('subagent', 'fork')`
 	if excludeOneShot {
 		q += " AND user_message_count > 1"
 	}
