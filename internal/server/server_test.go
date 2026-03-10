@@ -55,6 +55,12 @@ func withWriteTimeout(d time.Duration) setupOption {
 	return func(c *config.Config) { c.WriteTimeout = d }
 }
 
+func withPublicOrigins(origins ...string) setupOption {
+	return func(c *config.Config) {
+		c.PublicOrigins = append([]string(nil), origins...)
+	}
+}
+
 func setup(
 	t *testing.T,
 	opts ...setupOption,
@@ -1426,6 +1432,29 @@ func TestHostHeaderAllowsLegitimate(t *testing.T) {
 		if w.Code == http.StatusForbidden {
 			t.Errorf("host %s should be allowed, got 403", host)
 		}
+	}
+}
+
+func TestHostHeaderAllowsConfiguredPublicOriginHost(t *testing.T) {
+	te := setup(t, withPublicOrigins("http://viewer.example.test:8004"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req.Host = "viewer.example.test:8004"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusOK)
+}
+
+func TestCORSAllowsConfiguredHTTPSPublicOrigin(t *testing.T) {
+	te := setup(t, withPublicOrigins("https://viewer.example.test"))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
+	req.Host = "viewer.example.test"
+	req.Header.Set("Origin", "https://viewer.example.test")
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	if w.Code == http.StatusForbidden {
+		t.Fatal("configured public origin should not be blocked")
 	}
 }
 

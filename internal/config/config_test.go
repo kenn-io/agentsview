@@ -106,6 +106,9 @@ func TestLoad_DefaultsWithoutFlags(t *testing.T) {
 			"Port = %d, want default %d", cfg.Port, 8080,
 		)
 	}
+	if len(cfg.PublicOrigins) != 0 {
+		t.Errorf("PublicOrigins = %v, want none", cfg.PublicOrigins)
+	}
 }
 
 func TestLoad_NilFlagSet(t *testing.T) {
@@ -116,6 +119,64 @@ func TestLoad_NilFlagSet(t *testing.T) {
 
 	if cfg.Host != "127.0.0.1" {
 		t.Errorf("Host = %q, want %q", cfg.Host, "127.0.0.1")
+	}
+}
+
+func TestLoad_PublicOriginFlagOverridesConfigFile(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"public_origins": []string{"https://old.example.test"},
+	})
+
+	cfg, err := loadConfigFromFlags(
+		t,
+		"-public-origin", "https://viewer.example.test/",
+		"-public-origin", "http://viewer.example.test:8004",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := strings.Join(cfg.PublicOrigins, ",")
+	want := "https://viewer.example.test,http://viewer.example.test:8004"
+	if got != want {
+		t.Fatalf("PublicOrigins = %q, want %q", got, want)
+	}
+}
+
+func TestLoad_PublicOriginsFromConfigFile(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"public_origins": []string{
+			"https://Viewer.Example.Test:443/",
+			"http://viewer.example.test:8004",
+		},
+	})
+
+	cfg, err := LoadMinimal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := strings.Join(cfg.PublicOrigins, ",")
+	want := "https://viewer.example.test,http://viewer.example.test:8004"
+	if got != want {
+		t.Fatalf("PublicOrigins = %q, want %q", got, want)
+	}
+}
+
+func TestLoad_PublicOriginsRejectInvalid(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"public_origins": []string{"ftp://viewer.example.test"},
+	})
+
+	_, err := LoadMinimal()
+	if err == nil {
+		t.Fatal("expected invalid public origin error")
+	}
+	if !strings.Contains(err.Error(), "invalid public origins") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

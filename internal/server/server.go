@@ -261,8 +261,12 @@ func (s *Server) githubToken() string {
 
 // Handler returns the http.Handler with middleware applied.
 func (s *Server) Handler() http.Handler {
-	allowedOrigins := buildAllowedOrigins(s.cfg.Host, s.cfg.Port)
-	allowedHosts := buildAllowedHosts(s.cfg.Host, s.cfg.Port)
+	allowedOrigins := buildAllowedOrigins(
+		s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins,
+	)
+	allowedHosts := buildAllowedHosts(
+		s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins,
+	)
 	bindAll := isBindAll(s.cfg.Host)
 	bindAllIPs := map[string]bool(nil)
 	if bindAll {
@@ -281,7 +285,7 @@ func (s *Server) Handler() http.Handler {
 // rebinding attacks where an attacker's domain resolves to
 // 127.0.0.1 — the browser sends the attacker's domain as the
 // Host header, which we reject.
-func buildAllowedHosts(host string, port int) map[string]bool {
+func buildAllowedHosts(host string, port int, publicOrigins []string) map[string]bool {
 	hosts := make(map[string]bool)
 	add := func(h string) {
 		hosts[net.JoinHostPort(h, strconv.Itoa(port))] = true
@@ -308,6 +312,9 @@ func buildAllowedHosts(host string, port int) map[string]bool {
 	case "::1":
 		add("127.0.0.1")
 		add("localhost")
+	}
+	for _, origin := range publicOrigins {
+		addHostHeadersFromOrigin(hosts, origin)
 	}
 	return hosts
 }
@@ -364,7 +371,7 @@ func httpOrigin(host string, port int) []string {
 // permitted by CORS. For loopback addresses, both "127.0.0.1"
 // and "localhost" are allowed because browsers treat them as
 // distinct origins.
-func buildAllowedOrigins(host string, port int) map[string]bool {
+func buildAllowedOrigins(host string, port int, publicOrigins []string) map[string]bool {
 	origins := make(map[string]bool)
 	add := func(h string) {
 		for _, o := range httpOrigin(h, port) {
@@ -390,7 +397,26 @@ func buildAllowedOrigins(host string, port int) map[string]bool {
 		add("127.0.0.1")
 		add("localhost")
 	}
+	for _, origin := range publicOrigins {
+		origins[origin] = true
+	}
 	return origins
+}
+
+func addHostHeadersFromOrigin(hosts map[string]bool, origin string) {
+	u, err := url.Parse(origin)
+	if err != nil || u == nil || u.Host == "" {
+		return
+	}
+	hosts[u.Host] = true
+	if u.Port() != "" {
+		return
+	}
+	defaultPort := "80"
+	if u.Scheme == "https" {
+		defaultPort = "443"
+	}
+	hosts[net.JoinHostPort(u.Hostname(), defaultPort)] = true
 }
 
 // isBindAll returns true when the server is listening on all

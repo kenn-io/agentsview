@@ -82,6 +82,7 @@ Usage:
 Server flags:
   -host string        Host to bind to (default "127.0.0.1")
   -port int           Port to listen on (default 8080)
+  -public-origin str  Trusted browser origin to allow for remote/proxied access
   -no-browser         Don't open browser on startup
 
 Sync flags:

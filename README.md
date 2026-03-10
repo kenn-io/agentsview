@@ -72,6 +72,31 @@ On startup, agentsview discovers sessions from all supported
 agents, syncs them into a local SQLite database with FTS5
 full-text search, and opens a web UI at `http://127.0.0.1:8080`.
 
+For hostname or reverse-proxy access, explicitly allow the browser
+origin you expect. This preserves the default DNS-rebinding and CSRF
+protections while enabling remote or TLS-terminated access.
+
+```bash
+# Direct HTTP on a custom hostname/port
+agentsview -host 0.0.0.0 -port 8004 \
+  -public-origin http://viewer.example.test:8004
+
+# HTTPS behind a reverse proxy such as Caddy
+agentsview -host 127.0.0.1 -port 8004 \
+  -public-origin https://viewer.example.test
+```
+
+You can also persist the same setting in `~/.agentsview/config.json`:
+
+```json
+{
+  "public_origins": [
+    "https://viewer.example.test",
+    "http://viewer.example.test:8004"
+  ]
+}
+```
+
 ## Screenshots
 
 | Dashboard | Session viewer |

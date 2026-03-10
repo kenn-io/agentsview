@@ -7,9 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wesm/agentsview/internal/parser"
@@ -29,15 +32,16 @@ type TerminalConfig struct {
 
 // Config holds all application configuration.
 type Config struct {
-	Host         string        `json:"host"`
-	Port         int           `json:"port"`
-	NoBrowser    bool          `json:"no_browser"`
-	DataDir      string        `json:"data_dir"`
-	DBPath       string        `json:"-"`
-	CursorSecret string        `json:"cursor_secret"`
-	GithubToken  string        `json:"github_token,omitempty"`
-	Terminal     TerminalConfig `json:"terminal,omitempty"`
-	WriteTimeout time.Duration `json:"-"`
+	Host          string         `json:"host"`
+	Port          int            `json:"port"`
+	NoBrowser     bool           `json:"no_browser"`
+	DataDir       string         `json:"data_dir"`
+	DBPath        string         `json:"-"`
+	PublicOrigins []string       `json:"public_origins,omitempty"`
+	CursorSecret  string         `json:"cursor_secret"`
+	GithubToken   string         `json:"github_token,omitempty"`
+	Terminal      TerminalConfig `json:"terminal,omitempty"`
+	WriteTimeout  time.Duration  `json:"-"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -117,6 +121,10 @@ func Load(fs *flag.FlagSet) (Config, error) {
 		return cfg, err
 	}
 	applyFlags(&cfg, fs)
+	cfg.PublicOrigins, err = normalizePublicOrigins(cfg.PublicOrigins)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid public origins: %w", err)
+	}
 	return cfg, nil
 }
 
@@ -132,6 +140,10 @@ func LoadMinimal() (Config, error) {
 
 	if err := cfg.loadFile(); err != nil {
 		return cfg, fmt.Errorf("loading config file: %w", err)
+	}
+	cfg.PublicOrigins, err = normalizePublicOrigins(cfg.PublicOrigins)
+	if err != nil {
+		return cfg, fmt.Errorf("invalid public origins: %w", err)
 	}
 	if err := cfg.ensureCursorSecret(); err != nil {
 		return cfg, fmt.Errorf("ensuring cursor secret: %w", err)
@@ -156,6 +168,7 @@ func (c *Config) loadFile() error {
 	var file struct {
 		GithubToken                    string         `json:"github_token"`
 		CursorSecret                   string         `json:"cursor_secret"`
+		PublicOrigins                  []string       `json:"public_origins"`
 		ResultContentBlockedCategories []string       `json:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig `json:"terminal"`
 	}
@@ -167,6 +180,9 @@ func (c *Config) loadFile() error {
 	}
 	if file.CursorSecret != "" {
 		c.CursorSecret = file.CursorSecret
+	}
+	if file.PublicOrigins != nil {
+		c.PublicOrigins = file.PublicOrigins
 	}
 	if file.ResultContentBlockedCategories != nil {
 		c.ResultContentBlockedCategories = file.ResultContentBlockedCategories
@@ -259,11 +275,33 @@ func (c *Config) loadEnv() {
 	}
 }
 
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlag) Set(value string) error {
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		*f = append(*f, part)
+	}
+	return nil
+}
+
 // RegisterServeFlags registers serve-command flags on fs.
 // The caller must call fs.Parse before passing fs to Load.
 func RegisterServeFlags(fs *flag.FlagSet) {
 	fs.String("host", "127.0.0.1", "Host to bind to")
 	fs.Int("port", 8080, "Port to listen on")
+	fs.Var(
+		&stringListFlag{},
+		"public-origin",
+		"Trusted browser origin to allow for remote or proxied access (repeatable or comma-separated)",
+	)
 	fs.Bool(
 		"no-browser", false,
 		"Don't open browser on startup",
@@ -282,10 +320,112 @@ func applyFlags(cfg *Config, fs *flag.FlagSet) {
 		case "port":
 			// flag already validated the int; ignore parse error
 			cfg.Port, _ = strconv.Atoi(f.Value.String())
+		case "public-origin":
+			cfg.PublicOrigins = splitFlagList(f.Value.String())
 		case "no-browser":
 			cfg.NoBrowser = f.Value.String() == "true"
 		}
 	})
+}
+
+func splitFlagList(value string) []string {
+	if value == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func normalizePublicOrigins(origins []string) ([]string, error) {
+	if len(origins) == 0 {
+		return nil, nil
+	}
+	normalized := make([]string, 0, len(origins))
+	seen := make(map[string]bool, len(origins))
+	for _, origin := range origins {
+		if strings.TrimSpace(origin) == "" {
+			continue
+		}
+		norm, err := normalizePublicOrigin(origin)
+		if err != nil {
+			return nil, err
+		}
+		if seen[norm] {
+			continue
+		}
+		seen[norm] = true
+		normalized = append(normalized, norm)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	return normalized, nil
+}
+
+func normalizePublicOrigin(origin string) (string, error) {
+	origin = strings.TrimSpace(origin)
+	u, err := url.Parse(origin)
+	if err != nil {
+		return "", fmt.Errorf("parsing %q: %w", origin, err)
+	}
+	if u == nil || u.Host == "" {
+		return "", fmt.Errorf("%q must include a host", origin)
+	}
+	if u.User != nil {
+		return "", fmt.Errorf("%q must not include user info", origin)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%q must not include query or fragment", origin)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", fmt.Errorf("%q must not include a path", origin)
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("%q must use http or https", origin)
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("%q must include a host", origin)
+	}
+	port := u.Port()
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", fmt.Errorf("%q has an invalid port", origin)
+		}
+		if n == defaultPortForScheme(scheme) {
+			port = ""
+		}
+	}
+
+	if port == "" {
+		return scheme + "://" + hostLiteral(host), nil
+	}
+	return scheme + "://" + net.JoinHostPort(host, port), nil
+}
+
+func defaultPortForScheme(scheme string) int {
+	if scheme == "https" {
+		return 443
+	}
+	return 80
+}
+
+func hostLiteral(host string) string {
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // ResolveDataDir returns the effective data directory by applying
