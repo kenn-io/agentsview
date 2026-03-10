@@ -85,13 +85,10 @@
 
   let hasChildren = $derived(childCount > 0 && !!onToggleExpand);
 
-  /** The color for the left accent bar on child/grandchild items. */
-  let accentBarColor = $derived.by(() => {
-    if (depth === 0) return "transparent";
-    if (isTeamSession) return "var(--accent-blue)";
-    if (isSubagentSession) return "var(--accent-green)";
-    return "var(--text-muted)";
-  });
+  /** Whether this is an orphaned teammate showing at root level. */
+  let isOrphanedTeammate = $derived(
+    depth === 0 && isTeamSession,
+  );
 
   function handleStar(e: MouseEvent) {
     e.stopPropagation();
@@ -196,6 +193,7 @@
   class:compact
   class:depth-1={depth === 1}
   class:depth-2={depth >= 2}
+  class:orphaned-teammate={isOrphanedTeammate}
   data-session-id={session.id}
   role="button"
   tabindex="0"
@@ -204,11 +202,6 @@
   onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
 >
-  <!-- Colored accent bar for child/grandchild items -->
-  {#if depth > 0}
-    <span class="accent-bar" style:background={accentBarColor}></span>
-  {/if}
-
   <!-- Expand triangle or bullet dot -->
   {#if hasChildren}
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -342,7 +335,6 @@
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
-    border-left: 2px solid transparent;
     transition: background 0.1s;
     user-select: none;
     -webkit-user-select: none;
@@ -369,17 +361,11 @@
 
   .session-item.active {
     background: var(--bg-surface-hover);
-    border-left-color: var(--accent-blue);
   }
 
-  /* Colored accent bar for children */
-  .accent-bar {
-    position: absolute;
-    left: 0;
-    top: 4px;
-    bottom: 4px;
-    width: 2px;
-    border-radius: 1px;
+  /* Orphaned teammate at root level — dim it slightly */
+  .session-item.orphaned-teammate {
+    opacity: 0.65;
   }
 
   /* Tree toggle (▶/▼) */
