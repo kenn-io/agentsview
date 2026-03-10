@@ -2,7 +2,8 @@ import type { Session } from "../../api/types.js";
 import type { SessionGroup } from "../../stores/sessions.svelte.js";
 
 export const ITEM_HEIGHT = 42;
-export const CHILD_ITEM_HEIGHT = 36;
+export const CHILD_ITEM_HEIGHT = 34;
+export const TEAM_HEADER_HEIGHT = 28;
 export const HEADER_HEIGHT = 28;
 export const OVERSCAN = 10;
 export const STORAGE_KEY = "agentsview-group-by-agent";
@@ -20,7 +21,7 @@ export type AgentSection = GroupSection;
 
 export interface DisplayItem {
   id: string;
-  type: "header" | "session";
+  type: "header" | "session" | "team-group";
   label: string;
   count: number;
   group?: SessionGroup;
@@ -28,7 +29,7 @@ export interface DisplayItem {
   session?: Session;
   /** True when this is a child session inside an expanded group. */
   isChild?: boolean;
-  /** Nesting depth: 0 = root, 1 = child, 2 = grandchild. */
+  /** Nesting depth: 0 = root, 1 = child/team-group, 2 = teammate. */
   depth?: number;
   height: number;
   top: number;
@@ -85,9 +86,21 @@ export function buildAgentSections(
   return buildGroupSections(groups, groupByAgent ? "agent" : "none");
 }
 
+/** Check if a session is a teammate (received a <teammate-message>). */
+function isTeammate(s: Session): boolean {
+  return s.first_message?.includes("<teammate-message") ?? false;
+}
+
 /**
  * Emit display items for a single SessionGroup, expanding
  * child sessions when the group key is in expandedGroups.
+ *
+ * When a group contains teammate sessions, they are placed
+ * under a synthetic "Team (N)" expandable node at depth 1,
+ * and the teammates themselves render at depth 2. Regular
+ * subagents remain at depth 1. This gives the 3-level tree:
+ *   Session (depth 0) > Subagent (depth 1)
+ *   Session (depth 0) > Team (depth 1) > Teammate (depth 2)
  */
 function emitGroupItems(
   g: SessionGroup,
@@ -99,46 +112,83 @@ function emitGroupItems(
   const hasChildren = g.sessions.length > 1;
   const isExpanded = hasChildren && expandedGroups.has(g.key);
 
-  // Primary session
+  // Primary session (depth 0)
   items.push({
     id: label ? `session:${label}:${g.primarySessionId}` : `session:${g.primarySessionId}`,
     type: "session",
     label,
     count: 0,
     group: g,
+    depth: 0,
     height: ITEM_HEIGHT,
     top: y.value,
   });
   y.value += ITEM_HEIGHT;
 
-  // Child sessions when expanded
-  if (isExpanded) {
-    // Build a set of session IDs in this group for depth calculation.
-    const groupIds = new Set(g.sessions.map((s) => s.id));
-    for (const s of g.sessions) {
-      if (s.id === g.primarySessionId) continue;
-      // Compute depth: if parent is another non-primary member, depth=2.
-      let depth = 1;
-      if (
-        s.parent_session_id &&
-        s.parent_session_id !== g.primarySessionId &&
-        groupIds.has(s.parent_session_id)
-      ) {
-        depth = 2;
+  if (!isExpanded) return;
+
+  // Separate children into regular subagents and teammates.
+  const children = g.sessions.filter((s) => s.id !== g.primarySessionId);
+  const regulars: Session[] = [];
+  const teammates: Session[] = [];
+  for (const s of children) {
+    if (isTeammate(s)) {
+      teammates.push(s);
+    } else {
+      regulars.push(s);
+    }
+  }
+
+  // Emit regular subagent children at depth 1.
+  for (const s of regulars) {
+    items.push({
+      id: `child:${s.id}`,
+      type: "session",
+      label,
+      count: 0,
+      group: g,
+      session: s,
+      isChild: true,
+      depth: 1,
+      height: CHILD_ITEM_HEIGHT,
+      top: y.value,
+    });
+    y.value += CHILD_ITEM_HEIGHT;
+  }
+
+  // Emit synthetic "Team" group node + teammate children at depth 2.
+  if (teammates.length > 0) {
+    const teamKey = `team:${g.key}`;
+    const teamExpanded = expandedGroups.has(teamKey);
+
+    items.push({
+      id: `team-group:${g.key}`,
+      type: "team-group",
+      label: "Team",
+      count: teammates.length,
+      group: g,
+      depth: 1,
+      height: TEAM_HEADER_HEIGHT,
+      top: y.value,
+    });
+    y.value += TEAM_HEADER_HEIGHT;
+
+    if (teamExpanded) {
+      for (const s of teammates) {
+        items.push({
+          id: `child:${s.id}`,
+          type: "session",
+          label,
+          count: 0,
+          group: g,
+          session: s,
+          isChild: true,
+          depth: 2,
+          height: CHILD_ITEM_HEIGHT,
+          top: y.value,
+        });
+        y.value += CHILD_ITEM_HEIGHT;
       }
-      items.push({
-        id: `child:${s.id}`,
-        type: "session",
-        label,
-        count: 0,
-        group: g,
-        session: s,
-        isChild: true,
-        depth,
-        height: CHILD_ITEM_HEIGHT,
-        top: y.value,
-      });
-      y.value += CHILD_ITEM_HEIGHT;
     }
   }
 }

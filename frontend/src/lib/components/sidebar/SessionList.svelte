@@ -543,6 +543,29 @@
             <span class="group-name">{item.label}</span>
             <span class="group-count">{item.count}</span>
           </button>
+        {:else if item.type === "team-group" && item.group}
+          <button
+            class="team-group-header"
+            style:padding-left="{10 + (item.depth ?? 1) * 14}px"
+            onclick={() => toggleChainExpand(`team:${item.group!.key}`)}
+          >
+            <svg
+              class="tree-arrow"
+              class:expanded={expandedGroups.has(`team:${item.group.key}`)}
+              width="8"
+              height="8"
+              viewBox="0 0 8 8"
+              fill="currentColor"
+            >
+              <path d="M2 1l4 3-4 3z"/>
+            </svg>
+            <svg class="team-icon" width="11" height="9" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
+              <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
+              <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
+            </svg>
+            <span class="team-label">Team</span>
+            <span class="team-count">({item.count})</span>
+          </button>
         {:else if item.isChild && item.session}
           <SessionItem
             session={item.session}
@@ -948,6 +971,57 @@
     padding: 0 5px;
     border-radius: 8px;
     line-height: 16px;
+  }
+
+  /* Team group header (synthetic "Team (N)" node at depth 1) */
+  .team-group-header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    height: 28px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+    background: transparent;
+    border: none;
+    transition: background 0.1s, color 0.1s;
+    border-left: 2px solid var(--accent-blue, #58a6ff);
+  }
+
+  .team-group-header:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .tree-arrow {
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+    opacity: 0.6;
+  }
+
+  .tree-arrow.expanded {
+    transform: rotate(90deg);
+  }
+
+  .team-icon {
+    flex-shrink: 0;
+    color: var(--accent-blue, #58a6ff);
+    opacity: 0.8;
+  }
+
+  .team-label {
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .team-count {
+    font-size: 9px;
+    color: var(--text-muted);
+    font-weight: 500;
   }
 
 </style>
