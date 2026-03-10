@@ -4,16 +4,22 @@ export const ITEM_HEIGHT = 42;
 export const HEADER_HEIGHT = 28;
 export const OVERSCAN = 10;
 export const STORAGE_KEY = "agentsview-group-by-agent";
+export const STORAGE_KEY_GROUP = "agentsview-group-mode";
 
-export interface AgentSection {
-  agent: string;
+export type GroupMode = "none" | "agent" | "project";
+
+export interface GroupSection {
+  label: string;
   groups: SessionGroup[];
 }
+
+/** @deprecated Use GroupSection */
+export type AgentSection = GroupSection;
 
 export interface DisplayItem {
   id: string;
   type: "header" | "session";
-  agent: string;
+  label: string;
   count: number;
   group?: SessionGroup;
   height: number;
@@ -21,51 +27,73 @@ export interface DisplayItem {
 }
 
 /**
- * Build agent-grouped sections from flat session groups.
- * Returns empty array when grouping is off.
+ * Read persisted group mode from localStorage, migrating the
+ * legacy boolean key if needed.
  */
-export function buildAgentSections(
+export function getInitialGroupMode(): GroupMode {
+  if (typeof localStorage === "undefined") return "none";
+  const stored = localStorage.getItem(STORAGE_KEY_GROUP);
+  if (stored === "agent" || stored === "project") return stored;
+  // Legacy migration
+  if (localStorage.getItem(STORAGE_KEY) === "true") return "agent";
+  return "none";
+}
+
+/**
+ * Build grouped sections from flat session groups.
+ * Groups by agent name or project depending on mode.
+ * Returns empty array when mode is "none".
+ */
+export function buildGroupSections(
   groups: SessionGroup[],
-  groupByAgent: boolean,
-): AgentSection[] {
-  if (!groupByAgent) return [];
+  mode: GroupMode,
+): GroupSection[] {
+  if (mode === "none") return [];
   const map = new Map<string, SessionGroup[]>();
   for (const g of groups) {
     const primary =
       g.sessions.find((s) => s.id === g.primarySessionId) ??
       g.sessions[0];
     if (!primary) continue;
-    const agent = primary.agent;
-    let list = map.get(agent);
+    const key = mode === "agent" ? primary.agent : primary.project;
+    let list = map.get(key);
     if (!list) {
       list = [];
-      map.set(agent, list);
+      map.set(key, list);
     }
     list.push(g);
   }
   // Sort by count descending (most sessions first).
   return Array.from(map.entries())
     .sort((a, b) => b[1].length - a[1].length)
-    .map(([agent, groups]) => ({ agent, groups }));
+    .map(([label, groups]) => ({ label, groups }));
+}
+
+/** @deprecated Use buildGroupSections */
+export function buildAgentSections(
+  groups: SessionGroup[],
+  groupByAgent: boolean,
+): GroupSection[] {
+  return buildGroupSections(groups, groupByAgent ? "agent" : "none");
 }
 
 /**
  * Build a flat list of DisplayItems for virtual scrolling.
- * When `groupByAgent` is false, produces a simple flat list.
- * When true, interleaves header rows and session rows,
- * respecting collapsed agents.
+ * When mode is "none", produces a simple flat list.
+ * Otherwise, interleaves header rows and session rows,
+ * respecting collapsed groups.
  */
 export function buildDisplayItems(
   groups: SessionGroup[],
-  agentSections: AgentSection[],
-  groupByAgent: boolean,
-  collapsedAgents: Set<string>,
+  sections: GroupSection[],
+  mode: GroupMode,
+  collapsed: Set<string>,
 ): DisplayItem[] {
-  if (!groupByAgent) {
+  if (mode === "none") {
     return groups.map((g, i) => ({
       id: `session:${g.primarySessionId}`,
       type: "session" as const,
-      agent: "",
+      label: "",
       count: 0,
       group: g,
       height: ITEM_HEIGHT,
@@ -75,23 +103,23 @@ export function buildDisplayItems(
 
   const items: DisplayItem[] = [];
   let y = 0;
-  for (const section of agentSections) {
+  for (const section of sections) {
     items.push({
-      id: `header:${section.agent}`,
+      id: `header:${section.label}`,
       type: "header",
-      agent: section.agent,
+      label: section.label,
       count: section.groups.length,
       height: HEADER_HEIGHT,
       top: y,
     });
     y += HEADER_HEIGHT;
 
-    if (!collapsedAgents.has(section.agent)) {
+    if (!collapsed.has(section.label)) {
       for (const g of section.groups) {
         items.push({
-          id: `session:${section.agent}:${g.primarySessionId}`,
+          id: `session:${section.label}:${g.primarySessionId}`,
           type: "session",
-          agent: section.agent,
+          label: section.label,
           count: 0,
           group: g,
           height: ITEM_HEIGHT,

@@ -9,10 +9,12 @@
     agentLabel,
   } from "../../utils/agents.js";
   import {
+    type GroupMode,
     ITEM_HEIGHT,
     OVERSCAN,
-    STORAGE_KEY,
-    buildAgentSections,
+    STORAGE_KEY_GROUP,
+    getInitialGroupMode,
+    buildGroupSections,
     buildDisplayItems,
     computeTotalSize,
     findStart,
@@ -49,17 +51,14 @@
     }
   });
 
-  let groupByAgent = $state(
-    typeof localStorage !== "undefined" &&
-      localStorage.getItem(STORAGE_KEY) === "true",
-  );
+  let groupMode: GroupMode = $state(getInitialGroupMode());
   let manualExpanded: Set<string> = $state(new Set());
   // Start all collapsed when grouping is first enabled.
-  let collapseAll = $state(true);
+  let collapseAll = $state(groupMode !== "none");
 
   $effect(() => {
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, String(groupByAgent));
+      localStorage.setItem(STORAGE_KEY_GROUP, groupMode);
     }
   });
 
@@ -89,27 +88,27 @@
       .filter((g) => g.sessions.length > 0);
   });
 
-  // Build agent-grouped structure when groupByAgent is on.
-  let agentSections = $derived.by(() =>
-    buildAgentSections(groups, groupByAgent),
+  // Build grouped structure when groupMode is not "none".
+  let groupSections = $derived.by(() =>
+    buildGroupSections(groups, groupMode),
   );
 
   // Derive effective collapsed set synchronously so the first
   // render is already collapsed (no flicker).
-  let collapsedAgents = $derived.by(() => {
-    if (!groupByAgent) return new Set<string>();
+  let collapsed = $derived.by(() => {
+    if (groupMode === "none") return new Set<string>();
     if (collapseAll) {
-      return new Set(agentSections.map((s) => s.agent));
+      return new Set(groupSections.map((s) => s.label));
     }
-    // Invert: all agents minus the manually expanded ones.
-    const all = new Set(agentSections.map((s) => s.agent));
+    // Invert: all labels minus the manually expanded ones.
+    const all = new Set(groupSections.map((s) => s.label));
     for (const a of manualExpanded) all.delete(a);
     return all;
   });
 
   // Build flat display items for virtual scrolling.
   let displayItems = $derived.by(() =>
-    buildDisplayItems(groups, agentSections, groupByAgent, collapsedAgents),
+    buildDisplayItems(groups, groupSections, groupMode, collapsed),
   );
 
   let totalCount = $derived(
@@ -132,26 +131,32 @@
     return result;
   });
 
-  function toggleGroupByAgent() {
-    groupByAgent = !groupByAgent;
-    if (groupByAgent) {
-      collapseAll = true;
-      manualExpanded = new Set();
-    }
+  function setGroupMode(mode: GroupMode) {
+    groupMode = mode;
+    collapseAll = mode !== "none";
+    manualExpanded = new Set();
   }
 
-  function toggleAgent(agent: string) {
+  function toggleGroupByAgent() {
+    setGroupMode(groupMode === "agent" ? "none" : "agent");
+  }
+
+  function toggleGroupByProject() {
+    setGroupMode(groupMode === "project" ? "none" : "project");
+  }
+
+  function toggleGroup(label: string) {
     if (collapseAll) {
       // First toggle after fresh group-enable: switch to
-      // manual mode, expanding only the clicked agent.
+      // manual mode, expanding only the clicked group.
       collapseAll = false;
-      manualExpanded = new Set([agent]);
+      manualExpanded = new Set([label]);
     } else {
       const next = new Set(manualExpanded);
-      if (next.has(agent)) {
-        next.delete(agent);
+      if (next.has(label)) {
+        next.delete(label);
       } else {
-        next.add(agent);
+        next.add(label);
       }
       manualExpanded = next;
     }
@@ -300,7 +305,7 @@
           points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"
         />
       </svg>
-      {#if hasFilters || groupByAgent}
+      {#if hasFilters || groupMode !== "none"}
         <span class="filter-indicator"></span>
       {/if}
     </button>
@@ -310,14 +315,25 @@
           <div class="filter-section-label">Display</div>
           <button
             class="filter-toggle"
-            class:active={groupByAgent}
+            class:active={groupMode === "agent"}
             onclick={toggleGroupByAgent}
           >
             <span
               class="toggle-check"
-              class:on={groupByAgent}
+              class:on={groupMode === "agent"}
             ></span>
             Group by agent
+          </button>
+          <button
+            class="filter-toggle"
+            class:active={groupMode === "project"}
+            onclick={toggleGroupByProject}
+          >
+            <span
+              class="toggle-check"
+              class:on={groupMode === "project"}
+            ></span>
+            Group by project
           </button>
         </div>
         <div class="filter-section">
@@ -448,16 +464,17 @@
             {/each}
           </div>
         </div>
-        {#if hasFilters}
+        {#if hasFilters || groupMode !== "none"}
           <button
             class="clear-filters-btn"
             onclick={() => {
+              if (groupMode !== "none") setGroupMode("none");
               if (sessions.hasActiveFilters && starred.filterOnly) {
                 starred.filterOnly = false;
                 sessions.clearSessionFilters();
               } else if (sessions.hasActiveFilters) {
                 sessions.clearSessionFilters();
-              } else {
+              } else if (starred.filterOnly) {
                 starred.filterOnly = false;
               }
             }}
@@ -484,12 +501,12 @@
       >
         {#if item.type === "header"}
           <button
-            class="agent-group-header"
-            onclick={() => toggleAgent(item.agent)}
+            class="group-header"
+            onclick={() => toggleGroup(item.label)}
           >
             <svg
               class="chevron"
-              class:expanded={!collapsedAgents.has(item.agent)}
+              class:expanded={!collapsed.has(item.label)}
               width="10"
               height="10"
               viewBox="0 0 16 16"
@@ -497,12 +514,26 @@
             >
               <path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z"/>
             </svg>
-            <span
-              class="agent-group-dot"
-              style:background={agentColor(item.agent)}
-            ></span>
-            <span class="agent-group-name">{item.agent}</span>
-            <span class="agent-group-count">{item.count}</span>
+            {#if groupMode === "agent"}
+              <span
+                class="group-dot"
+                style:background={agentColor(item.label)}
+              ></span>
+            {:else}
+              <svg
+                class="project-icon"
+                width="11"
+                height="11"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+              >
+                <path d="M1.75 1A1.75 1.75 0 000 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0016 13.25v-8.5A1.75 1.75 0 0014.25 3H7.5a.25.25 0 01-.2-.1l-.9-1.2c-.33-.44-.85-.7-1.4-.7z"/>
+              </svg>
+            {/if}
+            <span class="group-name">
+              {groupMode === "agent" ? item.label : item.label}
+            </span>
+            <span class="group-count">{item.count}</span>
           </button>
         {:else if item.group}
           {@const primary = item.group.sessions.find(
@@ -515,7 +546,8 @@
               groupSessionIds={item.group.sessions.length > 1
                 ? item.group.sessions.map((s) => s.id)
                 : undefined}
-              hideAgent={groupByAgent}
+              hideAgent={groupMode === "agent"}
+              hideProject={groupMode === "project"}
             />
           {/if}
         {/if}
@@ -831,8 +863,8 @@
     overflow-x: hidden;
   }
 
-  /* Agent group headers */
-  .agent-group-header {
+  /* Group headers (agent and project) */
+  .group-header {
     display: flex;
     align-items: center;
     gap: 6px;
@@ -851,7 +883,7 @@
     user-select: none;
   }
 
-  .agent-group-header:hover {
+  .group-header:hover {
     color: var(--text-secondary);
     background: var(--bg-surface-hover);
   }
@@ -865,14 +897,19 @@
     transform: rotate(90deg);
   }
 
-  .agent-group-dot {
+  .group-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
   }
 
-  .agent-group-name {
+  .project-icon {
+    flex-shrink: 0;
+    color: var(--text-muted);
+  }
+
+  .group-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -880,7 +917,7 @@
     white-space: nowrap;
   }
 
-  .agent-group-count {
+  .group-count {
     flex-shrink: 0;
     font-size: 9px;
     font-weight: 500;
