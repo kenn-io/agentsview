@@ -100,6 +100,7 @@ class SessionsStore {
       min_user_messages:
         f.minUserMessages > 0 ? f.minUserMessages : undefined,
       include_one_shot: f.includeOneShot || undefined,
+      include_children: true,
     };
   }
 
@@ -589,9 +590,6 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
   const insertionOrder: string[] = [];
 
   for (const s of sessions) {
-    // Subagent sessions are only visible through their parent.
-    if (s.relationship_type === "subagent") continue;
-
     const root = findRoot(s.id, byId, rootCache);
     // Sessions without a parent_session_id that aren't
     // pointed to by anyone get root == their own id, so

@@ -5,12 +5,12 @@ import {
   ITEM_HEIGHT,
   HEADER_HEIGHT,
   STORAGE_KEY,
-  buildAgentSections,
+  buildGroupSections,
   buildDisplayItems,
   computeTotalSize,
   findStart,
 } from "./session-list-utils.js";
-import type { AgentSection, DisplayItem } from "./session-list-utils.js";
+import type { GroupSection, DisplayItem } from "./session-list-utils.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,13 +60,13 @@ function makeGroup(
 }
 
 // ---------------------------------------------------------------------------
-// buildAgentSections
+// buildGroupSections
 // ---------------------------------------------------------------------------
 
-describe("buildAgentSections", () => {
-  it("returns empty array when groupByAgent is false", () => {
+describe("buildGroupSections", () => {
+  it("returns empty array when mode is none", () => {
     const groups = [makeGroup("claude"), makeGroup("gpt")];
-    const result = buildAgentSections(groups, false);
+    const result = buildGroupSections(groups, "none");
     expect(result).toEqual([]);
   });
 
@@ -76,11 +76,11 @@ describe("buildAgentSections", () => {
       makeGroup("gpt", 1, "g1"),
       makeGroup("claude", 1, "c2"),
     ];
-    const result = buildAgentSections(groups, true);
+    const result = buildGroupSections(groups, "agent");
 
     expect(result).toHaveLength(2);
-    const claudeSection = result.find((s) => s.agent === "claude");
-    const gptSection = result.find((s) => s.agent === "gpt");
+    const claudeSection = result.find((s) => s.label === "claude");
+    const gptSection = result.find((s) => s.label === "gpt");
     expect(claudeSection).toBeDefined();
     expect(gptSection).toBeDefined();
     expect(claudeSection!.groups).toHaveLength(2);
@@ -95,11 +95,11 @@ describe("buildAgentSections", () => {
       makeGroup("claude", 1, "c3"),
       makeGroup("gpt", 1, "g2"),
     ];
-    const result = buildAgentSections(groups, true);
+    const result = buildGroupSections(groups, "agent");
 
-    expect(result[0]!.agent).toBe("claude");
+    expect(result[0]!.label).toBe("claude");
     expect(result[0]!.groups).toHaveLength(3);
-    expect(result[1]!.agent).toBe("gpt");
+    expect(result[1]!.label).toBe("gpt");
     expect(result[1]!.groups).toHaveLength(2);
   });
 
@@ -115,10 +115,10 @@ describe("buildAgentSections", () => {
       startedAt: "2025-01-01T00:00:00Z",
       endedAt: "2025-01-01T01:00:00Z",
     };
-    const result = buildAgentSections([group], true);
+    const result = buildGroupSections([group], "agent");
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.agent).toBe("gemini");
+    expect(result[0]!.label).toBe("gemini");
   });
 
   it("skips groups with no sessions", () => {
@@ -132,8 +132,20 @@ describe("buildAgentSections", () => {
       startedAt: null,
       endedAt: null,
     };
-    const result = buildAgentSections([emptyGroup], true);
+    const result = buildGroupSections([emptyGroup], "agent");
     expect(result).toEqual([]);
+  });
+
+  it("groups by project when mode is project", () => {
+    const groups = [
+      makeGroup("claude", 1, "c1"),
+      makeGroup("gpt", 1, "g1"),
+    ];
+    // Both groups have project "test-project" from makeGroup.
+    const result = buildGroupSections(groups, "project");
+    expect(result).toHaveLength(1);
+    expect(result[0]!.label).toBe("test-project");
+    expect(result[0]!.groups).toHaveLength(2);
   });
 });
 
@@ -147,7 +159,7 @@ describe("buildDisplayItems (ungrouped)", () => {
       makeGroup("claude", 1, "a"),
       makeGroup("gpt", 1, "b"),
     ];
-    const items = buildDisplayItems(groups, [], false, new Set());
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set());
 
     expect(items).toHaveLength(2);
     expect(items[0]!.type).toBe("session");
@@ -162,7 +174,7 @@ describe("buildDisplayItems (ungrouped)", () => {
       makeGroup("gpt", 1, "b"),
       makeGroup("gemini", 1, "c"),
     ];
-    const items = buildDisplayItems(groups, [], false, new Set());
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set());
 
     for (let i = 0; i < items.length; i++) {
       expect(items[i]!.top).toBe(i * ITEM_HEIGHT);
@@ -172,14 +184,14 @@ describe("buildDisplayItems (ungrouped)", () => {
 
   it("attaches correct group reference", () => {
     const groups = [makeGroup("claude", 2, "a")];
-    const items = buildDisplayItems(groups, [], false, new Set());
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set());
 
     expect(items).toHaveLength(1);
     expect(items[0]!.group).toBe(groups[0]);
   });
 
   it("returns empty array for no groups", () => {
-    const items = buildDisplayItems([], [], false, new Set());
+    const items = buildDisplayItems([], [], "none", new Set(), new Set());
     expect(items).toEqual([]);
   });
 
@@ -189,7 +201,7 @@ describe("buildDisplayItems (ungrouped)", () => {
       makeGroup("claude", 1, "b"),
       makeGroup("gpt", 1, "c"),
     ];
-    const items = buildDisplayItems(groups, [], false, new Set());
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set());
     const ids = items.map((i) => i.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -206,24 +218,24 @@ describe("buildDisplayItems (grouped)", () => {
       makeGroup("claude", 1, "c2"),
       makeGroup("gpt", 1, "g1"),
     ];
-    const sections = buildAgentSections(groups, true);
+    const sections = buildGroupSections(groups, "agent");
     const collapsed = new Set(opts?.collapsed ?? []);
-    const items = buildDisplayItems(groups, sections, true, collapsed);
+    const items = buildDisplayItems(groups, sections, "agent", collapsed, new Set());
     return { groups, sections, items };
   }
 
   it("interleaves headers and session items", () => {
-    const { items, sections } = setup();
+    const { items } = setup();
 
     // claude section: 1 header + 2 sessions = 3
     // gpt section: 1 header + 1 session = 2
     expect(items).toHaveLength(5);
     expect(items[0]!.type).toBe("header");
-    expect(items[0]!.agent).toBe("claude");
+    expect(items[0]!.label).toBe("claude");
     expect(items[1]!.type).toBe("session");
     expect(items[2]!.type).toBe("session");
     expect(items[3]!.type).toBe("header");
-    expect(items[3]!.agent).toBe("gpt");
+    expect(items[3]!.label).toBe("gpt");
     expect(items[4]!.type).toBe("session");
   });
 
@@ -253,10 +265,10 @@ describe("buildDisplayItems (grouped)", () => {
   it("header items have correct count", () => {
     const { items } = setup();
     const claudeHeader = items.find(
-      (i) => i.type === "header" && i.agent === "claude",
+      (i) => i.type === "header" && i.label === "claude",
     );
     const gptHeader = items.find(
-      (i) => i.type === "header" && i.agent === "gpt",
+      (i) => i.type === "header" && i.label === "gpt",
     );
 
     expect(claudeHeader!.count).toBe(2);
@@ -270,9 +282,9 @@ describe("buildDisplayItems (grouped)", () => {
     // gpt: header + 1 session = 2
     expect(items).toHaveLength(3);
     expect(items[0]!.type).toBe("header");
-    expect(items[0]!.agent).toBe("claude");
+    expect(items[0]!.label).toBe("claude");
     expect(items[1]!.type).toBe("header");
-    expect(items[1]!.agent).toBe("gpt");
+    expect(items[1]!.label).toBe("gpt");
     expect(items[2]!.type).toBe("session");
   });
 
@@ -287,7 +299,7 @@ describe("buildDisplayItems (grouped)", () => {
     const { items } = setup({ collapsed: ["claude"] });
 
     const claudeHeader = items.find(
-      (i) => i.type === "header" && i.agent === "claude",
+      (i) => i.type === "header" && i.label === "claude",
     );
     expect(claudeHeader!.count).toBe(2);
   });
@@ -301,10 +313,10 @@ describe("buildDisplayItems (grouped)", () => {
   it("header ids differ from session ids with same agent", () => {
     const { items } = setup();
     const claudeHeader = items.find(
-      (i) => i.type === "header" && i.agent === "claude",
+      (i) => i.type === "header" && i.label === "claude",
     );
     const claudeSessions = items.filter(
-      (i) => i.type === "session" && i.agent === "claude",
+      (i) => i.type === "session" && i.label === "claude",
     );
 
     expect(claudeHeader!.id).toMatch(/^header:/);
@@ -314,18 +326,15 @@ describe("buildDisplayItems (grouped)", () => {
     }
   });
 
-  it("session ids in grouped mode include agent prefix for uniqueness", () => {
-    // Two different agents could have groups referencing the same
-    // primarySessionId in theory.  The id format should include the
-    // agent so they stay unique.
+  it("session ids in grouped mode include label prefix for uniqueness", () => {
     const { items } = setup();
     const sessionItems = items.filter((i) => i.type === "session");
     for (const s of sessionItems) {
-      // Format: session:<agent>:<primarySessionId>
+      // Format: session:<label>:<primarySessionId>
       const parts = s.id.split(":");
       expect(parts.length).toBeGreaterThanOrEqual(3);
       expect(parts[0]).toBe("session");
-      expect(parts[1]).toBe(s.agent);
+      expect(parts[1]).toBe(s.label);
     }
   });
 });
@@ -344,7 +353,7 @@ describe("computeTotalSize", () => {
       makeGroup("claude", 1, "a"),
       makeGroup("gpt", 1, "b"),
     ];
-    const items = buildDisplayItems(groups, [], false, new Set());
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set());
     expect(computeTotalSize(items)).toBe(2 * ITEM_HEIGHT);
   });
 
@@ -353,8 +362,8 @@ describe("computeTotalSize", () => {
       makeGroup("claude", 1, "c1"),
       makeGroup("gpt", 1, "g1"),
     ];
-    const sections = buildAgentSections(groups, true);
-    const items = buildDisplayItems(groups, sections, true, new Set());
+    const sections = buildGroupSections(groups, "agent");
+    const items = buildDisplayItems(groups, sections, "agent", new Set(), new Set());
     // claude: HEADER_HEIGHT + ITEM_HEIGHT
     // gpt:    HEADER_HEIGHT + ITEM_HEIGHT
     expect(computeTotalSize(items)).toBe(
@@ -368,18 +377,20 @@ describe("computeTotalSize", () => {
       makeGroup("claude", 1, "c2"),
       makeGroup("gpt", 1, "g1"),
     ];
-    const sections = buildAgentSections(groups, true);
+    const sections = buildGroupSections(groups, "agent");
     const expanded = buildDisplayItems(
       groups,
       sections,
-      true,
+      "agent",
+      new Set(),
       new Set(),
     );
     const collapsed = buildDisplayItems(
       groups,
       sections,
-      true,
+      "agent",
       new Set(["claude"]),
+      new Set(),
     );
 
     expect(computeTotalSize(collapsed)).toBeLessThan(
@@ -402,7 +413,7 @@ describe("findStart", () => {
     for (let i = 0; i < count; i++) {
       groups.push(makeGroup("claude", 1, `g${i}`));
     }
-    return buildDisplayItems(groups, [], false, new Set());
+    return buildDisplayItems(groups, [], "none", new Set(), new Set());
   }
 
   it("returns 0 when scrolled to top", () => {
@@ -453,16 +464,8 @@ describe("findStart", () => {
       makeGroup("gpt", 1, "g1"),
       makeGroup("gpt", 1, "g2"),
     ];
-    const sections = buildAgentSections(groups, true);
-    const items = buildDisplayItems(groups, sections, true, new Set());
-    // items layout:
-    // [0] header:claude  top=0     h=28
-    // [1] session:c1     top=28    h=40
-    // [2] session:c2     top=68    h=40
-    // [3] session:c3     top=108   h=40
-    // [4] header:gpt     top=148   h=28
-    // [5] session:g1     top=176   h=40
-    // [6] session:g2     top=216   h=40
+    const sections = buildGroupSections(groups, "agent");
+    const items = buildDisplayItems(groups, sections, "agent", new Set(), new Set());
 
     // Scroll to where the gpt header would be visible.
     const start = findStart(items, 148);
@@ -492,9 +495,9 @@ describe("DisplayItem id stability", () => {
       makeGroup("claude", 1, "c1"),
       makeGroup("gpt", 1, "g1"),
     ];
-    const sections = buildAgentSections(groups, true);
-    const items1 = buildDisplayItems(groups, sections, true, new Set());
-    const items2 = buildDisplayItems(groups, sections, true, new Set());
+    const sections = buildGroupSections(groups, "agent");
+    const items1 = buildDisplayItems(groups, sections, "agent", new Set(), new Set());
+    const items2 = buildDisplayItems(groups, sections, "agent", new Set(), new Set());
 
     expect(items1.map((i) => i.id)).toEqual(items2.map((i) => i.id));
   });
@@ -504,16 +507,16 @@ describe("DisplayItem id stability", () => {
       makeGroup("claude", 1, "x"),
       makeGroup("gpt", 1, "y"),
     ];
-    const items = buildDisplayItems(groups, [], false, new Set());
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set());
 
     expect(items[0]!.id).toBe("session:x-session-0");
     expect(items[1]!.id).toBe("session:y-session-0");
   });
 
-  it("grouped ids are deterministic from agent + primarySessionId", () => {
+  it("grouped ids are deterministic from label + primarySessionId", () => {
     const groups = [makeGroup("claude", 1, "c1")];
-    const sections = buildAgentSections(groups, true);
-    const items = buildDisplayItems(groups, sections, true, new Set());
+    const sections = buildGroupSections(groups, "agent");
+    const items = buildDisplayItems(groups, sections, "agent", new Set(), new Set());
 
     const sessionItem = items.find((i) => i.type === "session");
     expect(sessionItem!.id).toBe("session:claude:c1-session-0");
@@ -525,11 +528,6 @@ describe("DisplayItem id stability", () => {
 // ---------------------------------------------------------------------------
 
 describe("starred-only session count", () => {
-  // Mirrors the component logic:
-  //   starred.filterOnly
-  //     ? groups.reduce((n, g) => n + g.sessions.length, 0)
-  //     : sessions.total
-
   function filterGroupsForStarred(
     groups: SessionGroup[],
     starredIds: Set<string>,
@@ -545,12 +543,10 @@ describe("starred-only session count", () => {
   }
 
   it("counts individual sessions, not groups", () => {
-    // Two groups, each with 3 sessions.
     const g1 = makeGroup("claude", 3, "c");
     const g2 = makeGroup("gpt", 3, "g");
     const groups = [g1, g2];
 
-    // Star 2 sessions from g1 and 1 from g2.
     const starred = new Set([
       "c-session-0",
       "c-session-2",
@@ -558,7 +554,6 @@ describe("starred-only session count", () => {
     ]);
     const filtered = filterGroupsForStarred(groups, starred);
 
-    // Should be 3 sessions across 2 groups, not 2 (groups).
     const count = filtered.reduce(
       (n, g) => n + g.sessions.length,
       0,
@@ -572,7 +567,6 @@ describe("starred-only session count", () => {
     const g2 = makeGroup("gpt", 2, "g");
     const groups = [g1, g2];
 
-    // Star only sessions from g1.
     const starred = new Set(["c-session-0"]);
     const filtered = filterGroupsForStarred(groups, starred);
 
