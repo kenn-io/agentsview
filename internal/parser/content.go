@@ -98,12 +98,9 @@ func toolResultContentLength(content gjson.Result) int {
 	// iFlow tool results use an object with nested output at
 	// responseParts.functionResponse.response.output.
 	if content.IsObject() {
-		if out := content.Get(
+		return len(content.Get(
 			"responseParts.functionResponse.response.output",
-		).Str; out != "" {
-			return len(out)
-		}
-		return len(content.Raw)
+		).Str)
 	}
 	return 0
 }
