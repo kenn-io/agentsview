@@ -138,6 +138,7 @@ export interface ListSessionsParams {
   max_messages?: number;
   min_user_messages?: number;
   include_one_shot?: boolean;
+  include_children?: boolean;
   cursor?: string;
   limit?: number;
 }
