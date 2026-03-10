@@ -211,17 +211,18 @@
   class:depth-1={depth === 1}
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
+  class:has-connector={depth > 0}
+  class:last-child={isLastChild}
   data-session-id={session.id}
   role="button"
   tabindex="0"
   style:padding-left="{8 + depth * 16}px"
   style:--connector-left="{depth * 16}px"
-  style:--accent-bar-color={agentColor}
   onclick={() => sessions.selectSession(session.id)}
   onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
 >
-  <!-- Tree expand/collapse or bullet -->
+  <!-- Tree expand/collapse or connector -->
   {#if hasChildren}
     <span
       class="tree-toggle"
@@ -241,9 +242,9 @@
       </svg>
     </span>
   {:else if depth > 0}
-    <span class="tree-bullet"></span>
+    <span class="tree-dash"></span>
   {:else}
-    <span class="tree-bullet"></span>
+    <span class="tree-spacer"></span>
   {/if}
 
   {#if !hideAgent || recentlyActive}
@@ -346,8 +347,8 @@
     display: flex;
     align-items: center;
     gap: 5px;
-    height: 38px;
-    margin: 2px 6px;
+    width: 100%;
+    height: 42px;
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
@@ -356,13 +357,16 @@
     -webkit-user-select: none;
     cursor: pointer;
     position: relative;
-    background: var(--bg-surface);
-    border-radius: 6px;
   }
 
   .session-item.compact {
-    height: 30px;
+    height: 34px;
     gap: 4px;
+  }
+
+  .session-item.depth-1,
+  .session-item.depth-2 {
+    background: transparent;
   }
 
   .session-item:hover {
@@ -378,17 +382,34 @@
     opacity: 0.6;
   }
 
-  /* Depth-2 leaf items: short colored accent bar on left edge of pill */
-  .session-item.depth-2::before {
+  /* ── Tree connector lines ────────────────────────────── */
+
+  /* Vertical line running alongside children.
+     Positioned at the parent's indent level. */
+  .session-item.has-connector::before {
     content: "";
     position: absolute;
-    left: 0;
+    left: calc(var(--connector-left) + 5px);
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border-muted);
+  }
+
+  /* For the last child, stop the vertical line at the center. */
+  .session-item.has-connector.last-child::before {
+    bottom: 50%;
+  }
+
+  /* Horizontal tee from the vertical line to the item. */
+  .session-item.has-connector::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-left) + 5px);
     top: 50%;
-    transform: translateY(-50%);
-    width: 3px;
-    height: 16px;
-    border-radius: 2px 0 0 2px;
-    background: var(--accent-bar-color, var(--text-muted));
+    width: 10px;
+    height: 1px;
+    background: var(--border-muted);
   }
 
   /* Tree toggle (▶/▼) */
@@ -403,6 +424,8 @@
     cursor: pointer;
     color: var(--text-muted);
     transition: color 0.1s;
+    position: relative;
+    z-index: 1;
   }
 
   .tree-toggle:hover {
@@ -417,23 +440,17 @@
     transform: rotate(90deg);
   }
 
-  /* Bullet dot for items without children */
-  .tree-bullet {
+  /* Horizontal dash for child leaf nodes (replaces bullet) */
+  .tree-dash {
     width: 14px;
     height: 14px;
     flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
   }
 
-  .tree-bullet::after {
-    content: "";
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: var(--text-muted);
-    opacity: 0.5;
+  /* Empty spacer for root items without children */
+  .tree-spacer {
+    width: 14px;
+    flex-shrink: 0;
   }
 
   .agent-dot {

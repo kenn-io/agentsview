@@ -506,7 +506,9 @@
           {@const subExpanded = expandedGroups.has(subKey)}
           <button
             class="sub-group-header"
+            class:last-child={item.isLastChild}
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
+            style:--connector-left="{(item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(subKey)}
           >
             <svg class="sub-group-arrow" class:expanded={subExpanded} width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1l4 3-4 3z"/></svg>
@@ -521,7 +523,9 @@
           {@const teamExpanded = expandedGroups.has(teamKey)}
           <button
             class="sub-group-header"
+            class:last-child={item.isLastChild}
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
+            style:--connector-left="{(item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(teamKey)}
           >
             <svg class="sub-group-arrow" class:expanded={teamExpanded} width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1l4 3-4 3z"/></svg>
@@ -885,16 +889,16 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    height: 26px;
-    margin: 2px 6px;
+    width: 100%;
+    height: 28px;
     padding: 0 10px;
     font-size: 10px;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: capitalize;
     letter-spacing: 0.02em;
-    background: var(--bg-surface);
-    border-radius: 6px;
+    background: var(--bg-inset);
+    border-bottom: 1px solid var(--border-muted);
     cursor: pointer;
     transition: color 0.1s, background 0.1s;
     user-select: none;
@@ -950,21 +954,45 @@
     display: flex;
     align-items: center;
     gap: 5px;
-    height: 24px;
-    margin: 2px 6px;
+    width: 100%;
+    height: 28px;
     font-size: 11px;
     color: var(--text-muted);
     cursor: pointer;
     user-select: none;
-    background: var(--bg-surface);
+    background: transparent;
     border: none;
-    border-radius: 6px;
     position: relative;
     transition: background 0.1s;
   }
 
+  /* Tree connector lines for sub-group headers */
+  .sub-group-header::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-left) + 5px);
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--border-muted);
+  }
+
+  .sub-group-header.last-child::before {
+    bottom: 50%;
+  }
+
   .sub-group-header:hover {
     background: var(--bg-surface-hover);
+  }
+
+  .sub-group-header::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--connector-left) + 5px);
+    top: 50%;
+    width: 10px;
+    height: 1px;
+    background: var(--border-muted);
   }
 
   .sub-group-arrow {
@@ -972,6 +1000,8 @@
     transition: transform 0.12s ease;
     color: var(--text-muted);
     opacity: 0.5;
+    position: relative;
+    z-index: 1;
   }
 
   .sub-group-arrow.expanded {
@@ -982,6 +1012,8 @@
     flex-shrink: 0;
     color: var(--text-muted);
     opacity: 0.6;
+    position: relative;
+    z-index: 1;
   }
 
   .sub-group-label {
