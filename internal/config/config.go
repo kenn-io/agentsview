@@ -456,6 +456,15 @@ func resolvePublicURL(value string, proxyCfg ProxyConfig) (string, error) {
 	if u == nil || u.Host == "" {
 		return "", fmt.Errorf("%q must include a host", value)
 	}
+	if u.User != nil {
+		return "", fmt.Errorf("%q must not include user info", value)
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("%q must not include query or fragment", value)
+	}
+	if u.Path != "" && u.Path != "/" {
+		return "", fmt.Errorf("%q must not include a path", value)
+	}
 	if proxyCfg.Mode != "caddy" {
 		return normalizePublicOrigin(value)
 	}

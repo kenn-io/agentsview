@@ -91,6 +91,11 @@ mode, keep the backend on loopback and let Caddy terminate TLS and
 optionally restrict client IP ranges. By default, managed Caddy binds
 to `0.0.0.0` and exposes the public URL on port `8443`.
 
+Managed Caddy mode requires the `caddy` CLI to already be installed.
+This patch does not automate Caddy installation. Use your normal OS
+package manager or ask your coding agent to install Caddy for your
+platform first. Caddy supports Linux, macOS, and Windows.
+
 ```bash
 agentsview -host 127.0.0.1 -port 8080 \
   -public-url https://viewer.example.test \

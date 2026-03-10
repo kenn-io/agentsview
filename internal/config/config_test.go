@@ -307,6 +307,20 @@ func TestLoad_ManagedCaddyRejectsConflictingPublicPort(t *testing.T) {
 	}
 }
 
+func TestLoad_ManagedCaddyRejectsPublicURLPath(t *testing.T) {
+	_, err := loadConfigFromFlags(
+		t,
+		"-public-url", "https://viewer.example.test/path",
+		"-proxy", "caddy",
+	)
+	if err == nil {
+		t.Fatal("expected public URL path error")
+	}
+	if !strings.Contains(err.Error(), "must not include a path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoad_AllowedSubnetsRejectInvalid(t *testing.T) {
 	tmp := setupTestEnv(t)
 	writeConfig(t, tmp, map[string]any{
