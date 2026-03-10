@@ -9,16 +9,16 @@ import (
 
 func TestParseIflowSession(t *testing.T) {
 	tests := []struct {
-		name            string
-		filename        string
-		expectID        string
+		name               string
+		filename           string
+		expectID           string
 		expectMessageCount int
 		expectFirstMessage string
 	}{
 		{
-			name:            "basic iFlow session",
-			filename:        "testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
-			expectID:        "iflow:5de701fc-7454-4858-a249-95cac4fd3b51",
+			name:               "basic iFlow session",
+			filename:           "testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
+			expectID:           "iflow:5de701fc-7454-4858-a249-95cac4fd3b51",
 			expectMessageCount: 11,
 			expectFirstMessage: "启动app时确保环境变量 DOCKER_API_VERSION=\"1.46\"",
 		},

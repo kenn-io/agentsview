@@ -1008,7 +1008,6 @@ func isContainedIn(child, root string) bool {
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-
 // DiscoverVSCodeCopilotSessions traverses the VSCode
 // workspaceStorage directory to find chatSessions/*.json
 // and *.jsonl files. When both formats exist for the same

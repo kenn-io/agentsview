@@ -29,15 +29,17 @@ type TerminalConfig struct {
 
 // Config holds all application configuration.
 type Config struct {
-	Host         string        `json:"host"`
-	Port         int           `json:"port"`
-	NoBrowser    bool          `json:"no_browser"`
-	DataDir      string        `json:"data_dir"`
-	DBPath       string        `json:"-"`
-	CursorSecret string        `json:"cursor_secret"`
-	GithubToken  string        `json:"github_token,omitempty"`
+	Host         string         `json:"host"`
+	Port         int            `json:"port"`
+	NoBrowser    bool           `json:"no_browser"`
+	DataDir      string         `json:"data_dir"`
+	DBPath       string         `json:"-"`
+	CursorSecret string         `json:"cursor_secret"`
+	GithubToken  string         `json:"github_token,omitempty"`
 	Terminal     TerminalConfig `json:"terminal,omitempty"`
-	WriteTimeout time.Duration `json:"-"`
+	AuthToken    string         `json:"auth_token,omitempty"`
+	RemoteAccess bool           `json:"remote_access"`
+	WriteTimeout time.Duration  `json:"-"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -158,6 +160,8 @@ func (c *Config) loadFile() error {
 		CursorSecret                   string         `json:"cursor_secret"`
 		ResultContentBlockedCategories []string       `json:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig `json:"terminal"`
+		AuthToken                      string         `json:"auth_token"`
+		RemoteAccess                   bool           `json:"remote_access"`
 	}
 	if err := json.Unmarshal(data, &file); err != nil {
 		return fmt.Errorf("parsing config: %w", err)
@@ -174,6 +178,10 @@ func (c *Config) loadFile() error {
 	if file.Terminal.Mode != "" {
 		c.Terminal = file.Terminal
 	}
+	if file.AuthToken != "" {
+		c.AuthToken = file.AuthToken
+	}
+	c.RemoteAccess = file.RemoteAccess
 
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
@@ -333,6 +341,109 @@ func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	c.Terminal = tc
+	return nil
+}
+
+// SaveSettings persists a partial settings update to the config file.
+// The patch map contains JSON keys mapped to their new values. Only
+// the keys present in patch are written; other config keys are preserved.
+func (c *Config) SaveSettings(patch map[string]any) error {
+	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
+		return fmt.Errorf("creating data dir: %w", err)
+	}
+
+	existing := make(map[string]any)
+	data, err := os.ReadFile(c.configPath())
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading config file: %w", err)
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf(
+				"existing config is invalid, cannot update: %w",
+				err,
+			)
+		}
+	}
+
+	for k, v := range patch {
+		existing[k] = v
+	}
+
+	out, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.WriteFile(c.configPath(), out, 0o600); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	// Update in-memory config for known keys.
+	if v, ok := patch["terminal"]; ok {
+		if b, err := json.Marshal(v); err == nil {
+			var tc TerminalConfig
+			if err := json.Unmarshal(b, &tc); err == nil {
+				c.Terminal = tc
+			}
+		}
+	}
+	if v, ok := patch["github_token"]; ok {
+		if s, ok := v.(string); ok {
+			c.GithubToken = s
+		}
+	}
+	if v, ok := patch["auth_token"]; ok {
+		if s, ok := v.(string); ok {
+			c.AuthToken = s
+		}
+	}
+	if v, ok := patch["remote_access"]; ok {
+		if b, ok := v.(bool); ok {
+			c.RemoteAccess = b
+		}
+	}
+	return nil
+}
+
+// EnsureAuthToken generates and persists an auth token if one does
+// not already exist. Called when remote_access is enabled.
+func (c *Config) EnsureAuthToken() error {
+	if c.AuthToken != "" {
+		return nil
+	}
+
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Errorf("generating auth token: %w", err)
+	}
+	token := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(b)
+	c.AuthToken = token
+
+	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
+		return fmt.Errorf("creating data dir: %w", err)
+	}
+
+	existing := make(map[string]any)
+	data, err := os.ReadFile(c.configPath())
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reading config: %w", err)
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("existing config invalid: %w", err)
+		}
+	}
+
+	existing["auth_token"] = token
+	out, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+
+	if err := os.WriteFile(c.configPath(), out, 0o600); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
 	return nil
 }
 

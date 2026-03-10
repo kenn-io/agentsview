@@ -187,6 +187,13 @@ func runServe(args []string) {
 		go startUnwatchedPoll(engine)
 	}
 
+	// Auto-bind to 0.0.0.0 when remote access is enabled so the
+	// server is reachable from the network. Only override if the
+	// user hasn't explicitly set a custom host via flag.
+	if cfg.RemoteAccess && cfg.Host == "127.0.0.1" {
+		cfg.Host = "0.0.0.0"
+	}
+
 	port := server.FindAvailablePort(cfg.Host, cfg.Port)
 	if port != cfg.Port {
 		fmt.Printf("Port %d in use, using %d\n", cfg.Port, port)

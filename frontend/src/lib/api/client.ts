@@ -35,7 +35,50 @@ import type {
   TrashResponse,
 } from "./types.js";
 
-const BASE = "/api/v1";
+const SERVER_URL_KEY = "agentsview-server-url";
+const AUTH_TOKEN_KEY = "agentsview-auth-token";
+
+function getBase(): string {
+  const server = getServerUrl();
+  return server ? `${server}/api/v1` : "/api/v1";
+}
+
+export function getServerUrl(): string {
+  return localStorage.getItem(SERVER_URL_KEY) ?? "";
+}
+
+export function setServerUrl(url: string): void {
+  if (url) {
+    localStorage.setItem(SERVER_URL_KEY, url);
+  } else {
+    localStorage.removeItem(SERVER_URL_KEY);
+  }
+}
+
+export function getAuthToken(): string {
+  return localStorage.getItem(AUTH_TOKEN_KEY) ?? "";
+}
+
+export function setAuthToken(token: string): void {
+  if (token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  }
+}
+
+export function isRemoteConnection(): boolean {
+  return getServerUrl() !== "";
+}
+
+function authHeaders(init?: RequestInit): RequestInit {
+  const token = getAuthToken();
+  if (!token) return init ?? {};
+
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return { ...init, headers };
+}
 
 export class ApiError extends Error {
   constructor(
@@ -52,7 +95,7 @@ function apiErrorMessage(status: number, body: string): string {
 }
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const res = await fetch(`${getBase()}${path}`, authHeaders(init));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -204,10 +247,10 @@ function streamSyncSSE(
   const controller = new AbortController();
 
   const done = (async () => {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await fetch(`${getBase()}${path}`, authHeaders({
       method: "POST",
       signal: controller.signal,
-    });
+    }));
 
     if (!res.ok || !res.body) {
       throw new Error(`Sync request failed: ${res.status}`);
@@ -317,7 +360,12 @@ export function watchSession(
   sessionId: string,
   onUpdate: () => void,
 ): EventSource {
-  const es = new EventSource(`${BASE}/sessions/${sessionId}/watch`);
+  const url = `${getBase()}/sessions/${sessionId}/watch`;
+  const token = getAuthToken();
+  // EventSource does not support custom headers, so pass the
+  // auth token as a query parameter for remote connections.
+  const fullUrl = token ? `${url}?token=${encodeURIComponent(token)}` : url;
+  const es = new EventSource(fullUrl);
 
   es.addEventListener("session_updated", () => {
     onUpdate();
@@ -332,7 +380,9 @@ export function watchSession(
 
 /** Get the export URL for a session */
 export function getExportUrl(sessionId: string): string {
-  return `${BASE}/sessions/${sessionId}/export`;
+  const url = `${getBase()}/sessions/${sessionId}/export`;
+  const token = getAuthToken();
+  return token ? `${url}?token=${encodeURIComponent(token)}` : url;
 }
 
 /* Resume in terminal */
@@ -392,9 +442,9 @@ export async function listStarred(): Promise<{ session_ids: string[] }> {
 }
 
 export async function starSession(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/sessions/${id}/star`, {
+  const res = await fetch(`${getBase()}/sessions/${id}/star`, authHeaders({
     method: "PUT",
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -402,9 +452,9 @@ export async function starSession(id: string): Promise<void> {
 }
 
 export async function unstarSession(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/sessions/${id}/star`, {
+  const res = await fetch(`${getBase()}/sessions/${id}/star`, authHeaders({
     method: "DELETE",
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -414,11 +464,11 @@ export async function unstarSession(id: string): Promise<void> {
 export async function bulkStarSessions(
   sessionIds: string[],
 ): Promise<void> {
-  const res = await fetch(`${BASE}/starred/bulk`, {
+  const res = await fetch(`${getBase()}/starred/bulk`, authHeaders({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_ids: sessionIds }),
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -486,6 +536,32 @@ export function setTerminalConfig(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(cfg),
+  });
+}
+
+/* Settings */
+
+export interface AppSettings {
+  agent_dirs: Record<string, string[]>;
+  terminal: TerminalConfig;
+  github_configured: boolean;
+  host: string;
+  port: number;
+  auth_token?: string;
+  remote_access?: boolean;
+}
+
+export function getSettings(): Promise<AppSettings> {
+  return fetchJSON("/settings");
+}
+
+export function updateSettings(
+  patch: Partial<AppSettings>,
+): Promise<AppSettings> {
+  return fetchJSON("/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
   });
 }
 
@@ -583,9 +659,9 @@ export function getInsight(id: number): Promise<Insight> {
 }
 
 export async function deleteInsight(id: number): Promise<void> {
-  const res = await fetch(`${BASE}/insights/${id}`, {
+  const res = await fetch(`${getBase()}/insights/${id}`, authHeaders({
     method: "DELETE",
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -610,12 +686,12 @@ export function generateInsight(
   const controller = new AbortController();
 
   const done = (async () => {
-    const res = await fetch(`${BASE}/insights/generate`, {
+    const res = await fetch(`${getBase()}/insights/generate`, authHeaders({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req),
       signal: controller.signal,
-    });
+    }));
 
     if (!res.ok || !res.body) {
       throw new Error(`Generate request failed: ${res.status}`);
@@ -724,9 +800,9 @@ export function renameSession(
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/sessions/${id}`, {
+  const res = await fetch(`${getBase()}/sessions/${id}`, authHeaders({
     method: "DELETE",
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -734,9 +810,9 @@ export async function deleteSession(id: string): Promise<void> {
 }
 
 export async function restoreSession(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/sessions/${id}/restore`, {
+  const res = await fetch(`${getBase()}/sessions/${id}/restore`, authHeaders({
     method: "POST",
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -746,9 +822,9 @@ export async function restoreSession(id: string): Promise<void> {
 export async function permanentDeleteSession(
   id: string,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/sessions/${id}/permanent`, {
+  const res = await fetch(`${getBase()}/sessions/${id}/permanent`, authHeaders({
     method: "DELETE",
-  });
+  }));
   if (!res.ok) {
     const body = await res.text();
     throw new ApiError(res.status, apiErrorMessage(res.status, body));
@@ -795,8 +871,8 @@ export async function unpinMessage(
   messageId: number,
 ): Promise<void> {
   const res = await fetch(
-    `${BASE}/sessions/${sessionId}/messages/${messageId}/pin`,
-    { method: "DELETE" },
+    `${getBase()}/sessions/${sessionId}/messages/${messageId}/pin`,
+    authHeaders({ method: "DELETE" }),
   );
   if (!res.ok) {
     const body = await res.text();
