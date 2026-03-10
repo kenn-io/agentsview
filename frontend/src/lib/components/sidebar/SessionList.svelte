@@ -935,7 +935,6 @@
     background: transparent;
     border: none;
     transition: background 0.1s, color 0.1s;
-    border-left: 2px solid var(--accent-blue, #58a6ff);
   }
 
   .team-group-header:hover {

@@ -617,6 +617,143 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
     group.endedAt = maxString(group.endedAt, s.ended_at);
   }
 
+  // Adopt orphaned teammate sessions: single-session groups where the
+  // session has <teammate-message in first_message but no parent link.
+  // Match them to the closest team-lead group in the same project
+  // (by start time proximity, within 2h window).
+  const isTeammateSession = (s: Session) =>
+    s.first_message?.includes("<teammate-message") ?? false;
+
+  // Identify groups that already have teammates (potential adoptive parents).
+  const teamLeadGroups = new Map<string, string[]>(); // project -> group keys
+  for (const [key, group] of groupMap) {
+    const hasTeammates = group.sessions.some(
+      (s) => s.id !== key && isTeammateSession(s),
+    );
+    if (hasTeammates || group.sessions.length > 1) {
+      const proj = group.project;
+      let list = teamLeadGroups.get(proj);
+      if (!list) {
+        list = [];
+        teamLeadGroups.set(proj, list);
+      }
+      list.push(key);
+    }
+  }
+
+  // Merge orphaned single-teammate groups into the nearest team-lead group.
+  const keysToRemove = new Set<string>();
+  for (const [key, group] of groupMap) {
+    if (group.sessions.length !== 1) continue;
+    const s = group.sessions[0]!;
+    if (!isTeammateSession(s)) continue;
+    if (s.parent_session_id) continue; // already linked, just missing in loaded set
+
+    const candidates = teamLeadGroups.get(s.project);
+    if (!candidates || candidates.length === 0) continue;
+
+    // Find the closest candidate by start time (within 2h).
+    const sTime = new Date(s.started_at ?? "").getTime();
+    let bestKey: string | null = null;
+    let bestDist = 2 * 60 * 60 * 1000; // 2h max
+    for (const ck of candidates) {
+      const cg = groupMap.get(ck)!;
+      // Use the primary session's start time.
+      const primary = cg.sessions.find((ss) => ss.id === ck) ?? cg.sessions[0]!;
+      const cTime = new Date(primary.started_at ?? "").getTime();
+      const dist = Math.abs(sTime - cTime);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestKey = ck;
+      }
+    }
+
+    if (bestKey) {
+      // Move the orphan into the adoptive group.
+      const target = groupMap.get(bestKey)!;
+      target.sessions.push(s);
+      target.totalMessages += s.message_count;
+      target.startedAt = minString(target.startedAt, s.started_at);
+      target.endedAt = maxString(target.endedAt, s.ended_at);
+      keysToRemove.add(key);
+    }
+  }
+
+  // Second pass: cluster remaining orphaned teammates by project + time.
+  // Teammates from the same project starting within 5 minutes are likely
+  // from the same team dispatch whose lead session isn't in the data.
+  const CLUSTER_WINDOW = 5 * 60 * 1000; // 5 minutes
+  const remainingOrphans: Array<{ key: string; session: Session; time: number }> = [];
+  for (const [key, group] of groupMap) {
+    if (keysToRemove.has(key)) continue;
+    if (group.sessions.length !== 1) continue;
+    const s = group.sessions[0]!;
+    if (!isTeammateSession(s)) continue;
+    if (s.parent_session_id) continue;
+    remainingOrphans.push({ key, session: s, time: new Date(s.started_at ?? "").getTime() });
+  }
+
+  // Group remaining orphans by project, then cluster by time.
+  const orphansByProject = new Map<string, typeof remainingOrphans>();
+  for (const o of remainingOrphans) {
+    let list = orphansByProject.get(o.session.project);
+    if (!list) {
+      list = [];
+      orphansByProject.set(o.session.project, list);
+    }
+    list.push(o);
+  }
+
+  for (const [, projectOrphans] of orphansByProject) {
+    if (projectOrphans.length < 2) continue;
+    // Sort by time, then greedily cluster within CLUSTER_WINDOW.
+    projectOrphans.sort((a, b) => a.time - b.time);
+    let clusterStart = projectOrphans[0]!;
+    const cluster = [clusterStart];
+    for (let i = 1; i < projectOrphans.length; i++) {
+      const cur = projectOrphans[i]!;
+      if (cur.time - clusterStart.time <= CLUSTER_WINDOW) {
+        cluster.push(cur);
+      } else {
+        // Flush previous cluster if it has multiple members.
+        if (cluster.length > 1) {
+          // Merge all into the first orphan's group.
+          const targetKey = cluster[0]!.key;
+          const target = groupMap.get(targetKey)!;
+          for (let j = 1; j < cluster.length; j++) {
+            const src = cluster[j]!;
+            target.sessions.push(src.session);
+            target.totalMessages += src.session.message_count;
+            target.startedAt = minString(target.startedAt, src.session.started_at);
+            target.endedAt = maxString(target.endedAt, src.session.ended_at);
+            keysToRemove.add(src.key);
+          }
+        }
+        cluster.length = 0;
+        clusterStart = cur;
+        cluster.push(cur);
+      }
+    }
+    // Flush last cluster.
+    if (cluster.length > 1) {
+      const targetKey = cluster[0]!.key;
+      const target = groupMap.get(targetKey)!;
+      for (let j = 1; j < cluster.length; j++) {
+        const src = cluster[j]!;
+        target.sessions.push(src.session);
+        target.totalMessages += src.session.message_count;
+        target.startedAt = minString(target.startedAt, src.session.started_at);
+        target.endedAt = maxString(target.endedAt, src.session.ended_at);
+        keysToRemove.add(src.key);
+      }
+    }
+  }
+
+  // Remove adopted orphan groups from the map and insertion order.
+  for (const key of keysToRemove) {
+    groupMap.delete(key);
+  }
+
   for (const group of groupMap.values()) {
     if (group.sessions.length > 1) {
       group.sessions.sort((a, b) => {
@@ -653,7 +790,9 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
     }
   }
 
-  return insertionOrder.map((k) => groupMap.get(k)!);
+  return insertionOrder
+    .filter((k) => !keysToRemove.has(k))
+    .map((k) => groupMap.get(k)!);
 }
 
 export const sessions = createSessionsStore();
