@@ -21,7 +21,7 @@ export type AgentSection = GroupSection;
 
 export interface DisplayItem {
   id: string;
-  type: "header" | "session" | "team-group";
+  type: "header" | "session" | "team-group" | "subagent-group";
   label: string;
   count: number;
   group?: SessionGroup;
@@ -144,34 +144,57 @@ function emitGroupItems(
     }
   }
 
-  // Count total depth-1 items for isLastChild calculation.
+  // Count depth-1 group headers.
+  const hasSubagentGroup = regulars.length > 0;
   const hasTeamGroup = teammates.length > 0;
-  const depth1Count = regulars.length + (hasTeamGroup ? 1 : 0);
+  const depth1Count = (hasSubagentGroup ? 1 : 0) + (hasTeamGroup ? 1 : 0);
+  let depth1Idx = 0;
 
-  // Emit regular subagent children at depth 1.
-  for (let i = 0; i < regulars.length; i++) {
-    const s = regulars[i]!;
-    const depth1Index = i;
+  // Emit "Subagents (N)" group header + children at depth 2.
+  if (hasSubagentGroup) {
+    const subagentKey = `subagent:${g.key}`;
+    // Auto-expand: when parent is expanded, subgroups expand too.
+    const subExpanded = expandedGroups.has(g.key);
+
     items.push({
-      id: `child:${s.id}`,
-      type: "session",
-      label,
-      count: 0,
+      id: `subagent-group:${g.key}`,
+      type: "subagent-group",
+      label: "Subagents",
+      count: regulars.length,
       group: g,
-      session: s,
-      isChild: true,
       depth: 1,
-      isLastChild: depth1Index === depth1Count - 1,
-      height: CHILD_ITEM_HEIGHT,
+      isLastChild: depth1Idx === depth1Count - 1,
+      height: TEAM_HEADER_HEIGHT,
       top: y.value,
     });
-    y.value += CHILD_ITEM_HEIGHT;
+    y.value += TEAM_HEADER_HEIGHT;
+    depth1Idx++;
+
+    if (subExpanded) {
+      for (let i = 0; i < regulars.length; i++) {
+        const s = regulars[i]!;
+        items.push({
+          id: `child:${s.id}`,
+          type: "session",
+          label,
+          count: 0,
+          group: g,
+          session: s,
+          isChild: true,
+          depth: 2,
+          isLastChild: i === regulars.length - 1,
+          height: CHILD_ITEM_HEIGHT,
+          top: y.value,
+        });
+        y.value += CHILD_ITEM_HEIGHT;
+      }
+    }
   }
 
-  // Emit synthetic "Team" group node + teammate children at depth 2.
+  // Emit "Team (N)" group header + children at depth 2.
   if (hasTeamGroup) {
-    const teamKey = `team:${g.key}`;
-    const teamExpanded = expandedGroups.has(teamKey);
+    // Auto-expand: when parent is expanded, subgroups expand too.
+    const teamExpanded = expandedGroups.has(g.key);
 
     items.push({
       id: `team-group:${g.key}`,
@@ -180,7 +203,7 @@ function emitGroupItems(
       count: teammates.length,
       group: g,
       depth: 1,
-      isLastChild: true, // Team group is always last at depth 1
+      isLastChild: depth1Idx === depth1Count - 1,
       height: TEAM_HEADER_HEIGHT,
       top: y.value,
     });
