@@ -388,6 +388,24 @@ func TestExtractTextContent_IflowToolResult(t *testing.T) {
 			"DecodeContent = %q, want %q", decoded, "result text",
 		)
 	}
+
+	// Object without nested output: both length and decode
+	// should be zero/empty.
+	noOutput := `[{
+		"type":"tool_result",
+		"tool_use_id":"tu_456",
+		"content":{"other":"data"}
+	}]`
+	_, _, _, _, trs2 := ExtractTextContent(gjson.Parse(noOutput))
+	if len(trs2) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(trs2))
+	}
+	if trs2[0].ContentLength != 0 {
+		t.Errorf("ContentLength = %d, want 0", trs2[0].ContentLength)
+	}
+	if d := DecodeContent(trs2[0].ContentRaw); d != "" {
+		t.Errorf("DecodeContent = %q, want empty", d)
+	}
 }
 
 func TestFormatToolUseVariants(t *testing.T) {
