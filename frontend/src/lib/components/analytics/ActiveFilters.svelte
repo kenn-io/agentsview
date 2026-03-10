@@ -1,6 +1,5 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { sessions } from "../../stores/sessions.svelte.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
 
   const selectedAgents = $derived(
@@ -101,7 +100,7 @@
     {#each selectedAgents as agent (agent)}
       <button
         class="filter-chip"
-        onclick={() => sessions.toggleAgentFilter(agent)}
+        onclick={() => analytics.toggleAgent(agent)}
         title="Remove {agentLabel(agent)} filter"
       >
         <span

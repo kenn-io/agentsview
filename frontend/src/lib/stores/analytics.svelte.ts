@@ -160,6 +160,20 @@ class AnalyticsStore {
     this.fetchAll();
   }
 
+  toggleAgent(agent: string) {
+    const current = this.agent ? this.agent.split(",") : [];
+    const idx = current.indexOf(agent);
+    if (idx >= 0) {
+      current.splice(idx, 1);
+    } else {
+      current.push(agent);
+    }
+    this.agent = current.join(",");
+    sessions.filters.agent = this.agent;
+    sessions.load();
+    this.fetchAll();
+  }
+
   clearMinUserMessages() {
     this.minUserMessages = 0;
     sessions.filters.minUserMessages = 0;
