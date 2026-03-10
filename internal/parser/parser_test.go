@@ -361,6 +361,35 @@ func TestDecodeContent(t *testing.T) {
 	}
 }
 
+func TestExtractTextContent_IflowToolResult(t *testing.T) {
+	// iFlow tool results use an object with nested output.
+	content := `[{
+		"type":"tool_result",
+		"tool_use_id":"tu_123",
+		"content":{"responseParts":{"functionResponse":{"response":{"output":"result text"}}}}
+	}]`
+	_, _, _, _, trs := ExtractTextContent(gjson.Parse(content))
+	if len(trs) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(trs))
+	}
+	tr := trs[0]
+	if tr.ToolUseID != "tu_123" {
+		t.Errorf("ToolUseID = %q, want %q", tr.ToolUseID, "tu_123")
+	}
+	if tr.ContentLength != len("result text") {
+		t.Errorf(
+			"ContentLength = %d, want %d",
+			tr.ContentLength, len("result text"),
+		)
+	}
+	decoded := DecodeContent(tr.ContentRaw)
+	if decoded != "result text" {
+		t.Errorf(
+			"DecodeContent = %q, want %q", decoded, "result text",
+		)
+	}
+}
+
 func TestFormatToolUseVariants(t *testing.T) {
 	tests := []struct {
 		toolName string
