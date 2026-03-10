@@ -340,6 +340,16 @@ func TestDecodeContent(t *testing.T) {
 		{"multiple array blocks", `[{"type":"text","text":"foo"},{"type":"text","text":"bar"}]`, "foobar"},
 		{"empty raw", "", ""},
 		{"non-text array block ignored", `[{"type":"image"}]`, ""},
+		{
+			"iFlow object with nested output",
+			`{"responseParts":{"functionResponse":{"response":{"output":"hello world"}}}}`,
+			"hello world",
+		},
+		{
+			"iFlow object without nested output",
+			`{"other":"data"}`,
+			"",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

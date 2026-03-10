@@ -129,6 +129,12 @@ func decodeContent(content gjson.Result) string {
 		})
 		return strings.Join(parts, "")
 	}
+	// iFlow tool results use an object with nested output.
+	if content.IsObject() {
+		return content.Get(
+			"responseParts.functionResponse.response.output",
+		).Str
+	}
 	return ""
 }
 

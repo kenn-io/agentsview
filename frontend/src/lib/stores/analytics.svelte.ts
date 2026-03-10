@@ -148,6 +148,7 @@ class AnalyticsStore {
     sessions.filters.minUserMessages = 0;
     sessions.filters.includeOneShot = false;
     sessions.filters.recentlyActive = false;
+    sessions.activeSessionId = null;
     sessions.invalidateFilterCaches();
     sessions.load();
     this.fetchAll();
@@ -156,6 +157,7 @@ class AnalyticsStore {
   clearAgent() {
     this.agent = "";
     sessions.filters.agent = "";
+    sessions.activeSessionId = null;
     sessions.load();
     this.fetchAll();
   }
@@ -170,6 +172,7 @@ class AnalyticsStore {
     }
     this.agent = current.join(",");
     sessions.filters.agent = this.agent;
+    sessions.activeSessionId = null;
     sessions.load();
     this.fetchAll();
   }
@@ -177,6 +180,7 @@ class AnalyticsStore {
   clearMinUserMessages() {
     this.minUserMessages = 0;
     sessions.filters.minUserMessages = 0;
+    sessions.activeSessionId = null;
     sessions.load();
     this.fetchAll();
   }
@@ -184,6 +188,7 @@ class AnalyticsStore {
   clearIncludeOneShot() {
     this.includeOneShot = false;
     sessions.filters.includeOneShot = false;
+    sessions.activeSessionId = null;
     sessions.invalidateFilterCaches();
     sessions.load();
     this.fetchAll();
@@ -192,6 +197,7 @@ class AnalyticsStore {
   clearRecentlyActive() {
     this.recentlyActive = false;
     sessions.filters.recentlyActive = false;
+    sessions.activeSessionId = null;
     sessions.load();
     this.fetchAll();
   }
@@ -209,6 +215,7 @@ class AnalyticsStore {
   clearProject() {
     this.project = "";
     sessions.filters.project = "";
+    sessions.activeSessionId = null;
     sessions.load();
     this.fetchAll();
   }
