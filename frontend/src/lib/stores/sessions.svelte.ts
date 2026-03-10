@@ -628,16 +628,30 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
     }
     group.firstMessage = group.sessions[0]?.first_message ?? null;
 
-    let bestIdx = 0;
-    let bestKey = recencyKey(group.sessions[0]!);
-    for (let i = 1; i < group.sessions.length; i++) {
-      const key = recencyKey(group.sessions[i]!);
-      if (key > bestKey) {
-        bestKey = key;
-        bestIdx = i;
+    // For groups containing subagent children, the root session
+    // should always be the main entry (not the most recent child).
+    const hasSubagents = group.sessions.some(
+      (s) => s.relationship_type === "subagent",
+    );
+    if (hasSubagents) {
+      const rootIdx = group.sessions.findIndex((s) => s.id === group.key);
+      group.primarySessionId =
+        rootIdx >= 0
+          ? group.sessions[rootIdx]!.id
+          : group.sessions[0]!.id;
+    } else {
+      // For continuation chains, use the most recently active session.
+      let bestIdx = 0;
+      let bestKey = recencyKey(group.sessions[0]!);
+      for (let i = 1; i < group.sessions.length; i++) {
+        const k = recencyKey(group.sessions[i]!);
+        if (k > bestKey) {
+          bestKey = k;
+          bestIdx = i;
+        }
       }
+      group.primarySessionId = group.sessions[bestIdx]!.id;
     }
-    group.primarySessionId = group.sessions[bestIdx]!.id;
   }
 
   return insertionOrder.map((k) => groupMap.get(k)!);
