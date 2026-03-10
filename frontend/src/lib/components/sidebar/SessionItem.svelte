@@ -56,8 +56,9 @@
   );
 
   /**
-   * Clean display name: strip <teammate-message ...> XML tags and
-   * show the actual task content instead of raw markup.
+   * Clean display name: for teammate sessions, extract the unique task
+   * description (e.g. "Task #2: Align ROADMAP.md...") instead of the
+   * repetitive "You are a teammate on..." boilerplate.
    */
   let displayName = $derived.by(() => {
     if (session.display_name) return truncate(session.display_name, 50);
@@ -67,6 +68,17 @@
         .replace(/<teammate-message[^>]*>/g, "")
         .replace(/<\/teammate-message>/g, "")
         .trim();
+      // Extract "Task #N: description" from the boilerplate.
+      const taskMatch = msg.match(/Task\s*#?\d+[:\s]+(.+?)(?:\s+\d+\.|$)/s);
+      if (taskMatch) {
+        return truncate(taskMatch[1]!.trim(), 50);
+      }
+      // Fallback: skip the "You are a teammate on ..." boilerplate.
+      const afterTeam = msg.match(/team[."]\s*[^.]*?[.]\s+(.+)/s)
+        ?? msg.match(/You are a teammate[^.]*\.\s+(.+)/s);
+      if (afterTeam) {
+        return truncate(afterTeam[1]!.trim(), 50);
+      }
     }
     return msg ? truncate(msg, 50) : truncate(session.project, 30);
   });
@@ -229,18 +241,12 @@
     <span class="tree-spacer"></span>
   {/if}
 
-  {#if !hideAgent}
-    <div class="agent-indicator" style:--agent-c={agentColor}>
-      <span
-        class="agent-dot"
-        class:recently-active={recentlyActive}
-      ></span>
-      {#if !compact}
-        <span class="agent-label">{session.agent}</span>
-      {/if}
-    </div>
-  {:else if recentlyActive}
-    <span class="agent-dot recently-active standalone" style:background={agentColor}></span>
+  {#if !hideAgent || recentlyActive}
+    <span
+      class="agent-dot"
+      class:recently-active={recentlyActive}
+      style:background={agentColor}
+    ></span>
   {/if}
 
   <div class="session-info">
@@ -298,6 +304,9 @@
         </svg>
       {/if}
     </button>
+  {/if}
+  {#if !hideAgent && !compact}
+    <span class="agent-tag" style:color={agentColor}>{session.agent}</span>
   {/if}
 </div>
 
@@ -427,24 +436,11 @@
     flex-shrink: 0;
   }
 
-  .agent-indicator {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-    max-width: 72px;
-  }
-
   .agent-dot {
     width: 5px;
     height: 5px;
     border-radius: 50%;
-    background: var(--agent-c);
     flex-shrink: 0;
-  }
-
-  .agent-dot.standalone {
-    background: var(--agent-c, currentColor);
   }
 
   .agent-dot.recently-active {
@@ -466,16 +462,19 @@
     }
   }
 
-  .agent-label {
-    font-size: 9px;
-    font-weight: 550;
-    color: var(--agent-c);
-    text-transform: capitalize;
-    letter-spacing: 0.01em;
+  /* Agent tag on the right side */
+  .agent-tag {
+    flex-shrink: 0;
+    font-size: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
     line-height: 1;
+    opacity: 0.7;
+    white-space: nowrap;
+    max-width: 52px;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .session-info {

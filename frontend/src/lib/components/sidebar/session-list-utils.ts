@@ -152,9 +152,8 @@ function emitGroupItems(
 
   // Emit "Subagents (N)" group header + children at depth 2.
   if (hasSubagentGroup) {
-    const subagentKey = `subagent:${g.key}`;
-    // Auto-expand: when parent is expanded, subgroups expand too.
-    const subExpanded = expandedGroups.has(g.key);
+    const subKey = `subagent:${g.key}`;
+    const subExpanded = expandedGroups.has(subKey);
 
     items.push({
       id: `subagent-group:${g.key}`,
@@ -193,8 +192,8 @@ function emitGroupItems(
 
   // Emit "Team (N)" group header + children at depth 2.
   if (hasTeamGroup) {
-    // Auto-expand: when parent is expanded, subgroups expand too.
-    const teamExpanded = expandedGroups.has(g.key);
+    const teamKey = `team:${g.key}`;
+    const teamExpanded = expandedGroups.has(teamKey);
 
     items.push({
       id: `team-group:${g.key}`,

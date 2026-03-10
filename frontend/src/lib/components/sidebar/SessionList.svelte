@@ -166,8 +166,18 @@
     const next = new Set(expandedGroups);
     if (next.has(groupKey)) {
       next.delete(groupKey);
+      // When collapsing a parent, also remove sub-group keys.
+      if (!groupKey.includes(":")) {
+        next.delete(`subagent:${groupKey}`);
+        next.delete(`team:${groupKey}`);
+      }
     } else {
       next.add(groupKey);
+      // When expanding a parent, auto-expand sub-groups.
+      if (!groupKey.includes(":")) {
+        next.add(`subagent:${groupKey}`);
+        next.add(`team:${groupKey}`);
+      }
     }
     expandedGroups = next;
   }
@@ -492,32 +502,40 @@
             <span class="group-count">{item.count}</span>
           </button>
         {:else if item.type === "subagent-group" && item.group}
-          <div
+          {@const subKey = `subagent:${item.group.key}`}
+          {@const subExpanded = expandedGroups.has(subKey)}
+          <button
             class="sub-group-header"
             class:last-child={item.isLastChild}
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             style:--connector-left="{(item.depth ?? 1) * 16}px"
+            onclick={() => toggleChainExpand(subKey)}
           >
+            <svg class="sub-group-arrow" class:expanded={subExpanded} width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1l4 3-4 3z"/></svg>
             <svg class="sub-group-icon" width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
               <path d="M10.56 7.01A3.5 3.5 0 108 0a3.5 3.5 0 002.56 7.01zM8 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
             </svg>
             <span class="sub-group-label">Subagents</span>
             <span class="sub-group-count">({item.count})</span>
-          </div>
+          </button>
         {:else if item.type === "team-group" && item.group}
-          <div
+          {@const teamKey = `team:${item.group.key}`}
+          {@const teamExpanded = expandedGroups.has(teamKey)}
+          <button
             class="sub-group-header"
             class:last-child={item.isLastChild}
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             style:--connector-left="{(item.depth ?? 1) * 16}px"
+            onclick={() => toggleChainExpand(teamKey)}
           >
+            <svg class="sub-group-arrow" class:expanded={teamExpanded} width="8" height="8" viewBox="0 0 8 8" fill="currentColor"><path d="M2 1l4 3-4 3z"/></svg>
             <svg class="sub-group-icon" width="12" height="10" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
               <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
               <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
             </svg>
             <span class="sub-group-label">Team</span>
             <span class="sub-group-count">({item.count})</span>
-          </div>
+          </button>
         {:else if item.isChild && item.session}
           <SessionItem
             session={item.session}
@@ -935,9 +953,12 @@
     height: 28px;
     font-size: 11px;
     color: var(--text-muted);
+    cursor: pointer;
     user-select: none;
     background: transparent;
+    border: none;
     position: relative;
+    transition: background 0.1s;
   }
 
   /* Tree connector lines for sub-group headers */
@@ -955,6 +976,10 @@
     bottom: 50%;
   }
 
+  .sub-group-header:hover {
+    background: var(--bg-surface-hover);
+  }
+
   .sub-group-header::after {
     content: "";
     position: absolute;
@@ -963,6 +988,19 @@
     width: 10px;
     height: 1px;
     background: var(--border-muted);
+  }
+
+  .sub-group-arrow {
+    flex-shrink: 0;
+    transition: transform 0.12s ease;
+    color: var(--text-muted);
+    opacity: 0.5;
+    position: relative;
+    z-index: 1;
+  }
+
+  .sub-group-arrow.expanded {
+    transform: rotate(90deg);
   }
 
   .sub-group-icon {
