@@ -11,6 +11,12 @@
     groupSessionIds?: string[];
     hideAgent?: boolean;
     hideProject?: boolean;
+    /** Render in compact mode (smaller, used for child sessions). */
+    compact?: boolean;
+    /** Whether this item's continuation chain is expanded. */
+    expanded?: boolean;
+    /** Callback to toggle continuation chain expand/collapse. */
+    onToggleExpand?: () => void;
   }
 
   let {
@@ -19,6 +25,9 @@
     groupSessionIds,
     hideAgent = false,
     hideProject = false,
+    compact = false,
+    expanded = false,
+    onToggleExpand,
   }: Props = $props();
 
   let isActive = $derived(
@@ -52,6 +61,11 @@
   function handleStar(e: MouseEvent) {
     e.stopPropagation();
     starred.toggle(session.id);
+  }
+
+  function handleExpand(e: MouseEvent) {
+    e.stopPropagation();
+    onToggleExpand?.();
   }
 
   // Context menu state
@@ -152,6 +166,7 @@
 <div
   class="session-item"
   class:active={isActive}
+  class:compact
   data-session-id={session.id}
   role="button"
   tabindex="0"
@@ -159,13 +174,34 @@
   onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
 >
+  {#if onToggleExpand}
+    <button
+      class="expand-toggle"
+      onclick={handleExpand}
+      title={expanded ? "Collapse chain" : "Expand chain"}
+      aria-label={expanded ? "Collapse chain" : "Expand chain"}
+    >
+      <svg
+        class="expand-chevron"
+        class:expanded
+        width="10"
+        height="10"
+        viewBox="0 0 16 16"
+        fill="currentColor"
+      >
+        <path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z"/>
+      </svg>
+    </button>
+  {/if}
   {#if !hideAgent}
     <div class="agent-indicator" style:--agent-c={agentColor}>
       <span
         class="agent-dot"
         class:recently-active={recentlyActive}
       ></span>
-      <span class="agent-label">{session.agent}</span>
+      {#if !compact}
+        <span class="agent-label">{session.agent}</span>
+      {/if}
     </div>
   {:else if recentlyActive}
     <span class="agent-dot recently-active" style:background={agentColor}></span>
@@ -201,28 +237,30 @@
       {/if}
       <span class="session-time">{timeStr}</span>
       <span class="session-count">{session.user_message_count}</span>
-      {#if continuationCount > 1}
+      {#if continuationCount > 1 && !onToggleExpand}
         <span class="continuation-badge">x{continuationCount}</span>
       {/if}
     </div>
   </div>
-  <button
-    class="star-btn"
-    class:starred={isStarred}
-    onclick={handleStar}
-    title={isStarred ? "Unstar session" : "Star session"}
-    aria-label={isStarred ? "Unstar session" : "Star session"}
-  >
-    {#if isStarred}
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/>
-      </svg>
-    {:else}
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
-        <path d="M8 1.5l1.88 3.81 4.21.61-3.05 2.97.72 4.19L8 11.1l-3.77 1.98.72-4.19L1.9 5.92l4.21-.61L8 1.5z"/>
-      </svg>
-    {/if}
-  </button>
+  {#if !compact}
+    <button
+      class="star-btn"
+      class:starred={isStarred}
+      onclick={handleStar}
+      title={isStarred ? "Unstar session" : "Star session"}
+      aria-label={isStarred ? "Unstar session" : "Star session"}
+    >
+      {#if isStarred}
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 .25a.75.75 0 01.673.418l1.882 3.815 4.21.612a.75.75 0 01.416 1.279l-3.046 2.97.719 4.192a.75.75 0 01-1.088.791L8 12.347l-3.766 1.98a.75.75 0 01-1.088-.79l.72-4.194L.818 6.374a.75.75 0 01.416-1.28l4.21-.611L7.327.668A.75.75 0 018 .25z"/>
+        </svg>
+      {:else}
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true">
+          <path d="M8 1.5l1.88 3.81 4.21.61-3.05 2.97.72 4.19L8 11.1l-3.77 1.98.72-4.19L1.9 5.92l4.21-.61L8 1.5z"/>
+        </svg>
+      {/if}
+    </button>
+  {/if}
 </div>
 
 {#if contextMenu}
@@ -256,6 +294,12 @@
     cursor: pointer;
   }
 
+  .session-item.compact {
+    height: 36px;
+    gap: 6px;
+    padding: 0 8px;
+  }
+
   .session-item:hover {
     background: var(--bg-surface-hover);
   }
@@ -263,6 +307,31 @@
   .session-item.active {
     background: var(--bg-surface-hover);
     border-left-color: var(--accent-blue);
+  }
+
+  .expand-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    border-radius: 3px;
+    color: var(--text-muted);
+    transition: color 0.1s, background 0.1s;
+  }
+
+  .expand-toggle:hover {
+    color: var(--text-primary);
+    background: var(--bg-surface-hover);
+  }
+
+  .expand-chevron {
+    transition: transform 0.15s ease;
+  }
+
+  .expand-chevron.expanded {
+    transform: rotate(90deg);
   }
 
   .agent-indicator {
@@ -328,6 +397,11 @@
     letter-spacing: -0.005em;
   }
 
+  .compact .session-name {
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+
   .rename-input {
     font-size: 12px;
     font-weight: 450;
@@ -349,6 +423,10 @@
     color: var(--text-muted);
     line-height: 1.3;
     letter-spacing: 0.01em;
+  }
+
+  .compact .session-meta {
+    font-size: 9px;
   }
 
   .session-project {

@@ -1,6 +1,8 @@
+import type { Session } from "../../api/types.js";
 import type { SessionGroup } from "../../stores/sessions.svelte.js";
 
 export const ITEM_HEIGHT = 42;
+export const CHILD_ITEM_HEIGHT = 36;
 export const HEADER_HEIGHT = 28;
 export const OVERSCAN = 10;
 export const STORAGE_KEY = "agentsview-group-by-agent";
@@ -22,6 +24,10 @@ export interface DisplayItem {
   label: string;
   count: number;
   group?: SessionGroup;
+  /** For child items within an expanded continuation chain. */
+  session?: Session;
+  /** True when this is a child session inside an expanded group. */
+  isChild?: boolean;
   height: number;
   top: number;
 }
@@ -78,31 +84,76 @@ export function buildAgentSections(
 }
 
 /**
+ * Emit display items for a single SessionGroup, expanding
+ * child sessions when the group key is in expandedGroups.
+ */
+function emitGroupItems(
+  g: SessionGroup,
+  label: string,
+  expandedGroups: Set<string>,
+  items: DisplayItem[],
+  y: { value: number },
+): void {
+  const hasChildren = g.sessions.length > 1;
+  const isExpanded = hasChildren && expandedGroups.has(g.key);
+
+  // Primary session
+  items.push({
+    id: label ? `session:${label}:${g.primarySessionId}` : `session:${g.primarySessionId}`,
+    type: "session",
+    label,
+    count: 0,
+    group: g,
+    height: ITEM_HEIGHT,
+    top: y.value,
+  });
+  y.value += ITEM_HEIGHT;
+
+  // Child sessions when expanded
+  if (isExpanded) {
+    for (const s of g.sessions) {
+      if (s.id === g.primarySessionId) continue;
+      items.push({
+        id: `child:${s.id}`,
+        type: "session",
+        label,
+        count: 0,
+        group: g,
+        session: s,
+        isChild: true,
+        height: CHILD_ITEM_HEIGHT,
+        top: y.value,
+      });
+      y.value += CHILD_ITEM_HEIGHT;
+    }
+  }
+}
+
+/**
  * Build a flat list of DisplayItems for virtual scrolling.
  * When mode is "none", produces a simple flat list.
  * Otherwise, interleaves header rows and session rows,
- * respecting collapsed groups.
+ * respecting collapsed groups. Continuation chains expand
+ * inline when their group key is in expandedGroups.
  */
 export function buildDisplayItems(
   groups: SessionGroup[],
   sections: GroupSection[],
   mode: GroupMode,
   collapsed: Set<string>,
+  expandedGroups: Set<string>,
 ): DisplayItem[] {
+  const y = { value: 0 };
+
   if (mode === "none") {
-    return groups.map((g, i) => ({
-      id: `session:${g.primarySessionId}`,
-      type: "session" as const,
-      label: "",
-      count: 0,
-      group: g,
-      height: ITEM_HEIGHT,
-      top: i * ITEM_HEIGHT,
-    }));
+    const items: DisplayItem[] = [];
+    for (const g of groups) {
+      emitGroupItems(g, "", expandedGroups, items, y);
+    }
+    return items;
   }
 
   const items: DisplayItem[] = [];
-  let y = 0;
   for (const section of sections) {
     items.push({
       id: `header:${section.label}`,
@@ -110,22 +161,13 @@ export function buildDisplayItems(
       label: section.label,
       count: section.groups.length,
       height: HEADER_HEIGHT,
-      top: y,
+      top: y.value,
     });
-    y += HEADER_HEIGHT;
+    y.value += HEADER_HEIGHT;
 
     if (!collapsed.has(section.label)) {
       for (const g of section.groups) {
-        items.push({
-          id: `session:${section.label}:${g.primarySessionId}`,
-          type: "session",
-          label: section.label,
-          count: 0,
-          group: g,
-          height: ITEM_HEIGHT,
-          top: y,
-        });
-        y += ITEM_HEIGHT;
+        emitGroupItems(g, section.label, expandedGroups, items, y);
       }
     }
   }
