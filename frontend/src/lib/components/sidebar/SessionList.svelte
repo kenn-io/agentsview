@@ -544,16 +544,14 @@
             <span class="group-count">{item.count}</span>
           </button>
         {:else if item.isChild && item.session}
-          <div class="child-session-row">
-            <span class="child-connector"></span>
-            <SessionItem
-              session={item.session}
-              continuationCount={1}
-              hideAgent={groupMode === "agent"}
-              hideProject={groupMode === "project"}
-              compact
-            />
-          </div>
+          <SessionItem
+            session={item.session}
+            continuationCount={1}
+            hideAgent={groupMode === "agent"}
+            hideProject={groupMode === "project"}
+            compact
+            isChild
+          />
         {:else if item.group}
           {@const primary = item.group.sessions.find(
             (s) => s.id === item.group!.primarySessionId,
@@ -951,44 +949,4 @@
     line-height: 16px;
   }
 
-  /* Child session rows (continuation chain children) */
-  .child-session-row {
-    display: flex;
-    align-items: stretch;
-    height: 100%;
-    padding-left: 10px;
-  }
-
-  .child-connector {
-    width: 12px;
-    flex-shrink: 0;
-    position: relative;
-  }
-
-  .child-connector::before {
-    content: "";
-    position: absolute;
-    left: 5px;
-    top: 0;
-    bottom: 50%;
-    width: 1px;
-    background: var(--border-muted);
-  }
-
-  .child-connector::after {
-    content: "";
-    position: absolute;
-    left: 5px;
-    top: 50%;
-    width: 7px;
-    height: 1px;
-    background: var(--border-muted);
-  }
-
-  /* Allow SessionItem inside child-session-row to flex */
-  .child-session-row :global(.session-item) {
-    flex: 1;
-    height: 100%;
-    padding-left: 4px;
-  }
 </style>

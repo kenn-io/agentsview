@@ -17,6 +17,8 @@
     expanded?: boolean;
     /** Callback to toggle continuation chain expand/collapse. */
     onToggleExpand?: () => void;
+    /** Whether this is a child session (subagent/team member). */
+    isChild?: boolean;
   }
 
   let {
@@ -28,6 +30,7 @@
     compact = false,
     expanded = false,
     onToggleExpand,
+    isChild = false,
   }: Props = $props();
 
   let isActive = $derived(
@@ -44,19 +47,41 @@
     getAgentColor(session.agent),
   );
 
-  let displayName = $derived(
-    session.display_name
-      ? truncate(session.display_name, 50)
-      : session.first_message
-        ? truncate(session.first_message, 50)
-        : truncate(session.project, 30),
+  /** Whether this session is a team member (received a <teammate-message>). */
+  let isTeamSession = $derived(
+    session.first_message?.includes("<teammate-message") ?? false,
   );
+
+  /** Whether this is a plain subagent (not a team member). */
+  let isSubagentSession = $derived(
+    session.relationship_type === "subagent" && !isTeamSession,
+  );
+
+  /**
+   * Clean display name: strip <teammate-message ...> XML tags and
+   * show the actual task content instead of raw markup.
+   */
+  let displayName = $derived.by(() => {
+    if (session.display_name) return truncate(session.display_name, 50);
+    let msg = session.first_message ?? "";
+    if (msg.includes("<teammate-message")) {
+      msg = msg
+        .replace(/<teammate-message[^>]*>/g, "")
+        .replace(/<\/teammate-message>/g, "")
+        .trim();
+    }
+    return msg ? truncate(msg, 50) : truncate(session.project, 30);
+  });
 
   let timeStr = $derived(
     formatRelativeTime(session.ended_at ?? session.started_at),
   );
 
   let isStarred = $derived(starred.isStarred(session.id));
+
+  let childCount = $derived(
+    continuationCount > 1 ? continuationCount - 1 : 0,
+  );
 
   function handleStar(e: MouseEvent) {
     e.stopPropagation();
@@ -167,6 +192,7 @@
   class="session-item"
   class:active={isActive}
   class:compact
+  class:child-session={isChild}
   data-session-id={session.id}
   role="button"
   tabindex="0"
@@ -174,25 +200,6 @@
   onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
 >
-  {#if onToggleExpand}
-    <button
-      class="expand-toggle"
-      onclick={handleExpand}
-      title={expanded ? "Collapse chain" : "Expand chain"}
-      aria-label={expanded ? "Collapse chain" : "Expand chain"}
-    >
-      <svg
-        class="expand-chevron"
-        class:expanded
-        width="10"
-        height="10"
-        viewBox="0 0 16 16"
-        fill="currentColor"
-      >
-        <path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z"/>
-      </svg>
-    </button>
-  {/if}
   {#if !hideAgent}
     <div class="agent-indicator" style:--agent-c={agentColor}>
       <span
@@ -237,8 +244,30 @@
       {/if}
       <span class="session-time">{timeStr}</span>
       <span class="session-count">{session.user_message_count}</span>
-      {#if continuationCount > 1 && !onToggleExpand}
-        <span class="continuation-badge">x{continuationCount}</span>
+      {#if isSubagentSession}
+        <svg class="type-icon" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" title="Subagent">
+          <path d="M10.56 7.01A3.5 3.5 0 108 0a3.5 3.5 0 002.56 7.01zM8 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
+        </svg>
+      {:else if isTeamSession}
+        <svg class="type-icon type-icon-team" width="11" height="9" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true" title="Team member">
+          <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
+          <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
+        </svg>
+      {/if}
+      {#if childCount > 0}
+        {#if onToggleExpand}
+          <button
+            class="expand-badge"
+            class:expanded
+            onclick={handleExpand}
+            title={expanded ? "Collapse" : `Expand ${childCount} sub-sessions`}
+            aria-label={expanded ? "Collapse" : `Expand ${childCount} sub-sessions`}
+          >
+            {expanded ? "\u2212" : "+"}{childCount}
+          </button>
+        {:else}
+          <span class="continuation-badge">x{continuationCount}</span>
+        {/if}
       {/if}
     </div>
   </div>
@@ -300,38 +329,23 @@
     padding: 0 8px;
   }
 
+  .session-item.child-session {
+    background: var(--bg-inset);
+    padding-left: 22px;
+    border-left-color: var(--border-muted);
+  }
+
   .session-item:hover {
     background: var(--bg-surface-hover);
+  }
+
+  .session-item.child-session:hover {
+    background: color-mix(in srgb, var(--bg-surface-hover) 80%, var(--bg-inset));
   }
 
   .session-item.active {
     background: var(--bg-surface-hover);
     border-left-color: var(--accent-blue);
-  }
-
-  .expand-toggle {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 16px;
-    height: 16px;
-    flex-shrink: 0;
-    border-radius: 3px;
-    color: var(--text-muted);
-    transition: color 0.1s, background 0.1s;
-  }
-
-  .expand-toggle:hover {
-    color: var(--text-primary);
-    background: var(--bg-surface-hover);
-  }
-
-  .expand-chevron {
-    transition: transform 0.15s ease;
-  }
-
-  .expand-chevron.expanded {
-    transform: rotate(90deg);
   }
 
   .agent-indicator {
@@ -448,6 +462,44 @@
 
   .session-count::before {
     content: "\2022 ";
+  }
+
+  .type-icon {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    opacity: 0.7;
+  }
+
+  .type-icon-team {
+    color: var(--accent-blue);
+    opacity: 0.8;
+  }
+
+  .expand-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent-blue);
+    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+    border-radius: 8px;
+    padding: 0 5px;
+    height: 15px;
+    line-height: 15px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+  }
+
+  .expand-badge:hover {
+    background: color-mix(in srgb, var(--accent-blue) 22%, transparent);
+  }
+
+  .expand-badge.expanded {
+    background: color-mix(in srgb, var(--accent-blue) 20%, transparent);
   }
 
   .continuation-badge {
