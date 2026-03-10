@@ -88,15 +88,18 @@ agentsview -host 127.0.0.1 -port 8004 \
 
 agentsview can also manage a Caddy frontend for you. In managed-Caddy
 mode, keep the backend on loopback and let Caddy terminate TLS and
-optionally restrict client IP ranges:
+optionally restrict client IP ranges. By default, managed Caddy binds
+to `0.0.0.0` and exposes the public URL on port `8443`.
 
 ```bash
 agentsview -host 127.0.0.1 -port 8080 \
   -public-url https://viewer.example.test \
   -proxy caddy \
+  -proxy-bind-host 0.0.0.0 \
+  -public-port 8443 \
   -tls-cert ~/.certs/viewer.crt \
   -tls-key ~/.certs/viewer.key \
-  -allowed-subnet 10.0.0.0/16 \
+  -allowed-subnet 10.0/16 \
   -allowed-subnet 192.168.1.0/24
 ```
 
@@ -107,10 +110,12 @@ You can persist the same settings in `~/.agentsview/config.json`:
   "public_url": "https://viewer.example.test",
   "proxy": {
     "mode": "caddy",
+    "bind_host": "0.0.0.0",
+    "public_port": 8443,
     "tls_cert": "/home/user/.certs/viewer.crt",
     "tls_key": "/home/user/.certs/viewer.key",
     "allowed_subnets": [
-      "10.0.0.0/16",
+      "10.0/16",
       "192.168.1.0/24"
     ]
   }

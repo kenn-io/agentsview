@@ -90,7 +90,8 @@ func TestValidateServeConfigManagedCaddyRejectsHTTPWithTLS(t *testing.T) {
 
 func TestBuildManagedCaddyfileIncludesAllowlistAndTLS(t *testing.T) {
 	got := buildManagedCaddyfile(
-		"https://viewer.example.test",
+		"https://viewer.example.test:8443",
+		"0.0.0.0",
 		"127.0.0.1:8080",
 		"/tmp/viewer.crt",
 		"/tmp/viewer.key",
@@ -100,7 +101,8 @@ func TestBuildManagedCaddyfileIncludesAllowlistAndTLS(t *testing.T) {
 	for _, want := range []string{
 		"admin off",
 		"auto_https off",
-		"https://viewer.example.test {",
+		"https://viewer.example.test:8443 {",
+		"bind 0.0.0.0",
 		"@blocked not remote_ip 10.0.0.0/16 192.168.1.0/24",
 		"respond @blocked \"Forbidden\" 403",
 		"tls \"/tmp/viewer.crt\" \"/tmp/viewer.key\"",

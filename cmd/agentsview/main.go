@@ -89,6 +89,8 @@ Server flags:
   -public-origin str  Trusted browser origin to allow for remote/proxied access
   -proxy string       Managed reverse proxy mode (currently: caddy)
   -caddy-bin string   Caddy binary to use when -proxy=caddy
+  -proxy-bind-host    Local interface/IP for managed Caddy to bind
+  -public-port int    External port for managed Caddy/public URL (default 8443)
   -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
   -tls-key string     TLS key path for managed Caddy HTTPS mode
   -allowed-subnet str Client CIDR allowed to connect to the managed proxy

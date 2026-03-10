@@ -202,8 +202,11 @@ func TestLoad_PublicURLMergedIntoOrigins(t *testing.T) {
 func TestLoad_ProxyConfigFromFile(t *testing.T) {
 	tmp := setupTestEnv(t)
 	writeConfig(t, tmp, map[string]any{
+		"public_url": "https://viewer.example.test",
 		"proxy": map[string]any{
 			"mode":            "caddy",
+			"bind_host":       "10.0.60.2",
+			"public_port":     9443,
 			"tls_cert":        "/tmp/viewer.crt",
 			"tls_key":         "/tmp/viewer.key",
 			"allowed_subnets": []string{"10.1.2.3/16", "192.168.1.0/24"},
@@ -221,6 +224,15 @@ func TestLoad_ProxyConfigFromFile(t *testing.T) {
 	if cfg.Proxy.Bin != "caddy" {
 		t.Fatalf("Proxy.Bin = %q, want %q", cfg.Proxy.Bin, "caddy")
 	}
+	if cfg.Proxy.BindHost != "10.0.60.2" {
+		t.Fatalf("BindHost = %q, want %q", cfg.Proxy.BindHost, "10.0.60.2")
+	}
+	if cfg.Proxy.PublicPort != 9443 {
+		t.Fatalf("PublicPort = %d, want %d", cfg.Proxy.PublicPort, 9443)
+	}
+	if cfg.PublicURL != "https://viewer.example.test:9443" {
+		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test:9443")
+	}
 	if got := strings.Join(cfg.Proxy.AllowedSubnets, ","); got != "10.1.0.0/16,192.168.1.0/24" {
 		t.Fatalf("AllowedSubnets = %q, want %q", got, "10.1.0.0/16,192.168.1.0/24")
 	}
@@ -229,8 +241,10 @@ func TestLoad_ProxyConfigFromFile(t *testing.T) {
 func TestLoad_ProxyFlags(t *testing.T) {
 	cfg, err := loadConfigFromFlags(
 		t,
-		"-public-url", "https://viewer.example.test/",
+		"-public-url", "https://viewer.example.test",
 		"-proxy", "caddy",
+		"-proxy-bind-host", "0.0.0.0",
+		"-public-port", "9443",
 		"-tls-cert", "/tmp/viewer.crt",
 		"-tls-key", "/tmp/viewer.key",
 		"-allowed-subnet", "10.0/16",
@@ -240,14 +254,56 @@ func TestLoad_ProxyFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if cfg.PublicURL != "https://viewer.example.test" {
-		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test")
+	if cfg.PublicURL != "https://viewer.example.test:9443" {
+		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test:9443")
 	}
 	if cfg.Proxy.Mode != "caddy" {
 		t.Fatalf("Proxy.Mode = %q, want %q", cfg.Proxy.Mode, "caddy")
 	}
+	if cfg.Proxy.BindHost != "0.0.0.0" {
+		t.Fatalf("BindHost = %q, want %q", cfg.Proxy.BindHost, "0.0.0.0")
+	}
+	if cfg.Proxy.PublicPort != 9443 {
+		t.Fatalf("PublicPort = %d, want %d", cfg.Proxy.PublicPort, 9443)
+	}
 	if got := strings.Join(cfg.Proxy.AllowedSubnets, ","); got != "10.0.0.0/16,192.168.0.0/24" {
 		t.Fatalf("AllowedSubnets = %q, want %q", got, "10.0.0.0/16,192.168.0.0/24")
+	}
+}
+
+func TestLoad_ManagedCaddyDefaultsPublicPortAndBindHost(t *testing.T) {
+	cfg, err := loadConfigFromFlags(
+		t,
+		"-public-url", "https://viewer.example.test",
+		"-proxy", "caddy",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.PublicURL != "https://viewer.example.test:8443" {
+		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test:8443")
+	}
+	if cfg.Proxy.BindHost != "0.0.0.0" {
+		t.Fatalf("BindHost = %q, want %q", cfg.Proxy.BindHost, "0.0.0.0")
+	}
+	if cfg.Proxy.PublicPort != 0 {
+		t.Fatalf("PublicPort = %d, want %d", cfg.Proxy.PublicPort, 0)
+	}
+}
+
+func TestLoad_ManagedCaddyRejectsConflictingPublicPort(t *testing.T) {
+	_, err := loadConfigFromFlags(
+		t,
+		"-public-url", "https://viewer.example.test:9443",
+		"-proxy", "caddy",
+		"-public-port", "8443",
+	)
+	if err == nil {
+		t.Fatal("expected public port conflict error")
+	}
+	if !strings.Contains(err.Error(), "conflicts with configured public port") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

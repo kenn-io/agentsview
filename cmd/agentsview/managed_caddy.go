@@ -121,6 +121,7 @@ func startManagedCaddy(
 ) (*managedCaddy, error) {
 	content := buildManagedCaddyfile(
 		cfg.PublicURL,
+		cfg.Proxy.BindHost,
 		net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
 		cfg.Proxy.TLSCert,
 		cfg.Proxy.TLSKey,
@@ -207,6 +208,7 @@ func (m *managedCaddy) Err() <-chan error {
 
 func buildManagedCaddyfile(
 	publicURL string,
+	bindHost string,
 	backendAddr string,
 	tlsCert string,
 	tlsKey string,
@@ -219,6 +221,9 @@ func buildManagedCaddyfile(
 	b.WriteString("}\n\n")
 	b.WriteString(publicURL)
 	b.WriteString(" {\n")
+	if bindHost != "" {
+		fmt.Fprintf(&b, "\tbind %s\n", bindHost)
+	}
 	if len(allowedSubnets) > 0 {
 		b.WriteString("\t@blocked not remote_ip")
 		for _, subnet := range allowedSubnets {

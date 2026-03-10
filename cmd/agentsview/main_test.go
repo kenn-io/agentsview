@@ -33,10 +33,10 @@ func TestMustLoadConfig(t *testing.T) {
 		},
 		{
 			name:          "ExplicitFlags",
-			args:          []string{"-host", "0.0.0.0", "-port", "9090", "-public-url", "https://viewer.example.test", "-proxy", "caddy", "-no-browser"},
+			args:          []string{"-host", "0.0.0.0", "-port", "9090", "-public-url", "https://viewer.example.test", "-proxy", "caddy", "-proxy-bind-host", "10.0.60.2", "-public-port", "9443", "-no-browser"},
 			wantHost:      "0.0.0.0",
 			wantPort:      9090,
-			wantPublicURL: "https://viewer.example.test",
+			wantPublicURL: "https://viewer.example.test:9443",
 			wantProxyMode: "caddy",
 			wantNoBrowser: true,
 		},

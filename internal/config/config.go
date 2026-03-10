@@ -37,6 +37,10 @@ type ProxyConfig struct {
 	Mode string `json:"mode,omitempty"`
 	// Bin overrides the proxy executable path.
 	Bin string `json:"bin,omitempty"`
+	// BindHost is the local interface/IP the proxy binds to.
+	BindHost string `json:"bind_host,omitempty"`
+	// PublicPort is the external port exposed by the proxy.
+	PublicPort int `json:"public_port,omitempty"`
 	// TLSCert and TLSKey are used by managed HTTPS mode.
 	TLSCert string `json:"tls_cert,omitempty"`
 	TLSKey  string `json:"tls_key,omitempty"`
@@ -204,6 +208,7 @@ func (c *Config) loadFile() error {
 		c.PublicOrigins = file.PublicOrigins
 	}
 	if file.Proxy.Mode != "" || file.Proxy.Bin != "" ||
+		file.Proxy.BindHost != "" || file.Proxy.PublicPort != 0 ||
 		file.Proxy.TLSCert != "" || file.Proxy.TLSKey != "" ||
 		file.Proxy.AllowedSubnets != nil {
 		c.Proxy = file.Proxy
@@ -339,6 +344,14 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 		"Caddy binary to use when -proxy=caddy (default: caddy)",
 	)
 	fs.String(
+		"proxy-bind-host", "",
+		"Local interface/IP for managed Caddy to bind (default: 0.0.0.0)",
+	)
+	fs.Int(
+		"public-port", 0,
+		"External port for the public URL in managed Caddy mode (default: 8443)",
+	)
+	fs.String(
 		"tls-cert", "",
 		"TLS certificate path for managed Caddy HTTPS mode",
 	)
@@ -377,6 +390,10 @@ func applyFlags(cfg *Config, fs *flag.FlagSet) {
 			cfg.Proxy.Mode = f.Value.String()
 		case "caddy-bin":
 			cfg.Proxy.Bin = f.Value.String()
+		case "proxy-bind-host":
+			cfg.Proxy.BindHost = f.Value.String()
+		case "public-port":
+			cfg.Proxy.PublicPort, _ = strconv.Atoi(f.Value.String())
 		case "tls-cert":
 			cfg.Proxy.TLSCert = f.Value.String()
 		case "tls-key":
@@ -406,7 +423,10 @@ func splitFlagList(value string) []string {
 
 func finalize(cfg *Config) error {
 	var err error
-	cfg.PublicURL, err = normalizeOptionalPublicURL(cfg.PublicURL)
+	if err := normalizeProxyConfig(&cfg.Proxy); err != nil {
+		return err
+	}
+	cfg.PublicURL, err = resolvePublicURL(cfg.PublicURL, cfg.Proxy)
 	if err != nil {
 		return fmt.Errorf("invalid public url: %w", err)
 	}
@@ -422,17 +442,51 @@ func finalize(cfg *Config) error {
 			return fmt.Errorf("invalid public url: %w", err)
 		}
 	}
-	if err := normalizeProxyConfig(&cfg.Proxy); err != nil {
-		return err
-	}
 	return nil
 }
 
-func normalizeOptionalPublicURL(value string) (string, error) {
+func resolvePublicURL(value string, proxyCfg ProxyConfig) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", nil
 	}
-	return normalizePublicOrigin(value)
+	u, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return "", err
+	}
+	if u == nil || u.Host == "" {
+		return "", fmt.Errorf("%q must include a host", value)
+	}
+	if proxyCfg.Mode != "caddy" {
+		return normalizePublicOrigin(value)
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("%q must use http or https", value)
+	}
+	resolvedPort := proxyCfg.PublicPort
+	if resolvedPort == 0 {
+		resolvedPort = 8443
+	}
+	if rawPort := u.Port(); rawPort != "" {
+		explicitPort, err := strconv.Atoi(rawPort)
+		if err != nil || explicitPort < 1 || explicitPort > 65535 {
+			return "", fmt.Errorf("%q has an invalid port", value)
+		}
+		if proxyCfg.PublicPort != 0 && explicitPort != proxyCfg.PublicPort {
+			return "", fmt.Errorf(
+				"%q conflicts with configured public port %d",
+				value, proxyCfg.PublicPort,
+			)
+		}
+		resolvedPort = explicitPort
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("%q must include a host", value)
+	}
+	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(resolvedPort)), nil
 }
 
 func normalizePublicOrigins(origins []string) ([]string, error) {
@@ -518,6 +572,15 @@ func normalizeProxyConfig(cfg *ProxyConfig) error {
 	}
 	if cfg.Mode == "caddy" && strings.TrimSpace(cfg.Bin) == "" {
 		cfg.Bin = "caddy"
+	}
+	if cfg.Mode == "caddy" {
+		cfg.BindHost = strings.TrimSpace(cfg.BindHost)
+		if cfg.BindHost == "" {
+			cfg.BindHost = "0.0.0.0"
+		}
+		if cfg.PublicPort < 0 || cfg.PublicPort > 65535 {
+			return fmt.Errorf("invalid public port %d", cfg.PublicPort)
+		}
 	}
 	var err error
 	cfg.AllowedSubnets, err = normalizeAllowedSubnets(cfg.AllowedSubnets)
