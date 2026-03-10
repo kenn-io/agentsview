@@ -55,6 +55,8 @@
   let manualExpanded: Set<string> = $state(new Set());
   // Start all collapsed when grouping is first enabled.
   let collapseAll = $state(groupMode !== "none");
+  // Track which continuation chains are expanded.
+  let expandedGroups: Set<string> = $state(new Set());
 
   $effect(() => {
     if (typeof localStorage !== "undefined") {
@@ -108,7 +110,7 @@
 
   // Build flat display items for virtual scrolling.
   let displayItems = $derived.by(() =>
-    buildDisplayItems(groups, groupSections, groupMode, collapsed),
+    buildDisplayItems(groups, groupSections, groupMode, collapsed, expandedGroups),
   );
 
   let totalCount = $derived(
@@ -147,8 +149,6 @@
 
   function toggleGroup(label: string) {
     if (collapseAll) {
-      // First toggle after fresh group-enable: switch to
-      // manual mode, expanding only the clicked group.
       collapseAll = false;
       manualExpanded = new Set([label]);
     } else {
@@ -160,6 +160,16 @@
       }
       manualExpanded = next;
     }
+  }
+
+  function toggleChainExpand(groupKey: string) {
+    const next = new Set(expandedGroups);
+    if (next.has(groupKey)) {
+      next.delete(groupKey);
+    } else {
+      next.add(groupKey);
+    }
+    expandedGroups = next;
   }
 
   $effect(() => {
@@ -478,11 +488,20 @@
                 <path d="M1.75 1A1.75 1.75 0 000 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0016 13.25v-8.5A1.75 1.75 0 0014.25 3H7.5a.25.25 0 01-.2-.1l-.9-1.2c-.33-.44-.85-.7-1.4-.7z"/>
               </svg>
             {/if}
-            <span class="group-name">
-              {groupMode === "agent" ? item.label : item.label}
-            </span>
+            <span class="group-name">{item.label}</span>
             <span class="group-count">{item.count}</span>
           </button>
+        {:else if item.isChild && item.session}
+          <div class="child-session-row">
+            <span class="child-connector"></span>
+            <SessionItem
+              session={item.session}
+              continuationCount={1}
+              hideAgent={groupMode === "agent"}
+              hideProject={groupMode === "project"}
+              compact
+            />
+          </div>
         {:else if item.group}
           {@const primary = item.group.sessions.find(
             (s) => s.id === item.group!.primarySessionId,
@@ -496,6 +515,10 @@
                 : undefined}
               hideAgent={groupMode === "agent"}
               hideProject={groupMode === "project"}
+              expanded={expandedGroups.has(item.group.key)}
+              onToggleExpand={item.group.sessions.length > 1
+                ? () => toggleChainExpand(item.group!.key)
+                : undefined}
             />
           {/if}
         {/if}
@@ -874,5 +897,46 @@
     padding: 0 5px;
     border-radius: 8px;
     line-height: 16px;
+  }
+
+  /* Child session rows (continuation chain children) */
+  .child-session-row {
+    display: flex;
+    align-items: stretch;
+    height: 100%;
+    padding-left: 10px;
+  }
+
+  .child-connector {
+    width: 12px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .child-connector::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 0;
+    bottom: 50%;
+    width: 1px;
+    background: var(--border-muted);
+  }
+
+  .child-connector::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    width: 7px;
+    height: 1px;
+    background: var(--border-muted);
+  }
+
+  /* Allow SessionItem inside child-session-row to flex */
+  .child-session-row :global(.session-item) {
+    flex: 1;
+    height: 100%;
+    padding-left: 4px;
   }
 </style>
