@@ -11,6 +11,7 @@
   import CodeBlock from "./CodeBlock.svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
 
   interface Props {
@@ -29,6 +30,27 @@
   );
 
   let isUser = $derived(message.role === "user");
+
+  /** Context-aware role labels based on session type. */
+  let roleLabel = $derived.by(() => {
+    if (!isUser) return "Assistant";
+    const s = sessions.activeSession;
+    if (!s) return "User";
+    const fm = s.first_message ?? "";
+    if (fm.includes("<teammate-message")) return "Teammate";
+    if (s.relationship_type === "subagent") return "Agent";
+    return "User";
+  });
+
+  let roleIcon = $derived.by(() => {
+    if (!isUser) return "A";
+    const s = sessions.activeSession;
+    if (!s) return "U";
+    const fm = s.first_message ?? "";
+    if (fm.includes("<teammate-message")) return "T";
+    if (s.relationship_type === "subagent") return "S";
+    return "U";
+  });
 
   /** Whether the text (prose) segments for this role should render. */
   let showText = $derived(
@@ -86,13 +108,13 @@
       class="role-icon"
       style:background={accentColor}
     >
-      {isUser ? "U" : "A"}
+      {roleIcon}
     </span>
     <span
       class="role-label"
       style:color={accentColor}
     >
-      {isUser ? "User" : "Assistant"}
+      {roleLabel}
     </span>
     <button
       type="button"
