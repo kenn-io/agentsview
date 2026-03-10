@@ -182,10 +182,10 @@ type SessionFilter struct {
 	MinMessages     int    // message_count >= N (0 = no filter)
 	MaxMessages     int    // message_count <= N (0 = no filter)
 	MinUserMessages int    // user_message_count >= N (0 = no filter)
-	ExcludeOneShot   bool   // exclude sessions with user_message_count <= 1
-	IncludeChildren  bool   // include subagent sessions (for sidebar grouping)
-	Cursor           string // opaque cursor from previous page
-	Limit            int
+	ExcludeOneShot  bool   // exclude sessions with user_message_count <= 1
+	IncludeChildren bool   // include subagent sessions (for sidebar grouping)
+	Cursor          string // opaque cursor from previous page
+	Limit           int
 }
 
 // SessionPage is a page of session results.
@@ -202,9 +202,7 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		"message_count > 0",
 		"deleted_at IS NULL",
 	}
-	if f.IncludeChildren {
-		preds = append(preds, "relationship_type NOT IN ('fork')")
-	} else {
+	if !f.IncludeChildren {
 		preds = append(preds, "relationship_type NOT IN ('subagent', 'fork')")
 	}
 	var args []any
