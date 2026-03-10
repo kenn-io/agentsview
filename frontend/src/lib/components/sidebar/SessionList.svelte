@@ -491,31 +491,33 @@
             <span class="group-name">{item.label}</span>
             <span class="group-count">{item.count}</span>
           </button>
-        {:else if item.type === "team-group" && item.group}
-          <button
-            class="team-group-header"
+        {:else if item.type === "subagent-group" && item.group}
+          <div
+            class="sub-group-header"
             class:last-child={item.isLastChild}
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             style:--connector-left="{(item.depth ?? 1) * 16}px"
-            onclick={() => toggleChainExpand(`team:${item.group!.key}`)}
           >
-            <svg
-              class="tree-arrow"
-              class:expanded={expandedGroups.has(`team:${item.group.key}`)}
-              width="8"
-              height="8"
-              viewBox="0 0 8 8"
-              fill="currentColor"
-            >
-              <path d="M2 1l4 3-4 3z"/>
+            <svg class="sub-group-icon" width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M10.56 7.01A3.5 3.5 0 108 0a3.5 3.5 0 002.56 7.01zM8 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
             </svg>
-            <svg class="team-icon" width="12" height="10" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
+            <span class="sub-group-label">Subagents</span>
+            <span class="sub-group-count">({item.count})</span>
+          </div>
+        {:else if item.type === "team-group" && item.group}
+          <div
+            class="sub-group-header"
+            class:last-child={item.isLastChild}
+            style:padding-left="{8 + (item.depth ?? 1) * 16}px"
+            style:--connector-left="{(item.depth ?? 1) * 16}px"
+          >
+            <svg class="sub-group-icon" width="12" height="10" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
               <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
               <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
             </svg>
-            <span class="team-label">Team</span>
-            <span class="team-count">({item.count})</span>
-          </button>
+            <span class="sub-group-label">Team</span>
+            <span class="sub-group-count">({item.count})</span>
+          </div>
         {:else if item.isChild && item.session}
           <SessionItem
             session={item.session}
@@ -924,25 +926,22 @@
     line-height: 16px;
   }
 
-  /* Team group header (synthetic "Team (N)" node at depth 1) */
-  .team-group-header {
+  /* Sub-group headers (Subagents, Team) at depth 1 */
+  .sub-group-header {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 5px;
     width: 100%;
     height: 28px;
     font-size: 11px;
-    color: var(--text-secondary);
-    cursor: pointer;
+    color: var(--text-muted);
     user-select: none;
     background: transparent;
-    border: none;
-    transition: background 0.1s, color 0.1s;
     position: relative;
   }
 
-  /* Tree connector lines for team-group (same as SessionItem) */
-  .team-group-header::before {
+  /* Tree connector lines for sub-group headers */
+  .sub-group-header::before {
     content: "";
     position: absolute;
     left: calc(var(--connector-left) + 5px);
@@ -952,11 +951,11 @@
     background: var(--border-muted);
   }
 
-  .team-group-header.last-child::before {
+  .sub-group-header.last-child::before {
     bottom: 50%;
   }
 
-  .team-group-header::after {
+  .sub-group-header::after {
     content: "";
     position: absolute;
     left: calc(var(--connector-left) + 5px);
@@ -966,36 +965,22 @@
     background: var(--border-muted);
   }
 
-  .team-group-header:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
-  .tree-arrow {
+  .sub-group-icon {
     flex-shrink: 0;
-    transition: transform 0.15s ease;
     color: var(--text-muted);
+    opacity: 0.6;
     position: relative;
     z-index: 1;
   }
 
-  .tree-arrow.expanded {
-    transform: rotate(90deg);
-  }
-
-  .team-icon {
-    flex-shrink: 0;
-    color: var(--text-muted);
-    opacity: 0.7;
-  }
-
-  .team-label {
+  .sub-group-label {
     font-weight: 600;
     font-size: 10px;
     letter-spacing: 0.02em;
+    text-transform: uppercase;
   }
 
-  .team-count {
+  .sub-group-count {
     font-size: 9px;
     color: var(--text-muted);
     font-weight: 500;

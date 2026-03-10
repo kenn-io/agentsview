@@ -55,11 +55,6 @@
     session.first_message?.includes("<teammate-message") ?? false,
   );
 
-  /** Whether this is a plain subagent (not a team member). */
-  let isSubagentSession = $derived(
-    session.relationship_type === "subagent" && !isTeamSession,
-  );
-
   /**
    * Clean display name: strip <teammate-message ...> XML tags and
    * show the actual task content instead of raw markup.
@@ -279,16 +274,6 @@
       {/if}
       <span class="session-time">{timeStr}</span>
       <span class="session-count">{session.user_message_count}</span>
-      {#if isSubagentSession}
-        <svg class="type-icon" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path d="M10.56 7.01A3.5 3.5 0 108 0a3.5 3.5 0 002.56 7.01zM8 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
-        </svg>
-      {:else if isTeamSession}
-        <svg class="type-icon type-icon-team" width="11" height="9" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true">
-          <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
-          <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
-        </svg>
-      {/if}
       {#if childCount > 0 && !onToggleExpand}
         <span class="continuation-badge">x{continuationCount}</span>
       {/if}
@@ -560,17 +545,6 @@
 
   .session-count::before {
     content: "\2022 ";
-  }
-
-  .type-icon {
-    flex-shrink: 0;
-    color: var(--text-muted);
-    opacity: 0.7;
-  }
-
-  .type-icon-team {
-    color: var(--accent-blue);
-    opacity: 0.8;
   }
 
   .continuation-badge {
