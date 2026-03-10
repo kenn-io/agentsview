@@ -10,6 +10,7 @@
     continuationCount?: number;
     groupSessionIds?: string[];
     hideAgent?: boolean;
+    hideProject?: boolean;
   }
 
   let {
@@ -17,6 +18,7 @@
     continuationCount = 1,
     groupSessionIds,
     hideAgent = false,
+    hideProject = false,
   }: Props = $props();
 
   let isActive = $derived(
@@ -194,7 +196,9 @@
       <div class="session-name" ondblclick={handleDblClick}>{displayName}</div>
     {/if}
     <div class="session-meta">
-      <span class="session-project">{session.project}</span>
+      {#if !hideProject}
+        <span class="session-project">{session.project}</span>
+      {/if}
       <span class="session-time">{timeStr}</span>
       <span class="session-count">{session.user_message_count}</span>
       {#if continuationCount > 1}
