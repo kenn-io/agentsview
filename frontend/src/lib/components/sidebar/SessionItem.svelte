@@ -21,6 +21,10 @@
     depth?: number;
     /** Whether this is the last sibling at its depth level. */
     isLastChild?: boolean;
+    /** Whether the group contains subagent children. */
+    hasSubagents?: boolean;
+    /** Whether the group contains teammate children. */
+    hasTeammates?: boolean;
   }
 
   let {
@@ -34,6 +38,8 @@
     onToggleExpand,
     depth = 0,
     isLastChild = false,
+    hasSubagents = false,
+    hasTeammates = false,
   }: Props = $props();
 
   let isActive = $derived(
@@ -280,6 +286,17 @@
       {/if}
       <span class="session-time">{timeStr}</span>
       <span class="session-count">{session.user_message_count}</span>
+      {#if hasSubagents}
+        <svg class="group-hint-icon" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" title="Has subagents">
+          <path d="M10.56 7.01A3.5 3.5 0 108 0a3.5 3.5 0 002.56 7.01zM8 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
+        </svg>
+      {/if}
+      {#if hasTeammates}
+        <svg class="group-hint-icon" width="11" height="9" viewBox="0 0 20 16" fill="currentColor" aria-hidden="true" title="Has team">
+          <path d="M7.56 7.01A3.5 3.5 0 105 0a3.5 3.5 0 002.56 7.01zM5 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z"/>
+          <path d="M17.56 7.01A3.5 3.5 0 1015 0a3.5 3.5 0 002.56 7.01zM15 8.5c-2.7 0-5 1.7-5 4v.75c0 .41.34.75.75.75h8.5c.41 0 .75-.34.75-.75v-.75c0-2.3-2.3-4-5-4z" opacity="0.6"/>
+        </svg>
+      {/if}
       {#if childCount > 0 && !onToggleExpand}
         <span class="continuation-badge">x{continuationCount}</span>
       {/if}
@@ -535,6 +552,12 @@
   .session-time {
     white-space: nowrap;
     flex-shrink: 0;
+  }
+
+  .group-hint-icon {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    opacity: 0.5;
   }
 
   .session-count {

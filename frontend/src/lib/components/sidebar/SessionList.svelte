@@ -602,6 +602,9 @@
           {@const primary = item.group.sessions.find(
             (s) => s.id === item.group!.primarySessionId,
           ) ?? item.group.sessions[0]}
+          {@const children = item.group.sessions.filter((s) => s.id !== item.group!.primarySessionId)}
+          {@const groupHasSubagents = children.some((s) => !(s.first_message?.includes("<teammate-message") ?? false))}
+          {@const groupHasTeammates = children.some((s) => s.first_message?.includes("<teammate-message") ?? false)}
           {#if primary}
             <SessionItem
               session={primary}
@@ -616,6 +619,8 @@
                 ? () => toggleChainExpand(item.group!.key)
                 : undefined}
               depth={0}
+              hasSubagents={groupHasSubagents}
+              hasTeammates={groupHasTeammates}
             />
           {/if}
         {/if}
