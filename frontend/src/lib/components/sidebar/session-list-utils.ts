@@ -128,12 +128,39 @@ function isSubagent(s: Session): boolean {
 }
 
 /**
- * Check if a session is a continuation or fork (not a subagent,
- * not a teammate).  These render without a sub-group header or
- * under a "Continuations" label.
+ * Check if a session is a subagent descendant — either it has
+ * relationship_type === "subagent" itself, or one of its ancestors
+ * in the group does.  This ensures that continuations/forks of a
+ * subagent stay under the "Subagents" group header instead of
+ * being miscategorised as plain continuations.
+ */
+export function isSubagentDescendant(
+  s: Session,
+  groupSessions: Session[],
+): boolean {
+  if (isSubagent(s)) return true;
+  if (!s.parent_session_id) return false;
+  const visited = new Set<string>();
+  let cur: Session | undefined = s;
+  while (cur?.parent_session_id && !visited.has(cur.id)) {
+    visited.add(cur.id);
+    const parent = groupSessions.find(
+      (p) => p.id === cur!.parent_session_id,
+    );
+    if (!parent) break;
+    if (isSubagent(parent)) return true;
+    cur = parent;
+  }
+  return false;
+}
+
+/**
+ * Check if a session is a continuation or fork (not a subagent
+ * descendant, not a teammate).  These render without a sub-group
+ * header or under a "Continuations" label.
  */
 function isContinuation(s: Session, allSessions: Session[]): boolean {
-  return !isSubagent(s) && !isTeammate(s, allSessions);
+  return !isSubagentDescendant(s, allSessions) && !isTeammate(s, allSessions);
 }
 
 /**
@@ -180,7 +207,7 @@ function emitGroupItems(
   for (const s of children) {
     if (isTeammate(s, g.sessions)) {
       teammates.push(s);
-    } else if (isSubagent(s)) {
+    } else if (isSubagentDescendant(s, g.sessions)) {
       subagents.push(s);
     } else {
       continuations.push(s);

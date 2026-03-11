@@ -18,6 +18,7 @@
     buildDisplayItems,
     computeTotalSize,
     findStart,
+    isSubagentDescendant,
   } from "./session-list-utils.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
@@ -627,7 +628,7 @@
             (s) => s.id === item.group!.primarySessionId,
           ) ?? item.group.sessions[0]}
           {@const children = item.group.sessions.filter((s) => s.id !== item.group!.primarySessionId)}
-          {@const groupHasSubagents = children.some((s) => s.relationship_type === "subagent")}
+          {@const groupHasSubagents = children.some((s) => isSubagentDescendant(s, item.group!.sessions))}
           {@const groupHasTeammates = children.some((s) => s.first_message?.includes("<teammate-message") ?? false)}
           {#if primary}
             <SessionItem

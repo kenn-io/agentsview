@@ -16,9 +16,10 @@
 
   interface Props {
     message: Message;
+    isSubagentContext?: boolean;
   }
 
-  let { message }: Props = $props();
+  let { message, isSubagentContext = false }: Props = $props();
 
   let copied = $state(false);
 
@@ -31,10 +32,17 @@
 
   let isUser = $derived(message.role === "user");
 
+  /** Resolve the session that owns this message, falling back to activeSession. */
+  let owningSession = $derived(
+    sessions.sessions.find((s) => s.id === message.session_id) ??
+      sessions.activeSession,
+  );
+
   /** Context-aware role labels based on session type. */
   let roleLabel = $derived.by(() => {
     if (!isUser) return "Assistant";
-    const s = sessions.activeSession;
+    if (isSubagentContext) return "Agent";
+    const s = owningSession;
     if (!s) return "User";
     const fm = s.first_message ?? "";
     if (fm.includes("<teammate-message")) return "Teammate";
@@ -44,7 +52,8 @@
 
   let roleIcon = $derived.by(() => {
     if (!isUser) return "A";
-    const s = sessions.activeSession;
+    if (isSubagentContext) return "S";
+    const s = owningSession;
     if (!s) return "U";
     const fm = s.first_message ?? "";
     if (fm.includes("<teammate-message")) return "T";
