@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wesm/agentsview/internal/config"
 )
@@ -63,6 +66,38 @@ func TestValidateServeConfigManagedCaddyRejectsNonLoopbackHost(t *testing.T) {
 		t.Fatal("expected error for non-loopback backend host")
 	}
 	if !strings.Contains(err.Error(), "loopback backend host") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateServeConfigManagedCaddyRequiresAllowlistForNonLoopbackBind(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "viewer.crt")
+	keyPath := filepath.Join(dir, "viewer.key")
+	if err := os.WriteFile(certPath, []byte("cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Config{
+		Host:      "127.0.0.1",
+		Port:      8080,
+		PublicURL: "https://viewer.example.test:8443",
+		Proxy: config.ProxyConfig{
+			Mode:     "caddy",
+			Bin:      os.Args[0],
+			BindHost: "0.0.0.0",
+			TLSCert:  certPath,
+			TLSKey:   keyPath,
+		},
+	}
+	err := validateServeConfig(cfg)
+	if err == nil {
+		t.Fatal("expected non-loopback bind allowlist error")
+	}
+	if !strings.Contains(err.Error(), "allowed_subnet") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -168,5 +203,35 @@ func TestReadinessProbeHost(t *testing.T) {
 		if got := readinessProbeHost(input); got != want {
 			t.Fatalf("readinessProbeHost(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestWaitForLocalPortReturnsEarlyOnErrorChannel(t *testing.T) {
+	errCh := make(chan error, 1)
+	errCh <- errors.New("backend failed")
+	err := waitForLocalPort(
+		context.Background(),
+		"127.0.0.1",
+		65535,
+		5*time.Second,
+		errCh,
+	)
+	if err == nil || !strings.Contains(err.Error(), "backend failed") {
+		t.Fatalf("expected backend failure, got %v", err)
+	}
+}
+
+func TestWaitForLocalPortHonorsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := waitForLocalPort(
+		ctx,
+		"127.0.0.1",
+		65535,
+		5*time.Second,
+		nil,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }

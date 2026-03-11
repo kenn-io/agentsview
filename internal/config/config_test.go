@@ -284,8 +284,8 @@ func TestLoad_ManagedCaddyDefaultsPublicPortAndBindHost(t *testing.T) {
 	if cfg.PublicURL != "https://viewer.example.test:8443" {
 		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test:8443")
 	}
-	if cfg.Proxy.BindHost != "0.0.0.0" {
-		t.Fatalf("BindHost = %q, want %q", cfg.Proxy.BindHost, "0.0.0.0")
+	if cfg.Proxy.BindHost != "127.0.0.1" {
+		t.Fatalf("BindHost = %q, want %q", cfg.Proxy.BindHost, "127.0.0.1")
 	}
 	if cfg.Proxy.PublicPort != 0 {
 		t.Fatalf("PublicPort = %d, want %d", cfg.Proxy.PublicPort, 0)

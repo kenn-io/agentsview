@@ -89,7 +89,9 @@ agentsview -host 127.0.0.1 -port 8004 \
 agentsview can also manage a Caddy frontend for you. In managed-Caddy
 mode, keep the backend on loopback and let Caddy terminate TLS and
 optionally restrict client IP ranges. By default, managed Caddy binds
-to `0.0.0.0` and exposes the public URL on port `8443`.
+to `127.0.0.1` and exposes the public URL on port `8443`. To expose it
+on a non-loopback interface, set `-proxy-bind-host` explicitly and
+provide at least one `-allowed-subnet`.
 
 Managed Caddy mode requires the `caddy` CLI to already be installed.
 This patch does not automate Caddy installation. Use your normal OS

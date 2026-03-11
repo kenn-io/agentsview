@@ -95,6 +95,16 @@ func validateServeConfig(cfg config.Config) error {
 			cfg.Host,
 		)
 	}
+	bindHost := cfg.Proxy.BindHost
+	if strings.TrimSpace(bindHost) == "" {
+		bindHost = "127.0.0.1"
+	}
+	if !isLoopbackHost(bindHost) &&
+		len(cfg.Proxy.AllowedSubnets) == 0 {
+		return fmt.Errorf(
+			"managed caddy non-loopback binds require at least one allowed_subnet",
+		)
+	}
 	if _, err := exec.LookPath(cfg.Proxy.Bin); err != nil {
 		return fmt.Errorf(
 			"finding caddy binary %q: %w",
@@ -296,18 +306,52 @@ func buildManagedCaddyfile(
 	return b.String()
 }
 
-func waitForLocalPort(host string, port int, timeout time.Duration) error {
+func waitForLocalPort(
+	ctx context.Context,
+	host string,
+	port int,
+	timeout time.Duration,
+	errCh <-chan error,
+) error {
 	deadline := time.Now().Add(timeout)
 	address := net.JoinHostPort(readinessProbeHost(host), strconv.Itoa(port))
 	var lastErr error
 	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-errCh:
+			if err == nil {
+				return fmt.Errorf(
+					"service exited before becoming ready on %s",
+					address,
+				)
+			}
+			return err
+		default:
+		}
 		conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
 		if err == nil {
 			conn.Close()
 			return nil
 		}
 		lastErr = err
-		time.Sleep(50 * time.Millisecond)
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case err := <-errCh:
+			timer.Stop()
+			if err == nil {
+				return fmt.Errorf(
+					"service exited before becoming ready on %s",
+					address,
+				)
+			}
+			return err
+		case <-timer.C:
+		}
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("timed out waiting for %s", address)
@@ -351,4 +395,18 @@ func hostLiteral(host string) string {
 		return "[" + host + "]"
 	}
 	return host
+}
+
+func publicURLPort(publicURL string) (int, error) {
+	u, err := url.Parse(publicURL)
+	if err != nil {
+		return 0, err
+	}
+	if u == nil {
+		return 0, fmt.Errorf("invalid public URL")
+	}
+	if port := u.Port(); port != "" {
+		return strconv.Atoi(port)
+	}
+	return defaultSchemePort(u.Scheme), nil
 }

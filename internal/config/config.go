@@ -585,7 +585,7 @@ func normalizeProxyConfig(cfg *ProxyConfig) error {
 	if cfg.Mode == "caddy" {
 		cfg.BindHost = strings.TrimSpace(cfg.BindHost)
 		if cfg.BindHost == "" {
-			cfg.BindHost = "0.0.0.0"
+			cfg.BindHost = "127.0.0.1"
 		}
 		if cfg.PublicPort < 0 || cfg.PublicPort > 65535 {
 			return fmt.Errorf("invalid public port %d", cfg.PublicPort)

@@ -233,22 +233,6 @@ func runServe(args []string) {
 		server.WithDataDir(cfg.DataDir),
 	)
 
-	localURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
-	publicURL := browserURL(cfg)
-	if publicURL == localURL {
-		fmt.Printf(
-			"agentsview %s listening at %s (started in %s)\n",
-			version, localURL,
-			time.Since(start).Round(time.Millisecond),
-		)
-	} else {
-		fmt.Printf(
-			"agentsview %s backend at %s, public at %s (started in %s)\n",
-			version, localURL, publicURL,
-			time.Since(start).Round(time.Millisecond),
-		)
-	}
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt, syscall.SIGTERM,
 	)
@@ -258,7 +242,17 @@ func runServe(args []string) {
 	go func() {
 		serveErrCh <- srv.ListenAndServe()
 	}()
-	if err := waitForLocalPort(cfg.Host, cfg.Port, 5*time.Second); err != nil {
+	if err := waitForLocalPort(
+		ctx, cfg.Host, cfg.Port, 5*time.Second, serveErrCh,
+	); err != nil {
+		shutdownCtx, cancel := context.WithTimeout(
+			context.Background(), 5*time.Second,
+		)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
 		fatal("server failed to start: %v", err)
 	}
 
@@ -275,6 +269,51 @@ func runServe(args []string) {
 			fatal("managed caddy error: %v", err)
 		}
 		defer caddy.Stop()
+
+		publicPort, err := publicURLPort(cfg.PublicURL)
+		if err != nil {
+			shutdownCtx, cancel := context.WithTimeout(
+				context.Background(), 5*time.Second,
+			)
+			defer cancel()
+			caddy.Stop()
+			_ = srv.Shutdown(shutdownCtx)
+			fatal("invalid public url: %v", err)
+		}
+		if err := waitForLocalPort(
+			ctx,
+			cfg.Proxy.BindHost,
+			publicPort,
+			5*time.Second,
+			caddy.Err(),
+		); err != nil {
+			shutdownCtx, cancel := context.WithTimeout(
+				context.Background(), 5*time.Second,
+			)
+			defer cancel()
+			caddy.Stop()
+			_ = srv.Shutdown(shutdownCtx)
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			fatal("managed caddy error: %v", err)
+		}
+	}
+
+	localURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	publicURL := browserURL(cfg)
+	if publicURL == localURL {
+		fmt.Printf(
+			"agentsview %s listening at %s (started in %s)\n",
+			version, localURL,
+			time.Since(start).Round(time.Millisecond),
+		)
+	} else {
+		fmt.Printf(
+			"agentsview %s backend at %s, public at %s (started in %s)\n",
+			version, localURL, publicURL,
+			time.Since(start).Round(time.Millisecond),
+		)
 	}
 
 	if !cfg.NoBrowser {
