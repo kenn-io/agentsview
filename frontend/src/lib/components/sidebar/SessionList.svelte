@@ -113,10 +113,13 @@
     buildDisplayItems(groups, groupSections, groupMode, collapsed, expandedGroups),
   );
 
+  // When include_children is enabled the API total includes
+  // child/subagent sessions.  The header should show the count of
+  // root-level groups the user actually sees in the sidebar.
   let totalCount = $derived(
     starred.filterOnly
       ? groups.reduce((n, g) => n + g.sessions.length, 0)
-      : sessions.total,
+      : groups.length,
   );
   let totalSize = $derived(computeTotalSize(displayItems));
 

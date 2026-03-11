@@ -64,8 +64,18 @@ export class SessionsPage {
   }
 
   async filterByProject(project: string) {
-    await this.projectTypeahead.locator(".typeahead-trigger").click();
+    const trigger = this.projectTypeahead.locator(".typeahead-trigger");
     const input = this.projectTypeahead.locator(".typeahead-input");
+    // The typeahead may close immediately if a reactive update
+    // steals focus right after opening. Retry until stable.
+    await expect(async () => {
+      if (await trigger.isVisible()) {
+        await trigger.click();
+      }
+      await expect(input).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 5_000 });
+    // Re-focus the input in case blur closed and re-opened it.
+    await input.click();
     await input.fill(project);
     const escaped = project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     await this.projectTypeahead

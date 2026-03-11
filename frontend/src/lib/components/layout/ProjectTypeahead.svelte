@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type { ProjectInfo } from "../../api/types/core.js";
 
   interface Props {
@@ -36,11 +37,15 @@
     value ? projects.find((p) => p.name === value)?.name ?? value : "All Projects",
   );
 
-  function openDropdown() {
+  async function openDropdown() {
     query = "";
     open = true;
     highlightIndex = 0;
-    requestAnimationFrame(() => { inputEl?.focus(); });
+    // Wait for Svelte to commit the DOM update before focusing.
+    // requestAnimationFrame alone can race with reactive updates
+    // that destroy and recreate the input element.
+    await tick();
+    inputEl?.focus();
   }
 
   function closeDropdown() {
