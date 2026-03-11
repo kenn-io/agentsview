@@ -235,3 +235,20 @@ func TestWaitForLocalPortHonorsContextCancellation(t *testing.T) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
 }
+
+func TestWaitForLocalPortPrefersContextCancellationOverError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	errCh := make(chan error, 1)
+	errCh <- errors.New("caddy exited")
+	err := waitForLocalPort(
+		ctx,
+		"127.0.0.1",
+		65535,
+		5*time.Second,
+		errCh,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+}

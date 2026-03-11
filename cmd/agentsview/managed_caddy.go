@@ -213,7 +213,7 @@ func startManagedCaddy(
 		return nil, fmt.Errorf("validating managed caddy config: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(
 		ctx,
 		cfg.Proxy.Bin,
@@ -317,10 +317,16 @@ func waitForLocalPort(
 	address := net.JoinHostPort(readinessProbeHost(host), strconv.Itoa(port))
 	var lastErr error
 	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case err := <-errCh:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err == nil {
 				return fmt.Errorf(
 					"service exited before becoming ready on %s",
@@ -343,6 +349,9 @@ func waitForLocalPort(
 			return ctx.Err()
 		case err := <-errCh:
 			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err == nil {
 				return fmt.Errorf(
 					"service exited before becoming ready on %s",

@@ -337,6 +337,13 @@ func runServe(args []string) {
 		)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
+		if ctx.Err() != nil {
+			if serveErr := <-serveErrCh; serveErr != nil &&
+				serveErr != http.ErrServerClosed {
+				fatal("server error: %v", serveErr)
+			}
+			return
+		}
 		if err != nil {
 			fatal("managed caddy error: %v", err)
 		}
