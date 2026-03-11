@@ -42,13 +42,18 @@
     hasTeammates = false,
   }: Props = $props();
 
-  let isActive = $derived(
-    groupSessionIds
-      ? groupSessionIds.includes(
-          sessions.activeSessionId ?? "",
-        )
-      : sessions.activeSessionId === session.id,
-  );
+  let isActive = $derived.by(() => {
+    const aid = sessions.activeSessionId;
+    if (!aid) return false;
+    // Direct match (child rows, or root with no group).
+    if (aid === session.id) return true;
+    // Parent row: only highlight when the chain is collapsed
+    // (i.e. the child is not visible as its own row).
+    if (groupSessionIds && !expanded) {
+      return groupSessionIds.includes(aid);
+    }
+    return false;
+  });
 
   let recentlyActive = $derived(isRecentlyActive(session));
 

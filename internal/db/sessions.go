@@ -272,7 +272,14 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		args = append(args, f.MinUserMessages)
 	}
 	if f.ExcludeOneShot {
-		preds = append(preds, "user_message_count > 1")
+		if f.IncludeChildren {
+			// When tree-view children are included, don't
+			// drop subagent/fork sessions that only received
+			// one user prompt — they are valid child nodes.
+			preds = append(preds, "(user_message_count > 1 OR parent_session_id IS NOT NULL)")
+		} else {
+			preds = append(preds, "user_message_count > 1")
+		}
 	}
 
 	return strings.Join(preds, " AND "), args

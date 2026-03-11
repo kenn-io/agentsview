@@ -257,25 +257,50 @@
     // Read displayItems inside the effect so Svelte tracks
     // it — needed to re-run after a group expansion.
     const items = displayItems;
-    const item = items.find(
+    // Try to find the exact child row first (when expanded).
+    let item = items.find(
       (it) =>
         it.type === "session" &&
-        it.group?.sessions.some((s) => s.id === activeId),
+        it.isChild &&
+        it.session?.id === activeId,
     );
+    // Fall back to the parent row if the child isn't rendered.
     if (!item) {
-      // Session may be hidden in a collapsed agent group.
+      item = items.find(
+        (it) =>
+          it.type === "session" &&
+          it.group?.sessions.some((s) => s.id === activeId),
+      );
+    }
+    if (!item) {
+      // Session may be hidden in a collapsed group section.
       // Expand it — the effect will re-run when displayItems
       // updates, and prevRevealedId is still unset so the
       // second pass will proceed to scroll.
-      if (!groupByAgent) return;
-      for (const section of agentSections) {
-        const owns = section.groups.some((g) =>
-          g.sessions.some((s) => s.id === activeId),
-        );
-        if (owns && collapsedAgents.has(section.agent)) {
-          toggleAgent(section.agent);
-          return;
+      if (groupMode !== "none") {
+        for (const section of groupSections) {
+          const owns = section.groups.some((g) =>
+            g.sessions.some((s) => s.id === activeId),
+          );
+          if (owns && collapsed.has(section.label)) {
+            toggleGroup(section.label);
+            return;
+          }
         }
+      }
+      // Session may be inside a collapsed continuation chain.
+      // Auto-expand the parent group and relevant sub-groups.
+      for (const g of groups) {
+        const match = g.sessions.find((s) => s.id === activeId);
+        if (!match) continue;
+        if (match.id === g.primarySessionId) break; // already primary
+        const next = new Set(expandedGroups);
+        if (!next.has(g.key)) next.add(g.key);
+        // Auto-expand the correct sub-group.
+        next.add(`subagent:${g.key}`);
+        next.add(`team:${g.key}`);
+        expandedGroups = next;
+        return;
       }
       return;
     }
@@ -602,7 +627,7 @@
             (s) => s.id === item.group!.primarySessionId,
           ) ?? item.group.sessions[0]}
           {@const children = item.group.sessions.filter((s) => s.id !== item.group!.primarySessionId)}
-          {@const groupHasSubagents = children.some((s) => !(s.first_message?.includes("<teammate-message") ?? false))}
+          {@const groupHasSubagents = children.some((s) => s.relationship_type === "subagent")}
           {@const groupHasTeammates = children.some((s) => s.first_message?.includes("<teammate-message") ?? false)}
           {#if primary}
             <SessionItem

@@ -92,8 +92,48 @@ export function buildAgentSections(
 }
 
 /** Check if a session is a teammate (received a <teammate-message>). */
-function isTeammate(s: Session): boolean {
+function isTeammateByMessage(s: Session): boolean {
   return s.first_message?.includes("<teammate-message") ?? false;
+}
+
+/**
+ * Check if a session is a teammate, inheriting status from the
+ * parent.  Continuation sessions of a teammate don't carry the
+ * `<teammate-message>` tag themselves, but they belong to the
+ * same teammate chain.
+ */
+function isTeammate(s: Session, allSessions: Session[]): boolean {
+  if (isTeammateByMessage(s)) return true;
+  // Walk up the parent chain within the group to inherit.
+  if (s.parent_session_id) {
+    const visited = new Set<string>();
+    let cur: Session | undefined = s;
+    while (cur?.parent_session_id && !visited.has(cur.id)) {
+      visited.add(cur.id);
+      const parent = allSessions.find((p) => p.id === cur!.parent_session_id);
+      if (!parent) break;
+      if (isTeammateByMessage(parent)) return true;
+      cur = parent;
+    }
+  }
+  return false;
+}
+
+/**
+ * Check if a session is a subagent (has relationship_type === "subagent").
+ * Continuation/fork sessions are NOT subagents.
+ */
+function isSubagent(s: Session): boolean {
+  return s.relationship_type === "subagent";
+}
+
+/**
+ * Check if a session is a continuation or fork (not a subagent,
+ * not a teammate).  These render without a sub-group header or
+ * under a "Continuations" label.
+ */
+function isContinuation(s: Session, allSessions: Session[]): boolean {
+  return !isSubagent(s) && !isTeammate(s, allSessions);
 }
 
 /**
@@ -132,20 +172,46 @@ function emitGroupItems(
 
   if (!isExpanded) return;
 
-  // Separate children into regular subagents and teammates.
+  // Separate children into subagents, teammates, and continuations.
   const children = g.sessions.filter((s) => s.id !== g.primarySessionId);
-  const regulars: Session[] = [];
+  const subagents: Session[] = [];
   const teammates: Session[] = [];
+  const continuations: Session[] = [];
   for (const s of children) {
-    if (isTeammate(s)) {
+    if (isTeammate(s, g.sessions)) {
       teammates.push(s);
+    } else if (isSubagent(s)) {
+      subagents.push(s);
     } else {
-      regulars.push(s);
+      continuations.push(s);
     }
   }
 
-  // Count depth-1 group headers.
-  const hasSubagentGroup = regulars.length > 0;
+  // Continuations render inline at depth 1 (no sub-group header).
+  for (let i = 0; i < continuations.length; i++) {
+    const s = continuations[i]!;
+    // Determine if this is the last depth-1 sibling (accounting
+    // for subsequent sub-group headers).
+    const hasFollowingGroup = subagents.length > 0 || teammates.length > 0;
+    const isLast = i === continuations.length - 1 && !hasFollowingGroup;
+    items.push({
+      id: `child:${s.id}`,
+      type: "session",
+      label,
+      count: 0,
+      group: g,
+      session: s,
+      isChild: true,
+      depth: 1,
+      isLastChild: isLast,
+      height: CHILD_ITEM_HEIGHT,
+      top: y.value,
+    });
+    y.value += CHILD_ITEM_HEIGHT;
+  }
+
+  // Count depth-1 group headers (subagents + team).
+  const hasSubagentGroup = subagents.length > 0;
   const hasTeamGroup = teammates.length > 0;
   const depth1Count = (hasSubagentGroup ? 1 : 0) + (hasTeamGroup ? 1 : 0);
   let depth1Idx = 0;
@@ -159,7 +225,7 @@ function emitGroupItems(
       id: `subagent-group:${g.key}`,
       type: "subagent-group",
       label: "Subagents",
-      count: regulars.length,
+      count: subagents.length,
       group: g,
       depth: 1,
       isLastChild: depth1Idx === depth1Count - 1,
@@ -170,8 +236,8 @@ function emitGroupItems(
     depth1Idx++;
 
     if (subExpanded) {
-      for (let i = 0; i < regulars.length; i++) {
-        const s = regulars[i]!;
+      for (let i = 0; i < subagents.length; i++) {
+        const s = subagents[i]!;
         items.push({
           id: `child:${s.id}`,
           type: "session",
@@ -181,7 +247,7 @@ function emitGroupItems(
           session: s,
           isChild: true,
           depth: 2,
-          isLastChild: i === regulars.length - 1,
+          isLastChild: i === subagents.length - 1,
           height: CHILD_ITEM_HEIGHT,
           top: y.value,
         });
