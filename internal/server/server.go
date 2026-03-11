@@ -265,7 +265,7 @@ func (s *Server) Handler() http.Handler {
 		s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins,
 	)
 	allowedHosts := buildAllowedHosts(
-		s.cfg.Host, s.cfg.Port, s.cfg.PublicOrigins,
+		s.cfg.Host, s.cfg.Port, s.cfg.PublicURL,
 	)
 	bindAll := isBindAll(s.cfg.Host)
 	bindAllIPs := map[string]bool(nil)
@@ -285,7 +285,7 @@ func (s *Server) Handler() http.Handler {
 // rebinding attacks where an attacker's domain resolves to
 // 127.0.0.1 — the browser sends the attacker's domain as the
 // Host header, which we reject.
-func buildAllowedHosts(host string, port int, publicOrigins []string) map[string]bool {
+func buildAllowedHosts(host string, port int, publicURL string) map[string]bool {
 	hosts := make(map[string]bool)
 	add := func(h string) {
 		hosts[net.JoinHostPort(h, strconv.Itoa(port))] = true
@@ -313,8 +313,8 @@ func buildAllowedHosts(host string, port int, publicOrigins []string) map[string
 		add("127.0.0.1")
 		add("localhost")
 	}
-	for _, origin := range publicOrigins {
-		addHostHeadersFromOrigin(hosts, origin)
+	if publicURL != "" {
+		addHostHeadersFromOrigin(hosts, publicURL)
 	}
 	return hosts
 }
