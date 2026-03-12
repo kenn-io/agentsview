@@ -1851,6 +1851,59 @@ func TestCORSAllowMethods(t *testing.T) {
 	}
 }
 
+func TestAuthErrorIncludesCORSHeaders(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.Host = "0.0.0.0"
+		c.RemoteAccess = true
+		c.AuthToken = "secret-token"
+	})
+
+	// Request with wrong token from a cross-origin remote client.
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	req.Header.Set("Origin", "http://192.168.1.50:8080")
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	req.RemoteAddr = "192.168.1.50:9999"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusUnauthorized)
+
+	cors := w.Header().Get("Access-Control-Allow-Origin")
+	if cors != "http://192.168.1.50:8080" {
+		t.Fatalf(
+			"expected CORS Allow-Origin on auth error, got %q",
+			cors,
+		)
+	}
+}
+
+func TestAuthErrorNoCORSWithoutOrigin(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.Host = "0.0.0.0"
+		c.RemoteAccess = true
+		c.AuthToken = "secret-token"
+	})
+
+	// Request without Origin header should not get CORS headers.
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	req.RemoteAddr = "192.168.1.50:9999"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusUnauthorized)
+
+	cors := w.Header().Get("Access-Control-Allow-Origin")
+	if cors != "" {
+		t.Fatalf(
+			"expected no CORS header without Origin, got %q",
+			cors,
+		)
+	}
+}
+
 func TestGetGithubConfig(t *testing.T) {
 	te := setup(t)
 

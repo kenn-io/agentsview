@@ -89,11 +89,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// requests outright. This prevents unauthenticated LAN
 		// access when the server is bound to 0.0.0.0.
 		if !remoteEnabled {
+			setCORSOnAuthError(w, r)
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 		// Remote access enabled but no token configured yet — reject.
 		if token == "" {
+			setCORSOnAuthError(w, r)
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -109,10 +111,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		} else if qt := r.URL.Query().Get("token"); qt != "" && strings.HasSuffix(r.URL.Path, "/watch") {
 			provided = qt
 		} else {
+			setCORSOnAuthError(w, r)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		if provided != token {
+			setCORSOnAuthError(w, r)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -122,4 +126,18 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// setCORSOnAuthError adds CORS headers to auth error responses so
+// cross-origin browsers can read the status code. Without these
+// headers, 401/403 from authMiddleware (which runs before
+// corsMiddleware) become opaque network errors, preventing the
+// frontend from detecting auth failures and prompting for a token.
+func setCORSOnAuthError(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	ensureVaryHeader(w.Header(), "Origin")
 }

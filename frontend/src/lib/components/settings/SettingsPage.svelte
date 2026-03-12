@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
-  import { setAuthToken, getAuthToken, setServerUrl } from "../../api/client.js";
+  import { setAuthToken, getAuthToken, setServerUrl, isRemoteConnection } from "../../api/client.js";
   import AppearanceSettings from "./AppearanceSettings.svelte";
   import AgentDirSettings from "./AgentDirSettings.svelte";
   import TerminalSettings from "./TerminalSettings.svelte";
@@ -67,7 +67,21 @@
       </button>
     </div>
   {:else if settings.error}
-    <div class="settings-error">{settings.error}</div>
+    <div class="settings-error">
+      <p>{settings.error}</p>
+      {#if isRemoteConnection()}
+        <button
+          class="auth-disconnect"
+          onclick={() => {
+            setAuthToken("");
+            setServerUrl("");
+            window.location.reload();
+          }}
+        >
+          Disconnect and reset
+        </button>
+      {/if}
+    </div>
   {:else}
     <div class="settings-sections">
       <AppearanceSettings />
@@ -125,6 +139,14 @@
 
   .settings-error {
     color: var(--accent-red, #ef4444);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .settings-error p {
+    margin: 0;
   }
 
   .settings-actions {
