@@ -342,6 +342,110 @@ func TestIncludeChildrenBypassesFilters(t *testing.T) {
 	}
 }
 
+func TestIncludeChildrenScopesToMatchingParent(t *testing.T) {
+	d := testDB(t)
+
+	// Parent A: claude agent — matches agent filter.
+	insertSession(t, d, "parentA", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 5
+		s.UserMessageCount = 3
+	})
+	// Child of parent A — should be included (parent matches).
+	insertSession(t, d, "childA", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("parentA")
+		s.RelationshipType = "subagent"
+	})
+
+	// Parent B: codex agent — does NOT match agent filter.
+	insertSession(t, d, "parentB", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 5
+		s.UserMessageCount = 3
+	})
+	// Child of parent B.
+	insertSession(t, d, "childB", "proj", func(s *Session) {
+		s.Agent = "gemini"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("parentB")
+		s.RelationshipType = "subagent"
+	})
+
+	// Parent C: gemini agent.
+	insertSession(t, d, "parentC", "proj", func(s *Session) {
+		s.Agent = "gemini"
+		s.MessageCount = 5
+		s.UserMessageCount = 3
+	})
+	// Child of parent C — gemini child of gemini parent.
+	// When filtering agent=claude, neither parent nor child
+	// match, so both should be excluded.
+	insertSession(t, d, "childC", "proj", func(s *Session) {
+		s.Agent = "gemini"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("parentC")
+		s.RelationshipType = "subagent"
+	})
+
+	tests := []struct {
+		name   string
+		filter SessionFilter
+		want   []string
+	}{
+		{
+			name: "ChildOfMatchingParentIncluded",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				Agent:           "claude",
+			},
+			want: []string{"parentA", "childA"},
+		},
+		{
+			// childA (agent=codex) matches the filter directly
+			// even though its parent (parentA, agent=claude)
+			// does not. childB is included because its parent
+			// (parentB, agent=codex) matches.
+			name: "ChildMatchesDirectlyOrViaParent",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				Agent:           "codex",
+			},
+			want: []string{"childA", "parentB", "childB"},
+		},
+		{
+			// Neither parentC (gemini) nor childC (gemini)
+			// match agent=claude, and neither parent matches
+			// either, so both are excluded.
+			name: "UnrelatedChildExcluded",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				Agent:           "claude",
+			},
+			want: []string{"parentA", "childA"},
+		},
+		{
+			name: "NoFilterReturnsAll",
+			filter: SessionFilter{
+				IncludeChildren: true,
+			},
+			want: []string{
+				"parentA", "childA", "parentB", "childB",
+				"parentC", "childC",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requireSessions(t, d, tt.filter, tt.want)
+		})
+	}
+}
+
 func TestActiveSinceUsesEndedAtOverStartedAt(t *testing.T) {
 	d := testDB(t)
 

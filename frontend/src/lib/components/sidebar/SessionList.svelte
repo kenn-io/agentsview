@@ -281,12 +281,16 @@
         it.isChild &&
         it.session?.id === activeId,
     );
-    // Fall back to the parent row if the child isn't rendered.
+    // Fall back to the parent row only if the active session
+    // IS the primary (visible as the root row). If it's a
+    // child hidden in a collapsed subgroup, fall through to
+    // the auto-expand path below instead.
     if (!item) {
       item = items.find(
         (it) =>
           it.type === "session" &&
-          it.group?.sessions.some((s) => s.id === activeId),
+          !it.isChild &&
+          it.group?.primarySessionId === activeId,
       );
     }
     if (!item) {

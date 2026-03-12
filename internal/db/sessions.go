@@ -198,101 +198,114 @@ type SessionPage struct {
 // buildSessionFilter returns a WHERE clause and args for the
 // non-cursor predicates in SessionFilter.
 func buildSessionFilter(f SessionFilter) (string, []any) {
-	preds := []string{
+	// Base predicates apply to every row.
+	basePreds := []string{
 		"message_count > 0",
 		"deleted_at IS NULL",
 	}
 	if !f.IncludeChildren {
-		preds = append(preds, "relationship_type NOT IN ('subagent', 'fork')")
+		basePreds = append(basePreds,
+			"relationship_type NOT IN ('subagent', 'fork')")
 	}
-	var args []any
+
+	// Filter predicates narrow results based on user criteria.
+	// When IncludeChildren is true these only apply to root
+	// sessions; children are included via a subquery on their
+	// parent instead.
+	var filterPreds []string
+	var filterArgs []any
 
 	if f.Project != "" {
-		preds = append(preds, "project = ?")
-		args = append(args, f.Project)
+		filterPreds = append(filterPreds, "project = ?")
+		filterArgs = append(filterArgs, f.Project)
 	}
 	if f.ExcludeProject != "" {
-		preds = append(preds, "project != ?")
-		args = append(args, f.ExcludeProject)
+		filterPreds = append(filterPreds, "project != ?")
+		filterArgs = append(filterArgs, f.ExcludeProject)
 	}
 	if f.Machine != "" {
-		preds = append(preds, "machine = ?")
-		args = append(args, f.Machine)
+		filterPreds = append(filterPreds, "machine = ?")
+		filterArgs = append(filterArgs, f.Machine)
 	}
-	// childBypass wraps a predicate so that child sessions
-	// (those with a parent) are exempt from the filter.  This
-	// keeps the tree intact when IncludeChildren is true.
-	childBypass := func(pred string) string {
-		if f.IncludeChildren {
-			return "(" + pred + " OR parent_session_id IS NOT NULL)"
-		}
-		return pred
-	}
-
 	if f.Agent != "" {
 		agents := strings.Split(f.Agent, ",")
 		if len(agents) == 1 {
-			preds = append(preds, childBypass("agent = ?"))
-			args = append(args, agents[0])
+			filterPreds = append(filterPreds, "agent = ?")
+			filterArgs = append(filterArgs, agents[0])
 		} else {
 			placeholders := make(
 				[]string, len(agents),
 			)
 			for i, a := range agents {
 				placeholders[i] = "?"
-				args = append(args, a)
+				filterArgs = append(filterArgs, a)
 			}
-			preds = append(preds,
-				childBypass("agent IN ("+
+			filterPreds = append(filterPreds,
+				"agent IN ("+
 					strings.Join(placeholders, ",")+
-					")"),
-			)
+					")")
 		}
 	}
 	if f.Date != "" {
-		preds = append(preds,
-			childBypass("date(COALESCE(NULLIF(started_at, ''), created_at)) = ?"))
-		args = append(args, f.Date)
+		filterPreds = append(filterPreds,
+			"date(COALESCE(NULLIF(started_at, ''), created_at)) = ?")
+		filterArgs = append(filterArgs, f.Date)
 	}
 	if f.DateFrom != "" {
-		preds = append(preds,
-			childBypass("date(COALESCE(NULLIF(started_at, ''), created_at)) >= ?"))
-		args = append(args, f.DateFrom)
+		filterPreds = append(filterPreds,
+			"date(COALESCE(NULLIF(started_at, ''), created_at)) >= ?")
+		filterArgs = append(filterArgs, f.DateFrom)
 	}
 	if f.DateTo != "" {
-		preds = append(preds,
-			childBypass("date(COALESCE(NULLIF(started_at, ''), created_at)) <= ?"))
-		args = append(args, f.DateTo)
+		filterPreds = append(filterPreds,
+			"date(COALESCE(NULLIF(started_at, ''), created_at)) <= ?")
+		filterArgs = append(filterArgs, f.DateTo)
 	}
 	if f.ActiveSince != "" {
-		preds = append(preds,
-			childBypass("COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= ?"))
-		args = append(args, f.ActiveSince)
+		filterPreds = append(filterPreds,
+			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= ?")
+		filterArgs = append(filterArgs, f.ActiveSince)
 	}
 	if f.MinMessages > 0 {
-		preds = append(preds, childBypass("message_count >= ?"))
-		args = append(args, f.MinMessages)
+		filterPreds = append(filterPreds, "message_count >= ?")
+		filterArgs = append(filterArgs, f.MinMessages)
 	}
 	if f.MaxMessages > 0 {
-		preds = append(preds, childBypass("message_count <= ?"))
-		args = append(args, f.MaxMessages)
+		filterPreds = append(filterPreds, "message_count <= ?")
+		filterArgs = append(filterArgs, f.MaxMessages)
 	}
 	if f.MinUserMessages > 0 {
-		preds = append(preds, childBypass("user_message_count >= ?"))
-		args = append(args, f.MinUserMessages)
+		filterPreds = append(filterPreds, "user_message_count >= ?")
+		filterArgs = append(filterArgs, f.MinUserMessages)
 	}
 	if f.ExcludeOneShot {
-		if f.IncludeChildren {
-			// When tree-view children are included, don't
-			// drop subagent/fork sessions that only received
-			// one user prompt — they are valid child nodes.
-			preds = append(preds, "(user_message_count > 1 OR parent_session_id IS NOT NULL)")
-		} else {
-			preds = append(preds, "user_message_count > 1")
-		}
+		filterPreds = append(filterPreds, "user_message_count > 1")
 	}
 
-	return strings.Join(preds, " AND "), args
+	// Simple case: no IncludeChildren or no user filters.
+	if !f.IncludeChildren || len(filterPreds) == 0 {
+		allPreds := append(basePreds, filterPreds...)
+		return strings.Join(allPreds, " AND "), filterArgs
+	}
+
+	// IncludeChildren + filters: match the filter directly,
+	// or be a child of a session that matches the filter.
+	// This scopes children to their parent's filter match
+	// instead of including all children in the database.
+	baseWhere := strings.Join(basePreds, " AND ")
+	filterWhere := strings.Join(filterPreds, " AND ")
+	rootWhere := "message_count > 0 AND deleted_at IS NULL AND " +
+		filterWhere
+
+	where := baseWhere + " AND (" + filterWhere +
+		" OR parent_session_id IN" +
+		" (SELECT id FROM sessions WHERE " + rootWhere + "))"
+
+	// Args appear twice: outer filter + subquery.
+	allArgs := make([]any, 0, len(filterArgs)*2)
+	allArgs = append(allArgs, filterArgs...)
+	allArgs = append(allArgs, filterArgs...)
+	return where, allArgs
 }
 
 // ListSessions returns a cursor-paginated list of sessions.

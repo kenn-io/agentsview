@@ -76,8 +76,8 @@
     const s = owningSession;
     if (!s) return "user";
     const all = sessions.sessions;
-    if (isTeammateAncestry(s, all)) return "teammate";
     if (isSubagentAncestry(s, all)) return "subagent";
+    if (isTeammateAncestry(s, all)) return "teammate";
     return "user";
   });
 
