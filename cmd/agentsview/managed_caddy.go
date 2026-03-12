@@ -26,7 +26,11 @@ func browserURL(cfg config.Config) string {
 	if cfg.PublicURL != "" {
 		return cfg.PublicURL
 	}
-	return fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	host := cfg.Host
+	if host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d", host, cfg.Port)
 }
 
 func rewriteConfiguredPublicURLPort(

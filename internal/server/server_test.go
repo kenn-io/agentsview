@@ -128,6 +128,12 @@ func setupWithServerOpts(
 		if r.Host == "example.com" || r.Host == "" {
 			r.Host = defaultHost
 		}
+		// httptest.NewRequest sets RemoteAddr to 192.0.2.1:1234
+		// (a non-routable test IP). Override to loopback so that
+		// auth middleware treats test requests as local.
+		if r.RemoteAddr == "192.0.2.1:1234" {
+			r.RemoteAddr = "127.0.0.1:1234"
+		}
 		// Auto-set Origin for mutating requests so tests
 		// don't need to set it manually on every inline
 		// httptest.NewRequest.
@@ -1431,6 +1437,7 @@ func TestHostHeaderAllowsLegitimate(t *testing.T) {
 			http.MethodGet, "/api/v1/stats", nil,
 		)
 		req.Host = host
+		req.RemoteAddr = "127.0.0.1:1234"
 		w := httptest.NewRecorder()
 		te.srv.Handler().ServeHTTP(w, req)
 		if w.Code == http.StatusForbidden {
@@ -1507,6 +1514,7 @@ func TestHostHeaderBindAllPort80AllowsPortlessLoopback(t *testing.T) {
 					http.MethodGet, "/api/v1/stats", nil,
 				)
 				req.Host = host
+				req.RemoteAddr = "127.0.0.1:1234"
 				w := httptest.NewRecorder()
 				te.srv.Handler().ServeHTTP(w, req)
 				assertStatus(t, w, http.StatusOK)
@@ -1585,10 +1593,15 @@ func TestHostHeaderBindAllPort80AllowsPortlessLANIP(t *testing.T) {
 			te := setup(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
+				// LAN access now requires remote_access + auth token.
+				c.RemoteAccess = true
+				c.AuthToken = "test-token"
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 			req.Host = host
+			req.RemoteAddr = lanIP + ":1234"
+			req.Header.Set("Authorization", "Bearer test-token")
 			w := httptest.NewRecorder()
 			te.srv.Handler().ServeHTTP(w, req)
 			assertStatus(t, w, http.StatusOK)
@@ -1697,10 +1710,15 @@ func TestHostHeaderBindAllAllowsLANIP(t *testing.T) {
 		t.Run(bindHost, func(t *testing.T) {
 			te := setup(t, func(c *config.Config) {
 				c.Host = bindHost
+				// LAN access now requires remote_access + auth token.
+				c.RemoteAccess = true
+				c.AuthToken = "test-token"
 			})
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 			req.Host = host
+			req.RemoteAddr = lanIP + ":1234"
+			req.Header.Set("Authorization", "Bearer test-token")
 			w := httptest.NewRecorder()
 			te.srv.Handler().ServeHTTP(w, req)
 			assertStatus(t, w, http.StatusOK)

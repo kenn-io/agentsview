@@ -16,6 +16,7 @@
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
+  import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
   import { sessions } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
@@ -23,7 +24,20 @@
   import { router } from "./lib/stores/router.svelte.js";
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
+  import { settings } from "./lib/stores/settings.svelte.js";
+  import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/client.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
+
+  let globalAuthToken: string = $state("");
+
+  function handleGlobalAuth() {
+    const token = globalAuthToken.trim();
+    if (!token) return;
+    setAuthToken(token);
+    // Full reload ensures all stores (settings, sessions, starred,
+    // sync, pins, etc.) reinitialize with the new credentials.
+    window.location.reload();
+  }
   import type { DisplayItem } from "./lib/utils/display-items.js";
   import {
     parseContent,
@@ -167,6 +181,8 @@
   }
 
   onMount(() => {
+    globalAuthToken = getAuthToken();
+    settings.load();
     starred.load();
     sync.loadStatus();
     sync.loadStats();
@@ -186,6 +202,45 @@
 
 </script>
 
+{#if settings.needsAuth && router.route !== "settings"}
+  <div class="auth-overlay">
+    <div class="auth-card">
+      <h2 class="auth-card-title">Authentication Required</h2>
+      <p class="auth-card-desc">
+        This server requires an auth token to access. Enter the token
+        shown on the server's console or settings page.
+      </p>
+      <div class="auth-card-field">
+        <input
+          class="auth-card-input"
+          type="password"
+          placeholder="Paste auth token"
+          bind:value={globalAuthToken}
+          onkeydown={(e) => { if (e.key === "Enter") handleGlobalAuth(); }}
+        />
+        <button
+          class="auth-card-btn"
+          disabled={!globalAuthToken.trim()}
+          onclick={handleGlobalAuth}
+        >
+          Authenticate
+        </button>
+      </div>
+      <button
+        class="auth-card-disconnect"
+        onclick={() => {
+          setAuthToken("");
+          setServerUrl("");
+          settings.needsAuth = false;
+          settings.load();
+        }}
+      >
+        Disconnect and reset
+      </button>
+    </div>
+  </div>
+{:else}
+
 <AppHeader />
 
 {#if router.route === "insights"}
@@ -199,6 +254,10 @@
 {:else if router.route === "trash"}
   <div class="page-scroll">
     <TrashPage />
+  </div>
+{:else if router.route === "settings"}
+  <div class="page-scroll">
+    <SettingsPage />
   </div>
 {:else}
   <ThreeColumnLayout>
@@ -245,6 +304,8 @@
 
 {#if ui.activeModal === "update"}
   <UpdateModal />
+{/if}
+
 {/if}
 
 {#if sessions.recentlyDeleted.length > 0}
@@ -322,5 +383,94 @@
 
   .undo-btn:hover {
     background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  }
+
+  .auth-overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    background: var(--bg-default);
+  }
+
+  .auth-card {
+    text-align: center;
+    max-width: 420px;
+    padding: 32px 24px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .auth-card-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 8px;
+  }
+
+  .auth-card-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0 0 20px;
+  }
+
+  .auth-card-field {
+    display: flex;
+    gap: 8px;
+  }
+
+  .auth-card-input {
+    flex: 1;
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: var(--font-mono, monospace);
+    color: var(--text-primary);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+  }
+
+  .auth-card-input:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+  }
+
+  .auth-card-btn {
+    height: 34px;
+    padding: 0 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: white;
+    background: var(--accent-blue);
+    border: none;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .auth-card-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .auth-card-btn:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .auth-card-disconnect {
+    margin-top: 12px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .auth-card-disconnect:hover {
+    color: var(--text-secondary);
   }
 </style>

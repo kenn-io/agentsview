@@ -190,6 +190,9 @@ func (s *Server) routes() {
 	)
 	s.mux.Handle("GET /api/v1/update/check", s.withTimeout(s.handleCheckUpdate))
 
+	s.mux.Handle("GET /api/v1/settings", s.withTimeout(s.handleGetSettings))
+	s.mux.Handle("PUT /api/v1/settings", s.withTimeout(s.handleUpdateSettings))
+
 	s.mux.Handle("GET /api/v1/starred", s.withTimeout(s.handleListStarred))
 	s.mux.Handle("PUT /api/v1/sessions/{id}/star", s.withTimeout(s.handleStarSession))
 	s.mux.Handle("DELETE /api/v1/sessions/{id}/star", s.withTimeout(s.handleUnstarSession))
@@ -272,10 +275,12 @@ func (s *Server) Handler() http.Handler {
 	if bindAll {
 		bindAllIPs = localInterfaceIPs()
 	}
-	return hostCheckMiddleware(
-		allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
-		corsMiddleware(
-			allowedOrigins, bindAll, s.cfg.Port, bindAllIPs, logMiddleware(s.mux),
+	return s.authMiddleware(
+		hostCheckMiddleware(
+			allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
+			corsMiddleware(
+				allowedOrigins, bindAll, s.cfg.Port, bindAllIPs, logMiddleware(s.mux),
+			),
 		),
 	)
 }
@@ -327,6 +332,11 @@ func hostCheckMiddleware(
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
+			// Authenticated remote requests bypass host checks.
+			if isRemoteAuth(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			hostAllowed := allowedHosts[r.Host]
 			// In bind-all mode, also allow local-interface IP-literal
 			// hosts on the configured port so LAN clients can reach the
@@ -557,6 +567,31 @@ func corsMiddleware(
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			origin := r.Header.Get("Origin")
+
+			// Authenticated remote requests: allow any origin.
+			if isRemoteAuth(r) {
+				if origin != "" {
+					w.Header().Set(
+						"Access-Control-Allow-Origin", origin,
+					)
+				}
+				ensureVaryHeader(w.Header(), "Origin")
+				w.Header().Set(
+					"Access-Control-Allow-Methods",
+					"GET, POST, PUT, PATCH, DELETE, OPTIONS",
+				)
+				w.Header().Set(
+					"Access-Control-Allow-Headers",
+					"Content-Type, Authorization",
+				)
+				if r.Method == http.MethodOptions {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
 			// For reads (GET/HEAD), allow empty Origin (same-origin
 			// requests often omit it). For mutating methods and
 			// preflights, require Origin to be present and allowed.
@@ -584,7 +619,7 @@ func corsMiddleware(
 			)
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
-				"Content-Type",
+				"Content-Type, Authorization",
 			)
 			if r.Method == http.MethodOptions {
 				if !safeForReads {
