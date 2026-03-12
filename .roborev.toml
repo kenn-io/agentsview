@@ -1,139 +1,72 @@
 review_guidelines = """
-agentsview is a single-user developer tool. It binds to 127.0.0.1
-by default and is not designed for multi-user or public deployment.
-An optional managed Caddy reverse proxy mode allows LAN/remote
-access while keeping the backend on loopback.
+agentsview is a single-user developer tool. Default mode binds to
+127.0.0.1. Optional managed Caddy proxy mode allows LAN access while
+keeping the backend on loopback. Not designed for multi-user or
+internet-facing deployment.
 
 Key assumptions reviewers MUST account for:
 
-1. AUTHENTICATION MODEL: In default (localhost-only) mode, all API
-   endpoints are unauthenticated by design — the loopback bind is
-   the access boundary. In managed Caddy proxy mode, the backend is
-   REQUIRED to bind to loopback (validateServeConfig enforces this).
-   External access goes through Caddy, which enforces CIDR-based
-   subnet allowlisting. This is a single-user personal tool — subnet
-   filtering is the intended access-control mechanism for LAN access.
-   Do not flag missing bearer tokens or session auth as a gap unless
-   the backend can be reached directly from the network (it cannot
-   when proxy mode is active). Do flag any code path that would allow
-   the backend to bind non-loopback while proxy mode is enabled.
+1. AUTH MODEL: Loopback bind is the access boundary — no auth tokens
+   needed. In proxy mode, validateServeConfig forces the backend to
+   loopback; Caddy enforces CIDR subnet allowlisting. Host/Origin
+   validation is defense-in-depth against DNS rebinding, not primary
+   access control. Do not flag missing bearer tokens/session auth.
+   DO flag any path that lets the backend bind non-loopback in proxy
+   mode, or missing subnet checks for non-loopback Caddy binds.
 
-2. XSS / SANITIZATION: Markdown rendering uses DOMPurify. The
-   {@html renderMarkdown(...)} pattern in Svelte is intentional and
-   safe because renderMarkdown() sanitizes via DOMPurify before
-   returning HTML. Do not flag this as XSS.
+2. MANAGED CADDY INVARIANTS: Backend loopback-only (enforced).
+   Non-loopback Caddy binds require allowed_subnets. auto_https off;
+   TLS needs user-supplied cert/key. Caddyfile is generated, validated
+   via `caddy validate`, then run as a supervised child process.
+   DO flag Caddyfile injection via unsanitized config values.
 
-3. RATE LIMITING / DoS: As a single-user tool, rate limiting and
-   concurrency caps are unnecessary. The 10-minute timeout on AI CLI
-   generation is intentional. Do not flag missing rate limits.
+3. XSS: {@html renderMarkdown(...)} is safe — renderMarkdown()
+   sanitizes via DOMPurify before returning HTML.
 
-4. CORS: In localhost mode, CORS allows same-origin and loopback
-   variants. In proxy mode, public_url and public_origins are added
-   to the allowed origins set. The corsMiddleware requires a matching
-   Origin header for mutating requests (CSRF protection). Do not flag
-   CORS as overly permissive unless origins outside the configured
-   set are accepted.
+4. RATE LIMITING: Single-user tool. Do not flag missing rate limits
+   or concurrency caps.
 
-5. INPUT VALIDATION: Request body size limits are not required for a
-   localhost-only service. In proxy mode, Caddy's subnet filtering
-   limits the client pool to trusted hosts. Do not flag missing
-   MaxBytesReader unless clients from untrusted networks can reach
-   the backend directly.
+5. CORS: corsMiddleware requires matching Origin for mutating
+   requests. Allowed origins = loopback variants + public_url +
+   public_origins. Do not flag as overly permissive unless origins
+   outside the configured set are accepted.
 
-6. SESSION DATA DISPLAY: The tool reads session files from the
-   user's own disk and displays their contents (including tool call
-   arguments, bash commands, prompts, file paths). This is the
-   tool's core purpose. Storing and rendering input_json, commands,
-   or other session content is NOT a credential exposure risk —
-   the user already has full access to these files. Do not flag
-   tool argument storage or display as sensitive data exposure.
+6. INPUT VALIDATION: Body size limits not required — backend is
+   loopback-only; in proxy mode Caddy subnet filtering limits
+   clients to trusted hosts.
 
-7. SCHEMA VERIFICATION: The tool_calls table has an explicit
-   `id INTEGER PRIMARY KEY` column (schema.sql). Do not flag
-   ORDER BY id or references to tool_calls.id as missing-column
-   errors without verifying the actual schema.
+7. SESSION DATA: Displaying session contents (tool args, commands,
+   paths) is the tool's purpose. The user owns these files. Do not
+   flag as sensitive data exposure.
 
-8. SUBPROCESS ENVIRONMENT: Agent CLI subprocesses (claude, codex,
-   gemini) intentionally inherit the parent process environment.
-   Environment sanitization is the user's responsibility when
-   launching agentsview. Do not flag env var inheritance to agent
-   CLIs as a security issue.
+8. SUBPROCESS ENV: Agent CLI subprocesses intentionally inherit the
+   parent environment. Do not flag env var inheritance.
 
-9. SESSION FILE PARSING: Session files (JSONL, JSON) are produced by
-   agent CLIs running on the user's own machine. The parser does not
-   need to defend against adversarial or malicious input. Do not flag:
-   - Missing cycle detection in DAG/tree traversals (UUIDs are unique)
-   - Missing recursion depth limits (fork depth is bounded by human
-     interaction — each fork requires a user backtracking)
-   - Unreachable-node checks in DAG connectivity (degenerate structures
-     already fall back to linear parsing via multi-root and dangling
-     parentUuid checks)
+9. SESSION PARSING: Input files are from local agent CLIs, not
+   adversarial. Do not flag missing cycle detection, recursion
+   limits, or unreachable-node checks in DAG traversals.
 
-10. WRITE ATOMICITY: Session data is written per-session in individual
-    transactions. Cross-session atomicity (e.g. writing all fork
-    sessions from one file in a single transaction) is not required.
-    A full resync recovers any partial state. Do not flag non-atomic
-    multi-session writes as a data corruption risk.
+10. WRITE ATOMICITY: Per-session transactions only. Full resync
+    recovers partial state. Do not flag non-atomic multi-session
+    writes.
 
-11. TOCTOU ON LOCAL FILES: File operations on user-owned paths inside
-    ~/.agentsview/ (e.g. log truncation, config reads) do not need
-    TOCTOU protection. An attacker who can create symlinks or modify
-    files in the user's home directory already has equivalent access.
-    Do not flag Lstat-then-Truncate or similar patterns on local-only
-    user-owned paths as TOCTOU vulnerabilities.
+11. TOCTOU ON LOCAL FILES: Files in ~/.agentsview/ are user-owned.
+    An attacker with home-directory access already has equivalent
+    privileges. Do not flag TOCTOU on local-only paths.
 
-12. SCHEMA NOT NULL CONSTRAINTS: Before flagging SQL NULL handling
-    issues (e.g. NOT IN excluding NULLs), check the schema. The
-    sessions table defines `relationship_type TEXT NOT NULL DEFAULT ''`
-    (schema.sql), so NULL values cannot exist. The NOT IN clause works
-    correctly for non-NULL columns. Do not flag NULL filtering issues
-    without verifying the actual column constraints.
+12. SCHEMA: Verify actual schema before flagging. tool_calls has
+    `id INTEGER PRIMARY KEY`. sessions has `relationship_type TEXT
+    NOT NULL DEFAULT ''` — NULLs cannot exist, so NOT IN is correct.
 
-13. VERIFY CONTROL FLOW BEFORE FLAGGING: When claiming a counter or
-    guard is incorrect, trace the actual control flow including early
-    returns, continue statements, and conditionals. For example, if
-    code has `if len(results) == 0 { continue }` before incrementing
-    a counter, the counter is NOT incremented for zero-result cases.
-    Read the code carefully before reporting logic errors.
+13. CONTROL FLOW: Trace actual flow (early returns, continues,
+    conditionals) before claiming logic errors.
 
-14. DESKTOP (TAURI) THREAT MODEL: The desktop app is a local wrapper
-    around the same localhost backend. Security reviews should focus on:
-    - Preventing remote content/navigation by default.
-    - Tight CSP and explicit local-only connect targets.
-    - Avoiding leakage of raw subprocess/internal errors to the UI.
-    - Ensuring startup/streaming logic does not create unsafe
-      concurrency on response writers or unbounded goroutine hangs.
-    Do not assume an internet-exposed embedded browser threat model.
-
-15. DESKTOP READINESS/LOG PARSING: Sidecar stdout/stderr can arrive in
-    partial chunks. Reviews should prefer buffered line-safe parsing and
-    deterministic shutdown behavior. Flag code that assumes each chunk is
-    a complete line when readiness or control-flow depends on it.
-
-16. DESKTOP CSP EXPECTATION: Flag desktop security regressions when
-    `tauri.conf.json` disables CSP (`csp: null`) or weakens it without
-    clear justification. For this project, a restrictive local-only CSP
-    is expected.
-
-17. MANAGED CADDY PROXY ARCHITECTURE: The optional managed Caddy mode
-    spawns Caddy as a supervised child process. Key invariants:
-    - Backend MUST bind to loopback (enforced by validateServeConfig).
-    - Caddy binds to the external interface and reverse-proxies to the
-      loopback backend. Non-loopback Caddy binds require at least one
-      allowed_subnet.
-    - Caddy's auto_https is disabled; TLS requires user-supplied
-      cert/key files.
-    - The Caddyfile is generated, validated (`caddy validate`), then
-      used with `caddy run`. The process is monitored and the server
-      shuts down if Caddy exits unexpectedly.
-    - Host/Origin validation in the backend prevents DNS rebinding:
-      only the configured public_url hostname is accepted. This is
-      defense-in-depth alongside subnet filtering — not the primary
-      access control. Do not flag Host/Origin checks as "the only
-      auth" without acknowledging the loopback + subnet model.
-    Do flag: any path where the backend could bind non-loopback in
-    proxy mode, missing subnet validation for non-loopback Caddy
-    binds, or Caddyfile injection via unsanitized config values.
+14. DESKTOP (TAURI): Local wrapper around localhost backend. Focus
+    on: preventing remote navigation, tight CSP, no internal error
+    leakage, safe concurrency on response writers. Flag CSP
+    regressions (`csp: null`). Sidecar stdout may arrive in partial
+    chunks — flag code that assumes complete lines when readiness
+    depends on it.
 
 Do NOT flag issues that only apply to public-facing, multi-tenant,
 or internet-exposed services. Focus on bugs, logic errors, data
