@@ -262,6 +262,86 @@ func TestListSessionsExcludesRelationshipTypes(t *testing.T) {
 	requireSessions(t, d, f, []string{"normal"})
 }
 
+func TestIncludeChildrenBypassesFilters(t *testing.T) {
+	d := testDB(t)
+
+	// Parent session: claude agent, dated 2024-06-01, 10 messages.
+	insertSession(t, d, "parent", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2024-06-01T10:00:00Z")
+		s.EndedAt = Ptr("2024-06-01T11:00:00Z")
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+
+	// Subagent child: different agent, different date, 1 message.
+	insertSession(t, d, "child-sub", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.StartedAt = Ptr("2024-07-15T10:00:00Z")
+		s.EndedAt = Ptr("2024-07-15T11:00:00Z")
+		s.MessageCount = 1
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("parent")
+		s.RelationshipType = "subagent"
+	})
+
+	// Fork child: same agent but fewer messages than filter.
+	insertSession(t, d, "child-fork", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2024-06-02T10:00:00Z")
+		s.EndedAt = Ptr("2024-06-02T11:00:00Z")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("parent")
+		s.RelationshipType = "fork"
+	})
+
+	tests := []struct {
+		name   string
+		filter SessionFilter
+		want   []string
+	}{
+		{
+			name: "AgentFilterBypassesChildren",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				Agent:           "claude",
+			},
+			want: []string{"parent", "child-sub", "child-fork"},
+		},
+		{
+			name: "DateFilterBypassesChildren",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				Date:            "2024-06-01",
+			},
+			want: []string{"parent", "child-sub", "child-fork"},
+		},
+		{
+			name: "MinMessagesFilterBypassesChildren",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				MinMessages:     5,
+			},
+			want: []string{"parent", "child-sub", "child-fork"},
+		},
+		{
+			name: "WithoutIncludeChildrenFiltersNormally",
+			filter: SessionFilter{
+				Agent: "claude",
+			},
+			// children excluded by default (subagent/fork filtered)
+			want: []string{"parent"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requireSessions(t, d, tt.filter, tt.want)
+		})
+	}
+}
+
 func TestActiveSinceUsesEndedAtOverStartedAt(t *testing.T) {
 	d := testDB(t)
 

@@ -605,6 +605,57 @@ describe("starred-only session count", () => {
     expect(filtered).toHaveLength(0);
   });
 
+  it("preserves ancestry classification via allSessions when parent is unstarred", () => {
+    // root -> teammate (unstarred) -> continuation (starred)
+    // The continuation should still be classified as a teammate
+    // because allSessions preserves the full session list.
+    const root = makeSession({ id: "root", agent: "claude" });
+    const teammate = makeSession({
+      id: "tm",
+      agent: "claude",
+      parent_session_id: "root",
+      first_message: "<teammate-message>hi</teammate-message>",
+    });
+    const cont = makeSession({
+      id: "cont",
+      agent: "claude",
+      parent_session_id: "tm",
+    });
+
+    const fullSessions = [root, teammate, cont];
+    const starred = new Set(["root", "cont"]); // teammate is NOT starred
+    const filtered = fullSessions.filter((s) => starred.has(s.id));
+
+    const group: SessionGroup = {
+      key: "root",
+      project: "test",
+      sessions: filtered,
+      allSessions: fullSessions, // full list for ancestry
+      primarySessionId: "root",
+      totalMessages: 30,
+      firstMessage: "hi",
+      startedAt: "2025-01-01T00:00:00Z",
+      endedAt: "2025-01-01T01:00:00Z",
+    };
+
+    // Expand so children are emitted.
+    const expanded = new Set(["root", `team:root`]);
+    const items = buildDisplayItems(
+      [group], [], "none", new Set(), expanded,
+    );
+
+    // cont should be classified as a teammate (under "Team"),
+    // NOT as a continuation, because allSessions lets the
+    // ancestry walk find the teammate parent.
+    const teamHeader = items.find((i) => i.type === "team-group");
+    expect(teamHeader).toBeDefined();
+    expect(teamHeader!.label).toBe("Team");
+
+    const contItem = items.find((i) => i.session?.id === "cont");
+    expect(contItem).toBeDefined();
+    expect(contItem!.depth).toBe(2);
+  });
+
   it("recomputes primarySessionId using recency when original primary is unstarred", () => {
     // Root session s0 is the primary, children s1 and s2 are starred.
     // s2 is more recent so it should become the new primary.

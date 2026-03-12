@@ -219,10 +219,20 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		preds = append(preds, "machine = ?")
 		args = append(args, f.Machine)
 	}
+	// childBypass wraps a predicate so that child sessions
+	// (those with a parent) are exempt from the filter.  This
+	// keeps the tree intact when IncludeChildren is true.
+	childBypass := func(pred string) string {
+		if f.IncludeChildren {
+			return "(" + pred + " OR parent_session_id IS NOT NULL)"
+		}
+		return pred
+	}
+
 	if f.Agent != "" {
 		agents := strings.Split(f.Agent, ",")
 		if len(agents) == 1 {
-			preds = append(preds, "agent = ?")
+			preds = append(preds, childBypass("agent = ?"))
 			args = append(args, agents[0])
 		} else {
 			placeholders := make(
@@ -233,42 +243,42 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 				args = append(args, a)
 			}
 			preds = append(preds,
-				"agent IN ("+
+				childBypass("agent IN ("+
 					strings.Join(placeholders, ",")+
-					")",
+					")"),
 			)
 		}
 	}
 	if f.Date != "" {
 		preds = append(preds,
-			"date(COALESCE(NULLIF(started_at, ''), created_at)) = ?")
+			childBypass("date(COALESCE(NULLIF(started_at, ''), created_at)) = ?"))
 		args = append(args, f.Date)
 	}
 	if f.DateFrom != "" {
 		preds = append(preds,
-			"date(COALESCE(NULLIF(started_at, ''), created_at)) >= ?")
+			childBypass("date(COALESCE(NULLIF(started_at, ''), created_at)) >= ?"))
 		args = append(args, f.DateFrom)
 	}
 	if f.DateTo != "" {
 		preds = append(preds,
-			"date(COALESCE(NULLIF(started_at, ''), created_at)) <= ?")
+			childBypass("date(COALESCE(NULLIF(started_at, ''), created_at)) <= ?"))
 		args = append(args, f.DateTo)
 	}
 	if f.ActiveSince != "" {
 		preds = append(preds,
-			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= ?")
+			childBypass("COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= ?"))
 		args = append(args, f.ActiveSince)
 	}
 	if f.MinMessages > 0 {
-		preds = append(preds, "message_count >= ?")
+		preds = append(preds, childBypass("message_count >= ?"))
 		args = append(args, f.MinMessages)
 	}
 	if f.MaxMessages > 0 {
-		preds = append(preds, "message_count <= ?")
+		preds = append(preds, childBypass("message_count <= ?"))
 		args = append(args, f.MaxMessages)
 	}
 	if f.MinUserMessages > 0 {
-		preds = append(preds, "user_message_count >= ?")
+		preds = append(preds, childBypass("user_message_count >= ?"))
 		args = append(args, f.MinUserMessages)
 	}
 	if f.ExcludeOneShot {

@@ -13,6 +13,7 @@
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
+  import type { Session } from "../../api/types.js";
 
   interface Props {
     message: Message;
@@ -38,26 +39,62 @@
       sessions.activeSession,
   );
 
+  /** Walk the parent chain to check if any ancestor has the teammate tag. */
+  function isTeammateAncestry(s: Session, all: Session[]): boolean {
+    if ((s.first_message ?? "").includes("<teammate-message")) return true;
+    if (!s.parent_session_id) return false;
+    const visited = new Set<string>();
+    let cur: Session | undefined = s;
+    while (cur?.parent_session_id && !visited.has(cur.id)) {
+      visited.add(cur.id);
+      const parent = all.find((p) => p.id === cur!.parent_session_id);
+      if (!parent) break;
+      if ((parent.first_message ?? "").includes("<teammate-message")) return true;
+      cur = parent;
+    }
+    return false;
+  }
+
+  /** Walk the parent chain to check if any ancestor is a subagent. */
+  function isSubagentAncestry(s: Session, all: Session[]): boolean {
+    if (s.relationship_type === "subagent") return true;
+    if (!s.parent_session_id) return false;
+    const visited = new Set<string>();
+    let cur: Session | undefined = s;
+    while (cur?.parent_session_id && !visited.has(cur.id)) {
+      visited.add(cur.id);
+      const parent = all.find((p) => p.id === cur!.parent_session_id);
+      if (!parent) break;
+      if (parent.relationship_type === "subagent") return true;
+      cur = parent;
+    }
+    return false;
+  }
+
+  /** Classify the session kind, walking the parent chain. */
+  let sessionKind = $derived.by((): "teammate" | "subagent" | "user" => {
+    const s = owningSession;
+    if (!s) return "user";
+    const all = sessions.sessions;
+    if (isTeammateAncestry(s, all)) return "teammate";
+    if (isSubagentAncestry(s, all)) return "subagent";
+    return "user";
+  });
+
   /** Context-aware role labels based on session type. */
   let roleLabel = $derived.by(() => {
     if (!isUser) return "Assistant";
     if (isSubagentContext) return "Agent";
-    const s = owningSession;
-    if (!s) return "User";
-    const fm = s.first_message ?? "";
-    if (fm.includes("<teammate-message")) return "Teammate";
-    if (s.relationship_type === "subagent") return "Agent";
+    if (sessionKind === "teammate") return "Teammate";
+    if (sessionKind === "subagent") return "Agent";
     return "User";
   });
 
   let roleIcon = $derived.by(() => {
     if (!isUser) return "A";
     if (isSubagentContext) return "S";
-    const s = owningSession;
-    if (!s) return "U";
-    const fm = s.first_message ?? "";
-    if (fm.includes("<teammate-message")) return "T";
-    if (s.relationship_type === "subagent") return "S";
+    if (sessionKind === "teammate") return "T";
+    if (sessionKind === "subagent") return "S";
     return "U";
   });
 

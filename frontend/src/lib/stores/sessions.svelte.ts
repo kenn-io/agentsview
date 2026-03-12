@@ -8,6 +8,9 @@ export interface SessionGroup {
   key: string;
   project: string;
   sessions: Session[];
+  /** Unfiltered session list for ancestry classification.
+   *  Set when a filter (e.g. starred) removes sessions from the group. */
+  allSessions?: Session[];
   primarySessionId: string;
   totalMessages: number;
   firstMessage: string | null;
@@ -652,7 +655,7 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
     orphanGroups.push({
       key,
       group,
-      time: new Date(root.started_at ?? "").getTime(),
+      time: new Date(root.started_at ?? root.created_at ?? "1970-01-01").getTime(),
     });
   }
 
@@ -666,7 +669,7 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
     for (const ck of candidates) {
       const cg = groupMap.get(ck)!;
       const primary = cg.sessions.find((ss) => ss.id === ck) ?? cg.sessions[0]!;
-      const cTime = new Date(primary.started_at ?? "").getTime();
+      const cTime = new Date(primary.started_at ?? primary.created_at ?? "1970-01-01").getTime();
       const dist = Math.abs(orphan.time - cTime);
       if (dist < bestDist) {
         bestDist = dist;

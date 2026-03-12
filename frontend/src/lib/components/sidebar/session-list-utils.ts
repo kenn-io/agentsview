@@ -231,14 +231,17 @@ function emitGroupItems(
   if (!isExpanded) return;
 
   // Separate children into subagents, teammates, and continuations.
+  // Use allSessions (unfiltered) for ancestry classification so that
+  // filtered-out ancestors don't break the parent-chain walk.
   const children = g.sessions.filter((s) => s.id !== g.primarySessionId);
+  const ancestryPool = g.allSessions ?? g.sessions;
   const subagents: Session[] = [];
   const teammates: Session[] = [];
   const continuations: Session[] = [];
   for (const s of children) {
-    if (isSubagentDescendant(s, g.sessions)) {
+    if (isSubagentDescendant(s, ancestryPool)) {
       subagents.push(s);
-    } else if (isTeammate(s, g.sessions)) {
+    } else if (isTeammate(s, ancestryPool)) {
       teammates.push(s);
     } else {
       continuations.push(s);

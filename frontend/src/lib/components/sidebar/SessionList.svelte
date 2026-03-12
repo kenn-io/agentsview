@@ -96,6 +96,9 @@
         return {
           ...g,
           sessions: filtered,
+          // Preserve full session list so ancestry helpers
+          // can still walk the parent chain correctly.
+          allSessions: g.sessions,
           primarySessionId: primaryStillPresent
             ? g.primarySessionId
             : selectPrimaryId(filtered, g.key),
