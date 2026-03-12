@@ -196,6 +196,21 @@ mark {
   padding: 0 2px;
 }
 
+/* In-session find highlights */
+mark.search-highlight {
+  background: color-mix(in srgb, var(--accent-amber) 35%, transparent);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+mark.search-highlight--current {
+  background: var(--accent-amber);
+  color: var(--text-primary);
+  outline: 1px solid color-mix(in srgb, var(--accent-amber) 80%, var(--text-primary));
+  outline-offset: 1px;
+}
+
 /* Modal shared styles */
 .modal-overlay {
   position: fixed;

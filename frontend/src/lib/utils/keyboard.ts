@@ -2,6 +2,7 @@ import { ui } from "../stores/ui.svelte.js";
 import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";
 import { sync } from "../stores/sync.svelte.js";
+import { inSessionSearch } from "../stores/inSessionSearch.svelte.js";
 import {
   getExportUrl,
   resumeSession,
@@ -26,6 +27,10 @@ interface ShortcutOptions {
 }
 
 function handleEscape(): void {
+  if (inSessionSearch.isOpen) {
+    inSessionSearch.close();
+    return;
+  }
   if (ui.activeModal !== null) {
     ui.activeModal = null;
     return;
@@ -143,6 +148,11 @@ export function registerShortcuts(
             );
             if (cmd) copyToClipboard(cmd);
           });
+        }
+      },
+      "/": () => {
+        if (sessions.activeSessionId) {
+          inSessionSearch.open();
         }
       },
       "?": () => {

@@ -16,6 +16,8 @@
     buildResumeCommand,
   } from "../../utils/resume.js";
 
+  import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
+
   interface Props {
     session: Session | undefined;
     onBack: () => void;
@@ -439,6 +441,17 @@
       {/if}
       <div class="actions-wrapper">
         <button
+          class="find-btn"
+          class:find-btn--active={inSessionSearch.isOpen}
+          title="Find in session (/)"
+          onclick={() => inSessionSearch.toggle()}
+          aria-label="Find in session"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85a1.007 1.007 0 00-.115-.099zm-5.242 1.156a5.5 5.5 0 110-11 5.5 5.5 0 010 11z"/>
+          </svg>
+        </button>
+        <button
           class="actions-btn"
           title="Session actions"
           bind:this={menuBtnEl}
@@ -673,6 +686,34 @@
 
   .actions-wrapper {
     position: relative;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .find-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .find-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--accent-blue);
+  }
+
+  .find-btn--active {
+    color: var(--accent-blue);
+    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
   }
 
   .actions-btn {
