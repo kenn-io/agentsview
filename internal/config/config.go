@@ -495,6 +495,9 @@ func resolvePublicURL(value string, proxyCfg ProxyConfig) (string, error) {
 	if host == "" {
 		return "", fmt.Errorf("%q must include a host", value)
 	}
+	if resolvedPort == defaultPortForScheme(scheme) {
+		return scheme + "://" + hostLiteral(host), nil
+	}
 	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(resolvedPort)), nil
 }
 

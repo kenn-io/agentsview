@@ -321,6 +321,32 @@ func TestLoad_ManagedCaddyRejectsPublicURLPath(t *testing.T) {
 	}
 }
 
+func TestLoad_ManagedCaddyNormalizesExplicitDefaultPorts(t *testing.T) {
+	cfg, err := loadConfigFromFlags(
+		t,
+		"-public-url", "https://viewer.example.test:443",
+		"-proxy", "caddy",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "https://viewer.example.test" {
+		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "https://viewer.example.test")
+	}
+
+	cfg, err = loadConfigFromFlags(
+		t,
+		"-public-url", "http://viewer.example.test:80",
+		"-proxy", "caddy",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicURL != "http://viewer.example.test" {
+		t.Fatalf("PublicURL = %q, want %q", cfg.PublicURL, "http://viewer.example.test")
+	}
+}
+
 func TestLoad_AllowedSubnetsRejectInvalid(t *testing.T) {
 	tmp := setupTestEnv(t)
 	writeConfig(t, tmp, map[string]any{
