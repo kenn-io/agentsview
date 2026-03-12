@@ -87,15 +87,17 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 
 		// When remote access is not enabled, reject non-loopback
 		// requests outright. This prevents unauthenticated LAN
-		// access when the server is bound to 0.0.0.0.
+		// access when the server is bound to 0.0.0.0. No CORS
+		// headers — cross-origin requests are not expected when
+		// remote access is off.
 		if !remoteEnabled {
-			setCORSOnAuthError(w, r)
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 		// Remote access enabled but no token configured yet — reject.
+		// No CORS headers — this is a server misconfiguration, not
+		// an auth challenge the client can resolve with a token.
 		if token == "" {
-			setCORSOnAuthError(w, r)
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -128,11 +130,16 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// setCORSOnAuthError adds CORS headers to auth error responses so
-// cross-origin browsers can read the status code. Without these
-// headers, 401/403 from authMiddleware (which runs before
+// setCORSOnAuthError adds CORS headers to 401 responses so
+// cross-origin browsers can read the auth failure status. Without
+// these headers, 401s from authMiddleware (which runs before
 // corsMiddleware) become opaque network errors, preventing the
 // frontend from detecting auth failures and prompting for a token.
+//
+// Only used for token-related 401s in remote mode, where the token
+// is the access boundary and cross-origin requests are expected.
+// Not used for 403s (remote access disabled / no token configured)
+// which are not auth challenges the client can resolve.
 func setCORSOnAuthError(w http.ResponseWriter, r *http.Request) {
 	origin := r.Header.Get("Origin")
 	if origin == "" {

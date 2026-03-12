@@ -1904,6 +1904,31 @@ func TestAuthErrorNoCORSWithoutOrigin(t *testing.T) {
 	}
 }
 
+func TestForbiddenNoCORSWhenRemoteDisabled(t *testing.T) {
+	te := setup(t, func(c *config.Config) {
+		c.Host = "0.0.0.0"
+		// remote_access is false — non-loopback requests are
+		// rejected with 403 and no CORS headers.
+	})
+
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	req.Header.Set("Origin", "http://192.168.1.50:8080")
+	req.RemoteAddr = "192.168.1.50:9999"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusForbidden)
+
+	cors := w.Header().Get("Access-Control-Allow-Origin")
+	if cors != "" {
+		t.Fatalf(
+			"expected no CORS on 403 when remote disabled, got %q",
+			cors,
+		)
+	}
+}
+
 func TestGetGithubConfig(t *testing.T) {
 	te := setup(t)
 
