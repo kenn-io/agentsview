@@ -98,6 +98,20 @@ This patch does not automate Caddy installation. Use your normal OS
 package manager or ask your coding agent to install Caddy for your
 platform first. Caddy supports Linux, macOS, and Windows.
 
+For privileged ports such as `443` or `80`, prefer leaving
+`agentsview` itself unprivileged and granting the Caddy binary
+permission to bind low ports. On Linux, that typically means:
+
+```bash
+sudo setcap cap_net_bind_service=+ep "$(command -v caddy)"
+```
+
+Then run `agentsview` normally as your user with `-public-port 443`
+or `-public-port 80`. This avoids running the session viewer as root,
+which would otherwise change which home directory and agent session
+data it can see. If you do not need a privileged port, the default
+`8443` is the simpler option.
+
 ```bash
 agentsview -host 127.0.0.1 -port 8080 \
   -public-url https://viewer.example.test \
