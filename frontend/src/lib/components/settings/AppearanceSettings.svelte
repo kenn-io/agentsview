@@ -27,14 +27,14 @@
   description="Theme, layout, and block visibility preferences."
 >
   <div class="setting-row">
-    <label class="setting-label">Theme</label>
+    <span class="setting-label">Theme</span>
     <button class="setting-toggle" onclick={() => ui.toggleTheme()}>
       {ui.theme === "light" ? "Light" : "Dark"}
     </button>
   </div>
 
   <div class="setting-row">
-    <label class="setting-label">Message layout</label>
+    <span class="setting-label">Message layout</span>
     <div class="setting-options">
       {#each LAYOUT_OPTIONS as opt}
         <button
@@ -49,7 +49,7 @@
   </div>
 
   <div class="setting-row column">
-    <label class="setting-label">Block visibility</label>
+    <span class="setting-label">Block visibility</span>
     <div class="block-toggles">
       {#each ALL_BLOCK_TYPES as bt}
         <label class="block-toggle">

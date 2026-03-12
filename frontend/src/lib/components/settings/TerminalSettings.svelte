@@ -41,7 +41,7 @@
   description="Configure how sessions are resumed in your terminal."
 >
   <div class="setting-row">
-    <label class="setting-label">Launch mode</label>
+    <span class="setting-label">Launch mode</span>
     <div class="setting-options">
       {#each MODES as opt}
         <button
