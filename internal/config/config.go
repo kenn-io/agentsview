@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"slices"
 	"strings"
 	"time"
 
@@ -311,7 +312,7 @@ func (f *stringListFlag) String() string {
 }
 
 func (f *stringListFlag) Set(value string) error {
-	for _, part := range strings.Split(value, ",") {
+	for part := range strings.SplitSeq(value, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -411,7 +412,7 @@ func splitFlagList(value string) []string {
 		return nil
 	}
 	var out []string
-	for _, part := range strings.Split(value, ",") {
+	for part := range strings.SplitSeq(value, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
@@ -655,10 +656,8 @@ func expandIPv4CIDRShorthand(value string) (string, bool) {
 	if len(parts) == 0 || len(parts) > 4 {
 		return "", false
 	}
-	for _, part := range parts {
-		if part == "" {
-			return "", false
-		}
+	if slices.Contains(parts, "") {
+		return "", false
 	}
 	for len(parts) < 4 {
 		parts = append(parts, "0")
