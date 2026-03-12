@@ -7,18 +7,29 @@
     extractToolParamMeta,
     generateFallbackContent,
   } from "../../utils/tool-params.js";
-
-
+  import { applyHighlight } from "../../utils/highlight.js";
 
   interface Props {
     content: string;
     label?: string;
     toolCall?: ToolCall;
+    highlightQuery?: string;
+    isCurrentHighlight?: boolean;
   }
 
-  let { content, label, toolCall }: Props = $props();
+  let { content, label, toolCall, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
   let collapsed: boolean = $state(true);
   let outputCollapsed: boolean = $state(true);
+
+  // Auto-expand when a search match exists in input or output content
+  $effect(() => {
+    if (!highlightQuery.trim()) return;
+    const q = highlightQuery.toLowerCase();
+    const inputText = (taskPrompt ?? content ?? fallbackContent ?? "").toLowerCase();
+    if (inputText.includes(q)) collapsed = false;
+    const outputText = (toolCall?.result_content ?? "").toLowerCase();
+    if (outputText.includes(q)) { collapsed = false; outputCollapsed = false; }
+  });
 
   let outputPreviewLine = $derived.by(() => {
     const rc = toolCall?.result_content;
@@ -173,11 +184,11 @@
       </div>
     {/if}
     {#if taskPrompt}
-      <pre class="tool-content">{taskPrompt}</pre>
+      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: taskPrompt }}>{taskPrompt}</pre>
     {:else if content}
-      <pre class="tool-content">{content}</pre>
+      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}>{content}</pre>
     {:else if fallbackContent}
-      <pre class="tool-content">{fallbackContent}</pre>
+      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: fallbackContent }}>{fallbackContent}</pre>
     {/if}
     {#if toolCall?.result_content}
       <button
@@ -198,7 +209,7 @@
         {/if}
       </button>
       {#if !outputCollapsed}
-        <pre class="tool-content output-content">{toolCall.result_content}</pre>
+        <pre class="tool-content output-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}>{toolCall.result_content}</pre>
       {/if}
     {/if}
   {/if}

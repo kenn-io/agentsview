@@ -1,10 +1,21 @@
 <script lang="ts">
+  import { applyHighlight } from "../../utils/highlight.js";
+
   interface Props {
     content: string;
+    highlightQuery?: string;
+    isCurrentHighlight?: boolean;
   }
 
-  let { content }: Props = $props();
+  let { content, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
   let collapsed: boolean = $state(true);
+
+  // Auto-expand when a search match exists in this block
+  $effect(() => {
+    if (highlightQuery.trim() && content.toLowerCase().includes(highlightQuery.toLowerCase())) {
+      collapsed = false;
+    }
+  });
 </script>
 
 <div class="thinking-block">
@@ -18,7 +29,10 @@
     <span class="thinking-label">Thinking</span>
   </button>
   {#if !collapsed}
-    <div class="thinking-content">{content}</div>
+    <div
+      class="thinking-content"
+      use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}
+    >{content}</div>
   {/if}
 </div>
 

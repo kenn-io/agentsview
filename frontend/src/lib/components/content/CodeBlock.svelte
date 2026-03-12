@@ -1,17 +1,24 @@
 <script lang="ts">
+  import { applyHighlight } from "../../utils/highlight.js";
+
   interface Props {
     content: string;
     language?: string;
+    highlightQuery?: string;
+    isCurrentHighlight?: boolean;
   }
 
-  let { content, language }: Props = $props();
+  let { content, language, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
 </script>
 
 <div class="code-block">
   {#if language}
     <div class="code-lang">{language}</div>
   {/if}
-  <pre class="code-content"><code>{content}</code></pre>
+  <pre
+    class="code-content"
+    use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}
+  ><code>{content}</code></pre>
 </div>
 
 <style>
