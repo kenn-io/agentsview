@@ -992,7 +992,7 @@
     font-size: 10px;
     font-weight: 600;
     color: var(--text-muted);
-    text-transform: capitalize;
+    text-transform: none;
     letter-spacing: 0.02em;
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-muted);
