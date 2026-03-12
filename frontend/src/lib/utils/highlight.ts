@@ -1,4 +1,19 @@
 /**
+ * Escapes a plain-text string for safe insertion via {@html}.
+ * Use this on raw content inside elements that also use applyHighlight,
+ * so Svelte replaces innerHTML on update instead of patching a retained
+ * text node reference (which becomes detached when applyHighlight splits it).
+ */
+export function escapeHTML(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
  * Svelte action that wraps all occurrences of a query string within
  * the text nodes of an element in <mark class="search-highlight"> tags.
  * Pass `content` as a param so the action re-runs when content changes.

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { applyHighlight } from "../../utils/highlight.js";
+  import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
 
   interface Props {
     content: string;
@@ -32,7 +32,7 @@
     <div
       class="thinking-content"
       use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}
-    >{content}</div>
+    >{@html escapeHTML(content)}</div>
   {/if}
 </div>
 

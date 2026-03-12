@@ -7,7 +7,7 @@
     extractToolParamMeta,
     generateFallbackContent,
   } from "../../utils/tool-params.js";
-  import { applyHighlight } from "../../utils/highlight.js";
+  import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
 
   interface Props {
     content: string;
@@ -184,11 +184,11 @@
       </div>
     {/if}
     {#if taskPrompt}
-      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: taskPrompt }}>{taskPrompt}</pre>
+      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: taskPrompt }}>{@html escapeHTML(taskPrompt)}</pre>
     {:else if content}
-      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}>{content}</pre>
+      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}>{@html escapeHTML(content)}</pre>
     {:else if fallbackContent}
-      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: fallbackContent }}>{fallbackContent}</pre>
+      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: fallbackContent }}>{@html escapeHTML(fallbackContent)}</pre>
     {/if}
     {#if toolCall?.result_content}
       <button
@@ -209,7 +209,7 @@
         {/if}
       </button>
       {#if !outputCollapsed}
-        <pre class="tool-content output-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}>{toolCall.result_content}</pre>
+        <pre class="tool-content output-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: toolCall.result_content }}>{@html escapeHTML(toolCall.result_content)}</pre>
       {/if}
     {/if}
   {/if}
