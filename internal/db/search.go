@@ -103,3 +103,36 @@ func (db *DB) Search(
 	}
 	return page, nil
 }
+
+// SearchSession performs a case-insensitive substring search within a single
+// session's messages, returning matching ordinals in document order.
+// This is used by the in-session find bar (analogous to browser Cmd+F).
+func (db *DB) SearchSession(
+	ctx context.Context, sessionID, query string,
+) ([]int, error) {
+	if query == "" {
+		return nil, nil
+	}
+	// Use LIKE for substring semantics consistent with browser find-bar UX.
+	// SQLite LIKE is case-insensitive for ASCII by default.
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT ordinal FROM messages
+		 WHERE session_id = ? AND content LIKE ? ESCAPE '\'
+		 ORDER BY ordinal ASC`,
+		sessionID, "%"+escapeLike(query)+"%",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("session search: %w", err)
+	}
+	defer rows.Close()
+
+	var ordinals []int
+	for rows.Next() {
+		var ord int
+		if err := rows.Scan(&ord); err != nil {
+			return nil, fmt.Errorf("scanning ordinal: %w", err)
+		}
+		ordinals = append(ordinals, ord)
+	}
+	return ordinals, rows.Err()
+}

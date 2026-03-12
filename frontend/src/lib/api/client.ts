@@ -203,6 +203,21 @@ export function search(
   return fetchJSON(`/search${buildQuery({ q: query, ...params })}`, init);
 }
 
+export interface SessionSearchResponse {
+  ordinals: number[];
+}
+
+export function searchSession(
+  sessionId: string,
+  query: string,
+  init?: RequestInit,
+): Promise<SessionSearchResponse> {
+  return fetchJSON(
+    `/sessions/${sessionId}/search${buildQuery({ q: query })}`,
+    init,
+  );
+}
+
 /* Metadata */
 
 export function getProjects(

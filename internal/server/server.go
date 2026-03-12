@@ -165,6 +165,7 @@ func (s *Server) routes() {
 	)
 	s.mux.Handle("GET /api/v1/openers", s.withTimeout(s.handleListOpeners))
 	s.mux.Handle("GET /api/v1/sessions/{id}/directory", s.withTimeout(s.handleGetSessionDir))
+	s.mux.Handle("GET /api/v1/sessions/{id}/search", s.withTimeout(s.handleSearchSession))
 	s.mux.Handle("POST /api/v1/sessions/{id}/open", s.withTimeout(s.handleOpenSession))
 	s.mux.Handle(
 		"POST /api/v1/sessions/upload", s.withTimeout(s.handleUploadSession),
