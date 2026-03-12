@@ -446,6 +446,78 @@ func TestIncludeChildrenScopesToMatchingParent(t *testing.T) {
 	}
 }
 
+func TestIncludeChildrenExcludeOneShotAgent(t *testing.T) {
+	d := testDB(t)
+
+	// Multi-message claude root.
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	// One-shot subagent (codex) — should be included via parent
+	// despite ExcludeOneShot and different agent.
+	insertSession(t, d, "sub-codex", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+	})
+	// One-shot fork (claude) — should be included via parent.
+	insertSession(t, d, "fork-1msg", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "fork"
+	})
+	// One-shot standalone (not a child) — should be excluded.
+	insertSession(t, d, "standalone", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	tests := []struct {
+		name   string
+		filter SessionFilter
+		want   []string
+	}{
+		{
+			name: "DefaultSidebar_OneShotChildrenKept",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				ExcludeOneShot:  true,
+			},
+			want: []string{"root", "sub-codex", "fork-1msg"},
+		},
+		{
+			name: "AgentFilter_OneShotChildrenKept",
+			filter: SessionFilter{
+				IncludeChildren: true,
+				ExcludeOneShot:  true,
+				Agent:           "claude",
+			},
+			want: []string{
+				"root", "sub-codex", "fork-1msg",
+			},
+		},
+		{
+			name: "WithoutIncludeChildren_OneShotExcluded",
+			filter: SessionFilter{
+				ExcludeOneShot: true,
+			},
+			want: []string{"root"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			requireSessions(t, d, tt.filter, tt.want)
+		})
+	}
+}
+
 func TestActiveSinceUsesEndedAtOverStartedAt(t *testing.T) {
 	d := testDB(t)
 

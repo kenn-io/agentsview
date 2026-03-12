@@ -278,12 +278,25 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterPreds = append(filterPreds, "user_message_count >= ?")
 		filterArgs = append(filterArgs, f.MinUserMessages)
 	}
+
+	// ExcludeOneShot is handled separately from filterPreds
+	// when IncludeChildren is true. Children (subagents, forks)
+	// are almost always one-shot by nature and must not be
+	// excluded. The one-shot filter applies only to root
+	// sessions that match the filter directly.
+	oneShotPred := ""
 	if f.ExcludeOneShot {
-		filterPreds = append(filterPreds, "user_message_count > 1")
+		if f.IncludeChildren {
+			oneShotPred = "user_message_count > 1"
+		} else {
+			filterPreds = append(filterPreds,
+				"user_message_count > 1")
+		}
 	}
 
 	// Simple case: no IncludeChildren or no user filters.
-	if !f.IncludeChildren || len(filterPreds) == 0 {
+	hasFilters := len(filterPreds) > 0 || oneShotPred != ""
+	if !f.IncludeChildren || !hasFilters {
 		allPreds := append(basePreds, filterPreds...)
 		return strings.Join(allPreds, " AND "), filterArgs
 	}
@@ -293,15 +306,26 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 	// This scopes children to their parent's filter match
 	// instead of including all children in the database.
 	baseWhere := strings.Join(basePreds, " AND ")
-	filterWhere := strings.Join(filterPreds, " AND ")
-	rootWhere := "message_count > 0 AND deleted_at IS NULL AND " +
-		filterWhere
 
-	where := baseWhere + " AND (" + filterWhere +
+	// Root match: must pass all filter predicates + one-shot.
+	rootMatchParts := append([]string{}, filterPreds...)
+	if oneShotPred != "" {
+		rootMatchParts = append(rootMatchParts, oneShotPred)
+	}
+	rootMatch := strings.Join(rootMatchParts, " AND ")
+
+	// Subquery for parent inclusion: same criteria as root
+	// match so only children of qualifying parents appear.
+	subqWhere := "message_count > 0 AND deleted_at IS NULL"
+	if rootMatch != "" {
+		subqWhere += " AND " + rootMatch
+	}
+
+	where := baseWhere + " AND (" + rootMatch +
 		" OR parent_session_id IN" +
-		" (SELECT id FROM sessions WHERE " + rootWhere + "))"
+		" (SELECT id FROM sessions WHERE " + subqWhere + "))"
 
-	// Args appear twice: outer filter + subquery.
+	// Args appear twice: outer root match + subquery.
 	allArgs := make([]any, 0, len(filterArgs)*2)
 	allArgs = append(allArgs, filterArgs...)
 	allArgs = append(allArgs, filterArgs...)
