@@ -1,6 +1,5 @@
-// @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { renderMarkdown } from "./markdown.js";
+import { renderMarkdown, stripMarkdown } from "./markdown.js";
 
 /**
  * Parse HTML string into a DOM container for semantic assertions.
@@ -328,6 +327,112 @@ describe("renderMarkdown", () => {
       const p = dom.querySelector("p");
       expect(p).not.toBeNull();
       expect(p!.textContent).toBe("text");
+    });
+  });
+});
+
+describe("stripMarkdown", () => {
+  describe("links", () => {
+    it("keeps link text, removes URL", () => {
+      expect(stripMarkdown("[click here](https://example.com)")).toBe("click here");
+    });
+
+    it("keeps link text with complex URL", () => {
+      expect(
+        stripMarkdown("[README](https://github.com/org/repo/blob/main/README.md)"),
+      ).toBe("README");
+    });
+
+    it("searching for URL keyword does not match link syntax", () => {
+      const result = stripMarkdown("See [docs](https://special.example.com/path)");
+      expect(result).not.toContain("https://");
+      expect(result).toContain("docs");
+    });
+  });
+
+  describe("images", () => {
+    it("keeps alt text, removes URL", () => {
+      expect(stripMarkdown("![diagram](https://example.com/img.png)")).toBe("diagram");
+    });
+
+    it("empty alt text becomes empty string", () => {
+      expect(stripMarkdown("![](https://example.com/img.png)")).toBe("");
+    });
+  });
+
+  describe("bold and italic", () => {
+    it("strips ** bold markers", () => {
+      expect(stripMarkdown("**bold text**")).toBe("bold text");
+    });
+
+    it("strips * italic markers", () => {
+      expect(stripMarkdown("*italic text*")).toBe("italic text");
+    });
+
+    it("strips *** bold-italic markers", () => {
+      expect(stripMarkdown("***bold italic***")).toBe("bold italic");
+    });
+
+    it("strips _ italic markers", () => {
+      expect(stripMarkdown("_italic_")).toBe("italic");
+    });
+
+    it("strips __ bold markers", () => {
+      expect(stripMarkdown("__bold__")).toBe("bold");
+    });
+
+    it("does not match ** as search term after stripping", () => {
+      expect(stripMarkdown("Hello **world**")).not.toContain("**");
+    });
+  });
+
+  describe("headings", () => {
+    it("strips # heading markers", () => {
+      expect(stripMarkdown("# Heading 1")).toBe("Heading 1");
+      expect(stripMarkdown("## Heading 2")).toBe("Heading 2");
+      expect(stripMarkdown("### Heading 3")).toBe("Heading 3");
+    });
+  });
+
+  describe("blockquotes", () => {
+    it("strips > blockquote markers", () => {
+      expect(stripMarkdown("> quoted text")).toBe("quoted text");
+    });
+  });
+
+  describe("code", () => {
+    it("keeps content of inline code, strips backticks", () => {
+      expect(stripMarkdown("`import os`")).toBe("import os");
+    });
+
+    it("keeps content of fenced code block, strips delimiters", () => {
+      const input = "```python\nimport os\nprint(os.getcwd())\n```";
+      const result = stripMarkdown(input);
+      expect(result).toContain("import os");
+      expect(result).toContain("print(os.getcwd())");
+      expect(result).not.toContain("```");
+    });
+  });
+
+  describe("HTML tags", () => {
+    it("strips HTML tags, keeps text content", () => {
+      expect(stripMarkdown("<strong>text</strong>")).toBe("text");
+    });
+  });
+
+  describe("mixed content", () => {
+    it("preserves searchable words inside formatting", () => {
+      const result = stripMarkdown("Run **`make build`** to compile");
+      expect(result).toContain("make build");
+      expect(result).toContain("compile");
+    });
+
+    it("empty string stays empty", () => {
+      expect(stripMarkdown("")).toBe("");
+    });
+
+    it("plain text is unchanged", () => {
+      expect(stripMarkdown("just plain text")).toBe("just plain text");
     });
   });
 });
