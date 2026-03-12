@@ -76,17 +76,19 @@ class SyncStore {
         newLastSync !== null && newLastSync !== this.lastSync;
       this.lastSync = newLastSync;
       this.lastSyncStats = status.stats;
-      // Suppress notifications on initial hydration,
-      // when a local sync just completed (pendingHydration),
-      // and when a session watch is active (the lastSync change
-      // is from SyncSingleSession, not a full sync — the SSE
-      // already handles incremental message updates, and a full
-      // session list reload would reset the sidebar scroll).
+      // Suppress notifications on initial hydration and
+      // when a local sync just completed (pendingHydration).
+      // When a session watch is active, still update stats but
+      // skip the sidebar-resetting notifySyncComplete() — the
+      // SSE already handles incremental message updates and a
+      // full session list reload would reset sidebar scroll.
       if (this.pendingHydration) {
         this.pendingHydration = false;
-      } else if (changed && !isInitial && !this.watchEventSource) {
+      } else if (changed && !isInitial) {
         this.loadStats();
-        this.notifySyncComplete();
+        if (!this.watchEventSource) {
+          this.notifySyncComplete();
+        }
       }
     } catch (error) {
       this.pendingHydration = false;
