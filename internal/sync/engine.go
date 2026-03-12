@@ -347,23 +347,28 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Cursor: <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
+	// Cursor old format: <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
+	// Cursor new format: <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 	for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
 		if cursorDir == "" {
 			continue
 		}
 		if rel, ok := isUnder(cursorDir, path); ok {
 			parts := strings.Split(rel, sep)
-			if len(parts) != 3 {
+			var projPart string
+			switch {
+			case len(parts) == 3 &&
+				parts[1] == "agent-transcripts" &&
+				parser.IsCursorTranscriptExt(parts[2]):
+				projPart = parts[0]
+			case len(parts) == 4 &&
+				parts[1] == "agent-transcripts" &&
+				parser.IsCursorTranscriptExt(parts[3]):
+				projPart = parts[0]
+			default:
 				continue
 			}
-			if parts[1] != "agent-transcripts" {
-				continue
-			}
-			if !parser.IsCursorTranscriptExt(parts[2]) {
-				continue
-			}
-			project := parser.DecodeCursorProjectDir(parts[0])
+			project := parser.DecodeCursorProjectDir(projPart)
 			if project == "" {
 				project = "unknown"
 			}
@@ -2146,11 +2151,17 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 			file.Project = filepath.Base(filepath.Dir(path))
 		}
 	case parser.AgentCursor:
-		// path is <cursorDir>/<project>/agent-transcripts/<uuid>.txt
-		// Extract project dir name from two levels up
-		projDir := filepath.Base(
-			filepath.Dir(filepath.Dir(path)),
-		)
+		// Old format: <cursorDir>/<project>/agent-transcripts/<uuid>.txt
+		// New format: <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.jsonl
+		// Detect by checking whether the immediate parent of the
+		// file's directory is "agent-transcripts".
+		dir := filepath.Dir(path)
+		var projDir string
+		if filepath.Base(dir) == "agent-transcripts" {
+			projDir = filepath.Base(filepath.Dir(dir))
+		} else {
+			projDir = filepath.Base(filepath.Dir(filepath.Dir(dir)))
+		}
 		file.Project = parser.DecodeCursorProjectDir(projDir)
 	case parser.AgentIflow:
 		// path is <iflowDir>/<project>/session-<uuid>.jsonl

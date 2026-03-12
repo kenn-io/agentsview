@@ -538,12 +538,46 @@ func DiscoverCursorSessions(
 		// Collect valid transcripts, deduping by basename
 		// stem. When both .jsonl and .txt exist for the
 		// same session, prefer .jsonl.
+		//
+		// Two formats are supported:
+		//   Old: agent-transcripts/<uuid>.{txt,jsonl}
+		//   New: agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 		seen := make(map[string]string) // stem -> path
+		addToSeen := func(stem, fullPath string) {
+			if prev, ok := seen[stem]; ok {
+				if strings.HasSuffix(prev, ".txt") &&
+					strings.HasSuffix(fullPath, ".jsonl") {
+					seen[stem] = fullPath
+				}
+				return
+			}
+			seen[stem] = fullPath
+		}
 		for _, sf := range transcripts {
+			name := sf.Name()
 			if sf.IsDir() {
+				// New format: <uuid-dir>/<uuid>.{jsonl,txt}
+				if !IsValidSessionID(name) {
+					continue
+				}
+				subDir := filepath.Join(transcriptsDir, name)
+				resolvedSub, err := filepath.EvalSymlinks(subDir)
+				if err != nil || !isContainedIn(resolvedSub, resolvedRoot) {
+					continue
+				}
+				for _, ext := range []string{".jsonl", ".txt"} {
+					candidate := filepath.Join(subDir, name+ext)
+					if !IsRegularFile(candidate) {
+						continue
+					}
+					resolvedFile, err := filepath.EvalSymlinks(candidate)
+					if err != nil || !isContainedIn(resolvedFile, resolvedRoot) {
+						continue
+					}
+					addToSeen(name, candidate)
+				}
 				continue
 			}
-			name := sf.Name()
 			if !IsCursorTranscriptExt(name) {
 				continue
 			}
@@ -556,15 +590,7 @@ func DiscoverCursorSessions(
 			stem := strings.TrimSuffix(
 				name, filepath.Ext(name),
 			)
-			if prev, ok := seen[stem]; ok {
-				// .jsonl wins over .txt
-				if strings.HasSuffix(prev, ".txt") &&
-					strings.HasSuffix(name, ".jsonl") {
-					seen[stem] = fullPath
-				}
-				continue
-			}
-			seen[stem] = fullPath
+			addToSeen(stem, fullPath)
 		}
 		for _, path := range seen {
 			files = append(files, DiscoveredFile{
@@ -606,28 +632,28 @@ func FindCursorSourceFile(
 			if !entry.IsDir() {
 				continue
 			}
-			candidate := filepath.Join(
+			// Old format: agent-transcripts/<uuid>.{jsonl,txt}
+			flat := filepath.Join(
 				projectsDir, entry.Name(),
 				"agent-transcripts", target,
 			)
-			if !IsRegularFile(candidate) {
-				continue
+			if IsRegularFile(flat) {
+				resolved, err := filepath.EvalSymlinks(flat)
+				if err == nil && isContainedIn(resolved, resolvedRoot) {
+					return flat
+				}
 			}
-			resolved, err := filepath.EvalSymlinks(
-				candidate,
+			// New format: agent-transcripts/<uuid>/<uuid>.{jsonl,txt}
+			nested := filepath.Join(
+				projectsDir, entry.Name(),
+				"agent-transcripts", sessionID, target,
 			)
-			if err != nil {
-				continue
+			if IsRegularFile(nested) {
+				resolved, err := filepath.EvalSymlinks(nested)
+				if err == nil && isContainedIn(resolved, resolvedRoot) {
+					return nested
+				}
 			}
-			rel, err := filepath.Rel(
-				resolvedRoot, resolved,
-			)
-			sep := string(filepath.Separator)
-			if err != nil || rel == ".." ||
-				strings.HasPrefix(rel, ".."+sep) {
-				continue
-			}
-			return candidate
 		}
 	}
 	return ""

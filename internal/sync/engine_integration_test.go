@@ -1751,6 +1751,53 @@ func TestSyncEngineMultiCursorDir(t *testing.T) {
 	}
 }
 
+// TestSyncEngineCursorNewFormat verifies that sessions stored in
+// Cursor's newer <uuid>/<uuid>.jsonl directory layout are
+// discovered and synced correctly.
+func TestSyncEngineCursorNewFormat(t *testing.T) {
+	env := setupTestEnv(t)
+	const uuid = "5b84cf99-8f9f-4bbe-b07b-cbbce91a32b9"
+
+	transcript := "user:\nHello from new format\nassistant:\nHi!\n"
+
+	// New format: <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.txt
+	path := env.writeCursorSession(
+		t, env.cursorDir,
+		"Users-alice-code-proj",
+		filepath.Join(uuid, uuid+".txt"),
+		transcript,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1, Skipped: 0,
+	})
+
+	sessionID := "cursor:" + uuid
+	assertSessionState(t, env.db, sessionID,
+		func(sess *db.Session) {
+			if sess.Agent != "cursor" {
+				t.Errorf("agent = %q, want cursor", sess.Agent)
+			}
+			if sess.Project != "proj" {
+				t.Errorf("project = %q, want proj", sess.Project)
+			}
+		},
+	)
+	assertSessionMessageCount(t, env.db, sessionID, 2)
+
+	// SyncPaths must also handle the new-format path.
+	updated := transcript + "user:\nFollowup\nassistant:\nYep.\n"
+	os.WriteFile(path, []byte(updated), 0o644)
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, sessionID, 4)
+
+	// FindSourceFile should resolve the new-format path.
+	src := env.engine.FindSourceFile(sessionID)
+	if src == "" {
+		t.Error("FindSourceFile returned empty for new-format session")
+	}
+}
+
 func TestSyncForkDetection(t *testing.T) {
 	env := setupTestEnv(t)
 

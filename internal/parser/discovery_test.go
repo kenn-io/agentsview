@@ -1167,6 +1167,40 @@ func TestDiscoverCursorSessions(t *testing.T) {
 			},
 			wantCount: 0,
 		},
+		{
+			// New Cursor format: agent-transcripts/<uuid>/<uuid>.jsonl
+			name: "NewFormatSubdirJsonl",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "5b84cf99-8f9f-4bbe-b07b-cbbce91a32b9", "5b84cf99-8f9f-4bbe-b07b-cbbce91a32b9.jsonl"): `{"role":"user"}`,
+			},
+			wantCount: 1,
+		},
+		{
+			// New format with .txt fallback
+			name: "NewFormatSubdirTxt",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "6dc705fb-a849-4ad5-a20b-e2ca975d0f22", "6dc705fb-a849-4ad5-a20b-e2ca975d0f22.txt"): "user:\nhi",
+			},
+			wantCount: 1,
+		},
+		{
+			// Mix of old and new format sessions in the same project
+			name: "MixedFormats",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "flat-session.txt"):                                                                   "user:\nhi",
+				filepath.Join(cursorTranscripts, "75d6894d-4317-4d3d-8324-60daa434dff4", "75d6894d-4317-4d3d-8324-60daa434dff4.jsonl"): `{"role":"user"}`,
+			},
+			wantCount: 2,
+		},
+		{
+			// New format: when both .jsonl and .txt exist inside subdir, prefer .jsonl
+			name: "NewFormatSubdirDedupPrefersJsonl",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "a1b2c3d4-0000-0000-0000-000000000001", "a1b2c3d4-0000-0000-0000-000000000001.txt"):   "user:\nold",
+				filepath.Join(cursorTranscripts, "a1b2c3d4-0000-0000-0000-000000000001", "a1b2c3d4-0000-0000-0000-000000000001.jsonl"): `{"role":"user"}`,
+			},
+			wantCount: 1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1254,6 +1288,32 @@ func TestFindCursorSourceFile(t *testing.T) {
 				"got %q, want %q (.jsonl preferred)",
 				got, jsonlPath,
 			)
+		}
+	})
+
+	t.Run("FindsNewFormatJsonl", func(t *testing.T) {
+		dir := t.TempDir()
+		setupFileSystem(t, dir, map[string]string{
+			filepath.Join(cursorTranscripts, "sess4", "sess4.jsonl"): "{}",
+		})
+		got := FindCursorSourceFile(dir, "sess4")
+		if got == "" {
+			t.Fatal("expected to find new-format .jsonl file")
+		}
+		if !strings.HasSuffix(got, ".jsonl") {
+			t.Errorf("expected .jsonl path, got %q", got)
+		}
+	})
+
+	t.Run("PrefersNewFormatJsonlOverFlatTxt", func(t *testing.T) {
+		dir := t.TempDir()
+		setupFileSystem(t, dir, map[string]string{
+			filepath.Join(cursorTranscripts, "sess5.txt"):            "old",
+			filepath.Join(cursorTranscripts, "sess5", "sess5.jsonl"): "new",
+		})
+		got := FindCursorSourceFile(dir, "sess5")
+		if !strings.HasSuffix(got, ".jsonl") {
+			t.Errorf("expected .jsonl path, got %q", got)
 		}
 	})
 
