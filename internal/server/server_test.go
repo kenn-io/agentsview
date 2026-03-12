@@ -1465,6 +1465,9 @@ func TestHostHeaderPublicOriginsDoNotExpandTrustedHosts(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 	req.Host = "viewer.example.test:8004"
+	// Use loopback RemoteAddr so authMiddleware passes through and
+	// the 403 comes from hostCheckMiddleware, not auth.
+	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	te.srv.Handler().ServeHTTP(w, req)
 	assertStatus(t, w, http.StatusForbidden)
