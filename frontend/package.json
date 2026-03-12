@@ -15,7 +15,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@tanstack/virtual-core": "3.13.19",
+    "@tanstack/virtual-core": "3.13.21",
     "dompurify": "3.3.1",
     "marked": "17.0.4"
   },
