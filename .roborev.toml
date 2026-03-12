@@ -1,29 +1,44 @@
 review_guidelines = """
-agentsview is a LOCAL-ONLY developer tool. It binds to 127.0.0.1
+agentsview is a single-user developer tool. It binds to 127.0.0.1
 by default and is not designed for multi-user or public deployment.
+An optional managed Caddy reverse proxy mode allows LAN/remote
+access while keeping the backend on loopback.
 
 Key assumptions reviewers MUST account for:
 
-1. NO AUTHENTICATION NEEDED: All API endpoints are unauthenticated
-   by design. The server listens on localhost only. Flagging missing
-   auth on any endpoint is a false positive.
+1. AUTHENTICATION MODEL: In default (localhost-only) mode, all API
+   endpoints are unauthenticated by design — the loopback bind is
+   the access boundary. In managed Caddy proxy mode, the backend is
+   REQUIRED to bind to loopback (validateServeConfig enforces this).
+   External access goes through Caddy, which enforces CIDR-based
+   subnet allowlisting. This is a single-user personal tool — subnet
+   filtering is the intended access-control mechanism for LAN access.
+   Do not flag missing bearer tokens or session auth as a gap unless
+   the backend can be reached directly from the network (it cannot
+   when proxy mode is active). Do flag any code path that would allow
+   the backend to bind non-loopback while proxy mode is enabled.
 
 2. XSS / SANITIZATION: Markdown rendering uses DOMPurify. The
    {@html renderMarkdown(...)} pattern in Svelte is intentional and
    safe because renderMarkdown() sanitizes via DOMPurify before
    returning HTML. Do not flag this as XSS.
 
-3. RATE LIMITING / DoS: As a local single-user tool, rate limiting
-   and concurrency caps are unnecessary. The 10-minute timeout on
-   AI CLI generation is intentional. Do not flag missing rate limits.
+3. RATE LIMITING / DoS: As a single-user tool, rate limiting and
+   concurrency caps are unnecessary. The 10-minute timeout on AI CLI
+   generation is intentional. Do not flag missing rate limits.
 
-4. CORS: The CORS policy uses Allow-Origin: * because the embedded
-   SPA is served from the same origin. Cross-origin access from
-   other local tools is acceptable for a localhost-only service.
+4. CORS: In localhost mode, CORS allows same-origin and loopback
+   variants. In proxy mode, public_url and public_origins are added
+   to the allowed origins set. The corsMiddleware requires a matching
+   Origin header for mutating requests (CSRF protection). Do not flag
+   CORS as overly permissive unless origins outside the configured
+   set are accepted.
 
-5. INPUT VALIDATION: Request body size limits are not required for
-   a localhost-only service. Do not flag missing MaxBytesReader or
-   similar unless the endpoint is exposed to untrusted networks.
+5. INPUT VALIDATION: Request body size limits are not required for a
+   localhost-only service. In proxy mode, Caddy's subnet filtering
+   limits the client pool to trusted hosts. Do not flag missing
+   MaxBytesReader unless clients from untrusted networks can reach
+   the backend directly.
 
 6. SESSION DATA DISPLAY: The tool reads session files from the
    user's own disk and displays their contents (including tool call
@@ -100,7 +115,27 @@ Key assumptions reviewers MUST account for:
     clear justification. For this project, a restrictive local-only CSP
     is expected.
 
+17. MANAGED CADDY PROXY ARCHITECTURE: The optional managed Caddy mode
+    spawns Caddy as a supervised child process. Key invariants:
+    - Backend MUST bind to loopback (enforced by validateServeConfig).
+    - Caddy binds to the external interface and reverse-proxies to the
+      loopback backend. Non-loopback Caddy binds require at least one
+      allowed_subnet.
+    - Caddy's auto_https is disabled; TLS requires user-supplied
+      cert/key files.
+    - The Caddyfile is generated, validated (`caddy validate`), then
+      used with `caddy run`. The process is monitored and the server
+      shuts down if Caddy exits unexpectedly.
+    - Host/Origin validation in the backend prevents DNS rebinding:
+      only the configured public_url hostname is accepted. This is
+      defense-in-depth alongside subnet filtering — not the primary
+      access control. Do not flag Host/Origin checks as "the only
+      auth" without acknowledging the loopback + subnet model.
+    Do flag: any path where the backend could bind non-loopback in
+    proxy mode, missing subnet validation for non-loopback Caddy
+    binds, or Caddyfile injection via unsanitized config values.
+
 Do NOT flag issues that only apply to public-facing, multi-tenant,
-or network-exposed services. Focus on bugs, logic errors, data
+or internet-exposed services. Focus on bugs, logic errors, data
 corruption risks, and code quality issues.
 """
