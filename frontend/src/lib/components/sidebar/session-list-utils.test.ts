@@ -3,12 +3,14 @@ import type { Session } from "../../api/types.js";
 import type { SessionGroup } from "../../stores/sessions.svelte.js";
 import {
   ITEM_HEIGHT,
+  CHILD_ITEM_HEIGHT,
   HEADER_HEIGHT,
   STORAGE_KEY,
   buildGroupSections,
   buildDisplayItems,
   computeTotalSize,
   findStart,
+  isSubagentDescendant,
 } from "./session-list-utils.js";
 import type { GroupSection, DisplayItem } from "./session-list-utils.js";
 
@@ -533,12 +535,21 @@ describe("starred-only session count", () => {
     starredIds: Set<string>,
   ): SessionGroup[] {
     return groups
-      .map((g) => ({
-        ...g,
-        sessions: g.sessions.filter((s) =>
+      .map((g) => {
+        const filtered = g.sessions.filter((s) =>
           starredIds.has(s.id),
-        ),
-      }))
+        );
+        const primaryStillPresent = filtered.some(
+          (s) => s.id === g.primarySessionId,
+        );
+        return {
+          ...g,
+          sessions: filtered,
+          primarySessionId: primaryStillPresent
+            ? g.primarySessionId
+            : filtered[0]?.id ?? g.primarySessionId,
+        };
+      })
       .filter((g) => g.sessions.length > 0);
   }
 
@@ -591,5 +602,128 @@ describe("starred-only session count", () => {
     );
     expect(count).toBe(0);
     expect(filtered).toHaveLength(0);
+  });
+
+  it("recomputes primarySessionId when original primary is unstarred", () => {
+    // Root session s0 is the primary, children s1 and s2 are starred.
+    const root = makeSession({ id: "s0", agent: "claude" });
+    const child1 = makeSession({
+      id: "s1",
+      agent: "claude",
+      parent_session_id: "s0",
+    });
+    const child2 = makeSession({
+      id: "s2",
+      agent: "claude",
+      parent_session_id: "s0",
+    });
+    const group: SessionGroup = {
+      key: "s0",
+      project: "test",
+      sessions: [root, child1, child2],
+      primarySessionId: "s0",
+      totalMessages: 30,
+      firstMessage: "hi",
+      startedAt: "2025-01-01T00:00:00Z",
+      endedAt: "2025-01-01T01:00:00Z",
+    };
+
+    // Only children are starred, not the root.
+    const starred = new Set(["s1", "s2"]);
+    const filtered = filterGroupsForStarred([group], starred);
+
+    expect(filtered).toHaveLength(1);
+    // primarySessionId must point to a session that survived filtering.
+    expect(filtered[0]!.primarySessionId).toBe("s1");
+    expect(
+      filtered[0]!.sessions.some(
+        (s) => s.id === filtered[0]!.primarySessionId,
+      ),
+    ).toBe(true);
+    // Children should not include the new primary when used
+    // to build display items.
+    const children = filtered[0]!.sessions.filter(
+      (s) => s.id !== filtered[0]!.primarySessionId,
+    );
+    expect(children).toHaveLength(1);
+    expect(children[0]!.id).toBe("s2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Child classification: subagent precedence over teammate
+// ---------------------------------------------------------------------------
+
+describe("child classification precedence", () => {
+  it("subagent child of teammate is classified as subagent", () => {
+    // root -> teammate -> subagent
+    const root = makeSession({ id: "root", agent: "claude" });
+    const teammate = makeSession({
+      id: "tm",
+      agent: "claude",
+      parent_session_id: "root",
+      first_message: "<teammate-message>hi</teammate-message>",
+    });
+    const subagent = makeSession({
+      id: "sub",
+      agent: "claude",
+      parent_session_id: "tm",
+      relationship_type: "subagent",
+    });
+    const group: SessionGroup = {
+      key: "root",
+      project: "test",
+      sessions: [root, teammate, subagent],
+      primarySessionId: "root",
+      totalMessages: 30,
+      firstMessage: "hi",
+      startedAt: "2025-01-01T00:00:00Z",
+      endedAt: "2025-01-01T01:00:00Z",
+    };
+
+    // Expand the group so children are emitted.
+    const expanded = new Set([group.key]);
+    const items = buildDisplayItems(
+      [group], [], "none", new Set(), expanded,
+    );
+
+    // The subagent should appear under "Subagents", not "Team".
+    const subagentHeader = items.find(
+      (i) => i.type === "subagent-group",
+    );
+    expect(subagentHeader).toBeDefined();
+    expect(subagentHeader!.label).toBe("Subagents");
+
+    // The subagent session should be a child at depth 2 under
+    // the subagent group (when expanded).
+    const subKey = `subagent:${group.key}`;
+    const expandedWithSub = new Set([group.key, subKey]);
+    const items2 = buildDisplayItems(
+      [group], [], "none", new Set(), expandedWithSub,
+    );
+    const subItem = items2.find(
+      (i) => i.session?.id === "sub",
+    );
+    expect(subItem).toBeDefined();
+    expect(subItem!.depth).toBe(2);
+
+    // The teammate should be under "Team", not subagents.
+    const teamHeader = items2.find(
+      (i) => i.type === "team-group",
+    );
+    expect(teamHeader).toBeDefined();
+    expect(teamHeader!.label).toBe("Team");
+  });
+
+  it("isSubagentDescendant returns true for child of subagent", () => {
+    const subagent = makeSession({
+      id: "sub",
+      relationship_type: "subagent",
+    });
+    const child = makeSession({
+      id: "child",
+      parent_session_id: "sub",
+    });
+    expect(isSubagentDescendant(child, [subagent, child])).toBe(true);
   });
 });

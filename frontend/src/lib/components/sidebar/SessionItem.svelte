@@ -229,6 +229,7 @@
     <span
       class="tree-toggle"
       onclick={handleToggle}
+      onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggle(e); } }}
       role="button"
       tabindex="-1"
     >

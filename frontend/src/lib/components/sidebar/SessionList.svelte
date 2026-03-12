@@ -55,7 +55,7 @@
   let groupMode: GroupMode = $state(getInitialGroupMode());
   let manualExpanded: Set<string> = $state(new Set());
   // Start all collapsed when grouping is first enabled.
-  let collapseAll = $state(groupMode !== "none");
+  let collapseAll = $state(getInitialGroupMode() !== "none");
   // Track which continuation chains are expanded.
   let expandedGroups: Set<string> = $state(new Set());
 
@@ -82,12 +82,23 @@
     const all = sessions.groupedSessions;
     if (!starred.filterOnly) return all;
     return all
-      .map((g) => ({
-        ...g,
-        sessions: g.sessions.filter((s) =>
+      .map((g) => {
+        const filtered = g.sessions.filter((s) =>
           starred.isStarred(s.id),
-        ),
-      }))
+        );
+        // Recompute primarySessionId so it points to a
+        // session that survived the filter.
+        const primaryStillPresent = filtered.some(
+          (s) => s.id === g.primarySessionId,
+        );
+        return {
+          ...g,
+          sessions: filtered,
+          primarySessionId: primaryStillPresent
+            ? g.primarySessionId
+            : filtered[0]?.id ?? g.primarySessionId,
+        };
+      })
       .filter((g) => g.sessions.length > 0);
   });
 

@@ -205,10 +205,10 @@ function emitGroupItems(
   const teammates: Session[] = [];
   const continuations: Session[] = [];
   for (const s of children) {
-    if (isTeammate(s, g.sessions)) {
-      teammates.push(s);
-    } else if (isSubagentDescendant(s, g.sessions)) {
+    if (isSubagentDescendant(s, g.sessions)) {
       subagents.push(s);
+    } else if (isTeammate(s, g.sessions)) {
+      teammates.push(s);
     } else {
       continuations.push(s);
     }
