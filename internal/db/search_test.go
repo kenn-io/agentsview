@@ -12,12 +12,26 @@ func TestSearchSession(t *testing.T) {
 	insertSession(t, d, "s1", "proj")
 	insertSession(t, d, "s2", "proj")
 
+	// Message at ordinal 4 has no match in its content but has a tool call
+	// whose result_content contains a unique term ("uniquetooloutput").
+	toolMsg := asstMsg("s1", 4, "I ran a tool here")
+	toolMsg.HasToolUse = true
+	toolMsg.ToolCalls = []ToolCall{
+		{
+			SessionID:     "s1",
+			ToolName:      "Bash",
+			Category:      "execution",
+			ResultContent: "uniquetooloutput: the command succeeded",
+		},
+	}
+
 	insertMessages(t, d,
 		userMsg("s1", 0, "Hello world, this is a test message"),
 		asstMsg("s1", 1, "Here is some Python code: import os; print(os.getcwd())"),
 		userMsg("s1", 2, "Can you search for **bold markdown** syntax?"),
 		asstMsg("s1", 3, "Another message with no special content"),
 		userMsg("s2", 0, "This belongs to a different session entirely"),
+		toolMsg,
 	)
 
 	tests := []struct {
@@ -97,6 +111,24 @@ func TestSearchSession(t *testing.T) {
 			sessionID: "s1",
 			query:     "is",
 			want:      []int{0, 1},
+		},
+		{
+			name:      "match in tool result_content only — message content has no match",
+			sessionID: "s1",
+			query:     "uniquetooloutput",
+			want:      []int{4},
+		},
+		{
+			name:      "tool result match is scoped to correct session",
+			sessionID: "s2",
+			query:     "uniquetooloutput",
+			want:      []int{},
+		},
+		{
+			name:      "message with tool call not double-counted when both content and result match",
+			sessionID: "s1",
+			query:     "tool",
+			want:      []int{4},
 		},
 	}
 
