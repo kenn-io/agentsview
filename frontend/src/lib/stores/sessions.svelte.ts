@@ -167,12 +167,14 @@ class SessionsStore {
   async load() {
     const version = ++this.loadVersion;
     this.loading = true;
+    // Preserve old data during reload — clearing eagerly
+    // causes a flash because the sidebar and content area
+    // briefly see an empty session list.
     const prev = {
       sessions: this.sessions,
       nextCursor: this.nextCursor,
       total: this.total,
     };
-    this.resetPagination();
     try {
       let cursor: string | undefined = undefined;
       let loaded: Session[] = [];

@@ -248,6 +248,17 @@ function emitGroupItems(
     }
   }
 
+  // Sort each child group most-recent-first so the sidebar
+  // matches the main session list ordering convention.
+  const byRecencyDesc = (a: Session, b: Session) => {
+    const ka = a.ended_at ?? a.started_at ?? a.created_at;
+    const kb = b.ended_at ?? b.started_at ?? b.created_at;
+    return ka > kb ? -1 : ka < kb ? 1 : 0;
+  };
+  continuations.sort(byRecencyDesc);
+  subagents.sort(byRecencyDesc);
+  teammates.sort(byRecencyDesc);
+
   // Continuations render inline at depth 1 (no sub-group header).
   for (let i = 0; i < continuations.length; i++) {
     const s = continuations[i]!;

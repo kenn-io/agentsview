@@ -763,6 +763,56 @@ describe("child classification precedence", () => {
     expect(teamHeader!.label).toBe("Team");
   });
 
+  it("children are sorted most-recent-first within sub-groups", () => {
+    const root = makeSession({ id: "root", agent: "claude" });
+    const sub1 = makeSession({
+      id: "sub-old",
+      agent: "claude",
+      parent_session_id: "root",
+      relationship_type: "subagent",
+      ended_at: "2025-01-01T01:00:00Z",
+    });
+    const sub2 = makeSession({
+      id: "sub-mid",
+      agent: "claude",
+      parent_session_id: "root",
+      relationship_type: "subagent",
+      ended_at: "2025-01-02T01:00:00Z",
+    });
+    const sub3 = makeSession({
+      id: "sub-new",
+      agent: "claude",
+      parent_session_id: "root",
+      relationship_type: "subagent",
+      ended_at: "2025-01-03T01:00:00Z",
+    });
+    const group: SessionGroup = {
+      key: "root",
+      project: "test",
+      // Insert in ascending order (as buildSessionGroups does).
+      sessions: [root, sub1, sub2, sub3],
+      primarySessionId: "root",
+      totalMessages: 40,
+      firstMessage: "hi",
+      startedAt: "2025-01-01T00:00:00Z",
+      endedAt: "2025-01-03T01:00:00Z",
+    };
+
+    const expanded = new Set(["root", `subagent:root`]);
+    const items = buildDisplayItems(
+      [group], [], "none", new Set(), expanded,
+    );
+
+    const childItems = items.filter(
+      (i) => i.session && i.depth === 2,
+    );
+    expect(childItems).toHaveLength(3);
+    // Most recent first.
+    expect(childItems[0]!.session!.id).toBe("sub-new");
+    expect(childItems[1]!.session!.id).toBe("sub-mid");
+    expect(childItems[2]!.session!.id).toBe("sub-old");
+  });
+
   it("isSubagentDescendant returns true for child of subagent", () => {
     const subagent = makeSession({
       id: "sub",
