@@ -17,7 +17,7 @@ func startTestWatcherNoCleanup(
 ) (*Watcher, string) {
 	t.Helper()
 	dir := t.TempDir()
-	w, err := NewWatcher(debounce, onChange)
+	w, err := NewWatcher(debounce, onChange, nil)
 	if err != nil {
 		t.Fatalf("NewWatcher: %v", err)
 	}
@@ -282,8 +282,206 @@ func TestWatcherDebounceLogic(t *testing.T) {
 	}
 }
 
+func TestWatchRecursive_ExcludesDirectoryNames(t *testing.T) {
+	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{".git", "node_modules"})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+
+	root := t.TempDir()
+	included := filepath.Join(root, "project", "src")
+	excludedGit := filepath.Join(root, "project", ".git", "objects")
+	excludedModules := filepath.Join(root, "project", "node_modules", "pkg")
+	for _, p := range []string{included, excludedGit, excludedModules} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", p, err)
+		}
+	}
+
+	if _, _, err := w.WatchRecursive(root); err != nil {
+		t.Fatalf("WatchRecursive: %v", err)
+	}
+
+	got := w.watcher.WatchList()
+	if slices.Contains(got, filepath.Join(root, "project", ".git")) {
+		t.Fatal(".git should be excluded from watch list")
+	}
+	if slices.Contains(got, filepath.Join(root, "project", "node_modules")) {
+		t.Fatal("node_modules should be excluded from watch list")
+	}
+	if !slices.Contains(got, included) {
+		t.Fatalf("expected included dir %s in watch list", included)
+	}
+}
+
+func TestWatcherAutoWatchesNewDirs_RespectsExcludes(t *testing.T) {
+	pathsCh := make(chan []string, 10)
+	w, err := NewWatcher(20*time.Millisecond, func(paths []string) {
+		pathsCh <- paths
+	}, []string{".git"})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	t.Cleanup(func() { w.Stop() })
+
+	root := t.TempDir()
+	if _, _, err := w.WatchRecursive(root); err != nil {
+		t.Fatalf("WatchRecursive: %v", err)
+	}
+	w.Start()
+
+	gitDir := filepath.Join(root, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatalf("Mkdir(.git): %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	if slices.Contains(w.watcher.WatchList(), gitDir) {
+		t.Fatal("newly created excluded dir should not be watched")
+	}
+
+	fileInGit := filepath.Join(gitDir, "config")
+	if err := os.WriteFile(fileInGit, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	select {
+	case paths := <-pathsCh:
+		if slices.Contains(paths, fileInGit) {
+			t.Fatal("changes inside excluded dir should not trigger onChange")
+		}
+	case <-time.After(200 * time.Millisecond):
+		// no events from excluded dir; expected
+	}
+}
+
+func TestWatchRecursive_RootUnderExcludedAncestorStillWatchesDescendants(t *testing.T) {
+	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{"venv"})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+
+	base := t.TempDir()
+	root := filepath.Join(base, "venv", "project")
+	included := filepath.Join(root, "src")
+	if err := os.MkdirAll(included, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", included, err)
+	}
+
+	if _, _, err := w.WatchRecursive(root); err != nil {
+		t.Fatalf("WatchRecursive: %v", err)
+	}
+
+	got := w.watcher.WatchList()
+	if !slices.Contains(got, root) {
+		t.Fatalf("expected root %s in watch list", root)
+	}
+	if !slices.Contains(got, included) {
+		t.Fatalf("expected included dir %s in watch list", included)
+	}
+}
+
+func TestWatchRecursive_ExcludesSlashPatternRelativeToRoot(t *testing.T) {
+	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{"foo/bar"})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+
+	root := t.TempDir()
+	excluded := filepath.Join(root, "foo", "bar")
+	includedSibling := filepath.Join(root, "foo", "baz")
+	for _, p := range []string{excluded, includedSibling} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", p, err)
+		}
+	}
+
+	if _, _, err := w.WatchRecursive(root); err != nil {
+		t.Fatalf("WatchRecursive: %v", err)
+	}
+
+	got := w.watcher.WatchList()
+	if slices.Contains(got, excluded) {
+		t.Fatalf("expected %s to be excluded", excluded)
+	}
+	if !slices.Contains(got, includedSibling) {
+		t.Fatalf("expected %s to be included", includedSibling)
+	}
+}
+
+func TestWatchRecursive_OverlappingRoots_UsesMostSpecificRoot(t *testing.T) {
+	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{"venv"})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+
+	base := t.TempDir()
+	parentRoot := filepath.Join(base, "workspace")
+	nestedRoot := filepath.Join(parentRoot, "venv", "project")
+	included := filepath.Join(nestedRoot, "src")
+	for _, p := range []string{parentRoot, included} {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%s): %v", p, err)
+		}
+	}
+
+	if _, _, err := w.WatchRecursive(parentRoot); err != nil {
+		t.Fatalf("WatchRecursive(parent): %v", err)
+	}
+	if _, _, err := w.WatchRecursive(nestedRoot); err != nil {
+		t.Fatalf("WatchRecursive(nested): %v", err)
+	}
+
+	got := w.watcher.WatchList()
+	if !slices.Contains(got, nestedRoot) {
+		t.Fatalf("expected nested root %s in watch list", nestedRoot)
+	}
+	if !slices.Contains(got, included) {
+		t.Fatalf("expected included dir %s in watch list", included)
+	}
+}
+
+func TestWatcherExcludedCreateDir_DoesNotTriggerOnChange(t *testing.T) {
+	pathsCh := make(chan []string, 10)
+	w, err := NewWatcher(20*time.Millisecond, func(paths []string) {
+		pathsCh <- paths
+	}, []string{".git"})
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	t.Cleanup(func() { w.Stop() })
+
+	root := t.TempDir()
+	if _, _, err := w.WatchRecursive(root); err != nil {
+		t.Fatalf("WatchRecursive: %v", err)
+	}
+	w.Start()
+
+	gitDir := filepath.Join(root, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatalf("Mkdir(.git): %v", err)
+	}
+
+	select {
+	case paths := <-pathsCh:
+		if slices.Contains(paths, gitDir) {
+			t.Fatal("excluded directory create should not trigger onChange")
+		}
+	case <-time.After(250 * time.Millisecond):
+		// Expected: no callback for excluded dir creation.
+	}
+}
+
 func TestNewWatcher_NilOnChange(t *testing.T) {
-	_, err := NewWatcher(time.Second, nil)
+	_, err := NewWatcher(time.Second, nil, nil)
 	if err == nil {
 		t.Fatal("NewWatcher(nil) should return error")
 	}

@@ -51,18 +51,19 @@ type ProxyConfig struct {
 
 // Config holds all application configuration.
 type Config struct {
-	Host          string         `json:"host"`
-	Port          int            `json:"port"`
-	NoBrowser     bool           `json:"no_browser"`
-	DataDir       string         `json:"data_dir"`
-	DBPath        string         `json:"-"`
-	PublicURL     string         `json:"public_url,omitempty"`
-	PublicOrigins []string       `json:"public_origins,omitempty"`
-	Proxy         ProxyConfig    `json:"proxy,omitempty"`
-	CursorSecret  string         `json:"cursor_secret"`
-	GithubToken   string         `json:"github_token,omitempty"`
-	Terminal      TerminalConfig `json:"terminal,omitempty"`
-	WriteTimeout  time.Duration  `json:"-"`
+	Host                 string         `json:"host"`
+	Port                 int            `json:"port"`
+	NoBrowser            bool           `json:"no_browser"`
+	DataDir              string         `json:"data_dir"`
+	DBPath               string         `json:"-"`
+	PublicURL            string         `json:"public_url,omitempty"`
+	PublicOrigins        []string       `json:"public_origins,omitempty"`
+	Proxy                ProxyConfig    `json:"proxy,omitempty"`
+	WatchExcludePatterns []string       `json:"watch_exclude_patterns,omitempty"`
+	CursorSecret         string         `json:"cursor_secret"`
+	GithubToken          string         `json:"github_token,omitempty"`
+	Terminal             TerminalConfig `json:"terminal,omitempty"`
+	WriteTimeout         time.Duration  `json:"-"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -129,6 +130,7 @@ func Default() (Config, error) {
 		WriteTimeout:                   30 * time.Second,
 		AgentDirs:                      agentDirs,
 		agentDirSource:                 agentDirSource,
+		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next"},
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
 	}, nil
 }
@@ -190,6 +192,7 @@ func (c *Config) loadFile() error {
 		PublicURL                      string         `json:"public_url"`
 		PublicOrigins                  []string       `json:"public_origins"`
 		Proxy                          ProxyConfig    `json:"proxy"`
+		WatchExcludePatterns           []string       `json:"watch_exclude_patterns"`
 		ResultContentBlockedCategories []string       `json:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig `json:"terminal"`
 	}
@@ -213,6 +216,9 @@ func (c *Config) loadFile() error {
 		file.Proxy.TLSCert != "" || file.Proxy.TLSKey != "" ||
 		file.Proxy.AllowedSubnets != nil {
 		c.Proxy = file.Proxy
+	}
+	if file.WatchExcludePatterns != nil {
+		c.WatchExcludePatterns = file.WatchExcludePatterns
 	}
 	if file.ResultContentBlockedCategories != nil {
 		c.ResultContentBlockedCategories = file.ResultContentBlockedCategories

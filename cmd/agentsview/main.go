@@ -123,6 +123,14 @@ Environment variables:
   AMP_DIR                 Amp threads directory
   AGENT_VIEWER_DATA_DIR   Data directory (database, config)
 
+Watcher excludes:
+  Add "watch_exclude_patterns" to ~/.agentsview/config.json to skip
+  directory names/patterns while recursively watching roots.
+  Example:
+  {
+    "watch_exclude_patterns": [".git", "node_modules", ".next", "dist"]
+  }
+
 Multiple directories:
   Add arrays to ~/.agentsview/config.json to scan multiple locations:
   {
@@ -518,7 +526,7 @@ func startFileWatcher(
 	onChange := func(paths []string) {
 		engine.SyncPaths(paths)
 	}
-	watcher, err := sync.NewWatcher(watcherDebounce, onChange)
+	watcher, err := sync.NewWatcher(watcherDebounce, onChange, cfg.WatchExcludePatterns)
 	if err != nil {
 		log.Printf(
 			"warning: file watcher unavailable: %v"+
