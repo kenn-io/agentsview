@@ -54,6 +54,37 @@ export function getInitialGroupMode(): GroupMode {
 }
 
 /**
+ * Select the best primary session from a list using the same
+ * recency rule as buildSessionGroups: for groups with subagents
+ * prefer the root session (matching the group key), otherwise
+ * pick the most recently active session.
+ */
+export function selectPrimaryId(
+  sessions: Session[],
+  groupKey: string,
+): string {
+  if (sessions.length === 0) return groupKey;
+  const hasSubagents = sessions.some(
+    (s) => s.relationship_type === "subagent",
+  );
+  if (hasSubagents) {
+    const root = sessions.find((s) => s.id === groupKey);
+    return root ? root.id : sessions[0]!.id;
+  }
+  let best = sessions[0]!;
+  let bestKey = best.ended_at ?? best.started_at ?? best.created_at;
+  for (let i = 1; i < sessions.length; i++) {
+    const s = sessions[i]!;
+    const k = s.ended_at ?? s.started_at ?? s.created_at;
+    if (k > bestKey) {
+      bestKey = k;
+      best = s;
+    }
+  }
+  return best.id;
+}
+
+/**
  * Build grouped sections from flat session groups.
  * Groups by agent name or project depending on mode.
  * Returns empty array when mode is "none".

@@ -226,12 +226,12 @@
 >
   <!-- Tree expand/collapse or connector -->
   {#if hasChildren}
-    <span
+    <button
+      type="button"
       class="tree-toggle"
       onclick={handleToggle}
-      onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleToggle(e); } }}
-      role="button"
       tabindex="-1"
+      aria-label={expanded ? "Collapse" : "Expand"}
     >
       <svg
         class="tree-arrow"
@@ -243,7 +243,7 @@
       >
         <path d="M6.22 3.22a.75.75 0 011.06 0l4.25 4.25a.75.75 0 010 1.06l-4.25 4.25a.75.75 0 01-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 010-1.06z"/>
       </svg>
-    </span>
+    </button>
   {:else if depth > 0}
     <span class="tree-dash"></span>
   {:else}
@@ -387,6 +387,7 @@
 
   /* Tree toggle (▶/▼) */
   .tree-toggle {
+    all: unset;
     display: flex;
     align-items: center;
     justify-content: center;

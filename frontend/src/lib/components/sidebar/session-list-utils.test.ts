@@ -11,6 +11,7 @@ import {
   computeTotalSize,
   findStart,
   isSubagentDescendant,
+  selectPrimaryId,
 } from "./session-list-utils.js";
 import type { GroupSection, DisplayItem } from "./session-list-utils.js";
 
@@ -547,7 +548,7 @@ describe("starred-only session count", () => {
           sessions: filtered,
           primarySessionId: primaryStillPresent
             ? g.primarySessionId
-            : filtered[0]?.id ?? g.primarySessionId,
+            : selectPrimaryId(filtered, g.key),
         };
       })
       .filter((g) => g.sessions.length > 0);
@@ -604,18 +605,21 @@ describe("starred-only session count", () => {
     expect(filtered).toHaveLength(0);
   });
 
-  it("recomputes primarySessionId when original primary is unstarred", () => {
+  it("recomputes primarySessionId using recency when original primary is unstarred", () => {
     // Root session s0 is the primary, children s1 and s2 are starred.
+    // s2 is more recent so it should become the new primary.
     const root = makeSession({ id: "s0", agent: "claude" });
     const child1 = makeSession({
       id: "s1",
       agent: "claude",
       parent_session_id: "s0",
+      ended_at: "2025-01-01T01:00:00Z",
     });
     const child2 = makeSession({
       id: "s2",
       agent: "claude",
       parent_session_id: "s0",
+      ended_at: "2025-01-02T01:00:00Z",
     });
     const group: SessionGroup = {
       key: "s0",
@@ -625,7 +629,7 @@ describe("starred-only session count", () => {
       totalMessages: 30,
       firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
-      endedAt: "2025-01-01T01:00:00Z",
+      endedAt: "2025-01-02T01:00:00Z",
     };
 
     // Only children are starred, not the root.
@@ -633,20 +637,13 @@ describe("starred-only session count", () => {
     const filtered = filterGroupsForStarred([group], starred);
 
     expect(filtered).toHaveLength(1);
-    // primarySessionId must point to a session that survived filtering.
-    expect(filtered[0]!.primarySessionId).toBe("s1");
+    // primarySessionId must be the most recent surviving session.
+    expect(filtered[0]!.primarySessionId).toBe("s2");
     expect(
       filtered[0]!.sessions.some(
         (s) => s.id === filtered[0]!.primarySessionId,
       ),
     ).toBe(true);
-    // Children should not include the new primary when used
-    // to build display items.
-    const children = filtered[0]!.sessions.filter(
-      (s) => s.id !== filtered[0]!.primarySessionId,
-    );
-    expect(children).toHaveLength(1);
-    expect(children[0]!.id).toBe("s2");
   });
 });
 
@@ -725,5 +722,69 @@ describe("child classification precedence", () => {
       parent_session_id: "sub",
     });
     expect(isSubagentDescendant(child, [subagent, child])).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// selectPrimaryId
+// ---------------------------------------------------------------------------
+
+describe("selectPrimaryId", () => {
+  it("returns groupKey for empty sessions", () => {
+    expect(selectPrimaryId([], "key")).toBe("key");
+  });
+
+  it("selects the most recent session by ended_at", () => {
+    const old = makeSession({
+      id: "old",
+      ended_at: "2025-01-01T00:00:00Z",
+    });
+    const recent = makeSession({
+      id: "recent",
+      ended_at: "2025-01-03T00:00:00Z",
+    });
+    const mid = makeSession({
+      id: "mid",
+      ended_at: "2025-01-02T00:00:00Z",
+    });
+    expect(selectPrimaryId([old, mid, recent], "key")).toBe("recent");
+  });
+
+  it("prefers root session when group has subagents", () => {
+    const root = makeSession({
+      id: "root",
+      ended_at: "2025-01-01T00:00:00Z",
+    });
+    const sub = makeSession({
+      id: "sub",
+      ended_at: "2025-01-05T00:00:00Z",
+      relationship_type: "subagent",
+    });
+    // Despite sub being more recent, root should be chosen
+    // because it matches the groupKey.
+    expect(selectPrimaryId([root, sub], "root")).toBe("root");
+  });
+
+  it("falls back to first session when root is missing from subagent group", () => {
+    const sub = makeSession({
+      id: "sub",
+      relationship_type: "subagent",
+    });
+    const other = makeSession({ id: "other" });
+    expect(selectPrimaryId([sub, other], "missing")).toBe("sub");
+  });
+
+  it("uses started_at when ended_at is missing", () => {
+    const a = makeSession({
+      id: "a",
+      started_at: "2025-01-01T00:00:00Z",
+      ended_at: undefined,
+    });
+    const b = makeSession({
+      id: "b",
+      started_at: "2025-01-05T00:00:00Z",
+      ended_at: undefined,
+    });
+    expect(selectPrimaryId([a, b], "key")).toBe("b");
   });
 });

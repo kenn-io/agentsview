@@ -19,6 +19,7 @@
     computeTotalSize,
     findStart,
     isSubagentDescendant,
+    selectPrimaryId,
   } from "./session-list-utils.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
@@ -87,7 +88,8 @@
           starred.isStarred(s.id),
         );
         // Recompute primarySessionId so it points to a
-        // session that survived the filter.
+        // session that survived the filter, using the same
+        // recency rule as buildSessionGroups.
         const primaryStillPresent = filtered.some(
           (s) => s.id === g.primarySessionId,
         );
@@ -96,7 +98,7 @@
           sessions: filtered,
           primarySessionId: primaryStillPresent
             ? g.primarySessionId
-            : filtered[0]?.id ?? g.primarySessionId,
+            : selectPrimaryId(filtered, g.key),
         };
       })
       .filter((g) => g.sessions.length > 0);
