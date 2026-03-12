@@ -1451,6 +1451,10 @@ func TestHostHeaderAllowsConfiguredPublicOriginHost(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 	req.Host = "viewer.example.test:8004"
+	// In the managed Caddy flow, the backend only accepts loopback
+	// connections. Set RemoteAddr to loopback so authMiddleware
+	// passes the request through to the host-check layer.
+	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	te.srv.Handler().ServeHTTP(w, req)
 	assertStatus(t, w, http.StatusOK)
