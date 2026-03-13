@@ -93,8 +93,9 @@ func runSync(args []string) {
 	cleanResyncTemp(appCfg.DBPath)
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs: appCfg.AgentDirs,
-		Machine:   "local",
+		AgentDirs:     appCfg.AgentDirs,
+		Machine:       "local",
+		CursorStateDB: appCfg.CursorStateDB,
 	})
 
 	ctx := context.Background()

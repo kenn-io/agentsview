@@ -29,6 +29,10 @@ type EngineConfig struct {
 	AgentDirs               map[parser.AgentType][]string
 	Machine                 string
 	BlockedResultCategories []string
+	// CursorStateDB is the path to Cursor's global
+	// state.vscdb SQLite database. Empty string disables
+	// vscdb-based Cursor sync.
+	CursorStateDB string
 }
 
 // Engine orchestrates session file discovery and sync.
@@ -37,6 +41,7 @@ type Engine struct {
 	agentDirs               map[parser.AgentType][]string
 	machine                 string
 	blockedResultCategories map[string]bool
+	cursorStateDB           string
 	syncMu                  gosync.Mutex // serializes all sync operations
 	mu                      gosync.RWMutex
 	lastSync                time.Time
@@ -48,6 +53,12 @@ type Engine struct {
 	// retried when its mtime changes.
 	skipMu    gosync.RWMutex
 	skipCache map[string]int64
+
+	// cursorVscdbSynced is the set of "cursor:<uuid>" session
+	// IDs synced from vscdb in the current sync cycle. It is
+	// populated before file workers start and cleared after.
+	// Read-only during worker execution; no lock needed.
+	cursorVscdbSynced map[string]bool
 }
 
 // NewEngine creates a sync engine. It pre-populates the
@@ -73,6 +84,7 @@ func NewEngine(
 		agentDirs:               dirs,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
+		cursorStateDB:           cfg.CursorStateDB,
 		skipCache:               skipCache,
 	}
 }
@@ -865,11 +877,43 @@ func (e *Engine) syncAllLocked(
 		})
 	}
 
+	// Sync Cursor vscdb sessions before file workers so that
+	// file-based cursor sync can skip already-handled IDs.
+	tCV := time.Now()
+	cvPending, cvSynced := e.syncCursorVscdb()
+	e.cursorVscdbSynced = cvSynced
+	cvCount := len(cvPending)
+	for _, pw := range cvPending {
+		e.writeSessionFull(pw)
+	}
+	if verbose && cvCount > 0 {
+		log.Printf(
+			"cursor vscdb write: %d sessions in %s",
+			cvCount,
+			time.Since(tCV).Round(time.Millisecond),
+		)
+	}
+	if verbose {
+		log.Printf(
+			"cursor vscdb sync: %s",
+			time.Since(tCV).Round(time.Millisecond),
+		)
+	}
+
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
 	stats := e.collectAndBatch(
 		ctx, results, len(all), onProgress,
 	)
+	// Clear vscdb synced set after workers complete.
+	e.cursorVscdbSynced = nil
+
+	// Fold cursor vscdb stats into the combined stats.
+	if cvCount > 0 {
+		stats.TotalSessions += cvCount
+		stats.RecordSynced(cvCount)
+	}
+
 	if verbose {
 		log.Printf(
 			"file sync: %d synced, %d skipped in %s",
@@ -1022,6 +1066,87 @@ func (e *Engine) syncOneOpenCode(
 	}
 
 	return pending
+}
+
+// syncCursorVscdb syncs sessions from Cursor's global state.vscdb.
+// Returns pending writes and the set of synced session IDs (with
+// "cursor:" prefix) so the file-based sync can skip duplicates.
+func (e *Engine) syncCursorVscdb() (
+	[]pendingWrite, map[string]bool,
+) {
+	dbPath := e.cursorStateDB
+	if dbPath == "" {
+		return nil, nil
+	}
+
+	metas, err := parser.ListCursorVscdbSessions(dbPath)
+	if err != nil {
+		log.Printf("sync cursor vscdb: %v", err)
+		return nil, nil
+	}
+	if len(metas) == 0 {
+		return nil, nil
+	}
+
+	// Build child→parent map from subComposerIds.
+	childToParent := make(map[string]string)
+	for _, m := range metas {
+		for _, childID := range m.SubComposerIDs {
+			if childID != "" {
+				childToParent[childID] = m.SessionID
+			}
+		}
+	}
+
+	syncedIDs := make(map[string]bool, len(metas))
+
+	var changed []parser.CursorVscdbMeta
+	for _, m := range metas {
+		_, storedMtime, ok :=
+			e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime {
+			// Unchanged: still mark as synced to suppress
+			// file-based sync overwriting with text-only data.
+			syncedIDs["cursor:"+m.SessionID] = true
+			continue
+		}
+		changed = append(changed, m)
+	}
+
+	if len(changed) == 0 {
+		return nil, syncedIDs
+	}
+
+	var pending []pendingWrite
+	for _, m := range changed {
+		sess, msgs, err := parser.ParseCursorVscdbSession(
+			dbPath, m.SessionID, m.Project, e.machine,
+		)
+		if err != nil {
+			log.Printf(
+				"cursor vscdb session %s: %v",
+				m.SessionID, err,
+			)
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+
+		// Wire up parent-child relationship.
+		if parentID, ok := childToParent[m.SessionID]; ok {
+			sess.ParentSessionID = "cursor:" + parentID
+			sess.RelationshipType = parser.RelSubagent
+		}
+
+		syncedIDs["cursor:"+m.SessionID] = true
+		pending = append(pending, pendingWrite{
+			sess: *sess,
+			msgs: msgs,
+		})
+	}
+
+	return pending, syncedIDs
 }
 
 // startWorkers fans out file processing across a worker pool
@@ -1686,6 +1811,11 @@ func (e *Engine) processCursor(
 	}
 
 	sessionID := parser.CursorSessionID(file.Path)
+
+	// Skip if already synced from vscdb (richer data source).
+	if e.cursorVscdbSynced[sessionID] {
+		return processResult{skip: true}
+	}
 
 	if e.shouldSkipFile(sessionID, info) {
 		return processResult{skip: true}

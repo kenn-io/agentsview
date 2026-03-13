@@ -194,6 +194,7 @@ func runServe(args []string) {
 		AgentDirs:               cfg.AgentDirs,
 		Machine:                 "local",
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		CursorStateDB:           cfg.CursorStateDB,
 	})
 
 	if database.NeedsResync() {

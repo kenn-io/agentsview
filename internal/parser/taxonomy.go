@@ -1,5 +1,7 @@
 package parser
 
+import "strings"
+
 // NormalizeToolCategory maps a raw tool name to a normalized
 // category. Categories: Read, Edit, Write, Bash, Grep, Glob,
 // Task, Tool, Other.
@@ -65,13 +67,39 @@ func NormalizeToolCategory(rawName string) string {
 	case "report_intent":
 		return "Tool"
 
-	// Cursor tools
+	// Cursor (file-based JSONL) tools
 	case "Shell":
 		return "Bash"
 	case "StrReplace":
 		return "Edit"
 	case "LS":
 		return "Read"
+
+	// Cursor vscdb tool names
+	// Note: "apply_patch" is handled above (Codex section).
+	// Note: "web_search", "web_fetch" handled below (OpenClaw).
+	case "run_terminal_command_v2", "run_terminal_cmd":
+		return "Bash"
+	case "read_file_v2":
+		return "Read"
+	case "edit_file_v2", "search_replace":
+		return "Edit"
+	case "ripgrep_raw_search", "rg":
+		return "Grep"
+	case "glob_file_search", "file_search":
+		return "Glob"
+	case "task_v2":
+		return "Task"
+	case "delete_file":
+		return "Write"
+	case "list_dir_v2", "list_dir":
+		return "Read"
+	case "read_lints":
+		return "Read"
+	case "todo_write", "create_plan", "ask_question",
+		"switch_mode", "codebase_search",
+		"semantic_search_full":
+		return "Tool"
 
 	// Amp tools (not already covered above)
 	// Note: "create_file" is also used by Pi.
@@ -113,6 +141,10 @@ func NormalizeToolCategory(rawName string) string {
 		return "Task"
 
 	default:
+		// MCP tool invocations are prefixed with "mcp-".
+		if strings.HasPrefix(rawName, "mcp-") {
+			return "Tool"
+		}
 		return "Other"
 	}
 }
