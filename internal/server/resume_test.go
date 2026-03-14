@@ -137,6 +137,28 @@ func TestReadSessionCwd_LargeLine(t *testing.T) {
 	}
 }
 
+func TestReadSessionCwd_CopilotFormat(t *testing.T) {
+	dir := t.TempDir()
+	cwdDir := filepath.Join(dir, "project")
+	if err := os.Mkdir(cwdDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cwdJSON, _ := json.Marshal(cwdDir)
+	line := `{"type":"session.start","data":{"sessionId":"abc","context":{"cwd":` +
+		string(cwdJSON) + `}}}` + "\n"
+
+	sessionFile := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(sessionFile, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readSessionCwd(sessionFile)
+	if got != cwdDir {
+		t.Errorf("readSessionCwd() = %q, want %q", got, cwdDir)
+	}
+}
+
 func TestResolveSessionDir(t *testing.T) {
 	// Create a real temp directory for the "absolute path" cases.
 	tmpDir := t.TempDir()

@@ -43,6 +43,7 @@ type resumeResponse struct {
 var resumeAgents = map[string]string{
 	"claude":   "claude --resume %s",
 	"codex":    "codex resume %s",
+	"copilot":  "copilot --resume=%s",
 	"gemini":   "gemini --resume %s",
 	"opencode": "opencode --session %s",
 	"amp":      "amp --resume %s",
@@ -453,6 +454,11 @@ func readSessionCwd(path string) string {
 				return cwd
 			}
 			if cwd := gjson.Get(s, "payload.cwd").Str; cwd != "" {
+				return cwd
+			}
+			// Copilot stores cwd under data.context.cwd on the
+			// session.start event.
+			if cwd := gjson.Get(s, "data.context.cwd").Str; cwd != "" {
 				return cwd
 			}
 		}

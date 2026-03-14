@@ -8,13 +8,13 @@ describe("supportsResume", () => {
   it("returns true for supported agents", () => {
     expect(supportsResume("claude")).toBe(true);
     expect(supportsResume("codex")).toBe(true);
+    expect(supportsResume("copilot")).toBe(true);
     expect(supportsResume("gemini")).toBe(true);
     expect(supportsResume("opencode")).toBe(true);
     expect(supportsResume("amp")).toBe(true);
   });
 
   it("returns false for unsupported agents", () => {
-    expect(supportsResume("copilot")).toBe(false);
     expect(supportsResume("cursor")).toBe(false);
     expect(supportsResume("vscode-copilot")).toBe(false);
     expect(supportsResume("unknown")).toBe(false);
@@ -71,9 +71,14 @@ describe("buildResumeCommand", () => {
   });
 
   it("returns null for unsupported agents", () => {
-    expect(buildResumeCommand("copilot", "id")).toBeNull();
     expect(buildResumeCommand("cursor", "id")).toBeNull();
     expect(buildResumeCommand("unknown", "id")).toBeNull();
+  });
+
+  it("generates copilot resume command", () => {
+    expect(
+      buildResumeCommand("copilot", "copilot:a108ddbe-acdb-42f4-a35e-6c2938bf038b"),
+    ).toBe("copilot --resume=a108ddbe-acdb-42f4-a35e-6c2938bf038b");
   });
 
   describe("claude flags", () => {

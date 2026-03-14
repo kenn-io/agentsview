@@ -7,6 +7,8 @@ RESUME_AGENTS["claude"] = (id) =>
   `claude --resume ${shellQuote(id)}`;
 RESUME_AGENTS["codex"] = (id) =>
   `codex resume ${shellQuote(id)}`;
+RESUME_AGENTS["copilot"] = (id) =>
+  `copilot --resume=${shellQuote(id)}`;
 RESUME_AGENTS["gemini"] = (id) =>
   `gemini --resume ${shellQuote(id)}`;
 RESUME_AGENTS["opencode"] = (id) =>
