@@ -70,6 +70,7 @@ class SessionsStore {
   private agentsPromise: Promise<void> | null = null;
   private agentsVersion: number = 0;
   private refreshVersion: number = 0;
+  private childSessionsVersion: number = 0;
 
   get activeSession(): Session | undefined {
     return this.sessions.find((s) => s.id === this.activeSessionId);
@@ -344,6 +345,10 @@ class SessionsStore {
   deselectSession() {
     this.activeSessionId = null;
     this.childSessions = new Map();
+    // Invalidate in-flight refreshes so stale responses from
+    // the previous session are discarded.
+    this.refreshVersion++;
+    this.childSessionsVersion++;
   }
 
   async refreshActiveSession() {
@@ -368,16 +373,27 @@ class SessionsStore {
   }
 
   async loadChildSessions(parentId: string) {
+    const version = ++this.childSessionsVersion;
     try {
       const children = await api.getChildSessions(parentId);
-      if (this.activeSessionId !== parentId) return;
+      if (
+        this.childSessionsVersion !== version ||
+        this.activeSessionId !== parentId
+      ) {
+        return;
+      }
       const map = new Map<string, Session>();
       for (const child of children) {
         map.set(child.id, child);
       }
       this.childSessions = map;
     } catch {
-      if (this.activeSessionId !== parentId) return;
+      if (
+        this.childSessionsVersion !== version ||
+        this.activeSessionId !== parentId
+      ) {
+        return;
+      }
       this.childSessions = new Map();
     }
   }
