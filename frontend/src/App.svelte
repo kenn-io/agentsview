@@ -76,6 +76,7 @@
         sessions.loadChildSessions(id);
         sync.watchSession(id, () => {
           messages.reload();
+          sessions.refreshActiveSession();
           sessions.loadChildSessions(id);
         });
         pins.loadForSession(id);

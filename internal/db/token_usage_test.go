@@ -408,3 +408,95 @@ func TestListSessionsTokenUsage(t *testing.T) {
 			got.PeakContextTokens)
 	}
 }
+
+func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	s := Session{
+		ID:                "inc-tokens",
+		Project:           "proj",
+		Machine:           "test",
+		Agent:             "claude",
+		MessageCount:      5,
+		UserMessageCount:  2,
+		TotalOutputTokens: 1000,
+		PeakContextTokens: 8000,
+		FilePath:          Ptr("/tmp/s.jsonl"),
+		FileSize:          Ptr(int64(2048)),
+		FileMtime:         Ptr(int64(100)),
+	}
+	requireNoError(t, d.UpsertSession(s), "upsert")
+
+	t.Run("metadata-only update preserves tokens", func(t *testing.T) {
+		// Simulate a no-new-messages incremental update that
+		// only advances file_size and ended_at. Token totals
+		// must be carried forward, not reset to zero.
+		ended := "2024-01-15T10:30:00Z"
+		err := d.UpdateSessionIncremental(
+			"inc-tokens", &ended, 5, 2, 4096, 200,
+			1000, 8000,
+		)
+		requireNoError(t, err, "incremental update")
+
+		got, err := d.GetSessionFull(ctx, "inc-tokens")
+		requireNoError(t, err, "get session")
+		if got.TotalOutputTokens != 1000 {
+			t.Errorf(
+				"TotalOutputTokens = %d, want 1000",
+				got.TotalOutputTokens,
+			)
+		}
+		if got.PeakContextTokens != 8000 {
+			t.Errorf(
+				"PeakContextTokens = %d, want 8000",
+				got.PeakContextTokens,
+			)
+		}
+	})
+
+	t.Run("update with new messages advances tokens", func(t *testing.T) {
+		ended := "2024-01-15T11:00:00Z"
+		err := d.UpdateSessionIncremental(
+			"inc-tokens", &ended, 8, 3, 8192, 300,
+			1500, 9000,
+		)
+		requireNoError(t, err, "incremental update")
+
+		got, err := d.GetSessionFull(ctx, "inc-tokens")
+		requireNoError(t, err, "get session")
+		if got.TotalOutputTokens != 1500 {
+			t.Errorf(
+				"TotalOutputTokens = %d, want 1500",
+				got.TotalOutputTokens,
+			)
+		}
+		if got.PeakContextTokens != 9000 {
+			t.Errorf(
+				"PeakContextTokens = %d, want 9000",
+				got.PeakContextTokens,
+			)
+		}
+	})
+
+	t.Run("idempotent retry does not inflate tokens", func(t *testing.T) {
+		// Same call again simulates a retry — absolute values
+		// should produce the same result.
+		ended := "2024-01-15T11:00:00Z"
+		err := d.UpdateSessionIncremental(
+			"inc-tokens", &ended, 8, 3, 8192, 300,
+			1500, 9000,
+		)
+		requireNoError(t, err, "retry update")
+
+		got, err := d.GetSessionFull(ctx, "inc-tokens")
+		requireNoError(t, err, "get session")
+		if got.TotalOutputTokens != 1500 {
+			t.Errorf(
+				"TotalOutputTokens = %d, want 1500"+
+					" (retry inflated)",
+				got.TotalOutputTokens,
+			)
+		}
+	})
+}

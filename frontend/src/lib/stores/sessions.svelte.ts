@@ -345,6 +345,20 @@ class SessionsStore {
     this.childSessions = new Map();
   }
 
+  async refreshActiveSession() {
+    const id = this.activeSessionId;
+    if (!id) return;
+    try {
+      const session = await api.getSession(id);
+      const idx = this.sessions.findIndex((s) => s.id === id);
+      if (idx >= 0 && this.activeSessionId === id) {
+        this.sessions[idx] = session;
+      }
+    } catch {
+      // Session may have been deleted
+    }
+  }
+
   async loadChildSessions(parentId: string) {
     try {
       const children = await api.getChildSessions(parentId);
