@@ -54,11 +54,13 @@ func TestResumeSession(t *testing.T) {
 
 	t.Run("copilot command only", func(t *testing.T) {
 		projectDir := t.TempDir()
-		te.seedSession(t, "copilot-1", projectDir, 3, func(s *db.Session) {
+		// Use a prefixed ID to exercise the agent-prefix stripping
+		// logic (e.g. "copilot:abc123" → raw ID "abc123").
+		te.seedSession(t, "copilot:abc123", projectDir, 3, func(s *db.Session) {
 			s.Agent = "copilot"
 		})
 		w := te.post(t,
-			"/api/v1/sessions/copilot-1/resume",
+			"/api/v1/sessions/copilot:abc123/resume",
 			`{"command_only":true}`,
 		)
 		assertStatus(t, w, http.StatusOK)
@@ -72,8 +74,9 @@ func TestResumeSession(t *testing.T) {
 		if resp.Launched {
 			t.Error("expected launched=false for command_only")
 		}
-		if resp.Command == "" {
-			t.Error("expected non-empty command")
+		wantCmd := "copilot --resume=abc123"
+		if resp.Command != wantCmd {
+			t.Errorf("command = %q, want %q", resp.Command, wantCmd)
 		}
 	})
 
