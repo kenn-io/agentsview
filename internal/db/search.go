@@ -107,8 +107,9 @@ func (db *DB) Search(
 // SearchSession performs a case-insensitive substring search within a single
 // session's messages, returning matching ordinals in document order.
 // This is used by the in-session find bar (analogous to browser Cmd+F).
-// Both message content and tool call result_content are searched so that
-// matches inside tool output blocks are always reachable.
+// Both message content and tool-call result_content are searched so that
+// matches inside tool output blocks are reachable. Only fields that the
+// frontend renders and highlights are included to avoid phantom matches.
 func (db *DB) SearchSession(
 	ctx context.Context, sessionID, query string,
 ) ([]int, error) {
@@ -128,10 +129,9 @@ func (db *DB) SearchSession(
 		 WHERE m.session_id = ?
 		   AND m.is_system = 0
 		   AND (m.content LIKE ? ESCAPE '\'
-		        OR tc.result_content LIKE ? ESCAPE '\'
-		        OR tc.input_json LIKE ? ESCAPE '\')
+		        OR tc.result_content LIKE ? ESCAPE '\')
 		 ORDER BY m.ordinal ASC`,
-		sessionID, like, like, like,
+		sessionID, like, like,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("session search: %w", err)
