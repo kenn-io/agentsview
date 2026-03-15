@@ -1479,12 +1479,14 @@ func (e *Engine) tryIncrementalJSONL(
 		if consumed > 0 {
 			return processResult{
 				incremental: &incrementalUpdate{
-					sessionID:    inc.ID,
-					endedAt:      endedAt,
-					msgCount:     inc.MsgCount,
-					userMsgCount: inc.UserMsgCount,
-					fileSize:     newOffset,
-					fileMtime:    info.ModTime().UnixNano(),
+					sessionID:         inc.ID,
+					endedAt:           endedAt,
+					msgCount:          inc.MsgCount,
+					userMsgCount:      inc.UserMsgCount,
+					fileSize:          newOffset,
+					fileMtime:         info.ModTime().UnixNano(),
+					totalOutputTokens: inc.TotalOutputTokens,
+					peakContextTokens: inc.PeakContextTokens,
 				},
 			}, true
 		}
