@@ -8,20 +8,26 @@
   }
 
   let { content, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
-  let collapsed: boolean = $state(true);
+  let userCollapsed: boolean = $state(true);
+  let searchExpanded: boolean = $state(false);
 
   // Auto-expand when a search match exists in this block
   $effect(() => {
-    if (highlightQuery.trim() && content.toLowerCase().includes(highlightQuery.toLowerCase())) {
-      collapsed = false;
-    }
+    const hasMatch =
+      highlightQuery.trim() !== "" &&
+      content.toLowerCase().includes(highlightQuery.toLowerCase());
+    searchExpanded = hasMatch;
   });
+
+  let collapsed = $derived(
+    searchExpanded ? false : userCollapsed,
+  );
 </script>
 
 <div class="thinking-block">
   <button
     class="thinking-header"
-    onclick={() => (collapsed = !collapsed)}
+    onclick={() => (userCollapsed = !collapsed)}
   >
     <span class="thinking-chevron" class:open={!collapsed}>
       &#9656;

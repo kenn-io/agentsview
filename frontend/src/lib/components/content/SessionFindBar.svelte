@@ -32,7 +32,7 @@
   let hasMatches = $derived(inSessionSearch.matches.length > 0);
   let noResults = $derived(hasQuery && !hasMatches && !inSessionSearch.loading);
 
-  let counterText = $derived(() => {
+  let counterText = $derived.by(() => {
     if (!hasQuery) return "";
     if (inSessionSearch.loading) return "…";
     if (inSessionSearch.matches.length === 0) return "No results";
@@ -70,7 +70,7 @@
 
     {#if hasQuery}
       <span class="counter" class:no-results={noResults} aria-live="polite">
-        {counterText()}
+        {counterText}
       </span>
     {/if}
 

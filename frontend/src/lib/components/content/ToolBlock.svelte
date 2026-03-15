@@ -18,18 +18,37 @@
   }
 
   let { content, label, toolCall, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
-  let collapsed: boolean = $state(true);
-  let outputCollapsed: boolean = $state(true);
+  let userCollapsed: boolean = $state(true);
+  let userOutputCollapsed: boolean = $state(true);
+  let searchExpandedInput: boolean = $state(false);
+  let searchExpandedOutput: boolean = $state(false);
 
   // Auto-expand when a search match exists in input or output content
   $effect(() => {
-    if (!highlightQuery.trim()) return;
+    if (!highlightQuery.trim()) {
+      searchExpandedInput = false;
+      searchExpandedOutput = false;
+      return;
+    }
     const q = highlightQuery.toLowerCase();
-    const inputText = (taskPrompt ?? content ?? fallbackContent ?? "").toLowerCase();
-    if (inputText.includes(q)) collapsed = false;
-    const outputText = (toolCall?.result_content ?? "").toLowerCase();
-    if (outputText.includes(q)) { collapsed = false; outputCollapsed = false; }
+    const inputText = (
+      taskPrompt ?? content ?? fallbackContent ?? ""
+    ).toLowerCase();
+    const outputText = (
+      toolCall?.result_content ?? ""
+    ).toLowerCase();
+    searchExpandedInput = inputText.includes(q);
+    searchExpandedOutput = outputText.includes(q);
   });
+
+  let collapsed = $derived(
+    (searchExpandedInput || searchExpandedOutput)
+      ? false
+      : userCollapsed,
+  );
+  let outputCollapsed = $derived(
+    searchExpandedOutput ? false : userOutputCollapsed,
+  );
 
   let outputPreviewLine = $derived.by(() => {
     const rc = toolCall?.result_content;
@@ -159,7 +178,7 @@
     onclick={() => {
       const sel = window.getSelection();
       if (sel && sel.toString().length > 0) return;
-      collapsed = !collapsed;
+      userCollapsed = !collapsed;
     }}
   >
     <span class="tool-chevron" class:open={!collapsed}>
@@ -197,7 +216,7 @@
           e.stopPropagation();
           const sel = window.getSelection();
           if (sel && sel.toString().length > 0) return;
-          outputCollapsed = !outputCollapsed;
+          userOutputCollapsed = !outputCollapsed;
         }}
       >
         <span class="tool-chevron" class:open={!outputCollapsed}>

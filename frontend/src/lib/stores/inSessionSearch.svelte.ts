@@ -15,6 +15,7 @@ class InSessionSearchStore {
   loading: boolean = $state(false);
   private prevQuery: string = "";
   private prevSessionId: string = "";
+  private prevMessageCount: number = 0;
   private abortController: AbortController | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -23,21 +24,25 @@ class InSessionSearchStore {
       $effect(() => {
         const q = this.query;
         const sessionId = messages.sessionId;
+        const msgCount = messages.messageCount;
 
         if (!q.trim() || !sessionId) {
           this.cancelPending();
           this.matches = [];
           this.currentMatchIndex = -1;
           this.prevQuery = q;
+          this.prevMessageCount = msgCount;
           return;
         }
 
         const queryChanged = q !== this.prevQuery;
         const sessionChanged = sessionId !== this.prevSessionId;
+        const contentChanged = msgCount !== this.prevMessageCount;
         this.prevQuery = q;
         this.prevSessionId = sessionId;
+        this.prevMessageCount = msgCount;
 
-        if (queryChanged || sessionChanged) {
+        if (queryChanged || sessionChanged || contentChanged) {
           // Debounce API calls — wait for user to pause typing
           this.cancelPending();
           this.debounceTimer = setTimeout(() => {
@@ -116,6 +121,7 @@ class InSessionSearchStore {
     this.currentMatchIndex = -1;
     this.prevQuery = "";
     this.prevSessionId = "";
+    this.prevMessageCount = 0;
   }
 
   toggle() {
