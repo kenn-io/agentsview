@@ -660,10 +660,12 @@ func (db *DB) GetSessionVersion(
 // IncrementalInfo holds the data needed for incremental
 // re-parsing of an append-only session file.
 type IncrementalInfo struct {
-	ID           string
-	FileSize     int64
-	MsgCount     int
-	UserMsgCount int
+	ID                string
+	FileSize          int64
+	MsgCount          int
+	UserMsgCount      int
+	TotalOutputTokens int
+	PeakContextTokens int
 }
 
 // GetSessionForIncremental returns session state needed for
@@ -689,10 +691,14 @@ func (db *DB) GetSessionForIncremental(
 	var fs sql.NullInt64
 	err = db.getReader().QueryRow(
 		`SELECT id, file_size, message_count,
-			user_message_count
+			user_message_count,
+			total_output_tokens, peak_context_tokens
 		 FROM sessions WHERE file_path = ?`,
 		path,
-	).Scan(&info.ID, &fs, &info.MsgCount, &info.UserMsgCount)
+	).Scan(
+		&info.ID, &fs, &info.MsgCount, &info.UserMsgCount,
+		&info.TotalOutputTokens, &info.PeakContextTokens,
+	)
 	if err != nil {
 		return nil, false
 	}
@@ -705,16 +711,14 @@ func (db *DB) GetSessionForIncremental(
 // UpdateSessionIncremental updates only the fields that change
 // during an incremental append: ended_at, message_count,
 // user_message_count, file_size, file_mtime, and token
-// aggregates. All other columns (project, parent_session_id,
-// file_hash, etc.) are preserved. outputTokensDelta is added
-// to total_output_tokens; peakContextTokens replaces the
-// stored value only if it is higher.
+// aggregates. All values are absolute (not deltas) so the
+// update is idempotent on retry.
 func (db *DB) UpdateSessionIncremental(
 	id string,
 	endedAt *string,
 	msgCount, userMsgCount int,
 	fileSize, fileMtime int64,
-	outputTokensDelta, peakContextTokens int,
+	totalOutputTokens, peakContextTokens int,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -726,14 +730,12 @@ func (db *DB) UpdateSessionIncremental(
 			user_message_count = ?,
 			file_size = ?,
 			file_mtime = ?,
-			total_output_tokens = total_output_tokens + ?,
-			peak_context_tokens = MAX(
-				peak_context_tokens, ?
-			)
+			total_output_tokens = ?,
+			peak_context_tokens = ?
 		WHERE id = ?`,
 		endedAt, msgCount, userMsgCount,
 		fileSize, fileMtime,
-		outputTokensDelta, peakContextTokens, id,
+		totalOutputTokens, peakContextTokens, id,
 	)
 	if err != nil {
 		return fmt.Errorf(

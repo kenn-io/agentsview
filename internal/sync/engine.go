@@ -1221,8 +1221,8 @@ type incrementalUpdate struct {
 	userMsgCount      int // total (old + new)
 	fileSize          int64
 	fileMtime         int64
-	totalOutputTokens int
-	peakContextTokens int
+	totalOutputTokens int // absolute (old + new)
+	peakContextTokens int // absolute max(old, new)
 }
 
 type processResult struct {
@@ -1499,9 +1499,10 @@ func (e *Engine) tryIncrementalJSONL(
 		agent, inc.ID, len(newMsgs), inc.FileSize,
 	)
 
-	var outputDelta, peakCtx int
+	totalOut := inc.TotalOutputTokens
+	peakCtx := inc.PeakContextTokens
 	for _, m := range newMsgs {
-		outputDelta += m.OutputTokens
+		totalOut += m.OutputTokens
 		if m.ContextTokens > peakCtx {
 			peakCtx = m.ContextTokens
 		}
@@ -1516,7 +1517,7 @@ func (e *Engine) tryIncrementalJSONL(
 			userMsgCount:      inc.UserMsgCount + newUserCount,
 			fileSize:          newOffset,
 			fileMtime:         info.ModTime().UnixNano(),
-			totalOutputTokens: outputDelta,
+			totalOutputTokens: totalOut,
 			peakContextTokens: peakCtx,
 		},
 	}, true
