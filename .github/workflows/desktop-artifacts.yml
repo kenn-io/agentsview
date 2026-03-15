@@ -6,8 +6,8 @@ on:
     paths:
       - 'desktop/**'
       - 'frontend/**'
-      - 'cmd/**'
-      - 'internal/**'
+      - 'cmd/agentsview/**'
+      - 'internal/web/**'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/desktop-*.yml'
