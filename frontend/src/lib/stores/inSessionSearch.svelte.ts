@@ -50,6 +50,7 @@ class InSessionSearchStore {
             this.matches = [];
             this.currentMatchIndex = -1;
           }
+          this.loading = true;
           this.debounceTimer = setTimeout(() => {
             this.fetchMatches(q, sessionId, preservePosition);
           }, 150);

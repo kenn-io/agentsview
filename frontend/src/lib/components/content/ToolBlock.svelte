@@ -24,26 +24,39 @@
   let userOutputOverride: boolean = $state(false);
   let searchExpandedInput: boolean = $state(false);
   let searchExpandedOutput: boolean = $state(false);
+  let prevQuery: string = "";
 
   // Auto-expand when a search match exists in input or output
-  // content. Reset user overrides when the query changes.
+  // content. Only reset user overrides when the query itself
+  // changes, not when content updates (e.g. during streaming).
   $effect(() => {
-    if (!highlightQuery.trim()) {
+    const hq = highlightQuery;
+    if (!hq.trim()) {
       searchExpandedInput = false;
       searchExpandedOutput = false;
+      prevQuery = hq;
       return;
     }
-    const q = highlightQuery.toLowerCase();
+    const q = hq.toLowerCase();
     const inputText = (
       taskPrompt ?? content ?? fallbackContent ?? ""
     ).toLowerCase();
     const outputText = (
       toolCall?.result_content ?? ""
     ).toLowerCase();
-    searchExpandedInput = inputText.includes(q);
+    // Also check raw input_json so matches in tool parameters
+    // that the backend returns are reachable via expand.
+    const paramsText = (
+      toolCall?.input_json ?? ""
+    ).toLowerCase();
+    searchExpandedInput =
+      inputText.includes(q) || paramsText.includes(q);
     searchExpandedOutput = outputText.includes(q);
-    userOverride = false;
-    userOutputOverride = false;
+    if (hq !== prevQuery) {
+      userOverride = false;
+      userOutputOverride = false;
+      prevQuery = hq;
+    }
   });
 
   let collapsed = $derived(

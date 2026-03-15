@@ -11,16 +11,21 @@
   let userCollapsed: boolean = $state(true);
   let userOverride: boolean = $state(false);
   let searchExpanded: boolean = $state(false);
+  let prevQuery: string = "";
 
   // Auto-expand when a search match exists in this block.
-  // Reset the user override when the query changes so new
-  // matches auto-expand again.
+  // Only reset the user override when the query itself changes,
+  // not when content updates (e.g. during streaming).
   $effect(() => {
+    const q = highlightQuery;
     const hasMatch =
-      highlightQuery.trim() !== "" &&
-      content.toLowerCase().includes(highlightQuery.toLowerCase());
+      q.trim() !== "" &&
+      content.toLowerCase().includes(q.toLowerCase());
     searchExpanded = hasMatch;
-    userOverride = false;
+    if (q !== prevQuery) {
+      userOverride = false;
+      prevQuery = q;
+    }
   });
 
   let collapsed = $derived(
