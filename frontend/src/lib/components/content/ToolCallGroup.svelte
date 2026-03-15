@@ -11,9 +11,16 @@
   interface Props {
     messages: Message[];
     timestamp: string;
+    highlightQuery?: string;
+    isCurrentHighlight?: boolean;
   }
 
-  let { messages, timestamp }: Props = $props();
+  let {
+    messages,
+    timestamp,
+    highlightQuery = "",
+    isCurrentHighlight = false,
+  }: Props = $props();
 
   let copied = $state(false);
 
@@ -117,6 +124,8 @@
         content={segment.content}
         label={segment.label}
         toolCall={segment.toolCall}
+        {highlightQuery}
+        {isCurrentHighlight}
       />
     {/each}
   </div>

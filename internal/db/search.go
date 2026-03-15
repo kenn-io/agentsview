@@ -126,9 +126,12 @@ func (db *DB) SearchSession(
 		 FROM messages m
 		 LEFT JOIN tool_calls tc ON tc.message_id = m.id
 		 WHERE m.session_id = ?
-		   AND (m.content LIKE ? ESCAPE '\' OR tc.result_content LIKE ? ESCAPE '\')
+		   AND m.is_system = 0
+		   AND (m.content LIKE ? ESCAPE '\'
+		        OR tc.result_content LIKE ? ESCAPE '\'
+		        OR tc.input_json LIKE ? ESCAPE '\')
 		 ORDER BY m.ordinal ASC`,
-		sessionID, like, like,
+		sessionID, like, like, like,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("session search: %w", err)

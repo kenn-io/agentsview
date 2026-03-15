@@ -20,10 +20,13 @@
   let { content, label, toolCall, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
   let userCollapsed: boolean = $state(true);
   let userOutputCollapsed: boolean = $state(true);
+  let userOverride: boolean = $state(false);
+  let userOutputOverride: boolean = $state(false);
   let searchExpandedInput: boolean = $state(false);
   let searchExpandedOutput: boolean = $state(false);
 
-  // Auto-expand when a search match exists in input or output content
+  // Auto-expand when a search match exists in input or output
+  // content. Reset user overrides when the query changes.
   $effect(() => {
     if (!highlightQuery.trim()) {
       searchExpandedInput = false;
@@ -39,15 +42,19 @@
     ).toLowerCase();
     searchExpandedInput = inputText.includes(q);
     searchExpandedOutput = outputText.includes(q);
+    userOverride = false;
+    userOutputOverride = false;
   });
 
   let collapsed = $derived(
-    (searchExpandedInput || searchExpandedOutput)
-      ? false
+    userOverride ? userCollapsed
+      : (searchExpandedInput || searchExpandedOutput) ? false
       : userCollapsed,
   );
   let outputCollapsed = $derived(
-    searchExpandedOutput ? false : userOutputCollapsed,
+    userOutputOverride ? userOutputCollapsed
+      : searchExpandedOutput ? false
+      : userOutputCollapsed,
   );
 
   let outputPreviewLine = $derived.by(() => {
@@ -179,6 +186,7 @@
       const sel = window.getSelection();
       if (sel && sel.toString().length > 0) return;
       userCollapsed = !userCollapsed;
+      userOverride = true;
     }}
   >
     <span class="tool-chevron" class:open={!collapsed}>
@@ -217,6 +225,7 @@
           const sel = window.getSelection();
           if (sel && sel.toString().length > 0) return;
           userOutputCollapsed = !userOutputCollapsed;
+          userOutputOverride = true;
         }}
       >
         <span class="tool-chevron" class:open={!outputCollapsed}>

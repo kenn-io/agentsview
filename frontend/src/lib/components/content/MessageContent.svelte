@@ -102,9 +102,11 @@
     return "U";
   });
 
+  let hasSearchQuery = $derived(highlightQuery.trim() !== "");
+
   /** Whether the text (prose) segments for this role should render. */
   let showText = $derived(
-    ui.isBlockVisible(isUser ? "user" : "assistant"),
+    hasSearchQuery || ui.isBlockVisible(isUser ? "user" : "assistant"),
   );
 
   let accentColor = $derived(
@@ -205,7 +207,7 @@
   <div class="message-body">
     {#each segments as segment}
       {#if segment.type === "thinking"}
-        {#if ui.isBlockVisible("thinking")}
+        {#if hasSearchQuery || ui.isBlockVisible("thinking")}
           <ThinkingBlock
             content={segment.content}
             highlightQuery={highlightQuery}
@@ -213,7 +215,7 @@
           />
         {/if}
       {:else if segment.type === "tool"}
-        {#if ui.isBlockVisible("tool")}
+        {#if hasSearchQuery || ui.isBlockVisible("tool")}
           <ToolBlock
             content={segment.content}
             label={segment.label}
@@ -223,7 +225,7 @@
           />
         {/if}
       {:else if segment.type === "code"}
-        {#if ui.isBlockVisible("code")}
+        {#if hasSearchQuery || ui.isBlockVisible("code")}
           <CodeBlock
             content={segment.content}
             language={segment.label}

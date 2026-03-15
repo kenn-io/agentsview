@@ -46,6 +46,10 @@ class InSessionSearchStore {
           const preservePosition =
             contentChanged && !queryChanged && !sessionChanged;
           this.cancelPending();
+          if (!preservePosition) {
+            this.matches = [];
+            this.currentMatchIndex = -1;
+          }
           this.debounceTimer = setTimeout(() => {
             this.fetchMatches(q, sessionId, preservePosition);
           }, 150);

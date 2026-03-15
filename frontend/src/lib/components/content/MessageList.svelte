@@ -283,6 +283,8 @@
               <ToolCallGroup
                 messages={item.messages}
                 timestamp={item.timestamp}
+                highlightQuery={highlightQuery}
+                isCurrentHighlight={item.ordinals.includes(inSessionSearch.currentOrdinal ?? -1)}
               />
             {:else}
               <MessageContent
