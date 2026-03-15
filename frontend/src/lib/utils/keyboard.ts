@@ -22,6 +22,14 @@ function isInputFocused(): boolean {
   );
 }
 
+function isFindInput(): boolean {
+  const el = document.activeElement;
+  return (
+    el instanceof HTMLInputElement &&
+    el.getAttribute("aria-label") === "Search query"
+  );
+}
+
 interface ShortcutOptions {
   navigateMessage: (delta: number) => void;
 }
@@ -60,15 +68,29 @@ export function registerShortcuts(
       return;
     }
 
-    // Cmd+F — open in-session find when a session is active
-    if (meta && e.key === "f" && sessions.activeSessionId) {
+    // Cmd+F — open in-session find when viewing a session
+    // and no modal is blocking interaction.
+    if (
+      meta &&
+      e.key === "f" &&
+      sessions.activeSessionId &&
+      ui.activeModal === null
+    ) {
       e.preventDefault();
       inSessionSearch.open();
       return;
     }
 
-    // Cmd+G / Cmd+Shift+G — next/prev match while find is open
-    if (meta && e.key === "g" && inSessionSearch.isOpen) {
+    // Cmd+G / Cmd+Shift+G — next/prev match while find is
+    // open. Skip when a modal is open or an unrelated input
+    // has focus (allow from the find input itself).
+    if (
+      meta &&
+      e.key === "g" &&
+      inSessionSearch.isOpen &&
+      ui.activeModal === null &&
+      (!isInputFocused() || isFindInput())
+    ) {
       e.preventDefault();
       if (e.shiftKey) {
         inSessionSearch.prev();

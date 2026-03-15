@@ -101,7 +101,14 @@ class InSessionSearchStore {
         const idx = found.findIndex(
           (m) => m.ordinal === prevOrdinal,
         );
-        this.currentMatchIndex = idx >= 0 ? idx : 0;
+        if (idx >= 0) {
+          this.currentMatchIndex = idx;
+        } else {
+          this.currentMatchIndex = found.length > 0 ? 0 : -1;
+          if (found.length > 0) {
+            await this.scrollToMatch(found[0]!);
+          }
+        }
       } else {
         this.currentMatchIndex = found.length > 0 ? 0 : -1;
         if (found.length > 0) {
