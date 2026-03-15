@@ -14,6 +14,10 @@ function msg(
     has_thinking: false,
     has_tool_use: false,
     content_length: overrides.content.length,
+    model: "",
+    token_usage: null,
+    context_tokens: 0,
+    output_tokens: 0,
     ...overrides,
   };
 }

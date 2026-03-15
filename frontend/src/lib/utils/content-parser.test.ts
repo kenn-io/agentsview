@@ -19,6 +19,10 @@ function makeMsg(
     has_tool_use: false,
     has_thinking: false,
     content_length: 0,
+    model: "",
+    token_usage: null,
+    context_tokens: 0,
+    output_tokens: 0,
     timestamp: "2024-01-01T00:00:00Z",
   };
   return { ...defaults, ...overrides };

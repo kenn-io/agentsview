@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -12,11 +13,13 @@ import (
 const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
 		timestamp, has_thinking, has_tool_use, content_length,
-		is_system`
+		is_system,
+		model, token_usage, context_tokens, output_tokens`
 
 	insertMessageCols = `session_id, ordinal, role, content,
 		timestamp, has_thinking, has_tool_use, content_length,
-		is_system`
+		is_system,
+		model, token_usage, context_tokens, output_tokens`
 
 	// DefaultMessageLimit is the default number of messages returned.
 	DefaultMessageLimit = 100
@@ -61,6 +64,10 @@ type Message struct {
 	HasThinking   bool         `json:"has_thinking"`
 	HasToolUse    bool         `json:"has_tool_use"`
 	ContentLength int          `json:"content_length"`
+	Model         string       `json:"model"`
+	TokenUsage    json.RawMessage `json:"token_usage,omitempty"`
+	ContextTokens int          `json:"context_tokens"`
+	OutputTokens  int          `json:"output_tokens"`
 	ToolCalls     []ToolCall   `json:"tool_calls,omitempty"`
 	ToolResults   []ToolResult `json:"-"`         // transient, for pairing
 	IsSystem      bool         `json:"is_system"` // persisted, filters search/analytics
@@ -207,7 +214,7 @@ func (db *DB) insertMessagesTx(
 ) ([]int64, error) {
 	stmt, err := tx.Prepare(fmt.Sprintf(`
 		INSERT INTO messages (%s)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, insertMessageCols))
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, insertMessageCols))
 	if err != nil {
 		return nil, fmt.Errorf("preparing insert: %w", err)
 	}
@@ -219,6 +226,8 @@ func (db *DB) insertMessagesTx(
 			m.SessionID, m.Ordinal, m.Role, m.Content,
 			m.Timestamp, m.HasThinking, m.HasToolUse,
 			m.ContentLength, m.IsSystem,
+			m.Model, string(m.TokenUsage),
+			m.ContextTokens, m.OutputTokens,
 		)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -497,14 +506,20 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 	var msgs []Message
 	for rows.Next() {
 		var m Message
+		var tokenUsage string
 		err := rows.Scan(
 			&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
 			&m.Content, &m.Timestamp,
 			&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 			&m.IsSystem,
+			&m.Model, &tokenUsage,
+			&m.ContextTokens, &m.OutputTokens,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning message: %w", err)
+		}
+		if tokenUsage != "" {
+			m.TokenUsage = json.RawMessage(tokenUsage)
 		}
 		msgs = append(msgs, m)
 	}
@@ -532,17 +547,23 @@ func (db *DB) GetMessageByOrdinal(
 		sessionID, ordinal)
 
 	var m Message
+	var tokenUsage string
 	err := row.Scan(
 		&m.ID, &m.SessionID, &m.Ordinal, &m.Role,
 		&m.Content, &m.Timestamp,
 		&m.HasThinking, &m.HasToolUse, &m.ContentLength,
 		&m.IsSystem,
+		&m.Model, &tokenUsage,
+		&m.ContextTokens, &m.OutputTokens,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if tokenUsage != "" {
+		m.TokenUsage = json.RawMessage(tokenUsage)
 	}
 	return &m, nil
 }

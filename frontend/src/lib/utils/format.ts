@@ -57,6 +57,17 @@ export function formatNumber(n: number): string {
   return n.toLocaleString();
 }
 
+/** Formats a token count as a compact string (e.g. 1.2k, 3.5M) */
+export function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) {
+    const k = Math.floor(n / 100) / 10;
+    return k % 1 === 0 ? `${Math.floor(k)}k` : `${k}k`;
+  }
+  const m = Math.floor(n / 100_000) / 10;
+  return m % 1 === 0 ? `${Math.floor(m)}M` : `${m}M`;
+}
+
 let nonceCounter = 0;
 
 /** Reset the nonce counter. Exported for testing only. */

@@ -182,6 +182,87 @@ func TestParseGeminiSession_ThinkingWithText(t *testing.T) {
 	assert.Contains(t, between, "\n\n")
 }
 
+func TestParseGeminiSession_TokenUsage(t *testing.T) {
+	t.Run("per-message tokens from fixture", func(t *testing.T) {
+		content := loadFixture(t, "gemini/standard_session.json")
+		sess, msgs := runGeminiParserTest(t, content)
+
+		require.Equal(t, 4, len(msgs))
+
+		// User messages have no tokens
+		assert.Equal(t, 0, msgs[0].ContextTokens)
+		assert.Equal(t, 0, msgs[0].OutputTokens)
+		assert.Empty(t, msgs[0].TokenUsage)
+
+		// First assistant message (a1): input=1500, output=200
+		assert.Equal(t, 1500, msgs[1].ContextTokens)
+		assert.Equal(t, 200, msgs[1].OutputTokens)
+		assert.NotEmpty(t, msgs[1].TokenUsage)
+
+		// Second user message has no tokens
+		assert.Equal(t, 0, msgs[2].ContextTokens)
+		assert.Equal(t, 0, msgs[2].OutputTokens)
+
+		// Second assistant message (a2): input=2000, output=300
+		assert.Equal(t, 2000, msgs[3].ContextTokens)
+		assert.Equal(t, 300, msgs[3].OutputTokens)
+		assert.NotEmpty(t, msgs[3].TokenUsage)
+
+		// Session totals
+		assert.Equal(t, 500, sess.TotalOutputTokens)
+		assert.Equal(t, 2000, sess.PeakContextTokens)
+	})
+
+	t.Run("messages without tokens get zero values", func(t *testing.T) {
+		content := testjsonl.GeminiSessionJSON(
+			"sess-no-tokens", "hash", tsEarly, tsEarlyS5,
+			[]map[string]any{
+				testjsonl.GeminiUserMsg("u1", tsEarly, "hello"),
+				testjsonl.GeminiAssistantMsg("a1", tsEarlyS5, "hi there", nil),
+			},
+		)
+		sess, msgs := runGeminiParserTest(t, content)
+
+		require.Equal(t, 2, len(msgs))
+		assert.Equal(t, 0, msgs[0].ContextTokens)
+		assert.Equal(t, 0, msgs[1].ContextTokens)
+		assert.Equal(t, 0, msgs[1].OutputTokens)
+		assert.Equal(t, 0, sess.TotalOutputTokens)
+		assert.Equal(t, 0, sess.PeakContextTokens)
+	})
+
+	t.Run("tokens with programmatic fixture", func(t *testing.T) {
+		content := testjsonl.GeminiSessionJSON(
+			"sess-tokens-prog", "hash", tsEarly, tsEarlyS5,
+			[]map[string]any{
+				testjsonl.GeminiUserMsg("u1", tsEarly, "explain"),
+				{
+					"id":        "a1",
+					"timestamp": tsEarlyS5,
+					"type":      "gemini",
+					"content":   "Here is the explanation.",
+					"tokens": map[string]int{
+						"input":    5000,
+						"output":   800,
+						"cached":   200,
+						"thoughts": 100,
+						"tool":     0,
+						"total":    6100,
+					},
+				},
+			},
+		)
+		sess, msgs := runGeminiParserTest(t, content)
+
+		require.Equal(t, 2, len(msgs))
+		assert.Equal(t, 5000, msgs[1].ContextTokens)
+		assert.Equal(t, 800, msgs[1].OutputTokens)
+		assert.NotEmpty(t, msgs[1].TokenUsage)
+		assert.Equal(t, 800, sess.TotalOutputTokens)
+		assert.Equal(t, 5000, sess.PeakContextTokens)
+	})
+}
+
 func TestParseGeminiSession_EdgeCases(t *testing.T) {
 	t.Run("only system messages", func(t *testing.T) {
 		content := loadFixture(t, "gemini/system_messages.json")

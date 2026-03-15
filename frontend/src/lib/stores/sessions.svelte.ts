@@ -53,6 +53,7 @@ class SessionsStore {
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
   activeSessionId: string | null = $state(null);
+  childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
   total: number = $state(0);
   loading: boolean = $state(false);
@@ -341,6 +342,22 @@ class SessionsStore {
 
   deselectSession() {
     this.activeSessionId = null;
+    this.childSessions = new Map();
+  }
+
+  async loadChildSessions(parentId: string) {
+    try {
+      const children = await api.getChildSessions(parentId);
+      if (this.activeSessionId !== parentId) return;
+      const map = new Map<string, Session>();
+      for (const child of children) {
+        map.set(child.id, child);
+      }
+      this.childSessions = map;
+    } catch {
+      if (this.activeSessionId !== parentId) return;
+      this.childSessions = new Map();
+    }
   }
 
   navigateSession(delta: number, filter?: (s: Session) => boolean) {

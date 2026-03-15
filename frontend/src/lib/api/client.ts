@@ -153,6 +153,13 @@ export function getSession(id: string, init?: RequestInit): Promise<Session> {
   return fetchJSON(`/sessions/${id}`, init);
 }
 
+export function getChildSessions(
+  id: string,
+  init?: RequestInit,
+): Promise<Session[]> {
+  return fetchJSON(`/sessions/${id}/children`, init);
+}
+
 /* Messages */
 
 export interface GetMessagesParams {

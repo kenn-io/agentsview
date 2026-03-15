@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { sanitizeSnippet, _resetNonceCounter } from "./format.js";
+import { sanitizeSnippet, _resetNonceCounter, formatTokenCount } from "./format.js";
 
 describe("sanitizeSnippet", () => {
   beforeEach(() => {
@@ -84,5 +84,40 @@ describe("sanitizeSnippet", () => {
     ],
   ])("%s", (_name, input, expected) => {
     expect(sanitizeSnippet(input)).toBe(expected);
+  });
+});
+
+describe("formatTokenCount", () => {
+  it("returns '0' for zero", () => {
+    expect(formatTokenCount(0)).toBe("0");
+  });
+
+  it("returns raw number for values under 1000", () => {
+    expect(formatTokenCount(1)).toBe("1");
+    expect(formatTokenCount(500)).toBe("500");
+    expect(formatTokenCount(999)).toBe("999");
+  });
+
+  it("formats thousands with 'k' suffix", () => {
+    expect(formatTokenCount(1000)).toBe("1k");
+    expect(formatTokenCount(1200)).toBe("1.2k");
+    expect(formatTokenCount(1250)).toBe("1.2k");
+    expect(formatTokenCount(45000)).toBe("45k");
+    expect(formatTokenCount(45600)).toBe("45.6k");
+    expect(formatTokenCount(999999)).toBe("999.9k");
+  });
+
+  it("formats millions with 'M' suffix", () => {
+    expect(formatTokenCount(1000000)).toBe("1M");
+    expect(formatTokenCount(1200000)).toBe("1.2M");
+    expect(formatTokenCount(1250000)).toBe("1.2M");
+    expect(formatTokenCount(25000000)).toBe("25M");
+    expect(formatTokenCount(25600000)).toBe("25.6M");
+  });
+
+  it("drops decimal when it would be .0", () => {
+    expect(formatTokenCount(2000)).toBe("2k");
+    expect(formatTokenCount(10000)).toBe("10k");
+    expect(formatTokenCount(3000000)).toBe("3M");
   });
 });

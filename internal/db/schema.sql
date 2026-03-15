@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_hash   TEXT,
     parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',
+    total_output_tokens INTEGER NOT NULL DEFAULT 0,
+    peak_context_tokens INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
@@ -32,6 +34,10 @@ CREATE TABLE IF NOT EXISTS messages (
     has_tool_use   INTEGER NOT NULL DEFAULT 0,
     content_length INTEGER NOT NULL DEFAULT 0,
     is_system      INTEGER NOT NULL DEFAULT 0,
+    model TEXT NOT NULL DEFAULT '',
+    token_usage TEXT NOT NULL DEFAULT '',
+    context_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
     UNIQUE(session_id, ordinal)
 );
 

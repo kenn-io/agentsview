@@ -2069,18 +2069,20 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 // toDBSession converts a pendingWrite to a db.Session.
 func toDBSession(pw pendingWrite) db.Session {
 	s := db.Session{
-		ID:               pw.sess.ID,
-		Project:          pw.sess.Project,
-		Machine:          pw.sess.Machine,
-		Agent:            string(pw.sess.Agent),
-		MessageCount:     pw.sess.MessageCount,
-		UserMessageCount: pw.sess.UserMessageCount,
-		ParentSessionID:  strPtr(pw.sess.ParentSessionID),
-		RelationshipType: string(pw.sess.RelationshipType),
-		FilePath:         strPtr(pw.sess.File.Path),
-		FileSize:         int64Ptr(pw.sess.File.Size),
-		FileMtime:        int64Ptr(pw.sess.File.Mtime),
-		FileHash:         strPtr(pw.sess.File.Hash),
+		ID:                pw.sess.ID,
+		Project:           pw.sess.Project,
+		Machine:           pw.sess.Machine,
+		Agent:             string(pw.sess.Agent),
+		MessageCount:      pw.sess.MessageCount,
+		UserMessageCount:  pw.sess.UserMessageCount,
+		ParentSessionID:   strPtr(pw.sess.ParentSessionID),
+		RelationshipType:  string(pw.sess.RelationshipType),
+		TotalOutputTokens: pw.sess.TotalOutputTokens,
+		PeakContextTokens: pw.sess.PeakContextTokens,
+		FilePath:          strPtr(pw.sess.File.Path),
+		FileSize:          int64Ptr(pw.sess.File.Size),
+		FileMtime:         int64Ptr(pw.sess.File.Mtime),
+		FileHash:          strPtr(pw.sess.File.Hash),
 	}
 	if pw.sess.FirstMessage != "" {
 		s.FirstMessage = &pw.sess.FirstMessage
@@ -2109,6 +2111,10 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 			HasToolUse:    m.HasToolUse,
 			ContentLength: m.ContentLength,
 			IsSystem:      m.IsSystem,
+			Model:         m.Model,
+			TokenUsage:    m.TokenUsage,
+			ContextTokens: m.ContextTokens,
+			OutputTokens:  m.OutputTokens,
 			ToolCalls: convertToolCalls(
 				pw.sess.ID, m.ToolCalls,
 			),

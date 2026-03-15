@@ -1,12 +1,36 @@
+// ABOUTME: Parses Gemini CLI session JSON files into structured session data.
+// ABOUTME: Extracts messages, tool calls, thinking blocks, and token usage.
 package parser
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/tidwall/gjson"
 )
+
+// geminiTokens holds token usage counts from a Gemini message.
+type geminiTokens struct {
+	Input  int
+	Output int
+	Cached int
+}
+
+// extractGeminiTokens reads the tokens object from a Gemini
+// message and returns the parsed counts.
+func extractGeminiTokens(msg gjson.Result) geminiTokens {
+	tok := msg.Get("tokens")
+	if !tok.Exists() {
+		return geminiTokens{}
+	}
+	return geminiTokens{
+		Input:  int(tok.Get("input").Int()),
+		Output: int(tok.Get("output").Int()),
+		Cached: int(tok.Get("cached").Int()),
+	}
+}
 
 // ParseGeminiSession parses a Gemini CLI session JSON file.
 // Unlike Claude/Codex JSONL, each Gemini file is a single JSON
@@ -73,6 +97,12 @@ func ParseGeminiSession(
 				)
 			}
 
+			tok := extractGeminiTokens(msg)
+			var tokenUsage json.RawMessage
+			tokResult := msg.Get("tokens")
+			if tokResult.Exists() {
+				tokenUsage = json.RawMessage(tokResult.Raw)
+			}
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          role,
@@ -83,29 +113,43 @@ func ParseGeminiSession(
 				ContentLength: len(content),
 				ToolCalls:     tcs,
 				ToolResults:   trs,
+				Model:         msg.Get("model").String(),
+				TokenUsage:    tokenUsage,
+				ContextTokens: tok.Input,
+				OutputTokens:  tok.Output,
 			})
 			ordinal++
 			return true
 		},
 	)
 
-	userCount := 0
+	var (
+		userCount   int
+		totalOut    int
+		peakContext int
+	)
 	for _, m := range messages {
 		if m.Role == RoleUser && m.Content != "" {
 			userCount++
 		}
+		totalOut += m.OutputTokens
+		if m.ContextTokens > peakContext {
+			peakContext = m.ContextTokens
+		}
 	}
 
 	sess := &ParsedSession{
-		ID:               "gemini:" + sessionID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentGemini,
-		FirstMessage:     firstMessage,
-		StartedAt:        startTime,
-		EndedAt:          lastUpdated,
-		MessageCount:     len(messages),
-		UserMessageCount: userCount,
+		ID:                "gemini:" + sessionID,
+		Project:           project,
+		Machine:           machine,
+		Agent:             AgentGemini,
+		FirstMessage:      firstMessage,
+		StartedAt:         startTime,
+		EndedAt:           lastUpdated,
+		MessageCount:      len(messages),
+		UserMessageCount:  userCount,
+		TotalOutputTokens: totalOut,
+		PeakContextTokens: peakContext,
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),

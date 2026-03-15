@@ -39,6 +39,8 @@ function makeSession(
     ended_at: null,
     message_count: messageCount,
     user_message_count: messageCount,
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
     created_at: new Date(0).toISOString(),
   };
 }
@@ -54,6 +56,10 @@ function makeMessage(ordinal: number): Message {
     has_thinking: false,
     has_tool_use: false,
     content_length: 6,
+    model: "",
+    token_usage: null,
+    context_tokens: 0,
+    output_tokens: 0,
   };
 }
 

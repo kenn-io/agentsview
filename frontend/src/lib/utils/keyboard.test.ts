@@ -209,6 +209,8 @@ describe("registerShortcuts", () => {
         ended_at: null,
         message_count: 1,
         user_message_count: 1,
+        total_output_tokens: 0,
+        peak_context_tokens: 0,
         created_at: "2024-01-01T00:00:00Z",
       };
     }

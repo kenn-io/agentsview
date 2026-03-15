@@ -23,6 +23,8 @@ export interface Session {
   file_path?: string;
   file_size?: number;
   file_mtime?: number;
+  total_output_tokens: number;
+  peak_context_tokens: number;
   created_at: string;
 }
 
@@ -62,6 +64,10 @@ export interface Message {
   has_thinking: boolean;
   has_tool_use: boolean;
   content_length: number;
+  model: string;
+  token_usage?: Record<string, number | boolean> | null;
+  context_tokens: number;
+  output_tokens: number;
   tool_calls?: ToolCall[];
 }
 

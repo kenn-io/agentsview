@@ -492,6 +492,61 @@ func TestParseClaudeSessionFrom_LinearUUID(
 	assert.False(t, endedAt.IsZero())
 }
 
+func TestParseClaudeSession_TokenUsage(t *testing.T) {
+	t.Run("per-message token fields from fixture", func(t *testing.T) {
+		content := loadFixture(t, "claude/valid_session.jsonl")
+		_, msgs := runClaudeParserTest(t, "test.jsonl", content)
+
+		// msgs[0] is user (no usage), msgs[1] is assistant (has usage),
+		// msgs[2] is user (no usage), msgs[3] is assistant (has usage).
+		assert.Equal(t, 0, msgs[0].ContextTokens)
+		assert.Equal(t, 0, msgs[0].OutputTokens)
+		assert.Empty(t, msgs[0].Model)
+		assert.Empty(t, msgs[0].TokenUsage)
+
+		// input=100, cache_creation=200, cache_read=300 -> context=600
+		assert.Equal(t, 600, msgs[1].ContextTokens)
+		assert.Equal(t, 50, msgs[1].OutputTokens)
+		assert.Equal(t, "claude-sonnet-4-20250514", msgs[1].Model)
+		assert.Contains(t, string(msgs[1].TokenUsage), `"input_tokens":100`)
+
+		assert.Equal(t, 0, msgs[2].ContextTokens)
+		assert.Equal(t, 0, msgs[2].OutputTokens)
+
+		// input=150, cache_creation=0, cache_read=500 -> context=650
+		assert.Equal(t, 650, msgs[3].ContextTokens)
+		assert.Equal(t, 75, msgs[3].OutputTokens)
+		assert.Equal(t, "claude-sonnet-4-20250514", msgs[3].Model)
+		assert.Contains(t, string(msgs[3].TokenUsage), `"input_tokens":150`)
+	})
+
+	t.Run("session totals from fixture", func(t *testing.T) {
+		content := loadFixture(t, "claude/valid_session.jsonl")
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+
+		assert.Equal(t, 125, sess.TotalOutputTokens)
+		assert.Equal(t, 650, sess.PeakContextTokens)
+	})
+
+	t.Run("messages without usage get zero values", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hello", tsZero),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "hi there"},
+			}, tsZeroS1),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+
+		assert.Equal(t, 0, msgs[0].ContextTokens)
+		assert.Equal(t, 0, msgs[1].ContextTokens)
+		assert.Equal(t, 0, msgs[1].OutputTokens)
+		assert.Empty(t, msgs[1].TokenUsage)
+
+		assert.Equal(t, 0, sess.TotalOutputTokens)
+		assert.Equal(t, 0, sess.PeakContextTokens)
+	})
+}
+
 func loadFixture(t *testing.T, name string) string {
 	t.Helper()
 	path := filepath.Join("testdata", name)

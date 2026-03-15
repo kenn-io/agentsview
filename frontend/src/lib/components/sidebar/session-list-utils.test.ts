@@ -30,6 +30,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     ended_at: "2025-01-01T01:00:00Z",
     message_count: 10,
     user_message_count: 5,
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
     created_at: "2025-01-01T00:00:00Z",
     ...overrides,
   };

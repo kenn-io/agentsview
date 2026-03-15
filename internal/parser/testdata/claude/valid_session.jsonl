@@ -1,4 +1,4 @@
 {"type":"user","timestamp":"2024-01-01T10:00:00Z","message":{"content":"Fix the login bug"},"cwd":"/Users/alice/code/my-app"}
-{"type":"assistant","timestamp":"2024-01-01T10:00:05Z","message":{"content":[{"type":"text","text":"Looking at the auth module..."},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"src/auth.ts"}}]}}
+{"type":"assistant","timestamp":"2024-01-01T10:00:05Z","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Looking at the auth module..."},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"src/auth.ts"}}],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}}}
 {"type":"user","timestamp":"2024-01-01T10:05:00Z","message":{"content":"That looks right"}}
-{"type":"assistant","timestamp":"2024-01-01T10:05:05Z","message":{"content":[{"type":"text","text":"Applied the fix."}]}}
+{"type":"assistant","timestamp":"2024-01-01T10:05:05Z","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Applied the fix."}],"usage":{"input_tokens":150,"output_tokens":75,"cache_creation_input_tokens":0,"cache_read_input_tokens":500}}}

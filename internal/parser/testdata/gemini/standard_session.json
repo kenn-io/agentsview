@@ -11,6 +11,14 @@
       "content": "Looking at the auth module...",
       "id": "a1",
       "timestamp": "2024-01-01T10:00:05Z",
+      "tokens": {
+        "input": 1500,
+        "output": 200,
+        "cached": 100,
+        "thoughts": 50,
+        "tool": 0,
+        "total": 1850
+      },
       "type": "gemini"
     },
     {
@@ -23,6 +31,14 @@
       "content": "Applied the fix.",
       "id": "a2",
       "timestamp": "2024-01-01T10:05:05Z",
+      "tokens": {
+        "input": 2000,
+        "output": 300,
+        "cached": 50,
+        "thoughts": 100,
+        "tool": 0,
+        "total": 2450
+      },
       "type": "gemini"
     }
   ],
