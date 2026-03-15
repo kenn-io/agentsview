@@ -176,7 +176,7 @@
     color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;
-    min-width: 52px;
+    min-width: 72px;
     text-align: right;
   }
 

@@ -60,6 +60,24 @@ export function registerShortcuts(
       return;
     }
 
+    // Cmd+F — open in-session find when a session is active
+    if (meta && e.key === "f" && sessions.activeSessionId) {
+      e.preventDefault();
+      inSessionSearch.open();
+      return;
+    }
+
+    // Cmd+G / Cmd+Shift+G — next/prev match while find is open
+    if (meta && e.key === "g" && inSessionSearch.isOpen) {
+      e.preventDefault();
+      if (e.shiftKey) {
+        inSessionSearch.prev();
+      } else {
+        inSessionSearch.next();
+      }
+      return;
+    }
+
     // Zoom: Cmd+= / Cmd+- / Cmd+0 (desktop only)
     if (sync.isDesktop) {
       if (meta && (e.key === "=" || e.key === "+")) {

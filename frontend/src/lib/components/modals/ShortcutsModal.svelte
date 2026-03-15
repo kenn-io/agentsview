@@ -7,7 +7,7 @@
 
   const baseShortcuts = [
     { key: `${mod}+K`, action: "Open command palette" },
-    { key: `/`, action: "Find in session" },
+    { key: `${mod}+F / /`, action: "Find in session" },
     { key: "Esc", action: "Close palette / modal / find" },
     { key: "j / \u2193", action: "Next message" },
     { key: "k / \u2191", action: "Previous message" },
