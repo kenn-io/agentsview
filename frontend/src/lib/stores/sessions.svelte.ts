@@ -69,6 +69,7 @@ class SessionsStore {
   private agentsLoaded: boolean = false;
   private agentsPromise: Promise<void> | null = null;
   private agentsVersion: number = 0;
+  private refreshVersion: number = 0;
 
   get activeSession(): Session | undefined {
     return this.sessions.find((s) => s.id === this.activeSessionId);
@@ -348,10 +349,17 @@ class SessionsStore {
   async refreshActiveSession() {
     const id = this.activeSessionId;
     if (!id) return;
+    const version = ++this.refreshVersion;
     try {
       const session = await api.getSession(id);
+      if (
+        this.refreshVersion !== version ||
+        this.activeSessionId !== id
+      ) {
+        return;
+      }
       const idx = this.sessions.findIndex((s) => s.id === id);
-      if (idx >= 0 && this.activeSessionId === id) {
+      if (idx >= 0) {
         this.sessions[idx] = session;
       }
     } catch {
