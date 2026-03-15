@@ -6,10 +6,6 @@ on:
     paths:
       - 'desktop/**'
       - 'frontend/**'
-      - 'cmd/agentsview/**'
-      - 'internal/web/**'
-      - 'go.mod'
-      - 'go.sum'
       - '.github/workflows/desktop-*.yml'
 
 permissions:
