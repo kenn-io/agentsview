@@ -6,6 +6,8 @@ on:
     paths:
       - 'desktop/**'
       - 'frontend/**'
+      - 'go.mod'
+      - 'go.sum'
       - '.github/workflows/desktop-*.yml'
 
 permissions:
