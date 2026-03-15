@@ -160,10 +160,10 @@ class SessionsStore {
       this.invalidateFilterCaches();
     }
     if (this.pendingNavTarget) {
-      this.activeSessionId = this.pendingNavTarget;
+      this.setActiveSession(this.pendingNavTarget);
       this.pendingNavTarget = null;
     } else {
-      this.activeSessionId = null;
+      this.setActiveSession(null);
     }
   }
 
@@ -321,8 +321,15 @@ class SessionsStore {
     return this.agentsPromise;
   }
 
-  selectSession(id: string) {
+  private setActiveSession(id: string | null) {
+    if (id === this.activeSessionId) return;
     this.activeSessionId = id;
+    this.refreshVersion++;
+    this.childSessionsVersion++;
+  }
+
+  selectSession(id: string) {
+    this.setActiveSession(id);
   }
 
   /**
@@ -339,16 +346,12 @@ class SessionsStore {
         // Session not found - still attempt to select
       }
     }
-    this.activeSessionId = id;
+    this.setActiveSession(id);
   }
 
   deselectSession() {
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     this.childSessions = new Map();
-    // Invalidate in-flight refreshes so stale responses from
-    // the previous session are discarded.
-    this.refreshVersion++;
-    this.childSessionsVersion++;
   }
 
   async refreshActiveSession() {
@@ -411,19 +414,19 @@ class SessionsStore {
       // an unstarred session while starred-only filter is on) — jump to
       // an edge so the keyboard shortcut doesn't silently fail.
       const edge = delta > 0 ? 0 : list.length - 1;
-      this.activeSessionId = list[edge]!.id;
+      this.setActiveSession(list[edge]!.id);
       return;
     }
     const next = idx + delta;
     if (next >= 0 && next < list.length) {
-      this.activeSessionId = list[next]!.id;
+      this.setActiveSession(list[next]!.id);
     }
   }
 
   setProjectFilter(project: string) {
     const wasOneShot = this.filters.includeOneShot;
     this.filters = { ...defaultFilters(), project, agent: this.filters.agent };
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     if (wasOneShot) this.invalidateFilterCaches();
     this.load();
   }
@@ -434,7 +437,7 @@ class SessionsStore {
     } else {
       this.filters.agent = agent;
     }
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     this.load();
   }
 
@@ -449,7 +452,7 @@ class SessionsStore {
       current.push(agent);
     }
     this.filters.agent = current.join(",");
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     this.load();
   }
 
@@ -465,13 +468,13 @@ class SessionsStore {
 
   setRecentlyActiveFilter(active: boolean) {
     this.filters.recentlyActive = active;
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     this.load();
   }
 
   setMinUserMessagesFilter(n: number) {
     this.filters.minUserMessages = n;
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     this.load();
   }
 
@@ -480,13 +483,13 @@ class SessionsStore {
     if (hide && this.filters.project === "unknown") {
       this.filters.project = "";
     }
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     this.load();
   }
 
   setIncludeOneShotFilter(include: boolean) {
     this.filters.includeOneShot = include;
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     this.invalidateFilterCaches();
     this.load();
   }
@@ -509,7 +512,7 @@ class SessionsStore {
     const project = this.filters.project;
     const wasOneShot = this.filters.includeOneShot;
     this.filters = { ...defaultFilters(), project };
-    this.activeSessionId = null;
+    this.setActiveSession(null);
     if (wasOneShot) this.invalidateFilterCaches();
     this.load();
   }
@@ -527,7 +530,7 @@ class SessionsStore {
       this.total = Math.max(0, this.total - removed);
     }
     if (this.activeSessionId === id) {
-      this.activeSessionId = null;
+      this.setActiveSession(null);
     }
     const timer = setTimeout(() => {
       this.recentlyDeleted = this.recentlyDeleted.filter(
