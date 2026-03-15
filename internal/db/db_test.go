@@ -4465,7 +4465,7 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	// Incremental update: bump counts and file metadata.
 	ended := "2024-01-15T10:30:00Z"
 	err := d.UpdateSessionIncremental(
-		"inc-update", &ended, 7, 3, 2048, 200,
+		"inc-update", &ended, 7, 3, 2048, 200, 0, 0,
 	)
 	requireNoError(t, err, "incremental update")
 

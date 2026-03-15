@@ -74,7 +74,10 @@
       if (id) {
         messages.loadSession(id);
         sessions.loadChildSessions(id);
-        sync.watchSession(id, () => messages.reload());
+        sync.watchSession(id, () => {
+          messages.reload();
+          sessions.loadChildSessions(id);
+        });
         pins.loadForSession(id);
       } else {
         messages.clear();

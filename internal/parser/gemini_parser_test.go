@@ -194,8 +194,8 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.Equal(t, 0, msgs[0].OutputTokens)
 		assert.Empty(t, msgs[0].TokenUsage)
 
-		// First assistant message (a1): input=1500, output=200
-		assert.Equal(t, 1500, msgs[1].ContextTokens)
+		// First assistant message (a1): input=1500, cached=100, output=200
+		assert.Equal(t, 1600, msgs[1].ContextTokens)
 		assert.Equal(t, 200, msgs[1].OutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
 
@@ -203,14 +203,14 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.Equal(t, 0, msgs[2].ContextTokens)
 		assert.Equal(t, 0, msgs[2].OutputTokens)
 
-		// Second assistant message (a2): input=2000, output=300
-		assert.Equal(t, 2000, msgs[3].ContextTokens)
+		// Second assistant message (a2): input=2000, cached=50, output=300
+		assert.Equal(t, 2050, msgs[3].ContextTokens)
 		assert.Equal(t, 300, msgs[3].OutputTokens)
 		assert.NotEmpty(t, msgs[3].TokenUsage)
 
 		// Session totals
 		assert.Equal(t, 500, sess.TotalOutputTokens)
-		assert.Equal(t, 2000, sess.PeakContextTokens)
+		assert.Equal(t, 2050, sess.PeakContextTokens)
 	})
 
 	t.Run("messages without tokens get zero values", func(t *testing.T) {
@@ -255,11 +255,11 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		sess, msgs := runGeminiParserTest(t, content)
 
 		require.Equal(t, 2, len(msgs))
-		assert.Equal(t, 5000, msgs[1].ContextTokens)
+		assert.Equal(t, 5200, msgs[1].ContextTokens)
 		assert.Equal(t, 800, msgs[1].OutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
 		assert.Equal(t, 800, sess.TotalOutputTokens)
-		assert.Equal(t, 5000, sess.PeakContextTokens)
+		assert.Equal(t, 5200, sess.PeakContextTokens)
 	})
 }
 

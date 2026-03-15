@@ -1214,13 +1214,15 @@ func drainResults(results <-chan syncJob, remaining int) {
 // incremental JSONL parse, used to partially update the
 // session row without overwriting unrelated columns.
 type incrementalUpdate struct {
-	sessionID    string
-	msgs         []parser.ParsedMessage
-	endedAt      time.Time
-	msgCount     int // total (old + new)
-	userMsgCount int // total (old + new)
-	fileSize     int64
-	fileMtime    int64
+	sessionID         string
+	msgs              []parser.ParsedMessage
+	endedAt           time.Time
+	msgCount          int // total (old + new)
+	userMsgCount      int // total (old + new)
+	fileSize          int64
+	fileMtime         int64
+	totalOutputTokens int
+	peakContextTokens int
 }
 
 type processResult struct {
@@ -1497,15 +1499,25 @@ func (e *Engine) tryIncrementalJSONL(
 		agent, inc.ID, len(newMsgs), inc.FileSize,
 	)
 
+	var outputDelta, peakCtx int
+	for _, m := range newMsgs {
+		outputDelta += m.OutputTokens
+		if m.ContextTokens > peakCtx {
+			peakCtx = m.ContextTokens
+		}
+	}
+
 	return processResult{
 		incremental: &incrementalUpdate{
-			sessionID:    inc.ID,
-			msgs:         newMsgs,
-			endedAt:      endedAt,
-			msgCount:     inc.MsgCount + len(newMsgs),
-			userMsgCount: inc.UserMsgCount + newUserCount,
-			fileSize:     newOffset,
-			fileMtime:    info.ModTime().UnixNano(),
+			sessionID:         inc.ID,
+			msgs:              newMsgs,
+			endedAt:           endedAt,
+			msgCount:          inc.MsgCount + len(newMsgs),
+			userMsgCount:      inc.UserMsgCount + newUserCount,
+			fileSize:          newOffset,
+			fileMtime:         info.ModTime().UnixNano(),
+			totalOutputTokens: outputDelta,
+			peakContextTokens: peakCtx,
 		},
 	}, true
 }
@@ -1979,6 +1991,7 @@ func (e *Engine) writeIncremental(
 		inc.sessionID, endedAt,
 		msgCount, userMsgCount,
 		inc.fileSize, inc.fileMtime,
+		inc.totalOutputTokens, inc.peakContextTokens,
 	); err != nil {
 		return fmt.Errorf(
 			"incremental update %s: %w",

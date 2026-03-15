@@ -115,7 +115,7 @@ func ParseGeminiSession(
 				ToolResults:   trs,
 				Model:         msg.Get("model").String(),
 				TokenUsage:    tokenUsage,
-				ContextTokens: tok.Input,
+				ContextTokens: tok.Input + tok.Cached,
 				OutputTokens:  tok.Output,
 			})
 			ordinal++

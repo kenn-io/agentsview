@@ -704,14 +704,17 @@ func (db *DB) GetSessionForIncremental(
 
 // UpdateSessionIncremental updates only the fields that change
 // during an incremental append: ended_at, message_count,
-// user_message_count, file_size, and file_mtime. All other
-// columns (project, parent_session_id, file_hash, etc.) are
-// preserved.
+// user_message_count, file_size, file_mtime, and token
+// aggregates. All other columns (project, parent_session_id,
+// file_hash, etc.) are preserved. outputTokensDelta is added
+// to total_output_tokens; peakContextTokens replaces the
+// stored value only if it is higher.
 func (db *DB) UpdateSessionIncremental(
 	id string,
 	endedAt *string,
 	msgCount, userMsgCount int,
 	fileSize, fileMtime int64,
+	outputTokensDelta, peakContextTokens int,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -722,10 +725,15 @@ func (db *DB) UpdateSessionIncremental(
 			message_count = ?,
 			user_message_count = ?,
 			file_size = ?,
-			file_mtime = ?
+			file_mtime = ?,
+			total_output_tokens = total_output_tokens + ?,
+			peak_context_tokens = MAX(
+				peak_context_tokens, ?
+			)
 		WHERE id = ?`,
 		endedAt, msgCount, userMsgCount,
-		fileSize, fileMtime, id,
+		fileSize, fileMtime,
+		outputTokensDelta, peakContextTokens, id,
 	)
 	if err != nil {
 		return fmt.Errorf(

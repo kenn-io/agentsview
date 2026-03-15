@@ -55,22 +55,22 @@ type ToolResult struct {
 
 // Message represents a row in the messages table.
 type Message struct {
-	ID            int64        `json:"id"`
-	SessionID     string       `json:"session_id"`
-	Ordinal       int          `json:"ordinal"`
-	Role          string       `json:"role"`
-	Content       string       `json:"content"`
-	Timestamp     string       `json:"timestamp"`
-	HasThinking   bool         `json:"has_thinking"`
-	HasToolUse    bool         `json:"has_tool_use"`
-	ContentLength int          `json:"content_length"`
-	Model         string       `json:"model"`
+	ID            int64           `json:"id"`
+	SessionID     string          `json:"session_id"`
+	Ordinal       int             `json:"ordinal"`
+	Role          string          `json:"role"`
+	Content       string          `json:"content"`
+	Timestamp     string          `json:"timestamp"`
+	HasThinking   bool            `json:"has_thinking"`
+	HasToolUse    bool            `json:"has_tool_use"`
+	ContentLength int             `json:"content_length"`
+	Model         string          `json:"model"`
 	TokenUsage    json.RawMessage `json:"token_usage,omitempty"`
-	ContextTokens int          `json:"context_tokens"`
-	OutputTokens  int          `json:"output_tokens"`
-	ToolCalls     []ToolCall   `json:"tool_calls,omitempty"`
-	ToolResults   []ToolResult `json:"-"`         // transient, for pairing
-	IsSystem      bool         `json:"is_system"` // persisted, filters search/analytics
+	ContextTokens int             `json:"context_tokens"`
+	OutputTokens  int             `json:"output_tokens"`
+	ToolCalls     []ToolCall      `json:"tool_calls,omitempty"`
+	ToolResults   []ToolResult    `json:"-"`         // transient, for pairing
+	IsSystem      bool            `json:"is_system"` // persisted, filters search/analytics
 }
 
 // MinimapEntry is a lightweight message summary for minimap rendering.

@@ -334,7 +334,7 @@ func extractMessagesFrom(
 			continue
 		}
 
-		messages = append(messages, ParsedMessage{
+		msg := ParsedMessage{
 			Ordinal:       ordinal,
 			Role:          RoleType(e.entryType),
 			Content:       text,
@@ -344,7 +344,13 @@ func extractMessagesFrom(
 			ContentLength: len(text),
 			ToolCalls:     tcs,
 			ToolResults:   trs,
-		})
+		}
+
+		if e.entryType == "assistant" {
+			extractClaudeTokenFields(&msg, e.line)
+		}
+
+		messages = append(messages, msg)
 		ordinal++
 	}
 
@@ -654,18 +660,7 @@ func extractMessages(entries []dagEntry) (
 		}
 
 		if e.entryType == "assistant" {
-			msg.Model = gjson.Get(e.line, "message.model").String()
-
-			usageResult := gjson.Get(e.line, "message.usage")
-			if usageResult.Exists() {
-				msg.TokenUsage = json.RawMessage(usageResult.Raw)
-
-				input := int(usageResult.Get("input_tokens").Int())
-				cacheCreation := int(usageResult.Get("cache_creation_input_tokens").Int())
-				cacheRead := int(usageResult.Get("cache_read_input_tokens").Int())
-				msg.OutputTokens = int(usageResult.Get("output_tokens").Int())
-				msg.ContextTokens = input + cacheCreation + cacheRead
-			}
+			extractClaudeTokenFields(&msg, e.line)
 		}
 
 		messages = append(messages, msg)
@@ -673,6 +668,31 @@ func extractMessages(entries []dagEntry) (
 	}
 
 	return messages, startedAt, endedAt
+}
+
+// extractClaudeTokenFields populates Model, TokenUsage,
+// ContextTokens, and OutputTokens on a ParsedMessage from
+// a Claude JSONL line. Used by both full and incremental
+// parsing paths.
+func extractClaudeTokenFields(msg *ParsedMessage, line string) {
+	msg.Model = gjson.Get(line, "message.model").String()
+
+	usageResult := gjson.Get(line, "message.usage")
+	if usageResult.Exists() {
+		msg.TokenUsage = json.RawMessage(usageResult.Raw)
+
+		input := int(usageResult.Get("input_tokens").Int())
+		cacheCreation := int(usageResult.Get(
+			"cache_creation_input_tokens",
+		).Int())
+		cacheRead := int(usageResult.Get(
+			"cache_read_input_tokens",
+		).Int())
+		msg.OutputTokens = int(usageResult.Get(
+			"output_tokens",
+		).Int())
+		msg.ContextTokens = input + cacheCreation + cacheRead
+	}
 }
 
 // sumTokenUsage accumulates per-message token counts into session

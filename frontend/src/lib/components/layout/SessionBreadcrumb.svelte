@@ -440,9 +440,9 @@
             : rawId.slice(0, 8)}
         </button>
       {/if}
-      {#if sessionContextTokens + session.total_output_tokens > 0}
+      {#if sessionContextTokens + (session?.total_output_tokens ?? 0) > 0}
         <span class="token-badge">
-          {formatTokenCount(sessionContextTokens)} ctx / {formatTokenCount(session.total_output_tokens)} out
+          {formatTokenCount(sessionContextTokens)} ctx / {formatTokenCount(session?.total_output_tokens ?? 0)} out
         </span>
       {/if}
       <div class="actions-wrapper">
