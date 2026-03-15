@@ -115,6 +115,9 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_category
 CREATE INDEX IF NOT EXISTS idx_tool_calls_skill
     ON tool_calls(skill_name)
     WHERE skill_name IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tool_calls_subagent
+    ON tool_calls(subagent_session_id)
+    WHERE subagent_session_id IS NOT NULL;
 
 -- Insights table for AI-generated activity insights
 CREATE TABLE IF NOT EXISTS insights (
