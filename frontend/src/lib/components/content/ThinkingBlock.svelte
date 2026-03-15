@@ -27,7 +27,7 @@
 <div class="thinking-block">
   <button
     class="thinking-header"
-    onclick={() => (userCollapsed = !collapsed)}
+    onclick={() => (userCollapsed = !userCollapsed)}
   >
     <span class="thinking-chevron" class:open={!collapsed}>
       &#9656;

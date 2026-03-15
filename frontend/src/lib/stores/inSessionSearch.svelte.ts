@@ -43,10 +43,11 @@ class InSessionSearchStore {
         this.prevMessageCount = msgCount;
 
         if (queryChanged || sessionChanged || contentChanged) {
-          // Debounce API calls — wait for user to pause typing
+          const preservePosition =
+            contentChanged && !queryChanged && !sessionChanged;
           this.cancelPending();
           this.debounceTimer = setTimeout(() => {
-            this.fetchMatches(q, sessionId);
+            this.fetchMatches(q, sessionId, preservePosition);
           }, 150);
         }
       });
@@ -72,10 +73,16 @@ class InSessionSearchStore {
     this.loading = false;
   }
 
-  private async fetchMatches(q: string, sessionId: string) {
+  private async fetchMatches(
+    q: string,
+    sessionId: string,
+    preservePosition = false,
+  ) {
     const ac = new AbortController();
     this.abortController = ac;
     this.loading = true;
+
+    const prevOrdinal = this.currentOrdinal;
 
     try {
       const res = await api.searchSession(sessionId, q, {
@@ -89,9 +96,17 @@ class InSessionSearchStore {
       }));
 
       this.matches = found;
-      this.currentMatchIndex = found.length > 0 ? 0 : -1;
-      if (found.length > 0) {
-        await this.scrollToMatch(found[0]!);
+
+      if (preservePosition && prevOrdinal !== null) {
+        const idx = found.findIndex(
+          (m) => m.ordinal === prevOrdinal,
+        );
+        this.currentMatchIndex = idx >= 0 ? idx : 0;
+      } else {
+        this.currentMatchIndex = found.length > 0 ? 0 : -1;
+        if (found.length > 0) {
+          await this.scrollToMatch(found[0]!);
+        }
       }
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;

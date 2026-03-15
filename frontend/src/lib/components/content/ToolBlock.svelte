@@ -178,7 +178,7 @@
     onclick={() => {
       const sel = window.getSelection();
       if (sel && sel.toString().length > 0) return;
-      userCollapsed = !collapsed;
+      userCollapsed = !userCollapsed;
     }}
   >
     <span class="tool-chevron" class:open={!collapsed}>
@@ -216,7 +216,7 @@
           e.stopPropagation();
           const sel = window.getSelection();
           if (sel && sel.toString().length > 0) return;
-          userOutputCollapsed = !outputCollapsed;
+          userOutputCollapsed = !userOutputCollapsed;
         }}
       >
         <span class="tool-chevron" class:open={!outputCollapsed}>
