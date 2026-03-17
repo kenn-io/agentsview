@@ -200,16 +200,20 @@ PostgreSQL. There is no automatic background push.
 
 ### PG Read-Only Mode
 
-Serve the web UI directly from PostgreSQL with no local SQLite:
+Serve the web UI directly from PostgreSQL with no local SQLite.
+Configure `[pg].url` in config (as shown above), then:
 
 ```bash
-agentsview pg serve 'postgres://user:pass@host:5432/dbname?sslmode=require'
+agentsview pg serve              # default: 127.0.0.1:8080
+agentsview pg serve -port 9090   # custom port
+agentsview pg serve -host 0.0.0.0 -port 8080  # expose on network
 ```
 
 This mode is useful for shared team viewers where multiple machines
 push to a central PG database and one or more read-only instances
 serve the UI. Uploads, file watching, and local sync are disabled.
-PG read-only mode enforces loopback-only binding for security.
+PG read-only mode defaults to loopback-only binding (`127.0.0.1`);
+use `-host` to override if needed.
 
 ### Known Limitations
 

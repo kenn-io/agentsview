@@ -15,7 +15,7 @@ CLI (agentsview) → Config → DB (SQLite/FTS5)
                                  ↓
                            PG Push Sync → PostgreSQL (optional)
                                  ↑
-              HTTP Server (pg-read mode) ← PostgreSQL
+              HTTP Server (pg serve) ← PostgreSQL
 ```
 
 - **Server**: HTTP server with auto-port discovery (default 8080)
@@ -29,7 +29,7 @@ CLI (agentsview) → Config → DB (SQLite/FTS5)
 
 - `cmd/agentsview/` - Go server entrypoint
 - `cmd/testfixture/` - Test data generator for E2E tests
-- `internal/config/` - Config loading, flag registration, legacy migration
+- `internal/config/` - Config loading (TOML), flag registration
 - `internal/db/` - SQLite operations (sessions, messages, search, analytics)
 - `internal/postgres/` - PostgreSQL support: push sync, read-only store, schema, connection helpers
 - `internal/parser/` - Session file parsers (Claude, Codex, Copilot, Gemini, OpenCode, Amp, content extraction)
