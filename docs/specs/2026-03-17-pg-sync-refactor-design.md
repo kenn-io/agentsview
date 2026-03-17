@@ -20,8 +20,9 @@ agentsview pg serve [flags]    Start read-only server backed by PostgreSQL
 ```
 
 **`pg push`**: Runs a local sync first (to discover new sessions), then
-pushes to PG. Accepts `--full` to bypass the per-message fingerprint
-heuristic and force a complete re-push.
+pushes to PG. Accepts `--full` to force a complete re-push (bypasses
+the per-message fingerprint heuristic on the PG side; the local sync
+always runs incrementally).
 
 **`pg status`**: Shows last push timestamp, PG session/message counts,
 machine name. Read-only, no side effects.
@@ -34,7 +35,9 @@ PostgreSQL. No local SQLite, no sync engine, no file watcher.
 - `sync --pg` and `sync --pg-status` flags removed from the `sync`
   subcommand. The `sync` command returns to its original purpose:
   syncing local session data into SQLite.
-- `serve --pg-read <url>` flag removed from the `serve` subcommand.
+- `serve --pg-read <url>` flag and `AGENTSVIEW_PG_READ` env var
+  removed from the `serve` subcommand.
+- `AGENTSVIEW_PG_INTERVAL` env var removed (no periodic push).
 - Automatic periodic PG push in server mode removed. The server no
   longer starts a background PG sync goroutine. Pushing is always
   explicit via `pg push`. Users who want periodic push use cron.
@@ -83,6 +86,18 @@ Removed fields (no longer needed):
 - `AGENTSVIEW_PG_SCHEMA` — schema name
 - `AGENTSVIEW_PG_MACHINE` — machine name
 
+**TOML library**: `pelletier/go-toml/v2` (same as roborev).
+
+**Go struct changes**: `PGSyncConfig` renamed to `PGConfig`.
+`Config.PGSync` field renamed to `Config.PG`. Struct tags change from
+`json:` to `toml:`. Field names updated to match TOML keys (`url`
+instead of `postgres_url`, `allow_insecure` instead of
+`allow_insecure_pg`).
+
+**Config write methods**: `SaveSettings`, `SaveTerminalConfig`,
+`ensureCursorSecret`, `SaveGithubToken`, and `EnsureAuthToken` all
+currently write JSON. These are rewritten to read/write TOML.
+
 All existing config fields (`host`, `port`, `proxy.*`,
 `watch_exclude_patterns`, directory overrides, etc.) migrate 1:1 from
 JSON keys to TOML keys with no structural changes.
@@ -109,7 +124,7 @@ File layout:
 | `postgres/sessions.go` | Session list/detail queries |
 | `postgres/messages.go` | Message queries, ILIKE search |
 | `postgres/analytics.go` | Analytics queries |
-| `postgres/time.go` | Timestamp parse/format utilities |
+| `postgres/time.go` | Timestamp parse/format helpers for SQLite↔Go↔PG conversion |
 
 Both `PGSync` (push side) and `Store` (read side) share connection
 setup from `connect.go`. The schema name flows through as a parameter
@@ -144,8 +159,21 @@ does not change.
 - The timestamp normalization code in `time.go` and format version
   tracking in `sync_metadata` are deleted. PG handles it natively.
 
-There are no existing PG databases to migrate, so the schema is
-defined with `TIMESTAMPTZ` from the start.
+There are no existing PG databases to migrate (this is pre-release),
+so the schema is defined with `TIMESTAMPTZ` from the start.
+
+**Deleted code**: The `normalizePGUpdatedAt` function, the
+`normalizeCreatedAt` backfill, the `updated_at_format_version` and
+`tool_calls_call_index_version` keys in `sync_metadata`, and all
+associated advisory-lock migration machinery in `ensureSchema` are
+deleted. The local SQLite sync watermark helpers
+(`normalizeLocalSyncTimestamp`, `previousLocalSyncTimestamp`) are
+retained since they manage the push boundary state in SQLite.
+
+**SSE version polling**: `Store.GetSessionVersion` currently hashes
+the `updated_at` TEXT column. With `TIMESTAMPTZ`, this scans into
+`time.Time` and formats to a string before hashing. The API contract
+(opaque version string) does not change.
 
 ### 5. pg serve and Deployment Model
 
