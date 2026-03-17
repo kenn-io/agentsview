@@ -879,7 +879,7 @@ func expandBracedEnv(s string) (string, error) {
 		for _, m := range partialBareEnvPattern.FindAllStringSubmatch(remaining, -1) {
 			if _, set := os.LookupEnv(m[1]); set {
 				if _, warned := bareEnvWarned.LoadOrStore(m[1], true); !warned {
-					log.Printf("warning: postgres_url contains bare $%s which will NOT be expanded; use ${%s} syntax instead", m[1], m[1])
+					log.Printf("warning: pg.url contains bare $%s which will NOT be expanded; use ${%s} syntax instead", m[1], m[1])
 				}
 			}
 		}

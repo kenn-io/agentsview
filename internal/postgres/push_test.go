@@ -60,7 +60,7 @@ func TestReadPushBoundaryStateValidity(t *testing.T) {
 			wantLen:   0,
 		},
 		{
-			name:      "legacy map payload",
+			name:      "bare map without cutoff",
 			raw:       `{"sess-001":"fingerprint"}`,
 			wantValid: false,
 			wantLen:   0,

@@ -57,7 +57,7 @@ func New(
 	if machine == "local" {
 		return nil, fmt.Errorf(
 			"machine name %q is reserved; "+
-				"choose a different pg_sync.machine_name",
+				"choose a different pg.machine_name",
 			machine,
 		)
 	}

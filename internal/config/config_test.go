@@ -855,7 +855,7 @@ func TestResolvePG_ExpandsEnvVars(t *testing.T) {
 	}
 }
 
-func TestResolvePG_ExpandsLegacyBareEnvOnlyForWholeValue(t *testing.T) {
+func TestResolvePG_ExpandsBareEnvOnlyForWholeValue(t *testing.T) {
 	t.Setenv("PGURL", "postgres://localhost/test")
 
 	cfg := Config{
