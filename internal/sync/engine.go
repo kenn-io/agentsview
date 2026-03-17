@@ -2095,6 +2095,7 @@ func toDBSession(pw pendingWrite) db.Session {
 		RelationshipType:  string(pw.sess.RelationshipType),
 		TotalOutputTokens: pw.sess.TotalOutputTokens,
 		PeakContextTokens: pw.sess.PeakContextTokens,
+		MainModel:         pw.sess.MainModel,
 		FilePath:          strPtr(pw.sess.File.Path),
 		FileSize:          int64Ptr(pw.sess.File.Size),
 		FileMtime:         int64Ptr(pw.sess.File.Mtime),

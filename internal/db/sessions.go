@@ -27,7 +27,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	first_message, display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
-	total_output_tokens, peak_context_tokens,
+	total_output_tokens, peak_context_tokens, main_model,
 	deleted_at, created_at`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
@@ -36,7 +36,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	first_message, display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
-	total_output_tokens, peak_context_tokens,
+	total_output_tokens, peak_context_tokens, main_model,
 	deleted_at, file_path, file_size, created_at`
 
 // sessionFullCols includes all columns for a complete session record.
@@ -44,7 +44,7 @@ const sessionFullCols = `id, project, machine, agent,
 	first_message, display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
-	total_output_tokens, peak_context_tokens,
+	total_output_tokens, peak_context_tokens, main_model,
 	deleted_at, file_path, file_size, file_mtime,
 	file_hash, local_modified_at, created_at`
 
@@ -69,7 +69,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
-		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.TotalOutputTokens, &s.PeakContextTokens, &s.MainModel,
 		&s.DeletedAt, &s.CreatedAt,
 	)
 	return s, err
@@ -91,6 +91,7 @@ type Session struct {
 	RelationshipType  string  `json:"relationship_type,omitempty"`
 	TotalOutputTokens int     `json:"total_output_tokens"`
 	PeakContextTokens int     `json:"peak_context_tokens"`
+	MainModel         string  `json:"main_model,omitempty"`
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	FilePath          *string `json:"file_path,omitempty"`
 	FileSize          *int64  `json:"file_size,omitempty"`
@@ -459,7 +460,7 @@ func (db *DB) GetSessionFull(
 		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
-		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.TotalOutputTokens, &s.PeakContextTokens, &s.MainModel,
 		&s.DeletedAt, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
@@ -518,9 +519,9 @@ func (db *DB) UpsertSession(s Session) error {
 			started_at, ended_at, message_count,
 			user_message_count, parent_session_id,
 			relationship_type,
-			total_output_tokens, peak_context_tokens,
+			total_output_tokens, peak_context_tokens, main_model,
 			file_path, file_size, file_mtime, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -534,6 +535,7 @@ func (db *DB) UpsertSession(s Session) error {
 			relationship_type = excluded.relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
 			peak_context_tokens = excluded.peak_context_tokens,
+			main_model = excluded.main_model,
 			file_path = excluded.file_path,
 			file_size = excluded.file_size,
 			file_mtime = excluded.file_mtime,
@@ -542,7 +544,7 @@ func (db *DB) UpsertSession(s Session) error {
 		s.StartedAt, s.EndedAt, s.MessageCount,
 		s.UserMessageCount, s.ParentSessionID,
 		s.RelationshipType,
-		s.TotalOutputTokens, s.PeakContextTokens,
+		s.TotalOutputTokens, s.PeakContextTokens, s.MainModel,
 		s.FilePath, s.FileSize, s.FileMtime, s.FileHash)
 	if err != nil {
 		return fmt.Errorf("upserting session %s: %w", s.ID, err)
@@ -1054,7 +1056,7 @@ func (db *DB) FindPruneCandidates(
 			&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
-			&s.TotalOutputTokens, &s.PeakContextTokens,
+			&s.TotalOutputTokens, &s.PeakContextTokens, &s.MainModel,
 			&s.DeletedAt, &s.FilePath, &s.FileSize, &s.CreatedAt,
 		)
 		if err != nil {

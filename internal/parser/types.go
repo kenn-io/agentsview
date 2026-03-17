@@ -272,6 +272,29 @@ type ParsedSession struct {
 
 	TotalOutputTokens int
 	PeakContextTokens int
+
+	// MainModel is the most frequently used model across assistant
+	// messages in this session, or empty if no model data is available.
+	MainModel string
+}
+
+// ComputeMainModel returns the most frequently occurring model
+// string across assistant messages. Empty-string models are
+// ignored. Returns "" when no model data is present.
+func ComputeMainModel(messages []ParsedMessage) string {
+	counts := make(map[string]int)
+	for _, m := range messages {
+		if m.Role == RoleAssistant && m.Model != "" {
+			counts[m.Model]++
+		}
+	}
+	best, bestN := "", 0
+	for model, n := range counts {
+		if n > bestN || (n == bestN && model < best) {
+			best, bestN = model, n
+		}
+	}
+	return best
 }
 
 // ParsedToolCall holds a single tool invocation extracted from

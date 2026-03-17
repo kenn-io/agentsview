@@ -330,3 +330,195 @@ func TestSessionIDFromPath(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCopilotSession_ModelChange(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"model-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"session.model_change","data":{"newModel":"claude-sonnet-4.6"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi there"},"timestamp":"2025-01-15T10:00:03Z"}`,
+	)
+
+	sess, msgs := parseAndValidateHelper(t, path, "m", 2)
+
+	// Model should be tracked on assistant message.
+	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model")
+	// User messages have no model.
+	assertEqual(t, "", msgs[0].Model, "msgs[0].Model")
+	// MainModel is the single model used.
+	assertEqual(t, "claude-sonnet-4.6", sess.MainModel, "sess.MainModel")
+}
+
+func TestParseCopilotSession_NoModel(t *testing.T) {
+	// Sessions without a session.model_change event should have
+	// empty model fields — model data is simply not available.
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"no-model"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi"},"timestamp":"2025-01-15T10:00:02Z"}`,
+	)
+
+	sess, msgs := parseAndValidateHelper(t, path, "m", 2)
+
+	assertEqual(t, "", msgs[1].Model, "msgs[1].Model")
+	assertEqual(t, "", sess.MainModel, "sess.MainModel")
+}
+
+func TestParseCopilotSession_ModelMidSessionChange(t *testing.T) {
+	// Model switches mid-session: first two assistant messages use
+	// sonnet, then user switches to haiku for the last one.
+	// MainModel should be sonnet (majority).
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"switch-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"session.model_change","data":{"newModel":"claude-sonnet-4.6"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"user.message","data":{"content":"First"},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"assistant.message","data":{"content":"Reply one"},"timestamp":"2025-01-15T10:00:03Z"}`,
+		`{"type":"user.message","data":{"content":"Second"},"timestamp":"2025-01-15T10:00:04Z"}`,
+		`{"type":"assistant.message","data":{"content":"Reply two"},"timestamp":"2025-01-15T10:00:05Z"}`,
+		`{"type":"session.model_change","data":{"newModel":"claude-haiku-4.5"},"timestamp":"2025-01-15T10:00:06Z"}`,
+		`{"type":"user.message","data":{"content":"Third"},"timestamp":"2025-01-15T10:00:07Z"}`,
+		`{"type":"assistant.message","data":{"content":"Reply three"},"timestamp":"2025-01-15T10:00:08Z"}`,
+	)
+
+	sess, msgs := parseAndValidateHelper(t, path, "m", 6)
+
+	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model")
+	assertEqual(t, "claude-sonnet-4.6", msgs[3].Model, "msgs[3].Model")
+	assertEqual(t, "claude-haiku-4.5", msgs[5].Model, "msgs[5].Model")
+	// Majority is sonnet (2 vs 1).
+	assertEqual(t, "claude-sonnet-4.6", sess.MainModel, "sess.MainModel")
+}
+
+func TestParseCopilotSession_ModelFromMultipleShutdowns(t *testing.T) {
+	// A long session with multiple session.shutdown events (Copilot
+	// appends one per reconnect). The last shutdown alone shows haiku
+	// winning, but accumulated counts show sonnet as dominant.
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"multi-shutdown"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi"},"timestamp":"2025-01-15T10:00:02Z"}`,
+		// First shutdown: sonnet=29, haiku=9 → sonnet leads
+		`{"type":"session.shutdown","data":{"shutdownType":"routine","modelMetrics":{"claude-sonnet-4.6":{"requests":{"count":29}},"claude-haiku-4.5":{"requests":{"count":9}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+		// Second shutdown: sonnet=137 only
+		`{"type":"session.shutdown","data":{"shutdownType":"routine","modelMetrics":{"claude-sonnet-4.6":{"requests":{"count":137}}}},"timestamp":"2025-01-15T10:02:00Z"}`,
+		// Third shutdown: haiku=39, sonnet=20 → haiku wins in isolation
+		`{"type":"session.shutdown","data":{"shutdownType":"routine","modelMetrics":{"claude-haiku-4.5":{"requests":{"count":39}},"claude-sonnet-4.6":{"requests":{"count":20}}}},"timestamp":"2025-01-15T10:03:00Z"}`,
+	)
+
+	// Accumulated: sonnet=29+137+20=186, haiku=9+39=48 → sonnet wins
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+	assertEqual(t, "claude-sonnet-4.6", sess.MainModel, "sess.MainModel")
+}
+
+func TestParseCopilotSession_ModelFromShutdown(t *testing.T) {
+	// No session.model_change — main model derived from modelMetrics
+	// in session.shutdown (sonnet has more requests than haiku).
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"shutdown-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi"},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"shutdownType":"routine","modelMetrics":{"claude-sonnet-4.6":{"requests":{"count":5,"cost":1},"usage":{"inputTokens":1000,"outputTokens":200}},"claude-haiku-4.5":{"requests":{"count":2,"cost":0},"usage":{"inputTokens":400,"outputTokens":80}}}},"timestamp":"2025-01-15T10:00:10Z"}`,
+	)
+
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+	assertEqual(t, "claude-sonnet-4.6", sess.MainModel, "sess.MainModel")
+}
+
+func TestParseCopilotSession_ModelFromShutdownCurrentModel(t *testing.T) {
+	// session.shutdown has currentModel but empty modelMetrics.
+	// currentModel should be used as a fallback for b.currentModel
+	// so that ComputeMainModel can pick it up from assistant messages
+	// IF there were tool completions that set it, but here we test
+	// the shutdownMainModel path is empty and falls back gracefully.
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"cur-model-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi"},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"shutdownType":"routine","currentModel":"claude-sonnet-4.6","modelMetrics":{}},"timestamp":"2025-01-15T10:00:10Z"}`,
+	)
+
+	// No modelMetrics and no model_change — MainModel stays empty
+	// because the assistant message was already emitted before the
+	// shutdown event and has no model assigned. (currentModel only
+	// affects future assistant messages.)
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+	// shutdownMainModel is empty (empty modelMetrics), currentModel
+	// set too late. MainModel will be "" in this edge case.
+	_ = sess // just verify it parses without panic
+}
+
+func TestParseCopilotSession_ModelFromToolComplete(t *testing.T) {
+	// tool.execution_complete carries a model field that should
+	// backfill the preceding assistant message and update currentModel.
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"tool-model"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Do something"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"","toolRequests":[{"toolCallId":"tc1","name":"bash","arguments":{"command":"ls"}}]},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"tool.execution_complete","data":{"toolCallId":"tc1","result":"file.txt","model":"claude-sonnet-4.6"},"timestamp":"2025-01-15T10:00:03Z"}`,
+		`{"type":"assistant.message","data":{"content":"Done"},"timestamp":"2025-01-15T10:00:04Z"}`,
+	)
+
+	// 4 messages: user, assistant (tool-only), tool-result user, assistant (final)
+	sess, msgs := parseAndValidateHelper(t, path, "m", 4)
+
+	// The tool-only assistant message should be backfilled.
+	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model (backfilled)")
+	// The final assistant message gets currentModel set from the tool complete.
+	assertEqual(t, "claude-sonnet-4.6", msgs[3].Model, "msgs[3].Model")
+	// ComputeMainModel over these 2 assistant messages → sonnet.
+	assertEqual(t, "claude-sonnet-4.6", sess.MainModel, "sess.MainModel")
+}
+
+func TestComputeMainModel(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []ParsedMessage
+		want     string
+	}{
+		{
+			name:     "empty",
+			messages: nil,
+			want:     "",
+		},
+		{
+			name: "no model data",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, Model: ""},
+				{Role: RoleUser, Model: ""},
+			},
+			want: "",
+		},
+		{
+			name: "single model",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, Model: "claude-sonnet-4.6"},
+				{Role: RoleUser, Model: ""},
+			},
+			want: "claude-sonnet-4.6",
+		},
+		{
+			name: "majority wins",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, Model: "claude-sonnet-4.6"},
+				{Role: RoleAssistant, Model: "claude-sonnet-4.6"},
+				{Role: RoleAssistant, Model: "claude-haiku-4.5"},
+			},
+			want: "claude-sonnet-4.6",
+		},
+		{
+			name: "user role model ignored",
+			messages: []ParsedMessage{
+				{Role: RoleUser, Model: "some-model"},
+				{Role: RoleAssistant, Model: "claude-sonnet-4.6"},
+			},
+			want: "claude-sonnet-4.6",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ComputeMainModel(tt.messages)
+			assertEqual(t, tt.want, got, "ComputeMainModel")
+		})
+	}
+}

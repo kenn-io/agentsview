@@ -13,6 +13,8 @@ import (
 // Copilot JSONL event types.
 const (
 	copilotEventSessionStart    = "session.start"
+	copilotEventModelChange     = "session.model_change"
+	copilotEventSessionShutdown = "session.shutdown"
 	copilotEventUserMessage     = "user.message"
 	copilotEventAssistantMsg    = "assistant.message"
 	copilotEventToolComplete    = "tool.execution_complete"
@@ -22,13 +24,15 @@ const (
 // copilotSessionBuilder accumulates state while scanning a
 // Copilot JSONL session file line by line.
 type copilotSessionBuilder struct {
-	messages     []ParsedMessage
-	firstMessage string
-	startedAt    time.Time
-	endedAt      time.Time
-	sessionID    string
-	project      string
-	ordinal      int
+	messages            []ParsedMessage
+	firstMessage        string
+	startedAt           time.Time
+	endedAt             time.Time
+	sessionID           string
+	project             string
+	currentModel        string
+	shutdownModelCounts map[string]int64 // accumulated across all session.shutdown events
+	ordinal             int
 }
 
 func newCopilotSessionBuilder() *copilotSessionBuilder {
@@ -52,6 +56,10 @@ func (b *copilotSessionBuilder) processLine(line string) {
 	switch gjson.Get(line, "type").Str {
 	case copilotEventSessionStart:
 		b.handleSessionStart(data)
+	case copilotEventModelChange:
+		b.handleModelChange(data)
+	case copilotEventSessionShutdown:
+		b.handleSessionShutdown(data)
 	case copilotEventUserMessage:
 		b.handleUserMessage(data, ts)
 	case copilotEventAssistantMsg:
@@ -79,6 +87,39 @@ func (b *copilotSessionBuilder) handleSessionStart(
 			b.project = p
 		}
 	}
+}
+
+func (b *copilotSessionBuilder) handleModelChange(
+	data gjson.Result,
+) {
+	if m := data.Get("newModel").Str; m != "" {
+		b.currentModel = m
+	}
+}
+
+// handleSessionShutdown accumulates model request counts from
+// modelMetrics across all shutdown events in the file (Copilot
+// appends a new shutdown on each reconnect). The model with the
+// highest total requests across all shutdowns wins.
+func (b *copilotSessionBuilder) handleSessionShutdown(
+	data gjson.Result,
+) {
+	// currentModel in the shutdown payload is a secondary
+	// fallback: use it only if we haven't learned the model yet.
+	if m := data.Get("currentModel").Str; m != "" && b.currentModel == "" {
+		b.currentModel = m
+	}
+
+	// Accumulate per-model request counts across all shutdowns.
+	data.Get("modelMetrics").ForEach(func(key, val gjson.Result) bool {
+		if count := val.Get("requests.count").Int(); count > 0 {
+			if b.shutdownModelCounts == nil {
+				b.shutdownModelCounts = make(map[string]int64)
+			}
+			b.shutdownModelCounts[key.Str] += count
+		}
+		return true
+	})
 }
 
 func (b *copilotSessionBuilder) handleUserMessage(
@@ -165,6 +206,7 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 		HasToolUse:    hasToolUse,
 		ContentLength: len(displayContent),
 		ToolCalls:     toolCalls,
+		Model:         b.currentModel,
 	})
 	b.ordinal++
 }
@@ -196,6 +238,21 @@ func (b *copilotSessionBuilder) handleToolComplete(
 		}},
 	})
 	b.ordinal++
+
+	// Use the model field to keep currentModel current and to
+	// backfill the model on the preceding assistant message
+	// (which was appended before the tool result arrived).
+	if m := data.Get("model").Str; m != "" {
+		b.currentModel = m
+		for i := len(b.messages) - 1; i >= 0; i-- {
+			if b.messages[i].Role == RoleAssistant {
+				if b.messages[i].Model == "" {
+					b.messages[i].Model = m
+				}
+				break
+			}
+		}
+	}
 }
 
 func (b *copilotSessionBuilder) handleAssistantReasoning() {
@@ -294,6 +351,20 @@ func ParseCopilotSession(
 		EndedAt:          b.endedAt,
 		MessageCount:     len(b.messages),
 		UserMessageCount: userCount,
+		MainModel: func() string {
+			if len(b.shutdownModelCounts) > 0 {
+				var best string
+				var bestCount int64
+				for model, count := range b.shutdownModelCounts {
+					if count > bestCount || (count == bestCount && model < best) {
+						best = model
+						bestCount = count
+					}
+				}
+				return best
+			}
+			return ComputeMainModel(b.messages)
+		}(),
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),

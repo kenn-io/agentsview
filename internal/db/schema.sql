@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
     peak_context_tokens INTEGER NOT NULL DEFAULT 0,
+    main_model  TEXT NOT NULL DEFAULT '',
     deleted_at  TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
