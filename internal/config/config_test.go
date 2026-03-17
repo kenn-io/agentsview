@@ -729,93 +729,57 @@ func TestLoadFile_ResultContentBlockedCategories(t *testing.T) {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
-
-func TestLoadFile_PGSyncConfig(t *testing.T) {
+func TestLoadFile_PGConfig(t *testing.T) {
 	tests := []struct {
 		name   string
 		config map[string]any
 		envURL string
-		want   PGSyncConfig
+		want   PGConfig
 	}{
 		{
 			"NoConfig",
 			map[string]any{},
 			"",
-			PGSyncConfig{},
+			PGConfig{},
 		},
 		{
 			"FromConfigFile",
 			map[string]any{
-				"pg_sync": map[string]any{
-					"enabled":      true,
-					"postgres_url": "postgres://localhost/test",
+				"pg": map[string]any{
+					"url":          "postgres://localhost/test",
 					"machine_name": "laptop",
-					"interval":     "30m",
 				},
 			},
 			"",
-			PGSyncConfig{
-				Enabled:     boolPtr(true),
-				PostgresURL: "postgres://localhost/test",
+			PGConfig{
+				URL:         "postgres://localhost/test",
 				MachineName: "laptop",
-				Interval:    "30m",
 			},
 		},
 		{
 			"EnvOverridesConfig",
 			map[string]any{
-				"pg_sync": map[string]any{
-					"postgres_url": "postgres://from-config",
+				"pg": map[string]any{
+					"url": "postgres://from-config",
 				},
 			},
 			"postgres://from-env",
-			PGSyncConfig{
-				Enabled:     boolPtr(true),
-				PostgresURL: "postgres://from-env",
+			PGConfig{
+				URL: "postgres://from-env",
 			},
 		},
 		{
 			"EnvURLMergesFileFields",
 			map[string]any{
-				"pg_sync": map[string]any{
-					"postgres_url": "postgres://from-config",
-					"interval":     "30m",
+				"pg": map[string]any{
+					"url":          "postgres://from-config",
 					"machine_name": "laptop",
 				},
 			},
 			"postgres://from-env",
-			PGSyncConfig{
-				Enabled:     boolPtr(true),
-				PostgresURL: "postgres://from-env",
-				Interval:    "30m",
+			PGConfig{
+				URL:         "postgres://from-env",
 				MachineName: "laptop",
-			},
-		},
-		{
-			"URLWithoutEnabledDefaultsToEnabled",
-			map[string]any{
-				"pg_sync": map[string]any{
-					"postgres_url": "postgres://localhost/test",
-				},
-			},
-			"",
-			PGSyncConfig{
-				PostgresURL: "postgres://localhost/test",
-			},
-		},
-		{
-			"ExplicitFalseWithURL",
-			map[string]any{
-				"pg_sync": map[string]any{
-					"enabled":      false,
-					"postgres_url": "postgres://localhost/test",
-				},
-			},
-			"",
-			PGSyncConfig{
-				Enabled:     boolPtr(false),
-				PostgresURL: "postgres://localhost/test",
 			},
 		},
 	}
@@ -833,128 +797,112 @@ func TestLoadFile_PGSyncConfig(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			gotEnabled := cfg.PGSync.IsEnabled()
-			wantEnabled := tt.want.IsEnabled()
-			if gotEnabled != wantEnabled {
+			if cfg.PG.URL != tt.want.URL {
 				t.Errorf(
-					"IsEnabled() = %v, want %v",
-					gotEnabled, wantEnabled,
+					"URL = %q, want %q",
+					cfg.PG.URL,
+					tt.want.URL,
 				)
 			}
-			if cfg.PGSync.PostgresURL != tt.want.PostgresURL {
-				t.Errorf(
-					"PostgresURL = %q, want %q",
-					cfg.PGSync.PostgresURL,
-					tt.want.PostgresURL,
-				)
-			}
-			if cfg.PGSync.MachineName != tt.want.MachineName {
+			if cfg.PG.MachineName != tt.want.MachineName {
 				t.Errorf(
 					"MachineName = %q, want %q",
-					cfg.PGSync.MachineName,
+					cfg.PG.MachineName,
 					tt.want.MachineName,
-				)
-			}
-			if cfg.PGSync.Interval != tt.want.Interval {
-				t.Errorf(
-					"Interval = %q, want %q",
-					cfg.PGSync.Interval,
-					tt.want.Interval,
 				)
 			}
 		})
 	}
 }
 
-func TestResolvePGSync_Defaults(t *testing.T) {
+func TestResolvePG_Defaults(t *testing.T) {
 	cfg := Config{
-		PGSync: PGSyncConfig{
-			Enabled:     boolPtr(true),
-			PostgresURL: "postgres://localhost/test",
+		PG: PGConfig{
+			URL: "postgres://localhost/test",
 		},
 	}
-	resolved, err := cfg.ResolvePGSync()
+	resolved, err := cfg.ResolvePG()
 	if err != nil {
-		t.Fatalf("ResolvePGSync: %v", err)
+		t.Fatalf("ResolvePG: %v", err)
 	}
 
-	if resolved.Interval != "1h" {
-		t.Errorf("Interval = %q, want 1h", resolved.Interval)
+	if resolved.Schema != "agentsview" {
+		t.Errorf("Schema = %q, want agentsview", resolved.Schema)
 	}
 	if resolved.MachineName == "" {
 		t.Error("MachineName should default to hostname")
 	}
 }
 
-func TestResolvePGSync_ExpandsEnvVars(t *testing.T) {
+func TestResolvePG_ExpandsEnvVars(t *testing.T) {
 	t.Setenv("PGPASS", "env-secret")
 	t.Setenv("PGURL", "postgres://localhost/test")
 
 	cfg := Config{
-		PGSync: PGSyncConfig{
-			PostgresURL: "${PGURL}?password=${PGPASS}",
+		PG: PGConfig{
+			URL: "${PGURL}?password=${PGPASS}",
 		},
 	}
 
-	resolved, err := cfg.ResolvePGSync()
+	resolved, err := cfg.ResolvePG()
 	if err != nil {
-		t.Fatalf("ResolvePGSync: %v", err)
+		t.Fatalf("ResolvePG: %v", err)
 	}
 
 	want := "postgres://localhost/test?password=env-secret"
-	if resolved.PostgresURL != want {
-		t.Fatalf("PostgresURL = %q, want %q", resolved.PostgresURL, want)
+	if resolved.URL != want {
+		t.Fatalf("URL = %q, want %q", resolved.URL, want)
 	}
 }
 
-func TestResolvePGSync_ExpandsLegacyBareEnvOnlyForWholeValue(t *testing.T) {
+func TestResolvePG_ExpandsLegacyBareEnvOnlyForWholeValue(t *testing.T) {
 	t.Setenv("PGURL", "postgres://localhost/test")
 
 	cfg := Config{
-		PGSync: PGSyncConfig{
-			PostgresURL: "$PGURL",
+		PG: PGConfig{
+			URL: "$PGURL",
 		},
 	}
 
-	resolved, err := cfg.ResolvePGSync()
+	resolved, err := cfg.ResolvePG()
 	if err != nil {
-		t.Fatalf("ResolvePGSync: %v", err)
+		t.Fatalf("ResolvePG: %v", err)
 	}
 
 	want := "postgres://localhost/test"
-	if resolved.PostgresURL != want {
-		t.Fatalf("PostgresURL = %q, want %q", resolved.PostgresURL, want)
+	if resolved.URL != want {
+		t.Fatalf("URL = %q, want %q", resolved.URL, want)
 	}
 }
 
-func TestResolvePGSync_PreservesLiteralDollarSequencesInURL(t *testing.T) {
+func TestResolvePG_PreservesLiteralDollarSequencesInURL(t *testing.T) {
 	t.Setenv("PGPASS", "env-secret")
 
 	cfg := Config{
-		PGSync: PGSyncConfig{
-			PostgresURL: "postgres://user:pa$word@localhost/db?application_name=$client&password=${PGPASS}",
+		PG: PGConfig{
+			URL: "postgres://user:pa$word@localhost/db?application_name=$client&password=${PGPASS}",
 		},
 	}
 
-	resolved, err := cfg.ResolvePGSync()
+	resolved, err := cfg.ResolvePG()
 	if err != nil {
-		t.Fatalf("ResolvePGSync: %v", err)
+		t.Fatalf("ResolvePG: %v", err)
 	}
 
 	want := "postgres://user:pa$word@localhost/db?application_name=$client&password=env-secret"
-	if resolved.PostgresURL != want {
-		t.Fatalf("PostgresURL = %q, want %q", resolved.PostgresURL, want)
+	if resolved.URL != want {
+		t.Fatalf("URL = %q, want %q", resolved.URL, want)
 	}
 }
 
-func TestResolvePGSync_ErrorsOnMissingEnvVar(t *testing.T) {
+func TestResolvePG_ErrorsOnMissingEnvVar(t *testing.T) {
 	cfg := Config{
-		PGSync: PGSyncConfig{
-			PostgresURL: "${NONEXISTENT_PG_VAR}",
+		PG: PGConfig{
+			URL: "${NONEXISTENT_PG_VAR}",
 		},
 	}
 
-	_, err := cfg.ResolvePGSync()
+	_, err := cfg.ResolvePG()
 	if err == nil {
 		t.Fatal("expected error for unset env var")
 	}
@@ -963,14 +911,14 @@ func TestResolvePGSync_ErrorsOnMissingEnvVar(t *testing.T) {
 	}
 }
 
-func TestResolvePGSync_ErrorsOnMissingBareEnvVar(t *testing.T) {
+func TestResolvePG_ErrorsOnMissingBareEnvVar(t *testing.T) {
 	cfg := Config{
-		PGSync: PGSyncConfig{
-			PostgresURL: "$NONEXISTENT_PG_BARE_VAR",
+		PG: PGConfig{
+			URL: "$NONEXISTENT_PG_BARE_VAR",
 		},
 	}
 
-	_, err := cfg.ResolvePGSync()
+	_, err := cfg.ResolvePG()
 	if err == nil {
 		t.Fatal("expected error for unset bare env var")
 	}

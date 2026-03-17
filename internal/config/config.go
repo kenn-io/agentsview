@@ -54,22 +54,12 @@ type ProxyConfig struct {
 	AllowedSubnets []string `json:"allowed_subnets,omitempty" toml:"allowed_subnets"`
 }
 
-// PGSyncConfig holds PostgreSQL sync settings.
-type PGSyncConfig struct {
-	Enabled         *bool  `json:"enabled,omitempty" toml:"enabled"`
-	PostgresURL     string `json:"postgres_url" toml:"postgres_url"`
-	Interval        string `json:"interval" toml:"interval"`
-	MachineName     string `json:"machine_name" toml:"machine_name"`
-	AllowInsecurePG bool   `json:"allow_insecure_pg,omitempty" toml:"allow_insecure_pg"`
-}
-
-// IsEnabled returns whether PG sync is enabled. When Enabled is nil
-// (not explicitly set), it defaults to true if PostgresURL is set.
-func (p PGSyncConfig) IsEnabled() bool {
-	if p.Enabled != nil {
-		return *p.Enabled
-	}
-	return p.PostgresURL != ""
+// PGConfig holds PostgreSQL connection settings.
+type PGConfig struct {
+	URL           string `toml:"url" json:"url"`
+	Schema        string `toml:"schema" json:"schema"`
+	MachineName   string `toml:"machine_name" json:"machine_name"`
+	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
 }
 
 // Config holds all application configuration.
@@ -88,7 +78,7 @@ type Config struct {
 	AuthToken            string         `json:"auth_token,omitempty" toml:"auth_token"`
 	RemoteAccess         bool           `json:"remote_access" toml:"remote_access"`
 	NoBrowser            bool           `json:"no_browser" toml:"no_browser"`
-	PGSync               PGSyncConfig   `json:"pg_sync,omitempty" toml:"pg_sync"`
+	PG                   PGConfig       `json:"pg,omitempty" toml:"pg"`
 	WriteTimeout         time.Duration  `json:"-" toml:"-"`
 
 	// AgentDirs maps each AgentType to its configured
@@ -106,10 +96,6 @@ type Config struct {
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
 	HostExplicit bool `json:"-" toml:"-"`
-
-	// PGReadURL, when set, switches the server to read-only mode
-	// backed by a PostgreSQL database instead of the local SQLite.
-	PGReadURL string `json:"-" toml:"-"`
 }
 
 type dirSource int
@@ -273,7 +259,7 @@ func (c *Config) loadFile() error {
 		Terminal                       TerminalConfig `toml:"terminal"`
 		AuthToken                      string         `toml:"auth_token"`
 		RemoteAccess                   bool           `toml:"remote_access"`
-		PGSync                         PGSyncConfig   `toml:"pg_sync"`
+		PG                             PGConfig       `toml:"pg"`
 	}
 	if _, err := toml.DecodeFile(path, &file); err != nil {
 		return fmt.Errorf("parsing config: %w", err)
@@ -309,25 +295,19 @@ func (c *Config) loadFile() error {
 		c.AuthToken = file.AuthToken
 	}
 	c.RemoteAccess = file.RemoteAccess
-	// Merge pg_sync field-by-field so env vars override only
+	// Merge pg field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
-	if file.PGSync.PostgresURL != "" && c.PGSync.PostgresURL == "" {
-		c.PGSync.PostgresURL = file.PGSync.PostgresURL
+	if file.PG.URL != "" && c.PG.URL == "" {
+		c.PG.URL = file.PG.URL
 	}
-	// Merge enabled: explicit config-file value wins when not already
-	// set by env var. If neither sets it, IsEnabled() defaults based
-	// on postgres_url presence.
-	if file.PGSync.Enabled != nil && c.PGSync.Enabled == nil {
-		c.PGSync.Enabled = file.PGSync.Enabled
+	if file.PG.Schema != "" && c.PG.Schema == "" {
+		c.PG.Schema = file.PG.Schema
 	}
-	if file.PGSync.MachineName != "" && c.PGSync.MachineName == "" {
-		c.PGSync.MachineName = file.PGSync.MachineName
+	if file.PG.MachineName != "" && c.PG.MachineName == "" {
+		c.PG.MachineName = file.PG.MachineName
 	}
-	if file.PGSync.Interval != "" && c.PGSync.Interval == "" {
-		c.PGSync.Interval = file.PGSync.Interval
-	}
-	if file.PGSync.AllowInsecurePG {
-		c.PGSync.AllowInsecurePG = true
+	if file.PG.AllowInsecure {
+		c.PG.AllowInsecure = true
 	}
 
 	// Parse config-file dir arrays for agents that have a
@@ -441,18 +421,13 @@ func (c *Config) loadEnv() {
 		c.DataDir = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
-		c.PGSync.PostgresURL = v
-		t := true
-		c.PGSync.Enabled = &t
+		c.PG.URL = v
+	}
+	if v := os.Getenv("AGENTSVIEW_PG_SCHEMA"); v != "" {
+		c.PG.Schema = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
-		c.PGSync.MachineName = v
-	}
-	if v := os.Getenv("AGENTSVIEW_PG_INTERVAL"); v != "" {
-		c.PGSync.Interval = v
-	}
-	if v := os.Getenv("AGENTSVIEW_PG_READ"); v != "" {
-		c.PGReadURL = v
+		c.PG.MachineName = v
 	}
 }
 
@@ -520,8 +495,6 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 		"no-browser", false,
 		"Don't open browser on startup",
 	)
-	fs.String("pg-read", "",
-		"PostgreSQL URL for read-only mode (overrides AGENTSVIEW_PG_READ)")
 }
 
 // applyFlags copies explicitly-set flags from fs into cfg.
@@ -557,8 +530,6 @@ func applyFlags(cfg *Config, fs *flag.FlagSet) {
 			cfg.Proxy.AllowedSubnets = splitFlagList(f.Value.String())
 		case "no-browser":
 			cfg.NoBrowser = f.Value.String() == "true"
-		case "pg-read":
-			cfg.PGReadURL = f.Value.String()
 		}
 	})
 }
@@ -850,19 +821,19 @@ func ResolveDataDir() (string, error) {
 	return cfg.DataDir, nil
 }
 
-// ResolvePGSync returns a copy of PGSync config with defaults
-// applied and environment variables expanded in PostgresURL.
-func (c *Config) ResolvePGSync() (PGSyncConfig, error) {
-	pg := c.PGSync
-	if pg.PostgresURL != "" {
-		expanded, err := expandBracedEnv(pg.PostgresURL)
+// ResolvePG returns a copy of PG config with defaults applied
+// and environment variables expanded in URL.
+func (c *Config) ResolvePG() (PGConfig, error) {
+	pg := c.PG
+	if pg.URL != "" {
+		expanded, err := expandBracedEnv(pg.URL)
 		if err != nil {
-			return pg, fmt.Errorf("expanding postgres_url: %w", err)
+			return pg, fmt.Errorf("expanding url: %w", err)
 		}
-		pg.PostgresURL = expanded
+		pg.URL = expanded
 	}
-	if pg.Interval == "" {
-		pg.Interval = "1h"
+	if pg.Schema == "" {
+		pg.Schema = "agentsview"
 	}
 	if pg.MachineName == "" {
 		h, err := os.Hostname()

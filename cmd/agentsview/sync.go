@@ -17,7 +17,7 @@ import (
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/pgsync"
+	"github.com/wesm/agentsview/internal/postgres"
 	"github.com/wesm/agentsview/internal/sync"
 )
 
@@ -118,29 +118,17 @@ func runSync(args []string) {
 func runPGSync(
 	appCfg config.Config, database *db.DB, cfg SyncConfig,
 ) {
-	pgCfg, err := appCfg.ResolvePGSync()
+	pgCfg, err := appCfg.ResolvePG()
 	if err != nil {
 		fatal("pg sync: %v", err)
 	}
-	if pgCfg.PostgresURL == "" {
-		fatal("pg sync: postgres_url not configured")
+	if pgCfg.URL == "" {
+		fatal("pg sync: url not configured")
 	}
 
-	var interval time.Duration
-	if cfg.PG {
-		interval, err = time.ParseDuration(pgCfg.Interval)
-		if err != nil {
-			fatal("pg sync: invalid interval %q: %v",
-				pgCfg.Interval, err)
-		}
-	} else {
-		// Status-only path: interval is stored but unused.
-		interval = 0
-	}
-
-	ps, err := pgsync.New(
-		pgCfg.PostgresURL, database, pgCfg.MachineName,
-		interval, pgCfg.AllowInsecurePG,
+	ps, err := postgres.New(
+		pgCfg.URL, pgCfg.Schema, database,
+		pgCfg.MachineName, pgCfg.AllowInsecure,
 	)
 	if err != nil {
 		fatal("pg sync: %v", err)
