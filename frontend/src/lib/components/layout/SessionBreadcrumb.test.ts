@@ -18,6 +18,7 @@ function makeSession(agent: string): Session {
     user_message_count: 1,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    main_model: "",
     created_at: "2026-02-20T12:30:00Z",
   };
 }
@@ -56,6 +57,37 @@ describe("SessionBreadcrumb", () => {
     expect(badge?.getAttribute("style")).toContain(
       "var(--accent-blue)",
     );
+
+    unmount(component);
+  });
+
+  it("shows shortened model badge when main_model is set", async () => {
+    const session: Session = {
+      ...makeSession("copilot"),
+      main_model: "claude-sonnet-4.6",
+    };
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session, onBack: () => {} },
+    });
+
+    await tick();
+    const badge = document.querySelector(".model-badge");
+    expect(badge).toBeTruthy();
+    expect(badge?.textContent).toBe("sonnet-4.6");
+    expect(badge?.getAttribute("title")).toBe("claude-sonnet-4.6");
+
+    unmount(component);
+  });
+
+  it("hides model badge when main_model is empty", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: { session: makeSession("copilot"), onBack: () => {} },
+    });
+
+    await tick();
+    expect(document.querySelector(".model-badge")).toBeNull();
 
     unmount(component);
   });

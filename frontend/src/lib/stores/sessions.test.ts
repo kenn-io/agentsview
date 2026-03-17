@@ -225,6 +225,7 @@ describe("SessionsStore", () => {
               user_message_count: 1,
               total_output_tokens: 0,
               peak_context_tokens: 0,
+    main_model: "",
               created_at: "2024-01-01T00:00:00Z",
             },
           ],
@@ -245,6 +246,7 @@ describe("SessionsStore", () => {
               user_message_count: 1,
               total_output_tokens: 0,
               peak_context_tokens: 0,
+    main_model: "",
               created_at: "2024-01-01T00:00:01Z",
             },
           ],
@@ -840,6 +842,7 @@ function makeSession(
     user_message_count: 1,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    main_model: "",
     created_at: "2024-01-01T00:00:00Z",
     ...overrides,
   };

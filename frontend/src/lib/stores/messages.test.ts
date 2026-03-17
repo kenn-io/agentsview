@@ -41,6 +41,7 @@ function makeSession(
     user_message_count: messageCount,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    main_model: "",
     created_at: new Date(0).toISOString(),
   };
 }

@@ -25,6 +25,7 @@ export interface Session {
   file_mtime?: number;
   total_output_tokens: number;
   peak_context_tokens: number;
+  main_model?: string;
   created_at: string;
 }
 

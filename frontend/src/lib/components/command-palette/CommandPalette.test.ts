@@ -73,6 +73,7 @@ function makeSession(id: string, agent: string) {
     user_message_count: 1,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    main_model: "",
     created_at: "2026-02-20T12:30:00Z",
   };
 }

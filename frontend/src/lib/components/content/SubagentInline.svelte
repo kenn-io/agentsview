@@ -3,7 +3,7 @@
 <script lang="ts">
   import type { Message, Session } from "../../api/types.js";
   import { getMessages, getSession } from "../../api/client.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatTokenCount, shortModelName } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import MessageContent from "./MessageContent.svelte";
@@ -74,6 +74,9 @@
         {@const ctxTokens = subagentSession.peak_context_tokens}
         {#if ctxTokens + subagentSession.total_output_tokens > 0}
           <span class="toggle-tokens">({formatTokenCount(ctxTokens)} ctx / {formatTokenCount(subagentSession.total_output_tokens)} out)</span>
+        {/if}
+        {#if subagentSession.main_model}
+          <span class="toggle-model" title={subagentSession.main_model}>{shortModelName(subagentSession.main_model)}</span>
         {/if}
       {/if}
     </button>
@@ -188,6 +191,13 @@
     font-size: 10px;
     font-variant-numeric: tabular-nums;
     color: color-mix(in srgb, var(--accent-green) 60%, var(--text-muted));
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .toggle-model {
+    font-size: 10px;
+    color: var(--text-muted);
     white-space: nowrap;
     flex-shrink: 0;
   }

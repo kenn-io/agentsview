@@ -68,6 +68,22 @@ export function formatTokenCount(n: number): string {
   return m % 1 === 0 ? `${Math.floor(m)}M` : `${m}M`;
 }
 
+/**
+ * Strips well-known vendor prefixes from a model name for compact display.
+ * e.g. "claude-sonnet-4.6" → "sonnet-4.6", "gpt-4.1" → "4.1"
+ * Unknown models are returned as-is.
+ */
+export function shortModelName(model: string | null | undefined): string {
+  if (!model) return "";
+  // Strip leading "claude-" prefix
+  if (model.startsWith("claude-")) return model.slice("claude-".length);
+  // Strip leading "gpt-" prefix
+  if (model.startsWith("gpt-")) return model.slice("gpt-".length);
+  // Strip leading "gemini-" prefix
+  if (model.startsWith("gemini-")) return model.slice("gemini-".length);
+  return model;
+}
+
 let nonceCounter = 0;
 
 /** Reset the nonce counter. Exported for testing only. */

@@ -121,3 +121,32 @@ describe("formatTokenCount", () => {
     expect(formatTokenCount(3000000)).toBe("3M");
   });
 });
+
+import { shortModelName } from "./format.js";
+
+describe("shortModelName", () => {
+  it("strips claude- prefix", () => {
+    expect(shortModelName("claude-sonnet-4.6")).toBe("sonnet-4.6");
+    expect(shortModelName("claude-haiku-4.5")).toBe("haiku-4.5");
+    expect(shortModelName("claude-opus-4.6")).toBe("opus-4.6");
+  });
+
+  it("strips gpt- prefix", () => {
+    expect(shortModelName("gpt-4.1")).toBe("4.1");
+    expect(shortModelName("gpt-5-mini")).toBe("5-mini");
+  });
+
+  it("strips gemini- prefix", () => {
+    expect(shortModelName("gemini-3-pro-preview")).toBe("3-pro-preview");
+  });
+
+  it("returns unknown models unchanged", () => {
+    expect(shortModelName("llama-3.3-70b")).toBe("llama-3.3-70b");
+  });
+
+  it("returns empty string for null/undefined/empty", () => {
+    expect(shortModelName(null)).toBe("");
+    expect(shortModelName(undefined)).toBe("");
+    expect(shortModelName("")).toBe("");
+  });
+});

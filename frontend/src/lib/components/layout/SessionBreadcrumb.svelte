@@ -10,7 +10,7 @@
   } from "../../api/client.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { agentColor } from "../../utils/agents.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatTokenCount, shortModelName } from "../../utils/format.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import {
     supportsResume,
@@ -447,6 +447,9 @@
           {formatTokenCount(sessionContextTokens)} ctx / {formatTokenCount(session?.total_output_tokens ?? 0)} out
         </span>
       {/if}
+      {#if session?.main_model}
+        <span class="model-badge" title={session.main_model}>{shortModelName(session.main_model)}</span>
+      {/if}
       <div class="actions-wrapper">
         <button
           class="find-btn"
@@ -695,6 +698,16 @@
   .token-badge {
     font-size: 10px;
     font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .model-badge {
+    font-size: 10px;
     color: var(--text-muted);
     padding: 1px 5px;
     border-radius: 4px;

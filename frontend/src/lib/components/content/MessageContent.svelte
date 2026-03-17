@@ -4,7 +4,7 @@
     parseContent,
     enrichSegments,
   } from "../../utils/content-parser.js";
-  import { formatTimestamp } from "../../utils/format.js";
+  import { formatTimestamp, shortModelName } from "../../utils/format.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
@@ -42,6 +42,16 @@
     sessions.sessions.find((s) => s.id === message.session_id) ??
       sessions.activeSession,
   );
+
+  /**
+   * Show the message's model name when it differs from the session's main
+   * model. Only applies to assistant messages — user messages carry no model.
+   */
+  let offMainModel = $derived.by((): string => {
+    if (isUser || !message.model) return "";
+    const mainModel = owningSession?.main_model ?? "";
+    return message.model !== mainModel ? message.model : "";
+  });
 
   /** Walk the parent chain to check if any ancestor has the teammate tag. */
   function isTeammateAncestry(s: Session, all: Session[]): boolean {
@@ -202,6 +212,9 @@
     <span class="timestamp">
       {formatTimestamp(message.timestamp)}
     </span>
+    {#if offMainModel}
+      <span class="message-model" title={offMainModel}>{shortModelName(offMainModel)}</span>
+    {/if}
   </div>
 
   <div class="message-body">
@@ -293,6 +306,17 @@
     font-size: 12px;
     color: var(--text-muted);
     margin-left: auto;
+  }
+
+  .message-model {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+    white-space: nowrap;
+    flex-shrink: 0;
+    opacity: 0.8;
   }
 
   .copy-btn {
