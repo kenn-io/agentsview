@@ -123,23 +123,18 @@ agentsview -host 127.0.0.1 -port 8080 \
   -allowed-subnet 192.168.1.0/24
 ```
 
-You can persist the same settings in `~/.agentsview/config.json`:
+You can persist the same settings in `~/.agentsview/config.toml`:
 
-```json
-{
-  "public_url": "https://viewer.example.test",
-  "proxy": {
-    "mode": "caddy",
-    "bind_host": "0.0.0.0",
-    "public_port": 8443,
-    "tls_cert": "/home/user/.certs/viewer.crt",
-    "tls_key": "/home/user/.certs/viewer.key",
-    "allowed_subnets": [
-      "10.0/16",
-      "192.168.1.0/24"
-    ]
-  }
-}
+```toml
+public_url = "https://viewer.example.test"
+
+[proxy]
+mode = "caddy"
+bind_host = "0.0.0.0"
+public_port = 8443
+tls_cert = "/home/user/.certs/viewer.crt"
+tls_key = "/home/user/.certs/viewer.key"
+allowed_subnets = ["10.0/16", "192.168.1.0/24"]
 ```
 
 `public_origins` remains available as an advanced override when you
@@ -177,16 +172,12 @@ centralized search across multiple machines.
 
 ### Push Sync (SQLite to PG)
 
-Configure `pg_sync` in `~/.agentsview/config.json`:
+Configure `pg` in `~/.agentsview/config.toml`:
 
-```json
-{
-  "pg_sync": {
-    "postgres_url": "postgres://user:pass@host:5432/dbname?sslmode=require",
-    "machine_name": "my-laptop",
-    "interval": "15m"
-  }
-}
+```toml
+[pg]
+url = "postgres://user:pass@host:5432/dbname?sslmode=require"
+machine_name = "my-laptop"
 ```
 
 Use `sslmode=require` (or `verify-full` for CA-verified connections)
@@ -194,26 +185,25 @@ for non-local PostgreSQL instances. Only use `sslmode=disable` for
 trusted local/loopback connections.
 
 The `machine_name` identifies which machine pushed each session
-(must not be `"local"`, which is reserved). The `interval` controls
-how often the background push runs when the server is active.
+(must not be `"local"`, which is reserved).
 
 CLI commands:
 
 ```bash
-agentsview sync -pg          # push now
-agentsview sync -pg -full    # force full re-push (bypasses heuristic)
-agentsview sync -pg-status   # show sync status
+agentsview pg push          # push now
+agentsview pg push --full   # force full re-push (bypasses heuristic)
+agentsview pg status        # show sync status
 ```
 
-Push sync runs automatically in the background when the server
-starts with `pg_sync` configured.
+Push is on-demand — run `pg push` whenever you want to sync to
+PostgreSQL. There is no automatic background push.
 
 ### PG Read-Only Mode
 
 Serve the web UI directly from PostgreSQL with no local SQLite:
 
 ```bash
-agentsview serve -pg-read 'postgres://user:pass@host:5432/dbname?sslmode=require'
+agentsview pg serve 'postgres://user:pass@host:5432/dbname?sslmode=require'
 ```
 
 This mode is useful for shared team viewers where multiple machines
@@ -279,8 +269,7 @@ PATH/API keys overrides).
 cmd/agentsview/     CLI entrypoint
 internal/config/    Configuration loading
 internal/db/        SQLite operations (sessions, search, analytics)
-internal/pgdb/      PostgreSQL read-only store (db.Store implementation)
-internal/pgsync/    Push sync from SQLite to PostgreSQL
+internal/postgres/  PostgreSQL support (push sync, read-only store, schema)
 internal/parser/    Session parsers (all supported agents)
 internal/server/    HTTP handlers, SSE, middleware
 internal/sync/      Sync engine, file watcher, discovery
