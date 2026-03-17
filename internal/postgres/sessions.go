@@ -151,17 +151,17 @@ func buildPGSessionFilter(
 	}
 	if f.Date != "" {
 		filterPreds = append(filterPreds,
-			"DATE(COALESCE(started_at, created_at)) = "+
+			"DATE(COALESCE(started_at, created_at) AT TIME ZONE 'UTC') = "+
 				pb.add(f.Date)+"::date")
 	}
 	if f.DateFrom != "" {
 		filterPreds = append(filterPreds,
-			"DATE(COALESCE(started_at, created_at)) >= "+
+			"DATE(COALESCE(started_at, created_at) AT TIME ZONE 'UTC') >= "+
 				pb.add(f.DateFrom)+"::date")
 	}
 	if f.DateTo != "" {
 		filterPreds = append(filterPreds,
-			"DATE(COALESCE(started_at, created_at)) <= "+
+			"DATE(COALESCE(started_at, created_at) AT TIME ZONE 'UTC') <= "+
 				pb.add(f.DateTo)+"::date")
 	}
 	if f.ActiveSince != "" {

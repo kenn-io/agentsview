@@ -158,13 +158,16 @@ func Open(
 		return nil, err
 	}
 
-	// Append search_path as a runtime parameter in the DSN so
-	// every connection in the pool inherits it automatically.
+	// Append search_path and timezone as runtime parameters in
+	// the DSN so every connection in the pool inherits them.
 	// pgx's stdlib driver passes options through to ConnConfig.
-	connStr, err := appendSearchPath(dsn, quoted)
+	connStr, err := appendConnParams(dsn, map[string]string{
+		"search_path": quoted,
+		"TimeZone":    "UTC",
+	})
 	if err != nil {
 		return nil, fmt.Errorf(
-			"setting search_path: %w", err,
+			"setting connection params: %w", err,
 		)
 	}
 
@@ -194,14 +197,12 @@ func Open(
 	return db, nil
 }
 
-// appendSearchPath injects search_path into the DSN's connection
-// parameters. For URI-style DSNs it adds a query parameter; for
-// key=value DSNs it appends a key=value pair. The schema value
-// is the quoted identifier (e.g. "agentsview").
-func appendSearchPath(
-	dsn, quotedSchema string,
+// appendConnParams injects key=value connection parameters into
+// the DSN. For URI-style DSNs it adds query parameters; for
+// key=value DSNs it appends key=value pairs.
+func appendConnParams(
+	dsn string, params map[string]string,
 ) (string, error) {
-	param := "search_path=" + quotedSchema
 	// URI format: postgres://...
 	if strings.HasPrefix(dsn, "postgres://") ||
 		strings.HasPrefix(dsn, "postgresql://") {
@@ -212,13 +213,19 @@ func appendSearchPath(
 			)
 		}
 		q := u.Query()
-		q.Set("search_path", quotedSchema)
+		for k, v := range params {
+			q.Set(k, v)
+		}
 		u.RawQuery = q.Encode()
 		return u.String(), nil
 	}
-	// Key=value format: append search_path parameter.
-	if dsn == "" {
-		return param, nil
+	// Key=value format: append parameters.
+	result := dsn
+	for k, v := range params {
+		if result != "" {
+			result += " "
+		}
+		result += k + "=" + v
 	}
-	return dsn + " " + param, nil
+	return result, nil
 }

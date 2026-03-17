@@ -41,7 +41,7 @@ func runPG(args []string) {
 func runPGPush(args []string) {
 	fs := flag.NewFlagSet("pg push", flag.ExitOnError)
 	full := fs.Bool("full", false,
-		"Bypass per-message skip heuristic")
+		"Force full local resync and PG push")
 	if err := fs.Parse(args); err != nil {
 		log.Fatalf("parsing flags: %v", err)
 	}
@@ -218,6 +218,7 @@ func runPGServe(args []string) {
 	}
 
 	appCfg.Host = *host
+	appCfg.RemoteAccess = false
 	appCfg.Port = server.FindAvailablePort(*host, *port)
 	if appCfg.Port != *port {
 		fmt.Printf("Port %d in use, using %d\n",

@@ -240,7 +240,7 @@ func (s *Store) Search(
 		FROM messages m
 		JOIN sessions s ON m.session_id = s.id
 		WHERE %s
-		ORDER BY COALESCE(m.timestamp, NOW()) DESC
+		ORDER BY m.timestamp DESC NULLS LAST
 		LIMIT $%d OFFSET $%d`,
 		strings.Join(whereClauses, " AND "),
 		argIdx, argIdx+1,
