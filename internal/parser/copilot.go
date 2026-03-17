@@ -363,7 +363,10 @@ func ParseCopilotSession(
 				}
 				return best
 			}
-			return ComputeMainModel(b.messages)
+			if m := ComputeMainModel(b.messages); m != "" {
+				return m
+			}
+			return b.currentModel
 		}(),
 		File: FileInfo{
 			Path:  path,

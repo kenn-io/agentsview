@@ -426,10 +426,9 @@ func TestParseCopilotSession_ModelFromShutdown(t *testing.T) {
 
 func TestParseCopilotSession_ModelFromShutdownCurrentModel(t *testing.T) {
 	// session.shutdown has currentModel but empty modelMetrics.
-	// currentModel should be used as a fallback for b.currentModel
-	// so that ComputeMainModel can pick it up from assistant messages
-	// IF there were tool completions that set it, but here we test
-	// the shutdownMainModel path is empty and falls back gracefully.
+	// shutdownModelCounts is empty, ComputeMainModel returns ""
+	// (no message has model set), so b.currentModel is the final
+	// fallback and should be used as MainModel.
 	path := writeCopilotJSONL(t,
 		`{"type":"session.start","data":{"sessionId":"cur-model-test"},"timestamp":"2025-01-15T10:00:00Z"}`,
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
@@ -437,14 +436,8 @@ func TestParseCopilotSession_ModelFromShutdownCurrentModel(t *testing.T) {
 		`{"type":"session.shutdown","data":{"shutdownType":"routine","currentModel":"claude-sonnet-4.6","modelMetrics":{}},"timestamp":"2025-01-15T10:00:10Z"}`,
 	)
 
-	// No modelMetrics and no model_change — MainModel stays empty
-	// because the assistant message was already emitted before the
-	// shutdown event and has no model assigned. (currentModel only
-	// affects future assistant messages.)
 	sess, _ := parseAndValidateHelper(t, path, "m", 2)
-	// shutdownMainModel is empty (empty modelMetrics), currentModel
-	// set too late. MainModel will be "" in this edge case.
-	_ = sess // just verify it parses without panic
+	assertEqual(t, "claude-sonnet-4.6", sess.MainModel, "sess.MainModel")
 }
 
 func TestParseCopilotSession_ModelFromToolComplete(t *testing.T) {
