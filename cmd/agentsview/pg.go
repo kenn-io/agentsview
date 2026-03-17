@@ -218,7 +218,18 @@ func runPGServe(args []string) {
 	}
 
 	appCfg.Host = *host
-	appCfg.RemoteAccess = false
+	// Enable remote access with auth when binding to a
+	// non-loopback address; keep it off for localhost.
+	if *host != "127.0.0.1" && *host != "localhost" &&
+		*host != "::1" {
+		appCfg.RemoteAccess = true
+		if err := appCfg.EnsureAuthToken(); err != nil {
+			fatal("pg serve: generating auth token: %v", err)
+		}
+		fmt.Printf("Auth token: %s\n", appCfg.AuthToken)
+	} else {
+		appCfg.RemoteAccess = false
+	}
 	appCfg.Port = server.FindAvailablePort(*host, *port)
 	if appCfg.Port != *port {
 		fmt.Printf("Port %d in use, using %d\n",
