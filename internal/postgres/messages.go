@@ -127,6 +127,47 @@ func (s *Store) GetMinimapFrom(
 	return entries, rows.Err()
 }
 
+// SearchSession performs ILIKE substring search within a single
+// session's messages, returning matching ordinals.
+func (s *Store) SearchSession(
+	ctx context.Context, sessionID, query string,
+) ([]int, error) {
+	if query == "" {
+		return nil, nil
+	}
+	like := "%" + escapeLike(query) + "%"
+	rows, err := s.pg.QueryContext(ctx, `
+		SELECT DISTINCT m.ordinal
+		FROM messages m
+		LEFT JOIN tool_calls tc
+			ON tc.session_id = m.session_id
+			AND tc.message_ordinal = m.ordinal
+		WHERE m.session_id = $1
+			AND (m.content ILIKE $2
+				OR tc.result_content ILIKE $2)
+		ORDER BY m.ordinal ASC`,
+		sessionID, like,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"searching session: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	var ordinals []int
+	for rows.Next() {
+		var ord int
+		if err := rows.Scan(&ord); err != nil {
+			return nil, fmt.Errorf(
+				"scanning ordinal: %w", err,
+			)
+		}
+		ordinals = append(ordinals, ord)
+	}
+	return ordinals, rows.Err()
+}
+
 // HasFTS returns true because ILIKE search is available.
 func (s *Store) HasFTS() bool { return true }
 

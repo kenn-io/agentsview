@@ -18,7 +18,6 @@ import (
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/postgres"
 	"github.com/wesm/agentsview/internal/server"
 	"github.com/wesm/agentsview/internal/sync"
 )
@@ -245,42 +244,6 @@ func runServe(args []string) {
 		}
 		if cfg.AuthToken != "" {
 			fmt.Printf("Remote access enabled. Auth token: %s\n", cfg.AuthToken)
-		}
-	}
-
-	// Start PG sync if configured.
-	var pgSync *postgres.Sync
-	resolvedPG, pgResolveErr := cfg.ResolvePG()
-	if pgResolveErr != nil {
-		log.Printf("warning: pg sync config: %v", pgResolveErr)
-	} else {
-		cfg.PG = resolvedPG
-	}
-	if pgCfg := cfg.PG; pgResolveErr == nil && pgCfg.URL != "" {
-		ps, pgErr := postgres.New(
-			pgCfg.URL, pgCfg.Schema, database,
-			pgCfg.MachineName, pgCfg.AllowInsecure,
-		)
-		if pgErr != nil {
-			log.Printf("warning: pg sync disabled: %v", pgErr)
-		} else {
-			pgSync = ps
-			defer pgSync.Close()
-			pgCtx, pgCancel := context.WithCancel(
-				context.Background(),
-			)
-			defer pgCancel()
-			if schemaErr := pgSync.EnsureSchema(pgCtx); schemaErr != nil {
-				log.Printf(
-					"warning: pg sync schema: %v", schemaErr,
-				)
-			} else {
-				go pgSync.StartPeriodicSync(pgCtx)
-				log.Printf(
-					"pg sync enabled (machine=%s)",
-					pgCfg.MachineName,
-				)
-			}
 		}
 	}
 

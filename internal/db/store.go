@@ -34,6 +34,7 @@ type Store interface {
 	// Search.
 	HasFTS() bool
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
+	SearchSession(ctx context.Context, sessionID, query string) ([]int, error)
 
 	// SSE change detection.
 	GetSessionVersion(id string) (count int, fileMtime int64, ok bool)
