@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -11,10 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BurntSushi/toml"
 	"github.com/wesm/agentsview/internal/parser"
 )
 
-const configFileName = "config.json"
+const configFileName = "config.toml"
 
 func skipIfNotUnix(t *testing.T) {
 	t.Helper()
@@ -32,11 +32,11 @@ func skipIfNotUnix(t *testing.T) {
 
 func writeConfig(t *testing.T, dir string, data any) {
 	t.Helper()
-	b, err := json.Marshal(data)
-	if err != nil {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(data); err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, configFileName), b, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, configFileName), buf.Bytes(), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 }
@@ -369,10 +369,10 @@ func TestSaveGithubToken_RejectsCorruptConfig(t *testing.T) {
 	tmp := setupTestEnv(t)
 	cfg := Config{DataDir: tmp}
 
-	// Write invalid JSON to config file
+	// Write invalid TOML to config file
 	path := filepath.Join(tmp, configFileName)
 	if err := os.WriteFile(
-		path, []byte("not json"), 0o600,
+		path, []byte("[invalid toml = ="), 0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +392,7 @@ func TestSaveGithubToken_ReturnsErrorOnReadFailure(t *testing.T) {
 	// Create a config file that is not readable
 	path := filepath.Join(tmp, configFileName)
 	if err := os.WriteFile(
-		path, []byte(`{"k":"v"}`), 0o000,
+		path, []byte("k = \"v\"\n"), 0o000,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ func TestSaveGithubToken_PreservesExistingKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result map[string]any
-	if err := json.Unmarshal(got, &result); err != nil {
+	if _, err := toml.Decode(string(got), &result); err != nil {
 		t.Fatal(err)
 	}
 	if result["custom_key"] != "value" {

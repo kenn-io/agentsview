@@ -133,19 +133,15 @@ Environment variables:
   AGENTSVIEW_PG_READ      PostgreSQL URL for read-only server mode
 
 Watcher excludes:
-  Add "watch_exclude_patterns" to ~/.agentsview/config.json to skip
+  Add "watch_exclude_patterns" to ~/.agentsview/config.toml to skip
   directory names/patterns while recursively watching roots.
   Example:
-  {
-    "watch_exclude_patterns": [".git", "node_modules", ".next", "dist"]
-  }
+  watch_exclude_patterns = [".git", "node_modules", ".next", "dist"]
 
 Multiple directories:
-  Add arrays to ~/.agentsview/config.json to scan multiple locations:
-  {
-    "claude_project_dirs": ["/path/one", "/path/two"],
-    "codex_sessions_dirs": ["/codex/a", "/codex/b"]
-  }
+  Add arrays to ~/.agentsview/config.toml to scan multiple locations:
+  claude_project_dirs = ["/path/one", "/path/two"]
+  codex_sessions_dirs = ["/codex/a", "/codex/b"]
   When set, these override the default directory. Environment variables
   override config file arrays.
 

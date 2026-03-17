@@ -30,7 +30,7 @@ type AgentDef struct {
 	Type         AgentType
 	DisplayName  string   // "Claude Code", "Codex", etc.
 	EnvVar       string   // env var for dir override
-	ConfigKey    string   // JSON key in config.json ("" = none)
+	ConfigKey    string   // TOML key in config.toml ("" = none)
 	DefaultDirs  []string // paths relative to $HOME
 	IDPrefix     string   // session ID prefix ("" for Claude)
 	WatchSubdirs []string // subdirs to watch (nil = watch root)

@@ -1,20 +1,19 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 )
 
 func readConfigFile(t *testing.T, dir string) Config {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, configFileName))
-	if err != nil {
-		t.Fatalf("reading config file: %v", err)
-	}
 	var fileCfg Config
-	if err := json.Unmarshal(data, &fileCfg); err != nil {
+	if _, err := toml.DecodeFile(
+		filepath.Join(dir, configFileName), &fileCfg,
+	); err != nil {
 		t.Fatalf("parsing config file: %v", err)
 	}
 	return fileCfg
@@ -63,7 +62,7 @@ func TestCursorSecret_GeneratedAndPersisted(t *testing.T) {
 func TestCursorSecret_RegeneratedIfMissing(t *testing.T) {
 	dir := setupTestEnv(t)
 
-	initialContent := `{"cursor_secret": ""}`
+	initialContent := "cursor_secret = \"\"\n"
 	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(initialContent), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -86,7 +85,7 @@ func TestCursorSecret_RegeneratedIfMissing(t *testing.T) {
 func TestCursorSecret_LoadErrorOnInvalidConfig(t *testing.T) {
 	dir := setupTestEnv(t)
 
-	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte("{invalid-json"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte("[invalid toml = ="), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -99,7 +98,7 @@ func TestCursorSecret_LoadErrorOnInvalidConfig(t *testing.T) {
 func TestCursorSecret_PreservesOtherFields(t *testing.T) {
 	dir := setupTestEnv(t)
 
-	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte(`{"github_token": "my-token"}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, configFileName), []byte("github_token = \"my-token\"\n"), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
