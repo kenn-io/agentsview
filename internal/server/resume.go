@@ -147,6 +147,14 @@ func (s *Server) handleResumeSession(
 		return
 	}
 
+	// Block actual launches in read-only mode. command_only
+	// requests above are safe and remain available.
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"session launch not available in remote mode")
+		return
+	}
+
 	// If the caller specified a terminal opener, use it directly.
 	if req.OpenerID != "" {
 		openers := detectOpeners()

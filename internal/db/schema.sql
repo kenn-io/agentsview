@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_size   INTEGER,
     file_mtime  INTEGER,
     file_hash   TEXT,
+    local_modified_at TEXT,
     parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -180,4 +181,10 @@ CREATE TABLE IF NOT EXISTS excluded_sessions (
 CREATE TABLE IF NOT EXISTS skipped_files (
     file_path  TEXT PRIMARY KEY,
     file_mtime INTEGER NOT NULL
+);
+
+-- PG sync state: stores watermarks for push sync
+CREATE TABLE IF NOT EXISTS pg_sync_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );

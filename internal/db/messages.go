@@ -536,6 +536,39 @@ func (db *DB) MessageCount(sessionID string) (int, error) {
 	return count, err
 }
 
+// MessageContentFingerprint returns a lightweight fingerprint of all
+// messages for a session, computed as the sum, max, and min of
+// content_length values.
+func (db *DB) MessageContentFingerprint(sessionID string) (sum, max, min int64, err error) {
+	err = db.getReader().QueryRow(
+		"SELECT COALESCE(SUM(content_length), 0), COALESCE(MAX(content_length), 0), COALESCE(MIN(content_length), 0) FROM messages WHERE session_id = ?",
+		sessionID,
+	).Scan(&sum, &max, &min)
+	return sum, max, min, err
+}
+
+// ToolCallCount returns the number of tool_calls rows for a session.
+func (db *DB) ToolCallCount(sessionID string) (int, error) {
+	var n int
+	err := db.getReader().QueryRow(
+		"SELECT COUNT(*) FROM tool_calls WHERE session_id = ?",
+		sessionID,
+	).Scan(&n)
+	return n, err
+}
+
+// ToolCallContentFingerprint returns the sum of result_content_length
+// values for a session's tool calls, used as a lightweight content
+// change detector.
+func (db *DB) ToolCallContentFingerprint(sessionID string) (int64, error) {
+	var sum int64
+	err := db.getReader().QueryRow(
+		"SELECT COALESCE(SUM(result_content_length), 0) FROM tool_calls WHERE session_id = ?",
+		sessionID,
+	).Scan(&sum)
+	return sum, err
+}
+
 // GetMessageByOrdinal returns a single message by session ID and ordinal.
 func (db *DB) GetMessageByOrdinal(
 	sessionID string, ordinal int,

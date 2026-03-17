@@ -8,15 +8,20 @@ agentsview is a local web viewer for AI agent sessions (Claude Code, Codex, Copi
 
 ```
 CLI (agentsview) → Config → DB (SQLite/FTS5)
-                  ↓
+                  ↓              ↓
               File Watcher → Sync Engine → Parser (Claude, Codex, Copilot, Gemini, OpenCode, Amp)
-                  ↓
+                  ↓              ↓
               HTTP Server → REST API + SSE + Embedded SPA
+                                 ↓
+                           PG Push Sync → PostgreSQL (optional)
+                                 ↑
+              HTTP Server (pg-read mode) ← PostgreSQL
 ```
 
 - **Server**: HTTP server with auto-port discovery (default 8080)
-- **Storage**: SQLite with WAL mode, FTS5 for full-text search
+- **Storage**: SQLite with WAL mode, FTS5 for full-text search; optional PostgreSQL for multi-machine shared access
 - **Sync**: File watcher + periodic sync (15min) for session directories
+- **PG Sync**: Push-only sync from SQLite to PostgreSQL (configurable interval)
 - **Frontend**: Svelte 5 SPA embedded in the Go binary at build time
 - **Config**: Env vars (`AGENT_VIEWER_DATA_DIR`, `CLAUDE_PROJECTS_DIR`, `CODEX_SESSIONS_DIR`, `COPILOT_DIR`, `GEMINI_DIR`, `OPENCODE_DIR`, `AMP_DIR`) and CLI flags
 
@@ -26,6 +31,8 @@ CLI (agentsview) → Config → DB (SQLite/FTS5)
 - `cmd/testfixture/` - Test data generator for E2E tests
 - `internal/config/` - Config loading, flag registration, legacy migration
 - `internal/db/` - SQLite operations (sessions, messages, search, analytics)
+- `internal/pgdb/` - PostgreSQL read-only store (implements `db.Store` for PG-backed serving)
+- `internal/pgsync/` - Push sync from local SQLite to PostgreSQL
 - `internal/parser/` - Session file parsers (Claude, Codex, Copilot, Gemini, OpenCode, Amp, content extraction)
 - `internal/server/` - HTTP handlers, SSE, middleware, search, export
 - `internal/sync/` - Sync engine, file watcher, discovery, hashing
@@ -51,6 +58,13 @@ CLI (agentsview) → Config → DB (SQLite/FTS5)
 | `internal/parser/codex.go` | Codex session parser |
 | `internal/parser/copilot.go` | Copilot CLI session parser |
 | `internal/parser/amp.go` | Amp session parser |
+| `internal/pgdb/pgdb.go` | PostgreSQL read-only store |
+| `internal/pgdb/sessions.go` | PG session list/detail queries |
+| `internal/pgdb/messages.go` | PG message queries, ILIKE search |
+| `internal/pgdb/analytics.go` | PG analytics queries |
+| `internal/pgsync/pgsync.go` | PG push sync lifecycle |
+| `internal/pgsync/push.go` | Push logic (sessions, messages, tool calls) |
+| `internal/pgsync/schema.go` | PG schema DDL and migrations |
 | `internal/config/config.go` | Config loading, flag registration |
 
 ## Development
@@ -77,6 +91,19 @@ make e2e        # Playwright E2E tests
 make lint       # golangci-lint
 make vet        # go vet
 ```
+
+### PostgreSQL Integration Tests
+
+PG integration tests require a real PostgreSQL instance and the `pgtest`
+build tag. Set `TEST_PG_URL` to a valid connection string:
+
+```bash
+TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
+  CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/pgsync/... -v
+```
+
+Tests create and drop the `agentsview` schema, so use a dedicated
+database or one where schema changes are acceptable.
 
 ### Test Guidelines
 

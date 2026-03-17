@@ -57,6 +57,14 @@ func (s *Server) sessionMonitor(
 			sessionID,
 		)
 
+		if s.engine == nil {
+			// PG read mode: poll GetSessionVersion only,
+			// no file watching or fallback sync.
+			s.pollDBOnly(ctx, ch, sessionID,
+				lastCount, lastDBMtime)
+			return
+		}
+
 		// Track file mtime for fallback sync.
 		sourcePath := s.engine.FindSourceFile(sessionID)
 		var lastFileMtime int64
@@ -92,6 +100,35 @@ func (s *Server) sessionMonitor(
 		}
 	}()
 	return ch
+}
+
+// pollDBOnly polls GetSessionVersion on a timer and signals ch
+// when changes are detected. Used in PG-read mode where there is
+// no sync engine or file watcher.
+func (s *Server) pollDBOnly(
+	ctx context.Context, ch chan<- struct{},
+	sessionID string, lastCount int, lastDBMtime int64,
+) {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			count, dbMtime, ok := s.db.GetSessionVersion(sessionID)
+			if ok && (count != lastCount || dbMtime != lastDBMtime) {
+				lastCount = count
+				lastDBMtime = dbMtime
+				select {
+				case ch <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
 }
 
 // checkDBForChanges polls the database for a session's
@@ -215,6 +252,11 @@ func (s *Server) handleWatchSession(
 func (s *Server) handleTriggerSync(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.engine == nil {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return
+	}
 	stream, err := NewSSEStream(w)
 	if err != nil {
 		// Non-streaming fallback
@@ -232,6 +274,11 @@ func (s *Server) handleTriggerSync(
 func (s *Server) handleTriggerResync(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.engine == nil {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return
+	}
 	stream, err := NewSSEStream(w)
 	if err != nil {
 		stats := s.engine.ResyncAll(r.Context(), nil)
@@ -248,6 +295,13 @@ func (s *Server) handleTriggerResync(
 func (s *Server) handleSyncStatus(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.engine == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"last_sync": "",
+			"stats":     nil,
+		})
+		return
+	}
 	lastSync := s.engine.LastSync()
 	stats := s.engine.LastSyncStats()
 

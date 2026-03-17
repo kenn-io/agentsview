@@ -25,13 +25,14 @@ type VersionInfo struct {
 	Version   string `json:"version"`
 	Commit    string `json:"commit"`
 	BuildDate string `json:"build_date"`
+	ReadOnly  bool   `json:"read_only,omitempty"`
 }
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
 	mu      gosync.RWMutex
 	cfg     config.Config
-	db      *db.DB
+	db      db.Store
 	engine  *sync.Engine
 	mux     *http.ServeMux
 	httpSrv *http.Server
@@ -60,7 +61,7 @@ type Server struct {
 
 // New creates a new Server.
 func New(
-	cfg config.Config, database *db.DB, engine *sync.Engine,
+	cfg config.Config, database db.Store, engine *sync.Engine,
 	opts ...Option,
 ) *Server {
 	dist, err := web.Assets()

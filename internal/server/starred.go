@@ -19,6 +19,9 @@ func (s *Server) handleStarSession(
 	// the TOCTOU race of a separate GetSession + INSERT.
 	ok, err := s.db.StarSession(id)
 	if err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("star session: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -40,6 +43,9 @@ func (s *Server) handleUnstarSession(
 	}
 
 	if err := s.db.UnstarSession(id); err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("unstar session: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -82,6 +88,9 @@ func (s *Server) handleBulkStar(
 		return
 	}
 	if err := s.db.BulkStarSessions(body.SessionIDs); err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("bulk star: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return

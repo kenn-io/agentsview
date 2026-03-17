@@ -23,7 +23,7 @@ type GenerateRequest struct {
 // a prompt for the AI agent.
 func BuildPrompt(
 	ctx context.Context,
-	database *db.DB,
+	database db.Store,
 	req GenerateRequest,
 ) (string, error) {
 	filter := db.SessionFilter{

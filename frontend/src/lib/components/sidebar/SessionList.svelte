@@ -45,11 +45,21 @@
     );
   });
 
-  // Ensure agents are loaded when dropdown opens.
+  let machineSearch = $state("");
+  let sortedMachines = $derived.by(() => {
+    const machines = [...sessions.machines].sort();
+    if (!machineSearch) return machines;
+    const q = machineSearch.toLowerCase();
+    return machines.filter((m) => m.toLowerCase().includes(q));
+  });
+
+  // Ensure agents and machines are loaded when dropdown opens.
   $effect(() => {
     if (showFilterDropdown) {
       sessions.loadAgents();
+      sessions.loadMachines();
       agentSearch = "";
+      machineSearch = "";
     }
   });
 
@@ -518,6 +528,43 @@
             {/each}
           </div>
         </div>
+        {#if sessions.machines.length > 0}
+          <div class="filter-section">
+            <div class="filter-section-label">Machine</div>
+            {#if sessions.machines.length > 5}
+              <input
+                class="agent-search"
+                type="text"
+                placeholder="Search machines..."
+                bind:value={machineSearch}
+              />
+            {/if}
+            <div class="agent-select-list">
+              {#each sortedMachines as machine (machine)}
+                {@const selected =
+                  sessions.filters.machine === machine}
+                <button
+                  class="agent-select-row"
+                  class:selected
+                  onclick={() =>
+                    sessions.setMachineFilter(machine)}
+                >
+                  <span
+                    class="agent-check"
+                    class:on={selected}
+                  ></span>
+                  <span class="agent-select-name">
+                    {machine}
+                  </span>
+                </button>
+              {:else}
+                <span class="agent-select-empty">
+                  {machineSearch ? "No match" : "No machines"}
+                </span>
+              {/each}
+            </div>
+          </div>
+        {/if}
         <div class="filter-section">
           <div class="filter-section-label">Min Prompts</div>
           <div class="pill-buttons">

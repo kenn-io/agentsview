@@ -34,6 +34,9 @@ func (s *Server) handlePinMessage(
 
 	id, err := s.db.PinMessage(sessionID, messageID, req.Note)
 	if err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("pin message: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -59,6 +62,9 @@ func (s *Server) handleUnpinMessage(
 	}
 
 	if err := s.db.UnpinMessage(sessionID, messageID); err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("unpin message: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return

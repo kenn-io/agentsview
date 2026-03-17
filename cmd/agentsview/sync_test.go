@@ -22,6 +22,12 @@ func TestParseSyncFlags(t *testing.T) {
 				if cfg.Full {
 					t.Error("Full should be false by default")
 				}
+				if cfg.PG {
+					t.Error("PG should be false by default")
+				}
+				if cfg.PGStatus {
+					t.Error("PGStatus should be false by default")
+				}
 			},
 		},
 		{
@@ -31,6 +37,26 @@ func TestParseSyncFlags(t *testing.T) {
 				t.Helper()
 				if !cfg.Full {
 					t.Error("Full should be true")
+				}
+			},
+		},
+		{
+			name: "pg flag",
+			args: []string{"-pg"},
+			check: func(t *testing.T, cfg SyncConfig) {
+				t.Helper()
+				if !cfg.PG {
+					t.Error("PG should be true")
+				}
+			},
+		},
+		{
+			name: "pg-status flag",
+			args: []string{"-pg-status"},
+			check: func(t *testing.T, cfg SyncConfig) {
+				t.Helper()
+				if !cfg.PGStatus {
+					t.Error("PGStatus should be true")
 				}
 			},
 		},

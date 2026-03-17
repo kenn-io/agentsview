@@ -12,9 +12,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wesm/agentsview/internal/parser"
@@ -50,6 +52,24 @@ type ProxyConfig struct {
 	AllowedSubnets []string `json:"allowed_subnets,omitempty"`
 }
 
+// PGSyncConfig holds PostgreSQL sync settings.
+type PGSyncConfig struct {
+	Enabled         *bool  `json:"enabled,omitempty"`
+	PostgresURL     string `json:"postgres_url"`
+	Interval        string `json:"interval"`
+	MachineName     string `json:"machine_name"`
+	AllowInsecurePG bool   `json:"allow_insecure_pg,omitempty"`
+}
+
+// IsEnabled returns whether PG sync is enabled. When Enabled is nil
+// (not explicitly set), it defaults to true if PostgresURL is set.
+func (p PGSyncConfig) IsEnabled() bool {
+	if p.Enabled != nil {
+		return *p.Enabled
+	}
+	return p.PostgresURL != ""
+}
+
 // Config holds all application configuration.
 type Config struct {
 	Host                 string         `json:"host"`
@@ -65,6 +85,8 @@ type Config struct {
 	Terminal             TerminalConfig `json:"terminal,omitempty"`
 	AuthToken            string         `json:"auth_token,omitempty"`
 	RemoteAccess         bool           `json:"remote_access"`
+	NoBrowser            bool           `json:"no_browser"`
+	PGSync               PGSyncConfig   `json:"pg_sync,omitempty"`
 	WriteTimeout         time.Duration  `json:"-"`
 
 	// AgentDirs maps each AgentType to its configured
@@ -82,6 +104,10 @@ type Config struct {
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
 	HostExplicit bool `json:"-"`
+
+	// PGReadURL, when set, switches the server to read-only mode
+	// backed by a PostgreSQL database instead of the local SQLite.
+	PGReadURL string `json:"-"`
 }
 
 type dirSource int
@@ -204,6 +230,7 @@ func (c *Config) loadFile() error {
 		Terminal                       TerminalConfig `json:"terminal"`
 		AuthToken                      string         `json:"auth_token"`
 		RemoteAccess                   bool           `json:"remote_access"`
+		PGSync                         PGSyncConfig   `json:"pg_sync"`
 	}
 	if err := json.Unmarshal(data, &file); err != nil {
 		return fmt.Errorf("parsing config: %w", err)
@@ -239,6 +266,26 @@ func (c *Config) loadFile() error {
 		c.AuthToken = file.AuthToken
 	}
 	c.RemoteAccess = file.RemoteAccess
+	// Merge pg_sync field-by-field so env vars override only
+	// the fields they set, preserving config-file settings.
+	if file.PGSync.PostgresURL != "" && c.PGSync.PostgresURL == "" {
+		c.PGSync.PostgresURL = file.PGSync.PostgresURL
+	}
+	// Merge enabled: explicit config-file value wins when not already
+	// set by env var. If neither sets it, IsEnabled() defaults based
+	// on postgres_url presence.
+	if file.PGSync.Enabled != nil && c.PGSync.Enabled == nil {
+		c.PGSync.Enabled = file.PGSync.Enabled
+	}
+	if file.PGSync.MachineName != "" && c.PGSync.MachineName == "" {
+		c.PGSync.MachineName = file.PGSync.MachineName
+	}
+	if file.PGSync.Interval != "" && c.PGSync.Interval == "" {
+		c.PGSync.Interval = file.PGSync.Interval
+	}
+	if file.PGSync.AllowInsecurePG {
+		c.PGSync.AllowInsecurePG = true
+	}
 
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
@@ -322,6 +369,20 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENT_VIEWER_DATA_DIR"); v != "" {
 		c.DataDir = v
 	}
+	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
+		c.PGSync.PostgresURL = v
+		t := true
+		c.PGSync.Enabled = &t
+	}
+	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
+		c.PGSync.MachineName = v
+	}
+	if v := os.Getenv("AGENTSVIEW_PG_INTERVAL"); v != "" {
+		c.PGSync.Interval = v
+	}
+	if v := os.Getenv("AGENTSVIEW_PG_READ"); v != "" {
+		c.PGReadURL = v
+	}
 }
 
 type stringListFlag []string
@@ -388,6 +449,8 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 		"no-browser", false,
 		"Don't open browser on startup",
 	)
+	fs.String("pg-read", "",
+		"PostgreSQL URL for read-only mode (overrides AGENTSVIEW_PG_READ)")
 }
 
 // applyFlags copies explicitly-set flags from fs into cfg.
@@ -421,6 +484,10 @@ func applyFlags(cfg *Config, fs *flag.FlagSet) {
 			cfg.Proxy.TLSKey = f.Value.String()
 		case "allowed-subnet":
 			cfg.Proxy.AllowedSubnets = splitFlagList(f.Value.String())
+		case "no-browser":
+			cfg.NoBrowser = f.Value.String() == "true"
+		case "pg-read":
+			cfg.PGReadURL = f.Value.String()
 		}
 	})
 }
@@ -710,6 +777,87 @@ func ResolveDataDir() (string, error) {
 		cfg.DataDir = v
 	}
 	return cfg.DataDir, nil
+}
+
+// ResolvePGSync returns a copy of PGSync config with defaults
+// applied and environment variables expanded in PostgresURL.
+func (c *Config) ResolvePGSync() (PGSyncConfig, error) {
+	pg := c.PGSync
+	if pg.PostgresURL != "" {
+		expanded, err := expandBracedEnv(pg.PostgresURL)
+		if err != nil {
+			return pg, fmt.Errorf("expanding postgres_url: %w", err)
+		}
+		pg.PostgresURL = expanded
+	}
+	if pg.Interval == "" {
+		pg.Interval = "1h"
+	}
+	if pg.MachineName == "" {
+		h, err := os.Hostname()
+		if err != nil {
+			return pg, fmt.Errorf("os.Hostname failed (%w); set machine_name explicitly in config", err)
+		}
+		pg.MachineName = h
+	}
+	return pg, nil
+}
+
+var (
+	bracedEnvPattern      = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	bareEnvPattern        = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)$`)
+	partialBareEnvPattern = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)`)
+)
+
+// bareEnvWarned tracks which bare $VAR names have already been warned
+// about, so each distinct variable triggers a warning at most once.
+var bareEnvWarned sync.Map
+
+// ResetBareEnvWarned clears the warning dedup state. Exported for tests.
+func ResetBareEnvWarned() {
+	bareEnvWarned.Range(func(k, _ any) bool { bareEnvWarned.Delete(k); return true })
+}
+
+// expandBracedEnv expands ${VAR} references in s. As a convenience,
+// if the entire string is a single bare $VAR (e.g. "$PGURL"), it is
+// expanded as a whole-string shortcut. Bare $VAR references embedded
+// in a larger string (e.g. "postgres://$USER@host") are NOT expanded;
+// use ${VAR} syntax instead.
+func expandBracedEnv(s string) (string, error) {
+	if parts := bareEnvPattern.FindStringSubmatch(s); parts != nil {
+		val, ok := os.LookupEnv(parts[1])
+		if !ok {
+			return "", fmt.Errorf("environment variable %s is not set", parts[1])
+		}
+		return val, nil
+	}
+
+	// Warn about bare $VAR references that won't be expanded.
+	if remaining := bracedEnvPattern.ReplaceAllString(s, ""); partialBareEnvPattern.MatchString(remaining) {
+		for _, m := range partialBareEnvPattern.FindAllStringSubmatch(remaining, -1) {
+			if _, set := os.LookupEnv(m[1]); set {
+				if _, warned := bareEnvWarned.LoadOrStore(m[1], true); !warned {
+					log.Printf("warning: postgres_url contains bare $%s which will NOT be expanded; use ${%s} syntax instead", m[1], m[1])
+				}
+			}
+		}
+	}
+
+	var missingVars []string
+	result := bracedEnvPattern.ReplaceAllStringFunc(s, func(match string) string {
+		name := bracedEnvPattern.FindStringSubmatch(match)[1]
+		val, ok := os.LookupEnv(name)
+		if !ok {
+			missingVars = append(missingVars, name)
+			return ""
+		}
+		return val
+	})
+	if len(missingVars) > 0 {
+		return "", fmt.Errorf("environment variable(s) not set: %s",
+			strings.Join(missingVars, ", "))
+	}
+	return result, nil
 }
 
 // SaveTerminalConfig persists terminal settings to the config file.

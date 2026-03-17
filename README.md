@@ -169,6 +169,67 @@ need to allow additional browser origins beyond the main `public_url`.
 | `r` | Sync sessions |
 | `?` | Show all shortcuts |
 
+## PostgreSQL Sync
+
+agentsview can push session data from the local SQLite database to a
+remote PostgreSQL instance, enabling shared team dashboards and
+centralized search across multiple machines.
+
+### Push Sync (SQLite to PG)
+
+Configure `pg_sync` in `~/.agentsview/config.json`:
+
+```json
+{
+  "pg_sync": {
+    "postgres_url": "postgres://user:pass@host:5432/dbname?sslmode=require",
+    "machine_name": "my-laptop",
+    "interval": "15m"
+  }
+}
+```
+
+Use `sslmode=require` (or `verify-full` for CA-verified connections)
+for non-local PostgreSQL instances. Only use `sslmode=disable` for
+trusted local/loopback connections.
+
+The `machine_name` identifies which machine pushed each session
+(must not be `"local"`, which is reserved). The `interval` controls
+how often the background push runs when the server is active.
+
+CLI commands:
+
+```bash
+agentsview sync -pg          # push now
+agentsview sync -pg -full    # force full re-push (bypasses heuristic)
+agentsview sync -pg-status   # show sync status
+```
+
+Push sync runs automatically in the background when the server
+starts with `pg_sync` configured.
+
+### PG Read-Only Mode
+
+Serve the web UI directly from PostgreSQL with no local SQLite:
+
+```bash
+agentsview serve -pg-read 'postgres://user:pass@host:5432/dbname?sslmode=require'
+```
+
+This mode is useful for shared team viewers where multiple machines
+push to a central PG database and one or more read-only instances
+serve the UI. Uploads, file watching, and local sync are disabled.
+PG read-only mode enforces loopback-only binding for security.
+
+### Known Limitations
+
+- **Deleted sessions**: Sessions permanently pruned from SQLite
+  (via `agentsview prune`) are not propagated as deletions to PG.
+  Sessions soft-deleted with `deleted_at` are synced correctly.
+- **Change detection**: Push uses aggregate length statistics
+  rather than content hashes. Use `-full` to force a complete
+  re-push if content was rewritten in-place.
+
 ## Documentation
 
 Full documentation is available at
@@ -218,6 +279,8 @@ PATH/API keys overrides).
 cmd/agentsview/     CLI entrypoint
 internal/config/    Configuration loading
 internal/db/        SQLite operations (sessions, search, analytics)
+internal/pgdb/      PostgreSQL read-only store (db.Store implementation)
+internal/pgsync/    Push sync from SQLite to PostgreSQL
 internal/parser/    Session parsers (all supported agents)
 internal/server/    HTTP handlers, SSE, middleware
 internal/sync/      Sync engine, file watcher, discovery

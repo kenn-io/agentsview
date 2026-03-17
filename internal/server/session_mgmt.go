@@ -43,6 +43,9 @@ func (s *Server) handleRenameSession(
 	}
 
 	if err := s.db.RenameSession(id, req.DisplayName); err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("rename session: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -89,6 +92,9 @@ func (s *Server) handleDeleteSession(
 	}
 
 	if err := s.db.SoftDeleteSession(id); err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("soft delete session: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -106,6 +112,9 @@ func (s *Server) handleRestoreSession(
 
 	n, err := s.db.RestoreSession(id)
 	if err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("restore session: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -132,6 +141,9 @@ func (s *Server) handlePermanentDeleteSession(
 	// performing the delete.
 	n, err := s.db.DeleteSessionIfTrashed(id)
 	if err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("permanent delete session: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -169,6 +181,9 @@ func (s *Server) handleEmptyTrash(
 ) {
 	count, err := s.db.EmptyTrash()
 	if err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		log.Printf("empty trash: %v", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return

@@ -4509,3 +4509,164 @@ func TestUpdateSessionIncremental(t *testing.T) {
 		t.Errorf("FileHash cleared: %v", got.FileHash)
 	}
 }
+
+func TestSyncState_GetSetRoundtrip(t *testing.T) {
+	d := testDB(t)
+
+	// Initially empty.
+	val, err := d.GetSyncState("last_push_at")
+	requireNoError(t, err, "get initial")
+	if val != "" {
+		t.Fatalf("initial value = %q, want empty", val)
+	}
+
+	// Set and read back.
+	if err := d.SetSyncState("last_push_at", "2026-03-11T12:00:00.000Z"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	val, err = d.GetSyncState("last_push_at")
+	requireNoError(t, err, "get after set")
+	if val != "2026-03-11T12:00:00.000Z" {
+		t.Fatalf("value = %q, want 2026-03-11T12:00:00.000Z", val)
+	}
+
+	// Update.
+	if err := d.SetSyncState("last_push_at", "2026-03-11T13:00:00.000Z"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	val, err = d.GetSyncState("last_push_at")
+	requireNoError(t, err, "get after update")
+	if val != "2026-03-11T13:00:00.000Z" {
+		t.Fatalf("value = %q, want 2026-03-11T13:00:00.000Z", val)
+	}
+}
+
+func TestListSessionsModifiedBetween(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Insert sessions with different timestamps.
+	sessions := []Session{
+		{ID: "s1", Project: "p", Machine: "local", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+		{ID: "s2", Project: "p", Machine: "local", Agent: "claude", CreatedAt: "2026-03-11T12:00:00.000Z"},
+		{ID: "s3", Project: "p", Machine: "local", Agent: "claude", CreatedAt: "2026-03-12T12:00:00.000Z"},
+	}
+	for _, s := range sessions {
+		if err := d.UpsertSession(s); err != nil {
+			t.Fatalf("upsert %s: %v", s.ID, err)
+		}
+	}
+
+	// Backdate created_at for deterministic test results.
+	for _, s := range sessions {
+		_, err := d.getWriter().Exec(
+			"UPDATE sessions SET created_at = ? WHERE id = ?",
+			s.CreatedAt, s.ID,
+		)
+		if err != nil {
+			t.Fatalf("backdate %s: %v", s.ID, err)
+		}
+	}
+
+	// Query all.
+	all, err := d.ListSessionsModifiedBetween(ctx, "", "")
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("list all = %d, want 3", len(all))
+	}
+
+	// Query with since.
+	since, err := d.ListSessionsModifiedBetween(ctx, "2026-03-11T00:00:00Z", "")
+	if err != nil {
+		t.Fatalf("list since: %v", err)
+	}
+	if len(since) != 2 {
+		t.Fatalf("list since = %d, want 2", len(since))
+	}
+
+	// Query with until.
+	until, err := d.ListSessionsModifiedBetween(ctx, "", "2026-03-11T12:00:00.000Z")
+	if err != nil {
+		t.Fatalf("list until: %v", err)
+	}
+	if len(until) != 2 {
+		t.Fatalf("list until = %d, want 2", len(until))
+	}
+
+	// Query with both.
+	between, err := d.ListSessionsModifiedBetween(ctx, "2026-03-10T12:00:00.000Z", "2026-03-11T12:00:00.000Z")
+	if err != nil {
+		t.Fatalf("list between: %v", err)
+	}
+	if len(between) != 1 {
+		t.Fatalf("list between = %d, want 1 (s2 only)", len(between))
+	}
+	if between[0].ID != "s2" {
+		t.Errorf("between[0].ID = %q, want s2", between[0].ID)
+	}
+}
+
+func TestMessageContentFingerprint(t *testing.T) {
+	d := testDB(t)
+	sess := Session{ID: "fp-sess", Project: "p", Machine: "local", Agent: "claude"}
+	if err := d.UpsertSession(sess); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := d.InsertMessages([]Message{
+		{SessionID: "fp-sess", Ordinal: 0, Role: "user", Content: "hello", ContentLength: 5},
+		{SessionID: "fp-sess", Ordinal: 1, Role: "assistant", Content: "hi there!", ContentLength: 9},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	sum, max, min, err := d.MessageContentFingerprint("fp-sess")
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	if sum != 14 {
+		t.Errorf("sum = %d, want 14", sum)
+	}
+	if max != 9 {
+		t.Errorf("max = %d, want 9", max)
+	}
+	if min != 5 {
+		t.Errorf("min = %d, want 5", min)
+	}
+}
+
+func TestToolCallCountAndFingerprint(t *testing.T) {
+	d := testDB(t)
+	sess := Session{ID: "tc-sess", Project: "p", Machine: "local", Agent: "claude"}
+	if err := d.UpsertSession(sess); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := d.InsertMessages([]Message{
+		{
+			SessionID: "tc-sess", Ordinal: 0, Role: "assistant", Content: "tool",
+			ToolCalls: []ToolCall{
+				{ToolName: "Read", Category: "Read", ResultContentLength: 100},
+				{ToolName: "Write", Category: "Write", ResultContentLength: 50},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	count, err := d.ToolCallCount("tc-sess")
+	if err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+
+	sum, err := d.ToolCallContentFingerprint("tc-sess")
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	if sum != 150 {
+		t.Errorf("sum = %d, want 150", sum)
+	}
+}

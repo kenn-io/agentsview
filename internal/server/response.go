@@ -6,6 +6,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+
+	"github.com/wesm/agentsview/internal/db"
 )
 
 // writeJSON writes v as JSON with the given HTTP status code.
@@ -22,6 +24,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // and message.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+// handleReadOnly checks for db.ErrReadOnly and writes a 501.
+// Returns true if the error was handled.
+func handleReadOnly(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, db.ErrReadOnly) {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return true
+	}
+	return false
 }
 
 // handleContextError checks for context.Canceled and

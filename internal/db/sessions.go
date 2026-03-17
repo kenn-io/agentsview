@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrInvalidCursor is returned when a cursor cannot be decoded or verified.
@@ -45,7 +46,7 @@ const sessionFullCols = `id, project, machine, agent,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
 	deleted_at, file_path, file_size, file_mtime,
-	file_hash, created_at`
+	file_hash, local_modified_at, created_at`
 
 const (
 	// DefaultSessionLimit is the default number of sessions returned.
@@ -95,6 +96,7 @@ type Session struct {
 	FileSize          *int64  `json:"file_size,omitempty"`
 	FileMtime         *int64  `json:"file_mtime,omitempty"`
 	FileHash          *string `json:"file_hash,omitempty"`
+	LocalModifiedAt   *string `json:"local_modified_at,omitempty"`
 	CreatedAt         string  `json:"created_at"`
 }
 
@@ -459,7 +461,7 @@ func (db *DB) GetSessionFull(
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
 		&s.DeletedAt, &s.FilePath, &s.FileSize,
-		&s.FileMtime, &s.FileHash, &s.CreatedAt,
+		&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -942,7 +944,7 @@ func (db *DB) GetMachines(
 	}
 	defer rows.Close()
 
-	var machines []string
+	machines := []string{}
 	for rows.Next() {
 		var m string
 		if err := rows.Scan(&m); err != nil {
@@ -1068,7 +1070,9 @@ func (db *DB) SoftDeleteSession(id string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().Exec(
-		`UPDATE sessions SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		`UPDATE sessions
+		 SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	return err
@@ -1081,7 +1085,10 @@ func (db *DB) RestoreSession(id string) (int64, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	res, err := db.getWriter().Exec(
-		"UPDATE sessions SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+		`UPDATE sessions
+		 SET deleted_at = NULL,
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ? AND deleted_at IS NOT NULL`,
 		id,
 	)
 	if err != nil {
@@ -1097,7 +1104,10 @@ func (db *DB) RenameSession(id string, displayName *string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().Exec(
-		"UPDATE sessions SET display_name = ? WHERE id = ? AND deleted_at IS NULL",
+		`UPDATE sessions
+		 SET display_name = ?,
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ? AND deleted_at IS NULL`,
 		displayName, id,
 	)
 	return err
@@ -1209,4 +1219,111 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 		return 0, fmt.Errorf("committing transaction: %w", err)
 	}
 	return total, nil
+}
+
+// ListSessionsModifiedBetween returns all sessions created or
+// modified after since and at or before until.
+//
+// Uses file_mtime (nanoseconds since epoch from the source file)
+// as the primary modification signal so that active sessions with
+// new messages are detected even when ended_at has not changed.
+// Falls back to session timestamps for rows without file_mtime.
+//
+// Precision note: file_mtime is compared as nanosecond integers,
+// while text timestamps are normalized to millisecond precision
+// (strftime '%f' -> 3 decimal places). Sub-millisecond differences
+// in text timestamp fields are therefore truncated.
+func (db *DB) ListSessionsModifiedBetween(
+	ctx context.Context, since, until string,
+) ([]Session, error) {
+	query := "SELECT " + sessionFullCols + " FROM sessions"
+	var (
+		args  []any
+		where []string
+	)
+	if since != "" {
+		sinceTime, err := time.Parse(time.RFC3339Nano, since)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"parsing since timestamp %q: %w", since, err,
+			)
+		}
+		sinceText := sinceTime.UTC().Format("2006-01-02T15:04:05.000Z")
+		sinceNano := sinceTime.UnixNano()
+		where = append(where, `(file_mtime > ?
+			OR `+sqliteSyncTimestampExpr(colLocalModifiedAt)+` > ?
+			OR `+sqliteSyncTimestampExpr(colBestTimestamp)+` > ?
+			OR `+sqliteSyncTimestampExpr(colCreatedAt)+` > ?)`)
+		args = append(args, sinceNano, sinceText, sinceText, sinceText)
+	}
+	if until != "" {
+		untilTime, err := time.Parse(time.RFC3339Nano, until)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"parsing until timestamp %q: %w", until, err,
+			)
+		}
+		untilText := untilTime.UTC().Format("2006-01-02T15:04:05.000Z")
+		untilNano := untilTime.UnixNano()
+		// COALESCE(file_mtime, -1) maps NULL to -1, which is always
+		// <= untilNano. This is intentional: rows without file_mtime
+		// should pass the upper-bound check and fall through to the
+		// timestamp comparisons below. The since clause omits COALESCE
+		// so that NULL file_mtime does not satisfy > sinceNano.
+		where = append(where, `(COALESCE(file_mtime, -1) <= ?
+			AND COALESCE(`+sqliteSyncTimestampExpr(colLocalModifiedAt)+`, '') <= ?
+			AND `+sqliteSyncTimestampExpr(colBestTimestamp)+` <= ?
+			AND `+sqliteSyncTimestampExpr(colCreatedAt)+` <= ?)`)
+		args = append(args, untilNano, untilText, untilText, untilText)
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += ` ORDER BY created_at`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"listing sessions modified since %s: %w",
+			since, err,
+		)
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		var s Session
+		err := rows.Scan(
+			&s.ID, &s.Project, &s.Machine, &s.Agent,
+			&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
+			&s.MessageCount, &s.UserMessageCount,
+			&s.ParentSessionID, &s.RelationshipType,
+			&s.DeletedAt, &s.FilePath, &s.FileSize,
+			&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning session: %w", err)
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+// trustedSQLiteExpr is a string type for SQL expressions known to be safe
+// (literals, column references). Using a distinct type prevents accidental
+// injection of user input, mirroring the trustedSQL pattern in pgsync/time.go.
+type trustedSQLiteExpr string
+
+const (
+	colLocalModifiedAt trustedSQLiteExpr = "NULLIF(local_modified_at, '')"
+	colBestTimestamp   trustedSQLiteExpr = `COALESCE(
+				NULLIF(ended_at, ''),
+				NULLIF(started_at, ''),
+				created_at
+			)`
+	colCreatedAt trustedSQLiteExpr = "created_at"
+)
+
+func sqliteSyncTimestampExpr(expr trustedSQLiteExpr) string {
+	return "strftime('%Y-%m-%dT%H:%M:%fZ', " + string(expr) + ")"
 }

@@ -112,6 +112,9 @@ func (s *Server) handleDeleteInsight(
 	}
 
 	if err := s.db.DeleteInsight(id); err != nil {
+		if handleReadOnly(w, err) {
+			return
+		}
 		writeError(
 			w, http.StatusInternalServerError, err.Error(),
 		)
@@ -137,6 +140,12 @@ func insightGenerateClientMessage(agent string) string {
 func (s *Server) handleGenerateInsight(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"insight generation is not available in read-only mode")
+		return
+	}
+
 	var req generateInsightRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest,

@@ -18,6 +18,8 @@ import (
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
+	"github.com/wesm/agentsview/internal/pgdb"
+	"github.com/wesm/agentsview/internal/pgsync"
 	"github.com/wesm/agentsview/internal/server"
 	"github.com/wesm/agentsview/internal/sync"
 )
@@ -94,9 +96,13 @@ Server flags:
   -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
   -tls-key string     TLS key path for managed Caddy HTTPS mode
   -allowed-subnet str Client CIDR allowed to connect to the managed proxy
+  -no-browser         Don't open browser on startup
+  -pg-read string     PostgreSQL URL for read-only mode
 
 Sync flags:
   -full              Force a full resync regardless of data version
+  -pg                Push to PostgreSQL now
+  -pg-status         Show PG sync status
 
 Prune flags:
   -project string     Sessions whose project contains this substring
@@ -121,6 +127,10 @@ Environment variables:
   IFLOW_DIR               iFlow projects directory
   AMP_DIR                 Amp threads directory
   AGENT_VIEWER_DATA_DIR   Data directory (database, config)
+  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync
+  AGENTSVIEW_PG_MACHINE   Machine name for PG sync
+  AGENTSVIEW_PG_INTERVAL  PG sync interval (e.g. "1h", "30m")
+  AGENTSVIEW_PG_READ      PostgreSQL URL for read-only server mode
 
 Watcher excludes:
   Add "watch_exclude_patterns" to ~/.agentsview/config.json to skip
@@ -170,6 +180,14 @@ func runServe(args []string) {
 	start := time.Now()
 	cfg := mustLoadConfig(args)
 	setupLogFile(cfg.DataDir)
+
+	// Branch to PG-read mode before proxy/caddy validation, which
+	// checks settings that are irrelevant in read-only mode.
+	if cfg.PGReadURL != "" {
+		runServePGRead(cfg, start)
+		return
+	}
+
 	if err := validateServeConfig(cfg); err != nil {
 		fatal("invalid serve config: %v", err)
 	}
@@ -239,6 +257,48 @@ func runServe(args []string) {
 		}
 		if cfg.AuthToken != "" {
 			fmt.Printf("Remote access enabled. Auth token: %s\n", cfg.AuthToken)
+		}
+	}
+
+	// Start PG sync if configured.
+	var pgSync *pgsync.PGSync
+	resolvedPG, pgResolveErr := cfg.ResolvePGSync()
+	if pgResolveErr != nil {
+		log.Printf("warning: pg sync config: %v", pgResolveErr)
+	} else {
+		cfg.PGSync = resolvedPG
+	}
+	if pgCfg := cfg.PGSync; pgResolveErr == nil && pgCfg.IsEnabled() && pgCfg.PostgresURL != "" {
+		interval, parseErr := time.ParseDuration(pgCfg.Interval)
+		if parseErr != nil {
+			log.Printf("warning: pg sync invalid interval %q: %v",
+				pgCfg.Interval, parseErr)
+		} else {
+			ps, pgErr := pgsync.New(
+				pgCfg.PostgresURL, database, pgCfg.MachineName,
+				interval, pgCfg.AllowInsecurePG,
+			)
+			if pgErr != nil {
+				log.Printf("warning: pg sync disabled: %v", pgErr)
+			} else {
+				pgSync = ps
+				defer pgSync.Close()
+				ctx, cancel := context.WithCancel(
+					context.Background(),
+				)
+				defer cancel()
+				if schemaErr := pgSync.EnsureSchema(ctx); schemaErr != nil {
+					log.Printf(
+						"warning: pg sync schema: %v", schemaErr,
+					)
+				} else {
+					go pgSync.StartPeriodicSync(ctx)
+					log.Printf(
+						"pg sync enabled (machine=%s, interval=%s)",
+						pgCfg.MachineName, pgCfg.Interval,
+					)
+				}
+			}
 		}
 	}
 
@@ -648,5 +708,129 @@ func startUnwatchedPoll(engine *sync.Engine) {
 	for range ticker.C {
 		log.Println("Polling unwatched directories...")
 		engine.SyncAll(context.Background(), nil)
+	}
+}
+
+// runServePGRead starts the HTTP server in read-only PG mode.
+// No local SQLite, sync engine, or file watcher is used.
+// Features that require local state (proxy, remote access, PG
+// push sync) are not available in this mode.
+func runServePGRead(cfg config.Config, start time.Time) {
+	// Zero out settings that are not supported in pg-read mode so
+	// they don't leak into server.New and enable auth middleware,
+	// CORS origins, or other features that don't apply.
+	if cfg.RemoteAccess {
+		log.Println("warning: remote_access is ignored in pg-read mode")
+	}
+	if cfg.Proxy.Mode != "" {
+		log.Println("warning: proxy config is ignored in pg-read mode")
+	}
+	if cfg.PGSync.PostgresURL != "" {
+		log.Println("warning: pg_sync config is ignored in pg-read mode")
+	}
+	allowInsecurePG := cfg.PGSync.AllowInsecurePG
+	cfg.RemoteAccess = false
+	cfg.AuthToken = ""
+	cfg.PublicURL = ""
+	cfg.PublicOrigins = nil
+	cfg.Proxy = config.ProxyConfig{}
+	cfg.PGSync = config.PGSyncConfig{}
+
+	// PG-read mode has no auth middleware, so reject non-loopback
+	// binds to avoid exposing session data on the network.
+	if !isLoopbackHost(cfg.Host) {
+		fatal("pg-read mode requires a loopback host (127.0.0.1, localhost, ::1); got %q", cfg.Host)
+	}
+
+	store, err := pgdb.New(cfg.PGReadURL, allowInsecurePG)
+	if err != nil {
+		fatal("pg read: %v", err)
+	}
+	defer store.Close()
+
+	// Best-effort schema migration so pg-read works against
+	// databases from older sync builds that may lack recent
+	// columns. Read-only PG roles and hot standbys will reject
+	// DDL — suppress those and verify schema compatibility
+	// separately. Other migration errors are fatal.
+	if err := pgsync.EnsureSchemaDB(
+		context.Background(), store.DB(),
+	); err != nil {
+		if pgsync.IsReadOnlyError(err) {
+			log.Printf("pg read: schema migration skipped (read-only connection): %v", err)
+		} else {
+			fatal("pg read schema migration: %v", err)
+		}
+	}
+	// Verify required columns exist regardless of whether
+	// migration ran or was skipped. This catches stale schemas
+	// on read-only connections at startup instead of at request
+	// time.
+	if err := pgsync.CheckSchemaCompat(
+		context.Background(), store.DB(),
+	); err != nil {
+		fatal("pg read: incompatible schema: %v", err)
+	}
+
+	if cfg.CursorSecret != "" {
+		secret, decErr := base64.StdEncoding.DecodeString(
+			cfg.CursorSecret,
+		)
+		if decErr != nil {
+			fatal("invalid cursor secret: %v", decErr)
+		}
+		store.SetCursorSecret(secret)
+	}
+
+	port := server.FindAvailablePort(cfg.Host, cfg.Port)
+	if port != cfg.Port {
+		fmt.Printf("Port %d in use, using %d\n", cfg.Port, port)
+	}
+	cfg.Port = port
+
+	ctx, ctxCancel := context.WithCancel(context.Background())
+	defer ctxCancel()
+
+	srv := server.New(cfg, store, nil,
+		server.WithVersion(server.VersionInfo{
+			Version:   version,
+			Commit:    commit,
+			BuildDate: buildDate,
+			ReadOnly:  true,
+		}),
+		server.WithDataDir(cfg.DataDir),
+		server.WithBaseContext(ctx),
+	)
+
+	srvURL := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	fmt.Printf(
+		"agentsview %s listening at %s (pg read-only, started in %s)\n",
+		version, srvURL,
+		time.Since(start).Round(time.Millisecond),
+	)
+
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- srv.ListenAndServe()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	select {
+	case sig := <-sigCh:
+		log.Printf("received %v, shutting down", sig)
+		ctxCancel()
+	case err := <-serveErrCh:
+		if err != nil && err != http.ErrServerClosed {
+			fatal("server error: %v", err)
+		}
+		return
+	}
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(), 5*time.Second,
+	)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown error: %v", err)
 	}
 }

@@ -79,6 +79,9 @@ func (db *DB) Path() string {
 	return db.path
 }
 
+// ReadOnly returns false for the local SQLite store.
+func (db *DB) ReadOnly() bool { return false }
+
 // SetCursorSecret updates the secret key used for cursor signing.
 func (db *DB) SetCursorSecret(secret []byte) {
 	db.cursorMu.Lock()
@@ -299,6 +302,10 @@ func (db *DB) migrateColumns() error {
 		{
 			"sessions", "peak_context_tokens",
 			"ALTER TABLE sessions ADD COLUMN peak_context_tokens INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "local_modified_at",
+			"ALTER TABLE sessions ADD COLUMN local_modified_at TEXT",
 		},
 	}
 
@@ -632,4 +639,29 @@ func (db *DB) Update(fn func(tx *sql.Tx) error) error {
 // Reader returns the read-only connection pool.
 func (db *DB) Reader() *sql.DB {
 	return db.getReader()
+}
+
+// GetSyncState reads a value from the pg_sync_state table.
+func (db *DB) GetSyncState(key string) (string, error) {
+	var value string
+	err := db.getReader().QueryRow(
+		"SELECT value FROM pg_sync_state WHERE key = ?", key,
+	).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// SetSyncState writes a value to the pg_sync_state table.
+func (db *DB) SetSyncState(key, value string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`INSERT INTO pg_sync_state (key, value)
+		 VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		key, value,
+	)
+	return err
 }

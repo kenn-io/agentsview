@@ -155,6 +155,11 @@ func (s *Server) handleListOpeners(
 func (s *Server) handleGetSessionDir(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return
+	}
 	sessionID := r.PathValue("id")
 	session, err := s.db.GetSessionFull(r.Context(), sessionID)
 	if err != nil {
@@ -181,6 +186,11 @@ type openRequest struct {
 func (s *Server) handleOpenSession(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"not available in remote mode")
+		return
+	}
 	sessionID := r.PathValue("id")
 	session, err := s.db.GetSessionFull(r.Context(), sessionID)
 	if err != nil {

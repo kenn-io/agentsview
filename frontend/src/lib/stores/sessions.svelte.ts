@@ -20,6 +20,7 @@ export interface SessionGroup {
 
 interface Filters {
   project: string;
+  machine: string;
   agent: string;
   date: string;
   dateFrom: string;
@@ -35,6 +36,7 @@ interface Filters {
 function defaultFilters(): Filters {
   return {
     project: "",
+    machine: "",
     agent: "",
     date: "",
     dateFrom: "",
@@ -52,6 +54,7 @@ class SessionsStore {
   sessions: Session[] = $state([]);
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
+  machines: string[] = $state([]);
   activeSessionId: string | null = $state(null);
   childSessions: Map<string, Session> = $state(new Map());
   nextCursor: string | null = $state(null);
@@ -71,6 +74,9 @@ class SessionsStore {
   private agentsVersion: number = 0;
   private refreshVersion: number = 0;
   private childSessionsVersion: number = 0;
+  private machinesLoaded: boolean = false;
+  private machinesPromise: Promise<void> | null = null;
+  private machinesVersion: number = 0;
 
   get activeSession(): Session | undefined {
     return this.sessions.find((s) => s.id === this.activeSessionId);
@@ -90,6 +96,7 @@ class SessionsStore {
     return {
       project: f.project || undefined,
       exclude_project: exclude,
+      machine: f.machine || undefined,
       agent: f.agent || undefined,
       date: f.date || undefined,
       date_from: f.dateFrom || undefined,
@@ -143,6 +150,7 @@ class SessionsStore {
 
     this.filters = {
       project,
+      machine: params["machine"] ?? "",
       agent: params["agent"] ?? "",
       date: params["date"] ?? "",
       dateFrom: params["date_from"] ?? "",
@@ -321,6 +329,31 @@ class SessionsStore {
     return this.agentsPromise;
   }
 
+  async loadMachines() {
+    if (this.machinesLoaded) return;
+    if (this.machinesPromise) return this.machinesPromise;
+    const ver = this.machinesVersion;
+    this.machinesPromise = (async () => {
+      try {
+        const params = this.filters.includeOneShot
+          ? { include_one_shot: true as const }
+          : {};
+        const res = await api.getMachines(params);
+        if (ver === this.machinesVersion) {
+          this.machines = res.machines;
+          this.machinesLoaded = true;
+        }
+      } catch {
+        // Non-fatal; machines list stays stale.
+      } finally {
+        if (ver === this.machinesVersion) {
+          this.machinesPromise = null;
+        }
+      }
+    })();
+    return this.machinesPromise;
+  }
+
   private setActiveSession(id: string | null) {
     if (id === this.activeSessionId) return;
     this.activeSessionId = id;
@@ -431,6 +464,12 @@ class SessionsStore {
     this.load();
   }
 
+  setMachineFilter(machine: string) {
+    this.filters.machine = this.filters.machine === machine ? "" : machine;
+    this.activeSessionId = null;
+    this.load();
+  }
+
   setAgentFilter(agent: string) {
     if (this.filters.agent === agent) {
       this.filters.agent = "";
@@ -497,6 +536,7 @@ class SessionsStore {
   get hasActiveFilters(): boolean {
     const f = this.filters;
     return !!(
+      f.machine ||
       f.agent ||
       f.recentlyActive ||
       f.hideUnknownProject ||
@@ -555,8 +595,12 @@ class SessionsStore {
     this.agentsVersion++;
     this.agentsLoaded = false;
     this.agentsPromise = null;
+    this.machinesVersion++;
+    this.machinesLoaded = false;
+    this.machinesPromise = null;
     this.loadProjects();
     this.loadAgents();
+    this.loadMachines();
     sync.loadStats(
       this.filters.includeOneShot
         ? { include_one_shot: true }

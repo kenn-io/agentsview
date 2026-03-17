@@ -164,6 +164,12 @@ func (s *Server) saveSessionToDB(
 func (s *Server) handleUploadSession(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"uploads are not available in read-only mode")
+		return
+	}
+
 	req, errMsg := parseUploadRequest(r)
 	if errMsg != "" {
 		writeError(w, http.StatusBadRequest, errMsg)
@@ -199,6 +205,9 @@ func (s *Server) handleUploadSession(
 
 	for _, pr := range results {
 		if err := s.saveSessionToDB(pr.Session, pr.Messages); err != nil {
+			if handleReadOnly(w, err) {
+				return
+			}
 			log.Printf("Error saving session to DB: %v", err)
 			writeError(w, http.StatusInternalServerError,
 				"failed to save session to database")
