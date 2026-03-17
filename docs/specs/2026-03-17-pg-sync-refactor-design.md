@@ -86,7 +86,9 @@ Removed fields (no longer needed):
 - `AGENTSVIEW_PG_SCHEMA` — schema name
 - `AGENTSVIEW_PG_MACHINE` — machine name
 
-**TOML library**: `pelletier/go-toml/v2` (same as roborev).
+**TOML library**: `BurntSushi/toml` (roborev uses this for reading;
+agentsview does not need comment preservation so one library suffices
+for both read and write).
 
 **Go struct changes**: `PGSyncConfig` renamed to `PGConfig`.
 `Config.PGSync` field renamed to `Config.PG`. Struct tags change from
