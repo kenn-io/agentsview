@@ -220,8 +220,7 @@ func runPGServe(args []string) {
 	appCfg.Host = *host
 	// Enable remote access with auth when binding to a
 	// non-loopback address; keep it off for localhost.
-	if *host != "127.0.0.1" && *host != "localhost" &&
-		*host != "::1" {
+	if !isLoopbackHost(*host) {
 		appCfg.RemoteAccess = true
 		if err := appCfg.EnsureAuthToken(); err != nil {
 			fatal("pg serve: generating auth token: %v", err)
