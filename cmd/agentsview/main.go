@@ -49,6 +49,9 @@ func main() {
 		case "sync":
 			runSync(os.Args[2:])
 			return
+		case "pg":
+			runPG(os.Args[2:])
+			return
 		case "token-use":
 			runTokenUse(os.Args[2:])
 			return
@@ -76,6 +79,9 @@ Usage:
   agentsview [flags]          Start the server (default command)
   agentsview serve [flags]    Start the server (explicit)
   agentsview sync [flags]     Sync session data without serving
+  agentsview pg push [flags]  Push local data to PostgreSQL
+  agentsview pg status        Show PG sync status
+  agentsview pg serve [flags] Serve from PostgreSQL (read-only)
   agentsview token-use <id>   Show token usage for a session (JSON)
   agentsview prune [flags]    Delete sessions matching filters
   agentsview update [flags]   Check for and install updates
@@ -95,12 +101,16 @@ Server flags:
   -tls-key string     TLS key path for managed Caddy HTTPS mode
   -allowed-subnet str Client CIDR allowed to connect to the managed proxy
   -no-browser         Don't open browser on startup
-  -pg-read string     PostgreSQL URL for read-only mode
 
 Sync flags:
   -full              Force a full resync regardless of data version
-  -pg                Push to PostgreSQL now
-  -pg-status         Show PG sync status
+
+PG push flags:
+  -full              Bypass per-message skip heuristic
+
+PG serve flags:
+  -host string       Host to bind to (default "127.0.0.1")
+  -port int          Port to listen on (default 8080)
 
 Prune flags:
   -project string     Sessions whose project contains this substring
@@ -127,8 +137,7 @@ Environment variables:
   AGENT_VIEWER_DATA_DIR   Data directory (database, config)
   AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync
   AGENTSVIEW_PG_MACHINE   Machine name for PG sync
-  AGENTSVIEW_PG_INTERVAL  PG sync interval (e.g. "1h", "30m")
-  AGENTSVIEW_PG_READ      PostgreSQL URL for read-only server mode
+  AGENTSVIEW_PG_SCHEMA    PG schema name (default "agentsview")
 
 Watcher excludes:
   Add "watch_exclude_patterns" to ~/.agentsview/config.toml to skip

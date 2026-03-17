@@ -10,37 +10,24 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"strings"
-	"time"
 
 	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 	"github.com/wesm/agentsview/internal/parser"
-	"github.com/wesm/agentsview/internal/postgres"
 	"github.com/wesm/agentsview/internal/sync"
 )
 
 // SyncConfig holds parsed CLI options for the sync command.
 type SyncConfig struct {
-	Full     bool
-	PG       bool
-	PGStatus bool
+	Full bool
 }
 
 func parseSyncFlags(args []string) (SyncConfig, error) {
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
 	full := fs.Bool(
 		"full", false,
-		"Force a full resync (local) and bypass message skip heuristic (PG push)",
-	)
-	pg := fs.Bool(
-		"pg", false,
-		"Push to PostgreSQL now",
-	)
-	pgStatus := fs.Bool(
-		"pg-status", false,
-		"Show PG sync status",
+		"Force a full resync regardless of data version",
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -55,9 +42,7 @@ func parseSyncFlags(args []string) (SyncConfig, error) {
 	}
 
 	return SyncConfig{
-		Full:     *full,
-		PG:       *pg,
-		PGStatus: *pgStatus,
+		Full: *full,
 	}, nil
 }
 
@@ -82,8 +67,7 @@ func runSync(args []string) {
 
 	setupLogFile(appCfg.DataDir)
 
-	var database *db.DB
-	database, err = db.Open(appCfg.DBPath)
+	database, err := db.Open(appCfg.DBPath)
 	if err != nil {
 		fatal("opening database: %v", err)
 	}
@@ -97,79 +81,7 @@ func runSync(args []string) {
 		database.SetCursorSecret(secret)
 	}
 
-	if cfg.PG {
-		// Run a local sync first so newly discovered sessions are
-		// available for the PG push. This is best-effort: even if
-		// local sync encounters errors, we proceed with the push
-		// so the user can export existing data.
-		runLocalSync(appCfg, database, cfg.Full)
-		runPGSync(appCfg, database, cfg)
-		return
-	}
-
-	if cfg.PGStatus {
-		runPGSync(appCfg, database, cfg)
-		return
-	}
-
 	runLocalSync(appCfg, database, cfg.Full)
-}
-
-func runPGSync(
-	appCfg config.Config, database *db.DB, cfg SyncConfig,
-) {
-	pgCfg, err := appCfg.ResolvePG()
-	if err != nil {
-		fatal("pg sync: %v", err)
-	}
-	if pgCfg.URL == "" {
-		fatal("pg sync: url not configured")
-	}
-
-	ps, err := postgres.New(
-		pgCfg.URL, pgCfg.Schema, database,
-		pgCfg.MachineName, pgCfg.AllowInsecure,
-	)
-	if err != nil {
-		fatal("pg sync: %v", err)
-	}
-	defer ps.Close()
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	var pushErrors int
-	if cfg.PG {
-		if err := ps.EnsureSchema(ctx); err != nil {
-			fatal("pg sync schema: %v", err)
-		}
-		result, err := ps.Push(ctx, cfg.Full)
-		if err != nil {
-			fatal("pg sync push: %v", err)
-		}
-		fmt.Printf(
-			"Pushed %d sessions, %d messages in %s\n",
-			result.SessionsPushed,
-			result.MessagesPushed,
-			result.Duration.Round(time.Millisecond),
-		)
-		pushErrors = result.Errors
-	}
-
-	if cfg.PGStatus {
-		status, err := ps.Status(ctx)
-		if err != nil {
-			fatal("pg sync status: %v", err)
-		}
-		fmt.Printf("Machine:     %s\n", status.Machine)
-		fmt.Printf("Last push:   %s\n", valueOrNever(status.LastPushAt))
-		fmt.Printf("PG sessions: %d\n", status.PGSessions)
-		fmt.Printf("PG messages: %d\n", status.PGMessages)
-	}
-
-	if pushErrors > 0 {
-		fatal("pg sync: %d session(s) failed to push", pushErrors)
-	}
 }
 
 func runLocalSync(
