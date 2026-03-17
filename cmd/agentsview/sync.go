@@ -84,9 +84,13 @@ func runSync(args []string) {
 	runLocalSync(appCfg, database, cfg.Full)
 }
 
+// runLocalSync runs a local sync (incremental or full resync).
+// It returns true if a full resync was performed, which callers
+// can use to force a full PG push (watermarks become stale after
+// a local resync).
 func runLocalSync(
 	appCfg config.Config, database *db.DB, full bool,
-) {
+) bool {
 	for _, def := range parser.Registry {
 		if !appCfg.IsUserConfigured(def.Type) {
 			continue
@@ -104,8 +108,9 @@ func runLocalSync(
 		Machine:   "local",
 	})
 
+	didResync := full || database.NeedsResync()
 	ctx := context.Background()
-	if full || database.NeedsResync() {
+	if didResync {
 		runInitialResync(ctx, engine)
 	} else {
 		runInitialSync(ctx, engine)
@@ -119,6 +124,7 @@ func runLocalSync(
 			stats.SessionCount, stats.MessageCount,
 		)
 	}
+	return didResync
 }
 
 func valueOrNever(s string) string {

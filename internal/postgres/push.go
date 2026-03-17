@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -312,9 +313,7 @@ func writePushBoundaryState(
 			len(priorFingerprints)+len(sessions),
 		),
 	}
-	for id, fp := range priorFingerprints {
-		state.Fingerprints[id] = fp
-	}
+	maps.Copy(state.Fingerprints, priorFingerprints)
 	for _, sess := range sessions {
 		state.Fingerprints[sess.ID] = sessionPushFingerprint(sess)
 	}

@@ -72,8 +72,11 @@ func runPGPush(args []string) {
 	}
 
 	// Run local sync first so newly discovered sessions
-	// are available for push.
-	runLocalSync(appCfg, database, *full)
+	// are available for push. If a full resync was performed
+	// (e.g. due to data version change), force a full PG push
+	// since watermarks become stale after a local rebuild.
+	didResync := runLocalSync(appCfg, database, *full)
+	forceFull := *full || didResync
 
 	pgCfg, err := appCfg.ResolvePG()
 	if err != nil {
@@ -100,7 +103,7 @@ func runPGPush(args []string) {
 	if err := ps.EnsureSchema(ctx); err != nil {
 		fatal("pg push schema: %v", err)
 	}
-	result, err := ps.Push(ctx, *full)
+	result, err := ps.Push(ctx, forceFull)
 	if err != nil {
 		fatal("pg push: %v", err)
 	}

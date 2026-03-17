@@ -79,6 +79,12 @@ type settingsUpdateRequest struct {
 func (s *Server) handleUpdateSettings(
 	w http.ResponseWriter, r *http.Request,
 ) {
+	if s.db.ReadOnly() {
+		writeError(w, http.StatusNotImplemented,
+			"settings cannot be modified in read-only mode")
+		return
+	}
+
 	var req settingsUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")

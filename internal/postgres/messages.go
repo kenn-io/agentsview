@@ -298,10 +298,7 @@ func (s *Store) attachToolCalls(
 	}
 
 	for i := 0; i < len(ordinals); i += attachToolCallBatchSize {
-		end := i + attachToolCallBatchSize
-		if end > len(ordinals) {
-			end = len(ordinals)
-		}
+		end := min(i+attachToolCallBatchSize, len(ordinals))
 		if err := s.attachToolCallsBatch(
 			ctx, msgs, ordToIdx, sessionID,
 			ordinals[i:end],
