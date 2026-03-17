@@ -22,9 +22,10 @@
     isSubagentContext?: boolean;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
+    owningSession?: Session | null;
   }
 
-  let { message, isSubagentContext = false, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
+  let { message, isSubagentContext = false, highlightQuery = "", isCurrentHighlight = false, owningSession: owningSessionProp = null }: Props = $props();
 
   let copied = $state(false);
 
@@ -37,9 +38,15 @@
 
   let isUser = $derived(message.role === "user");
 
-  /** Resolve the session that owns this message, falling back to activeSession. */
+  /**
+   * Resolve the session that owns this message. If an explicit owningSession
+   * prop is provided (e.g. from SubagentInline which already has the child
+   * session), use it. Otherwise look up by session_id in sessions.sessions,
+   * falling back to activeSession.
+   */
   let owningSession = $derived(
-    sessions.sessions.find((s) => s.id === message.session_id) ??
+    owningSessionProp ??
+      sessions.sessions.find((s) => s.id === message.session_id) ??
       sessions.activeSession,
   );
 
