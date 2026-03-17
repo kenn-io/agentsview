@@ -11,7 +11,7 @@ LDFLAGS := -X main.version=$(VERSION) \
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
 
-.PHONY: build build-release install frontend frontend-dev dev desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short e2e vet lint tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir help
+.PHONY: build build-release install frontend frontend-dev dev desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down e2e vet lint tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -141,6 +141,25 @@ test: ensure-embed-dir
 test-short: ensure-embed-dir
 	go test -tags fts5 ./... -short -count=1
 
+# Start test PostgreSQL container
+postgres-up:
+	docker compose -f docker-compose.test.yml up -d --wait
+
+# Stop test PostgreSQL container
+postgres-down:
+	docker compose -f docker-compose.test.yml down
+
+# Run PostgreSQL integration tests (starts postgres automatically)
+test-postgres: ensure-embed-dir postgres-up
+	@echo "Waiting for postgres to be ready..."
+	@sleep 2
+	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
+		CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -count=1
+
+# PostgreSQL integration tests for CI (postgres already running as service)
+test-postgres-ci: ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -count=1
+
 # Run Playwright E2E tests
 e2e:
 	cd frontend && npx playwright test
@@ -224,6 +243,9 @@ help:
 	@echo ""
 	@echo "  test           - Run all tests"
 	@echo "  test-short     - Run fast tests only"
+	@echo "  test-postgres  - Run PostgreSQL integration tests"
+	@echo "  postgres-up    - Start test PostgreSQL container"
+	@echo "  postgres-down  - Stop test PostgreSQL container"
 	@echo "  e2e            - Run Playwright E2E tests"
 	@echo "  vet            - Run go vet"
 	@echo "  lint           - Run golangci-lint"

@@ -97,7 +97,14 @@ make vet        # go vet
 ### PostgreSQL Integration Tests
 
 PG integration tests require a real PostgreSQL instance and the `pgtest`
-build tag. Set `TEST_PG_URL` to a valid connection string:
+build tag. The easiest way to run them is with docker-compose:
+
+```bash
+make test-postgres   # Starts PG container, runs tests, leaves container running
+make postgres-down   # Stop the test container when done
+```
+
+Or manually with an existing PostgreSQL instance:
 
 ```bash
 TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
@@ -106,6 +113,9 @@ TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
 
 Tests create and drop the `agentsview` schema, so use a dedicated
 database or one where schema changes are acceptable.
+
+The CI pipeline runs these tests automatically via a GitHub Actions
+service container (see `.github/workflows/ci.yml`, `integration` job).
 
 ### Test Guidelines
 

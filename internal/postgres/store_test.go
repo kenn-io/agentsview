@@ -4,22 +4,12 @@ package postgres
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/wesm/agentsview/internal/db"
 )
 
 const testSchema = "agentsview_store_test"
-
-func testPGURL(t *testing.T) string {
-	t.Helper()
-	url := os.Getenv("TEST_PG_URL")
-	if url == "" {
-		t.Skip("TEST_PG_URL not set; skipping PG tests")
-	}
-	return url
-}
 
 // ensureStoreSchema creates the test schema and seed data.
 func ensureStoreSchema(t *testing.T, pgURL string) {

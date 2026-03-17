@@ -98,6 +98,40 @@ jobs:
         if: steps.codecov.outcome == 'failure'
         run: echo "::warning::Codecov upload failed"
 
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agentsview_test
+          POSTGRES_PASSWORD: agentsview_test_password
+          POSTGRES_DB: agentsview_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U agentsview_test -d agentsview_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417  # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Stub frontend embed dir
+        run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
+
+      - name: Run PostgreSQL integration tests
+        run: make test-postgres-ci
+        env:
+          CGO_ENABLED: "1"
+          TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
+
   e2e:
     runs-on: ubuntu-latest
     steps:

@@ -1298,6 +1298,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
+			&s.TotalOutputTokens, &s.PeakContextTokens,
 			&s.DeletedAt, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 		)

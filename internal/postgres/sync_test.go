@@ -5,22 +5,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"os"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/wesm/agentsview/internal/db"
 )
-
-func testPGURL(t *testing.T) string {
-	t.Helper()
-	url := os.Getenv("TEST_PG_URL")
-	if url == "" {
-		t.Skip("TEST_PG_URL not set; skipping PG tests")
-	}
-	return url
-}
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()

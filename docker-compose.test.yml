@@ -1,0 +1,22 @@
+# Docker Compose file for integration testing with PostgreSQL
+# Usage:
+#   make postgres-up
+#   make test-postgres
+#   make postgres-down
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agentsview_test
+      POSTGRES_PASSWORD: agentsview_test_password
+      POSTGRES_DB: agentsview_test
+    ports:
+      - "5433:5432"  # Non-standard port to avoid conflict with local postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentsview_test -d agentsview_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    tmpfs:
+      - /var/lib/postgresql/data  # Use tmpfs for faster tests, no persistence needed
