@@ -46,6 +46,7 @@ func TestParseOpenClawSession_Basic(t *testing.T) {
 	}
 	if sess == nil {
 		t.Fatal("expected session, got nil")
+		return
 	}
 
 	if sess.ID != "openclaw:main:abc-123" {

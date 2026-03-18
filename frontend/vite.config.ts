@@ -13,6 +13,7 @@ function gitCommit(): string {
 }
 
 export default defineConfig({
+  base: "./",
   plugins: [svelte()],
   define: {
     "import.meta.env.VITE_BUILD_COMMIT": JSON.stringify(

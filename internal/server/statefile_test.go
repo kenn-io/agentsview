@@ -218,6 +218,7 @@ func TestFindRunningServer_LiveProcess(t *testing.T) {
 	result := FindRunningServer(dir)
 	if result == nil {
 		t.Fatal("expected running server, got nil")
+		return
 	}
 	if result.Port != port {
 		t.Errorf("port = %d, want %d", result.Port, port)
@@ -260,6 +261,7 @@ func TestFindRunningServer_BindAll(t *testing.T) {
 		t.Fatal(
 			"expected running server for 0.0.0.0 host, got nil",
 		)
+		return
 	}
 	if result.Port != port {
 		t.Errorf("port = %d, want %d", result.Port, port)

@@ -23,7 +23,9 @@ jobs:
           go-version-file: go.mod
 
       - name: Stub frontend embed dir
-        run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
+        run: |
+          mkdir -p internal/web/dist
+          echo '<!doctype html><html><head></head><body><div id="app"></div></body></html>' > internal/web/dist/index.html
 
       - uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20  # v9.2.0
         with:
@@ -55,7 +57,9 @@ jobs:
           path-type: inherit
 
       - name: Stub frontend embed dir
-        run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
+        run: |
+          mkdir -p internal/web/dist
+          echo '<!doctype html><html><head></head><body><div id="app"></div></body></html>' > internal/web/dist/index.html
 
       - name: Run Go tests
         run: go test -tags fts5 ./... -v -count=1
@@ -80,7 +84,9 @@ jobs:
           go-version-file: go.mod
 
       - name: Stub frontend embed dir
-        run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
+        run: |
+          mkdir -p internal/web/dist
+          echo '<!doctype html><html><head></head><body><div id="app"></div></body></html>' > internal/web/dist/index.html
 
       - name: Test with coverage
         run: go test -tags fts5 -race -coverprofile=coverage.out ./...
@@ -124,7 +130,9 @@ jobs:
           go-version-file: go.mod
 
       - name: Stub frontend embed dir
-        run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
+        run: |
+          mkdir -p internal/web/dist
+          echo '<!doctype html><html><head></head><body><div id="app"></div></body></html>' > internal/web/dist/index.html
 
       - name: Run PostgreSQL integration tests
         run: make test-postgres-ci
