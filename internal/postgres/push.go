@@ -165,7 +165,11 @@ func (s *Sync) Push(
 	}
 
 	var pushed []db.Session
-	for _, sess := range sessions {
+	const batchSize = 50
+	for i := 0; i < len(sessions); i += batchSize {
+		end := min(i+batchSize, len(sessions))
+		batch := sessions[i:end]
+
 		tx, err := s.pg.BeginTx(ctx, nil)
 		if err != nil {
 			return result, fmt.Errorf(
@@ -173,58 +177,61 @@ func (s *Sync) Push(
 			)
 		}
 
-		if err := s.pushSession(ctx, tx, sess); err != nil {
-			_ = tx.Rollback()
-			log.Printf(
-				"pgsync: skipping session %s: %v",
-				sess.ID, err,
-			)
-			result.Errors++
-			continue
-		}
-
-		msgCount, err := s.pushMessages(
-			ctx, tx, sess.ID, full,
-		)
-		if err != nil {
-			_ = tx.Rollback()
-			log.Printf(
-				"pgsync: skipping session %s: %v",
-				sess.ID, err,
-			)
-			result.Errors++
-			continue
-		}
-
-		if msgCount > 0 {
-			if _, err := tx.ExecContext(ctx, `
-				UPDATE sessions
-				SET updated_at = NOW()
-				WHERE id = $1`,
-				sess.ID,
+		// Track per-batch progress so we can undo on
+		// rollback. batchPushed counts sessions that
+		// completed pushSession+pushMessages within this
+		// batch; batchMsgs is the corresponding message
+		// total.
+		batchPushed := 0
+		batchMsgs := 0
+		batchOK := true
+		for _, sess := range batch {
+			if err := s.pushSession(
+				ctx, tx, sess,
 			); err != nil {
-				_ = tx.Rollback()
 				log.Printf(
 					"pgsync: skipping session %s: %v",
 					sess.ID, err,
 				)
 				result.Errors++
-				continue
+				batchOK = false
+				break
 			}
+
+			msgCount, err := s.pushMessages(
+				ctx, tx, sess.ID, full,
+			)
+			if err != nil {
+				log.Printf(
+					"pgsync: skipping session %s: %v",
+					sess.ID, err,
+				)
+				result.Errors++
+				batchOK = false
+				break
+			}
+
+			pushed = append(pushed, sess)
+			batchPushed++
+			batchMsgs += msgCount
 		}
 
-		if err := tx.Commit(); err != nil {
-			log.Printf(
-				"pgsync: skipping session %s: commit: %v",
-				sess.ID, err,
-			)
-			result.Errors++
+		if !batchOK {
+			_ = tx.Rollback()
+			// Undo sessions appended before the failure.
+			pushed = pushed[:len(pushed)-batchPushed]
 			continue
 		}
-
-		pushed = append(pushed, sess)
-		result.SessionsPushed++
-		result.MessagesPushed += msgCount
+		if err := tx.Commit(); err != nil {
+			log.Printf(
+				"pgsync: batch commit failed: %v", err,
+			)
+			pushed = pushed[:len(pushed)-batchPushed]
+			result.Errors += len(batch)
+			continue
+		}
+		result.SessionsPushed += batchPushed
+		result.MessagesPushed += batchMsgs
 	}
 
 	finalizeCutoff := cutoff
@@ -625,37 +632,6 @@ func (s *Sync) pushMessages(
 		)
 	}
 
-	msgStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO messages (
-			session_id, ordinal, role, content,
-			timestamp, has_thinking, has_tool_use,
-			content_length
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"preparing message insert: %w", err,
-		)
-	}
-	defer msgStmt.Close()
-
-	tcStmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO tool_calls (
-			session_id, tool_name, category,
-			call_index, tool_use_id, input_json,
-			skill_name, result_content_length,
-			result_content, subagent_session_id,
-			message_ordinal
-		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11
-		)`)
-	if err != nil {
-		return 0, fmt.Errorf(
-			"preparing tool_call insert: %w", err,
-		)
-	}
-	defer tcStmt.Close()
-
 	count := 0
 	startOrdinal := 0
 	for {
@@ -682,7 +658,50 @@ func (s *Sync) pushMessages(
 			)
 		}
 
-		for _, m := range msgs {
+		if err := bulkInsertMessages(
+			ctx, tx, sessionID, msgs,
+		); err != nil {
+			return count, err
+		}
+		if err := bulkInsertToolCalls(
+			ctx, tx, sessionID, msgs,
+		); err != nil {
+			return count, err
+		}
+		count += len(msgs)
+		startOrdinal = nextOrdinal
+	}
+
+	return count, nil
+}
+
+const msgInsertBatch = 100
+
+// bulkInsertMessages inserts messages using multi-row VALUES.
+func bulkInsertMessages(
+	ctx context.Context, tx *sql.Tx,
+	sessionID string, msgs []db.Message,
+) error {
+	for i := 0; i < len(msgs); i += msgInsertBatch {
+		end := min(i+msgInsertBatch, len(msgs))
+		batch := msgs[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO messages (
+			session_id, ordinal, role, content,
+			timestamp, has_thinking, has_tool_use,
+			content_length) VALUES `)
+		args := make([]any, 0, len(batch)*8)
+		for j, m := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			p := j*8 + 1
+			fmt.Fprintf(&b,
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				p, p+1, p+2, p+3,
+				p+4, p+5, p+6, p+7,
+			)
 			var ts any
 			if m.Timestamp != "" {
 				if t, ok := ParseSQLiteTimestamp(
@@ -691,44 +710,89 @@ func (s *Sync) pushMessages(
 					ts = t
 				}
 			}
-			_, err := msgStmt.ExecContext(ctx,
+			args = append(args,
 				sessionID, m.Ordinal, m.Role,
 				m.Content, ts, m.HasThinking,
 				m.HasToolUse, m.ContentLength,
 			)
-			if err != nil {
-				return count, fmt.Errorf(
-					"inserting message ordinal %d: %w",
-					m.Ordinal, err,
-				)
-			}
-			count++
-
-			for i, tc := range m.ToolCalls {
-				_, err := tcStmt.ExecContext(ctx,
-					sessionID,
-					tc.ToolName, tc.Category,
-					i,
-					tc.ToolUseID,
-					nilIfEmpty(tc.InputJSON),
-					nilIfEmpty(tc.SkillName),
-					nilIfZero(tc.ResultContentLength),
-					nilIfEmpty(tc.ResultContent),
-					nilIfEmpty(tc.SubagentSessionID),
-					m.Ordinal,
-				)
-				if err != nil {
-					return count, fmt.Errorf(
-						"inserting tool_call: %w", err,
-					)
-				}
-			}
 		}
+		if _, err := tx.ExecContext(
+			ctx, b.String(), args...,
+		); err != nil {
+			return fmt.Errorf(
+				"bulk inserting messages: %w", err,
+			)
+		}
+	}
+	return nil
+}
 
-		startOrdinal = nextOrdinal
+// bulkInsertToolCalls inserts tool calls using multi-row VALUES.
+func bulkInsertToolCalls(
+	ctx context.Context, tx *sql.Tx,
+	sessionID string, msgs []db.Message,
+) error {
+	// Collect all tool calls from messages.
+	type tcRow struct {
+		ordinal int
+		index   int
+		tc      db.ToolCall
+	}
+	var rows []tcRow
+	for _, m := range msgs {
+		for i, tc := range m.ToolCalls {
+			rows = append(rows, tcRow{m.Ordinal, i, tc})
+		}
+	}
+	if len(rows) == 0 {
+		return nil
 	}
 
-	return count, nil
+	const tcBatch = 50
+	for i := 0; i < len(rows); i += tcBatch {
+		end := min(i+tcBatch, len(rows))
+		batch := rows[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO tool_calls (
+			session_id, tool_name, category,
+			call_index, tool_use_id, input_json,
+			skill_name, result_content_length,
+			result_content, subagent_session_id,
+			message_ordinal) VALUES `)
+		args := make([]any, 0, len(batch)*11)
+		for j, r := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			p := j*11 + 1
+			fmt.Fprintf(&b,
+				"($%d,$%d,$%d,$%d,$%d,$%d,"+
+					"$%d,$%d,$%d,$%d,$%d)",
+				p, p+1, p+2, p+3, p+4, p+5,
+				p+6, p+7, p+8, p+9, p+10,
+			)
+			args = append(args,
+				sessionID,
+				r.tc.ToolName, r.tc.Category,
+				r.index, r.tc.ToolUseID,
+				nilIfEmpty(r.tc.InputJSON),
+				nilIfEmpty(r.tc.SkillName),
+				nilIfZero(r.tc.ResultContentLength),
+				nilIfEmpty(r.tc.ResultContent),
+				nilIfEmpty(r.tc.SubagentSessionID),
+				r.ordinal,
+			)
+		}
+		if _, err := tx.ExecContext(
+			ctx, b.String(), args...,
+		); err != nil {
+			return fmt.Errorf(
+				"bulk inserting tool_calls: %w", err,
+			)
+		}
+	}
+	return nil
 }
 
 // normalizeSyncTimestamps ensures schema exists and normalizes

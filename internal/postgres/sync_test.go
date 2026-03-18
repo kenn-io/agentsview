@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"regexp"
 	"testing"
 	"time"
@@ -627,6 +628,227 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 		t.Errorf(
 			"full push messages = %d, want 1",
 			result.MessagesPushed,
+		)
+	}
+}
+
+func TestPushBatchesMultipleSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	ctx := context.Background()
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	// Create 75 sessions to exercise two batches (50 + 25).
+	const totalSessions = 75
+	for i := range totalSessions {
+		id := fmt.Sprintf("batch-sess-%03d", i)
+		started := "2026-03-11T12:00:00Z"
+		sess := db.Session{
+			ID:           id,
+			Project:      "batch-project",
+			Machine:      "local",
+			Agent:        "claude",
+			StartedAt:    &started,
+			MessageCount: 2,
+		}
+		if err := local.UpsertSession(sess); err != nil {
+			t.Fatalf("upsert session %d: %v", i, err)
+		}
+		if err := local.InsertMessages([]db.Message{
+			{
+				SessionID:     id,
+				Ordinal:       0,
+				Role:          "user",
+				Content:       fmt.Sprintf("msg %d", i),
+				ContentLength: 5,
+			},
+			{
+				SessionID:     id,
+				Ordinal:       1,
+				Role:          "assistant",
+				Content:       fmt.Sprintf("reply %d", i),
+				ContentLength: 7,
+			},
+		}); err != nil {
+			t.Fatalf("insert messages %d: %v", i, err)
+		}
+	}
+
+	result, err := ps.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if result.SessionsPushed != totalSessions {
+		t.Errorf(
+			"sessions pushed = %d, want %d",
+			result.SessionsPushed, totalSessions,
+		)
+	}
+	if result.MessagesPushed != totalSessions*2 {
+		t.Errorf(
+			"messages pushed = %d, want %d",
+			result.MessagesPushed, totalSessions*2,
+		)
+	}
+	if result.Errors != 0 {
+		t.Errorf("errors = %d, want 0", result.Errors)
+	}
+
+	// Verify PG state.
+	var pgSessions, pgMessages int
+	if err := ps.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions",
+	).Scan(&pgSessions); err != nil {
+		t.Fatalf("counting pg sessions: %v", err)
+	}
+	if err := ps.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM messages",
+	).Scan(&pgMessages); err != nil {
+		t.Fatalf("counting pg messages: %v", err)
+	}
+	if pgSessions != totalSessions {
+		t.Errorf(
+			"pg sessions = %d, want %d",
+			pgSessions, totalSessions,
+		)
+	}
+	if pgMessages != totalSessions*2 {
+		t.Errorf(
+			"pg messages = %d, want %d",
+			pgMessages, totalSessions*2,
+		)
+	}
+}
+
+func TestPushBulkInsertManyMessages(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	ctx := context.Background()
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	// Create a session with 250 messages to exercise
+	// multi-row VALUES batching (100 per batch).
+	const msgCount = 250
+	started := "2026-03-11T12:00:00Z"
+	sess := db.Session{
+		ID:           "bulk-msg-sess",
+		Project:      "test-project",
+		Machine:      "local",
+		Agent:        "claude",
+		StartedAt:    &started,
+		MessageCount: msgCount,
+	}
+	if err := local.UpsertSession(sess); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+	msgs := make([]db.Message, msgCount)
+	for i := range msgs {
+		role := "user"
+		if i%2 == 1 {
+			role = "assistant"
+		}
+		msgs[i] = db.Message{
+			SessionID:     "bulk-msg-sess",
+			Ordinal:       i,
+			Role:          role,
+			Content:       fmt.Sprintf("message %d", i),
+			ContentLength: len(fmt.Sprintf("message %d", i)),
+		}
+		// Add a tool call on every 10th assistant message.
+		if role == "assistant" && i%10 == 1 {
+			msgs[i].HasToolUse = true
+			msgs[i].ToolCalls = []db.ToolCall{{
+				ToolName:            "Read",
+				Category:            "Read",
+				ToolUseID:           fmt.Sprintf("toolu_%d", i),
+				ResultContentLength: 10,
+				ResultContent:       "some result",
+			}}
+		}
+	}
+	if err := local.InsertMessages(msgs); err != nil {
+		t.Fatalf("insert messages: %v", err)
+	}
+
+	result, err := ps.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if result.SessionsPushed != 1 {
+		t.Errorf(
+			"sessions pushed = %d, want 1",
+			result.SessionsPushed,
+		)
+	}
+	if result.MessagesPushed != msgCount {
+		t.Errorf(
+			"messages pushed = %d, want %d",
+			result.MessagesPushed, msgCount,
+		)
+	}
+
+	// Verify all messages landed in PG.
+	var pgMsgCount int
+	if err := ps.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM messages WHERE session_id = $1",
+		"bulk-msg-sess",
+	).Scan(&pgMsgCount); err != nil {
+		t.Fatalf("counting pg messages: %v", err)
+	}
+	if pgMsgCount != msgCount {
+		t.Errorf(
+			"pg messages = %d, want %d",
+			pgMsgCount, msgCount,
+		)
+	}
+
+	// Verify tool calls landed.
+	var pgTCCount int
+	if err := ps.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM tool_calls WHERE session_id = $1",
+		"bulk-msg-sess",
+	).Scan(&pgTCCount); err != nil {
+		t.Fatalf("counting pg tool_calls: %v", err)
+	}
+	// Every 10th assistant message (ordinals 1, 11, 21, ...).
+	expectedTC := 0
+	for i := range msgCount {
+		if i%2 == 1 && i%10 == 1 {
+			expectedTC++
+		}
+	}
+	if pgTCCount != expectedTC {
+		t.Errorf(
+			"pg tool_calls = %d, want %d",
+			pgTCCount, expectedTC,
 		)
 	}
 }
