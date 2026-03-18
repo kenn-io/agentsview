@@ -170,24 +170,32 @@ func (s *Sync) Push(
 		end := min(i+batchSize, len(sessions))
 		batch := sessions[i:end]
 
-		ok, err := s.pushBatch(
-			ctx, batch, full, &pushed, &result,
+		batchResult, err := s.pushBatch(
+			ctx, batch, full, &pushed,
 		)
 		if err != nil {
 			return result, err
 		}
-		if !ok {
-			// Batch failed — retry each session
-			// individually so one bad session doesn't
-			// block the rest.
-			for _, sess := range batch {
-				_, retryErr := s.pushBatch(
-					ctx, []db.Session{sess},
-					full, &pushed, &result,
-				)
-				if retryErr != nil {
-					return result, retryErr
-				}
+		if batchResult.ok {
+			result.SessionsPushed += batchResult.sessions
+			result.MessagesPushed += batchResult.messages
+			continue
+		}
+		// Batch failed — retry each session individually
+		// so one bad session doesn't block the rest.
+		for _, sess := range batch {
+			sr, retryErr := s.pushBatch(
+				ctx, []db.Session{sess},
+				full, &pushed,
+			)
+			if retryErr != nil {
+				return result, retryErr
+			}
+			if sr.ok {
+				result.SessionsPushed += sr.sessions
+				result.MessagesPushed += sr.messages
+			} else {
+				result.Errors++
 			}
 		}
 	}
@@ -214,10 +222,16 @@ func (s *Sync) Push(
 	return result, nil
 }
 
+type batchResult struct {
+	ok       bool
+	sessions int
+	messages int
+}
+
 // pushBatch pushes a slice of sessions within a single
-// transaction. On success it appends to pushed and updates
-// result counters, returning (true, nil). On a session-level
-// error it rolls back and returns (false, nil) so the caller
+// transaction. On success it appends to pushed and returns
+// ok=true with session/message counts. On a session-level
+// error it rolls back and returns ok=false so the caller
 // can retry individually. Fatal errors (BeginTx failure)
 // return a non-nil error.
 func (s *Sync) pushBatch(
@@ -225,29 +239,27 @@ func (s *Sync) pushBatch(
 	batch []db.Session,
 	full bool,
 	pushed *[]db.Session,
-	result *PushResult,
-) (bool, error) {
+) (batchResult, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf(
+		return batchResult{}, fmt.Errorf(
 			"begin pg tx: %w", err,
 		)
 	}
 
-	batchPushed := 0
-	batchMsgs := 0
+	n := 0
+	msgs := 0
 	for _, sess := range batch {
 		if err := s.pushSession(
 			ctx, tx, sess,
 		); err != nil {
 			log.Printf(
-				"pgsync: skipping session %s: %v",
+				"pgsync: session %s: %v",
 				sess.ID, err,
 			)
-			result.Errors++
 			_ = tx.Rollback()
-			*pushed = (*pushed)[:len(*pushed)-batchPushed]
-			return false, nil
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
 		}
 
 		msgCount, err := s.pushMessages(
@@ -255,13 +267,12 @@ func (s *Sync) pushBatch(
 		)
 		if err != nil {
 			log.Printf(
-				"pgsync: skipping session %s: %v",
+				"pgsync: session %s: %v",
 				sess.ID, err,
 			)
-			result.Errors++
 			_ = tx.Rollback()
-			*pushed = (*pushed)[:len(*pushed)-batchPushed]
-			return false, nil
+			*pushed = (*pushed)[:len(*pushed)-n]
+			return batchResult{}, nil
 		}
 
 		// Bump updated_at when messages were rewritten
@@ -278,29 +289,25 @@ func (s *Sync) pushBatch(
 					"pgsync: bumping updated_at %s: %v",
 					sess.ID, err,
 				)
-				result.Errors++
 				_ = tx.Rollback()
-				*pushed = (*pushed)[:len(*pushed)-batchPushed]
-				return false, nil
+				*pushed = (*pushed)[:len(*pushed)-n]
+				return batchResult{}, nil
 			}
 		}
 
 		*pushed = append(*pushed, sess)
-		batchPushed++
-		batchMsgs += msgCount
+		n++
+		msgs += msgCount
 	}
 
 	if err := tx.Commit(); err != nil {
 		log.Printf(
 			"pgsync: batch commit failed: %v", err,
 		)
-		*pushed = (*pushed)[:len(*pushed)-batchPushed]
-		result.Errors += len(batch)
-		return false, nil
+		*pushed = (*pushed)[:len(*pushed)-n]
+		return batchResult{}, nil
 	}
-	result.SessionsPushed += batchPushed
-	result.MessagesPushed += batchMsgs
-	return true, nil
+	return batchResult{ok: true, sessions: n, messages: msgs}, nil
 }
 
 func finalizePushState(
@@ -482,11 +489,17 @@ func int64Value(value *int64) string {
 }
 
 // nilStr converts a nil or empty *string to SQL NULL.
+// Sanitizes before checking emptiness so strings like "\x00"
+// that reduce to "" are correctly returned as NULL.
 func nilStr(s *string) any {
-	if s == nil || *s == "" {
+	if s == nil {
 		return nil
 	}
-	return sanitizePG(*s)
+	v := sanitizePG(*s)
+	if v == "" {
+		return nil
+	}
+	return v
 }
 
 // nilStrTS converts a nil or empty *string timestamp to a
@@ -552,7 +565,9 @@ func (s *Sync) pushSession(
 			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
 			OR sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
 			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type`,
-		sess.ID, s.machine, sess.Project, sess.Agent,
+		sess.ID, s.machine,
+		sanitizePG(sess.Project),
+		sess.Agent,
 		nilStr(sess.FirstMessage),
 		nilStr(sess.DisplayName),
 		createdAt,
@@ -873,10 +888,11 @@ func sanitizePG(s string) string {
 }
 
 func nilIfEmpty(s string) any {
+	s = sanitizePG(s)
 	if s == "" {
 		return nil
 	}
-	return sanitizePG(s)
+	return s
 }
 
 func nilIfZero(n int) any {

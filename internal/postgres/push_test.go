@@ -383,7 +383,6 @@ func TestSanitizePG(t *testing.T) {
 }
 
 func TestNilIfEmptySanitizes(t *testing.T) {
-	// Verify nilIfEmpty applies UTF-8 sanitization.
 	got := nilIfEmpty("hello\x00world")
 	if got != "helloworld" {
 		t.Errorf(
@@ -392,9 +391,14 @@ func TestNilIfEmptySanitizes(t *testing.T) {
 		)
 	}
 
-	// nil/empty still returns nil.
 	if nilIfEmpty("") != nil {
 		t.Error("nilIfEmpty(\"\") should be nil")
+	}
+
+	// A string that reduces to empty after sanitization
+	// should return nil, not "".
+	if nilIfEmpty("\x00") != nil {
+		t.Error("nilIfEmpty(\"\\x00\") should be nil")
 	}
 }
 
@@ -406,5 +410,12 @@ func TestNilStrSanitizes(t *testing.T) {
 			"nilStr with invalid UTF-8 = %q, want %q",
 			got, "helloworld",
 		)
+	}
+
+	// A *string that reduces to empty after sanitization
+	// should return nil.
+	nul := "\x00"
+	if nilStr(&nul) != nil {
+		t.Error("nilStr(\"\\x00\") should be nil")
 	}
 }

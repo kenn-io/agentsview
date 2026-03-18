@@ -1482,15 +1482,23 @@ func TestHostHeaderHTTPSPublicOriginExpandsTrustedHosts(
 		"https://viewer.example.test",
 	))
 
-	req := httptest.NewRequest(
-		http.MethodGet, "/api/v1/stats", nil,
-	)
-	// HTTPS default port: browser sends Host without :443.
-	req.Host = "viewer.example.test:443"
-	req.RemoteAddr = "127.0.0.1:1234"
-	w := httptest.NewRecorder()
-	te.srv.Handler().ServeHTTP(w, req)
-	assertStatus(t, w, http.StatusOK)
+	// Browsers omit :443 for HTTPS, so test the bare hostname
+	// that a reverse proxy would forward.
+	for _, host := range []string{
+		"viewer.example.test",
+		"viewer.example.test:443",
+	} {
+		t.Run(host, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodGet, "/api/v1/stats", nil,
+			)
+			req.Host = host
+			req.RemoteAddr = "127.0.0.1:1234"
+			w := httptest.NewRecorder()
+			te.srv.Handler().ServeHTTP(w, req)
+			assertStatus(t, w, http.StatusOK)
+		})
+	}
 }
 
 func TestCORSAllowsConfiguredHTTPSPublicOrigin(t *testing.T) {
