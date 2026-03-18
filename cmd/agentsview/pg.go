@@ -179,6 +179,8 @@ func runPGServe(args []string) {
 		"Host to bind to")
 	port := fs.Int("port", 8080,
 		"Port to listen on")
+	basePath := fs.String("base-path", "",
+		"URL prefix for reverse-proxy subpath (e.g. /agentsview)")
 	if err := fs.Parse(args); err != nil {
 		log.Fatalf("parsing flags: %v", err)
 	}
@@ -235,7 +237,7 @@ func runPGServe(args []string) {
 			*port, appCfg.Port)
 	}
 
-	srv := server.New(appCfg, store, nil,
+	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
 			Commit:    commit,
@@ -243,7 +245,11 @@ func runPGServe(args []string) {
 			ReadOnly:  true,
 		}),
 		server.WithBaseContext(ctx),
-	)
+	}
+	if *basePath != "" {
+		opts = append(opts, server.WithBasePath(*basePath))
+	}
+	srv := server.New(appCfg, store, nil, opts...)
 
 	serveErrCh := make(chan error, 1)
 	go func() {

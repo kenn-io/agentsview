@@ -40,7 +40,11 @@ const AUTH_TOKEN_KEY = "agentsview-auth-token";
 
 function getBase(): string {
   const server = getServerUrl();
-  return server ? `${server}/api/v1` : "/api/v1";
+  if (server) return `${server}/api/v1`;
+  // Derive from <base href> so the app works behind a reverse
+  // proxy subpath (e.g. /agentsview/api/v1).
+  const base = new URL(document.baseURI).pathname.replace(/\/$/, "");
+  return `${base}/api/v1`;
 }
 
 export function getServerUrl(): string {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
@@ -57,6 +58,12 @@ type Server struct {
 	// updates. Defaults to update.CheckForUpdate; tests
 	// can override it via WithUpdateChecker.
 	updateCheckFn UpdateCheckFunc
+
+	// basePath is a URL prefix for reverse-proxy deployments
+	// (e.g. "/agentsview"). When set, all routes are served
+	// under this prefix and a <base href> tag is injected
+	// into the SPA's index.html.
+	basePath string
 }
 
 // New creates a new Server.
@@ -110,6 +117,16 @@ func WithBaseContext(ctx context.Context) Option {
 // allowing tests to substitute a deterministic stub.
 func WithUpdateChecker(f UpdateCheckFunc) Option {
 	return func(s *Server) { s.updateCheckFn = f }
+}
+
+// WithBasePath sets a URL prefix for reverse-proxy deployments.
+// The path must start with "/" and not end with "/" (e.g.
+// "/agentsview"). When set, the server strips this prefix from
+// incoming requests and injects a <base href> tag into the SPA.
+func WithBasePath(path string) Option {
+	return func(s *Server) {
+		s.basePath = strings.TrimRight(path, "/")
+	}
 }
 
 // WithGenerateFunc overrides the insight generation function,
@@ -247,13 +264,63 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	f, err := s.spaFS.Open(path)
 	if err == nil {
 		f.Close()
+		// For index.html with a base path, inject <base href>.
+		if s.basePath != "" && path == "index.html" {
+			s.serveIndexWithBase(w, r)
+			return
+		}
 		s.spaHandler.ServeHTTP(w, r)
 		return
 	}
 
 	// SPA fallback: serve index.html for all routes
+	if s.basePath != "" {
+		s.serveIndexWithBase(w, r)
+		return
+	}
 	r.URL.Path = "/"
 	s.spaHandler.ServeHTTP(w, r)
+}
+
+// serveIndexWithBase reads the embedded index.html, injects a
+// <base href> tag, and rewrites root-relative asset paths so
+// everything resolves correctly behind a reverse proxy subpath.
+func (s *Server) serveIndexWithBase(
+	w http.ResponseWriter, _ *http.Request,
+) {
+	f, err := s.spaFS.Open("index.html")
+	if err != nil {
+		http.Error(w, "index.html not found",
+			http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
+	if err != nil {
+		http.Error(w, "reading index.html",
+			http.StatusInternalServerError)
+		return
+	}
+	html := string(data)
+
+	// Rewrite root-relative asset paths (href="/...", src="/...")
+	// to include the base path prefix so the browser fetches
+	// assets through the reverse proxy.
+	bp := s.basePath
+	html = strings.ReplaceAll(html, `href="/`, `href="`+bp+`/`)
+	html = strings.ReplaceAll(html, `src="/`, `src="`+bp+`/`)
+
+	// Inject <base href> AFTER rewriting paths so it doesn't
+	// get double-prefixed by the replacement above.
+	baseTag := fmt.Sprintf(
+		`<base href="%s/">`, bp,
+	)
+	html = strings.Replace(
+		html, "<head>", "<head>\n    "+baseTag, 1,
+	)
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(html))
 }
 
 // SetPort updates the listen port (for testing).
@@ -290,7 +357,7 @@ func (s *Server) Handler() http.Handler {
 	if bindAll {
 		bindAllIPs = localInterfaceIPs()
 	}
-	return s.authMiddleware(
+	h := s.authMiddleware(
 		hostCheckMiddleware(
 			allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
 			corsMiddleware(
@@ -298,6 +365,22 @@ func (s *Server) Handler() http.Handler {
 			),
 		),
 	)
+	if s.basePath != "" {
+		inner := h
+		h = http.HandlerFunc(func(
+			w http.ResponseWriter, r *http.Request,
+		) {
+			// Redirect /basepath to /basepath/ for the SPA.
+			if r.URL.Path == s.basePath {
+				http.Redirect(w, r,
+					s.basePath+"/", http.StatusMovedPermanently)
+				return
+			}
+			http.StripPrefix(s.basePath, inner).
+				ServeHTTP(w, r)
+		})
+	}
+	return h
 }
 
 // buildAllowedHosts returns the set of Host header values that
