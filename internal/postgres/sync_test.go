@@ -736,7 +736,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 		Agent:     "claude",
 		CreatedAt: "2026-03-11T12:00:00.000Z",
 	}
-	if err := local.UpsertSession(ctx, sess); err != nil {
+	if err := local.UpsertSession(sess); err != nil {
 		t.Fatalf("upsert session: %v", err)
 	}
 
