@@ -144,6 +144,16 @@ export function createVirtualizer(
         scrollEl.scrollTop = 0;
         return;
       }
+      // Don't override an active scrollToIndex reconcile loop.
+      // scrollState.index is non-null while TanStack is iterating
+      // toward the target index. Calling scrollToOffset here would
+      // reset scrollState.index to null, breaking the loop and
+      // leaving the viewport at the wrong position (observed as
+      // pinned-message navigation stopping mid-scroll in ascending
+      // sort when the target item is not yet rendered).
+      // scrollState is typed private but is a plain public field at runtime.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((instance as any).scrollState?.index != null) return;
       if (scrollEl.scrollTop > 0) {
         instance.scrollToOffset(scrollEl.scrollTop);
       }
