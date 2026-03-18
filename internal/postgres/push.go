@@ -66,6 +66,17 @@ func (s *Sync) Push(
 	}
 	if full {
 		lastPush = ""
+		// Caller requested a full push — the PG schema
+		// may have been dropped since schemaDone was set.
+		// Clear the memo so EnsureSchema re-runs.
+		s.schemaMu.Lock()
+		s.schemaDone = false
+		s.schemaMu.Unlock()
+		if err := s.normalizeSyncTimestamps(
+			ctx,
+		); err != nil {
+			return result, err
+		}
 	}
 
 	// Coherence check: if the local watermark says we've
@@ -87,8 +98,6 @@ func (s *Sync) Push(
 			)
 			lastPush = ""
 			full = true
-			// Schema may have been dropped — clear
-			// cached state and re-ensure it exists.
 			s.schemaMu.Lock()
 			s.schemaDone = false
 			s.schemaMu.Unlock()

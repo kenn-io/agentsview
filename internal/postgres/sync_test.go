@@ -712,6 +712,62 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 	}
 }
 
+func TestPushFullAfterSchemaDropRecreatesSchema(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	ctx := context.Background()
+
+	sess := db.Session{
+		ID:        "sess-full-drop",
+		Project:   "proj",
+		Machine:   "test-machine",
+		Agent:     "claude",
+		CreatedAt: "2026-03-11T12:00:00.000Z",
+	}
+	if err := local.UpsertSession(ctx, sess); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+
+	r1, err := ps.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("initial push: %v", err)
+	}
+	if r1.SessionsPushed != 1 {
+		t.Fatalf(
+			"initial push sessions = %d, want 1",
+			r1.SessionsPushed,
+		)
+	}
+
+	// Drop the schema without clearing local state.
+	cleanPGSchema(t, pgURL)
+
+	// A full push should recreate the schema even though
+	// schemaDone is memoized from the first push.
+	r2, err := ps.Push(ctx, true)
+	if err != nil {
+		t.Fatalf("full push after drop: %v", err)
+	}
+	if r2.SessionsPushed != 1 {
+		t.Errorf(
+			"full push sessions = %d, want 1",
+			r2.SessionsPushed,
+		)
+	}
+}
+
 func TestPushBatchesMultipleSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
