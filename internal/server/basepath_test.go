@@ -101,6 +101,23 @@ func TestBasePath_SPAFallbackServesIndex(t *testing.T) {
 	}
 }
 
+func TestBasePath_RejectsSiblingPath(t *testing.T) {
+	s := testServer(t, 0, WithBasePath("/app"))
+
+	// /appfoo should NOT be handled — only /app or /app/...
+	req := httptest.NewRequest("GET", "/appfoo/bar", nil)
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf(
+			"GET /appfoo/bar = %d, want 404", w.Code,
+		)
+	}
+}
+
 func TestBasePath_TrailingSlashNormalized(t *testing.T) {
 	s := testServer(t, 0, WithBasePath("/app/"))
 

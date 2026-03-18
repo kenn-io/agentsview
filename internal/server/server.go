@@ -367,16 +367,24 @@ func (s *Server) Handler() http.Handler {
 	)
 	if s.basePath != "" {
 		inner := h
+		prefix := s.basePath
 		h = http.HandlerFunc(func(
 			w http.ResponseWriter, r *http.Request,
 		) {
+			p := r.URL.Path
 			// Redirect /basepath to /basepath/ for the SPA.
-			if r.URL.Path == s.basePath {
+			if p == prefix {
 				http.Redirect(w, r,
-					s.basePath+"/", http.StatusMovedPermanently)
+					prefix+"/", http.StatusMovedPermanently)
 				return
 			}
-			http.StripPrefix(s.basePath, inner).
+			// Only match full path-segment prefixes to
+			// prevent /basepathFOO from being handled.
+			if !strings.HasPrefix(p, prefix+"/") {
+				http.NotFound(w, r)
+				return
+			}
+			http.StripPrefix(prefix, inner).
 				ServeHTTP(w, r)
 		})
 	}
