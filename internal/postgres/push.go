@@ -170,68 +170,26 @@ func (s *Sync) Push(
 		end := min(i+batchSize, len(sessions))
 		batch := sessions[i:end]
 
-		tx, err := s.pg.BeginTx(ctx, nil)
+		ok, err := s.pushBatch(
+			ctx, batch, full, &pushed, &result,
+		)
 		if err != nil {
-			return result, fmt.Errorf(
-				"begin pg tx: %w", err,
-			)
+			return result, err
 		}
-
-		// Track per-batch progress so we can undo on
-		// rollback. batchPushed counts sessions that
-		// completed pushSession+pushMessages within this
-		// batch; batchMsgs is the corresponding message
-		// total.
-		batchPushed := 0
-		batchMsgs := 0
-		batchOK := true
-		for _, sess := range batch {
-			if err := s.pushSession(
-				ctx, tx, sess,
-			); err != nil {
-				log.Printf(
-					"pgsync: skipping session %s: %v",
-					sess.ID, err,
+		if !ok {
+			// Batch failed — retry each session
+			// individually so one bad session doesn't
+			// block the rest.
+			for _, sess := range batch {
+				_, retryErr := s.pushBatch(
+					ctx, []db.Session{sess},
+					full, &pushed, &result,
 				)
-				result.Errors++
-				batchOK = false
-				break
+				if retryErr != nil {
+					return result, retryErr
+				}
 			}
-
-			msgCount, err := s.pushMessages(
-				ctx, tx, sess.ID, full,
-			)
-			if err != nil {
-				log.Printf(
-					"pgsync: skipping session %s: %v",
-					sess.ID, err,
-				)
-				result.Errors++
-				batchOK = false
-				break
-			}
-
-			pushed = append(pushed, sess)
-			batchPushed++
-			batchMsgs += msgCount
 		}
-
-		if !batchOK {
-			_ = tx.Rollback()
-			// Undo sessions appended before the failure.
-			pushed = pushed[:len(pushed)-batchPushed]
-			continue
-		}
-		if err := tx.Commit(); err != nil {
-			log.Printf(
-				"pgsync: batch commit failed: %v", err,
-			)
-			pushed = pushed[:len(pushed)-batchPushed]
-			result.Errors += len(batch)
-			continue
-		}
-		result.SessionsPushed += batchPushed
-		result.MessagesPushed += batchMsgs
 	}
 
 	finalizeCutoff := cutoff
@@ -252,6 +210,95 @@ func (s *Sync) Push(
 
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// pushBatch pushes a slice of sessions within a single
+// transaction. On success it appends to pushed and updates
+// result counters, returning (true, nil). On a session-level
+// error it rolls back and returns (false, nil) so the caller
+// can retry individually. Fatal errors (BeginTx failure)
+// return a non-nil error.
+func (s *Sync) pushBatch(
+	ctx context.Context,
+	batch []db.Session,
+	full bool,
+	pushed *[]db.Session,
+	result *PushResult,
+) (bool, error) {
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf(
+			"begin pg tx: %w", err,
+		)
+	}
+
+	batchPushed := 0
+	batchMsgs := 0
+	for _, sess := range batch {
+		if err := s.pushSession(
+			ctx, tx, sess,
+		); err != nil {
+			log.Printf(
+				"pgsync: skipping session %s: %v",
+				sess.ID, err,
+			)
+			result.Errors++
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-batchPushed]
+			return false, nil
+		}
+
+		msgCount, err := s.pushMessages(
+			ctx, tx, sess.ID, full,
+		)
+		if err != nil {
+			log.Printf(
+				"pgsync: skipping session %s: %v",
+				sess.ID, err,
+			)
+			result.Errors++
+			_ = tx.Rollback()
+			*pushed = (*pushed)[:len(*pushed)-batchPushed]
+			return false, nil
+		}
+
+		// Bump updated_at when messages were rewritten
+		// but pushSession was a metadata no-op (its
+		// WHERE clause skips unchanged rows).
+		if msgCount > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE sessions
+				SET updated_at = NOW()
+				WHERE id = $1`,
+				sess.ID,
+			); err != nil {
+				log.Printf(
+					"pgsync: bumping updated_at %s: %v",
+					sess.ID, err,
+				)
+				result.Errors++
+				_ = tx.Rollback()
+				*pushed = (*pushed)[:len(*pushed)-batchPushed]
+				return false, nil
+			}
+		}
+
+		*pushed = append(*pushed, sess)
+		batchPushed++
+		batchMsgs += msgCount
+	}
+
+	if err := tx.Commit(); err != nil {
+		log.Printf(
+			"pgsync: batch commit failed: %v", err,
+		)
+		*pushed = (*pushed)[:len(*pushed)-batchPushed]
+		result.Errors += len(batch)
+		return false, nil
+	}
+	result.SessionsPushed += batchPushed
+	result.MessagesPushed += batchMsgs
+	return true, nil
 }
 
 func finalizePushState(
