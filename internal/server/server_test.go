@@ -1462,17 +1462,35 @@ func TestHostHeaderAllowsConfiguredPublicOriginHost(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 }
 
-func TestHostHeaderPublicOriginsDoNotExpandTrustedHosts(t *testing.T) {
+func TestHostHeaderPublicOriginsExpandTrustedHosts(t *testing.T) {
 	te := setup(t, withPublicOrigins("http://viewer.example.test:8004"))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
 	req.Host = "viewer.example.test:8004"
-	// Use loopback RemoteAddr so authMiddleware passes through and
-	// the 403 comes from hostCheckMiddleware, not auth.
 	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	te.srv.Handler().ServeHTTP(w, req)
-	assertStatus(t, w, http.StatusForbidden)
+	// public_origins should expand the host allowlist so
+	// reverse proxies forwarding the origin's Host are allowed.
+	assertStatus(t, w, http.StatusOK)
+}
+
+func TestHostHeaderHTTPSPublicOriginExpandsTrustedHosts(
+	t *testing.T,
+) {
+	te := setup(t, withPublicOrigins(
+		"https://viewer.example.test",
+	))
+
+	req := httptest.NewRequest(
+		http.MethodGet, "/api/v1/stats", nil,
+	)
+	// HTTPS default port: browser sends Host without :443.
+	req.Host = "viewer.example.test:443"
+	req.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusOK)
 }
 
 func TestCORSAllowsConfiguredHTTPSPublicOrigin(t *testing.T) {
