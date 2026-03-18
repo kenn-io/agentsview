@@ -68,6 +68,30 @@ func (s *Sync) Push(
 		lastPush = ""
 	}
 
+	// Coherence check: if the local watermark says we've
+	// pushed before but PG has zero sessions for this
+	// machine, the PG side was reset (schema dropped, DB
+	// recreated, etc.). Force a full push so all sessions
+	// are re-synced.
+	if lastPush != "" {
+		pgCount, cErr := s.pgSessionCount(ctx)
+		if cErr != nil {
+			return result, cErr
+		}
+		if pgCount == 0 {
+			log.Printf(
+				"pgsync: local watermark set but PG has "+
+					"0 sessions for machine %q; "+
+					"forcing full push",
+				s.machine,
+			)
+			lastPush = ""
+			// Clear stale local state so fingerprints
+			// don't suppress re-pushing.
+			full = true
+		}
+	}
+
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 
 	allSessions, err := s.local.ListSessionsModifiedBetween(
@@ -220,6 +244,27 @@ func (s *Sync) Push(
 
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// pgSessionCount returns the number of sessions in PG for
+// this machine. Used to detect schema resets.
+func (s *Sync) pgSessionCount(
+	ctx context.Context,
+) (int, error) {
+	var count int
+	err := s.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE machine = $1",
+		s.machine,
+	).Scan(&count)
+	if err != nil {
+		if isUndefinedTable(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf(
+			"counting pg sessions: %w", err,
+		)
+	}
+	return count, nil
 }
 
 type batchResult struct {

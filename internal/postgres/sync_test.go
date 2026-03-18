@@ -632,6 +632,88 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 	}
 }
 
+func TestPushDetectsSchemaReset(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+	)
+	if err != nil {
+		t.Fatalf("creating sync: %v", err)
+	}
+	defer ps.Close()
+
+	ctx := context.Background()
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+
+	// Push a session so the watermark advances.
+	started := "2026-03-11T12:00:00Z"
+	sess := db.Session{
+		ID:           "sess-reset-001",
+		Project:      "test-project",
+		Machine:      "local",
+		Agent:        "claude",
+		StartedAt:    &started,
+		MessageCount: 1,
+	}
+	if err := local.UpsertSession(sess); err != nil {
+		t.Fatalf("upsert session: %v", err)
+	}
+	if err := local.InsertMessages([]db.Message{{
+		SessionID:     "sess-reset-001",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: 5,
+	}}); err != nil {
+		t.Fatalf("insert message: %v", err)
+	}
+
+	r1, err := ps.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("initial push: %v", err)
+	}
+	if r1.SessionsPushed != 1 {
+		t.Fatalf(
+			"initial push sessions = %d, want 1",
+			r1.SessionsPushed,
+		)
+	}
+
+	// Simulate a PG schema reset.
+	cleanPGSchema(t, pgURL)
+	if err := ps.EnsureSchema(ctx); err != nil {
+		t.Fatalf("re-create schema: %v", err)
+	}
+
+	// An incremental push should detect the mismatch
+	// (local watermark set, PG has 0 sessions) and
+	// automatically force a full push.
+	r2, err := ps.Push(ctx, false)
+	if err != nil {
+		t.Fatalf("post-reset push: %v", err)
+	}
+	if r2.SessionsPushed != 1 {
+		t.Errorf(
+			"post-reset push sessions = %d, want 1 "+
+				"(should auto-detect schema reset)",
+			r2.SessionsPushed,
+		)
+	}
+	if r2.MessagesPushed != 1 {
+		t.Errorf(
+			"post-reset push messages = %d, want 1",
+			r2.MessagesPushed,
+		)
+	}
+}
+
 func TestPushBatchesMultipleSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
