@@ -686,15 +686,13 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 		)
 	}
 
-	// Simulate a PG schema reset.
+	// Simulate a PG schema reset — don't manually recreate;
+	// let Push detect and handle it via the coherence check.
 	cleanPGSchema(t, pgURL)
-	if err := ps.EnsureSchema(ctx); err != nil {
-		t.Fatalf("re-create schema: %v", err)
-	}
 
 	// An incremental push should detect the mismatch
-	// (local watermark set, PG has 0 sessions) and
-	// automatically force a full push.
+	// (local watermark set, PG has 0 sessions), recreate
+	// the schema, and automatically force a full push.
 	r2, err := ps.Push(ctx, false)
 	if err != nil {
 		t.Fatalf("post-reset push: %v", err)

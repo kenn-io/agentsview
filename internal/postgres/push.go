@@ -86,9 +86,17 @@ func (s *Sync) Push(
 				s.machine,
 			)
 			lastPush = ""
-			// Clear stale local state so fingerprints
-			// don't suppress re-pushing.
 			full = true
+			// Schema may have been dropped — clear
+			// cached state and re-ensure it exists.
+			s.schemaMu.Lock()
+			s.schemaDone = false
+			s.schemaMu.Unlock()
+			if err := s.normalizeSyncTimestamps(
+				ctx,
+			); err != nil {
+				return result, err
+			}
 		}
 	}
 
@@ -884,8 +892,10 @@ func bulkInsertToolCalls(
 			)
 			args = append(args,
 				sessionID,
-				r.tc.ToolName, r.tc.Category,
-				r.index, r.tc.ToolUseID,
+				sanitizePG(r.tc.ToolName),
+				sanitizePG(r.tc.Category),
+				r.index,
+				sanitizePG(r.tc.ToolUseID),
 				nilIfEmpty(r.tc.InputJSON),
 				nilIfEmpty(r.tc.SkillName),
 				nilIfZero(r.tc.ResultContentLength),
