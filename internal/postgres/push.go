@@ -192,13 +192,15 @@ func (s *Sync) Push(
 		}
 	}
 
+	// When all sessions succeeded, advance the watermark to
+	// cutoff. When some failed, keep the watermark at lastPush
+	// so the failed sessions (plus any already-pushed ones) are
+	// re-evaluated next time. Already-pushed sessions are
+	// fingerprint-matched and skipped cheaply.
 	finalizeCutoff := cutoff
+	var mergedFingerprints map[string]string
 	if result.Errors > 0 {
 		finalizeCutoff = lastPush
-	}
-	var mergedFingerprints map[string]string
-	if finalizeCutoff == lastPush &&
-		len(priorFingerprints) > 0 {
 		mergedFingerprints = priorFingerprints
 	}
 	if err := finalizePushState(
@@ -484,7 +486,7 @@ func nilStr(s *string) any {
 	if s == nil || *s == "" {
 		return nil
 	}
-	return *s
+	return sanitizePG(*s)
 }
 
 // nilStrTS converts a nil or empty *string timestamp to a
@@ -759,7 +761,8 @@ func bulkInsertMessages(
 			}
 			args = append(args,
 				sessionID, m.Ordinal, m.Role,
-				m.Content, ts, m.HasThinking,
+				sanitizePG(m.Content), ts,
+				m.HasThinking,
 				m.HasToolUse, m.ContentLength,
 			)
 		}
@@ -860,11 +863,20 @@ func (s *Sync) normalizeSyncTimestamps(
 	return NormalizeLocalSyncStateTimestamps(s.local)
 }
 
+// sanitizePG strips null bytes and replaces invalid UTF-8
+// sequences so text can be safely inserted into PostgreSQL,
+// which enforces strict UTF-8 encoding.
+func sanitizePG(s string) string {
+	s = strings.ReplaceAll(s, "\x00", "")
+	s = strings.ToValidUTF8(s, "")
+	return s
+}
+
 func nilIfEmpty(s string) any {
 	if s == "" {
 		return nil
 	}
-	return s
+	return sanitizePG(s)
 }
 
 func nilIfZero(n int) any {

@@ -320,3 +320,91 @@ func TestFinalizePushStateMergesPriorFingerprints(
 		t.Fatal("sess-002 fingerprint should be present")
 	}
 }
+
+func TestSanitizePG(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "clean string",
+			input: "hello world",
+			want:  "hello world",
+		},
+		{
+			name:  "null bytes stripped",
+			input: "hello\x00world",
+			want:  "helloworld",
+		},
+		{
+			name:  "multiple null bytes",
+			input: "\x00a\x00b\x00",
+			want:  "ab",
+		},
+		{
+			name:  "truncated 3-byte sequence",
+			input: "hello\xe2world",
+			want:  "helloworld",
+		},
+		{
+			name:  "truncated 2 of 3 bytes",
+			input: "hello\xe2\x80world",
+			want:  "helloworld",
+		},
+		{
+			name: "valid multibyte preserved",
+			// U+2026 HORIZONTAL ELLIPSIS = e2 80 a6
+			input: "hello\xe2\x80\xa6world",
+			want:  "hello\xe2\x80\xa6world",
+		},
+		{
+			name:  "null and invalid combined",
+			input: "a\x00b\xe2c",
+			want:  "abc",
+		},
+		{
+			name:  "empty string",
+			input: "",
+			want:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizePG(tc.input)
+			if got != tc.want {
+				t.Errorf(
+					"sanitizePG(%q) = %q, want %q",
+					tc.input, got, tc.want,
+				)
+			}
+		})
+	}
+}
+
+func TestNilIfEmptySanitizes(t *testing.T) {
+	// Verify nilIfEmpty applies UTF-8 sanitization.
+	got := nilIfEmpty("hello\x00world")
+	if got != "helloworld" {
+		t.Errorf(
+			"nilIfEmpty with null byte = %q, want %q",
+			got, "helloworld",
+		)
+	}
+
+	// nil/empty still returns nil.
+	if nilIfEmpty("") != nil {
+		t.Error("nilIfEmpty(\"\") should be nil")
+	}
+}
+
+func TestNilStrSanitizes(t *testing.T) {
+	s := "hello\xe2world"
+	got := nilStr(&s)
+	if got != "helloworld" {
+		t.Errorf(
+			"nilStr with invalid UTF-8 = %q, want %q",
+			got, "helloworld",
+		)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -553,4 +554,71 @@ func loadFixture(t *testing.T, name string) string {
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return string(data)
+}
+
+func TestTruncateRespectsRuneBoundaries(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{
+			name:   "ASCII within limit",
+			input:  "hello",
+			maxLen: 10,
+			want:   "hello",
+		},
+		{
+			name:   "ASCII truncated",
+			input:  "hello world",
+			maxLen: 5,
+			want:   "hello...",
+		},
+		{
+			name:   "multibyte within limit",
+			input:  "café",
+			maxLen: 10,
+			want:   "café",
+		},
+		{
+			name: "multibyte at boundary",
+			// 4 runes: c, a, f, é — truncate at 3 runes
+			input:  "café",
+			maxLen: 3,
+			want:   "caf...",
+		},
+		{
+			name: "CJK characters",
+			// 3 runes, each 3 bytes
+			input:  "你好世界",
+			maxLen: 2,
+			want:   "你好...",
+		},
+		{
+			name: "ellipsis character preserved",
+			// U+2026 is 3 bytes but 1 rune
+			input:  "abc\u2026def",
+			maxLen: 4,
+			want:   "abc\u2026...",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncate(tc.input, tc.maxLen)
+			if got != tc.want {
+				t.Errorf(
+					"truncate(%q, %d) = %q, want %q",
+					tc.input, tc.maxLen, got, tc.want,
+				)
+			}
+			// Verify result is valid UTF-8.
+			if !utf8.ValidString(got) {
+				t.Errorf(
+					"truncate produced invalid UTF-8: %q",
+					got,
+				)
+			}
+		})
+	}
 }
