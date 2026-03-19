@@ -24,7 +24,7 @@
     "@sveltejs/vite-plugin-svelte": "6.2.4",
     "@tsconfig/svelte": "5.0.8",
     "@types/dompurify": "3.2.0",
-    "jsdom": "28.1.0",
+    "jsdom": "29.0.0",
     "svelte": "5.53.11",
     "svelte-check": "4.4.5",
     "typescript": "5.9.3",
