@@ -67,9 +67,7 @@ func (b *codexSessionBuilder) processLine(
 	case codexTypeSessionMeta:
 		return b.handleSessionMeta(payload)
 	case codexTypeTurnContext:
-		if m := payload.Get("model").Str; m != "" {
-			b.currentModel = m
-		}
+		b.currentModel = payload.Get("model").Str
 	case codexTypeResponseItem:
 		b.handleResponseItem(payload, ts)
 	}

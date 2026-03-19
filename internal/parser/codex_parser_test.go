@@ -311,6 +311,24 @@ func TestParseCodexSession_TurnContextModel(t *testing.T) {
 		assert.Equal(t, "o3-pro", msgs[3].Model)
 	})
 
+	t.Run("empty model in turn_context clears previous model", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("m-4", "/tmp", "user", tsEarly),
+			testjsonl.CodexTurnContextJSON("gpt-5-codex", tsEarlyS1),
+			testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "hi", tsEarlyS5),
+			testjsonl.CodexTurnContextJSON("", tsLate),
+			testjsonl.CodexMsgJSON("user", "follow up", tsLate),
+			testjsonl.CodexMsgJSON("assistant", "reply", tsLateS5),
+		)
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		assert.Equal(t, 4, len(msgs))
+		assert.Equal(t, "gpt-5-codex", msgs[0].Model)
+		assert.Equal(t, "gpt-5-codex", msgs[1].Model)
+		assert.Empty(t, msgs[2].Model)
+		assert.Empty(t, msgs[3].Model)
+	})
+
 	t.Run("no turn_context leaves model empty", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("m-3", "/tmp", "user", tsEarly),
