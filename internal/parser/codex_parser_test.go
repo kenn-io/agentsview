@@ -278,6 +278,52 @@ func TestParseCodexSession_InputJSON(t *testing.T) {
 	})
 }
 
+func TestParseCodexSession_TurnContextModel(t *testing.T) {
+	t.Run("model from turn_context applied to subsequent messages", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("m-1", "/tmp", "user", tsEarly),
+			testjsonl.CodexTurnContextJSON("gpt-5-codex", tsEarlyS1),
+			testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "hi there", tsEarlyS5),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(t, 2, len(msgs))
+		assert.Equal(t, "gpt-5-codex", msgs[0].Model)
+		assert.Equal(t, "gpt-5-codex", msgs[1].Model)
+	})
+
+	t.Run("model changes across turns", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("m-2", "/tmp", "user", tsEarly),
+			testjsonl.CodexTurnContextJSON("gpt-5-codex", tsEarlyS1),
+			testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "hi", tsEarlyS5),
+			testjsonl.CodexTurnContextJSON("o3-pro", tsLate),
+			testjsonl.CodexMsgJSON("user", "think harder", tsLate),
+			testjsonl.CodexMsgJSON("assistant", "deep thought", tsLateS5),
+		)
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		assert.Equal(t, 4, len(msgs))
+		assert.Equal(t, "gpt-5-codex", msgs[0].Model)
+		assert.Equal(t, "gpt-5-codex", msgs[1].Model)
+		assert.Equal(t, "o3-pro", msgs[2].Model)
+		assert.Equal(t, "o3-pro", msgs[3].Model)
+	})
+
+	t.Run("no turn_context leaves model empty", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("m-3", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "hi", tsEarlyS5),
+		)
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		assert.Equal(t, 2, len(msgs))
+		assert.Empty(t, msgs[0].Model)
+		assert.Empty(t, msgs[1].Model)
+	})
+}
+
 func TestParseCodexSession_EdgeCases(t *testing.T) {
 	t.Run("skips system messages", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(

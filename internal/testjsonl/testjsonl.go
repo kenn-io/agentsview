@@ -217,6 +217,20 @@ func CodexFunctionCallFieldsJSON(
 	return mustMarshal(m)
 }
 
+// CodexTurnContextJSON returns a Codex turn_context entry as a
+// JSON string with the given model.
+func CodexTurnContextJSON(model, timestamp string) string {
+	m := map[string]any{
+		"type":      "turn_context",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"model": model,
+			"cwd":   "/tmp",
+		},
+	}
+	return mustMarshal(m)
+}
+
 // ClaudeEntryJSON returns a Claude JSONL entry with uuid and
 // parentUuid fields.
 func ClaudeEntryJSON(
