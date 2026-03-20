@@ -615,7 +615,8 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
         .item(&check_updates)
         .separator();
 
-    if cfg!(target_os = "macos") {
+    #[cfg(target_os = "macos")]
+    {
         builder = builder.hide().hide_others().separator();
     }
 
