@@ -609,13 +609,17 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
     let check_updates = MenuItemBuilder::with_id("check_updates", "Check for Updates...")
         .build(app)?;
 
-    let app_submenu = SubmenuBuilder::new(app, "File")
+    let mut builder = SubmenuBuilder::new(app, "File")
         .item(&about)
         .separator()
         .item(&check_updates)
-        .separator()
-        .quit()
-        .build()?;
+        .separator();
+
+    if cfg!(target_os = "macos") {
+        builder = builder.hide().hide_others().separator();
+    }
+
+    let app_submenu = builder.quit().build()?;
 
     let menu = MenuBuilder::new(app).item(&app_submenu).build()?;
     app.set_menu(menu)?;
