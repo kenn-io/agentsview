@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -370,11 +371,10 @@ func buildOpenCodeSession(
 	)
 
 	// Prefer OpenCode's LLM-generated title when available.
-	// Skip default placeholders like "New session - ..." or
-	// "Child session - ...".
-	if s.title != "" &&
-		!strings.HasPrefix(s.title, "New session - ") &&
-		!strings.HasPrefix(s.title, "Child session - ") {
+	// Skip default placeholders that match OpenCode's exact
+	// format: "New session - " or "Child session - " followed
+	// by an ISO-8601 timestamp.
+	if s.title != "" && !isOpenCodeDefaultTitle(s.title) {
 		firstMsg = truncate(s.title, 300)
 	}
 
@@ -456,6 +456,18 @@ func buildOpenCodeSession(
 	}
 
 	return sess, parsed, nil
+}
+
+// openCodeDefaultTitleRe matches the exact placeholder format
+// OpenCode uses before the LLM generates a real title:
+// "New session - 2026-03-22T10:00:00.000Z" or
+// "Child session - 2026-03-22T10:00:00.000Z".
+var openCodeDefaultTitleRe = regexp.MustCompile(
+	`^(New session|Child session) - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`,
+)
+
+func isOpenCodeDefaultTitle(title string) bool {
+	return openCodeDefaultTitleRe.MatchString(title)
 }
 
 func normalizeOpenCodeRole(role string) RoleType {
