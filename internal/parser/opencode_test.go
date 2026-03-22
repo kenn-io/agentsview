@@ -151,7 +151,7 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	assertEq(t, "Machine", s.Session.Machine, "testmachine")
 	assertEq(t, "Project", s.Session.Project, "myapp")
 	assertEq(t, "MessageCount", s.Session.MessageCount, 2)
-	assertEq(t, "FirstMessage", s.Session.FirstMessage, "Hello, help me with Go")
+	assertEq(t, "FirstMessage", s.Session.FirstMessage, "Test Session")
 
 	wantPath := dbPath + "#ses_abc"
 	assertEq(t, "File.Path", s.Session.File.Path, wantPath)
@@ -163,6 +163,51 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	assertEq(t, "msg[0].Role", s.Messages[0].Role, RoleUser)
 	assertEq(t, "msg[1].Role", s.Messages[1].Role, RoleAssistant)
 	assertEq(t, "msg[1].Content", s.Messages[1].Content, "Sure, I can help with Go.")
+}
+
+func TestParseOpenCodeDB_TitleFallback(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/tmp/proj")
+
+	// Empty title: should use first user message.
+	seeder.AddSession("ses_empty", "prj_1", "", "",
+		1700000000000, 1700000010000)
+	seeder.AddMessage("msg_1", "ses_empty",
+		1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_1", "msg_1", "ses_empty",
+		1700000000000, 1700000000000,
+		`{"type":"text","text":"Help me debug this crash"}`)
+
+	// Placeholder title: should also use first user message.
+	seeder.AddSession("ses_default", "prj_1", "",
+		"New session - 2026-03-22T10:00:00.000Z",
+		1700000020000, 1700000030000)
+	seeder.AddMessage("msg_2", "ses_default",
+		1700000020000, 1700000020000, `{"role":"user"}`)
+	seeder.AddPart("prt_2", "msg_2", "ses_default",
+		1700000020000, 1700000020000,
+		`{"type":"text","text":"Refactor the auth module"}`)
+
+	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	if err != nil {
+		t.Fatalf("ParseOpenCodeDB: %v", err)
+	}
+	assertEq(t, "sessions len", len(sessions), 2)
+
+	for _, s := range sessions {
+		switch s.Session.ID {
+		case "opencode:ses_empty":
+			assertEq(t, "empty title fallback",
+				s.Session.FirstMessage,
+				"Help me debug this crash")
+		case "opencode:ses_default":
+			assertEq(t, "placeholder title fallback",
+				s.Session.FirstMessage,
+				"Refactor the auth module")
+		}
+	}
 }
 
 func TestParseOpenCodeDB_ToolParts(t *testing.T) {

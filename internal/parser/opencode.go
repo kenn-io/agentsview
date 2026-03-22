@@ -369,6 +369,15 @@ func buildOpenCodeSession(
 		ordinal      int
 	)
 
+	// Prefer OpenCode's LLM-generated title when available.
+	// Skip default placeholders like "New session - ..." or
+	// "Child session - ...".
+	if s.title != "" &&
+		!strings.HasPrefix(s.title, "New session - ") &&
+		!strings.HasPrefix(s.title, "Child session - ") {
+		firstMsg = truncate(s.title, 300)
+	}
+
 	for _, m := range msgs {
 		var md openCodeMessageData
 		if json.Unmarshal([]byte(m.data), &md) != nil {
