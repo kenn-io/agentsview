@@ -128,7 +128,8 @@
 
   function scrollToDisplayIndex(
     index: number,
-    attempt: number = 0,
+    waitFrames: number = 0,
+    scrollRetries: number = 0,
     reqId: number = lastScrollRequest,
   ) {
     if (reqId !== lastScrollRequest) return;
@@ -136,21 +137,22 @@
     const v = virtualizer.instance;
     if (!v) return;
 
+    // Phase 1: wait up to 5 frames for virtualCount to sync.
     const desiredCount = displayItemsAsc.length;
     const virtualCount = v.options.count;
     if (
-      attempt < 5 &&
+      waitFrames < 5 &&
       (virtualCount !== desiredCount || index >= virtualCount)
     ) {
       requestAnimationFrame(() => {
-        scrollToDisplayIndex(index, attempt + 1, reqId);
+        scrollToDisplayIndex(
+          index, waitFrames + 1, 0, reqId,
+        );
       });
       return;
     }
 
-    // If the item is already rendered (in the current virtual window),
-    // use its exact measured offset. Predecessor sizes are known so
-    // getOffsetForIndex is accurate.
+    // Phase 2a: item already rendered — use exact measured offset.
     const virtualItems = v.getVirtualItems();
     const isRendered = virtualItems.some(
       (vi) => vi.index === index,
@@ -168,22 +170,24 @@
       return;
     }
 
-    // Item not yet in render window. scrollToIndex scrolls to an
-    // estimated position, but TanStack's reconcile loop exits after
-    // 1 stable frame — before ResizeObserver measurements (delayed
-    // by bumpVersion's setTimeout(0)) have updated the offsets. The
-    // scroll stops at an estimated position rather than the real one.
+    // Phase 2b: item not yet in render window. scrollToIndex
+    // scrolls to an estimated position, but TanStack's reconcile
+    // loop exits after 1 stable frame — before ResizeObserver
+    // measurements (delayed by bumpVersion's setTimeout(0)) have
+    // updated the offsets.
     //
     // Retry in 2 frames: by then ResizeObserver + bumpVersion have
     // fired, measurements are updated, and the next attempt either
-    // finds the item rendered (for an exact offset scroll) or repeats
-    // with a more accurate estimate. Limit to 15 render retries
-    // (~480 ms) to avoid looping forever.
+    // finds the item rendered (for an exact offset scroll) or
+    // repeats with a more accurate estimate. Limit to 15 scroll
+    // retries (~480 ms) to avoid looping forever.
     v.scrollToIndex(index, { align: "start" });
-    if (attempt < 15) {
+    if (scrollRetries < 15) {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          scrollToDisplayIndex(index, attempt + 1, reqId);
+          scrollToDisplayIndex(
+            index, waitFrames, scrollRetries + 1, reqId,
+          );
         });
       });
     }
@@ -203,7 +207,7 @@
       const idx = ui.sortNewestFirst
         ? displayItemsAsc.length - 1 - idxAsc
         : idxAsc;
-      scrollToDisplayIndex(idx, 0, reqId);
+      scrollToDisplayIndex(idx, 0, 0, reqId);
       return;
     }
 
@@ -225,7 +229,7 @@
     const loadedIdx = ui.sortNewestFirst
       ? displayItemsAsc.length - 1 - loadedIdxAsc
       : loadedIdxAsc;
-    scrollToDisplayIndex(loadedIdx, 0, reqId);
+    scrollToDisplayIndex(loadedIdx, 0, 0, reqId);
   }
 
   export function scrollToOrdinal(ordinal: number) {
