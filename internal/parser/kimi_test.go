@@ -271,18 +271,18 @@ func TestParseKimiSession_MessageTimestamps(t *testing.T) {
 	assertTimestamp(t, msgs[0].Timestamp,
 		time.Unix(1704067200, 0))
 
-	// Assistant (flushed by ToolResult) gets latest
-	// timestamp from its content/tool records.
-	assert.False(t, msgs[1].Timestamp.IsZero(),
-		"assistant message should have timestamp")
+	// Assistant (flushed by ToolResult) gets first content
+	// timestamp (ContentPart at :01, not ToolCall at :02).
+	assertTimestamp(t, msgs[1].Timestamp,
+		time.Unix(1704067201, 0))
 
 	// Tool result gets timestamp from ToolResult record.
 	assertTimestamp(t, msgs[2].Timestamp,
 		time.Unix(1704067203, 0))
 
-	// Final assistant gets timestamp from its content.
-	assert.False(t, msgs[3].Timestamp.IsZero(),
-		"final assistant message should have timestamp")
+	// Final assistant gets timestamp from its ContentPart.
+	assertTimestamp(t, msgs[3].Timestamp,
+		time.Unix(1704067204, 0))
 }
 
 func TestParseKimiSession_MissingFile(t *testing.T) {

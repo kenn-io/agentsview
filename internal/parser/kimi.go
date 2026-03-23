@@ -242,7 +242,9 @@ func ParseKimiSession(
 			ordinal++
 
 		case "ContentPart":
-			pendingTS = currentTS
+			if pendingTS.IsZero() {
+				pendingTS = currentTS
+			}
 			contentType := payload.Get("type").Str
 			switch contentType {
 			case "text":
@@ -260,7 +262,9 @@ func ParseKimiSession(
 			}
 
 		case "ToolCall":
-			pendingTS = currentTS
+			if pendingTS.IsZero() {
+				pendingTS = currentTS
+			}
 			hasToolUse = true
 			fnName := payload.Get("function.name").Str
 			fnArgs := payload.Get("function.arguments").Str
