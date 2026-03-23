@@ -269,15 +269,13 @@ func ParseKimiSession(
 				formatKimiToolUse(fnName, argsResult))
 
 		case "ToolResult":
-			// Flush assistant turn before recording tool
-			// result as a separate message.
 			flushAssistantTurn()
 
 			toolCallID := payload.Get("tool_call_id").Str
 			returnVal := payload.Get("return_value")
 			isError := returnVal.Get("is_error").Bool()
 
-			output := returnVal.Get("output").Str
+			output := extractKimiToolOutput(returnVal.Get("output"))
 			if isError && output == "" {
 				output = "[error]"
 			}
@@ -361,8 +359,30 @@ func ParseKimiSession(
 	return sess, messages, nil
 }
 
+// extractKimiToolOutput extracts text from a Kimi tool result
+// output field. The output can be a plain string or an array of
+// objects with {"type": "text", "text": "..."} entries.
+func extractKimiToolOutput(output gjson.Result) string {
+	if output.Type == gjson.String {
+		return output.Str
+	}
+	if output.IsArray() {
+		var parts []string
+		output.ForEach(func(_, item gjson.Result) bool {
+			if t := item.Get("text").Str; t != "" {
+				parts = append(parts, t)
+			}
+			return true
+		})
+		return strings.Join(parts, "\n")
+	}
+	if output.Raw != "" && output.Raw != "null" {
+		return output.Raw
+	}
+	return ""
+}
+
 // formatKimiToolUse formats a Kimi tool call for display.
-// Kimi tools use the same names as Claude Code tools.
 func formatKimiToolUse(name string, input gjson.Result) string {
 	switch name {
 	case "Read":

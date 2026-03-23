@@ -155,6 +155,60 @@ func TestParseKimiSession_ErrorToolResult(t *testing.T) {
 		DecodeContent(msgs[2].ToolResults[0].ContentRaw))
 }
 
+func TestParseKimiSession_ArrayToolResult(t *testing.T) {
+	path := writeKimiWireJSONL(t,
+		"proj-arr", "sess-arr",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Query logs"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ToolCall", "payload": {"type": "function", "id": "tool_arr", "function": {"name": "Bash", "arguments": "{\"command\": \"echo hi\"}"}, "extras": null}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "ToolResult", "payload": {"tool_call_id": "tool_arr", "return_value": {"is_error": false, "output": [{"type": "text", "text": "line one"}, {"type": "text", "text": "line two"}]}}}}`,
+			`{"timestamp": 1704067203.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Done."}}}`,
+			`{"timestamp": 1704067204.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	sess, msgs, err := ParseKimiSession(
+		path, "testproj", "local",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// user, assistant(tool call), tool_result(array output), assistant(text)
+	require.Equal(t, 4, len(msgs))
+	require.Equal(t, 1, len(msgs[2].ToolResults))
+	assert.Equal(t, "line one\nline two",
+		DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+	assert.Equal(t, len("line one\nline two"),
+		msgs[2].ToolResults[0].ContentLength)
+}
+
+func TestParseKimiSession_MultipleStatusUpdates(t *testing.T) {
+	path := writeKimiWireJSONL(t,
+		"proj-multi", "sess-multi",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Hi"}}}`,
+			`{"timestamp": 1704067201.5, "message": {"type": "StatusUpdate", "payload": {"context_tokens": 5000, "token_usage": {"output": 100}}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "ToolCall", "payload": {"type": "function", "id": "t1", "function": {"name": "Glob", "arguments": "{}"}, "extras": null}}}`,
+			`{"timestamp": 1704067202.5, "message": {"type": "StatusUpdate", "payload": {"context_tokens": 8000, "token_usage": {"output": 50}}}}`,
+			`{"timestamp": 1704067203.0, "message": {"type": "ToolResult", "payload": {"tool_call_id": "t1", "return_value": {"is_error": false, "output": "a.go"}}}}`,
+			`{"timestamp": 1704067203.5, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Found it."}}}`,
+			`{"timestamp": 1704067204.0, "message": {"type": "StatusUpdate", "payload": {"context_tokens": 6000, "token_usage": {"output": 75}}}}`,
+			`{"timestamp": 1704067205.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	sess, _, err := ParseKimiSession(
+		path, "testproj", "local",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, 225, sess.TotalOutputTokens)
+	assert.Equal(t, 8000, sess.PeakContextTokens)
+}
+
 func TestParseKimiSession_StatusUpdate(t *testing.T) {
 	path := writeKimiWireJSONL(t,
 		"proj4", "sess4",
