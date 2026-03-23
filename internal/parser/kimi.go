@@ -243,19 +243,22 @@ func ParseKimiSession(
 			ordinal++
 
 		case "ContentPart":
-			if pendingTS.IsZero() {
-				pendingTS = currentTS
-			}
 			contentType := payload.Get("type").Str
 			switch contentType {
 			case "text":
 				text := payload.Get("text").Str
 				if text != "" {
+					if pendingTS.IsZero() {
+						pendingTS = currentTS
+					}
 					pendingText = append(pendingText, text)
 				}
 			case "think":
 				think := payload.Get("think").Str
 				if think != "" {
+					if pendingTS.IsZero() {
+						pendingTS = currentTS
+					}
 					hasThinking = true
 					pendingText = append(pendingText,
 						"[Thinking]\n"+think+"\n[/Thinking]")
