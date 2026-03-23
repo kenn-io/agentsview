@@ -285,6 +285,38 @@ func TestParseKimiSession_MessageTimestamps(t *testing.T) {
 		time.Unix(1704067204, 0))
 }
 
+func TestParseKimiSession_EmptyFragmentTimestamp(t *testing.T) {
+	// Empty ContentPart followed by TurnEnd, then a real turn.
+	// The second turn must use its own timestamp, not a stale
+	// one from the empty fragment.
+	path := writeKimiWireJSONL(t,
+		"proj-empty", "sess-empty",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			// Turn 1: user + empty assistant fragment.
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": ""}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+			// Turn 2: user + real assistant content.
+			`{"timestamp": 1704067210.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Again"}]}}}`,
+			`{"timestamp": 1704067211.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Hi!"}}}`,
+			`{"timestamp": 1704067212.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	_, msgs, err := ParseKimiSession(
+		path, "testproj", "local",
+	)
+	require.NoError(t, err)
+	// Two user messages + one assistant (empty turn produces none).
+	require.Equal(t, 3, len(msgs))
+
+	// The assistant message must have the second turn's
+	// timestamp, not the stale one from the empty fragment.
+	assertTimestamp(t, msgs[2].Timestamp,
+		time.Unix(1704067211, 0))
+}
+
 func TestParseKimiSession_MissingFile(t *testing.T) {
 	_, _, err := ParseKimiSession(
 		"/nonexistent/wire.jsonl", "proj", "local",

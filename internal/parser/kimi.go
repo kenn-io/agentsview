@@ -38,7 +38,7 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 		}
 
 		for _, sessEntry := range sessionDirs {
-			if !sessEntry.IsDir() {
+			if !isDirOrSymlink(sessEntry, projDir) {
 				continue
 			}
 			wirePath := filepath.Join(
@@ -144,6 +144,7 @@ func ParseKimiSession(
 			len(pendingToolCall) == 0 {
 			pendingText = nil
 			pendingToolCall = nil
+			pendingTS = time.Time{}
 			hasThinking = false
 			hasToolUse = false
 			return
@@ -331,6 +332,10 @@ func ParseKimiSession(
 		case "StepBegin":
 			// Informational; no action needed.
 		}
+	}
+
+	if err := lr.Err(); err != nil {
+		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
 	// Flush any remaining assistant content.
