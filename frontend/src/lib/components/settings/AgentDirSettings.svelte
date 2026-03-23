@@ -14,6 +14,7 @@
     "vscode-copilot": "VSCode Copilot",
     pi: "Pi",
     openclaw: "OpenClaw",
+    kimi: "Kimi",
   };
 </script>
 

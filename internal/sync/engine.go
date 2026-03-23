@@ -1281,6 +1281,8 @@ func (e *Engine) processFile(
 		res = e.processPi(file, info)
 	case parser.AgentOpenClaw:
 		res = e.processOpenClaw(file, info)
+	case parser.AgentKimi:
+		res = e.processKimi(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -1726,6 +1728,35 @@ func (e *Engine) processOpenClaw(
 	}
 
 	sess, msgs, err := parser.ParseOpenClawSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processKimi(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseKimiSession(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {

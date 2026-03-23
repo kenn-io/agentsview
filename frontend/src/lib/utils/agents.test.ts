@@ -21,6 +21,7 @@ describe("KNOWN_AGENTS", () => {
       "pi",
       "openclaw",
       "iflow",
+      "kimi",
     ]);
   });
 

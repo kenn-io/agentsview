@@ -22,6 +22,7 @@ const (
 	AgentVSCodeCopilot AgentType = "vscode-copilot"
 	AgentPi            AgentType = "pi"
 	AgentOpenClaw      AgentType = "openclaw"
+	AgentKimi          AgentType = "kimi"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -194,6 +195,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverOpenClawSessions,
 		FindSourceFunc: FindOpenClawSourceFile,
+	},
+	{
+		Type:           AgentKimi,
+		DisplayName:    "Kimi",
+		EnvVar:         "KIMI_DIR",
+		ConfigKey:      "kimi_dirs",
+		DefaultDirs:    []string{".kimi/sessions"},
+		IDPrefix:       "kimi:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverKimiSessions,
+		FindSourceFunc: FindKimiSourceFile,
 	},
 }
 

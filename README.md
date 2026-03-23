@@ -2,7 +2,7 @@
 
 A local-first desktop and web application for browsing, searching,
 and analyzing AI agent coding sessions. Supports Claude Code, Codex,
-OpenCode, and 8 other agents.
+OpenCode, and 9 other agents.
 
 <p align="center">
   <img src="https://agentsview.io/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -53,7 +53,7 @@ patterns over time.
 - **Analytics dashboard** with activity heatmaps, tool usage,
   velocity metrics, and project breakdowns
 - **Multi-agent support** for Claude Code, Codex, OpenCode, and
-  8 other agents ([full list](#supported-agents))
+  9 other agents ([full list](#supported-agents))
 - **Live updates** via SSE as active sessions receive new messages
 - **Keyboard-first** navigation (vim-style `j`/`k`/`[`/`]`)
 - **Export and publish** sessions as HTML or to GitHub Gist
@@ -295,6 +295,7 @@ frontend/           Svelte 5 SPA (Vite, TypeScript)
 | VSCode Copilot | `~/Library/Application Support/Code/User/` (macOS) | `VSCODE_COPILOT_DIR` |
 | Pi | `~/.pi/agent/sessions/` | `PI_DIR` |
 | OpenClaw | `~/.openclaw/agents/` | `OPENCLAW_DIR` |
+| Kimi | `~/.kimi/sessions/` | `KIMI_DIR` |
 
 ## Acknowledgements
 
