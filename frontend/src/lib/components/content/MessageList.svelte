@@ -177,8 +177,8 @@
     // Retry in 2 frames: by then ResizeObserver + bumpVersion have
     // fired, measurements are updated, and the next attempt either
     // finds the item rendered (for an exact offset scroll) or repeats
-    // with a more accurate estimate. Limit to 10 render retries
-    // (~320 ms) to avoid looping forever.
+    // with a more accurate estimate. Limit to 15 render retries
+    // (~480 ms) to avoid looping forever.
     v.scrollToIndex(index, { align: "start" });
     if (attempt < 15) {
       requestAnimationFrame(() => {
