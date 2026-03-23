@@ -20,6 +20,7 @@
     { key: "e", action: "Export session" },
     { key: "p", action: "Publish to Gist" },
     { key: "c", action: "Copy resume command" },
+    { key: "Del", action: "Delete session" },
     { key: "?", action: "Show this modal" },
   ];
 

@@ -201,6 +201,16 @@ export function registerShortcuts(
           inSessionSearch.open();
         }
       },
+      Delete: () => {
+        if (sessions.activeSessionId) {
+          ui.activeModal = "confirmDelete";
+        }
+      },
+      Backspace: () => {
+        if (sessions.activeSessionId) {
+          ui.activeModal = "confirmDelete";
+        }
+      },
       "?": () => {
         ui.activeModal = "shortcuts";
       },

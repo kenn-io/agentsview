@@ -12,6 +12,7 @@
   import PublishModal from "./lib/components/modals/PublishModal.svelte";
   import ResyncModal from "./lib/components/modals/ResyncModal.svelte";
   import UpdateModal from "./lib/components/modals/UpdateModal.svelte";
+  import ConfirmDeleteModal from "./lib/components/modals/ConfirmDeleteModal.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
@@ -313,6 +314,10 @@
 
 {#if ui.activeModal === "update"}
   <UpdateModal />
+{/if}
+
+{#if ui.activeModal === "confirmDelete"}
+  <ConfirmDeleteModal />
 {/if}
 
 {/if}
