@@ -247,6 +247,44 @@ func TestParseKimiSession_NoProject(t *testing.T) {
 	assert.Equal(t, "kimi", sess.Project)
 }
 
+func TestParseKimiSession_MessageTimestamps(t *testing.T) {
+	path := writeKimiWireJSONL(t,
+		"proj-ts", "sess-ts",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Hi there!"}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "ToolCall", "payload": {"type": "function", "id": "t1", "function": {"name": "Bash", "arguments": "{\"command\": \"ls\"}"}, "extras": null}}}`,
+			`{"timestamp": 1704067203.0, "message": {"type": "ToolResult", "payload": {"tool_call_id": "t1", "return_value": {"is_error": false, "output": "file.go"}}}}`,
+			`{"timestamp": 1704067204.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Done."}}}`,
+			`{"timestamp": 1704067205.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	_, msgs, err := ParseKimiSession(
+		path, "testproj", "local",
+	)
+	require.NoError(t, err)
+	require.Equal(t, 4, len(msgs))
+
+	// User message gets timestamp from TurnBegin record.
+	assertTimestamp(t, msgs[0].Timestamp,
+		time.Unix(1704067200, 0))
+
+	// Assistant (flushed by ToolResult) gets latest
+	// timestamp from its content/tool records.
+	assert.False(t, msgs[1].Timestamp.IsZero(),
+		"assistant message should have timestamp")
+
+	// Tool result gets timestamp from ToolResult record.
+	assertTimestamp(t, msgs[2].Timestamp,
+		time.Unix(1704067203, 0))
+
+	// Final assistant gets timestamp from its content.
+	assert.False(t, msgs[3].Timestamp.IsZero(),
+		"final assistant message should have timestamp")
+}
+
 func TestParseKimiSession_MissingFile(t *testing.T) {
 	_, _, err := ParseKimiSession(
 		"/nonexistent/wire.jsonl", "proj", "local",

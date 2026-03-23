@@ -131,6 +131,11 @@ func ParseKimiSession(
 		// Track token usage from StatusUpdate.
 		totalOutputTokens int
 		peakContextTokens int
+
+		// Current record timestamp and pending assistant
+		// turn timestamp (latest seen).
+		currentTS time.Time
+		pendingTS time.Time
 	)
 
 	flushAssistantTurn := func() {
@@ -148,6 +153,7 @@ func ParseKimiSession(
 			Ordinal:       ordinal,
 			Role:          RoleAssistant,
 			Content:       content,
+			Timestamp:     pendingTS,
 			HasThinking:   hasThinking,
 			HasToolUse:    hasToolUse,
 			ContentLength: len(content),
@@ -156,6 +162,7 @@ func ParseKimiSession(
 		ordinal++
 		pendingText = nil
 		pendingToolCall = nil
+		pendingTS = time.Time{}
 		hasThinking = false
 		hasToolUse = false
 	}
@@ -185,6 +192,7 @@ func ParseKimiSession(
 			if t.After(endTime) {
 				endTime = t
 			}
+			currentTS = t
 		}
 
 		msgType := root.Get("message.type").Str
@@ -228,11 +236,13 @@ func ParseKimiSession(
 				Ordinal:       ordinal,
 				Role:          RoleUser,
 				Content:       userText,
+				Timestamp:     currentTS,
 				ContentLength: len(userText),
 			})
 			ordinal++
 
 		case "ContentPart":
+			pendingTS = currentTS
 			contentType := payload.Get("type").Str
 			switch contentType {
 			case "text":
@@ -250,6 +260,7 @@ func ParseKimiSession(
 			}
 
 		case "ToolCall":
+			pendingTS = currentTS
 			hasToolUse = true
 			fnName := payload.Get("function.name").Str
 			fnArgs := payload.Get("function.arguments").Str
@@ -294,6 +305,7 @@ func ParseKimiSession(
 			messages = append(messages, ParsedMessage{
 				Ordinal:     ordinal,
 				Role:        RoleUser,
+				Timestamp:   currentTS,
 				ToolResults: []ParsedToolResult{tr},
 			})
 			ordinal++

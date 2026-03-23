@@ -396,6 +396,24 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Kimi: <kimiDir>/<project-hash>/<session-uuid>/wire.jsonl
+	for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
+		if kimiDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(kimiDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 3 || parts[2] != "wire.jsonl" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parts[0],
+				Agent:   parser.AgentKimi,
+			}, true
+		}
+	}
+
 	// Amp: <ampDir>/T-*.json
 	for _, ampDir := range e.agentDirs[parser.AgentAmp] {
 		if ampDir == "" {
@@ -2294,6 +2312,10 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 		} else {
 			file.Project = filepath.Base(filepath.Dir(path))
 		}
+	case parser.AgentKimi:
+		// path is <kimiDir>/<project-hash>/<session-uuid>/wire.jsonl
+		// Derive project from two levels up.
+		file.Project = filepath.Base(filepath.Dir(filepath.Dir(path)))
 	}
 
 	res := e.processFile(file)
