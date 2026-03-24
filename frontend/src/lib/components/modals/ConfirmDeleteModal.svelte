@@ -4,6 +4,7 @@
   import { truncate } from "../../utils/format.js";
 
   let deleting = $state(false);
+  let deleteBtn = $state<HTMLButtonElement>();
 
   let sessionName = $derived.by(() => {
     const s = sessions.activeSession;
@@ -29,6 +30,7 @@
       // silently fail — toast will show undo option
     } finally {
       deleting = false;
+      deleteBtn?.focus();
     }
   }
 
@@ -71,6 +73,7 @@
       <!-- svelte-ignore a11y_autofocus -->
       <button
         class="delete-btn"
+        bind:this={deleteBtn}
         onclick={confirmDelete}
         disabled={deleting}
         autofocus
