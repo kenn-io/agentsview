@@ -202,12 +202,18 @@ export function registerShortcuts(
         }
       },
       Delete: () => {
-        if (sessions.activeSessionId) {
+        if (
+          router.route === "sessions" &&
+          sessions.activeSessionId
+        ) {
           ui.activeModal = "confirmDelete";
         }
       },
       Backspace: () => {
-        if (sessions.activeSessionId) {
+        if (
+          router.route === "sessions" &&
+          sessions.activeSessionId
+        ) {
           ui.activeModal = "confirmDelete";
         }
       },
