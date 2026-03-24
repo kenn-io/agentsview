@@ -923,10 +923,13 @@ func TestIsClaudeSystemMessage(t *testing.T) {
 		{"task-notification",
 			"<task-notification>some data</task-notification>",
 			true},
-		{"command-message",
-			"<command-message>foo</command-message>", true},
-		{"command-name",
-			"<command-name>commit</command-name>", true},
+		{"command-message is not system",
+			"<command-message>foo</command-message>", false},
+		{"command-name is not system",
+			"<command-name>commit</command-name>", false},
+		{"command-message with args is not system",
+			"<command-message>roborev-fix</command-message>\n<command-name>/roborev-fix</command-name>\n<command-args>450</command-args>",
+			false},
 		{"local-command tag",
 			"<local-command-result>ok</local-command-result>",
 			true},
@@ -936,13 +939,13 @@ func TestIsClaudeSystemMessage(t *testing.T) {
 			"  \n This session is being continued...",
 			true},
 		{"leading tabs trimmed",
-			"\t<command-name>commit</command-name>",
+			"\t<task-notification>data</task-notification>",
 			true},
 		{"BOM prefix trimmed",
 			"\uFEFFThis session is being continued...",
 			true},
 		{"BOM plus whitespace trimmed",
-			"\uFEFF \t<command-name>commit</command-name>",
+			"\uFEFF \t<task-notification>data</task-notification>",
 			true},
 		{"whitespace before BOM trimmed",
 			" \uFEFFThis session is being continued...",
@@ -965,6 +968,94 @@ func TestIsClaudeSystemMessage(t *testing.T) {
 			if got != tt.want {
 				t.Errorf(
 					"isClaudeSystemMessage(%q) = %v, want %v",
+					tt.content, got, tt.want,
+				)
+			}
+		})
+	}
+}
+
+func TestExtractCommandText(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+		ok      bool
+	}{
+		{
+			"skill with args",
+			"<command-message>roborev-fix</command-message>\n<command-name>/roborev-fix</command-name>\n<command-args>450</command-args>",
+			"/roborev-fix 450",
+			true,
+		},
+		{
+			"skill without args",
+			"<command-message>superpowers:brainstorming</command-message>\n<command-name>/superpowers:brainstorming</command-name>",
+			"/superpowers:brainstorming",
+			true,
+		},
+		{
+			"command-name first format",
+			"<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args></command-args>",
+			"/model",
+			true,
+		},
+		{
+			"command-name first with args",
+			"<command-name>/roborev-fix</command-name>\n<command-message>roborev-fix</command-message>\n<command-args>491</command-args>",
+			"/roborev-fix 491",
+			true,
+		},
+		{
+			"not a command message",
+			"Fix the login bug",
+			"",
+			false,
+		},
+		{
+			"empty string",
+			"",
+			"",
+			false,
+		},
+		{
+			"prose mentioning command-name tag not rewritten",
+			"The <command-name>foo</command-name> tag is used for...",
+			"",
+			false,
+		},
+		{
+			"tag followed by prose not rewritten",
+			"<command-message>foo</command-message> is the XML wrapper...",
+			"",
+			false,
+		},
+		{
+			"bare command-message without command-name",
+			"<command-message>insights</command-message>",
+			"/insights",
+			true,
+		},
+		{
+			"BOM-prefixed command envelope",
+			"\uFEFF<command-name>/commit</command-name>\n<command-message>commit</command-message>",
+			"/commit",
+			true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := extractCommandText(tt.content)
+			if ok != tt.ok {
+				t.Errorf(
+					"extractCommandText(%q) ok = %v, want %v",
+					tt.content, ok, tt.ok,
+				)
+			}
+			if got != tt.want {
+				t.Errorf(
+					"extractCommandText(%q) = %q, want %q",
 					tt.content, got, tt.want,
 				)
 			}

@@ -135,8 +135,6 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 			testjsonl.ClaudeUserJSON("This session is being continued from a previous conversation.", tsZero),
 			testjsonl.ClaudeUserJSON("[Request interrupted by user]", tsZeroS1),
 			testjsonl.ClaudeUserJSON("<task-notification>data</task-notification>", tsZeroS2),
-			testjsonl.ClaudeUserJSON("<command-message>x</command-message>", "2024-01-01T00:00:03Z"),
-			testjsonl.ClaudeUserJSON("<command-name>commit</command-name>", "2024-01-01T00:00:04Z"),
 			testjsonl.ClaudeUserJSON("<local-command-result>ok</local-command-result>", "2024-01-01T00:00:05Z"),
 			testjsonl.ClaudeUserJSON("Stop hook feedback: rejected", "2024-01-01T00:00:06Z"),
 			testjsonl.ClaudeUserJSON("real user message", "2024-01-01T00:00:07Z"),
@@ -145,6 +143,41 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		assert.Equal(t, 1, sess.MessageCount)
 		assert.Equal(t, "real user message", msgs[0].Content)
 		assert.Equal(t, "real user message", sess.FirstMessage)
+	})
+
+	t.Run("skill invocation shown as user message", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<command-message>roborev-fix</command-message>\n<command-name>/roborev-fix</command-name>\n<command-args>450</command-args>",
+				tsZero,
+			),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "Looking at issue 450..."},
+			}, tsZeroS1),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, 2, sess.MessageCount)
+		assert.Equal(t, 1, sess.UserMessageCount)
+		assert.Equal(t, "/roborev-fix 450", sess.FirstMessage)
+		assert.Equal(t, RoleUser, msgs[0].Role)
+		assert.Equal(t, "/roborev-fix 450", msgs[0].Content)
+	})
+
+	t.Run("skill invocation without args shown as user message", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"<command-message>superpowers:brainstorming</command-message>\n<command-name>/superpowers:brainstorming</command-name>",
+				tsZero,
+			),
+			testjsonl.ClaudeAssistantJSON([]map[string]any{
+				{"type": "text", "text": "Starting brainstorming..."},
+			}, tsZeroS1),
+		)
+		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, 2, sess.MessageCount)
+		assert.Equal(t, "/superpowers:brainstorming", sess.FirstMessage)
+		assert.Equal(t, RoleUser, msgs[0].Role)
+		assert.Equal(t, "/superpowers:brainstorming", msgs[0].Content)
 	})
 
 	t.Run("assistant with system-like content not filtered", func(t *testing.T) {

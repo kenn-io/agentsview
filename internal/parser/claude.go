@@ -17,8 +17,12 @@ import (
 )
 
 var (
-	xmlTaskIDRe  = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
-	xmlToolUseRe = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+	xmlTaskIDRe   = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
+	xmlToolUseRe  = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+	xmlCmdNameRe  = regexp.MustCompile(`<command-name>([^<]+)</command-name>`)
+	xmlCmdMsgRe   = regexp.MustCompile(`<command-message>([^<]+)</command-message>`)
+	xmlCmdArgsRe  = regexp.MustCompile(`<command-args>([^<]*)</command-args>`)
+	xmlCmdStripRe = regexp.MustCompile(`<command-(?:name|message|args)>[^<]*</command-(?:name|message|args)>`)
 )
 
 const (
@@ -326,6 +330,19 @@ func extractMessagesFrom(
 		content := gjson.Get(e.line, "message.content")
 		text, hasThinking, hasToolUse, tcs, trs :=
 			ExtractTextContent(content)
+
+		// Convert command/skill invocation XML into readable
+		// text (e.g. "/roborev-fix 450"). If the content
+		// looks like a command envelope but can't be
+		// normalized, skip it to avoid raw XML in transcripts.
+		if e.entryType == "user" {
+			if cmdText, ok := extractCommandText(text); ok {
+				text = cmdText
+			} else if isCommandEnvelope(text) {
+				continue
+			}
+		}
+
 		if strings.TrimSpace(text) == "" && len(trs) == 0 {
 			continue
 		}
@@ -639,6 +656,19 @@ func extractMessages(entries []dagEntry) (
 		content := gjson.Get(e.line, "message.content")
 		text, hasThinking, hasToolUse, tcs, trs :=
 			ExtractTextContent(content)
+
+		// Convert command/skill invocation XML into readable
+		// text (e.g. "/roborev-fix 450"). If the content
+		// looks like a command envelope but can't be
+		// normalized, skip it to avoid raw XML in transcripts.
+		if e.entryType == "user" {
+			if cmdText, ok := extractCommandText(text); ok {
+				text = cmdText
+			} else if isCommandEnvelope(text) {
+				continue
+			}
+		}
+
 		if strings.TrimSpace(text) == "" && len(trs) == 0 {
 			continue
 		}
@@ -840,6 +870,69 @@ func truncate(s string, maxLen int) string {
 	return string(r[:maxLen]) + "..."
 }
 
+// extractCommandText detects Claude Code command/skill invocation
+// messages and returns a human-readable representation like
+// "/skill-name args". Only matches messages whose trimmed content
+// starts with <command-message> or <command-name> (the standard
+// envelope format), so user messages that merely mention these
+// tags in prose are not affected.
+// Returns ("", false) if the content is not a command message.
+func extractCommandText(content string) (string, bool) {
+	trimmed := strings.TrimLeftFunc(content, func(r rune) bool {
+		return r == '\uFEFF' || unicode.IsSpace(r)
+	})
+	if !strings.HasPrefix(trimmed, "<command-message>") &&
+		!strings.HasPrefix(trimmed, "<command-name>") {
+		return "", false
+	}
+	// Verify the content is purely command XML tags with no
+	// trailing prose — strip all known tags and check the
+	// remainder is whitespace-only.
+	stripped := xmlCmdStripRe.ReplaceAllString(trimmed, "")
+	if strings.TrimSpace(stripped) != "" {
+		return "", false
+	}
+	m := xmlCmdNameRe.FindStringSubmatch(content)
+	if m == nil {
+		// Bare <command-message> without <command-name>: extract
+		// the command-message value as a fallback.
+		if cm := xmlCmdMsgRe.FindStringSubmatch(content); cm != nil {
+			return "/" + cm[1], true
+		}
+		return "", false
+	}
+	name := m[1]
+	// Ensure the name starts with "/" for display.
+	if !strings.HasPrefix(name, "/") {
+		name = "/" + name
+	}
+	args := ""
+	if am := xmlCmdArgsRe.FindStringSubmatch(content); am != nil {
+		args = strings.TrimSpace(am[1])
+	}
+	if args != "" {
+		return name + " " + args, true
+	}
+	return name, true
+}
+
+// isCommandEnvelope returns true if the content is a pure
+// command XML envelope (starts with a command tag and contains
+// nothing but command tags and whitespace). Used as a fallback
+// to skip messages that look like command envelopes but couldn't
+// be normalized by extractCommandText.
+func isCommandEnvelope(content string) bool {
+	trimmed := strings.TrimLeftFunc(content, func(r rune) bool {
+		return r == '\uFEFF' || unicode.IsSpace(r)
+	})
+	if !strings.HasPrefix(trimmed, "<command-message>") &&
+		!strings.HasPrefix(trimmed, "<command-name>") {
+		return false
+	}
+	stripped := xmlCmdStripRe.ReplaceAllString(trimmed, "")
+	return strings.TrimSpace(stripped) == ""
+}
+
 // isClaudeSystemMessage returns true if the content matches
 // a known system-injected user message pattern.
 func isClaudeSystemMessage(content string) bool {
@@ -850,8 +943,6 @@ func isClaudeSystemMessage(content string) bool {
 		"This session is being continued",
 		"[Request interrupted",
 		"<task-notification>",
-		"<command-message>",
-		"<command-name>",
 		"<local-command-",
 		"Stop hook feedback:",
 	}
