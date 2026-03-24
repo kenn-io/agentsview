@@ -43,18 +43,14 @@
   }
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  class="confirm-overlay"
-  onclick={handleOverlayClick}
+<svelte:window
   onkeydown={(e) => {
     if (e.key === "Escape") close();
-    if (e.key === "Enter") {
-      e.preventDefault();
-      confirmDelete();
-    }
   }}
->
+/>
+
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="confirm-overlay" onclick={handleOverlayClick}>
   <div class="confirm-modal">
     <div class="confirm-header">
       <h3 class="confirm-title">Delete Session</h3>
@@ -72,10 +68,12 @@
 
     <div class="confirm-actions">
       <button class="cancel-btn" onclick={close}>Cancel</button>
+      <!-- svelte-ignore a11y_autofocus -->
       <button
         class="delete-btn"
         onclick={confirmDelete}
         disabled={deleting}
+        autofocus
       >
         {deleting ? "Deleting..." : "Move to Trash"}
       </button>
