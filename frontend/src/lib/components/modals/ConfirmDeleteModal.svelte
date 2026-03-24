@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { truncate } from "../../utils/format.js";
@@ -30,6 +31,7 @@
       // silently fail — toast will show undo option
     } finally {
       deleting = false;
+      await tick();
       deleteBtn?.focus();
     }
   }
