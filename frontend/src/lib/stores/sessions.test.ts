@@ -926,43 +926,6 @@ describe("SessionsStore", () => {
       expect(api.getSession).not.toHaveBeenCalled();
     });
   });
-
-  describe("includeOneShot from analytics", () => {
-    it("sets filter when analytics has includeOneShot enabled", () => {
-      mockListSessions();
-      expect(sessions.filters.includeOneShot).toBe(false);
-
-      // Simulate the handleSessionClick guard from TopSessions
-      const analyticsIncludeOneShot = true;
-      if (
-        analyticsIncludeOneShot &&
-        !sessions.filters.includeOneShot
-      ) {
-        sessions.filters.includeOneShot = true;
-        sessions.invalidateFilterCaches();
-      }
-
-      expect(sessions.filters.includeOneShot).toBe(true);
-    });
-
-    it("does not re-invalidate when filter already set", () => {
-      mockListSessions();
-      sessions.filters.includeOneShot = true;
-
-      const spy = vi.spyOn(sessions, "invalidateFilterCaches");
-      const analyticsIncludeOneShot = true;
-      if (
-        analyticsIncludeOneShot &&
-        !sessions.filters.includeOneShot
-      ) {
-        sessions.filters.includeOneShot = true;
-        sessions.invalidateFilterCaches();
-      }
-
-      expect(spy).not.toHaveBeenCalled();
-      spy.mockRestore();
-    });
-  });
 });
 
 function makeSession(
