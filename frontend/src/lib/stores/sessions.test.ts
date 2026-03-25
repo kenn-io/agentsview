@@ -15,6 +15,7 @@ import type { ListSessionsParams } from "../api/client.js";
 
 vi.mock("../api/client.js", () => ({
   listSessions: vi.fn(),
+  getSession: vi.fn(),
   getProjects: vi.fn(),
   getAgents: vi.fn(),
 }));
@@ -890,6 +891,39 @@ describe("SessionsStore", () => {
       });
 
       expect(sessions.agents[0]!.name).toBe("fresh-agent");
+    });
+  });
+
+  describe("navigateToSession", () => {
+    it("sets activeSessionId synchronously before fetching", async () => {
+      let resolveGet!: (s: Session) => void;
+      const getPromise = new Promise<Session>((r) => {
+        resolveGet = r;
+      });
+      vi.mocked(api.getSession).mockReturnValue(getPromise);
+      mockListSessions();
+
+      const promise = sessions.navigateToSession("new-id");
+
+      // activeSessionId must be set before the await resolves
+      expect(sessions.activeSessionId).toBe("new-id");
+      expect(sessions.sessions).toHaveLength(0);
+
+      resolveGet(makeSession({ id: "new-id" }));
+      await promise;
+
+      expect(sessions.sessions).toHaveLength(1);
+      expect(sessions.sessions[0]!.id).toBe("new-id");
+    });
+
+    it("skips fetch for already-loaded session", async () => {
+      mockListSessions();
+      sessions.sessions = [makeSession({ id: "existing" })];
+
+      await sessions.navigateToSession("existing");
+
+      expect(sessions.activeSessionId).toBe("existing");
+      expect(api.getSession).not.toHaveBeenCalled();
     });
   });
 });

@@ -243,6 +243,7 @@ describe("RouterStore", () => {
     store = new RouterStore();
     store.navigate("insights");
     expect(window.location.search).toBe("?desktop=");
+    expect(store.params).toEqual({ desktop: "" });
   });
 
   it("preserves desktop param in navigateToSession", () => {
@@ -253,6 +254,7 @@ describe("RouterStore", () => {
       "/sessions/abc-123",
     );
     expect(window.location.search).toBe("?desktop=");
+    expect(store.params).toEqual({ desktop: "" });
   });
 
   it("preserves desktop param in navigateFromSession", () => {
@@ -263,6 +265,10 @@ describe("RouterStore", () => {
     expect(window.location.search).toContain(
       "project=myproj",
     );
+    expect(store.params).toEqual({
+      desktop: "",
+      project: "myproj",
+    });
   });
 
   it("preserves desktop param in replaceParams", () => {
@@ -271,6 +277,10 @@ describe("RouterStore", () => {
     store.replaceParams({ project: "bar" });
     expect(window.location.search).toContain("desktop=");
     expect(window.location.search).toContain("project=bar");
+    expect(store.params).toEqual({
+      desktop: "",
+      project: "bar",
+    });
   });
 
   it("routing params override sticky params", () => {

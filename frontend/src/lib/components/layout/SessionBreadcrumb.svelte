@@ -84,6 +84,7 @@
 
 
   let copiedLinkId = $state("");
+  let copiedLinkTimer: ReturnType<typeof setTimeout> | undefined;
 
   async function copySessionLink() {
     if (!session) return;
@@ -93,7 +94,8 @@
     const ok = await copyToClipboard(url);
     if (!ok) return;
     copiedLinkId = id;
-    setTimeout(() => {
+    clearTimeout(copiedLinkTimer);
+    copiedLinkTimer = setTimeout(() => {
       if (copiedLinkId === id) copiedLinkId = "";
     }, 1500);
   }
