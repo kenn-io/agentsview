@@ -17,9 +17,6 @@
   }
 
   function mobileNav(route: Route) {
-    if (route === "sessions") {
-      sessions.deselectSession();
-    }
     router.navigate(route);
     // Close sidebar for full-page routes; keep open for sessions
     // so the user can select from the list.

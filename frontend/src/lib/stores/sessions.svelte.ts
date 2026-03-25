@@ -62,9 +62,6 @@ class SessionsStore {
   loading: boolean = $state(false);
   filters: Filters = $state(defaultFilters());
 
-  /** Set before router.navigate() to survive initFromParams() reset. */
-  pendingNavTarget: string | null = null;
-
   private loadVersion: number = 0;
   private projectsLoaded: boolean = false;
   private projectsPromise: Promise<void> | null = null;
@@ -167,12 +164,7 @@ class SessionsStore {
     if (prevOneShot !== nextOneShot) {
       this.invalidateFilterCaches();
     }
-    if (this.pendingNavTarget) {
-      this.setActiveSession(this.pendingNavTarget);
-      this.pendingNavTarget = null;
-    } else {
-      this.setActiveSession(null);
-    }
+    this.setActiveSession(null);
   }
 
   async load() {

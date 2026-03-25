@@ -6,7 +6,7 @@
   import { formatTokenCount } from "../../utils/format.js";
   import { computeMainModel } from "../../utils/model.js";
   import { sessions } from "../../stores/sessions.svelte.js";
-  import { router } from "../../stores/router.svelte.js";
+  import { router, buildSessionHref } from "../../stores/router.svelte.js";
   import MessageContent from "./MessageContent.svelte";
 
   interface Props {
@@ -45,12 +45,8 @@
   async function openAsSession(e: MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (router.route === "sessions") {
-      await sessions.navigateToSession(sessionId);
-    } else {
-      sessions.pendingNavTarget = sessionId;
-      router.navigate("sessions");
-    }
+    router.navigateToSession(sessionId);
+    await sessions.navigateToSession(sessionId);
   }
 
   let agentLabel = $derived(sessionMeta?.agent ?? null);
@@ -88,7 +84,7 @@
       {/if}
     </button>
     <a
-      href="#{sessionId}"
+      href={buildSessionHref(sessionId)}
       class="open-session-link"
       onclick={openAsSession}
       title="Open as full session"

@@ -104,7 +104,6 @@
       class="hamburger"
       onclick={() => {
         if (ui.isMobileViewport && router.route !== "sessions") {
-          sessions.deselectSession();
           router.navigate("sessions");
           ui.sidebarOpen = true;
         } else {
@@ -120,10 +119,7 @@
     </button>
     <button
       class="header-home"
-      onclick={() => {
-        sessions.deselectSession();
-        router.navigate("sessions");
-      }}
+      onclick={() => router.navigate("sessions")}
       title="Home"
     >
       <svg class="header-logo" width="18" height="18" viewBox="0 0 32 32" aria-hidden="true">
@@ -145,10 +141,7 @@
     <button
       class="nav-btn"
       class:active={router.route === "sessions"}
-      onclick={() => {
-        sessions.deselectSession();
-        router.navigate("sessions");
-      }}
+      onclick={() => router.navigate("sessions")}
       title="Sessions"
       aria-label="Sessions"
     >

@@ -189,15 +189,102 @@
     messageListRef?.scrollToOrdinal(next.ordinals[0]!);
   }
 
-  // React to route changes: initialize session filters from URL params
+  // React to route changes: initialize session filters from URL params.
+  // Only track route and params — NOT sessionId. When the URL sync
+  // effect deselects a session (changing sessionId), we must not
+  // re-run initFromParams or it will reset filters the user just set.
   $effect(() => {
     const _route = router.route;
     const params = router.params;
     untrack(() => {
-      sessions.initFromParams(params);
+      const sid = router.sessionId;
+      if (!sid) {
+        sessions.initFromParams(params);
+      }
       sessions.load();
       sessions.loadProjects();
       sessions.loadAgents();
+    });
+  });
+
+  // Deep-link: select session from URL and handle ?msg param.
+  let urlSyncSuppressed = false;
+
+  $effect(() => {
+    const sid = router.sessionId;
+    const msgParam = router.params["msg"] ?? null;
+    untrack(() => {
+      if (sid) {
+        if (sid !== sessions.activeSessionId) {
+          urlSyncSuppressed = true;
+          sessions.navigateToSession(sid);
+          urlSyncSuppressed = false;
+        }
+        if (msgParam) {
+          if (msgParam === "last") {
+            ui.pendingScrollOrdinal = -1;
+            ui.pendingScrollSession = sid;
+          } else {
+            const ordinal = parseInt(msgParam, 10);
+            if (Number.isFinite(ordinal)) {
+              ui.scrollToOrdinal(ordinal, sid);
+            }
+          }
+        }
+      } else if (router.route === "sessions") {
+        if (sessions.activeSessionId !== null) {
+          urlSyncSuppressed = true;
+          sessions.deselectSession();
+          urlSyncSuppressed = false;
+        }
+      }
+    });
+  });
+
+  // Resolve msg=last once messages are loaded.
+  $effect(() => {
+    const pending = ui.pendingScrollOrdinal;
+    const loading = messages.loading;
+    const msgs = messages.messages;
+    untrack(() => {
+      if (pending !== -1 || loading || msgs.length === 0) return;
+      const lastOrdinal = msgs[msgs.length - 1]!.ordinal;
+      ui.scrollToOrdinal(lastOrdinal, ui.pendingScrollSession ?? undefined);
+    });
+  });
+
+  // Build URL params from current session filters.
+  function buildFilterParams(): Record<string, string> {
+    const f = sessions.filters;
+    const p: Record<string, string> = {};
+    if (f.project) p.project = f.project;
+    if (f.machine) p.machine = f.machine;
+    if (f.agent) p.agent = f.agent;
+    if (f.date) p.date = f.date;
+    if (f.dateFrom) p.date_from = f.dateFrom;
+    if (f.dateTo) p.date_to = f.dateTo;
+    if (f.recentlyActive) p.active_since = "true";
+    if (f.hideUnknownProject) p.exclude_project = "unknown";
+    if (f.minMessages > 0) p.min_messages = String(f.minMessages);
+    if (f.maxMessages > 0) p.max_messages = String(f.maxMessages);
+    if (f.minUserMessages > 0) p.min_user_messages = String(f.minUserMessages);
+    if (f.includeOneShot) p.include_one_shot = "true";
+    return p;
+  }
+
+  // Sync active session to URL.
+  $effect(() => {
+    const activeId = sessions.activeSessionId;
+    const currentUrlSessionId = router.sessionId;
+    untrack(() => {
+      if (urlSyncSuppressed) return;
+      if (router.route !== "sessions") return;
+      if (activeId === currentUrlSessionId) return;
+      if (activeId) {
+        router.navigateToSession(activeId);
+      } else {
+        router.navigateFromSession(buildFilterParams());
+      }
     });
   });
 

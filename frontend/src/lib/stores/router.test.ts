@@ -3,72 +3,103 @@ import {
   it,
   expect,
   vi,
-  beforeEach,
   afterEach,
 } from "vitest";
 import {
-  parseHash,
+  parsePath,
   RouterStore,
 } from "./router.svelte.js";
 
-describe("parseHash", () => {
-  let originalHash: string;
+function setURL(path: string) {
+  window.history.replaceState(null, "", path);
+}
 
-  beforeEach(() => {
-    originalHash = window.location.hash;
-  });
-
+describe("parsePath", () => {
   afterEach(() => {
-    window.location.hash = originalHash;
+    setURL("/");
   });
 
-  it("returns default route for empty hash", () => {
-    window.location.hash = "";
-    const result = parseHash();
+  it("returns default route for root path", () => {
+    setURL("/");
+    const result = parsePath();
     expect(result.route).toBe("sessions");
+    expect(result.sessionId).toBeNull();
     expect(result.params).toEqual({});
   });
 
-  it("returns default route for bare slash", () => {
-    window.location.hash = "#/";
-    const result = parseHash();
+  it("parses /sessions with query params", () => {
+    setURL("/sessions?project=myproj&machine=laptop");
+    const result = parsePath();
     expect(result.route).toBe("sessions");
+    expect(result.sessionId).toBeNull();
+    expect(result.params).toEqual({
+      project: "myproj",
+      machine: "laptop",
+    });
+  });
+
+  it("parses /sessions/{id}", () => {
+    setURL("/sessions/abc-123");
+    const result = parsePath();
+    expect(result.route).toBe("sessions");
+    expect(result.sessionId).toBe("abc-123");
     expect(result.params).toEqual({});
   });
 
-  it("parses #/sessions with query params", () => {
-    window.location.hash = "#/sessions?x=1&y=hello";
-    const result = parseHash();
+  it("parses /sessions/{id} with msg param", () => {
+    setURL("/sessions/abc-123?msg=5");
+    const result = parsePath();
     expect(result.route).toBe("sessions");
-    expect(result.params).toEqual({ x: "1", y: "hello" });
+    expect(result.sessionId).toBe("abc-123");
+    expect(result.params).toEqual({ msg: "5" });
   });
 
-  it("parses #/sessions without query params", () => {
-    window.location.hash = "#/sessions";
-    const result = parseHash();
-    expect(result.route).toBe("sessions");
-    expect(result.params).toEqual({});
+  it("parses /sessions/{id} with msg=last", () => {
+    setURL("/sessions/abc-123?msg=last");
+    const result = parsePath();
+    expect(result.sessionId).toBe("abc-123");
+    expect(result.params).toEqual({ msg: "last" });
   });
 
-  it("falls back to default route for unknown path", () => {
-    window.location.hash = "#/unknown";
-    const result = parseHash();
-    expect(result.route).toBe("sessions");
-    expect(result.params).toEqual({});
+  it("parses page routes", () => {
+    for (const route of [
+      "insights",
+      "pinned",
+      "trash",
+      "settings",
+    ]) {
+      setURL(`/${route}`);
+      const result = parsePath();
+      expect(result.route).toBe(route);
+      expect(result.sessionId).toBeNull();
+    }
   });
 
-  it("falls back to default route for unknown path with params", () => {
-    window.location.hash = "#/foo?bar=baz";
-    const result = parseHash();
+  it("falls back to default for unknown routes", () => {
+    setURL("/unknown");
+    const result = parsePath();
     expect(result.route).toBe("sessions");
-    expect(result.params).toEqual({ bar: "baz" });
+    expect(result.sessionId).toBeNull();
   });
 
-  it("handles path without leading slash", () => {
-    window.location.hash = "#sessions?a=1";
-    const result = parseHash();
-    expect(result.route).toBe("sessions");
-    expect(result.params).toEqual({ a: "1" });
+  it("decodes encoded session IDs", () => {
+    setURL("/sessions/copilot%3Aabc123");
+    const result = parsePath();
+    expect(result.sessionId).toBe("copilot:abc123");
+  });
+
+  it("strips basePath from pathname", () => {
+    const base = document.createElement("base");
+    base.href = "/agentsview/";
+    document.head.appendChild(base);
+    try {
+      setURL("/agentsview/sessions/abc");
+      const result = parsePath();
+      expect(result.route).toBe("sessions");
+      expect(result.sessionId).toBe("abc");
+    } finally {
+      base.remove();
+    }
   });
 });
 
@@ -77,100 +108,127 @@ describe("RouterStore", () => {
 
   afterEach(() => {
     store?.destroy();
-    window.location.hash = "";
+    setURL("/");
   });
 
-  it("initializes with parsed hash", () => {
-    window.location.hash = "#/sessions?project=test";
+  it("initializes with parsed path", () => {
+    setURL("/sessions?project=test");
     store = new RouterStore();
     expect(store.route).toBe("sessions");
     expect(store.params).toEqual({ project: "test" });
+    expect(store.sessionId).toBeNull();
+  });
+
+  it("initializes sessionId from path", () => {
+    setURL("/sessions/abc-123");
+    store = new RouterStore();
+    expect(store.route).toBe("sessions");
+    expect(store.sessionId).toBe("abc-123");
   });
 
   it("falls back to default on invalid route", () => {
-    window.location.hash = "#/bogus";
+    setURL("/bogus");
     store = new RouterStore();
     expect(store.route).toBe("sessions");
   });
 
-  it("destroy removes the hashchange listener", () => {
-    window.location.hash = "";
-    const addSpy = vi.spyOn(window, "addEventListener");
+  it("navigate updates URL via pushState", () => {
+    setURL("/");
     store = new RouterStore();
-
-    const registeredCb = addSpy.mock.calls.find(
-      ([event]) => event === "hashchange",
-    )?.[1];
-    addSpy.mockRestore();
-
-    const removeSpy = vi.spyOn(window, "removeEventListener");
-    store.destroy();
-    expect(removeSpy).toHaveBeenCalledWith(
-      "hashchange",
-      registeredCb,
-    );
-    removeSpy.mockRestore();
+    const spy = vi.spyOn(window.history, "pushState");
+    store.navigate("insights");
+    expect(spy).toHaveBeenCalled();
+    expect(store.route).toBe("insights");
+    spy.mockRestore();
   });
 
-  it("navigate returns true on hash change", () => {
-    window.location.hash = "";
-    store = new RouterStore();
-    const result = store.navigate("sessions", {
-      project: "foo",
-    });
-    expect(result).toBe(true);
-    expect(store.route).toBe("sessions");
-    expect(store.params).toEqual({ project: "foo" });
-  });
-
-  it("navigate returns false on same hash (no-op)", () => {
-    window.location.hash = "#/sessions";
+  it("navigate returns false on same URL (no-op)", () => {
+    setURL("/sessions");
     store = new RouterStore();
     const result = store.navigate("sessions");
     expect(result).toBe(false);
   });
 
-  it("navigate returns false when params match", () => {
-    window.location.hash =
-      "#/sessions?include_one_shot=true";
+  it("navigate with params builds query string", () => {
+    setURL("/");
     store = new RouterStore();
-    const result = store.navigate("sessions", {
-      include_one_shot: "true",
-    });
-    expect(result).toBe(false);
+    store.navigate("sessions", { project: "foo" });
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("?project=foo");
   });
 
-  it("does not accumulate listeners across instances", () => {
+  it("navigateToSession updates URL to /sessions/{id}", () => {
+    setURL("/sessions");
+    store = new RouterStore();
+    store.navigateToSession("abc-123");
+    expect(window.location.pathname).toBe(
+      "/sessions/abc-123",
+    );
+    expect(store.sessionId).toBe("abc-123");
+  });
+
+  it("navigateToSession with msg param", () => {
+    setURL("/sessions");
+    store = new RouterStore();
+    store.navigateToSession("abc-123", { msg: "last" });
+    expect(window.location.pathname).toBe(
+      "/sessions/abc-123",
+    );
+    expect(window.location.search).toBe("?msg=last");
+  });
+
+  it("navigateFromSession returns to /sessions", () => {
+    setURL("/sessions/abc-123");
+    store = new RouterStore();
+    store.navigateFromSession();
+    expect(window.location.pathname).toBe("/sessions");
+    expect(store.sessionId).toBeNull();
+  });
+
+  it("navigateFromSession preserves filter params", () => {
+    setURL("/sessions/abc-123");
+    store = new RouterStore();
+    store.navigateFromSession({ project: "myproj" });
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toBe("?project=myproj");
+  });
+
+  it("responds to popstate events", () => {
+    setURL("/sessions");
+    store = new RouterStore();
+    setURL("/insights");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(store.route).toBe("insights");
+  });
+
+  it("destroy removes popstate listener", () => {
+    setURL("/");
     const addSpy = vi.spyOn(window, "addEventListener");
+    store = new RouterStore();
+    const registeredCb = addSpy.mock.calls.find(
+      ([event]) => event === "popstate",
+    )?.[1];
+    addSpy.mockRestore();
+
     const removeSpy = vi.spyOn(
       window,
       "removeEventListener",
     );
-
-    const store1 = new RouterStore();
-    const store2 = new RouterStore();
-
-    const addCalls = addSpy.mock.calls.filter(
-      ([event]) => event === "hashchange",
+    store.destroy();
+    expect(removeSpy).toHaveBeenCalledWith(
+      "popstate",
+      registeredCb,
     );
-    expect(addCalls).toHaveLength(2);
-
-    store1.destroy();
-
-    const removeCalls = removeSpy.mock.calls.filter(
-      ([event]) => event === "hashchange",
-    );
-    expect(removeCalls).toHaveLength(1);
-    expect(removeCalls[0]![1]).toBe(addCalls[0]![1]);
-
-    // Destroyed store should not react to hashchange
-    window.location.hash = "#/sessions?after=destroy1";
-    window.dispatchEvent(new HashChangeEvent("hashchange"));
-    expect(store1.params).not.toHaveProperty("after");
-    expect(store2.params).toEqual({ after: "destroy1" });
-
-    store2.destroy();
-    addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+
+  it("replaceParams uses replaceState", () => {
+    setURL("/sessions");
+    store = new RouterStore();
+    const spy = vi.spyOn(window.history, "replaceState");
+    store.replaceParams({ project: "bar" });
+    expect(spy).toHaveBeenCalled();
+    expect(window.location.search).toBe("?project=bar");
+    spy.mockRestore();
   });
 });

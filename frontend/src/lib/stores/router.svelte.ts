@@ -15,78 +15,138 @@ const VALID_ROUTES: ReadonlySet<string> = new Set<Route>([
 
 const DEFAULT_ROUTE: Route = "sessions";
 
-export function parseHash(): {
+export function getBasePath(): string {
+  const base = document.querySelector("base");
+  if (!base) return "";
+  const href = base.getAttribute("href") ?? "";
+  return href.replace(/\/+$/, "");
+}
+
+/** Build a full URL path for a session, respecting basePath. */
+export function buildSessionHref(id: string): string {
+  return `${getBasePath()}/sessions/${encodeURIComponent(id)}`;
+}
+
+export function parsePath(): {
   route: Route;
+  sessionId: string | null;
   params: Record<string, string>;
 } {
-  const hash = window.location.hash.slice(1);
-  if (!hash || hash === "/") {
-    return { route: DEFAULT_ROUTE, params: {} };
+  const basePath = getBasePath();
+  let pathname = window.location.pathname;
+  if (basePath && pathname.startsWith(basePath)) {
+    pathname = pathname.slice(basePath.length);
   }
+  if (!pathname.startsWith("/")) pathname = "/" + pathname;
 
-  const qIdx = hash.indexOf("?");
-  const path = qIdx >= 0 ? hash.slice(0, qIdx) : hash;
-  const routeString = path.startsWith("/")
-    ? path.slice(1)
-    : path;
-  const route: Route = VALID_ROUTES.has(routeString)
-    ? (routeString as Route)
+  const segments = pathname
+    .split("/")
+    .filter((s) => s.length > 0);
+  const routeStr = segments[0] ?? "";
+  const route: Route = VALID_ROUTES.has(routeStr)
+    ? (routeStr as Route)
     : DEFAULT_ROUTE;
 
-  const params =
-    qIdx >= 0
-      ? Object.fromEntries(
-          new URLSearchParams(hash.slice(qIdx + 1)),
-        )
-      : {};
+  const sessionId =
+    route === "sessions" && segments.length >= 2
+      ? decodeURIComponent(segments[1]!)
+      : null;
 
-  return { route, params };
+  const params = Object.fromEntries(
+    new URLSearchParams(window.location.search),
+  );
+
+  return { route, sessionId, params };
 }
 
 export class RouterStore {
   route: Route = $state("sessions");
   params: Record<string, string> = $state({});
-  #onHashChange: () => void;
-  #lastHash: string = "";
+  sessionId: string | null = $state(null);
+  #onPopState: () => void;
 
   constructor() {
-    const initial = parseHash();
+    const initial = parsePath();
     this.route = initial.route;
     this.params = initial.params;
+    this.sessionId = initial.sessionId;
 
-    this.#onHashChange = () => {
-      const currentHash = window.location.hash;
-      if (currentHash === this.#lastHash) {
-        this.#lastHash = "";
-        return;
-      }
-      this.#lastHash = "";
-      const parsed = parseHash();
+    this.#onPopState = () => {
+      const parsed = parsePath();
       this.route = parsed.route;
       this.params = parsed.params;
+      this.sessionId = parsed.sessionId;
     };
-    window.addEventListener("hashchange", this.#onHashChange);
+    window.addEventListener("popstate", this.#onPopState);
   }
 
   destroy() {
     window.removeEventListener(
-      "hashchange",
-      this.#onHashChange,
+      "popstate",
+      this.#onPopState,
     );
+  }
+
+  #buildUrl(
+    path: string,
+    params: Record<string, string> = {},
+  ): string {
+    const basePath = getBasePath();
+    const qs = new URLSearchParams(params).toString();
+    const full = basePath + path;
+    return qs ? `${full}?${qs}` : full;
   }
 
   navigate(
     route: Route,
     params: Record<string, string> = {},
   ): boolean {
-    const qs = new URLSearchParams(params).toString();
-    const hash = qs ? `#/${route}?${qs}` : `#/${route}`;
-    if (hash === window.location.hash) return false;
+    const url = this.#buildUrl(`/${route}`, params);
+    if (
+      url ===
+      window.location.pathname + window.location.search
+    ) {
+      return false;
+    }
     this.route = route;
     this.params = params;
-    this.#lastHash = hash;
-    window.location.hash = hash;
+    this.sessionId = null;
+    window.history.pushState(null, "", url);
     return true;
+  }
+
+  navigateToSession(
+    id: string,
+    params: Record<string, string> = {},
+  ) {
+    const url = this.#buildUrl(
+      `/sessions/${encodeURIComponent(id)}`,
+      params,
+    );
+    this.route = "sessions";
+    this.params = params;
+    this.sessionId = id;
+    window.history.pushState(null, "", url);
+  }
+
+  navigateFromSession(
+    params: Record<string, string> = {},
+  ) {
+    const url = this.#buildUrl("/sessions", params);
+    this.route = "sessions";
+    this.params = params;
+    this.sessionId = null;
+    window.history.pushState(null, "", url);
+  }
+
+  /** Update query params without creating a history entry. */
+  replaceParams(params: Record<string, string>) {
+    const path = this.sessionId
+      ? `/sessions/${encodeURIComponent(this.sessionId)}`
+      : `/${this.route}`;
+    const url = this.#buildUrl(path, params);
+    this.params = params;
+    window.history.replaceState(null, "", url);
   }
 }
 

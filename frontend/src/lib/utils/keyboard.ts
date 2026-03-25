@@ -224,7 +224,6 @@ export function registerShortcuts(
         if (router.route === "sessions") {
           ui.toggleSidebar();
         } else if (ui.isMobileViewport) {
-          sessions.deselectSession();
           router.navigate("sessions");
           ui.sidebarOpen = true;
         } else {
