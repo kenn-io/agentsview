@@ -208,17 +208,13 @@
   });
 
   // Deep-link: select session from URL and handle ?msg param.
-  let urlSyncSuppressed = false;
-
   $effect(() => {
     const sid = router.sessionId;
     const msgParam = router.params["msg"] ?? null;
     untrack(() => {
       if (sid) {
         if (sid !== sessions.activeSessionId) {
-          urlSyncSuppressed = true;
           sessions.navigateToSession(sid);
-          urlSyncSuppressed = false;
         }
         if (msgParam) {
           if (msgParam === "last") {
@@ -233,9 +229,7 @@
         }
       } else if (router.route === "sessions") {
         if (sessions.activeSessionId !== null) {
-          urlSyncSuppressed = true;
           sessions.deselectSession();
-          urlSyncSuppressed = false;
         }
       }
     });
@@ -277,7 +271,6 @@
     const activeId = sessions.activeSessionId;
     const currentUrlSessionId = router.sessionId;
     untrack(() => {
-      if (urlSyncSuppressed) return;
       if (router.route !== "sessions") return;
       if (activeId === currentUrlSessionId) return;
       if (activeId) {

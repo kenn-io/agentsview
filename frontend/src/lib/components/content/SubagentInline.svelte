@@ -46,7 +46,6 @@
     e.preventDefault();
     e.stopPropagation();
     router.navigateToSession(sessionId);
-    await sessions.navigateToSession(sessionId);
   }
 
   let agentLabel = $derived(sessionMeta?.agent ?? null);

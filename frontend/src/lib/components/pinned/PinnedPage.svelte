@@ -25,7 +25,6 @@
   function navigateToPin(sessionId: string, ordinal: number) {
     ui.scrollToOrdinal(ordinal, sessionId);
     router.navigateToSession(sessionId);
-    sessions.navigateToSession(sessionId);
   }
 
   function getSessionInfo(pin: import("../../api/types.js").PinnedMessage) {

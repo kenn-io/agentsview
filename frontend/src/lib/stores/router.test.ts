@@ -231,4 +231,46 @@ describe("RouterStore", () => {
     expect(window.location.search).toBe("?project=bar");
     spy.mockRestore();
   });
+
+  it("preserves desktop param across navigations", () => {
+    setURL("/sessions?desktop");
+    store = new RouterStore();
+    store.navigate("insights");
+    expect(window.location.search).toBe("?desktop=");
+  });
+
+  it("preserves desktop param in navigateToSession", () => {
+    setURL("/sessions?desktop");
+    store = new RouterStore();
+    store.navigateToSession("abc-123");
+    expect(window.location.pathname).toBe(
+      "/sessions/abc-123",
+    );
+    expect(window.location.search).toBe("?desktop=");
+  });
+
+  it("preserves desktop param in navigateFromSession", () => {
+    setURL("/sessions/abc-123?desktop");
+    store = new RouterStore();
+    store.navigateFromSession({ project: "myproj" });
+    expect(window.location.search).toContain("desktop=");
+    expect(window.location.search).toContain(
+      "project=myproj",
+    );
+  });
+
+  it("preserves desktop param in replaceParams", () => {
+    setURL("/sessions?desktop");
+    store = new RouterStore();
+    store.replaceParams({ project: "bar" });
+    expect(window.location.search).toContain("desktop=");
+    expect(window.location.search).toContain("project=bar");
+  });
+
+  it("routing params override sticky params", () => {
+    setURL("/sessions?desktop");
+    store = new RouterStore();
+    store.navigate("sessions", { desktop: "off" });
+    expect(window.location.search).toBe("?desktop=off");
+  });
 });

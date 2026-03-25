@@ -59,17 +59,28 @@ export function parsePath(): {
   return { route, sessionId, params };
 }
 
+/** Params that are not part of routing but must survive navigations. */
+const STICKY_PARAMS = new Set(["desktop"]);
+
 export class RouterStore {
   route: Route = $state("sessions");
   params: Record<string, string> = $state({});
   sessionId: string | null = $state(null);
   #onPopState: () => void;
+  #stickyParams: Record<string, string>;
 
   constructor() {
     const initial = parsePath();
     this.route = initial.route;
     this.params = initial.params;
     this.sessionId = initial.sessionId;
+
+    this.#stickyParams = {};
+    for (const [k, v] of Object.entries(initial.params)) {
+      if (STICKY_PARAMS.has(k)) {
+        this.#stickyParams[k] = v;
+      }
+    }
 
     this.#onPopState = () => {
       const parsed = parsePath();
@@ -92,7 +103,8 @@ export class RouterStore {
     params: Record<string, string> = {},
   ): string {
     const basePath = getBasePath();
-    const qs = new URLSearchParams(params).toString();
+    const merged = { ...this.#stickyParams, ...params };
+    const qs = new URLSearchParams(merged).toString();
     const full = basePath + path;
     return qs ? `${full}?${qs}` : full;
   }
