@@ -1234,6 +1234,15 @@ func TestDiscoverCursorSessions_NestedLayout(t *testing.T) {
 			wantCount: 1,
 		},
 		{
+			name: "NestedIgnoresAuxiliaryFiles",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "eee", "eee.jsonl"):   `{"role":"user"}`,
+				filepath.Join(cursorTranscripts, "eee", "other.jsonl"): `{"role":"user"}`,
+				filepath.Join(cursorTranscripts, "eee", "notes.txt"):   "notes",
+			},
+			wantCount: 1,
+		},
+		{
 			name: "MixedFlatAndNested",
 			files: map[string]string{
 				filepath.Join(cursorTranscripts, "flat.txt"):               "user:\nhi",

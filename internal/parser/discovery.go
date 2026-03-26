@@ -586,12 +586,22 @@ func DiscoverCursorSessions(
 			if err != nil {
 				continue
 			}
+			dirName := sf.Name()
 			for _, sub := range subEntries {
 				if sub.IsDir() {
 					continue
 				}
 				name := sub.Name()
 				if !IsCursorTranscriptExt(name) {
+					continue
+				}
+				// Only accept files whose stem matches
+				// the parent directory name, e.g.
+				// <uuid>/<uuid>.jsonl.
+				stem := strings.TrimSuffix(
+					name, filepath.Ext(name),
+				)
+				if stem != dirName {
 					continue
 				}
 				fullPath := filepath.Join(
@@ -643,16 +653,16 @@ func FindCursorSourceFile(
 			if !entry.IsDir() {
 				continue
 			}
-			// Flat layout: agent-transcripts/<id>.ext
+			// Nested layout first (matches discovery
+			// precedence), then flat layout.
 			candidates := []string{
 				filepath.Join(
 					projectsDir, entry.Name(),
-					"agent-transcripts", target,
+					"agent-transcripts", sessionID, target,
 				),
-				// Nested layout: agent-transcripts/<id>/<id>.ext
 				filepath.Join(
 					projectsDir, entry.Name(),
-					"agent-transcripts", sessionID, target,
+					"agent-transcripts", target,
 				),
 			}
 			for _, candidate := range candidates {
