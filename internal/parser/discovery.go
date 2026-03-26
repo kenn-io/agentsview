@@ -481,6 +481,22 @@ func confirmGeminiSessionID(
 // the Cursor projects dir (<projectsDir>/<project>/agent-transcripts/<uuid>.txt).
 // All discovered paths are validated to resolve within the
 // canonical projectsDir, preventing symlink escapes.
+// cursorAddSeen inserts a transcript path into the seen map,
+// preferring .jsonl over .txt when both exist for the same stem.
+func cursorAddSeen(
+	seen map[string]string, name, fullPath string,
+) {
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	if prev, ok := seen[stem]; ok {
+		if strings.HasSuffix(prev, ".txt") &&
+			strings.HasSuffix(name, ".jsonl") {
+			seen[stem] = fullPath
+		}
+		return
+	}
+	seen[stem] = fullPath
+}
+
 func DiscoverCursorSessions(
 	projectsDir string,
 ) []DiscoveredFile {
@@ -538,33 +554,54 @@ func DiscoverCursorSessions(
 		// Collect valid transcripts, deduping by basename
 		// stem. When both .jsonl and .txt exist for the
 		// same session, prefer .jsonl.
+		//
+		// Cursor uses two layouts:
+		//   flat:   agent-transcripts/<uuid>.{txt,jsonl}
+		//   nested: agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 		seen := make(map[string]string) // stem -> path
 		for _, sf := range transcripts {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !IsCursorTranscriptExt(name) {
-				continue
-			}
-			fullPath := filepath.Join(
-				transcriptsDir, name,
-			)
-			if !IsRegularFile(fullPath) {
-				continue
-			}
-			stem := strings.TrimSuffix(
-				name, filepath.Ext(name),
-			)
-			if prev, ok := seen[stem]; ok {
-				// .jsonl wins over .txt
-				if strings.HasSuffix(prev, ".txt") &&
-					strings.HasSuffix(name, ".jsonl") {
-					seen[stem] = fullPath
+			if !sf.IsDir() {
+				// Flat layout: file directly in
+				// agent-transcripts/.
+				name := sf.Name()
+				if !IsCursorTranscriptExt(name) {
+					continue
 				}
+				fullPath := filepath.Join(
+					transcriptsDir, name,
+				)
+				if !IsRegularFile(fullPath) {
+					continue
+				}
+				cursorAddSeen(seen, name, fullPath)
 				continue
 			}
-			seen[stem] = fullPath
+
+			// Nested layout: agent-transcripts/<uuid>/
+			// containing <uuid>.{txt,jsonl}.
+			subDir := filepath.Join(
+				transcriptsDir, sf.Name(),
+			)
+			subEntries, err := os.ReadDir(subDir)
+			if err != nil {
+				continue
+			}
+			for _, sub := range subEntries {
+				if sub.IsDir() {
+					continue
+				}
+				name := sub.Name()
+				if !IsCursorTranscriptExt(name) {
+					continue
+				}
+				fullPath := filepath.Join(
+					subDir, name,
+				)
+				if !IsRegularFile(fullPath) {
+					continue
+				}
+				cursorAddSeen(seen, name, fullPath)
+			}
 		}
 		for _, path := range seen {
 			files = append(files, DiscoveredFile{
@@ -606,28 +643,38 @@ func FindCursorSourceFile(
 			if !entry.IsDir() {
 				continue
 			}
-			candidate := filepath.Join(
-				projectsDir, entry.Name(),
-				"agent-transcripts", target,
-			)
-			if !IsRegularFile(candidate) {
-				continue
+			// Flat layout: agent-transcripts/<id>.ext
+			candidates := []string{
+				filepath.Join(
+					projectsDir, entry.Name(),
+					"agent-transcripts", target,
+				),
+				// Nested layout: agent-transcripts/<id>/<id>.ext
+				filepath.Join(
+					projectsDir, entry.Name(),
+					"agent-transcripts", sessionID, target,
+				),
 			}
-			resolved, err := filepath.EvalSymlinks(
-				candidate,
-			)
-			if err != nil {
-				continue
+			for _, candidate := range candidates {
+				if !IsRegularFile(candidate) {
+					continue
+				}
+				resolved, err := filepath.EvalSymlinks(
+					candidate,
+				)
+				if err != nil {
+					continue
+				}
+				rel, err := filepath.Rel(
+					resolvedRoot, resolved,
+				)
+				sep := string(filepath.Separator)
+				if err != nil || rel == ".." ||
+					strings.HasPrefix(rel, ".."+sep) {
+					continue
+				}
+				return candidate
 			}
-			rel, err := filepath.Rel(
-				resolvedRoot, resolved,
-			)
-			sep := string(filepath.Separator)
-			if err != nil || rel == ".." ||
-				strings.HasPrefix(rel, ".."+sep) {
-				continue
-			}
-			return candidate
 		}
 	}
 	return ""

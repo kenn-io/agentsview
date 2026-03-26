@@ -1192,6 +1192,80 @@ func TestDiscoverCursorSessions(t *testing.T) {
 	}
 }
 
+func TestDiscoverCursorSessions_NestedLayout(t *testing.T) {
+	cursorTranscripts := filepath.Join(
+		"proj-dir", "agent-transcripts",
+	)
+
+	tests := []struct {
+		name      string
+		files     map[string]string
+		wantCount int
+	}{
+		{
+			name: "NestedJsonl",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "aaa", "aaa.jsonl"): `{"role":"user"}`,
+			},
+			wantCount: 1,
+		},
+		{
+			name: "NestedTxt",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "bbb", "bbb.txt"): "user:\nhi",
+			},
+			wantCount: 1,
+		},
+		{
+			name: "NestedWithSubagentsIgnored",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "ccc", "ccc.jsonl"):               `{"role":"user"}`,
+				filepath.Join(cursorTranscripts, "ccc", "subagents", "sub1.jsonl"): `{"role":"user"}`,
+				filepath.Join(cursorTranscripts, "ccc", "subagents", "sub2.jsonl"): `{"role":"user"}`,
+			},
+			wantCount: 1,
+		},
+		{
+			name: "NestedDedupPrefersJsonl",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "ddd", "ddd.txt"):   "user:\nhi",
+				filepath.Join(cursorTranscripts, "ddd", "ddd.jsonl"): `{"role":"user"}`,
+			},
+			wantCount: 1,
+		},
+		{
+			name: "MixedFlatAndNested",
+			files: map[string]string{
+				filepath.Join(cursorTranscripts, "flat.txt"):               "user:\nhi",
+				filepath.Join(cursorTranscripts, "nested", "nested.jsonl"): `{"role":"user"}`,
+			},
+			wantCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			setupFileSystem(t, dir, tt.files)
+			files := DiscoverCursorSessions(dir)
+			if len(files) != tt.wantCount {
+				t.Fatalf(
+					"got %d files, want %d",
+					len(files), tt.wantCount,
+				)
+			}
+			for _, f := range files {
+				if f.Agent != AgentCursor {
+					t.Errorf(
+						"agent = %q, want %q",
+						f.Agent, AgentCursor,
+					)
+				}
+			}
+		})
+	}
+}
+
 func TestDiscoverCursorSessions_DedupPrefersJsonl(t *testing.T) {
 	dir := t.TempDir()
 	transcripts := filepath.Join(
@@ -1254,6 +1328,32 @@ func TestFindCursorSourceFile(t *testing.T) {
 				"got %q, want %q (.jsonl preferred)",
 				got, jsonlPath,
 			)
+		}
+	})
+
+	t.Run("FindsNestedJsonl", func(t *testing.T) {
+		dir := t.TempDir()
+		setupFileSystem(t, dir, map[string]string{
+			filepath.Join(cursorTranscripts, "sess4", "sess4.jsonl"): "{}",
+		})
+		got := FindCursorSourceFile(dir, "sess4")
+		if got == "" {
+			t.Fatal("expected to find nested .jsonl file")
+		}
+		if !strings.HasSuffix(got, filepath.Join("sess4", "sess4.jsonl")) {
+			t.Errorf("unexpected path %q", got)
+		}
+	})
+
+	t.Run("PrefersJsonlOverNestedTxt", func(t *testing.T) {
+		dir := t.TempDir()
+		setupFileSystem(t, dir, map[string]string{
+			filepath.Join(cursorTranscripts, "sess5", "sess5.txt"):   "old",
+			filepath.Join(cursorTranscripts, "sess5", "sess5.jsonl"): "new",
+		})
+		got := FindCursorSourceFile(dir, "sess5")
+		if !strings.HasSuffix(got, "sess5.jsonl") {
+			t.Errorf("expected .jsonl path, got %q", got)
 		}
 	})
 
