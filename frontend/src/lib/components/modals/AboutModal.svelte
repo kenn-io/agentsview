@@ -45,7 +45,7 @@
         <circle cx="18" cy="8.5" r="2" fill="var(--accent-blue, #3b82f6)"/>
         <circle cx="18" cy="8.5" r="1" fill="#1d4ed8"/>
       </svg>
-      <div class="about-name">AgentsView</div>
+      <div class="about-name">Agentsview</div>
       <button
         class="close-btn"
         onclick={() => ui.activeModal = null}

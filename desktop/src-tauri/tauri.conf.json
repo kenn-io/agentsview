@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AgentsView",
+  "productName": "Agentsview",
   "version": "0.12.1",
   "identifier": "io.agentsview.desktop",
   "build": {
@@ -10,7 +10,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "AgentsView",
+        "title": "Agentsview",
         "width": 1440,
         "height": 900,
         "minWidth": 1024,
@@ -28,7 +28,7 @@
     "targets": "all",
     "copyright": "Copyright 2026 Wes McKinney",
     "shortDescription": "Local viewer for AI agent sessions",
-    "longDescription": "AgentsView is a local web viewer for AI agent sessions including Claude Code, Codex, Copilot CLI, Gemini CLI, OpenCode, and Amp.",
+    "longDescription": "Agentsview is a local web viewer for AI agent sessions including Claude Code, Codex, Copilot CLI, Gemini CLI, OpenCode, and Amp.",
     "createUpdaterArtifacts": "v1Compatible",
     "externalBin": [
       "binaries/agentsview"

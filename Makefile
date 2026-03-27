@@ -74,10 +74,10 @@ desktop-macos-app:
 	cd desktop && npm install && npm run tauri:build:macos-app \
 		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
 	mkdir -p $(DESKTOP_DIST_DIR)/macos
-	rm -rf $(DESKTOP_DIST_DIR)/macos/AgentsView.app
-	cp -R desktop/src-tauri/target/release/bundle/macos/AgentsView.app \
-		$(DESKTOP_DIST_DIR)/macos/AgentsView.app
-	@echo "macOS app bundle copied to $(DESKTOP_DIST_DIR)/macos/AgentsView.app"
+	rm -rf $(DESKTOP_DIST_DIR)/macos/Agentsview.app
+	cp -R desktop/src-tauri/target/release/bundle/macos/Agentsview.app \
+		$(DESKTOP_DIST_DIR)/macos/Agentsview.app
+	@echo "macOS app bundle copied to $(DESKTOP_DIST_DIR)/macos/Agentsview.app"
 
 # Build macOS DMG installer
 desktop-macos-dmg:

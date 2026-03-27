@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Build and launch the AgentsView Tauri desktop app in dev mode on Windows.
+    Build and launch the Agentsview Tauri desktop app in dev mode on Windows.
 
 .DESCRIPTION
     Builds the frontend SPA, compiles the Go sidecar binary, copies it into

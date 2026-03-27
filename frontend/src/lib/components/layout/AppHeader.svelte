@@ -129,7 +129,7 @@
         <circle cx="18" cy="8.5" r="2" fill="var(--accent-blue, #3b82f6)"/>
         <circle cx="18" cy="8.5" r="1" fill="#1d4ed8"/>
       </svg>
-      <span class="header-title">AgentsView</span>
+      <span class="header-title">Agentsview</span>
     </button>
 
     <ProjectTypeahead

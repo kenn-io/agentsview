@@ -455,7 +455,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow) {
         thread::sleep(READY_TIMEOUT);
         if !timeout_state.load(Ordering::SeqCst) {
             let _ = timeout_window.eval(
-                "window.__setStatus('AgentsView backend did not become ready in time.');",
+                "window.__setStatus('Agentsview backend did not become ready in time.');",
             );
         }
     });
@@ -507,7 +507,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow) {
                     if handle_sidecar_terminated(&state, startup_handled.as_ref()) {
                         let _ = window.eval(
                             "window.__setStatus(\
-                             'AgentsView backend exited before startup completed.');",
+                             'Agentsview backend exited before startup completed.');",
                         );
                     }
                     break;
@@ -550,7 +550,7 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
 
         let _ = window.eval(
             "document.getElementById('status').textContent = \
-             'AgentsView backend did not start within 30 seconds.';",
+             'Agentsview backend did not start within 30 seconds.';",
         );
     });
 }
@@ -604,7 +604,7 @@ fn parse_listening_port_from_stdout_buffer(buffer: &mut String, chunk: &str) -> 
 }
 
 fn setup_menu(app: &mut App) -> Result<(), DynError> {
-    let about = MenuItemBuilder::with_id("about", "About AgentsView")
+    let about = MenuItemBuilder::with_id("about", "About Agentsview")
         .build(app)?;
     let check_updates = MenuItemBuilder::with_id("check_updates", "Check for Updates...")
         .build(app)?;
