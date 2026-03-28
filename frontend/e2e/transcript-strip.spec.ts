@@ -28,8 +28,6 @@ test.describe("Transcript strip", () => {
     // The pill should fill the container height (minus the 1px border
     // on each side = 2px total).
     const stripInner = stripBox!.height - 2;
-    expect(pillBox!.height).toBeGreaterThanOrEqual(stripInner - 1);
-
-    await strip.screenshot({ path: "e2e/transcript-strip.png" });
+    expect(pillBox!.height).toBeGreaterThanOrEqual(stripInner);
   });
 });

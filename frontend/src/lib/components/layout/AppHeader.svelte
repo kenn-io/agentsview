@@ -585,7 +585,7 @@
   .transcript-strip {
     display: flex;
     align-items: stretch;
-    min-height: 26px;
+    height: 26px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     margin-right: 4px;
@@ -598,6 +598,7 @@
   }
 
   .pill {
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
