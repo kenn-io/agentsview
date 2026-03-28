@@ -182,7 +182,7 @@ jobs:
         working-directory: frontend
 
       - name: Run E2E tests
-        run: npx playwright test
+        run: npx playwright test --reporter=list
         working-directory: frontend
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
