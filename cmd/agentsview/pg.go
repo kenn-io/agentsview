@@ -243,11 +243,10 @@ func runPGServe(args []string) {
 	// is missing.
 	if err := postgres.EnsureSchema(
 		ctx, store.DB(), pgCfg.Schema,
-	); err != nil && !postgres.IsReadOnlyError(err) {
-		log.Printf(
-			"warning: pg serve: auto-migration failed: %v",
-			err,
-		)
+	); err != nil {
+		if !postgres.IsReadOnlyError(err) {
+			fatal("pg serve: schema migration failed: %v", err)
+		}
 	}
 
 	if err := postgres.CheckSchemaCompat(
