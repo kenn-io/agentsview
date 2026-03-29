@@ -235,6 +235,21 @@ func runPGServe(args []string) {
 	)
 	defer stop()
 
+	// Attempt to apply any missing schema migrations before
+	// the compatibility check. This handles upgrades (e.g.
+	// new tables like tool_result_events) without requiring a
+	// manual schema drop. If the PG role is read-only the
+	// migration is skipped and the compat check reports what
+	// is missing.
+	if err := postgres.EnsureSchema(
+		ctx, store.DB(), pgCfg.Schema,
+	); err != nil && !postgres.IsReadOnlyError(err) {
+		log.Printf(
+			"warning: pg serve: auto-migration failed: %v",
+			err,
+		)
+	}
+
 	if err := postgres.CheckSchemaCompat(
 		ctx, store.DB(),
 	); err != nil {
