@@ -1216,6 +1216,110 @@ func TestReplaceSessionMessages(t *testing.T) {
 	}
 }
 
+// TestReplaceSessionMessagesPreservesPins verifies that pinned
+// messages survive a full message replacement (regression test for
+// the ON DELETE CASCADE bug: deleting messages used to cascade-delete
+// pinned_messages rows).
+func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
+	)
+
+	// Pin ordinal-0 message with a note.
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetAllMessages: %v", err)
+	}
+	note := "important"
+	pinID, err := d.PinMessage("s1", msgs[0].ID, &note)
+	if err != nil || pinID == 0 {
+		t.Fatalf("PinMessage: id=%d err=%v", pinID, err)
+	}
+
+	// Full replace (simulates a resync of an OpenCode or
+	// explicitly re-synced session).
+	if err := d.ReplaceSessionMessages("s1", []Message{
+		userMsg("s1", 0, "msg0-updated"),
+		asstMsg("s1", 1, "msg1-updated"),
+	}); err != nil {
+		t.Fatalf("ReplaceSessionMessages: %v", err)
+	}
+
+	newMsgs, err := d.GetAllMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetAllMessages after replace: %v", err)
+	}
+	if len(newMsgs) != 2 {
+		t.Fatalf("want 2 messages after replace, got %d", len(newMsgs))
+	}
+
+	pins, err := d.ListPinnedMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages: %v", err)
+	}
+	if len(pins) != 1 {
+		t.Fatalf("want 1 pin after replace, got %d", len(pins))
+	}
+	if pins[0].MessageID != newMsgs[0].ID {
+		t.Errorf("pin message_id = %d, want %d (new ordinal-0 id)",
+			pins[0].MessageID, newMsgs[0].ID)
+	}
+	if pins[0].Ordinal != 0 {
+		t.Errorf("pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+	if pins[0].Note == nil || *pins[0].Note != note {
+		t.Errorf("pin note = %v, want %q", pins[0].Note, note)
+	}
+}
+
+// TestReplaceSessionMessagesDropsPinsForRemovedOrdinals verifies that
+// pins whose ordinal no longer exists after a replace are silently
+// dropped (the underlying message was removed from the session).
+func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p")
+	insertMessages(t, d,
+		userMsg("s1", 0, "msg0"),
+		asstMsg("s1", 1, "msg1"),
+	)
+
+	msgs, err := d.GetAllMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetAllMessages: %v", err)
+	}
+	// Pin both messages.
+	for _, m := range msgs {
+		if _, err := d.PinMessage("s1", m.ID, nil); err != nil {
+			t.Fatalf("PinMessage: %v", err)
+		}
+	}
+
+	// Replace with only ordinal-0 (ordinal-1 is gone).
+	if err := d.ReplaceSessionMessages("s1", []Message{
+		userMsg("s1", 0, "msg0-updated"),
+	}); err != nil {
+		t.Fatalf("ReplaceSessionMessages: %v", err)
+	}
+
+	pins, err := d.ListPinnedMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages: %v", err)
+	}
+	if len(pins) != 1 {
+		t.Fatalf("want 1 pin (ordinal-1 dropped), got %d", len(pins))
+	}
+	if pins[0].Ordinal != 0 {
+		t.Errorf("surviving pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+}
+
 func TestGetSessionFilePath(t *testing.T) {
 	d := testDB(t)
 

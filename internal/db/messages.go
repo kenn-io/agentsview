@@ -358,8 +358,20 @@ func (db *DB) MaxOrdinal(sessionID string) int {
 	return int(n.Int64)
 }
 
+// savedPin captures the minimal pin state needed to re-attach a pin
+// after a full message replacement. The ordinal acts as a stable key
+// because session files are append-only and message ordinals never
+// change for existing messages.
+type savedPin struct {
+	ordinal   int
+	note      sql.NullString
+	createdAt string
+}
+
 // ReplaceSessionMessages deletes existing and inserts new messages
-// in a single transaction.
+// in a single transaction. Any existing pins are preserved by
+// re-attaching them to the new message rows that share the same
+// ordinal (pins for ordinals that no longer exist are dropped).
 func (db *DB) ReplaceSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
@@ -382,6 +394,30 @@ func (db *DB) ReplaceSessionMessages(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// Save existing pins before deletion. The ON DELETE CASCADE on
+	// pinned_messages.message_id would otherwise wipe them when
+	// messages are deleted below.
+	pinRows, err := tx.Query(
+		"SELECT ordinal, note, created_at FROM pinned_messages WHERE session_id = ?",
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("saving pins: %w", err)
+	}
+	var pins []savedPin
+	for pinRows.Next() {
+		var sp savedPin
+		if err := pinRows.Scan(&sp.ordinal, &sp.note, &sp.createdAt); err != nil {
+			pinRows.Close()
+			return fmt.Errorf("scanning pin: %w", err)
+		}
+		pins = append(pins, sp)
+	}
+	pinRows.Close()
+	if err := pinRows.Err(); err != nil {
+		return fmt.Errorf("iterating pins: %w", err)
+	}
 
 	if _, err := tx.Exec(
 		"DELETE FROM tool_calls WHERE session_id = ?",
@@ -416,6 +452,22 @@ func (db *DB) ReplaceSessionMessages(
 		events := resolveToolResultEvents(msgs)
 		if err := insertToolResultEventsTx(tx, events); err != nil {
 			return err
+		}
+	}
+
+	// Re-attach saved pins by matching ordinal to the newly inserted
+	// messages. Pins for ordinals that no longer exist are silently
+	// dropped (the message was removed from the session).
+	for _, sp := range pins {
+		if _, err := tx.Exec(`
+			INSERT OR IGNORE INTO pinned_messages
+				(session_id, message_id, ordinal, note, created_at)
+			SELECT ?, m.id, m.ordinal, ?, ?
+			FROM messages m
+			WHERE m.session_id = ? AND m.ordinal = ?`,
+			sessionID, sp.note, sp.createdAt, sessionID, sp.ordinal,
+		); err != nil {
+			return fmt.Errorf("restoring pin ord=%d: %w", sp.ordinal, err)
 		}
 	}
 
