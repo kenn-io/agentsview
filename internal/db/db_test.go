@@ -1228,17 +1228,31 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 	insertMessages(t, d,
 		userMsg("s1", 0, "msg0"),
 		asstMsg("s1", 1, "msg1"),
+		userMsg("s1", 2, "msg2"),
 	)
 
-	// Pin ordinal-0 message with a note.
 	msgs, err := d.GetAllMessages(ctx, "s1")
 	if err != nil {
 		t.Fatalf("GetAllMessages: %v", err)
 	}
+
+	// Pin ordinal-0 with a note and ordinal-2 with no note.
 	note := "important"
-	pinID, err := d.PinMessage("s1", msgs[0].ID, &note)
-	if err != nil || pinID == 0 {
-		t.Fatalf("PinMessage: id=%d err=%v", pinID, err)
+	if _, err := d.PinMessage("s1", msgs[0].ID, &note); err != nil {
+		t.Fatalf("PinMessage ord=0: %v", err)
+	}
+	if _, err := d.PinMessage("s1", msgs[2].ID, nil); err != nil {
+		t.Fatalf("PinMessage ord=2: %v", err)
+	}
+
+	// Record created_at before replace so we can verify it is preserved.
+	prePins, err := d.ListPinnedMessages(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages before replace: %v", err)
+	}
+	pinCreatedAt := make(map[int]string) // ordinal → created_at
+	for _, p := range prePins {
+		pinCreatedAt[p.Ordinal] = p.CreatedAt
 	}
 
 	// Full replace (simulates a resync of an OpenCode or
@@ -1246,6 +1260,7 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 	if err := d.ReplaceSessionMessages("s1", []Message{
 		userMsg("s1", 0, "msg0-updated"),
 		asstMsg("s1", 1, "msg1-updated"),
+		userMsg("s1", 2, "msg2-updated"),
 	}); err != nil {
 		t.Fatalf("ReplaceSessionMessages: %v", err)
 	}
@@ -1254,26 +1269,55 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAllMessages after replace: %v", err)
 	}
-	if len(newMsgs) != 2 {
-		t.Fatalf("want 2 messages after replace, got %d", len(newMsgs))
+	if len(newMsgs) != 3 {
+		t.Fatalf("want 3 messages after replace, got %d", len(newMsgs))
 	}
 
 	pins, err := d.ListPinnedMessages(ctx, "s1")
 	if err != nil {
 		t.Fatalf("ListPinnedMessages: %v", err)
 	}
-	if len(pins) != 1 {
-		t.Fatalf("want 1 pin after replace, got %d", len(pins))
+	if len(pins) != 2 {
+		t.Fatalf("want 2 pins after replace, got %d", len(pins))
 	}
-	if pins[0].MessageID != newMsgs[0].ID {
-		t.Errorf("pin message_id = %d, want %d (new ordinal-0 id)",
-			pins[0].MessageID, newMsgs[0].ID)
+
+	byOrdinal := make(map[int]PinnedMessage)
+	for _, p := range pins {
+		byOrdinal[p.Ordinal] = p
 	}
-	if pins[0].Ordinal != 0 {
-		t.Errorf("pin ordinal = %d, want 0", pins[0].Ordinal)
+
+	// Ordinal-0: note preserved, message_id updated, created_at preserved.
+	p0, ok := byOrdinal[0]
+	if !ok {
+		t.Fatal("pin for ordinal 0 missing after replace")
 	}
-	if pins[0].Note == nil || *pins[0].Note != note {
-		t.Errorf("pin note = %v, want %q", pins[0].Note, note)
+	if p0.MessageID != newMsgs[0].ID {
+		t.Errorf("ord=0 pin message_id = %d, want %d",
+			p0.MessageID, newMsgs[0].ID)
+	}
+	if p0.Note == nil || *p0.Note != note {
+		t.Errorf("ord=0 pin note = %v, want %q", p0.Note, note)
+	}
+	if p0.CreatedAt != pinCreatedAt[0] {
+		t.Errorf("ord=0 pin created_at = %q, want %q",
+			p0.CreatedAt, pinCreatedAt[0])
+	}
+
+	// Ordinal-2: nil note preserved, message_id updated.
+	p2, ok := byOrdinal[2]
+	if !ok {
+		t.Fatal("pin for ordinal 2 missing after replace")
+	}
+	if p2.MessageID != newMsgs[2].ID {
+		t.Errorf("ord=2 pin message_id = %d, want %d",
+			p2.MessageID, newMsgs[2].ID)
+	}
+	if p2.Note != nil {
+		t.Errorf("ord=2 pin note = %v, want nil", p2.Note)
+	}
+	if p2.CreatedAt != pinCreatedAt[2] {
+		t.Errorf("ord=2 pin created_at = %q, want %q",
+			p2.CreatedAt, pinCreatedAt[2])
 	}
 }
 
@@ -1317,6 +1361,9 @@ func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
 	}
 	if pins[0].Ordinal != 0 {
 		t.Errorf("surviving pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+	if pins[0].Note != nil {
+		t.Errorf("surviving pin note = %v, want nil", pins[0].Note)
 	}
 }
 

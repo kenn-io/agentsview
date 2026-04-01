@@ -364,7 +364,7 @@ func (db *DB) MaxOrdinal(sessionID string) int {
 // change for existing messages.
 type savedPin struct {
 	ordinal   int
-	note      sql.NullString
+	note      *string
 	createdAt string
 }
 
@@ -405,16 +405,15 @@ func (db *DB) ReplaceSessionMessages(
 	if err != nil {
 		return fmt.Errorf("saving pins: %w", err)
 	}
+	defer pinRows.Close()
 	var pins []savedPin
 	for pinRows.Next() {
 		var sp savedPin
 		if err := pinRows.Scan(&sp.ordinal, &sp.note, &sp.createdAt); err != nil {
-			pinRows.Close()
 			return fmt.Errorf("scanning pin: %w", err)
 		}
 		pins = append(pins, sp)
 	}
-	pinRows.Close()
 	if err := pinRows.Err(); err != nil {
 		return fmt.Errorf("iterating pins: %w", err)
 	}
