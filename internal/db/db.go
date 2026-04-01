@@ -379,16 +379,31 @@ func (db *DB) migrateColumns() error {
 	return nil
 }
 
-// backfillIsAutomatedLocked scans single-turn sessions and
-// sets is_automated = 1 for those whose first_message matches
-// a known roborev prompt pattern. Uses the Go detector so the
-// SQL doesn't need to duplicate every pattern.
+// backfillIsAutomatedLocked recomputes is_automated for all
+// sessions, correcting both false negatives (new patterns) and
+// stale false positives (patterns tightened since last run).
+// Guarded by a stats marker so it only runs once per pattern
+// version.
 func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
+	const marker = "is_automated_backfill_v2"
+	var done int
+	if err := w.QueryRow(
+		`SELECT count(*) FROM stats
+		 WHERE key = ? AND value != 0`, marker,
+	).Scan(&done); err != nil {
+		return fmt.Errorf(
+			"probing automated backfill marker: %w", err,
+		)
+	}
+	if done > 0 {
+		return nil
+	}
+
 	rows, err := w.Query(
-		`SELECT id, first_message FROM sessions
-		 WHERE is_automated = 0
-		   AND user_message_count <= 1
-		   AND first_message IS NOT NULL`,
+		`SELECT id, first_message, user_message_count,
+			is_automated
+		 FROM sessions
+		 WHERE first_message IS NOT NULL`,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -397,37 +412,72 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 	}
 	defer rows.Close()
 
-	var ids []string
+	var setIDs, clearIDs []string
 	for rows.Next() {
 		var id, fm string
-		if err := rows.Scan(&id, &fm); err != nil {
+		var umc int
+		var current bool
+		if err := rows.Scan(
+			&id, &fm, &umc, &current,
+		); err != nil {
 			return fmt.Errorf(
 				"scanning backfill candidate: %w", err,
 			)
 		}
-		if IsAutomatedSession(fm) {
-			ids = append(ids, id)
+		want := umc <= 1 && IsAutomatedSession(fm)
+		if want && !current {
+			setIDs = append(setIDs, id)
+		} else if !want && current {
+			clearIDs = append(clearIDs, id)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if len(ids) == 0 {
-		return nil
+
+	if err := batchUpdateAutomated(
+		w, setIDs, 1,
+	); err != nil {
+		return err
+	}
+	if err := batchUpdateAutomated(
+		w, clearIDs, 0,
+	); err != nil {
+		return err
 	}
 
+	if len(setIDs) > 0 || len(clearIDs) > 0 {
+		log.Printf(
+			"migration: recomputed is_automated"+
+				" (set %d, cleared %d)",
+			len(setIDs), len(clearIDs),
+		)
+	}
+
+	_, err = w.Exec(
+		`INSERT INTO stats (key, value) VALUES (?, 1)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		marker,
+	)
+	return err
+}
+
+func batchUpdateAutomated(
+	w *sql.DB, ids []string, val int,
+) error {
 	const batchSize = 500
 	for i := 0; i < len(ids); i += batchSize {
 		end := min(i+batchSize, len(ids))
 		batch := ids[i:end]
-		args := make([]any, len(batch))
+		args := make([]any, len(batch)+1)
 		phs := make([]string, len(batch))
+		args[0] = val
 		for j, id := range batch {
-			args[j] = id
+			args[j+1] = id
 			phs[j] = "?"
 		}
 		_, err := w.Exec(
-			"UPDATE sessions SET is_automated = 1"+
+			"UPDATE sessions SET is_automated = ?"+
 				" WHERE id IN ("+
 				strings.Join(phs, ",")+
 				")",
@@ -435,14 +485,10 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 		)
 		if err != nil {
 			return fmt.Errorf(
-				"backfilling is_automated: %w", err,
+				"updating is_automated: %w", err,
 			)
 		}
 	}
-	log.Printf(
-		"migration: backfilled is_automated for %d sessions",
-		len(ids),
-	)
 	return nil
 }
 

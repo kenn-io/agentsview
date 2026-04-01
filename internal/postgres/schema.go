@@ -246,7 +246,6 @@ func EnsureSchema(
 		},
 	}
 	tokenCoverageColumnsAdded := false
-	isAutomatedAdded := false
 	for _, a := range alters {
 		added, err := ensureColumn(ctx, db, a.table, a.column, a.stmt)
 		if err != nil {
@@ -256,14 +255,10 @@ func EnsureSchema(
 		case "has_total_output_tokens", "has_peak_context_tokens",
 			"has_context_tokens", "has_output_tokens":
 			tokenCoverageColumnsAdded = tokenCoverageColumnsAdded || added
-		case "is_automated":
-			isAutomatedAdded = isAutomatedAdded || added
 		}
 	}
-	if isAutomatedAdded {
-		if err := backfillIsAutomatedPG(ctx, db); err != nil {
-			return err
-		}
+	if err := backfillIsAutomatedPG(ctx, db); err != nil {
+		return err
 	}
 	runRepair, err := shouldRunTokenCoverageRepair(
 		ctx, db, tokenCoverageColumnsAdded,
@@ -283,19 +278,35 @@ func EnsureSchema(
 	return nil
 }
 
-// backfillIsAutomatedPG scans single-turn PG sessions and
-// sets is_automated = TRUE for those matching roborev prompt
-// patterns. Uses the Go detector so the SQL doesn't need to
-// duplicate every pattern. Only runs when the column is newly
-// added.
+const isAutomatedBackfillMetadataKey = "is_automated_backfill_v2"
+
+// backfillIsAutomatedPG recomputes is_automated for all PG
+// sessions, correcting both false negatives (new patterns) and
+// stale false positives (patterns tightened since last run).
+// Guarded by a sync_metadata marker so it only runs once per
+// pattern version.
 func backfillIsAutomatedPG(
 	ctx context.Context, pg *sql.DB,
 ) error {
+	var done int
+	if err := pg.QueryRowContext(ctx,
+		`SELECT count(*) FROM sync_metadata
+		 WHERE key = $1 AND value != ''`,
+		isAutomatedBackfillMetadataKey,
+	).Scan(&done); err != nil {
+		return fmt.Errorf(
+			"probing PG automated backfill marker: %w", err,
+		)
+	}
+	if done > 0 {
+		return nil
+	}
+
 	rows, err := pg.QueryContext(ctx,
-		`SELECT id, first_message FROM sessions
-		 WHERE is_automated = FALSE
-		   AND user_message_count <= 1
-		   AND first_message IS NOT NULL`)
+		`SELECT id, first_message, user_message_count,
+			is_automated
+		 FROM sessions
+		 WHERE first_message IS NOT NULL`)
 	if err != nil {
 		return fmt.Errorf(
 			"querying PG automated backfill candidates: %w",
@@ -304,39 +315,74 @@ func backfillIsAutomatedPG(
 	}
 	defer rows.Close()
 
-	var ids []string
+	var setIDs, clearIDs []string
 	for rows.Next() {
 		var id, fm string
-		if err := rows.Scan(&id, &fm); err != nil {
+		var umc int
+		var current bool
+		if err := rows.Scan(
+			&id, &fm, &umc, &current,
+		); err != nil {
 			return fmt.Errorf(
 				"scanning PG backfill candidate: %w", err,
 			)
 		}
-		if db.IsAutomatedSession(fm) {
-			ids = append(ids, id)
+		want := umc <= 1 && db.IsAutomatedSession(fm)
+		if want && !current {
+			setIDs = append(setIDs, id)
+		} else if !want && current {
+			clearIDs = append(clearIDs, id)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if len(ids) == 0 {
-		return nil
+
+	if err := batchUpdateAutomatedPG(
+		ctx, pg, setIDs, true,
+	); err != nil {
+		return err
+	}
+	if err := batchUpdateAutomatedPG(
+		ctx, pg, clearIDs, false,
+	); err != nil {
+		return err
 	}
 
-	// Batch update in chunks.
-	pb := &paramBuilder{}
+	if len(setIDs) > 0 || len(clearIDs) > 0 {
+		log.Printf(
+			"pg migration: recomputed is_automated"+
+				" (set %d, cleared %d)",
+			len(setIDs), len(clearIDs),
+		)
+	}
+
+	_, err = pg.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value)
+		 VALUES ($1, '1')
+		 ON CONFLICT (key) DO UPDATE
+		 SET value = EXCLUDED.value`,
+		isAutomatedBackfillMetadataKey,
+	)
+	return err
+}
+
+func batchUpdateAutomatedPG(
+	ctx context.Context, pg *sql.DB,
+	ids []string, val bool,
+) error {
 	const batchSize = 500
 	for i := 0; i < len(ids); i += batchSize {
 		end := min(i+batchSize, len(ids))
 		batch := ids[i:end]
-		pb.n = 0
-		pb.args = pb.args[:0]
+		pb := &paramBuilder{}
+		valPh := pb.add(val)
 		phs := make([]string, len(batch))
 		for j, id := range batch {
 			phs[j] = pb.add(id)
 		}
 		_, err := pg.ExecContext(ctx,
-			"UPDATE sessions SET is_automated = TRUE"+
+			"UPDATE sessions SET is_automated = "+valPh+
 				" WHERE id IN ("+
 				strings.Join(phs, ",")+
 				")",
@@ -344,14 +390,10 @@ func backfillIsAutomatedPG(
 		)
 		if err != nil {
 			return fmt.Errorf(
-				"backfilling is_automated in PG: %w", err,
+				"updating is_automated in PG: %w", err,
 			)
 		}
 	}
-	log.Printf(
-		"pg migration: backfilled is_automated for %d sessions",
-		len(ids),
-	)
 	return nil
 }
 
