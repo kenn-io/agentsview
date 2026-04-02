@@ -541,3 +541,117 @@ func TestFindOpenClawSourceFile_ArchiveOnlyNewest(t *testing.T) {
 		t.Errorf("expected newest archive %s, got %s", want, found)
 	}
 }
+
+func TestParseOpenClawSession_ToolCallBlock(t *testing.T) {
+	// Test OpenClaw's native "toolCall" format (uses "arguments" not "input").
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"tc-123","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"m1","timestamp":"2026-02-25T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Search for something"}],"timestamp":"2026-02-25T10:00:01Z"}}`,
+		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me consider...","thinkingSignature":"sig"},{"type":"toolCall","id":"toolu_01SRgqwEr8buFdG5t78rzVF4","name":"read","arguments":{"path":"/etc/hosts"}}],"model":"claude-opus-4-6","provider":"anthropic","usage":{"input":100,"output":50},"timestamp":"2026-02-25T10:00:02Z"}}`,
+		`{"type":"message","id":"m3","timestamp":"2026-02-25T10:00:03Z","message":{"role":"toolResult","toolCallId":"toolu_01SRgqwEr8buFdG5t78rzVF4","toolName":"read","content":[{"type":"text","text":"127.0.0.1 localhost"}],"isError":false,"timestamp":"2026-02-25T10:00:03Z"}}`,
+		`{"type":"message","id":"m4","timestamp":"2026-02-25T10:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"The hosts file has localhost."}],"timestamp":"2026-02-25T10:00:04Z"}}`,
+	)
+
+	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+
+	// Assistant message with toolCall block.
+	assistantMsg := msgs[1]
+	if !assistantMsg.HasToolUse {
+		t.Error("expected HasToolUse=true for toolCall message")
+	}
+	if !assistantMsg.HasThinking {
+		t.Error("expected HasThinking=true for message with thinking block")
+	}
+	if len(assistantMsg.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(assistantMsg.ToolCalls))
+	}
+	tc := assistantMsg.ToolCalls[0]
+	if tc.ToolName != "read" {
+		t.Errorf("expected tool name 'read', got %s", tc.ToolName)
+	}
+	if tc.ToolUseID != "toolu_01SRgqwEr8buFdG5t78rzVF4" {
+		t.Errorf("expected tool use ID 'toolu_01SRgqwEr8buFdG5t78rzVF4', got %s", tc.ToolUseID)
+	}
+	if tc.Category != "Read" {
+		t.Errorf("expected category 'Read', got %s", tc.Category)
+	}
+
+	// Tool result should be paired correctly.
+	toolResultMsg := msgs[2]
+	if toolResultMsg.Role != RoleUser {
+		t.Errorf("expected tool result mapped to user role, got %s", toolResultMsg.Role)
+	}
+	if len(toolResultMsg.ToolResults) != 1 {
+		t.Fatalf("expected 1 tool result, got %d", len(toolResultMsg.ToolResults))
+	}
+	if toolResultMsg.ToolResults[0].ToolUseID != "toolu_01SRgqwEr8buFdG5t78rzVF4" {
+		t.Errorf("expected tool result ID 'toolu_01SRgqwEr8buFdG5t78rzVF4', got %s",
+			toolResultMsg.ToolResults[0].ToolUseID)
+	}
+
+	if sess.MessageCount != 4 {
+		t.Errorf("expected MessageCount=4, got %d", sess.MessageCount)
+	}
+	if sess.UserMessageCount != 1 {
+		t.Errorf("expected UserMessageCount=1, got %d", sess.UserMessageCount)
+	}
+}
+
+func TestParseOpenClawSession_ToolCallFormatting(t *testing.T) {
+	// Verify that toolCall blocks produce nicely formatted output
+	// (e.g., "[Read: /etc/hosts]" not just "[Tool: read]").
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"fmt-123","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"m1","timestamp":"2026-02-25T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"do stuff"}],"timestamp":"2026-02-25T10:00:01Z"}}`,
+		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"tc1","name":"read","arguments":{"path":"/etc/hosts"}},{"type":"toolCall","id":"tc2","name":"exec","arguments":{"command":"ls -la"}}],"timestamp":"2026-02-25T10:00:02Z"}}`,
+	)
+
+	_, msgs, err := ParseOpenClawSession(path, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	content := msgs[1].Content
+	if !strings.Contains(content, "[Read: /etc/hosts]") {
+		t.Errorf("expected '[Read: /etc/hosts]' in content, got: %s", content)
+	}
+}
+
+func TestParseOpenClawSession_ToolUseBackwardsCompat(t *testing.T) {
+	// Verify the original tool_use format still works correctly
+	// after adding toolCall support.
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"compat-123","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"m1","timestamp":"2026-02-25T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Read a file"}],"timestamp":"2026-02-25T10:00:01Z"}}`,
+		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Read","input":{"file_path":"/etc/passwd"}}],"timestamp":"2026-02-25T10:00:02Z"}}`,
+	)
+
+	_, msgs, err := ParseOpenClawSession(path, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if !msgs[1].HasToolUse {
+		t.Error("expected HasToolUse=true for tool_use message")
+	}
+	if len(msgs[1].ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(msgs[1].ToolCalls))
+	}
+	if msgs[1].ToolCalls[0].ToolName != "Read" {
+		t.Errorf("expected tool name 'Read', got %s", msgs[1].ToolCalls[0].ToolName)
+	}
+	if !strings.Contains(msgs[1].Content, "[Read: /etc/passwd]") {
+		t.Errorf("expected '[Read: /etc/passwd]' in content, got: %s", msgs[1].Content)
+	}
+}

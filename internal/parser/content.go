@@ -64,6 +64,30 @@ func ExtractTextContent(
 				toolCalls = append(toolCalls, tc)
 			}
 			parts = append(parts, formatToolUse(block))
+		case "toolCall":
+			// OpenClaw format: uses "toolCall" type and "arguments"
+			// instead of "tool_use" type and "input".
+			hasToolUse = true
+			name := block.Get("name").Str
+			if name != "" {
+				tc := ParsedToolCall{
+					ToolUseID: block.Get("id").Str,
+					ToolName:  name,
+					Category:  NormalizeToolCategory(name),
+					InputJSON: block.Get("arguments").Raw,
+				}
+				switch name {
+				case "Skill":
+					tc.SkillName = block.Get("arguments.skill").Str
+				case "skill":
+					tc.SkillName = block.Get("arguments.skill").Str
+					if tc.SkillName == "" {
+						tc.SkillName = block.Get("arguments.name").Str
+					}
+				}
+				toolCalls = append(toolCalls, tc)
+			}
+			parts = append(parts, formatToolUse(block))
 		case "tool_result":
 			tuid := block.Get("tool_use_id").Str
 			if tuid != "" {
@@ -141,9 +165,21 @@ var todoIcons = map[string]string{
 	"pending":     "○",
 }
 
+// resolveToolInput returns the tool input from a block, falling back to
+// "arguments" when "input" is absent or null. This handles both the
+// standard tool_use format ("input") and OpenClaw's toolCall format
+// ("arguments").
+func resolveToolInput(block gjson.Result) gjson.Result {
+	input := block.Get("input")
+	if input.Exists() && input.Raw != "" && input.Raw != "null" {
+		return input
+	}
+	return block.Get("arguments")
+}
+
 func formatToolUse(block gjson.Result) string {
 	name := block.Get("name").Str
-	input := block.Get("input")
+	input := resolveToolInput(block)
 
 	switch name {
 	case "AskUserQuestion":
