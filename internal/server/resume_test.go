@@ -111,6 +111,51 @@ func TestDetectTerminalLinux_EnvTerminalWithArgs(t *testing.T) {
 	}
 }
 
+func TestLaunchClaudeDesktop(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		cwd       string
+		wantArg   string
+	}{
+		{
+			name:      "simple session id",
+			sessionID: "abc-123",
+			cwd:       "",
+			wantArg:   "claude://resume?session=abc-123",
+		},
+		{
+			name:      "session id with cwd",
+			sessionID: "abc-123",
+			cwd:       "/Users/test/project",
+			wantArg:   "claude://resume?session=abc-123&cwd=%2FUsers%2Ftest%2Fproject",
+		},
+		{
+			name:      "cwd with spaces",
+			sessionID: "sess-1",
+			cwd:       "/Users/test/my project",
+			wantArg:   "claude://resume?session=sess-1&cwd=%2FUsers%2Ftest%2Fmy+project",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := launchClaudeDesktop(tt.sessionID, tt.cwd)
+			if cmd.Path == "" {
+				t.Fatal("expected non-empty command path")
+			}
+			// The command should be "open <url>".
+			args := cmd.Args
+			if len(args) != 2 {
+				t.Fatalf("args = %v, want 2 elements", args)
+			}
+			if args[1] != tt.wantArg {
+				t.Errorf("url = %q, want %q", args[1], tt.wantArg)
+			}
+		})
+	}
+}
+
 func TestReadSessionCwd_LargeLine(t *testing.T) {
 	// Verify that readSessionCwd handles lines larger than the
 	// old 2MB scanner limit without losing the cwd field.

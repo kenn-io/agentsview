@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -170,6 +171,35 @@ func (s *Server) handleResumeSession(
 				fmt.Sprintf("opener %q not found", req.OpenerID))
 			return
 		}
+
+		// Claude Desktop: hand off via claude:// URL scheme.
+		if opener.ID == "claude-desktop" {
+			if string(session.Agent) != "claude" {
+				writeError(w, http.StatusBadRequest,
+					"Claude Desktop resume only supports Claude sessions")
+				return
+			}
+			proc := launchClaudeDesktop(rawID, sessionDir)
+			if err := proc.Start(); err != nil {
+				log.Printf("resume: Claude Desktop launch failed: %v", err)
+				writeJSON(w, http.StatusOK, resumeResponse{
+					Launched: false,
+					Command:  cmd,
+					Cwd:      sessionDir,
+					Error:    "desktop_launch_failed",
+				})
+				return
+			}
+			go func() { _ = proc.Wait() }()
+			writeJSON(w, http.StatusOK, resumeResponse{
+				Launched: true,
+				Terminal: opener.Name,
+				Command:  cmd,
+				Cwd:      sessionDir,
+			})
+			return
+		}
+
 		proc := launchResumeInOpener(*opener, cmd, sessionDir)
 		if proc == nil {
 			writeJSON(w, http.StatusOK, resumeResponse{
@@ -565,10 +595,14 @@ func buildTerminalArgs(bin, cmd string) []string {
 
 // launchResumeInOpener builds an exec.Cmd that runs a shell command
 // inside the terminal identified by the opener. Returns nil if the
-// opener kind is not "terminal" or the terminal is not supported.
+// opener kind is not "terminal" (or "action" for special openers like
+// Claude Desktop) or the terminal is not supported.
 func launchResumeInOpener(
 	o Opener, cmd string, cwd string,
 ) *exec.Cmd {
+	if o.ID == "claude-desktop" {
+		return nil // handled separately via launchClaudeDesktop
+	}
 	if o.Kind != "terminal" {
 		return nil
 	}
@@ -656,4 +690,15 @@ func launchResumeDarwin(
 	default:
 		return nil
 	}
+}
+
+// launchClaudeDesktop builds an exec.Cmd that opens a Claude Code
+// session in Claude Desktop via the claude:// URL scheme. The URL
+// format is claude://resume?session={id}&cwd={path}.
+func launchClaudeDesktop(sessionID string, cwd string) *exec.Cmd {
+	u := "claude://resume?session=" + url.QueryEscape(sessionID)
+	if cwd != "" {
+		u += "&cwd=" + url.QueryEscape(cwd)
+	}
+	return exec.Command("open", u)
 }

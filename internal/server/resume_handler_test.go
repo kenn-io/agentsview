@@ -80,6 +80,17 @@ func TestResumeSession(t *testing.T) {
 		}
 	})
 
+	t.Run("claude desktop rejects non-claude agent", func(t *testing.T) {
+		te.seedSession(t, "codex-desk", t.TempDir(), 3, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		w := te.post(t,
+			"/api/v1/sessions/codex-desk/resume",
+			`{"opener_id":"claude-desktop"}`,
+		)
+		assertStatus(t, w, http.StatusBadRequest)
+	})
+
 	t.Run("unsupported agent", func(t *testing.T) {
 		te.seedSession(t, "cursor-1", "/tmp", 3, func(s *db.Session) {
 			s.Agent = "cursor"

@@ -290,6 +290,12 @@
     openers.filter((o) => o.kind === "terminal"),
   );
 
+  const claudeDesktopOpener = $derived(
+    session?.agent === "claude"
+      ? openers.find((o) => o.id === "claude-desktop") ?? null
+      : null,
+  );
+
   const editorOpeners = $derived(
     openers.filter((o) => o.kind === "editor"),
   );
@@ -418,6 +424,20 @@
           {#if showOpenMenu}
             <div class="open-menu">
               {#if canResume}
+                {#if claudeDesktopOpener}
+                  <button
+                    class="open-menu-item"
+                    onclick={() => handleResumeIn(claudeDesktopOpener)}
+                  >
+                    <span class="open-menu-num">
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.5 8.9l-5 3a.75.75 0 01-1.125-.65v-6a.75.75 0 011.125-.65l5 3a.75.75 0 010 1.3z"/>
+                      </svg>
+                    </span>
+                    <span class="open-menu-name">Claude Desktop</span>
+                  </button>
+                  <div class="open-menu-divider"></div>
+                {/if}
                 {#each terminalOpeners as opener, i (opener.id)}
                   <button
                     class="open-menu-item"
