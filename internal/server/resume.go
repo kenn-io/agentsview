@@ -367,23 +367,20 @@ func detectTerminalDarwin(
 				end tell
 				tell application "iTerm"
 					activate
-					if isRunning then
+					if isRunning and (count of windows) > 0 then
 						tell current window
 							create tab with default profile
-							tell current session
-								write text "%s"
-							end tell
 						end tell
 					else
 						create window with default profile
-						tell current window
-							tell current session
-								write text "%s"
-							end tell
-						end tell
 					end if
+					tell current window
+						tell current session
+							write text "%s"
+						end tell
+					end tell
 				end tell`,
-				safe, safe,
+				safe,
 			)
 			return "osascript", []string{"-e", appleScript}, "iTerm2", nil
 		}
@@ -473,8 +470,8 @@ func (s *Server) handleSetTerminalConfig(
 func readSessionCwd(path string) string {
 	// Kiro CLI stores cwd in a companion .json metadata file
 	// alongside the .jsonl session file.
-	if strings.HasSuffix(path, ".jsonl") {
-		metaPath := strings.TrimSuffix(path, ".jsonl") + ".json"
+	if before, ok := strings.CutSuffix(path, ".jsonl"); ok {
+		metaPath := before + ".json"
 		if data, err := os.ReadFile(metaPath); err == nil {
 			if cwd := gjson.GetBytes(data, "cwd").Str; cwd != "" {
 				return cwd
@@ -649,22 +646,19 @@ func launchResumeDarwin(
 			end tell
 			tell application "iTerm"
 				activate
-				if isRunning then
+				if isRunning and (count of windows) > 0 then
 					tell current window
 						create tab with default profile
-						tell current session
-							write text "%s"
-						end tell
 					end tell
 				else
 					create window with default profile
-					tell current window
-						tell current session
-							write text "%s"
-						end tell
-					end tell
 				end if
-			end tell`, safe, safe,
+				tell current window
+					tell current session
+						write text "%s"
+					end tell
+				end tell
+			end tell`, safe,
 		)
 		return exec.Command("osascript", "-e", script)
 	case "terminal":

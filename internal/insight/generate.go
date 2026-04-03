@@ -700,7 +700,7 @@ func generateKiro(
 	clean := ansiRE.ReplaceAllString(string(stdoutBytes), "")
 	// Remove the trust banner and timing lines.
 	var lines []string
-	for _, line := range strings.Split(clean, "\n") {
+	for line := range strings.SplitSeq(clean, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue

@@ -58,16 +58,16 @@ type kiroIDESessionEntry struct {
 // kiroIDENewSession is the new-format session JSON stored in
 // workspace-sessions/<b64-path>/<uuid>.json.
 type kiroIDENewSession struct {
-	SessionID          string              `json:"sessionId"`
-	Title              string              `json:"title"`
-	WorkspaceDirectory string              `json:"workspaceDirectory"`
+	SessionID          string                `json:"sessionId"`
+	Title              string                `json:"title"`
+	WorkspaceDirectory string                `json:"workspaceDirectory"`
 	History            []kiroIDEHistoryEntry `json:"history"`
 }
 
 type kiroIDEHistoryEntry struct {
 	Message     kiroIDEHistoryMessage `json:"message"`
-	PromptLogs  []kiroIDEPromptLog   `json:"promptLogs"`
-	ExecutionID string               `json:"executionId"`
+	PromptLogs  []kiroIDEPromptLog    `json:"promptLogs"`
+	ExecutionID string                `json:"executionId"`
 }
 
 type kiroIDEPromptLog struct {
@@ -75,9 +75,9 @@ type kiroIDEPromptLog struct {
 }
 
 type kiroIDEHistoryMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
-	ID      string      `json:"id"`
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+	ID      string `json:"id"`
 }
 
 // kiroIDEExecAction represents an action in an execution log.
@@ -171,22 +171,51 @@ func DiscoverKiroIDESessions(dir string) []DiscoveredFile {
 	return files
 }
 
-// FindKiroIDESourceFile locates a Kiro IDE .chat file by raw
-// session ID. The raw ID has the format
-// "<workspace-hash>:<filename-hash>".
+// FindKiroIDESourceFile locates a Kiro IDE session file by
+// raw session ID. Supports both formats:
+//   - Old: "<workspace-hash>:<filename-hash>" → .chat file
+//   - New: "<uuid>" → workspace-sessions/*/<uuid>.json
 func FindKiroIDESourceFile(dir, rawID string) string {
+	cleanDir := filepath.Clean(dir)
+
+	// Old format: <workspace-hash>:<filename-hash>
 	wsHash, fileHash, ok := strings.Cut(rawID, ":")
-	if !ok || !IsValidSessionID(wsHash) || !IsValidSessionID(fileHash) {
+	if ok && IsValidSessionID(wsHash) && IsValidSessionID(fileHash) {
+		candidate := filepath.Join(dir, wsHash, fileHash+".chat")
+		if abs, err := filepath.Abs(candidate); err == nil &&
+			strings.HasPrefix(abs, cleanDir) {
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+
+	// New format: rawID is a UUID, file is at
+	// workspace-sessions/<b64-path>/<uuid>.json
+	if !IsValidSessionID(rawID) {
 		return ""
 	}
-	candidate := filepath.Join(dir, wsHash, fileHash+".chat")
-	if abs, err := filepath.Abs(candidate); err != nil || !strings.HasPrefix(abs, filepath.Clean(dir)) {
+	wsSessionsDir := filepath.Join(dir, "workspace-sessions")
+	wsDirs, err := os.ReadDir(wsSessionsDir)
+	if err != nil {
 		return ""
 	}
-	if _, err := os.Stat(candidate); err != nil {
-		return ""
+	for _, wsEntry := range wsDirs {
+		if !wsEntry.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(
+			wsSessionsDir, wsEntry.Name(), rawID+".json",
+		)
+		abs, err := filepath.Abs(candidate)
+		if err != nil || !strings.HasPrefix(abs, cleanDir) {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
-	return candidate
+	return ""
 }
 
 // isKiroIDESystemMessage returns true for system prompt and
@@ -349,6 +378,7 @@ func parseKiroIDENewFormat(
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentKiroIDE,
+		DisplayName:      title,
 		FirstMessage:     firstMessage,
 		StartedAt:        info.ModTime(),
 		EndedAt:          info.ModTime(),
@@ -366,14 +396,14 @@ func parseKiroIDENewFormat(
 
 // kiroIDEExtractText extracts text from content that can be
 // either a string or a list of content blocks.
-func kiroIDEExtractText(content interface{}) string {
+func kiroIDEExtractText(content any) string {
 	switch v := content.(type) {
 	case string:
 		return strings.TrimSpace(v)
-	case []interface{}:
+	case []any:
 		var parts []string
 		for _, item := range v {
-			block, ok := item.(map[string]interface{})
+			block, ok := item.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -432,8 +462,8 @@ func parseKiroIDEChatFormat(
 				continue
 			}
 			// Strip <kiro-ide-message> wrapper
-			if strings.HasPrefix(content, "<kiro-ide-message>") {
-				content = strings.TrimPrefix(content, "<kiro-ide-message>")
+			if after, ok := strings.CutPrefix(content, "<kiro-ide-message>"); ok {
+				content = after
 				content = strings.TrimSuffix(content, "</kiro-ide-message>")
 				content = strings.TrimSpace(content)
 			}
@@ -543,8 +573,10 @@ func parseKiroIDEChatFormat(
 
 // kiroIDEExecLogDir returns the execution log directory for a
 // session JSON. Layout:
-//   session: <base>/workspace-sessions/<b64>/<uuid>.json
-//   exec logs: <base>/<ws-hash>/414d1636299d2b9e4ce7e17fb11f63e9/
+//
+//	session: <base>/workspace-sessions/<b64>/<uuid>.json
+//	exec logs: <base>/<ws-hash>/414d1636299d2b9e4ce7e17fb11f63e9/
+//
 // We need the workspace path to compute ws-hash. Read it from
 // the sibling sessions.json.
 const kiroIDEExecSubdir = "414d1636299d2b9e4ce7e17fb11f63e9"
@@ -600,12 +632,12 @@ func kiroIDEBuildExecIndex(dir string) map[string]string {
 		// Quick extract: {"executionId":"<uuid>",...}
 		if i := strings.Index(string(buf[:n]),
 			`"executionId"`); i >= 0 {
-			rest := string(buf[i+len(`"executionId"`):n])
+			rest := string(buf[i+len(`"executionId"`) : n])
 			// skip `: "`
 			if j := strings.Index(rest, `"`); j >= 0 {
 				rest = rest[j+1:]
-				if k := strings.Index(rest, `"`); k >= 0 {
-					idx[rest[:k]] = path
+				if before, _, ok := strings.Cut(rest, `"`); ok {
+					idx[before] = path
 				}
 			}
 		}
