@@ -491,7 +491,7 @@
                   </button>
                 {/each}
               {/if}
-              {#if claudeDesktopOpener}
+              {#if canResume && claudeDesktopOpener}
                 <div class="open-menu-divider"></div>
                 <button
                   class="open-menu-item"
