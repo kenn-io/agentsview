@@ -176,7 +176,7 @@ func (s *Sync) Push(
 	var priorFingerprints map[string]string
 	var boundaryState map[string]string
 	var boundaryOK bool
-	if !full {
+	if !full && lastPush != "" {
 		var bErr error
 		priorFingerprints, boundaryState, boundaryOK, bErr = readBoundaryAndFingerprints(
 			s.local, lastPush,
