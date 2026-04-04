@@ -88,6 +88,7 @@ Usage:
   agentsview prune [flags]    Delete sessions matching filters
   agentsview import --type <type> <path>
                           Import conversations (claude-ai, chatgpt)
+  agentsview projects [flags] List projects with session counts
   agentsview update [flags]   Check for and install updates
   agentsview version          Show version information
   agentsview help             Show this help
@@ -111,6 +112,8 @@ Sync flags:
 
 PG push flags:
   -full              Bypass per-message skip heuristic
+  -projects string   Comma-separated projects to push (inclusive)
+  -exclude-projects  Comma-separated projects to exclude from push
 
 PG serve flags:
   -host string       Host to bind to (default "127.0.0.1")
