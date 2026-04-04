@@ -17,6 +17,7 @@ func TestPGConnectivity(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"connectivity-test-machine", true,
+		nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
@@ -49,6 +50,7 @@ func TestPGPushCycle(t *testing.T) {
 	local := testDB(t)
 	ps, err := New(
 		pgURL, "agentsview", local, "machine-a", true,
+		nil, nil,
 	)
 	if err != nil {
 		t.Fatalf("creating sync: %v", err)
