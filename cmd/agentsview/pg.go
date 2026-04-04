@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,8 +43,16 @@ func runPGPush(args []string) {
 	fs := flag.NewFlagSet("pg push", flag.ExitOnError)
 	full := fs.Bool("full", false,
 		"Force full local resync and PG push")
+	projectsFlag := fs.String("projects", "",
+		"Comma-separated list of projects to push (inclusive)")
+	excludeProjectsFlag := fs.String("exclude-projects", "",
+		"Comma-separated list of projects to exclude from push")
 	if err := fs.Parse(args); err != nil {
 		log.Fatalf("parsing flags: %v", err)
+	}
+
+	if *projectsFlag != "" && *excludeProjectsFlag != "" {
+		fatal("pg push: --projects and --exclude-projects are mutually exclusive")
 	}
 
 	appCfg, err := config.LoadMinimal()
@@ -63,6 +72,21 @@ func runPGPush(args []string) {
 		fatal("pg push: url not configured")
 	}
 
+	// CLI flags override config values entirely.
+	projects := pgCfg.Projects
+	excludeProjects := pgCfg.ExcludeProjects
+	if *projectsFlag != "" {
+		projects = strings.Split(*projectsFlag, ",")
+	}
+	if *excludeProjectsFlag != "" {
+		excludeProjects = strings.Split(*excludeProjectsFlag, ",")
+	}
+
+	// Validate mutual exclusivity (config values may conflict too).
+	if len(projects) > 0 && len(excludeProjects) > 0 {
+		fatal("pg push: projects and exclude_projects are mutually exclusive")
+	}
+
 	database, err := db.Open(appCfg.DBPath)
 	if err != nil {
 		fatal("opening database: %v", err)
@@ -79,17 +103,13 @@ func runPGPush(args []string) {
 		database.SetCursorSecret(secret)
 	}
 
-	// Run local sync first so newly discovered sessions
-	// are available for push. If a full resync was performed
-	// (e.g. due to data version change), force a full PG push
-	// since watermarks become stale after a local rebuild.
 	didResync := runLocalSync(appCfg, database, *full)
 	forceFull := *full || didResync
 
 	ps, err := postgres.New(
 		pgCfg.URL, pgCfg.Schema, database,
 		pgCfg.MachineName, pgCfg.AllowInsecure,
-		nil, nil,
+		projects, excludeProjects,
 	)
 	if err != nil {
 		fatal("pg push: %v", err)
