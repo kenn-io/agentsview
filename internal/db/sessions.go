@@ -1330,6 +1330,7 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 // in text timestamp fields are therefore truncated.
 func (db *DB) ListSessionsModifiedBetween(
 	ctx context.Context, since, until string,
+	projects, excludeProjects []string,
 ) ([]Session, error) {
 	query := "SELECT " + sessionFullCols + " FROM sessions"
 	var (
@@ -1370,6 +1371,22 @@ func (db *DB) ListSessionsModifiedBetween(
 			AND `+sqliteSyncTimestampExpr(colBestTimestamp)+` <= ?
 			AND `+sqliteSyncTimestampExpr(colCreatedAt)+` <= ?)`)
 		args = append(args, untilNano, untilText, untilText, untilText)
+	}
+	if len(projects) > 0 {
+		placeholders := make([]string, len(projects))
+		for i, p := range projects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project IN ("+strings.Join(placeholders, ", ")+")")
+	}
+	if len(excludeProjects) > 0 {
+		placeholders := make([]string, len(excludeProjects))
+		for i, p := range excludeProjects {
+			placeholders[i] = "?"
+			args = append(args, p)
+		}
+		where = append(where, "project NOT IN ("+strings.Join(placeholders, ", ")+")")
 	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")

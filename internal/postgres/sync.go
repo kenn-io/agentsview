@@ -30,6 +30,10 @@ type Sync struct {
 	machine string
 	schema  string
 
+	// Project filtering for push scope.
+	projects        []string
+	excludeProjects []string
+
 	closeOnce sync.Once
 	closeErr  error
 
@@ -45,6 +49,7 @@ type Sync struct {
 func New(
 	pgURL, schema string, local *db.DB,
 	machine string, allowInsecure bool,
+	projects, excludeProjects []string,
 ) (*Sync, error) {
 	if pgURL == "" {
 		return nil, fmt.Errorf("postgres URL is required")
@@ -71,10 +76,12 @@ func New(
 	}
 
 	return &Sync{
-		pg:      pg,
-		local:   local,
-		machine: machine,
-		schema:  schema,
+		pg:              pg,
+		local:           local,
+		machine:         machine,
+		schema:          schema,
+		projects:        projects,
+		excludeProjects: excludeProjects,
 	}, nil
 }
 

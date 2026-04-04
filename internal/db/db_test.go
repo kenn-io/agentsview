@@ -5421,7 +5421,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query all.
-	all, err := d.ListSessionsModifiedBetween(ctx, "", "")
+	all, err := d.ListSessionsModifiedBetween(ctx, "", "", nil, nil)
 	if err != nil {
 		t.Fatalf("list all: %v", err)
 	}
@@ -5430,7 +5430,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query with since.
-	since, err := d.ListSessionsModifiedBetween(ctx, "2026-03-11T00:00:00Z", "")
+	since, err := d.ListSessionsModifiedBetween(ctx, "2026-03-11T00:00:00Z", "", nil, nil)
 	if err != nil {
 		t.Fatalf("list since: %v", err)
 	}
@@ -5439,7 +5439,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query with until.
-	until, err := d.ListSessionsModifiedBetween(ctx, "", "2026-03-11T12:00:00.000Z")
+	until, err := d.ListSessionsModifiedBetween(ctx, "", "2026-03-11T12:00:00.000Z", nil, nil)
 	if err != nil {
 		t.Fatalf("list until: %v", err)
 	}
@@ -5448,7 +5448,7 @@ func TestListSessionsModifiedBetween(t *testing.T) {
 	}
 
 	// Query with both.
-	between, err := d.ListSessionsModifiedBetween(ctx, "2026-03-10T12:00:00.000Z", "2026-03-11T12:00:00.000Z")
+	between, err := d.ListSessionsModifiedBetween(ctx, "2026-03-10T12:00:00.000Z", "2026-03-11T12:00:00.000Z", nil, nil)
 	if err != nil {
 		t.Fatalf("list between: %v", err)
 	}
@@ -5591,5 +5591,85 @@ func TestToolCallCountAndFingerprint(t *testing.T) {
 	}
 	if sum != 150 {
 		t.Errorf("sum = %d, want 150", sum)
+	}
+}
+
+func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	sessions := []Session{
+		{ID: "s1", Project: "alpha", Machine: "local", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+		{ID: "s2", Project: "beta", Machine: "local", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+		{ID: "s3", Project: "gamma", Machine: "local", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+	}
+	for _, s := range sessions {
+		if err := d.UpsertSession(s); err != nil {
+			t.Fatalf("upsert %s: %v", s.ID, err)
+		}
+	}
+	for _, s := range sessions {
+		_, err := d.getWriter().Exec(
+			"UPDATE sessions SET created_at = ? WHERE id = ?",
+			s.CreatedAt, s.ID,
+		)
+		if err != nil {
+			t.Fatalf("backdate %s: %v", s.ID, err)
+		}
+	}
+
+	tests := []struct {
+		name            string
+		projects        []string
+		excludeProjects []string
+		wantIDs         []string
+	}{
+		{
+			name:    "no filter returns all",
+			wantIDs: []string{"s1", "s2", "s3"},
+		},
+		{
+			name:     "include alpha only",
+			projects: []string{"alpha"},
+			wantIDs:  []string{"s1"},
+		},
+		{
+			name:     "include alpha and gamma",
+			projects: []string{"alpha", "gamma"},
+			wantIDs:  []string{"s1", "s3"},
+		},
+		{
+			name:            "exclude beta",
+			excludeProjects: []string{"beta"},
+			wantIDs:         []string{"s1", "s3"},
+		},
+		{
+			name:     "include nonexistent project",
+			projects: []string{"nope"},
+			wantIDs:  []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := d.ListSessionsModifiedBetween(
+				ctx, "", "", tt.projects, tt.excludeProjects,
+			)
+			if err != nil {
+				t.Fatalf("ListSessionsModifiedBetween: %v", err)
+			}
+			var gotIDs []string
+			for _, s := range got {
+				gotIDs = append(gotIDs, s.ID)
+			}
+			if len(gotIDs) != len(tt.wantIDs) {
+				t.Fatalf("got %v, want %v", gotIDs, tt.wantIDs)
+			}
+			for i, id := range tt.wantIDs {
+				if gotIDs[i] != id {
+					t.Errorf("got[%d] = %q, want %q", i, gotIDs[i], id)
+				}
+			}
+		})
 	}
 }

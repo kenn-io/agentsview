@@ -89,6 +89,7 @@ func runPGPush(args []string) {
 	ps, err := postgres.New(
 		pgCfg.URL, pgCfg.Schema, database,
 		pgCfg.MachineName, pgCfg.AllowInsecure,
+		nil, nil,
 	)
 	if err != nil {
 		fatal("pg push: %v", err)
@@ -151,6 +152,7 @@ func runPGStatus(args []string) {
 	ps, err := postgres.New(
 		pgCfg.URL, pgCfg.Schema, database,
 		pgCfg.MachineName, pgCfg.AllowInsecure,
+		nil, nil,
 	)
 	if err != nil {
 		fatal("pg status: %v", err)

@@ -112,7 +112,7 @@ func (s *Sync) Push(
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 
 	allSessions, err := s.local.ListSessionsModifiedBetween(
-		ctx, lastPush, cutoff,
+		ctx, lastPush, cutoff, s.projects, s.excludeProjects,
 	)
 	if err != nil {
 		return result, fmt.Errorf(
@@ -152,7 +152,7 @@ func (s *Sync) Push(
 			)
 		}
 		boundarySessions, err := s.local.ListSessionsModifiedBetween(
-			ctx, windowStart, lastPush,
+			ctx, windowStart, lastPush, s.projects, s.excludeProjects,
 		)
 		if err != nil {
 			return result, fmt.Errorf(
