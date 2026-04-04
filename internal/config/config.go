@@ -56,10 +56,12 @@ type ProxyConfig struct {
 
 // PGConfig holds PostgreSQL connection settings.
 type PGConfig struct {
-	URL           string `toml:"url" json:"url"`
-	Schema        string `toml:"schema" json:"schema"`
-	MachineName   string `toml:"machine_name" json:"machine_name"`
-	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
+	URL             string   `toml:"url" json:"url"`
+	Schema          string   `toml:"schema" json:"schema"`
+	MachineName     string   `toml:"machine_name" json:"machine_name"`
+	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
+	Projects        []string `toml:"projects" json:"projects,omitempty"`
+	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
 // Config holds all application configuration.
@@ -351,6 +353,12 @@ func (c *Config) loadFile() error {
 	}
 	if file.PG.AllowInsecure {
 		c.PG.AllowInsecure = true
+	}
+	if file.PG.Projects != nil && c.PG.Projects == nil {
+		c.PG.Projects = file.PG.Projects
+	}
+	if file.PG.ExcludeProjects != nil && c.PG.ExcludeProjects == nil {
+		c.PG.ExcludeProjects = file.PG.ExcludeProjects
 	}
 
 	// Parse config-file dir arrays for agents that have a
