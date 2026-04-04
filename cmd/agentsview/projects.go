@@ -38,6 +38,9 @@ func runProjects(args []string) {
 	}
 
 	if *jsonOutput {
+		if projects == nil {
+			projects = []db.ProjectInfo{}
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(projects); err != nil {

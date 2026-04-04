@@ -196,7 +196,16 @@ func (s *Sync) Push(
 	})
 
 	if len(sessions) == 0 {
-		if !s.isFiltered() {
+		// Filtered pushes must not advance the global
+		// watermark but should still update fingerprints
+		// so repeated filtered runs stay incremental.
+		if s.isFiltered() {
+			if err := writePushBoundaryState(
+				s.local, lastPush, sessions, priorFingerprints,
+			); err != nil {
+				return result, err
+			}
+		} else {
 			if err := finalizePushState(
 				s.local, cutoff, sessions, nil,
 			); err != nil {
@@ -243,11 +252,24 @@ func (s *Sync) Push(
 		}
 	}
 
-	// When project filters are active, skip watermark updates
-	// so a filtered push does not advance the global watermark
-	// past sessions from other projects. A later unfiltered
-	// push will still see those sessions.
-	if !s.isFiltered() {
+	if s.isFiltered() {
+		// Filtered pushes update fingerprints for pushed
+		// sessions so subsequent filtered runs stay
+		// incremental, but do not advance the global
+		// watermark past sessions from other projects.
+		merged := maps.Clone(priorFingerprints)
+		if merged == nil {
+			merged = make(map[string]string, len(pushed))
+		}
+		for _, sess := range pushed {
+			merged[sess.ID] = sessionPushFingerprint(sess)
+		}
+		if err := writePushBoundaryState(
+			s.local, lastPush, nil, merged,
+		); err != nil {
+			return result, err
+		}
+	} else {
 		// When all sessions succeeded, advance the watermark
 		// to cutoff. When some failed, keep the watermark at
 		// lastPush so the failed sessions (plus any

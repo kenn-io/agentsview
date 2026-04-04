@@ -78,11 +78,11 @@ func runPGPush(args []string) {
 	projects := pgCfg.Projects
 	excludeProjects := pgCfg.ExcludeProjects
 	if *projectsFlag != "" {
-		projects = strings.Split(*projectsFlag, ",")
+		projects = splitProjectList(*projectsFlag)
 		excludeProjects = nil
 	}
 	if *excludeProjectsFlag != "" {
-		excludeProjects = strings.Split(*excludeProjectsFlag, ",")
+		excludeProjects = splitProjectList(*excludeProjectsFlag)
 		projects = nil
 	}
 
@@ -340,4 +340,18 @@ func runPGServe(args []string) {
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("pg serve: %v", err)
 	}
+}
+
+// splitProjectList splits a comma-separated string into trimmed,
+// non-empty project names.
+func splitProjectList(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
