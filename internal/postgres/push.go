@@ -245,13 +245,14 @@ func (s *Sync) Push(
 		// Filtered pushes must not advance the global
 		// watermark but should still update fingerprints
 		// so repeated filtered runs stay incremental.
-		if s.isFiltered() {
+		// Skip when lastPush is empty (--full/PG reset).
+		if s.isFiltered() && lastPush != "" {
 			if err := writePushBoundaryState(
 				s.local, lastPush, sessions, priorFingerprints,
 			); err != nil {
 				return result, err
 			}
-		} else {
+		} else if !s.isFiltered() {
 			if err := finalizePushState(
 				s.local, cutoff, sessions, nil,
 			); err != nil {
@@ -303,10 +304,18 @@ func (s *Sync) Push(
 		// sessions so subsequent filtered runs stay
 		// incremental, but do not advance the global
 		// watermark past sessions from other projects.
-		if err := writePushBoundaryState(
-			s.local, lastPush, pushed, priorFingerprints,
-		); err != nil {
-			return result, err
+		// Only write fingerprints when a watermark exists;
+		// an empty watermark means --full or PG reset
+		// cleared the state, and writing fingerprints
+		// would create stale entries that survive a
+		// subsequent PG reset undetected.
+		if lastPush != "" {
+			if err := writePushBoundaryState(
+				s.local, lastPush, pushed,
+				priorFingerprints,
+			); err != nil {
+				return result, err
+			}
 		}
 	} else {
 		// When all sessions succeeded, advance the watermark
