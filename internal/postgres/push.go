@@ -196,10 +196,12 @@ func (s *Sync) Push(
 	})
 
 	if len(sessions) == 0 {
-		if err := finalizePushState(
-			s.local, cutoff, sessions, nil,
-		); err != nil {
-			return result, err
+		if !s.isFiltered() {
+			if err := finalizePushState(
+				s.local, cutoff, sessions, nil,
+			); err != nil {
+				return result, err
+			}
 		}
 		result.Duration = time.Since(start)
 		return result, nil
