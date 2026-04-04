@@ -57,6 +57,9 @@ func main() {
 		case "import":
 			runImport(os.Args[2:])
 			return
+		case "projects":
+			runProjects(os.Args[2:])
+			return
 		case "version", "--version", "-v":
 			fmt.Printf("agentsview %s (commit %s, built %s)\n",
 				version, commit, buildDate)
