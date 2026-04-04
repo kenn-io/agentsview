@@ -72,14 +72,18 @@ func runPGPush(args []string) {
 		fatal("pg push: url not configured")
 	}
 
-	// CLI flags override config values entirely.
+	// CLI flags override config values entirely. When either
+	// flag is set, clear both config-derived lists so a CLI
+	// include can override a config exclude (and vice versa).
 	projects := pgCfg.Projects
 	excludeProjects := pgCfg.ExcludeProjects
 	if *projectsFlag != "" {
 		projects = strings.Split(*projectsFlag, ",")
+		excludeProjects = nil
 	}
 	if *excludeProjectsFlag != "" {
 		excludeProjects = strings.Split(*excludeProjectsFlag, ",")
+		projects = nil
 	}
 
 	// Validate mutual exclusivity (config values may conflict too).

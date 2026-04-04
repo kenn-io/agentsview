@@ -241,22 +241,29 @@ func (s *Sync) Push(
 		}
 	}
 
-	// When all sessions succeeded, advance the watermark to
-	// cutoff. When some failed, keep the watermark at lastPush
-	// so the failed sessions (plus any already-pushed ones) are
-	// re-evaluated next time. Already-pushed sessions are
-	// fingerprint-matched and skipped cheaply.
-	finalizeCutoff := cutoff
-	var mergedFingerprints map[string]string
-	if result.Errors > 0 {
-		finalizeCutoff = lastPush
-		mergedFingerprints = priorFingerprints
-	}
-	if err := finalizePushState(
-		s.local, finalizeCutoff, pushed,
-		mergedFingerprints,
-	); err != nil {
-		return result, err
+	// When project filters are active, skip watermark updates
+	// so a filtered push does not advance the global watermark
+	// past sessions from other projects. A later unfiltered
+	// push will still see those sessions.
+	if !s.isFiltered() {
+		// When all sessions succeeded, advance the watermark
+		// to cutoff. When some failed, keep the watermark at
+		// lastPush so the failed sessions (plus any
+		// already-pushed ones) are re-evaluated next time.
+		// Already-pushed sessions are fingerprint-matched and
+		// skipped cheaply.
+		finalizeCutoff := cutoff
+		var mergedFingerprints map[string]string
+		if result.Errors > 0 {
+			finalizeCutoff = lastPush
+			mergedFingerprints = priorFingerprints
+		}
+		if err := finalizePushState(
+			s.local, finalizeCutoff, pushed,
+			mergedFingerprints,
+		); err != nil {
+			return result, err
+		}
 	}
 
 	result.Duration = time.Since(start)

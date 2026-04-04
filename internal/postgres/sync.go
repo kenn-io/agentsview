@@ -85,6 +85,12 @@ func New(
 	}, nil
 }
 
+// isFiltered reports whether push scope is restricted by
+// project include/exclude filters.
+func (s *Sync) isFiltered() bool {
+	return len(s.projects) > 0 || len(s.excludeProjects) > 0
+}
+
 // DB returns the underlying PostgreSQL connection pool.
 func (s *Sync) DB() *sql.DB { return s.pg }
 

@@ -116,7 +116,7 @@ Sync flags:
 PG push flags:
   -full              Bypass per-message skip heuristic
   -projects string   Comma-separated projects to push (inclusive)
-  -exclude-projects  Comma-separated projects to exclude from push
+  -exclude-projects string  Comma-separated projects to exclude from push
 
 PG serve flags:
   -host string       Host to bind to (default "127.0.0.1")
@@ -129,6 +129,9 @@ Prune flags:
   -first-message str  Sessions whose first message starts with this text
   -dry-run            Show what would be pruned without deleting
   -yes                Skip confirmation prompt
+
+Projects flags:
+  -json              Output as JSON array
 
 Update flags:
   -check              Check for updates without installing
