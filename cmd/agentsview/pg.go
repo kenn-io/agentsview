@@ -107,6 +107,10 @@ func runPGPush(args []string) {
 		database.SetCursorSecret(secret)
 	}
 
+	// Run local sync first so newly discovered sessions
+	// are available for push. If a full resync was performed
+	// (e.g. due to data version change), force a full PG push
+	// since watermarks become stale after a local rebuild.
 	didResync := runLocalSync(appCfg, database, *full)
 	forceFull := *full || didResync
 
