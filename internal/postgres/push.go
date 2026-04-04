@@ -106,6 +106,20 @@ func (s *Sync) Push(
 			); err != nil {
 				return result, err
 			}
+			// When running a filtered push against a
+			// reset PG, clear the watermark so the next
+			// unfiltered push also triggers a full sync
+			// for the remaining projects.
+			if s.isFiltered() {
+				if err := s.local.SetSyncState(
+					"last_push_at", "",
+				); err != nil {
+					return result, fmt.Errorf(
+						"clearing last_push_at: %w",
+						err,
+					)
+				}
+			}
 		}
 	}
 
