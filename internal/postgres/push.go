@@ -77,6 +77,27 @@ func (s *Sync) Push(
 		); err != nil {
 			return result, err
 		}
+		// When a filtered full push runs, clear persisted
+		// watermark and boundary state so the next
+		// unfiltered push also starts from scratch.
+		if s.isFiltered() {
+			if err := s.local.SetSyncState(
+				lastPushBoundaryStateKey, "",
+			); err != nil {
+				return result, fmt.Errorf(
+					"clearing boundary state: %w",
+					err,
+				)
+			}
+			if err := s.local.SetSyncState(
+				"last_push_at", "",
+			); err != nil {
+				return result, fmt.Errorf(
+					"clearing last_push_at: %w",
+					err,
+				)
+			}
+		}
 	}
 
 	// Coherence check: if the local watermark says we've
@@ -282,15 +303,8 @@ func (s *Sync) Push(
 		// sessions so subsequent filtered runs stay
 		// incremental, but do not advance the global
 		// watermark past sessions from other projects.
-		merged := maps.Clone(priorFingerprints)
-		if merged == nil {
-			merged = make(map[string]string, len(pushed))
-		}
-		for _, sess := range pushed {
-			merged[sess.ID] = sessionPushFingerprint(sess)
-		}
 		if err := writePushBoundaryState(
-			s.local, lastPush, nil, merged,
+			s.local, lastPush, pushed, priorFingerprints,
 		); err != nil {
 			return result, err
 		}
