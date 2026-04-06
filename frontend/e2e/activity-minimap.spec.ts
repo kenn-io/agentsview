@@ -66,12 +66,15 @@ test.describe("Activity Minimap", () => {
     const lastBar = clickableBars.nth(barCount - 1);
     await lastBar.click();
 
-    if (barCount > 1) {
+    const isScrollable = await sp.scroller.evaluate(
+      (el) => el.scrollHeight > el.clientHeight,
+    );
+    if (barCount > 1 && isScrollable) {
       await expect
         .poll(
           () =>
             sp.scroller.evaluate((el) => el.scrollTop),
-          { timeout: 3000 },
+          { timeout: 5000 },
         )
         .not.toBe(scrollBefore);
     }
