@@ -22,18 +22,18 @@ var cortexBackupRe = regexp.MustCompile(
 // a companion <uuid>.history.jsonl file and this JSON stores only
 // metadata (no "history" key).
 type cortexSessionJSON struct {
-	SessionID          string            `json:"session_id"`
-	Title              string            `json:"title"`
-	History            []cortexMessage   `json:"history"`
-	ConnectionName     string            `json:"connection_name"`
-	WorkingDirectory   string            `json:"working_directory"`
-	GitRoot            string            `json:"git_root"`
-	GitBranch          string            `json:"git_branch"`
-	CreatedAt          string            `json:"created_at"`
-	LastUpdated        string            `json:"last_updated"`
-	HistoryLength      int               `json:"history_length"`
-	SessionType        string            `json:"session_type"`
-	PermissionCache    map[string]string `json:"permission_cache"`
+	SessionID        string            `json:"session_id"`
+	Title            string            `json:"title"`
+	History          []cortexMessage   `json:"history"`
+	ConnectionName   string            `json:"connection_name"`
+	WorkingDirectory string            `json:"working_directory"`
+	GitRoot          string            `json:"git_root"`
+	GitBranch        string            `json:"git_branch"`
+	CreatedAt        string            `json:"created_at"`
+	LastUpdated      string            `json:"last_updated"`
+	HistoryLength    int               `json:"history_length"`
+	SessionType      string            `json:"session_type"`
+	PermissionCache  map[string]string `json:"permission_cache"`
 }
 
 // cortexMessage represents a single turn in the conversation history.
@@ -48,13 +48,13 @@ type cortexMessage struct {
 // Cortex uses a nested structure: tool_use and tool_result are wrapped
 // inside an object under the key matching the block type.
 type cortexContentBlock struct {
-	Type       string               `json:"type"`
-	Text       string               `json:"text"`
-	InternalOnly *bool              `json:"internalOnly"`
-	IsUserPrompt *bool              `json:"is_user_prompt"`
-	MessageID  string               `json:"message_id"`
-	ToolUse    *cortexToolUse       `json:"tool_use"`
-	ToolResult *cortexToolResult    `json:"tool_result"`
+	Type         string            `json:"type"`
+	Text         string            `json:"text"`
+	InternalOnly *bool             `json:"internalOnly"`
+	IsUserPrompt *bool             `json:"is_user_prompt"`
+	MessageID    string            `json:"message_id"`
+	ToolUse      *cortexToolUse    `json:"tool_use"`
+	ToolResult   *cortexToolResult `json:"tool_result"`
 }
 
 // cortexToolUse is the payload for a tool_use content block.
@@ -418,16 +418,9 @@ func ParseCortexSession(
 		}
 	}
 
-	// Pick file size: prefer JSONL if it exists (it's authoritative).
-	fileSize := info.Size()
-	fileMtime := info.ModTime().UnixNano()
-	filePath := path
-	if ji, err := os.Stat(histFile); err == nil {
-		fileSize = ji.Size()
-		fileMtime = ji.ModTime().UnixNano()
-		filePath = histFile
-	}
-
+	// Always use the discovered .json file for File metadata, even
+	// when we read from .history.jsonl. The sync engine tracks the
+	// .json file for skip/hash logic, so this must match.
 	sess := &ParsedSession{
 		ID:               "cortex:" + meta.SessionID,
 		Project:          project,
@@ -441,9 +434,9 @@ func ParseCortexSession(
 		MessageCount:     len(msgs),
 		UserMessageCount: userCount,
 		File: FileInfo{
-			Path:  filePath,
-			Size:  fileSize,
-			Mtime: fileMtime,
+			Path:  path,
+			Size:  info.Size(),
+			Mtime: info.ModTime().UnixNano(),
 		},
 	}
 
