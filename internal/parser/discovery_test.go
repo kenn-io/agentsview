@@ -1295,6 +1295,75 @@ func TestDiscoverCursorSessions_DedupPrefersJsonl(t *testing.T) {
 	}
 }
 
+func TestParseCursorTranscriptRelPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		rel         string
+		wantProject string
+		wantOK      bool
+	}{
+		{
+			name:        "flat txt",
+			rel:         filepath.Join("proj-dir", "agent-transcripts", "sess.txt"),
+			wantProject: "proj-dir",
+			wantOK:      true,
+		},
+		{
+			name:        "flat jsonl",
+			rel:         filepath.Join("proj-dir", "agent-transcripts", "sess.jsonl"),
+			wantProject: "proj-dir",
+			wantOK:      true,
+		},
+		{
+			name:        "nested jsonl",
+			rel:         filepath.Join("proj-dir", "agent-transcripts", "sess", "sess.jsonl"),
+			wantProject: "proj-dir",
+			wantOK:      true,
+		},
+		{
+			name:        "nested txt",
+			rel:         filepath.Join("proj-dir", "agent-transcripts", "sess", "sess.txt"),
+			wantProject: "proj-dir",
+			wantOK:      true,
+		},
+		{
+			name:   "nested mismatched filename",
+			rel:    filepath.Join("proj-dir", "agent-transcripts", "sess", "other.jsonl"),
+			wantOK: false,
+		},
+		{
+			name:   "nested auxiliary file",
+			rel:    filepath.Join("proj-dir", "agent-transcripts", "sess", "notes.txt"),
+			wantOK: false,
+		},
+		{
+			name:   "subagent file ignored",
+			rel:    filepath.Join("proj-dir", "agent-transcripts", "sess", "subagents", "child.jsonl"),
+			wantOK: false,
+		},
+		{
+			name:   "wrong extension",
+			rel:    filepath.Join("proj-dir", "agent-transcripts", "sess.json"),
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotProject, gotOK := ParseCursorTranscriptRelPath(tt.rel)
+			if gotOK != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", gotOK, tt.wantOK)
+			}
+			if gotProject != tt.wantProject {
+				t.Errorf(
+					"project = %q, want %q",
+					gotProject, tt.wantProject,
+				)
+			}
+		})
+	}
+}
+
 func TestFindCursorSourceFile(t *testing.T) {
 	cursorTranscripts := filepath.Join(
 		"proj-dir", "agent-transcripts",

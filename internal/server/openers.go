@@ -80,7 +80,10 @@ var darwinOpenerCandidates = []openerCandidate{
 	// Terminals — Ghostty, iTerm2, kitty, and Terminal.app are macOS
 	// GUI apps; detect via app bundle first, fall back to PATH binary
 	// for non-default installs (e.g. Homebrew formula).
-	{"ghostty", "Ghostty", "terminal", []string{"ghostty"}, "/Applications/Ghostty.app"},
+	{"ghostty", "Ghostty", "terminal", []string{
+		"ghostty",
+		"/Applications/Ghostty.app/Contents/MacOS/ghostty",
+	}, ""},
 	{"iterm2", "iTerm2", "terminal", nil, "/Applications/iTerm.app"},
 	{"kitty", "kitty", "terminal", []string{"kitty"}, "/Applications/kitty.app"},
 	{"alacritty", "Alacritty", "terminal", []string{"alacritty"}, ""},

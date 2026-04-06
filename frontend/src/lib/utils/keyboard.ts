@@ -8,7 +8,11 @@ import {
   getExportUrl,
   resumeSession,
 } from "../api/client.js";
-import { supportsResume, buildResumeCommand } from "./resume.js";
+import {
+  supportsResume,
+  buildResumeCommand,
+  formatResumeResponseCommand,
+} from "./resume.js";
 import { copyToClipboard } from "./clipboard.js";
 
 function isInputFocused(): boolean {
@@ -179,10 +183,12 @@ export function registerShortcuts(
       c: () => {
         const session = sessions.activeSession;
         if (session && supportsResume(session.agent)) {
-          // Copy resume command to clipboard. Use backend-built command
-          // (includes cd to project dir) with local fallback.
+          // Copy a runnable resume command. Cursor needs the backend cwd
+          // applied client-side so the copied command is self-contained.
           resumeSession(session.id, { command_only: true }).then((resp) => {
-            const cmd = resp.command || buildResumeCommand(
+            const cmd = formatResumeResponseCommand(
+              session.agent, resp,
+            ) || buildResumeCommand(
               session.agent,
               session.id,
             );

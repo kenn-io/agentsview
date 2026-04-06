@@ -347,23 +347,19 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Cursor: <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
+	// Cursor:
+	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
+	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 	for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
 		if cursorDir == "" {
 			continue
 		}
 		if rel, ok := isUnder(cursorDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 3 {
+			projectDir, ok := parser.ParseCursorTranscriptRelPath(rel)
+			if !ok {
 				continue
 			}
-			if parts[1] != "agent-transcripts" {
-				continue
-			}
-			if !parser.IsCursorTranscriptExt(parts[2]) {
-				continue
-			}
-			project := parser.DecodeCursorProjectDir(parts[0])
+			project := parser.DecodeCursorProjectDir(projectDir)
 			if project == "" {
 				project = "unknown"
 			}
@@ -2385,12 +2381,22 @@ func (e *Engine) SyncSingleSession(sessionID string) error {
 			file.Project = filepath.Base(filepath.Dir(path))
 		}
 	case parser.AgentCursor:
-		// path is <cursorDir>/<project>/agent-transcripts/<uuid>.txt
-		// Extract project dir name from two levels up
-		projDir := filepath.Base(
-			filepath.Dir(filepath.Dir(path)),
-		)
-		file.Project = parser.DecodeCursorProjectDir(projDir)
+		// Support both flat and nested transcript layouts.
+		for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
+			rel, ok := isUnder(cursorDir, path)
+			if !ok {
+				continue
+			}
+			projDir, ok := parser.ParseCursorTranscriptRelPath(rel)
+			if !ok {
+				continue
+			}
+			file.Project = parser.DecodeCursorProjectDir(projDir)
+			break
+		}
+		if file.Project == "" {
+			file.Project = "unknown"
+		}
 	case parser.AgentIflow:
 		// path is <iflowDir>/<project>/session-<uuid>.jsonl
 		// Extract project dir name from parent directory

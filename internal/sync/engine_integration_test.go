@@ -199,6 +199,23 @@ func (e *testEnv) writeCursorSession(
 	)
 }
 
+// writeNestedCursorSession creates a Cursor transcript file under
+// the nested layout <project>/agent-transcripts/<session>/<session><ext>.
+func (e *testEnv) writeNestedCursorSession(
+	t *testing.T, cursorDir, project, sessionID, ext,
+	content string,
+) string {
+	t.Helper()
+	return e.writeSession(
+		t, cursorDir,
+		filepath.Join(
+			project, "agent-transcripts", sessionID,
+			sessionID+ext,
+		),
+		content,
+	)
+}
+
 func TestSyncEngineIntegration(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -1750,6 +1767,67 @@ func TestSyncEngineMultiCursorDir(t *testing.T) {
 				"in second directory",
 		)
 	}
+}
+
+func TestSyncPathsCursorNestedLayout(t *testing.T) {
+	env := setupTestEnv(t)
+
+	path := env.writeNestedCursorSession(
+		t, env.cursorDir,
+		"Users-alice-code-nested-proj",
+		"nested-sync", ".jsonl",
+		"user:\nHello nested cursor\nassistant:\nHi there!\n",
+	)
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionProject(
+		t, env.db, "cursor:nested-sync", "nested_proj",
+	)
+	assertSessionMessageCount(
+		t, env.db, "cursor:nested-sync", 2,
+	)
+}
+
+func TestSyncSingleSessionCursorNestedLayoutPreservesProject(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	path := env.writeNestedCursorSession(
+		t, env.cursorDir,
+		"Users-alice-code-nested-proj",
+		"nested-resync", ".jsonl",
+		"user:\nHello nested cursor\nassistant:\nHi there!\n",
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1, Skipped: 0,
+	})
+	assertSessionProject(
+		t, env.db, "cursor:nested-resync", "nested_proj",
+	)
+
+	updated := "user:\nHello nested cursor\n" +
+		"assistant:\nHi there!\n" +
+		"user:\nFollow-up\n" +
+		"assistant:\nGot it.\n"
+	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"cursor:nested-resync",
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertSessionProject(
+		t, env.db, "cursor:nested-resync", "nested_proj",
+	)
+	assertSessionMessageCount(
+		t, env.db, "cursor:nested-resync", 4,
+	)
 }
 
 func TestSyncForkDetection(t *testing.T) {

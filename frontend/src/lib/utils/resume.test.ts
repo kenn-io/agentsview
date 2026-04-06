@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildResumeCommand,
+  formatResumeResponseCommand,
   supportsResume,
 } from "./resume.js";
 
@@ -9,13 +10,13 @@ describe("supportsResume", () => {
     expect(supportsResume("claude")).toBe(true);
     expect(supportsResume("codex")).toBe(true);
     expect(supportsResume("copilot")).toBe(true);
+    expect(supportsResume("cursor")).toBe(true);
     expect(supportsResume("gemini")).toBe(true);
     expect(supportsResume("opencode")).toBe(true);
     expect(supportsResume("amp")).toBe(true);
   });
 
   it("returns false for unsupported agents", () => {
-    expect(supportsResume("cursor")).toBe(false);
     expect(supportsResume("vscode-copilot")).toBe(false);
     expect(supportsResume("unknown")).toBe(false);
   });
@@ -46,6 +47,12 @@ describe("buildResumeCommand", () => {
     ).toBe("gemini --resume sess-2");
   });
 
+  it("generates cursor resume command", () => {
+    expect(
+      buildResumeCommand("cursor", "cursor:chat-7"),
+    ).toBe("cursor agent --resume chat-7");
+  });
+
   it("generates opencode resume command", () => {
     expect(
       buildResumeCommand("opencode", "opencode:s3"),
@@ -71,7 +78,6 @@ describe("buildResumeCommand", () => {
   });
 
   it("returns null for unsupported agents", () => {
-    expect(buildResumeCommand("cursor", "id")).toBeNull();
     expect(buildResumeCommand("unknown", "id")).toBeNull();
   });
 
@@ -169,5 +175,54 @@ describe("buildResumeCommand", () => {
       "amp:$HOME/evil",
     );
     expect(cmd).toBe("amp --resume '$HOME/evil'");
+  });
+});
+
+describe("formatResumeResponseCommand", () => {
+  it("keeps non-cursor backend commands unchanged", () => {
+    expect(
+      formatResumeResponseCommand("claude", {
+        command: "claude --resume sess-1",
+        cwd: "/tmp/project",
+      }),
+    ).toBe("claude --resume sess-1");
+  });
+
+  it("prepends cwd for cursor clipboard copy", () => {
+    expect(
+      formatResumeResponseCommand("cursor", {
+        command: "cursor agent --resume chat-7 --workspace '/tmp/project'",
+        cwd: "/tmp/project/frontend",
+      }),
+    ).toBe(
+      "cd '/tmp/project/frontend' && " +
+        "cursor agent --resume chat-7 --workspace '/tmp/project'",
+    );
+  });
+
+  it("quotes cursor cwd when needed", () => {
+    expect(
+      formatResumeResponseCommand("cursor", {
+        command: "cursor agent --resume chat-7 --workspace '/tmp/project dir'",
+        cwd: "/tmp/project dir/frontend",
+      }),
+    ).toBe(
+      "cd '/tmp/project dir/frontend' && " +
+        "cursor agent --resume chat-7 --workspace '/tmp/project dir'",
+    );
+  });
+
+  it("returns bare cursor command when cwd is unavailable", () => {
+    expect(
+      formatResumeResponseCommand("cursor", {
+        command: "cursor agent --resume chat-7",
+      }),
+    ).toBe("cursor agent --resume chat-7");
+  });
+
+  it("returns null for missing backend command", () => {
+    expect(
+      formatResumeResponseCommand("cursor", null),
+    ).toBeNull();
   });
 });

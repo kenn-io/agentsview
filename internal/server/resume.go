@@ -45,6 +45,7 @@ var resumeAgents = map[string]string{
 	"claude":   "claude --resume %s",
 	"codex":    "codex resume %s",
 	"copilot":  "copilot --resume=%s",
+	"cursor":   "cursor agent --resume %s",
 	"gemini":   "gemini --resume %s",
 	"opencode": "opencode --session %s",
 	"amp":      "amp --resume %s",
@@ -130,16 +131,18 @@ func (s *Server) handleResumeSession(
 		}
 	}
 
-	// Resolve the project directory from the session file or
-	// project field for use in cd prefix and response metadata.
-	sessionDir := resolveSessionDir(session)
+	// Resolve the terminal launch directory. Cursor resume needs the
+	// shell to start in the latest session cwd so the resumed chat
+	// inherits the same working directory it last used.
+	launchDir, workspaceDir := resolveResumePaths(session)
+	if string(session.Agent) == "cursor" && workspaceDir != "" {
+		cmd += " --workspace " + shellQuote(workspaceDir)
+	}
 
-	// Claude Code and Kiro CLI scope sessions by the working
-	// directory the session was started from. Prepend cd <cwd> so
-	// the resume works from any terminal location.
-	agent := string(session.Agent)
-	if (agent == "claude" || agent == "kiro") && sessionDir != "" {
-		cmd = fmt.Sprintf("cd %s && %s", shellQuote(sessionDir), cmd)
+	responseCmd := cmd
+	switch string(session.Agent) {
+	case "claude", "kiro":
+		responseCmd = commandWithCwd(cmd, launchDir)
 	}
 
 	// If the caller only wants the command string (e.g. for
@@ -147,8 +150,8 @@ func (s *Server) handleResumeSession(
 	if req.CommandOnly {
 		writeJSON(w, http.StatusOK, resumeResponse{
 			Launched: false,
-			Command:  cmd,
-			Cwd:      sessionDir,
+			Command:  responseCmd,
+			Cwd:      launchDir,
 		})
 		return
 	}
@@ -184,13 +187,13 @@ func (s *Server) handleResumeSession(
 					"Claude Desktop resume only supports Claude sessions")
 				return
 			}
-			proc := launchClaudeDesktop(rawID, sessionDir)
+			proc := launchClaudeDesktop(rawID, launchDir)
 			if err := proc.Start(); err != nil {
 				log.Printf("resume: Claude Desktop launch failed: %v", err)
 				writeJSON(w, http.StatusOK, resumeResponse{
 					Launched: false,
-					Command:  cmd,
-					Cwd:      sessionDir,
+					Command:  responseCmd,
+					Cwd:      launchDir,
 					Error:    "desktop_launch_failed",
 				})
 				return
@@ -199,18 +202,21 @@ func (s *Server) handleResumeSession(
 			writeJSON(w, http.StatusOK, resumeResponse{
 				Launched: true,
 				Terminal: opener.Name,
-				Command:  cmd,
-				Cwd:      sessionDir,
+				Command:  responseCmd,
+				Cwd:      launchDir,
 			})
 			return
 		}
 
-		proc := launchResumeInOpener(*opener, cmd, sessionDir)
+		openerCwd := resumeLaunchCwd(
+			string(session.Agent), opener.ID, runtime.GOOS, launchDir,
+		)
+		proc := launchResumeInOpener(*opener, cmd, openerCwd)
 		if proc == nil {
 			writeJSON(w, http.StatusOK, resumeResponse{
 				Launched: false,
-				Command:  cmd,
-				Cwd:      sessionDir,
+				Command:  responseCmd,
+				Cwd:      launchDir,
 				Error:    "unsupported_opener",
 			})
 			return
@@ -219,8 +225,8 @@ func (s *Server) handleResumeSession(
 			log.Printf("resume: opener start failed: %v", err)
 			writeJSON(w, http.StatusOK, resumeResponse{
 				Launched: false,
-				Command:  cmd,
-				Cwd:      sessionDir,
+				Command:  responseCmd,
+				Cwd:      launchDir,
 				Error:    "terminal_launch_failed",
 			})
 			return
@@ -229,8 +235,8 @@ func (s *Server) handleResumeSession(
 		writeJSON(w, http.StatusOK, resumeResponse{
 			Launched: true,
 			Terminal: opener.Name,
-			Command:  cmd,
-			Cwd:      sessionDir,
+			Command:  responseCmd,
+			Cwd:      launchDir,
 		})
 		return
 	}
@@ -244,20 +250,27 @@ func (s *Server) handleResumeSession(
 		// User explicitly chose clipboard-only mode.
 		writeJSON(w, http.StatusOK, resumeResponse{
 			Launched: false,
-			Command:  cmd,
+			Command:  responseCmd,
+			Cwd:      launchDir,
 		})
 		return
 	}
 
 	// Detect and launch a terminal.
-	termBin, termArgs, termName, termErr := detectTerminal(cmd, sessionDir, termCfg)
+	detectCwd := launchDir
+	if termCfg.Mode == "auto" {
+		detectCwd = resumeLaunchCwd(
+			string(session.Agent), "auto", runtime.GOOS, launchDir,
+		)
+	}
+	termBin, termArgs, termName, termErr := detectTerminal(cmd, detectCwd, termCfg)
 	if termErr != nil {
 		// Can't launch — return the command for clipboard fallback.
 		log.Printf("resume: terminal detection failed: %v", termErr)
 		writeJSON(w, http.StatusOK, resumeResponse{
 			Launched: false,
-			Command:  cmd,
-			Cwd:      sessionDir,
+			Command:  responseCmd,
+			Cwd:      launchDir,
 			Error:    "no_terminal_found",
 		})
 		return
@@ -269,16 +282,16 @@ func (s *Server) handleResumeSession(
 	proc.Stdout = nil
 	proc.Stderr = nil
 	proc.Stdin = nil
-	if sessionDir != "" {
-		proc.Dir = sessionDir
+	if detectCwd != "" {
+		proc.Dir = detectCwd
 	}
 
 	if err := proc.Start(); err != nil {
 		log.Printf("resume: terminal start failed: %v", err)
 		writeJSON(w, http.StatusOK, resumeResponse{
 			Launched: false,
-			Command:  cmd,
-			Cwd:      sessionDir,
+			Command:  responseCmd,
+			Cwd:      launchDir,
 			Error:    "terminal_launch_failed",
 		})
 		return
@@ -290,8 +303,8 @@ func (s *Server) handleResumeSession(
 	writeJSON(w, http.StatusOK, resumeResponse{
 		Launched: true,
 		Terminal: termName,
-		Command:  cmd,
-		Cwd:      sessionDir,
+		Command:  responseCmd,
+		Cwd:      launchDir,
 	})
 }
 
@@ -314,6 +327,21 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+}
+
+func commandWithCwd(cmd, cwd string) string {
+	if !isDir(cwd) {
+		return cmd
+	}
+	return fmt.Sprintf("cd %s && %s", shellQuote(cwd), cmd)
+}
+
+// resumeLaunchCwd returns the cwd a terminal launcher should apply for
+// a resume command. Cursor resumes still need the terminal shell to
+// start in the last working directory even when --workspace points the
+// CLI at the session's workspace root.
+func resumeLaunchCwd(agent, openerID, goos, cwd string) string {
+	return cwd
 }
 
 // detectTerminal finds a suitable terminal emulator and builds the
@@ -369,23 +397,11 @@ func detectTerminalDarwin(
 	// Check for iTerm2 first, then fall back to Terminal.app.
 	// Use osascript to tell the app to open a new window and run
 	// the command.
-	script := cmd
-	if cwd != "" {
-		if info, err := os.Stat(cwd); err == nil && info.IsDir() {
-			script = fmt.Sprintf("cd %s && %s", shellQuote(cwd), cmd)
-		}
-	}
+	script := commandWithCwd(cmd, cwd)
 
 	// Try iTerm2 first.
 	if _, err := exec.LookPath("osascript"); err == nil {
-		// Sanitize for AppleScript: escape backslashes, then quotes,
-		// and reject newlines to prevent multi-line injection.
-		safe := strings.NewReplacer(
-			"\n", " ",
-			"\r", " ",
-			`\`, `\\`,
-			`"`, `\"`,
-		).Replace(script)
+		safe := escapeForAppleScript(script)
 
 		// Check if iTerm is installed.
 		iterm := "/Applications/iTerm.app"
@@ -493,7 +509,7 @@ func (s *Server) handleSetTerminalConfig(
 }
 
 // readSessionCwd reads the first few lines of a session JSONL file
-// and extracts the "cwd" field. Claude Code stores the working
+// and extracts the initial "cwd" field. Claude Code stores the working
 // directory in early conversation entries; some agents (e.g. Codex)
 // store it under payload.cwd. Returns "" if not found.
 func readSessionCwd(path string) string {
@@ -508,39 +524,176 @@ func readSessionCwd(path string) string {
 		}
 	}
 
+	var cwd string
+	scanJSONLLines(path, 20, func(line []byte) bool {
+		for _, jsonPath := range []string{
+			"cwd",
+			"payload.cwd",
+			// Copilot stores cwd under data.context.cwd on the
+			// session.start event.
+			"data.context.cwd",
+		} {
+			if value := gjson.GetBytes(line, jsonPath).Str; value != "" {
+				cwd = value
+				return false
+			}
+		}
+		return true
+	})
+	return cwd
+}
+
+// readCursorLastWorkingDir scans a Cursor transcript for the most
+// recent tool invocation that recorded a working_directory. Returns
+// the latest existing absolute directory, or "" if not found.
+func readCursorLastWorkingDir(path string) string {
+	last := ""
+	scanJSONLLines(path, 0, func(line []byte) bool {
+		content := gjson.GetBytes(line, "message.content")
+		if content.IsArray() {
+			content.ForEach(func(_, item gjson.Result) bool {
+				if item.Get("type").Str != "tool_use" {
+					return true
+				}
+				for _, jsonPath := range []string{
+					"input.working_directory",
+					"parameters.working_directory",
+				} {
+					wd := normalizeCursorDir(item.Get(jsonPath).Str)
+					if wd != "" {
+						last = wd
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return last
+}
+
+func scanJSONLLines(
+	path string, maxLines int, visit func([]byte) bool,
+) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return
 	}
 	defer f.Close()
 
 	reader := bufio.NewReader(f)
-	for range 20 {
+	for lineNum := 0; maxLines <= 0 || lineNum < maxLines; lineNum++ {
 		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			s := string(line)
-			if cwd := gjson.Get(s, "cwd").Str; cwd != "" {
-				return cwd
-			}
-			if cwd := gjson.Get(s, "payload.cwd").Str; cwd != "" {
-				return cwd
-			}
-			// Copilot stores cwd under data.context.cwd on the
-			// session.start event.
-			if cwd := gjson.Get(s, "data.context.cwd").Str; cwd != "" {
-				return cwd
-			}
+		if len(line) > 0 && !visit(line) {
+			return
 		}
 		if err != nil {
-			break
+			return
 		}
 	}
-	return ""
+}
+
+func cursorLastWorkingDir(session *db.Session) string {
+	if session.Agent != "cursor" || session.FilePath == nil {
+		return ""
+	}
+	return readCursorLastWorkingDir(*session.FilePath)
+}
+
+func resolveCursorResumePaths(
+	session *db.Session, lastCwd string,
+) (launchDir, workspaceDir string) {
+	workspaceDir = resolveCursorWorkspaceDirWithHint(
+		session,
+		func() string { return lastCwd },
+	)
+	if workspaceDir == "" {
+		workspaceDir = lastCwd
+	}
+	if lastCwd != "" {
+		return lastCwd, workspaceDir
+	}
+	return workspaceDir, workspaceDir
+}
+
+func resolveResumePaths(session *db.Session) (launchDir, workspaceDir string) {
+	if session.Agent != "cursor" {
+		return resolveSessionDir(session), ""
+	}
+	return resolveCursorResumePaths(
+		session, cursorLastWorkingDir(session),
+	)
+}
+
+func resolveCursorWorkspaceDirFromTranscriptPath(
+	session *db.Session,
+) (string, bool) {
+	if session.FilePath == nil {
+		return "", false
+	}
+	dir, ambiguous := resolveCursorProjectDirFromSessionFile(
+		*session.FilePath,
+	)
+	if canonical := normalizeCursorDir(dir); canonical != "" {
+		return canonical, ambiguous
+	}
+	return "", false
+}
+
+func resolveCursorWorkspaceDirFromTranscriptPathHint(
+	session *db.Session, hint string,
+) string {
+	if session.FilePath == nil {
+		return ""
+	}
+	dir := resolveCursorProjectDirFromSessionFileHint(
+		*session.FilePath, hint,
+	)
+	return normalizeCursorDir(dir)
+}
+
+func resolveCursorWorkspaceDirWithHint(
+	session *db.Session, hintFn func() string,
+) string {
+	projectDir := normalizeCursorDir(session.Project)
+	if dir, ambiguous := resolveCursorWorkspaceDirFromTranscriptPath(
+		session,
+	); dir != "" {
+		if ambiguous {
+			hint := projectDir
+			if hintFn != nil {
+				if value := hintFn(); value != "" {
+					hint = value
+				}
+			}
+			if hint != "" {
+				if hinted := resolveCursorWorkspaceDirFromTranscriptPathHint(
+					session, hint,
+				); hinted != "" {
+					return hinted
+				}
+			}
+			// Ambiguous with no useful hint — don't guess.
+			return projectDir
+		}
+		return dir
+	}
+	return projectDir
+}
+
+// resolveResumeDir determines the terminal launch directory for a
+// session resume. Cursor sessions prefer the latest recorded
+// working_directory so resumed chats reopen in the same shell cwd
+// they last used instead of a generic workspace root.
+func resolveResumeDir(session *db.Session) string {
+	launchDir, _ := resolveResumePaths(session)
+	return launchDir
 }
 
 // resolveSessionDir determines the project directory for a session.
-// It tries the session file's embedded cwd first, then falls back to
-// the session's project field. Both candidates must be absolute paths
+// It tries the session file's embedded cwd first, then Cursor's
+// transcript-derived workspace path, then falls back to the session's
+// project field. All returned candidates must be absolute paths
 // pointing to existing directories.
 func resolveSessionDir(session *db.Session) string {
 	if session.FilePath != nil {
@@ -548,10 +701,49 @@ func resolveSessionDir(session *db.Session) string {
 			return cwd
 		}
 	}
+	if session.Agent == "cursor" {
+		if dir := resolveCursorWorkspaceDir(session); dir != "" {
+			return dir
+		}
+	}
 	if isDir(session.Project) {
 		return session.Project
 	}
 	return ""
+}
+
+// resolveCursorWorkspaceDir returns the real workspace root for a
+// Cursor session, preferring the transcript path and falling back to
+// an absolute project field when available. It only scans transcript
+// contents when the transcript path maps to multiple plausible
+// workspace roots.
+func resolveCursorWorkspaceDir(session *db.Session) string {
+	return resolveCursorWorkspaceDirWithHint(
+		session,
+		func() string { return cursorLastWorkingDir(session) },
+	)
+}
+
+func normalizeCursorDir(path string) string {
+	if !isDir(path) {
+		return ""
+	}
+	clean := filepath.Clean(path)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil || !isDir(resolved) {
+		return clean
+	}
+	resolved = filepath.Clean(resolved)
+	if runtime.GOOS == "darwin" &&
+		strings.HasPrefix(resolved, "/private/") {
+		publicPath := filepath.Clean(
+			strings.TrimPrefix(resolved, "/private"),
+		)
+		if isDir(publicPath) {
+			return publicPath
+		}
+	}
+	return resolved
 }
 
 func isDir(path string) bool {
@@ -662,13 +854,10 @@ func launchResumeDarwin(
 	o Opener, cmd string, cwd string,
 ) *exec.Cmd {
 	// For AppleScript-based terminals, build a single shell command
-	// that cd's and then runs the resume command.
-	shellCmd := cmd
-	if cwd != "" {
-		shellCmd = fmt.Sprintf(
-			"cd %s && %s", shellQuote(cwd), cmd,
-		)
-	}
+	// that enters the requested directory and then runs the resume
+	// command. The caller passes the raw resume command without a
+	// leading `cd` so terminal-specific launchers only add it once.
+	shellCmd := commandWithCwd(cmd, cwd)
 	safe := escapeForAppleScript(shellCmd)
 
 	switch o.ID {

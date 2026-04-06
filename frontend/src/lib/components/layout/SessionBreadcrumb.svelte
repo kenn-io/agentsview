@@ -16,6 +16,7 @@
   import {
     supportsResume,
     buildResumeCommand,
+    formatResumeResponseCommand,
   } from "../../utils/resume.js";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
@@ -195,7 +196,8 @@
       }
       // Launch failed — fall back to clipboard copy.
       if (resp.command) {
-        const ok = await copyToClipboard(resp.command);
+        const cmd = formatResumeResponseCommand(session.agent, resp);
+        const ok = cmd ? await copyToClipboard(cmd) : false;
         showFeedback(ok ? "Command copied!" : "Failed");
         return;
       }
@@ -217,7 +219,8 @@
     try {
       const resp = await resumeSession(session.id, { command_only: true });
       if (resp.command) {
-        const ok = await copyToClipboard(resp.command);
+        const cmd = formatResumeResponseCommand(session.agent, resp);
+        const ok = cmd ? await copyToClipboard(cmd) : false;
         showFeedback(ok ? "Command copied!" : "Failed");
         return;
       }
@@ -266,7 +269,8 @@
         return;
       }
       if (resp.command) {
-        const ok = await copyToClipboard(resp.command);
+        const cmd = formatResumeResponseCommand(session.agent, resp);
+        const ok = cmd ? await copyToClipboard(cmd) : false;
         showFeedback(ok ? "Command copied!" : "Failed");
         return;
       }
