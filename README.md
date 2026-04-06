@@ -354,6 +354,7 @@ frontend/           Svelte 5 SPA (Vite, TypeScript)
 | Kimi           | `~/.kimi/sessions/`                                | `KIMI_DIR`            |
 | Kiro CLI       | `~/.kiro/sessions/cli/`                            | `KIRO_SESSIONS_DIR`   |
 | Kiro IDE       | `~/Library/Application Support/Kiro/` (macOS)      | `KIRO_IDE_DIR`        |
+| Cortex Code    | `~/.snowflake/cortex/conversations/`               | `CORTEX_DIR`          |
 
 ## Acknowledgements
 

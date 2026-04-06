@@ -1307,6 +1307,8 @@ func (e *Engine) processFile(
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
+	case parser.AgentCortex:
+		res = e.processCortex(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -1857,6 +1859,35 @@ func (e *Engine) processKiroIDE(
 	}
 
 	sess, msgs, err := parser.ParseKiroIDESession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processCortex(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseCortexSession(
 		file.Path, e.machine,
 	)
 	if err != nil {

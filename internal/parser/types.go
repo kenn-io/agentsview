@@ -27,6 +27,7 @@ const (
 	AgentChatGPT       AgentType = "chatgpt"
 	AgentKiro          AgentType = "kiro"
 	AgentKiroIDE       AgentType = "kiro-ide"
+	AgentCortex        AgentType = "cortex"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -244,6 +245,19 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverKiroIDESessions,
 		FindSourceFunc: FindKiroIDESourceFile,
+	},
+	{
+		Type:        AgentCortex,
+		DisplayName: "Cortex Code",
+		EnvVar:      "CORTEX_DIR",
+		ConfigKey:   "cortex_dirs",
+		DefaultDirs: []string{
+			".snowflake/cortex/conversations",
+		},
+		IDPrefix:       "cortex:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverCortexSessions,
+		FindSourceFunc: FindCortexSourceFile,
 	},
 }
 
