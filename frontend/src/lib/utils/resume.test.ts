@@ -47,10 +47,10 @@ describe("buildResumeCommand", () => {
     ).toBe("gemini --resume sess-2");
   });
 
-  it("generates cursor resume command", () => {
+  it("returns null for cursor (server-only resume)", () => {
     expect(
       buildResumeCommand("cursor", "cursor:chat-7"),
-    ).toBe("cursor agent --resume chat-7");
+    ).toBeNull();
   });
 
   it("generates opencode resume command", () => {

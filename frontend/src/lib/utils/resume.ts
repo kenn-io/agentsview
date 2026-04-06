@@ -18,6 +18,14 @@ RESUME_AGENTS["opencode"] = (id) =>
 RESUME_AGENTS["amp"] = (id) =>
   `amp --resume ${shellQuote(id)}`;
 
+/**
+ * Agents whose resume commands require server-resolved parameters
+ * (e.g. --workspace, cwd) that the client cannot compute locally.
+ * buildResumeCommand returns null for these agents so callers
+ * don't produce incomplete fallback commands.
+ */
+const SERVER_ONLY_RESUME = new Set(["cursor"]);
+
 /** Flags available for Claude Code resume. */
 export interface ClaudeResumeFlags {
   skipPermissions?: boolean;
@@ -79,6 +87,7 @@ export function buildResumeCommand(
   sessionId: string,
   flags?: ClaudeResumeFlags,
 ): string | null {
+  if (SERVER_ONLY_RESUME.has(agent)) return null;
   const builder = RESUME_AGENTS[agent];
   if (!builder) return null;
 
