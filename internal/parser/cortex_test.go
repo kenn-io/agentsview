@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -187,6 +188,9 @@ func TestParseCortexSession_SplitHistoryJSONL(t *testing.T) {
 }
 
 func TestParseCortexSession_SplitHistoryReadError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod 0o000 does not prevent reads on Windows")
+	}
 	dir := t.TempDir()
 	uuid := cortexTestUUID
 
