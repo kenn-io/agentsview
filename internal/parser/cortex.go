@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -366,8 +367,12 @@ func ParseCortexSession(
 	if len(history) == 0 {
 		loaded, err := readCortexHistoryJSONL(histFile)
 		if err != nil {
-			// If there's no history and no JSONL either, skip silently.
-			return nil, nil, nil
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, nil, nil
+			}
+			return nil, nil, fmt.Errorf(
+				"read history %s: %w", histFile, err,
+			)
 		}
 		history = loaded
 	}
@@ -454,7 +459,7 @@ func readCortexHistoryJSONL(
 	}
 
 	var msgs []cortexMessage
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
@@ -542,17 +547,18 @@ func DiscoverCortexSessions(
 	return files
 }
 
-// FindCortexSourceFile locates a Cortex session file by its raw UUID
-// (without the "cortex:" prefix). Returns the path to the .json metadata
-// file if found, otherwise "".
+// FindCortexSourceFile locates a Cortex session file by UUID. Accepts
+// both the raw UUID and the prefixed "cortex:<uuid>" form. Returns the
+// path to the .json metadata file if found, otherwise "".
 func FindCortexSourceFile(
 	conversationsDir, sessionID string,
 ) string {
+	// Strip "cortex:" prefix before validation — callers may
+	// pass the full prefixed ID.
+	sessionID = strings.TrimPrefix(sessionID, "cortex:")
 	if conversationsDir == "" || !IsValidSessionID(sessionID) {
 		return ""
 	}
-	// Strip "cortex:" prefix if caller forgot to strip it.
-	sessionID = strings.TrimPrefix(sessionID, "cortex:")
 
 	candidate := filepath.Join(conversationsDir, sessionID+".json")
 	if _, err := os.Stat(candidate); err == nil {
