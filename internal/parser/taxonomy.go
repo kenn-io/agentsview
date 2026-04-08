@@ -116,6 +116,29 @@ func NormalizeToolCategory(rawName string) string {
 	case "subagents", "agents_list", "session_status":
 		return "Task"
 
+	// Hermes Agent tools (excluding names already handled above:
+	// read_file→Read, write_file→Write, search_files→Grep,
+	// edit_file→Edit, run_command/execute_command→Bash)
+	case "patch":
+		return "Edit"
+	case "terminal":
+		return "Bash"
+	case "browser_navigate", "browser_snapshot", "browser_click",
+		"browser_type", "browser_scroll", "browser_press",
+		"browser_back", "browser_close", "browser_vision",
+		"browser_console", "browser_get_images":
+		return "Tool"
+	case "vision_analyze":
+		return "Read"
+	case "delegate_task":
+		return "Task"
+	case "execute_code":
+		return "Bash"
+	case "todo", "memory", "session_search", "skill_view",
+		"skills_list", "skill_manage", "clarify",
+		"text_to_speech", "cronjob":
+		return "Tool"
+
 	// Zencoder tools (not already covered above)
 	case "WebFetch":
 		return "Read"

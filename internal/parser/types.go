@@ -28,6 +28,7 @@ const (
 	AgentKiro          AgentType = "kiro"
 	AgentKiroIDE       AgentType = "kiro-ide"
 	AgentCortex        AgentType = "cortex"
+	AgentHermes        AgentType = "hermes"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -258,6 +259,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverCortexSessions,
 		FindSourceFunc: FindCortexSourceFile,
+	},
+	{
+		Type:           AgentHermes,
+		DisplayName:    "Hermes Agent",
+		EnvVar:         "HERMES_SESSIONS_DIR",
+		ConfigKey:      "hermes_sessions_dirs",
+		DefaultDirs:    []string{".hermes/sessions"},
+		IDPrefix:       "hermes:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverHermesSessions,
+		FindSourceFunc: FindHermesSourceFile,
 	},
 }
 
