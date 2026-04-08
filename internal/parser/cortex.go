@@ -190,8 +190,9 @@ func parseCortexMessages(
 				tr := b.ToolResult
 				raw, _ := json.Marshal(tr.Content)
 				toolResults = append(toolResults, ParsedToolResult{
-					ToolUseID:  tr.ToolUseID,
-					ContentRaw: string(raw),
+					ToolUseID:     tr.ToolUseID,
+					ContentRaw:    string(raw),
+					ContentLength: len(raw),
 				})
 			}
 		}

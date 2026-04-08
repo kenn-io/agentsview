@@ -146,6 +146,12 @@ func TestParseCortexSession_ToolUse(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "read", msgs[1].ToolCalls[0].ToolName)
 	assert.Contains(t, msgs[1].Content, "/tmp/main.go")
+
+	// Tool result message carries ContentLength > 0.
+	require.Len(t, msgs[2].ToolResults, 1)
+	assert.Equal(t, "tu1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Greater(t, msgs[2].ToolResults[0].ContentLength, 0,
+		"tool result ContentLength must be populated")
 }
 
 func TestParseCortexSession_SplitHistoryJSONL(t *testing.T) {

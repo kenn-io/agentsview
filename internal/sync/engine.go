@@ -560,6 +560,43 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Cortex: <cortexDir>/<uuid>.json
+	//     or: <cortexDir>/<uuid>.history.jsonl → remap to .json
+	for _, cortexDir := range e.agentDirs[parser.AgentCortex] {
+		if cortexDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(cortexDir, path); ok {
+			if strings.Count(rel, sep) != 0 {
+				continue
+			}
+			name := filepath.Base(rel)
+
+			// .history.jsonl companion → remap to .json metadata.
+			if stem, ok := strings.CutSuffix(
+				name, ".history.jsonl",
+			); ok {
+				jsonPath := filepath.Join(
+					cortexDir, stem+".json",
+				)
+				if parser.IsCortexSessionFile(stem + ".json") {
+					return parser.DiscoveredFile{
+						Path:  jsonPath,
+						Agent: parser.AgentCortex,
+					}, true
+				}
+				continue
+			}
+
+			if parser.IsCortexSessionFile(name) {
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: parser.AgentCortex,
+				}, true
+			}
+		}
+	}
+
 	return parser.DiscoveredFile{}, false
 }
 
