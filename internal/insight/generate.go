@@ -34,7 +34,7 @@ var ValidAgents = map[string]bool{
 	"codex":   true,
 	"copilot": true,
 	"gemini":  true,
-	"kiro": true,
+	"kiro":    true,
 }
 
 // GenerateFunc is the signature for insight generation,
