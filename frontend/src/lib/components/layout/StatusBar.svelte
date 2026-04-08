@@ -1,10 +1,17 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
-  import { formatNumber, formatRelativeTime } from "../../utils/format.js";
+  import {
+    formatNumber,
+    formatRelativeTime,
+    formatTimestamp,
+  } from "../../utils/format.js";
 
+  const RELATIVE_TIME_REFRESH_MS = 10_000;
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const mod = isMac ? "Cmd" : "Ctrl";
+  let relativeTimeTick = $state(0);
 
   let progressText = $derived.by(() => {
     if (!sync.syncing || !sync.progress) return null;
@@ -19,6 +26,24 @@
       return `Syncing ${pct}% (${p.sessions_done}/${p.sessions_total})`;
     }
     return "Syncing...";
+  });
+
+  let lastSyncText = $derived.by(() => {
+    relativeTimeTick;
+    return sync.lastSync
+      ? formatRelativeTime(sync.lastSync)
+      : null;
+  });
+
+  let lastSyncTimestamp = $derived(
+    sync.lastSync ? formatTimestamp(sync.lastSync) : null,
+  );
+
+  onMount(() => {
+    const interval = window.setInterval(() => {
+      relativeTimeTick = Date.now();
+    }, RELATIVE_TIME_REFRESH_MS);
+    return () => window.clearInterval(interval);
   });
 </script>
 
@@ -84,9 +109,11 @@
     {#if progressText}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
       <span class="sync-progress">{progressText}</span>
-    {:else if sync.lastSync}
+    {:else if lastSyncText}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
-      <span>synced {formatRelativeTime(sync.lastSync)}</span>
+      <span title={lastSyncTimestamp ?? undefined}>
+        synced {lastSyncText}
+      </span>
     {/if}
     {#if sync.serverVersion}
       {#if sync.versionMismatch || progressText || sync.lastSync}
