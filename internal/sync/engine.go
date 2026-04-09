@@ -1385,6 +1385,8 @@ func (e *Engine) processFile(
 		res = e.processCortex(file, info)
 	case parser.AgentHermes:
 		res = e.processHermes(file, info)
+	case parser.AgentPositron:
+		res = e.processPositron(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -2013,6 +2015,36 @@ func (e *Engine) processHermes(
 		},
 	}
 }
+
+func (e *Engine) processPositron(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParsePositronSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
 func (e *Engine) processCursor(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {

@@ -30,6 +30,7 @@ const (
 	AgentCortex        AgentType = "cortex"
 	AgentHermes        AgentType = "hermes"
 	AgentWarp          AgentType = "warp"
+	AgentPositron      AgentType = "positron"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -280,6 +281,20 @@ var Registry = []AgentDef{
 		DefaultDirs: warpDefaultDirs(),
 		IDPrefix:    "warp:",
 		FileBased:   false,
+	},
+	{
+		Type:        AgentPositron,
+		DisplayName: "Positron Assistant",
+		EnvVar:      "POSITRON_DIR",
+		ConfigKey:   "positron_dirs",
+		DefaultDirs: []string{
+			"Library/Application Support/Positron/User",
+		},
+		IDPrefix:       "positron:",
+		WatchSubdirs:   []string{"workspaceStorage"},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverPositronSessions,
+		FindSourceFunc: FindPositronSourceFile,
 	},
 }
 

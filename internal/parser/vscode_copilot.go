@@ -131,6 +131,35 @@ func ParseVSCodeCopilotSession(
 		return nil, nil, nil
 	}
 
+	sess, msgs, err := parseVSCodeCopilotData(
+		data, path, project, machine,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if sess == nil {
+		return nil, nil, nil
+	}
+
+	sess.Agent = AgentVSCodeCopilot
+	sess.ID = "vscode-copilot:" + strings.TrimPrefix(
+		sess.ID, "vscode-copilot:",
+	)
+	sess.File = FileInfo{
+		Path:  path,
+		Size:  info.Size(),
+		Mtime: info.ModTime().UnixNano(),
+	}
+
+	return sess, msgs, nil
+}
+
+// parseVSCodeCopilotData parses VSCode-style chat session JSON
+// data. Used by both VSCode Copilot and Positron parsers since
+// the formats are identical.
+func parseVSCodeCopilotData(
+	data []byte, path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	var session vscodeCopilotSession
 	if err := json.Unmarshal(data, &session); err != nil {
 		return nil, nil, fmt.Errorf(
@@ -209,7 +238,6 @@ func ParseVSCodeCopilotSession(
 			strings.TrimSuffix(base, ".jsonl"), ".json",
 		)
 	}
-	sessionID = "vscode-copilot:" + sessionID
 
 	// Use customTitle as first message if we have no user text
 	if firstMessage == "" && session.CustomTitle != "" {
@@ -234,17 +262,11 @@ func ParseVSCodeCopilotSession(
 		ID:               sessionID,
 		Project:          project,
 		Machine:          machine,
-		Agent:            AgentVSCodeCopilot,
 		FirstMessage:     firstMessage,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
-		File: FileInfo{
-			Path:  path,
-			Size:  info.Size(),
-			Mtime: info.ModTime().UnixNano(),
-		},
 	}
 
 	return sess, messages, nil
