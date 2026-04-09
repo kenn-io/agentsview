@@ -29,6 +29,7 @@ const (
 	AgentKiroIDE       AgentType = "kiro-ide"
 	AgentCortex        AgentType = "cortex"
 	AgentHermes        AgentType = "hermes"
+	AgentWarp          AgentType = "warp"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -270,6 +271,15 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverHermesSessions,
 		FindSourceFunc: FindHermesSourceFile,
+	},
+	{
+		Type:        AgentWarp,
+		DisplayName: "Warp",
+		EnvVar:      "WARP_DIR",
+		ConfigKey:   "warp_dirs",
+		DefaultDirs: warpDefaultDirs(),
+		IDPrefix:    "warp:",
+		FileBased:   false,
 	},
 }
 

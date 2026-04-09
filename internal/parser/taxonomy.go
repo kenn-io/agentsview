@@ -153,6 +153,24 @@ func NormalizeToolCategory(rawName string) string {
 	case "code_interpreter":
 		return "Bash"
 
+	// Warp tools
+	case "read_files":
+		return "Read"
+	case "apply_file_diff":
+		return "Edit"
+	case "search_codebase":
+		return "Grep"
+	case "call_mcp_tool", "read_mcp_resource":
+		return "Tool"
+	case "suggest_plan", "suggest_create_plan":
+		return "Tool"
+	case "write_to_long_running_shell_command":
+		return "Bash"
+	case "read_shell_command_output":
+		return "Read"
+	case "use_computer":
+		return "Tool"
+
 	default:
 		// MCP tools may carry a server prefix (e.g.
 		// "Zencoder_subagent__ZencoderSubagent") or use
