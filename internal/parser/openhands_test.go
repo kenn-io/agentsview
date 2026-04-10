@@ -121,7 +121,7 @@ func TestParseOpenHandsSession(t *testing.T) {
 
 	assert.Equal(t, "openhands:"+sessionID, sess.ID)
 	assert.Equal(t, AgentOpenHands, sess.Agent)
-	assert.Equal(t, "demo-repo", sess.Project)
+	assert.Equal(t, "demo_repo", sess.Project)
 	assert.Equal(t, projectDir, sess.Cwd)
 	assert.Equal(t, "Help me debug the server", sess.FirstMessage)
 	assert.Equal(t, 4, sess.MessageCount)

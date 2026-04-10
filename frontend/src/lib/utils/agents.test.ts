@@ -27,6 +27,7 @@ describe("KNOWN_AGENTS", () => {
       "chatgpt",
       "kiro",
       "kiro-ide",
+      "cortex",
     ]);
   });
 
