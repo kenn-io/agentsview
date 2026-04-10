@@ -44,6 +44,7 @@ type AgentDef struct {
 	DefaultDirs  []string // paths relative to $HOME
 	IDPrefix     string   // session ID prefix ("" for Claude)
 	WatchSubdirs []string // subdirs to watch (nil = watch root)
+	ShallowWatch bool     // true = watch root only, rely on periodic sync for subdirs
 	FileBased    bool     // false for DB-backed agents
 
 	// DiscoverFunc finds session files under a root directory.
