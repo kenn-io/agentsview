@@ -83,6 +83,16 @@ func (w *Watcher) WatchRecursive(root string) (watched int, unwatched int, err e
 	return watched, unwatched, err
 }
 
+// WatchShallow adds only the root directory to the watch list,
+// without recursing into subdirectories. Use this for directories
+// with many subdirectories where periodic sync handles changes.
+// Returns true if the directory was successfully watched.
+func (w *Watcher) WatchShallow(root string) bool {
+	root = filepath.Clean(root)
+	w.addRoot(root)
+	return w.watcher.Add(root) == nil
+}
+
 // Start begins processing file events in a goroutine.
 func (w *Watcher) Start() {
 	go w.loop()
