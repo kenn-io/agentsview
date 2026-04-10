@@ -1461,6 +1461,13 @@ func (e *Engine) processFile(
 	// Capture mtime once from the initial stat so all
 	// downstream cache operations use a consistent value.
 	mtime := info.ModTime().UnixNano()
+	if file.Agent == parser.AgentOpenHands {
+		snapshot, err := parser.OpenHandsSnapshot(file.Path)
+		if err != nil {
+			return processResult{err: err}
+		}
+		mtime = snapshot.Mtime
+	}
 
 	// Skip files cached from a previous sync (parse errors
 	// or non-interactive sessions) whose mtime is unchanged.
