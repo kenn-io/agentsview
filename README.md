@@ -1,8 +1,8 @@
 # agentsview
 
 A local-first desktop and web application for browsing, searching, and analyzing
-AI agent coding sessions. Supports Claude Code, Codex, OpenCode, and 11 other
-agents.
+AI agent coding sessions. Supports Claude Code, Codex, OpenCode, and many
+other agents.
 
 <p align="center">
   <img src="https://agentsview.io/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -51,7 +51,7 @@ behavior, and track usage patterns over time.
 - **Full-text search** across all message content, instantly
 - **Analytics dashboard** with activity heatmaps, tool usage, velocity metrics,
   and project breakdowns
-- **Multi-agent support** for Claude Code, Codex, OpenCode, and 11 other agents
+- **Multi-agent support** for Claude Code, Codex, OpenCode, and many other agents
   ([full list](#supported-agents))
 - **Live updates** via SSE as active sessions receive new messages
 - **Keyboard-first** navigation (vim-style `j`/`k`/`[`/`]`)
@@ -345,6 +345,7 @@ frontend/           Svelte 5 SPA (Vite, TypeScript)
 | Copilot        | `~/.copilot/`                                      | `COPILOT_DIR`         |
 | Gemini         | `~/.gemini/`                                       | `GEMINI_DIR`          |
 | OpenCode       | `~/.local/share/opencode/`                         | `OPENCODE_DIR`        |
+| OpenHands CLI  | `~/.openhands/conversations/`                      | `OPENHANDS_CONVERSATIONS_DIR` |
 | Cursor         | `~/.cursor/projects/`                              | `CURSOR_PROJECTS_DIR` |
 | Amp            | `~/.local/share/amp/threads/`                      | `AMP_DIR`             |
 | iFlow          | `~/.iflow/projects/`                               | `IFLOW_DIR`           |

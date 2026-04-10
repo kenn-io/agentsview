@@ -15,6 +15,7 @@ const (
 	AgentCopilot       AgentType = "copilot"
 	AgentGemini        AgentType = "gemini"
 	AgentOpenCode      AgentType = "opencode"
+	AgentOpenHands     AgentType = "openhands"
 	AgentCursor        AgentType = "cursor"
 	AgentIflow         AgentType = "iflow"
 	AgentAmp           AgentType = "amp"
@@ -112,6 +113,17 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".local/share/opencode"},
 		IDPrefix:    "opencode:",
 		FileBased:   false,
+	},
+	{
+		Type:           AgentOpenHands,
+		DisplayName:    "OpenHands CLI",
+		EnvVar:         "OPENHANDS_CONVERSATIONS_DIR",
+		ConfigKey:      "openhands_dirs",
+		DefaultDirs:    []string{".openhands/conversations"},
+		IDPrefix:       "openhands:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverOpenHandsSessions,
+		FindSourceFunc: FindOpenHandsSourceFile,
 	},
 	{
 		Type:           AgentCursor,

@@ -137,6 +137,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentCopilot, true},
 		{AgentGemini, true},
 		{AgentOpenCode, true},
+		{AgentOpenHands, true},
 		{AgentCursor, true},
 		{AgentAmp, true},
 		{AgentVSCodeCopilot, true},
@@ -195,6 +196,12 @@ func TestAgentByPrefix(t *testing.T) {
 			"opencode prefix",
 			"opencode:sess-id",
 			AgentOpenCode,
+			true,
+		},
+		{
+			"openhands prefix",
+			"openhands:sess-id",
+			AgentOpenHands,
 			true,
 		},
 		{
@@ -260,6 +267,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCopilot,
 		AgentGemini,
 		AgentOpenCode,
+		AgentOpenHands,
 		AgentCursor,
 		AgentAmp,
 		AgentVSCodeCopilot,

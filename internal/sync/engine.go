@@ -347,6 +347,38 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// OpenHands CLI:
+	//   <openhandsDir>/<conversation-id>/base_state.json
+	//   <openhandsDir>/<conversation-id>/TASKS.json
+	//   <openhandsDir>/<conversation-id>/events/*.json
+	for _, openHandsDir := range e.agentDirs[parser.AgentOpenHands] {
+		if openHandsDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(openHandsDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) < 2 || !parser.IsValidSessionID(parts[0]) {
+				continue
+			}
+			switch {
+			case len(parts) == 2 &&
+				(parts[1] == "base_state.json" ||
+					parts[1] == "TASKS.json"):
+			case len(parts) == 3 &&
+				parts[1] == "events" &&
+				strings.HasSuffix(parts[2], ".json"):
+			default:
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path: filepath.Join(
+					openHandsDir, parts[0],
+				),
+				Agent: parser.AgentOpenHands,
+			}, true
+		}
+	}
+
 	// Cursor:
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
@@ -1449,6 +1481,8 @@ func (e *Engine) processFile(
 		res = e.processCopilot(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
+	case parser.AgentOpenHands:
+		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
 	case parser.AgentIflow:
@@ -2124,6 +2158,40 @@ func (e *Engine) processPositron(
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
 		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processOpenHands(
+	file parser.DiscoveredFile, _ os.FileInfo,
+) processResult {
+	snapshot, err := parser.OpenHandsSnapshot(file.Path)
+	if err != nil {
+		return processResult{err: err}
+	}
+
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(
+		file.Path,
+	)
+	if ok &&
+		storedSize == snapshot.Size &&
+		storedMtime == snapshot.Mtime {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseOpenHandsSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
 	}
 
 	return processResult{

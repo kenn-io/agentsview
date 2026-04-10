@@ -79,9 +79,9 @@ func main() {
 func printUsage() {
 	fmt.Printf(`agentsview %s - local web viewer for AI agent sessions
 
-Syncs Claude Code, Codex, Copilot CLI, Gemini CLI, OpenCode, Cursor,
-and Amp session data into SQLite, serves an analytics dashboard and
-session browser via a local web UI.
+Syncs Claude Code, Codex, Copilot CLI, Gemini CLI, OpenCode, OpenHands,
+Cursor, and Amp session data into SQLite, serves an analytics dashboard
+and session browser via a local web UI.
 
 Usage:
   agentsview [flags]          Start the server (default command)
@@ -150,6 +150,7 @@ Environment variables:
   COPILOT_DIR             Copilot CLI directory
   GEMINI_DIR              Gemini CLI directory
   OPENCODE_DIR            OpenCode data directory
+  OPENHANDS_CONVERSATIONS_DIR OpenHands CLI conversations directory
   CURSOR_PROJECTS_DIR     Cursor projects directory
   IFLOW_DIR               iFlow projects directory
   AMP_DIR                 Amp threads directory
