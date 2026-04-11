@@ -40,7 +40,7 @@ describe("setupVisibilityHealthCheck", () => {
 
   it("reloads when backend is unreachable", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("net"));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     expect(reloadSpy).toHaveBeenCalledOnce();
@@ -51,7 +51,7 @@ describe("setupVisibilityHealthCheck", () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response("{}", { status: 200 }));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     expect(reloadSpy).not.toHaveBeenCalled();
@@ -60,7 +60,7 @@ describe("setupVisibilityHealthCheck", () => {
 
   it("skips check when document is hidden", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("net"));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireHidden();
     await new Promise((r) => setTimeout(r, 50));
     expect(globalThis.fetch).not.toHaveBeenCalled();
@@ -71,7 +71,7 @@ describe("setupVisibilityHealthCheck", () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response("{}", { status: 200 }));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireVisible();
     fireVisible();
     fireVisible();
@@ -80,35 +80,58 @@ describe("setupVisibilityHealthCheck", () => {
     cleanup();
   });
 
-  it("reloads on non-OK status", async () => {
+  it("reloads on 5xx server error", async () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response("", { status: 502 }));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     expect(reloadSpy).toHaveBeenCalledOnce();
     cleanup();
   });
 
+  it("does not reload on 401 (backend alive, auth needed)", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 401 }));
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
+    fireVisible();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(reloadSpy).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("does not reload on 403", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response("", { status: 403 }));
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
+    fireVisible();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(reloadSpy).not.toHaveBeenCalled();
+    cleanup();
+  });
+
   it("removes listener on cleanup", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("net"));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     cleanup();
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it("fetches the correct URL", async () => {
+  it("resolves base URL lazily on each check", async () => {
+    let base = "/first";
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response("{}", { status: 200 }));
-    const cleanup = setupVisibilityHealthCheck("/custom/base");
+    const cleanup = setupVisibilityHealthCheck(() => base);
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     expect(globalThis.fetch).toHaveBeenCalledWith(
-      "/custom/base/version",
+      "/first/version",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     cleanup();
@@ -119,7 +142,7 @@ describe("setupVisibilityHealthCheck", () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response("{}", { status: 200 }));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     expect(globalThis.fetch).toHaveBeenCalledWith(
@@ -135,7 +158,7 @@ describe("setupVisibilityHealthCheck", () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response("{}", { status: 200 }));
-    const cleanup = setupVisibilityHealthCheck("/api/v1");
+    const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
     const call = (globalThis.fetch as ReturnType<typeof vi.fn>)

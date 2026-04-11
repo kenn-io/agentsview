@@ -560,12 +560,15 @@ fn recover_webview(window: &WebviewWindow, port: u16) {
     // Read the auth token from localStorage (same key the frontend
     // API client uses) so the health probe succeeds in authenticated
     // remote-access mode.
+    // Only reload on network failure, timeout, or 5xx. A 401/403
+    // means the backend is alive — auth recovery is handled by the
+    // frontend, not by reloading.
     let health_js = "(function(){\
         var t=localStorage.getItem('agentsview-auth-token')||'';\
         var h={signal:AbortSignal.timeout(3000)};\
         if(t)h.headers={'Authorization':'Bearer '+t};\
         fetch('/api/v1/version',h)\
-        .then(function(r){if(!r.ok)throw r})\
+        .then(function(r){if(r.status>=500)throw r})\
         .catch(function(){location.reload()})\
         })()";
     match window.eval(health_js) {

@@ -313,7 +313,7 @@
     sync.checkForUpdate();
     sync.startPolling();
 
-    const healthCleanup = setupVisibilityHealthCheck(getBase());
+    const healthCleanup = setupVisibilityHealthCheck(getBase);
 
     window.addEventListener("show-about", showAbout);
     const cleanup = registerShortcuts({ navigateMessage });

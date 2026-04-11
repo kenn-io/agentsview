@@ -6,15 +6,18 @@ const TIMEOUT_MS = 3_000;
 /**
  * Set up a visibilitychange listener that pings the backend when the
  * page becomes visible. If the backend is unreachable (network error,
- * timeout, non-OK status), the page reloads automatically.
+ * timeout, or 5xx), the page reloads automatically.
  *
- * This recovers from stale WebView connections after macOS sleep/wake
- * cycles or extended background periods in the Tauri desktop app.
+ * 4xx responses (401/403) are treated as proof the backend is alive
+ * and do not trigger a reload — auth recovery is handled elsewhere.
+ *
+ * The base URL is resolved lazily on each check so it stays current
+ * if the connection target changes at runtime.
  *
  * Returns a cleanup function that removes the listener.
  */
 export function setupVisibilityHealthCheck(
-  baseUrl: string,
+  getBaseUrl: () => string,
 ): () => void {
   let lastCheck = 0;
 
@@ -32,9 +35,9 @@ export function setupVisibilityHealthCheck(
       init.headers = { Authorization: `Bearer ${token}` };
     }
 
-    fetch(`${baseUrl}/version`, init)
+    fetch(`${getBaseUrl()}/version`, init)
       .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
       })
       .catch(() => {
         window.location.reload();
