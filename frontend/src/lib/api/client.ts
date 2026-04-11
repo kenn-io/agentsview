@@ -1042,8 +1042,9 @@ export async function importChatGPT(
 
 /* Pins */
 
-export function listPins(): Promise<PinsResponse> {
-  return fetchJSON("/pins");
+export function listPins(project?: string): Promise<PinsResponse> {
+  const url = project ? `/pins?project=${encodeURIComponent(project)}` : "/pins";
+  return fetchJSON(url);
 }
 
 export function listSessionPins(

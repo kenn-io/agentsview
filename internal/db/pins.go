@@ -100,11 +100,12 @@ func (db *DB) UnpinMessage(sessionID string, messageID int64) error {
 	return err
 }
 
-// ListPinnedMessages returns all pins, optionally filtered by session.
+// ListPinnedMessages returns all pins, optionally filtered by session or project.
 // Pass empty sessionID for all pins across all sessions.
 // When listing all pins, message content and role are included.
+// project is only applied when sessionID is empty.
 func (db *DB) ListPinnedMessages(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, project string,
 ) ([]PinnedMessage, error) {
 	var query string
 	var args []any
@@ -122,8 +123,12 @@ func (db *DB) ListPinnedMessages(
 				s.project, s.agent, s.display_name, s.first_message
 			FROM pinned_messages p
 			JOIN sessions s ON p.session_id = s.id AND s.deleted_at IS NULL
-			LEFT JOIN messages m ON p.message_id = m.id
-			ORDER BY p.created_at DESC LIMIT 500`
+			LEFT JOIN messages m ON p.message_id = m.id`
+		if project != "" {
+			query += " WHERE s.project = ?"
+			args = []any{project}
+		}
+		query += " ORDER BY p.created_at DESC LIMIT 500"
 	}
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)

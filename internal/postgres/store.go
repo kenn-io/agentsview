@@ -107,7 +107,7 @@ func (s *Store) UnpinMessage(_ string, _ int64) error {
 
 // ListPinnedMessages returns an empty slice.
 func (s *Store) ListPinnedMessages(
-	_ context.Context, _ string,
+	_ context.Context, _ string, _ string,
 ) ([]db.PinnedMessage, error) {
 	return []db.PinnedMessage{}, nil
 }

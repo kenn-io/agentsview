@@ -64,7 +64,7 @@ type Store interface {
 	// Pins (local-only; PG returns ErrReadOnly).
 	PinMessage(sessionID string, messageID int64, note *string) (int64, error)
 	UnpinMessage(sessionID string, messageID int64) error
-	ListPinnedMessages(ctx context.Context, sessionID string) ([]PinnedMessage, error)
+	ListPinnedMessages(ctx context.Context, sessionID string, project string) ([]PinnedMessage, error)
 
 	// Insights (local-only; PG returns ErrReadOnly).
 	ListInsights(ctx context.Context, f InsightFilter) ([]Insight, error)

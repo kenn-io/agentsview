@@ -1246,7 +1246,7 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 	}
 
 	// Record created_at before replace so we can verify it is preserved.
-	prePins, err := d.ListPinnedMessages(ctx, "s1")
+	prePins, err := d.ListPinnedMessages(ctx, "s1", "")
 	if err != nil {
 		t.Fatalf("ListPinnedMessages before replace: %v", err)
 	}
@@ -1273,7 +1273,7 @@ func TestReplaceSessionMessagesPreservesPins(t *testing.T) {
 		t.Fatalf("want 3 messages after replace, got %d", len(newMsgs))
 	}
 
-	pins, err := d.ListPinnedMessages(ctx, "s1")
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
 	if err != nil {
 		t.Fatalf("ListPinnedMessages: %v", err)
 	}
@@ -1352,7 +1352,7 @@ func TestReplaceSessionMessagesDropsPinsForRemovedOrdinals(t *testing.T) {
 		t.Fatalf("ReplaceSessionMessages: %v", err)
 	}
 
-	pins, err := d.ListPinnedMessages(ctx, "s1")
+	pins, err := d.ListPinnedMessages(ctx, "s1", "")
 	if err != nil {
 		t.Fatalf("ListPinnedMessages: %v", err)
 	}
@@ -4373,7 +4373,7 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 	if s.DeletedAt != nil {
 		t.Errorf("deleted_at before = %v, want nil", *s.DeletedAt)
 	}
-	pins, err := dstDB.ListPinnedMessages(ctx, "s1")
+	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
 	requireNoError(t, err, "ListPins before")
 	if len(pins) != 0 {
 		t.Errorf("pins before = %d, want 0", len(pins))
@@ -4405,7 +4405,7 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 	if sf.DeletedAt == nil {
 		t.Error("deleted_at should be set after copy")
 	}
-	pins, err = dstDB.ListPinnedMessages(ctx, "s1")
+	pins, err = dstDB.ListPinnedMessages(ctx, "s1", "")
 	requireNoError(t, err, "ListPins after")
 	if len(pins) != 1 {
 		t.Fatalf("pins after = %d, want 1", len(pins))

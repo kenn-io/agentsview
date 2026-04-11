@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
@@ -8,8 +7,8 @@
   import { renderMarkdown } from "../../utils/markdown.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
 
-  onMount(() => {
-    pins.loadAll();
+  $effect(() => {
+    pins.loadAll(sessions.filters.project || undefined);
   });
 
   /** Set of expanded pin IDs. */
@@ -51,15 +50,6 @@
         };
   }
 
-  const visiblePins = $derived(
-    sessions.filters.project
-      ? pins.pins.filter((p) => {
-          const proj = p.session_project ?? getSessionInfo(p).project;
-          return proj === sessions.filters.project;
-        })
-      : pins.pins,
-  );
-
   let copiedId: number | null = $state(null);
 
   async function handleCopy(pinId: number, content: string | null | undefined) {
@@ -89,13 +79,13 @@
     </svg>
     <h2>Pinned Messages</h2>
     {#if pins.pins.length > 0}
-      <span class="pin-count">{visiblePins.length}</span>
+      <span class="pin-count">{pins.pins.length}</span>
     {/if}
   </div>
 
   {#if pins.loading}
     <div class="loading-state">Loading pins...</div>
-  {:else if visiblePins.length === 0 && pins.pins.length > 0}
+  {:else if pins.pins.length === 0 && sessions.filters.project}
     <div class="empty-state">
       <p class="empty-title">No pinned messages for this project</p>
       <p class="empty-desc">
@@ -114,7 +104,7 @@
     </div>
   {:else}
     <div class="pin-list">
-      {#each visiblePins as pin (pin.id)}
+      {#each pins.pins as pin (pin.id)}
         {@const info = getSessionInfo(pin)}
         {@const isExpanded = expanded.has(pin.id)}
         {@const preview = previewContent(pin.content)}

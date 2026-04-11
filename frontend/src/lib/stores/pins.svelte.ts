@@ -17,12 +17,12 @@ class PinsStore {
   /** Incremented on every mutation so loads can detect staleness. */
   #mutationVersion = 0;
 
-  async loadAll() {
+  async loadAll(project?: string) {
     this.loading = true;
     const loadVer = ++this.#loadAllVersion;
     const mutVer = this.#mutationVersion;
     try {
-      const res = await api.listPins();
+      const res = await api.listPins(project);
       // Apply only if this is the latest load AND no mutation
       // occurred since the request started (which would make
       // this response stale relative to the optimistic state).

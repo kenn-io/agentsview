@@ -76,7 +76,8 @@ func (s *Server) handleUnpinMessage(
 func (s *Server) handleListPins(
 	w http.ResponseWriter, r *http.Request,
 ) {
-	pins, err := s.db.ListPinnedMessages(r.Context(), "")
+	project := r.URL.Query().Get("project")
+	pins, err := s.db.ListPinnedMessages(r.Context(), "", project)
 	if err != nil {
 		if handleContextError(w, err) {
 			return
@@ -95,7 +96,7 @@ func (s *Server) handleListSessionPins(
 	w http.ResponseWriter, r *http.Request,
 ) {
 	sessionID := r.PathValue("id")
-	pins, err := s.db.ListPinnedMessages(r.Context(), sessionID)
+	pins, err := s.db.ListPinnedMessages(r.Context(), sessionID, "")
 	if err != nil {
 		if handleContextError(w, err) {
 			return
