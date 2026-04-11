@@ -51,6 +51,15 @@
         };
   }
 
+  const visiblePins = $derived(
+    sessions.filters.project
+      ? pins.pins.filter((p) => {
+          const proj = p.session_project ?? getSessionInfo(p).project;
+          return proj === sessions.filters.project;
+        })
+      : pins.pins,
+  );
+
   let copiedId: number | null = $state(null);
 
   async function handleCopy(pinId: number, content: string | null | undefined) {
@@ -80,12 +89,19 @@
     </svg>
     <h2>Pinned Messages</h2>
     {#if pins.pins.length > 0}
-      <span class="pin-count">{pins.pins.length}</span>
+      <span class="pin-count">{visiblePins.length}</span>
     {/if}
   </div>
 
   {#if pins.loading}
     <div class="loading-state">Loading pins...</div>
+  {:else if visiblePins.length === 0 && pins.pins.length > 0}
+    <div class="empty-state">
+      <p class="empty-title">No pinned messages for this project</p>
+      <p class="empty-desc">
+        Try selecting a different project or clear the project filter.
+      </p>
+    </div>
   {:else if pins.pins.length === 0}
     <div class="empty-state">
       <svg width="40" height="40" viewBox="0 0 16 16" fill="currentColor" class="empty-icon">
@@ -98,7 +114,7 @@
     </div>
   {:else}
     <div class="pin-list">
-      {#each pins.pins as pin (pin.id)}
+      {#each visiblePins as pin (pin.id)}
         {@const info = getSessionInfo(pin)}
         {@const isExpanded = expanded.has(pin.id)}
         {@const preview = previewContent(pin.content)}
