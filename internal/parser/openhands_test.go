@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,6 +61,9 @@ func TestParseOpenHandsSession(t *testing.T) {
 		[]byte(baseState), 0o644,
 	))
 
+	projectDirJSON, err := json.Marshal(projectDir)
+	require.NoError(t, err)
+
 	events := map[string]string{
 		"event-00000-user.json": `{
 			"id":"e0",
@@ -90,7 +94,7 @@ func TestParseOpenHandsSession(t *testing.T) {
 			"observation":{
 				"content":[{"type":"text","text":"panic: boom"}],
 				"is_error":false,
-				"metadata":{"working_dir":"` + projectDir + `"},
+				"metadata":{"working_dir":` + string(projectDirJSON) + `},
 				"kind":"TerminalObservation"
 			},
 			"action_id":"e1",
