@@ -123,6 +123,7 @@ var Registry = []AgentDef{
 		DefaultDirs:    []string{".openhands/conversations"},
 		IDPrefix:       "openhands:",
 		FileBased:      true,
+		ShallowWatch:   true,
 		DiscoverFunc:   DiscoverOpenHandsSessions,
 		FindSourceFunc: FindOpenHandsSourceFile,
 	},
