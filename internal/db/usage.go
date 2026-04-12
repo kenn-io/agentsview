@@ -16,14 +16,14 @@ type UsageFilter struct {
 	Timezone string // IANA timezone, "" for UTC
 }
 
-// location loads the timezone or returns UTC on error.
+// location loads the timezone or returns the system local timezone.
 func (f UsageFilter) location() *time.Location {
 	if f.Timezone == "" {
-		return time.UTC
+		return time.Local
 	}
 	loc, err := time.LoadLocation(f.Timezone)
 	if err != nil {
-		return time.UTC
+		return time.Local
 	}
 	return loc
 }
@@ -105,17 +105,18 @@ WHERE m.token_usage != ''
 
 	var args []any
 
-	// Pad date range by ±14h to cover all timezone offsets,
-	// matching the approach in analytics.go:utcRange(). The
-	// actual date filtering happens post-query via localDate.
+	// Filter on message timestamp (not session started_at) so
+	// long-lived sessions that span date boundaries are included.
+	// Pad by ±14h to cover all timezone offsets — the actual
+	// date filtering happens post-query via localDate.
 	if f.From != "" {
 		padded := paddedUTCBound(f.From+"T00:00:00Z", -14)
-		query += " AND s.started_at >= ?"
+		query += " AND COALESCE(m.timestamp, s.started_at) >= ?"
 		args = append(args, padded)
 	}
 	if f.To != "" {
 		padded := paddedUTCBound(f.To+"T23:59:59Z", 14)
-		query += " AND s.started_at <= ?"
+		query += " AND COALESCE(m.timestamp, s.started_at) <= ?"
 		args = append(args, padded)
 	}
 	if f.Agent != "" {

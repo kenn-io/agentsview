@@ -353,3 +353,67 @@ func TestGetDailyUsageNoPricing(t *testing.T) {
 			day.ModelsUsed)
 	}
 }
+
+func TestGetDailyUsageLongLivedSession(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-6",
+		InputPerMTok:  3.0,
+		OutputPerMTok: 15.0,
+	}}), "upsert pricing")
+
+	// Session started on Apr 1 but has messages on Apr 10.
+	requireNoError(t, d.UpsertSession(Session{
+		ID: "long-lived", Project: "proj", Machine: "local",
+		Agent:     "claude",
+		StartedAt: Ptr("2026-04-01T10:00:00Z"),
+	}), "upsert session")
+
+	insertMessages(t, d,
+		Message{
+			SessionID: "long-lived", Ordinal: 0,
+			Role: "assistant", Content: "early",
+			ContentLength: 5,
+			Timestamp:     "2026-04-01T10:00:00Z",
+			Model:         "claude-sonnet-4-6",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":100,"output_tokens":50}`),
+			ContextTokens:    100,
+			OutputTokens:     50,
+			HasContextTokens: true,
+			HasOutputTokens:  true,
+		},
+		Message{
+			SessionID: "long-lived", Ordinal: 1,
+			Role: "assistant", Content: "late",
+			ContentLength: 4,
+			Timestamp:     "2026-04-10T14:00:00Z",
+			Model:         "claude-sonnet-4-6",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":2000,"output_tokens":500}`),
+			ContextTokens:    2000,
+			OutputTokens:     500,
+			HasContextTokens: true,
+			HasOutputTokens:  true,
+		},
+	)
+
+	// Query Apr 10 only — should include the late message even
+	// though the session started on Apr 1.
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:     "2026-04-10",
+		To:       "2026-04-10",
+		Timezone: "UTC",
+	})
+	requireNoError(t, err, "GetDailyUsage long-lived")
+
+	if len(result.Daily) != 1 {
+		t.Fatalf("expected 1 day, got %d", len(result.Daily))
+	}
+	if result.Daily[0].InputTokens != 2000 {
+		t.Errorf("InputTokens = %d, want 2000",
+			result.Daily[0].InputTokens)
+	}
+}

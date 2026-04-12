@@ -27,6 +27,32 @@ func FallbackPricing() []ModelPricing {
 			CacheCreationPerMTok: 1.25,
 			CacheReadPerMTok:     0.10,
 		},
+		// Codex / OpenAI models
+		{
+			ModelPattern: "gpt-5.4",
+			InputPerMTok: 2.50,
+			OutputPerMTok: 15.0,
+		},
+		{
+			ModelPattern: "gpt-5.2-codex",
+			InputPerMTok: 1.75,
+			OutputPerMTok: 14.0,
+		},
+		{
+			ModelPattern: "gpt-5.3-codex",
+			InputPerMTok: 1.75,
+			OutputPerMTok: 14.0,
+		},
+		{
+			ModelPattern: "gpt-5.4-mini",
+			InputPerMTok: 0.75,
+			OutputPerMTok: 4.50,
+		},
+		{
+			ModelPattern: "gpt-5.1-codex-max",
+			InputPerMTok: 1.25,
+			OutputPerMTok: 10.0,
+		},
 		// Older model names (still in some session logs)
 		{
 			ModelPattern:         "claude-sonnet-4-20250514",
