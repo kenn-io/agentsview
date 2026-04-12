@@ -15,10 +15,10 @@ func FallbackPricing() []ModelPricing {
 		},
 		{
 			ModelPattern:         "claude-opus-4-6",
-			InputPerMTok:         5.0,
-			OutputPerMTok:        25.0,
-			CacheCreationPerMTok: 6.25,
-			CacheReadPerMTok:     0.50,
+			InputPerMTok:         15.0,
+			OutputPerMTok:        75.0,
+			CacheCreationPerMTok: 18.75,
+			CacheReadPerMTok:     1.50,
 		},
 		{
 			ModelPattern:         "claude-haiku-4-5-20251001",
