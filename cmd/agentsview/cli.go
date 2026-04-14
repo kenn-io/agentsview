@@ -401,7 +401,6 @@ func renderRootUsage(w io.Writer, root *cobra.Command) {
 }
 
 func renderRootCommands(w io.Writer, root *cobra.Command) {
-	fmt.Fprintln(w, "Commands:")
 	for _, group := range root.Groups() {
 		cmds := groupedRootCommands(root, group.ID)
 		if len(cmds) == 0 {

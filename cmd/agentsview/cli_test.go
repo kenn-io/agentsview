@@ -96,11 +96,14 @@ func TestRootHelpDoesNotDuplicateCommandListings(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Usage:\n  agentsview [flags]\n  agentsview <command>",
-		"Commands:\nCore Commands:",
+		"Core Commands:",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q\n%s", want, help)
 		}
+	}
+	if strings.Contains(help, "\nCommands:\n") {
+		t.Fatalf("help should not include redundant Commands heading\n%s", help)
 	}
 }
 
