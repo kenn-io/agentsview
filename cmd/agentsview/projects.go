@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -12,17 +11,7 @@ import (
 	"github.com/wesm/agentsview/internal/db"
 )
 
-func runProjects(args []string) {
-	fs := flag.NewFlagSet("projects", flag.ExitOnError)
-	jsonOutput := fs.Bool("json", false,
-		"Output as JSON array")
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
-	runProjectsConfig(*jsonOutput)
-}
-
-func runProjectsConfig(jsonOutput bool) {
+func runProjects(jsonOutput bool) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)

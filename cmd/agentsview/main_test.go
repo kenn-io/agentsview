@@ -31,7 +31,7 @@ func TestMustLoadConfig(t *testing.T) {
 		},
 		{
 			name:          "ExplicitFlags",
-			args:          []string{"-host", "0.0.0.0", "-port", "9090", "-public-url", "https://viewer.example.test", "-proxy", "caddy", "-proxy-bind-host", "10.0.60.2", "-public-port", "9443", "-no-browser"},
+			args:          []string{"--host", "0.0.0.0", "--port", "9090", "--public-url", "https://viewer.example.test", "--proxy", "caddy", "--proxy-bind-host", "10.0.60.2", "--public-port", "9443", "--no-browser"},
 			wantHost:      "0.0.0.0",
 			wantPort:      9090,
 			wantPublicURL: "https://viewer.example.test:9443",
@@ -39,7 +39,7 @@ func TestMustLoadConfig(t *testing.T) {
 		},
 		{
 			name:          "PartialFlags",
-			args:          []string{"-port", "3000"},
+			args:          []string{"--port", "3000"},
 			wantHost:      "127.0.0.1",
 			wantPort:      3000,
 			wantPublicURL: "",
@@ -50,7 +50,11 @@ func TestMustLoadConfig(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("AGENT_VIEWER_DATA_DIR", t.TempDir())
-			cfg := mustLoadConfig(tt.args)
+			cmd := newServeCommand()
+			if err := cmd.Flags().Parse(tt.args); err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			cfg := mustLoadConfig(cmd)
 
 			if cfg.Host != tt.wantHost {
 				t.Errorf("Host = %q, want %q", cfg.Host, tt.wantHost)

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -24,27 +23,6 @@ import (
 // during the prior sync. Smaller values are faster but risk
 // missing recent writes; 10s is a safe default.
 const quickSyncMargin = 10 * time.Second
-
-func runUsage(args []string) {
-	if len(args) == 0 {
-		printUsageHelp()
-		os.Exit(1)
-	}
-
-	switch args[0] {
-	case "daily":
-		runUsageDaily(args[1:])
-	case "statusline":
-		runUsageStatusline(args[1:])
-	case "help", "--help", "-h":
-		printUsageHelp()
-	default:
-		fmt.Fprintf(os.Stderr,
-			"unknown usage subcommand: %s\n", args[0])
-		printUsageHelp()
-		os.Exit(1)
-	}
-}
 
 // defaultUsageDays is the default lookback window for
 // `agentsview usage daily` when neither --since nor --all is
@@ -84,45 +62,7 @@ type UsageDailyConfig struct {
 	Timezone  string
 }
 
-func runUsageDaily(args []string) {
-	fs := flag.NewFlagSet("usage daily", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false,
-		"Output as JSON")
-	since := fs.String("since", "",
-		"Start date (YYYY-MM-DD)")
-	until := fs.String("until", "",
-		"End date (YYYY-MM-DD)")
-	all := fs.Bool("all", false,
-		"Include all history (overrides default 30-day window)")
-	agent := fs.String("agent", "",
-		"Filter by agent name")
-	breakdown := fs.Bool("breakdown", false,
-		"Show per-model breakdown rows")
-	offline := fs.Bool("offline", false,
-		"Use fallback pricing only")
-	noSync := fs.Bool("no-sync", false,
-		"Skip on-demand sync before querying")
-	timezone := fs.String("timezone", "",
-		"IANA timezone for date bucketing")
-
-	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
-	}
-
-	runUsageDailyConfig(UsageDailyConfig{
-		JSON:      *jsonOut,
-		Since:     *since,
-		Until:     *until,
-		All:       *all,
-		Agent:     *agent,
-		Breakdown: *breakdown,
-		Offline:   *offline,
-		NoSync:    *noSync,
-		Timezone:  *timezone,
-	})
-}
-
-func runUsageDailyConfig(cfg UsageDailyConfig) {
+func runUsageDaily(cfg UsageDailyConfig) {
 	database, appCfg := openUsageDB()
 	defer database.Close()
 
@@ -172,27 +112,7 @@ type UsageStatuslineConfig struct {
 	NoSync  bool
 }
 
-func runUsageStatusline(args []string) {
-	fs := flag.NewFlagSet("usage statusline", flag.ExitOnError)
-	agent := fs.String("agent", "",
-		"Filter by agent name")
-	offline := fs.Bool("offline", false,
-		"Use fallback pricing only")
-	noSync := fs.Bool("no-sync", false,
-		"Skip on-demand sync before querying")
-
-	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
-	}
-
-	runUsageStatuslineConfig(UsageStatuslineConfig{
-		Agent:   *agent,
-		Offline: *offline,
-		NoSync:  *noSync,
-	})
-}
-
-func runUsageStatuslineConfig(cfg UsageStatuslineConfig) {
+func runUsageStatusline(cfg UsageStatuslineConfig) {
 	database, appCfg := openUsageDB()
 	defer database.Close()
 
@@ -466,30 +386,4 @@ func joinModels(models []string) string {
 		s.WriteString(", " + m)
 	}
 	return s.String()
-}
-
-func printUsageHelp() {
-	fmt.Fprint(os.Stderr, `Usage: agentsview usage <command> [flags]
-
-Commands:
-  daily       Daily cost summary
-  statusline  One-line cost summary for today
-  help        Show this help
-
-Daily flags:
-  --json              Output as JSON
-  --since YYYY-MM-DD  Start date (default: 30 days ago)
-  --until YYYY-MM-DD  End date
-  --all               Include all history (overrides default window)
-  --agent string      Filter by agent name
-  --breakdown         Show per-model breakdown rows
-  --offline           Use fallback pricing only
-  --no-sync           Skip on-demand sync before querying
-  --timezone string   IANA timezone for date bucketing
-
-Statusline flags:
-  --agent string      Filter by agent name
-  --offline           Use fallback pricing only
-  --no-sync           Skip on-demand sync before querying
-`)
 }

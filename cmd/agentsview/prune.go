@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -234,19 +233,7 @@ func formatBytes(b int64) string {
 	}
 }
 
-func runPrune(args []string) {
-	cfg, err := parsePruneFlags(args)
-	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			os.Exit(0)
-		}
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-	runPruneConfig(cfg)
-}
-
-func runPruneConfig(cfg PruneConfig) {
+func runPrune(cfg PruneConfig) {
 	if cfg.Filter.MaxMessages != nil && *cfg.Filter.MaxMessages < 0 {
 		fatal("max-messages must be >= 0")
 	}

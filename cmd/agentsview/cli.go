@@ -34,7 +34,7 @@ func newRootCommand() *cobra.Command {
 				printVersion(cmd.OutOrStdout())
 				return
 			}
-			runServeConfig(mustLoadConfigFromCommand(cmd))
+			runServe(mustLoadConfig(cmd))
 		},
 	}
 	root.AddGroup(
@@ -86,7 +86,7 @@ func newServeCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServeConfig(mustLoadConfigFromCommand(cmd))
+			runServe(mustLoadConfig(cmd))
 		},
 	}
 	config.RegisterServePFlags(cmd.Flags())
@@ -102,7 +102,7 @@ func newSyncCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runSyncConfig(SyncConfig{Full: full})
+			runSync(SyncConfig{Full: full})
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -129,7 +129,7 @@ func newPruneCommand() *cobra.Command {
 			if maxMessages != -1 {
 				mm = &maxMessages
 			}
-			runPruneConfig(PruneConfig{
+			runPrune(PruneConfig{
 				Filter: db.PruneFilter{
 					Project:      project,
 					MaxMessages:  mm,
@@ -159,7 +159,7 @@ func newUpdateCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runUpdateConfig(cfg)
+			runUpdate(cfg)
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.Check, "check", false, "Check for updates without installing")
@@ -190,7 +190,7 @@ func newImportCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			runImportConfig(ImportConfig{Type: importType, Path: args[0]})
+			runImport(ImportConfig{Type: importType, Path: args[0]})
 		},
 	}
 	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt")
@@ -207,7 +207,7 @@ func newProjectsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runProjectsConfig(jsonOutput)
+			runProjects(jsonOutput)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON array")
@@ -238,7 +238,7 @@ func newUsageDailyCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runUsageDailyConfig(cfg)
+			runUsageDaily(cfg)
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.JSON, "json", false, "Output as JSON")
@@ -261,7 +261,7 @@ func newUsageStatuslineCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runUsageStatuslineConfig(cfg)
+			runUsageStatusline(cfg)
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
@@ -295,7 +295,7 @@ func newPGPushCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runPGPushConfig(cfg)
+			runPGPush(cfg)
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and PG push")
@@ -312,7 +312,7 @@ func newPGStatusCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runPGStatus(nil)
+			runPGStatus()
 		},
 	}
 }
@@ -324,11 +324,11 @@ func newPGServeCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			appCfg, basePath, err := loadPGServeConfigFromCommand(cmd)
+			appCfg, basePath, err := loadPGServeConfig(cmd)
 			if err != nil {
 				fatal("%v", err)
 			}
-			runPGServeConfig(appCfg, basePath)
+			runPGServe(appCfg, basePath)
 		},
 	}
 	cmd.Flags().String(

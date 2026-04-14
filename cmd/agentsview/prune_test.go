@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -412,42 +411,6 @@ func TestDeleteFilesNilPath(t *testing.T) {
 	}
 	if reclaimed != 0 {
 		t.Errorf("reclaimed = %d, want 0", reclaimed)
-	}
-}
-
-func TestPruneHelpExitCode(t *testing.T) {
-	if os.Getenv("GO_TEST_PRUNE_HELPER_PROCESS") == "1" {
-		// Attempt to run prune --help
-		// This should call os.Exit(0)
-		runPrune([]string{"--help"})
-		// If we are here, os.Exit wasn't called or failed
-		t.Fatal("runPrune did not exit")
-		return
-	}
-
-	// Run the test in a subprocess
-	exe, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
-
-	// We pass -test.run to only run THIS function in subprocess
-	cmd := exec.Command(exe, "-test.run=^TestPruneHelpExitCode$")
-	// Set the helper env var
-	cmd.Env = append(os.Environ(), "GO_TEST_PRUNE_HELPER_PROCESS=1")
-
-	// We might need to capture output to ensure it prints help
-	var out bytes.Buffer
-	cmd.Stderr = &out
-	cmd.Stdout = &out
-
-	err = cmd.Run()
-
-	// Check exit code
-	if err != nil {
-		// If exit code is not 0, err will be of type *ExitError
-		// If TestPruneHelpExitCode subprocess exits 0, err is nil.
-		t.Fatalf("subprocess failed with %v\nOutput: %s", err, out.String())
 	}
 }
 

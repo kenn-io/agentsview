@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -40,105 +39,6 @@ func main() {
 	}
 }
 
-func printUsage() {
-	fmt.Printf(`agentsview %s - local web viewer for AI agent sessions
-
-Syncs session data from supported agents into SQLite and serves an
-analytics dashboard and session browser via a local web UI.
-
-Usage:
-  agentsview [flags]          Start the server (default command)
-  agentsview serve [flags]    Start the server (explicit)
-  agentsview sync [flags]     Sync session data without serving
-  agentsview pg push [flags]  Push local data to PostgreSQL
-  agentsview pg status        Show PG sync status
-  agentsview pg serve [flags] Serve from PostgreSQL (read-only)
-  agentsview token-use <id>   Show token usage for a session (JSON)
-  agentsview prune [flags]    Delete sessions matching filters
-  agentsview import --type <type> <path>
-                          Import conversations (claude-ai, chatgpt)
-  agentsview projects [flags] List projects with session counts
-  agentsview usage <daily|statusline> [flags]
-                        Token cost tracking and reporting
-  agentsview update [flags]   Check for and install updates
-  agentsview version          Show version information
-  agentsview help             Show this help
-
-Server flags:
-  -host string        Host to bind to (default "127.0.0.1")
-  -port int           Port to listen on (default 8080)
-  -public-url str     Public URL to trust and open for hostname/proxy access
-  -public-origin str  Trusted browser origin to allow for remote/proxied access
-  -proxy string       Managed reverse proxy mode (currently: caddy)
-  -caddy-bin string   Caddy binary to use when -proxy=caddy
-  -proxy-bind-host    Local interface/IP for managed Caddy to bind
-  -public-port int    External port for managed Caddy/public URL (default 8443)
-  -tls-cert string    TLS certificate path for managed Caddy HTTPS mode
-  -tls-key string     TLS key path for managed Caddy HTTPS mode
-  -allowed-subnet str Client CIDR allowed to connect to the managed proxy
-  -no-browser         Don't open browser on startup
-
-Sync flags:
-  -full              Force a full resync regardless of data version
-
-PG push flags:
-  -full              Bypass per-message skip heuristic
-  -projects string   Comma-separated projects to push (inclusive)
-  -exclude-projects string  Comma-separated projects to exclude from push
-  -all-projects      Ignore configured project filters for this run
-
-PG serve flags:
-  -host string       Host to bind to (default "127.0.0.1")
-  -port int          Port to listen on (default 8080)
-
-Prune flags:
-  -project string     Sessions whose project contains this substring
-  -max-messages int   Sessions with at most N messages (default -1)
-  -before string      Sessions that ended before this date (YYYY-MM-DD)
-  -first-message str  Sessions whose first message starts with this text
-  -dry-run            Show what would be pruned without deleting
-  -yes                Skip confirmation prompt
-
-Projects flags:
-  -json              Output as JSON array
-
-Update flags:
-  -check              Check for updates without installing
-  -yes                Install without confirmation prompt
-  -force              Force check (ignore cache)
-
-Environment variables:
-  CLAUDE_PROJECTS_DIR     Claude Code projects directory
-  CODEX_SESSIONS_DIR      Codex sessions directory
-  COPILOT_DIR             Copilot CLI directory
-  GEMINI_DIR              Gemini CLI directory
-  OPENCODE_DIR            OpenCode data directory
-  OPENHANDS_CONVERSATIONS_DIR OpenHands CLI conversations directory
-  CURSOR_PROJECTS_DIR     Cursor projects directory
-  IFLOW_DIR               iFlow projects directory
-  AMP_DIR                 Amp threads directory
-  AGENT_VIEWER_DATA_DIR   Data directory (database, config)
-  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync
-  AGENTSVIEW_PG_MACHINE   Machine name for PG sync
-  AGENTSVIEW_PG_SCHEMA    PG schema name (default "agentsview")
-
-Watcher excludes:
-  Add "watch_exclude_patterns" to ~/.agentsview/config.toml to skip
-  directory names/patterns while recursively watching roots.
-  Example:
-  watch_exclude_patterns = [".git", "node_modules", ".next", "dist"]
-
-Multiple directories:
-  Add arrays to ~/.agentsview/config.toml to scan multiple locations:
-  claude_project_dirs = ["/path/one", "/path/two"]
-  codex_sessions_dirs = ["/codex/a", "/codex/b"]
-  When set, these override the default directory. Environment variables
-  override config file arrays.
-
-Data is stored in ~/.agentsview/ by default.
-`, version)
-}
-
 // warnMissingDirs prints a warning to stderr for each
 // configured directory that does not exist or is
 // inaccessible.
@@ -162,11 +62,7 @@ func warnMissingDirs(dirs []string, label string) {
 	}
 }
 
-func runServe(args []string) {
-	runServeConfig(mustLoadConfig(args))
-}
-
-func runServeConfig(cfg config.Config) {
+func runServe(cfg config.Config) {
 	start := time.Now()
 	setupLogFile(cfg.DataDir)
 
@@ -319,37 +215,11 @@ func runServeConfig(cfg config.Config) {
 	}
 }
 
-func mustLoadConfig(args []string) config.Config {
-	fs := flag.NewFlagSet("agentsview", flag.ExitOnError)
-	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(),
-			"Usage: agentsview [serve] [flags]\n\nFlags:\n")
-		fs.PrintDefaults()
-	}
-	config.RegisterServeFlags(fs)
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
-	return mustLoadParsedConfig(fs)
-}
-
-func mustLoadConfigFromCommand(cmd *cobra.Command) config.Config {
+func mustLoadConfig(cmd *cobra.Command) config.Config {
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
 	}
-	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
-	}
-	return cfg
-}
-
-func mustLoadParsedConfig(fs *flag.FlagSet) config.Config {
-	cfg, err := config.Load(fs)
-	if err != nil {
-		log.Fatalf("loading config: %v", err)
-	}
-
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		log.Fatalf("creating data dir: %v", err)
 	}

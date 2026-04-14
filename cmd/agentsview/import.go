@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -19,30 +18,7 @@ type ImportConfig struct {
 	Path string
 }
 
-func runImport(args []string) {
-	fs := flag.NewFlagSet("import", flag.ContinueOnError)
-	importType := fs.String(
-		"type", "", "Import type: claude-ai, chatgpt",
-	)
-
-	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
-	}
-
-	if *importType == "" || fs.NArg() == 0 {
-		fmt.Fprintln(os.Stderr,
-			"usage: agentsview import --type <type> <path>")
-		fmt.Fprintln(os.Stderr,
-			"  --type   claude-ai or chatgpt")
-		fmt.Fprintln(os.Stderr,
-			"  <path>   directory, .json, or .zip file")
-		os.Exit(1)
-	}
-
-	runImportConfig(ImportConfig{Type: *importType, Path: fs.Arg(0)})
-}
-
-func runImportConfig(cfg ImportConfig) {
+func runImport(cfg ImportConfig) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)

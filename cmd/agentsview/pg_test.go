@@ -6,7 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wesm/agentsview/internal/config"
 )
+
+func loadPGServeConfigForTest(t *testing.T, args ...string) (config.Config, string, error) {
+	t.Helper()
+	cmd := newPGServeCommand()
+	if err := cmd.Flags().Parse(args); err != nil {
+		return config.Config{}, "", err
+	}
+	return loadPGServeConfig(cmd)
+}
 
 func TestLoadPGServeConfigDoesNotInheritServeProxySettings(t *testing.T) {
 	dataDir := t.TempDir()
@@ -31,9 +42,9 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 		t.Fatal(err)
 	}
 
-	cfg, _, err := loadPGServeConfig(nil)
+	cfg, _, err := loadPGServeConfigForTest(t)
 	if err != nil {
-		t.Fatalf("loadPGServeConfig: %v", err)
+		t.Fatalf("loadPGServeConfigForTest: %v", err)
 	}
 	if cfg.PG.URL == "" {
 		t.Fatal("expected PG URL")
@@ -72,9 +83,9 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 		t.Fatal(err)
 	}
 
-	cfg, _, err := loadPGServeConfig(nil)
+	cfg, _, err := loadPGServeConfigForTest(t)
 	if err != nil {
-		t.Fatalf("loadPGServeConfig: %v", err)
+		t.Fatalf("loadPGServeConfigForTest: %v", err)
 	}
 	if cfg.PG.URL == "" {
 		t.Fatal("expected PG URL")
@@ -90,21 +101,21 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
 	t.Setenv("AGENT_VIEWER_DATA_DIR", t.TempDir())
 
-	cfg, basePath, err := loadPGServeConfig([]string{
-		"-host", "127.0.0.1",
-		"-port", "8081",
-		"-public-url", "https://viewer.example.test",
-		"-public-origin", "https://app.example.test/",
-		"-proxy", "caddy",
-		"-caddy-bin", "/usr/local/bin/caddy",
-		"-proxy-bind-host", "0.0.0.0",
-		"-public-port", "8443",
-		"-tls-cert", "/tmp/viewer.crt",
-		"-tls-key", "/tmp/viewer.key",
-		"-allowed-subnet", "10.0.0.0/16",
-	})
+	cfg, basePath, err := loadPGServeConfigForTest(t,
+		"--host", "127.0.0.1",
+		"--port", "8081",
+		"--public-url", "https://viewer.example.test",
+		"--public-origin", "https://app.example.test/",
+		"--proxy", "caddy",
+		"--caddy-bin", "/usr/local/bin/caddy",
+		"--proxy-bind-host", "0.0.0.0",
+		"--public-port", "8443",
+		"--tls-cert", "/tmp/viewer.crt",
+		"--tls-key", "/tmp/viewer.key",
+		"--allowed-subnet", "10.0.0.0/16",
+	)
 	if err != nil {
-		t.Fatalf("loadPGServeConfig: %v", err)
+		t.Fatalf("loadPGServeConfigForTest: %v", err)
 	}
 	if cfg.Proxy.Mode != "caddy" {
 		t.Fatalf(
@@ -170,10 +181,10 @@ func TestRunPGServeRejectsInvalidManagedCaddyConfigBeforePGSetup(t *testing.T) {
 	dataDir := t.TempDir()
 
 	cmd := exec.Command(os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
-		"-host", "0.0.0.0",
-		"-public-url", "https://viewer.example.test",
-		"-proxy", "caddy",
-		"-caddy-bin", os.Args[0],
+		"--host", "0.0.0.0",
+		"--public-url", "https://viewer.example.test",
+		"--proxy", "caddy",
+		"--caddy-bin", os.Args[0],
 	)
 	cmd.Env = append(
 		os.Environ(),
@@ -193,8 +204,8 @@ func TestRunPGServeNonLoopbackWithoutProxyFallsThroughToPGConfig(t *testing.T) {
 	dataDir := t.TempDir()
 
 	cmd := exec.Command(os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
-		"-host", "0.0.0.0",
-		"-port", "8081",
+		"--host", "0.0.0.0",
+		"--port", "8081",
 	)
 	cmd.Env = append(
 		os.Environ(),
@@ -231,5 +242,13 @@ func TestRunPGServeHelperProcess(t *testing.T) {
 		t.Fatal("missing argument separator")
 	}
 
-	runPGServe(args[sep+1:])
+	cmd := newPGServeCommand()
+	if err := cmd.Flags().Parse(args[sep+1:]); err != nil {
+		t.Fatal(err)
+	}
+	cfg, basePath, err := loadPGServeConfig(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runPGServe(cfg, basePath)
 }

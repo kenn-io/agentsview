@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -18,32 +17,7 @@ type UpdateConfig struct {
 	Force bool
 }
 
-func runUpdate(args []string) {
-	fs := flag.NewFlagSet("update", flag.ExitOnError)
-	check := fs.Bool("check", false,
-		"Check for updates without installing")
-	yes := fs.Bool("yes", false,
-		"Install without confirmation prompt")
-	force := fs.Bool("force", false,
-		"Force check (ignore cache)")
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(),
-			"Usage: agentsview update [flags]")
-		fmt.Fprintln(fs.Output(), "\nFlags:")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(args); err != nil {
-		log.Fatalf("parsing flags: %v", err)
-	}
-
-	runUpdateConfig(UpdateConfig{
-		Check: *check,
-		Yes:   *yes,
-		Force: *force,
-	})
-}
-
-func runUpdateConfig(cfg UpdateConfig) {
+func runUpdate(cfg UpdateConfig) {
 	dataDir, err := config.ResolveDataDir()
 	if err != nil {
 		log.Fatalf("resolving data dir: %v", err)
