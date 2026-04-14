@@ -474,28 +474,6 @@ func shouldListRootChildren(cmd *cobra.Command) bool {
 	return cmd.Name() != "completion"
 }
 
-func commandUsage(root, cmd *cobra.Command) string {
-	path := commandPath(root, cmd)
-	flags := ""
-	if cmd.Flags().HasAvailableFlags() {
-		flags = " [flags]"
-	}
-	if cmd.Args == nil {
-		return root.Name() + " " + path + flags
-	}
-	if strings.Contains(cmd.Use, "<") || strings.Contains(cmd.Use, "[") {
-		return root.Name() + " " + path + flags
-	}
-	return root.Name() + " " + path + flags
-}
-
 func commandPath(root, cmd *cobra.Command) string {
 	return strings.TrimPrefix(cmd.CommandPath(), root.CommandPath()+" ")
-}
-
-func execute() error {
-	cmd := newRootCommand()
-	cmd.SetOut(os.Stdout)
-	cmd.SetErr(os.Stderr)
-	return cmd.Execute()
 }

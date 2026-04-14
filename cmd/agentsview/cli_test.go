@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -110,5 +111,79 @@ func TestRootVersionFlag(t *testing.T) {
 	}
 	if !strings.Contains(got, "agentsview ") {
 		t.Fatalf("version output = %q", got)
+	}
+}
+
+func TestNormalizeLegacyLongFlags(t *testing.T) {
+	flags := collectLongFlags(newRootCommand())
+	got, rewrites := normalizeLegacyLongFlags([]string{
+		"-host", "0.0.0.0",
+		"-port=9090",
+		"sync",
+		"-full",
+		"--",
+		"-port", "1000",
+	}, flags)
+	want := []string{
+		"--host", "0.0.0.0",
+		"--port=9090",
+		"sync",
+		"--full",
+		"--",
+		"-port", "1000",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalized = %#v, want %#v", got, want)
+	}
+	wantRewrites := []string{
+		"-host -> --host",
+		"-port -> --port",
+		"-full -> --full",
+	}
+	if !slices.Equal(rewrites, wantRewrites) {
+		t.Fatalf("rewrites = %#v, want %#v", rewrites, wantRewrites)
+	}
+}
+
+func TestNormalizeLegacyLongFlagsSkipsShortFlagsAndNumbers(t *testing.T) {
+	flags := collectLongFlags(newRootCommand())
+	got, rewrites := normalizeLegacyLongFlags([]string{
+		"-h",
+		"-v",
+		"-1",
+		"-abc",
+		"--port", "9090",
+	}, flags)
+	want := []string{"-h", "-v", "-1", "-abc", "--port", "9090"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("normalized = %#v, want %#v", got, want)
+	}
+	if len(rewrites) != 0 {
+		t.Fatalf("rewrites = %#v, want none", rewrites)
+	}
+}
+
+func TestLegacyLongFlagWarning(t *testing.T) {
+	got := legacyLongFlagWarning([]string{
+		"-host -> --host",
+		"-port -> --port",
+	})
+	want := "warning: deprecated single-dash long flags detected; use GNU-style long flags instead: -host -> --host, -port -> --port\n"
+	if got != want {
+		t.Fatalf("warning = %q, want %q", got, want)
+	}
+}
+
+func TestExecuteWithLegacyFlagCompatWarnsOnce(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := executeWithLegacyFlagCompat([]string{"-version"}, &stdout, &stderr); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "agentsview ") {
+		t.Fatalf("version output = %q", stdout.String())
+	}
+	want := "warning: deprecated single-dash long flags detected; use GNU-style long flags instead: -version -> --version\n"
+	if stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}
 }
