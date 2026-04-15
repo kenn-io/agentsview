@@ -97,20 +97,24 @@
         usage.to = params["to"];
         changed = true;
       }
-      // Exclude params: missing means "nothing excluded", so we
-      // MUST update to "" when the param disappears.
+      // Exclude params: missing means "nothing excluded" when the
+      // URL changes via back/forward (urlInitRan=true). On initial
+      // mount (urlInitRan=false), missing params preserve store
+      // state so filters survive tab switches — the write-back
+      // effect will populate the URL from the store.
+      const clearMissing = urlInitRan;
       const newExProj = params["exclude_project"] ?? "";
-      if (newExProj !== usage.excludedProjects) {
+      if (newExProj !== usage.excludedProjects && (newExProj || clearMissing)) {
         usage.excludedProjects = newExProj;
         changed = true;
       }
       const newExAgent = params["exclude_agent"] ?? "";
-      if (newExAgent !== usage.excludedAgents) {
+      if (newExAgent !== usage.excludedAgents && (newExAgent || clearMissing)) {
         usage.excludedAgents = newExAgent;
         changed = true;
       }
       const newExModel = params["exclude_model"] ?? "";
-      if (newExModel !== usage.excludedModels) {
+      if (newExModel !== usage.excludedModels && (newExModel || clearMissing)) {
         usage.excludedModels = newExModel;
         changed = true;
       }

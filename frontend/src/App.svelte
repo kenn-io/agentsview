@@ -208,12 +208,14 @@
   // Only track route and params — NOT sessionId. When the URL sync
   // effect deselects a session (changing sessionId), we must not
   // re-run initFromParams or it will reset filters the user just set.
+  // Only reinitialize filters when the route is "sessions" — switching
+  // to other tabs (usage, insights, etc.) should preserve session filters.
   $effect(() => {
-    const _route = router.route;
+    const route = router.route;
     const params = router.params;
     untrack(() => {
       const sid = router.sessionId;
-      if (!sid) {
+      if (!sid && route === "sessions") {
         sessions.initFromParams(params);
       }
       sessions.load();
