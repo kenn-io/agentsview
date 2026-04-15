@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -292,9 +293,13 @@ func parseCLIResult(data []byte) (result, model string) {
 			}
 			if ev.Type == "result" &&
 				strings.TrimSpace(ev.Result) != "" {
-				for name := range ev.ModelUsage {
-					model = name
-					break
+				if len(ev.ModelUsage) > 0 {
+					keys := make([]string, 0, len(ev.ModelUsage))
+					for k := range ev.ModelUsage {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+					model = keys[0]
 				}
 				return ev.Result, model
 			}

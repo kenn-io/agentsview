@@ -639,6 +639,57 @@ func TestGenerateClaude_SuccessNotDiscarded(t *testing.T) {
 	}
 }
 
+func TestParseCLIResult(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantResult  string
+		wantModel   string
+	}{
+		{
+			name:       "array format with result event",
+			input:      `[{"type":"result","result":"# Summary","modelUsage":{"claude-3":{}}}]`,
+			wantResult: "# Summary",
+			wantModel:  "claude-3",
+		},
+		{
+			name:       "legacy single-object format",
+			input:      `{"result":"legacy result","model":"old-model"}`,
+			wantResult: "legacy result",
+			wantModel:  "old-model",
+		},
+		{
+			name:      "array with no result event",
+			input:     `[{"type":"system_prompt","content":"hello"},{"type":"turn","result":""}]`,
+			wantResult: "",
+			wantModel:  "",
+		},
+		{
+			name:      "empty input",
+			input:     ``,
+			wantResult: "",
+			wantModel:  "",
+		},
+		{
+			name:      "garbage input",
+			input:     `not json at all`,
+			wantResult: "",
+			wantModel:  "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, model := parseCLIResult([]byte(tc.input))
+			if result != tc.wantResult {
+				t.Errorf("result: got %q, want %q", result, tc.wantResult)
+			}
+			if model != tc.wantModel {
+				t.Errorf("model: got %q, want %q", model, tc.wantModel)
+			}
+		})
+	}
+}
+
 func TestGenerateClaude_TruncatesLargeStdoutLogEvent(t *testing.T) {
 	largeResult := strings.Repeat("x", claudeStdoutLogMaxBytes*2)
 	stdout := fmt.Sprintf(`[{"type":"result","result":%q,"modelUsage":{"m1":{}}}]`, largeResult)
