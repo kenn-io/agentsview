@@ -43,10 +43,10 @@
               <span class="agent-pill">
                 {formatAgentName(row.agent)}
               </span>
-              {truncate(row.displayName || row.sessionId.slice(0, 12), 40)}
+              {truncate(row.displayName || row.sessionId.slice(0, 12), 100)}
             </span>
             <span class="session-project">
-              {row.project}
+              {row.project} &middot; {row.sessionId}
             </span>
           </div>
           <span class="session-tokens">
