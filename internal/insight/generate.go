@@ -245,16 +245,17 @@ func generateClaude(
 		)
 	}
 
-	var resp struct {
-		Result string `json:"result"`
-		Model  string `json:"model"`
-	}
-	if json.Unmarshal(stdoutBytes, &resp) == nil &&
-		strings.TrimSpace(resp.Result) != "" {
+	// Claude Code CLI outputs a JSON array of events when
+	// invoked with -p --output-format json. Find the element
+	// with type="result" and extract its result field.
+	// Also accept the legacy single-object format as a
+	// fallback for older Claude CLI versions.
+	content, model := parseCLIResult(stdoutBytes)
+	if strings.TrimSpace(content) != "" {
 		return Result{
-			Content: resp.Result,
+			Content: content,
 			Agent:   "claude",
-			Model:   resp.Model,
+			Model:   model,
 		}, nil
 	}
 
@@ -269,6 +270,45 @@ func generateClaude(
 		"claude returned empty result\nraw: %s",
 		string(stdoutBytes),
 	)
+}
+
+// parseCLIResult extracts the result text and model from
+// claude CLI output. Claude Code (v2+) outputs a JSON array
+// of events; we find type="result" and read its result field.
+// Falls back to the legacy single-object format for older
+// versions: {"result":"...","model":"..."}.
+func parseCLIResult(data []byte) (result, model string) {
+	// Try JSON array format (Claude Code v2+).
+	var events []json.RawMessage
+	if json.Unmarshal(data, &events) == nil {
+		for _, raw := range events {
+			var ev struct {
+				Type       string                     `json:"type"`
+				Result     string                     `json:"result"`
+				ModelUsage map[string]json.RawMessage `json:"modelUsage"`
+			}
+			if json.Unmarshal(raw, &ev) != nil {
+				continue
+			}
+			if ev.Type == "result" &&
+				strings.TrimSpace(ev.Result) != "" {
+				for name := range ev.ModelUsage {
+					model = name
+					break
+				}
+				return ev.Result, model
+			}
+		}
+	}
+	// Fall back to legacy single-object format.
+	var resp struct {
+		Result string `json:"result"`
+		Model  string `json:"model"`
+	}
+	if json.Unmarshal(data, &resp) == nil {
+		return resp.Result, resp.Model
+	}
+	return "", ""
 }
 
 // generateCodex invokes `codex exec` in read-only sandbox

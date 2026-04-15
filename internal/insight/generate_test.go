@@ -272,7 +272,7 @@ func TestGenerateClaude_CLIFlags(t *testing.T) {
 		t.Skip("shell script test not supported on windows")
 	}
 
-	stdout := `{"result":"OK","model":"m1"}`
+	stdout := `[{"type":"result","result":"OK","modelUsage":{"m1":{}}}]`
 	bin, argsFile := createMockBinary(
 		t, stdout, 0, true, "claude",
 	)
@@ -467,13 +467,13 @@ func TestGenerateClaude_SalvageOnNonZeroExit(t *testing.T) {
 	}{
 		{
 			name:       "non-zero exit with valid result",
-			stdout:     `{"result":"# Analysis\nDone.","model":"m1"}`,
+			stdout:     `[{"type":"result","result":"# Analysis\nDone.","modelUsage":{"m1":{}}}]`,
 			exitCode:   1,
 			wantResult: "# Analysis\nDone.",
 		},
 		{
 			name:     "non-zero exit with empty result",
-			stdout:   `{"result":"","model":"m1"}`,
+			stdout:   `[{"type":"result","result":"","modelUsage":{"m1":{}}}]`,
 			exitCode: 1,
 			wantErr:  true,
 		},
@@ -491,13 +491,13 @@ func TestGenerateClaude_SalvageOnNonZeroExit(t *testing.T) {
 		},
 		{
 			name:       "zero exit with valid result",
-			stdout:     `{"result":"OK","model":"m2"}`,
+			stdout:     `[{"type":"result","result":"OK","modelUsage":{"m2":{}}}]`,
 			exitCode:   0,
 			wantResult: "OK",
 		},
 		{
 			name:     "zero exit with empty result",
-			stdout:   `{"result":"","model":"m2"}`,
+			stdout:   `[{"type":"result","result":"","modelUsage":{"m2":{}}}]`,
 			exitCode: 0,
 			wantErr:  true,
 		},
@@ -605,7 +605,7 @@ func TestGenerateClaude_CancelledContext(t *testing.T) {
 	// Pre-cancelled context: cmd.Run fails (runErr != nil)
 	// and ctx.Err() != nil → cancellation error.
 	bin := fakeClaudeBin(
-		t, `{"result":"OK","model":"m1"}`, 0,
+		t, `[{"type":"result","result":"OK","modelUsage":{"m1":{}}}]`, 0,
 	)
 	ctx, cancel := context.WithCancel(
 		context.Background(),
@@ -626,7 +626,7 @@ func TestGenerateClaude_SuccessNotDiscarded(t *testing.T) {
 	// the context is not fresh (regression test for gating
 	// ctx.Err() on runErr != nil).
 	bin := fakeClaudeBin(
-		t, `{"result":"OK","model":"m1"}`, 0,
+		t, `[{"type":"result","result":"OK","modelUsage":{"m1":{}}}]`, 0,
 	)
 	result, err := generateClaude(
 		context.Background(), bin, "test", nil,
@@ -641,7 +641,7 @@ func TestGenerateClaude_SuccessNotDiscarded(t *testing.T) {
 
 func TestGenerateClaude_TruncatesLargeStdoutLogEvent(t *testing.T) {
 	largeResult := strings.Repeat("x", claudeStdoutLogMaxBytes*2)
-	stdout := fmt.Sprintf(`{"result":%q,"model":"m1"}`, largeResult)
+	stdout := fmt.Sprintf(`[{"type":"result","result":%q,"modelUsage":{"m1":{}}}]`, largeResult)
 	bin := fakeClaudeBin(t, stdout, 0)
 
 	var logs []LogEvent
