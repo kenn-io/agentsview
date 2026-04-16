@@ -25,7 +25,7 @@
     "@tsconfig/svelte": "5.0.8",
     "@types/dompurify": "3.2.0",
     "jsdom": "29.0.2",
-    "svelte": "5.55.2",
+    "svelte": "5.55.4",
     "svelte-check": "4.4.5",
     "typescript": "6.0.2",
     "vite": "^8.0.8",
