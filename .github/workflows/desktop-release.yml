@@ -130,7 +130,7 @@ jobs:
           cp "$app_sig" "staging/${app_sig_name%.app.tar.gz.sig}_${{ matrix.arch }}.app.tar.gz.sig"
           ls -la staging/
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: agentsview-desktop-macos-${{ matrix.arch }}
           path: staging/*
@@ -208,7 +208,7 @@ jobs:
           cp desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip.sig staging/
           ls -la staging/
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: agentsview-desktop-windows
           path: staging/*
@@ -309,7 +309,7 @@ jobs:
           fi
           ls -la staging/
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: ${{ matrix.artifact_name }}
           path: staging/*
