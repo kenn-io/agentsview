@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@tanstack/virtual-core": "3.13.23",
-    "dompurify": "3.3.3",
+    "dompurify": "3.4.0",
     "marked": "18.0.0"
   },
   "devDependencies": {
