@@ -42,12 +42,13 @@ const (
 
 // testEnv sets up a server with a temporary database.
 type testEnv struct {
-	srv       *server.Server
-	handler   http.Handler
-	db        *db.DB
-	engine    *sync.Engine
-	claudeDir string
-	dataDir   string
+	srv         *server.Server
+	handler     http.Handler
+	db          *db.DB
+	engine      *sync.Engine
+	broadcaster *server.Broadcaster
+	claudeDir   string
+	dataDir     string
 }
 
 // setupOption customizes the config used by setup.
@@ -108,13 +109,19 @@ func setupWithServerOpts(
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	broadcaster := server.NewBroadcaster()
+	engineCfg := sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 			parser.AgentCodex:  {codexDir},
 		},
 		Machine: "test",
-	})
+		Emitter: broadcaster,
+	}
+	engine := sync.NewEngine(database, engineCfg)
+
+	// Prepend so caller-provided srvOpts can still override.
+	srvOpts = append([]server.Option{server.WithBroadcaster(broadcaster)}, srvOpts...)
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	// Wrap handler to set default Host header for all test
@@ -150,12 +157,69 @@ func setupWithServerOpts(
 	})
 
 	return &testEnv{
-		srv:       srv,
-		handler:   wrappedHandler,
-		db:        database,
-		engine:    engine,
-		claudeDir: claudeDir,
-		dataDir:   dir,
+		srv:         srv,
+		handler:     wrappedHandler,
+		db:          database,
+		engine:      engine,
+		broadcaster: broadcaster,
+		claudeDir:   claudeDir,
+		dataDir:     dir,
+	}
+}
+
+// setupPGMode builds a testEnv with engine == nil and no
+// broadcaster, mirroring the "pg serve" runtime mode where the
+// server reads from PostgreSQL and does not run a local sync
+// engine or live-refresh broadcaster.
+func setupPGMode(t *testing.T) *testEnv {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	database, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("opening db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	cfg := config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dir,
+		DBPath:       dbPath,
+		WriteTimeout: 30 * time.Second,
+	}
+	srv := server.New(cfg, database, nil)
+
+	defaultHost := net.JoinHostPort(
+		cfg.Host, fmt.Sprintf("%d", cfg.Port),
+	)
+	defaultOrigin := fmt.Sprintf("http://%s", defaultHost)
+	baseHandler := srv.Handler()
+	wrappedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host == "example.com" || r.Host == "" {
+			r.Host = defaultHost
+		}
+		if r.RemoteAddr == "192.0.2.1:1234" {
+			r.RemoteAddr = "127.0.0.1:1234"
+		}
+		if r.Header.Get("Origin") == "" {
+			switch r.Method {
+			case http.MethodPost, http.MethodPut,
+				http.MethodPatch, http.MethodDelete:
+				r.Header.Set("Origin", defaultOrigin)
+			}
+		}
+		baseHandler.ServeHTTP(w, r)
+	})
+
+	return &testEnv{
+		srv:         srv,
+		handler:     wrappedHandler,
+		db:          database,
+		engine:      nil,
+		broadcaster: nil,
+		dataDir:     dir,
 	}
 }
 
@@ -3050,4 +3114,125 @@ func TestFindAvailablePortZeroReturnsAssignedPort(t *testing.T) {
 		)
 	}
 	ln.Close()
+}
+
+func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
+	te := setup(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	// Give the handler time to subscribe.
+	time.Sleep(100 * time.Millisecond)
+
+	// Emit directly via the broadcaster to isolate the handler
+	// from sync engine timing.
+	te.broadcaster.Emit("messages")
+
+	te.waitForSSEEvent(t, w, "data_changed", 3*time.Second)
+	cancel()
+	<-done
+}
+
+func TestEvents_ReturnsServiceUnavailableInPGMode(t *testing.T) {
+	// A server with engine == nil (PG serve mode) must not stream.
+	te := setupPGMode(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("got status %d, want 503", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "300" {
+		t.Errorf("got Retry-After %q, want 300", got)
+	}
+}
+
+func withAuth(token string) setupOption {
+	return func(c *config.Config) {
+		c.RequireAuth = true
+		c.AuthToken = token
+	}
+}
+
+func TestEvents_AuthViaQueryTokenSucceeds(t *testing.T) {
+	te := setup(t, withAuth("secret"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/events?token=secret", nil).WithContext(ctx)
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	te.broadcaster.Emit("messages")
+	te.waitForSSEEvent(t, w, "data_changed", 2*time.Second)
+
+	cancel()
+	<-done
+}
+
+func TestEvents_AuthViaBearerHeaderSucceeds(t *testing.T) {
+	te := setup(t, withAuth("secret"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/events", nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer secret")
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	te.broadcaster.Emit("messages")
+	te.waitForSSEEvent(t, w, "data_changed", 2*time.Second)
+
+	cancel()
+	<-done
+}
+
+func TestEvents_AuthMissingTokenReturns401(t *testing.T) {
+	te := setup(t, withAuth("secret"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("got status %d, want 401", w.Code)
+	}
+}
+
+func TestEvents_AuthInvalidTokenReturns401(t *testing.T) {
+	te := setup(t, withAuth("secret"))
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/events?token=wrong", nil)
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("got status %d, want 401", w.Code)
+	}
 }

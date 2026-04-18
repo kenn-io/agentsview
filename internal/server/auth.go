@@ -85,14 +85,15 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		// Check Bearer token in Authorization header. The ?token=
-		// query param fallback is restricted to the SSE watch
-		// endpoint because EventSource cannot set custom headers.
-		// All other endpoints must use the Authorization header.
+		// query param fallback is restricted to SSE endpoints
+		// (see isSSEPath) because EventSource cannot set custom
+		// headers. All other endpoints must use the Authorization
+		// header.
 		var provided string
 		auth := r.Header.Get("Authorization")
 		if t, ok := strings.CutPrefix(auth, "Bearer "); ok {
 			provided = t
-		} else if qt := r.URL.Query().Get("token"); qt != "" && strings.HasSuffix(r.URL.Path, "/watch") {
+		} else if qt := r.URL.Query().Get("token"); qt != "" && isSSEPath(r.URL.Path) {
 			provided = qt
 		} else {
 			setCORSOnAuthError(w, r)
@@ -110,6 +111,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), ctxKeyRemoteAuth, true)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isSSEPath reports whether the given path is a server-sent events
+// endpoint that accepts a ?token= query parameter in place of the
+// Authorization header. The query-param fallback exists because
+// browser EventSource cannot set headers.
+func isSSEPath(path string) bool {
+	return strings.HasSuffix(path, "/watch") || path == "/api/v1/events"
 }
 
 // setCORSOnAuthError adds CORS headers to 401 responses so

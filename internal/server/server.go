@@ -31,14 +31,15 @@ type VersionInfo struct {
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
-	mu      gosync.RWMutex
-	cfg     config.Config
-	db      db.Store
-	engine  *sync.Engine
-	mux     *http.ServeMux
-	httpSrv *http.Server
-	version VersionInfo
-	dataDir string
+	mu          gosync.RWMutex
+	cfg         config.Config
+	db          db.Store
+	engine      *sync.Engine
+	broadcaster *Broadcaster
+	mux         *http.ServeMux
+	httpSrv     *http.Server
+	version     VersionInfo
+	dataDir     string
 
 	// baseCtx, when set, is used as the base context for all
 	// incoming requests. Cancelling it causes SSE handlers to
@@ -113,6 +114,13 @@ func WithBaseContext(ctx context.Context) Option {
 	return func(s *Server) { s.baseCtx = ctx }
 }
 
+// WithBroadcaster wires an event broadcaster into the server so the
+// /api/v1/events handler has something to subscribe to. Required for
+// live-refresh SSE; absent in PG serve mode where the engine is nil.
+func WithBroadcaster(b *Broadcaster) Option {
+	return func(s *Server) { s.broadcaster = b }
+}
+
 // WithUpdateChecker overrides the update check function,
 // allowing tests to substitute a deterministic stub.
 func WithUpdateChecker(f UpdateCheckFunc) Option {
@@ -170,6 +178,10 @@ func (s *Server) routes() {
 	// SSE: Do not use timeout, as this is a long-lived connection.
 	s.mux.HandleFunc(
 		"GET /api/v1/sessions/{id}/watch", s.handleWatchSession,
+	)
+	// SSE: Do not use timeout, as this is a long-lived connection.
+	s.mux.HandleFunc(
+		"GET /api/v1/events", s.handleEvents,
 	)
 	// Export: Do not use timeout handler to support large downloads and avoid buffering.
 	s.mux.Handle(

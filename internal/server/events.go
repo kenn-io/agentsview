@@ -214,6 +214,46 @@ func (s *Server) checkDBForChanges(
 	return false
 }
 
+func (s *Server) handleEvents(
+	w http.ResponseWriter, r *http.Request,
+) {
+	if s.engine == nil || s.broadcaster == nil {
+		w.Header().Set("Retry-After", "300")
+		writeError(w, http.StatusServiceUnavailable,
+			"events not available in this mode")
+		return
+	}
+
+	stream, err := NewSSEStream(w)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError,
+			"streaming not supported")
+		return
+	}
+
+	sub, unsub := s.broadcaster.Subscribe()
+	defer unsub()
+
+	heartbeat := time.NewTicker(pollInterval * heartbeatTicks)
+	defer heartbeat.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, ok := <-sub:
+			if !ok {
+				return
+			}
+			stream.SendJSON("data_changed",
+				map[string]string{"scope": ev.Scope})
+		case <-heartbeat.C:
+			stream.Send("heartbeat",
+				time.Now().Format(time.RFC3339))
+		}
+	}
+}
+
 func (s *Server) handleWatchSession(
 	w http.ResponseWriter, r *http.Request,
 ) {
