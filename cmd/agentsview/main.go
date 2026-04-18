@@ -98,12 +98,15 @@ func runServe(cfg config.Config) {
 	)
 	defer stop()
 
+	broadcaster := server.NewBroadcaster()
+
 	var engine *sync.Engine
 	if !cfg.NoSync {
 		engine = sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               cfg.AgentDirs,
 			Machine:                 "local",
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
+			Emitter:                 broadcaster,
 		})
 
 		if database.NeedsResync() {
@@ -197,6 +200,7 @@ func runServe(cfg config.Config) {
 		}),
 		server.WithDataDir(cfg.DataDir),
 		server.WithBaseContext(ctx),
+		server.WithBroadcaster(broadcaster),
 	)
 
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)
