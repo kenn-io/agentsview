@@ -91,6 +91,7 @@ func TestBroadcaster_ConcurrentSubscribeAndEmit(t *testing.T) {
 			select {
 			case <-sub:
 			case <-time.After(time.Second):
+				t.Errorf("concurrent subscriber did not receive event")
 			}
 		})
 	}

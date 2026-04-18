@@ -3236,3 +3236,35 @@ func TestEvents_AuthInvalidTokenReturns401(t *testing.T) {
 		t.Fatalf("got status %d, want 401", w.Code)
 	}
 }
+
+// TestSessionWatch_AuthViaQueryTokenSucceeds guards the existing
+// /api/v1/sessions/{id}/watch query-token flow against future
+// isSSEPath changes. The auth path now routes both /watch and
+// /api/v1/events through the same helper; this test ensures the
+// session-watch branch keeps working.
+func TestSessionWatch_AuthViaQueryTokenSucceeds(t *testing.T) {
+	te := setup(t, withAuth("secret"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/sessions/missing/watch?token=secret", nil).WithContext(ctx)
+	w := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	// The handler opens an SSE stream and starts emitting
+	// heartbeats even for unknown sessions; a quick wait
+	// confirms we got past auth (anything non-401 counts).
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	if w.Code == http.StatusUnauthorized {
+		t.Fatalf("query-token auth failed on /watch: status %d", w.Code)
+	}
+}
