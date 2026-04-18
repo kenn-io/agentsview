@@ -777,8 +777,14 @@ const resyncTempSuffix = "-resync"
 // deleting hundreds of thousands of messages in place.
 func (e *Engine) ResyncAll(
 	ctx context.Context, onProgress ProgressFunc,
-) SyncStats {
+) (stats SyncStats) {
 	e.syncMu.Lock()
+	// Defers LIFO: Unlock runs before emit.
+	defer func() {
+		if stats.Synced > 0 {
+			e.emit("sync")
+		}
+	}()
 	defer e.syncMu.Unlock()
 
 	origDB := e.db
@@ -820,7 +826,7 @@ func (e *Engine) ResyncAll(
 	if err != nil {
 		log.Printf("resync: open temp db: %v", err)
 		restoreSkipCache()
-		stats := SyncStats{
+		stats = SyncStats{
 			Aborted: true,
 			Warnings: []string{
 				"resync failed: " + err.Error(),
@@ -829,7 +835,7 @@ func (e *Engine) ResyncAll(
 		e.mu.Lock()
 		e.lastSyncStats = stats
 		e.mu.Unlock()
-		return stats
+		return
 	}
 
 	// 2b. Copy excluded session IDs from the old DB so that
@@ -842,7 +848,7 @@ func (e *Engine) ResyncAll(
 
 	// 3. Point engine at newDB and sync into it.
 	e.db = newDB
-	stats := e.syncAllLocked(ctx, onProgress, time.Time{})
+	stats = e.syncAllLocked(ctx, onProgress, time.Time{})
 	e.db = origDB // restore immediately
 
 	// Abort swap when the fresh DB would be worse than the
@@ -1020,10 +1026,9 @@ func (e *Engine) ResyncAll(
 	e.lastSyncStats = stats
 	e.mu.Unlock()
 
-	if stats.Synced > 0 {
-		e.emit("sync")
-	}
-	return stats
+	// Emission happens via the deferred closure above, after
+	// syncMu is released.
+	return
 }
 
 // removeTempDB removes a temp database and its WAL/SHM files.
@@ -1064,10 +1069,19 @@ func (e *Engine) LastSyncStartedAt() time.Time {
 // SyncAll discovers and syncs all session files from all agents.
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,
-) SyncStats {
+) (stats SyncStats) {
 	e.syncMu.Lock()
+	// Defers run LIFO: Unlock runs before the emit closure so
+	// Emitter implementations cannot widen the syncMu critical
+	// section or deadlock by re-entering sync code.
+	defer func() {
+		if stats.Synced > 0 {
+			e.emit("sessions")
+		}
+	}()
 	defer e.syncMu.Unlock()
-	return e.syncAllLocked(ctx, onProgress, time.Time{})
+	stats = e.syncAllLocked(ctx, onProgress, time.Time{})
+	return
 }
 
 // SyncAllSince syncs only files whose mtime is at or after
@@ -1079,10 +1093,16 @@ func (e *Engine) SyncAll(
 // files that were being written during a prior sync.
 func (e *Engine) SyncAllSince(
 	ctx context.Context, since time.Time, onProgress ProgressFunc,
-) SyncStats {
+) (stats SyncStats) {
 	e.syncMu.Lock()
+	defer func() {
+		if stats.Synced > 0 {
+			e.emit("sessions")
+		}
+	}()
 	defer e.syncMu.Unlock()
-	return e.syncAllLocked(ctx, onProgress, since)
+	stats = e.syncAllLocked(ctx, onProgress, since)
+	return
 }
 
 func (e *Engine) syncAllLocked(
@@ -1264,9 +1284,8 @@ func (e *Engine) syncAllLocked(
 	e.mu.Unlock()
 
 	e.recordSyncFinished()
-	if stats.Synced > 0 {
-		e.emit("sessions")
-	}
+	// Emission happens in SyncAll / SyncAllSince after syncMu is
+	// released; syncAllLocked runs under the caller's lock.
 	return stats
 }
 
