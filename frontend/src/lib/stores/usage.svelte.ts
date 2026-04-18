@@ -319,7 +319,10 @@ class UsageStore {
 
   async fetchSummary() {
     const v = ++this.versions.summary;
-    this.loading.summary = true;
+    // Only show the skeleton when we don't already have data to
+    // display. Refetches triggered by live events or filter changes
+    // replace data in place instead of flashing to loading state.
+    if (this.summary === null) this.loading.summary = true;
     this.errors.summary = null;
     try {
       const data = await getUsageSummary(this.baseParams());
@@ -340,7 +343,7 @@ class UsageStore {
 
   async fetchTopSessions() {
     const v = ++this.versions.topSessions;
-    this.loading.topSessions = true;
+    if (this.topSessions === null) this.loading.topSessions = true;
     this.errors.topSessions = null;
     try {
       const data = await getUsageTopSessions(this.baseParams());

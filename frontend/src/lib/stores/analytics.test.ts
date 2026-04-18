@@ -169,6 +169,21 @@ function resetStore() {
   analytics.project = "";
   analytics.from = "2024-01-01";
   analytics.to = "2024-01-31";
+  // Clear cached data fields so each test starts from a clean
+  // "no data" state. Prior tests leave the singleton populated,
+  // which breaks assertions like `loading === true during fetch`
+  // now that loading is only flipped on first-load (no existing
+  // data) rather than every refetch.
+  analytics.summary = null;
+  analytics.activity = null;
+  analytics.heatmap = null;
+  analytics.projects = null;
+  analytics.hourOfWeek = null;
+  analytics.sessionShape = null;
+  analytics.velocity = null;
+  analytics.tools = null;
+  analytics.topSessions = null;
+  analytics.signals = null;
 }
 
 // Note: selectDate and setDateRange invoke API mocks

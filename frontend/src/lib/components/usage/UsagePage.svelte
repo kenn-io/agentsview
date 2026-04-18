@@ -3,6 +3,7 @@
   import { usage } from "../../stores/usage.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { events } from "../../stores/events.svelte.js";
   import { agentColor } from "../../utils/agents.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
@@ -13,6 +14,7 @@
 
   const REFRESH_MS = 5 * 60 * 1000;
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let unsubEvents: (() => void) | undefined;
 
   const projectItems = $derived(
     sessions.projects.map((p) => ({
@@ -162,12 +164,16 @@
       () => usage.fetchAll(),
       REFRESH_MS,
     );
+    unsubEvents = events.subscribeDebounced(
+      () => usage.fetchAll(),
+    );
   });
 
   onDestroy(() => {
     if (refreshTimer !== undefined) {
       clearInterval(refreshTimer);
     }
+    unsubEvents?.();
   });
 </script>
 

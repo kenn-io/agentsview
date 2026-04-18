@@ -15,6 +15,7 @@
   import ActiveFilters from "./ActiveFilters.svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { events } from "../../stores/events.svelte.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
 
   function shortTz(tz: string): string {
@@ -39,12 +40,16 @@
   }
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let unsubEvents: (() => void) | undefined;
 
   onMount(() => {
     analytics.fetchAll();
     refreshTimer = setInterval(
       () => analytics.fetchAll(),
       REFRESH_INTERVAL_MS,
+    );
+    unsubEvents = events.subscribeDebounced(
+      () => analytics.fetchAll(),
     );
   });
 
@@ -119,6 +124,7 @@
     if (refreshTimer !== undefined) {
       clearInterval(refreshTimer);
     }
+    unsubEvents?.();
   });
 </script>
 

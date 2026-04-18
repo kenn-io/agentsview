@@ -344,9 +344,13 @@ class AnalyticsStore {
     panel: Panel,
     fetchRequest: () => Promise<T>,
     onSuccess: (data: T) => void,
+    hasExistingData: () => boolean = () => false,
   ) {
     const v = ++this.versions[panel];
-    this.loading[panel] = true;
+    // Only show the skeleton when we don't already have data to
+    // display. Refetches triggered by live events or filter changes
+    // replace data in place instead of flashing to loading state.
+    if (!hasExistingData()) this.loading[panel] = true;
     this.errors[panel] = null;
     try {
       const data = await fetchRequest();
@@ -386,6 +390,7 @@ class AnalyticsStore {
       (data) => {
         this.summary = data;
       },
+      () => this.summary !== null,
     );
   }
 
@@ -403,6 +408,7 @@ class AnalyticsStore {
       (data) => {
         this.activity = data;
       },
+      () => this.activity !== null,
     );
   }
 
@@ -417,6 +423,7 @@ class AnalyticsStore {
       (data) => {
         this.heatmap = data;
       },
+      () => this.heatmap !== null,
     );
   }
 
@@ -430,6 +437,7 @@ class AnalyticsStore {
       (data) => {
         this.projects = data;
       },
+      () => this.projects !== null,
     );
   }
 
@@ -440,6 +448,7 @@ class AnalyticsStore {
       (data) => {
         this.hourOfWeek = data;
       },
+      () => this.hourOfWeek !== null,
     );
   }
 
@@ -450,6 +459,7 @@ class AnalyticsStore {
       (data) => {
         this.sessionShape = data;
       },
+      () => this.sessionShape !== null,
     );
   }
 
@@ -460,6 +470,7 @@ class AnalyticsStore {
       (data) => {
         this.velocity = data;
       },
+      () => this.velocity !== null,
     );
   }
 
@@ -470,6 +481,7 @@ class AnalyticsStore {
       (data) => {
         this.tools = data;
       },
+      () => this.tools !== null,
     );
   }
 
@@ -484,6 +496,7 @@ class AnalyticsStore {
       (data) => {
         this.topSessions = data;
       },
+      () => this.topSessions !== null,
     );
   }
 
@@ -494,6 +507,7 @@ class AnalyticsStore {
       (data) => {
         this.signals = data;
       },
+      () => this.signals !== null,
     );
   }
 

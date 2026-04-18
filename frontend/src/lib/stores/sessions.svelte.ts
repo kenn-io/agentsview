@@ -1,6 +1,7 @@
 import * as api from "../api/client.js";
 import type { Session, ProjectInfo, AgentInfo } from "../api/types.js";
 import { sync } from "./sync.svelte.js";
+import { events } from "./events.svelte.js";
 
 const SESSION_PAGE_SIZE = 500;
 
@@ -173,6 +174,10 @@ class SessionsStore {
   private machinesPromise: Promise<void> | null = null;
   private machinesVersion: number = 0;
 
+  private liveRefreshStarted = false;
+  private unsubEvents: (() => void) | null = null;
+  private safetyNetTimer: ReturnType<typeof setInterval> | null = null;
+
   get activeSession(): Session | undefined {
     return this.sessions.find((s) => s.id === this.activeSessionId);
   }
@@ -233,8 +238,13 @@ class SessionsStore {
 
   async load() {
     saveFilters(this.filters);
+    this.startLiveRefresh();
     const version = ++this.loadVersion;
-    this.loading = true;
+    // Only flip loading=true when we don't already have data to show.
+    // Live-event refetches and filter-change refetches keep the
+    // existing list visible and swap it in place when data arrives,
+    // instead of flashing to a loading indicator.
+    if (this.sessions.length === 0) this.loading = true;
     // Preserve old data during reload — clearing eagerly
     // causes a flash because the sidebar and content area
     // briefly see an empty session list.
@@ -777,6 +787,30 @@ class SessionsStore {
     if (idx !== -1) {
       this.sessions[idx] = { ...this.sessions[idx]!, ...updated };
     }
+  }
+
+  private startLiveRefresh() {
+    if (this.liveRefreshStarted) return;
+    this.liveRefreshStarted = true;
+    this.unsubEvents = events.subscribeDebounced(
+      () => { this.load(); },
+    );
+    this.safetyNetTimer = setInterval(
+      () => { this.load(); },
+      5 * 60 * 1000,
+    );
+  }
+
+  dispose() {
+    if (this.unsubEvents) {
+      this.unsubEvents();
+      this.unsubEvents = null;
+    }
+    if (this.safetyNetTimer !== null) {
+      clearInterval(this.safetyNetTimer);
+      this.safetyNetTimer = null;
+    }
+    this.liveRefreshStarted = false;
   }
 }
 
