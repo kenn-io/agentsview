@@ -101,6 +101,35 @@ describe("events store", () => {
     expect(FakeEventSource.instances[0]!.closed).toBe(true);
   });
 
+  it("self-heals a closed EventSource while listeners are still subscribed", async () => {
+    vi.useFakeTimers();
+    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import(
+      "./events.svelte.js"
+    );
+    const received: string[] = [];
+    const unsub = events.subscribe((e) => received.push(e.scope));
+    const first = FakeEventSource.instances[0]!;
+
+    // Trip the circuit breaker on the first connection; the long-
+    // lived subscriber never resubscribes, so without the heal
+    // timer it would be stuck on a closed stream.
+    for (let i = 0; i < 5; i++) first.fireError();
+    expect(first.closed).toBe(true);
+
+    // Advance to the heal-timer tick. The store should notice the
+    // closed ES and rebuild while the listener is still active.
+    await vi.advanceTimersByTimeAsync(EVENTS_STORE_HEAL_INTERVAL_MS);
+    expect(FakeEventSource.instances.length).toBe(2);
+    const second = FakeEventSource.instances[1]!;
+    expect(second.closed).toBe(false);
+
+    second.fire("data_changed", { scope: "messages" });
+    expect(received).toEqual(["messages"]);
+
+    unsub();
+    vi.useRealTimers();
+  });
+
   it("reopens the EventSource after the circuit breaker closes it", async () => {
     const { events } = await import("./events.svelte.js");
     const received: string[] = [];

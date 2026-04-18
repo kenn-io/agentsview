@@ -2,18 +2,26 @@ import { watchEvents, type DataChangedEvent } from "../api/client.js";
 
 type Listener = (e: DataChangedEvent) => void;
 
+// How often the store checks whether a closed EventSource can be
+// rebuilt. Long-lived subscribers (e.g. the sessions store) never
+// resubscribe, so without this self-heal a circuit-breaker close
+// would leave them permanently detached from live events.
+export const EVENTS_STORE_HEAL_INTERVAL_MS = 60_000;
+
 class EventsStore {
   private es: EventSource | null = null;
   // Use a Map keyed by a unique per-call token so two subscribes
   // of the same function reference are tracked independently and
   // each unsubscribe only removes its own entry.
   private listeners = new Map<symbol, Listener>();
+  private healTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Subscribe to every event. Returns unsubscribe. */
   subscribe(fn: Listener): () => void {
     const key = Symbol();
     this.listeners.set(key, fn);
     this.ensureOpen();
+    this.ensureHealTimer();
     return () => {
       this.listeners.delete(key);
       if (this.listeners.size === 0) {
@@ -76,6 +84,33 @@ class EventsStore {
     if (this.es === null) return;
     this.es.close();
     this.es = null;
+    if (this.healTimer !== null) {
+      clearInterval(this.healTimer);
+      this.healTimer = null;
+    }
+  }
+
+  // ensureHealTimer starts a periodic check that rebuilds the
+  // shared EventSource when it has been closed by the circuit
+  // breaker but listeners are still registered. Without it, a
+  // transient outage that trips the breaker would leave long-lived
+  // subscribers stuck until the page reloads.
+  private ensureHealTimer() {
+    if (this.healTimer !== null) return;
+    this.healTimer = setInterval(() => {
+      if (this.listeners.size === 0) {
+        if (this.healTimer !== null) {
+          clearInterval(this.healTimer);
+          this.healTimer = null;
+        }
+        return;
+      }
+      const CLOSED = 2;
+      if (this.es !== null && this.es.readyState === CLOSED) {
+        this.es = null;
+        this.ensureOpen();
+      }
+    }, EVENTS_STORE_HEAL_INTERVAL_MS);
   }
 }
 
