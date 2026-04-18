@@ -3,13 +3,18 @@
 package sync
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	gosync "sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/wesm/agentsview/internal/db"
+	"github.com/wesm/agentsview/internal/parser"
+	"github.com/wesm/agentsview/internal/testjsonl"
 )
 
 func openTestDB(t *testing.T) *db.DB {
@@ -952,5 +957,234 @@ func TestBlockedCategorySet(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// fakeEmitter records scopes passed to Emit. Thread-safe so it
+// can be called from engine goroutines under test.
+type fakeEmitter struct {
+	mu     gosync.Mutex
+	scopes []string
+}
+
+func (f *fakeEmitter) Emit(scope string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scopes = append(f.scopes, scope)
+}
+
+func (f *fakeEmitter) got() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.scopes))
+	copy(out, f.scopes)
+	return out
+}
+
+// engineFixture bundles a *db.DB, a Claude directory, and an
+// *Engine for emitter tests. The engine is rebuilt by
+// engineWithEmitter so tests can swap emitters in.
+type engineFixture struct {
+	db        *db.DB
+	claudeDir string
+	engine    *Engine
+}
+
+func newEngineFixture(t *testing.T) *engineFixture {
+	t.Helper()
+	fx := &engineFixture{
+		db:        openTestDB(t),
+		claudeDir: t.TempDir(),
+	}
+	fx.engineWithEmitter(nil)
+	return fx
+}
+
+// engineWithEmitter builds a new *Engine wired to the fixture's
+// db and claude dir, using em as the Emitter (nil for no
+// emitter).
+func (fx *engineFixture) engineWithEmitter(em Emitter) {
+	fx.engine = NewEngine(fx.db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {fx.claudeDir},
+		},
+		Machine: "local",
+		Emitter: em,
+	})
+}
+
+// writeClaudeSession writes a minimal single-user-message
+// Claude JSONL file under <claudeDir>/<proj>/<filename> and
+// returns the full path. The session ID derived by the parser
+// is the filename with .jsonl stripped.
+func (fx *engineFixture) writeClaudeSession(
+	t *testing.T, proj, filename, firstMessage string,
+) string {
+	t.Helper()
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", firstMessage).
+		String()
+	path := filepath.Join(fx.claudeDir, proj, filename)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
+
+// appendClaudeMessage appends a single user message to the
+// existing JSONL file so that SyncSingleSession has new data
+// to ingest.
+func (fx *engineFixture) appendClaudeMessage(
+	t *testing.T, path, message string,
+) {
+	t.Helper()
+	line := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:05Z", message).
+		String()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatalf("WriteString: %v", err)
+	}
+}
+
+// sessionIDFor returns the session ID the engine uses for the
+// given Claude JSONL file. For Claude sessions the ID is the
+// filename stem (no .jsonl suffix).
+func (fx *engineFixture) sessionIDFor(
+	t *testing.T, path string,
+) string {
+	t.Helper()
+	return filepath.Base(path[:len(path)-len(".jsonl")])
+}
+
+func TestEngine_SyncAllEmitsWhenSessionsChange(t *testing.T) {
+	fx := newEngineFixture(t)
+	em := &fakeEmitter{}
+	fx.engineWithEmitter(em)
+
+	fx.writeClaudeSession(t, "proj", "s1.jsonl", "hello")
+	stats := fx.engine.SyncAll(context.Background(), nil)
+	if stats.Synced == 0 {
+		t.Fatal("expected Synced > 0")
+	}
+	got := em.got()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 emission, got %d: %v", len(got), got)
+	}
+	if got[0] != "sessions" {
+		t.Errorf("SyncAll scope: got %q, want %q", got[0], "sessions")
+	}
+}
+
+func TestEngine_SyncAllDoesNotEmitOnEmptyRun(t *testing.T) {
+	fx := newEngineFixture(t)
+	em := &fakeEmitter{}
+	fx.engineWithEmitter(em)
+
+	// No session files — sync finds nothing.
+	stats := fx.engine.SyncAll(context.Background(), nil)
+	if stats.Synced != 0 {
+		t.Fatalf("expected Synced == 0, got %d", stats.Synced)
+	}
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions, got %v", got)
+	}
+}
+
+func TestEngine_SyncPathsEmitsWhenSessionsChange(t *testing.T) {
+	fx := newEngineFixture(t)
+	em := &fakeEmitter{}
+	fx.engineWithEmitter(em)
+
+	path := fx.writeClaudeSession(t, "proj", "s1.jsonl", "hello")
+	fx.engine.SyncPaths([]string{path})
+
+	got := em.got()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 emission, got %d: %v", len(got), got)
+	}
+	if got[0] != "sessions" {
+		t.Errorf("SyncPaths scope: got %q, want %q", got[0], "sessions")
+	}
+}
+
+// emitterFunc adapts a plain function to the Emitter interface so
+// tests can inline probing behavior without declaring a new type.
+type emitterFunc func(scope string)
+
+func (f emitterFunc) Emit(scope string) { f(scope) }
+
+// TestEngine_SyncPathsEmitsAfterSyncMuReleased asserts that SyncPaths
+// releases syncMu BEFORE invoking Emitter.Emit. The probe uses
+// sync.Mutex.TryLock() synchronously: if the emit caller still holds
+// the lock, TryLock returns false immediately; if the lock is already
+// released, TryLock returns true. No goroutines, no wall-clock
+// timeouts — deterministic under load.
+func TestEngine_SyncPathsEmitsAfterSyncMuReleased(t *testing.T) {
+	fx := newEngineFixture(t)
+
+	var acquired atomic.Bool
+	em := emitterFunc(func(scope string) {
+		if fx.engine.syncMu.TryLock() {
+			fx.engine.syncMu.Unlock()
+			acquired.Store(true)
+		}
+	})
+	fx.engineWithEmitter(em)
+
+	path := fx.writeClaudeSession(t, "proj", "s1.jsonl", "hello")
+	fx.engine.SyncPaths([]string{path})
+
+	if !acquired.Load() {
+		t.Fatal("syncMu was still held when SyncPaths emitted — defer-order regression")
+	}
+}
+
+func TestEngine_SyncPathsDoesNotEmitOnNoMatches(t *testing.T) {
+	fx := newEngineFixture(t)
+	em := &fakeEmitter{}
+	fx.engineWithEmitter(em)
+
+	// Path doesn't match any known session pattern — classifyPaths
+	// returns zero files and SyncPaths returns early.
+	fx.engine.SyncPaths([]string{"/nonexistent/bogus.txt"})
+
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions, got %v", got)
+	}
+}
+
+func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
+	fx := newEngineFixture(t)
+	em := &fakeEmitter{}
+	fx.engineWithEmitter(em)
+
+	path := fx.writeClaudeSession(t, "proj", "s1.jsonl", "hello")
+	// Seed DB first so SyncSingleSession has something to find.
+	fx.engine.SyncPaths([]string{path})
+
+	// Clear emissions from the seed, then append + SyncSingleSession.
+	em.mu.Lock()
+	em.scopes = em.scopes[:0]
+	em.mu.Unlock()
+
+	fx.appendClaudeMessage(t, path, "world")
+	sessionID := fx.sessionIDFor(t, path)
+	if err := fx.engine.SyncSingleSession(sessionID); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+	got := em.got()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 emission, got %d: %v", len(got), got)
+	}
+	if got[0] != "messages" {
+		t.Errorf("SyncSingleSession scope: got %q, want %q", got[0], "messages")
 	}
 }
