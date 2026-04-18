@@ -401,6 +401,11 @@ function processFrame(
   return undefined;
 }
 
+/** Event payload for /api/v1/events data_changed frames. */
+export interface DataChangedEvent {
+  scope: "messages" | "sessions" | "sync";
+}
+
 /** Watch a session for live updates via SSE.
  *
  * SECURITY NOTE: The native EventSource API does not support custom
@@ -427,6 +432,86 @@ export function watchSession(
 
   es.onerror = () => {
     // Connection will auto-retry via EventSource spec
+  };
+
+  return es;
+}
+
+/** Watch the global sync event stream via SSE.
+ *
+ * Returns the underlying EventSource so callers can close() it
+ * when done. The browser's native EventSource auto-reconnects
+ * on transient errors; in PG serve mode the endpoint returns
+ * 503 and the browser will retry at its default interval.
+ *
+ * SECURITY NOTE: Same as watchSession — EventSource cannot set
+ * headers, so the auth token is passed as a query parameter
+ * for remote connections. This may leak the token into browser
+ * history / access logs; accepted per the project threat model.
+ */
+/** Number of consecutive onerror firings without any successful
+ * event delivery before watchEvents gives up and closes the
+ * underlying EventSource. This protects PG serve mode — where
+ * /api/v1/events returns 503 permanently — from turning into a
+ * forever retry loop in the browser.
+ */
+export const WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS = 5;
+
+export function watchEvents(
+  onEvent: (e: DataChangedEvent) => void,
+): EventSource {
+  const url = `${getBase()}/events`;
+  const token = getAuthToken();
+  const fullUrl = token
+    ? `${url}?token=${encodeURIComponent(token)}`
+    : url;
+  const es = new EventSource(fullUrl);
+
+  // Circuit breaker: on N consecutive onerror firings without any
+  // successful connection or event delivery, assume the endpoint
+  // is permanently unavailable (e.g. PG serve mode 503) and stop
+  // reconnecting. The counter resets on both `open` (a successful
+  // (re)connect) and a delivered `data_changed` event, so a quiet
+  // but healthy stream isn't tripped by transient network blips.
+  let consecutiveErrors = 0;
+
+  es.addEventListener("open", () => {
+    consecutiveErrors = 0;
+  });
+
+  es.addEventListener("data_changed", (msg) => {
+    // Successful delivery also resets the circuit breaker.
+    consecutiveErrors = 0;
+    // Parse and shape-check the payload. Anything that isn't an
+    // object with a known scope collapses to a safe refresh signal
+    // so subscribers never observe scope === undefined.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse((msg as MessageEvent).data);
+    } catch {
+      onEvent({ scope: "sync" });
+      return;
+    }
+    const scope =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as { scope?: unknown }).scope
+        : undefined;
+    if (
+      scope === "messages" ||
+      scope === "sessions" ||
+      scope === "sync"
+    ) {
+      onEvent({ scope });
+    } else {
+      onEvent({ scope: "sync" });
+    }
+  });
+
+  es.onerror = () => {
+    consecutiveErrors += 1;
+    if (consecutiveErrors >= WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS) {
+      es.close();
+    }
   };
 
   return es;

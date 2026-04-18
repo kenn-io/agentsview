@@ -7,6 +7,8 @@ import {
   getAnalyticsActivity,
   getAnalyticsHeatmap,
   getAnalyticsTopSessions,
+  watchEvents,
+  WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   ApiError,
 } from "./client.js";
 import type { SyncHandle } from "./client.js";
@@ -660,5 +662,172 @@ describe("query serialization", () => {
         "/api/v1/analytics/top-sessions?from=2024-01-01",
       );
     });
+  });
+});
+
+describe("watchEvents", () => {
+  class FakeEventSource {
+    static instances: FakeEventSource[] = [];
+    public url: string;
+    public readyState = 1;
+    private listeners: Record<string, ((ev: MessageEvent) => void)[]> = {};
+    public onerror: ((ev: Event) => void) | null = null;
+    public closed = false;
+
+    constructor(url: string) {
+      this.url = url;
+      FakeEventSource.instances.push(this);
+    }
+
+    addEventListener(name: string, cb: (ev: MessageEvent) => void) {
+      (this.listeners[name] ||= []).push(cb);
+    }
+
+    close() {
+      this.closed = true;
+    }
+
+    // Fire an onerror event (the native API triggers via the property, not addEventListener).
+    fireError() {
+      if (this.onerror) this.onerror(new Event("error"));
+    }
+
+    // Fire an open event (successful (re)connect).
+    fireOpen() {
+      (this.listeners["open"] || []).forEach((cb) => cb(new Event("open") as MessageEvent));
+    }
+
+    // Fire a frame with a string body (caller controls JSON validity).
+    fireRaw(name: string, data: string) {
+      const payload = { data } as MessageEvent;
+      (this.listeners[name] || []).forEach((cb) => cb(payload));
+    }
+
+    static reset() {
+      FakeEventSource.instances = [];
+    }
+  }
+
+  beforeEach(() => {
+    FakeEventSource.reset();
+    vi.stubGlobal("EventSource", FakeEventSource);
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it("opens /api/v1/events locally without a token", () => {
+    watchEvents(() => {});
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances[0]!.url).toBe("/api/v1/events");
+  });
+
+  it("appends ?token= when an auth token is set", () => {
+    localStorage.setItem("agentsview-auth-token", "secret");
+    watchEvents(() => {});
+    expect(FakeEventSource.instances[0]!.url).toBe(
+      "/api/v1/events?token=secret",
+    );
+  });
+
+  it("invokes onEvent with parsed scope for valid data_changed frames", () => {
+    const received: string[] = [];
+    watchEvents((e) => received.push(e.scope));
+    FakeEventSource.instances[0]!.fireRaw(
+      "data_changed",
+      JSON.stringify({ scope: "messages" }),
+    );
+    expect(received).toEqual(["messages"]);
+  });
+
+  it("falls back to { scope: 'sync' } for malformed payloads", () => {
+    const received: string[] = [];
+    watchEvents((e) => received.push(e.scope));
+    FakeEventSource.instances[0]!.fireRaw(
+      "data_changed",
+      "not valid json",
+    );
+    expect(received).toEqual(["sync"]);
+  });
+
+  it("falls back to { scope: 'sync' } for parsed-but-invalid payloads", () => {
+    const received: string[] = [];
+    watchEvents((e) => received.push(e.scope));
+    const es = FakeEventSource.instances[0]!;
+    // Empty object — no scope field.
+    es.fireRaw("data_changed", JSON.stringify({}));
+    // Unknown scope value.
+    es.fireRaw("data_changed", JSON.stringify({ scope: "bogus" }));
+    // Non-object payloads (string, number, null).
+    es.fireRaw("data_changed", JSON.stringify("messages"));
+    es.fireRaw("data_changed", JSON.stringify(42));
+    es.fireRaw("data_changed", JSON.stringify(null));
+    expect(received).toEqual(["sync", "sync", "sync", "sync", "sync"]);
+  });
+
+  it("opens <server>/api/v1/events with server-scoped token in remote mode", () => {
+    const server = "https://remote.example.com";
+    localStorage.setItem("agentsview-server-url", server);
+    localStorage.setItem(`agentsview-auth-token::${server}`, "remote-token");
+    watchEvents(() => {});
+    expect(FakeEventSource.instances[0]!.url).toBe(
+      `${server}/api/v1/events?token=remote-token`,
+    );
+  });
+
+  it("URL-encodes reserved characters in the token query parameter", () => {
+    const rawToken = "a b&c?d=e/f+g";
+    localStorage.setItem("agentsview-auth-token", rawToken);
+    watchEvents(() => {});
+    expect(FakeEventSource.instances[0]!.url).toBe(
+      `/api/v1/events?token=${encodeURIComponent(rawToken)}`,
+    );
+  });
+
+  it("closes the EventSource after N consecutive errors without a successful event", () => {
+    watchEvents(() => {});
+    const es = FakeEventSource.instances[0]!;
+    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
+      es.fireError();
+      expect(es.closed).toBe(false);
+    }
+    es.fireError();
+    expect(es.closed).toBe(true);
+  });
+
+  it("resets the error counter on a successful (re)connect", () => {
+    watchEvents(() => {});
+    const es = FakeEventSource.instances[0]!;
+    // Accumulate N-1 errors.
+    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
+      es.fireError();
+    }
+    // A successful reconnect (open event) resets the counter.
+    es.fireOpen();
+    // Another N-1 errors should still not close.
+    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
+      es.fireError();
+    }
+    expect(es.closed).toBe(false);
+  });
+
+  it("resets the error counter after a successful event delivery", () => {
+    const received: string[] = [];
+    watchEvents((e) => received.push(e.scope));
+    const es = FakeEventSource.instances[0]!;
+    // Accumulate N-1 errors, then a successful event resets the counter.
+    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
+      es.fireError();
+    }
+    es.fireRaw("data_changed", JSON.stringify({ scope: "messages" }));
+    expect(received).toEqual(["messages"]);
+    // Another N-1 errors should still not close — counter is back at 0.
+    for (let i = 0; i < WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS - 1; i++) {
+      es.fireError();
+    }
+    expect(es.closed).toBe(false);
   });
 });
