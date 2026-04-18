@@ -21,6 +21,11 @@ class FakeEventSource {
 
   close() {
     this.closed = true;
+    this.readyState = 2; // EventSource.CLOSED per HTML spec
+  }
+
+  fireError() {
+    if (this.onerror) this.onerror(new Event("error"));
   }
 
   fire(name: string, data: unknown) {
@@ -94,6 +99,35 @@ describe("events store", () => {
     // Second unsubscribe closes the connection.
     unsub2();
     expect(FakeEventSource.instances[0]!.closed).toBe(true);
+  });
+
+  it("reopens the EventSource after the circuit breaker closes it", async () => {
+    const { events } = await import("./events.svelte.js");
+    const received: string[] = [];
+    const unsub = events.subscribe((e) => received.push(e.scope));
+    const first = FakeEventSource.instances[0]!;
+
+    // Trip the circuit breaker on the first connection. watchEvents
+    // closes the ES after N consecutive onerror firings without a
+    // successful delivery; the FakeEventSource's fireError + close
+    // sequence simulates that permanent failure.
+    for (let i = 0; i < 5; i++) first.fireError();
+    expect(first.closed).toBe(true);
+    expect(first.readyState).toBe(2);
+
+    // A new subscriber should trigger a fresh EventSource rather
+    // than silently returning with a stale CLOSED handle.
+    const unsub2 = events.subscribe((e) => received.push(`b:${e.scope}`));
+    expect(FakeEventSource.instances.length).toBe(2);
+    const second = FakeEventSource.instances[1]!;
+    expect(second.closed).toBe(false);
+
+    second.fire("data_changed", { scope: "messages" });
+    expect(received).toContain("messages");
+    expect(received).toContain("b:messages");
+
+    unsub();
+    unsub2();
   });
 
   it("debounces rapid events into one callback per debounce window", async () => {

@@ -53,7 +53,20 @@ class EventsStore {
   }
 
   private ensureOpen() {
-    if (this.es !== null) return;
+    // watchEvents trips a circuit breaker and calls es.close() on
+    // repeated errors; the store's cached handle then points at a
+    // CLOSED EventSource. Treat that as "not open" and build a
+    // fresh connection so existing/new subscribers can recover
+    // once the endpoint starts serving again.
+    //
+    // EventSource.CLOSED === 2 per the HTML spec. Using the literal
+    // here avoids referencing the EventSource global, which isn't
+    // defined in every test environment (e.g. sessions tests mock
+    // watchEvents directly without stubbing EventSource).
+    const CLOSED = 2;
+    if (this.es !== null && this.es.readyState !== CLOSED) {
+      return;
+    }
     this.es = watchEvents((e) => {
       for (const fn of this.listeners.values()) fn(e);
     });
