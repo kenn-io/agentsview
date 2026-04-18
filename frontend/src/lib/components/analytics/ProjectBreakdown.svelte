@@ -95,9 +95,7 @@
     {/if}
   </div>
 
-  {#if analytics.loading.projects}
-    <div class="loading">Loading projects...</div>
-  {:else if analytics.errors.projects}
+  {#if analytics.errors.projects}
     <div class="error">
       {analytics.errors.projects}
       <button
@@ -258,7 +256,7 @@
     z-index: 100;
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;

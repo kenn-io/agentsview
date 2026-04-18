@@ -75,9 +75,7 @@
 <div class="cache-panel">
   <h3 class="chart-title">Cache Efficiency</h3>
 
-  {#if usage.loading.summary}
-    <div class="loading">Loading...</div>
-  {:else if bars.length === 0}
+  {#if bars.length === 0}
     <div class="empty">No token data</div>
   {:else}
     <div class="bar-list">
@@ -188,7 +186,7 @@
     color: var(--accent-amber);
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;

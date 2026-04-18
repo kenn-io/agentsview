@@ -16,9 +16,7 @@
 <div class="top-sessions-container">
   <h3 class="chart-title">Top Sessions by Cost</h3>
 
-  {#if usage.loading.topSessions}
-    <div class="loading">Loading top sessions...</div>
-  {:else if usage.errors.topSessions}
+  {#if usage.errors.topSessions}
     <div class="error">
       {usage.errors.topSessions}
       <button
@@ -165,7 +163,7 @@
     text-align: right;
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;

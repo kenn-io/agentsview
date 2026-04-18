@@ -59,11 +59,8 @@
 
 <div class="summary-cards">
   {#each cards as card}
-    <div class="card" class:loading={analytics.loading.summary}>
-      {#if analytics.loading.summary}
-        <div class="skeleton-value"></div>
-        <div class="skeleton-label"></div>
-      {:else if analytics.errors.summary}
+    <div class="card">
+      {#if analytics.errors.summary}
         <span class="card-value error">--</span>
         <span class="card-label">{card.label}</span>
       {:else}
@@ -134,20 +131,6 @@
     font-size: 10px;
     color: var(--text-muted);
     margin-top: 2px;
-  }
-
-  .skeleton-value {
-    width: 60px;
-    height: 20px;
-    background: var(--bg-inset);
-    border-radius: var(--radius-sm);
-  }
-
-  .skeleton-label {
-    width: 80px;
-    height: 12px;
-    background: var(--bg-inset);
-    border-radius: var(--radius-sm);
   }
 
   .error-bar {

@@ -147,9 +147,7 @@
     </div>
   </div>
 
-  {#if usage.loading.summary}
-    <div class="loading">Loading...</div>
-  {:else if rows.length === 0}
+  {#if rows.length === 0}
     <div class="empty">No data for this period</div>
   {:else}
     <div class="hint">Click to hide from chart</div>
@@ -423,7 +421,7 @@
     color: var(--accent-blue);
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;

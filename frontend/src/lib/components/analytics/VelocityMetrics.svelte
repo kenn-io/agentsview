@@ -57,9 +57,7 @@
     </div>
   </div>
 
-  {#if analytics.loading.velocity}
-    <div class="loading">Loading...</div>
-  {:else if analytics.errors.velocity}
+  {#if analytics.errors.velocity}
     <div class="error">
       {analytics.errors.velocity}
       <button
@@ -265,7 +263,6 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .loading,
   .empty {
     color: var(--text-muted);
     font-size: 12px;

@@ -75,9 +75,7 @@
     </div>
   </div>
 
-  {#if analytics.loading.sessionShape}
-    <div class="loading">Loading...</div>
-  {:else if analytics.errors.sessionShape}
+  {#if analytics.errors.sessionShape}
     <div class="error">
       {analytics.errors.sessionShape}
       <button
@@ -224,7 +222,6 @@
     text-align: right;
   }
 
-  .loading,
   .empty {
     color: var(--text-muted);
     font-size: 12px;

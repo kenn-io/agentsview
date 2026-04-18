@@ -87,9 +87,7 @@
 <div class="agent-comparison">
   <h3 class="chart-title">Agent Comparison</h3>
 
-  {#if analytics.loading.velocity || analytics.loading.summary || analytics.loading.tools}
-    <div class="loading">Loading...</div>
-  {:else if analytics.errors.velocity || analytics.errors.summary || analytics.errors.tools}
+  {#if analytics.errors.velocity || analytics.errors.summary || analytics.errors.tools}
     <div class="error">
       {analytics.errors.velocity ?? analytics.errors.summary ?? analytics.errors.tools}
       <button
@@ -218,7 +216,6 @@
     font-size: 10px;
   }
 
-  .loading,
   .empty {
     color: var(--text-muted);
     font-size: 12px;

@@ -69,9 +69,7 @@
     </div>
   </div>
 
-  {#if analytics.loading.topSessions}
-    <div class="loading">Loading top sessions...</div>
-  {:else if analytics.errors.topSessions}
+  {#if analytics.errors.topSessions}
     <div class="error">
       {analytics.errors.topSessions}
       <button
@@ -229,7 +227,7 @@
     text-align: right;
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;

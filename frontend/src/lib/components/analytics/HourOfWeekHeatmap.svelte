@@ -140,9 +140,7 @@
 </script>
 
 <div class="how-container">
-  {#if analytics.loading.hourOfWeek}
-    <div class="loading">Loading...</div>
-  {:else if analytics.errors.hourOfWeek}
+  {#if analytics.errors.hourOfWeek}
     <div class="error">
       {analytics.errors.hourOfWeek}
       <button
@@ -303,7 +301,6 @@
     z-index: 100;
   }
 
-  .loading,
   .empty {
     color: var(--text-muted);
     font-size: 12px;

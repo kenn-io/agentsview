@@ -169,9 +169,7 @@
     </div>
   </div>
 
-  {#if analytics.loading.heatmap}
-    <div class="loading">Loading heatmap...</div>
-  {:else if analytics.errors.heatmap}
+  {#if analytics.errors.heatmap}
     <div class="error">
       {analytics.errors.heatmap}
       <button
@@ -356,7 +354,7 @@
     margin-bottom: 4px;
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;

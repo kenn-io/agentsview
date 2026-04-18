@@ -360,9 +360,7 @@
     </div>
   </div>
 
-  {#if usage.loading.summary}
-    <div class="loading">Loading chart...</div>
-  {:else if seriesData.points.length === 0}
+  {#if seriesData.points.length === 0}
     <div class="empty">No data for this period</div>
   {:else}
     <div class="chart-scroll" bind:this={containerEl}>
@@ -521,7 +519,7 @@
     flex-shrink: 0;
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;

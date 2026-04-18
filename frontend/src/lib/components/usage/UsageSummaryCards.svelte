@@ -139,12 +139,8 @@
     <div
       class="card"
       class:featured={card.featured}
-      class:loading={usage.loading.summary}
     >
-      {#if usage.loading.summary}
-        <div class="skeleton-value"></div>
-        <div class="skeleton-label"></div>
-      {:else if usage.errors.summary}
+      {#if usage.errors.summary}
         <span class="card-value error">--</span>
         <span class="card-label">{card.label}</span>
       {:else}
@@ -218,20 +214,6 @@
     font-size: 10px;
     color: var(--text-muted);
     margin-top: 2px;
-  }
-
-  .skeleton-value {
-    width: 60px;
-    height: 20px;
-    background: var(--bg-inset);
-    border-radius: var(--radius-sm);
-  }
-
-  .skeleton-label {
-    width: 80px;
-    height: 12px;
-    background: var(--bg-inset);
-    border-radius: var(--radius-sm);
   }
 
   .error-bar {

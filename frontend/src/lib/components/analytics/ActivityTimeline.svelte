@@ -207,9 +207,7 @@
     </div>
   </div>
 
-  {#if analytics.loading.activity}
-    <div class="loading">Loading activity...</div>
-  {:else if analytics.errors.activity}
+  {#if analytics.errors.activity}
     <div class="error">
       {analytics.errors.activity}
       <button
@@ -397,7 +395,7 @@
     z-index: 100;
   }
 
-  .loading, .empty {
+  .empty {
     color: var(--text-muted);
     font-size: 12px;
     padding: 24px;
