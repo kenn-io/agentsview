@@ -322,17 +322,28 @@ class UsageStore {
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
     // replace data in place instead of flashing to loading state.
-    if (this.summary === null) this.loading.summary = true;
-    this.errors.summary = null;
+    const isFirstLoad = this.summary === null;
+    if (isFirstLoad) this.loading.summary = true;
+    // Clear errors only on first load; on refetch, keep any prior
+    // error state in place until we have a definitive result.
+    if (isFirstLoad) this.errors.summary = null;
     try {
       const data = await getUsageSummary(this.baseParams());
       if (this.versions.summary === v) {
         this.summary = data;
+        this.errors.summary = null;
       }
     } catch (e) {
       if (this.versions.summary === v) {
-        this.errors.summary =
-          e instanceof Error ? e.message : "Failed to load";
+        // On refetch failure with cached data, swallow the error so
+        // existing values stay visible instead of flipping to a "--"
+        // error state. First-load failures still surface.
+        if (this.summary === null) {
+          this.errors.summary =
+            e instanceof Error ? e.message : "Failed to load";
+        } else {
+          console.warn("usage.fetchSummary refetch failed:", e);
+        }
       }
     } finally {
       if (this.versions.summary === v) {
@@ -343,17 +354,23 @@ class UsageStore {
 
   async fetchTopSessions() {
     const v = ++this.versions.topSessions;
-    if (this.topSessions === null) this.loading.topSessions = true;
-    this.errors.topSessions = null;
+    const isFirstLoad = this.topSessions === null;
+    if (isFirstLoad) this.loading.topSessions = true;
+    if (isFirstLoad) this.errors.topSessions = null;
     try {
       const data = await getUsageTopSessions(this.baseParams());
       if (this.versions.topSessions === v) {
         this.topSessions = data;
+        this.errors.topSessions = null;
       }
     } catch (e) {
       if (this.versions.topSessions === v) {
-        this.errors.topSessions =
-          e instanceof Error ? e.message : "Failed to load";
+        if (this.topSessions === null) {
+          this.errors.topSessions =
+            e instanceof Error ? e.message : "Failed to load";
+        } else {
+          console.warn("usage.fetchTopSessions refetch failed:", e);
+        }
       }
     } finally {
       if (this.versions.topSessions === v) {

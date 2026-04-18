@@ -350,16 +350,29 @@ class AnalyticsStore {
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
     // replace data in place instead of flashing to loading state.
-    if (!hasExistingData()) this.loading[panel] = true;
-    this.errors[panel] = null;
+    const isFirstLoad = !hasExistingData();
+    if (isFirstLoad) this.loading[panel] = true;
+    // On refetch, keep any prior error state in place until we have
+    // a definitive result. First-load clears up front so we start
+    // fresh.
+    if (isFirstLoad) this.errors[panel] = null;
     try {
       const data = await fetchRequest();
       if (this.versions[panel] === v) {
         onSuccess(data);
+        this.errors[panel] = null;
       }
     } catch (e) {
       if (this.versions[panel] === v) {
-        this.errors[panel] = e instanceof Error ? e.message : "Failed to load";
+        // On refetch failure with cached data, swallow the error so
+        // existing values stay visible instead of flipping to an
+        // error state. First-load failures still surface.
+        if (isFirstLoad) {
+          this.errors[panel] =
+            e instanceof Error ? e.message : "Failed to load";
+        } else {
+          console.warn(`analytics.${panel} refetch failed:`, e);
+        }
       }
     } finally {
       if (this.versions[panel] === v) {
