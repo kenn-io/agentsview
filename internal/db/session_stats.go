@@ -60,6 +60,7 @@ func (db *DB) GetSessionStats(
 	}
 
 	computeTotalsAndArchetypes(stats, rows)
+	computeDistributions(stats, rows)
 
 	return stats, nil
 }
@@ -182,6 +183,8 @@ type sessionStatsRow struct {
 	totalOutputTokens int64
 	peakContextTokens int64
 	hasPeakContext    bool
+	totalToolCalls    int
+	assistantTurns    int
 }
 
 // loadSessionsInWindow returns the rows the stats pipeline needs.
@@ -232,11 +235,21 @@ func (db *DB) loadSessionsInWindow(
 		args = append(args, inArgs...)
 	}
 
-	query := `SELECT id, agent, project, started_at, ended_at,
-		message_count, user_message_count,
-		total_output_tokens, peak_context_tokens,
-		has_peak_context_tokens
-		FROM sessions WHERE ` + strings.Join(preds, " AND ")
+	// The tool-call / assistant-turn subqueries keep the per-session
+	// projection self-contained: one row per session, no separate
+	// merge step. Correlated subqueries are cheap here because
+	// idx_tool_calls_session and idx_messages_session_role already
+	// narrow the scan to the session's rows.
+	query := `SELECT s.id, s.agent, s.project, s.started_at, s.ended_at,
+		s.message_count, s.user_message_count,
+		s.total_output_tokens, s.peak_context_tokens,
+		s.has_peak_context_tokens,
+		COALESCE((SELECT COUNT(*) FROM tool_calls tc
+			WHERE tc.session_id = s.id), 0) AS total_tool_calls,
+		COALESCE((SELECT COUNT(*) FROM messages m
+			WHERE m.session_id = s.id AND m.role = 'assistant'),
+			0) AS assistant_turns
+		FROM sessions s WHERE ` + strings.Join(preds, " AND ")
 
 	sqlRows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -258,6 +271,7 @@ func (db *DB) loadSessionsInWindow(
 			&r.messageCount, &r.userMessageCount,
 			&r.totalOutputTokens, &r.peakContextTokens,
 			&hasPeak,
+			&r.totalToolCalls, &r.assistantTurns,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning session stats row: %w", err,
@@ -390,4 +404,128 @@ func nonNilSlice(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// scopedAccumulator collects values for one scope of one metric: a
+// bucket slice plus the running sum/n needed for the arithmetic mean.
+// Kept as a plain struct so computeDistributions can wire up one pair
+// per metric without bespoke variables per scope.
+type scopedAccumulator struct {
+	buckets []DistributionBucketV1
+	edges   []float64
+	sum     float64
+	n       int
+}
+
+func newAccumulator(edges []float64) scopedAccumulator {
+	return scopedAccumulator{
+		buckets: buildEmptyBuckets(edges),
+		edges:   edges,
+	}
+}
+
+func (a *scopedAccumulator) add(v float64) {
+	addBucket(a.buckets, a.edges, v)
+	a.sum += v
+	a.n++
+}
+
+func (a *scopedAccumulator) finalize() ScopedDistribution {
+	return ScopedDistribution{
+		Buckets: a.buckets,
+		Mean:    safeMean(a.sum, a.n),
+	}
+}
+
+// computeDistributions populates the four scope-aware histograms on
+// SessionStats. Scope rules:
+//
+//   - ScopeAll includes every row in the window.
+//   - ScopeHuman requires userMessageCount >= 2 (mirrors the archetype
+//     boundary between automation and quick).
+//
+// PeakContextTokens is Claude-only: rows from other agents and rows
+// without hasPeakContext data are excluded from every bucket and, for
+// the latter, tallied separately in NullCount.
+func computeDistributions(s *SessionStats, rows []sessionStatsRow) {
+	durAll := newAccumulator(durationMinutesEdges)
+	durHuman := newAccumulator(durationMinutesEdges)
+	umAll := newAccumulator(userMessagesEdgesAll)
+	umHuman := newAccumulator(userMessagesEdgesHuman)
+	pcAll := newAccumulator(peakContextEdges)
+	pcHuman := newAccumulator(peakContextEdges)
+	tptAll := newAccumulator(toolsPerTurnEdges)
+	tptHuman := newAccumulator(toolsPerTurnEdges)
+	var pcNull int
+
+	for _, r := range rows {
+		human := r.userMessageCount >= 2
+		if r.endedAt.Valid {
+			dur := r.endedAt.Time.Sub(r.startedAt).Minutes()
+			durAll.add(dur)
+			if human {
+				durHuman.add(dur)
+			}
+		}
+		umv := float64(r.userMessageCount)
+		umAll.add(umv)
+		if human {
+			umHuman.add(umv)
+		}
+		if r.agent == "claude" {
+			if r.hasPeakContext {
+				pv := float64(r.peakContextTokens)
+				pcAll.add(pv)
+				if human {
+					pcHuman.add(pv)
+				}
+			} else {
+				pcNull++
+			}
+		}
+		tpt := float64(r.totalToolCalls) / float64(max(r.assistantTurns, 1))
+		tptAll.add(tpt)
+		if human {
+			tptHuman.add(tpt)
+		}
+	}
+
+	s.Distributions.DurationMinutes = ScopedDistributionPair{
+		ScopeAll:   durAll.finalize(),
+		ScopeHuman: durHuman.finalize(),
+	}
+	s.Distributions.UserMessages = ScopedDistributionPair{
+		ScopeAll:   umAll.finalize(),
+		ScopeHuman: umHuman.finalize(),
+	}
+	s.Distributions.PeakContextTokens = PeakContextDistribution{
+		ScopeAll:   pcAll.finalize(),
+		ScopeHuman: pcHuman.finalize(),
+		NullCount:  pcNull,
+		ClaudeOnly: true,
+	}
+	s.Distributions.ToolsPerTurn = ScopedDistributionPair{
+		ScopeAll:   tptAll.finalize(),
+		ScopeHuman: tptHuman.finalize(),
+	}
+}
+
+// addBucket places v into the bucket matching edges and increments
+// its count. Values outside the edge range are silently dropped; the
+// v1 edge lists all end in +Inf so this is unreachable in practice.
+func addBucket(buckets []DistributionBucketV1, edges []float64, v float64) {
+	idx := assignBucket(edges, v)
+	if idx < 0 || idx >= len(buckets) {
+		return
+	}
+	buckets[idx].Count++
+}
+
+// safeMean returns sum/n or 0 when n is zero. Keeps the JSON mean
+// field numeric (never NaN) when a scope has no contributing rows.
+func safeMean(sum float64, n int) float64 {
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
 }

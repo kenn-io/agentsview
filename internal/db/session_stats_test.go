@@ -11,18 +11,28 @@ import (
 // session-stats tests. Fields mirror the subset of sessions-table
 // columns the stats pipeline actually reads; extend in future tasks.
 type sessionFixture struct {
-	id               string
-	project          string
-	agent            string
-	userMsgs         int
-	messageCount     int
-	startedAt        string // RFC3339; required to place row in window
-	endedAt          string // RFC3339 or ""
+	id           string
+	project      string
+	agent        string
+	userMsgs     int
+	messageCount int
+	startedAt    string // RFC3339; required to place row in window
+	endedAt      string // RFC3339 or ""
+	// durationMin, when > 0 and endedAt is empty, derives endedAt as
+	// startedAt + durationMin minutes. Ignored if endedAt is set.
+	durationMin      float64
 	peakContext      int
 	hasPeakContext   bool
 	totalOutputTok   int
 	isAutomated      bool
 	relationshipType string
+	// totalToolCalls seeds that many rows in the tool_calls table for
+	// this session, each attached to a synthetic assistant message.
+	totalToolCalls int
+	// assistantTurns seeds that many assistant-role messages for this
+	// session. Set alongside totalToolCalls so tests can control the
+	// tools_per_turn denominator precisely.
+	assistantTurns int
 }
 
 // hoursAgo returns an RFC3339 timestamp N hours before now in UTC.
@@ -55,6 +65,18 @@ func insertSessionFixture(t *testing.T, d *DB, f sessionFixture) {
 			mc = 1
 		}
 	}
+	endedAt := f.endedAt
+	if endedAt == "" && f.durationMin > 0 && f.startedAt != "" {
+		start, err := time.Parse(time.RFC3339, f.startedAt)
+		if err != nil {
+			t.Fatalf(
+				"insertSessionFixture %s: parsing startedAt %q: %v",
+				f.id, f.startedAt, err,
+			)
+		}
+		dur := time.Duration(f.durationMin * float64(time.Minute))
+		endedAt = start.Add(dur).UTC().Format(time.RFC3339Nano)
+	}
 	insertSession(t, d, f.id, project, func(s *Session) {
 		s.Agent = agent
 		s.UserMessageCount = f.userMsgs
@@ -62,8 +84,8 @@ func insertSessionFixture(t *testing.T, d *DB, f sessionFixture) {
 		if f.startedAt != "" {
 			s.StartedAt = Ptr(f.startedAt)
 		}
-		if f.endedAt != "" {
-			s.EndedAt = Ptr(f.endedAt)
+		if endedAt != "" {
+			s.EndedAt = Ptr(endedAt)
 		}
 		s.PeakContextTokens = f.peakContext
 		s.HasPeakContextTokens = f.hasPeakContext
@@ -71,6 +93,64 @@ func insertSessionFixture(t *testing.T, d *DB, f sessionFixture) {
 		s.IsAutomated = f.isAutomated
 		s.RelationshipType = f.relationshipType
 	})
+	seedAssistantActivity(t, d, f.id, f.assistantTurns, f.totalToolCalls)
+}
+
+// seedAssistantActivity inserts `turns` assistant messages and
+// spreads `toolCalls` rows across them (or across a single synthetic
+// message when turns==0 but toolCalls>0). Purpose: let stats tests
+// control both the assistant-turn count (denominator of
+// tools_per_turn) and the total tool-call count (numerator) without
+// reaching into the full parser pipeline.
+func seedAssistantActivity(
+	t *testing.T, d *DB, sessionID string, turns, toolCalls int,
+) {
+	t.Helper()
+	if turns == 0 && toolCalls == 0 {
+		return
+	}
+	n := turns
+	if n == 0 {
+		n = 1 // need at least one host message for tool_calls FK
+	}
+	msgs := make([]Message, 0, n)
+	for i := range n {
+		msgs = append(msgs, asstMsg(sessionID, i+1, "reply"))
+	}
+	if err := d.InsertMessages(msgs); err != nil {
+		t.Fatalf("seedAssistantActivity %s: InsertMessages: %v",
+			sessionID, err)
+	}
+	if toolCalls == 0 {
+		return
+	}
+	// Distribute tool_calls round-robin across inserted messages so
+	// they all attach to a real message row. Rely on the router-like
+	// INSERT ... SELECT ordinal to find the message_id.
+	for i := range toolCalls {
+		ord := (i % n) + 1
+		if _, err := d.getWriter().Exec(`
+			INSERT INTO tool_calls
+				(message_id, session_id, tool_name, category)
+			SELECT id, session_id, 'Read', 'file'
+			FROM messages
+			WHERE session_id = ? AND ordinal = ?`,
+			sessionID, ord,
+		); err != nil {
+			t.Fatalf("seedAssistantActivity %s: tool_call: %v",
+				sessionID, err)
+		}
+	}
+}
+
+// floatsClose reports whether a and b are within eps of each other.
+// Used by stats tests that compare arithmetic means.
+func floatsClose(a, b, eps float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d <= eps
 }
 
 func TestArchetypeLabel(t *testing.T) {
@@ -380,4 +460,193 @@ func TestWindowBounds(t *testing.T) {
 			t.Error("expected error for invalid Since")
 		}
 	})
+}
+
+func TestGetSessionStats_Distributions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Five sessions chosen to place one row in each interesting bucket
+	// for duration and peak_context. userMsgs drives archetype/scope:
+	// a,b → automation (userMsgs <= 1); c,d,e → human.
+	fixtures := []struct {
+		id             string
+		userMsgs       int
+		peakCtx        int
+		durMin         float64
+		toolCalls      int
+		assistantTurns int
+	}{
+		{"a", 0, 2_000, 0.5, 0, 0},
+		{"b", 1, 8_000, 0.9, 1, 1},
+		{"c", 3, 25_000, 10.0, 6, 3},
+		{"d", 10, 60_000, 25.0, 15, 10},
+		{"e", 30, 150_000, 120.0, 30, 30},
+	}
+	for _, f := range fixtures {
+		insertSessionFixture(t, d, sessionFixture{
+			id:             f.id,
+			agent:          "claude",
+			userMsgs:       f.userMsgs,
+			peakContext:    f.peakCtx,
+			hasPeakContext: true,
+			durationMin:    f.durMin,
+			startedAt:      hoursAgo(10),
+			totalToolCalls: f.toolCalls,
+			assistantTurns: f.assistantTurns,
+		})
+	}
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+
+	// duration scope_all: 0.5→bucket0, 0.9→bucket0, 10→bucket2,
+	// 25→bucket3, 120→bucket5 (top).
+	gotAll := stats.Distributions.DurationMinutes.ScopeAll.Buckets
+	wantCountsAll := []int{2, 0, 1, 1, 0, 1}
+	if len(gotAll) != len(wantCountsAll) {
+		t.Fatalf("duration scope_all: got %d buckets, want %d",
+			len(gotAll), len(wantCountsAll))
+	}
+	for i, w := range wantCountsAll {
+		if gotAll[i].Count != w {
+			t.Errorf("duration scope_all bucket %d: got %d want %d",
+				i, gotAll[i].Count, w)
+		}
+	}
+	// duration scope_human (c,d,e): bucket2=1, bucket3=1, bucket5=1.
+	gotHuman := stats.Distributions.DurationMinutes.ScopeHuman.Buckets
+	wantCountsHuman := []int{0, 0, 1, 1, 0, 1}
+	if len(gotHuman) != len(wantCountsHuman) {
+		t.Fatalf("duration scope_human: got %d buckets, want %d",
+			len(gotHuman), len(wantCountsHuman))
+	}
+	for i, w := range wantCountsHuman {
+		if gotHuman[i].Count != w {
+			t.Errorf("duration scope_human bucket %d: got %d want %d",
+				i, gotHuman[i].Count, w)
+		}
+	}
+
+	// Means (arithmetic over included sessions).
+	wantAllMean := (0.5 + 0.9 + 10 + 25 + 120) / 5.0
+	gotAllMean := stats.Distributions.DurationMinutes.ScopeAll.Mean
+	if !floatsClose(gotAllMean, wantAllMean, 0.01) {
+		t.Errorf("duration scope_all mean: got %v want %v",
+			gotAllMean, wantAllMean)
+	}
+	wantHumanMean := (10.0 + 25.0 + 120.0) / 3.0
+	gotHumanMean := stats.Distributions.DurationMinutes.ScopeHuman.Mean
+	if !floatsClose(gotHumanMean, wantHumanMean, 0.01) {
+		t.Errorf("duration scope_human mean: got %v want %v",
+			gotHumanMean, wantHumanMean)
+	}
+
+	// user_messages scope_all uses userMessagesEdgesAll
+	// ([0,2),[2,6),[6,16),[16,31),[31,51),[51,inf)):
+	// 0→0, 1→0, 3→1, 10→2, 30→3.
+	gotUM := stats.Distributions.UserMessages.ScopeAll.Buckets
+	wantUM := []int{2, 1, 1, 1, 0, 0}
+	if len(gotUM) != len(wantUM) {
+		t.Fatalf("user_messages scope_all: got %d buckets, want %d",
+			len(gotUM), len(wantUM))
+	}
+	for i, w := range wantUM {
+		if gotUM[i].Count != w {
+			t.Errorf("user_messages scope_all bucket %d: got %d want %d",
+				i, gotUM[i].Count, w)
+		}
+	}
+	// user_messages scope_human uses userMessagesEdgesHuman (5 buckets,
+	// dropping the automation band): 3→0, 10→1, 30→2.
+	gotUMH := stats.Distributions.UserMessages.ScopeHuman.Buckets
+	wantUMH := []int{1, 1, 1, 0, 0}
+	if len(gotUMH) != len(wantUMH) {
+		t.Fatalf("user_messages scope_human: got %d buckets, want %d",
+			len(gotUMH), len(wantUMH))
+	}
+	for i, w := range wantUMH {
+		if gotUMH[i].Count != w {
+			t.Errorf("user_messages scope_human bucket %d: got %d want %d",
+				i, gotUMH[i].Count, w)
+		}
+	}
+
+	// peak_context scope_all: 2k→0, 8k→0, 25k→1, 60k→2, 150k→4.
+	gotPCAll := stats.Distributions.PeakContextTokens.ScopeAll.Buckets
+	wantPCAll := []int{2, 1, 1, 0, 1, 0}
+	for i, w := range wantPCAll {
+		if gotPCAll[i].Count != w {
+			t.Errorf("peak_context scope_all bucket %d: got %d want %d",
+				i, gotPCAll[i].Count, w)
+		}
+	}
+	// peak_context scope_human (c,d,e): 25k→1, 60k→2, 150k→4.
+	gotPC := stats.Distributions.PeakContextTokens.ScopeHuman.Buckets
+	if gotPC[1].Count != 1 || gotPC[2].Count != 1 || gotPC[4].Count != 1 {
+		t.Errorf("peak_context scope_human: %+v", gotPC)
+	}
+	if !stats.Distributions.PeakContextTokens.ClaudeOnly {
+		t.Errorf("peak_context.claude_only: got false want true")
+	}
+	if stats.Distributions.PeakContextTokens.NullCount != 0 {
+		t.Errorf("peak_context.null_count: got %d want 0",
+			stats.Distributions.PeakContextTokens.NullCount)
+	}
+
+	// tools_per_turn: a=0/1=0, b=1/1=1, c=6/3=2, d=15/10=1.5, e=30/30=1.
+	// toolsPerTurnEdges = [0,1,2,4,7,11,+Inf].
+	gotTPT := stats.Distributions.ToolsPerTurn.ScopeAll.Buckets
+	wantTPT := []int{1, 3, 1, 0, 0, 0}
+	if len(gotTPT) != len(wantTPT) {
+		t.Fatalf("tools_per_turn scope_all: got %d buckets, want %d",
+			len(gotTPT), len(wantTPT))
+	}
+	for i, w := range wantTPT {
+		if gotTPT[i].Count != w {
+			t.Errorf("tools_per_turn scope_all bucket %d: got %d want %d",
+				i, gotTPT[i].Count, w)
+		}
+	}
+}
+
+func TestGetSessionStats_Distributions_NullPeakContext(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// One session lacks peak-context data; it must land in NullCount
+	// rather than any peak_context bucket (including bucket 0).
+	insertSessionFixture(t, d, sessionFixture{
+		id: "np1", agent: "claude", userMsgs: 5,
+		startedAt:   hoursAgo(5),
+		durationMin: 3.0,
+		// peakContext left at zero value AND hasPeakContext=false
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "wp1", agent: "claude", userMsgs: 5,
+		startedAt:      hoursAgo(5),
+		durationMin:    3.0,
+		peakContext:    20_000,
+		hasPeakContext: true,
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	if err != nil {
+		t.Fatalf("GetSessionStats: %v", err)
+	}
+
+	pc := stats.Distributions.PeakContextTokens
+	if pc.NullCount != 1 {
+		t.Errorf("null_count: got %d want 1", pc.NullCount)
+	}
+	total := 0
+	for _, b := range pc.ScopeAll.Buckets {
+		total += b.Count
+	}
+	if total != 1 {
+		t.Errorf("scope_all bucket total: got %d want 1 "+
+			"(the one session with hasPeakContext=true)", total)
+	}
 }
