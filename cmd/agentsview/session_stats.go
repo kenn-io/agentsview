@@ -42,10 +42,19 @@ func newSessionStatsCommand() *cobra.Command {
 				}
 			}
 
+			// "all" is the human-facing default and echoes through to
+			// stats.Filters.Agent, but the db layer treats any non-empty
+			// Agent as a literal filter. Pass "" when the user hasn't
+			// scoped to a specific agent so the window includes every
+			// agent's sessions.
+			agentFilter := agent
+			if agentFilter == "all" {
+				agentFilter = ""
+			}
 			stats, err := svc.Stats(cmd.Context(), service.StatsFilter{
 				Since:           since,
 				Until:           until,
-				Agent:           agent,
+				Agent:           agentFilter,
 				IncludeProjects: includeProjects,
 				ExcludeProjects: excludeProjects,
 				Timezone:        timezone,

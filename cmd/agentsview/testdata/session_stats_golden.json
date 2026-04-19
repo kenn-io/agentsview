@@ -1,0 +1,586 @@
+{
+  "adoption": {
+    "claude_only": true,
+    "distinct_skills": 1,
+    "plan_mode_rate": 0.1111111111111111,
+    "subagents_per_session": 0.2222222222222222
+  },
+  "agent_portfolio": {
+    "by_messages": {
+      "claude": 322,
+      "codex": 20,
+      "cursor": 6
+    },
+    "by_sessions": {
+      "claude": 9,
+      "codex": 1,
+      "cursor": 1
+    },
+    "by_tokens": {
+      "claude": 151420,
+      "codex": 0,
+      "cursor": 0
+    },
+    "primary": "claude"
+  },
+  "archetypes": {
+    "automation": 2,
+    "deep": 2,
+    "marathon": 1,
+    "primary": "standard",
+    "primary_human": "standard",
+    "quick": 3,
+    "standard": 3
+  },
+  "cache_economics": {
+    "cache_hit_ratio": {
+      "buckets": [
+        {
+          "count": 0,
+          "edge": [
+            0,
+            0.25
+          ]
+        },
+        {
+          "count": 0,
+          "edge": [
+            0.25,
+            0.5
+          ]
+        },
+        {
+          "count": 9,
+          "edge": [
+            0.5,
+            0.75
+          ]
+        },
+        {
+          "count": 0,
+          "edge": [
+            0.75,
+            0.95
+          ]
+        },
+        {
+          "count": 0,
+          "edge": [
+            0.95,
+            1.000001
+          ]
+        }
+      ],
+      "overall": 0.5793498147018812
+    },
+    "claude_only": true,
+    "dollars_saved_vs_uncached": 1.839855,
+    "dollars_spent": 6.751545
+  },
+  "distributions": {
+    "duration_minutes": {
+      "scope_all": {
+        "buckets": [
+          {
+            "count": 0,
+            "edge": [
+              0,
+              1
+            ]
+          },
+          {
+            "count": 1,
+            "edge": [
+              1,
+              5
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              5,
+              20
+            ]
+          },
+          {
+            "count": 4,
+            "edge": [
+              20,
+              60
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              60,
+              120
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              120,
+              null
+            ]
+          }
+        ],
+        "mean": 60.36363636363637
+      },
+      "scope_human": {
+        "buckets": [
+          {
+            "count": 0,
+            "edge": [
+              0,
+              1
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              1,
+              5
+            ]
+          },
+          {
+            "count": 2,
+            "edge": [
+              5,
+              20
+            ]
+          },
+          {
+            "count": 4,
+            "edge": [
+              20,
+              60
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              60,
+              120
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              120,
+              null
+            ]
+          }
+        ],
+        "mean": 72.77777777777777
+      }
+    },
+    "peak_context_tokens": {
+      "claude_only": true,
+      "null_count": 4,
+      "scope_all": {
+        "buckets": [
+          {
+            "count": 0,
+            "edge": [
+              0,
+              10000
+            ]
+          },
+          {
+            "count": 1,
+            "edge": [
+              10000,
+              50000
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              50000,
+              100000
+            ]
+          },
+          {
+            "count": 1,
+            "edge": [
+              100000,
+              150000
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              150000,
+              200000
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              200000,
+              null
+            ]
+          }
+        ],
+        "mean": 75000
+      },
+      "scope_human": {
+        "buckets": [
+          {
+            "count": 0,
+            "edge": [
+              0,
+              10000
+            ]
+          },
+          {
+            "count": 1,
+            "edge": [
+              10000,
+              50000
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              50000,
+              100000
+            ]
+          },
+          {
+            "count": 1,
+            "edge": [
+              100000,
+              150000
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              150000,
+              200000
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              200000,
+              null
+            ]
+          }
+        ],
+        "mean": 75000
+      }
+    },
+    "tools_per_turn": {
+      "scope_all": {
+        "buckets": [
+          {
+            "count": 9,
+            "edge": [
+              0,
+              1
+            ]
+          },
+          {
+            "count": 2,
+            "edge": [
+              1,
+              2
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              2,
+              4
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              4,
+              7
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              7,
+              11
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              11,
+              null
+            ]
+          }
+        ],
+        "mean": 0.3195454545454545
+      },
+      "scope_human": {
+        "buckets": [
+          {
+            "count": 7,
+            "edge": [
+              0,
+              1
+            ]
+          },
+          {
+            "count": 2,
+            "edge": [
+              1,
+              2
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              2,
+              4
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              4,
+              7
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              7,
+              11
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              11,
+              null
+            ]
+          }
+        ],
+        "mean": 0.39055555555555554
+      }
+    },
+    "user_messages": {
+      "scope_all": {
+        "buckets": [
+          {
+            "count": 2,
+            "edge": [
+              0,
+              2
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              2,
+              6
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              6,
+              16
+            ]
+          },
+          {
+            "count": 2,
+            "edge": [
+              16,
+              31
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              31,
+              51
+            ]
+          },
+          {
+            "count": 1,
+            "edge": [
+              51,
+              null
+            ]
+          }
+        ],
+        "mean": 15.818181818181818
+      },
+      "scope_human": {
+        "buckets": [
+          {
+            "count": 3,
+            "edge": [
+              2,
+              6
+            ]
+          },
+          {
+            "count": 3,
+            "edge": [
+              6,
+              16
+            ]
+          },
+          {
+            "count": 2,
+            "edge": [
+              16,
+              31
+            ]
+          },
+          {
+            "count": 0,
+            "edge": [
+              31,
+              51
+            ]
+          },
+          {
+            "count": 1,
+            "edge": [
+              51,
+              null
+            ]
+          }
+        ],
+        "mean": 19.11111111111111
+      }
+    }
+  },
+  "filters": {
+    "agent": "all",
+    "projects_excluded": [],
+    "timezone": "UTC"
+  },
+  "model_mix": {
+    "by_tokens": {
+      "claude-opus-4-20250514": 33740,
+      "claude-sonnet-4-20250514": 117680
+    }
+  },
+  "outcomes": {
+    "avg_edit_churn": 0.7777777777777778,
+    "claude_only": true,
+    "compactions_per_session": 0.3333333333333333,
+    "failure": 1,
+    "grade_distribution": {
+      "A": 5,
+      "B": 3,
+      "C": 1
+    },
+    "success": 8,
+    "tool_retry_rate": 0.23076923076923078,
+    "unknown": 0
+  },
+  "schema_version": 1,
+  "temporal": {
+    "hourly_utc": [
+      {
+        "sessions": 1,
+        "ts": "2026-04-05T10:00:00Z",
+        "user_messages": 1
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-05T11:00:00Z",
+        "user_messages": 1
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-06T10:00:00Z",
+        "user_messages": 3
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-07T10:00:00Z",
+        "user_messages": 3
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-08T10:00:00Z",
+        "user_messages": 10
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-08T14:00:00Z",
+        "user_messages": 10
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-09T10:00:00Z",
+        "user_messages": 30
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-09T14:00:00Z",
+        "user_messages": 3
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-10T10:00:00Z",
+        "user_messages": 25
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-11T10:00:00Z",
+        "user_messages": 60
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-11T11:00:00Z",
+        "user_messages": 20
+      },
+      {
+        "sessions": 1,
+        "ts": "2026-04-12T10:00:00Z",
+        "user_messages": 8
+      }
+    ],
+    "reporter_timezone": "UTC"
+  },
+  "tool_mix": {
+    "by_category": {
+      "file": 10,
+      "other": 5,
+      "search": 8,
+      "shell": 3
+    },
+    "total_calls": 26
+  },
+  "totals": {
+    "messages_total": 348,
+    "sessions_all": 11,
+    "sessions_automation": 2,
+    "sessions_human": 9,
+    "user_messages_total": 174
+  },
+  "velocity": {
+    "first_response_seconds": {
+      "mean": 10,
+      "p50": 10,
+      "p90": 10
+    },
+    "messages_per_active_hour": 126.67340748230536,
+    "turn_cycle_seconds": {
+      "mean": 10,
+      "p50": 10,
+      "p90": 10
+    }
+  },
+  "window": {
+    "days": 14,
+    "since": "2026-04-01T00:00:00Z",
+    "until": "2026-04-15T00:00:00Z"
+  }
+}

@@ -826,7 +826,16 @@ func (db *DB) computeCacheEconomics(
 		dollarsSpent   float64
 		dollarsNoCache float64
 	)
-	for _, totals := range perSession {
+	// Iterate in session-id order so floating-point sums stay
+	// deterministic across runs; Go's map iteration order is
+	// randomised and (a+b)+c != a+(b+c) in IEEE 754.
+	keys := make([]string, 0, len(perSession))
+	for k := range perSession {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		totals := perSession[k]
 		denom := totals.inputTok + totals.cacheReadT +
 			totals.cacheCreateT
 		dollarsSpent += totals.dollarsSpent
