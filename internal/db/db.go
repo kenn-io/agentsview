@@ -461,6 +461,14 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE sessions ADD COLUMN is_truncated INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			"sessions", "file_inode",
+			"ALTER TABLE sessions ADD COLUMN file_inode INTEGER",
+		},
+		{
+			"sessions", "file_device",
+			"ALTER TABLE sessions ADD COLUMN file_device INTEGER",
+		},
+		{
 			"messages", "thinking_text",
 			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
 		},

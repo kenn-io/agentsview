@@ -3179,6 +3179,85 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	}
 }
 
+// TestIncrementalSync_ClaudeFileReplaced verifies that when a
+// session file is replaced atomically (new inode/device), the
+// sync engine detects the identity change and falls back to a
+// full parse instead of treating the new content as an append.
+func TestIncrementalSync_ClaudeFileReplaced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+	env := setupTestEnv(t)
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "replaced.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionMessageCount(t, env.db, "replaced", 1)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "replaced",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full.FileInode == nil || *full.FileInode == 0 {
+		t.Fatal("file_inode not populated after initial sync")
+	}
+	origInode := *full.FileInode
+
+	// Atomically replace the file. The content is longer than the
+	// original so an incremental parse would mistakenly append the
+	// new file's bytes past the old offset.
+	replacement := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("second", tsZero),
+		testjsonl.ClaudeUserJSON("third", tsZeroS5),
+	)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(replacement), 0o644); err != nil {
+		t.Fatalf("write replacement: %v", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatalf("rename replacement: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{path})
+
+	// The stored inode must track the new file (i.e. a full
+	// parse re-ran and overwrote the identity). If the incremental
+	// path had run instead, the old inode would still be stored
+	// and the appended bytes would be interpreted as continuation
+	// of the original file.
+	full, err = env.db.GetSessionFull(
+		context.Background(), "replaced",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull after replace: %v", err)
+	}
+	if full.FileInode == nil {
+		t.Fatal("file_inode cleared after replace")
+	}
+	if *full.FileInode == origInode {
+		t.Errorf("file_inode = %d, want change from original",
+			*full.FileInode)
+	}
+	// File size in the DB should match the replacement, not the
+	// pre-replacement size that an incremental parse would have
+	// left in place.
+	newInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat replacement: %v", err)
+	}
+	if full.FileSize == nil || *full.FileSize != newInfo.Size() {
+		t.Errorf("file_size = %v, want %d (full-parse size)",
+			full.FileSize, newInfo.Size())
+	}
+}
+
 func TestIncrementalSync_CodexAppend(t *testing.T) {
 	env := setupTestEnv(t)
 

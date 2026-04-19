@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_path   TEXT,
     file_size   INTEGER,
     file_mtime  INTEGER,
+    file_inode  INTEGER,
+    file_device INTEGER,
     file_hash   TEXT,
     local_modified_at TEXT,
     parent_session_id TEXT,

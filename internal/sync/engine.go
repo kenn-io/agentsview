@@ -1860,6 +1860,12 @@ func (e *Engine) processClaude(
 		return processResult{err: err}
 	}
 
+	inode, device := getFileIdentity(info)
+	for i := range results {
+		results[i].Session.File.Inode = inode
+		results[i].Session.File.Device = device
+	}
+
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
 		for i := range results {
@@ -1914,6 +1920,27 @@ func (e *Engine) tryIncrementalJSONL(
 	currentSize := info.Size()
 	if currentSize <= inc.FileSize {
 		return processResult{}, false
+	}
+
+	// If the file was replaced (different inode/device), fall
+	// back to a full parse so we don't append on top of stale
+	// state. Only check when both sides have a known identity
+	// (non-zero); zeros mean the data is missing or the
+	// platform doesn't expose inode/device (Windows).
+	if inc.FileInode != 0 && inc.FileDevice != 0 {
+		curInode, curDevice := getFileIdentity(info)
+		if curInode != 0 && curDevice != 0 &&
+			(curInode != inc.FileInode ||
+				curDevice != inc.FileDevice) {
+			log.Printf(
+				"incremental %s %s: file identity changed "+
+					"(inode %d→%d, device %d→%d), full parse",
+				agent, file.Path,
+				inc.FileInode, curInode,
+				inc.FileDevice, curDevice,
+			)
+			return processResult{}, false
+		}
 	}
 
 	maxOrd := e.db.MaxOrdinal(inc.ID)
@@ -2038,6 +2065,8 @@ func (e *Engine) processCodex(
 	if err != nil {
 		return processResult{err: err}
 	}
+
+	sess.File.Inode, sess.File.Device = getFileIdentity(info)
 
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
@@ -2981,10 +3010,12 @@ func toDBSession(pw pendingWrite) db.Session {
 		// not persist this field; the caller bumps it via
 		// SetSessionDataVersion only after the message
 		// rewrite succeeds.
-		FilePath:  strPtr(pw.sess.File.Path),
-		FileSize:  int64Ptr(pw.sess.File.Size),
-		FileMtime: int64Ptr(pw.sess.File.Mtime),
-		FileHash:  strPtr(pw.sess.File.Hash),
+		FilePath:   strPtr(pw.sess.File.Path),
+		FileSize:   int64Ptr(pw.sess.File.Size),
+		FileMtime:  int64Ptr(pw.sess.File.Mtime),
+		FileInode:  int64Ptr(pw.sess.File.Inode),
+		FileDevice: int64Ptr(pw.sess.File.Device),
+		FileHash:   strPtr(pw.sess.File.Hash),
 	}
 	if pw.sess.FirstMessage != "" {
 		s.FirstMessage = &pw.sess.FirstMessage

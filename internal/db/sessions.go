@@ -88,6 +88,7 @@ const sessionFullCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
 	deleted_at, file_path, file_size, file_mtime,
+	file_inode, file_device,
 	file_hash, local_modified_at, created_at`
 
 const (
@@ -181,6 +182,8 @@ type Session struct {
 	FilePath        *string `json:"file_path,omitempty"`
 	FileSize        *int64  `json:"file_size,omitempty"`
 	FileMtime       *int64  `json:"file_mtime,omitempty"`
+	FileInode       *int64  `json:"file_inode,omitempty"`
+	FileDevice      *int64  `json:"file_device,omitempty"`
 	FileHash        *string `json:"file_hash,omitempty"`
 	LocalModifiedAt *string `json:"local_modified_at,omitempty"`
 	CreatedAt       string  `json:"created_at"`
@@ -618,7 +621,8 @@ func (db *DB) GetSessionFull(
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.FilePath, &s.FileSize,
-		&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
+		&s.FileMtime, &s.FileInode, &s.FileDevice,
+		&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -692,8 +696,9 @@ func (db *DB) UpsertSession(s Session) error {
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
 			is_truncated,
-			file_path, file_size, file_mtime, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			file_path, file_size, file_mtime,
+			file_inode, file_device, file_hash
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -719,6 +724,8 @@ func (db *DB) UpsertSession(s Session) error {
 			file_path = excluded.file_path,
 			file_size = excluded.file_size,
 			file_mtime = excluded.file_mtime,
+			file_inode = excluded.file_inode,
+			file_device = excluded.file_device,
 			file_hash = excluded.file_hash`,
 		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.DisplayName,
 		s.StartedAt, s.EndedAt, s.MessageCount,
@@ -730,7 +737,8 @@ func (db *DB) UpsertSession(s Session) error {
 		s.Cwd, s.GitBranch, s.SourceSessionID,
 		s.SourceVersion, s.ParserMalformedLines,
 		s.IsTruncated,
-		s.FilePath, s.FileSize, s.FileMtime, s.FileHash)
+		s.FilePath, s.FileSize, s.FileMtime,
+		s.FileInode, s.FileDevice, s.FileHash)
 	if err != nil {
 		return fmt.Errorf("upserting session %s: %w", s.ID, err)
 	}
@@ -984,6 +992,9 @@ func (db *DB) GetSessionVersion(
 type IncrementalInfo struct {
 	ID                   string
 	FileSize             int64
+	FileMtime            int64
+	FileInode            int64
+	FileDevice           int64
 	MsgCount             int
 	UserMsgCount         int
 	TotalOutputTokens    int
@@ -1012,16 +1023,18 @@ func (db *DB) GetSessionForIncremental(
 	}
 
 	var info IncrementalInfo
-	var fs sql.NullInt64
+	var fs, fm, fi, fd sql.NullInt64
 	err = db.getReader().QueryRow(
-		`SELECT id, file_size, message_count,
-			user_message_count,
+		`SELECT id, file_size, file_mtime,
+			file_inode, file_device,
+			message_count, user_message_count,
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens
 		 FROM sessions WHERE file_path = ?`,
 		path,
 	).Scan(
-		&info.ID, &fs, &info.MsgCount, &info.UserMsgCount,
+		&info.ID, &fs, &fm, &fi, &fd,
+		&info.MsgCount, &info.UserMsgCount,
 		&info.TotalOutputTokens, &info.PeakContextTokens,
 		&info.HasTotalOutputTokens, &info.HasPeakContextTokens,
 	)
@@ -1030,6 +1043,15 @@ func (db *DB) GetSessionForIncremental(
 	}
 	if fs.Valid {
 		info.FileSize = fs.Int64
+	}
+	if fm.Valid {
+		info.FileMtime = fm.Int64
+	}
+	if fi.Valid {
+		info.FileInode = fi.Int64
+	}
+	if fd.Valid {
+		info.FileDevice = fd.Int64
 	}
 	info.HasTotalOutputTokens =
 		info.HasTotalOutputTokens || info.TotalOutputTokens != 0
@@ -1724,7 +1746,8 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.FilePath, &s.FileSize,
-			&s.FileMtime, &s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
+			&s.FileMtime, &s.FileInode, &s.FileDevice,
+			&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)

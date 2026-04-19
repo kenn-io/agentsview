@@ -392,10 +392,12 @@ const (
 
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
-	Path  string
-	Size  int64
-	Mtime int64
-	Hash  string
+	Path   string
+	Size   int64
+	Mtime  int64
+	Inode  int64
+	Device int64
+	Hash   string
 }
 
 // ParsedSession holds session metadata extracted from a JSONL file.
