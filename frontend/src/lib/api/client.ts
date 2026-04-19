@@ -478,8 +478,22 @@ export function watchSession(
  */
 export const WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS = 5;
 
+export interface WatchEventsOptions {
+  /** Called once when the circuit breaker trips WITHOUT the
+   * EventSource ever having reached the OPEN state. That pattern
+   * indicates the endpoint is permanently unreachable for this
+   * client (PG serve mode returning 503, incompatible server
+   * build, wrong URL, etc.), so callers should stop retrying.
+   * Transient failures — where `open` fired at least once before
+   * the breaker tripped — do not call this, letting callers
+   * recover on their own.
+   */
+  onPermanentFailure?: () => void;
+}
+
 export function watchEvents(
   onEvent: (e: DataChangedEvent) => void,
+  opts: WatchEventsOptions = {},
 ): EventSource {
   const url = `${getBase()}/events`;
   const token = getAuthToken();
@@ -489,20 +503,27 @@ export function watchEvents(
   const es = new EventSource(fullUrl);
 
   // Circuit breaker: on N consecutive onerror firings without any
-  // successful connection or event delivery, assume the endpoint
-  // is permanently unavailable (e.g. PG serve mode 503) and stop
-  // reconnecting. The counter resets on both `open` (a successful
-  // (re)connect) and a delivered `data_changed` event, so a quiet
-  // but healthy stream isn't tripped by transient network blips.
+  // successful connection or event delivery, close the stream.
+  // The counter resets on both `open` (a successful (re)connect)
+  // and a delivered `data_changed` event, so a quiet but healthy
+  // stream isn't tripped by transient network blips.
+  //
+  // `hasOpened` distinguishes "never worked" (permanent failure,
+  // e.g. PG serve 503) from "worked once, then failed" (transient
+  // outage). Permanent failures invoke onPermanentFailure so the
+  // caller can stop retrying.
   let consecutiveErrors = 0;
+  let hasOpened = false;
 
   es.addEventListener("open", () => {
+    hasOpened = true;
     consecutiveErrors = 0;
   });
 
   es.addEventListener("data_changed", (msg) => {
     // Successful delivery also resets the circuit breaker.
     consecutiveErrors = 0;
+    hasOpened = true;
     // Parse and shape-check the payload. Anything that isn't an
     // object with a known scope collapses to a safe refresh signal
     // so subscribers never observe scope === undefined.
@@ -532,6 +553,9 @@ export function watchEvents(
     consecutiveErrors += 1;
     if (consecutiveErrors >= WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS) {
       es.close();
+      if (!hasOpened && opts.onPermanentFailure) {
+        opts.onPermanentFailure();
+      }
     }
   };
 

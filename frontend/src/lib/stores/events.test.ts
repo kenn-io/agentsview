@@ -33,6 +33,12 @@ class FakeEventSource {
     (this.listeners[name] || []).forEach((cb) => cb(payload));
   }
 
+  fireOpen() {
+    (this.listeners["open"] || []).forEach((cb) =>
+      cb(new Event("open") as MessageEvent),
+    );
+  }
+
   static reset() {
     FakeEventSource.instances = [];
   }
@@ -101,7 +107,7 @@ describe("events store", () => {
     expect(FakeEventSource.instances[0]!.closed).toBe(true);
   });
 
-  it("self-heals a closed EventSource while listeners are still subscribed", async () => {
+  it("self-heals a closed EventSource after a transient failure", async () => {
     vi.useFakeTimers();
     const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import(
       "./events.svelte.js"
@@ -110,9 +116,10 @@ describe("events store", () => {
     const unsub = events.subscribe((e) => received.push(e.scope));
     const first = FakeEventSource.instances[0]!;
 
-    // Trip the circuit breaker on the first connection; the long-
-    // lived subscriber never resubscribes, so without the heal
-    // timer it would be stuck on a closed stream.
+    // Simulate a transient failure: the stream opens successfully
+    // at least once, then later errors trip the circuit breaker.
+    // This is the "worked once, then failed" case that should heal.
+    first.fireOpen();
     for (let i = 0; i < 5; i++) first.fireError();
     expect(first.closed).toBe(true);
 
@@ -130,16 +137,40 @@ describe("events store", () => {
     vi.useRealTimers();
   });
 
-  it("reopens the EventSource after the circuit breaker closes it", async () => {
+  it("does not heal after a permanent failure (never opened)", async () => {
+    vi.useFakeTimers();
+    const { events, EVENTS_STORE_HEAL_INTERVAL_MS } = await import(
+      "./events.svelte.js"
+    );
+    const unsub = events.subscribe(() => {});
+    const first = FakeEventSource.instances[0]!;
+
+    // Permanent failure pattern: errors fire without any open ever
+    // succeeding (e.g. PG serve 503 on /api/v1/events). The circuit
+    // breaker trips AND marks the store permanentlyFailed, so no
+    // heal timer rebuilds.
+    for (let i = 0; i < 5; i++) first.fireError();
+    expect(first.closed).toBe(true);
+
+    // Advance far past the heal interval. The store must NOT
+    // rebuild — doing so would reintroduce retry churn on an
+    // endpoint that has already been classified as unreachable.
+    await vi.advanceTimersByTimeAsync(EVENTS_STORE_HEAL_INTERVAL_MS * 3);
+    expect(FakeEventSource.instances.length).toBe(1);
+
+    unsub();
+    vi.useRealTimers();
+  });
+
+  it("reopens the EventSource after a transient close on new subscribe", async () => {
     const { events } = await import("./events.svelte.js");
     const received: string[] = [];
     const unsub = events.subscribe((e) => received.push(e.scope));
     const first = FakeEventSource.instances[0]!;
 
-    // Trip the circuit breaker on the first connection. watchEvents
-    // closes the ES after N consecutive onerror firings without a
-    // successful delivery; the FakeEventSource's fireError + close
-    // sequence simulates that permanent failure.
+    // Transient-close pattern: open fires once so the failure is
+    // classified as recoverable, then the breaker trips.
+    first.fireOpen();
     for (let i = 0; i < 5; i++) first.fireError();
     expect(first.closed).toBe(true);
     expect(first.readyState).toBe(2);

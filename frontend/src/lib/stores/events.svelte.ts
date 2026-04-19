@@ -15,6 +15,12 @@ class EventsStore {
   // each unsubscribe only removes its own entry.
   private listeners = new Map<symbol, Listener>();
   private healTimer: ReturnType<typeof setInterval> | null = null;
+  // Sticky flag. When watchEvents reports a permanent failure
+  // (circuit breaker tripped without the EventSource ever reaching
+  // OPEN — i.e., the endpoint is unreachable for this client, as in
+  // PG serve mode), stop rebuilding the connection. A page reload
+  // is required to recover if the backend configuration changes.
+  private permanentlyFailed = false;
 
   /** Subscribe to every event. Returns unsubscribe. */
   subscribe(fn: Listener): () => void {
@@ -61,6 +67,10 @@ class EventsStore {
   }
 
   private ensureOpen() {
+    // Don't retry once watchEvents has told us the endpoint is
+    // permanently unavailable. The safety-net polls on each view
+    // still keep data fresh in that mode.
+    if (this.permanentlyFailed) return;
     // watchEvents trips a circuit breaker and calls es.close() on
     // repeated errors; the store's cached handle then points at a
     // CLOSED EventSource. Treat that as "not open" and build a
@@ -75,9 +85,20 @@ class EventsStore {
     if (this.es !== null && this.es.readyState !== CLOSED) {
       return;
     }
-    this.es = watchEvents((e) => {
-      for (const fn of this.listeners.values()) fn(e);
-    });
+    this.es = watchEvents(
+      (e) => {
+        for (const fn of this.listeners.values()) fn(e);
+      },
+      {
+        onPermanentFailure: () => {
+          this.permanentlyFailed = true;
+          if (this.healTimer !== null) {
+            clearInterval(this.healTimer);
+            this.healTimer = null;
+          }
+        },
+      },
+    );
   }
 
   private close() {
@@ -88,17 +109,26 @@ class EventsStore {
       clearInterval(this.healTimer);
       this.healTimer = null;
     }
+    // Reset permanent-failure state when the subscriber set empties.
+    // A fresh round of subscribers may succeed if the backend state
+    // has changed (e.g., the user navigated pages, a sidebar opened
+    // fresh, or the server was restarted between subscriptions).
+    this.permanentlyFailed = false;
   }
 
   // ensureHealTimer starts a periodic check that rebuilds the
   // shared EventSource when it has been closed by the circuit
   // breaker but listeners are still registered. Without it, a
   // transient outage that trips the breaker would leave long-lived
-  // subscribers stuck until the page reloads.
+  // subscribers stuck until the page reloads. Permanent failures
+  // (endpoint never reached OPEN) disable the timer via
+  // permanentlyFailed so this never becomes a retry storm against
+  // a known-dead endpoint like PG serve's 503.
   private ensureHealTimer() {
     if (this.healTimer !== null) return;
+    if (this.permanentlyFailed) return;
     this.healTimer = setInterval(() => {
-      if (this.listeners.size === 0) {
+      if (this.listeners.size === 0 || this.permanentlyFailed) {
         if (this.healTimer !== null) {
           clearInterval(this.healTimer);
           this.healTimer = null;
