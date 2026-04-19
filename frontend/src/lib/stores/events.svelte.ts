@@ -17,15 +17,20 @@ class EventsStore {
   private healTimer: ReturnType<typeof setInterval> | null = null;
   // Sticky flag. When watchEvents reports a permanent failure
   // (circuit breaker tripped without the EventSource ever reaching
-  // OPEN — i.e., the endpoint is unreachable for this client, as in
-  // PG serve mode), stop rebuilding the connection. A page reload
-  // is required to recover if the backend configuration changes.
+  // OPEN — typical of PG serve mode's 503 but also possible for
+  // false positives: slow startup, tunnel handshake, transient
+  // network issue at mount time), stop rebuilding the connection.
+  // The flag clears when the subscriber set empties OR when the
+  // tab becomes visible again (giving a user-initiated retry
+  // window so false positives recover without a page reload).
   private permanentlyFailed = false;
+  private visibilityHandlerInstalled = false;
 
   /** Subscribe to every event. Returns unsubscribe. */
   subscribe(fn: Listener): () => void {
     const key = Symbol();
     this.listeners.set(key, fn);
+    this.installVisibilityHandler();
     this.ensureOpen();
     this.ensureHealTimer();
     return () => {
@@ -141,6 +146,33 @@ class EventsStore {
         this.ensureOpen();
       }
     }, EVENTS_STORE_HEAL_INTERVAL_MS);
+  }
+
+  // installVisibilityHandler wires a one-time document listener
+  // that gives permanently-failed SSE one more retry when the user
+  // refocuses the tab. This absorbs false-positive "permanent"
+  // classifications (slow startup, tunnel handshake, transient
+  // network hiccup at mount time) without running a periodic
+  // retry storm in the background. Installed lazily on first
+  // subscribe so module import has no global side effect.
+  private installVisibilityHandler() {
+    if (this.visibilityHandlerInstalled) return;
+    if (
+      typeof document === "undefined" ||
+      typeof document.addEventListener !== "function"
+    ) {
+      return;
+    }
+    this.visibilityHandlerInstalled = true;
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      if (!this.permanentlyFailed) return;
+      if (this.listeners.size === 0) return;
+      this.permanentlyFailed = false;
+      this.es = null;
+      this.ensureOpen();
+      this.ensureHealTimer();
+    });
   }
 }
 
