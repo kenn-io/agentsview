@@ -23,7 +23,22 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 ensure-embed-dir:
 	@mkdir -p internal/web/dist
 	@test -n "$$(ls internal/web/dist/ 2>/dev/null)" \
-		|| echo ok > internal/web/dist/stub.html
+		|| printf '%s\n' \
+			'<!doctype html>' \
+			'<html lang="en">' \
+			'  <head>' \
+			'    <meta charset="UTF-8" />' \
+			'    <meta name="viewport" content="width=device-width, initial-scale=1.0" />' \
+			'    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />' \
+			'    <title>AgentsView</title>' \
+			'    <script type="module" src="/assets/index.js"></script>' \
+			'    <link rel="stylesheet" href="/assets/index.css" />' \
+			'  </head>' \
+			'  <body>' \
+			'    <div id="app"></div>' \
+			'  </body>' \
+			'</html>' \
+			> internal/web/dist/index.html
 
 # Build the binary (debug, with embedded frontend)
 build: frontend

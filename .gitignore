@@ -13,7 +13,8 @@ test-results/
 frontend/playwright-report/
 
 # Embedded frontend build output
-internal/web/dist/
+internal/web/dist/*
+!internal/web/dist/index.html
 
 # Test/build artifacts
 /dist/

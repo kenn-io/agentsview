@@ -11,7 +11,22 @@ mkdir -p tmp
 # so go:embed doesn't complain during backend-only dev.
 mkdir -p internal/web/dist
 [ -n "$(ls internal/web/dist/ 2>/dev/null)" ] \
-  || echo ok > internal/web/dist/stub.html
+  || printf '%s\n' \
+    '<!doctype html>' \
+    '<html lang="en">' \
+    '  <head>' \
+    '    <meta charset="UTF-8" />' \
+    '    <meta name="viewport" content="width=device-width, initial-scale=1.0" />' \
+    '    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />' \
+    '    <title>AgentsView</title>' \
+    '    <script type="module" src="/assets/index.js"></script>' \
+    '    <link rel="stylesheet" href="/assets/index.css" />' \
+    '  </head>' \
+    '  <body>' \
+    '    <div id="app"></div>' \
+    '  </body>' \
+    '</html>' \
+    > internal/web/dist/index.html
 
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
