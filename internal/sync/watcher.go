@@ -138,7 +138,10 @@ func (w *Watcher) loop() {
 // handleEvent processes a single fsnotify event, auto-watching
 // newly created directories and recording pending changes.
 func (w *Watcher) handleEvent(event fsnotify.Event) {
-	if event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
+	if event.Op&(fsnotify.Write|
+		fsnotify.Create|
+		fsnotify.Remove|
+		fsnotify.Rename) == 0 {
 		return
 	}
 

@@ -2267,6 +2267,53 @@ func TestSyncSingleSessionOpenCodeStorageMissingMessagePreservesArchive(
 	)
 }
 
+func TestSyncPathsOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-paths"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Paths",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
 func TestSyncPathsOpenCodeStorageMissingPartDirPreservesArchive(
 	t *testing.T,
 ) {
@@ -2362,6 +2409,49 @@ func TestSyncSingleSessionOpenCodeStorageMissingPartPreservesArchive(
 	assertMessageContent(
 		t, env.db, "opencode:"+sessionID,
 		"first part\nsecond part",
+	)
+}
+
+func TestSyncAllOpenCodeStorageContentRewritePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-content-rewrite"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Content Rewrite",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"complete response", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	dbtest.WriteTestFile(t, partPath, []byte(
+		`{"id":"part-u1","sessionID":"`+sessionID+`","messageID":"msg-u1","type":"text","text":"cut","time":{"created":1704067200000}}`,
+	))
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"complete response",
 	)
 }
 

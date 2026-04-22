@@ -280,11 +280,17 @@ func (e *Engine) classifyPaths(
 	paths []string,
 ) []parser.DiscoveredFile {
 	geminiProjectsByDir := make(map[string]map[string]string)
+	seen := make(map[string]struct{}, len(paths))
 	var files []parser.DiscoveredFile
 	for _, p := range paths {
 		if df, ok := e.classifyOnePath(
 			p, geminiProjectsByDir,
 		); ok {
+			key := string(df.Agent) + "\x00" + df.Path
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
 			files = append(files, df)
 		}
 	}
@@ -327,6 +333,19 @@ func (e *Engine) classifyOnePath(
 	geminiProjectsByDir map[string]map[string]string,
 ) (parser.DiscoveredFile, bool) {
 	sep := string(filepath.Separator)
+	pathExists := true
+	if _, err := os.Stat(path); err != nil {
+		pathExists = false
+	}
+
+	if df, ok := e.classifyOpenCodePath(
+		path, pathExists,
+	); ok {
+		return df, true
+	}
+	if !pathExists {
+		return parser.DiscoveredFile{}, false
+	}
 
 	// Claude: <claudeDir>/<project>/<session>.jsonl
 	//     or: <claudeDir>/<project>/<session>/subagents/agent-<id>.jsonl
@@ -471,65 +490,6 @@ func (e *Engine) classifyOnePath(
 				Project: project,
 				Agent:   parser.AgentGemini,
 			}, true
-		}
-	}
-
-	// OpenCode storage:
-	//   <opencodeDir>/storage/session/<project>/<session>.json
-	//   <opencodeDir>/storage/message/<session>/<message>.json
-	//   <opencodeDir>/storage/part/<message>/<part>.json
-	for _, openCodeDir := range e.agentDirs[parser.AgentOpenCode] {
-		if openCodeDir == "" {
-			continue
-		}
-		src := parser.ResolveOpenCodeSource(openCodeDir)
-		if src.Mode != parser.OpenCodeSourceStorage {
-			continue
-		}
-		if rel, ok := isUnder(openCodeDir, path); ok {
-			parts := strings.Split(rel, sep)
-			switch {
-			case len(parts) == 4 &&
-				parts[0] == "storage" &&
-				parts[1] == "session" &&
-				strings.HasSuffix(parts[3], ".json"):
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentOpenCode,
-				}, true
-			case len(parts) == 4 &&
-				parts[0] == "storage" &&
-				parts[1] == "message" &&
-				strings.HasSuffix(parts[3], ".json"):
-				sessionPath := parser.FindOpenCodeSourceFile(
-					openCodeDir, parts[2],
-				)
-				if sessionPath == "" {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:  sessionPath,
-					Agent: parser.AgentOpenCode,
-				}, true
-			case len(parts) == 4 &&
-				parts[0] == "storage" &&
-				parts[1] == "part" &&
-				strings.HasSuffix(parts[3], ".json"):
-				sessionID := readOpenCodeStorageSessionID(path)
-				if sessionID == "" {
-					continue
-				}
-				sessionPath := parser.FindOpenCodeSourceFile(
-					openCodeDir, sessionID,
-				)
-				if sessionPath == "" {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:  sessionPath,
-					Agent: parser.AgentOpenCode,
-				}, true
-			}
 		}
 	}
 
@@ -811,6 +771,81 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) classifyOpenCodePath(
+	path string, pathExists bool,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+
+	// OpenCode storage:
+	//   <opencodeDir>/storage/session/<project>/<session>.json
+	//   <opencodeDir>/storage/message/<session>/<message>.json
+	//   <opencodeDir>/storage/part/<message>/<part>.json
+	for _, openCodeDir := range e.agentDirs[parser.AgentOpenCode] {
+		if openCodeDir == "" {
+			continue
+		}
+		src := parser.ResolveOpenCodeSource(openCodeDir)
+		if src.Mode != parser.OpenCodeSourceStorage {
+			continue
+		}
+		rel, ok := isUnder(openCodeDir, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		switch {
+		case pathExists &&
+			len(parts) == 4 &&
+			parts[0] == "storage" &&
+			parts[1] == "session" &&
+			strings.HasSuffix(parts[3], ".json"):
+			return parser.DiscoveredFile{
+				Path:  path,
+				Agent: parser.AgentOpenCode,
+			}, true
+		case len(parts) == 4 &&
+			parts[0] == "storage" &&
+			parts[1] == "message" &&
+			strings.HasSuffix(parts[3], ".json"):
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, parts[2],
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
+		case len(parts) == 4 &&
+			parts[0] == "storage" &&
+			parts[1] == "part" &&
+			strings.HasSuffix(parts[3], ".json"):
+			sessionID := readOpenCodeStorageSessionID(path)
+			if sessionID == "" {
+				sessionID =
+					findOpenCodeStorageSessionIDByMessageID(
+						openCodeDir, parts[2],
+					)
+			}
+			if sessionID == "" {
+				continue
+			}
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, sessionID,
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
+		}
+	}
 	return parser.DiscoveredFile{}, false
 }
 
@@ -3203,34 +3238,32 @@ func (e *Engine) shouldPreserveOpenCodeArchive(
 		return false
 	}
 	storedHash := derefString(stored.FileHash)
-	if parser.OpenCodeStorageFingerprintMissing(
-		storedHash, currentHash,
-	) {
-		log.Printf(
-			"skip opencode session %s: storage fingerprint lost previously-seen messages or parts",
-			sessionID,
-		)
-		return true
-	}
-	if parser.HasOpenCodeStorageFingerprint(
-		storedHash,
-	) {
-		return false
-	}
-
 	storedMsgs, err := e.db.GetAllMessages(
 		context.Background(), sessionID,
 	)
 	if err != nil || len(storedMsgs) == 0 {
 		return false
 	}
+	if parser.HasOpenCodeStorageFingerprint(storedHash) &&
+		!parser.OpenCodeStorageFingerprintMissing(
+			storedHash, currentHash,
+		) {
+		return false
+	}
 	if openCodeLegacyArchiveLooksIncomplete(
 		currentMsgs, storedMsgs,
 	) {
-		log.Printf(
-			"skip opencode session %s: storage update looks incomplete relative to legacy archive",
-			sessionID,
-		)
+		if parser.HasOpenCodeStorageFingerprint(storedHash) {
+			log.Printf(
+				"skip opencode session %s: storage fingerprint changed but update looks incomplete relative to archive",
+				sessionID,
+			)
+		} else {
+			log.Printf(
+				"skip opencode session %s: storage update looks incomplete relative to legacy archive",
+				sessionID,
+			)
+		}
 		return true
 	}
 	return false
@@ -3724,6 +3757,31 @@ func readOpenCodeStorageSessionID(path string) string {
 		return ""
 	}
 	return data.SessionID
+}
+
+func findOpenCodeStorageSessionIDByMessageID(
+	openCodeDir, messageID string,
+) string {
+	messageRoot := filepath.Join(
+		openCodeDir, "storage", "message",
+	)
+	entries, err := os.ReadDir(messageRoot)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(
+			messageRoot, entry.Name(), messageID+".json",
+		)
+		if info, err := os.Stat(path); err == nil &&
+			!info.IsDir() {
+			return entry.Name()
+		}
+	}
+	return ""
 }
 
 // syncWarp syncs sessions from Warp SQLite databases.

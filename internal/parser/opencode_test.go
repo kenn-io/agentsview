@@ -1154,3 +1154,44 @@ func TestParseOpenCodeDB_NoTokenUsage(t *testing.T) {
 		t.Fatalf("TokenUsage = %q, want empty", string(asst.TokenUsage))
 	}
 }
+
+func TestOpenCodeStorageFingerprintMissingDetectsContentRewrite(
+	t *testing.T,
+) {
+	stored := buildOpenCodeStorageFingerprint(
+		[]openCodeMessageRow{{
+			id:          "msg-1",
+			data:        `{"role":"assistant","modelID":"gpt-5"}`,
+			timeCreated: 100,
+		}},
+		map[string][]openCodePartRow{
+			"msg-1": {{
+				id:          "part-1",
+				messageID:   "msg-1",
+				data:        `{"type":"text","text":"complete"}`,
+				timeCreated: 101,
+			}},
+		},
+	)
+	current := buildOpenCodeStorageFingerprint(
+		[]openCodeMessageRow{{
+			id:          "msg-1",
+			data:        `{"role":"assistant","modelID":"gpt-5"}`,
+			timeCreated: 100,
+		}},
+		map[string][]openCodePartRow{
+			"msg-1": {{
+				id:          "part-1",
+				messageID:   "msg-1",
+				data:        `{"type":"text","text":"truncated"}`,
+				timeCreated: 101,
+			}},
+		},
+	)
+
+	if !OpenCodeStorageFingerprintMissing(
+		stored, current,
+	) {
+		t.Fatal("expected content rewrite to invalidate fingerprint")
+	}
+}

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -378,12 +379,14 @@ type openCodeStorageFingerprint struct {
 type openCodeStorageFingerprintMessage struct {
 	ID    string                           `json:"id"`
 	Time  int64                            `json:"time"`
+	Hash  string                           `json:"hash,omitempty"`
 	Parts []openCodeStorageFingerprintPart `json:"parts,omitempty"`
 }
 
 type openCodeStorageFingerprintPart struct {
 	ID   string `json:"id"`
 	Time int64  `json:"time"`
+	Hash string `json:"hash,omitempty"`
 }
 
 func loadOpenCodeMessages(
@@ -1023,7 +1026,8 @@ func OpenCodeStorageFingerprintMissing(
 	}
 	for _, storedMsg := range stored.Messages {
 		currentMsg, ok := currentMsgs[storedMsg.ID]
-		if !ok || currentMsg.Time < storedMsg.Time {
+		if !ok || currentMsg.Time < storedMsg.Time ||
+			currentMsg.Hash != storedMsg.Hash {
 			return true
 		}
 		currentParts := make(map[string]openCodeStorageFingerprintPart, len(currentMsg.Parts))
@@ -1032,7 +1036,8 @@ func OpenCodeStorageFingerprintMissing(
 		}
 		for _, storedPart := range storedMsg.Parts {
 			currentPart, ok := currentParts[storedPart.ID]
-			if !ok || currentPart.Time < storedPart.Time {
+			if !ok || currentPart.Time < storedPart.Time ||
+				currentPart.Hash != storedPart.Hash {
 				return true
 			}
 		}
@@ -1065,12 +1070,14 @@ func buildOpenCodeStorageFingerprint(
 		fpMsg := openCodeStorageFingerprintMessage{
 			ID:   msg.id,
 			Time: msg.timeCreated,
+			Hash: openCodeStorageFingerprintHash(msg.data),
 		}
 		for _, part := range partRows {
 			fpMsg.Parts = append(fpMsg.Parts,
 				openCodeStorageFingerprintPart{
 					ID:   part.id,
 					Time: part.timeCreated,
+					Hash: openCodeStorageFingerprintHash(part.data),
 				},
 			)
 		}
@@ -1095,6 +1102,11 @@ func decodeOpenCodeStorageFingerprint(
 		return openCodeStorageFingerprint{}, false
 	}
 	return fp, true
+}
+
+func openCodeStorageFingerprintHash(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%x", sum)
 }
 
 func openCodeSQLiteSessionMtime(

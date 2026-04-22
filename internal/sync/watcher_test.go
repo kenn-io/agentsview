@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 // startTestWatcherNoCleanup sets up a watcher without registering
@@ -212,6 +214,39 @@ func TestWatcherIgnoresNonWriteCreate(t *testing.T) {
 		t.Fatal("onChange called for chmod event, expected it to be ignored")
 	case <-time.After(100 * time.Millisecond):
 		// Success
+	}
+}
+
+func TestWatcherHandlesRemoveAndRename(t *testing.T) {
+	pathsCh := make(chan []string, 1)
+	w, err := NewWatcher(time.Millisecond, func(paths []string) {
+		pathsCh <- paths
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+	base := time.Unix(0, 0)
+	w.now = func() time.Time { return base }
+
+	w.handleEvent(fsnotify.Event{
+		Name: "/tmp/remove.json",
+		Op:   fsnotify.Remove,
+	})
+	w.handleEvent(fsnotify.Event{
+		Name: "/tmp/rename.json",
+		Op:   fsnotify.Rename,
+	})
+	w.now = func() time.Time { return base.Add(2 * time.Millisecond) }
+	w.flush()
+
+	got := <-pathsCh
+	if !slices.Contains(got, "/tmp/remove.json") {
+		t.Fatalf("remove event missing from %v", got)
+	}
+	if !slices.Contains(got, "/tmp/rename.json") {
+		t.Fatalf("rename event missing from %v", got)
 	}
 }
 
