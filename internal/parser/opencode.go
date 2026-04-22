@@ -1027,8 +1027,6 @@ func openCodeStorageSessionMtime(
 
 	messageDir := filepath.Join(root, "storage", "message", sessionID)
 	fileMtime = max(fileMtime, statMtime(messageDir))
-	partRoot := filepath.Join(root, "storage", "part")
-	fileMtime = max(fileMtime, statMtime(partRoot))
 	msgEntries, err := os.ReadDir(messageDir)
 	if err != nil && !os.IsNotExist(err) {
 		return 0, fmt.Errorf(
