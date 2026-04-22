@@ -317,6 +317,20 @@ func (oc *openCodeTestDB) addMessage(
 	)
 }
 
+func (oc *openCodeTestDB) updateMessageData(
+	t *testing.T, id string, data map[string]any,
+) {
+	t.Helper()
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal message update: %v", err)
+	}
+	oc.mustExec(t, "update message data",
+		"UPDATE message SET data = ? WHERE id = ?",
+		string(raw), id,
+	)
+}
+
 func (oc *openCodeTestDB) addTextPart(
 	t *testing.T,
 	id, sessionID, messageID, content string,

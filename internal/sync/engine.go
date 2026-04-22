@@ -1506,7 +1506,9 @@ func (e *Engine) syncOneOpenCode(
 	for _, m := range metas {
 		_, storedMtime, ok :=
 			e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime {
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >=
+				db.CurrentDataVersion() {
 			continue
 		}
 		changed = append(changed, m.SessionID)
@@ -2951,7 +2953,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		}
 		if e.shouldPreserveOpenCodeArchive(
 			pw.sess.Agent, pw.sess.File.Path, s.ID,
-			derefString(s.FileHash),
+			derefString(s.FileHash), msgs,
 		) {
 			continue
 		}
@@ -3141,7 +3143,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	s.IsAutomated = isAutomatedFromSession(s)
 	if e.shouldPreserveOpenCodeArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
-		derefString(s.FileHash),
+		derefString(s.FileHash), msgs,
 	) {
 		return nil
 	}
@@ -3188,6 +3190,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 func (e *Engine) shouldPreserveOpenCodeArchive(
 	agent parser.AgentType, path, sessionID string,
 	currentHash string,
+	currentMsgs []db.Message,
 ) bool {
 	if agent != parser.AgentOpenCode ||
 		!isOpenCodeStoragePath(path) {
@@ -3196,14 +3199,36 @@ func (e *Engine) shouldPreserveOpenCodeArchive(
 	stored, err := e.db.GetSessionFull(
 		context.Background(), sessionID,
 	)
-	if err != nil || stored == nil || stored.FileHash == nil {
+	if err != nil || stored == nil {
 		return false
 	}
+	storedHash := derefString(stored.FileHash)
 	if parser.OpenCodeStorageFingerprintMissing(
-		*stored.FileHash, currentHash,
+		storedHash, currentHash,
 	) {
 		log.Printf(
 			"skip opencode session %s: storage fingerprint lost previously-seen messages or parts",
+			sessionID,
+		)
+		return true
+	}
+	if parser.HasOpenCodeStorageFingerprint(
+		storedHash,
+	) {
+		return false
+	}
+
+	storedMsgs, err := e.db.GetAllMessages(
+		context.Background(), sessionID,
+	)
+	if err != nil || len(storedMsgs) == 0 {
+		return false
+	}
+	if openCodeLegacyArchiveLooksIncomplete(
+		currentMsgs, storedMsgs,
+	) {
+		log.Printf(
+			"skip opencode session %s: storage update looks incomplete relative to legacy archive",
 			sessionID,
 		)
 		return true
@@ -3226,6 +3251,54 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func openCodeLegacyArchiveLooksIncomplete(
+	parsed, stored []db.Message,
+) bool {
+	if len(parsed) < len(stored) {
+		return true
+	}
+	if len(parsed) != len(stored) {
+		return false
+	}
+	for i := range parsed {
+		if openCodeMessageLooksIncomplete(
+			parsed[i], stored[i],
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func openCodeMessageLooksIncomplete(
+	parsed, stored db.Message,
+) bool {
+	if parsed.Ordinal != stored.Ordinal ||
+		parsed.Role != stored.Role {
+		return false
+	}
+	if parsed.ContentLength < stored.ContentLength {
+		return true
+	}
+	if parsed.HasThinking != stored.HasThinking &&
+		stored.HasThinking {
+		return true
+	}
+	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
+		return true
+	}
+	return countToolResultEvents(parsed.ToolCalls) <
+		countToolResultEvents(stored.ToolCalls)
+}
+
+func countToolResultEvents(calls []db.ToolCall) int {
+	total := 0
+	for _, call := range calls {
+		total += len(call.ResultEvents)
+	}
+	return total
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites

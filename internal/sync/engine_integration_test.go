@@ -1618,6 +1618,63 @@ func TestSyncSingleSessionOpenCodeSQLiteFallback(t *testing.T) {
 	)
 }
 
+func TestSyncAllOpenCodeSQLiteReparsesStaleDataVersion(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-stale-version"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.updateMessageData(t, "msg-a1", map[string]any{
+		"role":    "assistant",
+		"modelID": "claude-3-7-sonnet",
+	})
+	if err := env.db.SetSessionDataVersion(
+		"opencode:"+sessionID, 0,
+	); err != nil {
+		t.Fatalf("SetSessionDataVersion: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Synced != 1 {
+		t.Fatalf("SyncAll synced = %d, want 1", stats.Synced)
+	}
+
+	msgs := fetchMessages(t, env.db, "opencode:"+sessionID)
+	if got := msgs[1].Model; got != "claude-3-7-sonnet" {
+		t.Fatalf("assistant model = %q, want claude-3-7-sonnet", got)
+	}
+}
+
 func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 	t *testing.T,
 ) {
@@ -2041,6 +2098,66 @@ func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
 	assertMessageContent(
 		t, env.db, "opencode:oc-missing-message",
 		"question", "answer",
+	)
+}
+
+func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-storage-upgrade-legacy"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	sqlite.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	sqlite.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	sqlite.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"legacy sqlite question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"legacy sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Upgrade",
+		timeCreated, timeUpdated+1000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		timeCreated, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"legacy sqlite question", timeCreated,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"legacy sqlite question",
+		"legacy sqlite answer",
 	)
 }
 

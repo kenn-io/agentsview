@@ -1040,6 +1040,10 @@ func OpenCodeStorageFingerprintMissing(
 	return false
 }
 
+func HasOpenCodeStorageFingerprint(hash string) bool {
+	return strings.HasPrefix(hash, openCodeStorageFingerprintPrefix)
+}
+
 func buildOpenCodeStorageFingerprint(
 	msgs []openCodeMessageRow,
 	parts map[string][]openCodePartRow,
