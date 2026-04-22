@@ -439,6 +439,69 @@ func TestParseOpenCodeFile_StoragePartOrderingUsesStartTime(
 	assertEq(t, "msg[0].Content", msgs[0].Content, "first\nsecond")
 }
 
+func TestParseOpenCodeFile_StoragePartOrderingPrefersStartOverCreated(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_storage.json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id":        "ses_storage",
+		"directory": "/home/user/code/myapp",
+		"title":     "Storage Session",
+		"time": map[string]any{
+			"created": 1700000000000,
+			"updated": 1700000060000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_1.json",
+	), map[string]any{
+		"id":        "msg_1",
+		"sessionID": "ses_storage",
+		"role":      "assistant",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "part_1.json",
+	), map[string]any{
+		"id":        "part_1",
+		"sessionID": "ses_storage",
+		"messageID": "msg_1",
+		"type":      "text",
+		"text":      "second",
+		"time": map[string]any{
+			"start":   1700000002000,
+			"created": 1700000001000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "part_2.json",
+	), map[string]any{
+		"id":        "part_2",
+		"sessionID": "ses_storage",
+		"messageID": "msg_1",
+		"type":      "text",
+		"text":      "first",
+		"time": map[string]any{
+			"start":   1700000001000,
+			"created": 1700000002000,
+		},
+	})
+
+	_, msgs, err := ParseOpenCodeFile(sessionPath, "testmachine")
+	if err != nil {
+		t.Fatalf("ParseOpenCodeFile: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	assertEq(t, "msg[0].Content", msgs[0].Content, "first\nsecond")
+}
+
 func TestParseOpenCodeFile_StorageStepFinishTokens(t *testing.T) {
 	root := t.TempDir()
 	sessionPath := filepath.Join(

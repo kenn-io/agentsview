@@ -812,12 +812,25 @@ type openCodeStorageTime struct {
 	Updated int64 `json:"updated"`
 }
 
-func (t openCodeStorageTime) sortTime() int64 {
+func (t openCodeStorageTime) messageSortTime() int64 {
 	switch {
 	case t.Created != 0:
 		return t.Created
 	case t.Start != 0:
 		return t.Start
+	case t.End != 0:
+		return t.End
+	default:
+		return t.Updated
+	}
+}
+
+func (t openCodeStorageTime) partSortTime() int64 {
+	switch {
+	case t.Start != 0:
+		return t.Start
+	case t.Created != 0:
+		return t.Created
 	case t.End != 0:
 		return t.End
 	default:
@@ -894,7 +907,7 @@ func loadOpenCodeStorageMessages(
 		msgs = append(msgs, openCodeMessageRow{
 			id:          mf.ID,
 			data:        string(raw),
-			timeCreated: mf.Time.sortTime(),
+			timeCreated: mf.Time.messageSortTime(),
 			fileMtime:   mustEntryMtime(entry),
 		})
 	}
@@ -947,7 +960,7 @@ func loadOpenCodeStorageParts(
 				id:          pf.ID,
 				messageID:   pf.MessageID,
 				data:        string(raw),
-				timeCreated: pf.Time.sortTime(),
+				timeCreated: pf.Time.partSortTime(),
 				fileMtime:   mustEntryMtime(entry),
 			})
 		}

@@ -2197,6 +2197,57 @@ func TestSyncPathsOpenCodeStorageMissingPartDirPreservesArchive(
 	)
 }
 
+func TestSyncSingleSessionOpenCodeStorageMissingPartPreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-part-single"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Part Single",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	part1Path := oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"first part", 1704067201000,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a2",
+		"second part", 1704067201001,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(part1Path); err != nil {
+		t.Fatalf("remove part file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"first part\nsecond part",
+	)
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.

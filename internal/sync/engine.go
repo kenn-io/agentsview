@@ -2951,7 +2951,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		}
 		if e.shouldPreserveOpenCodeArchive(
 			pw.sess.Agent, pw.sess.File.Path, s.ID,
-			len(msgs),
+			msgs,
 		) {
 			continue
 		}
@@ -3141,7 +3141,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	s.IsAutomated = isAutomatedFromSession(s)
 	if e.shouldPreserveOpenCodeArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
-		len(msgs),
+		msgs,
 	) {
 		return nil
 	}
@@ -3187,26 +3187,79 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 
 func (e *Engine) shouldPreserveOpenCodeArchive(
 	agent parser.AgentType, path, sessionID string,
-	parsedCount int,
+	msgs []db.Message,
 ) bool {
 	if agent != parser.AgentOpenCode ||
 		!isOpenCodeStoragePath(path) {
 		return false
 	}
 	existingCount, ok := e.db.GetSessionMessageCount(sessionID)
-	if !ok || existingCount == 0 || parsedCount >= existingCount {
+	if !ok || existingCount == 0 {
 		return false
 	}
-	log.Printf(
-		"skip opencode session %s: parsed %d messages, existing %d; treating source as incomplete",
-		sessionID, parsedCount, existingCount,
+	if len(msgs) < existingCount {
+		log.Printf(
+			"skip opencode session %s: parsed %d messages, existing %d; treating source as incomplete",
+			sessionID, len(msgs), existingCount,
+		)
+		return true
+	}
+	if len(msgs) != existingCount {
+		return false
+	}
+
+	storedMsgs, err := e.db.GetAllMessages(
+		context.Background(), sessionID,
 	)
-	return true
+	if err != nil || len(storedMsgs) != existingCount {
+		return false
+	}
+	for i := range msgs {
+		if openCodeMessageLooksIncomplete(
+			msgs[i], storedMsgs[i],
+		) {
+			log.Printf(
+				"skip opencode session %s: parsed message %d looks incomplete relative to stored transcript",
+				sessionID, msgs[i].Ordinal,
+			)
+			return true
+		}
+	}
+	return false
 }
 
 func isOpenCodeStoragePath(path string) bool {
 	return strings.HasSuffix(path, ".json") &&
 		!strings.Contains(path, "#")
+}
+
+func openCodeMessageLooksIncomplete(
+	parsed, stored db.Message,
+) bool {
+	if parsed.Ordinal != stored.Ordinal ||
+		parsed.Role != stored.Role {
+		return false
+	}
+	if parsed.ContentLength < stored.ContentLength {
+		return true
+	}
+	if parsed.HasThinking != stored.HasThinking &&
+		stored.HasThinking {
+		return true
+	}
+	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
+		return true
+	}
+	return countToolResultEvents(parsed.ToolCalls) <
+		countToolResultEvents(stored.ToolCalls)
+}
+
+func countToolResultEvents(calls []db.ToolCall) int {
+	total := 0
+	for _, call := range calls {
+		total += len(call.ResultEvents)
+	}
+	return total
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites
