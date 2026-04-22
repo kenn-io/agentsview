@@ -82,6 +82,13 @@ func ResolveOpenCodeSource(root string) OpenCodeSource {
 			SessionRoot: sessionRoot,
 			DBPath:      filepath.Join(root, "opencode.db"),
 		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return OpenCodeSource{
+			Mode:        OpenCodeSourceStorage,
+			Root:        root,
+			SessionRoot: sessionRoot,
+			DBPath:      filepath.Join(root, "opencode.db"),
+		}
 	}
 
 	dbPath := filepath.Join(root, "opencode.db")

@@ -1161,6 +1161,7 @@ func openCodeStorageSessionMtime(
 	root := filepath.Dir(filepath.Dir(filepath.Dir(
 		filepath.Dir(sessionPath),
 	)))
+	messageRoot := filepath.Join(root, "storage", "message")
 	partRoot := filepath.Join(root, "storage", "part")
 	sessionID := strings.TrimSuffix(
 		filepath.Base(sessionPath), filepath.Ext(sessionPath),
@@ -1170,7 +1171,11 @@ func openCodeStorageSessionMtime(
 	messageDir := filepath.Join(root, "storage", "message", sessionID)
 	fileMtime = max(fileMtime, statMtime(messageDir))
 	msgEntries, err := os.ReadDir(messageDir)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil {
+		if os.IsNotExist(err) {
+			fileMtime = max(fileMtime, statMtime(messageRoot))
+			return fileMtime, nil
+		}
 		return 0, fmt.Errorf(
 			"reading opencode message dir %s: %w",
 			messageDir, err,

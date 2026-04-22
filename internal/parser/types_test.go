@@ -438,6 +438,28 @@ func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
 	}
 }
 
+func TestResolveOpenCodeSourceKeepsStorageAuthoritativeOnStatError(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	storagePath := filepath.Join(root, "storage")
+	if err := os.WriteFile(storagePath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write storage marker: %v", err)
+	}
+	dbPath := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeSource(root)
+	if got.Mode != OpenCodeSourceStorage {
+		t.Fatalf("Mode = %v, want %v", got.Mode, OpenCodeSourceStorage)
+	}
+	if got.SessionRoot != filepath.Join(root, "storage", "session") {
+		t.Fatalf("SessionRoot = %q", got.SessionRoot)
+	}
+}
+
 func TestDiscoverOpenCodeSessions(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session", "global")

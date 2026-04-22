@@ -1974,6 +1974,55 @@ func TestSourceMtimeOpenCodeStorageTracksPartDirRemoval(t *testing.T) {
 	}
 }
 
+func TestSourceMtimeOpenCodeStorageTracksMessageDirRemoval(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove-message-dir",
+		"/home/user/code/myapp", "Source Remove Message Dir",
+		1704067200000, 1704067205000,
+	)
+	messagePath := oc.addMessage(
+		t, "oc-source-remove-message-dir", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-source-remove-message-dir", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime(
+		"opencode:oc-source-remove-message-dir",
+	)
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.RemoveAll(filepath.Dir(messagePath)); err != nil {
+		t.Fatalf("remove message dir: %v", err)
+	}
+	messageRoot := filepath.Join(
+		env.opencodeDir, "storage", "message",
+	)
+	if err := os.Chtimes(messageRoot, future, future); err != nil {
+		t.Fatalf("chtimes message root: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime(
+		"opencode:oc-source-remove-message-dir",
+	)
+	if updatedMtime <= initialMtime {
+		t.Fatalf(
+			"updated source mtime = %d, want > %d",
+			updatedMtime, initialMtime,
+		)
+	}
+}
+
 func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeDB(t, env.opencodeDir)
