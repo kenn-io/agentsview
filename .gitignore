@@ -14,7 +14,7 @@ frontend/playwright-report/
 
 # Embedded frontend build output
 internal/web/dist/*
-!internal/web/dist/index.html
+!internal/web/dist/.keep
 
 # Test/build artifacts
 /dist/

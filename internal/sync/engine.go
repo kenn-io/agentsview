@@ -2949,15 +2949,10 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 			existing < db.CurrentDataVersion() {
 			stale = true
 		}
-		if pw.sess.Agent == parser.AgentOpenCode {
-			if existingCount, ok := e.db.GetSessionMessageCount(s.ID); ok &&
-				existingCount > 0 && len(msgs) < existingCount {
-				log.Printf(
-					"skip opencode session %s: parsed %d messages, existing %d; treating source as incomplete",
-					s.ID, len(msgs), existingCount,
-				)
-				continue
-			}
+		if e.shouldPreserveOpenCodeArchive(
+			pw.sess.File.Path, s.ID, len(msgs),
+		) {
+			continue
 		}
 
 		// UpsertSession first: the session row must exist
@@ -3143,6 +3138,11 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 		postFilterCounts(msgs)
 	e.applyRemoteRewrites(&s, msgs)
 	s.IsAutomated = isAutomatedFromSession(s)
+	if e.shouldPreserveOpenCodeArchive(
+		pw.sess.File.Path, s.ID, len(msgs),
+	) {
+		return nil
+	}
 	if err := e.db.UpsertSession(s); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
 			if pw.sess.File.Path != "" {
@@ -3181,6 +3181,28 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	}
 
 	return nil
+}
+
+func (e *Engine) shouldPreserveOpenCodeArchive(
+	path, sessionID string, parsedCount int,
+) bool {
+	if !isOpenCodeStoragePath(path) {
+		return false
+	}
+	existingCount, ok := e.db.GetSessionMessageCount(sessionID)
+	if !ok || existingCount == 0 || parsedCount >= existingCount {
+		return false
+	}
+	log.Printf(
+		"skip opencode session %s: parsed %d messages, existing %d; treating source as incomplete",
+		sessionID, parsedCount, existingCount,
+	)
+	return true
+}
+
+func isOpenCodeStoragePath(path string) bool {
+	return strings.HasSuffix(path, ".json") &&
+		!strings.Contains(path, "#")
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites

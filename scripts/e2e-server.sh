@@ -32,6 +32,9 @@ else
     cd "$ROOT/frontend" && npm run build
     rm -rf "$ROOT/internal/web/dist"
     cp -r "$ROOT/frontend/dist" "$ROOT/internal/web/dist"
+    printf '%s\n' \
+      'keep embed dir for generated frontend assets' \
+      > "$ROOT/internal/web/dist/.keep"
     CGO_ENABLED=1 go build -tags fts5 \
       -o "$SERVER" "$ROOT/cmd/agentsview"
 fi
