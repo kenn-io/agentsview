@@ -1020,6 +1020,7 @@ func openCodeStorageSessionMtime(
 	root := filepath.Dir(filepath.Dir(filepath.Dir(
 		filepath.Dir(sessionPath),
 	)))
+	partRoot := filepath.Join(root, "storage", "part")
 	sessionID := strings.TrimSuffix(
 		filepath.Base(sessionPath), filepath.Ext(sessionPath),
 	)
@@ -1048,6 +1049,7 @@ func openCodeStorageSessionMtime(
 		partEntries, err := os.ReadDir(partDir)
 		if err != nil {
 			if os.IsNotExist(err) {
+				fileMtime = max(fileMtime, statMtime(partRoot))
 				continue
 			}
 			return 0, fmt.Errorf(

@@ -2950,7 +2950,8 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 			stale = true
 		}
 		if e.shouldPreserveOpenCodeArchive(
-			pw.sess.File.Path, s.ID, len(msgs),
+			pw.sess.Agent, pw.sess.File.Path, s.ID,
+			len(msgs),
 		) {
 			continue
 		}
@@ -3139,7 +3140,8 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	e.applyRemoteRewrites(&s, msgs)
 	s.IsAutomated = isAutomatedFromSession(s)
 	if e.shouldPreserveOpenCodeArchive(
-		pw.sess.File.Path, s.ID, len(msgs),
+		pw.sess.Agent, pw.sess.File.Path, s.ID,
+		len(msgs),
 	) {
 		return nil
 	}
@@ -3184,9 +3186,11 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 }
 
 func (e *Engine) shouldPreserveOpenCodeArchive(
-	path, sessionID string, parsedCount int,
+	agent parser.AgentType, path, sessionID string,
+	parsedCount int,
 ) bool {
-	if !isOpenCodeStoragePath(path) {
+	if agent != parser.AgentOpenCode ||
+		!isOpenCodeStoragePath(path) {
 		return false
 	}
 	existingCount, ok := e.db.GetSessionMessageCount(sessionID)

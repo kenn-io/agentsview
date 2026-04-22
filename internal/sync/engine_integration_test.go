@@ -1850,6 +1850,46 @@ func TestSourceMtimeOpenCodeStorageTracksChildRemoval(t *testing.T) {
 	}
 }
 
+func TestSourceMtimeOpenCodeStorageTracksPartDirRemoval(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove-dir",
+		"/home/user/code/myapp", "Source Remove Dir",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-remove-dir", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-remove-dir", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	future := time.Now().Add(2 * time.Second)
+	if err := os.RemoveAll(filepath.Dir(partPath)); err != nil {
+		t.Fatalf("remove part dir: %v", err)
+	}
+	partRoot := filepath.Join(
+		env.opencodeDir, "storage", "part",
+	)
+	if err := os.Chtimes(partRoot, future, future); err != nil {
+		t.Fatalf("chtimes part root: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
 func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeDB(t, env.opencodeDir)
