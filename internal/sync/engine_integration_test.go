@@ -34,9 +34,10 @@ type testEnv struct {
 }
 
 type testEnvOpts struct {
-	claudeDirs []string
-	codexDirs  []string
-	cursorDirs []string
+	claudeDirs   []string
+	codexDirs    []string
+	cursorDirs   []string
+	opencodeDirs []string
 }
 
 type TestEnvOption func(*testEnvOpts)
@@ -59,6 +60,12 @@ func WithCursorDirs(dirs []string) TestEnvOption {
 	}
 }
 
+func WithOpenCodeDirs(dirs []string) TestEnvOption {
+	return func(o *testEnvOpts) {
+		o.opencodeDirs = dirs
+	}
+}
+
 func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	t.Helper()
 	if testing.Short() {
@@ -71,12 +78,11 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	}
 
 	env := &testEnv{
-		geminiDir:   t.TempDir(),
-		opencodeDir: t.TempDir(),
-		iflowDir:    t.TempDir(),
-		ampDir:      t.TempDir(),
-		piDir:       t.TempDir(),
-		db:          dbtest.OpenTestDB(t),
+		geminiDir: t.TempDir(),
+		iflowDir:  t.TempDir(),
+		ampDir:    t.TempDir(),
+		piDir:     t.TempDir(),
+		db:        dbtest.OpenTestDB(t),
 	}
 
 	claudeDirs := options.claudeDirs
@@ -103,13 +109,21 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		env.cursorDir = cursorDirs[0]
 	}
 
+	opencodeDirs := options.opencodeDirs
+	if len(opencodeDirs) == 0 {
+		env.opencodeDir = t.TempDir()
+		opencodeDirs = []string{env.opencodeDir}
+	} else {
+		env.opencodeDir = opencodeDirs[0]
+	}
+
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   claudeDirs,
 			parser.AgentCodex:    codexDirs,
 			parser.AgentCursor:   cursorDirs,
 			parser.AgentGemini:   {env.geminiDir},
-			parser.AgentOpenCode: {env.opencodeDir},
+			parser.AgentOpenCode: opencodeDirs,
 			parser.AgentIflow:    {env.iflowDir},
 			parser.AgentAmp:      {env.ampDir},
 			parser.AgentPi:       {env.piDir},
@@ -1820,6 +1834,60 @@ func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 	}
 }
 
+func TestSyncAllSinceOpenCodeStorageUsesChildMtime(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-since-child",
+		"/home/user/code/myapp", "Since Child",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-since-child", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-since-child", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	cutoff := time.Now()
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime()
+	future := cutoff.Add(2 * time.Second)
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-since-child","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(partPath, future, future); err != nil {
+		t.Fatalf("chtimes part: %v", err)
+	}
+	if err := os.Chtimes(sessionPath, sessionMtime, sessionMtime); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	if stats.Synced != 1 {
+		t.Fatalf("SyncAllSince synced = %d, want 1", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-since-child",
+		"updated reply",
+	)
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.
@@ -2959,6 +3027,65 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 	assertMessageContent(
 		t, env.db, agentviewID,
 		"hello opencode", "hi there",
+	)
+}
+
+func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
+	storageRoot := t.TempDir()
+	sqliteRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(
+		storageRoot, "storage", "session", "global",
+	), 0o755); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+
+	env := setupTestEnv(
+		t, WithOpenCodeDirs([]string{storageRoot, sqliteRoot}),
+	)
+
+	oc := createOpenCodeDB(t, sqliteRoot)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-resync-sqlite-fallback"
+	var timeCreated int64 = 1704067200000
+	var timeUpdated int64 = 1704067205000
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello sqlite fallback", timeCreated,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+	agentviewID := "opencode:" + sessionID
+	assertSessionMessageCount(t, env.db, agentviewID, 1)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for mixed OpenCode roots: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced == 0 {
+		t.Fatal(
+			"expected SQLite fallback OpenCode session to be synced",
+		)
+	}
+
+	assertSessionMessageCount(t, env.db, agentviewID, 1)
+	assertMessageContent(
+		t, env.db, agentviewID,
+		"hello sqlite fallback",
 	)
 }
 

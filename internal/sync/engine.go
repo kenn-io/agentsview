@@ -862,9 +862,9 @@ func (e *Engine) ResyncAll(
 	if err != nil {
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
-	} else if !e.hasOpenCodeStorageRoot() {
-		oldFileSessions -= e.countRootSessionsByAgent(
-			origDB, parser.AgentOpenCode,
+	} else {
+		oldFileSessions -= e.countRootSessionsByAgentSource(
+			origDB, parser.AgentOpenCode, "%#%",
 		)
 		if oldFileSessions < 0 {
 			oldFileSessions = 0
@@ -1122,30 +1122,30 @@ func removeWAL(path string) {
 	os.Remove(path + "-shm")
 }
 
-func (e *Engine) hasOpenCodeStorageRoot() bool {
-	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
-		if dir == "" {
-			continue
-		}
-		if parser.ResolveOpenCodeSource(dir).Mode ==
-			parser.OpenCodeSourceStorage {
-			return true
-		}
-	}
-	return false
-}
-
 func (e *Engine) countRootSessionsByAgent(
 	database *db.DB, agent parser.AgentType,
 ) int {
+	return e.countRootSessionsByAgentSource(
+		database, agent, "",
+	)
+}
+
+func (e *Engine) countRootSessionsByAgentSource(
+	database *db.DB, agent parser.AgentType, filePathLike string,
+) int {
 	var count int
-	err := database.Reader().QueryRow(
-		`SELECT COUNT(*) FROM sessions
+	query := `SELECT COUNT(*) FROM sessions
 		 WHERE agent = ?
 		 AND message_count > 0
 		 AND relationship_type NOT IN ('subagent', 'fork')
-		 AND deleted_at IS NULL`,
-		string(agent),
+		 AND deleted_at IS NULL`
+	args := []any{string(agent)}
+	if filePathLike != "" {
+		query += " AND COALESCE(file_path, '') LIKE ?"
+		args = append(args, filePathLike)
+	}
+	err := database.Reader().QueryRow(
+		query, args...,
 	).Scan(&count)
 	if err != nil {
 		log.Printf("count root sessions for %s: %v", agent, err)
@@ -1436,16 +1436,30 @@ func filterFilesByMtime(
 	cutoffNs := cutoff.UnixNano()
 	out := files[:0]
 	for _, f := range files {
-		info, err := os.Stat(f.Path)
+		mtime, err := discoveredFileMtime(f)
 		if err != nil {
 			out = append(out, f)
 			continue
 		}
-		if info.ModTime().UnixNano() >= cutoffNs {
+		if mtime >= cutoffNs {
 			out = append(out, f)
 		}
 	}
 	return out
+}
+
+func discoveredFileMtime(
+	file parser.DiscoveredFile,
+) (int64, error) {
+	if file.Agent == parser.AgentOpenCode {
+		return parser.OpenCodeSourceMtime(file.Path)
+	}
+
+	info, err := os.Stat(file.Path)
+	if err != nil {
+		return 0, err
+	}
+	return info.ModTime().UnixNano(), nil
 }
 
 // syncOpenCode syncs sessions from OpenCode SQLite databases.

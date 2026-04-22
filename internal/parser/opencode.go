@@ -195,6 +195,10 @@ func ParseOpenCodeFile(
 	root := filepath.Dir(filepath.Dir(filepath.Dir(
 		filepath.Dir(sessionPath),
 	)))
+	// OpenCode session sync replaces the full stored transcript.
+	// If a child JSON is truncated mid-write, skipping it here
+	// would silently drop previously persisted content until the
+	// next successful sync, so malformed children abort the parse.
 	msgs, err := loadOpenCodeStorageMessages(root, sf.ID)
 	if err != nil {
 		return nil, nil, err
