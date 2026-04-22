@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -164,6 +165,70 @@ func ParseOpenCodeSession(
 	)
 }
 
+// ParseOpenCodeFile parses a file-backed OpenCode storage session
+// rooted at storage/session/<project>/<session>.json.
+func ParseOpenCodeFile(
+	sessionPath, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	raw, err := os.ReadFile(sessionPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"reading opencode session file %s: %w",
+			sessionPath, err,
+		)
+	}
+
+	var sf openCodeStorageSessionFile
+	if err := json.Unmarshal(raw, &sf); err != nil {
+		return nil, nil, fmt.Errorf(
+			"decoding opencode session file %s: %w",
+			sessionPath, err,
+		)
+	}
+	if sf.ID == "" {
+		return nil, nil, fmt.Errorf(
+			"opencode session file %s missing id",
+			sessionPath,
+		)
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"stat opencode session file %s: %w",
+			sessionPath, err,
+		)
+	}
+
+	root := filepath.Dir(filepath.Dir(filepath.Dir(
+		filepath.Dir(sessionPath),
+	)))
+	msgs, err := loadOpenCodeStorageMessages(root, sf.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	parts, err := loadOpenCodeStorageParts(root, msgs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return buildOpenCodeParsedSession(
+		openCodeSessionRow{
+			id:          sf.ID,
+			parentID:    sf.ParentID,
+			title:       sf.Title,
+			timeCreated: sf.Time.Created,
+			timeUpdated: sf.Time.Updated,
+		},
+		sf.Directory,
+		sessionPath,
+		info.ModTime().UnixNano(),
+		machine,
+		msgs,
+		parts,
+	)
+}
+
 func openOpenCodeDB(dbPath string) (*sql.DB, error) {
 	dsn := dbPath +
 		"?mode=ro&_journal_mode=WAL&_busy_timeout=3000"
@@ -277,8 +342,13 @@ type openCodeMessageRow struct {
 // and is read separately via gjson so the parser can
 // distinguish explicit zero fields from absent ones.
 type openCodeMessageData struct {
-	Role    string `json:"role"`
-	ModelID string `json:"modelID"`
+	Role       string `json:"role"`
+	ModelID    string `json:"modelID"`
+	ProviderID string `json:"providerID"`
+	Model      struct {
+		ModelID    string `json:"modelID"`
+		ProviderID string `json:"providerID"`
+	} `json:"model"`
 }
 
 // openCodePartRow is a row from the opencode part table.
@@ -368,6 +438,26 @@ func buildOpenCodeSession(
 		)
 	}
 
+	return buildOpenCodeParsedSession(
+		s,
+		worktree,
+		dbPath+"#"+s.id,
+		s.timeUpdated*1_000_000,
+		machine,
+		msgs,
+		parts,
+	)
+}
+
+func buildOpenCodeParsedSession(
+	s openCodeSessionRow,
+	worktree, filePath string,
+	fileMtime int64,
+	machine string,
+	msgs []openCodeMessageRow,
+	parts map[string][]openCodePartRow,
+) (*ParsedSession, []ParsedMessage, error) {
+
 	var (
 		parsed       []ParsedMessage
 		firstMsg     string
@@ -456,8 +546,8 @@ func buildOpenCodeSession(
 		MessageCount:     len(parsed),
 		UserMessageCount: userCount,
 		File: FileInfo{
-			Path:  dbPath + "#" + s.id,
-			Mtime: s.timeUpdated * 1_000_000,
+			Path:  filePath,
+			Mtime: fileMtime,
 		},
 	}
 
@@ -483,6 +573,8 @@ func applyOpenCodeTokenUsage(
 ) {
 	if md.ModelID != "" {
 		pm.Model = md.ModelID
+	} else if md.Model.ModelID != "" {
+		pm.Model = md.Model.ModelID
 	}
 	tokens := gjson.Get(dataRaw, "tokens")
 	if !tokens.Exists() {
@@ -661,6 +753,142 @@ func extractOpenCodeToolCall(data string) ParsedToolCall {
 		Category:  NormalizeToolCategory(d.ToolName),
 		InputJSON: inputJSON,
 	}
+}
+
+type openCodeStorageTime struct {
+	Created int64 `json:"created"`
+	Updated int64 `json:"updated"`
+}
+
+type openCodeStorageSessionFile struct {
+	ID        string              `json:"id"`
+	Directory string              `json:"directory"`
+	ParentID  string              `json:"parentID"`
+	Title     string              `json:"title"`
+	Time      openCodeStorageTime `json:"time"`
+}
+
+type openCodeStorageMessageFile struct {
+	ID         string `json:"id"`
+	SessionID  string `json:"sessionID"`
+	Role       string `json:"role"`
+	ModelID    string `json:"modelID"`
+	ProviderID string `json:"providerID"`
+	Model      struct {
+		ModelID    string `json:"modelID"`
+		ProviderID string `json:"providerID"`
+	} `json:"model"`
+	Time openCodeStorageTime `json:"time"`
+}
+
+type openCodeStoragePartFile struct {
+	ID        string              `json:"id"`
+	SessionID string              `json:"sessionID"`
+	MessageID string              `json:"messageID"`
+	Time      openCodeStorageTime `json:"time"`
+}
+
+func loadOpenCodeStorageMessages(
+	root, sessionID string,
+) ([]openCodeMessageRow, error) {
+	dir := filepath.Join(root, "storage", "message", sessionID)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf(
+			"reading opencode message dir %s: %w", dir, err,
+		)
+	}
+
+	var msgs []openCodeMessageRow
+	for _, entry := range entries {
+		if entry.IsDir() ||
+			!strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"reading opencode message file %s: %w",
+				path, err,
+			)
+		}
+		var mf openCodeStorageMessageFile
+		if err := json.Unmarshal(raw, &mf); err != nil {
+			return nil, fmt.Errorf(
+				"decoding opencode message file %s: %w",
+				path, err,
+			)
+		}
+		if mf.ID == "" {
+			continue
+		}
+		msgs = append(msgs, openCodeMessageRow{
+			id:          mf.ID,
+			data:        string(raw),
+			timeCreated: mf.Time.Created,
+		})
+	}
+
+	sort.Slice(msgs, func(i, j int) bool {
+		if msgs[i].timeCreated == msgs[j].timeCreated {
+			return msgs[i].id < msgs[j].id
+		}
+		return msgs[i].timeCreated < msgs[j].timeCreated
+	})
+	return msgs, nil
+}
+
+func loadOpenCodeStorageParts(
+	root string, msgs []openCodeMessageRow,
+) (map[string][]openCodePartRow, error) {
+	parts := make(map[string][]openCodePartRow, len(msgs))
+	for _, msg := range msgs {
+		dir := filepath.Join(root, "storage", "part", msg.id)
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf(
+				"reading opencode part dir %s: %w", dir, err,
+			)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() ||
+				!strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"reading opencode part file %s: %w",
+					path, err,
+				)
+			}
+			var pf openCodeStoragePartFile
+			if err := json.Unmarshal(raw, &pf); err != nil {
+				return nil, fmt.Errorf(
+					"decoding opencode part file %s: %w",
+					path, err,
+				)
+			}
+			if pf.MessageID == "" {
+				pf.MessageID = msg.id
+			}
+			parts[msg.id] = append(parts[msg.id], openCodePartRow{
+				id:          pf.ID,
+				messageID:   pf.MessageID,
+				data:        string(raw),
+				timeCreated: pf.Time.Created,
+			})
+		}
+	}
+	return parts, nil
 }
 
 func millisToTime(ms int64) time.Time {

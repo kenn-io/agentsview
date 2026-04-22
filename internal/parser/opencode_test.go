@@ -134,6 +134,22 @@ func seedStandardSession(t *testing.T, seeder *OpenCodeSeeder) {
 	seeder.AddPart("prt_2", "msg_2", "ses_abc", 1700000010000, 1700000010000, `{"type":"text","text":"Sure, I can help with Go."}`)
 }
 
+func writeOpenCodeStorageFile(
+	t *testing.T, path string, data any,
+) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
@@ -164,6 +180,129 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	assertEq(t, "msg[0].Role", s.Messages[0].Role, RoleUser)
 	assertEq(t, "msg[1].Role", s.Messages[1].Role, RoleAssistant)
 	assertEq(t, "msg[1].Content", s.Messages[1].Content, "Sure, I can help with Go.")
+}
+
+func TestParseOpenCodeFile_StorageSession(t *testing.T) {
+	root := t.TempDir()
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_storage.json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id":        "ses_storage",
+		"directory": "/home/user/code/myapp",
+		"title":     "Storage Session",
+		"time": map[string]any{
+			"created": 1700000000000,
+			"updated": 1700000060000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_1.json",
+	), map[string]any{
+		"id":        "msg_1",
+		"sessionID": "ses_storage",
+		"role":      "user",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_2.json",
+	), map[string]any{
+		"id":        "msg_2",
+		"sessionID": "ses_storage",
+		"role":      "assistant",
+		"modelID":   "gpt-5.2-codex",
+		"tokens": map[string]any{
+			"input":  11,
+			"output": 7,
+			"cache": map[string]any{
+				"read":  3,
+				"write": 2,
+			},
+		},
+		"time": map[string]any{
+			"created": 1700000010000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "prt_1.json",
+	), map[string]any{
+		"id":        "prt_1",
+		"sessionID": "ses_storage",
+		"messageID": "msg_1",
+		"type":      "text",
+		"text":      "Hello from storage",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_2", "prt_2.json",
+	), map[string]any{
+		"id":        "prt_2",
+		"sessionID": "ses_storage",
+		"messageID": "msg_2",
+		"type":      "tool",
+		"tool":      "read",
+		"callID":    "call_storage",
+		"state": map[string]any{
+			"input": map[string]any{
+				"file_path": "main.go",
+			},
+		},
+		"time": map[string]any{
+			"created": 1700000010000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_2", "prt_3.json",
+	), map[string]any{
+		"id":        "prt_3",
+		"sessionID": "ses_storage",
+		"messageID": "msg_2",
+		"type":      "text",
+		"text":      "Here is the file.",
+		"time": map[string]any{
+			"created": 1700000011000,
+		},
+	})
+
+	sess, msgs, err := ParseOpenCodeFile(
+		sessionPath, "testmachine",
+	)
+	if err != nil {
+		t.Fatalf("ParseOpenCodeFile: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("expected non-nil session")
+	}
+
+	assertEq(t, "ID", sess.ID, "opencode:ses_storage")
+	assertEq(t, "Agent", sess.Agent, AgentOpenCode)
+	assertEq(t, "Project", sess.Project, "myapp")
+	assertEq(t, "Machine", sess.Machine, "testmachine")
+	assertEq(t, "MessageCount", sess.MessageCount, 2)
+	assertEq(t, "FirstMessage", sess.FirstMessage, "Storage Session")
+	assertEq(t, "File.Path", sess.File.Path, sessionPath)
+	assertEq(t, "File.Mtime", sess.File.Mtime > 0, true)
+
+	assertEq(t, "messages len", len(msgs), 2)
+	assertEq(t, "msg[0].Role", msgs[0].Role, RoleUser)
+	assertEq(t, "msg[0].Content", msgs[0].Content, "Hello from storage")
+	assertEq(t, "msg[1].Role", msgs[1].Role, RoleAssistant)
+	assertEq(t, "msg[1].Model", msgs[1].Model, "gpt-5.2-codex")
+	assertEq(t, "msg[1].HasToolUse", msgs[1].HasToolUse, true)
+	assertEq(t, "msg[1].Content", msgs[1].Content, "Here is the file.")
+	assertEq(t, "msg[1].HasOutputTokens", msgs[1].HasOutputTokens, true)
+	assertEq(t, "msg[1].OutputTokens", msgs[1].OutputTokens, 7)
+
+	assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{
+		ToolName:  "read",
+		Category:  "Read",
+		ToolUseID: "call_storage",
+		InputJSON: `{"file_path":"main.go"}`,
+	}})
 }
 
 func TestParseOpenCodeDB_TitleFallback(t *testing.T) {

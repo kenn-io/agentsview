@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -473,6 +474,65 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// OpenCode storage:
+	//   <opencodeDir>/storage/session/<project>/<session>.json
+	//   <opencodeDir>/storage/message/<session>/<message>.json
+	//   <opencodeDir>/storage/part/<message>/<part>.json
+	for _, openCodeDir := range e.agentDirs[parser.AgentOpenCode] {
+		if openCodeDir == "" {
+			continue
+		}
+		src := parser.ResolveOpenCodeSource(openCodeDir)
+		if src.Mode != parser.OpenCodeSourceStorage {
+			continue
+		}
+		if rel, ok := isUnder(openCodeDir, path); ok {
+			parts := strings.Split(rel, sep)
+			switch {
+			case len(parts) == 4 &&
+				parts[0] == "storage" &&
+				parts[1] == "session" &&
+				strings.HasSuffix(parts[3], ".json"):
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: parser.AgentOpenCode,
+				}, true
+			case len(parts) == 4 &&
+				parts[0] == "storage" &&
+				parts[1] == "message" &&
+				strings.HasSuffix(parts[3], ".json"):
+				sessionPath := parser.FindOpenCodeSourceFile(
+					openCodeDir, parts[2],
+				)
+				if sessionPath == "" {
+					continue
+				}
+				return parser.DiscoveredFile{
+					Path:  sessionPath,
+					Agent: parser.AgentOpenCode,
+				}, true
+			case len(parts) == 4 &&
+				parts[0] == "storage" &&
+				parts[1] == "part" &&
+				strings.HasSuffix(parts[3], ".json"):
+				sessionID := readOpenCodeStorageSessionID(path)
+				if sessionID == "" {
+					continue
+				}
+				sessionPath := parser.FindOpenCodeSourceFile(
+					openCodeDir, sessionID,
+				)
+				if sessionPath == "" {
+					continue
+				}
+				return parser.DiscoveredFile{
+					Path:  sessionPath,
+					Agent: parser.AgentOpenCode,
+				}, true
+			}
+		}
+	}
+
 	// OpenHands CLI:
 	//   <openhandsDir>/<conversation-id>/base_state.json
 	//   <openhandsDir>/<conversation-id>/TASKS.json
@@ -802,6 +862,13 @@ func (e *Engine) ResyncAll(
 	if err != nil {
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
+	} else if !e.hasOpenCodeStorageRoot() {
+		oldFileSessions -= e.countRootSessionsByAgent(
+			origDB, parser.AgentOpenCode,
+		)
+		if oldFileSessions < 0 {
+			oldFileSessions = 0
+		}
 	}
 
 	// Clean up stale temp DB from a prior crash.
@@ -1053,6 +1120,38 @@ func removeTempDB(path string) {
 func removeWAL(path string) {
 	os.Remove(path + "-wal")
 	os.Remove(path + "-shm")
+}
+
+func (e *Engine) hasOpenCodeStorageRoot() bool {
+	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if dir == "" {
+			continue
+		}
+		if parser.ResolveOpenCodeSource(dir).Mode ==
+			parser.OpenCodeSourceStorage {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) countRootSessionsByAgent(
+	database *db.DB, agent parser.AgentType,
+) int {
+	var count int
+	err := database.Reader().QueryRow(
+		`SELECT COUNT(*) FROM sessions
+		 WHERE agent = ?
+		 AND message_count > 0
+		 AND relationship_type NOT IN ('subagent', 'fork')
+		 AND deleted_at IS NULL`,
+		string(agent),
+	).Scan(&count)
+	if err != nil {
+		log.Printf("count root sessions for %s: %v", agent, err)
+		return 0
+	}
+	return count
 }
 
 // Sync state keys persisted in pg_sync_state.
@@ -1374,6 +1473,10 @@ func (e *Engine) syncOpenCode(
 func (e *Engine) syncOneOpenCode(
 	ctx context.Context, dir string,
 ) []pendingWrite {
+	src := parser.ResolveOpenCodeSource(dir)
+	if src.Mode != parser.OpenCodeSourceSQLite {
+		return nil
+	}
 	dbPath := filepath.Join(dir, "opencode.db")
 
 	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
@@ -1661,6 +1764,8 @@ func (e *Engine) processFile(
 		res = e.processCopilot(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
+	case parser.AgentOpenCode:
+		res = e.processOpenCode(file, info)
 	case parser.AgentOpenHands:
 		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
@@ -2083,6 +2188,33 @@ func (e *Engine) processCodex(
 	if err == nil {
 		sess.File.Hash = hash
 	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processOpenCode(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	sess, msgs, err := parser.ParseOpenCodeFile(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	sess.File.Inode, sess.File.Device = getFileIdentity(info)
 
 	return processResult{
 		results: []parser.ParseResult{
@@ -3171,6 +3303,10 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	if !ok {
 		return fmt.Errorf("unknown agent for session %s", sessionID)
 	}
+	if def.Type == parser.AgentOpenCode &&
+		e.openCodeUsesSQLite(sessionID) {
+		return e.syncSingleOpenCode(sessionID)
+	}
 	if !def.FileBased {
 		switch def.Type {
 		case parser.AgentWarp:
@@ -3282,6 +3418,23 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	return nil
 }
 
+func (e *Engine) openCodeUsesSQLite(sessionID string) bool {
+	rawID := strings.TrimPrefix(sessionID, "opencode:")
+	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if dir == "" {
+			continue
+		}
+		if parser.ResolveOpenCodeSource(dir).Mode !=
+			parser.OpenCodeSourceSQLite {
+			continue
+		}
+		if parser.FindOpenCodeSourceFile(dir, rawID) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // syncSingleOpenCode re-syncs a single OpenCode session.
 func (e *Engine) syncSingleOpenCode(
 	sessionID string,
@@ -3291,6 +3444,10 @@ func (e *Engine) syncSingleOpenCode(
 	var lastErr error
 	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
 		if dir == "" {
+			continue
+		}
+		if parser.ResolveOpenCodeSource(dir).Mode !=
+			parser.OpenCodeSourceSQLite {
 			continue
 		}
 		dbPath := filepath.Join(dir, "opencode.db")
@@ -3322,6 +3479,20 @@ func (e *Engine) syncSingleOpenCode(
 		)
 	}
 	return fmt.Errorf("opencode session %s not found", sessionID)
+}
+
+func readOpenCodeStorageSessionID(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var data struct {
+		SessionID string `json:"sessionID"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return ""
+	}
+	return data.SessionID
 }
 
 // syncWarp syncs sessions from Warp SQLite databases.

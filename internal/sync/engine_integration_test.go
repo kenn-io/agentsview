@@ -1498,6 +1498,112 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 	)
 }
 
+func TestSyncEngineOpenCodeStorageBulkSync(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-1",
+		"/home/user/code/myapp", "Storage Sync",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-storage-1", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-storage-1", "msg-u1", "part-u1",
+		"hello from storage", 1704067200000,
+	)
+	oc.addMessage(
+		t, "oc-storage-1", "msg-a1", "assistant",
+		1704067201000, map[string]any{
+			"modelID": "gpt-5.2-codex",
+		},
+	)
+	oc.addTextPart(
+		t, "oc-storage-1", "msg-a1", "part-a1",
+		"reply from storage", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertSessionState(t, env.db, "opencode:oc-storage-1",
+		func(sess *db.Session) {
+			if sess.Agent != "opencode" {
+				t.Errorf("agent = %q, want opencode",
+					sess.Agent)
+			}
+		},
+	)
+	if got := env.engine.FindSourceFile("opencode:oc-storage-1"); got != sessionPath {
+		t.Fatalf("FindSourceFile() = %q, want %q", got, sessionPath)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-1",
+		"hello from storage", "reply from storage",
+	)
+}
+
+func TestSyncSingleSessionOpenCodeSQLiteFallback(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-single"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.
