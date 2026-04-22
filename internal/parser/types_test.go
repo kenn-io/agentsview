@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -438,7 +439,7 @@ func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
 	}
 }
 
-func TestResolveOpenCodeSourceKeepsStorageAuthoritativeOnStatError(
+func TestResolveOpenCodeSourceFallsBackToSQLiteOnBrokenStoragePath(
 	t *testing.T,
 ) {
 	root := t.TempDir()
@@ -446,6 +447,38 @@ func TestResolveOpenCodeSourceKeepsStorageAuthoritativeOnStatError(
 	if err := os.WriteFile(storagePath, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write storage marker: %v", err)
 	}
+	dbPath := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeSource(root)
+	if got.Mode != OpenCodeSourceSQLite {
+		t.Fatalf("Mode = %v, want %v", got.Mode, OpenCodeSourceSQLite)
+	}
+	if got.DBPath != dbPath {
+		t.Fatalf("DBPath = %q, want %q", got.DBPath, dbPath)
+	}
+}
+
+func TestResolveOpenCodeSourceKeepsStorageAuthoritativeWhenUnreadable(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission semantics differ on Windows")
+	}
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	storageRoot := filepath.Join(root, "storage")
+	if err := os.Chmod(storageRoot, 0o000); err != nil {
+		t.Fatalf("chmod storage root: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(storageRoot, 0o755)
+	}()
 	dbPath := filepath.Join(root, "opencode.db")
 	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
 		t.Fatalf("write db marker: %v", err)

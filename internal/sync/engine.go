@@ -66,6 +66,7 @@ type EngineConfig struct {
 // Engine orchestrates session file discovery and sync.
 type Engine struct {
 	db                      *db.DB
+	openCodeArchiveStore    db.Store
 	agentDirs               map[parser.AgentType][]string
 	machine                 string
 	blockedResultCategories map[string]bool
@@ -986,9 +987,11 @@ func (e *Engine) ResyncAll(
 	}
 
 	// 3. Point engine at newDB and sync into it.
+	e.openCodeArchiveStore = origDB
 	e.db = newDB
 	stats = e.syncAllLocked(ctx, onProgress, time.Time{})
 	e.db = origDB // restore immediately
+	e.openCodeArchiveStore = nil
 
 	// Abort swap when the fresh DB would be worse than the
 	// original:
@@ -997,14 +1000,24 @@ func (e *Engine) ResyncAll(
 	//   when old DB had data
 	// - more files failed than succeeded (permission errors,
 	//   disk issues)
+	// OpenCode-only rebuilds are allowed to finish with 0
+	// freshly synced sessions when every storage parse was
+	// intentionally preserved against the archive; orphan copy
+	// restores those rows immediately after the sync pass.
 	// A few permanent parse failures are tolerated since those
 	// files were broken in the old DB too.
 	emptyDiscovery := stats.filesDiscovered == 0 &&
 		stats.filesOK == 0 &&
 		oldFileSessions > 0
+	openCodeArchiveOnly := stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		stats.Failed == 0 &&
+		oldFileSessions == 0
 	abortSwap := stats.Aborted ||
 		emptyDiscovery ||
-		(stats.Synced == 0 && stats.TotalSessions > 0) ||
+		(stats.Synced == 0 &&
+			stats.TotalSessions > 0 &&
+			!openCodeArchiveOnly) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
 	if abortSwap {
 		log.Printf(
@@ -3293,14 +3306,18 @@ func (e *Engine) shouldPreserveOpenCodeArchive(
 		!isOpenCodeStoragePath(path) {
 		return false
 	}
-	stored, err := e.db.GetSessionFull(
+	store := e.openCodeArchiveStore
+	if store == nil {
+		store = e.db
+	}
+	stored, err := store.GetSessionFull(
 		context.Background(), sessionID,
 	)
 	if err != nil || stored == nil {
 		return false
 	}
 	storedHash := derefString(stored.FileHash)
-	storedMsgs, err := e.db.GetAllMessages(
+	storedMsgs, err := store.GetAllMessages(
 		context.Background(), sessionID,
 	)
 	if err != nil || len(storedMsgs) == 0 {

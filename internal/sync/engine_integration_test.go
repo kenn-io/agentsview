@@ -3919,6 +3919,65 @@ func TestResyncAllOpenCodeStorageArchiveFallsBackToSQLite(
 	)
 }
 
+func TestResyncAllOpenCodeStorageMissingMessagePreservesArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-resync-missing-message"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Resync Missing Message",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for missing OpenCode message: %s",
+				w,
+			)
+		}
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
 // TestResyncAllAbortsMixedSourceEmptyFiles verifies that
 // ResyncAll aborts when the old DB has both file-backed and
 // OpenCode sessions but file discovery returns zero (e.g.
