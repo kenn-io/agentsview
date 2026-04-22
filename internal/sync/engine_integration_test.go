@@ -38,6 +38,7 @@ type testEnvOpts struct {
 	codexDirs    []string
 	cursorDirs   []string
 	opencodeDirs []string
+	emitter      sync.Emitter
 }
 
 type TestEnvOption func(*testEnvOpts)
@@ -63,6 +64,12 @@ func WithCursorDirs(dirs []string) TestEnvOption {
 func WithOpenCodeDirs(dirs []string) TestEnvOption {
 	return func(o *testEnvOpts) {
 		o.opencodeDirs = dirs
+	}
+}
+
+func WithEmitter(em sync.Emitter) TestEnvOption {
+	return func(o *testEnvOpts) {
+		o.emitter = em
 	}
 }
 
@@ -129,8 +136,28 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentPi:       {env.piDir},
 		},
 		Machine: "local",
+		Emitter: options.emitter,
 	})
 	return env
+}
+
+type fakeEmitter struct {
+	mu     gosync.Mutex
+	scopes []string
+}
+
+func (f *fakeEmitter) Emit(scope string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.scopes = append(f.scopes, scope)
+}
+
+func (f *fakeEmitter) got() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.scopes))
+	copy(out, f.scopes)
+	return out
 }
 
 // writeSession creates a JSONL session file under baseDir at
@@ -2267,6 +2294,69 @@ func TestSyncSingleSessionOpenCodeStorageMissingMessagePreservesArchive(
 	)
 }
 
+func TestSyncSingleSessionOpenCodeStoragePreservedUpdateDoesNotEmit(
+	t *testing.T,
+) {
+	em := &fakeEmitter{}
+	env := setupTestEnv(t, WithEmitter(em))
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-no-emit"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message No Emit",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	em.mu.Lock()
+	em.scopes = em.scopes[:0]
+	em.mu.Unlock()
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions for preserved update, got %v", got)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
 func TestSyncPathsOpenCodeStorageMissingMessagePreservesArchive(
 	t *testing.T,
 ) {
@@ -3598,7 +3688,8 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 }
 
 func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
-	storageRoot := t.TempDir()
+	storageBase := t.TempDir()
+	storageRoot := filepath.Join(storageBase, "storage#root")
 	sqliteRoot := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(
 		storageRoot, "storage", "session", "global",

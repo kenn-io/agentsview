@@ -25,6 +25,8 @@ const (
 	maxWorkers = 8
 )
 
+var errSessionPreserved = errors.New("session preserved")
+
 // Emitter is notified after a sync pass writes data. Implementations
 // must be thread-safe; Emit is called from whatever goroutine runs
 // the sync pass (e.g., the file watcher, a periodic timer, or a
@@ -898,8 +900,8 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
 	} else {
-		oldFileSessions -= e.countRootSessionsByAgentSource(
-			origDB, parser.AgentOpenCode, "%#%",
+		oldFileSessions -= e.countRootOpenCodeSQLiteSessions(
+			origDB,
 		)
 		if oldFileSessions < 0 {
 			oldFileSessions = 0
@@ -1189,6 +1191,42 @@ func (e *Engine) countRootSessionsByAgentSource(
 	return count
 }
 
+func (e *Engine) countRootOpenCodeSQLiteSessions(
+	database *db.DB,
+) int {
+	rows, err := database.Reader().Query(`
+		SELECT COALESCE(file_path, '') FROM sessions
+		WHERE agent = ?
+		  AND message_count > 0
+		  AND relationship_type NOT IN ('subagent', 'fork')
+		  AND deleted_at IS NULL
+	`, string(parser.AgentOpenCode))
+	if err != nil {
+		log.Printf("count root opencode sqlite sessions: %v", err)
+		return 0
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			log.Printf(
+				"scan root opencode sqlite session path: %v",
+				err,
+			)
+			return count
+		}
+		if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+			count++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("iterate root opencode sqlite sessions: %v", err)
+	}
+	return count
+}
+
 // Sync state keys persisted in pg_sync_state.
 const (
 	syncStateStartedAt  = "last_sync_started_at"
@@ -1345,7 +1383,8 @@ func (e *Engine) syncAllLocked(
 			switch err := e.writeSessionFull(pw); {
 			case err == nil:
 				ocWritten++
-			case errors.Is(err, db.ErrSessionExcluded):
+			case errors.Is(err, db.ErrSessionExcluded),
+				errors.Is(err, errSessionPreserved):
 				// Intentional skip, not a failure.
 			default:
 				stats.RecordFailed()
@@ -1386,7 +1425,8 @@ func (e *Engine) syncAllLocked(
 			switch err := e.writeSessionFull(pw); {
 			case err == nil:
 				warpWritten++
-			case errors.Is(err, db.ErrSessionExcluded):
+			case errors.Is(err, db.ErrSessionExcluded),
+				errors.Is(err, errSessionPreserved):
 				// Intentional skip, not a failure.
 			default:
 				stats.RecordFailed()
@@ -3180,7 +3220,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
 		derefString(s.FileHash), msgs,
 	) {
-		return nil
+		return errSessionPreserved
 	}
 	if err := e.db.UpsertSession(s); err != nil {
 		if errors.Is(err, db.ErrSessionExcluded) {
@@ -3561,11 +3601,12 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 // uses the existing DB project as fallback where applicable.
 func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	e.syncMu.Lock()
+	preserved := false
 	// Defers run LIFO: unlock runs first (releasing syncMu), then
 	// emit. Keep emission outside the critical section so a future
 	// Emitter implementation can't widen the lock's scope.
 	defer func() {
-		if err == nil {
+		if err == nil && !preserved {
 			e.emit("messages")
 		}
 	}()
@@ -3587,7 +3628,12 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		case parser.AgentWarp:
 			return e.syncSingleWarp(sessionID)
 		default:
-			return e.syncSingleOpenCode(sessionID)
+			err = e.syncSingleOpenCode(sessionID)
+			if errors.Is(err, errSessionPreserved) {
+				preserved = true
+				return nil
+			}
+			return err
 		}
 	}
 
@@ -3599,7 +3645,12 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	}
 	if def.Type == parser.AgentOpenCode &&
 		isOpenCodeSQLiteVirtualPath(path) {
-		return e.syncSingleOpenCode(sessionID)
+		err = e.syncSingleOpenCode(sessionID)
+		if errors.Is(err, errSessionPreserved) {
+			preserved = true
+			return nil
+		}
+		return err
 	}
 
 	agent := def.Type
@@ -3683,9 +3734,13 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	for _, pr := range res.results {
 		if err := e.writeSessionFull(
 			pendingWrite{sess: pr.Session, msgs: pr.Messages},
-		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+		); err != nil &&
+			!errors.Is(err, db.ErrSessionExcluded) &&
+			!errors.Is(err, errSessionPreserved) {
 			return fmt.Errorf("write session %s: %w",
 				pr.Session.ID, err)
+		} else if errors.Is(err, errSessionPreserved) {
+			preserved = true
 		}
 	}
 
@@ -3727,9 +3782,13 @@ func (e *Engine) syncSingleOpenCode(
 		}
 		if err := e.writeSessionFull(
 			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+		); err != nil &&
+			!errors.Is(err, db.ErrSessionExcluded) &&
+			!errors.Is(err, errSessionPreserved) {
 			return fmt.Errorf("write session %s: %w",
 				sess.ID, err)
+		} else if errors.Is(err, errSessionPreserved) {
+			return err
 		}
 		return nil
 	}
