@@ -3806,6 +3806,70 @@ func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
 	)
 }
 
+func TestResyncAllOpenCodeStorageArchiveFallsBackToSQLite(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-storage-to-sqlite"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Then SQLite",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067209000,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for storage->sqlite fallback: %s",
+				w,
+			)
+		}
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello sqlite fallback",
+	)
+}
+
 // TestResyncAllAbortsMixedSourceEmptyFiles verifies that
 // ResyncAll aborts when the old DB has both file-backed and
 // OpenCode sessions but file discovery returns zero (e.g.

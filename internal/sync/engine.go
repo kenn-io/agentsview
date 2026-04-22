@@ -922,11 +922,12 @@ func (e *Engine) ResyncAll(
 	origPath := origDB.Path()
 	tempPath := origPath + resyncTempSuffix
 
-	// Snapshot old file-backed session count to detect
-	// empty-discovery. Uses file-backed count (excludes
-	// OpenCode) so OpenCode-only datasets don't trigger the
-	// guard. Fail closed: if we can't query, assume old DB
-	// has file-backed data worth protecting.
+	// Snapshot old non-OpenCode file-backed session count to
+	// detect empty-discovery. OpenCode is excluded entirely
+	// because a root may legitimately fall back between
+	// storage and SQLite sources across resyncs. Fail closed:
+	// if we can't query, assume old DB has file-backed data
+	// worth protecting.
 	oldFileSessions, err := origDB.FileBackedSessionCount(
 		context.Background(),
 	)
@@ -934,7 +935,7 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
 	} else {
-		oldFileSessions -= e.countRootOpenCodeSQLiteSessions(
+		oldFileSessions -= e.countRootOpenCodeSessions(
 			origDB,
 		)
 		if oldFileSessions < 0 {
@@ -1225,38 +1226,19 @@ func (e *Engine) countRootSessionsByAgentSource(
 	return count
 }
 
-func (e *Engine) countRootOpenCodeSQLiteSessions(
+func (e *Engine) countRootOpenCodeSessions(
 	database *db.DB,
 ) int {
-	rows, err := database.Reader().Query(`
-		SELECT COALESCE(file_path, '') FROM sessions
+	var count int
+	err := database.Reader().QueryRow(`
+		SELECT COUNT(*) FROM sessions
 		WHERE agent = ?
 		  AND message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL
-	`, string(parser.AgentOpenCode))
+	`, string(parser.AgentOpenCode)).Scan(&count)
 	if err != nil {
-		log.Printf("count root opencode sqlite sessions: %v", err)
-		return 0
-	}
-	defer rows.Close()
-
-	var count int
-	for rows.Next() {
-		var path string
-		if err := rows.Scan(&path); err != nil {
-			log.Printf(
-				"scan root opencode sqlite session path: %v",
-				err,
-			)
-			return count
-		}
-		if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
-			count++
-		}
-	}
-	if err := rows.Err(); err != nil {
-		log.Printf("iterate root opencode sqlite sessions: %v", err)
+		log.Printf("count root opencode sessions: %v", err)
 	}
 	return count
 }
@@ -3324,6 +3306,11 @@ func (e *Engine) shouldPreserveOpenCodeArchive(
 	if err != nil || len(storedMsgs) == 0 {
 		return false
 	}
+	// A changed storage fingerprint alone is not enough to
+	// preserve the archive. OpenCode legitimately rewrites
+	// live child files in place, so we only preserve when the
+	// newly parsed transcript also looks incomplete relative
+	// to what is already archived.
 	if parser.HasOpenCodeStorageFingerprint(storedHash) &&
 		!parser.OpenCodeStorageFingerprintMissing(
 			storedHash, currentHash,
