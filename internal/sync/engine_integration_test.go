@@ -1812,6 +1812,44 @@ func TestSourceMtimeOpenCodeStorageIncludesChildFiles(t *testing.T) {
 	}
 }
 
+func TestSourceMtimeOpenCodeStorageTracksChildRemoval(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-source-remove",
+		"/home/user/code/myapp", "Source Remove",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-remove", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-remove", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	partDir := filepath.Dir(partPath)
+	if err := os.Remove(partPath); err != nil {
+		t.Fatalf("remove part: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(partDir, future, future); err != nil {
+		t.Fatalf("chtimes part dir: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
 func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeDB(t, env.opencodeDir)
@@ -1886,6 +1924,36 @@ func TestSyncAllSinceOpenCodeStorageUsesChildMtime(t *testing.T) {
 		t, env.db, "opencode:oc-since-child",
 		"updated reply",
 	)
+}
+
+func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	oc.addSession(
+		t, "global", "oc-skip-unchanged",
+		"/home/user/code/myapp", "Skip Unchanged",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-skip-unchanged", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-skip-unchanged", "msg-a1", "part-a1",
+		"stable reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Skipped != 1 || stats.Synced != 0 {
+		t.Fatalf("SyncAll stats = %+v, want 1 skipped and 0 synced", stats)
+	}
 }
 
 func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {

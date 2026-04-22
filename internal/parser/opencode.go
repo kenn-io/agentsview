@@ -1026,6 +1026,9 @@ func openCodeStorageSessionMtime(
 	fileMtime := info.ModTime().UnixNano()
 
 	messageDir := filepath.Join(root, "storage", "message", sessionID)
+	fileMtime = max(fileMtime, statMtime(messageDir))
+	partRoot := filepath.Join(root, "storage", "part")
+	fileMtime = max(fileMtime, statMtime(partRoot))
 	msgEntries, err := os.ReadDir(messageDir)
 	if err != nil && !os.IsNotExist(err) {
 		return 0, fmt.Errorf(
@@ -1043,6 +1046,7 @@ func openCodeStorageSessionMtime(
 			entry.Name(), filepath.Ext(entry.Name()),
 		)
 		partDir := filepath.Join(root, "storage", "part", messageID)
+		fileMtime = max(fileMtime, statMtime(partDir))
 		partEntries, err := os.ReadDir(partDir)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -1067,6 +1071,14 @@ func openCodeStorageSessionMtime(
 
 func mustEntryMtime(entry os.DirEntry) int64 {
 	info, err := entry.Info()
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().UnixNano()
+}
+
+func statMtime(path string) int64 {
+	info, err := os.Stat(path)
 	if err != nil {
 		return 0
 	}

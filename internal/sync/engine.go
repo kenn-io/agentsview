@@ -2250,6 +2250,10 @@ func (e *Engine) processCodex(
 func (e *Engine) processOpenCode(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
+	if e.shouldSkipOpenCodeByPath(file.Path) {
+		return processResult{skip: true}
+	}
+
 	sess, msgs, err := parser.ParseOpenCodeFile(
 		file.Path, e.machine,
 	)
@@ -2272,6 +2276,31 @@ func (e *Engine) processOpenCode(
 			{Session: *sess, Messages: msgs},
 		},
 	}
+}
+
+func (e *Engine) shouldSkipOpenCodeByPath(path string) bool {
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+
+	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+
+	sourceMtime, err := parser.OpenCodeSourceMtime(path)
+	if err != nil || sourceMtime == 0 {
+		return false
+	}
+	if storedMtime != sourceMtime {
+		return false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	return true
 }
 
 func (e *Engine) processCopilot(
