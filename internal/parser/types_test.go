@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 )
@@ -394,6 +396,88 @@ func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
 				def.DisplayName, def.Type,
 			)
 		}
+	}
+}
+
+func TestOpenCodeRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentOpenCode)
+	if !ok {
+		t.Fatalf("AgentOpenCode missing from Registry")
+	}
+	if !def.FileBased {
+		t.Fatalf("OpenCode FileBased = false, want true")
+	}
+	if def.DiscoverFunc == nil {
+		t.Fatalf("OpenCode DiscoverFunc = nil")
+	}
+	if def.FindSourceFunc == nil {
+		t.Fatalf("OpenCode FindSourceFunc = nil")
+	}
+	if got, want := def.WatchSubdirs, []string{"storage/session", "storage/message", "storage/part"}; !slices.Equal(got, want) {
+		t.Fatalf("OpenCode WatchSubdirs = %v, want %v", got, want)
+	}
+}
+
+func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	dbPath := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeSource(root)
+	if got.Mode != OpenCodeSourceStorage {
+		t.Fatalf("Mode = %v, want %v", got.Mode, OpenCodeSourceStorage)
+	}
+	if got.SessionRoot != filepath.Join(root, "storage", "session") {
+		t.Fatalf("SessionRoot = %q", got.SessionRoot)
+	}
+}
+
+func TestDiscoverOpenCodeSessions(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "ses_test.json")
+	data := []byte(`{"id":"ses_test","directory":"/home/user/code/my-app"}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+
+	got := DiscoverOpenCodeSessions(root)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Path != path {
+		t.Fatalf("Path = %q, want %q", got[0].Path, path)
+	}
+	if got[0].Agent != AgentOpenCode {
+		t.Fatalf("Agent = %q, want %q", got[0].Agent, AgentOpenCode)
+	}
+}
+
+func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "storage", "session", "global", "ses_123.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"id":"ses_123"}`), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opencode.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := FindOpenCodeSourceFile(root, "ses_123")
+	if got != path {
+		t.Fatalf("FindOpenCodeSourceFile() = %q, want %q", got, path)
 	}
 }
 

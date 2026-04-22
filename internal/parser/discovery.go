@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -46,6 +48,112 @@ type DiscoveredFile struct {
 	Path    string
 	Project string    // pre-extracted project name
 	Agent   AgentType // which agent this file belongs to
+}
+
+// OpenCodeSourceMode identifies the usable OpenCode storage
+// backend found under an OPENCODE_DIR root.
+type OpenCodeSourceMode string
+
+const (
+	OpenCodeSourceNone    OpenCodeSourceMode = ""
+	OpenCodeSourceStorage OpenCodeSourceMode = "storage"
+	OpenCodeSourceSQLite  OpenCodeSourceMode = "sqlite"
+)
+
+// OpenCodeSource describes the resolved storage backend for an
+// OpenCode root.
+type OpenCodeSource struct {
+	Mode        OpenCodeSourceMode
+	Root        string
+	SessionRoot string
+	DBPath      string
+}
+
+// ResolveOpenCodeSource detects whether an OpenCode root is using
+// file-backed storage or legacy SQLite storage.
+func ResolveOpenCodeSource(root string) OpenCodeSource {
+	if root == "" {
+		return OpenCodeSource{}
+	}
+
+	sessionRoot := filepath.Join(root, "storage", "session")
+	if info, err := os.Stat(sessionRoot); err == nil && info.IsDir() {
+		return OpenCodeSource{
+			Mode:        OpenCodeSourceStorage,
+			Root:        root,
+			SessionRoot: sessionRoot,
+			DBPath:      filepath.Join(root, "opencode.db"),
+		}
+	}
+
+	dbPath := filepath.Join(root, "opencode.db")
+	if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
+		return OpenCodeSource{
+			Mode:   OpenCodeSourceSQLite,
+			Root:   root,
+			DBPath: dbPath,
+		}
+	}
+
+	return OpenCodeSource{Root: root}
+}
+
+// DiscoverOpenCodeSessions finds all file-backed OpenCode session
+// JSON files under storage/session.
+func DiscoverOpenCodeSessions(root string) []DiscoveredFile {
+	src := ResolveOpenCodeSource(root)
+	if src.Mode != OpenCodeSourceStorage {
+		return nil
+	}
+
+	var files []DiscoveredFile
+	_ = filepath.WalkDir(src.SessionRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d == nil || d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+		files = append(files, DiscoveredFile{
+			Path:  path,
+			Agent: AgentOpenCode,
+		})
+		return nil
+	})
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	return files
+}
+
+// FindOpenCodeSourceFile locates a single OpenCode session source
+// path or SQLite backing file by raw session ID.
+func FindOpenCodeSourceFile(root, sessionID string) string {
+	if !IsValidSessionID(sessionID) {
+		return ""
+	}
+
+	src := ResolveOpenCodeSource(root)
+	switch src.Mode {
+	case OpenCodeSourceStorage:
+		var found string
+		_ = filepath.WalkDir(src.SessionRoot, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d == nil || d.IsDir() {
+				return nil
+			}
+			if filepath.Base(path) == sessionID+".json" {
+				found = path
+				return errors.New("opencode source found")
+			}
+			return nil
+		})
+		return found
+	case OpenCodeSourceSQLite:
+		return src.DBPath + "#" + sessionID
+	default:
+		return ""
+	}
 }
 
 // DiscoverClaudeProjects finds all project directories under the
