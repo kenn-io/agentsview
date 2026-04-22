@@ -2653,6 +2653,100 @@ func TestSyncAllOpenCodeStorageContentRewritePreservesArchive(
 	)
 }
 
+func TestSyncAllOpenCodeStorageMissingStepFinishPreservesTokens(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-step-finish"
+	sessionPath := oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Step Finish",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, map[string]any{
+			"modelID": "gpt-5.2-codex",
+		},
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+	stepFinishPath := oc.writeJSON(t, filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-a1", "part-a2.json",
+	), map[string]any{
+		"id":        "part-a2",
+		"sessionID": sessionID,
+		"messageID": "msg-a1",
+		"type":      "step-finish",
+		"tokens": map[string]any{
+			"input":  300,
+			"output": 200,
+		},
+		"time": map[string]any{
+			"created": 1704067201001,
+		},
+	})
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.Remove(stepFinishPath); err != nil {
+		t.Fatalf("remove step-finish part: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("touch session path: %v", err)
+	}
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "opencode:"+sessionID,
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full == nil {
+		t.Fatal("session missing after preserve")
+	}
+	if !full.HasTotalOutputTokens || full.TotalOutputTokens != 200 {
+		t.Fatalf(
+			"session output tokens = (%v, %d), want (true, 200)",
+			full.HasTotalOutputTokens, full.TotalOutputTokens,
+		)
+	}
+	if !full.HasPeakContextTokens || full.PeakContextTokens != 300 {
+		t.Fatalf(
+			"session context tokens = (%v, %d), want (true, 300)",
+			full.HasPeakContextTokens, full.PeakContextTokens,
+		)
+	}
+
+	msgs := fetchMessages(t, env.db, "opencode:"+sessionID)
+	if len(msgs) != 1 {
+		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
+	}
+	if !msgs[0].HasOutputTokens || msgs[0].OutputTokens != 200 {
+		t.Fatalf(
+			"message output tokens = (%v, %d), want (true, 200)",
+			msgs[0].HasOutputTokens, msgs[0].OutputTokens,
+		)
+	}
+	if !msgs[0].HasContextTokens || msgs[0].ContextTokens != 300 {
+		t.Fatalf(
+			"message context tokens = (%v, %d), want (true, 300)",
+			msgs[0].HasContextTokens, msgs[0].ContextTokens,
+		)
+	}
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.

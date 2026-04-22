@@ -3403,6 +3403,16 @@ func openCodeMessageLooksIncomplete(
 		stored.HasThinking {
 		return true
 	}
+	if stored.HasOutputTokens &&
+		(!parsed.HasOutputTokens ||
+			parsed.OutputTokens < stored.OutputTokens) {
+		return true
+	}
+	if stored.HasContextTokens &&
+		(!parsed.HasContextTokens ||
+			parsed.ContextTokens < stored.ContextTokens) {
+		return true
+	}
 	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
 		return true
 	}
