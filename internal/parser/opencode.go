@@ -15,6 +15,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+const openCodeStorageFingerprintPrefix = "opencode-storage:v1:"
+
 // OpenCodeSession bundles a parsed session with its messages.
 type OpenCodeSession struct {
 	Session  ParsedSession
@@ -212,7 +214,7 @@ func ParseOpenCodeFile(
 		return nil, nil, err
 	}
 
-	return buildOpenCodeParsedSession(
+	sess, parsed, err := buildOpenCodeParsedSession(
 		openCodeSessionRow{
 			id:          sf.ID,
 			parentID:    sf.ParentID,
@@ -227,6 +229,13 @@ func ParseOpenCodeFile(
 		msgs,
 		parts,
 	)
+	if err != nil || sess == nil {
+		return sess, parsed, err
+	}
+	sess.File.Hash = buildOpenCodeStorageFingerprint(
+		msgs, parts,
+	)
+	return sess, parsed, nil
 }
 
 func openOpenCodeDB(dbPath string) (*sql.DB, error) {
@@ -360,6 +369,21 @@ type openCodePartRow struct {
 	data        string
 	timeCreated int64
 	fileMtime   int64
+}
+
+type openCodeStorageFingerprint struct {
+	Messages []openCodeStorageFingerprintMessage `json:"messages"`
+}
+
+type openCodeStorageFingerprintMessage struct {
+	ID    string                           `json:"id"`
+	Time  int64                            `json:"time"`
+	Parts []openCodeStorageFingerprintPart `json:"parts,omitempty"`
+}
+
+type openCodeStorageFingerprintPart struct {
+	ID   string `json:"id"`
+	Time int64  `json:"time"`
 }
 
 func loadOpenCodeMessages(
@@ -975,10 +999,98 @@ func OpenCodeSourceMtime(sourcePath string) (int64, error) {
 	if sourcePath == "" {
 		return 0, nil
 	}
-	if dbPath, sessionID, ok := strings.Cut(sourcePath, "#"); ok {
+	if dbPath, sessionID, ok := ParseOpenCodeSQLiteVirtualPath(sourcePath); ok {
 		return openCodeSQLiteSessionMtime(dbPath, sessionID)
 	}
 	return openCodeStorageSessionMtime(sourcePath)
+}
+
+func OpenCodeStorageFingerprintMissing(
+	storedHash, currentHash string,
+) bool {
+	stored, ok := decodeOpenCodeStorageFingerprint(storedHash)
+	if !ok {
+		return false
+	}
+	current, ok := decodeOpenCodeStorageFingerprint(currentHash)
+	if !ok {
+		return false
+	}
+
+	currentMsgs := make(map[string]openCodeStorageFingerprintMessage, len(current.Messages))
+	for _, msg := range current.Messages {
+		currentMsgs[msg.ID] = msg
+	}
+	for _, storedMsg := range stored.Messages {
+		currentMsg, ok := currentMsgs[storedMsg.ID]
+		if !ok || currentMsg.Time < storedMsg.Time {
+			return true
+		}
+		currentParts := make(map[string]openCodeStorageFingerprintPart, len(currentMsg.Parts))
+		for _, part := range currentMsg.Parts {
+			currentParts[part.ID] = part
+		}
+		for _, storedPart := range storedMsg.Parts {
+			currentPart, ok := currentParts[storedPart.ID]
+			if !ok || currentPart.Time < storedPart.Time {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func buildOpenCodeStorageFingerprint(
+	msgs []openCodeMessageRow,
+	parts map[string][]openCodePartRow,
+) string {
+	fp := openCodeStorageFingerprint{
+		Messages: make(
+			[]openCodeStorageFingerprintMessage,
+			0, len(msgs),
+		),
+	}
+	for _, msg := range msgs {
+		partRows := append([]openCodePartRow(nil), parts[msg.id]...)
+		sort.Slice(partRows, func(i, j int) bool {
+			if partRows[i].timeCreated == partRows[j].timeCreated {
+				return partRows[i].id < partRows[j].id
+			}
+			return partRows[i].timeCreated < partRows[j].timeCreated
+		})
+		fpMsg := openCodeStorageFingerprintMessage{
+			ID:   msg.id,
+			Time: msg.timeCreated,
+		}
+		for _, part := range partRows {
+			fpMsg.Parts = append(fpMsg.Parts,
+				openCodeStorageFingerprintPart{
+					ID:   part.id,
+					Time: part.timeCreated,
+				},
+			)
+		}
+		fp.Messages = append(fp.Messages, fpMsg)
+	}
+	raw, err := json.Marshal(fp)
+	if err != nil {
+		return ""
+	}
+	return openCodeStorageFingerprintPrefix + string(raw)
+}
+
+func decodeOpenCodeStorageFingerprint(
+	hash string,
+) (openCodeStorageFingerprint, bool) {
+	if !strings.HasPrefix(hash, openCodeStorageFingerprintPrefix) {
+		return openCodeStorageFingerprint{}, false
+	}
+	raw := strings.TrimPrefix(hash, openCodeStorageFingerprintPrefix)
+	var fp openCodeStorageFingerprint
+	if err := json.Unmarshal([]byte(raw), &fp); err != nil {
+		return openCodeStorageFingerprint{}, false
+	}
+	return fp, true
 }
 
 func openCodeSQLiteSessionMtime(

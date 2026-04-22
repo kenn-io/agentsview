@@ -5,9 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -107,20 +105,32 @@ func DiscoverOpenCodeSessions(root string) []DiscoveredFile {
 	}
 
 	var files []DiscoveredFile
-	_ = filepath.WalkDir(src.SessionRoot, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".json") {
-			return nil
-		}
-		files = append(files, DiscoveredFile{
-			Path:    path,
-			Project: openCodeSessionProject(path),
-			Agent:   AgentOpenCode,
-		})
+	entries, err := os.ReadDir(src.SessionRoot)
+	if err != nil {
 		return nil
-	})
+	}
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, src.SessionRoot) {
+			continue
+		}
+		projectDir := filepath.Join(src.SessionRoot, entry.Name())
+		sessionEntries, err := os.ReadDir(projectDir)
+		if err != nil {
+			continue
+		}
+		for _, sessionEntry := range sessionEntries {
+			if sessionEntry.IsDir() ||
+				!strings.HasSuffix(sessionEntry.Name(), ".json") {
+				continue
+			}
+			path := filepath.Join(projectDir, sessionEntry.Name())
+			files = append(files, DiscoveredFile{
+				Path:    path,
+				Project: openCodeSessionProject(path),
+				Agent:   AgentOpenCode,
+			})
+		}
+	}
 
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
@@ -138,23 +148,50 @@ func FindOpenCodeSourceFile(root, sessionID string) string {
 	src := ResolveOpenCodeSource(root)
 	switch src.Mode {
 	case OpenCodeSourceStorage:
-		var found string
-		_ = filepath.WalkDir(src.SessionRoot, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || d == nil || d.IsDir() {
-				return nil
+		entries, err := os.ReadDir(src.SessionRoot)
+		if err != nil {
+			return ""
+		}
+		for _, entry := range entries {
+			if !isDirOrSymlink(entry, src.SessionRoot) {
+				continue
 			}
-			if filepath.Base(path) == sessionID+".json" {
-				found = path
-				return errors.New("opencode source found")
+			path := filepath.Join(
+				src.SessionRoot, entry.Name(),
+				sessionID+".json",
+			)
+			if info, err := os.Stat(path); err == nil &&
+				!info.IsDir() {
+				return path
 			}
-			return nil
-		})
-		return found
+		}
+		return ""
 	case OpenCodeSourceSQLite:
-		return src.DBPath + "#" + sessionID
+		return OpenCodeSQLiteVirtualPath(
+			src.DBPath, sessionID,
+		)
 	default:
 		return ""
 	}
+}
+
+func OpenCodeSQLiteVirtualPath(
+	dbPath, sessionID string,
+) string {
+	return dbPath + "#" + sessionID
+}
+
+func ParseOpenCodeSQLiteVirtualPath(
+	sourcePath string,
+) (dbPath, sessionID string, ok bool) {
+	dbPath, sessionID, ok = strings.Cut(sourcePath, "#")
+	if !ok || dbPath == "" || sessionID == "" {
+		return "", "", false
+	}
+	if filepath.Base(dbPath) != "opencode.db" {
+		return "", "", false
+	}
+	return dbPath, sessionID, true
 }
 
 func openCodeSessionProject(path string) string {

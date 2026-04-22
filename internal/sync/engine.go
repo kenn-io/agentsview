@@ -2236,7 +2236,7 @@ func (e *Engine) processCodex(
 	sess.File.Inode, sess.File.Device = getFileIdentity(info)
 
 	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
+	if err == nil && sess.File.Hash == "" {
 		sess.File.Hash = hash
 	}
 
@@ -2265,7 +2265,7 @@ func (e *Engine) processOpenCode(
 	}
 
 	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
+	if err == nil && sess.File.Hash == "" {
 		sess.File.Hash = hash
 	}
 
@@ -2951,7 +2951,7 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 		}
 		if e.shouldPreserveOpenCodeArchive(
 			pw.sess.Agent, pw.sess.File.Path, s.ID,
-			msgs,
+			derefString(s.FileHash),
 		) {
 			continue
 		}
@@ -3141,7 +3141,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	s.IsAutomated = isAutomatedFromSession(s)
 	if e.shouldPreserveOpenCodeArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
-		msgs,
+		derefString(s.FileHash),
 	) {
 		return nil
 	}
@@ -3187,79 +3187,45 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 
 func (e *Engine) shouldPreserveOpenCodeArchive(
 	agent parser.AgentType, path, sessionID string,
-	msgs []db.Message,
+	currentHash string,
 ) bool {
 	if agent != parser.AgentOpenCode ||
 		!isOpenCodeStoragePath(path) {
 		return false
 	}
-	existingCount, ok := e.db.GetSessionMessageCount(sessionID)
-	if !ok || existingCount == 0 {
-		return false
-	}
-	if len(msgs) < existingCount {
-		log.Printf(
-			"skip opencode session %s: parsed %d messages, existing %d; treating source as incomplete",
-			sessionID, len(msgs), existingCount,
-		)
-		return true
-	}
-	if len(msgs) != existingCount {
-		return false
-	}
-
-	storedMsgs, err := e.db.GetAllMessages(
+	stored, err := e.db.GetSessionFull(
 		context.Background(), sessionID,
 	)
-	if err != nil || len(storedMsgs) != existingCount {
+	if err != nil || stored == nil || stored.FileHash == nil {
 		return false
 	}
-	for i := range msgs {
-		if openCodeMessageLooksIncomplete(
-			msgs[i], storedMsgs[i],
-		) {
-			log.Printf(
-				"skip opencode session %s: parsed message %d looks incomplete relative to stored transcript",
-				sessionID, msgs[i].Ordinal,
-			)
-			return true
-		}
+	if parser.OpenCodeStorageFingerprintMissing(
+		*stored.FileHash, currentHash,
+	) {
+		log.Printf(
+			"skip opencode session %s: storage fingerprint lost previously-seen messages or parts",
+			sessionID,
+		)
+		return true
 	}
 	return false
 }
 
 func isOpenCodeStoragePath(path string) bool {
 	return strings.HasSuffix(path, ".json") &&
-		!strings.Contains(path, "#")
+		!isOpenCodeSQLiteVirtualPath(path)
 }
 
-func openCodeMessageLooksIncomplete(
-	parsed, stored db.Message,
-) bool {
-	if parsed.Ordinal != stored.Ordinal ||
-		parsed.Role != stored.Role {
-		return false
-	}
-	if parsed.ContentLength < stored.ContentLength {
-		return true
-	}
-	if parsed.HasThinking != stored.HasThinking &&
-		stored.HasThinking {
-		return true
-	}
-	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
-		return true
-	}
-	return countToolResultEvents(parsed.ToolCalls) <
-		countToolResultEvents(stored.ToolCalls)
+func isOpenCodeSQLiteVirtualPath(path string) bool {
+	_, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path)
+	return ok
 }
 
-func countToolResultEvents(calls []db.ToolCall) int {
-	total := 0
-	for _, call := range calls {
-		total += len(call.ResultEvents)
+func derefString(s *string) string {
+	if s == nil {
+		return ""
 	}
-	return total
+	return *s
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites
@@ -3526,7 +3492,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		)
 	}
 	if def.Type == parser.AgentOpenCode &&
-		strings.Contains(path, "#") {
+		isOpenCodeSQLiteVirtualPath(path) {
 		return e.syncSingleOpenCode(sessionID)
 	}
 

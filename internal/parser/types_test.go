@@ -465,6 +465,29 @@ func TestDiscoverOpenCodeSessions(t *testing.T) {
 	}
 }
 
+func TestDiscoverOpenCodeSessionsIgnoresNestedJSON(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "storage", "session", "global")
+	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	path := filepath.Join(dir, "ses_test.json")
+	if err := os.WriteFile(path, []byte(`{"id":"ses_test"}`), 0o644); err != nil {
+		t.Fatalf("write session: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nested", "meta.json"), []byte(`{"id":"meta"}`), 0o644); err != nil {
+		t.Fatalf("write nested json: %v", err)
+	}
+
+	got := DiscoverOpenCodeSessions(root)
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].Path != path {
+		t.Fatalf("Path = %q, want %q", got[0].Path, path)
+	}
+}
+
 func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "storage", "session", "global", "ses_123.json")
@@ -481,6 +504,21 @@ func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 	got := FindOpenCodeSourceFile(root, "ses_123")
 	if got != path {
 		t.Fatalf("FindOpenCodeSourceFile() = %q, want %q", got, path)
+	}
+}
+
+func TestParseOpenCodeSQLiteVirtualPath(t *testing.T) {
+	dbPath := filepath.Join("/tmp", "opencode.db")
+	virtual := OpenCodeSQLiteVirtualPath(dbPath, "ses_123")
+	gotDB, gotSessionID, ok := ParseOpenCodeSQLiteVirtualPath(virtual)
+	if !ok {
+		t.Fatal("expected virtual path to parse")
+	}
+	if gotDB != dbPath || gotSessionID != "ses_123" {
+		t.Fatalf("ParseOpenCodeSQLiteVirtualPath() = (%q, %q), want (%q, %q)", gotDB, gotSessionID, dbPath, "ses_123")
+	}
+	if _, _, ok := ParseOpenCodeSQLiteVirtualPath("/tmp/project#dir/storage/session/global/ses_123.json"); ok {
+		t.Fatal("expected real storage path with # to be rejected")
 	}
 }
 
