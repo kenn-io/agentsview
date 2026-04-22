@@ -811,17 +811,17 @@ func loadOpenCodeStorageMessages(
 		path := filepath.Join(dir, entry.Name())
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"reading opencode message file %s: %w",
-				path, err,
+			log.Printf(
+				"opencode message file %s: %v", path, err,
 			)
+			continue
 		}
 		var mf openCodeStorageMessageFile
 		if err := json.Unmarshal(raw, &mf); err != nil {
-			return nil, fmt.Errorf(
-				"decoding opencode message file %s: %w",
-				path, err,
+			log.Printf(
+				"opencode message file %s: %v", path, err,
 			)
+			continue
 		}
 		if mf.ID == "" {
 			continue
@@ -865,17 +865,17 @@ func loadOpenCodeStorageParts(
 			path := filepath.Join(dir, entry.Name())
 			raw, err := os.ReadFile(path)
 			if err != nil {
-				return nil, fmt.Errorf(
-					"reading opencode part file %s: %w",
-					path, err,
+				log.Printf(
+					"opencode part file %s: %v", path, err,
 				)
+				continue
 			}
 			var pf openCodeStoragePartFile
 			if err := json.Unmarshal(raw, &pf); err != nil {
-				return nil, fmt.Errorf(
-					"decoding opencode part file %s: %w",
-					path, err,
+				log.Printf(
+					"opencode part file %s: %v", path, err,
 				)
+				continue
 			}
 			if pf.MessageID == "" {
 				pf.MessageID = msg.id

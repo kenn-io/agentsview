@@ -413,7 +413,7 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	if def.FindSourceFunc == nil {
 		t.Fatalf("OpenCode FindSourceFunc = nil")
 	}
-	if got, want := def.WatchSubdirs, []string{"storage/session", "storage/message", "storage/part"}; !slices.Equal(got, want) {
+	if got, want := def.WatchSubdirs, []string{"storage"}; !slices.Equal(got, want) {
 		t.Fatalf("OpenCode WatchSubdirs = %v, want %v", got, want)
 	}
 }

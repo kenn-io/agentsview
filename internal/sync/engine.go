@@ -1607,7 +1607,7 @@ func (e *Engine) collectAndBatch(
 				goto flush
 			}
 			stats.RecordFailed()
-			if r.mtime != 0 {
+			if r.cacheSkip && r.mtime != 0 {
 				e.cacheSkip(r.path, r.mtime)
 			}
 			log.Printf("sync error: %v", r.err)
@@ -1622,14 +1622,18 @@ func (e *Engine) collectAndBatch(
 			continue
 		}
 		if len(r.results) == 0 && r.incremental == nil {
-			e.cacheSkip(r.path, r.mtime)
+			if r.cacheSkip {
+				e.cacheSkip(r.path, r.mtime)
+			}
 			progress.SessionsDone++
 			if onProgress != nil {
 				onProgress(progress)
 			}
 			continue
 		}
-		e.clearSkip(r.path)
+		if r.cacheSkip {
+			e.clearSkip(r.path)
+		}
 		stats.filesOK++
 
 		if r.incremental != nil {
@@ -1716,6 +1720,7 @@ type processResult struct {
 	mtime       int64
 	err         error
 	incremental *incrementalUpdate
+	cacheSkip   bool
 }
 
 func (e *Engine) processFile(
@@ -1739,6 +1744,7 @@ func (e *Engine) processFile(
 		}
 		mtime = snapshot.Mtime
 	}
+	cacheSkip := e.shouldCacheSkip(file)
 
 	// Skip files cached from a previous sync (parse errors
 	// or non-interactive sessions) whose mtime is unchanged.
@@ -1747,11 +1753,17 @@ func (e *Engine) processFile(
 	// migrateLegacyCodexExecSkips, so this check can treat
 	// the skip cache as authoritative without per-file
 	// re-validation.
-	e.skipMu.RLock()
-	cachedMtime, cached := e.skipCache[file.Path]
-	e.skipMu.RUnlock()
-	if cached && cachedMtime == mtime {
-		return processResult{skip: true, mtime: mtime}
+	if cacheSkip {
+		e.skipMu.RLock()
+		cachedMtime, cached := e.skipCache[file.Path]
+		e.skipMu.RUnlock()
+		if cached && cachedMtime == mtime {
+			return processResult{
+				skip:      true,
+				mtime:     mtime,
+				cacheSkip: true,
+			}
+		}
 	}
 
 	var res processResult
@@ -1801,8 +1813,33 @@ func (e *Engine) processFile(
 			),
 		}
 	}
+	res.cacheSkip = cacheSkip
 	res.mtime = mtime
 	return res
+}
+
+func (e *Engine) shouldCacheSkip(
+	file parser.DiscoveredFile,
+) bool {
+	if file.Agent != parser.AgentOpenCode {
+		return true
+	}
+	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if dir == "" {
+			continue
+		}
+		if parser.ResolveOpenCodeSource(dir).Mode !=
+			parser.OpenCodeSourceStorage {
+			continue
+		}
+		if rel, ok := isUnder(dir, file.Path); ok {
+			rel = filepath.ToSlash(rel)
+			return !strings.HasPrefix(
+				rel, "storage/session/",
+			)
+		}
+	}
+	return true
 }
 
 // cacheSkip records a file so it won't be retried until
@@ -3303,10 +3340,6 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	if !ok {
 		return fmt.Errorf("unknown agent for session %s", sessionID)
 	}
-	if def.Type == parser.AgentOpenCode &&
-		e.openCodeUsesSQLite(sessionID) {
-		return e.syncSingleOpenCode(sessionID)
-	}
 	if !def.FileBased {
 		switch def.Type {
 		case parser.AgentWarp:
@@ -3322,19 +3355,25 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 			"source file not found for %s", sessionID,
 		)
 	}
+	if def.Type == parser.AgentOpenCode &&
+		strings.Contains(path, "#") {
+		return e.syncSingleOpenCode(sessionID)
+	}
 
 	agent := def.Type
 
 	// Clear skip cache so explicit re-sync always processes
 	// the file, even if it was cached as non-interactive
 	// during a bulk SyncAll.
-	e.clearSkip(path)
-
-	// Reuse processFile for stat and DB-skip logic.
 	file := parser.DiscoveredFile{
 		Path:  path,
 		Agent: agent,
 	}
+	if e.shouldCacheSkip(file) {
+		e.clearSkip(path)
+	}
+
+	// Reuse processFile for stat and DB-skip logic.
 	switch agent {
 	case parser.AgentClaude:
 		// Try to preserve existing project from DB first
@@ -3380,7 +3419,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 
 	res := e.processFile(file)
 	if res.err != nil {
-		if res.mtime != 0 {
+		if res.cacheSkip && res.mtime != 0 {
 			e.cacheSkip(path, res.mtime)
 		}
 		return res.err
@@ -3416,23 +3455,6 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	}
 
 	return nil
-}
-
-func (e *Engine) openCodeUsesSQLite(sessionID string) bool {
-	rawID := strings.TrimPrefix(sessionID, "opencode:")
-	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
-		if dir == "" {
-			continue
-		}
-		if parser.ResolveOpenCodeSource(dir).Mode !=
-			parser.OpenCodeSourceSQLite {
-			continue
-		}
-		if parser.FindOpenCodeSourceFile(dir, rawID) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // syncSingleOpenCode re-syncs a single OpenCode session.

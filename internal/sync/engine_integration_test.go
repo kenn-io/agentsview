@@ -1604,6 +1604,69 @@ func TestSyncSingleSessionOpenCodeSQLiteFallback(t *testing.T) {
 	)
 }
 
+func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-retry",
+		"/home/user/code/myapp", "Retry Session",
+		1704067200000, 1704067205000,
+	)
+	messagePath := filepath.Join(
+		env.opencodeDir, "storage", "message",
+		"oc-storage-retry", "msg-u1.json",
+	)
+	if err := os.MkdirAll(filepath.Dir(messagePath), 0o755); err != nil {
+		t.Fatalf("mkdir message dir: %v", err)
+	}
+	if err := os.WriteFile(
+		messagePath, []byte(`{"id":"msg-u1"`), 0o644,
+	); err != nil {
+		t.Fatalf("write invalid message: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+	if sess, err := env.db.GetSession(
+		context.Background(), "opencode:oc-storage-retry",
+	); err != nil {
+		t.Fatalf("GetSession: %v", err)
+	} else if sess != nil {
+		t.Fatalf("unexpected session after invalid child parse: %+v", sess)
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime().UnixNano()
+
+	oc.addMessage(
+		t, "oc-storage-retry", "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, "oc-storage-retry", "msg-u1", "part-u1",
+		"hello after retry", 1704067200000,
+	)
+	if err := os.Chtimes(
+		sessionPath,
+		time.Unix(0, sessionMtime),
+		time.Unix(0, sessionMtime),
+	); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-retry",
+		"hello after retry",
+	)
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.

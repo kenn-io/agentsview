@@ -15,9 +15,9 @@ func TestFileBackedSessionCount_ExcludesNonFileAgents(
 	insertSession(t, d, "claude-ai:test-1", "claude.ai",
 		func(s *Session) { s.Agent = "claude-ai" })
 
-	// Insert an opencode session (non-file-backed).
-	insertSession(t, d, "opencode:test-1", "myproject",
-		func(s *Session) { s.Agent = "opencode" })
+	// Insert a warp session (non-file-backed).
+	insertSession(t, d, "warp:test-1", "myproject",
+		func(s *Session) { s.Agent = "warp" })
 
 	// Insert a claude session (file-backed).
 	insertSession(t, d, "test-file-session", "myproject")

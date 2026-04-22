@@ -305,6 +305,80 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 	}})
 }
 
+func TestParseOpenCodeFile_StorageSessionSkipsInvalidChildFiles(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_storage.json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id":        "ses_storage",
+		"directory": "/home/user/code/myapp",
+		"title":     "Storage Session",
+		"time": map[string]any{
+			"created": 1700000000000,
+			"updated": 1700000060000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_1.json",
+	), map[string]any{
+		"id":        "msg_1",
+		"sessionID": "ses_storage",
+		"role":      "user",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	if err := os.MkdirAll(filepath.Join(
+		root, "storage", "message", "ses_storage",
+	), 0o755); err != nil {
+		t.Fatalf("mkdir invalid message dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_bad.json",
+	), []byte(`{"id":"msg_bad"`), 0o644); err != nil {
+		t.Fatalf("write invalid message: %v", err)
+	}
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "prt_1.json",
+	), map[string]any{
+		"id":        "prt_1",
+		"sessionID": "ses_storage",
+		"messageID": "msg_1",
+		"type":      "text",
+		"text":      "Hello from storage",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	if err := os.MkdirAll(filepath.Join(
+		root, "storage", "part", "msg_1",
+	), 0o755); err != nil {
+		t.Fatalf("mkdir invalid part dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(
+		root, "storage", "part", "msg_1", "prt_bad.json",
+	), []byte(`{"id":"prt_bad"`), 0o644); err != nil {
+		t.Fatalf("write invalid part: %v", err)
+	}
+
+	sess, msgs, err := ParseOpenCodeFile(
+		sessionPath, "testmachine",
+	)
+	if err != nil {
+		t.Fatalf("ParseOpenCodeFile: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("expected non-nil session")
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	assertEq(t, "msg[0].Content", msgs[0].Content, "Hello from storage")
+}
+
 func TestParseOpenCodeDB_TitleFallback(t *testing.T) {
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
