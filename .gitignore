@@ -54,3 +54,4 @@ html/
 .superset/
 .github/hooks/
 .superpowers/
+.worktrees/
