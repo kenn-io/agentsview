@@ -3318,6 +3318,41 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	return ""
 }
 
+// SourceMtime returns the current source-backed mtime for a
+// session. Most file-based agents map directly to a single source
+// file, but OpenCode storage sessions derive their effective mtime
+// from the session JSON plus related message/part files.
+func (e *Engine) SourceMtime(sessionID string) int64 {
+	host, _ := parser.StripHostPrefix(sessionID)
+	if host != "" {
+		return 0
+	}
+
+	def, ok := parser.AgentByPrefix(sessionID)
+	if !ok || !def.FileBased {
+		return 0
+	}
+
+	path := e.FindSourceFile(sessionID)
+	if path == "" {
+		return 0
+	}
+
+	if def.Type == parser.AgentOpenCode {
+		mtime, err := parser.OpenCodeSourceMtime(path)
+		if err != nil {
+			return 0
+		}
+		return mtime
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().UnixNano()
+}
+
 // SyncSingleSession re-syncs a single session by its ID and
 // uses the existing DB project as fallback where applicable.
 func (e *Engine) SyncSingleSession(sessionID string) (err error) {

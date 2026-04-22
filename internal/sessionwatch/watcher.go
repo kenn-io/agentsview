@@ -77,7 +77,7 @@ func (w *Watcher) Events(
 		var lastFileMtime int64
 		var fileMtimeChangedAt time.Time
 		if sourcePath != "" {
-			lastFileMtime = StatMtime(sourcePath)
+			lastFileMtime = w.engine.SourceMtime(sessionID)
 		}
 
 		ticker := time.NewTicker(PollInterval)
@@ -171,14 +171,14 @@ func (w *Watcher) checkDBForChanges(
 		if *sourcePath == "" {
 			return false
 		}
-		*lastFileMtime = StatMtime(*sourcePath)
+		*lastFileMtime = w.engine.SourceMtime(sessionID)
 		// Source file (re-)resolved — trigger fallback sync
 		// immediately since content likely differs from DB.
 		past := time.Now().Add(-SyncFallbackDelay)
 		*fileMtimeChangedAt = past
 	}
 
-	mtime := StatMtime(*sourcePath)
+	mtime := w.engine.SourceMtime(sessionID)
 	if mtime == 0 {
 		// File disappeared; try to re-resolve later.
 		*sourcePath = ""

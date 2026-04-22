@@ -1750,6 +1750,76 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 	)
 }
 
+func TestSourceMtimeOpenCodeStorageIncludesChildFiles(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-source-mtime",
+		"/home/user/code/myapp", "Source Mtime",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-source-mtime", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-source-mtime", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	if initialMtime == 0 {
+		t.Fatal("expected initial composite source mtime")
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime()
+	future := time.Now().Add(2 * time.Second)
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-source-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(partPath, future, future); err != nil {
+		t.Fatalf("chtimes part: %v", err)
+	}
+	if err := os.Chtimes(sessionPath, sessionMtime, sessionMtime); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	if updatedMtime <= initialMtime {
+		t.Fatalf("updated source mtime = %d, want > %d", updatedMtime, initialMtime)
+	}
+}
+
+func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, "oc-source-sqlite", "proj-1",
+		1704067200000, 1704067205000,
+	)
+
+	initialMtime := env.engine.SourceMtime("opencode:oc-source-sqlite")
+	if initialMtime != 1704067205000*1_000_000 {
+		t.Fatalf("initial source mtime = %d, want %d", initialMtime, 1704067205000*1_000_000)
+	}
+
+	oc.updateSessionTime(t, "oc-source-sqlite", 1704067210000)
+
+	updatedMtime := env.engine.SourceMtime("opencode:oc-source-sqlite")
+	if updatedMtime != 1704067210000*1_000_000 {
+		t.Fatalf("updated source mtime = %d, want %d", updatedMtime, 1704067210000*1_000_000)
+	}
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.

@@ -192,14 +192,6 @@ func ParseOpenCodeFile(
 		)
 	}
 
-	info, err := os.Stat(sessionPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"stat opencode session file %s: %w",
-			sessionPath, err,
-		)
-	}
-
 	root := filepath.Dir(filepath.Dir(filepath.Dir(
 		filepath.Dir(sessionPath),
 	)))
@@ -211,14 +203,9 @@ func ParseOpenCodeFile(
 	if err != nil {
 		return nil, nil, err
 	}
-	fileMtime := info.ModTime().UnixNano()
-	for _, msg := range msgs {
-		fileMtime = max(fileMtime, msg.fileMtime)
-	}
-	for _, msgParts := range parts {
-		for _, part := range msgParts {
-			fileMtime = max(fileMtime, part.fileMtime)
-		}
+	fileMtime, err := OpenCodeSourceMtime(sessionPath)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return buildOpenCodeParsedSession(
@@ -497,6 +484,10 @@ func buildOpenCodeParsedSession(
 
 		msgParts := parts[m.id]
 		sort.Slice(msgParts, func(a, b int) bool {
+			if msgParts[a].timeCreated ==
+				msgParts[b].timeCreated {
+				return msgParts[a].id < msgParts[b].id
+			}
 			return msgParts[a].timeCreated <
 				msgParts[b].timeCreated
 		})
@@ -768,7 +759,22 @@ func extractOpenCodeToolCall(data string) ParsedToolCall {
 
 type openCodeStorageTime struct {
 	Created int64 `json:"created"`
+	Start   int64 `json:"start"`
+	End     int64 `json:"end"`
 	Updated int64 `json:"updated"`
+}
+
+func (t openCodeStorageTime) sortTime() int64 {
+	switch {
+	case t.Created != 0:
+		return t.Created
+	case t.Start != 0:
+		return t.Start
+	case t.End != 0:
+		return t.End
+	default:
+		return t.Updated
+	}
 }
 
 type openCodeStorageSessionFile struct {
@@ -840,7 +846,7 @@ func loadOpenCodeStorageMessages(
 		msgs = append(msgs, openCodeMessageRow{
 			id:          mf.ID,
 			data:        string(raw),
-			timeCreated: mf.Time.Created,
+			timeCreated: mf.Time.sortTime(),
 			fileMtime:   mustEntryMtime(entry),
 		})
 	}
@@ -896,12 +902,122 @@ func loadOpenCodeStorageParts(
 				id:          pf.ID,
 				messageID:   pf.MessageID,
 				data:        string(raw),
-				timeCreated: pf.Time.Created,
+				timeCreated: pf.Time.sortTime(),
 				fileMtime:   mustEntryMtime(entry),
 			})
 		}
 	}
 	return parts, nil
+}
+
+// OpenCodeSourceMtime returns a composite mtime for either an
+// OpenCode storage session JSON path or a legacy SQLite virtual
+// path in the form opencode.db#<sessionID>.
+func OpenCodeSourceMtime(sourcePath string) (int64, error) {
+	if sourcePath == "" {
+		return 0, nil
+	}
+	if dbPath, sessionID, ok := strings.Cut(sourcePath, "#"); ok {
+		return openCodeSQLiteSessionMtime(dbPath, sessionID)
+	}
+	return openCodeStorageSessionMtime(sourcePath)
+}
+
+func openCodeSQLiteSessionMtime(
+	dbPath, sessionID string,
+) (int64, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf(
+			"stat opencode db %s: %w", dbPath, err,
+		)
+	}
+
+	db, err := openOpenCodeDB(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+
+	row := db.QueryRow(
+		"SELECT time_updated FROM session WHERE id = ?",
+		sessionID,
+	)
+	var timeUpdated int64
+	if err := row.Scan(&timeUpdated); err != nil {
+		if err == sql.ErrNoRows {
+			return 0, nil
+		}
+		return 0, fmt.Errorf(
+			"loading opencode session mtime %s#%s: %w",
+			dbPath, sessionID, err,
+		)
+	}
+	return timeUpdated * 1_000_000, nil
+}
+
+func openCodeStorageSessionMtime(
+	sessionPath string,
+) (int64, error) {
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf(
+			"stat opencode session file %s: %w",
+			sessionPath, err,
+		)
+	}
+
+	root := filepath.Dir(filepath.Dir(filepath.Dir(
+		filepath.Dir(sessionPath),
+	)))
+	sessionID := strings.TrimSuffix(
+		filepath.Base(sessionPath), filepath.Ext(sessionPath),
+	)
+	fileMtime := info.ModTime().UnixNano()
+
+	messageDir := filepath.Join(root, "storage", "message", sessionID)
+	msgEntries, err := os.ReadDir(messageDir)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf(
+			"reading opencode message dir %s: %w",
+			messageDir, err,
+		)
+	}
+	for _, entry := range msgEntries {
+		if entry.IsDir() ||
+			!strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		fileMtime = max(fileMtime, mustEntryMtime(entry))
+		messageID := strings.TrimSuffix(
+			entry.Name(), filepath.Ext(entry.Name()),
+		)
+		partDir := filepath.Join(root, "storage", "part", messageID)
+		partEntries, err := os.ReadDir(partDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return 0, fmt.Errorf(
+				"reading opencode part dir %s: %w",
+				partDir, err,
+			)
+		}
+		for _, partEntry := range partEntries {
+			if partEntry.IsDir() ||
+				!strings.HasSuffix(partEntry.Name(), ".json") {
+				continue
+			}
+			fileMtime = max(fileMtime, mustEntryMtime(partEntry))
+		}
+	}
+
+	return fileMtime, nil
 }
 
 func mustEntryMtime(entry os.DirEntry) int64 {
