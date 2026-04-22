@@ -2928,8 +2928,11 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 			continue
 		}
 
+		replaceMessages := stale ||
+			pw.sess.Agent == parser.AgentOpenCode
+
 		var werr error
-		if stale {
+		if replaceMessages {
 			werr = e.db.ReplaceSessionMessages(s.ID, msgs)
 		} else {
 			werr = e.writeMessages(s.ID, msgs)

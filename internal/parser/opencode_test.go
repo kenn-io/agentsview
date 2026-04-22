@@ -305,7 +305,7 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 	}})
 }
 
-func TestParseOpenCodeFile_StorageSessionSkipsInvalidChildFiles(
+func TestParseOpenCodeFile_StorageSessionInvalidChildFails(
 	t *testing.T,
 ) {
 	root := t.TempDir()
@@ -367,16 +367,15 @@ func TestParseOpenCodeFile_StorageSessionSkipsInvalidChildFiles(
 	sess, msgs, err := ParseOpenCodeFile(
 		sessionPath, "testmachine",
 	)
-	if err != nil {
-		t.Fatalf("ParseOpenCodeFile: %v", err)
+	if err == nil {
+		t.Fatal("expected ParseOpenCodeFile error")
 	}
-	if sess == nil {
-		t.Fatal("expected non-nil session")
+	if sess != nil {
+		t.Fatalf("session = %#v, want nil", sess)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("messages len = %d, want 1", len(msgs))
+	if msgs != nil {
+		t.Fatalf("msgs = %#v, want nil", msgs)
 	}
-	assertEq(t, "msg[0].Content", msgs[0].Content, "Hello from storage")
 }
 
 func TestParseOpenCodeDB_TitleFallback(t *testing.T) {

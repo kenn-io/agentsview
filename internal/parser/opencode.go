@@ -211,6 +211,15 @@ func ParseOpenCodeFile(
 	if err != nil {
 		return nil, nil, err
 	}
+	fileMtime := info.ModTime().UnixNano()
+	for _, msg := range msgs {
+		fileMtime = max(fileMtime, msg.fileMtime)
+	}
+	for _, msgParts := range parts {
+		for _, part := range msgParts {
+			fileMtime = max(fileMtime, part.fileMtime)
+		}
+	}
 
 	return buildOpenCodeParsedSession(
 		openCodeSessionRow{
@@ -222,7 +231,7 @@ func ParseOpenCodeFile(
 		},
 		sf.Directory,
 		sessionPath,
-		info.ModTime().UnixNano(),
+		fileMtime,
 		machine,
 		msgs,
 		parts,
@@ -335,6 +344,7 @@ type openCodeMessageRow struct {
 	id          string
 	data        string
 	timeCreated int64
+	fileMtime   int64
 }
 
 // openCodeMessageData holds the scalar fields we extract from
@@ -358,6 +368,7 @@ type openCodePartRow struct {
 	messageID   string
 	data        string
 	timeCreated int64
+	fileMtime   int64
 }
 
 func loadOpenCodeMessages(
@@ -811,17 +822,17 @@ func loadOpenCodeStorageMessages(
 		path := filepath.Join(dir, entry.Name())
 		raw, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf(
-				"opencode message file %s: %v", path, err,
+			return nil, fmt.Errorf(
+				"reading opencode message file %s: %w",
+				path, err,
 			)
-			continue
 		}
 		var mf openCodeStorageMessageFile
 		if err := json.Unmarshal(raw, &mf); err != nil {
-			log.Printf(
-				"opencode message file %s: %v", path, err,
+			return nil, fmt.Errorf(
+				"decoding opencode message file %s: %w",
+				path, err,
 			)
-			continue
 		}
 		if mf.ID == "" {
 			continue
@@ -830,6 +841,7 @@ func loadOpenCodeStorageMessages(
 			id:          mf.ID,
 			data:        string(raw),
 			timeCreated: mf.Time.Created,
+			fileMtime:   mustEntryMtime(entry),
 		})
 	}
 
@@ -865,17 +877,17 @@ func loadOpenCodeStorageParts(
 			path := filepath.Join(dir, entry.Name())
 			raw, err := os.ReadFile(path)
 			if err != nil {
-				log.Printf(
-					"opencode part file %s: %v", path, err,
+				return nil, fmt.Errorf(
+					"reading opencode part file %s: %w",
+					path, err,
 				)
-				continue
 			}
 			var pf openCodeStoragePartFile
 			if err := json.Unmarshal(raw, &pf); err != nil {
-				log.Printf(
-					"opencode part file %s: %v", path, err,
+				return nil, fmt.Errorf(
+					"decoding opencode part file %s: %w",
+					path, err,
 				)
-				continue
 			}
 			if pf.MessageID == "" {
 				pf.MessageID = msg.id
@@ -885,10 +897,19 @@ func loadOpenCodeStorageParts(
 				messageID:   pf.MessageID,
 				data:        string(raw),
 				timeCreated: pf.Time.Created,
+				fileMtime:   mustEntryMtime(entry),
 			})
 		}
 	}
 	return parts, nil
+}
+
+func mustEntryMtime(entry os.DirEntry) int64 {
+	info, err := entry.Info()
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().UnixNano()
 }
 
 func millisToTime(ms int64) time.Time {

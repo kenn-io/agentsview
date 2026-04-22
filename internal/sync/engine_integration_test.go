@@ -1667,6 +1667,89 @@ func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 	)
 }
 
+func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionPath := oc.addSession(
+		t, "global", "oc-storage-mtime",
+		"/home/user/code/myapp", "Mtime Session",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, "oc-storage-mtime", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := oc.addTextPart(
+		t, "oc-storage-mtime", "msg-a1", "part-a1",
+		"initial reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	_, initialMtime, ok := env.db.GetSessionFileInfo(
+		"opencode:oc-storage-mtime",
+	)
+	if !ok {
+		t.Fatal("expected initial session file_mtime")
+	}
+
+	info, err := os.Stat(sessionPath)
+	if err != nil {
+		t.Fatalf("stat session path: %v", err)
+	}
+	sessionMtime := info.ModTime().UnixNano()
+
+	if err := os.WriteFile(partPath, []byte(
+		`{"id":"part-a1","sessionID":"oc-storage-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
+	), 0o644); err != nil {
+		t.Fatalf("rewrite part: %v", err)
+	}
+	if err := os.Chtimes(
+		sessionPath,
+		time.Unix(0, sessionMtime),
+		time.Unix(0, sessionMtime),
+	); err != nil {
+		t.Fatalf("restore session mtime: %v", err)
+	}
+	if _, parsedMsgs, err := parser.ParseOpenCodeFile(
+		sessionPath, "local",
+	); err != nil {
+		t.Fatalf("ParseOpenCodeFile after rewrite: %v", err)
+	} else if len(parsedMsgs) != 1 ||
+		parsedMsgs[0].Content != "updated reply" {
+		t.Fatalf(
+			"parsed messages after rewrite = %#v, want updated reply",
+			parsedMsgs,
+		)
+	}
+
+	env.engine.SyncPaths([]string{partPath})
+
+	_, updatedMtime, ok := env.db.GetSessionFileInfo(
+		"opencode:oc-storage-mtime",
+	)
+	if !ok {
+		t.Fatal("expected updated session file_mtime")
+	}
+	if updatedMtime <= initialMtime {
+		t.Fatalf(
+			"updated file_mtime = %d, want > %d",
+			updatedMtime, initialMtime,
+		)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-storage-mtime",
+		"updated reply",
+	)
+}
+
 // TestSyncEngineOpenCodeToolCallReplace verifies that tool
 // call data is fully replaced during OpenCode bulk sync, not
 // left stale from a previous sync.
