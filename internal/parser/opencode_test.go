@@ -439,6 +439,91 @@ func TestParseOpenCodeFile_StoragePartOrderingUsesStartTime(
 	assertEq(t, "msg[0].Content", msgs[0].Content, "first\nsecond")
 }
 
+func TestParseOpenCodeFile_StorageStepFinishTokens(t *testing.T) {
+	root := t.TempDir()
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_storage.json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id":        "ses_storage",
+		"directory": "/home/user/code/myapp",
+		"title":     "Storage Session",
+		"time": map[string]any{
+			"created": 1700000000000,
+			"updated": 1700000060000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_1.json",
+	), map[string]any{
+		"id":        "msg_1",
+		"sessionID": "ses_storage",
+		"role":      "assistant",
+		"modelID":   "gpt-5.2-codex",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "prt_1.json",
+	), map[string]any{
+		"id":        "prt_1",
+		"sessionID": "ses_storage",
+		"messageID": "msg_1",
+		"type":      "text",
+		"text":      "reply from storage",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "prt_2.json",
+	), map[string]any{
+		"id":        "prt_2",
+		"sessionID": "ses_storage",
+		"messageID": "msg_1",
+		"type":      "step-finish",
+		"tokens": map[string]any{
+			"input":  11,
+			"output": 7,
+			"cache": map[string]any{
+				"read":  3,
+				"write": 2,
+			},
+		},
+		"time": map[string]any{
+			"created": 1700000001000,
+		},
+	})
+
+	sess, msgs, err := ParseOpenCodeFile(sessionPath, "testmachine")
+	if err != nil {
+		t.Fatalf("ParseOpenCodeFile: %v", err)
+	}
+	if sess == nil || len(msgs) != 1 {
+		t.Fatalf(
+			"got session=%#v messages=%d, want one parsed session",
+			sess, len(msgs),
+		)
+	}
+
+	assertEq(t, "msg[0].Model", msgs[0].Model, "gpt-5.2-codex")
+	assertEq(t, "msg[0].HasOutputTokens", msgs[0].HasOutputTokens, true)
+	assertEq(t, "msg[0].OutputTokens", msgs[0].OutputTokens, 7)
+	assertEq(t, "msg[0].HasContextTokens", msgs[0].HasContextTokens, true)
+	assertEq(t, "msg[0].ContextTokens", msgs[0].ContextTokens, 16)
+	assertEq(
+		t, "session HasTotalOutputTokens",
+		sess.HasTotalOutputTokens, true,
+	)
+	assertEq(t, "session TotalOutputTokens", sess.TotalOutputTokens, 7)
+	assertEq(
+		t, "session HasPeakContextTokens",
+		sess.HasPeakContextTokens, true,
+	)
+	assertEq(t, "session PeakContextTokens", sess.PeakContextTokens, 16)
+}
+
 func TestParseOpenCodeDB_TitleFallback(t *testing.T) {
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()

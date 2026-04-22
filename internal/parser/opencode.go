@@ -499,7 +499,7 @@ func buildOpenCodeParsedSession(
 		pm := buildOpenCodeMessage(
 			ordinal, role, m.timeCreated, msgParts,
 		)
-		applyOpenCodeTokenUsage(&pm, md, m.data)
+		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
 			!pm.HasToolUse {
 			continue
@@ -575,49 +575,93 @@ func buildOpenCodeParsedSession(
 // recognized fields (empty `{}` or a foreign schema) leaves
 // TokenUsage empty so the usage query filter skips the row.
 func applyOpenCodeTokenUsage(
-	pm *ParsedMessage, md openCodeMessageData, dataRaw string,
+	pm *ParsedMessage,
+	md openCodeMessageData,
+	dataRaw string,
+	parts []openCodePartRow,
 ) {
 	if md.ModelID != "" {
 		pm.Model = md.ModelID
 	} else if md.Model.ModelID != "" {
 		pm.Model = md.Model.ModelID
 	}
-	tokens := gjson.Get(dataRaw, "tokens")
-	if !tokens.Exists() {
+	raws := []string{dataRaw}
+	for _, part := range parts {
+		if extractOpenCodePartType(part.data) == "step-finish" {
+			raws = append(raws, part.data)
+		}
+	}
+	fields, ok := collectOpenCodeTokenFields(raws...)
+	if !ok {
 		return
 	}
-
-	inputField := tokens.Get("input")
-	outputField := tokens.Get("output")
-	cacheReadField := tokens.Get("cache.read")
-	cacheWriteField := tokens.Get("cache.write")
-
-	if !inputField.Exists() && !outputField.Exists() &&
-		!cacheReadField.Exists() && !cacheWriteField.Exists() {
-		return
-	}
-
-	input := int(inputField.Int())
-	output := int(outputField.Int())
-	cacheRead := int(cacheReadField.Int())
-	cacheCreate := int(cacheWriteField.Int())
 
 	normalized := map[string]int{
-		"input_tokens":                input,
-		"output_tokens":               output,
-		"cache_read_input_tokens":     cacheRead,
-		"cache_creation_input_tokens": cacheCreate,
+		"input_tokens":                fields.input,
+		"output_tokens":               fields.output,
+		"cache_read_input_tokens":     fields.cacheRead,
+		"cache_creation_input_tokens": fields.cacheCreate,
 	}
 	j, err := json.Marshal(normalized)
 	if err != nil {
 		return
 	}
 	pm.TokenUsage = j
-	pm.OutputTokens = output
-	pm.HasOutputTokens = outputField.Exists()
-	pm.ContextTokens = input + cacheRead + cacheCreate
-	pm.HasContextTokens = inputField.Exists() ||
-		cacheReadField.Exists() || cacheWriteField.Exists()
+	pm.OutputTokens = fields.output
+	pm.HasOutputTokens = fields.hasOutput
+	pm.ContextTokens = fields.input +
+		fields.cacheRead + fields.cacheCreate
+	pm.HasContextTokens = fields.hasInput ||
+		fields.hasCacheRead || fields.hasCacheCreate
+}
+
+type openCodeTokenFields struct {
+	input          int
+	output         int
+	cacheRead      int
+	cacheCreate    int
+	hasInput       bool
+	hasOutput      bool
+	hasCacheRead   bool
+	hasCacheCreate bool
+}
+
+func collectOpenCodeTokenFields(
+	raws ...string,
+) (openCodeTokenFields, bool) {
+	var (
+		fields openCodeTokenFields
+		any    bool
+	)
+
+	for _, raw := range raws {
+		tokens := gjson.Get(raw, "tokens")
+		if !tokens.Exists() {
+			continue
+		}
+		if field := tokens.Get("input"); field.Exists() {
+			fields.input = int(field.Int())
+			fields.hasInput = true
+			any = true
+		}
+		if field := tokens.Get("output"); field.Exists() {
+			fields.output = int(field.Int())
+			fields.hasOutput = true
+			any = true
+		}
+		if field := tokens.Get("cache.read"); field.Exists() {
+			fields.cacheRead = int(field.Int())
+			fields.hasCacheRead = true
+			any = true
+		}
+		if field := tokens.Get("cache.write"); field.Exists() {
+			fields.cacheCreate = int(field.Int())
+			fields.hasCacheCreate = true
+			any = true
+		}
+	}
+
+	return fields, any
 }
 
 // openCodeDefaultTitleRe matches the exact placeholder format
@@ -872,9 +916,6 @@ func loadOpenCodeStorageParts(
 		dir := filepath.Join(root, "storage", "part", msg.id)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return nil, fmt.Errorf(
 				"reading opencode part dir %s: %w", dir, err,
 			)

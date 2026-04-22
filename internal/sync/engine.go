@@ -2920,6 +2920,16 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 			existing < db.CurrentDataVersion() {
 			stale = true
 		}
+		if pw.sess.Agent == parser.AgentOpenCode {
+			if existingCount, ok := e.db.GetSessionMessageCount(s.ID); ok &&
+				existingCount > 0 && len(msgs) < existingCount {
+				log.Printf(
+					"skip opencode session %s: parsed %d messages, existing %d; treating source as incomplete",
+					s.ID, len(msgs), existingCount,
+				)
+				continue
+			}
+		}
 
 		// UpsertSession first: the session row must exist
 		// before messages can be inserted (FK constraint).
