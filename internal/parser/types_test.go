@@ -457,6 +457,9 @@ func TestDiscoverOpenCodeSessions(t *testing.T) {
 	if got[0].Path != path {
 		t.Fatalf("Path = %q, want %q", got[0].Path, path)
 	}
+	if got[0].Project != "my_app" {
+		t.Fatalf("Project = %q, want %q", got[0].Project, "my_app")
+	}
 	if got[0].Agent != AgentOpenCode {
 		t.Fatalf("Agent = %q, want %q", got[0].Agent, AgentOpenCode)
 	}

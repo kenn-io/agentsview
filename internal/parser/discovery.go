@@ -115,8 +115,9 @@ func DiscoverOpenCodeSessions(root string) []DiscoveredFile {
 			return nil
 		}
 		files = append(files, DiscoveredFile{
-			Path:  path,
-			Agent: AgentOpenCode,
+			Path:    path,
+			Project: openCodeSessionProject(path),
+			Agent:   AgentOpenCode,
 		})
 		return nil
 	})
@@ -154,6 +155,22 @@ func FindOpenCodeSourceFile(root, sessionID string) string {
 	default:
 		return ""
 	}
+}
+
+func openCodeSessionProject(path string) string {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		if cwd := gjson.GetBytes(data, "directory").Str; cwd != "" {
+			if project := ExtractProjectFromCwd(cwd); project != "" {
+				return project
+			}
+		}
+	}
+
+	if project := NormalizeName(filepath.Base(filepath.Dir(path))); project != "" {
+		return project
+	}
+	return "unknown"
 }
 
 // DiscoverClaudeProjects finds all project directories under the
