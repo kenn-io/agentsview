@@ -378,6 +378,46 @@ func TestParseOpenCodeFile_StorageSessionInvalidChildFails(
 	}
 }
 
+func TestParseOpenCodeFile_MissingPartDirAllowed(t *testing.T) {
+	root := t.TempDir()
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_storage.json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id":        "ses_storage",
+		"directory": "/home/user/code/myapp",
+		"title":     "Storage Session",
+		"time": map[string]any{
+			"created": 1700000000000,
+			"updated": 1700000060000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_1.json",
+	), map[string]any{
+		"id":        "msg_1",
+		"sessionID": "ses_storage",
+		"role":      "assistant",
+		"modelID":   "gpt-5.2-codex",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+
+	sess, msgs, err := ParseOpenCodeFile(
+		sessionPath, "testmachine",
+	)
+	if err != nil {
+		t.Fatalf("ParseOpenCodeFile: %v", err)
+	}
+	if sess != nil {
+		t.Fatalf("session = %#v, want nil", sess)
+	}
+	if msgs != nil {
+		t.Fatalf("msgs = %#v, want nil", msgs)
+	}
+}
+
 func TestParseOpenCodeFile_StoragePartOrderingUsesStartTime(
 	t *testing.T,
 ) {

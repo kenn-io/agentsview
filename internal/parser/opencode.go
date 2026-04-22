@@ -956,6 +956,9 @@ func loadOpenCodeStorageParts(
 		dir := filepath.Join(root, "storage", "part", msg.id)
 		entries, err := os.ReadDir(dir)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
 			return nil, fmt.Errorf(
 				"reading opencode part dir %s: %w", dir, err,
 			)

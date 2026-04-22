@@ -2278,8 +2278,11 @@ func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
 	}
 
 	stats := env.engine.SyncAll(context.Background(), nil)
-	if stats.Failed == 0 {
-		t.Fatal("expected transient missing part dir to fail the parse")
+	if stats.Failed != 0 {
+		t.Fatalf("stats.Failed = %d, want 0", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
 	}
 
 	assertMessageContent(

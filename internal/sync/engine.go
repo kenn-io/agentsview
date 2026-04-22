@@ -827,7 +827,10 @@ func (e *Engine) classifyOpenCodePath(
 			parts[0] == "storage" &&
 			parts[1] == "part" &&
 			strings.HasSuffix(parts[3], ".json"):
-			sessionID := readOpenCodeStorageSessionID(path)
+			sessionID := ""
+			if pathExists {
+				sessionID = readOpenCodeStorageSessionID(path)
+			}
 			if sessionID == "" {
 				sessionID =
 					findOpenCodeStorageSessionIDByMessageID(

@@ -1260,6 +1260,54 @@ func TestEngine_ClassifyPathsOpenCodeRemovedMessageDir(
 	}
 }
 
+func TestEngine_ClassifyPathsOpenCodeRemovedMessageFile(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("Remove(%q): %v", messagePath, err)
+	}
+
+	files := engine.classifyPaths([]string{messagePath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
 func TestEngine_ClassifyPathsOpenCodeRemovedPartDir(
 	t *testing.T,
 ) {
@@ -1305,6 +1353,59 @@ func TestEngine_ClassifyPathsOpenCodeRemovedPartDir(
 	}
 
 	files := engine.classifyPaths([]string{partDir})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
+func TestEngine_ClassifyPathsOpenCodeRemovedPartFile(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	partPath := filepath.Join(
+		opencodeDir, "storage", "part", "msg_1",
+		"part_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+		partPath:    `{"id":"part_1","messageID":"msg_1","type":"text","text":"hi","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	if err := os.Remove(partPath); err != nil {
+		t.Fatalf("Remove(%q): %v", partPath, err)
+	}
+
+	files := engine.classifyPaths([]string{partPath})
 	if len(files) != 1 {
 		t.Fatalf("len(files) = %d, want 1", len(files))
 	}
