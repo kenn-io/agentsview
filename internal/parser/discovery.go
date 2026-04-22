@@ -184,10 +184,12 @@ func OpenCodeSQLiteVirtualPath(
 func ParseOpenCodeSQLiteVirtualPath(
 	sourcePath string,
 ) (dbPath, sessionID string, ok bool) {
-	dbPath, sessionID, ok = strings.Cut(sourcePath, "#")
-	if !ok || dbPath == "" || sessionID == "" {
+	idx := strings.LastIndex(sourcePath, "#")
+	if idx <= 0 || idx >= len(sourcePath)-1 {
 		return "", "", false
 	}
+	dbPath = sourcePath[:idx]
+	sessionID = sourcePath[idx+1:]
 	if filepath.Base(dbPath) != "opencode.db" {
 		return "", "", false
 	}

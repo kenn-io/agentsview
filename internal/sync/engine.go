@@ -846,6 +846,40 @@ func (e *Engine) classifyOpenCodePath(
 				Path:  sessionPath,
 				Agent: parser.AgentOpenCode,
 			}, true
+		case !pathExists &&
+			len(parts) == 3 &&
+			parts[0] == "storage" &&
+			parts[1] == "message":
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, parts[2],
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
+		case !pathExists &&
+			len(parts) == 3 &&
+			parts[0] == "storage" &&
+			parts[1] == "part":
+			sessionID := findOpenCodeStorageSessionIDByMessageID(
+				openCodeDir, parts[2],
+			)
+			if sessionID == "" {
+				continue
+			}
+			sessionPath := parser.FindOpenCodeSourceFile(
+				openCodeDir, sessionID,
+			)
+			if sessionPath == "" {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  sessionPath,
+				Agent: parser.AgentOpenCode,
+			}, true
 		}
 	}
 	return parser.DiscoveredFile{}, false
@@ -1747,9 +1781,10 @@ func (e *Engine) collectAndBatch(
 		}
 
 		if len(pending) >= batchSize {
-			stats.RecordSynced(len(pending))
-			progress.MessagesIndexed += countMessages(pending)
-			e.writeBatch(pending)
+			writtenSessions, writtenMessages :=
+				e.writeBatch(pending)
+			stats.RecordSynced(writtenSessions)
+			progress.MessagesIndexed += writtenMessages
 			pending = pending[:0]
 		}
 
@@ -1761,9 +1796,10 @@ func (e *Engine) collectAndBatch(
 
 flush:
 	if len(pending) > 0 {
-		stats.RecordSynced(len(pending))
-		progress.MessagesIndexed += countMessages(pending)
-		e.writeBatch(pending)
+		writtenSessions, writtenMessages :=
+			e.writeBatch(pending)
+		stats.RecordSynced(writtenSessions)
+		progress.MessagesIndexed += writtenMessages
 	}
 
 	// Link subagent child sessions to their parents via
@@ -3006,7 +3042,9 @@ type pendingWrite struct {
 	msgs []parser.ParsedMessage
 }
 
-func (e *Engine) writeBatch(batch []pendingWrite) {
+func (e *Engine) writeBatch(
+	batch []pendingWrite,
+) (writtenSessions, writtenMessages int) {
 	for _, pw := range batch {
 		msgs := toDBMessages(pw, e.blockedResultCategories)
 		s := toDBSession(pw)
@@ -3092,8 +3130,10 @@ func (e *Engine) writeBatch(batch []pendingWrite) {
 				"signals: update %s: %v", s.ID, err,
 			)
 		}
+		writtenSessions++
+		writtenMessages += len(msgs)
 	}
-
+	return writtenSessions, writtenMessages
 }
 
 // writeIncremental appends new messages and partially updates

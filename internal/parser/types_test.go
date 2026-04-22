@@ -517,6 +517,15 @@ func TestParseOpenCodeSQLiteVirtualPath(t *testing.T) {
 	if gotDB != dbPath || gotSessionID != "ses_123" {
 		t.Fatalf("ParseOpenCodeSQLiteVirtualPath() = (%q, %q), want (%q, %q)", gotDB, gotSessionID, dbPath, "ses_123")
 	}
+	hashDBPath := filepath.Join("/tmp", "opencode#dev", "opencode.db")
+	hashVirtual := OpenCodeSQLiteVirtualPath(hashDBPath, "ses_456")
+	gotDB, gotSessionID, ok = ParseOpenCodeSQLiteVirtualPath(hashVirtual)
+	if !ok {
+		t.Fatal("expected virtual path with # in db path to parse")
+	}
+	if gotDB != hashDBPath || gotSessionID != "ses_456" {
+		t.Fatalf("ParseOpenCodeSQLiteVirtualPath() with # in db path = (%q, %q), want (%q, %q)", gotDB, gotSessionID, hashDBPath, "ses_456")
+	}
 	if _, _, ok := ParseOpenCodeSQLiteVirtualPath("/tmp/project#dir/storage/session/global/ses_123.json"); ok {
 		t.Fatal("expected real storage path with # to be rejected")
 	}

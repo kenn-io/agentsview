@@ -2404,6 +2404,65 @@ func TestSyncPathsOpenCodeStorageMissingMessagePreservesArchive(
 	)
 }
 
+func TestSyncPathsOpenCodeStoragePreservedUpdateDoesNotEmitOrCountSynced(
+	t *testing.T,
+) {
+	em := &fakeEmitter{}
+	env := setupTestEnv(t, WithEmitter(em))
+	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-missing-message-paths-no-emit"
+	oc.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Missing Message Paths No Emit",
+		1704067200000, 1704067205000,
+	)
+	oc.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"question", 1704067200000,
+	)
+	messagePath := oc.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	oc.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	em.mu.Lock()
+	em.scopes = em.scopes[:0]
+	em.mu.Unlock()
+
+	if err := os.Remove(messagePath); err != nil {
+		t.Fatalf("remove message file: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{messagePath})
+
+	if got := em.got(); len(got) != 0 {
+		t.Fatalf("expected no emissions for preserved SyncPaths update, got %v", got)
+	}
+	stats := env.engine.LastSyncStats()
+	if stats.Synced != 0 {
+		t.Fatalf("LastSyncStats().Synced = %d, want 0", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"question", "answer",
+	)
+}
+
 func TestSyncPathsOpenCodeStorageMissingPartDirPreservesArchive(
 	t *testing.T,
 ) {

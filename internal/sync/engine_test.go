@@ -1211,6 +1211,109 @@ func TestEngine_ClassifyPathsDedupesOpenCodeChildPaths(t *testing.T) {
 	}
 }
 
+func TestEngine_ClassifyPathsOpenCodeRemovedMessageDir(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	messageDir := filepath.Dir(messagePath)
+	if err := os.RemoveAll(messageDir); err != nil {
+		t.Fatalf("RemoveAll(%q): %v", messageDir, err)
+	}
+
+	files := engine.classifyPaths([]string{messageDir})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
+func TestEngine_ClassifyPathsOpenCodeRemovedPartDir(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		opencodeDir, "storage", "session", "global",
+		"ses_123.json",
+	)
+	messagePath := filepath.Join(
+		opencodeDir, "storage", "message", "ses_123",
+		"msg_1.json",
+	)
+	partPath := filepath.Join(
+		opencodeDir, "storage", "part", "msg_1",
+		"part_1.json",
+	)
+	for path, content := range map[string]string{
+		sessionPath: `{"id":"ses_123","directory":"/tmp/proj","time":{"created":1,"updated":2}}`,
+		messagePath: `{"id":"msg_1","sessionID":"ses_123","role":"user","time":{"created":1}}`,
+		partPath:    `{"id":"part_1","messageID":"msg_1","type":"text","text":"hi","time":{"created":1}}`,
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", path, err)
+		}
+		if err := os.WriteFile(
+			path, []byte(content), 0o644,
+		); err != nil {
+			t.Fatalf("WriteFile(%q): %v", path, err)
+		}
+	}
+
+	partDir := filepath.Dir(partPath)
+	if err := os.RemoveAll(partDir); err != nil {
+		t.Fatalf("RemoveAll(%q): %v", partDir, err)
+	}
+
+	files := engine.classifyPaths([]string{partDir})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, sessionPath)
+	}
+}
+
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 	fx := newEngineFixture(t)
 	em := &fakeEmitter{}
