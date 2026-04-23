@@ -2375,7 +2375,7 @@ func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 	}
 }
 
-func TestSyncAllSinceOpenCodeStorageUsesChildMtime(t *testing.T) {
+func TestSyncAllSinceOpenCodeStorageRequiresSessionMtime(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -2420,6 +2420,19 @@ func TestSyncAllSinceOpenCodeStorageUsesChildMtime(t *testing.T) {
 	}
 
 	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	if stats.Synced != 0 {
+		t.Fatalf("SyncAllSince synced = %d, want 0", stats.Synced)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:oc-since-child",
+		"initial reply",
+	)
+
+	if err := os.Chtimes(sessionPath, future, future); err != nil {
+		t.Fatalf("chtimes session path: %v", err)
+	}
+
+	stats = env.engine.SyncAllSince(context.Background(), cutoff, nil)
 	if stats.Synced != 1 {
 		t.Fatalf("SyncAllSince synced = %d, want 1", stats.Synced)
 	}

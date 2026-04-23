@@ -1576,7 +1576,9 @@ func discoveredFileMtime(
 	file parser.DiscoveredFile,
 ) (int64, error) {
 	if file.Agent == parser.AgentOpenCode {
-		return parser.OpenCodeSourceMtime(file.Path)
+		if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(file.Path); ok {
+			return parser.OpenCodeSourceMtime(file.Path)
+		}
 	}
 
 	info, err := os.Stat(file.Path)
