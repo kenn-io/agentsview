@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -488,9 +489,7 @@ func (oc *openCodeStorageFixture) addMessage(
 			"created": timeCreated,
 		},
 	}
-	for k, v := range extra {
-		data[k] = v
-	}
+	maps.Copy(data, extra)
 	return oc.writeJSON(t, filepath.Join(
 		oc.root, "storage", "message", sessionID,
 		messageID+".json",

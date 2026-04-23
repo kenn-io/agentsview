@@ -1227,38 +1227,6 @@ func removeWAL(path string) {
 	os.Remove(path + "-shm")
 }
 
-func (e *Engine) countRootSessionsByAgent(
-	database *db.DB, agent parser.AgentType,
-) int {
-	return e.countRootSessionsByAgentSource(
-		database, agent, "",
-	)
-}
-
-func (e *Engine) countRootSessionsByAgentSource(
-	database *db.DB, agent parser.AgentType, filePathLike string,
-) int {
-	var count int
-	query := `SELECT COUNT(*) FROM sessions
-		 WHERE agent = ?
-		 AND message_count > 0
-		 AND relationship_type NOT IN ('subagent', 'fork')
-		 AND deleted_at IS NULL`
-	args := []any{string(agent)}
-	if filePathLike != "" {
-		query += " AND COALESCE(file_path, '') LIKE ?"
-		args = append(args, filePathLike)
-	}
-	err := database.Reader().QueryRow(
-		query, args...,
-	).Scan(&count)
-	if err != nil {
-		log.Printf("count root sessions for %s: %v", agent, err)
-		return 0
-	}
-	return count
-}
-
 func (e *Engine) countRootOpenCodeSessions(
 	database *db.DB,
 ) int {
@@ -3675,14 +3643,6 @@ func countUserMsgs(msgs []parser.ParsedMessage) int {
 		if m.Role == parser.RoleUser {
 			n++
 		}
-	}
-	return n
-}
-
-func countMessages(batch []pendingWrite) int {
-	n := 0
-	for _, pw := range batch {
-		n += len(pw.msgs)
 	}
 	return n
 }
