@@ -576,11 +576,7 @@ func TestResolveOpenCodeWatchRootsStorage(t *testing.T) {
 	}
 
 	got := ResolveOpenCodeWatchRoots(root)
-	want := []string{
-		filepath.Join(root, "storage", "session"),
-		filepath.Join(root, "storage", "message"),
-		filepath.Join(root, "storage", "part"),
-	}
+	want := []string{root}
 	if !slices.Equal(got, want) {
 		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
 	}
@@ -598,6 +594,14 @@ func TestResolveOpenCodeWatchRootsSQLite(t *testing.T) {
 	want := []string{root}
 	if !slices.Equal(got, want) {
 		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
+	}
+}
+
+func TestResolveOpenCodeWatchRootsMissingRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	got := ResolveOpenCodeWatchRoots(root)
+	if got != nil {
+		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want nil", got)
 	}
 }
 

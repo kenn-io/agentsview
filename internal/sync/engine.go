@@ -338,7 +338,9 @@ func (e *Engine) classifyOnePath(
 	sep := string(filepath.Separator)
 	pathExists := true
 	if _, err := os.Stat(path); err != nil {
-		pathExists = false
+		if os.IsNotExist(err) {
+			pathExists = false
+		}
 	}
 
 	if df, ok := e.classifyOpenCodePath(
@@ -3134,7 +3136,7 @@ func (e *Engine) writeBatch(
 		}
 		if e.shouldPreserveOpenCodeArchive(
 			pw.sess.Agent, pw.sess.File.Path, s.ID,
-			derefString(s.FileHash), msgs,
+			pw.sess.File.Mtime, derefString(s.FileHash), msgs,
 		) {
 			continue
 		}
@@ -3326,7 +3328,7 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 	s.IsAutomated = isAutomatedFromSession(s)
 	if e.shouldPreserveOpenCodeArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
-		derefString(s.FileHash), msgs,
+		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
 	) {
 		return errSessionPreserved
 	}
@@ -3372,11 +3374,11 @@ func (e *Engine) writeSessionFull(pw pendingWrite) error {
 
 func (e *Engine) shouldPreserveOpenCodeArchive(
 	agent parser.AgentType, path, sessionID string,
+	currentMtime int64,
 	currentHash string,
 	currentMsgs []db.Message,
 ) bool {
-	if agent != parser.AgentOpenCode ||
-		!isOpenCodeStoragePath(path) {
+	if agent != parser.AgentOpenCode {
 		return false
 	}
 	store := e.openCodeArchiveStore
@@ -3390,6 +3392,15 @@ func (e *Engine) shouldPreserveOpenCodeArchive(
 		return false
 	}
 	storedHash := derefString(stored.FileHash)
+	storedPath := derefString(stored.FilePath)
+	storedMtime := derefInt64(stored.FileMtime)
+	storedIsStorageArchive := parser.HasOpenCodeStorageFingerprint(
+		storedHash,
+	) || isOpenCodeStoragePath(storedPath)
+	if isOpenCodeSQLiteVirtualPath(path) &&
+		!storedIsStorageArchive {
+		return false
+	}
 	storedMsgs, err := store.GetAllMessages(
 		context.Background(), sessionID,
 	)
@@ -3402,10 +3413,22 @@ func (e *Engine) shouldPreserveOpenCodeArchive(
 	// newly parsed transcript also looks incomplete relative
 	// to what is already archived.
 	if parser.HasOpenCodeStorageFingerprint(storedHash) &&
+		parser.HasOpenCodeStorageFingerprint(currentHash) &&
 		!parser.OpenCodeStorageFingerprintMissing(
 			storedHash, currentHash,
 		) {
 		return false
+	}
+	if storedIsStorageArchive &&
+		isOpenCodeSQLiteVirtualPath(path) &&
+		currentMtime != 0 &&
+		storedMtime != 0 &&
+		currentMtime <= storedMtime {
+		log.Printf(
+			"skip opencode session %s: sqlite fallback is not newer than preserved storage archive",
+			sessionID,
+		)
+		return true
 	}
 	if openCodeLegacyArchiveLooksIncomplete(
 		currentMsgs, storedMsgs,
@@ -3441,6 +3464,13 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+func derefInt64(v *int64) int64 {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 func openCodeLegacyArchiveLooksIncomplete(

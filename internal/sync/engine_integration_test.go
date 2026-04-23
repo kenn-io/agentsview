@@ -1645,6 +1645,74 @@ func TestSyncSingleSessionOpenCodeSQLiteFallback(t *testing.T) {
 	)
 }
 
+func TestSyncSingleSessionOpenCodeSQLiteFallbackPreservesStorageArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-sqlite-single-preserve"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Archive",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"storage archive answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067205000,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	if err := env.engine.SyncSingleSession(
+		"opencode:" + sessionID,
+	); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage", "storage archive answer",
+	)
+}
+
 func TestSyncPathsOpenCodeSQLiteDBEvent(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeDB(t, env.opencodeDir)
@@ -1693,6 +1761,76 @@ func TestSyncPathsOpenCodeSQLiteDBEvent(t *testing.T) {
 		t, env.db, "opencode:"+sessionID,
 		"updated sqlite question",
 		"updated sqlite answer",
+	)
+}
+
+func TestSyncAllOpenCodeSQLiteFallbackPreservesStorageArchive(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-sqlite-bulk-preserve"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Archive Bulk",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"storage archive answer", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, 1704067205000,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"hello sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("stats.Failed = %d, want 0", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello storage", "storage archive answer",
 	)
 }
 
@@ -4144,7 +4282,7 @@ func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
 	)
 }
 
-func TestResyncAllOpenCodeStorageArchiveFallsBackToSQLite(
+func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
 	t *testing.T,
 ) {
 	env := setupTestEnv(t)
@@ -4201,10 +4339,82 @@ func TestResyncAllOpenCodeStorageArchiveFallsBackToSQLite(
 			)
 		}
 	}
+	if stats.Synced != 0 {
+		t.Fatalf("stats.Synced = %d, want 0", stats.Synced)
+	}
 
 	assertMessageContent(
 		t, env.db, "opencode:"+sessionID,
-		"hello sqlite fallback",
+		"hello storage",
+	)
+}
+
+func TestResyncAllOpenCodeStorageArchiveAllowsNewerSQLiteFallback(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+
+	sessionID := "oc-storage-to-newer-sqlite"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/myapp", "Storage Then Newer SQLite",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-u1", "part-u1",
+		"hello storage", 1704067200000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	if err := os.RemoveAll(
+		filepath.Join(env.opencodeDir, "storage"),
+	); err != nil {
+		t.Fatalf("remove storage tree: %v", err)
+	}
+
+	sqliteUpdatedAt := time.Now().Add(2 * time.Second).UnixMilli()
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+	oc.addSession(
+		t, sessionID, "proj-1",
+		1704067200000, sqliteUpdatedAt,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user",
+		1704067200000,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"hello newer sqlite fallback", 1704067200000,
+	)
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	for _, w := range stats.Warnings {
+		if strings.Contains(w, "resync aborted") {
+			t.Fatalf(
+				"ResyncAll aborted for newer storage->sqlite fallback: %s",
+				w,
+			)
+		}
+	}
+	if stats.Synced == 0 {
+		t.Fatal("expected newer sqlite fallback to be synced")
+	}
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"hello newer sqlite fallback",
 	)
 }
 

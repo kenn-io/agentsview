@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	gosync "sync"
 	"sync/atomic"
 	"testing"
@@ -1158,6 +1159,49 @@ func TestEngine_SyncPathsDoesNotEmitOnNoMatches(t *testing.T) {
 
 	if got := em.got(); len(got) != 0 {
 		t.Fatalf("expected no emissions, got %v", got)
+	}
+}
+
+func TestEngine_ClassifyOnePathClaudeStatPermissionErrorStillClassifies(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("permission semantics differ on Windows")
+	}
+
+	db := openTestDB(t)
+	claudeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine: "local",
+	})
+
+	projectDir := filepath.Join(claudeDir, "proj")
+	path := filepath.Join(projectDir, "session.jsonl")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", projectDir, err)
+	}
+	if err := os.WriteFile(path, []byte("[]"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+	if err := os.Chmod(projectDir, 0o000); err != nil {
+		t.Fatalf("Chmod(%q): %v", projectDir, err)
+	}
+	defer func() {
+		_ = os.Chmod(projectDir, 0o755)
+	}()
+
+	got, ok := engine.classifyOnePath(path, nil)
+	if !ok {
+		t.Fatal("expected path to classify despite stat permission error")
+	}
+	if got.Path != path {
+		t.Fatalf("Path = %q, want %q", got.Path, path)
+	}
+	if got.Agent != parser.AgentClaude {
+		t.Fatalf("Agent = %q, want %q", got.Agent, parser.AgentClaude)
 	}
 }
 
