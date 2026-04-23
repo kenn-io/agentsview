@@ -3449,10 +3449,7 @@ func openCodeLegacyArchiveLooksIncomplete(
 	if len(parsed) < len(stored) {
 		return true
 	}
-	if len(parsed) != len(stored) {
-		return false
-	}
-	for i := range parsed {
+	for i := range stored {
 		if openCodeMessageLooksIncomplete(
 			parsed[i], stored[i],
 		) {

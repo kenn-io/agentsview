@@ -961,6 +961,70 @@ func TestBlockedCategorySet(t *testing.T) {
 	}
 }
 
+func TestOpenCodeLegacyArchiveLooksIncomplete(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:          1,
+			Role:             "assistant",
+			ContentLength:    100,
+			HasOutputTokens:  true,
+			OutputTokens:     200,
+			HasContextTokens: true,
+			ContextTokens:    400,
+			ToolCalls:        []db.ToolCall{{ToolName: "Read"}},
+			HasThinking:      true,
+		},
+	}
+
+	t.Run("extra parsed messages still preserve incomplete prefix", func(t *testing.T) {
+		parsed := []db.Message{
+			{
+				Ordinal:          1,
+				Role:             "assistant",
+				ContentLength:    50,
+				HasOutputTokens:  false,
+				HasContextTokens: false,
+				ToolCalls:        nil,
+				HasThinking:      false,
+			},
+			{
+				Ordinal:       2,
+				Role:          "assistant",
+				ContentLength: 25,
+			},
+		}
+
+		if !openCodeLegacyArchiveLooksIncomplete(parsed, stored) {
+			t.Fatal("want incomplete archive detection")
+		}
+	})
+
+	t.Run("extra parsed messages with complete prefix do not preserve", func(t *testing.T) {
+		parsed := []db.Message{
+			{
+				Ordinal:          1,
+				Role:             "assistant",
+				ContentLength:    100,
+				HasOutputTokens:  true,
+				OutputTokens:     200,
+				HasContextTokens: true,
+				ContextTokens:    400,
+				ToolCalls:        []db.ToolCall{{ToolName: "Read"}},
+				HasThinking:      true,
+			},
+			{
+				Ordinal:       2,
+				Role:          "assistant",
+				ContentLength: 25,
+			},
+		}
+
+		if openCodeLegacyArchiveLooksIncomplete(parsed, stored) {
+			t.Fatal("got incomplete archive detection, want false")
+		}
+	})
+}
+
 // fakeEmitter records scopes passed to Emit. Thread-safe so it
 // can be called from engine goroutines under test.
 type fakeEmitter struct {
