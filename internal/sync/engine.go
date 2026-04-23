@@ -1964,6 +1964,12 @@ func (e *Engine) shouldCacheSkip(
 	if file.Agent != parser.AgentOpenCode {
 		return true
 	}
+	if filepath.Base(file.Path) == "opencode.db" {
+		return false
+	}
+	if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(file.Path); ok {
+		return false
+	}
 	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
 		if dir == "" {
 			continue
@@ -2409,7 +2415,11 @@ func (e *Engine) processOpenCode(
 				file.Path, meta.SessionID, e.machine,
 			)
 			if err != nil {
-				return processResult{err: err}
+				log.Printf(
+					"opencode sqlite watch session %s: %v",
+					meta.SessionID, err,
+				)
+				continue
 			}
 			if sess == nil {
 				continue

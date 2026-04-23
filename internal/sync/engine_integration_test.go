@@ -1696,6 +1696,147 @@ func TestSyncPathsOpenCodeSQLiteDBEvent(t *testing.T) {
 	)
 }
 
+func TestSyncPathsOpenCodeSQLiteDBEventIgnoresStaleSkipCache(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-sqlite-sync-paths-skip-cache"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "msg-u1", sessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	info, err := os.Stat(oc.path)
+	if err != nil {
+		t.Fatalf("stat opencode db: %v", err)
+	}
+	cachedMtime := info.ModTime()
+	env.engine.InjectSkipCache(map[string]int64{
+		oc.path: cachedMtime.UnixNano(),
+	})
+
+	oc.replaceTextContent(
+		t, sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
+	if err := os.Chtimes(oc.path, cachedMtime, cachedMtime); err != nil {
+		t.Fatalf("restore db mtime: %v", err)
+	}
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated sqlite question",
+		"updated sqlite answer",
+	)
+}
+
+func TestSyncPathsOpenCodeSQLiteDBEventContinuesPastBadSession(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	goodSessionID := "oc-sqlite-watch-good"
+	badSessionID := "oc-sqlite-watch-bad"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+
+	oc.addSession(
+		t, goodSessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(
+		t, "good-msg-u1", goodSessionID, "user", timeCreated,
+	)
+	oc.addMessage(
+		t, "good-msg-a1", goodSessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, "good-part-u1", goodSessionID, "good-msg-u1",
+		"good original question", timeCreated,
+	)
+	oc.addTextPart(
+		t, "good-part-a1", goodSessionID, "good-msg-a1",
+		"good original answer", timeCreated+1,
+	)
+
+	oc.addSession(
+		t, badSessionID, "proj-1",
+		timeCreated+10, timeUpdated+10,
+	)
+	oc.addMessage(
+		t, "bad-msg-u1", badSessionID, "user", timeCreated+10,
+	)
+	oc.addTextPart(
+		t, "bad-part-u1", badSessionID, "bad-msg-u1",
+		"bad original question", timeCreated+10,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        2,
+		Skipped:       0,
+	})
+
+	oc.replaceTextContent(
+		t, goodSessionID,
+		"good updated question",
+		"good updated answer",
+		timeCreated,
+	)
+	oc.updateSessionTime(t, goodSessionID, timeUpdated+1000)
+	oc.updateSessionTime(t, badSessionID, timeUpdated+2000)
+	oc.mustExec(
+		t, "corrupt bad session message time",
+		"UPDATE message SET time_created = ? WHERE id = ?",
+		"broken-time", "bad-msg-u1",
+	)
+
+	env.engine.SyncPaths([]string{oc.path})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+goodSessionID,
+		"good updated question",
+		"good updated answer",
+	)
+	assertMessageContent(
+		t, env.db, "opencode:"+badSessionID,
+		"bad original question",
+	)
+}
+
 func TestSyncAllOpenCodeSQLiteReparsesStaleDataVersion(
 	t *testing.T,
 ) {
