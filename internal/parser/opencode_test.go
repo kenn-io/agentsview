@@ -418,6 +418,93 @@ func TestParseOpenCodeFile_MissingPartDirAllowed(t *testing.T) {
 	}
 }
 
+func TestParseOpenCodeFile_StorageMessageMissingIDFails(t *testing.T) {
+	root := t.TempDir()
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_storage.json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id":        "ses_storage",
+		"directory": "/home/user/code/myapp",
+		"title":     "Storage Session",
+		"time": map[string]any{
+			"created": 1700000000000,
+			"updated": 1700000060000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_1.json",
+	), map[string]any{
+		"sessionID": "ses_storage",
+		"role":      "assistant",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+
+	sess, msgs, err := ParseOpenCodeFile(
+		sessionPath, "testmachine",
+	)
+	if err == nil {
+		t.Fatal("expected ParseOpenCodeFile error")
+	}
+	if sess != nil {
+		t.Fatalf("session = %#v, want nil", sess)
+	}
+	if msgs != nil {
+		t.Fatalf("msgs = %#v, want nil", msgs)
+	}
+}
+
+func TestParseOpenCodeFile_StoragePartMissingIDFails(t *testing.T) {
+	root := t.TempDir()
+	sessionPath := filepath.Join(
+		root, "storage", "session", "global", "ses_storage.json",
+	)
+	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
+		"id":        "ses_storage",
+		"directory": "/home/user/code/myapp",
+		"title":     "Storage Session",
+		"time": map[string]any{
+			"created": 1700000000000,
+			"updated": 1700000060000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "message", "ses_storage", "msg_1.json",
+	), map[string]any{
+		"id":        "msg_1",
+		"sessionID": "ses_storage",
+		"role":      "assistant",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+	writeOpenCodeStorageFile(t, filepath.Join(
+		root, "storage", "part", "msg_1", "part_1.json",
+	), map[string]any{
+		"messageID": "msg_1",
+		"type":      "text",
+		"text":      "hello",
+		"time": map[string]any{
+			"created": 1700000000000,
+		},
+	})
+
+	sess, msgs, err := ParseOpenCodeFile(
+		sessionPath, "testmachine",
+	)
+	if err == nil {
+		t.Fatal("expected ParseOpenCodeFile error")
+	}
+	if sess != nil {
+		t.Fatalf("session = %#v, want nil", sess)
+	}
+	if msgs != nil {
+		t.Fatalf("msgs = %#v, want nil", msgs)
+	}
+}
+
 func TestParseOpenCodeFile_StoragePartOrderingUsesStartTime(
 	t *testing.T,
 ) {

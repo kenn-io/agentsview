@@ -451,6 +451,16 @@ func startFileWatcher(
 			continue
 		}
 		for _, d := range cfg.ResolveDirs(def.Type) {
+			if def.Type == parser.AgentOpenCode {
+				for _, watchDir := range parser.ResolveOpenCodeWatchRoots(d) {
+					if _, err := os.Stat(watchDir); err == nil {
+						roots = append(
+							roots, watchRoot{d, watchDir, def.ShallowWatch},
+						)
+					}
+				}
+				continue
+			}
 			if len(def.WatchSubdirs) == 0 {
 				if _, err := os.Stat(d); err == nil {
 					roots = append(

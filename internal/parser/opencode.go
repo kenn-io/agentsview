@@ -929,7 +929,10 @@ func loadOpenCodeStorageMessages(
 			)
 		}
 		if mf.ID == "" {
-			continue
+			return nil, fmt.Errorf(
+				"opencode message file %s missing id",
+				path,
+			)
 		}
 		msgs = append(msgs, openCodeMessageRow{
 			id:          mf.ID,
@@ -981,6 +984,12 @@ func loadOpenCodeStorageParts(
 				return nil, fmt.Errorf(
 					"decoding opencode part file %s: %w",
 					path, err,
+				)
+			}
+			if pf.ID == "" {
+				return nil, fmt.Errorf(
+					"opencode part file %s missing id",
+					path,
 				)
 			}
 			if pf.MessageID == "" {

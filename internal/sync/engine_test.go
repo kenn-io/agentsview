@@ -1260,6 +1260,37 @@ func TestEngine_ClassifyPathsOpenCodeRemovedMessageDir(
 	}
 }
 
+func TestEngine_ClassifyPathsOpenCodeSQLiteWALFile(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	opencodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenCode: {opencodeDir},
+		},
+		Machine: "local",
+	})
+
+	dbPath := filepath.Join(opencodeDir, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("db"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", dbPath, err)
+	}
+	walPath := filepath.Join(opencodeDir, "opencode.db-wal")
+	if err := os.WriteFile(walPath, []byte("wal"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", walPath, err)
+	}
+
+	files := engine.classifyPaths([]string{walPath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != dbPath {
+		t.Fatalf("files[0].Path = %q, want %q",
+			files[0].Path, dbPath)
+	}
+}
+
 func TestEngine_ClassifyPathsOpenCodeRemovedMessageFile(
 	t *testing.T,
 ) {

@@ -792,6 +792,21 @@ func (e *Engine) classifyOpenCodePath(
 		}
 		src := parser.ResolveOpenCodeSource(openCodeDir)
 		if src.Mode != parser.OpenCodeSourceStorage {
+			if src.Mode != parser.OpenCodeSourceSQLite {
+				continue
+			}
+			rel, ok := isUnder(openCodeDir, path)
+			if !ok {
+				continue
+			}
+			base := filepath.Base(rel)
+			if rel == "opencode.db" ||
+				strings.HasPrefix(base, "opencode.db-") {
+				return parser.DiscoveredFile{
+					Path:  src.DBPath,
+					Agent: parser.AgentOpenCode,
+				}, true
+			}
 			continue
 		}
 		rel, ok := isUnder(openCodeDir, path)
@@ -2361,6 +2376,51 @@ func (e *Engine) processCodex(
 func (e *Engine) processOpenCode(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
+	if dbPath, sessionID, ok := parser.ParseOpenCodeSQLiteVirtualPath(file.Path); ok {
+		sess, msgs, err := parser.ParseOpenCodeSession(
+			dbPath, sessionID, e.machine,
+		)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if sess == nil {
+			return processResult{}
+		}
+		return processResult{
+			results: []parser.ParseResult{
+				{Session: *sess, Messages: msgs},
+			},
+		}
+	}
+	if filepath.Base(file.Path) == "opencode.db" {
+		metas, err := parser.ListOpenCodeSessionMeta(file.Path)
+		if err != nil {
+			return processResult{err: err}
+		}
+		var results []parser.ParseResult
+		for _, meta := range metas {
+			_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
+			if ok && storedMtime == meta.FileMtime &&
+				e.db.GetDataVersionByPath(meta.VirtualPath) >=
+					db.CurrentDataVersion() {
+				continue
+			}
+			sess, msgs, err := parser.ParseOpenCodeSession(
+				file.Path, meta.SessionID, e.machine,
+			)
+			if err != nil {
+				return processResult{err: err}
+			}
+			if sess == nil {
+				continue
+			}
+			results = append(results, parser.ParseResult{
+				Session:  *sess,
+				Messages: msgs,
+			})
+		}
+		return processResult{results: results}
+	}
 	if e.shouldSkipOpenCodeByPath(file.Path) {
 		return processResult{skip: true}
 	}
