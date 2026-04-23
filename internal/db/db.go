@@ -16,6 +16,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
+	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/parser"
 )
 
@@ -95,6 +96,8 @@ type DB struct {
 
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
+
+	customPricing map[string]config.CustomModelRate
 }
 
 // getReader returns the current read-only connection pool.
@@ -110,6 +113,10 @@ func (db *DB) Path() string {
 
 // ReadOnly returns false for the local SQLite store.
 func (db *DB) ReadOnly() bool { return false }
+
+func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
+	db.customPricing = p
+}
 
 // SetCursorSecret updates the secret key used for cursor signing.
 func (db *DB) SetCursorSecret(secret []byte) {

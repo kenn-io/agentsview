@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/wesm/agentsview/internal/config"
 )
 
 func TestGetDailyUsageEmpty(t *testing.T) {
@@ -1914,5 +1916,92 @@ func BenchmarkGetDailyUsage(b *testing.B) {
 		if err != nil {
 			b.Fatalf("GetDailyUsage: %v", err)
 		}
+	}
+}
+
+func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
+	tests := []struct {
+		name     string
+		dbRates  []ModelPricing
+		custom   map[string]config.CustomModelRate
+		model    string
+		input    int // input tokens
+		output   int // output tokens
+		wantCost float64
+	}{
+		{
+			name:     "db pricing only",
+			dbRates:  []ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0, OutputPerMTok: 4.0}},
+			model:    "acme-ultra-2.1",
+			input:    1_000_000,
+			output:   100_000,
+			wantCost: 1.4, // 1M*$1/M + 100k*$4/M
+		},
+		{
+			name:    "custom overrides db for same model",
+			dbRates: []ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0, OutputPerMTok: 4.0}},
+			custom:  map[string]config.CustomModelRate{"acme-ultra-2.1": {Input: 2.0, Output: 8.0}},
+			model:   "acme-ultra-2.1",
+			input:   1_000_000,
+			output:  100_000,
+			wantCost: 2.8, // 1M*$2/M + 100k*$8/M
+		},
+		{
+			name:    "custom for unknown model, no db entry",
+			custom:  map[string]config.CustomModelRate{"my-custom-model": {Input: 1.5, Output: 6.0}},
+			model:   "my-custom-model",
+			input:   500_000,
+			output:  50_000,
+			wantCost: 1.05, // 500k*$1.5/M + 50k*$6/M
+		},
+		{
+			name:     "no pricing at all yields zero cost",
+			model:    "unknown-model",
+			input:    1_000_000,
+			output:   100_000,
+			wantCost: 0.0,
+		},
+		{
+			name:    "custom only affects targeted model",
+			dbRates: []ModelPricing{{ModelPattern: "db-model", InputPerMTok: 3.0, OutputPerMTok: 10.0}},
+			custom:  map[string]config.CustomModelRate{"other-model": {Input: 99.0, Output: 99.0}},
+			model:   "db-model",
+			input:   1_000_000,
+			output:  100_000,
+			wantCost: 4.0, // 1M*$3/M + 100k*$10/M -- db rates, not custom
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			if len(tt.dbRates) > 0 {
+				requireNoError(t, d.UpsertModelPricing(tt.dbRates), "UpsertModelPricing")
+			}
+			if tt.custom != nil {
+				d.SetCustomPricing(tt.custom)
+			}
+
+			insertSession(t, d, "s1", "proj", func(s *Session) {
+				s.StartedAt = Ptr("2024-06-15T10:00:00Z")
+			})
+			insertMessages(t, d, Message{
+				SessionID:  "s1",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2024-06-15T10:30:00Z",
+				Model:      tt.model,
+				TokenUsage: json.RawMessage(`{"input_tokens":` + strconv.Itoa(tt.input) + `,"output_tokens":` + strconv.Itoa(tt.output) + `}`),
+			})
+
+			result, err := d.GetDailyUsage(context.Background(), UsageFilter{
+				From: "2024-06-01", To: "2024-06-30",
+			})
+			requireNoError(t, err, "GetDailyUsage")
+
+			if math.Abs(result.Totals.TotalCost-tt.wantCost) > 0.01 {
+				t.Errorf("TotalCost = %.4f, want %.4f", result.Totals.TotalCost, tt.wantCost)
+			}
+		})
 	}
 }

@@ -297,9 +297,18 @@ func truncateLogFile(path string, limit int64) {
 	_ = os.Truncate(path, 0)
 }
 
-func mustOpenDB(cfg config.Config) *db.DB {
+func openDB(cfg config.Config) (*db.DB, error) {
 	applyClassifierConfig(cfg)
 	database, err := db.Open(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	applyCustomPricing(database, cfg)
+	return database, nil
+}
+
+func mustOpenDB(cfg config.Config) *db.DB {
+	database, err := openDB(cfg)
 	if err != nil {
 		fatal("opening database: %v", err)
 	}

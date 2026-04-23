@@ -57,7 +57,20 @@ func (s *Store) loadPricingMap(
 	ctx context.Context,
 ) (map[string]modelRates, error) {
 	out := fallbackPricingMap()
+	if err := s.mergeDBPricing(ctx, out); err != nil {
+		return nil, err
+	}
+	s.applyCustomPricing(out)
+	return out, nil
+}
 
+// mergeDBPricing layers rows from the PG model_pricing table onto
+// out. A missing table is treated as "no DB overrides" so that
+// custom_model_pricing still applies on fresh PG installs where
+// `agentsview pg push` has not run yet.
+func (s *Store) mergeDBPricing(
+	ctx context.Context, out map[string]modelRates,
+) error {
 	rows, err := s.pg.QueryContext(
 		ctx,
 		`SELECT model_pattern, input_per_mtok,
@@ -67,11 +80,9 @@ func (s *Store) loadPricingMap(
 	)
 	if err != nil {
 		if isUndefinedTable(err) {
-			return out, nil
+			return nil
 		}
-		return nil, fmt.Errorf(
-			"querying pg pricing: %w", err,
-		)
+		return fmt.Errorf("querying pg pricing: %w", err)
 	}
 	defer rows.Close()
 
@@ -85,9 +96,7 @@ func (s *Store) loadPricingMap(
 			&p.CacheReadPerMTok,
 			&p.UpdatedAt,
 		); err != nil {
-			return nil, fmt.Errorf(
-				"scanning pg pricing: %w", err,
-			)
+			return fmt.Errorf("scanning pg pricing: %w", err)
 		}
 		if strings.HasPrefix(p.ModelPattern, "_") {
 			continue
@@ -100,12 +109,24 @@ func (s *Store) loadPricingMap(
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"iterating pg pricing: %w", err,
-		)
+		return fmt.Errorf("iterating pg pricing: %w", err)
 	}
+	return nil
+}
 
-	return out, nil
+// applyCustomPricing overlays user-configured rates onto out, letting
+// custom entries win over both DB and fallback pricing for the same
+// model. Kept separate from loadPricingMap so unit tests can exercise
+// the override step without a live PostgreSQL connection.
+func (s *Store) applyCustomPricing(out map[string]modelRates) {
+	for model, cp := range s.customPricing {
+		out[model] = modelRates{
+			input:         cp.Input,
+			output:        cp.Output,
+			cacheCreation: cp.CacheCreation,
+			cacheRead:     cp.CacheRead,
+		}
+	}
 }
 
 func upsertModelPricing(

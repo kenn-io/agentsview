@@ -1114,3 +1114,74 @@ func TestAutomatedPrefixesAbsentIsNil(t *testing.T) {
 		t.Errorf("expected nil, got %v", cfg.Automated.Prefixes)
 	}
 }
+
+func TestLoadFile_CustomModelPricing(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+		want map[string]CustomModelRate
+	}{
+		{
+			name: "basic rates",
+			data: map[string]any{
+				"custom_model_pricing": map[string]CustomModelRate{
+					"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+				},
+			},
+			want: map[string]CustomModelRate{
+				"acme-ultra-2.1": {Input: 2.0, Output: 8.0},
+			},
+		},
+		{
+			name: "multiple models with cache rates",
+			data: map[string]any{
+				"custom_model_pricing": map[string]CustomModelRate{
+					"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
+					"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+				},
+			},
+			want: map[string]CustomModelRate{
+				"acme-ultra-2.1": {Input: 2.0, Output: 8.0, CacheCreation: 2.5, CacheRead: 0.2},
+				"acme-fast-2.1":  {Input: 0.8, Output: 4.0},
+			},
+		},
+		{
+			name: "empty map omitted",
+			data: map[string]any{},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			writeConfig(t, dir, tt.data)
+
+			cfg, err := LoadMinimal()
+			if err != nil {
+				t.Fatalf("LoadMinimal: %v", err)
+			}
+
+			if len(tt.want) == 0 {
+				if len(cfg.CustomModelPricing) != 0 {
+					t.Fatalf("expected nil/empty, got %v", cfg.CustomModelPricing)
+				}
+				return
+			}
+
+			if len(cfg.CustomModelPricing) != len(tt.want) {
+				t.Fatalf("got %d entries, want %d", len(cfg.CustomModelPricing), len(tt.want))
+			}
+			for model, wantRate := range tt.want {
+				got, ok := cfg.CustomModelPricing[model]
+				if !ok {
+					t.Errorf("missing model %q", model)
+					continue
+				}
+				if got != wantRate {
+					t.Errorf("model %q = %+v, want %+v", model, got, wantRate)
+				}
+			}
+		})
+	}
+}

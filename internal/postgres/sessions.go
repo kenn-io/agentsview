@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wesm/agentsview/internal/config"
 	"github.com/wesm/agentsview/internal/db"
 )
 
@@ -21,6 +22,8 @@ type Store struct {
 	pg           *sql.DB
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
+
+	customPricing map[string]config.CustomModelRate
 }
 
 // pgSessionCols is the column list for standard PG session

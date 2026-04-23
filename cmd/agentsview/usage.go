@@ -144,6 +144,13 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 	}
 }
 
+func applyCustomPricing(database *db.DB, cfg config.Config) {
+	if len(cfg.CustomModelPricing) == 0 {
+		return
+	}
+	database.SetCustomPricing(cfg.CustomModelPricing)
+}
+
 func openUsageDB() (*db.DB, config.Config) {
 	cfg, err := config.LoadMinimal()
 	if err != nil {
@@ -151,8 +158,7 @@ func openUsageDB() (*db.DB, config.Config) {
 		os.Exit(1)
 	}
 
-	applyClassifierConfig(cfg)
-	database, err := db.Open(cfg.DBPath)
+	database, err := openDB(cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
 			"error opening database: %v\n", err)

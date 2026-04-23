@@ -221,7 +221,20 @@ func (db *DB) loadPricingMap(
 		}
 		out[pattern] = rates
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for model, cp := range db.customPricing {
+		out[model] = modelRates{
+			input:         cp.Input,
+			output:        cp.Output,
+			cacheCreation: cp.CacheCreation,
+			cacheRead:     cp.CacheRead,
+		}
+	}
+
+	return out, nil
 }
 
 // paddedUTCBound pads a UTC timestamp by hours to cover timezone

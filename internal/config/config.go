@@ -73,6 +73,13 @@ type AutomatedConfig struct {
 	Prefixes []string `toml:"prefixes" json:"prefixes,omitempty"`
 }
 
+type CustomModelRate struct {
+	Input         float64 `json:"input" toml:"input"`
+	Output        float64 `json:"output" toml:"output"`
+	CacheCreation float64 `json:"cache_creation,omitempty" toml:"cache_creation"`
+	CacheRead     float64 `json:"cache_read,omitempty" toml:"cache_read"`
+}
+
 // Config holds all application configuration.
 type Config struct {
 	Host                 string          `json:"host" toml:"host"`
@@ -112,6 +119,8 @@ type Config struct {
 	// into a single trailing broadcast, bounding dashboard refetch
 	// work during bursts of sync activity. Zero disables coalescing.
 	EventsCoalesceInterval time.Duration `json:"events_coalesce_interval,omitempty" toml:"events_coalesce_interval"`
+
+	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
 
 	// HostExplicit is true when the user passed --host on the CLI.
 	// Used to prevent auto-bind to 0.0.0.0 when the user
@@ -342,21 +351,22 @@ func (c *Config) loadFile() error {
 	}
 
 	var file struct {
-		GithubToken                    string          `toml:"github_token"`
-		CursorSecret                   string          `toml:"cursor_secret"`
-		PublicURL                      string          `toml:"public_url"`
-		PublicOrigins                  []string        `toml:"public_origins"`
-		Proxy                          ProxyConfig     `toml:"proxy"`
-		WatchExcludePatterns           []string        `toml:"watch_exclude_patterns"`
-		ResultContentBlockedCategories []string        `toml:"result_content_blocked_categories"`
-		Terminal                       TerminalConfig  `toml:"terminal"`
-		AuthToken                      string          `toml:"auth_token"`
-		RequireAuth                    bool            `toml:"require_auth"`
-		RemoteAccess                   bool            `toml:"remote_access"`
-		DisableUpdateCheck             bool            `toml:"disable_update_check"`
-		PG                             PGConfig        `toml:"pg"`
-		Automated                      AutomatedConfig `toml:"automated"`
-		EventsCoalesceInterval         time.Duration   `toml:"events_coalesce_interval"`
+		GithubToken                    string                     `toml:"github_token"`
+		CursorSecret                   string                     `toml:"cursor_secret"`
+		PublicURL                      string                     `toml:"public_url"`
+		PublicOrigins                  []string                   `toml:"public_origins"`
+		Proxy                          ProxyConfig                `toml:"proxy"`
+		WatchExcludePatterns           []string                   `toml:"watch_exclude_patterns"`
+		ResultContentBlockedCategories []string                   `toml:"result_content_blocked_categories"`
+		Terminal                       TerminalConfig             `toml:"terminal"`
+		AuthToken                      string                     `toml:"auth_token"`
+		RequireAuth                    bool                       `toml:"require_auth"`
+		RemoteAccess                   bool                       `toml:"remote_access"`
+		DisableUpdateCheck             bool                       `toml:"disable_update_check"`
+		PG                             PGConfig                   `toml:"pg"`
+		Automated                      AutomatedConfig            `toml:"automated"`
+		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
+		CustomModelPricing             map[string]CustomModelRate `toml:"custom_model_pricing"`
 	}
 	meta, err := toml.DecodeFile(path, &file)
 	if err != nil {
@@ -422,6 +432,9 @@ func (c *Config) loadFile() error {
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes
+	}
+	if len(file.CustomModelPricing) > 0 {
+		c.CustomModelPricing = file.CustomModelPricing
 	}
 
 	// Parse config-file dir arrays for agents that have a

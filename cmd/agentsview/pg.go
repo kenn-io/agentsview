@@ -244,6 +244,10 @@ func runPGServe(appCfg config.Config, basePath string) {
 	}
 	defer store.Close()
 
+	if len(appCfg.CustomModelPricing) > 0 {
+		store.SetCustomPricing(appCfg.CustomModelPricing)
+	}
+
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt, syscall.SIGTERM,
