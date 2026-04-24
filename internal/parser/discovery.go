@@ -38,7 +38,10 @@ func isDirOrSymlink(
 	fi, err := os.Stat(
 		filepath.Join(parentDir, entry.Name()),
 	)
-	return err == nil && fi.IsDir()
+	if err != nil || fi == nil {
+		return false
+	}
+	return fi.IsDir()
 }
 
 // DiscoveredFile holds a discovered session file.

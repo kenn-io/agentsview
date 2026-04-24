@@ -212,7 +212,7 @@ func linearizeDAG(
 		return nil
 	}
 
-	var chain []chatGPTNode
+	chain := make([]chatGPTNode, 0)
 	nodeID := currentNode
 	for {
 		node, ok := mapping[nodeID]

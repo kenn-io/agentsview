@@ -187,6 +187,10 @@ func (s *Server) handleUploadSession(
 		writeError(w, http.StatusBadRequest, errMsg)
 		return
 	}
+	if req == nil {
+		writeError(w, http.StatusBadRequest, "invalid upload request")
+		return
+	}
 	defer req.file.Close()
 
 	destPath, err := s.saveUpload(

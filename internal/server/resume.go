@@ -762,7 +762,10 @@ func isDir(path string) bool {
 		return false
 	}
 	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+	if err != nil || info == nil {
+		return false
+	}
+	return info.IsDir()
 }
 
 func detectTerminalLinux(cmd string) (string, []string, string, error) {

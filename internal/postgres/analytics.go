@@ -995,7 +995,10 @@ func (s *Store) GetAnalyticsProjects(
 		[]db.ProjectAnalytics, 0, len(projectMap),
 	)
 	for _, name := range projectOrder {
-		pd := projectMap[name]
+		pd, ok := projectMap[name]
+		if !ok || pd == nil {
+			continue
+		}
 		sort.Ints(pd.counts)
 		n := len(pd.counts)
 
@@ -1953,7 +1956,10 @@ func (s *Store) GetAnalyticsVelocity(
 		[]db.VelocityBreakdown, 0, len(agentKeys),
 	)
 	for _, k := range agentKeys {
-		a := byAgent[k]
+		a, ok := byAgent[k]
+		if !ok || a == nil {
+			continue
+		}
 		resp.ByAgent = append(resp.ByAgent,
 			db.VelocityBreakdown{
 				Label:    k,
@@ -1977,7 +1983,10 @@ func (s *Store) GetAnalyticsVelocity(
 		[]db.VelocityBreakdown, 0, len(compKeys),
 	)
 	for _, k := range compKeys {
-		a := byComplexity[k]
+		a, ok := byComplexity[k]
+		if !ok || a == nil {
+			continue
+		}
 		resp.ByComplexity = append(resp.ByComplexity,
 			db.VelocityBreakdown{
 				Label:    k,

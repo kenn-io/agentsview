@@ -406,7 +406,7 @@ func parseCodexStream(
 	r io.Reader, onLog LogFunc,
 ) (string, error) {
 	br := bufio.NewReader(r)
-	var messages []string
+	messages := make([]string, 0)
 	indexByID := make(map[string]int)
 
 	for {

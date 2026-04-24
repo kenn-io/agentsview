@@ -64,7 +64,7 @@ func ParseClaudeSession(
 
 	// First pass: collect all valid lines with metadata.
 	var (
-		entries         []dagEntry
+		entries         = make([]dagEntry, 0)
 		hasAnyUUID      bool
 		allHaveUUID     bool
 		parentSessionID string

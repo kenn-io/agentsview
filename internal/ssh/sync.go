@@ -76,8 +76,8 @@ func (rs *RemoteSync) Run(
 	// and track remote<->temp dir mappings for path
 	// translation.
 	engineDirs := make(map[parser.AgentType][]string)
-	var remoteDirs []string
-	var tempDirs []string
+	remoteDirs := make([]string, 0)
+	tempDirs := make([]string, 0)
 	for agentType, agentDirList := range dirs {
 		for _, remoteDir := range agentDirList {
 			local := remappedDir(tmpDir, remoteDir)

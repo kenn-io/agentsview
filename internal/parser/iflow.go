@@ -54,7 +54,7 @@ func ParseIflowSession(
 
 	// First pass: collect all valid lines with metadata.
 	var (
-		entries         []dagEntryIflow
+		entries         = make([]dagEntryIflow, 0)
 		hasAnyUUID      bool
 		allHaveUUID     bool
 		parentSessionID string
@@ -226,7 +226,10 @@ func deduplicateIflowEntries(
 		if e.entryType != "assistant" || e.parentUuid == "" {
 			continue
 		}
-		runs := groups[e.parentUuid]
+		runs, ok := groups[e.parentUuid]
+		if !ok {
+			runs = []assistantRun{}
+		}
 		canExtend := false
 		if len(runs) > 0 {
 			last := &runs[len(runs)-1]
@@ -288,6 +291,10 @@ func deduplicateIflowEntries(
 func mergeIflowBurst(
 	entries []dagEntryIflow, indices []int,
 ) string {
+	if len(indices) == 0 {
+		return ""
+	}
+
 	var blocks []string
 	seenToolUse := map[string]bool{}
 

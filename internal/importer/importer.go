@@ -172,7 +172,7 @@ func upsertConversation(
 
 	// Preserve user-renamed display_name on re-import.
 	displayName := strPtr(s.DisplayName)
-	if !isNew && existing.DisplayName != nil {
+	if !isNew && existing != nil && existing.DisplayName != nil {
 		importName := strPtr(s.DisplayName)
 		nameChanged := importName == nil ||
 			*existing.DisplayName != *importName
@@ -205,7 +205,7 @@ func upsertConversation(
 	// has not changed since the last import. Compare both
 	// message count and ended_at (source updated_at) to detect
 	// content/metadata changes even when count is unchanged.
-	if !isNew && existing.MessageCount == s.MessageCount {
+	if !isNew && existing != nil && existing.MessageCount == s.MessageCount {
 		newEnd := timeStr(s.EndedAt)
 		if ptrEqual(existing.EndedAt, newEnd) {
 			return importSkipped, nil

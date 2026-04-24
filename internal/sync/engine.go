@@ -2351,6 +2351,9 @@ func (e *Engine) processCodex(
 	if err != nil {
 		return processResult{err: err}
 	}
+	if sess == nil {
+		return processResult{skip: true}
+	}
 
 	sess.File.Inode, sess.File.Device = getFileIdentity(info)
 

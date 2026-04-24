@@ -4,10 +4,18 @@ minimum_prek_version = "0.3.6"
 repo = "local"
 
 [[repos.hooks]]
-id = "go-lint"
-name = "Go lint"
+id = "golangci-lint"
+name = "golangci-lint"
 language = "system"
-entry = "make lint"
+entry = "make lint-golangci"
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "nilaway"
+name = "NilAway"
+language = "system"
+entry = "make nilaway"
 pass_filenames = false
 always_run = true
 

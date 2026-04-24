@@ -725,7 +725,10 @@ func isOpenHandsSessionDir(path string) bool {
 	}
 	eventsDir := filepath.Join(path, "events")
 	eventsInfo, err := os.Stat(eventsDir)
-	return err == nil && eventsInfo.IsDir()
+	if err != nil || eventsInfo == nil {
+		return false
+	}
+	return eventsInfo.IsDir()
 }
 
 func normalizeOpenHandsSessionID(id string) string {

@@ -453,8 +453,10 @@ func normalizePiIntent(argsRaw string) string {
 	}
 	if v, ok := m["agent__intent"]; ok {
 		m["description"] = v
+	} else if v, ok := m["_i"]; ok {
+		m["description"] = v
 	} else {
-		m["description"] = m["_i"]
+		return argsRaw
 	}
 	delete(m, "agent__intent")
 	delete(m, "_i")

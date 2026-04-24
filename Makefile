@@ -13,8 +13,6 @@ DESKTOP_DIST_DIR := dist/desktop
 GOLANGCI_LINT_VERSION ?= v2.10.1
 NILAWAY_VERSION ?= v0.0.0-20260318203545-ad240b12fb4c
 NILAWAY_INCLUDE_PKGS := github.com/wesm/agentsview
-# Existing NilAway findings are baselined by report file; remove entries as they are fixed.
-NILAWAY_EXCLUDE_ERRORS_IN_FILES := internal/parser/chatgpt.go,internal/parser/claude.go,internal/parser/discovery.go,internal/parser/iflow.go,internal/parser/openhands.go,internal/parser/pi.go,internal/db/analytics.go,internal/db/usage.go,internal/postgres/analytics.go,internal/insight/generate.go,internal/sync/engine.go,internal/server/resume.go,internal/server/upload.go,internal/ssh/sync.go,internal/importer/importer.go
 
 GOPATH_FIRST := $(shell go env GOPATH | cut -d: -f1)
 AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
@@ -22,7 +20,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e vet lint lint-ci nilaway lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -273,22 +271,26 @@ vet: ensure-embed-dir
 	go vet -tags fts5 ./...
 
 # Lint Go code and auto-fix where possible (local development)
-lint: ensure-embed-dir
+lint: lint-golangci nilaway
+
+# Run golangci-lint with auto-fixes for local development.
+lint-golangci: ensure-embed-dir
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
 	golangci-lint run --fix ./...
-	$(MAKE) nilaway
 
 # Lint Go code without fixing (for CI)
-lint-ci: ensure-embed-dir
+lint-ci: lint-golangci-ci nilaway
+
+# Run golangci-lint without auto-fixes for CI.
+lint-golangci-ci: ensure-embed-dir
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
 	golangci-lint run ./...
-	$(MAKE) nilaway
 
 # Run NilAway's nil panic analyzer.
 nilaway: ensure-embed-dir
@@ -296,7 +298,7 @@ nilaway: ensure-embed-dir
 		echo "nilaway not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
-	nilaway -test=false -include-pkgs="$(NILAWAY_INCLUDE_PKGS)" -exclude-errors-in-files="$(NILAWAY_EXCLUDE_ERRORS_IN_FILES)" ./...
+	nilaway -test=false -include-pkgs="$(NILAWAY_INCLUDE_PKGS)" ./...
 
 # Install pinned local lint tools.
 lint-tools:
@@ -383,6 +385,8 @@ help:
 	@echo "  vet            - Run go vet"
 	@echo "  lint           - Run golangci-lint and NilAway (auto-fix golangci issues)"
 	@echo "  lint-ci        - Run golangci-lint and NilAway (no fix, for CI)"
+	@echo "  lint-golangci  - Run golangci-lint with auto-fix"
+	@echo "  nilaway        - Run NilAway"
 	@echo "  lint-tools     - Install pinned lint tools"
 	@echo "  tidy           - Tidy go.mod"
 	@echo ""
