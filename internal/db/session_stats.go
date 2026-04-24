@@ -880,7 +880,10 @@ func (db *DB) computeCacheEconomics(
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		totals := perSession[k]
+		totals, ok := perSession[k]
+		if !ok || totals == nil {
+			continue
+		}
 		denom := totals.inputTok + totals.cacheReadT +
 			totals.cacheCreateT
 		dollarsSpent += totals.dollarsSpent
@@ -1055,7 +1058,11 @@ func (db *DB) computeTemporal(
 
 	out := make([]TemporalHourlyUTCEntry, 0, len(hours))
 	for _, h := range hours {
-		out = append(out, *perHour[h])
+		entry, ok := perHour[h]
+		if !ok || entry == nil {
+			continue
+		}
+		out = append(out, *entry)
 	}
 	stats.Temporal.HourlyUTC = out
 	return nil

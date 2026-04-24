@@ -302,7 +302,10 @@ WHERE ` + pgUsageMessageEligibility
 		daily := make([]db.DailyUsageEntry, 0, len(dateKeys))
 		var totals db.UsageTotals
 		for _, date := range dateKeys {
-			dd := days[date]
+			dd, ok := days[date]
+			if !ok || dd == nil {
+				continue
+			}
 			var entry db.DailyUsageEntry
 			entry.Date = date
 
@@ -311,8 +314,13 @@ WHERE ` + pgUsageMessageEligibility
 				modelNames = append(modelNames, m)
 			}
 			sort.Slice(modelNames, func(i, j int) bool {
-				ci := dd.models[modelNames[i]].cost
-				cj := dd.models[modelNames[j]].cost
+				left := dd.models[modelNames[i]]
+				right := dd.models[modelNames[j]]
+				if left == nil || right == nil {
+					return left != nil
+				}
+				ci := left.cost
+				cj := right.cost
 				if ci != cj {
 					return ci > cj
 				}
@@ -321,7 +329,10 @@ WHERE ` + pgUsageMessageEligibility
 			entry.ModelsUsed = modelNames
 			mbd := make([]db.ModelBreakdown, 0, len(modelNames))
 			for _, m := range modelNames {
-				ma := dd.models[m]
+				ma, ok := dd.models[m]
+				if !ok || ma == nil {
+					continue
+				}
 				entry.InputTokens += ma.inputTok
 				entry.OutputTokens += ma.outputTok
 				entry.CacheCreationTokens += ma.cacheCr
@@ -406,7 +417,10 @@ WHERE ` + pgUsageMessageEligibility
 	daily := make([]db.DailyUsageEntry, 0, len(dateKeys))
 	var totals db.UsageTotals
 	for _, date := range dateKeys {
-		dm := days[date]
+		dm, ok := days[date]
+		if !ok || dm == nil {
+			continue
+		}
 		var entry db.DailyUsageEntry
 		entry.Date = date
 
@@ -415,8 +429,10 @@ WHERE ` + pgUsageMessageEligibility
 			modelNames = append(modelNames, m)
 		}
 		sort.Slice(modelNames, func(i, j int) bool {
-			ci := dm.models[modelNames[i]].cost
-			cj := dm.models[modelNames[j]].cost
+			left := dm.models[modelNames[i]]
+			right := dm.models[modelNames[j]]
+			ci := left.cost
+			cj := right.cost
 			if ci != cj {
 				return ci > cj
 			}
@@ -425,7 +441,10 @@ WHERE ` + pgUsageMessageEligibility
 		entry.ModelsUsed = modelNames
 		mbd := make([]db.ModelBreakdown, 0, len(modelNames))
 		for _, m := range modelNames {
-			b := dm.models[m]
+			b, ok := dm.models[m]
+			if !ok {
+				continue
+			}
 			entry.InputTokens += b.inputTok
 			entry.OutputTokens += b.outputTok
 			entry.CacheCreationTokens += b.cacheCr
@@ -649,7 +668,10 @@ WHERE ` + pgUsageMessageEligibility
 
 	result := make([]db.TopSessionEntry, 0, len(order))
 	for _, id := range order {
-		sa := accum[id]
+		sa, ok := accum[id]
+		if !ok || sa == nil {
+			continue
+		}
 		result = append(result, db.TopSessionEntry{
 			SessionID:   id,
 			DisplayName: sa.displayName,

@@ -130,7 +130,7 @@ func computeSignalsFromMessages(
 func extractToolCallRows(
 	msgs []db.Message,
 ) []signals.ToolCallRow {
-	var rows []signals.ToolCallRow
+	rows := make([]signals.ToolCallRow, 0)
 	for _, m := range msgs {
 		for callIdx, tc := range m.ToolCalls {
 			status := ""
@@ -217,6 +217,9 @@ func extractMostCommonModel(msgs []db.Message) string {
 func extractLastMessageRole(
 	msgs []db.Message,
 ) (role, content string) {
+	if msgs == nil {
+		return "", ""
+	}
 	for i := len(msgs) - 1; i >= 0; i-- {
 		if !msgs[i].IsSystem {
 			return msgs[i].Role, msgs[i].Content

@@ -2575,7 +2575,10 @@ func AggregateSignals(
 		[]SignalsAgentRow, 0, len(agentKeys),
 	)
 	for _, agent := range agentKeys {
-		g := agentMap[agent]
+		g, ok := agentMap[agent]
+		if !ok || g == nil {
+			continue
+		}
 		row := SignalsAgentRow{
 			Agent:        agent,
 			SessionCount: g.count,
