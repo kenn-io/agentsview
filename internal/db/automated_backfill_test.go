@@ -67,7 +67,7 @@ func TestBackfillIsAutomatedBidirectional(t *testing.T) {
 	}
 }
 
-func TestBackfillIsAutomatedMarkerIdempotent(t *testing.T) {
+func TestBackfillIsAutomatedMarkerDoesNotHideCorruption(t *testing.T) {
 	d := testDB(t)
 
 	// Seed a roborev session.
@@ -90,13 +90,16 @@ func TestBackfillIsAutomatedMarkerIdempotent(t *testing.T) {
 	d.mu.Unlock()
 	requireNoError(t, err, "first run")
 
-	// Manually corrupt the session to verify second run is a no-op.
+	// Manually corrupt the session. Matching classifier hashes
+	// cannot be trusted as a complete integrity marker because
+	// other DB write paths can import or preserve stale flags.
 	_, err = d.getWriter().Exec(
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'review'",
 	)
 	requireNoError(t, err, "corrupt")
 
-	// Second run should be a no-op (marker present).
+	// Second run should repair the inconsistent row even though
+	// the current hash is already stored.
 	d.mu.Lock()
 	err = d.backfillIsAutomatedLocked(d.getWriter())
 	d.mu.Unlock()
@@ -105,8 +108,76 @@ func TestBackfillIsAutomatedMarkerIdempotent(t *testing.T) {
 	ctx := context.Background()
 	review, err := d.GetSession(ctx, "review")
 	requireNoError(t, err, "get review")
-	if review.IsAutomated {
-		t.Error("second run should be no-op; is_automated should still be 0")
+	if !review.IsAutomated {
+		t.Error("second run should repair stale is_automated=0")
+	}
+}
+
+func TestBackfillIsAutomatedRepairsFalseNegativeWithMatchingHash(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "stale-hash", "proj", func(s *Session) {
+		fm := "You are combining multiple code review outputs into a single GitHub PR comment. Rules follow."
+		s.FirstMessage = &fm
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET is_automated = 0 WHERE id = 'stale-hash'",
+	)
+	requireNoError(t, err, "force stale is_automated=0")
+	_, err = d.getWriter().Exec(
+		`INSERT INTO stats (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		ClassifierHashKey, ClassifierHash(),
+	)
+	requireNoError(t, err, "stamp current classifier hash")
+
+	d.mu.Lock()
+	err = d.backfillIsAutomatedLocked(d.getWriter())
+	d.mu.Unlock()
+	requireNoError(t, err, "backfill")
+
+	got, err := d.GetSession(ctx, "stale-hash")
+	requireNoError(t, err, "get stale-hash")
+	if !got.IsAutomated {
+		t.Fatal("matching classifier hash must not hide stale is_automated=0")
+	}
+}
+
+func TestOpenRepairsAutomatedFalseNegativeWithMatchingHash(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(path)
+	requireNoError(t, err, "open")
+
+	insertSession(t, d, "reload-stale", "proj", func(s *Session) {
+		fm := "You are combining multiple code review outputs into a single GitHub PR comment. Rules follow."
+		s.FirstMessage = &fm
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	_, err = d.getWriter().Exec(
+		"UPDATE sessions SET is_automated = 0 WHERE id = 'reload-stale'",
+	)
+	requireNoError(t, err, "force stale is_automated=0")
+	_, err = d.getWriter().Exec(
+		`INSERT INTO stats (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		ClassifierHashKey, ClassifierHash(),
+	)
+	requireNoError(t, err, "stamp current classifier hash")
+	requireNoError(t, d.Close(), "close")
+
+	reopened, err := Open(path)
+	requireNoError(t, err, "reopen")
+	defer reopened.Close()
+
+	got, err := reopened.GetSession(context.Background(), "reload-stale")
+	requireNoError(t, err, "get reload-stale")
+	if !got.IsAutomated {
+		t.Fatal("Open must repair stale is_automated=0 despite matching hash")
 	}
 }
 
@@ -303,8 +374,9 @@ func TestBackfillIsAutomatedRerunsOnHashChange(t *testing.T) {
 		t.Error("essay should be is_automated=1 after user prefix added")
 	}
 
-	// A second backfill (no further classifier change) is a
-	// no-op: stored hash now matches.
+	// A second backfill (no further classifier change) still
+	// repairs inconsistent rows; the stored hash is not a
+	// substitute for row integrity.
 	_, err = d.getWriter().Exec(
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'essay'",
 	)
@@ -315,12 +387,12 @@ func TestBackfillIsAutomatedRerunsOnHashChange(t *testing.T) {
 	requireNoError(t, err, "second backfill")
 	got, err = d.GetSession(ctx, "essay")
 	requireNoError(t, err, "get essay second")
-	if got.IsAutomated {
-		t.Error("second backfill must be a no-op when hash unchanged")
+	if !got.IsAutomated {
+		t.Error("second backfill must repair stale flag when hash unchanged")
 	}
 }
 
-// TestForceBackfillFixesOrphanCopyClassificationGap reproduces
+// TestBackfillFixesOrphanCopyClassificationGap reproduces
 // the production bug where ResyncAll's orphan-copied rows kept
 // stale is_automated values forever. The sequence:
 //
@@ -332,13 +404,12 @@ func TestBackfillIsAutomatedRerunsOnHashChange(t *testing.T) {
 //     hash, so future Opens skip backfill.
 //  3. CopyOrphanedDataFrom imports the orphan row verbatim,
 //     including is_automated=0.
-//  4. Without ForceBackfillIsAutomated, the row is permanently
-//     stuck — the stamped hash matches, so backfill never runs
-//     against it.
+//  4. The stamped hash still matches. A regular backfill must
+//     nevertheless audit rows and repair the imported flag.
 //
-// ForceBackfillIsAutomated breaks the loop by clearing the
-// hash before re-running the backfill.
-func TestForceBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
+// This guards against treating the classifier hash as a complete
+// integrity marker.
+func TestBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 	dir := t.TempDir()
 
 	// 1. Old DB with a misclassified single-turn roborev session.
@@ -378,29 +449,17 @@ func TestForceBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 		t.Fatal("precondition: orphan row should carry stale is_automated=0")
 	}
 
-	// 4. Without ForceBackfillIsAutomated, the row stays stuck
-	// because the stored hash already matches.
+	// 4. A regular backfill must still repair the row even
+	// though the stored classifier hash already matches.
 	dstDB.mu.Lock()
 	err = dstDB.backfillIsAutomatedLocked(dstDB.getWriter())
 	dstDB.mu.Unlock()
-	requireNoError(t, err, "gated backfill is no-op")
+	requireNoError(t, err, "backfill")
 	got, err = dstDB.GetSession(ctx, "stale-orphan")
-	requireNoError(t, err, "get orphan after gated backfill")
-	if got.IsAutomated {
-		t.Fatal("gated backfill should NOT have flipped the orphan")
-	}
-
-	// 5. ForceBackfillIsAutomated (called from ResyncAll after
-	// CopyOrphanedDataFrom) reclassifies the orphan correctly.
-	requireNoError(
-		t, dstDB.ForceBackfillIsAutomated(),
-		"ForceBackfillIsAutomated",
-	)
-	got, err = dstDB.GetSession(ctx, "stale-orphan")
-	requireNoError(t, err, "get orphan after force")
+	requireNoError(t, err, "get orphan after backfill")
 	if !got.IsAutomated {
 		t.Error(
-			"ForceBackfillIsAutomated must reclassify orphan-copied " +
+			"backfill must reclassify orphan-copied " +
 				"rows so they don't keep stale is_automated values",
 		)
 	}
@@ -443,19 +502,8 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	)
 	requireNoError(t, err, "stamp current hash")
 
-	// Sanity check: a regular (gated) backfill is a no-op.
-	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
-	d.mu.Unlock()
-	requireNoError(t, err, "gated backfill")
-	gated, err := d.GetSession(ctx, "stuck")
-	requireNoError(t, err, "get stuck after gated")
-	if gated.IsAutomated {
-		t.Fatal("precondition: gated backfill should NOT have flipped stuck")
-	}
-
-	// Now the force path must reclassify regardless of the
-	// stored hash.
+	// The force path must reclassify regardless of the stored
+	// hash and re-stamp the current classifier hash.
 	requireNoError(t, d.ForceBackfillIsAutomated(), "force backfill")
 
 	got, err := d.GetSession(ctx, "stuck")

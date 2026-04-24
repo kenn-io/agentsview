@@ -558,12 +558,13 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// backfillIsAutomatedPG recomputes is_automated for all PG
-// sessions, correcting both false negatives (new patterns) and
-// stale false positives (patterns tightened since last run).
-// Gated by a stored classifier hash so it only runs when the
-// classifier set (built-in patterns + user prefixes + algorithm
-// version) has changed since the last successful run.
+// backfillIsAutomatedPG verifies is_automated for all PG
+// sessions, correcting both false negatives (new patterns or
+// stale imported rows) and stale false positives (patterns
+// tightened since last run). The stored classifier hash records
+// which classifier wrote the current audit, but it is not a
+// complete integrity marker: rows can arrive from stale clients
+// after the hash was stamped.
 func backfillIsAutomatedPG(
 	ctx context.Context, pg *sql.DB,
 ) error {
@@ -578,15 +579,11 @@ func backfillIsAutomatedPG(
 			"probing PG classifier hash: %w", err,
 		)
 	}
-	if err == nil && stored == current {
-		return nil
-	}
 
 	rows, err := pg.QueryContext(ctx,
 		`SELECT id, first_message, user_message_count,
 			is_automated
-		 FROM sessions
-		 WHERE first_message IS NOT NULL`)
+		 FROM sessions`)
 	if err != nil {
 		return fmt.Errorf(
 			"querying PG automated backfill candidates: %w",
@@ -597,7 +594,8 @@ func backfillIsAutomatedPG(
 
 	var setIDs, clearIDs []string
 	for rows.Next() {
-		var id, fm string
+		var id string
+		var fm sql.NullString
 		var umc int
 		var rowAutomated bool
 		if err := rows.Scan(
@@ -607,7 +605,10 @@ func backfillIsAutomatedPG(
 				"scanning PG backfill candidate: %w", err,
 			)
 		}
-		want := umc <= 1 && db.IsAutomatedSession(fm)
+		want := false
+		if fm.Valid {
+			want = umc <= 1 && db.IsAutomatedSession(fm.String)
+		}
 		if want && !rowAutomated {
 			setIDs = append(setIDs, id)
 		} else if !want && rowAutomated {

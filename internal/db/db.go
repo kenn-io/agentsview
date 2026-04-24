@@ -575,12 +575,13 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 	return nil
 }
 
-// backfillIsAutomatedLocked recomputes is_automated for all
-// sessions, correcting both false negatives (new patterns) and
-// stale false positives (patterns tightened since last run).
-// Gated by a stored classifier hash so it only runs when the
-// classifier set (built-in patterns + user prefixes + algorithm
-// version) has changed since the last successful run.
+// backfillIsAutomatedLocked verifies is_automated for all
+// sessions, correcting both false negatives (new patterns or
+// stale imported rows) and stale false positives (patterns
+// tightened since last run). The stored classifier hash records
+// which classifier wrote the current audit, but it is not a
+// complete integrity marker: rows can be copied from older DBs
+// or stale remote machines after the hash was stamped.
 func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 	current := ClassifierHash()
 	var stored string
@@ -593,15 +594,11 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 			"probing classifier hash: %w", err,
 		)
 	}
-	if err == nil && stored == current {
-		return nil
-	}
 
 	rows, err := w.Query(
 		`SELECT id, first_message, user_message_count,
 			is_automated
-		 FROM sessions
-		 WHERE first_message IS NOT NULL`,
+		 FROM sessions`,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -612,7 +609,8 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 
 	var setIDs, clearIDs []string
 	for rows.Next() {
-		var id, fm string
+		var id string
+		var fm sql.NullString
 		var umc int
 		var rowAutomated bool
 		if err := rows.Scan(
@@ -622,7 +620,10 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 				"scanning backfill candidate: %w", err,
 			)
 		}
-		want := umc <= 1 && IsAutomatedSession(fm)
+		want := false
+		if fm.Valid {
+			want = umc <= 1 && IsAutomatedSession(fm.String)
+		}
 		if want && !rowAutomated {
 			setIDs = append(setIDs, id)
 		} else if !want && rowAutomated {
