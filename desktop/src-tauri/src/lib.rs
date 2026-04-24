@@ -1373,10 +1373,29 @@ mod tests {
         // Result-returning variant so a CI flake prints the real
         // reason (spawn error, non-zero exit + stderr, timeout,
         // etc.) instead of an opaque "returned None".
-        let result = try_run_login_shell_env(
-            script_path.to_str().expect("script path utf-8"),
-            Duration::from_secs(10),
-        );
+        //
+        // Linux can return ETXTBSY (OS error 26) on execve when a
+        // parallel test thread's fork briefly holds a writable fd
+        // for the script we just wrote. Retry a few times on that
+        // race so cargo test -j N doesn't flake.
+        let mut attempts_left = 5;
+        let result = loop {
+            let result = try_run_login_shell_env(
+                script_path.to_str().expect("script path utf-8"),
+                Duration::from_secs(10),
+            );
+            match &result {
+                Err(LoginShellEnvError::Spawn(e)) if e.raw_os_error() == Some(26) => {
+                    attempts_left -= 1;
+                    if attempts_left == 0 {
+                        break result;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                _ => break result,
+            }
+        };
         let removed = fs::remove_file(&script_path);
 
         let output = result.unwrap_or_else(|err| {
