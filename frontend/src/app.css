@@ -33,6 +33,21 @@
   --accent-sky: #0284c7;
   --accent-pink: #ec4899;
   --accent-lime: #65a30d;
+  /* Tool-category color map (see internal/parser/taxonomy.go for normalized values) */
+  --cat-read:  #4a7ba8; /* Read, Grep, Glob */
+  --cat-edit:  #5a8b3a; /* Edit, Write */
+  --cat-bash:  #d4a35a; /* Bash */
+  --cat-task:  #c45a5a; /* Task / sub-agents */
+  --cat-tool:  #7a5fa8; /* Tool: Skills, MCP, misc */
+  --cat-other: #888888; /* Other */
+  --cat-mixed: #4a4a4a; /* Mixed: parallel-group rail, no-dominant */
+  /* Duration UX state colors */
+  --slow-fg:    #f29070;
+  --slow-bg:    rgba(242, 144, 112, 0.12);
+  --slow-ring:  rgba(242, 144, 112, 0.20);
+  --running-fg: #6ad0a8;
+  --running-bg: rgba(106, 208, 168, 0.12);
+  --running-ring: rgba(106, 208, 168, 0.22);
   --user-bg: #eef2ff;
   --assistant-bg: #faf9ff;
   --thinking-bg: #f5f3ff;
@@ -327,6 +342,11 @@ mark.search-highlight--current {
   to {
     transform: rotate(360deg);
   }
+}
+
+@keyframes duration-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
 
 /* Enlarge header on touch devices so layout offsets stay in sync */

@@ -8,6 +8,7 @@
   import MessageList from "./lib/components/content/MessageList.svelte";
   import ActivityMinimap from "./lib/components/content/ActivityMinimap.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
+  import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
   import AboutModal from "./lib/components/modals/AboutModal.svelte";
   import ShortcutsModal from "./lib/components/modals/ShortcutsModal.svelte";
@@ -85,19 +86,26 @@
         }
         messages.loadSession(id);
         sessions.loadChildSessions(id);
-        sync.watchSession(id, () => {
-          messages.reload();
-          sessions.refreshActiveSession();
-          sessions.loadChildSessions(id);
-          if (ui.activityMinimapOpen) {
-            sessionActivity.reload(id);
-          } else {
-            sessionActivity.invalidate();
-          }
-        });
+        sync.watchSession(
+          id,
+          () => {
+            messages.reload();
+            sessions.refreshActiveSession();
+            sessions.loadChildSessions(id);
+            if (ui.activityMinimapOpen) {
+              sessionActivity.reload(id);
+            } else {
+              sessionActivity.invalidate();
+            }
+          },
+          (t) => {
+            sessionTiming.applyEvent(t);
+          },
+        );
         pins.loadForSession(id);
       } else {
         sessionActivity.clear();
+        sessionTiming.reset();
         messages.clear();
         sessions.childSessions = new Map();
         sync.unwatchSession();

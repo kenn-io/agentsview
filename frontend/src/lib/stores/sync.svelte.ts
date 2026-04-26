@@ -6,6 +6,7 @@ import type {
   VersionInfo,
   UpdateCheck,
 } from "../api/types.js";
+import type { SessionTiming } from "../api/types/timing.js";
 
 type SyncCompleteListener = () => void;
 
@@ -222,11 +223,16 @@ class SyncStore {
     return true;
   }
 
-  watchSession(sessionId: string, onUpdate: () => void) {
+  watchSession(
+    sessionId: string,
+    onUpdate: () => void,
+    onTiming?: (t: SessionTiming) => void,
+  ) {
     this.unwatchSession();
     this.watchEventSource = api.watchSession(
       sessionId,
       onUpdate,
+      onTiming,
     );
   }
 

@@ -41,6 +41,7 @@ import type {
   UsageTopSessionsParams,
 } from "./types.js";
 import type { SessionActivityResponse } from "./types/session-activity.js";
+import type { SessionTiming } from "./types/timing.js";
 
 const SERVER_URL_KEY = "agentsview-server-url";
 const AUTH_TOKEN_KEY = "agentsview-auth-token";
@@ -427,6 +428,7 @@ export const WATCH_SESSION_MAX_CONSECUTIVE_ERRORS = 5;
 export function watchSession(
   sessionId: string,
   onUpdate: () => void,
+  onTiming?: (t: SessionTiming) => void,
 ): EventSource {
   const url = `${getBase()}/sessions/${sessionId}/watch`;
   const token = getAuthToken();
@@ -449,6 +451,16 @@ export function watchSession(
     consecutiveErrors = 0;
     onUpdate();
   });
+
+  if (onTiming) {
+    es.addEventListener("session.timing", (ev: MessageEvent) => {
+      try {
+        onTiming(JSON.parse(ev.data) as SessionTiming);
+      } catch (err) {
+        console.warn("session.timing parse failed", err);
+      }
+    });
+  }
 
   es.onerror = () => {
     consecutiveErrors += 1;
