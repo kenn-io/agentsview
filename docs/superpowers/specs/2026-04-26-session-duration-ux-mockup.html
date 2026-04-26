@@ -1,0 +1,1259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Session Duration UX — complete design</title>
+<style>
+  body {
+    margin: 0;
+    background: #111;
+    color: #ddd;
+    font-family: ui-sans-serif, -apple-system, system-ui, sans-serif;
+    padding: 24px;
+  }
+  .page-h2 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    color: #eee;
+  }
+  .page-sub {
+    color: #888;
+    font-size: 13px;
+    margin: 0 0 18px;
+    line-height: 1.5;
+  }
+
+  /* ============= TOP-LEVEL LAYOUT ============= */
+  .app {
+    display: grid;
+    grid-template-columns: 220px 1fr 340px;
+    gap: 0;
+    background: #1a1a1a;
+    border-radius: 8px;
+    overflow: hidden;
+    height: 920px;
+    border: 1px solid #2a2a2a;
+  }
+
+  /* ============= SIDEBAR (left) ============= */
+  .sidebar {
+    background: #161616;
+    border-right: 1px solid #232323;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .sb-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid #232323;
+    font-size: 11px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 500;
+  }
+  .sb-search {
+    padding: 8px 10px;
+    background: #1d1d1d;
+    margin: 8px 10px;
+    border-radius: 4px;
+    color: #666;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+  }
+  .sb-list {
+    flex: 1;
+    overflow-y: auto;
+  }
+  .sb-item {
+    padding: 8px 14px;
+    border-bottom: 1px solid #1f1f1f;
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .sb-item:hover { background: #1c1c1c; }
+  .sb-item.active {
+    background: #2a3540;
+    border-left: 2px solid #4a7ba8;
+    padding-left: 12px;
+  }
+  .sb-item .name {
+    color: #ddd;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+  }
+  .sb-item .meta {
+    color: #666;
+    font-size: 10px;
+    font-family: ui-monospace, monospace;
+    display: flex;
+    justify-content: space-between;
+  }
+  .sb-item.active .meta { color: #889; }
+
+  /* ============= CONVERSATION (center) ============= */
+  .conv {
+    background: #1a1a1a;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .conv-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid #232323;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #181818;
+  }
+  .conv-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: #ddd;
+  }
+  .conv-title .session-id {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: #666;
+    margin-left: 8px;
+  }
+  .conv-controls {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+    color: #888;
+  }
+  .conv-controls .ctrl {
+    padding: 3px 8px;
+    background: #232323;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .conv-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px;
+  }
+  .msg {
+    padding: 11px 14px;
+    background: #232323;
+    border-radius: 5px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .msg.user { background: #243240; }
+  .msg-role {
+    font-size: 10px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .msg-role .role-name { font-weight: 500; }
+  .msg-role .role-meta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .msg-role .timestamp {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #666;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .turn-summary {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #aaa;
+    background: rgba(255,255,255,0.04);
+    padding: 2px 8px;
+    border-radius: 3px;
+    text-transform: none;
+    letter-spacing: 0;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .turn-summary.slow {
+    color: #f29070;
+    background: rgba(242,144,112,0.10);
+    border-color: rgba(242,144,112,0.20);
+  }
+  .turn-summary.running {
+    color: #6ad0a8;
+    background: rgba(106,208,168,0.10);
+    border-color: rgba(106,208,168,0.20);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+  .msg-text {
+    font-size: 13px;
+    color: #ccc;
+    line-height: 1.55;
+    margin-bottom: 4px;
+  }
+
+  /* ============= TOOL BLOCK ============= */
+  .tb {
+    border-left: 2px solid #d4a35a;
+    background: #322f24;
+    border-radius: 0 4px 4px 0;
+    margin: 6px 0;
+    overflow: hidden;
+  }
+  .tb.read   { border-left-color: #4a7ba8; background: #232c36; }
+  .tb.bash   { border-left-color: #d4a35a; background: #322f24; }
+  .tb.task   { border-left-color: #c45a5a; background: #362828; }
+  .tb.tool   { border-left-color: #7a5fa8; background: #2a253a; }
+  .tb.edit   { border-left-color: #5a8b3a; background: #28321f; }
+  .tb-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    width: 100%;
+    text-align: left;
+    font-size: 12px;
+    color: #aaa;
+  }
+  .tb-chevron { font-size: 10px; color: #777; transition: transform 0.15s; }
+  .tb.open .tb-chevron { transform: rotate(90deg); }
+  .tb-name {
+    font-family: ui-monospace, monospace;
+    font-weight: 500;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .tb.read .tb-name  { color: #6a9bd0; }
+  .tb.bash .tb-name  { color: #e0b070; }
+  .tb.task .tb-name  { color: #e07a7a; }
+  .tb.tool .tb-name  { color: #9a85d0; }
+  .tb.edit .tb-name  { color: #7aa850; }
+  .tb-preview {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    color: #777;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .tb-dur {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #999;
+    padding: 2px 7px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 3px;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.03);
+  }
+  .tb-dur.slow {
+    color: #f29070;
+    background: rgba(242,144,112,0.12);
+    border-color: rgba(242,144,112,0.20);
+  }
+  .tb-dur.running {
+    color: #6ad0a8;
+    background: rgba(106,208,168,0.12);
+    border-color: rgba(106,208,168,0.22);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+
+  /* ============= PARALLEL GROUP ============= */
+  .pg {
+    border-left: 2px solid #4a4a4a;
+    background: rgba(255,255,255,0.025);
+    border-radius: 0 4px 4px 0;
+    margin: 6px 0;
+    padding: 4px 0;
+    overflow: hidden;
+  }
+  .pg-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 12px 7px;
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #888;
+  }
+  .pg-header .pg-label { color: #aaa; font-weight: 500; }
+  .pg-header .pg-count {
+    background: rgba(255,255,255,0.06);
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 9px;
+    color: #ccc;
+  }
+  .pg-header .pg-spacer { flex: 1; }
+  .pg-header .pg-upper {
+    color: #888;
+    font-size: 10px;
+  }
+  .pg .members .tb {
+    margin: 0;
+    border-left: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .pg .members .tb .tb-header {
+    border-left: 2px solid currentColor;
+    margin-left: -2px;
+  }
+  .pg .members .tb.read .tb-header { border-left-color: #4a7ba8; background: #232c36; }
+  .pg .members .tb.bash .tb-header { border-left-color: #d4a35a; background: #322f24; }
+  .pg .members .tb.task .tb-header { border-left-color: #c45a5a; background: #362828; }
+  .pg .members .tb + .tb {
+    border-top: 1px solid rgba(255,255,255,0.04);
+  }
+  .pg .members .tb:last-child { border-bottom-right-radius: 4px; }
+
+  /* sub-agent inline */
+  .sa {
+    margin: 2px 12px 8px 22px;
+    border-left: 2px solid #c45a5a;
+    background: rgba(196,90,90,0.06);
+    border-radius: 0 4px 4px 0;
+    padding: 6px 10px 4px;
+  }
+  .sa-h {
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    color: #c47a7a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .sa-h .sa-meta { color: #888; text-transform: none; letter-spacing: 0; }
+  .sa-tb {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: #999;
+    padding: 3px 0;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .sa-tb .sa-cn { font-weight: 600; width: 40px; flex-shrink: 0; }
+  .sa-tb .sa-cn.read { color: #6a9bd0; }
+  .sa-tb .sa-cn.bash { color: #e0b070; }
+  .sa-tb .sa-cn.edit { color: #7aa850; }
+  .sa-tb .sa-arg { color: #888; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sa-tb .sa-d {
+    color: #888;
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  .sa-tb .sa-d.slow { color: #f29070; }
+
+  /* ============= RIGHT PANEL ============= */
+  .vital {
+    background: #161616;
+    border-left: 1px solid #232323;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .v-section {
+    padding: 12px 14px 14px;
+    border-bottom: 1px solid #1f1f1f;
+  }
+  .v-section:last-child { border-bottom: 0; }
+  .v-h {
+    color: #888;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    margin-bottom: 9px;
+    font-weight: 500;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .v-meta {
+    color: #666;
+    font-size: 9px;
+    font-family: ui-monospace, monospace;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .v-meta.live {
+    color: #6ad0a8;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+
+  /* stat grid */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+  }
+  .stat-grid .lbl {
+    color: #666;
+    font-size: 9px;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .stat-grid .val { color: #ddd; }
+  .stat-grid .val.slow { color: #f29070; }
+  .stat-grid .val.live {
+    color: #6ad0a8;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+
+  /* aggregates */
+  .agg-row {
+    display: grid;
+    grid-template-columns: 48px 1fr 56px;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: background 0.12s;
+  }
+  .agg-row:hover { background: rgba(255,255,255,0.03); }
+  .agg-name { font-family: ui-monospace, monospace; color: #ccc; font-size: 10px; }
+  .agg-bar {
+    height: 7px;
+    background: #2c2c2c;
+    border-radius: 1px;
+    position: relative;
+    overflow: hidden;
+  }
+  .agg-fill {
+    height: 100%;
+    border-radius: 1px;
+  }
+  .agg-val {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #999;
+    text-align: right;
+  }
+
+  /* timeline lanes */
+  .lane-row {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .lane-label {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #999;
+  }
+  .lane-track {
+    height: 12px;
+    background: #1f1f1f;
+    border-radius: 2px;
+    position: relative;
+  }
+  .lane-track.activity {
+    background: #1c1c1c;
+    height: 22px;
+  }
+  .lane-mark {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    border-radius: 1px;
+    cursor: pointer;
+  }
+  .lane-mark:hover { filter: brightness(1.4); }
+  .lane-mark.live {
+    background: linear-gradient(90deg, #6ad0a8, #4a9b78);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .activity-bar {
+    position: absolute;
+    bottom: 0;
+    background: #4a7ba8;
+    border-radius: 1px 1px 0 0;
+    width: 4%;
+  }
+
+  /* call sequence */
+  .scale-axis {
+    display: flex;
+    justify-content: space-between;
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    color: #666;
+    padding: 0 4px 5px;
+    border-bottom: 1px solid #232323;
+    margin-bottom: 8px;
+  }
+  .scale-axis .now {
+    color: #6ad0a8;
+    font-weight: 500;
+  }
+  .calls {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .call {
+    display: grid;
+    grid-template-columns: 14px 38px 1fr 56px 56px;
+    gap: 5px;
+    align-items: center;
+    padding: 4px 5px;
+    font-size: 10px;
+    border-radius: 2px;
+    cursor: pointer;
+  }
+  .call:hover { background: rgba(255,255,255,0.04); }
+  .call .chev {
+    color: #666;
+    font-size: 10px;
+    transition: transform 0.15s;
+  }
+  .call.expanded .chev { transform: rotate(90deg); color: #ccc; }
+  .call .chev.spacer { visibility: hidden; }
+  .call .cn {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .call .cn.read  { color: #6a9bd0; }
+  .call .cn.bash  { color: #e0b070; }
+  .call .cn.task  { color: #e07a7a; }
+  .call .cn.tool  { color: #9a85d0; }
+  .call .cn.edit  { color: #7aa850; }
+  .call .ca {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #888;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .call .cbar-wrap {
+    height: 9px;
+    background: #1f1f1f;
+    border-radius: 1px;
+    position: relative;
+    overflow: hidden;
+  }
+  .call .cbar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    border-radius: 1px;
+  }
+  .call .cbar.shared {
+    opacity: 0.55;
+    background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.18) 0 3px, transparent 3px 6px);
+  }
+  .call .cbar.live {
+    background: linear-gradient(90deg, #6ad0a8, #4a9b78);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .call.slow .cbar-wrap { background: rgba(242,144,112,0.10); }
+  .call .cd {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #999;
+    text-align: right;
+  }
+  .call .cd.slow {
+    color: #f29070;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+  .call .cd.slow::before {
+    content: "";
+    display: inline-block;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #f29070;
+  }
+  .call .cd.live {
+    color: #6ad0a8;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .call .cd.muted { color: #666; }
+  .call .star {
+    color: #f29070;
+    margin-left: 3px;
+  }
+
+  /* call group inside calls */
+  .cgroup {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    margin: 3px 0;
+    background: rgba(255,255,255,0.025);
+    border-radius: 3px;
+    padding: 3px 0;
+  }
+  .cgroup .cg-rail {
+    position: relative;
+    margin: 4px 0 4px 5px;
+  }
+  .cgroup .cg-rail::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #4a4a4a;
+    border-radius: 1px;
+  }
+  .cgroup .cg-members {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .cgroup .cg-header {
+    display: grid;
+    grid-template-columns: 1fr 56px 56px;
+    gap: 5px;
+    align-items: center;
+    padding: 0 5px 4px;
+    margin-bottom: 2px;
+  }
+  .cgroup .cg-h-label {
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .cgroup .cg-h-bar-wrap {
+    height: 7px;
+    background: #1c1c1c;
+    border-radius: 1px;
+    position: relative;
+    overflow: hidden;
+  }
+  .cgroup .cg-h-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: linear-gradient(90deg, rgba(124,124,124,0.6), rgba(124,124,124,0.3));
+    border-radius: 1px;
+  }
+  .cgroup .cg-h-dur {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    color: #aaa;
+    text-align: right;
+  }
+
+  /* sub-agent expansion in right panel */
+  .sa-expand {
+    background: rgba(196,90,90,0.04);
+    border-left: 2px solid #c45a5a;
+    margin: 2px 0 4px 26px;
+    padding: 4px 4px 4px 0;
+    border-radius: 0 3px 3px 0;
+  }
+  .sa-expand .sa-eh {
+    font-family: ui-monospace, monospace;
+    font-size: 9px;
+    color: #c47a7a;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 2px 8px 5px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .sa-expand .sa-eh-meta {
+    color: #888;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-top: 10px;
+    font-size: 9px;
+    color: #888;
+    font-family: ui-monospace, monospace;
+  }
+  .legend-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 1px;
+    margin-right: 4px;
+    vertical-align: -1px;
+  }
+
+  /* footnotes */
+  .footnotes {
+    margin-top: 24px;
+    background: #1c1c1c;
+    border-radius: 6px;
+    padding: 16px 20px;
+    color: #aaa;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .footnotes h3 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #ddd;
+  }
+  .footnotes ol {
+    margin: 8px 0 0 18px;
+    padding: 0;
+  }
+  .footnotes ol li {
+    margin-bottom: 4px;
+  }
+  .footnotes code {
+    color: #ddd;
+    background: rgba(255,255,255,0.06);
+    padding: 1px 5px;
+    border-radius: 2px;
+    font-family: ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+
+<h2 class="page-h2">Session Duration UX — complete design</h2>
+<p class="page-sub">All elements assembled in a realistic full-screen session view. Live session: last turn is in flight. Sub-agent in turn 2 is expanded inline. Right panel shows the full Session Vital Signs.</p>
+
+<div class="app">
+
+  <!-- ========== SIDEBAR ========== -->
+  <div class="sidebar">
+    <div class="sb-header">Sessions</div>
+    <div class="sb-search">⌕  search…</div>
+    <div class="sb-list">
+      <div class="sb-item"><div class="name">Implement OTEL ingestion follow-up</div><div class="meta"><span>opus 4.7</span><span>2h ago</span></div></div>
+      <div class="sb-item active"><div class="name">Refactor parser to use AgentDef registry</div><div class="meta"><span>opus 4.7</span><span>4m ago · live</span></div></div>
+      <div class="sb-item"><div class="name">Fix top sessions display name</div><div class="meta"><span>sonnet 4.6</span><span>yesterday</span></div></div>
+      <div class="sb-item"><div class="name">PostgreSQL push sync investigation</div><div class="meta"><span>opus 4.7</span><span>yesterday</span></div></div>
+      <div class="sb-item"><div class="name">Brainstorm: per-call OTEL precision</div><div class="meta"><span>opus 4.7</span><span>2 days</span></div></div>
+      <div class="sb-item"><div class="name">SSE event broadcasting refactor</div><div class="meta"><span>opus 4.7</span><span>3 days</span></div></div>
+      <div class="sb-item"><div class="name">Update changelog for v0.6.0</div><div class="meta"><span>haiku 4.5</span><span>3 days</span></div></div>
+    </div>
+  </div>
+
+  <!-- ========== CONVERSATION ========== -->
+  <div class="conv">
+    <div class="conv-header">
+      <div class="conv-title">Refactor parser to use AgentDef registry<span class="session-id">· 0193fe7c</span></div>
+      <div class="conv-controls">
+        <span class="ctrl">⤓ export</span>
+        <span class="ctrl">⌖ pin</span>
+        <span class="ctrl">⌕ find</span>
+      </div>
+    </div>
+
+    <div class="conv-body">
+
+      <!-- USER 1 -->
+      <div class="msg user">
+        <div class="msg-role">
+          <span class="role-name">user</span>
+          <div class="role-meta"><span class="timestamp">10:14:02</span></div>
+        </div>
+        <div class="msg-text">Refactor the parser so the AgentDef registry handles tool parsing centrally. Use brainstorming first to align on the approach.</div>
+      </div>
+
+      <!-- ASSISTANT 1 — solo Skill -->
+      <div class="msg">
+        <div class="msg-role">
+          <span class="role-name">assistant</span>
+          <div class="role-meta">
+            <span class="turn-summary">turn 2.1s · 1 call</span>
+            <span class="timestamp">10:14:03</span>
+          </div>
+        </div>
+        <div class="msg-text">Let me run brainstorming first.</div>
+        <div class="tb tool">
+          <div class="tb-header">
+            <span class="tb-chevron">▸</span>
+            <span class="tb-name">Skill</span>
+            <span class="tb-preview">superpowers:brainstorming</span>
+            <span class="tb-dur">2.1s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- USER 2 -->
+      <div class="msg user">
+        <div class="msg-role">
+          <span class="role-name">user</span>
+          <div class="role-meta"><span class="timestamp">10:14:06</span></div>
+        </div>
+        <div class="msg-text">Looks good. Now explore the existing parser and propose a refactor.</div>
+      </div>
+
+      <!-- ASSISTANT 2 — parallel turn with sub-agent expanded -->
+      <div class="msg">
+        <div class="msg-role">
+          <span class="role-name">assistant</span>
+          <div class="role-meta">
+            <span class="turn-summary slow">turn 2m 18s · 3 calls</span>
+            <span class="timestamp">10:14:07</span>
+          </div>
+        </div>
+        <div class="msg-text">I'll read the parser layout while a sub-agent maps the existing patterns.</div>
+
+        <!-- ParallelGroup component -->
+        <div class="pg">
+          <div class="pg-header">
+            <span class="pg-label">parallel</span>
+            <span class="pg-count">3 calls</span>
+            <span class="pg-spacer"></span>
+            <span class="pg-upper">≤ 2m 14s each</span>
+          </div>
+          <div class="members">
+            <div class="tb read">
+              <div class="tb-header">
+                <span class="tb-chevron">▸</span>
+                <span class="tb-name">Read</span>
+                <span class="tb-preview">internal/parser/types.go</span>
+              </div>
+            </div>
+            <div class="tb read">
+              <div class="tb-header">
+                <span class="tb-chevron">▸</span>
+                <span class="tb-name">Read</span>
+                <span class="tb-preview">internal/parser/claude.go</span>
+              </div>
+            </div>
+            <div class="tb task open">
+              <div class="tb-header">
+                <span class="tb-chevron">▸</span>
+                <span class="tb-name">Agent</span>
+                <span class="tb-preview">explore parser patterns</span>
+                <span class="tb-dur slow">2m 14s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- sub-agent inline expansion -->
+        <div class="sa">
+          <div class="sa-h">
+            <span>↳ sub-agent · explore patterns</span>
+            <span class="sa-meta">8 calls · 2m 14s</span>
+          </div>
+          <div class="sa-tb"><span class="sa-cn read">Read</span><span class="sa-arg">parser/types.go</span><span class="sa-d">9ms</span></div>
+          <div class="sa-tb"><span class="sa-cn read">Read</span><span class="sa-arg">parser/codex.go</span><span class="sa-d">≤11ms</span></div>
+          <div class="sa-tb"><span class="sa-cn read">Read</span><span class="sa-arg">parser/gemini.go</span><span class="sa-d">≤11ms</span></div>
+          <div class="sa-tb"><span class="sa-cn bash">Bash</span><span class="sa-arg">rg -n "tool_use" parser/</span><span class="sa-d slow">2m 8s</span></div>
+          <div class="sa-tb"><span class="sa-cn read">Read</span><span class="sa-arg">parser/taxonomy.go</span><span class="sa-d">14ms</span></div>
+          <div class="sa-tb"><span class="sa-cn edit">Write</span><span class="sa-arg">/tmp/agent-report.md</span><span class="sa-d">5ms</span></div>
+        </div>
+      </div>
+
+      <!-- USER 3 -->
+      <div class="msg user">
+        <div class="msg-role">
+          <span class="role-name">user</span>
+          <div class="role-meta"><span class="timestamp">10:16:25</span></div>
+        </div>
+        <div class="msg-text">Approach LGTM. Make the change and run tests.</div>
+      </div>
+
+      <!-- ASSISTANT 3 — solo Edit -->
+      <div class="msg">
+        <div class="msg-role">
+          <span class="role-name">assistant</span>
+          <div class="role-meta">
+            <span class="turn-summary">turn 1.2s · 1 call</span>
+            <span class="timestamp">10:16:26</span>
+          </div>
+        </div>
+        <div class="tb edit">
+          <div class="tb-header">
+            <span class="tb-chevron">▸</span>
+            <span class="tb-name">Edit</span>
+            <span class="tb-preview">internal/db/sessions.go</span>
+            <span class="tb-dur">1.2s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ASSISTANT 4 — solo slow Bash (test run) -->
+      <div class="msg">
+        <div class="msg-role">
+          <span class="role-name">assistant</span>
+          <div class="role-meta">
+            <span class="turn-summary slow">turn 28.7s · 1 call</span>
+            <span class="timestamp">10:16:28</span>
+          </div>
+        </div>
+        <div class="tb bash">
+          <div class="tb-header">
+            <span class="tb-chevron">▸</span>
+            <span class="tb-name">Bash</span>
+            <span class="tb-preview">go test -tags fts5 ./...</span>
+            <span class="tb-dur slow">28.4s</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- USER 4 -->
+      <div class="msg user">
+        <div class="msg-role">
+          <span class="role-name">user</span>
+          <div class="role-meta"><span class="timestamp">10:17:01</span></div>
+        </div>
+        <div class="msg-text">Now run the full integration suite.</div>
+      </div>
+
+      <!-- ASSISTANT 5 — RUNNING -->
+      <div class="msg">
+        <div class="msg-role">
+          <span class="role-name">assistant</span>
+          <div class="role-meta">
+            <span class="turn-summary running">running 1m 28s+ · 1 call</span>
+            <span class="timestamp">10:17:02</span>
+          </div>
+        </div>
+        <div class="tb bash">
+          <div class="tb-header">
+            <span class="tb-chevron">▸</span>
+            <span class="tb-name">Bash</span>
+            <span class="tb-preview">make test-postgres</span>
+            <span class="tb-dur running">running 1m 28s+</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ========== RIGHT PANEL: Session Vital Signs ========== -->
+  <div class="vital">
+
+    <!-- 1. Session summary -->
+    <div class="v-section">
+      <div class="v-h">
+        <span>Session</span>
+        <span class="v-meta live">running 4m 18s+</span>
+      </div>
+      <div class="stat-grid">
+        <div><div class="lbl">tool calls</div><div class="val">6 + 1 in flight</div></div>
+        <div><div class="lbl">tool time</div><div class="val live">2m 49s+</div></div>
+        <div><div class="lbl">slowest done</div><div class="val slow">Agent · 2m 14s</div></div>
+        <div><div class="lbl">in flight</div><div class="val live">Bash · 1m 28s+</div></div>
+        <div><div class="lbl">turns</div><div class="val">5</div></div>
+        <div><div class="lbl">sub-agents</div><div class="val">1</div></div>
+      </div>
+    </div>
+
+    <!-- 2. Where time went -->
+    <div class="v-section">
+      <div class="v-h">
+        <span>Where time went</span>
+        <span class="v-meta">completed turns · click to highlight</span>
+      </div>
+      <div class="agg-row">
+        <span class="agg-name">Task</span>
+        <span class="agg-bar"><span class="agg-fill" style="width: 79%; background: #c45a5a;"></span></span>
+        <span class="agg-val">2m 14s</span>
+      </div>
+      <div class="agg-row">
+        <span class="agg-name">Bash</span>
+        <span class="agg-bar"><span class="agg-fill" style="width: 17%; background: #d4a35a;"></span></span>
+        <span class="agg-val">28.4s</span>
+      </div>
+      <div class="agg-row">
+        <span class="agg-name">Tool</span>
+        <span class="agg-bar"><span class="agg-fill" style="width: 2%; background: #7a5fa8;"></span></span>
+        <span class="agg-val">2.1s</span>
+      </div>
+      <div class="agg-row">
+        <span class="agg-name">Edit</span>
+        <span class="agg-bar"><span class="agg-fill" style="width: 1%; background: #5a8b3a;"></span></span>
+        <span class="agg-val">1.2s</span>
+      </div>
+    </div>
+
+    <!-- 3. Timeline lanes -->
+    <div class="v-section">
+      <div class="v-h">
+        <span>Timeline</span>
+        <span class="v-meta">click marks to scroll</span>
+      </div>
+
+      <div class="lane-row">
+        <span class="lane-label">turns</span>
+        <span class="lane-track">
+          <span class="lane-mark" style="left: 0%; width: 1%; background: #7a5fa8;"></span>
+          <span class="lane-mark" style="left: 2%; width: 53%; background: #c45a5a;" title="turn 2m 18s"></span>
+          <span class="lane-mark" style="left: 56%; width: 0.5%; background: #5a8b3a;"></span>
+          <span class="lane-mark" style="left: 57%; width: 11%; background: #d4a35a;" title="turn 28.7s"></span>
+          <span class="lane-mark live" style="left: 68.5%; width: 31.5%;"></span>
+        </span>
+      </div>
+
+      <div style="height: 6px;"></div>
+
+      <div class="lane-row">
+        <span class="lane-label">Task</span>
+        <span class="lane-track">
+          <span class="lane-mark" style="left: 2%; width: 53%; background: #c45a5a;"></span>
+        </span>
+      </div>
+      <div class="lane-row">
+        <span class="lane-label">Bash</span>
+        <span class="lane-track">
+          <span class="lane-mark" style="left: 57%; width: 11%; background: #d4a35a;"></span>
+          <span class="lane-mark live" style="left: 68.5%; width: 31.5%;"></span>
+        </span>
+      </div>
+      <div class="lane-row">
+        <span class="lane-label">Tool</span>
+        <span class="lane-track">
+          <span class="lane-mark" style="left: 0%; width: 1%; background: #7a5fa8;"></span>
+        </span>
+      </div>
+      <div class="lane-row">
+        <span class="lane-label">Edit</span>
+        <span class="lane-track">
+          <span class="lane-mark" style="left: 56%; width: 0.5%; background: #5a8b3a;"></span>
+        </span>
+      </div>
+      <div class="lane-row">
+        <span class="lane-label">Read</span>
+        <span class="lane-track">
+          <span class="lane-mark" style="left: 2%; width: 0.5%; background: #4a7ba8;"></span>
+          <span class="lane-mark" style="left: 3%; width: 0.5%; background: #4a7ba8;"></span>
+        </span>
+      </div>
+
+      <div style="height: 8px;"></div>
+
+      <div class="lane-row">
+        <span class="lane-label">activity</span>
+        <span class="lane-track activity">
+          <span class="activity-bar" style="left: 0%; height: 25%;"></span>
+          <span class="activity-bar" style="left: 5%; height: 40%;"></span>
+          <span class="activity-bar" style="left: 11%; height: 60%;"></span>
+          <span class="activity-bar" style="left: 19%; height: 50%;"></span>
+          <span class="activity-bar" style="left: 27%; height: 80%;"></span>
+          <span class="activity-bar" style="left: 35%; height: 70%;"></span>
+          <span class="activity-bar" style="left: 43%; height: 65%;"></span>
+          <span class="activity-bar" style="left: 51%; height: 30%;"></span>
+          <span class="activity-bar" style="left: 58%; height: 50%;"></span>
+          <span class="activity-bar" style="left: 65%; height: 60%;"></span>
+          <span class="activity-bar" style="left: 73%; height: 35%;"></span>
+          <span class="activity-bar" style="left: 81%; height: 70%;"></span>
+          <span class="activity-bar" style="left: 89%; height: 50%;"></span>
+        </span>
+      </div>
+
+      <div class="legend">
+        <span><span class="legend-dot" style="background: #c45a5a;"></span>Task</span>
+        <span><span class="legend-dot" style="background: #d4a35a;"></span>Bash</span>
+        <span><span class="legend-dot" style="background: #7a5fa8;"></span>Tool</span>
+        <span><span class="legend-dot" style="background: #5a8b3a;"></span>Edit</span>
+        <span><span class="legend-dot" style="background: #4a7ba8;"></span>Read</span>
+      </div>
+    </div>
+
+    <!-- 4. Calls -->
+    <div class="v-section">
+      <div class="v-h">
+        <span>Calls</span>
+        <span class="v-meta">7 calls · 1 running</span>
+      </div>
+      <div class="scale-axis">
+        <span>0</span>
+        <span>1m</span>
+        <span>2m</span>
+        <span>3m</span>
+        <span class="now">now</span>
+      </div>
+
+      <div class="calls">
+
+        <!-- Skill brainstorm -->
+        <div class="call">
+          <span class="chev spacer">▸</span>
+          <span class="cn tool">Skill</span>
+          <span class="ca">brainstorming</span>
+          <span class="cbar-wrap"><span class="cbar" style="width: 1%; background: #7a5fa8;"></span></span>
+          <span class="cd muted">2.1s</span>
+        </div>
+
+        <!-- parallel group with expanded sub-agent -->
+        <div class="cgroup">
+          <div class="cg-rail"></div>
+          <div class="cg-members">
+            <div class="cg-header">
+              <span class="cg-h-label">parallel · 3 calls</span>
+              <span class="cg-h-bar-wrap"><span class="cg-h-bar" style="width: 53%;"></span></span>
+              <span class="cg-h-dur">2m 14s</span>
+            </div>
+            <div class="call">
+              <span class="chev spacer">▸</span>
+              <span class="cn read">Read</span>
+              <span class="ca">parser/types.go</span>
+              <span class="cbar-wrap"><span class="cbar shared" style="width: 53%; background: #4a7ba8;"></span></span>
+              <span class="cd muted">≤2m14s</span>
+            </div>
+            <div class="call">
+              <span class="chev spacer">▸</span>
+              <span class="cn read">Read</span>
+              <span class="ca">parser/claude.go</span>
+              <span class="cbar-wrap"><span class="cbar shared" style="width: 53%; background: #4a7ba8;"></span></span>
+              <span class="cd muted">≤2m14s</span>
+            </div>
+            <div class="call slow expanded">
+              <span class="chev">▸</span>
+              <span class="cn task">Agent</span>
+              <span class="ca">explore patterns</span>
+              <span class="cbar-wrap"><span class="cbar" style="width: 53%; background: #c45a5a;"></span></span>
+              <span class="cd slow">2m14s<span class="star">★</span></span>
+            </div>
+
+            <!-- sub-agent expanded -->
+            <div class="sa-expand">
+              <div class="sa-eh">
+                <span>↳ sub-agent · explore</span>
+                <span class="sa-eh-meta">8 calls · 2m 14s</span>
+              </div>
+              <div class="calls">
+                <div class="call">
+                  <span class="chev spacer">▸</span>
+                  <span class="cn read">Read</span>
+                  <span class="ca">parser/types.go</span>
+                  <span class="cbar-wrap"><span class="cbar" style="width: 0.5%; background: #4a7ba8;"></span></span>
+                  <span class="cd muted">9ms</span>
+                </div>
+
+                <div class="cgroup">
+                  <div class="cg-rail"></div>
+                  <div class="cg-members">
+                    <div class="cg-header">
+                      <span class="cg-h-label">parallel · 3 calls</span>
+                      <span class="cg-h-bar-wrap"><span class="cg-h-bar" style="width: 1%;"></span></span>
+                      <span class="cg-h-dur">11ms</span>
+                    </div>
+                    <div class="call">
+                      <span class="chev spacer">▸</span>
+                      <span class="cn read">Read</span>
+                      <span class="ca">parser/codex.go</span>
+                      <span class="cbar-wrap"><span class="cbar shared" style="width: 1%; background: #4a7ba8;"></span></span>
+                      <span class="cd muted">≤11ms</span>
+                    </div>
+                    <div class="call">
+                      <span class="chev spacer">▸</span>
+                      <span class="cn read">Read</span>
+                      <span class="ca">parser/gemini.go</span>
+                      <span class="cbar-wrap"><span class="cbar shared" style="width: 1%; background: #4a7ba8;"></span></span>
+                      <span class="cd muted">≤11ms</span>
+                    </div>
+                    <div class="call">
+                      <span class="chev spacer">▸</span>
+                      <span class="cn read">Read</span>
+                      <span class="ca">parser/taxonomy.go</span>
+                      <span class="cbar-wrap"><span class="cbar shared" style="width: 1%; background: #4a7ba8;"></span></span>
+                      <span class="cd muted">≤11ms</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="call slow">
+                  <span class="chev spacer">▸</span>
+                  <span class="cn bash">Bash</span>
+                  <span class="ca">rg -n "tool_use" parser/</span>
+                  <span class="cbar-wrap"><span class="cbar" style="width: 50%; background: #d4a35a;"></span></span>
+                  <span class="cd slow">2m 8s</span>
+                </div>
+                <div class="call">
+                  <span class="chev spacer">▸</span>
+                  <span class="cn edit">Write</span>
+                  <span class="ca">/tmp/agent-report.md</span>
+                  <span class="cbar-wrap"><span class="cbar" style="width: 0.1%; background: #5a8b3a;"></span></span>
+                  <span class="cd muted">5ms</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Edit -->
+        <div class="call">
+          <span class="chev spacer">▸</span>
+          <span class="cn edit">Edit</span>
+          <span class="ca">db/sessions.go</span>
+          <span class="cbar-wrap"><span class="cbar" style="width: 0.5%; background: #5a8b3a;"></span></span>
+          <span class="cd muted">1.2s</span>
+        </div>
+
+        <!-- slow Bash test -->
+        <div class="call slow">
+          <span class="chev spacer">▸</span>
+          <span class="cn bash">Bash</span>
+          <span class="ca">go test -tags fts5 ./...</span>
+          <span class="cbar-wrap"><span class="cbar" style="width: 11%; background: #d4a35a;"></span></span>
+          <span class="cd slow">28.4s</span>
+        </div>
+
+        <!-- running Bash -->
+        <div class="call">
+          <span class="chev spacer">▸</span>
+          <span class="cn bash">Bash</span>
+          <span class="ca">make test-postgres</span>
+          <span class="cbar-wrap"><span class="cbar live" style="width: 31%;"></span></span>
+          <span class="cd live">running 1m 28s+</span>
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="footnotes">
+  <h3>Reading the mockup</h3>
+  <ol>
+    <li><strong>Sidebar</strong> stays as-is. The active session shows "live" instead of an ago time.</li>
+    <li><strong>Conversation</strong> — every assistant message gets a turn-summary chip in its header (e.g. <code>turn 2m 18s · 3 calls</code>). Slow turns get the rose tint. Running turn pulses in green family.</li>
+    <li><strong>ParallelGroup</strong> — assistant turn 2 has 3 parallel calls, wrapped in a solid neutral rail with header <code>parallel · 3 calls · ≤2m 14s each</code>. Inside, the Read tool blocks lose their per-call duration badge (the group owns it); the Agent sub-agent keeps its <em>exact</em> duration since we know it from the child session.</li>
+    <li><strong>Sub-agent inline</strong> — the Agent in turn 2 is expanded; child calls show with their own duration badges (<code>9ms</code>, <code>≤11ms</code> for parallel reads inside, <code>2m 8s</code> for the slow Bash). The same hierarchy is browsable via the chevron on the Agent row in the right panel.</li>
+    <li><strong>Right panel sections</strong>, top to bottom:
+      <ul>
+        <li><em>Session summary</em> — running time pulses green; <code>slowest done</code> excludes the in-flight call; <code>in flight</code> tile shows the current running tool.</li>
+        <li><em>Where time went</em> — bars sum to total <em>completed</em> tool wall-clock; running turn doesn't yet contribute (its category is undecidable until it ends).</li>
+        <li><em>Timeline lanes</em> — turns lane shows each turn's duration colored by primary category; per-category lanes show the same data sliced; activity lane keeps the existing message-density chart. Running turn shows a pulsing green segment.</li>
+        <li><em>Calls</em> — chronological list; ParallelGroup uses a left-rail container with the same encoding as the conversation; sub-agents expand via chevron with full nested hierarchy; the running call has a green pulsing bar; scale axis ends at <code>now</code>.</li>
+      </ul>
+    </li>
+  </ol>
+</div>
+
+</body>
+</html>
