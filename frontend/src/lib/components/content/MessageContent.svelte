@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Message } from "../../api/types.js";
+  import type { CallTiming, TurnTiming } from "../../api/types/timing.js";
   import {
     parseContent,
     enrichSegments,
@@ -8,11 +9,15 @@
     formatTimestamp,
     formatTokenUsage,
   } from "../../utils/format.js";
+  import { formatDuration } from "../../utils/duration.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { formatMessageForCopy } from "../../utils/copy-message.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
+  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
+  import { liveTick } from "../../stores/liveTick.svelte.js";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
+  import ParallelGroup from "./ParallelGroup.svelte";
   import CodeBlock from "./CodeBlock.svelte";
   import SkillBlock from "./SkillBlock.svelte";
   import { ui } from "../../stores/ui.svelte.js";
@@ -159,6 +164,88 @@
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
 
+  /** Index turn timings by message id for O(1) lookup. */
+  let turnByMessage = $derived.by(() => {
+    const m = new Map<number, TurnTiming>();
+    for (const t of sessionTiming.timing?.turns ?? []) {
+      m.set(t.message_id, t);
+    }
+    return m;
+  });
+
+  /** Index call timings by tool_use_id for O(1) lookup. */
+  let callByToolUseID = $derived.by(() => {
+    const m = new Map<string, CallTiming>();
+    for (const t of sessionTiming.timing?.turns ?? []) {
+      for (const c of t.calls) m.set(c.tool_use_id, c);
+    }
+    return m;
+  });
+
+  /** Resolve the duration badge for a solo (non-grouped) tool call.
+   *  Sub-agent calls show their exact duration; non-sub-agent solo
+   *  calls inherit the turn's wall-clock duration since per-call
+   *  timing isn't available without tool_result deltas. Running
+   *  turns synthesize a live `running …+` label from the turn's
+   *  `started_at`, ticked once per second by `liveTick`. */
+  function soloDurationLabel(
+    ct: CallTiming | undefined,
+    turn: TurnTiming | undefined,
+    msg: Message,
+  ): string | undefined {
+    if (ct?.subagent_session_id && ct.duration_ms != null) {
+      return formatDuration(ct.duration_ms);
+    }
+    if (turn?.duration_ms != null) {
+      return formatDuration(turn.duration_ms);
+    }
+    if (sessionTiming.timing?.running && turn != null) {
+      const startSrc = turn.started_at ?? msg.timestamp;
+      const startMs = new Date(startSrc).getTime();
+      const elapsed = Number.isNaN(startMs)
+        ? 0
+        : Math.max(0, liveTick.now - startMs);
+      return `running ${formatDuration(elapsed)}+`;
+    }
+    return undefined;
+  }
+
+  /** A turn is running iff the session is active AND its
+   *  duration isn't yet known. */
+  function isRunningTurn(msg: Message): boolean {
+    if (!sessionTiming.timing?.running) return false;
+    const turn = turnByMessage.get(msg.id);
+    return turn != null && turn.duration_ms == null;
+  }
+
+  /** Build the chip payload for an assistant turn. Returns null
+   *  when the message has no tool calls or timing isn't loaded. */
+  let turnSummary = $derived.by(() => {
+    if (isUser || !message.has_tool_use) return null;
+    const calls = message.tool_calls?.length ?? 0;
+    const turn = turnByMessage.get(message.id);
+    if (turn?.duration_ms != null) {
+      return {
+        text: `turn ${formatDuration(turn.duration_ms)} · ${calls} call${calls === 1 ? "" : "s"}`,
+        slow: false,
+        running: false,
+      };
+    }
+    if (sessionTiming.timing?.running && turn != null) {
+      const startSrc = turn.started_at ?? message.timestamp;
+      const startMs = new Date(startSrc).getTime();
+      const elapsed = Number.isNaN(startMs)
+        ? 0
+        : Math.max(0, liveTick.now - startMs);
+      return {
+        text: `running ${formatDuration(elapsed)}+ · ${calls} call${calls === 1 ? "" : "s"}`,
+        slow: false,
+        running: true,
+      };
+    }
+    return null;
+  });
+
   let copyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
 
@@ -244,6 +331,15 @@
           {tokenSummary}
         </span>
       {/if}
+      {#if turnSummary}
+        <span
+          class="turn-summary"
+          class:slow={turnSummary.slow}
+          class:running={turnSummary.running}
+        >
+          {turnSummary.text}
+        </span>
+      {/if}
       <span class="timestamp">
         {formatTimestamp(message.timestamp)}
       </span>
@@ -266,15 +362,9 @@
           />
         {/if}
       {:else if segment.type === "tool"}
-        {#if hasSearchQuery || ui.isBlockVisible("tool")}
-          <ToolBlock
-            content={segment.content}
-            label={segment.label}
-            toolCall={segment.toolCall}
-            highlightQuery={highlightQuery}
-            isCurrentHighlight={isCurrentHighlight}
-          />
-        {/if}
+        <!-- Tool segments are rendered after the loop so contiguous
+             tool_calls can be grouped into a single ParallelGroup
+             (v1 simplification: text first, then all tools). -->
       {:else if segment.type === "code"}
         {#if hasSearchQuery || ui.isBlockVisible("code")}
           <CodeBlock
@@ -303,6 +393,51 @@
         {/if}
       {/if}
     {/each}
+
+    {#if (hasSearchQuery || ui.isBlockVisible("tool"))}
+      {@const turn = turnByMessage.get(message.id)}
+      {@const structuredCalls = message.tool_calls ?? []}
+      {#if structuredCalls.length === 1}
+        {@const soloCall = structuredCalls[0]!}
+        <ToolBlock
+          toolCall={soloCall}
+          content=""
+          label={soloCall.tool_name}
+          durationLabel={soloDurationLabel(
+            callByToolUseID.get(soloCall.tool_use_id ?? ""),
+            turn,
+            message,
+          )}
+          isRunning={isRunningTurn(message)}
+          highlightQuery={highlightQuery}
+          isCurrentHighlight={isCurrentHighlight}
+        />
+      {:else if structuredCalls.length >= 2}
+        <ParallelGroup
+          toolCalls={structuredCalls}
+          callTimingByID={callByToolUseID}
+          turnDurationMs={turn?.duration_ms ?? null}
+          isRunning={isRunningTurn(message)}
+          highlightQuery={highlightQuery}
+          isCurrentHighlight={isCurrentHighlight}
+        />
+      {:else}
+        <!-- Fallback for messages with `has_tool_use` but no
+             structured tool_calls — render parsed tool segments
+             so legacy/synthetic transcripts (e.g. `[Bash]...`
+             markers) keep their tool blocks. Mirrors
+             ToolCallGroup.svelte's fallback path. -->
+        {#each segments.filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
+          <ToolBlock
+            content={seg.content}
+            label={seg.label}
+            toolCall={seg.toolCall}
+            highlightQuery={highlightQuery}
+            isCurrentHighlight={isCurrentHighlight}
+          />
+        {/each}
+      {/if}
+    {/if}
   </div>
 </div>
 
@@ -369,6 +504,31 @@
     white-space: nowrap;
     flex-shrink: 0;
     opacity: 0.8;
+  }
+
+  .turn-summary {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.04);
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .turn-summary.slow {
+    color: var(--slow-fg);
+    background: var(--slow-bg);
+    border-color: var(--slow-ring);
+  }
+
+  .turn-summary.running {
+    color: var(--running-fg);
+    background: var(--running-bg);
+    border-color: var(--running-ring);
+    animation: duration-pulse 1.6s ease-in-out infinite;
   }
 
   .copy-btn {

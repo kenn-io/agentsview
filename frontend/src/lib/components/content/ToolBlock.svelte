@@ -15,9 +15,27 @@
     toolCall?: ToolCall;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
+    /** Pre-formatted duration label (e.g. "2.4s", "running 1m 28s+"). Null/undefined renders no badge. */
+    durationLabel?: string;
+    /** Tints the duration badge with the slow color family. */
+    isSlow?: boolean;
+    /** Tints the duration badge green and pulses it. */
+    isRunning?: boolean;
+    /** When true, the block sits inside a ParallelGroup — flatten outer margin and corner radii. */
+    inGroup?: boolean;
   }
 
-  let { content, label, toolCall, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
+  let {
+    content,
+    label,
+    toolCall,
+    highlightQuery = "",
+    isCurrentHighlight = false,
+    durationLabel,
+    isSlow = false,
+    isRunning = false,
+    inGroup = false,
+  }: Props = $props();
   let userCollapsed: boolean = $state(true);
   let userOutputCollapsed: boolean = $state(true);
   let userHistoryCollapsed: boolean = $state(true);
@@ -217,7 +235,7 @@
   });
 </script>
 
-<div class="tool-block">
+<div class="tool-block" class:in-group={inGroup}>
   <button
     class="tool-header"
     onclick={() => {
@@ -235,6 +253,15 @@
     {/if}
     {#if collapsed && previewLine}
       <span class="tool-preview">{previewLine}</span>
+    {/if}
+    {#if durationLabel}
+      <span
+        class="tool-duration"
+        class:slow={isSlow}
+        class:running={isRunning}
+      >
+        {durationLabel}
+      </span>
     {/if}
   </button>
   {#if !collapsed}
@@ -343,6 +370,11 @@
     margin: 0;
   }
 
+  .tool-block.in-group {
+    margin: 0;
+    border-radius: 0;
+  }
+
   .tool-header {
     display: flex;
     align-items: center;
@@ -392,6 +424,31 @@
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+  }
+
+  .tool-duration {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 2px 7px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.04);
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+
+  .tool-duration.slow {
+    color: var(--slow-fg);
+    background: var(--slow-bg);
+    border-color: var(--slow-ring);
+  }
+
+  .tool-duration.running {
+    color: var(--running-fg);
+    background: var(--running-bg);
+    border-color: var(--running-ring);
+    animation: duration-pulse 1.6s ease-in-out infinite;
   }
 
   .tool-meta {

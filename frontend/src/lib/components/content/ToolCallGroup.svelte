@@ -1,13 +1,18 @@
 <script lang="ts">
   import type { Message } from "../../api/types.js";
+  import type { CallTiming, TurnTiming } from "../../api/types/timing.js";
+  import { formatTimestamp } from "../../utils/format.js";
+  import { formatDuration } from "../../utils/duration.js";
+  import { copyToClipboard } from "../../utils/clipboard.js";
+  import { formatMessageForCopy } from "../../utils/copy-message.js";
   import {
     parseContent,
     enrichSegments,
   } from "../../utils/content-parser.js";
-  import { formatTimestamp } from "../../utils/format.js";
-  import { copyToClipboard } from "../../utils/clipboard.js";
-  import { formatMessageForCopy } from "../../utils/copy-message.js";
+  import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
+  import { liveTick } from "../../stores/liveTick.svelte.js";
   import ToolBlock from "./ToolBlock.svelte";
+  import ParallelGroup from "./ParallelGroup.svelte";
 
   interface Props {
     messages: Message[];
@@ -25,25 +30,79 @@
 
   let copied = $state(false);
 
-  let toolSegments = $derived(
-    messages.flatMap((m) =>
-      enrichSegments(
-        parseContent(
-          m.content,
-          m.has_tool_use,
-          m.id,
-          m.content_length,
-        ),
-        m.tool_calls,
-      ).filter((s) => s.type === "tool"),
-    ),
+  /** Effective tool-call count for one message: structured
+   *  `tool_calls` when present, falling back to parsed tool
+   *  segments so legacy transcripts (e.g. `[Bash]...` markers
+   *  with no structured calls) still match the rendering path. */
+  function messageToolCount(m: Message): number {
+    const structured = m.tool_calls?.length ?? 0;
+    if (structured > 0) return structured;
+    return enrichSegments(
+      parseContent(m.content, m.has_tool_use, m.id, m.content_length),
+      m.tool_calls,
+    ).filter((s) => s.type === "tool").length;
+  }
+
+  let totalCalls = $derived(
+    messages.reduce((n, m) => n + messageToolCount(m), 0),
   );
 
   let label = $derived(
-    toolSegments.length === 1
-      ? "1 tool call"
-      : `${toolSegments.length} tool calls`,
+    totalCalls === 1 ? "1 tool call" : `${totalCalls} tool calls`,
   );
+
+  /** Index turn timings by message id for O(1) lookup. */
+  let turnByMessage = $derived.by(() => {
+    const m = new Map<number, TurnTiming>();
+    for (const t of sessionTiming.timing?.turns ?? []) {
+      m.set(t.message_id, t);
+    }
+    return m;
+  });
+
+  /** Index call timings by tool_use_id for O(1) lookup. */
+  let callByToolUseID = $derived.by(() => {
+    const m = new Map<string, CallTiming>();
+    for (const t of sessionTiming.timing?.turns ?? []) {
+      for (const c of t.calls) m.set(c.tool_use_id, c);
+    }
+    return m;
+  });
+
+  /** Resolve the duration badge for a solo (non-grouped) tool call.
+   *  Sub-agent calls show their exact duration; non-sub-agent solo
+   *  calls inherit the turn's wall-clock duration. Running turns
+   *  synthesize a live `running …+` label from the turn's
+   *  `started_at`, ticked once per second by `liveTick`. */
+  function soloDurationLabel(
+    ct: CallTiming | undefined,
+    turn: TurnTiming | undefined,
+    msg: Message,
+  ): string | undefined {
+    if (ct?.subagent_session_id && ct.duration_ms != null) {
+      return formatDuration(ct.duration_ms);
+    }
+    if (turn?.duration_ms != null) {
+      return formatDuration(turn.duration_ms);
+    }
+    if (sessionTiming.timing?.running && turn != null) {
+      const startSrc = turn.started_at ?? msg.timestamp;
+      const startMs = new Date(startSrc).getTime();
+      const elapsed = Number.isNaN(startMs)
+        ? 0
+        : Math.max(0, liveTick.now - startMs);
+      return `running ${formatDuration(elapsed)}+`;
+    }
+    return undefined;
+  }
+
+  /** A turn is running iff the session is active AND its
+   *  duration isn't yet known. */
+  function isRunningTurn(msg: Message): boolean {
+    if (!sessionTiming.timing?.running) return false;
+    const turn = turnByMessage.get(msg.id);
+    return turn != null && turn.duration_ms == null;
+  }
 
   let copyTimer: ReturnType<typeof setTimeout>;
 
@@ -125,14 +184,47 @@
   </div>
 
   <div class="tool-group-body">
-    {#each toolSegments as segment}
-      <ToolBlock
-        content={segment.content}
-        label={segment.label}
-        toolCall={segment.toolCall}
-        {highlightQuery}
-        {isCurrentHighlight}
-      />
+    {#each messages as message (message.id)}
+      {@const calls = message.tool_calls ?? []}
+      {@const turn = turnByMessage.get(message.id)}
+      {#if calls.length === 1}
+        {@const soloCall = calls[0]!}
+        <ToolBlock
+          toolCall={soloCall}
+          content=""
+          label={soloCall.tool_name}
+          durationLabel={soloDurationLabel(
+            callByToolUseID.get(soloCall.tool_use_id ?? ""),
+            turn,
+            message,
+          )}
+          isRunning={isRunningTurn(message)}
+          {highlightQuery}
+          {isCurrentHighlight}
+        />
+      {:else if calls.length >= 2}
+        <ParallelGroup
+          toolCalls={calls}
+          callTimingByID={callByToolUseID}
+          turnDurationMs={turn?.duration_ms ?? null}
+          isRunning={isRunningTurn(message)}
+          {highlightQuery}
+          {isCurrentHighlight}
+        />
+      {:else}
+        <!-- Fallback for messages with `has_tool_use` but no
+             structured tool_calls — parse the content for tool
+             markers (legacy/synthetic transcripts). -->
+        {#each enrichSegments(parseContent(message.content, message.has_tool_use, message.id, message.content_length), message.tool_calls).filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
+          <ToolBlock
+            content={seg.content}
+            label={seg.label}
+            toolCall={seg.toolCall}
+            {highlightQuery}
+            {isCurrentHighlight}
+          />
+        {/each}
+      {/if}
     {/each}
   </div>
 </div>

@@ -86,6 +86,7 @@
         }
         messages.loadSession(id);
         sessions.loadChildSessions(id);
+        sessionTiming.load(id);
         sync.watchSession(
           id,
           () => {
