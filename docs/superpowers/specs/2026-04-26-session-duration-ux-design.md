@@ -58,7 +58,7 @@ The panel has four stacked sections, top to bottom:
 
 1. **Session summary** — total wall clock, turn count, tool call count, slowest
    call, sub-agent count.
-1. **Where time went** — per-category aggregate bars.
+1. **Time spent** — per-category aggregate bars.
 1. **Timeline lanes** — turns lane, one lane per category, plus the existing
    message-activity bars folded in as a bottom lane.
 1. **Calls** — chronological list with horizontal duration bars, parallel groups
@@ -125,7 +125,7 @@ Turn-summary line on the assistant message header reads `turn 2m 18s · 3 calls`
 
 ### Aggregate attribution rule
 
-For "Where time went" and per-category lane bars, attribute each turn's
+For "Time spent" and per-category lane bars, attribute each turn's
 wall-clock duration to a single category:
 
 - If the turn contains any sub-agent calls, compute the union (interval merge)
@@ -479,7 +479,7 @@ let categoryFilter = $state<string | null>(null);  // for highlight on click
 Sections:
 
 1. **Session summary** — fixed grid of label/value pairs.
-1. **Where time went** — `each` over `timing.byCategory`, render category name +
+1. **Time spent** — `each` over `timing.byCategory`, render category name +
    bar (width = `category.durationMs / timing.toolDurationMs`) + formatted
    total. Click a row to toggle `categoryFilter`.
 1. **Timeline lanes** —
@@ -503,7 +503,7 @@ Sections:
 
 Click behavior across the panel:
 
-- Clicking a row in **Where time went** toggles `categoryFilter`.
+- Clicking a row in **Time spent** toggles `categoryFilter`.
   - The clicked agg row gets a tinted background and a `1px` ring in its own
     category color; other agg rows fade to 40% opacity.
   - A removable filter chip appears in the section header (`Bash ×`); clicking
@@ -621,7 +621,7 @@ mode:
 - **Stat grid** swaps in two extra tiles: `in flight` (the running call's tool
   name + elapsed) and `slowest done` (the slowest *completed* call only). The
   running call is excluded from "slowest" until it finishes.
-- **Where time went** counts only completed turns. The in-flight turn doesn't
+- **Time spent** counts only completed turns. The in-flight turn doesn't
   contribute, by design — its category attribution isn't decidable until the
   turn ends.
 - **Calls** — the running row's bar uses a green gradient with a combined CSS

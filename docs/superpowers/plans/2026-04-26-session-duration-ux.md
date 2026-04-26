@@ -2365,7 +2365,7 @@ ______________________________________________________________________
 ## Phase E — Right panel (Session Vital Signs)
 
 > Open the mockup again. The right panel sections in order are: **Session
-> summary**, **Where time went**, **Timeline**, **Calls**. Build them in that
+> summary**, **Time spent**, **Timeline**, **Calls**. Build them in that
 > order.
 
 ### Task 15: `SessionVitals` shell + Session summary section
@@ -2479,9 +2479,9 @@ git commit -m "feat(frontend): add SessionVitals shell and Session summary secti
 
 ______________________________________________________________________
 
-### Task 16: "Where time went" section + click-to-highlight state
+### Task 16: "Time spent" section + click-to-highlight state
 
-Spec section: **Sections › 2. Where time went** and **Click behavior across the
+Spec section: **Sections › 2. Time spent** and **Click behavior across the
 panel**.
 
 **Files:**
@@ -2507,7 +2507,7 @@ Inside the `<div class="vital">`, after the Session section:
 {#if timing && timing.by_category.length > 0}
   <section class="v-section">
     <header class="v-h">
-      <span>Where time went</span>
+      <span>Time spent</span>
       {#if categoryFilter}
         <button class="filter-chip" onclick={() => (categoryFilter = null)}>
           {categoryFilter}<span class="x">×</span>
@@ -2569,13 +2569,13 @@ Use it in the inline `style` and elsewhere.
 
 Open dev server. Verify rows render with the right colors. Click a row — the
 active row should tint and the chip appear. Click again or click × to clear.
-Compare to the mockup's "Where time went" section.
+Compare to the mockup's "Time spent" section.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add frontend/src/lib/components/content/SessionVitals.svelte
-git commit -m "feat(frontend): add Where time went section with click-to-highlight"
+git commit -m "feat(frontend): add Time spent section with click-to-highlight"
 ```
 
 ______________________________________________________________________
@@ -2622,7 +2622,7 @@ function turnWidthPct(turn: TurnTiming, sessionStart: number, sessionEnd: number
 
 - [ ] **Step 3: Render the lanes**
 
-Add a section under "Where time went":
+Add a section under "Time spent":
 
 ```svelte
 {#if timing}
@@ -3027,7 +3027,7 @@ Spec section: **Click behavior across the panel**.
 
 In each render block, add the `dimmed` class based on `categoryFilter`:
 
-- "Where time went" rows: dim if
+- "Time spent" rows: dim if
   `categoryFilter && row.category !== categoryFilter` (already done in Task 16;
   verify)
 
@@ -3054,7 +3054,7 @@ In each render block, add the `dimmed` class based on `categoryFilter`:
 
 - [ ] **Step 3: Visual check**
 
-Live app: click "Bash" in "Where time went". Confirm:
+Live app: click "Bash" in "Time spent". Confirm:
 
 - Bash row tints with the active background + ring
 - Filter chip appears in the section header with the × close button
@@ -3141,7 +3141,7 @@ Find or trigger a live session. Open the right panel and verify:
   mockup; you may need to add a new stat tile if the live session is currently
   active)
 
-- Where time went: only completed turns contribute (in-flight turn excluded)
+- Time spent: only completed turns contribute (in-flight turn excluded)
 
 - Calls: the running row at the bottom has a green pulsing bar with the
   slow-grow animation; duration label pulses
@@ -3174,7 +3174,7 @@ long one).
 | Section                                                                                     | Match? |
 | ------------------------------------------------------------------------------------------- | ------ |
 | Session header (right meta, stat grid)                                                      |        |
-| Where time went (bars, colors, click-to-highlight, filter chip)                             |        |
+| Time spent (bars, colors, click-to-highlight, filter chip)                             |        |
 | Timeline (turns lane, per-category lanes, activity lane, legend)                            |        |
 | Calls (chronological order, parallel groups, sub-agent expansion, slow tinting, scale axis) |        |
 | Live session: running row, pulsing animations, `now` label, in-flight stat tile             |        |
@@ -3374,12 +3374,12 @@ test.describe("Session Vital Signs", () => {
 
   test("renders the four sections", async ({ page }) => {
     await expect(page.getByRole("heading", { name: "Session" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Where time went" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Time spent" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Calls" })).toBeVisible();
   });
 
-  test("clicking a Where time went row highlights matching rows", async ({ page }) => {
+  test("clicking a Time spent row highlights matching rows", async ({ page }) => {
     await page.getByRole("button", { name: /^Bash/ }).click();
     // Filter chip appears
     await expect(page.locator(".filter-chip")).toContainText("Bash");
