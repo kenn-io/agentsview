@@ -97,6 +97,16 @@ func (s *Server) handleWatchSession(
 	)
 	defer heartbeat.Stop()
 
+	// Push the initial timing snapshot on connect so the right
+	// panel doesn't wait for the next change to populate.
+	if t, err := s.db.GetSessionTiming(
+		r.Context(), sessionID,
+	); err != nil {
+		log.Printf("session timing initial: %v", err)
+	} else if t != nil {
+		stream.SendJSON("session.timing", t)
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -106,6 +116,13 @@ func (s *Server) handleWatchSession(
 				return
 			}
 			stream.Send("session_updated", sessionID)
+			if t, err := s.db.GetSessionTiming(
+				r.Context(), sessionID,
+			); err != nil {
+				log.Printf("session timing update: %v", err)
+			} else if t != nil {
+				stream.SendJSON("session.timing", t)
+			}
 		case <-heartbeat.C:
 			stream.Send("heartbeat",
 				time.Now().UTC().Format(time.RFC3339))

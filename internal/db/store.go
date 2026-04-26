@@ -30,6 +30,9 @@ type Store interface {
 	GetAllMessages(ctx context.Context, sessionID string) ([]Message, error)
 	GetSessionActivity(ctx context.Context, sessionID string) (*SessionActivityResponse, error)
 
+	// Timing.
+	GetSessionTiming(ctx context.Context, sessionID string) (*SessionTiming, error)
+
 	// Search.
 	HasFTS() bool
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
