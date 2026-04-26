@@ -1,5 +1,6 @@
 import {
   beforeEach,
+  afterEach,
   describe,
   expect,
   it,
@@ -158,5 +159,117 @@ describe("UsageStore group-by linking", () => {
       timeSeries: { groupBy: "agent" },
       attribution: { groupBy: "agent" },
     });
+  });
+});
+
+describe("UsageStore rolling default date range", () => {
+  beforeEach(() => {
+    installStorage();
+    localStorage.removeItem("usage-toggles");
+    localStorage.removeItem("usage-filters");
+    vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-25T12:00:00"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("constructor produces isPinned=false and windowDays=30 with rolling defaults", async () => {
+    const { usage } = await loadStore();
+    expect(usage.isPinned).toBe(false);
+    expect(usage.windowDays).toBe(30);
+    expect(usage.from).toBe("2026-03-26");
+    expect(usage.to).toBe("2026-04-25");
+  });
+
+  it("fetchAll re-derives from/to against the current clock while unpinned", async () => {
+    const { usage } = await loadStore();
+
+    expect(usage.from).toBe("2026-03-26");
+    expect(usage.to).toBe("2026-04-25");
+
+    vi.setSystemTime(new Date("2026-04-26T12:00:00"));
+    await usage.fetchAll();
+
+    expect(usage.from).toBe("2026-03-27");
+    expect(usage.to).toBe("2026-04-26");
+  });
+
+  it("setDateRange pins and subsequent fetchAll does not roll", async () => {
+    const { usage } = await loadStore();
+    usage.setDateRange("2026-01-01", "2026-01-15");
+    expect(usage.isPinned).toBe(true);
+    expect(usage.from).toBe("2026-01-01");
+    expect(usage.to).toBe("2026-01-15");
+
+    vi.setSystemTime(new Date("2026-04-26T12:00:00"));
+    await usage.fetchAll();
+
+    expect(usage.isPinned).toBe(true);
+    expect(usage.from).toBe("2026-01-01");
+    expect(usage.to).toBe("2026-01-15");
+  });
+});
+
+describe("buildUsageUrlParams", () => {
+  it("omits from/to when isPinned is false, includes excludes", async () => {
+    const { buildUsageUrlParams } = await loadStore();
+    const params = buildUsageUrlParams({
+      from: "2026-03-26",
+      to: "2026-04-25",
+      isPinned: false,
+      excludedProjects: "p1",
+      excludedAgents: "a1",
+      excludedModels: "m1",
+    });
+    expect(params).toEqual({
+      exclude_project: "p1",
+      exclude_agent: "a1",
+      exclude_model: "m1",
+    });
+  });
+
+  it("includes from/to when isPinned is true", async () => {
+    const { buildUsageUrlParams } = await loadStore();
+    const params = buildUsageUrlParams({
+      from: "2026-01-01",
+      to: "2026-01-15",
+      isPinned: true,
+      excludedProjects: "",
+      excludedAgents: "",
+      excludedModels: "",
+    });
+    expect(params).toEqual({
+      from: "2026-01-01",
+      to: "2026-01-15",
+    });
+  });
+
+  it("returns empty object when nothing is set", async () => {
+    const { buildUsageUrlParams } = await loadStore();
+    const params = buildUsageUrlParams({
+      from: "",
+      to: "",
+      isPinned: false,
+      excludedProjects: "",
+      excludedAgents: "",
+      excludedModels: "",
+    });
+    expect(params).toEqual({});
+  });
+
+  it("omits empty from/to even when pinned", async () => {
+    const { buildUsageUrlParams } = await loadStore();
+    const params = buildUsageUrlParams({
+      from: "",
+      to: "",
+      isPinned: true,
+      excludedProjects: "",
+      excludedAgents: "",
+      excludedModels: "",
+    });
+    expect(params).toEqual({});
   });
 });

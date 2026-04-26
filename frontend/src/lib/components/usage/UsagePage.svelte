@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { usage } from "../../stores/usage.svelte.js";
+  import { usage, buildUsageUrlParams } from "../../stores/usage.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { events } from "../../stores/events.svelte.js";
@@ -90,11 +90,28 @@
     const params = router.params;
     untrack(() => {
       if (route !== "usage") return;
+      const hasDateParam = !!params["from"] || !!params["to"];
       const hasFilterKeys = Object.keys(params).some(
         (k) => USAGE_FILTER_KEYS.has(k),
       );
-      if (!hasFilterKeys) { urlInitRan = true; return; }
+
       let changed = false;
+
+      // Sync pin state from URL: dated URL pins, undated URL unpins.
+      // Runs before the !hasFilterKeys early return so a fully bare URL
+      // (no exclude_* either) still flips the pin off.
+      if (usage.isPinned !== hasDateParam) {
+        usage.isPinned = hasDateParam;
+        changed = true;
+      }
+
+      if (!hasFilterKeys) {
+        if (changed && urlInitRan) {
+          usage.fetchAll();
+        }
+        urlInitRan = true;
+        return;
+      }
       if (params["from"] && params["from"] !== usage.from) {
         usage.from = params["from"];
         changed = true;
@@ -128,20 +145,17 @@
   // URL write-back: keep URL params in sync with filter state
   // so users can share/bookmark the view.
   $effect(() => {
-    const from = usage.from;
-    const to = usage.to;
-    const exProj = usage.excludedProjects;
-    const exAgent = usage.excludedAgents;
-    const exModel = usage.excludedModels;
+    const state = {
+      from: usage.from,
+      to: usage.to,
+      isPinned: usage.isPinned,
+      excludedProjects: usage.excludedProjects,
+      excludedAgents: usage.excludedAgents,
+      excludedModels: usage.excludedModels,
+    };
     untrack(() => {
       if (router.route !== "usage") return;
-      const params: Record<string, string> = {};
-      if (from) params["from"] = from;
-      if (to) params["to"] = to;
-      if (exProj) params["exclude_project"] = exProj;
-      if (exAgent) params["exclude_agent"] = exAgent;
-      if (exModel) params["exclude_model"] = exModel;
-      router.replaceParams(params);
+      router.replaceParams(buildUsageUrlParams(state));
     });
   });
 

@@ -62,6 +62,8 @@ type Panel =
 class AnalyticsStore {
   from: string = $state(daysAgo(365));
   to: string = $state(today());
+  isPinned: boolean = $state(false);
+  windowDays: number = $state(365);
   granularity: Granularity = $state("day");
   metric: HeatmapMetric = $state("messages");
   selectedDate: string | null = $state(null);
@@ -381,7 +383,14 @@ class AnalyticsStore {
     }
   }
 
+  private rollDates(): void {
+    if (this.isPinned) return;
+    this.from = daysAgo(this.windowDays);
+    this.to = today();
+  }
+
   async fetchAll() {
+    this.rollDates();
     await Promise.all([
       this.fetchSummary(),
       this.fetchActivity(),
@@ -530,11 +539,22 @@ class AnalyticsStore {
   }
 
   setDateRange(from: string, to: string) {
+    this.isPinned = true;
     this.from = from;
     this.to = to;
     this.selectedDate = null;
     this.selectedDow = null;
     this.selectedHour = null;
+    this.fetchAll();
+  }
+
+  setRollingWindow(days: number) {
+    this.windowDays = days;
+    this.isPinned = false;
+    this.selectedDate = null;
+    this.selectedDow = null;
+    this.selectedHour = null;
+    this.rollDates();
     this.fetchAll();
   }
 

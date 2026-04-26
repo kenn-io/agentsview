@@ -129,6 +129,8 @@ type Endpoint = "summary" | "topSessions";
 class UsageStore {
   from: string = $state(daysAgo(30));
   to: string = $state(today());
+  isPinned: boolean = $state(false);
+  windowDays: number = $state(30);
 
   // Excluded items (comma-separated strings). Default is
   // empty = nothing excluded = show all. The UI shows all items
@@ -186,6 +188,7 @@ class UsageStore {
   }
 
   setDateRange(from: string, to: string) {
+    this.isPinned = true;
     this.from = from;
     this.to = to;
     this.fetchAll();
@@ -309,7 +312,14 @@ class UsageStore {
     saveToggles(this.toggles);
   }
 
+  private rollDates(): void {
+    if (this.isPinned) return;
+    this.from = daysAgo(this.windowDays);
+    this.to = today();
+  }
+
   async fetchAll() {
+    this.rollDates();
     saveUsageFilters(this);
     await Promise.all([
       this.fetchSummary(),
@@ -381,3 +391,32 @@ class UsageStore {
 }
 
 export const usage = new UsageStore();
+
+export interface UsageUrlState {
+  from: string;
+  to: string;
+  isPinned: boolean;
+  excludedProjects: string;
+  excludedAgents: string;
+  excludedModels: string;
+}
+
+export function buildUsageUrlParams(
+  state: UsageUrlState,
+): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (state.isPinned) {
+    if (state.from) params["from"] = state.from;
+    if (state.to) params["to"] = state.to;
+  }
+  if (state.excludedProjects) {
+    params["exclude_project"] = state.excludedProjects;
+  }
+  if (state.excludedAgents) {
+    params["exclude_agent"] = state.excludedAgents;
+  }
+  if (state.excludedModels) {
+    params["exclude_model"] = state.excludedModels;
+  }
+  return params;
+}
