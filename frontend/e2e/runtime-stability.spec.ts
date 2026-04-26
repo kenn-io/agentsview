@@ -14,7 +14,7 @@ const KNOWN_SVELTE_WARNINGS_RE = /each_key_duplicate/;
 // and 5+ messages, totalling 8 sessions across all projects.
 const TEST_PROJECT = "project-alpha";
 const FILTERED_SESSION_COUNT = 2;
-const TOTAL_SESSION_COUNT = 8;
+const TOTAL_SESSION_COUNT = 9;
 
 // Session deep in the list to exercise virtualizer scroll.
 const TARGET_SESSION_INDEX = 6;

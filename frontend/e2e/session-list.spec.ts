@@ -2,8 +2,9 @@ import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
 // Test-fixture assumptions: project-alpha has 2 sessions,
-// project-beta has 3, totalling 8 sessions across all projects.
-const TOTAL_SESSIONS = 8;
+// project-beta has 3, project-duration has 1 (the duration UX
+// showcase), totalling 9 sessions across all projects.
+const TOTAL_SESSIONS = 9;
 const ALPHA_SESSIONS = 2;
 const BETA_SESSIONS = 3;
 
