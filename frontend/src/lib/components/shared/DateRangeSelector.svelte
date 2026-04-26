@@ -10,13 +10,18 @@
     from: string;
     to: string;
     onChange: (from: string, to: string) => void;
+    onPreset?: (days: number) => void;
   }
 
-  let { from, to, onChange }: Props = $props();
+  let { from, to, onChange, onPreset }: Props = $props();
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
   function applyPreset(days: number) {
+    if (days > 0 && onPreset) {
+      onPreset(days);
+      return;
+    }
     const range = presetRange(days, earliestSession);
     onChange(range.from, range.to);
   }

@@ -134,6 +134,7 @@
       from={analytics.from}
       to={analytics.to}
       onChange={(from, to) => analytics.setDateRange(from, to)}
+      onPreset={(days) => analytics.setRollingWindow(days)}
     />
     <button
       class="refresh-btn"
