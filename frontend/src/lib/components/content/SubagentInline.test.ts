@@ -53,6 +53,7 @@ function makeSession(
     peak_context_tokens: 0,
     has_total_output_tokens: true,
     has_peak_context_tokens: false,
+    is_automated: false,
     created_at: "2026-02-20T12:30:00Z",
     ...overrides,
   };

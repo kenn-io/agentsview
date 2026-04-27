@@ -408,6 +408,7 @@ describe("SessionsStore", () => {
               peak_context_tokens: 0,
               has_total_output_tokens: false,
               has_peak_context_tokens: false,
+              is_automated: false,
               created_at: "2024-01-01T00:00:00Z",
             },
           ],
@@ -430,6 +431,7 @@ describe("SessionsStore", () => {
               peak_context_tokens: 0,
               has_total_output_tokens: false,
               has_peak_context_tokens: false,
+              is_automated: false,
               created_at: "2024-01-01T00:00:01Z",
             },
           ],
@@ -1187,6 +1189,7 @@ function makeSession(
     user_message_count: 1,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    is_automated: false,
     created_at: "2024-01-01T00:00:00Z",
     ...overrides,
   };

@@ -201,8 +201,8 @@ describe("ToolBlock output section", () => {
 
     const historyEntries = Array.from(document.querySelectorAll(".history-content"));
     expect(historyEntries).toHaveLength(2);
-    expect(historyEntries[0].textContent).toBe("First finished");
-    expect(historyEntries[1].textContent).toBe("Second finished");
+    expect(historyEntries[0]!.textContent).toBe("First finished");
+    expect(historyEntries[1]!.textContent).toBe("Second finished");
   });
 });
 

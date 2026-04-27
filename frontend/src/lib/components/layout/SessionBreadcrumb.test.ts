@@ -46,6 +46,7 @@ function makeSession(
     user_message_count: 1,
     total_output_tokens: 0,
     peak_context_tokens: 0,
+    is_automated: false,
     created_at: "2026-02-20T12:30:00Z",
     ...overrides,
   };

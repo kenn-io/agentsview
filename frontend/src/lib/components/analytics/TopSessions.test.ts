@@ -58,6 +58,7 @@ describe("TopSessions", () => {
           project: "proj",
           first_message: "hello",
           message_count: 10,
+          output_tokens: 0,
           duration_min: 5,
         },
       ],
@@ -86,6 +87,7 @@ describe("TopSessions", () => {
 
   it("sets filter and navigates when analytics includeOneShot is enabled", async () => {
     analytics.includeOneShot = true;
+    sessions.filters.includeOneShot = false;
     const component = mountWithData();
     await tick();
 
