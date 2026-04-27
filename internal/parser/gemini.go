@@ -4,6 +4,7 @@ package parser
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -50,24 +51,22 @@ func ParseGeminiSession(
 		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	if gjson.ValidBytes(data) {
-		root := gjson.ParseBytes(data)
+	valid := gjson.ValidBytes(data)
+	var root gjson.Result
+	if valid {
+		root = gjson.ParseBytes(data)
 		if root.Get("messages").IsArray() {
 			return parseGeminiJSONObject(
 				path, project, machine, info, root,
 			)
 		}
 	}
-	if strings.ContainsRune(string(data), '\n') {
+	if bytes.IndexByte(data, '\n') >= 0 {
 		return parseGeminiJSONL(
 			path, project, machine, info, data,
 		)
 	}
-	if !gjson.ValidBytes(data) {
-		return nil, nil, fmt.Errorf("invalid JSON or JSONL in %s", path)
-	}
-	root := gjson.ParseBytes(data)
-	if root.Get("sessionId").Exists() {
+	if valid && root.Get("sessionId").Exists() {
 		return parseGeminiJSONObject(
 			path, project, machine, info, root,
 		)
@@ -135,7 +134,7 @@ func parseGeminiJSONL(
 		firstMessage   string
 		records        []gjson.Result
 		recordIDs      = make(map[string]int)
-		scanner        = bufio.NewScanner(strings.NewReader(string(data)))
+		scanner        = bufio.NewScanner(bytes.NewReader(data))
 		maxScanBufSize = 16 * 1024 * 1024
 	)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxScanBufSize)
@@ -177,6 +176,10 @@ func parseGeminiJSONL(
 		}
 		msgID := rec.Get("id").Str
 		if msgID != "" {
+			// Later record with same id replaces the earlier one in
+			// place. Assumes Gemini does not reuse ids across roles
+			// (user vs gemini); collisions would silently flip the
+			// slot's role while keeping its chronological position.
 			if idx, ok := recordIDs[msgID]; ok {
 				records[idx] = rec
 				continue
@@ -444,7 +447,7 @@ func GeminiSessionID(data []byte) string {
 	if id := gjson.GetBytes(data, "sessionId").Str; id != "" {
 		return id
 	}
-	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
