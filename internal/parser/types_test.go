@@ -586,6 +586,58 @@ func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
 	}
 }
 
+func TestOpenCodeStorageSessionIDsCollectsJSONFiles(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "storage", "session")
+	if err := os.MkdirAll(
+		filepath.Join(sessionDir, "global"), 0o755,
+	); err != nil {
+		t.Fatalf("mkdir global: %v", err)
+	}
+	if err := os.MkdirAll(
+		filepath.Join(sessionDir, "proj-x"), 0o755,
+	); err != nil {
+		t.Fatalf("mkdir proj-x: %v", err)
+	}
+	for _, p := range []string{
+		filepath.Join(sessionDir, "global", "ses_a.json"),
+		filepath.Join(sessionDir, "global", "ses_b.json"),
+		filepath.Join(sessionDir, "proj-x", "ses_c.json"),
+		filepath.Join(sessionDir, "global", "skip.txt"),
+	} {
+		if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
+	}
+
+	got := OpenCodeStorageSessionIDs(root)
+	want := map[string]struct{}{
+		"ses_a": {},
+		"ses_b": {},
+		"ses_c": {},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d ids, want %d: %v", len(got), len(want), got)
+	}
+	for id := range want {
+		if _, ok := got[id]; !ok {
+			t.Errorf("missing %q in result %v", id, got)
+		}
+	}
+}
+
+func TestOpenCodeStorageSessionIDsNilForNonStorageRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(root, "opencode.db"), []byte("x"), 0o644,
+	); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+	if got := OpenCodeStorageSessionIDs(root); got != nil {
+		t.Fatalf("got %v, want nil for SQLite-only root", got)
+	}
+}
+
 func TestResolveOpenCodeWatchRootsStorage(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(

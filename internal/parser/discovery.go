@@ -194,6 +194,46 @@ func FindOpenCodeSourceFile(root, sessionID string) string {
 	}
 }
 
+// OpenCodeStorageSessionIDs returns the set of session IDs that
+// have a JSON file under storage/session/*/ in the given root.
+// Returns nil for non-storage roots. In hybrid roots (storage and
+// SQLite both present) the storage transcript is canonical, so
+// callers use this to skip duplicate SQLite metas during sync.
+func OpenCodeStorageSessionIDs(root string) map[string]struct{} {
+	src := ResolveOpenCodeSource(root)
+	if src.Mode != OpenCodeSourceStorage {
+		return nil
+	}
+	entries, err := os.ReadDir(src.SessionRoot)
+	if err != nil {
+		return nil
+	}
+	ids := make(map[string]struct{})
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, src.SessionRoot) {
+			continue
+		}
+		projectDir := filepath.Join(src.SessionRoot, entry.Name())
+		sessionEntries, err := os.ReadDir(projectDir)
+		if err != nil {
+			continue
+		}
+		for _, sessionEntry := range sessionEntries {
+			name := sessionEntry.Name()
+			if sessionEntry.IsDir() ||
+				!strings.HasSuffix(name, ".json") {
+				continue
+			}
+			id := strings.TrimSuffix(name, ".json")
+			if id == "" {
+				continue
+			}
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
 // ResolveOpenCodeWatchRoots returns the directories that should be
 // watched for live OpenCode updates under a configured root. Pure
 // storage mode targets the storage/ subtree so fsnotify does not

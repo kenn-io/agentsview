@@ -2471,6 +2471,92 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 	)
 }
 
+// TestOpenCodeHybridRootStorageWinsOnDuplicateID covers a hybrid
+// OpenCode root where the same session ID exists in both
+// storage/session and opencode.db. Storage is the canonical
+// transcript, so the SQLite duplicate must be skipped during sync
+// even when its time_updated is newer than the storage file mtime
+// — otherwise a stale SQLite row could overwrite live storage data.
+func TestOpenCodeHybridRootStorageWinsOnDuplicateID(t *testing.T) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-hybrid-dup"
+	storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/storage-app", "Hybrid Dup",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-storage-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-storage-a1", "part-storage-a1",
+		"canonical storage reply", 1704067201000,
+	)
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/storage-app")
+	// Use a much newer time_updated so that without the
+	// duplicate-ID filter, shouldPreserveOpenCodeArchive's
+	// mtime check would not save the storage transcript.
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1804067200000)
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user", timeCreated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"stale sqlite question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-a1", sessionID, "sqlite-msg-a1",
+		"stale sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"canonical storage reply",
+	)
+
+	storagePath := filepath.Join(
+		env.opencodeDir, "storage", "session", "global",
+		sessionID+".json",
+	)
+	if got := env.engine.FindSourceFile("opencode:" + sessionID); got != storagePath {
+		t.Fatalf("FindSourceFile() = %q, want %q", got, storagePath)
+	}
+
+	// SyncPaths on opencode.db must also leave the storage
+	// transcript untouched, even though the SQLite session was
+	// just modified.
+	sqlite.replaceTextContent(
+		t, sessionID,
+		"newer stale sqlite question",
+		"newer stale sqlite answer",
+		timeCreated,
+	)
+	sqlite.updateSessionTime(t, sessionID, timeUpdated+1000)
+	env.engine.SyncPaths([]string{sqlite.path})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"canonical storage reply",
+	)
+}
+
 func TestSyncAllSinceOpenCodeStorageRequiresSessionMtime(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)

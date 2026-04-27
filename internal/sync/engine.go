@@ -1593,8 +1593,13 @@ func (e *Engine) syncOneOpenCode(
 		return nil
 	}
 
+	storageIDs := parser.OpenCodeStorageSessionIDs(dir)
+
 	var changed []string
 	for _, m := range metas {
+		if _, ok := storageIDs[m.SessionID]; ok {
+			continue
+		}
 		_, storedMtime, ok :=
 			e.db.GetFileInfoByPath(m.VirtualPath)
 		if ok && storedMtime == m.FileMtime &&
@@ -2390,8 +2395,14 @@ func (e *Engine) processOpenCode(
 		if err != nil {
 			return processResult{err: err}
 		}
+		storageIDs := parser.OpenCodeStorageSessionIDs(
+			filepath.Dir(file.Path),
+		)
 		var results []parser.ParseResult
 		for _, meta := range metas {
+			if _, ok := storageIDs[meta.SessionID]; ok {
+				continue
+			}
 			_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
 			if ok && storedMtime == meta.FileMtime &&
 				e.db.GetDataVersionByPath(meta.VirtualPath) >=
