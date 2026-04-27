@@ -53,7 +53,13 @@
   }}
 />
 
+<!--
+  Overlay is closed via Escape (svelte:window above) and via the
+  Cancel/× buttons inside the modal, so a separate keydown handler
+  here would be redundant.
+-->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div class="confirm-overlay" onclick={handleOverlayClick}>
   <div class="confirm-modal">
     <div class="confirm-header">

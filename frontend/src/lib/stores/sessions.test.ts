@@ -34,6 +34,16 @@ vi.mock("../api/client.js", () => ({
   getSession: vi.fn(),
   getProjects: vi.fn(),
   getAgents: vi.fn(),
+  // invalidateFilterCaches() triggers sync.loadStats() which calls
+  // getStats(). Provide a default so the stale-state guards we
+  // exercise don't trip noisy "no export" stderr from the mock.
+  getStats: vi.fn().mockResolvedValue({
+    session_count: 0,
+    message_count: 0,
+    project_count: 0,
+    machine_count: 0,
+    earliest_session: null,
+  }),
   // Live-refresh subscription opens an EventSource via watchEvents.
   // Stub it so the mocked client doesn't blow up when the store
   // calls events.subscribeDebounced() during load().

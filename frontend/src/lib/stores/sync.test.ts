@@ -38,6 +38,14 @@ function mockResyncSuccess(): void {
     machine_count: 1,
     earliest_session: null,
   });
+  // triggerResync schedules loadStatus() as a side effect.
+  // loadStatus() reads getSyncStatus and unconditionally sets
+  // lastSyncStats from the response, so mirror MOCK_STATS here so
+  // the post-resync state matches what the resync just produced.
+  vi.mocked(api.getSyncStatus).mockResolvedValue({
+    last_sync: "2024-01-01T00:00:00Z",
+    stats: MOCK_STATS,
+  });
 }
 
 function mockResyncFailure(error: Error): void {
