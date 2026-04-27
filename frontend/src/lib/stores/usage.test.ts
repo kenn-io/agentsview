@@ -351,4 +351,11 @@ describe("parseWindowDays", () => {
     expect(parseWindowDays("7d")).toBeNull();
     expect(parseWindowDays("abc")).toBeNull();
   });
+
+  it("accepts values up to the 100-year cap and rejects beyond", async () => {
+    const { parseWindowDays } = await loadStore();
+    expect(parseWindowDays("36500")).toBe(36500);
+    expect(parseWindowDays("36501")).toBeNull();
+    expect(parseWindowDays("1000000000")).toBeNull();
+  });
 });

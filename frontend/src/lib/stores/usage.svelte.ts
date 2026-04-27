@@ -88,6 +88,11 @@ function today(): string {
 
 const DEFAULT_WINDOW_DAYS = 30;
 
+// 100 years is well beyond any realistic session history and stays
+// inside Date#setDate's safe range, so daysAgo(MAX_WINDOW_DAYS) always
+// produces a valid YYYY-MM-DD string.
+const MAX_WINDOW_DAYS = 36500;
+
 const USAGE_FILTERS_KEY = "usage-filters";
 
 export interface UsageFilterState {
@@ -416,7 +421,14 @@ export const USAGE_DEFAULT_WINDOW_DAYS = DEFAULT_WINDOW_DAYS;
 export function parseWindowDays(raw: string | undefined): number | null {
   if (!raw) return null;
   const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n <= 0 || String(n) !== raw) return null;
+  if (
+    !Number.isFinite(n) ||
+    n <= 0 ||
+    n > MAX_WINDOW_DAYS ||
+    String(n) !== raw
+  ) {
+    return null;
+  }
   return n;
 }
 
