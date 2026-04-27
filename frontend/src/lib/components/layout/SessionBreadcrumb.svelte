@@ -593,10 +593,10 @@
         </button>
         <button
           class="minimap-btn"
-          class:minimap-btn--active={ui.activityMinimapOpen}
-          title="Activity minimap"
-          onclick={() => ui.toggleActivityMinimap()}
-          aria-label="Toggle activity minimap"
+          class:minimap-btn--active={ui.vitalsOpen}
+          title="Session vital signs"
+          onclick={() => ui.toggleVitals()}
+          aria-label="Toggle session vital signs"
         >
           <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
             <path d="M1 14V8h2v6H1zm4 0V2h2v12H5zm4 0V5h2v9H9zm4 0V9h2v5h-2z"/>

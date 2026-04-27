@@ -6,7 +6,7 @@
   import StatusBar from "./lib/components/layout/StatusBar.svelte";
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
-  import ActivityMinimap from "./lib/components/content/ActivityMinimap.svelte";
+  import SessionVitals from "./lib/components/content/SessionVitals.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
@@ -93,7 +93,7 @@
             messages.reload();
             sessions.refreshActiveSession();
             sessions.loadChildSessions(id);
-            if (ui.activityMinimapOpen) {
+            if (ui.vitalsOpen) {
               sessionActivity.reload(id);
             } else {
               sessionActivity.invalidate();
@@ -436,14 +436,15 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
-        {#if ui.activityMinimapOpen && sessions.activeSessionId}
-          <ActivityMinimap
-            sessionId={sessions.activeSessionId}
-          />
-        {/if}
         <MessageList bind:this={messageListRef} />
       {:else}
         <AnalyticsPage />
+      {/if}
+    {/snippet}
+
+    {#snippet vitals()}
+      {#if sessions.activeSessionId}
+        <SessionVitals sessionId={sessions.activeSessionId} />
       {/if}
     {/snippet}
   </ThreeColumnLayout>
@@ -512,6 +513,7 @@
     min-height: 0;
     overflow-y: auto;
   }
+
 
   .undo-toast {
     position: fixed;

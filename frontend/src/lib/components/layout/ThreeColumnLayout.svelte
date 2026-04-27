@@ -16,12 +16,13 @@
   interface Props {
     sidebar: Snippet;
     content: Snippet;
+    vitals?: Snippet;
   }
 
   const RESIZE_HANDLE_WIDTH = 12;
   const SIDEBAR_BORDER_WIDTH = 1;
 
-  let { sidebar, content }: Props = $props();
+  let { sidebar, content, vitals }: Props = $props();
   let layoutElement = $state<HTMLElement | null>(null);
   let resizeHandleElement = $state<HTMLElement | null>(null);
   let layoutWidth = $state<number | null>(null);
@@ -377,6 +378,12 @@
   <main class="content">
     {@render content()}
   </main>
+
+  {#if vitals && isDesktop && ui.vitalsOpen && sessions.activeSessionId}
+    <aside class="vitals">
+      {@render vitals()}
+    </aside>
+  {/if}
 </div>
 
 <style>
@@ -456,6 +463,16 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+  }
+
+  .vitals {
+    width: 320px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border-default);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
   }
 
   .sidebar-backdrop {

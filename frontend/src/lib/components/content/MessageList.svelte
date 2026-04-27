@@ -159,7 +159,7 @@
   // Recompute visible timestamp when minimap opens or
   // message content changes (e.g. SSE reload).
   $effect(() => {
-    if (ui.activityMinimapOpen) {
+    if (ui.vitalsOpen) {
       // Track message array so the effect re-runs after
       // content changes while the minimap is open.
       void messages.messages.length;
@@ -191,7 +191,7 @@
         }
       }
 
-      if (ui.activityMinimapOpen) {
+      if (ui.vitalsOpen) {
         publishVisibleTimestamp();
       }
     });

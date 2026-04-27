@@ -35,7 +35,7 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
 
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
 const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
-const MINIMAP_KEY = "agentsview-activity-minimap";
+const VITALS_KEY = "agentsview-session-vitals";
 const SIGNAL_PANEL_KEY = "agentsview-signal-panel";
 
 function readBlockFilters(): Set<BlockType> {
@@ -171,8 +171,8 @@ class UIStore {
 
   sidebarOpen: boolean = $state(true);
   isMobileViewport: boolean = $state(false);
-  activityMinimapOpen: boolean = $state(
-    readStoredBool(MINIMAP_KEY, false),
+  vitalsOpen: boolean = $state(
+    readStoredBool(VITALS_KEY, false),
   );
   signalPanelOpen: boolean = $state(
     readStoredBool(SIGNAL_PANEL_KEY, false),
@@ -252,8 +252,8 @@ class UIStore {
       $effect(() => {
         try {
           localStorage?.setItem(
-            MINIMAP_KEY,
-            String(this.activityMinimapOpen),
+            VITALS_KEY,
+            String(this.vitalsOpen),
           );
         } catch {
           // ignore
@@ -424,8 +424,8 @@ class UIStore {
     this.sidebarOpen = false;
   }
 
-  toggleActivityMinimap() {
-    this.activityMinimapOpen = !this.activityMinimapOpen;
+  toggleVitals() {
+    this.vitalsOpen = !this.vitalsOpen;
   }
 
   toggleSignalPanel() {

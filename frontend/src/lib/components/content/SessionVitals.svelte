@@ -474,10 +474,9 @@
 <style>
   /* Outer panel */
   .vital {
-    background: var(--bg-surface);
-    border-left: 1px solid var(--border-muted);
+    flex: 1;
     overflow-y: auto;
-    height: 100%;
+    min-height: 0;
   }
 
   .v-section {
