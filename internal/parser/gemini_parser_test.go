@@ -34,6 +34,38 @@ func TestParseGeminiSession_Basic(t *testing.T) {
 	assert.Equal(t, 1, msgs[1].Ordinal)
 }
 
+func TestParseGeminiSession_JSONLStream(t *testing.T) {
+	content := strings.Join([]string{
+		`{"sessionId":"sess-jsonl-1","projectHash":"hash","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:12:42.783Z","kind":"main"}`,
+		`{"id":"u1","timestamp":"2026-04-23T16:12:43.085Z","type":"user","content":[{"text":"Fix the import path"}]}`,
+		`{"$set":{"lastUpdated":"2026-04-23T16:12:43.085Z"}}`,
+		`{"id":"a1","timestamp":"2026-04-23T16:12:50.158Z","type":"gemini","content":"","thoughts":[{"subject":"Planning","description":"Looking for the failure.","timestamp":"2026-04-23T16:12:46.795Z"}],"tokens":{"input":9184,"output":26,"cached":0},"model":"gemini-3.1-pro-preview"}`,
+		`{"id":"a1","timestamp":"2026-04-23T16:12:50.158Z","type":"gemini","content":"I found the issue.","thoughts":[{"subject":"Planning","description":"Looking for the failure.","timestamp":"2026-04-23T16:12:46.795Z"}],"tokens":{"input":9184,"output":26,"cached":0},"model":"gemini-3.1-pro-preview","toolCalls":[{"id":"read_file_1","name":"read_file","args":{"file_path":"main.go"},"result":[{"functionResponse":{"id":"read_file_1","name":"read_file","response":{"output":"package main"}}}],"displayName":"ReadFile"}]}`,
+		`{"$set":{"lastUpdated":"2026-04-23T16:12:50.158Z"}}`,
+	}, "\n")
+	path := createTestFile(t, "session.jsonl", content)
+	sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+	require.NoError(t, err)
+
+	require.NotNil(t, sess)
+	require.Equal(t, 2, len(msgs))
+	assertSessionMeta(t, sess, "gemini:sess-jsonl-1", "my_project", AgentGemini)
+	assert.Equal(t, "Fix the import path", sess.FirstMessage)
+	assertMessage(t, msgs[0], RoleUser, "Fix the import path")
+	assertMessage(t, msgs[1], RoleAssistant, "I found the issue.")
+	assert.True(t, msgs[1].HasThinking)
+	assert.True(t, msgs[1].HasToolUse)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "read_file_1", msgs[1].ToolCalls[0].ToolUseID)
+	require.Len(t, msgs[1].ToolResults, 1)
+	assert.Equal(t, "package main", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
+	assert.Equal(
+		t,
+		parseTimestamp("2026-04-23T16:12:50.158Z"),
+		sess.EndedAt,
+	)
+}
+
 func TestParseGeminiSession_ToolCalls(t *testing.T) {
 	t.Run("basic tool calls", func(t *testing.T) {
 		content := loadFixture(t, "gemini/tool_calls.json")

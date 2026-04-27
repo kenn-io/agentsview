@@ -1411,6 +1411,11 @@ func TestGeminiSessionID(t *testing.T) {
 		t.Errorf("GeminiSessionID = %q, want %q", got, "abc-123")
 	}
 
+	got = GeminiSessionID([]byte("{\"sessionId\":\"jsonl-123\"}\n{\"type\":\"user\"}\n"))
+	if got != "jsonl-123" {
+		t.Errorf("GeminiSessionID JSONL = %q, want %q", got, "jsonl-123")
+	}
+
 	got = GeminiSessionID([]byte(`{}`))
 	if got != "" {
 		t.Errorf("GeminiSessionID empty = %q, want empty", got)

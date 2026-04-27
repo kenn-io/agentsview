@@ -464,7 +464,7 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Gemini: <geminiDir>/tmp/<dir>/chats/session-*.json
+	// Gemini: <geminiDir>/tmp/<dir>/chats/session-*.json(.l)
 	// <dir> is either a SHA-256 hash (old) or project name (new).
 	for _, geminiDir := range e.agentDirs[parser.AgentGemini] {
 		if geminiDir == "" {
@@ -479,7 +479,8 @@ func (e *Engine) classifyOnePath(
 			}
 			name := parts[3]
 			if !strings.HasPrefix(name, "session-") ||
-				!strings.HasSuffix(name, ".json") {
+				(!strings.HasSuffix(name, ".json") &&
+					!strings.HasSuffix(name, ".jsonl")) {
 				continue
 			}
 			dirName := parts[1]

@@ -485,12 +485,14 @@ func TestDiscoverGeminiSessions(t *testing.T) {
 		{
 			name: "SkipsNonSessionFiles",
 			files: map[string]string{
-				filepath.Join("tmp", "hash1", geminiChatsDir, "session-abc.json"): "{}",
-				filepath.Join("tmp", "hash1", geminiChatsDir, "other.json"):       "{}",
-				filepath.Join("tmp", "hash1", geminiChatsDir, "session-def.txt"):  "{}",
+				filepath.Join("tmp", "hash1", geminiChatsDir, "session-abc.json"):  "{}",
+				filepath.Join("tmp", "hash1", geminiChatsDir, "session-def.jsonl"): "{}",
+				filepath.Join("tmp", "hash1", geminiChatsDir, "other.json"):        "{}",
+				filepath.Join("tmp", "hash1", geminiChatsDir, "session-def.txt"):   "{}",
 			},
 			wantFiles: []string{
 				filepath.Join("tmp", "hash1", geminiChatsDir, "session-abc.json"),
+				filepath.Join("tmp", "hash1", geminiChatsDir, "session-def.jsonl"),
 			},
 		},
 		{
@@ -571,6 +573,14 @@ func TestFindGeminiSourceFile(t *testing.T) {
 			},
 			targetID: "b0a4eadd-cb99-4165-94d9-64cad5a66d24",
 			wantFile: filepath.Join("tmp", "hash1", geminiChatsDir, "session-2026-01-19T18-21-b0a4eadd.json"),
+		},
+		{
+			name: "FoundJSONL",
+			files: map[string]string{
+				filepath.Join("tmp", "hash1", geminiChatsDir, "session-2026-01-19T18-21-b0a4eadd.jsonl"): "{\"sessionId\":\"b0a4eadd-cb99-4165-94d9-64cad5a66d24\",\"kind\":\"main\"}\n",
+			},
+			targetID: "b0a4eadd-cb99-4165-94d9-64cad5a66d24",
+			wantFile: filepath.Join("tmp", "hash1", geminiChatsDir, "session-2026-01-19T18-21-b0a4eadd.jsonl"),
 		},
 		{
 			name: "Nonexistent",

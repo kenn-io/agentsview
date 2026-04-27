@@ -621,8 +621,14 @@ func IsAmpThreadFileName(name string) bool {
 	return isValidAmpThreadID(strings.TrimSuffix(name, ".json"))
 }
 
-// DiscoverGeminiSessions finds all session JSON files under
-// the Gemini directory (~/.gemini/tmp/*/chats/session-*.json).
+func isGeminiSessionFilename(name string) bool {
+	return strings.HasPrefix(name, "session-") &&
+		(strings.HasSuffix(name, ".json") ||
+			strings.HasSuffix(name, ".jsonl"))
+}
+
+// DiscoverGeminiSessions finds all Gemini session files under
+// the Gemini directory (~/.gemini/tmp/*/chats/session-*).
 func DiscoverGeminiSessions(
 	geminiDir string,
 ) []DiscoveredFile {
@@ -657,8 +663,7 @@ func DiscoverGeminiSessions(
 				continue
 			}
 			name := sf.Name()
-			if !strings.HasPrefix(name, "session-") ||
-				!strings.HasSuffix(name, ".json") {
+			if !isGeminiSessionFilename(name) {
 				continue
 			}
 			files = append(files, DiscoveredFile{
@@ -705,8 +710,7 @@ func FindGeminiSourceFile(
 				continue
 			}
 			name := sf.Name()
-			if !strings.HasPrefix(name, "session-") ||
-				!strings.HasSuffix(name, ".json") {
+			if !isGeminiSessionFilename(name) {
 				continue
 			}
 			if strings.Contains(name, sessionID[:8]) {

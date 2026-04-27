@@ -3,10 +3,12 @@
 package parser
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/tidwall/gjson"
 )
@@ -48,12 +50,36 @@ func ParseGeminiSession(
 		return nil, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 
-	if !gjson.ValidBytes(data) {
-		return nil, nil, fmt.Errorf("invalid JSON in %s", path)
+	if gjson.ValidBytes(data) {
+		root := gjson.ParseBytes(data)
+		if root.Get("messages").IsArray() {
+			return parseGeminiJSONObject(
+				path, project, machine, info, root,
+			)
+		}
 	}
-
+	if strings.ContainsRune(string(data), '\n') {
+		return parseGeminiJSONL(
+			path, project, machine, info, data,
+		)
+	}
+	if !gjson.ValidBytes(data) {
+		return nil, nil, fmt.Errorf("invalid JSON or JSONL in %s", path)
+	}
 	root := gjson.ParseBytes(data)
+	if root.Get("sessionId").Exists() {
+		return parseGeminiJSONObject(
+			path, project, machine, info, root,
+		)
+	}
+	return nil, nil, fmt.Errorf("invalid Gemini session in %s", path)
+}
 
+func parseGeminiJSONObject(
+	path, project, machine string,
+	info os.FileInfo,
+	root gjson.Result,
+) (*ParsedSession, []ParsedMessage, error) {
 	sessionID := root.Get("sessionId").Str
 	if sessionID == "" {
 		return nil, nil, fmt.Errorf(
@@ -69,64 +95,179 @@ func ParseGeminiSession(
 		firstMessage string
 		ordinal      int
 	)
+	appendMessage := func(msg gjson.Result) {
+		parsed, ok := parseGeminiMessage(msg, ordinal)
+		if !ok {
+			return
+		}
+		if parsed.Role == RoleUser && firstMessage == "" {
+			firstMessage = truncate(
+				strings.ReplaceAll(parsed.Content, "\n", " "),
+				300,
+			)
+		}
+		messages = append(messages, parsed)
+		ordinal++
+	}
 
 	root.Get("messages").ForEach(
 		func(_, msg gjson.Result) bool {
-			msgType := msg.Get("type").Str
-			if msgType != "user" && msgType != "gemini" {
-				return true
-			}
-
-			ts := parseTimestamp(msg.Get("timestamp").Str)
-
-			role := RoleUser
-			if msgType == "gemini" {
-				role = RoleAssistant
-			}
-
-			content, hasThinking, hasToolUse, tcs, trs :=
-				extractGeminiContent(msg)
-			if strings.TrimSpace(content) == "" {
-				return true
-			}
-
-			if role == RoleUser && firstMessage == "" {
-				firstMessage = truncate(
-					strings.ReplaceAll(content, "\n", " "),
-					300,
-				)
-			}
-
-			tok := extractGeminiTokens(msg)
-			var tokenUsage json.RawMessage
-			tokResult := msg.Get("tokens")
-			if tokResult.Exists() {
-				tokenUsage = json.RawMessage(tokResult.Raw)
-			}
-			messages = append(messages, ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          role,
-				Content:       content,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(content),
-				ToolCalls:     tcs,
-				ToolResults:   trs,
-				Model:         msg.Get("model").String(),
-				TokenUsage:    tokenUsage,
-				ContextTokens: tok.Input + tok.Cached,
-				OutputTokens:  tok.Output,
-				HasContextTokens: tokResult.Get("input").Exists() ||
-					tokResult.Get("cached").Exists(),
-				HasOutputTokens:    tokResult.Get("output").Exists(),
-				tokenPresenceKnown: true,
-			})
-			ordinal++
+			appendMessage(msg)
 			return true
 		},
 	)
+	return buildGeminiSession(
+		path, project, machine, info,
+		sessionID, startTime, lastUpdated,
+		firstMessage, messages,
+	), messages, nil
+}
 
+func parseGeminiJSONL(
+	path, project, machine string,
+	info os.FileInfo,
+	data []byte,
+) (*ParsedSession, []ParsedMessage, error) {
+	var (
+		sessionID      string
+		startTime      time.Time
+		lastUpdated    time.Time
+		firstMessage   string
+		records        []gjson.Result
+		recordIDs      = make(map[string]int)
+		scanner        = bufio.NewScanner(strings.NewReader(string(data)))
+		maxScanBufSize = 16 * 1024 * 1024
+	)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxScanBufSize)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if !gjson.Valid(line) {
+			return nil, nil, fmt.Errorf(
+				"invalid JSONL record in %s", path,
+			)
+		}
+		rec := gjson.Parse(line)
+		if id := rec.Get("sessionId").Str; id != "" {
+			if sessionID == "" {
+				sessionID = id
+			}
+			if startTime.IsZero() {
+				startTime = parseTimestamp(
+					rec.Get("startTime").Str,
+				)
+			}
+			if ts := parseTimestamp(
+				rec.Get("lastUpdated").Str,
+			); ts.After(lastUpdated) {
+				lastUpdated = ts
+			}
+		}
+		if ts := parseTimestamp(
+			rec.Get("$set.lastUpdated").Str,
+		); ts.After(lastUpdated) {
+			lastUpdated = ts
+		}
+
+		msgType := rec.Get("type").Str
+		if msgType != "user" && msgType != "gemini" {
+			continue
+		}
+		msgID := rec.Get("id").Str
+		if msgID != "" {
+			if idx, ok := recordIDs[msgID]; ok {
+				records[idx] = rec
+				continue
+			}
+			recordIDs[msgID] = len(records)
+		}
+		records = append(records, rec)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, nil, fmt.Errorf("scan %s: %w", path, err)
+	}
+	if sessionID == "" {
+		return nil, nil, fmt.Errorf(
+			"missing sessionId in %s", path,
+		)
+	}
+
+	messages := make([]ParsedMessage, 0, len(records))
+	for _, rec := range records {
+		parsed, ok := parseGeminiMessage(rec, len(messages))
+		if !ok {
+			continue
+		}
+		if parsed.Role == RoleUser && firstMessage == "" {
+			firstMessage = truncate(
+				strings.ReplaceAll(parsed.Content, "\n", " "),
+				300,
+			)
+		}
+		messages = append(messages, parsed)
+	}
+	return buildGeminiSession(
+		path, project, machine, info,
+		sessionID, startTime, lastUpdated,
+		firstMessage, messages,
+	), messages, nil
+}
+
+func parseGeminiMessage(
+	msg gjson.Result, ordinal int,
+) (ParsedMessage, bool) {
+	msgType := msg.Get("type").Str
+	if msgType != "user" && msgType != "gemini" {
+		return ParsedMessage{}, false
+	}
+
+	role := RoleUser
+	if msgType == "gemini" {
+		role = RoleAssistant
+	}
+	content, hasThinking, hasToolUse, tcs, trs :=
+		extractGeminiContent(msg)
+	if strings.TrimSpace(content) == "" {
+		return ParsedMessage{}, false
+	}
+
+	tok := extractGeminiTokens(msg)
+	var tokenUsage json.RawMessage
+	tokResult := msg.Get("tokens")
+	if tokResult.Exists() {
+		tokenUsage = json.RawMessage(tokResult.Raw)
+	}
+	return ParsedMessage{
+		Ordinal:       ordinal,
+		Role:          role,
+		Content:       content,
+		Timestamp:     parseTimestamp(msg.Get("timestamp").Str),
+		HasThinking:   hasThinking,
+		HasToolUse:    hasToolUse,
+		ContentLength: len(content),
+		ToolCalls:     tcs,
+		ToolResults:   trs,
+		Model:         msg.Get("model").String(),
+		TokenUsage:    tokenUsage,
+		ContextTokens: tok.Input + tok.Cached,
+		OutputTokens:  tok.Output,
+		HasContextTokens: tokResult.Get("input").Exists() ||
+			tokResult.Get("cached").Exists(),
+		HasOutputTokens:    tokResult.Get("output").Exists(),
+		tokenPresenceKnown: true,
+	}, true
+}
+
+func buildGeminiSession(
+	path, project, machine string,
+	info os.FileInfo,
+	sessionID string,
+	startTime, lastUpdated time.Time,
+	firstMessage string,
+	messages []ParsedMessage,
+) *ParsedSession {
 	var userCount int
 	for _, m := range messages {
 		if m.Role == RoleUser && m.Content != "" {
@@ -151,8 +292,7 @@ func ParseGeminiSession(
 		},
 	}
 	accumulateMessageTokenUsage(sess, messages)
-
-	return sess, messages, nil
+	return sess
 }
 
 // extractGeminiContent builds readable text from a Gemini
@@ -301,5 +441,19 @@ func formatGeminiToolCall(tc gjson.Result) string {
 // GeminiSessionID extracts the sessionId field from raw
 // Gemini session JSON data without fully parsing.
 func GeminiSessionID(data []byte) string {
-	return gjson.GetBytes(data, "sessionId").Str
+	if id := gjson.GetBytes(data, "sessionId").Str; id != "" {
+		return id
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || !gjson.Valid(line) {
+			continue
+		}
+		if id := gjson.Get(line, "sessionId").Str; id != "" {
+			return id
+		}
+	}
+	return ""
 }

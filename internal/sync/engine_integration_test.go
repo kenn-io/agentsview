@@ -1073,6 +1073,41 @@ func TestSyncPathsGemini(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
 }
 
+func TestSyncPathsGeminiJSONL(t *testing.T) {
+	env := setupTestEnv(t)
+
+	sessionID := "gem-test-jsonl"
+	hash := "abcdef1234567890"
+	content := strings.Join([]string{
+		`{"sessionId":"gem-test-jsonl","projectHash":"abcdef1234567890","startTime":"` + tsEarly + `","lastUpdated":"` + tsEarly + `","kind":"main"}`,
+		`{"id":"m1","timestamp":"` + tsEarly + `","type":"user","content":[{"text":"Hello Gemini"}]}`,
+		`{"$set":{"lastUpdated":"` + tsEarlyS5 + `"}}`,
+		`{"id":"m2","timestamp":"` + tsEarlyS5 + `","type":"gemini","content":"Hi there!","model":"gemini-3.1-pro-preview","tokens":{"input":10,"output":5,"cached":0}}`,
+	}, "\n")
+
+	path := env.writeGeminiSession(
+		t,
+		filepath.Join(
+			"tmp", hash, "chats",
+			"session-001.jsonl",
+		),
+		content,
+	)
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			if sess.Agent != "gemini" {
+				t.Errorf("agent = %q, want gemini",
+					sess.Agent)
+			}
+		},
+	)
+	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
+}
+
 func TestSyncPathsCodexRejectsFlat(t *testing.T) {
 	env := setupTestEnv(t)
 
