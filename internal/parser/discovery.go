@@ -178,6 +178,12 @@ func FindOpenCodeSourceFile(root, sessionID string) string {
 				return path
 			}
 		}
+		if info, err := os.Stat(src.DBPath); err == nil &&
+			!info.IsDir() {
+			return OpenCodeSQLiteVirtualPath(
+				src.DBPath, sessionID,
+			)
+		}
 		return ""
 	case OpenCodeSourceSQLite:
 		return OpenCodeSQLiteVirtualPath(
@@ -189,20 +195,25 @@ func FindOpenCodeSourceFile(root, sessionID string) string {
 }
 
 // ResolveOpenCodeWatchRoots returns the directories that should be
-// watched for live OpenCode updates under a configured root. Storage
-// mode targets the storage/ subtree so fsnotify does not recurse over
-// unrelated opencode state (binaries, logs, caches, the SQLite DB),
+// watched for live OpenCode updates under a configured root. Pure
+// storage mode targets the storage/ subtree so fsnotify does not
+// recurse over unrelated opencode state (binaries, logs, caches),
 // while still covering the session/message/part subdirs — including
 // ones that OpenCode creates lazily after the watcher starts, since
-// the watcher auto-adds new subdirectories on Create events. SQLite
-// mode keeps the root as the watch target since the DB sits directly
-// under it.
+// the watcher auto-adds new subdirectories on Create events. Hybrid
+// storage+SQLite roots and pure SQLite mode watch the root so DB/WAL
+// updates are observed too.
 func ResolveOpenCodeWatchRoots(root string) []string {
 	if root == "" {
 		return nil
 	}
-	switch ResolveOpenCodeSource(root).Mode {
+	src := ResolveOpenCodeSource(root)
+	switch src.Mode {
 	case OpenCodeSourceStorage:
+		if info, err := os.Stat(src.DBPath); err == nil &&
+			!info.IsDir() {
+			return []string{root}
+		}
 		return []string{filepath.Join(root, "storage")}
 	case OpenCodeSourceSQLite:
 		return []string{root}

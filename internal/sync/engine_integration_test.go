@@ -2375,6 +2375,102 @@ func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 	}
 }
 
+func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
+	env := setupTestEnv(t)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "global", "oc-hybrid-storage",
+		"/home/user/code/storage-app", "Hybrid Storage",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, "oc-hybrid-storage", "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, "oc-hybrid-storage", "msg-a1", "part-a1",
+		"storage reply", 1704067201000,
+	)
+
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/sqlite-app")
+	sessionID := "oc-hybrid-sqlite"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+	sqlite.addSession(
+		t, sessionID, "proj-1",
+		timeCreated, timeUpdated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-u1", sessionID, "user", timeCreated,
+	)
+	sqlite.addMessage(
+		t, "sqlite-msg-a1", sessionID, "assistant", timeCreated+1,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-u1", sessionID, "sqlite-msg-u1",
+		"original sqlite question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-part-a1", sessionID, "sqlite-msg-a1",
+		"original sqlite answer", timeCreated+1,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        2,
+		Skipped:       0,
+	})
+
+	assertMessageContent(
+		t, env.db, "opencode:oc-hybrid-storage",
+		"storage reply",
+	)
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"original sqlite question",
+		"original sqlite answer",
+	)
+
+	virtualPath := parser.OpenCodeSQLiteVirtualPath(sqlite.path, sessionID)
+	if got := env.engine.FindSourceFile("opencode:" + sessionID); got != virtualPath {
+		t.Fatalf("FindSourceFile() = %q, want %q", got, virtualPath)
+	}
+	if got := env.engine.SourceMtime("opencode:" + sessionID); got != timeUpdated*1_000_000 {
+		t.Fatalf("SourceMtime() = %d, want %d", got, timeUpdated*1_000_000)
+	}
+
+	sqlite.replaceTextContent(
+		t, sessionID,
+		"updated by sync paths",
+		"updated sqlite answer",
+		timeCreated,
+	)
+	sqlite.updateSessionTime(t, sessionID, timeUpdated+1000)
+	env.engine.SyncPaths([]string{sqlite.path})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated by sync paths",
+		"updated sqlite answer",
+	)
+
+	sqlite.replaceTextContent(
+		t, sessionID,
+		"updated by single sync",
+		"updated sqlite answer again",
+		timeCreated,
+	)
+	sqlite.updateSessionTime(t, sessionID, timeUpdated+2000)
+	if err := env.engine.SyncSingleSession("opencode:" + sessionID); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID,
+		"updated by single sync",
+		"updated sqlite answer again",
+	)
+}
+
 func TestSyncAllSinceOpenCodeStorageRequiresSessionMtime(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)

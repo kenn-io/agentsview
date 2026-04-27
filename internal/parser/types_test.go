@@ -566,6 +566,26 @@ func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 	}
 }
 
+func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(root, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	dbPath := filepath.Join(root, "opencode.db")
+	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := FindOpenCodeSourceFile(root, "ses_456")
+	want := OpenCodeSQLiteVirtualPath(dbPath, "ses_456")
+	if got != want {
+		t.Fatalf("FindOpenCodeSourceFile() = %q, want %q", got, want)
+	}
+}
+
 func TestResolveOpenCodeWatchRootsStorage(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(
@@ -577,6 +597,27 @@ func TestResolveOpenCodeWatchRootsStorage(t *testing.T) {
 
 	got := ResolveOpenCodeWatchRoots(root)
 	want := []string{filepath.Join(root, "storage")}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
+	}
+}
+
+func TestResolveOpenCodeWatchRootsHybrid(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(root, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, "opencode.db"), []byte("x"), 0o644,
+	); err != nil {
+		t.Fatalf("write db marker: %v", err)
+	}
+
+	got := ResolveOpenCodeWatchRoots(root)
+	want := []string{root}
 	if !slices.Equal(got, want) {
 		t.Fatalf("ResolveOpenCodeWatchRoots() = %v, want %v", got, want)
 	}
