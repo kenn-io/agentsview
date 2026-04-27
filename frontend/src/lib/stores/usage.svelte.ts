@@ -86,6 +86,8 @@ function today(): string {
   return localDateStr(new Date());
 }
 
+const DEFAULT_WINDOW_DAYS = 30;
+
 const USAGE_FILTERS_KEY = "usage-filters";
 
 export interface UsageFilterState {
@@ -127,10 +129,10 @@ function saveUsageFilters(f: UsageFilterState): void {
 type Endpoint = "summary" | "topSessions";
 
 class UsageStore {
-  from: string = $state(daysAgo(30));
+  from: string = $state(daysAgo(DEFAULT_WINDOW_DAYS));
   to: string = $state(today());
   isPinned: boolean = $state(false);
-  windowDays: number = $state(30);
+  windowDays: number = $state(DEFAULT_WINDOW_DAYS);
 
   // Excluded items (comma-separated strings). Default is
   // empty = nothing excluded = show all. The UI shows all items
@@ -403,9 +405,19 @@ export interface UsageUrlState {
   from: string;
   to: string;
   isPinned: boolean;
+  windowDays: number;
   excludedProjects: string;
   excludedAgents: string;
   excludedModels: string;
+}
+
+export const USAGE_DEFAULT_WINDOW_DAYS = DEFAULT_WINDOW_DAYS;
+
+export function parseWindowDays(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0 || String(n) !== raw) return null;
+  return n;
 }
 
 export function buildUsageUrlParams(
@@ -415,6 +427,11 @@ export function buildUsageUrlParams(
   if (state.isPinned) {
     if (state.from) params["from"] = state.from;
     if (state.to) params["to"] = state.to;
+  } else if (
+    state.windowDays > 0 &&
+    state.windowDays !== DEFAULT_WINDOW_DAYS
+  ) {
+    params["window_days"] = String(state.windowDays);
   }
   if (state.excludedProjects) {
     params["exclude_project"] = state.excludedProjects;

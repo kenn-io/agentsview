@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import { usage, buildUsageUrlParams } from "../../stores/usage.svelte.js";
+  import {
+    usage,
+    buildUsageUrlParams,
+    parseWindowDays,
+  } from "../../stores/usage.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { events } from "../../stores/events.svelte.js";
@@ -82,7 +86,8 @@
   // current store state (restored from localStorage). Only
   // apply params that are actually present in the URL.
   const USAGE_FILTER_KEYS = new Set([
-    "from", "to", "exclude_project", "exclude_agent", "exclude_model",
+    "from", "to", "window_days",
+    "exclude_project", "exclude_agent", "exclude_model",
   ]);
   let urlInitRan = false;
   $effect(() => {
@@ -91,6 +96,7 @@
     untrack(() => {
       if (route !== "usage") return;
       const hasDateParam = !!params["from"] || !!params["to"];
+      const parsedWindowDays = parseWindowDays(params["window_days"]);
       const hasFilterKeys = Object.keys(params).some(
         (k) => USAGE_FILTER_KEYS.has(k),
       );
@@ -103,6 +109,15 @@
       if (usage.isPinned !== hasDateParam) {
         usage.isPinned = hasDateParam;
         changed = true;
+      }
+
+      // Apply rolling window from URL when present and the URL is
+      // not pinning a specific date range.
+      if (!hasDateParam && parsedWindowDays !== null) {
+        if (usage.windowDays !== parsedWindowDays) {
+          usage.windowDays = parsedWindowDays;
+          changed = true;
+        }
       }
 
       if (!hasFilterKeys) {
@@ -149,6 +164,7 @@
       from: usage.from,
       to: usage.to,
       isPinned: usage.isPinned,
+      windowDays: usage.windowDays,
       excludedProjects: usage.excludedProjects,
       excludedAgents: usage.excludedAgents,
       excludedModels: usage.excludedModels,

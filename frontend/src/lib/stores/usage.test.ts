@@ -239,12 +239,13 @@ describe("UsageStore rolling default date range", () => {
 });
 
 describe("buildUsageUrlParams", () => {
-  it("omits from/to when isPinned is false, includes excludes", async () => {
+  it("omits from/to when isPinned is false with default window, includes excludes", async () => {
     const { buildUsageUrlParams } = await loadStore();
     const params = buildUsageUrlParams({
       from: "2026-03-26",
       to: "2026-04-25",
       isPinned: false,
+      windowDays: 30,
       excludedProjects: "p1",
       excludedAgents: "a1",
       excludedModels: "m1",
@@ -262,6 +263,7 @@ describe("buildUsageUrlParams", () => {
       from: "2026-01-01",
       to: "2026-01-15",
       isPinned: true,
+      windowDays: 30,
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
@@ -278,6 +280,7 @@ describe("buildUsageUrlParams", () => {
       from: "",
       to: "",
       isPinned: false,
+      windowDays: 30,
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
@@ -291,10 +294,61 @@ describe("buildUsageUrlParams", () => {
       from: "",
       to: "",
       isPinned: true,
+      windowDays: 30,
       excludedProjects: "",
       excludedAgents: "",
       excludedModels: "",
     });
     expect(params).toEqual({});
+  });
+
+  it("emits window_days for unpinned non-default windows", async () => {
+    const { buildUsageUrlParams } = await loadStore();
+    const params = buildUsageUrlParams({
+      from: "2026-04-19",
+      to: "2026-04-25",
+      isPinned: false,
+      windowDays: 7,
+      excludedProjects: "",
+      excludedAgents: "",
+      excludedModels: "",
+    });
+    expect(params).toEqual({ window_days: "7" });
+  });
+
+  it("omits window_days when isPinned is true", async () => {
+    const { buildUsageUrlParams } = await loadStore();
+    const params = buildUsageUrlParams({
+      from: "2026-01-01",
+      to: "2026-01-15",
+      isPinned: true,
+      windowDays: 7,
+      excludedProjects: "",
+      excludedAgents: "",
+      excludedModels: "",
+    });
+    expect(params).toEqual({
+      from: "2026-01-01",
+      to: "2026-01-15",
+    });
+  });
+});
+
+describe("parseWindowDays", () => {
+  it("returns the parsed integer for valid positive integers", async () => {
+    const { parseWindowDays } = await loadStore();
+    expect(parseWindowDays("7")).toBe(7);
+    expect(parseWindowDays("365")).toBe(365);
+  });
+
+  it("rejects non-positive, non-integer, and malformed values", async () => {
+    const { parseWindowDays } = await loadStore();
+    expect(parseWindowDays(undefined)).toBeNull();
+    expect(parseWindowDays("")).toBeNull();
+    expect(parseWindowDays("0")).toBeNull();
+    expect(parseWindowDays("-7")).toBeNull();
+    expect(parseWindowDays("7.5")).toBeNull();
+    expect(parseWindowDays("7d")).toBeNull();
+    expect(parseWindowDays("abc")).toBeNull();
   });
 });
