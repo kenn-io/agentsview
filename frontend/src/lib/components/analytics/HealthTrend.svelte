@@ -42,10 +42,10 @@
     </div>
     <div class="x-axis">
       {#if trend.length > 0}
-        <span>{trend[0].date}</span>
+        <span>{trend[0]!.date}</span>
       {/if}
       {#if trend.length > 1}
-        <span>{trend[trend.length - 1].date}</span>
+        <span>{trend[trend.length - 1]!.date}</span>
       {/if}
     </div>
     <div class="chart-caption">

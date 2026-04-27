@@ -252,7 +252,7 @@
       result.push({ key, d, color });
 
       for (let i = 0; i < points.length; i++) {
-        baselines[i] += points[i]!.values[key] ?? 0;
+        baselines[i] = baselines[i]! + (points[i]!.values[key] ?? 0);
       }
     }
 
