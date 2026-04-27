@@ -575,14 +575,52 @@ func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
 		t.Fatalf("mkdir session dir: %v", err)
 	}
 	dbPath := filepath.Join(root, "opencode.db")
-	if err := os.WriteFile(dbPath, []byte("x"), 0o644); err != nil {
-		t.Fatalf("write db marker: %v", err)
-	}
+	seedHybridSQLiteDB(t, dbPath, "ses_456")
 
 	got := FindOpenCodeSourceFile(root, "ses_456")
 	want := OpenCodeSQLiteVirtualPath(dbPath, "ses_456")
 	if got != want {
 		t.Fatalf("FindOpenCodeSourceFile() = %q, want %q", got, want)
+	}
+}
+
+// TestFindOpenCodeSourceFileReturnsEmptyWhenSessionMissing covers
+// the multi-root shadowing case: an early hybrid root with an
+// opencode.db file that does NOT contain the session must return
+// "" so the engine's FindSourceFile loop continues to later roots
+// where the session actually lives.
+func TestFindOpenCodeSourceFileReturnsEmptyWhenSessionMissing(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(root, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir session dir: %v", err)
+	}
+	dbPath := filepath.Join(root, "opencode.db")
+	seedHybridSQLiteDB(t, dbPath, "ses_unrelated")
+
+	if got := FindOpenCodeSourceFile(root, "ses_missing"); got != "" {
+		t.Fatalf("FindOpenCodeSourceFile() = %q, want empty", got)
+	}
+}
+
+func TestFindOpenCodeSourceFilePureSQLiteOnlyForExistingSession(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "opencode.db")
+	seedHybridSQLiteDB(t, dbPath, "ses_present")
+
+	if got := FindOpenCodeSourceFile(root, "ses_present"); got !=
+		OpenCodeSQLiteVirtualPath(dbPath, "ses_present") {
+		t.Fatalf(
+			"FindOpenCodeSourceFile(present) = %q, want virtual path",
+			got,
+		)
+	}
+	if got := FindOpenCodeSourceFile(root, "ses_absent"); got != "" {
+		t.Fatalf(
+			"FindOpenCodeSourceFile(absent) = %q, want empty", got,
+		)
 	}
 }
 

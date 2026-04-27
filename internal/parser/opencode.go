@@ -32,6 +32,34 @@ type OpenCodeSessionMeta struct {
 	FileMtime   int64
 }
 
+// OpenCodeSQLiteSessionExists reports whether a session row with
+// the given ID is present in the OpenCode SQLite database at
+// dbPath. Returns false when the file is missing, the schema is
+// unexpected, or no row matches. Used by FindOpenCodeSourceFile
+// so callers can distinguish "this DB has the session" from
+// "this DB exists but doesn't have it" — the latter must let
+// resolution continue to other configured roots.
+func OpenCodeSQLiteSessionExists(dbPath, sessionID string) bool {
+	if dbPath == "" || sessionID == "" {
+		return false
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	db, err := openOpenCodeDB(dbPath)
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+	var found int
+	err = db.QueryRow(
+		"SELECT 1 FROM session WHERE id = ? LIMIT 1",
+		sessionID,
+	).Scan(&found)
+	return err == nil
+}
+
 // ListOpenCodeSessionMeta returns lightweight metadata for
 // all sessions without parsing messages or parts. Used by
 // the sync engine to detect which sessions have changed.

@@ -122,6 +122,38 @@ func newTestDB(t *testing.T) (string, *OpenCodeSeeder, *sql.DB) {
 	return dbPath, seeder, db
 }
 
+// seedHybridSQLiteDB creates an OpenCode-shaped SQLite DB at
+// dbPath containing a single session row with the given ID. Used
+// by tests that exercise FindOpenCodeSourceFile in hybrid and
+// pure-SQLite roots, where a real DB file (not just a marker) is
+// required.
+func seedHybridSQLiteDB(t *testing.T, dbPath, sessionID string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open hybrid db: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(openCodeSchema); err != nil {
+		t.Fatalf("create hybrid schema: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO project (id, worktree)
+		 VALUES (?, ?)`,
+		"prj_seed", "/tmp/seed",
+	); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO session
+			(id, project_id, time_created, time_updated)
+		 VALUES (?, ?, ?, ?)`,
+		sessionID, "prj_seed", int64(1), int64(2),
+	); err != nil {
+		t.Fatalf("seed session: %v", err)
+	}
+}
+
 func seedStandardSession(t *testing.T, seeder *OpenCodeSeeder) {
 	t.Helper()
 	seeder.AddProject("prj_1", "/home/user/code/myapp")

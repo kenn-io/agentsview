@@ -2471,6 +2471,67 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 	)
 }
 
+// TestFindSourceFileSkipsHybridRootMissingSession covers the
+// multi-root shadowing case: an early hybrid root with an
+// opencode.db that lacks the requested session must not shadow a
+// later pure-storage root that contains it. Without the
+// session-existence gate in FindOpenCodeSourceFile, the engine
+// would return a virtual SQLite path pointing at the wrong DB.
+func TestFindSourceFileSkipsHybridRootMissingSession(t *testing.T) {
+	hybridRoot := t.TempDir()
+	storageRoot := t.TempDir()
+	if err := os.MkdirAll(
+		filepath.Join(hybridRoot, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir hybrid storage: %v", err)
+	}
+	if err := os.MkdirAll(
+		filepath.Join(storageRoot, "storage", "session", "global"),
+		0o755,
+	); err != nil {
+		t.Fatalf("mkdir storage root: %v", err)
+	}
+
+	hybridDB := createOpenCodeDB(t, hybridRoot)
+	hybridDB.addProject(t, "proj-x", "/tmp/x")
+	hybridDB.addSession(
+		t, "oc-only-in-hybrid-db", "proj-x",
+		1704067200000, 1704067205000,
+	)
+
+	const wantedID = "oc-real-in-storage"
+	storage := createOpenCodeStorageFixture(t, storageRoot)
+	storage.addSession(
+		t, "global", wantedID,
+		"/home/user/code/realapp", "Real Storage",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, wantedID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, wantedID, "msg-a1", "part-a1",
+		"real storage reply", 1704067201000,
+	)
+
+	env := setupTestEnv(
+		t,
+		WithOpenCodeDirs([]string{hybridRoot, storageRoot}),
+	)
+	wantPath := filepath.Join(
+		storageRoot, "storage", "session", "global",
+		wantedID+".json",
+	)
+	if got := env.engine.FindSourceFile("opencode:" + wantedID); got != wantPath {
+		t.Fatalf(
+			"FindSourceFile() = %q, want %q (hybrid root must not shadow)",
+			got, wantPath,
+		)
+	}
+}
+
 // TestOpenCodeHybridRootStorageWinsOnDuplicateID covers a hybrid
 // OpenCode root where the same session ID exists in both
 // storage/session and opencode.db. Storage is the canonical
