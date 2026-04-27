@@ -55,7 +55,8 @@ func ParseGeminiSession(
 	var root gjson.Result
 	if valid {
 		root = gjson.ParseBytes(data)
-		if root.Get("messages").IsArray() {
+		if root.Get("messages").IsArray() ||
+			root.Get("sessionId").Exists() {
 			return parseGeminiJSONObject(
 				path, project, machine, info, root,
 			)
@@ -64,11 +65,6 @@ func ParseGeminiSession(
 	if bytes.IndexByte(data, '\n') >= 0 {
 		return parseGeminiJSONL(
 			path, project, machine, info, data,
-		)
-	}
-	if valid && root.Get("sessionId").Exists() {
-		return parseGeminiJSONObject(
-			path, project, machine, info, root,
 		)
 	}
 	return nil, nil, fmt.Errorf("invalid Gemini session in %s", path)
