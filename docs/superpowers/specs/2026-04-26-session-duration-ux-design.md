@@ -619,7 +619,7 @@ mode:
 - **Session header meta** shows `running {elapsed}+` in the green-family token,
   pulsing.
 - **Stat grid** swaps in two extra tiles: `in flight` (the running call's tool
-  name + elapsed) and `slowest done` (the slowest *completed* call only). The
+  name + elapsed) and `slowest call` (the slowest *completed* call only). The
   running call is excluded from "slowest" until it finishes.
 - **Time spent** counts only completed turns. The in-flight turn doesn't
   contribute, by design — its category attribution isn't decidable until the

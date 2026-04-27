@@ -2421,7 +2421,7 @@ the section labeled "Session". This is the layout target.
           <div class="val" class:live={timing.running}>{formatDuration(timing.tool_duration_ms)}{timing.running ? "+" : ""}</div>
         </div>
         <div>
-          <div class="lbl">slowest done</div>
+          <div class="lbl">slowest call</div>
           <div class="val slow">
             {#if timing.slowest_call}
               {timing.slowest_call.tool_name} · {formatDuration(timing.slowest_call.duration_ms ?? 0)}
@@ -2513,7 +2513,7 @@ Inside the `<div class="vital">`, after the Session section:
           {categoryFilter}<span class="x">×</span>
         </button>
       {:else}
-        <span class="v-meta">click to highlight</span>
+        <span class="v-meta">completed turns · click to highlight</span>
       {/if}
     </header>
     {#each timing.by_category as cat (cat.category)}

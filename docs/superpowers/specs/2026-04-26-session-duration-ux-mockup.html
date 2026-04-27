@@ -963,7 +963,7 @@
       <div class="stat-grid">
         <div><div class="lbl">tool calls</div><div class="val">6 + 1 in flight</div></div>
         <div><div class="lbl">tool time</div><div class="val live">2m 49s+</div></div>
-        <div><div class="lbl">slowest done</div><div class="val slow">Agent · 2m 14s</div></div>
+        <div><div class="lbl">slowest call</div><div class="val slow">Agent · 2m 14s</div></div>
         <div><div class="lbl">in flight</div><div class="val live">Bash · 1m 28s+</div></div>
         <div><div class="lbl">turns</div><div class="val">5</div></div>
         <div><div class="lbl">sub-agents</div><div class="val">1</div></div>
@@ -1246,7 +1246,7 @@
     <li><strong>Sub-agent inline</strong> — the Agent in turn 2 is expanded; child calls show with their own duration badges (<code>9ms</code>, <code>≤11ms</code> for parallel reads inside, <code>2m 8s</code> for the slow Bash). The same hierarchy is browsable via the chevron on the Agent row in the right panel.</li>
     <li><strong>Right panel sections</strong>, top to bottom:
       <ul>
-        <li><em>Session summary</em> — running time pulses green; <code>slowest done</code> excludes the in-flight call; <code>in flight</code> tile shows the current running tool.</li>
+        <li><em>Session summary</em> — running time pulses green; <code>slowest call</code> excludes the in-flight call; <code>in flight</code> tile shows the current running tool.</li>
         <li><em>Time spent</em> — bars sum to total <em>completed</em> tool wall-clock; running turn doesn't yet contribute (its category is undecidable until it ends).</li>
         <li><em>Timeline lanes</em> — turns lane shows each turn's duration colored by primary category; per-category lanes show the same data sliced; activity lane keeps the existing message-density chart. Running turn shows a pulsing green segment.</li>
         <li><em>Calls</em> — chronological list; ParallelGroup uses a left-rail container with the same encoding as the conversation; sub-agents expand via chevron with full nested hierarchy; the running call has a green pulsing bar; scale axis ends at <code>now</code>.</li>

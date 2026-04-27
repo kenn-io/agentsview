@@ -387,6 +387,18 @@ func attributeTurnGo(
 		}
 	}
 	remainder := max(*turnDur-subUnion, 0)
+	// When a sub-agent's wall time meets or exceeds whatever non-
+	// sub-agent work happened in the same turn, attribute the turn
+	// to "Task". The user's mental model is "the sub-agent did the
+	// work" — surfacing that on the turns lane is more honest than
+	// letting a couple of fast parallel siblings win the count vote.
+	if subUnion > 0 && subUnion >= remainder {
+		return turnAttribution{
+			PrimaryCategory:   "Task",
+			RemainderMs:       remainder,
+			SubagentDurations: subTotals,
+		}
+	}
 	if len(nonSub) == 0 {
 		return turnAttribution{
 			PrimaryCategory:   "Mixed",
@@ -500,8 +512,8 @@ func makeInputPreview(toolName, inputJSON string) string {
 	}
 
 	const maxLen = 100
-	if len(raw) > maxLen {
-		raw = raw[:maxLen] + "…"
+	if r := []rune(raw); len(r) > maxLen {
+		raw = string(r[:maxLen]) + "…"
 	}
 	return raw
 }

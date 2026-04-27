@@ -267,14 +267,23 @@ func TestHTTPBackend_Watch_ReceivesSessionUpdated(t *testing.T) {
 	})
 
 	// PollInterval is 1.5s. Allow up to 6s before giving up so the
-	// test is robust against scheduling jitter.
-	select {
-	case ev, ok := <-ch:
-		require.True(t, ok, "channel closed before event arrived")
-		assert.Equal(t, "session_updated", ev.Event)
-		assert.Equal(t, "s-watch", ev.Data)
-	case <-time.After(6 * time.Second):
-		t.Fatal("did not receive session_updated event in time")
+	// test is robust against scheduling jitter. The watch stream now
+	// also emits an initial session.timing snapshot on connect plus
+	// follow-up session.timing events alongside session_updated;
+	// skip past them and assert on session_updated specifically.
+	deadline := time.After(6 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			require.True(t, ok, "channel closed before event arrived")
+			if ev.Event != "session_updated" {
+				continue
+			}
+			assert.Equal(t, "s-watch", ev.Data)
+			return
+		case <-deadline:
+			t.Fatal("did not receive session_updated event in time")
+		}
 	}
 }
 

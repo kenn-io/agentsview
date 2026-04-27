@@ -23,16 +23,27 @@ export function attributeTurn(t: TurnAttributionInput): TurnAttribution | null {
   const nonSub = t.calls.filter((c) => !c.isSubagent);
 
   let remainder = t.turnDurationMs;
+  let subUnion = 0;
   if (subagents.length > 0) {
-    const union = unionDuration(
+    subUnion = unionDuration(
       subagents.map((c) => c.subagentRange!),
     );
-    remainder = Math.max(0, t.turnDurationMs - union);
-    if (nonSub.length === 0) {
-      // All calls were sub-agents; the remainder is whatever pre/post
-      // overhead the parent turn had. Attribute to Mixed.
-      return { category: "Mixed", durationMs: remainder };
-    }
+    remainder = Math.max(0, t.turnDurationMs - subUnion);
+  }
+
+  // When a sub-agent's wall time meets or exceeds whatever non-
+  // sub-agent work happened in the same turn, attribute the turn to
+  // "Task". The user's mental model is "the sub-agent did the work"
+  // — surfacing that on the turns lane is more honest than letting a
+  // couple of fast parallel siblings win the count vote.
+  if (subUnion > 0 && subUnion >= remainder) {
+    return { category: "Task", durationMs: remainder };
+  }
+
+  if (nonSub.length === 0) {
+    // All calls were sub-agents but none dominated; remainder is
+    // pre/post overhead the parent turn carried. Attribute to Mixed.
+    return { category: "Mixed", durationMs: remainder };
   }
 
   // Dominant non-sub-agent category: strict majority

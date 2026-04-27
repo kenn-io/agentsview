@@ -13,7 +13,7 @@ describe("formatDuration", () => {
     expect(formatDuration(1000)).toBe("1.0s");
     expect(formatDuration(2400)).toBe("2.4s");
     expect(formatDuration(28400)).toBe("28.4s");
-    expect(formatDuration(59999)).toBe("60.0s");
+    expect(formatDuration(59999)).toBe("59.9s");
   });
 
   it("formats sub-hour values as `Nm Ss`", () => {

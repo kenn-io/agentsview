@@ -235,6 +235,15 @@
     padding: 4px 0;
   }
 
+  /* Inner messages already get their role identity from the avatar
+     and name; the green rail of .subagent-messages already groups
+     them. The per-message left rail is redundant and reads as
+     toothy in this context. */
+  .subagent-messages :global(.message) {
+    border-left: none;
+    border-radius: var(--radius-md);
+  }
+
   .subagent-status {
     padding: 8px 14px;
     font-size: 12px;

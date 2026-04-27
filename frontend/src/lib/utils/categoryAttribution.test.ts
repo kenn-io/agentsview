@@ -52,8 +52,9 @@ describe("attributeTurn", () => {
     ).toEqual({ category: "Mixed", durationMs: 2000 });
   });
 
-  it("splits sub-agent and non-sub-agent attribution", () => {
-    // 3-call parallel turn: 2 reads + 1 sub-agent (2m of the 2m18s turn)
+  it("attributes a sub-agent-dominated turn to Task", () => {
+    // 3-call parallel turn: 2 reads + 1 sub-agent (2m of the 2m18s turn).
+    // Sub-agent union (120s) >= remainder (18s) → Task dominates.
     const result = attributeTurn(turn({
       turnDurationMs: 138_000,
       calls: [
@@ -67,17 +68,33 @@ describe("attributeTurn", () => {
         },
       ],
     }));
-    // Returns the dominant non-sub-agent attribution (2 reads → "Read");
-    // sub-agent contribution is reported separately via byCategory.
-    // Spec says: subtract sub-agent UNION from turn duration; remainder
-    // goes to dominant non-sub-agent.
-    expect(result).toEqual({ category: "Read", durationMs: 18_000 });
+    expect(result).toEqual({ category: "Task", durationMs: 18_000 });
+  });
+
+  it("falls through to non-sub-agent majority when sub-agent doesn't dominate", () => {
+    // Sub-agent union 30s, non-sub-agent remainder 90s → Read wins
+    // strict majority among the 3 non-sub Reads.
+    const result = attributeTurn(turn({
+      turnDurationMs: 120_000,
+      calls: [
+        { category: "Read", durationMs: null, isSubagent: false },
+        { category: "Read", durationMs: null, isSubagent: false },
+        { category: "Read", durationMs: null, isSubagent: false },
+        {
+          category: "Task",
+          durationMs: 30_000,
+          isSubagent: true,
+          subagentRange: { startedAtMs: 0, endedAtMs: 30_000 },
+        },
+      ],
+    }));
+    expect(result).toEqual({ category: "Read", durationMs: 90_000 });
   });
 
   it("uses the union of overlapping parallel sub-agent ranges", () => {
     // 2 sub-agents in parallel; A=[0,100], B=[50,200]; union=[0,200]=200
-    // turn duration = 220, remainder = 20 attributed to dominant non-sub-agent
-    // (none here → 'Mixed').
+    // turn duration = 220, remainder = 20. subUnion (200) >= remainder (20)
+    // → Task dominates.
     const result = attributeTurn(turn({
       turnDurationMs: 220,
       calls: [
@@ -95,7 +112,7 @@ describe("attributeTurn", () => {
         },
       ],
     }));
-    expect(result).toEqual({ category: "Mixed", durationMs: 20 });
+    expect(result).toEqual({ category: "Task", durationMs: 20 });
   });
 
   it("treats Read/Grep/Glob as non-distinct for dominance? No — exact strings", () => {

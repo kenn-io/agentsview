@@ -42,7 +42,7 @@
     {/if}
   </div>
   <div class="pg-members">
-    {#each toolCalls as toolCall (toolCall.tool_use_id ?? "")}
+    {#each toolCalls as toolCall, i (toolCall.tool_use_id || `idx:${i}`)}
       {@const ct = callTimingByID?.get(toolCall.tool_use_id ?? "")}
       {@const dur =
         ct?.subagent_session_id && ct.duration_ms != null

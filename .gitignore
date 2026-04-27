@@ -58,8 +58,5 @@ html/
 .superpowers/
 .worktrees/
 
-# Visual verification scratch (Tasks 13, 15, 16, 17)
-.test-data13/
-.test-data15/
-.test-data16/
-.test-data17/
+# Visual verification scratch — per-task screenshot/HTML capture dirs.
+.test-data*/

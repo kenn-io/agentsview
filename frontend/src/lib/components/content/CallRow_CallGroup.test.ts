@@ -23,7 +23,14 @@ const ARTIFACT_DIR = resolve(
   import.meta.dirname,
   "../../../../../.test-data18",
 );
-mkdirSync(ARTIFACT_DIR, { recursive: true });
+// Only mutate the worktree when the developer has opted in. Default
+// CI/local test runs leave the previously-captured artifacts in place
+// so the tree stays clean.
+// @ts-ignore -- process is from node, no @types/node configured.
+const CAPTURE_ARTIFACTS = process.env.CAPTURE_ARTIFACTS === "1";
+if (CAPTURE_ARTIFACTS) {
+  mkdirSync(ARTIFACT_DIR, { recursive: true });
+}
 
 function makeCall(overrides: Partial<CallTiming> = {}): CallTiming {
   return {
@@ -42,6 +49,7 @@ afterEach(() => {
 });
 
 function dumpHtml(filename: string, html: string) {
+  if (!CAPTURE_ARTIFACTS) return;
   writeFileSync(resolve(ARTIFACT_DIR, filename), html, "utf8");
 }
 

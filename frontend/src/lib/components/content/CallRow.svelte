@@ -57,21 +57,25 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   class="call"
   class:slow={isSlow}
   class:expanded={isSubagentExpanded}
   class:dimmed
-  role="button"
-  tabindex="0"
+  class:interactive={!!onClick}
+  role={onClick ? "button" : undefined}
+  tabindex={onClick ? 0 : undefined}
   onclick={onClick}
-  onkeydown={(e) => {
-    if (e.target !== e.currentTarget) return;
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onClick?.();
-    }
-  }}
+  onkeydown={onClick
+    ? (e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }
+    : undefined}
 >
   {#if isSubagent && expandable}
     <button
@@ -115,9 +119,11 @@
     padding: 4px 5px;
     font-size: 10px;
     border-radius: 2px;
+  }
+  .call.interactive {
     cursor: pointer;
   }
-  .call:hover {
+  .call.interactive:hover {
     background: rgba(255, 255, 255, 0.04);
   }
   .call .chev {

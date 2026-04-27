@@ -372,6 +372,7 @@
 
   .tool-block.in-group {
     margin: 0;
+    border-left: none;
     border-radius: 0;
   }
 

@@ -13,9 +13,14 @@
   interface Props {
     timing: SessionTiming;
     barScalePct: (call: CallTiming) => number;
+    categoryFilter?: string | null;
   }
 
-  let { timing, barScalePct }: Props = $props();
+  let {
+    timing,
+    barScalePct,
+    categoryFilter = null,
+  }: Props = $props();
 
   // Nested-nested expansion is intentionally disabled in v1.
   // expandable={false} on the inner CallRow / CallGroup cuts the
@@ -75,6 +80,8 @@
           isLive={isLive}
           liveDurationMs={liveElapsed}
           expandable={false}
+          dimmed={categoryFilter !== null &&
+            call.category !== categoryFilter}
         />
       {:else}
         <CallGroup
@@ -85,6 +92,8 @@
           isLive={isLive}
           liveDurationMs={liveElapsed}
           expandable={false}
+          dimmed={categoryFilter !== null &&
+            turn.primary_category !== categoryFilter}
           onCallClick={() => {}}
           onSubagentExpand={noopExpand}
           expandedSubagentIds={noSubagentExpansion}

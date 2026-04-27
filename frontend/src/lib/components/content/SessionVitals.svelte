@@ -28,18 +28,6 @@
 
   let timing = $derived(sessionTiming.timing);
 
-  // Live re-render driver. SSE events refresh `timing` whenever the
-  // server pushes a fresh snapshot; this 1-second tick smooths the gap
-  // so any time-derived UI keeps animating between events.
-  let liveTick = $state(0);
-  $effect(() => {
-    if (!timing?.running) return;
-    const id = setInterval(() => {
-      liveTick += 1;
-    }, 1000);
-    return () => clearInterval(id);
-  });
-
   let categoryFilter = $state<string | null>(null);
 
   function toggleCategory(cat: string) {
@@ -273,7 +261,7 @@
               {categoryFilter}<span class="x">×</span>
             </button>
           {:else}
-            <span class="v-meta">click to highlight</span>
+            <span class="v-meta">completed turns · click to highlight</span>
           {/if}
         </header>
         {#each timing.by_category as cat (cat.category)}
@@ -430,6 +418,7 @@
                   <SubagentCalls
                     timing={subT}
                     barScalePct={(c) => callBarPct(c, subT)}
+                    {categoryFilter}
                   />
                 {/if}
               {/if}
@@ -458,6 +447,7 @@
                   <SubagentCalls
                     timing={subT}
                     barScalePct={(c) => callBarPct(c, subT)}
+                    {categoryFilter}
                   />
                 {/if}
               {/each}
