@@ -211,6 +211,31 @@ describe("UsageStore rolling default date range", () => {
     expect(usage.from).toBe("2026-01-01");
     expect(usage.to).toBe("2026-01-15");
   });
+
+  it("setRollingWindow sets windowDays, clears the pin, and re-derives dates", async () => {
+    const { usage } = await loadStore();
+    usage.setDateRange("2026-01-01", "2026-01-15");
+    expect(usage.isPinned).toBe(true);
+
+    usage.setRollingWindow(7);
+
+    expect(usage.isPinned).toBe(false);
+    expect(usage.windowDays).toBe(7);
+    expect(usage.from).toBe("2026-04-18");
+    expect(usage.to).toBe("2026-04-25");
+  });
+
+  it("after setRollingWindow, fetchAll keeps rolling", async () => {
+    const { usage } = await loadStore();
+    usage.setRollingWindow(7);
+    expect(usage.from).toBe("2026-04-18");
+
+    vi.setSystemTime(new Date("2026-04-26T12:00:00"));
+    await usage.fetchAll();
+
+    expect(usage.from).toBe("2026-04-19");
+    expect(usage.to).toBe("2026-04-26");
+  });
 });
 
 describe("buildUsageUrlParams", () => {

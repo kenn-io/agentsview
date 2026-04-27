@@ -187,6 +187,7 @@
         from={usage.from}
         to={usage.to}
         onChange={(from, to) => usage.setDateRange(from, to)}
+        onPreset={(days) => usage.setRollingWindow(days)}
       />
 
       <FilterDropdown

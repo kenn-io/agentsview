@@ -194,6 +194,13 @@ class UsageStore {
     this.fetchAll();
   }
 
+  setRollingWindow(days: number) {
+    this.windowDays = days;
+    this.isPinned = false;
+    this.rollDates();
+    this.fetchAll();
+  }
+
   // Toggle an item's exclusion. Clicking an included item
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {
