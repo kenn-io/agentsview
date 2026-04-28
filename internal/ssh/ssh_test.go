@@ -21,7 +21,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			host: "devbox1",
 			cmd:  "echo hello",
 			want: []string{
-				"ssh", "devbox1", "--", "sh -lc 'echo hello'",
+				"ssh", "devbox1", "--", "sh -c 'echo hello'",
 			},
 		},
 		{
@@ -30,7 +30,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			user: "wes",
 			cmd:  "ls -la",
 			want: []string{
-				"ssh", "wes@devbox1", "--", "sh -lc 'ls -la'",
+				"ssh", "wes@devbox1", "--", "sh -c 'ls -la'",
 			},
 		},
 		{
@@ -41,7 +41,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			cmd:  "echo hi",
 			want: []string{
 				"ssh", "-p", "2222",
-				"wes@devbox1", "--", "sh -lc 'echo hi'",
+				"wes@devbox1", "--", "sh -c 'echo hi'",
 			},
 		},
 		{
@@ -49,7 +49,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			host: "devbox1",
 			cmd:  "echo hi",
 			want: []string{
-				"ssh", "devbox1", "--", "sh -lc 'echo hi'",
+				"ssh", "devbox1", "--", "sh -c 'echo hi'",
 			},
 		},
 		{
@@ -66,7 +66,7 @@ func TestBuildSSHArgs(t *testing.T) {
 				"ssh", "-p", "2222",
 				"-i", "/tmp/key",
 				"-o", "StrictHostKeyChecking=no",
-				"wes@devbox1", "--", "sh -lc 'ls'",
+				"wes@devbox1", "--", "sh -c 'ls'",
 			},
 		},
 		{
@@ -75,7 +75,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			cmd:  `printf "it's fine"`,
 			want: []string{
 				"ssh", "devbox1", "--",
-				`sh -lc 'printf "it'\''s fine"'`,
+				`sh -c 'printf "it'\''s fine"'`,
 			},
 		},
 	}
