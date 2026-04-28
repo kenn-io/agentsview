@@ -3,7 +3,6 @@
 package parser
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -124,27 +123,26 @@ func parseGeminiJSONL(
 	data []byte,
 ) (*ParsedSession, []ParsedMessage, error) {
 	var (
-		sessionID      string
-		startTime      time.Time
-		lastUpdated    time.Time
-		firstMessage   string
-		records        = make([]gjson.Result, 0)
-		recordIDs      = make(map[string]int)
-		scanner        = bufio.NewScanner(bytes.NewReader(data))
-		maxScanBufSize = 16 * 1024 * 1024
+		sessionID    string
+		startTime    time.Time
+		lastUpdated  time.Time
+		firstMessage string
+		records      = make([]gjson.Result, 0)
+		recordIDs    = make(map[string]int)
 	)
-	scanner.Buffer(make([]byte, 0, 64*1024), maxScanBufSize)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	for len(data) > 0 {
+		line, rest, _ := bytes.Cut(data, []byte("\n"))
+		data = rest
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
 			continue
 		}
-		if !gjson.Valid(line) {
+		if !gjson.ValidBytes(line) {
 			return nil, nil, fmt.Errorf(
 				"invalid JSONL record in %s", path,
 			)
 		}
-		rec := gjson.Parse(line)
+		rec := gjson.ParseBytes(line)
 		if id := rec.Get("sessionId").Str; id != "" {
 			if sessionID == "" {
 				sessionID = id
@@ -183,9 +181,6 @@ func parseGeminiJSONL(
 			recordIDs[msgID] = len(records)
 		}
 		records = append(records, rec)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, nil, fmt.Errorf("scan %s: %w", path, err)
 	}
 	if sessionID == "" {
 		return nil, nil, fmt.Errorf(
@@ -443,14 +438,14 @@ func GeminiSessionID(data []byte) string {
 	if id := gjson.GetBytes(data, "sessionId").Str; id != "" {
 		return id
 	}
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || !gjson.Valid(line) {
+	for len(data) > 0 {
+		line, rest, _ := bytes.Cut(data, []byte("\n"))
+		data = rest
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 || !gjson.ValidBytes(line) {
 			continue
 		}
-		if id := gjson.Get(line, "sessionId").Str; id != "" {
+		if id := gjson.GetBytes(line, "sessionId").Str; id != "" {
 			return id
 		}
 	}

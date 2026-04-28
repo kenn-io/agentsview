@@ -66,6 +66,22 @@ func TestParseGeminiSession_JSONLStream(t *testing.T) {
 	)
 }
 
+func TestParseGeminiSession_JSONLStreamLargeRecord(t *testing.T) {
+	largeContent := strings.Repeat("x", 16*1024*1024+1)
+	content := strings.Join([]string{
+		`{"sessionId":"sess-jsonl-large","projectHash":"hash","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:12:42.783Z","kind":"main"}`,
+		`{"id":"u1","timestamp":"2026-04-23T16:12:43.085Z","type":"user","content":[{"text":"` + largeContent + `"}]}`,
+	}, "\n")
+	path := createTestFile(t, "large-session.jsonl", content)
+	sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+	require.NoError(t, err)
+
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 1)
+	assertSessionMeta(t, sess, "gemini:sess-jsonl-large", "my_project", AgentGemini)
+	assert.Equal(t, len(largeContent), len(msgs[0].Content))
+}
+
 func TestParseGeminiSession_ToolCalls(t *testing.T) {
 	t.Run("basic tool calls", func(t *testing.T) {
 		content := loadFixture(t, "gemini/tool_calls.json")
