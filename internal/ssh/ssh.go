@@ -11,9 +11,15 @@ import (
 )
 
 // buildSSHArgs constructs args for the ssh command.
-// Returns ["ssh", "user@host", "--", cmd] or ["ssh", "host", "--", cmd]
-// when user is empty. Port adds "-p N" when > 0. Extra opts are
-// inserted before the target (e.g. "-i keyfile").
+//
+// Remote commands are always executed through a POSIX shell via
+// "sh -lc '<cmd>'" so behavior is independent of the remote user's
+// login shell (e.g. fish).
+//
+// Returns ["ssh", "user@host", "--", "sh -lc '<cmd>'"] or
+// ["ssh", "host", "--", "sh -lc '<cmd>'"] when user is empty.
+// Port adds "-p N" when > 0. Extra opts are inserted before the
+// target (e.g. "-i keyfile").
 func buildSSHArgs(
 	host, user string, port int, sshOpts []string, cmd string,
 ) []string {
@@ -21,12 +27,13 @@ func buildSSHArgs(
 	if user != "" {
 		target = user + "@" + host
 	}
+	remoteCmd := "sh -lc " + shellQuote(cmd)
 	args := []string{"ssh"}
 	if port > 0 {
 		args = append(args, "-p", strconv.Itoa(port))
 	}
 	args = append(args, sshOpts...)
-	return append(args, target, "--", cmd)
+	return append(args, target, "--", remoteCmd)
 }
 
 // runSSH executes a command on the remote host and returns stdout.
