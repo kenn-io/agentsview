@@ -5814,3 +5814,38 @@ func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionsHasTerminationStatusColumn(t *testing.T) {
+	d := testDB(t)
+
+	var count int
+	err := d.getReader().QueryRow(
+		`SELECT count(*) FROM pragma_table_info('sessions')
+		 WHERE name = 'termination_status'`,
+	).Scan(&count)
+	requireNoError(t, err, "probing termination_status column")
+
+	if count != 1 {
+		t.Fatalf(
+			"expected 1 termination_status column, got %d", count,
+		)
+	}
+}
+
+func TestSessionsTerminationStatusIndex(t *testing.T) {
+	d := testDB(t)
+
+	var count int
+	err := d.getReader().QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'index' AND name = 'idx_sessions_termination_status'`,
+	).Scan(&count)
+	requireNoError(t, err, "probing idx_sessions_termination_status")
+
+	if count != 1 {
+		t.Fatalf(
+			"expected idx_sessions_termination_status to exist, got count=%d",
+			count,
+		)
+	}
+}

@@ -27,17 +27,19 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 21: Copilot parser now reads workspace.yaml to use
-// the LLM-generated session name as first_message. Existing
+// Bumped to 22: added termination_status column to sessions;
+// existing rows need re-parsing so the Claude classifier can
+// populate the new column.
+//
+// (21: Copilot parser now reads workspace.yaml to use the
+// LLM-generated session name as first_message. Existing
 // directory-format sessions where workspace.yaml.mtime <=
 // events.jsonl.mtime would be permanently skipped without this
-// bump, leaving first_message as the raw first user message.
+// bump, leaving first_message as the raw first user message.)
 //
-// (20: Claude parser now surfaces queued_command
-// attachment entries (user messages typed mid-tool-call) as
-// real user messages with source_subtype="queued_command".
-// Sessions previously parsed by older versions had these
-// dropped, so a full resync is required to recover them.
+// (20: Claude parser now surfaces queued_command attachment
+// entries (user messages typed mid-tool-call) as real user
+// messages with source_subtype="queued_command".)
 //
 // (19: Copilot parser now filters synthetic skill context
 // user messages.)
@@ -50,7 +52,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 21
+const dataVersion = 22
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -512,6 +514,10 @@ func (db *DB) migrateColumns() error {
 			"messages", "thinking_text",
 			"ALTER TABLE messages ADD COLUMN thinking_text TEXT NOT NULL DEFAULT ''",
 		},
+		{
+			"sessions", "termination_status",
+			"ALTER TABLE sessions ADD COLUMN termination_status TEXT",
+		},
 	}
 
 	for _, m := range migrations {
@@ -545,6 +551,15 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.backfillIsAutomatedLocked(w); err != nil {
 		return err
+	}
+
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
+		 ON sessions(termination_status)`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_sessions_termination_status: %w", err,
+		)
 	}
 
 	if _, err := w.Exec(`

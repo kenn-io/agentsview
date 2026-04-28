@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     parser_malformed_lines INTEGER NOT NULL DEFAULT 0,
     is_truncated INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
-    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    termination_status TEXT
 );
 
 -- Messages table with ordinal for efficient range queries

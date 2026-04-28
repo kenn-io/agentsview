@@ -42,7 +42,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, created_at`
+	deleted_at, termination_status, created_at`
 
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
@@ -65,7 +65,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, file_path, file_size, created_at`
+	deleted_at, termination_status, file_path, file_size, created_at`
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
@@ -87,7 +87,7 @@ const sessionFullCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at, file_path, file_size, file_mtime,
+	deleted_at, termination_status, file_path, file_size, file_mtime,
 	file_inode, file_device,
 	file_hash, local_modified_at, created_at`
 
@@ -128,7 +128,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.DeletedAt, &s.CreatedAt,
+		&s.DeletedAt, &s.TerminationStatus, &s.CreatedAt,
 	)
 	return s, err
 }
@@ -178,15 +178,16 @@ type Session struct {
 	ParserMalformedLines   int      `json:"parser_malformed_lines,omitempty"`
 	IsTruncated            bool     `json:"is_truncated,omitempty"`
 
-	DeletedAt       *string `json:"deleted_at,omitempty"`
-	FilePath        *string `json:"file_path,omitempty"`
-	FileSize        *int64  `json:"file_size,omitempty"`
-	FileMtime       *int64  `json:"file_mtime,omitempty"`
-	FileInode       *int64  `json:"file_inode,omitempty"`
-	FileDevice      *int64  `json:"file_device,omitempty"`
-	FileHash        *string `json:"file_hash,omitempty"`
-	LocalModifiedAt *string `json:"local_modified_at,omitempty"`
-	CreatedAt       string  `json:"created_at"`
+	DeletedAt         *string `json:"deleted_at,omitempty"`
+	TerminationStatus *string `json:"termination_status,omitempty"`
+	FilePath          *string `json:"file_path,omitempty"`
+	FileSize          *int64  `json:"file_size,omitempty"`
+	FileMtime         *int64  `json:"file_mtime,omitempty"`
+	FileInode         *int64  `json:"file_inode,omitempty"`
+	FileDevice        *int64  `json:"file_device,omitempty"`
+	FileHash          *string `json:"file_hash,omitempty"`
+	LocalModifiedAt   *string `json:"local_modified_at,omitempty"`
+	CreatedAt         string  `json:"created_at"`
 }
 
 // SessionCursor is the opaque pagination token.
@@ -630,7 +631,7 @@ func (db *DB) GetSessionFull(
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&s.DeletedAt, &s.FilePath, &s.FileSize,
+		&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.FileInode, &s.FileDevice,
 		&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
@@ -675,12 +676,13 @@ const upsertSessionSQL = `
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
 			is_automated,
+			termination_status,
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
 			is_truncated,
 			file_path, file_size, file_mtime,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -697,6 +699,7 @@ const upsertSessionSQL = `
 			has_total_output_tokens = excluded.has_total_output_tokens,
 			has_peak_context_tokens = excluded.has_peak_context_tokens,
 			is_automated = excluded.is_automated,
+			termination_status = excluded.termination_status,
 			cwd = excluded.cwd,
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
@@ -725,6 +728,7 @@ func upsertSessionArgs(s Session) []any {
 		s.TotalOutputTokens, s.PeakContextTokens,
 		s.HasTotalOutputTokens, s.HasPeakContextTokens,
 		sessionIsAutomated(s),
+		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
 		s.SourceVersion, s.ParserMalformedLines,
 		s.IsTruncated,
@@ -1520,7 +1524,7 @@ func (db *DB) FindPruneCandidates(
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
-			&s.DeletedAt, &s.FilePath, &s.FileSize, &s.CreatedAt,
+			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize, &s.CreatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning prune candidate: %w", err)
@@ -1796,7 +1800,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
-			&s.DeletedAt, &s.FilePath, &s.FileSize,
+			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 		)

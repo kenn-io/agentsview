@@ -288,3 +288,59 @@ func TestUpsertSessionDoesNotAdvanceDataVersion(t *testing.T) {
 		)
 	}
 }
+
+func TestUpsertSessionTerminationStatus(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	clean := "clean"
+	pending := "tool_call_pending"
+
+	tests := []struct {
+		name string
+		val  *string
+	}{
+		{name: "null", val: nil},
+		{name: "clean", val: &clean},
+		{name: "tool_call_pending", val: &pending},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			id := "session_" + tc.name
+			s := Session{
+				ID:                id,
+				Project:           "p",
+				Machine:           "local",
+				Agent:             "claude",
+				MessageCount:      1,
+				UserMessageCount:  1,
+				TerminationStatus: tc.val,
+			}
+			if err := d.UpsertSession(s); err != nil {
+				t.Fatalf("upsert: %v", err)
+			}
+
+			got, err := d.GetSession(ctx, id)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if got == nil {
+				t.Fatal("session not found")
+			}
+
+			if (got.TerminationStatus == nil) != (tc.val == nil) {
+				t.Fatalf(
+					"nil mismatch: got=%v want=%v",
+					got.TerminationStatus, tc.val,
+				)
+			}
+			if got.TerminationStatus != nil && *got.TerminationStatus != *tc.val {
+				t.Fatalf(
+					"value mismatch: got=%q want=%q",
+					*got.TerminationStatus, *tc.val,
+				)
+			}
+		})
+	}
+}
