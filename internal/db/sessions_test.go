@@ -344,3 +344,85 @@ func TestUpsertSessionTerminationStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestListSessionsTerminationFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	clean := "clean"
+	pending := "tool_call_pending"
+	truncated := "truncated"
+
+	insertWithTerm := func(id string, val *string) {
+		s := Session{
+			ID:                id,
+			Project:           "p",
+			Machine:           "local",
+			Agent:             "claude",
+			MessageCount:      1,
+			UserMessageCount:  2,
+			TerminationStatus: val,
+		}
+		if err := d.UpsertSession(s); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	insertWithTerm("clean1", &clean)
+	insertWithTerm("clean2", &clean)
+	insertWithTerm("pending1", &pending)
+	insertWithTerm("trunc1", &truncated)
+	insertWithTerm("null1", nil)
+
+	collect := func(f SessionFilter) []string {
+		page, err := d.ListSessions(ctx, f)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		ids := make([]string, len(page.Sessions))
+		for i, s := range page.Sessions {
+			ids[i] = s.ID
+		}
+		return ids
+	}
+
+	tests := []struct {
+		name        string
+		termination string
+		wantIDs     []string
+	}{
+		{name: "all (default)", termination: "", wantIDs: []string{"clean1", "clean2", "pending1", "trunc1", "null1"}},
+		{name: "clean", termination: "clean", wantIDs: []string{"clean1", "clean2"}},
+		{name: "unclean", termination: "unclean", wantIDs: []string{"pending1", "trunc1"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := collect(SessionFilter{Termination: tc.termination})
+			assertStringSetsEqual(t, got, tc.wantIDs)
+		})
+	}
+}
+
+// assertStringSetsEqual checks that two slices contain the same
+// elements regardless of order.
+func assertStringSetsEqual(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("len mismatch: got=%d want=%d (got=%v want=%v)",
+			len(got), len(want), got, want)
+	}
+	seen := make(map[string]int)
+	for _, s := range want {
+		seen[s]++
+	}
+	for _, s := range got {
+		seen[s]--
+	}
+	for s, n := range seen {
+		if n != 0 {
+			t.Fatalf("set mismatch on %q: leftover=%d (got=%v want=%v)",
+				s, n, got, want)
+		}
+	}
+}

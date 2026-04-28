@@ -83,6 +83,7 @@ func (s *Server) handleListSessions(
 		HealthGrade:      q.Get("health_grade"),
 		Cursor:           q.Get("cursor"),
 		Limit:            limit,
+		Termination:      q.Get("termination"),
 	}
 	if v := q.Get("min_tool_failures"); v != "" {
 		n, err := strconv.Atoi(v)

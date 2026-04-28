@@ -288,6 +288,12 @@ type SessionFilter struct {
 	MinToolFailures  *int     // minimum tool_failure_signal_count
 	Cursor           string   // opaque cursor from previous page
 	Limit            int
+	// Termination filters by termination_status:
+	//   "" or "all"  → no filter (default)
+	//   "clean"      → only sessions with status = 'clean'
+	//   "unclean"    → only sessions with status IN
+	//                  ('tool_call_pending', 'truncated')
+	Termination string
 }
 
 // SessionPage is a page of session results.
@@ -395,6 +401,14 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterPreds = append(filterPreds, "user_message_count >= ?")
 		filterArgs = append(filterArgs, f.MinUserMessages)
 	}
+	switch f.Termination {
+	case "clean":
+		filterPreds = append(filterPreds, "termination_status = 'clean'")
+	case "unclean":
+		filterPreds = append(filterPreds,
+			"termination_status IN ('tool_call_pending', 'truncated')")
+	}
+	// "" and "all" add no predicate.
 
 	// ExcludeOneShot is handled separately from filterPreds
 	// when IncludeChildren is true. Children (subagents, forks)
