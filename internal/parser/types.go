@@ -429,6 +429,11 @@ type ParsedSession struct {
 	UserMessageCount int
 	File             FileInfo
 
+	// TerminationStatus describes how the session appears to have
+	// ended. Empty string = unknown (parser did not classify, or
+	// agent format does not yet support classification).
+	TerminationStatus TerminationStatus
+
 	TotalOutputTokens    int
 	PeakContextTokens    int
 	HasTotalOutputTokens bool

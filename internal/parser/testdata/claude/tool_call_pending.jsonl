@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2024-01-01T10:00:00Z","message":{"content":"Read auth.ts"},"cwd":"/Users/alice/code/my-app"}
+{"type":"assistant","timestamp":"2024-01-01T10:00:05Z","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Reading the file..."},{"type":"tool_use","id":"toolu_orphan","name":"Read","input":{"file_path":"src/auth.ts"}}],"usage":{"input_tokens":100,"output_tokens":50}}}

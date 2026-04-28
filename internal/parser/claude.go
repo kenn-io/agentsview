@@ -95,6 +95,7 @@ func ParseClaudeSession(
 	allHaveUUID = true
 
 	lr := newLineReader(f, maxLineSize)
+	lastLineFailed := false
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -103,8 +104,10 @@ func ParseClaudeSession(
 		lastLine = line
 		if !gjson.Valid(line) {
 			malformedLines++
+			lastLineFailed = true
 			continue
 		}
+		lastLineFailed = false
 
 		entryType := gjson.Get(line, "type").Str
 
@@ -285,6 +288,15 @@ func ParseClaudeSession(
 	// the original conversation timeline (results[0]).
 	if len(queuedCommands) > 0 && len(results) > 0 {
 		results[0] = applyQueuedCommands(results[0], queuedCommands)
+	}
+
+	// Classify termination status for each result. All forks
+	// from a single file share lastLineFailed because a
+	// truncated tail affects every branch.
+	for i := range results {
+		results[i].Session.TerminationStatus = Classify(
+			results[i].Messages, lastLineFailed,
+		)
 	}
 	return results, nil
 }

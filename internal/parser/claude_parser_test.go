@@ -733,6 +733,26 @@ func TestParseClaudeSessionFrom_LinearUUID(
 	assert.False(t, endedAt.IsZero())
 }
 
+func TestParseClaudeSession_TerminationStatus(t *testing.T) {
+	t.Run("clean", func(t *testing.T) {
+		content := loadFixture(t, "claude/valid_session.jsonl")
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, TerminationClean, sess.TerminationStatus)
+	})
+
+	t.Run("tool_call_pending", func(t *testing.T) {
+		content := loadFixture(t, "claude/tool_call_pending.jsonl")
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, TerminationToolCallPending, sess.TerminationStatus)
+	})
+
+	t.Run("truncated", func(t *testing.T) {
+		content := loadFixture(t, "claude/truncated.jsonl")
+		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
+		assert.Equal(t, TerminationTruncated, sess.TerminationStatus)
+	})
+}
+
 func TestParseClaudeSession_TokenUsage(t *testing.T) {
 	t.Run("explicit parser presence beats fallback inference", func(t *testing.T) {
 		msg := ParsedMessage{
