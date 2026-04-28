@@ -128,7 +128,7 @@ func parseGeminiJSONL(
 		startTime      time.Time
 		lastUpdated    time.Time
 		firstMessage   string
-		records        []gjson.Result
+		records        = make([]gjson.Result, 0)
 		recordIDs      = make(map[string]int)
 		scanner        = bufio.NewScanner(bytes.NewReader(data))
 		maxScanBufSize = 16 * 1024 * 1024
