@@ -137,6 +137,7 @@ export interface TopSession {
   message_count: number;
   output_tokens: number;
   duration_min: number;
+  termination_status?: string | null;
 }
 
 export interface TopSessionsResponse {

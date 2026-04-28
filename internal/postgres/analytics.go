@@ -175,6 +175,14 @@ func buildAnalyticsWhereWithDate(
 				" >= "+pb.add(f.ActiveSince)+
 				"::timestamptz")
 	}
+	switch f.Termination {
+	case "clean":
+		preds = append(preds,
+			"termination_status = 'clean'")
+	case "unclean":
+		preds = append(preds,
+			"termination_status IN ('tool_call_pending', 'truncated')")
+	}
 	return strings.Join(preds, " AND ")
 }
 
@@ -2065,7 +2073,8 @@ func (s *Store) GetAnalyticsTopSessions(
 		first_message, message_count,
 		total_output_tokens,
 		EXTRACT(EPOCH FROM ended_at - started_at)
-			AS duration_sec
+			AS duration_sec,
+		termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + limitClause
 
@@ -2084,12 +2093,13 @@ func (s *Store) GetAnalyticsTopSessions(
 	for rows.Next() {
 		var id, project string
 		var ts *time.Time
-		var firstMsg *string
+		var firstMsg, termStatus *string
 		var mc, outputTokens int
 		var durationSec *float64
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
 			&mc, &outputTokens, &durationSec,
+			&termStatus,
 		); err != nil {
 			return db.TopSessionsResponse{},
 				fmt.Errorf(
@@ -2110,12 +2120,13 @@ func (s *Store) GetAnalyticsTopSessions(
 			continue
 		}
 		sessions = append(sessions, db.TopSession{
-			ID:           id,
-			Project:      project,
-			FirstMessage: firstMsg,
-			MessageCount: mc,
-			OutputTokens: outputTokens,
-			DurationMin:  durMin,
+			ID:                id,
+			Project:           project,
+			FirstMessage:      firstMsg,
+			MessageCount:      mc,
+			OutputTokens:      outputTokens,
+			DurationMin:       durMin,
+			TerminationStatus: termStatus,
 		})
 	}
 	if err := rows.Err(); err != nil {

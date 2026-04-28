@@ -50,6 +50,7 @@
     (analytics.project !== "" ? 1 : 0) +
     selectedMachines.length +
     selectedAgents.length +
+    (analytics.termination !== "" ? 1 : 0) +
     (analytics.minUserMessages > 0 ? 1 : 0) +
     (!analytics.includeOneShot ? 1 : 0) +
     (analytics.includeAutomated ? 1 : 0) +
@@ -183,6 +184,26 @@
           </svg>
         </span>
         Active 24h
+        <span class="chip-x">&times;</span>
+      </button>
+    {/if}
+
+    {#if analytics.termination === "unclean"}
+      <button
+        class="filter-chip"
+        onclick={() => analytics.clearTermination()}
+        title="Clear status filter"
+      >
+        Status: Unclean
+        <span class="chip-x">&times;</span>
+      </button>
+    {:else if analytics.termination === "clean"}
+      <button
+        class="filter-chip"
+        onclick={() => analytics.clearTermination()}
+        title="Clear status filter"
+      >
+        Status: Clean
         <span class="chip-x">&times;</span>
       </button>
     {/if}

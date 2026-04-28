@@ -108,6 +108,7 @@ func parseAnalyticsFilter(
 		ExcludeOneShot:   !includeOneShot,
 		ExcludeAutomated: !includeAutomated,
 		ActiveSince:      activeSince,
+		Termination:      q.Get("termination"),
 	}, true
 }
 

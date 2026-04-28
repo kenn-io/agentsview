@@ -20,6 +20,7 @@ export interface Session {
   parent_session_id?: string;
   relationship_type?: string;
   deleted_at?: string | null;
+  termination_status?: string | null;
   file_path?: string;
   file_size?: number;
   file_mtime?: number;

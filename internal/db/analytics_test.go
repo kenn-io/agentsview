@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1816,6 +1817,163 @@ func TestBuildWhereProjectFilter(t *testing.T) {
 			t.Errorf("TotalSessions = %d, want 0",
 				s.TotalSessions)
 		}
+	})
+}
+
+func TestAnalyticsTerminationFilter(t *testing.T) {
+	t.Run("BuildWherePredicate", func(t *testing.T) {
+		cases := []struct {
+			name        string
+			termination string
+			want        string
+		}{
+			{"empty adds nothing", "", ""},
+			{
+				"clean", "clean",
+				"termination_status = 'clean'",
+			},
+			{
+				"unclean", "unclean",
+				"termination_status IN ('tool_call_pending', 'truncated')",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				f := baseFilter()
+				f.Termination = tc.termination
+				where, _ := f.buildWhere(
+					"COALESCE(NULLIF(started_at, ''), created_at)",
+				)
+				if tc.want == "" {
+					if strings.Contains(where, "termination_status") {
+						t.Errorf(
+							"empty termination produced predicate: %s",
+							where,
+						)
+					}
+					return
+				}
+				if !strings.Contains(where, tc.want) {
+					t.Errorf(
+						"buildWhere(%q) missing %q in: %s",
+						tc.termination, tc.want, where,
+					)
+				}
+			})
+		}
+	})
+
+	t.Run("RoundTripQueries", func(t *testing.T) {
+		d := testDB(t)
+		ctx := context.Background()
+
+		clean := "clean"
+		pending := "tool_call_pending"
+		truncated := "truncated"
+
+		insert := func(id string, term *string) {
+			insertSession(t, d, id, "p", func(s *Session) {
+				s.StartedAt = Ptr("2024-06-02T09:00:00Z")
+				s.EndedAt = Ptr("2024-06-02T10:00:00Z")
+				s.MessageCount = 5
+				s.UserMessageCount = 2
+				s.TerminationStatus = term
+			})
+			msgs := make([]Message, 5)
+			for i := range msgs {
+				role := "user"
+				if i%2 == 1 {
+					role = "assistant"
+				}
+				msgs[i] = Message{
+					SessionID:     id,
+					Ordinal:       i,
+					Role:          role,
+					Content:       "msg",
+					ContentLength: 3,
+					Timestamp:     "2024-06-02T09:00:00Z",
+				}
+			}
+			insertMessages(t, d, msgs...)
+		}
+
+		insert("c1", &clean)
+		insert("c2", &clean)
+		insert("p1", &pending)
+		insert("t1", &truncated)
+		insert("n1", nil)
+
+		collect := func(termination string) []string {
+			f := baseFilter()
+			f.Termination = termination
+			resp, err := d.GetAnalyticsTopSessions(
+				ctx, f, "messages",
+			)
+			if err != nil {
+				t.Fatalf("GetAnalyticsTopSessions(%q): %v",
+					termination, err)
+			}
+			ids := make([]string, len(resp.Sessions))
+			for i, s := range resp.Sessions {
+				ids[i] = s.ID
+			}
+			return ids
+		}
+
+		cases := []struct {
+			name        string
+			termination string
+			want        []string
+		}{
+			{"all", "", []string{"c1", "c2", "p1", "t1", "n1"}},
+			{"clean", "clean", []string{"c1", "c2"}},
+			{"unclean", "unclean", []string{"p1", "t1"}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				got := collect(tc.termination)
+				assertStringSetsEqual(t, got, tc.want)
+			})
+		}
+
+		t.Run("TopSessionsCarriesTerminationStatus", func(t *testing.T) {
+			f := baseFilter()
+			f.Termination = "clean"
+			resp, err := d.GetAnalyticsTopSessions(
+				ctx, f, "messages",
+			)
+			if err != nil {
+				t.Fatalf("GetAnalyticsTopSessions: %v", err)
+			}
+			if len(resp.Sessions) == 0 {
+				t.Fatal("expected sessions, got 0")
+			}
+			for _, s := range resp.Sessions {
+				if s.TerminationStatus == nil {
+					t.Errorf(
+						"session %s TerminationStatus = nil, want clean",
+						s.ID,
+					)
+					continue
+				}
+				if *s.TerminationStatus != "clean" {
+					t.Errorf(
+						"session %s TerminationStatus = %q, want clean",
+						s.ID, *s.TerminationStatus,
+					)
+				}
+			}
+		})
+
+		t.Run("SummaryFilteredByTermination", func(t *testing.T) {
+			f := baseFilter()
+			f.Termination = "unclean"
+			s := mustSummary(t, d, ctx, f)
+			if s.TotalSessions != 2 {
+				t.Errorf("TotalSessions = %d, want 2",
+					s.TotalSessions)
+			}
+		})
 	})
 }
 

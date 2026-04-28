@@ -62,6 +62,7 @@
     const headerProject = sessions.filters.project;
     const headerMachine = sessions.filters.machine;
     const headerAgent = sessions.filters.agent;
+    const headerTermination = sessions.filters.termination;
     const headerRecentlyActive = sessions.filters.recentlyActive;
     const headerMinUserMessages =
       sessions.filters.minUserMessages;
@@ -73,6 +74,7 @@
     const curProject = untrack(() => analytics.project);
     const curMachine = untrack(() => analytics.machine);
     const curAgent = untrack(() => analytics.agent);
+    const curTermination = untrack(() => analytics.termination);
     const curRecentlyActive = untrack(
       () => analytics.recentlyActive,
     );
@@ -97,6 +99,10 @@
     }
     if (curAgent !== headerAgent) {
       analytics.agent = headerAgent;
+      changed = true;
+    }
+    if (curTermination !== headerTermination) {
+      analytics.termination = headerTermination;
       changed = true;
     }
 

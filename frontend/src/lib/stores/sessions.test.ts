@@ -240,6 +240,7 @@ describe("SessionsStore", () => {
         project: "myproj",
         machine: "host-a",
         agent: "claude",
+        termination: "unclean",
         date: "2024-06-15",
         dateFrom: "2024-06-01",
         dateTo: "2024-06-30",
@@ -255,6 +256,7 @@ describe("SessionsStore", () => {
         project: "myproj",
         machine: "host-a",
         agent: "claude",
+        termination: "unclean",
         date: "2024-06-15",
         date_from: "2024-06-01",
         date_to: "2024-06-30",
@@ -268,11 +270,23 @@ describe("SessionsStore", () => {
       });
     });
 
+    it("should serialize termination filter into the URL", () => {
+      const defaults = parseFiltersFromParams({});
+      const params = filtersToParams({ ...defaults, termination: "unclean" });
+      expect(params.termination).toBe("unclean");
+    });
+
+    it("should parse termination from URL params", () => {
+      const f = parseFiltersFromParams({ termination: "unclean" });
+      expect(f.termination).toBe("unclean");
+    });
+
     it("should round-trip through parseFiltersFromParams", () => {
       const original: Filters = {
         project: "myproj",
         machine: "host-a",
         agent: "claude",
+        termination: "unclean",
         date: "2024-06-15",
         dateFrom: "2024-06-01",
         dateTo: "2024-06-30",

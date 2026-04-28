@@ -297,7 +297,38 @@
       onToggleGroupByAgent={toggleGroupByAgent}
       onToggleGroupByProject={toggleGroupByProject}
       onClearGroupMode={() => setGroupMode("none")}
+      extraActive={sessions.filters.termination !== ""}
+      onClearExtra={() => sessions.setTerminationFilter("")}
+      extraSections={statusFilterSection}
     />
+{#snippet statusFilterSection()}
+  <div class="filter-section">
+    <div class="filter-section-label">Status</div>
+    <div class="pill-buttons">
+      <button
+        class="pill-btn"
+        class:active={sessions.filters.termination === ""}
+        onclick={() => sessions.setTerminationFilter("")}
+      >
+        All
+      </button>
+      <button
+        class="pill-btn"
+        class:active={sessions.filters.termination === "clean"}
+        onclick={() => sessions.setTerminationFilter("clean")}
+      >
+        Clean
+      </button>
+      <button
+        class="pill-btn"
+        class:active={sessions.filters.termination === "unclean"}
+        onclick={() => sessions.setTerminationFilter("unclean")}
+      >
+        Unclean
+      </button>
+    </div>
+  </div>
+{/snippet}
   </div>
 </div>
 

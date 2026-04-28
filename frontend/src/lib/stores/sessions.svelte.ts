@@ -23,6 +23,7 @@ export interface Filters {
   project: string;
   machine: string;
   agent: string;
+  termination: string;
   date: string;
   dateFrom: string;
   dateTo: string;
@@ -40,6 +41,7 @@ function defaultFilters(): Filters {
     project: "",
     machine: "",
     agent: "",
+    termination: "",
     date: "",
     dateFrom: "",
     dateTo: "",
@@ -85,6 +87,7 @@ export function filtersToParams(
   if (f.project) p["project"] = f.project;
   if (f.machine) p["machine"] = f.machine;
   if (f.agent) p["agent"] = f.agent;
+  if (f.termination) p["termination"] = f.termination;
   if (f.date) p["date"] = f.date;
   if (f.dateFrom) p["date_from"] = f.dateFrom;
   if (f.dateTo) p["date_to"] = f.dateTo;
@@ -150,6 +153,7 @@ export function parseFiltersFromParams(
     project,
     machine: params["machine"] ?? "",
     agent: params["agent"] ?? "",
+    termination: params["termination"] ?? "",
     date: params["date"] ?? "",
     dateFrom: params["date_from"] ?? "",
     dateTo: params["date_to"] ?? "",
@@ -225,6 +229,7 @@ class SessionsStore {
       exclude_project: exclude,
       machine: f.machine || undefined,
       agent: f.agent || undefined,
+      termination: f.termination || undefined,
       date: f.date || undefined,
       date_from: f.dateFrom || undefined,
       date_to: f.dateTo || undefined,
@@ -702,11 +707,18 @@ class SessionsStore {
     this.load();
   }
 
+  setTerminationFilter(termination: string) {
+    this.filters.termination = termination;
+    this.setActiveSession(null);
+    this.load();
+  }
+
   get hasActiveFilters(): boolean {
     const f = this.filters;
     return !!(
       f.machine ||
       f.agent ||
+      f.termination ||
       f.recentlyActive ||
       f.hideUnknownProject ||
       f.dateFrom ||

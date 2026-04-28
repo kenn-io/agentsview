@@ -70,6 +70,7 @@ class AnalyticsStore {
   project: string = $state("");
   machine: string = $state("");
   agent: string = $state("");
+  termination: string = $state("");
   minUserMessages: number = $state(0);
   includeOneShot: boolean = $state(true);
   includeAutomated: boolean = $state(false);
@@ -138,6 +139,7 @@ class AnalyticsStore {
       this.project !== "" ||
       this.machine !== "" ||
       this.agent !== "" ||
+      this.termination !== "" ||
       this.minUserMessages > 0 ||
       !this.includeOneShot ||
       this.includeAutomated ||
@@ -152,6 +154,7 @@ class AnalyticsStore {
     this.project = "";
     this.machine = "";
     this.agent = "";
+    this.termination = "";
     this.minUserMessages = 0;
     this.includeOneShot = true;
     this.includeAutomated = false;
@@ -161,6 +164,7 @@ class AnalyticsStore {
     sessions.filters.project = "";
     sessions.filters.machine = "";
     sessions.filters.agent = "";
+    sessions.filters.termination = "";
     sessions.filters.minUserMessages = 0;
     sessions.filters.includeOneShot = true;
     sessions.filters.includeAutomated = false;
@@ -264,6 +268,14 @@ class AnalyticsStore {
     this.fetchAll();
   }
 
+  clearTermination() {
+    this.termination = "";
+    sessions.filters.termination = "";
+    sessions.activeSessionId = null;
+    sessions.load();
+    this.fetchAll();
+  }
+
   clearTimeFilter() {
     this.selectedDow = null;
     this.selectedHour = null;
@@ -296,6 +308,7 @@ class AnalyticsStore {
     }
     if (this.machine) p.machine = this.machine;
     if (this.agent) p.agent = this.agent;
+    if (this.termination) p.termination = this.termination;
     if (this.minUserMessages > 0) {
       p.min_user_messages = this.minUserMessages;
     }
@@ -338,6 +351,7 @@ class AnalyticsStore {
       }
       if (this.machine) p.machine = this.machine;
       if (this.agent) p.agent = this.agent;
+      if (this.termination) p.termination = this.termination;
       if (this.minUserMessages > 0) {
         p.min_user_messages = this.minUserMessages;
       }

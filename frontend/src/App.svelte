@@ -7,6 +7,7 @@
   import SessionList from "./lib/components/sidebar/SessionList.svelte";
   import MessageList from "./lib/components/content/MessageList.svelte";
   import SessionVitals from "./lib/components/content/SessionVitals.svelte";
+  import TerminationBanner from "./lib/components/content/TerminationBanner.svelte";
   import { sessionActivity } from "./lib/stores/sessionActivity.svelte.js";
   import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
   import CommandPalette from "./lib/components/command-palette/CommandPalette.svelte";
@@ -436,6 +437,7 @@
           session={session}
           onBack={() => sessions.deselectSession()}
         />
+        <TerminationBanner session={session} />
         <MessageList bind:this={messageListRef} />
       {:else}
         <AnalyticsPage />

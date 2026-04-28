@@ -46,7 +46,11 @@ describe("TopSessions", () => {
     // @ts-ignore
     analytics.errors = savedErrors;
     sessions.filters.includeOneShot = false;
+    sessions.filters.termination = "";
     window.history.replaceState(null, "", "/");
+    // Clear any orphaned DOM left behind by tests that fail
+    // before their unmount call.
+    document.body.innerHTML = "";
   });
 
   function mountWithData() {
@@ -129,5 +133,142 @@ describe("TopSessions", () => {
     expect(navSpy).toHaveBeenCalledWith("sess-1");
 
     unmount(component);
+  });
+
+  describe("status column", () => {
+    function mountWithFourStates() {
+      analytics.topSessions = {
+        metric: "messages",
+        sessions: [
+          {
+            id: "s1",
+            project: "p",
+            first_message: "clean session",
+            message_count: 1,
+            output_tokens: 0,
+            duration_min: 0,
+            termination_status: "clean",
+          },
+          {
+            id: "s2",
+            project: "p",
+            first_message: "tcp session",
+            message_count: 1,
+            output_tokens: 0,
+            duration_min: 0,
+            termination_status: "tool_call_pending",
+          },
+          {
+            id: "s3",
+            project: "p",
+            first_message: "trunc session",
+            message_count: 1,
+            output_tokens: 0,
+            duration_min: 0,
+            termination_status: "truncated",
+          },
+          {
+            id: "s4",
+            project: "p",
+            first_message: "unknown session",
+            message_count: 1,
+            output_tokens: 0,
+            duration_min: 0,
+            termination_status: null,
+          },
+        ],
+      };
+      // @ts-ignore — loading is reactive state
+      analytics.loading = {
+        ...analytics.loading,
+        topSessions: false,
+      };
+      // @ts-ignore
+      analytics.errors = {
+        ...analytics.errors,
+        topSessions: null,
+      };
+      return mount(TopSessions, { target: document.body });
+    }
+
+    it("renders clean dot, two unclean glyphs, and dash", async () => {
+      const component = mountWithFourStates();
+      await tick();
+
+      expect(
+        document.querySelectorAll(".status-dot--clean").length,
+      ).toBe(1);
+      expect(
+        document.querySelectorAll(".status-glyph--unclean").length,
+      ).toBe(2);
+      expect(
+        document.querySelectorAll(".status-dash").length,
+      ).toBe(1);
+
+      unmount(component);
+    });
+
+    it("shows the unclean count pill and triggers termination filter on click", async () => {
+      const setSpy = vi
+        .spyOn(sessions, "setTerminationFilter")
+        .mockImplementation(() => {});
+
+      const component = mountWithFourStates();
+      await tick();
+
+      const pill = document.querySelector(
+        ".status-count-pill",
+      ) as HTMLButtonElement | null;
+      expect(pill).toBeTruthy();
+      expect(pill!.textContent?.trim()).toBe("2 unclean");
+
+      pill!.dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+      await tick();
+
+      expect(setSpy).toHaveBeenCalledWith("unclean");
+
+      setSpy.mockRestore();
+      unmount(component);
+    });
+
+    it("hides the count pill when no rows are unclean", async () => {
+      analytics.topSessions = {
+        metric: "messages",
+        sessions: [
+          {
+            id: "s1",
+            project: "p",
+            first_message: "clean only",
+            message_count: 1,
+            output_tokens: 0,
+            duration_min: 0,
+            termination_status: "clean",
+          },
+        ],
+      };
+      // @ts-ignore
+      analytics.loading = {
+        ...analytics.loading,
+        topSessions: false,
+      };
+      // @ts-ignore
+      analytics.errors = {
+        ...analytics.errors,
+        topSessions: null,
+      };
+
+      const component = mount(TopSessions, {
+        target: document.body,
+      });
+      await tick();
+
+      expect(
+        document.querySelector(".status-count-pill"),
+      ).toBeNull();
+
+      unmount(component);
+    });
   });
 });

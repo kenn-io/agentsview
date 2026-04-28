@@ -149,6 +149,7 @@ export interface ListSessionsParams {
   exclude_project?: string;
   machine?: string;
   agent?: string;
+  termination?: string;
   date?: string;
   date_from?: string;
   date_to?: string;
@@ -157,6 +158,7 @@ export interface ListSessionsParams {
   max_messages?: number;
   min_user_messages?: number;
   include_one_shot?: boolean;
+  include_automated?: boolean;
   include_children?: boolean;
   cursor?: string;
   limit?: number;
@@ -826,6 +828,7 @@ export interface AnalyticsParams {
   include_one_shot?: boolean;
   include_automated?: boolean;
   active_since?: string;
+  termination?: string;
 }
 
 export function getAnalyticsSummary(
