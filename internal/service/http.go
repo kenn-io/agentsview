@@ -114,6 +114,7 @@ func filterToQuery(f ListFilter) url.Values {
 	}
 	setIfNotEmpty("outcome", f.Outcome)
 	setIfNotEmpty("health_grade", f.HealthGrade)
+	setIfNotEmpty("termination", f.Termination)
 	if f.MinToolFailures != nil {
 		q.Set("min_tool_failures", strconv.Itoa(*f.MinToolFailures))
 	}

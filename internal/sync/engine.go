@@ -3834,6 +3834,7 @@ func toDBSession(pw pendingWrite) db.Session {
 		SourceVersion:        pw.sess.SourceVersion,
 		ParserMalformedLines: pw.sess.MalformedLines,
 		IsTruncated:          pw.sess.IsTruncated,
+		TerminationStatus:    strPtr(string(pw.sess.TerminationStatus)),
 		// data_version is intentionally left at the
 		// existing column default (0). UpsertSession does
 		// not persist this field; the caller bumps it via

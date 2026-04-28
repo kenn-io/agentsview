@@ -1581,3 +1581,44 @@ func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 		t.Errorf("SyncSingleSession scope: got %q, want %q", got[0], "messages")
 	}
 }
+
+func TestToDBSessionTerminationStatus(t *testing.T) {
+	tests := []struct {
+		name string
+		in   parser.TerminationStatus
+		want *string
+	}{
+		{name: "empty maps to nil", in: "", want: nil},
+		{name: "clean maps to pointer", in: parser.TerminationClean, want: new("clean")},
+		{name: "tool_call_pending maps to pointer", in: parser.TerminationToolCallPending, want: new("tool_call_pending")},
+		{name: "truncated maps to pointer", in: parser.TerminationTruncated, want: new("truncated")},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pw := pendingWrite{
+				sess: parser.ParsedSession{
+					ID:                "s1",
+					Project:           "p",
+					Machine:           "m",
+					Agent:             parser.AgentClaude,
+					StartedAt:         time.Now(),
+					EndedAt:           time.Now(),
+					MessageCount:      1,
+					UserMessageCount:  1,
+					TerminationStatus: tc.in,
+				},
+			}
+			got := toDBSession(pw)
+
+			if (got.TerminationStatus == nil) != (tc.want == nil) {
+				t.Fatalf("nil mismatch: got=%v want=%v",
+					got.TerminationStatus, tc.want)
+			}
+			if got.TerminationStatus != nil && *got.TerminationStatus != *tc.want {
+				t.Fatalf("value mismatch: got=%q want=%q",
+					*got.TerminationStatus, *tc.want)
+			}
+		})
+	}
+}

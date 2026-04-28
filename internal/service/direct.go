@@ -151,6 +151,9 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 	if f.HealthGrade != "" {
 		filter.HealthGrade = strings.Split(f.HealthGrade, ",")
 	}
+	if f.Termination != "" {
+		filter.Termination = f.Termination
+	}
 	return filter
 }
 

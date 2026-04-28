@@ -59,6 +59,7 @@ type ListFilter struct {
 	IncludeChildren  bool   `json:"include_children,omitempty"`
 	Outcome          string `json:"outcome,omitempty"`      // comma-separated
 	HealthGrade      string `json:"health_grade,omitempty"` // comma-separated
+	Termination      string `json:"termination,omitempty"`  // comma-separated
 	MinToolFailures  *int   `json:"min_tool_failures,omitempty"`
 	Cursor           string `json:"cursor,omitempty"`
 	Limit            int    `json:"limit,omitempty"`
