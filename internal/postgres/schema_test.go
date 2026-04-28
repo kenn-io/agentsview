@@ -258,7 +258,10 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
 
-	if got := state.alterTableExecCount(); got != 1 {
-		t.Fatalf("ALTER TABLE execs = %d, want 1", got)
+	// Two tables have missing columns (sessions: termination_status;
+	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
+	// thinking_text). Per-table batching means one ALTER each.
+	if got := state.alterTableExecCount(); got != 2 {
+		t.Fatalf("ALTER TABLE execs = %d, want 2", got)
 	}
 }

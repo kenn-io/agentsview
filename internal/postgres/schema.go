@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     context_pressure_max      DOUBLE PRECISION,
     health_score              INT,
     health_grade              TEXT,
+    termination_status        TEXT,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -424,6 +425,11 @@ func EnsureSchema(
 			`thinking_text TEXT NOT NULL DEFAULT ''`,
 			"adding messages.thinking_text",
 		},
+		{
+			"sessions", "termination_status",
+			`termination_status TEXT`,
+			"adding sessions.termination_status",
+		},
 	}
 	step = time.Now()
 	existingColumns, err := loadExistingColumns(ctx, db, alters)
@@ -454,6 +460,14 @@ func EnsureSchema(
 		len(addedColumns),
 	)
 	step = time.Now()
+	if _, err := db.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
+		 ON sessions(termination_status)`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_sessions_termination_status: %w", err,
+		)
+	}
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}
@@ -1118,7 +1132,8 @@ func CheckSchemaCompat(
 	ctx context.Context, db *sql.DB,
 ) error {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, created_at, deleted_at, updated_at
+		`SELECT id, created_at, deleted_at, updated_at,
+			termination_status
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

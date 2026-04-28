@@ -130,6 +130,99 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	checkIsSystem(t, pg, sessID, secondSet, 7)
 }
 
+// TestPushSessionTerminationStatus verifies that pushSession round-trips
+// the termination_status column to PG: a non-nil value writes the string,
+// and a subsequent push with nil clears the column back to NULL via the
+// ON CONFLICT DO UPDATE path.
+func TestPushSessionTerminationStatus(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_termstatus_test"
+	pg, err := Open(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer pg.Close()
+
+	ctx := context.Background()
+	if _, err := pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+	if err := EnsureSchema(ctx, pg, schema); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	pending := "tool_call_pending"
+	sess := db.Session{
+		ID:               "term-test-1",
+		Project:          "p",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		// CreatedAt must be parseable by ParseSQLiteTimestamp;
+		// PG's NOT NULL on created_at would otherwise reject NULL.
+		CreatedAt:         "2024-01-01T00:00:00Z",
+		TerminationStatus: &pending,
+	}
+
+	pushOnce := func(s db.Session) {
+		t.Helper()
+		tx, err := pg.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("BeginTx: %v", err)
+		}
+		if err := sync.pushSession(ctx, tx, s); err != nil {
+			_ = tx.Rollback()
+			t.Fatalf("pushSession: %v", err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+	}
+
+	pushOnce(sess)
+
+	var got *string
+	if err := pg.QueryRow(
+		`SELECT termination_status FROM sessions WHERE id = $1`,
+		sess.ID,
+	).Scan(&got); err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if got == nil || *got != "tool_call_pending" {
+		t.Fatalf("got %v, want tool_call_pending", got)
+	}
+
+	// Update to NULL and verify ON CONFLICT clears it.
+	sess.TerminationStatus = nil
+	pushOnce(sess)
+
+	if err := pg.QueryRow(
+		`SELECT termination_status FROM sessions WHERE id = $1`,
+		sess.ID,
+	).Scan(&got); err != nil {
+		t.Fatalf("read back 2: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("got %q, want NULL", *got)
+	}
+}
+
 // checkIsSystem asserts that PG contains exactly wantTotal rows for the
 // session with ordinals 0..wantTotal-1, and that each row's is_system
 // matches wantSystem. Tracking the exact ordinal set prevents false

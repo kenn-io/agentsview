@@ -48,7 +48,7 @@ const pgSessionCols = `id, project, machine, agent,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
-	deleted_at`
+	deleted_at, termination_status`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -92,7 +92,7 @@ func scanPGSession(
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
-		&deletedAt,
+		&deletedAt, &s.TerminationStatus,
 	)
 	if err != nil {
 		return s, err
@@ -230,6 +230,15 @@ func buildPGSessionFilter(
 			"user_message_count >= "+
 				pb.add(f.MinUserMessages))
 	}
+	switch f.Termination {
+	case "clean":
+		filterPreds = append(filterPreds,
+			"termination_status = 'clean'")
+	case "unclean":
+		filterPreds = append(filterPreds,
+			"termination_status IN ('tool_call_pending', 'truncated')")
+	}
+	// "" and "all" add no predicate.
 
 	oneShotPred := ""
 	if f.ExcludeOneShot {

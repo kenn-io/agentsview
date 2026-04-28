@@ -730,7 +730,7 @@ func (s *Sync) pushSession(
 			is_automated, data_version,
 			cwd, git_branch, source_session_id,
 			source_version, parser_malformed_lines,
-			is_truncated,
+			is_truncated, termination_status,
 			parent_session_id, relationship_type,
 			tool_failure_signal_count, tool_retry_count,
 			edit_churn_count, consecutive_failure_max,
@@ -747,14 +747,14 @@ func (s *Sync) pushSession(
 			$7, $8, $9, $10,
 			$11, $12, $13, $14,
 			$15, $16, $17, $18,
-			$19, $20, $21, $22, $23, $24,
-			$25, $26,
-			$27, $28, $29, $30,
-			$31, $32, $33, $34,
-			$35,
-			$36, $37,
-			$38,
-			$39, $40, $41, $42,
+			$19, $20, $21, $22, $23, $24, $25,
+			$26, $27,
+			$28, $29, $30, $31,
+			$32, $33, $34, $35,
+			$36,
+			$37, $38,
+			$39,
+			$40, $41, $42, $43,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
@@ -781,6 +781,7 @@ func (s *Sync) pushSession(
 			source_version = EXCLUDED.source_version,
 			parser_malformed_lines = EXCLUDED.parser_malformed_lines,
 			is_truncated = EXCLUDED.is_truncated,
+			termination_status = EXCLUDED.termination_status,
 			parent_session_id = EXCLUDED.parent_session_id,
 			relationship_type = EXCLUDED.relationship_type,
 			tool_failure_signal_count = EXCLUDED.tool_failure_signal_count,
@@ -823,6 +824,7 @@ func (s *Sync) pushSession(
 			OR sessions.source_version IS DISTINCT FROM EXCLUDED.source_version
 			OR sessions.parser_malformed_lines IS DISTINCT FROM EXCLUDED.parser_malformed_lines
 			OR sessions.is_truncated IS DISTINCT FROM EXCLUDED.is_truncated
+			OR sessions.termination_status IS DISTINCT FROM EXCLUDED.termination_status
 			OR sessions.parent_session_id IS DISTINCT FROM EXCLUDED.parent_session_id
 			OR sessions.relationship_type IS DISTINCT FROM EXCLUDED.relationship_type
 			OR sessions.tool_failure_signal_count IS DISTINCT FROM EXCLUDED.tool_failure_signal_count
@@ -856,7 +858,7 @@ func (s *Sync) pushSession(
 		isAutomated, sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
 		sess.SourceVersion, sess.ParserMalformedLines,
-		sess.IsTruncated,
+		sess.IsTruncated, nilStr(sess.TerminationStatus),
 		nilStr(sess.ParentSessionID),
 		sess.RelationshipType,
 		sess.ToolFailureSignalCount, sess.ToolRetryCount,
