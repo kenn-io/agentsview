@@ -138,9 +138,11 @@ func parseGeminiJSONL(
 			continue
 		}
 		if !gjson.ValidBytes(line) {
-			return nil, nil, fmt.Errorf(
-				"invalid JSONL record in %s", path,
-			)
+			// Tolerate malformed lines: Gemini appends to this
+			// file while the session is live, so a watcher scan
+			// can race a partial trailing write. Matches the
+			// Claude JSONL parser's skip-invalid behavior.
+			continue
 		}
 		rec := gjson.ParseBytes(line)
 		if id := rec.Get("sessionId").Str; id != "" {

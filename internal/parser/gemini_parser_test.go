@@ -82,6 +82,41 @@ func TestParseGeminiSession_JSONLStreamLargeRecord(t *testing.T) {
 	assert.Equal(t, len(largeContent), len(msgs[0].Content))
 }
 
+func TestParseGeminiSession_JSONLStreamTolerantOfPartialLines(t *testing.T) {
+	t.Run("partial trailing write", func(t *testing.T) {
+		content := strings.Join([]string{
+			`{"sessionId":"sess-jsonl-partial","projectHash":"hash","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:12:42.783Z","kind":"main"}`,
+			`{"id":"u1","timestamp":"2026-04-23T16:12:43.085Z","type":"user","content":[{"text":"first"}]}`,
+			`{"id":"a1","timestamp":"2026-04-23T16:12:50.158Z","type":"gemini","content":"reply"`,
+		}, "\n")
+		path := createTestFile(t, "session.jsonl", content)
+		sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+		require.NoError(t, err)
+
+		require.NotNil(t, sess)
+		require.Equal(t, 1, len(msgs))
+		assertMessage(t, msgs[0], RoleUser, "first")
+	})
+
+	t.Run("malformed line mid-stream", func(t *testing.T) {
+		content := strings.Join([]string{
+			`{"sessionId":"sess-jsonl-mid","projectHash":"hash","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:12:42.783Z","kind":"main"}`,
+			`{"id":"u1","timestamp":"2026-04-23T16:12:43.085Z","type":"user","content":[{"text":"first"}]}`,
+			`{not valid json`,
+			`{"id":"a1","timestamp":"2026-04-23T16:12:50.158Z","type":"gemini","content":"reply"}`,
+			"",
+		}, "\n")
+		path := createTestFile(t, "session.jsonl", content)
+		sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+		require.NoError(t, err)
+
+		require.NotNil(t, sess)
+		require.Equal(t, 2, len(msgs))
+		assertMessage(t, msgs[0], RoleUser, "first")
+		assertMessage(t, msgs[1], RoleAssistant, "reply")
+	})
+}
+
 func TestParseGeminiSession_ToolCalls(t *testing.T) {
 	t.Run("basic tool calls", func(t *testing.T) {
 		content := loadFixture(t, "gemini/tool_calls.json")
