@@ -267,7 +267,7 @@ func AssembleTiming(
 			SkillName:         r.SkillName,
 			SubagentSessionID: r.SubagentSessionID,
 			DurationMs:        r.DurationMs,
-			InputPreview:      makeInputPreview(r.ToolName, r.InputJSON),
+			InputPreview:      makeInputPreview(r.Category, r.ToolName, r.InputJSON),
 		}
 		callsByMsg[r.MessageID] = append(callsByMsg[r.MessageID], c)
 	}
@@ -465,7 +465,12 @@ func millisBetween(a, b string) int64 {
 // Keep this minimal — the frontend rebuilds the full label from raw
 // input_json on display. This is purely a hint surfaced via the API
 // for clients that don't fetch the full message.
-func makeInputPreview(toolName, inputJSON string) string {
+//
+// Dispatches on the normalized category first so codex's exec_command
+// (category Bash, args under "cmd") shares an arm with Claude's Bash
+// (args under "command"). Falls back to the raw tool name when the
+// category is too generic ("Tool", "Other") to identify arg shape.
+func makeInputPreview(category, toolName, inputJSON string) string {
 	if inputJSON == "" {
 		return ""
 	}
@@ -485,8 +490,13 @@ func makeInputPreview(toolName, inputJSON string) string {
 		return ""
 	}
 
+	key := category
+	if key == "" || key == "Other" || key == "Tool" {
+		key = toolName
+	}
+
 	var raw string
-	switch toolName {
+	switch key {
 	case "Read":
 		raw = pickStr("file_path", "path")
 	case "Edit":
@@ -508,7 +518,7 @@ func makeInputPreview(toolName, inputJSON string) string {
 	case "Skill", "skill":
 		raw = pickStr("skill", "name")
 	default:
-		raw = pickStr("file_path", "path", "pattern", "command")
+		raw = pickStr("file_path", "path", "pattern", "command", "cmd")
 	}
 
 	const maxLen = 100

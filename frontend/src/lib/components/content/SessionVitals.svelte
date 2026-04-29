@@ -5,6 +5,7 @@
   import { fetchSessionTiming } from "../../api/timing.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
+  import { displayToolName } from "../../utils/toolDisplay.js";
   import { ui } from "../../stores/ui.svelte.js";
   import type {
     CallTiming,
@@ -230,7 +231,7 @@
               title="Jump to call"
               onclick={() => scrollToCall(slowest)}
             >
-              {slowest.tool_name} · {formatDuration(slowest.duration_ms ?? 0)}
+              {displayToolName(slowest)} · {formatDuration(slowest.duration_ms ?? 0)}
             </button>
           {:else}
             <div class="val slow">—</div>

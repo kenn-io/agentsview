@@ -372,3 +372,84 @@ describe("ToolBlock fallback content", () => {
     expect(toolContent).toBeNull();
   });
 });
+
+describe("ToolBlock collapsed preview", () => {
+  let component: ReturnType<typeof mount>;
+
+  afterEach(() => {
+    if (component) unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("shows codex bash command (cmd key) when content is empty", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "exec_command",
+      category: "Bash",
+      input_json: JSON.stringify({
+        cmd: "nl -ba file.md",
+        workdir: "/x",
+      }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", label: "Bash", toolCall },
+    });
+    await tick();
+
+    const preview = document.querySelector(".tool-header .tool-preview");
+    expect(preview).not.toBeNull();
+    expect(preview!.textContent).toBe("$ nl -ba file.md");
+  });
+
+  it("shows claude bash command (command key) when content is empty", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "Bash",
+      category: "Bash",
+      input_json: JSON.stringify({ command: "ls -la" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", label: "Bash", toolCall },
+    });
+    await tick();
+
+    const preview = document.querySelector(".tool-header .tool-preview");
+    expect(preview).not.toBeNull();
+    expect(preview!.textContent).toBe("$ ls -la");
+  });
+
+  it("shows only the first line of multi-line bash commands", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "exec_command",
+      category: "Bash",
+      input_json: JSON.stringify({
+        cmd: "cat <<EOF\nhello\nworld\nEOF",
+      }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", label: "Bash", toolCall },
+    });
+    await tick();
+
+    const preview = document.querySelector(".tool-header .tool-preview");
+    expect(preview).not.toBeNull();
+    expect(preview!.textContent).toBe("$ cat <<EOF");
+  });
+
+  it("prefers explicit content over command fallback", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "exec_command",
+      category: "Bash",
+      input_json: JSON.stringify({ cmd: "from json" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "$ from content", label: "Bash", toolCall },
+    });
+    await tick();
+
+    const preview = document.querySelector(".tool-header .tool-preview");
+    expect(preview!.textContent).toBe("$ from content");
+  });
+});

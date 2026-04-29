@@ -123,6 +123,14 @@
   let previewLine = $derived.by(() => {
     const line = content.split("\n")[0]?.slice(0, 100) ?? "";
     if (line) return line;
+    // For Bash tools, surface the command in the collapsed header so
+    // codex exec_command (cmd) and Claude Bash (command) are both
+    // legible without expanding the block.
+    const cmd = inputParams?.command ?? inputParams?.cmd;
+    if (cmd) {
+      const firstLine = String(cmd).split("\n")[0] ?? "";
+      return `$ ${firstLine}`.slice(0, 100);
+    }
     // For Edit/Write/Read with no content, show file path as preview
     const filePath =
       inputParams?.file_path ?? inputParams?.path ?? inputParams?.filePath;

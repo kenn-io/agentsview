@@ -3,6 +3,7 @@
   import type { CallTiming } from "../../api/types/timing.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
+  import { displayToolName } from "../../utils/toolDisplay.js";
 
   interface Props {
     call: CallTiming;
@@ -88,7 +89,7 @@
   {:else}
     <span class="chev spacer">▸</span>
   {/if}
-  <span class="cn" style="color: {categoryToken(call.category)}">{call.tool_name}</span>
+  <span class="cn" style="color: {categoryToken(call.category)}">{displayToolName(call)}</span>
   <span class="ca">{call.input_preview}</span>
   <span class="cbar-wrap">
     <span

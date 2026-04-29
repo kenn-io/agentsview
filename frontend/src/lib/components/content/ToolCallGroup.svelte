@@ -13,6 +13,7 @@
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
+  import { displayToolName } from "../../utils/toolDisplay.js";
 
   interface Props {
     messages: Message[];
@@ -192,7 +193,7 @@
         <ToolBlock
           toolCall={soloCall}
           content=""
-          label={soloCall.tool_name}
+          label={displayToolName(soloCall)}
           durationLabel={soloDurationLabel(
             callByToolUseID.get(soloCall.tool_use_id ?? ""),
             turn,

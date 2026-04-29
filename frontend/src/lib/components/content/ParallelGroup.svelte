@@ -4,6 +4,7 @@
   import type { CallTiming } from "../../api/types/timing.js";
   import ToolBlock from "./ToolBlock.svelte";
   import { formatDuration } from "../../utils/duration.js";
+  import { displayToolName } from "../../utils/toolDisplay.js";
 
   interface Props {
     toolCalls: ToolCall[];
@@ -51,7 +52,7 @@
       <ToolBlock
         {toolCall}
         content=""
-        label={toolCall.tool_name}
+        label={displayToolName(toolCall)}
         durationLabel={dur}
         inGroup={true}
         {highlightQuery}

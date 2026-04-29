@@ -25,6 +25,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { applyHighlight } from "../../utils/highlight.js";
   import { renderMarkdown } from "../../utils/markdown.js";
+  import { displayToolName } from "../../utils/toolDisplay.js";
   import type { Session } from "../../api/types.js";
 
   interface Props {
@@ -402,7 +403,7 @@
         <ToolBlock
           toolCall={soloCall}
           content=""
-          label={soloCall.tool_name}
+          label={displayToolName(soloCall)}
           durationLabel={soloDurationLabel(
             callByToolUseID.get(soloCall.tool_use_id ?? ""),
             turn,

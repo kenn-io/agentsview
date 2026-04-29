@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -194,6 +195,91 @@ func TestGetSessionTiming_MissingSessionReturnsNil(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("GetSessionTiming = %v, want nil", got)
+	}
+}
+
+func TestMakeInputPreview(t *testing.T) {
+	cases := []struct {
+		name      string
+		category  string
+		toolName  string
+		inputJSON string
+		want      string
+	}{
+		{
+			name:      "claude bash uses command key",
+			category:  "Bash",
+			toolName:  "Bash",
+			inputJSON: `{"command":"ls -la"}`,
+			want:      "ls -la",
+		},
+		{
+			name:      "codex exec_command uses cmd key via category",
+			category:  "Bash",
+			toolName:  "exec_command",
+			inputJSON: `{"cmd":"nl -ba file.md","workdir":"/x"}`,
+			want:      "nl -ba file.md",
+		},
+		{
+			name:      "bash trims to first line",
+			category:  "Bash",
+			toolName:  "exec_command",
+			inputJSON: `{"cmd":"echo a\necho b"}`,
+			want:      "echo a",
+		},
+		{
+			name:      "codex apply_patch falls through to category Edit",
+			category:  "Edit",
+			toolName:  "apply_patch",
+			inputJSON: `{"file_path":"/tmp/foo.go"}`,
+			want:      "/tmp/foo.go",
+		},
+		{
+			name:      "skill prefers tool name over Tool category",
+			category:  "Tool",
+			toolName:  "Skill",
+			inputJSON: `{"skill":"using-superpowers"}`,
+			want:      "using-superpowers",
+		},
+		{
+			name:      "unknown tool with Other category falls back to common keys",
+			category:  "Other",
+			toolName:  "weird_tool",
+			inputJSON: `{"cmd":"do thing"}`,
+			want:      "do thing",
+		},
+		{
+			name:      "empty input returns empty",
+			category:  "Bash",
+			toolName:  "Bash",
+			inputJSON: "",
+			want:      "",
+		},
+		{
+			name:      "invalid json returns empty",
+			category:  "Bash",
+			toolName:  "Bash",
+			inputJSON: `{not json`,
+			want:      "",
+		},
+		{
+			name:     "long value is truncated with ellipsis",
+			category: "Read",
+			toolName: "Read",
+			inputJSON: `{"file_path":"` +
+				strings.Repeat("a", 150) + `"}`,
+			want: strings.Repeat("a", 100) + "…",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := makeInputPreview(
+				tc.category, tc.toolName, tc.inputJSON,
+			)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
