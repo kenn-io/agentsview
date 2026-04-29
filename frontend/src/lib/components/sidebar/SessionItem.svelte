@@ -540,12 +540,11 @@
 
   .session-name.shell > code {
     font-family: var(--font-mono);
-    font-size: 0.92em;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    border-radius: 3px;
-    padding: 1px 5px;
-    color: var(--text-primary);
+    font-size: 0.95em;
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: var(--text-secondary);
     letter-spacing: 0;
   }
 
