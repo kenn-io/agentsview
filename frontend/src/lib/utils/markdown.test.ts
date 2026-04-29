@@ -417,6 +417,37 @@ describe("renderMarkdown", () => {
         /<code[^>]*class="language-shell"/,
       );
     });
+
+    it("preserves leading whitespace and indentation in stdout", () => {
+      // Shell output frequently has indentation that's meaningful
+      // (tree output, table layouts, log-line columns). Trimming
+      // would corrupt the transcript.
+      const dom = parseHTML(
+        renderMarkdown(
+          "<bash-stdout>  line one\n    nested\n  line two</bash-stdout>",
+        ),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe(
+        "  line one\n    nested\n  line two\n",
+      );
+    });
+
+    it("preserves leading and trailing blank lines in stdout", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<bash-stdout>\n\nbody\n\n</bash-stdout>",
+        ),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      // marked normalizes the final newline but leading blanks
+      // and the interior blank-line structure are preserved.
+      expect(code!.textContent).toMatch(
+        /^\n\nbody\n/,
+      );
+    });
   });
 
   describe("edge cases", () => {

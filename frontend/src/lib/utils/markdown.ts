@@ -25,16 +25,19 @@ function bashWrapperExtension(
     tokenizer(src) {
       const m = fullRe.exec(src);
       if (!m) return undefined;
-      const inner = (m[1] ?? "").trim();
-      if (!inner) {
+      const captured = m[1] ?? "";
+      if (!captured.trim()) {
         // Drop empty wrappers entirely (common for stdout/stderr).
         return { type: "space", raw: m[0] };
       }
+      // Preserve the captured whitespace verbatim — code blocks
+      // are expected to render shell output exactly, including
+      // indentation and trailing blank lines.
       return {
         type: "code",
         raw: m[0],
         lang,
-        text: prefix + inner,
+        text: prefix + captured,
       };
     },
   };
