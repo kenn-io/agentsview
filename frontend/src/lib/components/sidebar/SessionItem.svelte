@@ -4,7 +4,10 @@
   import { starred } from "../../stores/starred.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
-  import { normalizeMessagePreview } from "../../utils/messages.js";
+  import {
+    normalizeMessagePreview,
+    previewMessage,
+  } from "../../utils/messages.js";
 
   interface Props {
     session: Session;
@@ -78,8 +81,13 @@
    * description (e.g. "Task #2: Align ROADMAP.md...") instead of the
    * repetitive "You are a teammate on..." boilerplate.
    */
-  let displayName = $derived.by(() => {
-    if (session.display_name) return truncate(session.display_name, 50);
+  let displayLabel = $derived.by((): { text: string; isShell: boolean } => {
+    if (session.display_name) {
+      return {
+        text: truncate(session.display_name, 50),
+        isShell: false,
+      };
+    }
     let msg = session.first_message ?? "";
     if (msg.includes("<teammate-message")) {
       msg = msg
@@ -89,17 +97,18 @@
       // Extract "Task #N: description" from the boilerplate.
       const taskMatch = msg.match(/Task\s*#?\d+[:\s]+(.+?)(?:\s+\d+\.|$)/s);
       if (taskMatch) {
-        return truncate(taskMatch[1]!.trim(), 50);
+        return { text: truncate(taskMatch[1]!.trim(), 50), isShell: false };
       }
       // Fallback: skip the "You are a teammate on ..." boilerplate.
       const afterTeam = msg.match(/team[."]\s*[^.]*?[.]\s+(.+)/s)
         ?? msg.match(/You are a teammate[^.]*\.\s+(.+)/s);
       if (afterTeam) {
-        return truncate(afterTeam[1]!.trim(), 50);
+        return { text: truncate(afterTeam[1]!.trim(), 50), isShell: false };
       }
     }
-    msg = normalizeMessagePreview(msg);
-    return msg ? truncate(msg, 50) : truncate(session.project, 30);
+    const p = previewMessage(msg);
+    if (p.text) return { text: truncate(p.text, 50), isShell: p.isShell };
+    return { text: truncate(session.project, 30), isShell: false };
   });
 
   let timeStr = $derived(
@@ -291,7 +300,17 @@
       />
     {:else}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="session-name" ondblclick={handleDblClick}>{displayName}</div>
+      <div
+        class="session-name"
+        class:shell={displayLabel.isShell}
+        ondblclick={handleDblClick}
+      >
+        {#if displayLabel.isShell}
+          <code>{displayLabel.text}</code>
+        {:else}
+          {displayLabel.text}
+        {/if}
+      </div>
     {/if}
     <div class="session-meta">
       {#if !hideProject}
@@ -517,6 +536,17 @@
     text-overflow: ellipsis;
     line-height: 1.3;
     letter-spacing: -0.005em;
+  }
+
+  .session-name.shell > code {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--text-primary);
+    letter-spacing: 0;
   }
 
   .compact .session-name {
