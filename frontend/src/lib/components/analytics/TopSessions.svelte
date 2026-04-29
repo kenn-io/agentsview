@@ -3,6 +3,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { formatTokenCount } from "../../utils/format.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
 
   function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
@@ -82,6 +83,7 @@
   {:else if analytics.topSessions && analytics.topSessions.sessions.length > 0}
     <div class="session-list">
       {#each analytics.topSessions.sessions as session, i}
+        {@const preview = normalizeMessagePreview(session.first_message)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
@@ -91,8 +93,8 @@
           <span class="rank">{i + 1}</span>
           <div class="session-info">
             <span class="session-label">
-              {session.first_message
-                ? truncate(session.first_message, 50)
+              {preview
+                ? truncate(preview, 50)
                 : session.id.slice(0, 12)}
             </span>
             <span class="session-project">{session.project}</span>

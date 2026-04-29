@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isSystemMessage } from "./messages.js";
+import { isSystemMessage, normalizeMessagePreview } from "./messages.js";
 import type { Message } from "../api/types.js";
 
 function msg(overrides: Partial<Message>): Message {
@@ -87,5 +87,54 @@ describe("isSystemMessage", () => {
         msg({ is_system: true, source_subtype: "future_subtype" }),
       ),
     ).toBe(true);
+  });
+});
+
+describe("normalizeMessagePreview", () => {
+  it("returns empty string for null/undefined/empty", () => {
+    expect(normalizeMessagePreview(null)).toBe("");
+    expect(normalizeMessagePreview(undefined)).toBe("");
+    expect(normalizeMessagePreview("")).toBe("");
+  });
+
+  it("strips <bash-input> tags and prefixes with !", () => {
+    expect(
+      normalizeMessagePreview(
+        "<bash-input>git pull origin main</bash-input>",
+      ),
+    ).toBe("!git pull origin main");
+  });
+
+  it("unwraps <bash-stdout> and <bash-stderr>", () => {
+    expect(
+      normalizeMessagePreview(
+        "<bash-stdout>hello</bash-stdout>",
+      ),
+    ).toBe("hello");
+    expect(
+      normalizeMessagePreview(
+        "<bash-stderr>oops</bash-stderr>",
+      ),
+    ).toBe("oops");
+  });
+
+  it("normalizes a sequence of input + stdout", () => {
+    expect(
+      normalizeMessagePreview(
+        "<bash-input>echo hi</bash-input>\n<bash-stdout>hi</bash-stdout>",
+      ),
+    ).toBe("!echo hi\nhi");
+  });
+
+  it("leaves plain prose untouched", () => {
+    expect(
+      normalizeMessagePreview("just a regular message"),
+    ).toBe("just a regular message");
+  });
+
+  it("trims whitespace inside the wrapper", () => {
+    expect(
+      normalizeMessagePreview("<bash-input>  ls -la  </bash-input>"),
+    ).toBe("!ls -la");
   });
 });

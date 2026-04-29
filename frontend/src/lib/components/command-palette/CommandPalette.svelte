@@ -12,6 +12,7 @@
   import { agentColor } from "../../utils/agents.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
   import type { Session, SearchResult } from "../../api/types.js";
 
   let inputRef: HTMLInputElement | undefined = $state(undefined);
@@ -224,6 +225,7 @@
       {:else}
         <div class="palette-section-label">Recent Sessions</div>
         {#each recentSessions as session, i}
+          {@const preview = normalizeMessagePreview(session.first_message)}
           <button
             class="palette-item"
             class:selected={i === selectedIndex}
@@ -232,8 +234,8 @@
           >
             <span class="item-dot" style:background={agentColor(session.agent)}></span>
             <span class="item-body">
-              <span class="item-name">{session.first_message
-                ? truncate(session.first_message, 60)
+              <span class="item-name">{preview
+                ? truncate(preview, 60)
                 : session.project}</span>
             </span>
             <span class="item-meta">

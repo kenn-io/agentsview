@@ -4,6 +4,7 @@
   import { starred } from "../../stores/starred.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
 
   interface Props {
     session: Session;
@@ -97,6 +98,7 @@
         return truncate(afterTeam[1]!.trim(), 50);
       }
     }
+    msg = normalizeMessagePreview(msg);
     return msg ? truncate(msg, 50) : truncate(session.project, 30);
   });
 
@@ -154,7 +156,9 @@
   }
 
   function startRename() {
-    renameValue = session.display_name ?? session.first_message ?? "";
+    renameValue =
+      session.display_name
+      ?? normalizeMessagePreview(session.first_message);
     renaming = true;
     closeContextMenu();
     requestAnimationFrame(() => renameInput?.select());

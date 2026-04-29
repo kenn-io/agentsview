@@ -6,6 +6,7 @@
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
 
   $effect(() => {
     pins.loadAll(sessions.filters.project || undefined);
@@ -33,7 +34,13 @@
       return {
         project: pin.session_project ?? "unknown",
         agent: pin.session_agent ?? "unknown",
-        name: pin.session_display_name ?? pin.session_first_message ?? pin.session_project ?? pin.session_id.slice(0, 12),
+        name:
+          pin.session_display_name
+          ?? (
+            normalizeMessagePreview(pin.session_first_message)
+            || pin.session_project
+            || pin.session_id.slice(0, 12)
+          ),
       };
     }
     const s = sessions.sessions.find((s) => s.id === pin.session_id);
@@ -41,7 +48,9 @@
       ? {
           project: s.project,
           agent: s.agent,
-          name: s.display_name ?? s.first_message ?? s.project,
+          name:
+            s.display_name
+            ?? (normalizeMessagePreview(s.first_message) || s.project),
         }
       : {
           project: "unknown",

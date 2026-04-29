@@ -11,6 +11,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
   import { formatTokenUsage } from "../../utils/format.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SignalPanel from "../content/SignalPanel.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -158,7 +159,8 @@
   function startRename() {
     if (!session) return;
     renameValue =
-      session.display_name ?? session.first_message ?? "";
+      session.display_name
+      ?? normalizeMessagePreview(session.first_message);
     renaming = true;
     closeMenu();
     requestAnimationFrame(() => renameInput?.select());

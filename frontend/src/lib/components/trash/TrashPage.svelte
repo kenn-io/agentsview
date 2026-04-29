@@ -4,6 +4,7 @@
   import * as api from "../../api/client.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
 
   let trashedSessions: Session[] = $state([]);
   let loading = $state(true);
@@ -63,9 +64,8 @@
   }
 
   function displayName(s: Session): string {
-    return s.display_name ?? s.first_message
-      ? truncate(s.display_name ?? s.first_message ?? "", 70)
-      : s.project;
+    const raw = s.display_name ?? normalizeMessagePreview(s.first_message);
+    return raw ? truncate(raw, 70) : s.project;
   }
 </script>
 

@@ -49,3 +49,27 @@ export function isSystemMessage(m: Message): boolean {
 export function isCompactBoundary(m: Message): boolean {
   return Boolean(m.is_compact_boundary);
 }
+
+/**
+ * Replace Claude Code shell-shortcut wrappers with the form a user
+ * typed (or saw output as): `<bash-input>cmd</bash-input>` becomes
+ * `!cmd`, and `<bash-stdout>` / `<bash-stderr>` are unwrapped.
+ *
+ * Use for plain-text labels (sidebar, breadcrumbs, modals). For
+ * message-body rendering use `renderMarkdown`, which emits real
+ * code blocks via marked extensions.
+ */
+export function normalizeMessagePreview(
+  text: string | null | undefined,
+): string {
+  if (!text) return "";
+  return text
+    .replace(
+      /<bash-input>([\s\S]*?)<\/bash-input>/g,
+      (_, cmd: string) => `!${cmd.trim()}`,
+    )
+    .replace(
+      /<bash-(?:stdout|stderr)>([\s\S]*?)<\/bash-(?:stdout|stderr)>/g,
+      (_, out: string) => out.trim(),
+    );
+}

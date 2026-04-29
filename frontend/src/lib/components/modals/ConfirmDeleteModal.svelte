@@ -3,6 +3,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { truncate } from "../../utils/format.js";
+  import { normalizeMessagePreview } from "../../utils/messages.js";
 
   let deleting = $state(false);
   let deleteBtn = $state<HTMLButtonElement>();
@@ -10,10 +11,14 @@
   let sessionName = $derived.by(() => {
     const s = sessions.activeSession;
     if (!s) return "this session";
-    return truncate(
-      s.display_name ?? s.first_message ?? s.project ?? "this session",
-      60,
-    );
+    const raw =
+      s.display_name
+      ?? (
+        normalizeMessagePreview(s.first_message)
+        || s.project
+        || "this session"
+      );
+    return truncate(raw, 60);
   });
 
   function close() {
