@@ -94,6 +94,13 @@ func ExtractProjectFromCwdWithBranch(
 	}
 	cleaned := filepath.Clean(norm)
 
+	// Recognize worktree manager layouts before walking git roots.
+	// These layouts encode the owning project in the path even when
+	// the git root basename is a branch or generated worktree id.
+	if p := projectFromWorktreeLayout(cleaned); p != "" {
+		return NormalizeName(p)
+	}
+
 	// Skip the git-root walk when the cwd cannot resolve to a
 	// real local filesystem location. On macOS a bulk walk under
 	// an unbacked autofs prefix cascades through automountd into
@@ -109,13 +116,6 @@ func ExtractProjectFromCwdWithBranch(
 		}
 	}
 
-	// Recognize worktree manager layouts:
-	// .superset/worktrees/$PROJECT/$BRANCH[/...]
-	// conductor/workspaces/$PROJECT/$BRANCH[/...]
-	if p := projectFromWorktreeLayout(cleaned); p != "" {
-		return NormalizeName(p)
-	}
-
 	name := filepath.Base(cleaned)
 	if isInvalidPathBase(name) {
 		return ""
@@ -127,16 +127,28 @@ func ExtractProjectFromCwdWithBranch(
 	return NormalizeName(name)
 }
 
-// worktreeLayoutMarkers are path fragments that identify
-// worktree manager directory conventions. Each encodes
-// .../$MARKER/$PROJECT/$BRANCH[/...].
-var worktreeLayoutMarkers []string
+// worktreeLayout describes path fragments that identify worktree
+// manager directory conventions. projectPart is the zero-based
+// component after marker that contains the owning project name.
+type worktreeLayout struct {
+	marker      string
+	projectPart int
+	minParts    int
+}
+
+var worktreeLayouts []worktreeLayout
 
 func init() {
 	sep := string(filepath.Separator)
-	worktreeLayoutMarkers = []string{
-		sep + ".superset" + sep + "worktrees" + sep,
-		sep + "conductor" + sep + "workspaces" + sep,
+	worktreeLayouts = []worktreeLayout{
+		// .superset/worktrees/$PROJECT/$BRANCH[/...]
+		{marker: sep + ".superset" + sep + "worktrees" + sep, projectPart: 0, minParts: 2},
+		// conductor/workspaces/$PROJECT/$BRANCH[/...]
+		{marker: sep + "conductor" + sep + "workspaces" + sep, projectPart: 0, minParts: 2},
+		// ~/.config/middleman/worktrees/github.com/$OWNER/$REPO/$WORKTREE[/...]
+		{marker: sep + ".config" + sep + "middleman" + sep + "worktrees" + sep + "github.com" + sep, projectPart: 1, minParts: 3},
+		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
+		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
 	}
 }
 
@@ -144,18 +156,20 @@ func init() {
 // directory layouts and extracts the project name component.
 // Returns "" if the path does not match any known layout.
 func projectFromWorktreeLayout(path string) string {
-	for _, marker := range worktreeLayoutMarkers {
-		_, rest, found := strings.Cut(path, marker)
+	for _, layout := range worktreeLayouts {
+		_, rest, found := strings.Cut(path, layout.marker)
 		if !found {
 			continue
 		}
-		// Require at least project/branch to distinguish
-		// from the container directory itself.
-		projEnd := strings.IndexByte(rest, filepath.Separator)
-		if projEnd <= 0 {
+		parts := strings.Split(rest, string(filepath.Separator))
+		if len(parts) < layout.minParts {
 			continue
 		}
-		return rest[:projEnd]
+		project := parts[layout.projectPart]
+		if isInvalidPathBase(project) {
+			continue
+		}
+		return project
 	}
 	return ""
 }

@@ -546,6 +546,30 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 			branch: "fix/auth-bug",
 			want:   "my_app",
 		},
+		{
+			name: "MiddlemanGitHubWorktree",
+			cwd: filepath.FromSlash(
+				"/Users/wesm/.config/middleman/worktrees/github.com/wesm/middleman/pr-205",
+			),
+			branch: "fix-exited-agent-session-cleanup",
+			want:   "middleman",
+		},
+		{
+			name: "MiddlemanGitHubWorktreeSubdir",
+			cwd: filepath.FromSlash(
+				"/Users/wesm/.config/middleman/worktrees/github.com/wesm/middleman/pr-205/internal/parser",
+			),
+			branch: "fix-exited-agent-session-cleanup",
+			want:   "middleman",
+		},
+		{
+			name: "CodexAppWorktree",
+			cwd: filepath.FromSlash(
+				"/Users/wesm/.codex/worktrees/44be/middleman/internal/parser",
+			),
+			branch: "fix-exited-agent-session-cleanup",
+			want:   "middleman",
+		},
 	}
 
 	for _, tt := range tests {
