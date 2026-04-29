@@ -1,10 +1,56 @@
-import { Marked } from "marked";
+import { Marked, type TokenizerExtension } from "marked";
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
+
+/** Build a marked tokenizer extension that consumes a Claude Code
+ *  shell-shortcut wrapper tag and emits a `code` token directly.
+ *  Because this runs at the lexer level, occurrences of the tag
+ *  inside a fenced code block are never reached — marked has
+ *  already consumed those characters as a `code` token. */
+function bashWrapperExtension(
+  name: string,
+  tag: string,
+  prefix: string,
+  lang: string,
+): TokenizerExtension {
+  const startRe = new RegExp(`<${tag}>`);
+  const fullRe = new RegExp(`^<${tag}>([\\s\\S]*?)</${tag}>`);
+  return {
+    name,
+    level: "block",
+    start(src) {
+      const m = startRe.exec(src);
+      return m?.index;
+    },
+    tokenizer(src) {
+      const m = fullRe.exec(src);
+      if (!m) return undefined;
+      const inner = (m[1] ?? "").trim();
+      if (!inner) {
+        // Drop empty wrappers entirely (common for stdout/stderr).
+        return { type: "space", raw: m[0] };
+      }
+      return {
+        type: "code",
+        raw: m[0],
+        lang,
+        text: prefix + inner,
+      };
+    },
+  };
+}
 
 const parser = new Marked({
   gfm: true,
   breaks: true,
+});
+
+parser.use({
+  extensions: [
+    bashWrapperExtension("bashInput", "bash-input", "!", "shell"),
+    bashWrapperExtension("bashStdout", "bash-stdout", "", ""),
+    bashWrapperExtension("bashStderr", "bash-stderr", "", ""),
+  ],
 });
 
 const cache = new LRUCache<string, string>(6000);

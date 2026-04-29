@@ -310,6 +310,115 @@ describe("renderMarkdown", () => {
     );
   });
 
+  describe("Claude Code shell shortcuts", () => {
+    it("renders <bash-input> as a shell code block with ! prefix", () => {
+      const dom = parseHTML(
+        renderMarkdown("<bash-input>git pull origin main</bash-input>"),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("!git pull origin main\n");
+      // Tag itself must not survive in the output.
+      expect(dom.innerHTML).not.toMatch(/<\/?bash-input>/);
+    });
+
+    it("preserves multi-line commands in <bash-input>", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<bash-input>cd /tmp\nls -la</bash-input>",
+        ),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("!cd /tmp\nls -la\n");
+    });
+
+    it("renders <bash-stdout> as an unlabelled code block", () => {
+      const dom = parseHTML(
+        renderMarkdown("<bash-stdout>hello world</bash-stdout>"),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("hello world\n");
+      expect(dom.innerHTML).not.toMatch(/<\/?bash-stdout>/);
+    });
+
+    it("renders <bash-stderr> as an unlabelled code block", () => {
+      const dom = parseHTML(
+        renderMarkdown("<bash-stderr>oops</bash-stderr>"),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("oops\n");
+      expect(dom.innerHTML).not.toMatch(/<\/?bash-stderr>/);
+    });
+
+    it("drops empty <bash-stdout> and <bash-stderr> blocks", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<bash-input>true</bash-input>" +
+            "<bash-stdout></bash-stdout>" +
+            "<bash-stderr></bash-stderr>",
+        ),
+      );
+      const codes = dom.querySelectorAll("pre > code");
+      expect(codes.length).toBe(1);
+      expect(codes[0]!.textContent).toBe("!true\n");
+    });
+
+    it("handles input with backticks by picking a longer fence", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<bash-input>echo ```triple``` and ` single`</bash-input>",
+        ),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe(
+        "!echo ```triple``` and ` single`\n",
+      );
+    });
+
+    it("handles consecutive input/stdout pair", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<bash-input>echo hi</bash-input>" +
+            "<bash-stdout>hi\n</bash-stdout>",
+        ),
+      );
+      const codes = dom.querySelectorAll("pre > code");
+      expect(codes.length).toBe(2);
+      expect(codes[0]!.textContent).toBe("!echo hi\n");
+      expect(codes[1]!.textContent).toBe("hi\n");
+    });
+
+    it("leaves wrappers inside fenced code blocks alone", () => {
+      // The user is talking ABOUT the tag, not invoking one. The
+      // marked extension runs at the lexer level, so once the
+      // fenced block consumes these characters they are never
+      // re-tokenized as wrappers.
+      const dom = parseHTML(
+        renderMarkdown(
+          "```\n<bash-input>echo hi</bash-input>\n```",
+        ),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe(
+        "<bash-input>echo hi</bash-input>\n",
+      );
+    });
+
+    it("tags the input block with language-shell", () => {
+      const html = renderMarkdown(
+        "<bash-input>echo hi</bash-input>",
+      );
+      expect(html).toMatch(
+        /<code[^>]*class="language-shell"/,
+      );
+    });
+  });
+
   describe("edge cases", () => {
     it("returns empty string for empty input", () => {
       expect(renderMarkdown("")).toBe("");
