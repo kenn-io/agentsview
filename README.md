@@ -23,7 +23,7 @@ Or download the **desktop app** (macOS / Windows) from
 Or run the published Docker image:
 
 ```bash
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   -v "$HOME/.agentsview:/data" \
   -v "$HOME/.claude/projects:/agents/claude:ro" \
   -e CLAUDE_PROJECTS_DIR=/agents/claude \
@@ -55,6 +55,10 @@ docker compose -f docker-compose.prod.yaml up -d
 The included compose file persists the agentsview data directory in a named
 volume and mounts Claude, Codex, and OpenCode session roots read-only.
 
+The examples publish the UI on loopback only (`127.0.0.1`). If you need to
+expose it beyond localhost, enable `--require-auth` and publish the port
+intentionally.
+
 Important: a containerized agentsview instance can only discover agent sessions
 from directories you explicitly mount into the container. If you do not mount an
 agent's session directory and point the matching env var at it, that agent will
@@ -63,7 +67,7 @@ not appear in the UI.
 Example PostgreSQL-backed startup:
 
 ```bash
-docker run --rm -p 8080:8080 \
+docker run --rm -p 127.0.0.1:8080:8080 \
   -e PG_SERVE=1 \
   -e AGENTSVIEW_PG_URL='postgres://user:password@postgres.example.com:5432/agentsview?sslmode=require' \
   ghcr.io/wesm/agentsview:latest

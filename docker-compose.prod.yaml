@@ -3,7 +3,7 @@ services:
     image: ghcr.io/wesm/agentsview:latest
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       CLAUDE_PROJECTS_DIR: /agents/claude
       CODEX_SESSIONS_DIR: /agents/codex
