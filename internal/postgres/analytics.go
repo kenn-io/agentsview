@@ -175,13 +175,8 @@ func buildAnalyticsWhereWithDate(
 				" >= "+pb.add(f.ActiveSince)+
 				"::timestamptz")
 	}
-	switch f.Termination {
-	case "clean":
-		preds = append(preds,
-			"termination_status = 'clean'")
-	case "unclean":
-		preds = append(preds,
-			"termination_status IN ('tool_call_pending', 'truncated')")
+	if pred := pgTerminationPred(f.Termination, pb); pred != "" {
+		preds = append(preds, pred)
 	}
 	return strings.Join(preds, " AND ")
 }

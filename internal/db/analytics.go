@@ -228,12 +228,9 @@ func (f AnalyticsFilter) buildWhereWithDate(
 		args = append(args, f.ActiveSince)
 	}
 
-	switch f.Termination {
-	case "clean":
-		preds = append(preds, "termination_status = 'clean'")
-	case "unclean":
-		preds = append(preds,
-			"termination_status IN ('tool_call_pending', 'truncated')")
+	if pred, pargs := buildTerminationPredSQLite(f.Termination); pred != "" {
+		preds = append(preds, pred)
+		args = append(args, pargs...)
 	}
 
 	return strings.Join(preds, " AND "), args

@@ -296,6 +296,70 @@ type SessionFilter struct {
 	Termination string
 }
 
+// activeWindow is the freshness window for "active" sessions
+// (last activity within this duration).
+const activeWindow = 10 * time.Minute
+
+// staleWindow is the upper bound for "stale" sessions. Past this
+// idle duration with an orphan tool call, the session is "unclean".
+const staleWindow = 60 * time.Minute
+
+// activityExprSQLite computes seconds-since-epoch of the most
+// recent activity timestamp. Used by both sessions and analytics
+// filters when classifying by status.
+const activityExprSQLite = "CAST(strftime('%s', " +
+	"COALESCE(ended_at, started_at, created_at)) AS INTEGER)"
+
+// buildTerminationPredSQLite returns a WHERE fragment and args for
+// the multi-state termination filter (active / stale / unclean).
+// The status value may be comma-separated to OR multiple states
+// (e.g. "stale,unclean"). Returns ("", nil) when empty or "all".
+//
+// Stale and unclean both require a parser red flag
+// (tool_call_pending or truncated). Sessions classified as clean
+// or with NULL termination_status never appear under those
+// filters — the parser-side classifier is the only positive
+// signal that something is wrong. Active is purely time-based:
+// any session written to in the last activeWindow qualifies.
+func buildTerminationPredSQLite(status string) (string, []any) {
+	if status == "" || status == "all" {
+		return "", nil
+	}
+	now := time.Now().Unix()
+	activeCutoff := now - int64(activeWindow.Seconds())
+	staleCutoff := now - int64(staleWindow.Seconds())
+	const flagged = "termination_status IN ('tool_call_pending', 'truncated')"
+
+	parts := strings.Split(status, ",")
+	preds := make([]string, 0, len(parts))
+	args := make([]any, 0, len(parts)*2)
+	for _, p := range parts {
+		switch strings.TrimSpace(p) {
+		case "active":
+			preds = append(preds, activityExprSQLite+" > ?")
+			args = append(args, activeCutoff)
+		case "stale":
+			preds = append(preds, "("+activityExprSQLite+" > ? AND "+
+				activityExprSQLite+" <= ? AND "+flagged+")")
+			args = append(args, staleCutoff, activeCutoff)
+		case "unclean":
+			preds = append(preds, "("+activityExprSQLite+" <= ? AND "+flagged+")")
+			args = append(args, staleCutoff)
+		case "clean":
+			preds = append(preds, "termination_status = 'clean'")
+		case "awaiting_user":
+			preds = append(preds, "termination_status = 'awaiting_user'")
+		}
+	}
+	if len(preds) == 0 {
+		return "", nil
+	}
+	if len(preds) == 1 {
+		return preds[0], args
+	}
+	return "(" + strings.Join(preds, " OR ") + ")", args
+}
+
 // SessionPage is a page of session results.
 type SessionPage struct {
 	Sessions   []Session `json:"sessions"`
@@ -401,12 +465,9 @@ func buildSessionFilter(f SessionFilter) (string, []any) {
 		filterPreds = append(filterPreds, "user_message_count >= ?")
 		filterArgs = append(filterArgs, f.MinUserMessages)
 	}
-	switch f.Termination {
-	case "clean":
-		filterPreds = append(filterPreds, "termination_status = 'clean'")
-	case "unclean":
-		filterPreds = append(filterPreds,
-			"termination_status IN ('tool_call_pending', 'truncated')")
+	if pred, args := buildTerminationPredSQLite(f.Termination); pred != "" {
+		filterPreds = append(filterPreds, pred)
+		filterArgs = append(filterArgs, args...)
 	}
 	// "" and "all" add no predicate.
 

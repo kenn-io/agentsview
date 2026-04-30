@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestFindSessionIDsByPartial(t *testing.T) {
@@ -353,26 +354,44 @@ func TestListSessionsTerminationFilter(t *testing.T) {
 	pending := "tool_call_pending"
 	truncated := "truncated"
 
-	insertWithTerm := func(id string, val *string) {
+	now := time.Now().UTC()
+	mkTS := func(d time.Duration) string {
+		return now.Add(-d).Format("2006-01-02T15:04:05.000Z")
+	}
+
+	insertAt := func(id string, age time.Duration, term *string) {
+		ts := mkTS(age)
 		s := Session{
 			ID:                id,
 			Project:           "p",
 			Machine:           "local",
 			Agent:             "claude",
+			StartedAt:         &ts,
+			EndedAt:           &ts,
 			MessageCount:      1,
 			UserMessageCount:  2,
-			TerminationStatus: val,
+			TerminationStatus: term,
 		}
 		if err := d.UpsertSession(s); err != nil {
 			t.Fatalf("upsert %s: %v", id, err)
 		}
 	}
 
-	insertWithTerm("clean1", &clean)
-	insertWithTerm("clean2", &clean)
-	insertWithTerm("pending1", &pending)
-	insertWithTerm("trunc1", &truncated)
-	insertWithTerm("null1", nil)
+	// Active (< 10 min idle): regardless of termination_status,
+	// these are surfaced by ?termination=active.
+	insertAt("active-clean", 1*time.Minute, &clean)
+	insertAt("active-pending", 2*time.Minute, &pending)
+
+	// Stale (10–60 min idle): surfaced by ?termination=stale.
+	insertAt("stale-clean", 30*time.Minute, &clean)
+	insertAt("stale-pending", 40*time.Minute, &pending)
+
+	// Idle > 60 min: surfaced by ?termination=unclean only when
+	// termination_status flags an issue.
+	insertAt("old-clean", 2*time.Hour, &clean)
+	insertAt("old-pending", 2*time.Hour, &pending)
+	insertAt("old-truncated", 3*time.Hour, &truncated)
+	insertAt("old-null", 2*time.Hour, nil)
 
 	collect := func(f SessionFilter) []string {
 		page, err := d.ListSessions(ctx, f)
@@ -391,9 +410,42 @@ func TestListSessionsTerminationFilter(t *testing.T) {
 		termination string
 		wantIDs     []string
 	}{
-		{name: "all (default)", termination: "", wantIDs: []string{"clean1", "clean2", "pending1", "trunc1", "null1"}},
-		{name: "clean", termination: "clean", wantIDs: []string{"clean1", "clean2"}},
-		{name: "unclean", termination: "unclean", wantIDs: []string{"pending1", "trunc1"}},
+		{
+			name:        "all (default)",
+			termination: "",
+			wantIDs: []string{
+				"active-clean", "active-pending",
+				"stale-clean", "stale-pending",
+				"old-clean", "old-pending",
+				"old-truncated", "old-null",
+			},
+		},
+		{
+			name:        "active",
+			termination: "active",
+			wantIDs:     []string{"active-clean", "active-pending"},
+		},
+		{
+			// Yellow only fires for parser-flagged sessions —
+			// stale-clean stays quiet, no false positive for
+			// sessions that ended normally.
+			name:        "stale",
+			termination: "stale",
+			wantIDs:     []string{"stale-pending"},
+		},
+		{
+			name:        "unclean",
+			termination: "unclean",
+			wantIDs:     []string{"old-pending", "old-truncated"},
+		},
+		{
+			// Multi-select: comma-separated values OR together,
+			// so "stale,unclean" surfaces every parser-flagged
+			// session past the active window.
+			name:        "stale or unclean",
+			termination: "stale,unclean",
+			wantIDs:     []string{"stale-pending", "old-pending", "old-truncated"},
+		},
 	}
 
 	for _, tc := range tests {
