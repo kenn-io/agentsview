@@ -2591,8 +2591,12 @@ func (e *Engine) processCopilot(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
 	skip := e.shouldSkipByPath(file.Path, info)
-	if skip && e.copilotWorkspaceYAMLNewer(file.Path) {
-		skip = false
+	var yamlMtime int64
+	if skip {
+		if t := e.copilotWorkspaceYAMLNewer(file.Path); t > 0 {
+			yamlMtime = t
+			skip = false
+		}
 	}
 	if skip {
 		return processResult{skip: true}
@@ -2608,6 +2612,13 @@ func (e *Engine) processCopilot(
 		return processResult{}
 	}
 
+	// When a workspace.yaml update triggered the re-parse,
+	// advance the stored mtime to max(events.jsonl, workspace.yaml)
+	// so the next sync does not re-parse unnecessarily.
+	if yamlMtime > sess.File.Mtime {
+		sess.File.Mtime = yamlMtime
+	}
+
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
 		sess.File.Hash = hash
@@ -2620,28 +2631,35 @@ func (e *Engine) processCopilot(
 	}
 }
 
-// copilotWorkspaceYAMLNewer reports whether the workspace.yaml
-// sibling of a directory-format events.jsonl is newer than the
-// file_mtime the DB has on record for the session. When true,
-// the session should be re-parsed even if events.jsonl itself
-// has not changed, so that a freshly generated session name is
-// picked up.
-func (e *Engine) copilotWorkspaceYAMLNewer(eventsPath string) bool {
+// copilotWorkspaceYAMLNewer returns the workspace.yaml mtime
+// (nanoseconds) when it is newer than the file_mtime the DB
+// has stored for the session, indicating the session name may
+// have changed. Returns 0 when the file is absent, unchanged,
+// or the session is not in directory format.
+func (e *Engine) copilotWorkspaceYAMLNewer(eventsPath string) int64 {
 	if filepath.Base(eventsPath) != "events.jsonl" {
-		return false
+		return 0
 	}
 	yamlPath := filepath.Join(
 		filepath.Dir(eventsPath), "workspace.yaml",
 	)
 	yamlInfo, err := os.Stat(yamlPath)
 	if err != nil {
-		return false
+		return 0
 	}
-	_, storedMtime, ok := e.db.GetFileInfoByPath(eventsPath)
+	lookupPath := eventsPath
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(eventsPath)
+	}
+	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
 	if !ok {
-		return false
+		return 0
 	}
-	return yamlInfo.ModTime().UnixNano() > storedMtime
+	yamlMtime := yamlInfo.ModTime().UnixNano()
+	if yamlMtime > storedMtime {
+		return yamlMtime
+	}
+	return 0
 }
 
 func (e *Engine) processGemini(
