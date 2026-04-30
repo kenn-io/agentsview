@@ -1,5 +1,62 @@
 # Session Termination Status Implementation Plan
 
+> **Status: superseded.** This plan reflects the original task breakdown
+> at the start of the build-out. The shipped feature evolved during
+> implementation (added `awaiting_user`, replaced the detail-page banner
+> with `StatusDot`, added active/stale/unclean time tiers, added Codex
+> classification, made incremental sync clear stale status). For the
+> current contract, see the "as-implemented addendum" at the top of
+> `docs/superpowers/specs/2026-04-28-session-termination-status-design.md`
+> and the actual code. Tasks below remain useful as a layered build
+> sequence reference but should not be followed verbatim.
+>
+> ### As-shipped checklist (for follow-up work and verification)
+>
+> Use this checklist instead of the original task list when extending
+> or auditing the feature:
+>
+> - **Parser taxonomy**: `clean`, `awaiting_user`, `tool_call_pending`,
+>   `truncated`, `NULL`. See `internal/parser/termination.go`.
+>   Claude classifier checks `stop_reason` (`end_turn` →
+>   `awaiting_user`) and orphan tool calls scoped to messages
+>   strictly *after* the last assistant message. Codex classifier
+>   reads task lifecycle events (`task_started` / `task_complete` /
+>   `turn_aborted`).
+> - **SQLite persistence**: `sessions.termination_status` column +
+>   `idx_sessions_termination_status`. `UpsertSession` writes the
+>   parser value; `UpdateSessionIncremental` clears to `NULL` on
+>   every incremental write. Migration covered by
+>   `TestMigration_TerminationStatusColumn`.
+> - **PostgreSQL parity**: same column + index, same upsert/clear
+>   semantics, mirrored predicate helpers (`pgTerminationPred`).
+>   Push round-trip covered in `internal/postgres/push_pgtest_test.go`.
+> - **Filter contract**: comma-separated `?termination=` accepts
+>   `clean`, `awaiting_user`, `active`, `stale`, `unclean`, or
+>   `all`/empty. `active`/`stale`/`unclean` combine recency with the
+>   parser flag (see `buildTerminationPredSQLite` in
+>   `internal/db/sessions.go`). Unknown values are silently ignored
+>   (consistent with `outcome` and `health_grade` filters).
+> - **Frontend status tiers**: `getSessionStatus` in
+>   `frontend/src/lib/stores/sessions.svelte.ts` derives one of
+>   `working` / `waiting` / `idle` / `stale` / `unclean` / `quiet`
+>   from termination_status + recency. `StatusDot` renders the dot
+>   or champagne speech-bubble. Sidebar sort: working → waiting →
+>   idle → stale → quiet → unclean.
+> - **UI surfaces**: sidebar `SessionItem`, Top Sessions analytics
+>   table, multi-select Active/Stale/Unclean pills in the sidebar
+>   filter, ActiveFilters chip in the analytics page. No detail-page
+>   banner (deliberately removed).
+> - **Regression tests**: `TestClassify` (parser, including
+>   prior-matching-result-then-final-orphan), the migration test
+>   above, `TestIncrementalUpdateClearsTerminationStatus`,
+>   `buildSessionGroups` status-tier sort test, and the
+>   `frontend/e2e/termination.spec.ts` Playwright spec.
+> - **Edge case to keep covered**: `awaiting_user` should render
+>   as `waiting` only inside the 10m active window. Once the
+>   session ages past 10m it should render as `quiet` (not stuck
+>   on the waiting bubble forever). Add coverage if the
+>   precedence rules change.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Detect and surface sessions that ended without a clean

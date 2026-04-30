@@ -301,34 +301,37 @@
       onClearExtra={() => sessions.setTerminationFilter("")}
       extraSections={statusFilterSection}
     />
-{#snippet statusFilterSection()}
-  <div class="filter-section">
-    <div class="filter-section-label">Status</div>
-    <div class="pill-buttons">
-      <button
-        class="pill-btn"
-        class:active={sessions.filters.termination === ""}
-        onclick={() => sessions.setTerminationFilter("")}
-      >
-        All
-      </button>
-      <button
-        class="pill-btn"
-        class:active={sessions.filters.termination === "clean"}
-        onclick={() => sessions.setTerminationFilter("clean")}
-      >
-        Clean
-      </button>
-      <button
-        class="pill-btn"
-        class:active={sessions.filters.termination === "unclean"}
-        onclick={() => sessions.setTerminationFilter("unclean")}
-      >
-        Unclean
-      </button>
-    </div>
-  </div>
-{/snippet}
+    {#snippet statusFilterSection()}
+      <div class="filter-section">
+        <div class="filter-section-label">Status</div>
+        <div class="pill-buttons">
+          <button
+            class="pill-btn pill-btn--status-active"
+            class:active={sessions.hasTerminationStatus("active")}
+            onclick={() => sessions.toggleTerminationStatus("active")}
+            title="Last activity within 10 minutes"
+          >
+            Active
+          </button>
+          <button
+            class="pill-btn pill-btn--status-stale"
+            class:active={sessions.hasTerminationStatus("stale")}
+            onclick={() => sessions.toggleTerminationStatus("stale")}
+            title="Flagged session, idle 10 minutes to 1 hour"
+          >
+            Stale
+          </button>
+          <button
+            class="pill-btn pill-btn--status-unclean"
+            class:active={sessions.hasTerminationStatus("unclean")}
+            onclick={() => sessions.toggleTerminationStatus("unclean")}
+            title="Terminated mid tool call (over 1 hour idle)"
+          >
+            Unclean
+          </button>
+        </div>
+      </div>
+    {/snippet}
   </div>
 </div>
 
@@ -433,6 +436,9 @@
               groupSessionIds={item.group.sessions.length > 1
                 ? item.group.sessions.map((s) => s.id)
                 : undefined}
+              groupSessions={item.group.sessions.length > 1
+                ? item.group.sessions
+                : undefined}
               hideAgent={groupMode === "agent"}
               hideProject={groupMode === "project"}
               expanded={expandedGroups.has(item.group.key)}
@@ -477,6 +483,95 @@
 
   .loading-indicator {
     color: var(--accent-green);
+  }
+
+  /* Snippet rendered inside SessionFilterControl carries this
+     component's CSS scope, so it doesn't see SessionFilterControl's
+     own .filter-section / .pill-* base styles. Re-declare them
+     here so the Status section's buttons render as pills with
+     proper section spacing. */
+  .filter-section {
+    padding: 4px 0;
+    border-top: 1px solid var(--border-muted);
+    margin-top: 4px;
+    padding-top: 8px;
+  }
+
+  .filter-section-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 6px;
+  }
+
+  .pill-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .pill-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-muted);
+    border-radius: 4px;
+    transition:
+      background 0.1s,
+      border-color 0.1s,
+      color 0.1s;
+  }
+
+  .pill-btn:hover {
+    background: var(--bg-surface-hover);
+    border-color: var(--border-default);
+  }
+
+  /* Status filter pills mirror the dot indicators: green = active,
+     amber = stale, red = unclean. Inactive state shows a faint
+     colored border so the colors are recognizable without selection. */
+  .pill-btn--status-active {
+    color: color-mix(in srgb, var(--accent-green) 75%, var(--text-secondary));
+    border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
+  }
+  .pill-btn--status-active:hover {
+    border-color: color-mix(in srgb, var(--accent-green) 65%, transparent);
+  }
+  .pill-btn--status-active.active {
+    background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+    border-color: var(--accent-green);
+    color: var(--accent-green);
+  }
+
+  .pill-btn--status-stale {
+    color: color-mix(in srgb, var(--accent-amber) 75%, var(--text-secondary));
+    border-color: color-mix(in srgb, var(--accent-amber) 35%, transparent);
+  }
+  .pill-btn--status-stale:hover {
+    border-color: color-mix(in srgb, var(--accent-amber) 65%, transparent);
+  }
+  .pill-btn--status-stale.active {
+    background: color-mix(in srgb, var(--accent-amber) 12%, transparent);
+    border-color: var(--accent-amber);
+    color: var(--accent-amber);
+  }
+
+  .pill-btn--status-unclean {
+    color: color-mix(in srgb, var(--accent-red) 75%, var(--text-secondary));
+    border-color: color-mix(in srgb, var(--accent-red) 35%, transparent);
+  }
+  .pill-btn--status-unclean:hover {
+    border-color: color-mix(in srgb, var(--accent-red) 65%, transparent);
+  }
+  .pill-btn--status-unclean.active {
+    background: color-mix(in srgb, var(--accent-red) 12%, transparent);
+    border-color: var(--accent-red);
+    color: var(--accent-red);
   }
 
   .session-list-scroll {

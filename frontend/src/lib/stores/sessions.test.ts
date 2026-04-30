@@ -8,6 +8,7 @@ import {
 import {
   createSessionsStore,
   buildSessionGroups,
+  getSessionStatus,
   parseFiltersFromParams,
   filtersToParams,
   splitExcludeProjectParam,
@@ -1554,6 +1555,68 @@ describe("buildSessionGroups", () => {
     expect(groups).toHaveLength(2);
     expect(groups[0]!.sessions).toHaveLength(2);
     expect(groups[1]!.sessions).toHaveLength(1);
+  });
+
+  it("aged awaiting_user falls through to quiet", () => {
+    // The waiting bubble is meant for freshly-blocked sessions.
+    // Once an awaiting_user session ages past the 10m active
+    // window it must fall through to quiet, not stay on the
+    // bubble forever.
+    const old = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const fresh = new Date(Date.now() - 30 * 1000).toISOString();
+    expect(
+      getSessionStatus({
+        ended_at: old,
+        termination_status: "awaiting_user",
+      } as Session),
+    ).toBe("quiet");
+    expect(
+      getSessionStatus({
+        ended_at: fresh,
+        termination_status: "awaiting_user",
+      } as Session),
+    ).toBe("waiting");
+  });
+
+  it("status-tier sort puts unclean below quiet", () => {
+    // All four sessions are >1h idle so the time-based tier is
+    // either quiet (clean/null) or unclean (flagged). Within a
+    // tier, freshness wins. Order should be:
+    //   quiet-newer → quiet-older → unclean-newer → unclean-older
+    // i.e. unclean sinks to the very bottom regardless of
+    // recency relative to quiet rows.
+    const sessions = [
+      makeSession({
+        id: "unclean-newer",
+        project: "u-new",
+        ended_at: "2024-01-04T00:00:00Z",
+        termination_status: "tool_call_pending",
+      }),
+      makeSession({
+        id: "quiet-older",
+        project: "q-old",
+        ended_at: "2024-01-01T00:00:00Z",
+      }),
+      makeSession({
+        id: "unclean-older",
+        project: "u-old",
+        ended_at: "2024-01-02T00:00:00Z",
+        termination_status: "truncated",
+      }),
+      makeSession({
+        id: "quiet-newer",
+        project: "q-new",
+        ended_at: "2024-01-03T00:00:00Z",
+      }),
+    ];
+
+    const groups = buildSessionGroups(sessions);
+    expect(groups.map((g) => g.sessions[0]!.id)).toEqual([
+      "quiet-newer",
+      "quiet-older",
+      "unclean-newer",
+      "unclean-older",
+    ]);
   });
 });
 

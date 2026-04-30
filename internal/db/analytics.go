@@ -2705,6 +2705,12 @@ type TopSession struct {
 	MessageCount      int     `json:"message_count"`
 	OutputTokens      int     `json:"output_tokens"`
 	DurationMin       float64 `json:"duration_min"`
+	// StartedAt and EndedAt are included so the frontend can
+	// derive a recency-based status tier — the StatusDot in the
+	// Top Sessions column needs the same time window inputs as
+	// the sidebar's session list.
+	StartedAt         *string `json:"started_at,omitempty"`
+	EndedAt           *string `json:"ended_at,omitempty"`
 	TerminationStatus *string `json:"termination_status,omitempty"`
 }
 
@@ -2801,6 +2807,8 @@ func (db *DB) GetAnalyticsTopSessions(
 			MessageCount:      mc,
 			OutputTokens:      outputTokens,
 			DurationMin:       durMin,
+			StartedAt:         startedAt,
+			EndedAt:           endedAt,
 			TerminationStatus: termStatus,
 		})
 	}

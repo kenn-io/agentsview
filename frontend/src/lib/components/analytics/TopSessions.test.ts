@@ -191,19 +191,25 @@ describe("TopSessions", () => {
       return mount(TopSessions, { target: document.body });
     }
 
-    it("renders clean dot, two unclean glyphs, and dash", async () => {
+    it("renders distinct status indicators per termination_status", async () => {
       const component = mountWithFourStates();
       await tick();
 
+      // Two flagged statuses (tool_call_pending + truncated)
+      // resolve to "unclean" once past the active window —
+      // the sessions in this fixture have no timestamps, so
+      // age comparisons fail and they fall straight into the
+      // unclean tier.
       expect(
-        document.querySelectorAll(".status-dot--clean").length,
-      ).toBe(1);
-      expect(
-        document.querySelectorAll(".status-glyph--unclean").length,
+        document.querySelectorAll(".status-dot--unclean").length,
       ).toBe(2);
+
+      // The clean and NULL sessions resolve to "quiet" — a
+      // transparent dot is still rendered so the layout column
+      // stays consistent.
       expect(
-        document.querySelectorAll(".status-dash").length,
-      ).toBe(1);
+        document.querySelectorAll(".status-dot--quiet").length,
+      ).toBe(2);
 
       unmount(component);
     });

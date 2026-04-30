@@ -13,6 +13,18 @@
       : [],
   );
 
+  const selectedStatuses = $derived(
+    analytics.termination
+      ? analytics.termination.split(",").filter((s) => s.length > 0)
+      : [],
+  );
+
+  const STATUS_LABEL: Record<string, string> = {
+    active: "Active",
+    stale: "Stale",
+    unclean: "Unclean",
+  };
+
   const DAY_LABELS = [
     "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
   ];
@@ -50,7 +62,7 @@
     (analytics.project !== "" ? 1 : 0) +
     selectedMachines.length +
     selectedAgents.length +
-    (analytics.termination !== "" ? 1 : 0) +
+    selectedStatuses.length +
     (analytics.minUserMessages > 0 ? 1 : 0) +
     (!analytics.includeOneShot ? 1 : 0) +
     (analytics.includeAutomated ? 1 : 0) +
@@ -188,25 +200,16 @@
       </button>
     {/if}
 
-    {#if analytics.termination === "unclean"}
+    {#each selectedStatuses as status (status)}
       <button
         class="filter-chip"
-        onclick={() => analytics.clearTermination()}
-        title="Clear status filter"
+        onclick={() => analytics.toggleTerminationStatus(status)}
+        title="Remove {STATUS_LABEL[status] ?? status} from status filter"
       >
-        Status: Unclean
+        Status: {STATUS_LABEL[status] ?? status}
         <span class="chip-x">&times;</span>
       </button>
-    {:else if analytics.termination === "clean"}
-      <button
-        class="filter-chip"
-        onclick={() => analytics.clearTermination()}
-        title="Clear status filter"
-      >
-        Status: Clean
-        <span class="chip-x">&times;</span>
-      </button>
-    {/if}
+    {/each}
 
     {#if !analytics.includeOneShot}
       <button

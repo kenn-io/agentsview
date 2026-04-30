@@ -1,9 +1,13 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { sessions } from "../../stores/sessions.svelte.js";
+  import {
+    sessions,
+    getSessionStatus,
+  } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import StatusDot from "../common/StatusDot.svelte";
 
   function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
@@ -41,9 +45,7 @@
 
   const uncleanCount = $derived(
     (analytics.topSessions?.sessions ?? []).filter(
-      (s) =>
-        s.termination_status === "tool_call_pending" ||
-        s.termination_status === "truncated",
+      (s) => getSessionStatus(s) === "unclean",
     ).length,
   );
 </script>
@@ -111,27 +113,7 @@
         >
           <span class="rank">{i + 1}</span>
           <span class="session-status">
-            {#if session.termination_status === "clean"}
-              <span
-                class="status-dot status-dot--clean"
-                title="Clean exit"
-                aria-label="Clean exit">●</span>
-            {:else if session.termination_status === "tool_call_pending"}
-              <span
-                class="status-glyph status-glyph--unclean"
-                title="Ended with an unmatched tool call"
-                aria-label="Ended with an unmatched tool call">⚠</span>
-            {:else if session.termination_status === "truncated"}
-              <span
-                class="status-glyph status-glyph--unclean"
-                title="Session file ends mid-write"
-                aria-label="Session file ends mid-write">⚠</span>
-            {:else}
-              <span
-                class="status-dash"
-                title="Status not determined"
-                aria-label="Status not determined">—</span>
-            {/if}
+            <StatusDot session={session} size={7} />
           </span>
           <div class="session-info">
             <span class="session-label">
@@ -279,21 +261,6 @@
     align-items: center;
     font-size: 11px;
     line-height: 1;
-  }
-
-  .status-dot--clean {
-    color: var(--accent-green);
-    font-size: 9px;
-  }
-
-  .status-glyph--unclean {
-    color: var(--accent-amber);
-    font-size: 11px;
-  }
-
-  .status-dash {
-    color: var(--text-muted);
-    font-size: 11px;
   }
 
   .session-info {

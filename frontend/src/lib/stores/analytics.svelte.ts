@@ -276,6 +276,20 @@ class AnalyticsStore {
     this.fetchAll();
   }
 
+  toggleTerminationStatus(status: string) {
+    const set = new Set(
+      this.termination.split(",").filter((s) => s.length > 0),
+    );
+    if (set.has(status)) set.delete(status);
+    else set.add(status);
+    const next = [...set].join(",");
+    this.termination = next;
+    sessions.filters.termination = next;
+    sessions.activeSessionId = null;
+    sessions.load();
+    this.fetchAll();
+  }
+
   clearTimeFilter() {
     this.selectedDow = null;
     this.selectedHour = null;

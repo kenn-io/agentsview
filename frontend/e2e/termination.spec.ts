@@ -7,16 +7,9 @@ import { SessionsPage } from "./pages/sessions-page";
 const UNCLEAN_SESSION_ID = "test-session-mixed-content-7";
 
 test.describe("session termination status", () => {
-  test("unclean session shows banner on detail page", async ({
+  test("status filter narrows session list to unclean", async ({
     page,
   }) => {
-    await page.goto(`/sessions/${UNCLEAN_SESSION_ID}`);
-    await expect(
-      page.getByText(/tool call that never received a response/i),
-    ).toBeVisible();
-  });
-
-  test("status filter narrows session list", async ({ page }) => {
     const sp = new SessionsPage(page);
     await sp.goto();
 
@@ -37,16 +30,33 @@ test.describe("session termination status", () => {
     await expect(sp.sessionListHeader).toContainText(
       "1 sessions",
     );
+
+    // Surviving session renders the unclean StatusDot.
+    await expect(
+      page.locator(".status-dot--unclean").first(),
+    ).toBeVisible();
   });
 
-  test("Top Sessions table renders unclean status glyph", async ({
+  test("Top Sessions table renders unclean status dot", async ({
     page,
   }) => {
     // AnalyticsPage renders inside the right pane on bare "/"
     // when no session is selected.
     await page.goto("/");
     await expect(
-      page.locator(".status-glyph--unclean").first(),
+      page.locator(".status-dot--unclean").first(),
+    ).toBeVisible();
+  });
+
+  test("unclean session is reachable by direct URL", async ({
+    page,
+  }) => {
+    // The detail page no longer shows a banner — the StatusDot in
+    // the sidebar conveys the same signal — but the session must
+    // still be navigable by ID.
+    await page.goto(`/sessions/${UNCLEAN_SESSION_ID}`);
+    await expect(
+      page.locator(`.session-item[data-session-id="${UNCLEAN_SESSION_ID}"]`),
     ).toBeVisible();
   });
 });

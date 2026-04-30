@@ -1,5 +1,85 @@
 # Session Termination Status
 
+> **Status: as-implemented addendum below.** This spec captured the original
+> design; the implementation evolved during build-out. Read this section
+> first if you want the shipped contract; the rest of the document is
+> retained for historical context.
+>
+> ### Final taxonomy
+>
+> Persisted enum on `sessions.termination_status`:
+>
+> - `clean` — agent stopped for a non-orphan, non-truncated reason that
+>   isn't an explicit "your turn" signal (e.g. Claude `max_tokens`,
+>   `stop_sequence`).
+> - `awaiting_user` — agent emitted an explicit "I'm done, your turn"
+>   signal: Claude `end_turn` or Codex `task_complete`. Surfaces in the
+>   UI as a champagne speech-bubble.
+> - `tool_call_pending` — last assistant message has a `tool_use` block
+>   without a matching `tool_result` strictly *after* it.
+> - `truncated` — file was cut off mid-write (last line is invalid JSON).
+> - `NULL` — unknown / not classified (non-Claude/non-Codex agents,
+>   sessions in flight after an incremental append, or pre-bump rows
+>   awaiting full resync).
+>
+> ### Derived UI tiers (`StatusDot`)
+>
+> Combination of recency + persisted status, evaluated in this order
+> (first match wins):
+>
+> | Tier      | Recency       | Parser flag             | Visual                  |
+> |-----------|---------------|-------------------------|-------------------------|
+> | waiting   | < 10m         | `awaiting_user`         | champagne bubble        |
+> | working   | < 1m          | not `awaiting_user`     | green pulse             |
+> | idle      | 1m – 10m      | not `awaiting_user`     | dim dot                 |
+> | quiet     | ≥ 10m         | `clean`/`NULL`/`awaiting_user` | grey dot         |
+> | stale     | 10m – 60m     | `tool_call_pending`/`truncated` | amber dot       |
+> | unclean   | ≥ 60m         | `tool_call_pending`/`truncated` | red dot         |
+>
+> Two precedence rules to note:
+>
+> - `awaiting_user` always wins over the time-based tier inside the
+>   10m active window: a session that's actively writing but has
+>   emitted `end_turn`/`task_complete` shows the waiting bubble, not
+>   the working pulse.
+> - Once an `awaiting_user` session ages past the 10m active window
+>   it falls through to `quiet`, not `waiting` — the bubble is meant
+>   to surface freshly-blocked sessions, not every long-completed
+>   conversation. Same fall-through applies to `clean` and `NULL`.
+>
+> Recency uses `COALESCE(ended_at, started_at, created_at)`; this is
+> approximate for in-flight sessions but is moved forward by every
+> incremental append, so an actively-writing session ranks correctly.
+>
+> ### Filter contract
+>
+> `?termination=` accepts a comma-separated list of: `clean`,
+> `awaiting_user`, `active`, `stale`, `unclean`, or empty/`all`. `active`
+> is purely time-based (< 10m); `stale`/`unclean` require both the
+> recency window AND a parser flag. Unknown values are silently ignored,
+> matching the convention of other comma-separated filters in this
+> codebase.
+>
+> ### Incremental sync
+>
+> `UpdateSessionIncremental` clears `termination_status` to `NULL` on
+> every write (the classifier needs the full message slice; the
+> incremental path only sees the new tail). The next full sync (≤ 15m
+> later, or sooner via the file watcher) reclassifies. UI falls back to
+> the time-based tier in the meantime.
+>
+> ### UI surfaces
+>
+> - Sidebar: each session row renders a `StatusDot`; group rows roll up
+>   the freshest member's recency. Sort tiers (top→bottom):
+>   working → waiting → idle → stale → quiet → unclean.
+> - Sidebar filter: three multi-select pills (Active / Stale / Unclean)
+>   tinted with their dot color.
+> - Top Sessions analytics table: `Status` column renders `StatusDot`.
+> - Detail page: no banner. The sidebar `StatusDot` plus the breadcrumb
+>   convey the same signal — the original banner was removed during
+>   review based on user feedback.
+
 ## Problem
 
 Sessions in agentsview have an `ended_at` timestamp set to the last message

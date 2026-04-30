@@ -48,6 +48,11 @@
   --running-fg: #6ad0a8;
   --running-bg: rgba(106, 208, 168, 0.12);
   --running-ring: rgba(106, 208, 168, 0.22);
+  /* Status-only color reserved for the "awaiting user input"
+     bubble. Warm muted gold so it doesn't clash with the green
+     working pulse, the amber stale dot, the red unclean dot, or
+     any of the agent-identity colors above. */
+  --status-waiting: #a48a55;
   --user-bg: #eef2ff;
   --assistant-bg: #faf9ff;
   --thinking-bg: #f5f3ff;
@@ -97,6 +102,9 @@
   --accent-sky: #38bdf8;
   --accent-pink: #f472b6;
   --accent-lime: #a3e635;
+  /* Lighter champagne for dark mode — keeps the same warm-gold
+     identity without disappearing into the dark surface. */
+  --status-waiting: #d4b878;
   --user-bg: #111827;
   --assistant-bg: #141220;
   --thinking-bg: #1a1530;

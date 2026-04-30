@@ -713,6 +713,28 @@ class SessionsStore {
     this.load();
   }
 
+  /** Add or remove a status from the comma-separated termination
+   * filter. Empty list means "no filter". */
+  toggleTerminationStatus(status: string) {
+    const set = new Set(
+      this.filters.termination
+        .split(",")
+        .filter((s) => s.length > 0),
+    );
+    if (set.has(status)) set.delete(status);
+    else set.add(status);
+    this.setTerminationFilter([...set].join(","));
+  }
+
+  /** Whether the comma-separated termination filter contains
+   * the given status. Used by the multi-select pill UI. */
+  hasTerminationStatus(status: string): boolean {
+    if (!this.filters.termination) return false;
+    return this.filters.termination
+      .split(",")
+      .includes(status);
+  }
+
   get hasActiveFilters(): boolean {
     const f = this.filters;
     return !!(
@@ -861,11 +883,24 @@ function minString(a: string | null, b: string | null): string | null {
   return a < b ? a : b;
 }
 
-function recencyKey(s: Session): string {
-  return s.ended_at ?? s.started_at ?? s.created_at;
+/** Minimal shape that StatusDot / getSessionStatus need from a
+ * row. Both the full `Session` and the lighter `TopSession`
+ * (analytics top list) match it structurally — the recency
+ * fields all have safe fallbacks via `??`. */
+export interface SessionStatusInput {
+  termination_status?: string | null;
+  ended_at?: string | null;
+  started_at?: string | null;
+  created_at?: string;
 }
 
+function recencyKey(s: SessionStatusInput): string {
+  return s.ended_at ?? s.started_at ?? s.created_at ?? "";
+}
+
+const FRESH_MS = 60 * 1000;
 const RECENTLY_ACTIVE_MS = 10 * 60 * 1000;
+const STALE_MS = 60 * 60 * 1000;
 
 /** Ticking timestamp that updates every 30s so derived
  *  recency checks stay reactive without manual triggers. */
@@ -878,6 +913,74 @@ export function isRecentlyActive(session: Session): boolean {
   const key = recencyKey(session);
   const ts = new Date(key).getTime();
   return now - ts < RECENTLY_ACTIVE_MS;
+}
+
+export type SessionStatus =
+  | "working"
+  | "waiting"
+  | "idle"
+  | "stale"
+  | "unclean"
+  | "quiet";
+
+/** Combine wall-clock recency with the parser's structural fact
+ * (termination_status) into a single user-facing status.
+ *
+ * Precedence (first match wins, see body below):
+ *   - waiting: < 10m idle AND termination_status == awaiting_user
+ *   - working: < 1m idle AND not awaiting_user
+ *   - idle:    1-10m idle AND not awaiting_user
+ *   - quiet:   ≥ 10m idle AND clean/NULL
+ *   - stale:   10-60m idle AND tool_call_pending/truncated
+ *   - unclean: ≥ 60m idle AND tool_call_pending/truncated
+ *
+ * When a `groupSessions` array is provided, the freshness check
+ * uses the freshest activity across the whole group. Two interactions
+ * matter:
+ *
+ *   1. A parent in tool_call_pending whose subagent is currently
+ *      writing rolls up to "working" via the freshest member — the
+ *      tool_call_pending flag is not consulted at the working/idle
+ *      branch, only at the stale/unclean branch.
+ *   2. A parent in awaiting_user always renders "waiting" within the
+ *      10m window even when a fork or sibling in the group is fresh.
+ *      The parser flag is the stronger signal here: the agent has
+ *      explicitly said "your turn".
+ *
+ * The parser flag always comes from the row's own session (the
+ * parent's file is what's actually ambiguous), never from a child.
+ *
+ * Yellow (stale) and red (unclean) only fire when the parser has
+ * positively flagged the session. Cleanly-finished or unclassified
+ * sessions go straight from active → quiet — short-lived sessions
+ * that complete normally don't pollute the sidebar with stale dots. */
+export function getSessionStatus(
+  session: SessionStatusInput,
+  groupSessions?: SessionStatusInput[],
+): SessionStatus {
+  let freshest = recencyKey(session);
+  if (groupSessions && groupSessions.length > 1) {
+    for (const g of groupSessions) {
+      const k = recencyKey(g);
+      if (k > freshest) freshest = k;
+    }
+  }
+  const ts = new Date(freshest).getTime();
+  const age = now - ts;
+  const term = session.termination_status;
+  const flagged = term === "tool_call_pending" || term === "truncated";
+  const awaitingUser = term === "awaiting_user";
+
+  // awaiting_user wins as soon as the parser classifies it — the
+  // agent already told us "I'm done, your turn", so don't keep
+  // showing the working pulse just because the file mtime is fresh.
+  if (awaitingUser && age < RECENTLY_ACTIVE_MS) return "waiting";
+
+  if (age < FRESH_MS) return "working";
+  if (age < RECENTLY_ACTIVE_MS) return "idle";
+  if (!flagged) return "quiet";
+  if (age < STALE_MS) return "stale";
+  return "unclean";
 }
 
 /**
@@ -1091,9 +1194,66 @@ export function buildSessionGroups(sessions: Session[]): SessionGroup[] {
     }
   }
 
-  return insertionOrder
+  const ordered = insertionOrder
     .filter((k) => !keysToRemove.has(k))
     .map((k) => groupMap.get(k)!);
+
+  // Two-key sort:
+  //   1. status priority — working → waiting → idle → stale →
+  //      quiet → unclean. Awaiting-user rows sit above idle even
+  //      when older, and unclean (terminated mid tool call) sinks
+  //      to the very bottom so noise from old crashed sessions
+  //      doesn't push live work off-screen.
+  //   2. group freshness — within a tier, the group whose
+  //      newest member was written most recently wins. Mirrors
+  //      the time-since-last-update order the sidebar had before
+  //      the status sort was added.
+  ordered.sort((a, b) => {
+    const sa = statusSortKey(a);
+    const sb = statusSortKey(b);
+    if (sa !== sb) return sa - sb;
+    const ra = groupFreshness(a);
+    const rb = groupFreshness(b);
+    if (ra > rb) return -1;
+    if (ra < rb) return 1;
+    return 0;
+  });
+  return ordered;
+}
+
+function statusSortKey(group: SessionGroup): number {
+  const primary =
+    group.sessions.find((s) => s.id === group.primarySessionId) ??
+    group.sessions[0]!;
+  const status = getSessionStatus(primary, group.sessions);
+  switch (status) {
+    case "working":
+      return 0;
+    case "waiting":
+      return 1;
+    case "idle":
+      return 2;
+    case "stale":
+      return 3;
+    case "quiet":
+      return 4;
+    case "unclean":
+      return 5;
+  }
+  return 6;
+}
+
+function groupFreshness(group: SessionGroup): string {
+  // The freshest activity across any member of the group. A
+  // subagent child's recent write counts as the group's
+  // freshness so a parent waiting on a running child is sorted
+  // by the child's activity.
+  let best = "";
+  for (const s of group.sessions) {
+    const k = recencyKey(s);
+    if (k > best) best = k;
+  }
+  return best;
 }
 
 export const sessions = createSessionsStore();

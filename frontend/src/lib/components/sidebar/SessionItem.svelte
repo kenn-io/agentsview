@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Session } from "../../api/types.js";
-  import { sessions, isRecentlyActive } from "../../stores/sessions.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
@@ -8,11 +8,17 @@
     normalizeMessagePreview,
     previewMessage,
   } from "../../utils/messages.js";
+  import StatusDot from "../common/StatusDot.svelte";
 
   interface Props {
     session: Session;
     continuationCount?: number;
     groupSessionIds?: string[];
+    /** Optional full session objects in this row's group. When
+     * provided, the status dot uses the group's freshest activity
+     * for the time-based tier so a parent waiting on a running
+     * subagent stays green. */
+    groupSessions?: Session[];
     hideAgent?: boolean;
     hideProject?: boolean;
     /** Render in compact mode (smaller, used for child sessions). */
@@ -35,6 +41,7 @@
     session,
     continuationCount = 1,
     groupSessionIds,
+    groupSessions,
     hideAgent = false,
     hideProject = false,
     compact = false,
@@ -58,8 +65,6 @@
     }
     return false;
   });
-
-  let recentlyActive = $derived(isRecentlyActive(session));
 
   let agentColor = $derived(
     getAgentColor(session.agent),
@@ -269,13 +274,8 @@
     <span class="tree-spacer"></span>
   {/if}
 
-  {#if !hideAgent || recentlyActive}
-    <span
-      class="agent-dot"
-      class:recently-active={recentlyActive}
-      style:background={agentColor}
-    ></span>
-  {/if}
+  <StatusDot {session} {groupSessions} size={6} />
+
 
   <div class="session-info">
     {#if renaming}
@@ -459,32 +459,6 @@
   .tree-spacer {
     width: 16px;
     flex-shrink: 0;
-  }
-
-  .agent-dot {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .agent-dot.recently-active {
-    animation: pulse-glow 3s ease-in-out infinite;
-    will-change: box-shadow;
-  }
-
-  @keyframes pulse-glow {
-    0%,
-    100% {
-      box-shadow: 0 0 0 0 transparent;
-    }
-    50% {
-      box-shadow: 0 0 6px 3px color-mix(
-        in srgb,
-        var(--accent-green) 40%,
-        transparent
-      );
-    }
   }
 
   .side-meta {
