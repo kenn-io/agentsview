@@ -2590,15 +2590,12 @@ func (e *Engine) shouldSkipOpenCodeByPath(path string) bool {
 func (e *Engine) processCopilot(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
-	skip := e.shouldSkipByPath(file.Path, info)
-	var yamlMtime int64
-	if skip {
-		if t := e.copilotWorkspaceYAMLNewer(file.Path); t > 0 {
-			yamlMtime = t
-			skip = false
-		}
-	}
-	if skip {
+	// Use effective mtime = max(events.jsonl, workspace.yaml) so
+	// that a new or updated workspace.yaml triggers a re-parse and
+	// the stored mtime stays consistent with what we compare against
+	// on subsequent syncs (preventing oscillation).
+	effectiveMtime := copilotEffectiveMtime(file.Path, info)
+	if e.shouldSkipCopilot(file.Path, info, effectiveMtime) {
 		return processResult{skip: true}
 	}
 
@@ -2612,11 +2609,8 @@ func (e *Engine) processCopilot(
 		return processResult{}
 	}
 
-	// When a workspace.yaml update triggered the re-parse,
-	// advance the stored mtime to max(events.jsonl, workspace.yaml)
-	// so the next sync does not re-parse unnecessarily.
-	if yamlMtime > sess.File.Mtime {
-		sess.File.Mtime = yamlMtime
+	if effectiveMtime > sess.File.Mtime {
+		sess.File.Mtime = effectiveMtime
 	}
 
 	hash, err := ComputeFileHash(file.Path)
@@ -2631,35 +2625,48 @@ func (e *Engine) processCopilot(
 	}
 }
 
-// copilotWorkspaceYAMLNewer returns the workspace.yaml mtime
-// (nanoseconds) when it is newer than the file_mtime the DB
-// has stored for the session, indicating the session name may
-// have changed. Returns 0 when the file is absent, unchanged,
-// or the session is not in directory format.
-func (e *Engine) copilotWorkspaceYAMLNewer(eventsPath string) int64 {
+// copilotEffectiveMtime returns max(events.jsonl mtime,
+// workspace.yaml mtime). For flat .jsonl sessions (no
+// workspace.yaml sibling) it returns the events.jsonl mtime.
+func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
+	m := info.ModTime().UnixNano()
 	if filepath.Base(eventsPath) != "events.jsonl" {
-		return 0
+		return m
 	}
 	yamlPath := filepath.Join(
 		filepath.Dir(eventsPath), "workspace.yaml",
 	)
-	yamlInfo, err := os.Stat(yamlPath)
-	if err != nil {
-		return 0
+	if yi, err := os.Stat(yamlPath); err == nil {
+		if ym := yi.ModTime().UnixNano(); ym > m {
+			m = ym
+		}
 	}
-	lookupPath := eventsPath
+	return m
+}
+
+// shouldSkipCopilot is like shouldSkipByPath but uses the
+// pre-computed effectiveMtime (max of events.jsonl and
+// workspace.yaml) for the mtime comparison, keeping the stored
+// value consistent with what we compare against on next sync.
+func (e *Engine) shouldSkipCopilot(
+	path string, info os.FileInfo, effectiveMtime int64,
+) bool {
+	lookupPath := path
 	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(eventsPath)
+		lookupPath = e.pathRewriter(path)
 	}
-	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
 	if !ok {
-		return 0
+		return false
 	}
-	yamlMtime := yamlInfo.ModTime().UnixNano()
-	if yamlMtime > storedMtime {
-		return yamlMtime
+	if storedSize != info.Size() || storedMtime != effectiveMtime {
+		return false
 	}
-	return 0
+	if e.db.GetDataVersionByPath(lookupPath) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	return true
 }
 
 func (e *Engine) processGemini(
