@@ -127,6 +127,18 @@ func (f AnalyticsFilter) buildWhereWithoutDate() (string, []any) {
 	return f.buildWhereWithDate("", false)
 }
 
+func csvFilterValues(raw string) []string {
+	values := strings.Split(raw, ",")
+	out := values[:0]
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func (f AnalyticsFilter) buildWhereWithDate(
 	dateCol string,
 	includeDate bool,
@@ -147,8 +159,24 @@ func (f AnalyticsFilter) buildWhereWithDate(
 	}
 
 	if f.Machine != "" {
-		preds = append(preds, "machine = ?")
-		args = append(args, f.Machine)
+		machines := csvFilterValues(f.Machine)
+		if len(machines) == 1 {
+			preds = append(preds, "machine = ?")
+			args = append(args, machines[0])
+		} else if len(machines) > 1 {
+			placeholders := make(
+				[]string, len(machines),
+			)
+			for i, machine := range machines {
+				placeholders[i] = "?"
+				args = append(args, machine)
+			}
+			preds = append(preds,
+				"machine IN ("+
+					strings.Join(placeholders, ",")+
+					")",
+			)
+		}
 	}
 
 	if f.Project != "" {

@@ -241,6 +241,34 @@ func TestGetAnalyticsSummary(t *testing.T) {
 	})
 }
 
+func TestAnalyticsFilterMachineMultiSelect(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	for _, sess := range []struct {
+		id      string
+		machine string
+	}{
+		{"machine-a", "laptop"},
+		{"machine-b", "server"},
+		{"machine-c", "desktop"},
+	} {
+		insertSession(t, d, sess.id, "project", func(s *Session) {
+			s.Machine = sess.machine
+			s.StartedAt = new("2024-06-01T09:00:00Z")
+			s.EndedAt = new("2024-06-01T10:00:00Z")
+			s.MessageCount = 4
+		})
+	}
+
+	f := baseFilter()
+	f.Machine = "laptop,server"
+	s := mustSummary(t, d, ctx, f)
+	if s.TotalSessions != 2 {
+		t.Fatalf("TotalSessions = %d, want 2", s.TotalSessions)
+	}
+}
+
 func TestGetAnalyticsActivity(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
