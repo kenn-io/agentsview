@@ -2590,7 +2590,11 @@ func (e *Engine) shouldSkipOpenCodeByPath(path string) bool {
 func (e *Engine) processCopilot(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
+	skip := e.shouldSkipByPath(file.Path, info)
+	if skip && e.copilotWorkspaceYAMLNewer(file.Path) {
+		skip = false
+	}
+	if skip {
 		return processResult{skip: true}
 	}
 
@@ -2614,6 +2618,30 @@ func (e *Engine) processCopilot(
 			{Session: *sess, Messages: msgs},
 		},
 	}
+}
+
+// copilotWorkspaceYAMLNewer reports whether the workspace.yaml
+// sibling of a directory-format events.jsonl is newer than the
+// file_mtime the DB has on record for the session. When true,
+// the session should be re-parsed even if events.jsonl itself
+// has not changed, so that a freshly generated session name is
+// picked up.
+func (e *Engine) copilotWorkspaceYAMLNewer(eventsPath string) bool {
+	if filepath.Base(eventsPath) != "events.jsonl" {
+		return false
+	}
+	yamlPath := filepath.Join(
+		filepath.Dir(eventsPath), "workspace.yaml",
+	)
+	yamlInfo, err := os.Stat(yamlPath)
+	if err != nil {
+		return false
+	}
+	_, storedMtime, ok := e.db.GetFileInfoByPath(eventsPath)
+	if !ok {
+		return false
+	}
+	return yamlInfo.ModTime().UnixNano() > storedMtime
 }
 
 func (e *Engine) processGemini(

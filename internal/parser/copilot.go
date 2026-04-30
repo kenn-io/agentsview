@@ -240,6 +240,36 @@ func formatCopilotToolCalls(
 	return strings.Join(parts, "\n")
 }
 
+// readCopilotWorkspaceName reads the session name from the
+// workspace.yaml sibling file in a directory-format session.
+// Returns an empty string for flat .jsonl sessions or when
+// no name is present.
+func readCopilotWorkspaceName(eventsPath string) string {
+	if filepath.Base(eventsPath) != "events.jsonl" {
+		return ""
+	}
+	yamlPath := filepath.Join(
+		filepath.Dir(eventsPath), "workspace.yaml",
+	)
+	data, err := os.ReadFile(yamlPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		after, ok := strings.CutPrefix(line, "name: ")
+		if !ok {
+			continue
+		}
+		name := strings.TrimSpace(after)
+		if name != "" {
+			return truncate(
+				strings.ReplaceAll(name, "\n", " "), 300,
+			)
+		}
+	}
+	return ""
+}
+
 // ParseCopilotSession parses a Copilot JSONL session file.
 // Returns (nil, nil, nil) if the file doesn't exist or
 // contains no user/assistant messages.
@@ -297,6 +327,14 @@ func ParseCopilotSession(
 	}
 	sessionID = "copilot:" + sessionID
 
+	// Prefer the workspace.yaml name (LLM-generated or user-set
+	// title) over the raw first user message. Falls back to the
+	// first user message when no name is present.
+	firstMessage := b.firstMessage
+	if wsName := readCopilotWorkspaceName(path); wsName != "" {
+		firstMessage = wsName
+	}
+
 	userCount := 0
 	for _, m := range b.messages {
 		if m.Role == RoleUser && m.Content != "" {
@@ -309,7 +347,7 @@ func ParseCopilotSession(
 		Project:          b.project,
 		Machine:          machine,
 		Agent:            AgentCopilot,
-		FirstMessage:     b.firstMessage,
+		FirstMessage:     firstMessage,
 		StartedAt:        b.startedAt,
 		EndedAt:          b.endedAt,
 		MessageCount:     len(b.messages),

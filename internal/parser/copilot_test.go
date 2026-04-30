@@ -214,6 +214,151 @@ func TestParseCopilotSession_DirectoryFormat(t *testing.T) {
 
 	sess, _ := parseAndValidateHelper(t, path, "m", 2)
 	assertEqual(t, "copilot:abc-456", sess.ID, "session ID")
+	// No workspace.yaml, so first user message is used.
+	assertEqual(t, "hello", sess.FirstMessage, "FirstMessage")
+}
+
+// writeDirSession writes events.jsonl (and optionally
+// workspace.yaml) into a temporary session directory and
+// returns the path to events.jsonl.
+func writeDirSession(
+	t *testing.T,
+	sessID string,
+	events []string,
+	workspaceYAML string,
+) string {
+	t.Helper()
+	dir := t.TempDir()
+	sessDir := filepath.Join(dir, sessID)
+	if err := os.MkdirAll(sessDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	eventsPath := filepath.Join(sessDir, "events.jsonl")
+	if err := os.WriteFile(
+		eventsPath,
+		[]byte(strings.Join(events, "\n")+"\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if workspaceYAML != "" {
+		yamlPath := filepath.Join(sessDir, "workspace.yaml")
+		if err := os.WriteFile(
+			yamlPath, []byte(workspaceYAML), 0o644,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return eventsPath
+}
+
+func TestParseCopilotSession_WorkspaceName(t *testing.T) {
+	events := []string{
+		`{"type":"session.start","data":{"sessionId":"ws-name"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Fix the login bug"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Done."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	}
+	yaml := "id: ws-name\nname: Fix Login Authentication Bug\nuser_named: false\nsummary_count: 1\n"
+
+	path := writeDirSession(t, "ws-name", events, yaml)
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+
+	// workspace.yaml name takes precedence over first user message.
+	assertEqual(t, "Fix Login Authentication Bug", sess.FirstMessage, "FirstMessage")
+}
+
+func TestParseCopilotSession_WorkspaceNameUserNamed(t *testing.T) {
+	events := []string{
+		`{"type":"session.start","data":{"sessionId":"ws-user-named"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Original prompt"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Done."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	}
+	yaml := "id: ws-user-named\nname: My Custom Session Name\nuser_named: true\nsummary_count: 0\n"
+
+	path := writeDirSession(t, "ws-user-named", events, yaml)
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+
+	// user_named: true sessions also use name as FirstMessage.
+	assertEqual(t, "My Custom Session Name", sess.FirstMessage, "FirstMessage")
+}
+
+func TestParseCopilotSession_WorkspaceNameMissing(t *testing.T) {
+	// workspace.yaml exists but has no name field (older sessions).
+	events := []string{
+		`{"type":"session.start","data":{"sessionId":"ws-no-name"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"First user message"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Done."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	}
+	yaml := "id: ws-no-name\nsummary_count: 0\ncreated_at: 2026-03-08T12:38:01.203Z\n"
+
+	path := writeDirSession(t, "ws-no-name", events, yaml)
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+
+	// Falls back to first user message.
+	assertEqual(t, "First user message", sess.FirstMessage, "FirstMessage")
+}
+
+func TestParseCopilotSession_WorkspaceNameWhitespaceOnly(t *testing.T) {
+	events := []string{
+		`{"type":"session.start","data":{"sessionId":"ws-blank"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Do something"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Done."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	}
+	yaml := "id: ws-blank\nname:   \nsummary_count: 0\n"
+
+	path := writeDirSession(t, "ws-blank", events, yaml)
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+
+	// Whitespace-only name falls back to first user message.
+	assertEqual(t, "Do something", sess.FirstMessage, "FirstMessage")
+}
+
+func TestParseCopilotSession_WorkspaceNoYAMLFile(t *testing.T) {
+	// Directory format session with no workspace.yaml at all.
+	events := []string{
+		`{"type":"session.start","data":{"sessionId":"ws-noyaml"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello there"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	}
+
+	path := writeDirSession(t, "ws-noyaml", events, "")
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+
+	assertEqual(t, "Hello there", sess.FirstMessage, "FirstMessage")
+}
+
+func TestParseCopilotSession_FlatFileNoWorkspaceYAML(t *testing.T) {
+	// Flat .jsonl format never looks for workspace.yaml.
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"flat-sess"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Flat file prompt"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"OK."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	)
+
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+
+	assertEqual(t, "Flat file prompt", sess.FirstMessage, "FirstMessage")
+}
+
+func TestParseCopilotSession_WorkspaceNameTruncated(t *testing.T) {
+	longName := strings.Repeat("a", 350)
+	events := []string{
+		`{"type":"session.start","data":{"sessionId":"ws-long"},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"original"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Done."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	}
+	yaml := "id: ws-long\nname: " + longName + "\nsummary_count: 1\n"
+
+	path := writeDirSession(t, "ws-long", events, yaml)
+	sess, _ := parseAndValidateHelper(t, path, "m", 2)
+
+	// truncate(s, 300) returns at most 303 bytes (300 runes + "...").
+	if len(sess.FirstMessage) > 303 {
+		t.Errorf("FirstMessage not truncated: len=%d", len(sess.FirstMessage))
+	}
+	if len(sess.FirstMessage) == len(longName) {
+		t.Error("FirstMessage was not truncated at all")
+	}
 }
 
 func TestParseCopilotSession_DirectoryFormatFallbackID(t *testing.T) {
