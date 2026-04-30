@@ -1183,6 +1183,17 @@ func (db *DB) GetSessionForIncremental(
 // a row whose first parse predates a new pattern would stay
 // is_automated=0 indefinitely (UpsertSession sets the flag once
 // at insert; the incremental path never re-evaluates it).
+//
+// termination_status is cleared to NULL on every incremental
+// write. The classifier needs the full message slice to reach the
+// right verdict (orphan tool calls, awaiting_user, etc.) and the
+// incremental path only sees the new tail. Leaving the previous
+// classification in place would surface stale "tool_call_pending"
+// or "awaiting_user" indicators in the UI for up to 15 minutes
+// (the periodic full-resync interval) after the user appended a
+// resolving result or sent a new message. Clearing makes the
+// session render with the time-based StatusDot tier (working /
+// idle / quiet) until the next full sync reclassifies.
 func (db *DB) UpdateSessionIncremental(
 	id string,
 	endedAt *string,
@@ -1222,7 +1233,8 @@ func (db *DB) UpdateSessionIncremental(
 			total_output_tokens = ?,
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
-			has_peak_context_tokens = ?
+			has_peak_context_tokens = ?,
+			termination_status = NULL
 		WHERE id = ?`,
 		endedAt, msgCount, userMsgCount, isAutomated,
 		fileSize, fileMtime,

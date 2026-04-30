@@ -76,8 +76,11 @@ func isAwaitingUserStopReason(stopReason string) bool {
 }
 
 // hasOrphanedToolCall reports whether the last assistant message has
-// any tool_use blocks that lack a matching tool_result anywhere in
-// the message slice.
+// any tool_use blocks that lack a matching tool_result. Only results
+// that appear AFTER the last assistant message resolve its calls —
+// an earlier message reusing the same ToolUseID (rare, but possible
+// in forked sessions or malformed transcripts) must not retroactively
+// mark the final unresolved call as resolved.
 func hasOrphanedToolCall(messages []ParsedMessage) bool {
 	lastAssistantIdx := -1
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -95,7 +98,7 @@ func hasOrphanedToolCall(messages []ParsedMessage) bool {
 	}
 
 	resolved := make(map[string]bool)
-	for _, m := range messages {
+	for _, m := range messages[lastAssistantIdx+1:] {
 		for _, tr := range m.ToolResults {
 			if tr.ToolUseID != "" {
 				resolved[tr.ToolUseID] = true

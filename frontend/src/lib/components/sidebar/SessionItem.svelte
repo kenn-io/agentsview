@@ -16,8 +16,11 @@
     groupSessionIds?: string[];
     /** Optional full session objects in this row's group. When
      * provided, the status dot uses the group's freshest activity
-     * for the time-based tier so a parent waiting on a running
-     * subagent stays green. */
+     * for the time-based tier — so a parent in tool_call_pending
+     * with a subagent currently writing stays green/working
+     * instead of decaying to stale. The parent's parser status
+     * still wins over freshness for awaiting_user (a fork running
+     * in parallel doesn't change that the parent is waiting). */
     groupSessions?: Session[];
     hideAgent?: boolean;
     hideProject?: boolean;

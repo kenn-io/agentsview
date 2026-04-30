@@ -121,6 +121,25 @@ func TestClassify(t *testing.T) {
 			stopReason: "end_turn",
 			want:       TerminationAwaitingUser,
 		},
+		{
+			// Regression: an earlier message reusing a ToolUseID
+			// must NOT mark a later unresolved call as resolved.
+			// hasOrphanedToolCall only counts results that appear
+			// strictly AFTER the last assistant message.
+			name: "earlier matching result does not resolve final orphan",
+			messages: []ParsedMessage{
+				{Role: RoleAssistant, ToolCalls: []ParsedToolCall{
+					{ToolUseID: "toolu_dup"},
+				}},
+				{Role: RoleUser, ToolResults: []ParsedToolResult{
+					{ToolUseID: "toolu_dup"},
+				}},
+				{Role: RoleAssistant, ToolCalls: []ParsedToolCall{
+					{ToolUseID: "toolu_dup"},
+				}},
+			},
+			want: TerminationToolCallPending,
+		},
 	}
 
 	for _, tc := range tests {

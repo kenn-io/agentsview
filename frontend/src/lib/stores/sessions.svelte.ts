@@ -971,9 +971,14 @@ export function getSessionStatus(
   const flagged = term === "tool_call_pending" || term === "truncated";
   const awaitingUser = term === "awaiting_user";
 
-  // awaiting_user wins as soon as the parser classifies it — the
-  // agent already told us "I'm done, your turn", so don't keep
-  // showing the working pulse just because the file mtime is fresh.
+  // awaiting_user wins over the freshness tier as soon as the
+  // parser classifies it. The agent already told us "I'm done,
+  // your turn", so we surface the waiting bubble even when a
+  // related session in the group (e.g. a fork running in
+  // parallel) is currently writing. For tool_call_pending parents
+  // the freshness rollup still does its job — that flag isn't
+  // checked here, so a parent in tool_call_pending with a fresh
+  // subagent falls through to "working" below.
   if (awaitingUser && age < RECENTLY_ACTIVE_MS) return "waiting";
 
   if (age < FRESH_MS) return "working";

@@ -5849,3 +5849,92 @@ func TestSessionsTerminationStatusIndex(t *testing.T) {
 		)
 	}
 }
+
+// TestMigration_TerminationStatusColumn simulates upgrading from a
+// pre-termination_status schema. Drops the column and its index from
+// a freshly-opened DB, reopens, and verifies the migration restores
+// both without losing existing session data.
+func TestMigration_TerminationStatusColumn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "initial open")
+	insertSession(t, d, "s1", "proj")
+	d.Close()
+
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "raw open")
+
+	// SQLite supports DROP COLUMN as of 3.35; the in-tree driver is
+	// recent enough. Drop the index first since SQLite blocks
+	// dropping a column referenced by an index.
+	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_sessions_termination_status`)
+	requireNoError(t, err, "drop termination_status index")
+	_, err = conn.Exec(`ALTER TABLE sessions DROP COLUMN termination_status`)
+	requireNoError(t, err, "drop termination_status column")
+
+	// Verify column and index are gone, and the row survived.
+	var count int
+	err = conn.QueryRow(
+		`SELECT count(*) FROM pragma_table_info('sessions')
+		 WHERE name = 'termination_status'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify column removed")
+	if count != 0 {
+		t.Fatal("expected termination_status column to be absent")
+	}
+	err = conn.QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type='index' AND name='idx_sessions_termination_status'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify index removed")
+	if count != 0 {
+		t.Fatal("expected termination_status index to be absent")
+	}
+	var sessCount int
+	err = conn.QueryRow(`SELECT count(*) FROM sessions`).Scan(&sessCount)
+	requireNoError(t, err, "count sessions pre-migration")
+	if sessCount != 1 {
+		t.Fatalf("expected 1 session row, got %d", sessCount)
+	}
+
+	// Force the migration path: bump user_version down so Open()
+	// re-runs the ADD COLUMN / CREATE INDEX steps.
+	_, err = conn.Exec(`PRAGMA user_version = 0`)
+	requireNoError(t, err, "reset user_version")
+	conn.Close()
+
+	d2, err := Open(path)
+	requireNoError(t, err, "reopen after migration")
+	defer d2.Close()
+
+	// Column and index restored, row preserved.
+	err = d2.getReader().QueryRow(
+		`SELECT count(*) FROM pragma_table_info('sessions')
+		 WHERE name = 'termination_status'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify column added")
+	if count != 1 {
+		t.Fatal("expected termination_status column after migration")
+	}
+	err = d2.getReader().QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type='index' AND name='idx_sessions_termination_status'`,
+	).Scan(&count)
+	requireNoError(t, err, "verify index added")
+	if count != 1 {
+		t.Fatal("expected termination_status index after migration")
+	}
+
+	sessions, err := d2.ListSessions(context.Background(), SessionFilter{})
+	requireNoError(t, err, "list sessions")
+	if len(sessions.Sessions) != 1 || sessions.Sessions[0].ID != "s1" {
+		t.Fatalf("expected 1 session 's1' after migration, got %v",
+			sessions.Sessions)
+	}
+	if sessions.Sessions[0].TerminationStatus != nil {
+		t.Errorf("expected NULL termination_status after migration, got %q",
+			*sessions.Sessions[0].TerminationStatus)
+	}
+}
