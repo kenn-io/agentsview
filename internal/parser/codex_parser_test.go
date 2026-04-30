@@ -1047,6 +1047,93 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 	})
 }
 
+// codexEventMsgJSON builds a Codex event_msg line for lifecycle
+// events like task_complete / task_started / turn_aborted. The
+// shape mirrors what the Codex CLI emits in real session files.
+func codexEventMsgJSON(
+	eventType, timestamp string,
+) string {
+	return `{"type":"event_msg","timestamp":"` + timestamp +
+		`","payload":{"type":"` + eventType + `"}}`
+}
+
+// TestParseCodexSession_TerminationStatus exercises the lifecycle
+// event tracking that drives termination_status for Codex sessions.
+// Codex doesn't go through Classify() — it sets the status from the
+// most recent task_started / task_complete / turn_aborted event
+// seen on the file, so a regression in handleEventMsg or the
+// session-builder wiring would silently leave Codex sessions as
+// NULL or misclassified.
+func TestParseCodexSession_TerminationStatus(t *testing.T) {
+	t.Run("task_complete -> awaiting_user", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(
+				"sess-tc", "/Users/me/proj", "user", tsEarly),
+			testjsonl.CodexMsgJSON(
+				"user", "build it", tsEarlyS1),
+			codexEventMsgJSON(
+				"task_started", "2024-01-01T10:00:02Z"),
+			testjsonl.CodexMsgJSON(
+				"assistant", "done", "2024-01-01T10:00:03Z"),
+			codexEventMsgJSON(
+				"task_complete", "2024-01-01T10:00:04Z"),
+		)
+		sess, _ := runCodexParserTest(
+			t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(
+			t, TerminationAwaitingUser, sess.TerminationStatus)
+	})
+
+	t.Run("task_started in flight -> tool_call_pending", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(
+				"sess-ts", "/Users/me/proj", "user", tsEarly),
+			testjsonl.CodexMsgJSON(
+				"user", "long task", tsEarlyS1),
+			codexEventMsgJSON(
+				"task_started", "2024-01-01T10:00:02Z"),
+		)
+		sess, _ := runCodexParserTest(
+			t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(
+			t, TerminationToolCallPending, sess.TerminationStatus)
+	})
+
+	t.Run("turn_aborted -> tool_call_pending", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(
+				"sess-ta", "/Users/me/proj", "user", tsEarly),
+			testjsonl.CodexMsgJSON(
+				"user", "interrupt me", tsEarlyS1),
+			codexEventMsgJSON(
+				"task_started", "2024-01-01T10:00:02Z"),
+			codexEventMsgJSON(
+				"turn_aborted", "2024-01-01T10:00:03Z"),
+		)
+		sess, _ := runCodexParserTest(
+			t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(
+			t, TerminationToolCallPending, sess.TerminationStatus)
+	})
+
+	t.Run("no lifecycle events -> empty (unknown)", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(
+				"sess-empty", "/Users/me/proj", "user", tsEarly),
+			testjsonl.CodexMsgJSON(
+				"user", "hi", tsEarlyS1),
+		)
+		sess, _ := runCodexParserTest(
+			t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Equal(
+			t, TerminationStatus(""), sess.TerminationStatus)
+	})
+}
+
 func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 	t.Parallel()
 

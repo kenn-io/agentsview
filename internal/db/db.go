@@ -27,9 +27,15 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 22: added termination_status column to sessions;
-// existing rows need re-parsing so the Claude classifier can
-// populate the new column.
+// Bumped to 23: split termination_status into awaiting_user vs
+// clean (Claude end_turn / Codex task_complete vs other clean
+// stops); Codex parser now classifies based on task lifecycle
+// events. Existing rows need re-parsing so the new awaiting_user
+// value populates correctly.
+//
+// (22: added termination_status column to sessions; existing
+// rows need re-parsing so the Claude classifier can populate
+// the new column.)
 //
 // (21: Copilot parser now reads workspace.yaml to use the
 // LLM-generated session name as first_message. Existing
@@ -52,7 +58,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 22
+const dataVersion = 23
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

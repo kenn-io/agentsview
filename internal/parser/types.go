@@ -512,6 +512,13 @@ type ParsedMessage struct {
 	IsSidechain       bool
 	IsCompactBoundary bool
 
+	// StopReason is the reason the assistant stopped generating
+	// (Claude: "end_turn", "tool_use", "max_tokens", "stop_sequence";
+	// other agents may use their own vocabulary or leave it empty).
+	// Only populated for assistant messages where the parser sees
+	// the field. Empty when unknown.
+	StopReason string
+
 	// tokenPresenceKnown marks per-message token coverage as
 	// parser-owned and authoritative.
 	tokenPresenceKnown bool

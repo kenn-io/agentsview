@@ -47,6 +47,13 @@ type codexSessionBuilder struct {
 	pendingAgentEvents   map[string][]codexPendingEvent
 	orphanNotificationIx map[string]int
 	lastTokenUsageRaw    string // dedup streaming duplicates
+
+	// Most recent task lifecycle event seen on the file. Used to
+	// classify termination_status — task_complete maps to
+	// "awaiting user input" while task_started in flight (no
+	// matching task_complete after) means the agent was working
+	// when the file was last written.
+	lastTaskEvent string
 }
 
 type codexToolCallRef struct {
@@ -176,6 +183,10 @@ func (b *codexSessionBuilder) handleResponseItem(
 func (b *codexSessionBuilder) handleEventMsg(
 	payload gjson.Result,
 ) {
+	switch payload.Get("type").Str {
+	case "task_started", "task_complete", "turn_aborted":
+		b.lastTaskEvent = payload.Get("type").Str
+	}
 	if payload.Get("type").Str != "token_count" {
 		return
 	}
@@ -1118,15 +1129,16 @@ func ParseCodexSession(
 	}
 
 	sess := &ParsedSession{
-		ID:               sessionID,
-		Project:          b.project,
-		Machine:          machine,
-		Agent:            AgentCodex,
-		FirstMessage:     b.firstMessage,
-		StartedAt:        b.startedAt,
-		EndedAt:          b.endedAt,
-		MessageCount:     len(b.messages),
-		UserMessageCount: userCount,
+		ID:                sessionID,
+		Project:           b.project,
+		Machine:           machine,
+		Agent:             AgentCodex,
+		FirstMessage:      b.firstMessage,
+		StartedAt:         b.startedAt,
+		EndedAt:           b.endedAt,
+		MessageCount:      len(b.messages),
+		UserMessageCount:  userCount,
+		TerminationStatus: classifyCodexTermination(b.lastTaskEvent),
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
@@ -1137,6 +1149,26 @@ func ParseCodexSession(
 	accumulateMessageTokenUsage(sess, b.messages)
 
 	return sess, b.messages, nil
+}
+
+// classifyCodexTermination maps the most recent task lifecycle
+// event seen on a Codex session file to a TerminationStatus.
+// Codex emits explicit task_started / task_complete / turn_aborted
+// events, so the classification is unambiguous when any are
+// present. Returns "" (unknown) for files where no task event
+// was seen — typically very short or malformed sessions.
+func classifyCodexTermination(lastTaskEvent string) TerminationStatus {
+	switch lastTaskEvent {
+	case "task_complete":
+		return TerminationAwaitingUser
+	case "task_started", "turn_aborted":
+		// task_started without a matching task_complete after
+		// means the agent was mid-turn when the file last
+		// flushed — treat the same as an orphan tool call.
+		// turn_aborted means the user interrupted; same shape.
+		return TerminationToolCallPending
+	}
+	return ""
 }
 
 // readCodexModelAtOffset scans a Codex JSONL file from the

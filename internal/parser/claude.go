@@ -292,13 +292,31 @@ func ParseClaudeSession(
 
 	// Classify termination status for each result. All forks
 	// from a single file share lastLineFailed because a
-	// truncated tail affects every branch.
+	// truncated tail affects every branch. The stop_reason is
+	// pulled from the last assistant message in each branch so
+	// "awaiting_user" can be distinguished from a generic clean
+	// termination.
 	for i := range results {
 		results[i].Session.TerminationStatus = Classify(
-			results[i].Messages, lastLineFailed,
+			results[i].Messages,
+			lastAssistantStopReason(results[i].Messages),
+			lastLineFailed,
 		)
 	}
 	return results, nil
+}
+
+// lastAssistantStopReason returns the StopReason of the most
+// recent assistant message in the slice, or "" when there is
+// none. Used by Classify to decide between awaiting_user and
+// clean for sessions that ended without an orphan tool_use.
+func lastAssistantStopReason(messages []ParsedMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == RoleAssistant {
+			return messages[i].StopReason
+		}
+	}
+	return ""
 }
 
 // ParseClaudeSessionFrom parses only new lines from a Claude
@@ -540,6 +558,7 @@ func extractMessagesFrom(
 
 		if e.entryType == "assistant" {
 			extractClaudeTokenFields(&msg, e.line)
+			msg.StopReason = gjson.Get(e.line, "message.stop_reason").Str
 		}
 
 		messages = append(messages, msg)
@@ -1077,6 +1096,7 @@ func extractMessages(entries []dagEntry) (
 
 		if e.entryType == "assistant" {
 			extractClaudeTokenFields(&msg, e.line)
+			msg.StopReason = gjson.Get(e.line, "message.stop_reason").Str
 		}
 
 		messages = append(messages, msg)

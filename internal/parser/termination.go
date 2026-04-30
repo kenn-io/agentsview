@@ -6,18 +6,47 @@ package parser
 type TerminationStatus string
 
 const (
-	TerminationClean           TerminationStatus = "clean"
+	// TerminationAwaitingUser means the agent reached a clear
+	// "I'm done, your turn" stopping point: Claude end_turn,
+	// Codex task_complete, or equivalent for other agents. UI
+	// surfaces this as a calm "waiting" indicator.
+	TerminationAwaitingUser TerminationStatus = "awaiting_user"
+
+	// TerminationClean means the session ended for a non-orphan,
+	// non-truncated reason that ISN'T explicitly "agent waiting"
+	// (e.g. Claude max_tokens or stop_sequence). Treated as
+	// "session done" by the UI — no special indicator.
+	TerminationClean TerminationStatus = "clean"
+
+	// TerminationToolCallPending means the last assistant message
+	// emitted a tool_use that never received a matching
+	// tool_result. Could be a tool currently running, a permission
+	// prompt waiting on the user, or a crashed agent — the JSONL
+	// can't distinguish those without runtime info.
 	TerminationToolCallPending TerminationStatus = "tool_call_pending"
-	TerminationTruncated       TerminationStatus = "truncated"
+
+	// TerminationTruncated means the session file was cut off
+	// mid-write (e.g. last line is invalid JSON).
+	TerminationTruncated TerminationStatus = "truncated"
 )
 
-// Classify returns a status given a parsed message slice and a
-// sentinel from the file scanner. Returns "" (unknown) when no
-// classification can be made — for example, an empty message slice
-// from an unparseable file. Truncation takes precedence over
-// tool_call_pending: if the file was cut off mid-write, that's the
-// stronger signal about what went wrong.
-func Classify(messages []ParsedMessage, fileTruncated bool) TerminationStatus {
+// Classify returns a status given a parsed message slice, the
+// last assistant message's stop_reason (or empty when unknown),
+// and a sentinel from the file scanner. Returns "" (unknown) when
+// no classification can be made — for example, an empty message
+// slice from an unparseable file. Truncation takes precedence over
+// tool_call_pending: if the file was cut off mid-write, that's
+// the stronger signal about what went wrong.
+//
+// stopReason values that signal "agent waiting on user input" map
+// to TerminationAwaitingUser. The vocabulary differs per agent:
+// Claude uses "end_turn"; Codex uses "task_complete"; pass through
+// the raw string and the helper recognizes both.
+func Classify(
+	messages []ParsedMessage,
+	stopReason string,
+	fileTruncated bool,
+) TerminationStatus {
 	if fileTruncated {
 		return TerminationTruncated
 	}
@@ -27,7 +56,23 @@ func Classify(messages []ParsedMessage, fileTruncated bool) TerminationStatus {
 	if hasOrphanedToolCall(messages) {
 		return TerminationToolCallPending
 	}
+	if isAwaitingUserStopReason(stopReason) {
+		return TerminationAwaitingUser
+	}
 	return TerminationClean
+}
+
+// isAwaitingUserStopReason reports whether the given stop_reason
+// (from any agent's vocabulary) means the agent has finished its
+// turn and is parked waiting for the user. The set of accepted
+// values grows as more agents are wired up.
+func isAwaitingUserStopReason(stopReason string) bool {
+	switch stopReason {
+	case "end_turn", // Claude
+		"task_complete": // Codex
+		return true
+	}
+	return false
 }
 
 // hasOrphanedToolCall reports whether the last assistant message has
