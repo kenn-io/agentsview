@@ -459,13 +459,26 @@ func (e *Engine) classifyOnePath(
 					Agent: parser.AgentCopilot,
 				}, true
 			case 2:
-				if parts[1] != "events.jsonl" {
-					continue
+				if parts[1] == "events.jsonl" {
+					return parser.DiscoveredFile{
+						Path:  path,
+						Agent: parser.AgentCopilot,
+					}, true
 				}
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentCopilot,
-				}, true
+				// workspace.yaml changes should trigger a re-parse
+				// of the sibling events.jsonl.
+				if parts[1] == "workspace.yaml" {
+					eventsPath := filepath.Join(
+						stateDir, parts[0], "events.jsonl",
+					)
+					if _, err := os.Stat(eventsPath); err == nil {
+						return parser.DiscoveredFile{
+							Path:  eventsPath,
+							Agent: parser.AgentCopilot,
+						}, true
+					}
+				}
+				continue
 			default:
 				continue
 			}
@@ -1643,6 +1656,11 @@ func discoveredFileMtime(
 	if err != nil {
 		return 0, err
 	}
+
+	if file.Agent == parser.AgentCopilot {
+		return copilotEffectiveMtime(file.Path, info), nil
+	}
+
 	return info.ModTime().UnixNano(), nil
 }
 
