@@ -66,7 +66,7 @@ Features:
 
 ## Session Stats
 
-`agentsview session stats` emits window-scoped analytics over recorded sessions:
+`agentsview stats` emits window-scoped analytics over recorded sessions:
 totals, archetypes (automation vs. quick/standard/deep/marathon), distributions
 for session duration, user-message count, peak context, and tools-per-turn, plus
 cache economics, tool/model/agent mix, and a temporal hourly breakdown. The
@@ -75,13 +75,13 @@ suitable for downstream consumers.
 
 ```bash
 # Human-readable summary over the last 28 days
-agentsview session stats
+agentsview stats
 
 # Machine-readable JSON over a fixed date range
-agentsview session stats --format json --since 2026-04-01 --until 2026-04-15
+agentsview stats --format json --since 2026-04-01 --until 2026-04-15
 
 # Restrict to one agent and inspect the schema
-agentsview session stats --format json --agent claude | jq '.schema_version'
+agentsview stats --format json --agent claude | jq '.schema_version'
 ```
 
 ## Session Browser
