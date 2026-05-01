@@ -27,7 +27,13 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 20: Claude parser now surfaces queued_command
+// Bumped to 21: Copilot parser now reads workspace.yaml to use
+// the LLM-generated session name as first_message. Existing
+// directory-format sessions where workspace.yaml.mtime <=
+// events.jsonl.mtime would be permanently skipped without this
+// bump, leaving first_message as the raw first user message.
+//
+// (20: Claude parser now surfaces queued_command
 // attachment entries (user messages typed mid-tool-call) as
 // real user messages with source_subtype="queued_command".
 // Sessions previously parsed by older versions had these
@@ -44,7 +50,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 20
+const dataVersion = 21
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
