@@ -4380,6 +4380,20 @@ func TestDeleteSessionExcludes(t *testing.T) {
 	requireSessionGone(t, d, "s1")
 }
 
+func TestUpsertSessionTrashedReturnsErrSessionTrashed(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "s1", "p")
+	requireNoError(t, d.SoftDeleteSession("s1"), "SoftDeleteSession")
+
+	err := d.UpsertSession(Session{
+		ID: "s1", Project: "p", Machine: "m", Agent: "claude",
+	})
+	if !errors.Is(err, ErrSessionTrashed) {
+		t.Fatalf("UpsertSession = %v, want ErrSessionTrashed", err)
+	}
+}
+
 func TestEmptyTrashExcludes(t *testing.T) {
 	d := testDB(t)
 

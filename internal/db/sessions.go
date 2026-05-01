@@ -21,6 +21,11 @@ var ErrInvalidCursor = errors.New("invalid cursor")
 // skip any follow-up writes (messages, tool_calls) for this session.
 var ErrSessionExcluded = errors.New("session excluded")
 
+// ErrSessionTrashed is returned by UpsertSession when the
+// session currently exists in the trash. Upload/import callers
+// should surface a conflict instead of silently overwriting it.
+var ErrSessionTrashed = errors.New("session trashed")
+
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
@@ -735,19 +740,26 @@ func upsertSessionArgs(s Session) []any {
 
 // UpsertSession inserts or updates a session.
 // Sessions that were permanently deleted (in excluded_sessions)
-// are silently skipped.
+// or currently in the trash are rejected.
 func (db *DB) UpsertSession(s Session) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// Check exclusion under the write lock to avoid a race with
-	// concurrent DeleteSession/EmptyTrash.
+	// Check exclusion/trash state under the write lock to avoid a race with
+	// concurrent DeleteSession/EmptyTrash/RestoreSession.
 	var excluded int
 	_ = db.getWriter().QueryRow(
 		"SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
 	).Scan(&excluded)
 	if excluded == 1 {
 		return ErrSessionExcluded
+	}
+	var trashed int
+	_ = db.getWriter().QueryRow(
+		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL", s.ID,
+	).Scan(&trashed)
+	if trashed == 1 {
+		return ErrSessionTrashed
 	}
 
 	// data_version is intentionally NOT advanced here. The

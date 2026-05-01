@@ -2466,6 +2466,50 @@ func TestUploadSession_Errors(t *testing.T) {
 	}
 }
 
+func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, te *testEnv, id string)
+	}{
+		{
+			name: "excluded",
+			setup: func(t *testing.T, te *testEnv, id string) {
+				t.Helper()
+				require.NoError(t, te.db.UpsertSession(db.Session{
+					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
+				}), "seed session")
+				require.NoError(t, te.db.DeleteSession(id), "DeleteSession")
+			},
+		},
+		{
+			name: "trashed",
+			setup: func(t *testing.T, te *testEnv, id string) {
+				t.Helper()
+				require.NoError(t, te.db.UpsertSession(db.Session{
+					ID: id, Project: "myproj", Machine: "remote", Agent: "claude",
+				}), "seed session")
+				require.NoError(t, te.db.SoftDeleteSession(id), "SoftDeleteSession")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := setup(t)
+			const id = "upload-conflict"
+			tt.setup(t, te, id)
+
+			content := testjsonl.NewSessionBuilder().
+				AddClaudeUser(tsEarly, "Hello upload").
+				AddClaudeAssistant(tsEarlyS5, "Done.").
+				String()
+			w := te.upload(t, id+".jsonl", content, "project=myproj&machine=remote")
+			assertStatus(t, w, http.StatusConflict)
+			assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
+		})
+	}
+}
+
 func TestUploadSession_EmptyFile(t *testing.T) {
 	te := setup(t)
 

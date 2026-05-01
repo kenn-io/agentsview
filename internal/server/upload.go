@@ -138,9 +138,6 @@ func (s *Server) saveSessionToDB(
 	}
 
 	if err := s.db.UpsertSession(dbSess); err != nil {
-		if errors.Is(err, db.ErrSessionExcluded) {
-			return nil // silently skip excluded sessions
-		}
 		return fmt.Errorf("storing session: %w", err)
 	}
 
@@ -222,6 +219,11 @@ func (s *Server) handleUploadSession(
 	for _, pr := range results {
 		if err := s.saveSessionToDB(pr.Session, pr.Messages); err != nil {
 			if handleReadOnly(w, err) {
+				return
+			}
+			if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
+				writeError(w, http.StatusConflict,
+					"session upload rejected: session is excluded or trashed")
 				return
 			}
 			log.Printf("Error saving session to DB: %v", err)
