@@ -194,6 +194,117 @@ func TestParseOpenClawSession_EmptyFile(t *testing.T) {
 	}
 }
 
+func TestParseOpenClawSession_AssistantUsage(t *testing.T) {
+	// Synthetic fixture covering the OpenClaw assistant-turn usage
+	// shape: per-message provider/model and a usage block with
+	// short-name token counts plus a nested cost object.
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"usage-1","timestamp":"2026-04-30T12:00:00Z","cwd":"/home/user/proj"}`,
+		`{"type":"model_change","id":"mc1","timestamp":"2026-04-30T12:00:00Z","provider":"anthropic","modelId":"claude-sonnet-4-6"}`,
+		`{"type":"message","id":"u1","timestamp":"2026-04-30T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"do a thing"}],"timestamp":"2026-04-30T12:00:01Z"}}`,
+		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":"2026-04-30T12:00:02Z","provider":"anthropic","model":"claude-sonnet-4-6","usage":{"input":3,"output":91,"cacheRead":0,"cacheWrite":9612,"totalTokens":9706,"cost":{"input":0.000009,"output":0.001365,"cacheRead":0,"cacheWrite":0.036045,"total":0.037419}}}}`,
+	)
+
+	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	a := msgs[1]
+	if a.Role != RoleAssistant {
+		t.Fatalf("expected assistant role, got %s", a.Role)
+	}
+	if a.Model != "claude-sonnet-4-6" {
+		t.Errorf("Model = %q, want claude-sonnet-4-6", a.Model)
+	}
+	if a.OutputTokens != 91 {
+		t.Errorf("OutputTokens = %d, want 91", a.OutputTokens)
+	}
+	if !a.HasOutputTokens {
+		t.Error("HasOutputTokens = false, want true")
+	}
+	// ContextTokens = input + cacheRead + cacheWrite.
+	if a.ContextTokens != 9615 {
+		t.Errorf("ContextTokens = %d, want 9615", a.ContextTokens)
+	}
+	if !a.HasContextTokens {
+		t.Error("HasContextTokens = false, want true")
+	}
+	// TokenUsage must be normalized to Anthropic-style keys so
+	// downstream usage aggregation (internal/db/usage.go) can
+	// read input_tokens/output_tokens/cache_*_input_tokens.
+	if len(a.TokenUsage) == 0 {
+		t.Fatal("TokenUsage empty, want normalized JSON")
+	}
+	tu := string(a.TokenUsage)
+	for _, want := range []string{
+		`"input_tokens":3`,
+		`"output_tokens":91`,
+		`"cache_read_input_tokens":0`,
+		`"cache_creation_input_tokens":9612`,
+	} {
+		if !strings.Contains(tu, want) {
+			t.Errorf("TokenUsage %q missing %q", tu, want)
+		}
+	}
+
+	// Session-level rollup must reflect the per-message totals.
+	if !sess.HasTotalOutputTokens {
+		t.Error("sess.HasTotalOutputTokens = false, want true")
+	}
+	if sess.TotalOutputTokens != 91 {
+		t.Errorf("TotalOutputTokens = %d, want 91",
+			sess.TotalOutputTokens)
+	}
+	if !sess.HasPeakContextTokens {
+		t.Error("sess.HasPeakContextTokens = false, want true")
+	}
+	if sess.PeakContextTokens != 9615 {
+		t.Errorf("PeakContextTokens = %d, want 9615",
+			sess.PeakContextTokens)
+	}
+}
+
+func TestParseOpenClawSession_AssistantUsageWithoutCost(t *testing.T) {
+	// Older sessions may carry a usage block without the nested
+	// cost object. Token extraction must still succeed and not
+	// crash on the missing field.
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"usage-2","timestamp":"2026-04-30T12:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","timestamp":"2026-04-30T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":"2026-04-30T12:00:01Z"}}`,
+		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"timestamp":"2026-04-30T12:00:02Z","provider":"anthropic","model":"claude-haiku-4-5","usage":{"input":42,"output":17,"cacheRead":0,"cacheWrite":0,"totalTokens":59}}}`,
+	)
+
+	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	a := msgs[1]
+	if a.Model != "claude-haiku-4-5" {
+		t.Errorf("Model = %q, want claude-haiku-4-5", a.Model)
+	}
+	if a.OutputTokens != 17 {
+		t.Errorf("OutputTokens = %d, want 17", a.OutputTokens)
+	}
+	if a.ContextTokens != 42 {
+		t.Errorf("ContextTokens = %d, want 42", a.ContextTokens)
+	}
+	if len(a.TokenUsage) == 0 {
+		t.Error("TokenUsage empty, want normalized JSON")
+	}
+	if sess.TotalOutputTokens != 17 {
+		t.Errorf("TotalOutputTokens = %d, want 17",
+			sess.TotalOutputTokens)
+	}
+}
+
 func TestParseOpenClawSession_Compaction(t *testing.T) {
 	path, _ := writeOpenClawTestFile(t, "main",
 		`{"type":"session","version":3,"id":"compact","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,

@@ -3,6 +3,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,7 +139,7 @@ func ParseOpenClawSession(
 				continue
 			}
 
-			messages = append(messages, ParsedMessage{
+			pm := ParsedMessage{
 				Ordinal:       ordinal,
 				Role:          RoleAssistant,
 				Content:       text,
@@ -149,7 +150,9 @@ func ParseOpenClawSession(
 				ContentLength: len(text),
 				ToolCalls:     tcs,
 				ToolResults:   trs,
-			})
+			}
+			applyOpenClawAssistantUsage(&pm, msg)
+			messages = append(messages, pm)
 			ordinal++
 
 		case "toolResult":
@@ -224,7 +227,88 @@ func ParseOpenClawSession(
 		},
 	}
 
+	accumulateMessageTokenUsage(sess, messages)
+
 	return sess, messages, nil
+}
+
+// applyOpenClawAssistantUsage copies the assistant turn's model id
+// and per-message token counts into pm so the usage dashboard can
+// attribute cost. OpenClaw uses its own usage shape — short field
+// names (input, output, cacheRead, cacheWrite) under message.usage,
+// with provider/model on message itself. We map the token fields
+// onto the agentsview-native input_tokens/output_tokens/
+// cache_creation_input_tokens/cache_read_input_tokens keys that
+// internal/db/usage.go reads.
+//
+// Cost (message.usage.cost.total) is intentionally not propagated:
+// agentsview re-prices via the model_pricing table (loaded from
+// LiteLLM), so trusting the gateway's at-request cost would skew
+// totals against the canonical pricing source. The model name is
+// the load-bearing field for accurate pricing lookup.
+//
+// Defensive about missing fields — older sessions may carry a model
+// without a usage block, or a usage block without cost; either is
+// fine.
+func applyOpenClawAssistantUsage(
+	pm *ParsedMessage, msg gjson.Result,
+) {
+	if model := msg.Get("model").Str; model != "" {
+		pm.Model = model
+	}
+
+	usage := msg.Get("usage")
+	if !usage.Exists() {
+		return
+	}
+
+	var (
+		input      int
+		output     int
+		cacheRead  int
+		cacheWrite int
+
+		hasInput      bool
+		hasOutput     bool
+		hasCacheRead  bool
+		hasCacheWrite bool
+	)
+	if f := usage.Get("input"); f.Exists() {
+		input = int(f.Int())
+		hasInput = true
+	}
+	if f := usage.Get("output"); f.Exists() {
+		output = int(f.Int())
+		hasOutput = true
+	}
+	if f := usage.Get("cacheRead"); f.Exists() {
+		cacheRead = int(f.Int())
+		hasCacheRead = true
+	}
+	if f := usage.Get("cacheWrite"); f.Exists() {
+		cacheWrite = int(f.Int())
+		hasCacheWrite = true
+	}
+
+	if !hasInput && !hasOutput && !hasCacheRead && !hasCacheWrite {
+		return
+	}
+
+	normalized := map[string]int{
+		"input_tokens":                input,
+		"output_tokens":               output,
+		"cache_read_input_tokens":     cacheRead,
+		"cache_creation_input_tokens": cacheWrite,
+	}
+	j, err := json.Marshal(normalized)
+	if err != nil {
+		return
+	}
+	pm.TokenUsage = j
+	pm.OutputTokens = output
+	pm.HasOutputTokens = hasOutput
+	pm.ContextTokens = input + cacheRead + cacheWrite
+	pm.HasContextTokens = hasInput || hasCacheRead || hasCacheWrite
 }
 
 // extractToolResultText extracts plain text from an OpenClaw
