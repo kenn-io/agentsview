@@ -1587,6 +1587,58 @@ func (e *Engine) syncAllLocked(
 		return stats
 	}
 
+	// Sync Forge sessions (DB-backed, not file-based).
+	tForge := time.Now()
+	forgePending := e.syncForge(ctx)
+	if len(forgePending) > 0 {
+		stats.TotalSessions += len(forgePending)
+		tWrite := time.Now()
+		var forgeWritten int
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			forgeWritten, _, failedWrites = e.writeBatch(
+				forgePending, writeMode, true,
+			)
+			for range failedWrites {
+				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range forgePending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					forgeWritten++
+				case errors.Is(err, db.ErrSessionExcluded),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
+			}
+		}
+		stats.RecordSynced(forgeWritten)
+		if verbose {
+			log.Printf(
+				"forge write: %d sessions in %s",
+				len(forgePending),
+				time.Since(tWrite).Round(time.Millisecond),
+			)
+		}
+	}
+	if verbose {
+		log.Printf(
+			"forge sync: %s",
+			time.Since(tForge).Round(time.Millisecond),
+		)
+	}
+
+	if ctx.Err() != nil {
+		stats.Aborted = true
+		return stats
+	}
+
 	tPersist := time.Now()
 	skipCount := e.persistSkipCache()
 	if verbose {
@@ -3950,7 +4002,36 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 
 	def, ok := parser.AgentByPrefix(sessionID)
-	if !ok || !def.FileBased || def.FindSourceFunc == nil {
+	if !ok {
+		return ""
+	}
+	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
+	if !def.FileBased {
+		switch def.Type {
+		case parser.AgentWarp:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindWarpDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				if _, _, err := parser.ParseWarpSession(dbPath, rawSessionID, e.machine); err == nil {
+					return dbPath
+				}
+			}
+		case parser.AgentForge:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindForgeDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				if _, _, err := parser.ParseForgeSession(dbPath, rawSessionID, e.machine); err == nil {
+					return dbPath
+				}
+			}
+		}
+		return ""
+	}
+	if def.FindSourceFunc == nil {
 		return ""
 	}
 
@@ -3976,13 +4057,51 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 // file, but OpenCode storage sessions derive their effective mtime
 // from the session JSON plus related message/part files.
 func (e *Engine) SourceMtime(sessionID string) int64 {
-	host, _ := parser.StripHostPrefix(sessionID)
+	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
 		return 0
 	}
 
 	def, ok := parser.AgentByPrefix(sessionID)
-	if !ok || !def.FileBased {
+	if !ok {
+		return 0
+	}
+	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
+	if !def.FileBased {
+		switch def.Type {
+		case parser.AgentWarp:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindWarpDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				metas, err := parser.ListWarpSessionMeta(dbPath)
+				if err != nil {
+					continue
+				}
+				for _, meta := range metas {
+					if meta.SessionID == rawSessionID {
+						return meta.FileMtime
+					}
+				}
+			}
+		case parser.AgentForge:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindForgeDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				metas, err := parser.ListForgeSessionMeta(dbPath)
+				if err != nil {
+					continue
+				}
+				for _, meta := range metas {
+					if meta.SessionID == rawSessionID {
+						return meta.FileMtime
+					}
+				}
+			}
+		}
 		return 0
 	}
 
@@ -4036,6 +4155,8 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		switch def.Type {
 		case parser.AgentWarp:
 			return e.syncSingleWarp(sessionID)
+		case parser.AgentForge:
+			return e.syncSingleForge(sessionID)
 		default:
 			err = e.syncSingleOpenCode(sessionID)
 			if errors.Is(err, errSessionPreserved) {
@@ -4373,6 +4494,115 @@ func (e *Engine) syncSingleWarp(
 		)
 	}
 	return fmt.Errorf("warp session %s not found", sessionID)
+}
+
+// syncForge syncs sessions from Forge SQLite databases.
+func (e *Engine) syncForge(
+	ctx context.Context,
+) []pendingWrite {
+	var allPending []pendingWrite
+	for _, dir := range e.agentDirs[parser.AgentForge] {
+		if ctx.Err() != nil {
+			break
+		}
+		if dir == "" {
+			continue
+		}
+		allPending = append(allPending, e.syncOneForge(ctx, dir)...)
+	}
+	return allPending
+}
+
+// syncOneForge handles a single Forge directory.
+func (e *Engine) syncOneForge(
+	ctx context.Context, dir string,
+) []pendingWrite {
+	dbPath := parser.FindForgeDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+
+	metas, err := parser.ListForgeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync forge: %v", err)
+		return nil
+	}
+	if len(metas) == 0 {
+		return nil
+	}
+
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+
+	var pending []pendingWrite
+	for _, cid := range changed {
+		if ctx.Err() != nil {
+			break
+		}
+		sess, msgs, err := parser.ParseForgeSession(dbPath, cid, e.machine)
+		if err != nil {
+			log.Printf("forge conversation %s: %v", cid, err)
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+		pending = append(pending, pendingWrite{sess: *sess, msgs: msgs})
+	}
+	return pending
+}
+
+// syncSingleForge re-syncs a single Forge conversation.
+func (e *Engine) syncSingleForge(
+	sessionID string,
+) error {
+	rawID := strings.TrimPrefix(sessionID, "forge:")
+
+	var lastErr error
+	for _, dir := range e.agentDirs[parser.AgentForge] {
+		if dir == "" {
+			continue
+		}
+		dbPath := parser.FindForgeDBPath(dir)
+		if dbPath == "" {
+			continue
+		}
+		sess, msgs, err := parser.ParseForgeSession(dbPath, rawID, e.machine)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+		if err := e.writeSessionFull(
+			pendingWrite{sess: *sess, msgs: msgs},
+		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+			return fmt.Errorf("write session %s: %w", sess.ID, err)
+		}
+		if err := e.db.LinkSubagentSessions(); err != nil {
+			log.Printf("link subagent sessions: %v", err)
+		}
+		return nil
+	}
+
+	if len(e.agentDirs[parser.AgentForge]) == 0 {
+		return fmt.Errorf("forge dir not configured")
+	}
+	if lastErr != nil {
+		return fmt.Errorf("forge session %s: %w", sessionID, lastErr)
+	}
+	return fmt.Errorf("forge session %s not found", sessionID)
 }
 
 func strPtr(s string) *string {

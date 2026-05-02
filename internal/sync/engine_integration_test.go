@@ -26,6 +26,7 @@ type testEnv struct {
 	cursorDir   string
 	geminiDir   string
 	opencodeDir string
+	forgeDir    string
 	iflowDir    string
 	ampDir      string
 	piDir       string
@@ -86,6 +87,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 
 	env := &testEnv{
 		geminiDir: t.TempDir(),
+		forgeDir:  t.TempDir(),
 		iflowDir:  t.TempDir(),
 		ampDir:    t.TempDir(),
 		piDir:     t.TempDir(),
@@ -131,6 +133,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentCursor:   cursorDirs,
 			parser.AgentGemini:   {env.geminiDir},
 			parser.AgentOpenCode: opencodeDirs,
+			parser.AgentForge:    {env.forgeDir},
 			parser.AgentIflow:    {env.iflowDir},
 			parser.AgentAmp:      {env.ampDir},
 			parser.AgentPi:       {env.piDir},

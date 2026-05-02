@@ -30,6 +30,7 @@ const (
 	AgentKiroIDE       AgentType = "kiro-ide"
 	AgentCortex        AgentType = "cortex"
 	AgentHermes        AgentType = "hermes"
+	AgentForge         AgentType = "forge"
 	AgentWarp          AgentType = "warp"
 	AgentPositron      AgentType = "positron"
 )
@@ -296,6 +297,15 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverHermesSessions,
 		FindSourceFunc: FindHermesSourceFile,
+	},
+	{
+		Type:        AgentForge,
+		DisplayName: "Forge",
+		EnvVar:      "FORGE_DIR",
+		ConfigKey:   "forge_dirs",
+		DefaultDirs: []string{".forge"},
+		IDPrefix:    "forge:",
+		FileBased:   false,
 	},
 	{
 		Type:        AgentWarp,
