@@ -156,6 +156,20 @@ describe("renderMarkdown", () => {
       expect(bq!.textContent!.trim()).toBe("quoted text");
     });
 
+    it("preserves prose around separated blockquotes", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5",
+        ),
+      );
+      expect(dom.textContent).toContain("blabla1");
+      expect(dom.textContent).toContain("blabla2");
+      expect(dom.textContent).toContain("blabla3");
+      expect(dom.textContent).toContain("blabla4");
+      expect(dom.textContent).toContain("blabla5");
+      expect(dom.querySelectorAll("blockquote")).toHaveLength(2);
+    });
+
     it("renders tables", () => {
       const md = "| A | B |\n| --- | --- |\n| 1 | 2 |";
       const dom = parseHTML(renderMarkdown(md));

@@ -1,0 +1,4 @@
+{"timestamp":"2026-05-02T12:33:24.669Z","type":"session_meta","payload":{"id":"quote-123","timestamp":"2026-05-02T12:33:22.511Z","cwd":"/tmp/agentsview-quote","originator":"codex_exec","cli_version":"0.128.0","source":"exec","model_provider":"openai"}}
+{"timestamp":"2026-05-02T12:33:24.753Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"blablabla?"}]}}
+{"timestamp":"2026-05-02T12:33:26.485Z","type":"event_msg","payload":{"type":"agent_message","message":"blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5","phase":"final_answer","memory_citation":null}}
+{"timestamp":"2026-05-02T12:33:26.485Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5"}],"phase":"final_answer"}}

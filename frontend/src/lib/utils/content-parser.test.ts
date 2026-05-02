@@ -52,6 +52,14 @@ describe("parseContent", () => {
     ]);
   });
 
+  it("keeps blockquote markers in prose as one text segment", () => {
+    const content =
+      "blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5";
+    expect(parseContent(content)).toEqual([
+      { type: "text", content },
+    ]);
+  });
+
   it("preserves leading whitespace before blocks", () => {
     const segments =
       parseContent("  Indented text\n[Thinking]\n...");

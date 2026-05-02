@@ -47,6 +47,22 @@ func TestParseCodexSession_Basic(t *testing.T) {
 	assertSessionMeta(t, sess, "codex:abc-123", "my_api", AgentCodex)
 }
 
+func TestParseCodexSession_PreservesAssistantBlockquotes(t *testing.T) {
+	content := loadFixture(t, "codex/blockquotes_session.jsonl")
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, "codex:quote-123", sess.ID)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "blablabla?", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t,
+		"blabla1\n\n> blabla2\n\nblabla3\n\n> blabla4\n\nblabla5",
+		msgs[1].Content,
+	)
+}
+
 func TestParseCodexSession_ExecOriginator(t *testing.T) {
 	execContent := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON("abc", "/tmp", "codex_exec", tsEarly),
