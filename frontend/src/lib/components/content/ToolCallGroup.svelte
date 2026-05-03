@@ -140,7 +140,7 @@
   </div>
 
   <div class="tool-group-body">
-    {#each messages as message (message.id)}
+    {#each messages as message (message.ordinal)}
       {@const calls = message.tool_calls ?? []}
       {@const turn = turnByMessage.get(message.id)}
       {#if calls.length === 1}
