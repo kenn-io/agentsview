@@ -14,21 +14,33 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+const defaultRecursiveWatchBudget = 8192
+
+type RecursiveWatchResult struct {
+	Watched             int
+	Unwatched           int
+	Err                 error
+	BudgetExhausted     bool
+	ResourceExhausted   bool
+	ResourceExhaustedAt string
+}
+
 // Watcher uses fsnotify to watch session directories for changes
 // and triggers a callback with debouncing.
 type Watcher struct {
-	onChange func(paths []string)
-	watcher  *fsnotify.Watcher
-	debounce time.Duration
-	excludes []string
-	roots    []string
-	rootsMu  sync.RWMutex
-	pending  map[string]time.Time
-	mu       sync.Mutex
-	stop     chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
-	now      func() time.Time
+	onChange             func(paths []string)
+	watcher              *fsnotify.Watcher
+	debounce             time.Duration
+	excludes             []string
+	roots                []string
+	rootsMu              sync.RWMutex
+	pending              map[string]time.Time
+	mu                   sync.Mutex
+	stop                 chan struct{}
+	done                 chan struct{}
+	stopOnce             sync.Once
+	now                  func() time.Time
+	recursiveWatchBudget int
 }
 
 // NewWatcher creates a file watcher that calls onChange when
@@ -44,14 +56,15 @@ func NewWatcher(debounce time.Duration, onChange func(paths []string), excludes 
 	}
 
 	w := &Watcher{
-		onChange: onChange,
-		watcher:  fsw,
-		debounce: debounce,
-		excludes: normalizeExcludePatterns(excludes),
-		pending:  make(map[string]time.Time),
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
-		now:      time.Now,
+		onChange:             onChange,
+		watcher:              fsw,
+		debounce:             debounce,
+		excludes:             normalizeExcludePatterns(excludes),
+		pending:              make(map[string]time.Time),
+		stop:                 make(chan struct{}),
+		done:                 make(chan struct{}),
+		now:                  time.Now,
+		recursiveWatchBudget: defaultRecursiveWatchBudget,
 	}
 	return w, nil
 }
@@ -60,9 +73,20 @@ func NewWatcher(debounce time.Duration, onChange func(paths []string), excludes 
 // subdirectories to the watch list. Returns the number
 // of directories watched and unwatched (failed to add).
 func (w *Watcher) WatchRecursive(root string) (watched int, unwatched int, err error) {
+	result := w.WatchRecursiveBudgeted(root)
+	return result.Watched, result.Unwatched, result.Err
+}
+
+func (w *Watcher) setRecursiveWatchBudgetForTest(n int) {
+	w.recursiveWatchBudget = n
+}
+
+func (w *Watcher) WatchRecursiveBudgeted(root string) RecursiveWatchResult {
+	var result RecursiveWatchResult
 	root = filepath.Clean(root)
 	w.addRoot(root)
-	err = filepath.WalkDir(root,
+
+	result.Err = filepath.WalkDir(root,
 		func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil // skip inaccessible dirs
@@ -72,15 +96,21 @@ func (w *Watcher) WatchRecursive(root string) (watched int, unwatched int, err e
 				if path != root && w.shouldExcludeForRoot(path, root) {
 					return filepath.SkipDir
 				}
+				if w.recursiveWatchBudget <= 0 {
+					result.Unwatched++
+					result.BudgetExhausted = true
+					return nil
+				}
 				if addErr := w.watcher.Add(path); addErr != nil {
-					unwatched++
+					result.Unwatched++
 				} else {
-					watched++
+					w.recursiveWatchBudget--
+					result.Watched++
 				}
 			}
 			return nil
 		})
-	return watched, unwatched, err
+	return result
 }
 
 // WatchShallow adds only the root directory to the watch list,

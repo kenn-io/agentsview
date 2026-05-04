@@ -2,6 +2,7 @@ package sync
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -348,6 +349,34 @@ func TestWatchRecursive_ExcludesDirectoryNames(t *testing.T) {
 	}
 	if !slices.Contains(got, included) {
 		t.Fatalf("expected included dir %s in watch list", included)
+	}
+}
+
+func TestWatchRecursiveBudget_DegradesWhenBudgetExhausted(t *testing.T) {
+	root := t.TempDir()
+	for i := range 5 {
+		if err := os.MkdirAll(filepath.Join(root, fmt.Sprintf("dir-%d", i)), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+	}
+
+	w, err := NewWatcher(time.Second, func(_ []string) {}, nil)
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	w.Start()
+	t.Cleanup(func() { w.Stop() })
+	w.setRecursiveWatchBudgetForTest(3)
+
+	result := w.WatchRecursiveBudgeted(root)
+	if result.Watched != 3 {
+		t.Fatalf("Watched = %d, want 3", result.Watched)
+	}
+	if !result.BudgetExhausted {
+		t.Fatal("BudgetExhausted = false, want true")
+	}
+	if result.Unwatched == 0 {
+		t.Fatal("Unwatched = 0, want remaining directories counted")
 	}
 }
 
