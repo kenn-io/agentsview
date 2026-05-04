@@ -2559,6 +2559,45 @@ func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
 	}
 }
 
+func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
+	te := setup(t)
+
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original upload").
+		AddClaudeAssistant(tsEarlyS5, "original reply").
+		String()
+	w := te.upload(t, "upload-pinned.jsonl", initial,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	msgs, err := te.db.GetAllMessages(context.Background(), "upload-pinned")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, msgs, 2, "initial messages")
+	note := "keep this"
+	_, err = te.db.PinMessage("upload-pinned", msgs[0].ID, &note)
+	require.NoError(t, err, "PinMessage")
+
+	updated := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "updated upload").
+		AddClaudeAssistant(tsEarlyS5, "updated reply").
+		String()
+	w = te.upload(t, "upload-pinned.jsonl", updated,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	pins, err := te.db.ListPinnedMessages(
+		context.Background(), "upload-pinned", "",
+	)
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1, "pins after re-upload")
+	if pins[0].Ordinal != 0 {
+		t.Fatalf("pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+	if pins[0].Note == nil || *pins[0].Note != note {
+		t.Fatalf("pin note = %v, want %q", pins[0].Note, note)
+	}
+}
+
 func TestUploadSession_EmptyFile(t *testing.T) {
 	te := setup(t)
 

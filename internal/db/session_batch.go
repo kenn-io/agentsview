@@ -204,7 +204,12 @@ func writeOneSessionBatchTx(
 	}
 
 	msgs := write.Messages
+	var pins []savedPin
 	if write.ReplaceMessages {
+		pins, err = savePinsTx(tx, write.Session.ID)
+		if err != nil {
+			return 0, err
+		}
 		if err := deleteSessionMessagesTx(tx, write.Session.ID); err != nil {
 			return 0, err
 		}
@@ -227,6 +232,11 @@ func writeOneSessionBatchTx(
 		}
 		events := resolveToolResultEvents(msgs)
 		if err := insertToolResultEventsTx(tx, events); err != nil {
+			return 0, err
+		}
+	}
+	if write.ReplaceMessages {
+		if err := restorePinsTx(tx, write.Session.ID, pins); err != nil {
 			return 0, err
 		}
 	}

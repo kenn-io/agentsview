@@ -1017,11 +1017,13 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	trashedCopied := 0
 	if n, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
 		log.Printf("resync: pre-sync copy trashed sessions: %v", err)
 		// Non-fatal: worst case, trashed sessions are reparsed
 		// and then re-marked as trashed by metadata copy.
 	} else if n > 0 {
+		trashedCopied = n
 		log.Printf("resync: pre-sync copied %d trashed sessions", n)
 	}
 
@@ -1080,15 +1082,15 @@ func (e *Engine) ResyncAll(
 	emptyDiscovery := stats.filesDiscovered == 0 &&
 		stats.filesOK == 0 &&
 		oldFileSessions > 0
-	openCodeArchiveOnly := stats.Synced == 0 &&
+	preservedOnly := stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
 		stats.Failed == 0 &&
-		oldFileSessions == 0
+		(oldFileSessions == 0 || trashedCopied > 0)
 	abortSwap := stats.Aborted ||
 		emptyDiscovery ||
 		(stats.Synced == 0 &&
 			stats.TotalSessions > 0 &&
-			!openCodeArchiveOnly) ||
+			!preservedOnly) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
 	if abortSwap {
 		log.Printf(

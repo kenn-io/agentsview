@@ -4016,6 +4016,19 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 1, Synced: 1,
 	})
+	orphanContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "orphan prompt").
+		AddClaudeAssistant(tsZeroS5, "orphan reply").
+		String()
+	orphanPath := env.writeClaudeSession(
+		t, "test-proj", "active-orphan.jsonl", orphanContent,
+	)
+	env.engine.SyncPaths([]string{orphanPath})
+	assertSessionMessageCount(t, env.db, "active-orphan", 2)
+	if err := os.Remove(orphanPath); err != nil {
+		t.Fatalf("remove orphan source: %v", err)
+	}
+
 	if err := env.db.SoftDeleteSession("resync-trash"); err != nil {
 		t.Fatalf("SoftDeleteSession: %v", err)
 	}
@@ -4030,6 +4043,7 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 	if stats.Aborted {
 		t.Fatalf("ResyncAll aborted: %+v", stats)
 	}
+	assertSessionMessageCount(t, env.db, "active-orphan", 2)
 
 	full, err := env.db.GetSessionFull(
 		context.Background(), "resync-trash",

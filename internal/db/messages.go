@@ -476,35 +476,9 @@ func (db *DB) ReplaceSessionMessages(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Save existing pins before deletion. The ON DELETE CASCADE on
-	// pinned_messages.message_id would otherwise wipe them when
-	// messages are deleted below. source_uuid comes from the joined
-	// message row; LEFT JOIN keeps pins on legacy rows whose
-	// message_id no longer resolves cleanly.
-	pinRows, err := tx.Query(`
-		SELECT p.ordinal, COALESCE(m.source_uuid, ''),
-			p.note, p.created_at
-		FROM pinned_messages p
-		LEFT JOIN messages m ON m.id = p.message_id
-		WHERE p.session_id = ?`,
-		sessionID,
-	)
+	pins, err := savePinsTx(tx, sessionID)
 	if err != nil {
-		return fmt.Errorf("saving pins: %w", err)
-	}
-	defer pinRows.Close()
-	var pins []savedPin
-	for pinRows.Next() {
-		var sp savedPin
-		if err := pinRows.Scan(
-			&sp.ordinal, &sp.sourceUUID, &sp.note, &sp.createdAt,
-		); err != nil {
-			return fmt.Errorf("scanning pin: %w", err)
-		}
-		pins = append(pins, sp)
-	}
-	if err := pinRows.Err(); err != nil {
-		return fmt.Errorf("iterating pins: %w", err)
+		return err
 	}
 
 	if _, err := tx.Exec(
@@ -584,6 +558,50 @@ func (db *DB) ReplaceSessionMessages(
 		}
 	}
 
+	if err := restorePinsTx(tx, sessionID, pins); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {
+	// Save existing pins before deletion. The ON DELETE CASCADE on
+	// pinned_messages.message_id would otherwise wipe them when
+	// messages are deleted below. source_uuid comes from the joined
+	// message row; LEFT JOIN keeps pins on legacy rows whose
+	// message_id no longer resolves cleanly.
+	pinRows, err := tx.Query(`
+		SELECT p.ordinal, COALESCE(m.source_uuid, ''),
+			p.note, p.created_at
+		FROM pinned_messages p
+		LEFT JOIN messages m ON m.id = p.message_id
+		WHERE p.session_id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("saving pins: %w", err)
+	}
+	defer pinRows.Close()
+	var pins []savedPin
+	for pinRows.Next() {
+		var sp savedPin
+		if err := pinRows.Scan(
+			&sp.ordinal, &sp.sourceUUID, &sp.note, &sp.createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning pin: %w", err)
+		}
+		pins = append(pins, sp)
+	}
+	if err := pinRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pins: %w", err)
+	}
+	return pins, nil
+}
+
+func restorePinsTx(
+	tx *sql.Tx, sessionID string, pins []savedPin,
+) error {
 	// Re-attach saved pins. Prefer source_uuid (stable across
 	// ordinal-shifting rewrites) and fall back to ordinal for
 	// legacy pins whose source row predates the source_uuid column.
@@ -619,8 +637,7 @@ func (db *DB) ReplaceSessionMessages(
 			return fmt.Errorf("restoring pin ord=%d: %w", sp.ordinal, err)
 		}
 	}
-
-	return tx.Commit()
+	return nil
 }
 
 // attachToolCalls loads tool_calls for the given messages
