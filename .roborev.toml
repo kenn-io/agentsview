@@ -97,6 +97,27 @@ Key assumptions reviewers MUST account for:
     model as running agents on codebases. Do not flag Copilot's or
     Kiro's sandboxing as insufficient.
 
+17. POSTGRES PARITY: agentsview supports both SQLite (default) and
+    PostgreSQL (via `pg push` / `pg serve`) as the session store.
+    Any schema or read/write change to the SQLite session model
+    must be mirrored on the PG side. Reviewers should check that
+    new sessions columns are added to:
+      - internal/postgres/schema.go (CREATE TABLE + idempotent
+        ALTER TABLE migration in EnsureSchema)
+      - internal/postgres/sessions.go (pgSessionCols, scanPGSession)
+      - internal/postgres/push.go (INSERT column list + placeholders,
+        ON CONFLICT DO UPDATE SET, the IS DISTINCT FROM predicate,
+        the args slice, AND sessionPushFingerprint — a column missing
+        from the fingerprint will silently skip pushes when only that
+        column changed)
+      - CheckSchemaCompat probe (any column required for reads)
+    Filter logic that runs against both backends (e.g. activity-
+    window predicates) must use the same constants/semantics in
+    both internal/db/ and internal/postgres/. DO flag SQLite-only
+    changes to the session model that don't have a matching PG
+    update, and DO flag new session columns missing from
+    sessionPushFingerprint.
+
 Do NOT flag issues that only apply to public-facing, multi-tenant,
 or internet-exposed services. Focus on bugs, logic errors, data
 corruption risks, and code quality issues.
