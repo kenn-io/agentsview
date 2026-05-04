@@ -190,3 +190,10 @@ func (s *Store) ReplaceSessionMessages(
 ) error {
 	return db.ErrReadOnly
 }
+
+// WriteSessionBatchAtomic is not supported in read-only mode.
+func (s *Store) WriteSessionBatchAtomic(
+	_ []db.SessionBatchWrite,
+) (db.SessionBatchResult, error) {
+	return db.SessionBatchResult{}, db.ErrReadOnly
+}

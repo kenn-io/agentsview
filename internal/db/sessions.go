@@ -1054,7 +1054,8 @@ func (db *DB) GetSessionForIncremental(
 	var count int
 	err := db.getReader().QueryRow(
 		`SELECT COUNT(*) FROM sessions
-		 WHERE file_path = ?`, path,
+		 WHERE file_path = ?
+		   AND deleted_at IS NULL`, path,
 	).Scan(&count)
 	if err != nil || count != 1 {
 		return nil, false
@@ -1070,7 +1071,9 @@ func (db *DB) GetSessionForIncremental(
 			first_message,
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens
-		 FROM sessions WHERE file_path = ?`,
+		 FROM sessions
+		 WHERE file_path = ?
+		   AND deleted_at IS NULL`,
 		path,
 	).Scan(
 		&info.ID, &fs, &fm, &fi, &fd,

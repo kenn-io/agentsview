@@ -97,6 +97,55 @@ func (db *DB) WriteSessionBatch(
 	return result, nil
 }
 
+// WriteSessionBatchAtomic writes all sessions in one
+// transaction. Any rejected or failed row rolls back the whole
+// batch.
+func (db *DB) WriteSessionBatchAtomic(
+	writes []SessionBatchWrite,
+) (SessionBatchResult, error) {
+	var result SessionBatchResult
+	if len(writes) == 0 {
+		return result, nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return result, fmt.Errorf("beginning batch tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, write := range writes {
+		messagesWritten, err := writeOneSessionBatchTx(tx, write)
+		if err != nil {
+			result.WrittenSessions = 0
+			result.WrittenMessages = 0
+			switch {
+			case errors.Is(err, ErrSessionExcluded),
+				errors.Is(err, ErrSessionTrashed):
+				result.ExcludedSessions++
+				result.ExcludedIDs = append(
+					result.ExcludedIDs,
+					write.Session.ID,
+				)
+			default:
+				result.FailedSessions++
+				result.Errors = append(result.Errors, err)
+			}
+			return result, err
+		}
+		result.WrittenSessions++
+		result.WrittenMessages += messagesWritten
+	}
+
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("committing batch tx: %w", err)
+	}
+	return result, nil
+}
+
 func rollbackSavepoint(tx *sql.Tx, savepoint string) error {
 	if _, err := tx.Exec("ROLLBACK TO SAVEPOINT " + savepoint); err != nil {
 		return fmt.Errorf(

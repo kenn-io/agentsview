@@ -2517,6 +2517,48 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 	}
 }
 
+func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
+	te := setup(t)
+
+	const filename = "upload-multi-conflict.jsonl"
+	const mainID = "upload-multi-conflict"
+	const forkID = "upload-multi-conflict-i"
+
+	require.NoError(t, te.db.UpsertSession(db.Session{
+		ID: forkID, Project: "myproj", Machine: "remote", Agent: "claude",
+	}), "seed fork session")
+	require.NoError(t, te.db.DeleteSession(forkID), "DeleteSession")
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID(tsEarly, "q1", "a", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "a1", "b", "a").
+		AddClaudeUserWithUUID(tsEarlyS5, "q2", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:06Z", "a2", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:07Z", "q3", "e", "d").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:08Z", "a3", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:09Z", "q4", "g", "f").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:10Z", "a4", "h", "g").
+		AddClaudeUserWithUUID("2024-01-01T10:00:11Z", "q5", "k", "h").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:12Z", "a5", "l", "k").
+		AddClaudeUserWithUUID("2024-01-01T10:00:13Z", "fork q", "i", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:14Z", "fork a", "j", "i").
+		String()
+
+	w := te.upload(t, filename, content, "project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusConflict)
+	assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
+
+	main, err := te.db.GetSessionFull(context.Background(), mainID)
+	require.NoError(t, err, "GetSessionFull main")
+	if main != nil {
+		t.Fatalf("main session was partially written: %+v", main)
+	}
+	destPath := filepath.Join(te.dataDir, "uploads", "myproj", filename)
+	if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+	}
+}
+
 func TestUploadSession_EmptyFile(t *testing.T) {
 	te := setup(t)
 

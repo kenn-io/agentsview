@@ -137,12 +137,12 @@ func commitUpload(upload stagedUpload) error {
 	return nil
 }
 
-// saveSessionToDB maps parsed session and messages to DB types
-// and persists them.
-func (s *Server) saveSessionToDB(
+// sessionBatchWriteFromParsed maps parsed session and messages
+// to DB types for an upload transaction.
+func sessionBatchWriteFromParsed(
 	sess parser.ParsedSession,
 	msgs []parser.ParsedMessage,
-) error {
+) db.SessionBatchWrite {
 	hasTotal, hasPeak := sess.TokenCoverage(msgs)
 	dbSess := db.Session{
 		ID:                   sess.ID,
@@ -172,10 +172,6 @@ func (s *Server) saveSessionToDB(
 		dbSess.EndedAt = timeutil.Ptr(sess.EndedAt)
 	}
 
-	if err := s.db.UpsertSession(dbSess); err != nil {
-		return fmt.Errorf("storing session: %w", err)
-	}
-
 	dbMsgs := make([]db.Message, len(msgs))
 	for i, m := range msgs {
 		hasCtx, hasOut := m.TokenPresence()
@@ -197,12 +193,11 @@ func (s *Server) saveSessionToDB(
 		}
 	}
 
-	if err := s.db.ReplaceSessionMessages(
-		sess.ID, dbMsgs,
-	); err != nil {
-		return fmt.Errorf("storing messages: %w", err)
+	return db.SessionBatchWrite{
+		Session:         dbSess,
+		Messages:        dbMsgs,
+		ReplaceMessages: true,
 	}
-	return nil
 }
 
 func (s *Server) handleUploadSession(
@@ -260,21 +255,26 @@ func (s *Server) handleUploadSession(
 		results[i].Session.File.Path = upload.finalPath
 	}
 
-	for _, pr := range results {
-		if err := s.saveSessionToDB(pr.Session, pr.Messages); err != nil {
-			if handleReadOnly(w, err) {
-				return
-			}
-			if errors.Is(err, db.ErrSessionExcluded) || errors.Is(err, db.ErrSessionTrashed) {
-				writeError(w, http.StatusConflict,
-					"session upload rejected: session is excluded or trashed")
-				return
-			}
-			log.Printf("Error saving session to DB: %v", err)
-			writeError(w, http.StatusInternalServerError,
-				"failed to save session to database")
+	writes := make([]db.SessionBatchWrite, len(results))
+	for i, pr := range results {
+		writes[i] = sessionBatchWriteFromParsed(
+			pr.Session, pr.Messages,
+		)
+	}
+	if _, err := s.db.WriteSessionBatchAtomic(writes); err != nil {
+		if handleReadOnly(w, err) {
 			return
 		}
+		if errors.Is(err, db.ErrSessionExcluded) ||
+			errors.Is(err, db.ErrSessionTrashed) {
+			writeError(w, http.StatusConflict,
+				"session upload rejected: session is excluded or trashed")
+			return
+		}
+		log.Printf("Error saving session to DB: %v", err)
+		writeError(w, http.StatusInternalServerError,
+			"failed to save session to database")
+		return
 	}
 
 	if err := commitUpload(upload); err != nil {

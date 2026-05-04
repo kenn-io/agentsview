@@ -894,6 +894,10 @@ func TestStoreWriteMethodsReturnReadOnly(t *testing.T) {
 		{"ReplaceSessionMessages", func() error {
 			return store.ReplaceSessionMessages("x", nil)
 		}},
+		{"WriteSessionBatchAtomic", func() error {
+			_, err := store.WriteSessionBatchAtomic(nil)
+			return err
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -4002,6 +4002,56 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	}
 }
 
+func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
+	env := setupTestEnv(t)
+
+	original := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "original trashed prompt").
+		AddClaudeAssistant(tsZeroS5, "original trashed reply").
+		String()
+	path := env.writeClaudeSession(
+		t, "test-proj", "resync-trash.jsonl", original,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	if err := env.db.SoftDeleteSession("resync-trash"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+
+	replacement := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "replacement prompt").
+		AddClaudeAssistant(tsZeroS5, "replacement reply").
+		String()
+	dbtest.WriteTestFile(t, path, []byte(replacement))
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	if stats.Aborted {
+		t.Fatalf("ResyncAll aborted: %+v", stats)
+	}
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "resync-trash",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full == nil || full.DeletedAt == nil {
+		t.Fatal("trashed session was not preserved as trashed")
+	}
+	msgs := fetchMessages(t, env.db, "resync-trash")
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %d, want 2", len(msgs))
+	}
+	if msgs[0].Content != "original trashed prompt" {
+		t.Fatalf(
+			"trashed content = %q, want original content",
+			msgs[0].Content,
+		)
+	}
+}
+
 // TestResyncAllSurfacesQueuedCommands locks in that bumping
 // dataVersion (which forces a full resync) recovers Claude
 // queued_command attachments dropped by older parser versions.
@@ -5952,6 +6002,59 @@ func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
 	}
 	if got := env.engine.SnapshotSkipCache()[path]; got == 0 {
 		t.Fatalf("skip cache missing trashed session path %s", path)
+	}
+}
+
+func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+
+	path := env.writeClaudeSession(
+		t, "test-proj", "trashed-append.jsonl", content,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "trashed-append", 2)
+
+	if err := env.db.SoftDeleteSession("trashed-append"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open append: %v", err)
+	}
+	_, err = f.WriteString(
+		testjsonl.NewSessionBuilder().
+			AddClaudeUser(tsEarly, "new prompt").
+			AddClaudeAssistant(tsEarlyS5, "new reply").
+			String(),
+	)
+	if closeErr := f.Close(); closeErr != nil {
+		t.Fatalf("close append: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("Failed = %d, want 0 for trashed append", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("Synced = %d, want 0 for trashed append", stats.Synced)
+	}
+	full, err := env.db.GetSessionFull(
+		context.Background(), "trashed-append",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if full == nil || full.MessageCount != 2 {
+		t.Fatalf("MessageCount = %v, want preserved count 2", full)
 	}
 }
 

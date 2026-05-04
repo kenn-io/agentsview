@@ -1017,6 +1017,13 @@ func (e *Engine) ResyncAll(
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
 	}
+	if n, err := newDB.CopyTrashedDataFrom(origPath); err != nil {
+		log.Printf("resync: pre-sync copy trashed sessions: %v", err)
+		// Non-fatal: worst case, trashed sessions are reparsed
+		// and then re-marked as trashed by metadata copy.
+	} else if n > 0 {
+		log.Printf("resync: pre-sync copied %d trashed sessions", n)
+	}
 
 	// The temp DB is not swapped into production until the end,
 	// so avoid per-row FTS trigger work during the bulk load and
