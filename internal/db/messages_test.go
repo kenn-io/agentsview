@@ -46,6 +46,13 @@ func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 		)
 		return err
 	}), "seed excluded session")
+	requireNoError(t, d.UpsertSession(Session{
+		ID:      "trashed",
+		Project: "proj",
+		Machine: defaultMachine,
+		Agent:   defaultAgent,
+	}), "seed trashed session")
+	requireNoError(t, d.SoftDeleteSession("trashed"), "soft delete session")
 
 	health := 95
 	grade := "A"
@@ -113,6 +120,20 @@ func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 			},
 			DataVersion: CurrentDataVersion(),
 		},
+		{
+			Session: Session{
+				ID:               "trashed",
+				Project:          "proj",
+				Machine:          defaultMachine,
+				Agent:            defaultAgent,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []Message{
+				userMsg("trashed", 0, "trashed"),
+			},
+			DataVersion: CurrentDataVersion(),
+		},
 	})
 	requireNoError(t, err, "WriteSessionBatch")
 	if result.WrittenSessions != 1 {
@@ -124,8 +145,8 @@ func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 	if result.FailedSessions != 1 {
 		t.Fatalf("FailedSessions = %d, want 1", result.FailedSessions)
 	}
-	if result.ExcludedSessions != 1 {
-		t.Fatalf("ExcludedSessions = %d, want 1", result.ExcludedSessions)
+	if result.ExcludedSessions != 2 {
+		t.Fatalf("ExcludedSessions = %d, want 2", result.ExcludedSessions)
 	}
 
 	sess, err := d.GetSessionFull(context.Background(), "good")
@@ -147,6 +168,11 @@ func TestWriteSessionBatchCommitsGoodRowsAndSkipsBadRows(t *testing.T) {
 	}
 	if !sess.HasToolCalls {
 		t.Error("HasToolCalls = false, want true")
+	}
+	trashed, err := d.GetSessionFull(context.Background(), "trashed")
+	requireNoError(t, err, "GetSessionFull trashed")
+	if trashed == nil || trashed.DeletedAt == nil {
+		t.Fatal("trashed session was not preserved in trash")
 	}
 
 	msgs, err := d.GetAllMessages(context.Background(), "good")

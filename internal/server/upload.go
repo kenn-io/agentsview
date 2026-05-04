@@ -23,6 +23,12 @@ type uploadRequest struct {
 	filename string
 }
 
+type stagedUpload struct {
+	tempPath  string
+	tempDir   string
+	finalPath string
+}
+
 // parseUploadRequest extracts and validates query params and
 // the multipart file from an upload request. The caller must
 // close req.file when done.
@@ -70,36 +76,65 @@ func parseUploadRequest(
 	}, ""
 }
 
-// saveUpload writes the uploaded file to disk under
-// <dataDir>/uploads/<project>/<filename> and returns the
-// destination path.
-func (s *Server) saveUpload(
+// stageUpload writes the uploaded file to a temporary path in
+// <dataDir>/uploads/<project>. The caller must either commit
+// or remove the staged file.
+func (s *Server) stageUpload(
 	project string, filename string, src io.Reader,
-) (string, error) {
+) (stagedUpload, error) {
 	uploadDir := filepath.Join(
 		s.cfg.DataDir, "uploads", project,
 	)
 	if err := os.MkdirAll(uploadDir, 0o755); err != nil {
-		return "", fmt.Errorf(
+		return stagedUpload{}, fmt.Errorf(
 			"creating upload directory: %w", err,
 		)
 	}
 
-	destPath := filepath.Join(uploadDir, filename)
-	dest, err := os.Create(destPath)
+	tempDir, err := os.MkdirTemp(
+		uploadDir, "."+strings.TrimSuffix(filename, ".jsonl")+".*.tmp",
+	)
 	if err != nil {
-		return "", fmt.Errorf(
+		return stagedUpload{}, fmt.Errorf(
 			"saving uploaded file: %w", err,
 		)
 	}
-	defer dest.Close()
+	finalPath := filepath.Join(uploadDir, filename)
+	tempPath := filepath.Join(tempDir, filename)
+	dest, err := os.Create(tempPath)
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		return stagedUpload{}, fmt.Errorf(
+			"saving uploaded file: %w", err,
+		)
+	}
 
 	if _, err := io.Copy(dest, src); err != nil {
-		return "", fmt.Errorf(
+		_ = dest.Close()
+		_ = os.RemoveAll(tempDir)
+		return stagedUpload{}, fmt.Errorf(
 			"writing uploaded file: %w", err,
 		)
 	}
-	return destPath, nil
+	if err := dest.Close(); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return stagedUpload{}, fmt.Errorf(
+			"closing uploaded file: %w", err,
+		)
+	}
+	return stagedUpload{
+		tempPath:  tempPath,
+		tempDir:   tempDir,
+		finalPath: finalPath,
+	}, nil
+}
+
+func commitUpload(upload stagedUpload) error {
+	if err := os.Rename(upload.tempPath, upload.finalPath); err != nil {
+		return fmt.Errorf("committing upload: %w", err)
+	}
+	_ = os.RemoveAll(upload.tempDir)
+	return nil
 }
 
 // saveSessionToDB maps parsed session and messages to DB types
@@ -190,7 +225,7 @@ func (s *Server) handleUploadSession(
 	}
 	defer req.file.Close()
 
-	destPath, err := s.saveUpload(
+	upload, err := s.stageUpload(
 		req.project, req.filename, req.file,
 	)
 	if err != nil {
@@ -199,9 +234,15 @@ func (s *Server) handleUploadSession(
 			"failed to save upload")
 		return
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(upload.tempDir)
+		}
+	}()
 
 	results, err := parser.ParseClaudeSession(
-		destPath, req.project, req.machine,
+		upload.tempPath, req.project, req.machine,
 	)
 	if err != nil {
 		writeError(w, http.StatusBadRequest,
@@ -215,6 +256,9 @@ func (s *Server) handleUploadSession(
 	}
 
 	parser.InferRelationshipTypes(results)
+	for i := range results {
+		results[i].Session.File.Path = upload.finalPath
+	}
 
 	for _, pr := range results {
 		if err := s.saveSessionToDB(pr.Session, pr.Messages); err != nil {
@@ -232,6 +276,14 @@ func (s *Server) handleUploadSession(
 			return
 		}
 	}
+
+	if err := commitUpload(upload); err != nil {
+		log.Printf("Error committing upload: %v", err)
+		writeError(w, http.StatusInternalServerError,
+			"failed to save upload")
+		return
+	}
+	committed = true
 
 	main := results[0]
 	writeJSON(w, http.StatusOK, map[string]any{

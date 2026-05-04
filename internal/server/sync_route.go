@@ -34,7 +34,8 @@ func (s *Server) handleSyncSession(
 		if handleReadOnly(w, err) {
 			return
 		}
-		if errors.Is(err, db.ErrSessionExcluded) {
+		if errors.Is(err, db.ErrSessionExcluded) ||
+			errors.Is(err, db.ErrSessionTrashed) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}

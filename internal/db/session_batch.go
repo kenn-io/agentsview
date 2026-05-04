@@ -72,7 +72,8 @@ func (db *DB) WriteSessionBatch(
 			}
 			result.WrittenSessions++
 			result.WrittenMessages += messagesWritten
-		case errors.Is(err, ErrSessionExcluded):
+		case errors.Is(err, ErrSessionExcluded),
+			errors.Is(err, ErrSessionTrashed):
 			if rerr := rollbackSavepoint(tx, savepoint); rerr != nil {
 				return result, rerr
 			}
@@ -127,6 +128,20 @@ func writeOneSessionBatchTx(
 	}
 	if excluded == 1 {
 		return 0, ErrSessionExcluded
+	}
+	var trashed int
+	err = tx.QueryRow(
+		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL",
+		write.Session.ID,
+	).Scan(&trashed)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf(
+			"checking trash for %s: %w",
+			write.Session.ID, err,
+		)
+	}
+	if trashed == 1 {
+		return 0, ErrSessionTrashed
 	}
 
 	if _, err := tx.Exec(

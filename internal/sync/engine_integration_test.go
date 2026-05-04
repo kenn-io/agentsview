@@ -5909,6 +5909,78 @@ func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
 	}
 }
 
+func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+
+	path := env.writeClaudeSession(
+		t, "test-proj", "trashed-sync.jsonl", content,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "trashed-sync", 2)
+
+	if err := env.db.SoftDeleteSession("trashed-sync"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+	if err := env.db.ResetAllMtimes(); err != nil {
+		t.Fatalf("ResetAllMtimes: %v", err)
+	}
+
+	updated := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello again with a longer prompt").
+		AddClaudeAssistant(tsZeroS5, "still here with a longer reply").
+		String()
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	dbtest.WriteTestFile(t, path, []byte(updated))
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	if stats.Failed != 0 {
+		t.Fatalf("Failed = %d, want 0 for trashed session", stats.Failed)
+	}
+	if stats.Synced != 0 {
+		t.Fatalf("Synced = %d, want 0 for trashed session", stats.Synced)
+	}
+	if got := env.engine.SnapshotSkipCache()[path]; got == 0 {
+		t.Fatalf("skip cache missing trashed session path %s", path)
+	}
+}
+
+func TestSyncSingleSessionTrashedIsNoOp(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+
+	env.writeClaudeSession(
+		t, "test-proj", "trashed-single.jsonl", content,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "trashed-single", 2)
+
+	if err := env.db.SoftDeleteSession("trashed-single"); err != nil {
+		t.Fatalf("SoftDeleteSession: %v", err)
+	}
+
+	if err := env.engine.SyncSingleSession("trashed-single"); err != nil {
+		t.Fatalf(
+			"SyncSingleSession on trashed session "+
+				"returned error: %v", err,
+		)
+	}
+}
+
 // TestSyncSingleSessionOpenCodeExcludedIsNoOp verifies that
 // calling SyncSingleSession on an excluded OpenCode session
 // returns nil.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net"
@@ -2506,6 +2507,12 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 			w := te.upload(t, id+".jsonl", content, "project=myproj&machine=remote")
 			assertStatus(t, w, http.StatusConflict)
 			assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
+			destPath := filepath.Join(
+				te.dataDir, "uploads", "myproj", id+".jsonl",
+			)
+			if _, err := os.Stat(destPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected upload file exists at %s: %v", destPath, err)
+			}
 		})
 	}
 }
