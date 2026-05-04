@@ -24,7 +24,7 @@ Or run the published Docker image:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
-  -v "$HOME/.agentsview:/data" \
+  -v agentsview-data:/data \
   -v "$HOME/.claude/projects:/agents/claude:ro" \
   -e CLAUDE_PROJECTS_DIR=/agents/claude \
   ghcr.io/wesm/agentsview:latest
@@ -53,7 +53,10 @@ docker compose -f docker-compose.prod.yaml up -d
 ```
 
 The included compose file persists the agentsview data directory in a named
-volume and mounts Claude, Codex, and OpenCode session roots read-only.
+volume and mounts Claude, Codex, and OpenCode session roots read-only. The
+container runs as root, so prefer a named volume for `/data` over a host bind
+mount; if you do bind-mount, pre-create the directory with the desired ownership
+to avoid root-owned files in your home directory.
 
 The examples publish the UI on loopback only (`127.0.0.1`). If you need to
 expose it beyond localhost, enable `--require-auth` and publish the port

@@ -5,6 +5,8 @@ tmp
 agentsview
 coverage.out
 frontend/node_modules
+frontend/dist
+internal/web/dist
 desktop/node_modules
 desktop/src-tauri/target
 testdata/ssh/test_key
