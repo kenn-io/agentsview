@@ -525,6 +525,69 @@ func copySessionDataForIDs(
 			)
 		}
 	}
+
+	if err := copyPinnedMessagesForIDs(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
+	return nil
+}
+
+func copyPinnedMessagesForIDs(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	if !oldDBHasTable(ctx, tx, "pinned_messages") {
+		return nil
+	}
+
+	// Re-map old message IDs to the newly inserted message rows.
+	// Prefer source_uuid when available because it survives ordinal
+	// shifts, then fall back to the same (session_id, ordinal)
+	// natural key used by tool call copying.
+	if oldDBHasColumn(ctx, tx, "messages", "source_uuid") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT OR IGNORE INTO main.pinned_messages
+				(session_id, message_id, ordinal, note, created_at)
+			SELECT
+				op.session_id, new_m.id, new_m.ordinal,
+				op.note, op.created_at
+			FROM old_db.pinned_messages op
+			JOIN old_db.messages old_m
+				ON old_m.id = op.message_id
+			JOIN main.messages new_m
+				ON new_m.session_id = old_m.session_id
+				AND new_m.source_uuid = old_m.source_uuid
+			WHERE op.session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)
+			  AND old_m.source_uuid IS NOT NULL
+			  AND old_m.source_uuid <> ''`,
+		); err != nil {
+			return fmt.Errorf(
+				"copying pinned messages by source_uuid: %w", err,
+			)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO main.pinned_messages
+			(session_id, message_id, ordinal, note, created_at)
+		SELECT
+			op.session_id, new_m.id, new_m.ordinal,
+			op.note, op.created_at
+		FROM old_db.pinned_messages op
+		JOIN old_db.messages old_m
+			ON old_m.id = op.message_id
+		JOIN main.messages new_m
+			ON new_m.session_id = old_m.session_id
+			AND new_m.ordinal = old_m.ordinal
+		WHERE op.session_id IN (
+			SELECT id FROM `+tempIDsTable+`
+		)`,
+	); err != nil {
+		return fmt.Errorf("copying pinned messages by ordinal: %w", err)
+	}
 	return nil
 }
 

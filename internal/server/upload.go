@@ -29,6 +29,13 @@ type stagedUpload struct {
 	finalPath string
 }
 
+type committedUpload struct {
+	finalPath   string
+	backupPath  string
+	hadPrevious bool
+	movedFinal  bool
+}
+
 // parseUploadRequest extracts and validates query params and
 // the multipart file from an upload request. The caller must
 // close req.file when done.
@@ -129,12 +136,91 @@ func (s *Server) stageUpload(
 	}, nil
 }
 
-func commitUpload(upload stagedUpload) error {
-	if err := os.Rename(upload.tempPath, upload.finalPath); err != nil {
-		return fmt.Errorf("committing upload: %w", err)
+func commitUpload(upload stagedUpload) (committedUpload, error) {
+	state := committedUpload{finalPath: upload.finalPath}
+
+	info, err := os.Lstat(upload.finalPath)
+	switch {
+	case err == nil:
+		if !info.Mode().IsRegular() {
+			return state, fmt.Errorf(
+				"committing upload: destination is not a regular file",
+			)
+		}
+		backupPath, err := createUploadBackupPath(upload.finalPath)
+		if err != nil {
+			return state, err
+		}
+		state.backupPath = backupPath
+		state.hadPrevious = true
+		if err := os.Rename(upload.finalPath, backupPath); err != nil {
+			return state, fmt.Errorf(
+				"backing up existing upload: %w", err,
+			)
+		}
+	case errors.Is(err, os.ErrNotExist):
+	default:
+		return state, fmt.Errorf(
+			"checking upload destination: %w", err,
+		)
 	}
-	_ = os.RemoveAll(upload.tempDir)
+
+	if err := os.Rename(upload.tempPath, upload.finalPath); err != nil {
+		if state.hadPrevious {
+			if rbErr := os.Rename(state.backupPath, upload.finalPath); rbErr != nil {
+				return state, fmt.Errorf(
+					"committing upload: %w (restore previous upload failed: %v)",
+					err, rbErr,
+				)
+			}
+			state.hadPrevious = false
+			state.backupPath = ""
+		}
+		return state, fmt.Errorf("committing upload: %w", err)
+	}
+	state.movedFinal = true
+	return state, nil
+}
+
+func createUploadBackupPath(finalPath string) (string, error) {
+	f, err := os.CreateTemp(
+		filepath.Dir(finalPath),
+		"."+filepath.Base(finalPath)+".*.bak",
+	)
+	if err != nil {
+		return "", fmt.Errorf("creating upload backup: %w", err)
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", fmt.Errorf("closing upload backup: %w", err)
+	}
+	if err := os.Remove(path); err != nil {
+		return "", fmt.Errorf("preparing upload backup: %w", err)
+	}
+	return path, nil
+}
+
+func rollbackCommittedUpload(upload committedUpload) error {
+	if !upload.movedFinal {
+		return nil
+	}
+	if err := os.Remove(upload.finalPath); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing committed upload: %w", err)
+	}
+	if upload.hadPrevious {
+		if err := os.Rename(upload.backupPath, upload.finalPath); err != nil {
+			return fmt.Errorf("restoring previous upload: %w", err)
+		}
+	}
 	return nil
+}
+
+func cleanupCommittedUpload(upload committedUpload) {
+	if upload.hadPrevious && upload.backupPath != "" {
+		_ = os.Remove(upload.backupPath)
+	}
 }
 
 // sessionBatchWriteFromParsed maps parsed session and messages
@@ -229,11 +315,8 @@ func (s *Server) handleUploadSession(
 			"failed to save upload")
 		return
 	}
-	committed := false
 	defer func() {
-		if !committed {
-			_ = os.RemoveAll(upload.tempDir)
-		}
+		_ = os.RemoveAll(upload.tempDir)
 	}()
 
 	results, err := parser.ParseClaudeSession(
@@ -262,18 +345,31 @@ func (s *Server) handleUploadSession(
 		)
 	}
 	var commitErr error
+	var uploadCommit committedUpload
 	_, err = s.db.WriteSessionBatchAtomic(writes, func() error {
-		commitErr = commitUpload(upload)
+		uploadCommit, commitErr = commitUpload(upload)
 		return commitErr
 	})
 	if err != nil {
-		if handleReadOnly(w, err) {
-			return
-		}
 		if commitErr != nil {
 			log.Printf("Error committing upload: %v", commitErr)
 			writeError(w, http.StatusInternalServerError,
 				"failed to save upload")
+			return
+		}
+		if uploadCommit.movedFinal {
+			if rbErr := rollbackCommittedUpload(uploadCommit); rbErr != nil {
+				log.Printf(
+					"Error rolling back upload after DB failure: %v",
+					rbErr,
+				)
+				writeError(w, http.StatusInternalServerError,
+					"failed to save upload")
+				return
+			}
+			cleanupCommittedUpload(uploadCommit)
+		}
+		if handleReadOnly(w, err) {
 			return
 		}
 		if errors.Is(err, db.ErrSessionExcluded) ||
@@ -287,7 +383,7 @@ func (s *Server) handleUploadSession(
 			"failed to save session to database")
 		return
 	}
-	committed = true
+	cleanupCommittedUpload(uploadCommit)
 
 	main := results[0]
 	writeJSON(w, http.StatusOK, map[string]any{

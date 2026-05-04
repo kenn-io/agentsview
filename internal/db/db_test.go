@@ -3923,6 +3923,62 @@ func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
 	}
 }
 
+func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	requireNoError(t, err, "Open src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		userMsg("s1", 0, "keep this pinned"),
+		asstMsg("s1", 1, "reply"),
+	)
+	srcMsgs, err := srcDB.GetAllMessages(ctx, "s1")
+	requireNoError(t, err, "GetAllMessages src")
+	note := "important"
+	pinID, err := srcDB.PinMessage("s1", srcMsgs[0].ID, &note)
+	if err != nil || pinID == 0 {
+		t.Fatalf("PinMessage src: id=%d err=%v", pinID, err)
+	}
+	requireNoError(t, srcDB.SoftDeleteSession("s1"), "SoftDelete src")
+	srcDB.Close()
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	requireNoError(t, err, "Open dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyTrashedDataFrom(srcPath)
+	requireNoError(t, err, "CopyTrashedDataFrom")
+	if count != 1 {
+		t.Fatalf("copied trashed sessions = %d, want 1", count)
+	}
+
+	pins, err := dstDB.ListPinnedMessages(ctx, "s1", "")
+	requireNoError(t, err, "ListPinnedMessages")
+	if len(pins) != 1 {
+		t.Fatalf("pins copied = %d, want 1", len(pins))
+	}
+	if pins[0].Ordinal != 0 {
+		t.Fatalf("pin ordinal = %d, want 0", pins[0].Ordinal)
+	}
+	if pins[0].Note == nil || *pins[0].Note != note {
+		t.Fatalf("pin note = %v, want %q", pins[0].Note, note)
+	}
+
+	var messageContent string
+	requireNoError(t, dstDB.getReader().QueryRow(
+		"SELECT content FROM messages WHERE id = ?",
+		pins[0].MessageID,
+	).Scan(&messageContent), "query pinned message")
+	if messageContent != "keep this pinned" {
+		t.Fatalf("pinned content = %q, want %q",
+			messageContent, "keep this pinned")
+	}
+}
+
 func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
 	dir := t.TempDir()
 
