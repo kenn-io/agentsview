@@ -102,6 +102,7 @@ func (db *DB) WriteSessionBatch(
 // batch.
 func (db *DB) WriteSessionBatchAtomic(
 	writes []SessionBatchWrite,
+	beforeCommit ...func() error,
 ) (SessionBatchResult, error) {
 	var result SessionBatchResult
 	if len(writes) == 0 {
@@ -138,6 +139,14 @@ func (db *DB) WriteSessionBatchAtomic(
 		}
 		result.WrittenSessions++
 		result.WrittenMessages += messagesWritten
+	}
+
+	if len(beforeCommit) > 0 && beforeCommit[0] != nil {
+		if err := beforeCommit[0](); err != nil {
+			result.WrittenSessions = 0
+			result.WrittenMessages = 0
+			return result, err
+		}
 	}
 
 	if err := tx.Commit(); err != nil {

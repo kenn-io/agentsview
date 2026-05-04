@@ -93,7 +93,10 @@ type Store interface {
 	// Upload (local-only; PG returns ErrReadOnly).
 	UpsertSession(s Session) error
 	ReplaceSessionMessages(sessionID string, msgs []Message) error
-	WriteSessionBatchAtomic(writes []SessionBatchWrite) (SessionBatchResult, error)
+	WriteSessionBatchAtomic(
+		writes []SessionBatchWrite,
+		beforeCommit ...func() error,
+	) (SessionBatchResult, error)
 
 	// ReadOnly returns true for remote/PG-backed stores.
 	ReadOnly() bool

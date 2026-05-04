@@ -261,8 +261,19 @@ func (s *Server) handleUploadSession(
 			pr.Session, pr.Messages,
 		)
 	}
-	if _, err := s.db.WriteSessionBatchAtomic(writes); err != nil {
+	var commitErr error
+	_, err = s.db.WriteSessionBatchAtomic(writes, func() error {
+		commitErr = commitUpload(upload)
+		return commitErr
+	})
+	if err != nil {
 		if handleReadOnly(w, err) {
+			return
+		}
+		if commitErr != nil {
+			log.Printf("Error committing upload: %v", commitErr)
+			writeError(w, http.StatusInternalServerError,
+				"failed to save upload")
 			return
 		}
 		if errors.Is(err, db.ErrSessionExcluded) ||
@@ -274,13 +285,6 @@ func (s *Server) handleUploadSession(
 		log.Printf("Error saving session to DB: %v", err)
 		writeError(w, http.StatusInternalServerError,
 			"failed to save session to database")
-		return
-	}
-
-	if err := commitUpload(upload); err != nil {
-		log.Printf("Error committing upload: %v", err)
-		writeError(w, http.StatusInternalServerError,
-			"failed to save upload")
 		return
 	}
 	committed = true

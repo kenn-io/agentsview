@@ -1,10 +1,13 @@
 package server_test
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/wesm/agentsview/internal/testjsonl"
 )
 
 func TestUploadSession_SaveFailure(t *testing.T) {
@@ -36,4 +39,35 @@ func TestUploadSession_DBFailure(t *testing.T) {
 	w := te.upload(t, "test.jsonl", content, "project=myproj")
 	assertStatus(t, w, http.StatusInternalServerError)
 	assertErrorResponse(t, w, "failed to save session to database")
+}
+
+func TestUploadSession_CommitFailureDoesNotWriteDB(t *testing.T) {
+	te := setup(t)
+
+	project := "myproj"
+	filename := "rename-fail.jsonl"
+	finalPath := filepath.Join(
+		te.dataDir, "uploads", project, filename,
+	)
+	if err := os.MkdirAll(finalPath, 0o755); err != nil {
+		t.Fatalf("creating final path directory: %v", err)
+	}
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T10:00:00Z", "hello").
+		AddClaudeAssistant("2024-01-01T10:00:05Z", "hi").
+		String()
+	w := te.upload(t, filename, content, "project="+project)
+	assertStatus(t, w, http.StatusInternalServerError)
+	assertErrorResponse(t, w, "failed to save upload")
+
+	sess, err := te.db.GetSessionFull(
+		context.Background(), "rename-fail",
+	)
+	if err != nil {
+		t.Fatalf("GetSessionFull: %v", err)
+	}
+	if sess != nil {
+		t.Fatalf("session persisted despite upload commit failure: %+v", sess)
+	}
 }
