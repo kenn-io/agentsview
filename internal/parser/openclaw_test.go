@@ -305,6 +305,68 @@ func TestParseOpenClawSession_AssistantUsageWithoutCost(t *testing.T) {
 	}
 }
 
+func TestParseOpenClawSession_PartialUsage(t *testing.T) {
+	// Partial usage block: only output is present in the source.
+	// applyOpenClawAssistantUsage normalizes to a 4-key JSON, but
+	// HasContextTokens must still be false. TokenPresence() must
+	// trust the parser's explicit flags rather than inferring from
+	// the always-populated normalized keys.
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"partial","timestamp":"2026-04-30T12:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","timestamp":"2026-04-30T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":"2026-04-30T12:00:01Z"}}`,
+		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"reply"}],"timestamp":"2026-04-30T12:00:02Z","provider":"anthropic","model":"claude-haiku-4-5","usage":{"output":17}}}`,
+	)
+
+	_, msgs, err := ParseOpenClawSession(path, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	a := msgs[1]
+	if a.HasContextTokens {
+		t.Error("HasContextTokens = true, want false")
+	}
+	if !a.HasOutputTokens {
+		t.Error("HasOutputTokens = false, want true")
+	}
+
+	hasCtx, hasOut := a.TokenPresence()
+	if hasCtx {
+		t.Error("TokenPresence ctx = true, want false " +
+			"(parser flags must take precedence over JSON keys)")
+	}
+	if !hasOut {
+		t.Error("TokenPresence out = false, want true")
+	}
+}
+
+func TestParseOpenClawSession_NoUsage(t *testing.T) {
+	// Assistant turn without any usage block: the parser is still
+	// authoritative — both presence flags must be false and stick.
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"nousage","timestamp":"2026-04-30T12:00:00Z","cwd":"/tmp"}`,
+		`{"type":"message","id":"u1","timestamp":"2026-04-30T12:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":"2026-04-30T12:00:01Z"}}`,
+		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"reply"}],"timestamp":"2026-04-30T12:00:02Z"}}`,
+	)
+
+	_, msgs, err := ParseOpenClawSession(path, "", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	hasCtx, hasOut := msgs[1].TokenPresence()
+	if hasCtx || hasOut {
+		t.Errorf("TokenPresence = (%v, %v), want (false, false)",
+			hasCtx, hasOut)
+	}
+}
+
 func TestParseOpenClawSession_Compaction(t *testing.T) {
 	path, _ := writeOpenClawTestFile(t, "main",
 		`{"type":"session","version":3,"id":"compact","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,

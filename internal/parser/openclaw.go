@@ -140,16 +140,17 @@ func ParseOpenClawSession(
 			}
 
 			pm := ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       text,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				ThinkingText:  thinkingText,
-				HasToolUse:    hasToolUse,
-				ContentLength: len(text),
-				ToolCalls:     tcs,
-				ToolResults:   trs,
+				Ordinal:            ordinal,
+				Role:               RoleAssistant,
+				Content:            text,
+				Timestamp:          ts,
+				HasThinking:        hasThinking,
+				ThinkingText:       thinkingText,
+				HasToolUse:         hasToolUse,
+				ContentLength:      len(text),
+				ToolCalls:          tcs,
+				ToolResults:        trs,
+				tokenPresenceKnown: true,
 			}
 			applyOpenClawAssistantUsage(&pm, msg)
 			messages = append(messages, pm)
