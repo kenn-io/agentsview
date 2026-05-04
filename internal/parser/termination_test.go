@@ -140,6 +140,30 @@ func TestClassify(t *testing.T) {
 			},
 			want: TerminationToolCallPending,
 		},
+		{
+			// Regression: once the user replies after an end_turn,
+			// the agent is no longer parked. The last assistant's
+			// stop_reason is still end_turn but the transcript has
+			// moved on, so awaiting_user would mislead.
+			name: "user reply after end_turn is not awaiting_user",
+			messages: []ParsedMessage{
+				{Role: RoleUser, Content: "hello"},
+				{Role: RoleAssistant, Content: "hi"},
+				{Role: RoleUser, Content: "follow-up"},
+			},
+			stopReason: "end_turn",
+			want:       TerminationClean,
+		},
+		{
+			name: "user reply after task_complete is not awaiting_user",
+			messages: []ParsedMessage{
+				{Role: RoleUser, Content: "build it"},
+				{Role: RoleAssistant, Content: "done"},
+				{Role: RoleUser, Content: "now test"},
+			},
+			stopReason: "task_complete",
+			want:       TerminationClean,
+		},
 	}
 
 	for _, tc := range tests {

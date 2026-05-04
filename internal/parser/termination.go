@@ -56,7 +56,13 @@ func Classify(
 	if hasOrphanedToolCall(messages) {
 		return TerminationToolCallPending
 	}
-	if isAwaitingUserStopReason(stopReason) {
+	// awaiting_user only applies when the assistant's "I'm done"
+	// signal is the actual end of the transcript. If a user
+	// message follows the last assistant turn, the agent is no
+	// longer parked — the user has already replied, so the UI
+	// should not show a "waiting for you" indicator.
+	lastIsAssistant := messages[len(messages)-1].Role == RoleAssistant
+	if lastIsAssistant && isAwaitingUserStopReason(stopReason) {
 		return TerminationAwaitingUser
 	}
 	return TerminationClean

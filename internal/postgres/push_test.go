@@ -178,6 +178,14 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 				return s
 			},
 		},
+		{
+			name: "termination_status change",
+			modify: func(s db.Session) db.Session {
+				ts := "tool_call_pending"
+				s.TerminationStatus = &ts
+				return s
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -646,6 +646,7 @@ func sessionPushFingerprint(sess db.Session) string {
 		sess.SourceVersion,
 		fmt.Sprintf("%d", sess.ParserMalformedLines),
 		fmt.Sprintf("%t", sess.IsTruncated),
+		stringValue(sess.TerminationStatus),
 	}
 	var b strings.Builder
 	for _, f := range fields {
