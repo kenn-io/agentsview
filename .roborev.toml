@@ -118,6 +118,14 @@ Key assumptions reviewers MUST account for:
     update, and DO flag new session columns missing from
     sessionPushFingerprint.
 
+18. GO VERSION: This project pins Go 1.26+ in go.mod. Go 1.26
+    added value-form `new(v)` which returns `*T` pointing to v —
+    e.g. `new("clean")` is valid and yields a `*string`
+    initialized to "clean". DO NOT flag value-form `new` calls as
+    "new requires a type" compile errors; that was true through
+    1.25 only. Verify the go.mod toolchain version before
+    flagging unfamiliar-looking language features.
+
 Do NOT flag issues that only apply to public-facing, multi-tenant,
 or internet-exposed services. Focus on bugs, logic errors, data
 corruption risks, and code quality issues.
