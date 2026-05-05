@@ -73,6 +73,17 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"Zencoder_subagent__ZencoderSubagent", "Task"},
 		{"mcp__zen_subagents__spawn_subagent", "Task"},
 
+		// Forge tools
+		{"fs_search", "Grep"},
+		{"patch", "Edit"},
+		{"multi_patch", "Edit"},
+		{"undo", "Edit"},
+		{"remove", "Edit"},
+		{"fetch", "Read"},
+		{"todo_write", "Tool"},
+		{"todo_read", "Tool"},
+		{"parallel", "Task"},
+
 		// Unknown
 		{"view_image", "Other"},
 		{"update_plan", "Other"},

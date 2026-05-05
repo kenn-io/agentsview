@@ -310,3 +310,793 @@ func TestFindForgeDBPath(t *testing.T) {
 	defer db.Close()
 	assertEq(t, "found", FindForgeDBPath(filepath.Dir(dbPath)), dbPath)
 }
+
+// ---------------------------------------------------------------------------
+// Priority 2 — Token/metrics fallback tests
+// ---------------------------------------------------------------------------
+
+func TestForgeTokenFallbacks(t *testing.T) {
+	// Case 1: no metrics column but per-message usage populated.
+	// accumulateMessageTokenUsage should aggregate from messages.
+	t.Run("no_metrics_per_message_usage", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Hello there.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      },
+		      "usage": {
+		        "prompt_tokens":     {"actual": 50},
+		        "completion_tokens": {"actual": 10},
+		        "cached_tokens":     {"actual": 20}
+		      }
+		    },
+		    {
+		      "message": {
+		        "text": {
+		          "role": "Assistant",
+		          "content": "Hi back.",
+		          "timestamp": "2026-05-02T10:00:01Z"
+		        }
+		      },
+		      "usage": {
+		        "prompt_tokens":     {"actual": 80},
+		        "completion_tokens": {"actual": 15},
+		        "cached_tokens":     {"actual": 30}
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"token-fallback-1", "No Metrics", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"", // empty metrics → accumulateMessageTokenUsage fallback
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		s := sessions[0].Session
+		assertEq(t, "HasTotalOutputTokens", s.HasTotalOutputTokens, true)
+		assertEq(t, "TotalOutputTokens", s.TotalOutputTokens, 25) // 10+15
+		assertEq(t, "HasPeakContextTokens", s.HasPeakContextTokens, true)
+		if s.PeakContextTokens != 110 && s.PeakContextTokens != 70 {
+			// Peak is max(50+20=70, 80+30=110) = 110
+			t.Errorf("PeakContextTokens = %d, want 110", s.PeakContextTokens)
+		}
+	})
+
+	// Case 2: metrics has only output_tokens (no input, no cached).
+	t.Run("metrics_output_only", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Run something.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    },
+		    {
+		      "message": {
+		        "text": {
+		          "role": "Assistant",
+		          "content": "Done.",
+		          "timestamp": "2026-05-02T10:00:01Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"token-fallback-2", "Output Only Metrics", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			`{"output_tokens": 42}`,
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		s := sessions[0].Session
+		assertEq(t, "HasTotalOutputTokens", s.HasTotalOutputTokens, true)
+		assertEq(t, "TotalOutputTokens", s.TotalOutputTokens, 42)
+		assertEq(t, "HasPeakContextTokens", s.HasPeakContextTokens, false)
+	})
+
+	// Case 3: per-message usage with no cached_tokens key.
+	// ContextTokens should equal just prompt_tokens.actual.
+	t.Run("per_message_no_cached_tokens", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Tell me something.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      },
+		      "usage": {
+		        "prompt_tokens":     {"actual": 60},
+		        "completion_tokens": {"actual": 8}
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"token-fallback-3", "No Cached Tokens", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		msgs := sessions[0].Messages
+		if len(msgs) == 0 {
+			t.Fatal("want at least 1 message")
+		}
+		assertEq(t, "HasContextTokens", msgs[0].HasContextTokens, true)
+		assertEq(t, "ContextTokens", msgs[0].ContextTokens, 60) // only prompt, no cached
+	})
+
+	// Case 4: per-message usage entirely absent.
+	t.Run("per_message_no_usage", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Empty usage.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"token-fallback-4", "No Usage At All", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		msgs := sessions[0].Messages
+		if len(msgs) == 0 {
+			t.Fatal("want at least 1 message")
+		}
+		m := msgs[0]
+		assertEq(t, "HasContextTokens", m.HasContextTokens, false)
+		assertEq(t, "HasOutputTokens", m.HasOutputTokens, false)
+		// tokenPresenceKnown is unexported; verify by checking TokenPresence()
+		hasCtx, hasOut := m.TokenPresence()
+		assertEq(t, "TokenPresence hasCtx", hasCtx, false)
+		assertEq(t, "TokenPresence hasOut", hasOut, false)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Priority 7 — Degenerate conversation tests
+// ---------------------------------------------------------------------------
+
+func TestForgeDegenerate(t *testing.T) {
+	// Sub-case 1: assistant message with empty content, no reasoning, no tool_calls → skipped.
+	t.Run("empty_assistant_no_tools", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Hello.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    },
+		    {
+		      "message": {
+		        "text": {
+		          "role": "Assistant",
+		          "content": "",
+		          "timestamp": "2026-05-02T10:00:01Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"degen-1", "Empty Assistant", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		// Only the user message; empty assistant was skipped.
+		assertEq(t, "messages len", len(sessions[0].Messages), 1)
+		assertEq(t, "role", sessions[0].Messages[0].Role, RoleUser)
+	})
+
+	// Sub-case 2: tool message with empty call_id → skipped.
+	t.Run("tool_message_empty_call_id", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Run a tool.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    },
+		    {
+		      "message": {
+		        "tool": {
+		          "name": "bash",
+		          "call_id": "",
+		          "output": {"values": [{"text": "result"}]}
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"degen-2", "Empty Call ID", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		// Only the user message; tool result with empty call_id was skipped.
+		assertEq(t, "messages len", len(sessions[0].Messages), 1)
+	})
+
+	// Sub-case 3: user message with empty content but populated raw_content.Text.
+	t.Run("user_raw_content_fallback", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "",
+		          "raw_content": {"Text": "raw text fallback"},
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"degen-3", "Raw Content Fallback", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		msgs := sessions[0].Messages
+		assertEq(t, "messages len", len(msgs), 1)
+		assertEq(t, "content", msgs[0].Content, "raw text fallback")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Priority 8 — cwd extraction edge cases
+// ---------------------------------------------------------------------------
+
+func TestForgeCwdEdgeCases(t *testing.T) {
+	// Case 1: no system message at all → Cwd and Project empty.
+	t.Run("no_system_message", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "No system message.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"cwd-1", "No System", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		s := sessions[0].Session
+		assertEq(t, "Cwd", s.Cwd, "")
+		assertEq(t, "Project", s.Project, ExtractProjectFromCwd(""))
+	})
+
+	// Case 2: system message present but no cwd tag → same result.
+	t.Run("system_no_cwd_tag", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "System",
+		          "content": "<system_information>no cwd here</system_information>",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    },
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Hi.",
+		          "timestamp": "2026-05-02T10:00:01Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"cwd-2", "System No Tag", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		assertEq(t, "Cwd", sessions[0].Session.Cwd, "")
+	})
+
+	// Case 3: cwd tag present but empty content → Cwd empty.
+	t.Run("cwd_tag_empty_content", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "System",
+		          "content": "<current_working_directory></current_working_directory>",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    },
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Hi again.",
+		          "timestamp": "2026-05-02T10:00:01Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"cwd-3", "Empty CWD Tag", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		assertEq(t, "Cwd", sessions[0].Session.Cwd, "")
+	})
+
+	// Case 4: cwd in a non-system message → still extracted.
+	t.Run("cwd_in_non_system_message", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Working from <current_working_directory>/home/mj/dev/projects/myapp</current_working_directory> today.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"cwd-4", "CWD In User Message", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		s := sessions[0].Session
+		assertEq(t, "Cwd", s.Cwd, "/home/mj/dev/projects/myapp")
+		assertEq(t, "Project", s.Project, "myapp")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Lower priority — parseForgeTimestamp table-driven
+// ---------------------------------------------------------------------------
+
+func TestParseForgeTimestamp(t *testing.T) {
+	cases := []struct {
+		input string
+		empty bool
+	}{
+		{input: "2026-05-02T09:58:15.741021507Z", empty: false},
+		{input: "2026-05-02T09:58:15Z", empty: false},
+		{input: "2026-05-02 09:58:15.741021507", empty: false},
+		{input: "2026-05-02 09:58:15.741021", empty: false},
+		{input: "2026-05-02 09:58:15", empty: false},
+		{input: "", empty: true},
+		{input: "not-a-date", empty: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			got := parseForgeTimestamp(tc.input)
+			if tc.empty && !got.IsZero() {
+				t.Errorf("parseForgeTimestamp(%q) = %v, want zero", tc.input, got)
+			}
+			if !tc.empty && got.IsZero() {
+				t.Errorf("parseForgeTimestamp(%q) returned zero time", tc.input)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lower priority — endedAt fallback to startedAt
+// ---------------------------------------------------------------------------
+
+func TestForgeEndedAtFallback(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+
+	context := `{
+	  "messages": [
+	    {
+	      "message": {
+	        "text": {
+	          "role": "User",
+	          "content": "No updated_at.",
+	          "timestamp": "2026-05-02T10:00:00Z"
+	        }
+	      }
+	    }
+	  ]
+	}`
+	// Set updated_at to empty so loadForgeConversations COALESCE returns created_at,
+	// but force a NULL by inserting directly.
+	seeder.AddConversation(
+		"ended-fallback", "Ended At Fallback", 1,
+		context,
+		"2026-05-02 10:00:00", "",
+		"",
+	)
+	// Override to NULL updated_at.
+	if _, err := db.Exec("UPDATE conversations SET updated_at = NULL WHERE conversation_id = 'ended-fallback'"); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	sessions, err := ParseForgeDB(dbPath, "m")
+	if err != nil {
+		t.Fatalf("ParseForgeDB: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("want 1 session, got %d", len(sessions))
+	}
+	s := sessions[0].Session
+	if s.EndedAt.IsZero() {
+		t.Error("EndedAt is zero, want fallback to StartedAt")
+	}
+	if !s.StartedAt.Equal(s.EndedAt) {
+		t.Errorf("EndedAt = %v, want StartedAt = %v", s.EndedAt, s.StartedAt)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lower priority — forgeToolOutputText fallback ladder
+// ---------------------------------------------------------------------------
+
+func TestForgeToolOutputText(t *testing.T) {
+	// values[].text covered in standard test; test top-level text fallback.
+	t.Run("top_level_text", func(t *testing.T) {
+		dbPath, seeder, db := newForgeTestDB(t)
+		defer db.Close()
+
+		context := `{
+		  "messages": [
+		    {
+		      "message": {
+		        "text": {
+		          "role": "User",
+		          "content": "Call a tool.",
+		          "timestamp": "2026-05-02T10:00:00Z"
+		        }
+		      }
+		    },
+		    {
+		      "message": {
+		        "tool": {
+		          "name": "bash",
+		          "call_id": "call_top_1",
+		          "output": {
+		            "text": "top-level text output"
+		          }
+		        }
+		      }
+		    }
+		  ]
+		}`
+		seeder.AddConversation(
+			"tool-output-1", "Top Level Text", 1,
+			context,
+			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+			"",
+		)
+
+		sessions, err := ParseForgeDB(dbPath, "m")
+		if err != nil {
+			t.Fatalf("ParseForgeDB: %v", err)
+		}
+		if len(sessions) != 1 {
+			t.Fatalf("want 1 session, got %d", len(sessions))
+		}
+		msgs := sessions[0].Messages
+		if len(msgs) < 2 {
+			t.Fatalf("want at least 2 messages, got %d", len(msgs))
+		}
+		// Second message is the tool result (role=user with ToolResults)
+		tr := msgs[1].ToolResults
+		if len(tr) == 0 {
+			t.Fatal("expected tool result")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Lower priority — skill tool populates SkillName from arguments.name/.skill
+// ---------------------------------------------------------------------------
+
+func TestForgeSkillToolName(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      string
+		wantSkill string
+	}{
+		{
+			name:      "arguments.name",
+			args:      `{"name": "my-skill"}`,
+			wantSkill: "my-skill",
+		},
+		{
+			name:      "arguments.skill_fallback",
+			args:      `{"skill": "fallback-skill"}`,
+			wantSkill: "fallback-skill",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dbPath, seeder, db := newForgeTestDB(t)
+			defer db.Close()
+
+			context := `{
+			  "messages": [
+			    {
+			      "message": {
+			        "text": {
+			          "role": "User",
+			          "content": "Run skill.",
+			          "timestamp": "2026-05-02T10:00:00Z"
+			        }
+			      }
+			    },
+			    {
+			      "message": {
+			        "text": {
+			          "role": "Assistant",
+			          "content": "",
+			          "tool_calls": [
+			            {
+			              "name": "skill",
+			              "call_id": "call_skill_1",
+			              "arguments": ` + tc.args + `
+			            }
+			          ],
+			          "timestamp": "2026-05-02T10:00:01Z"
+			        }
+			      }
+			    }
+			  ]
+			}`
+			seeder.AddConversation(
+				"skill-test-"+tc.name, "Skill Test", 1,
+				context,
+				"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+				"",
+			)
+
+			sessions, err := ParseForgeDB(dbPath, "m")
+			if err != nil {
+				t.Fatalf("ParseForgeDB: %v", err)
+			}
+			if len(sessions) != 1 {
+				t.Fatalf("want 1 session, got %d", len(sessions))
+			}
+			var skillCall *ParsedToolCall
+			for i := range sessions[0].Messages {
+				for j := range sessions[0].Messages[i].ToolCalls {
+					if sessions[0].Messages[i].ToolCalls[j].ToolName == "skill" {
+						skillCall = &sessions[0].Messages[i].ToolCalls[j]
+					}
+				}
+			}
+			if skillCall == nil {
+				t.Fatal("expected skill tool call")
+			}
+			assertEq(t, "SkillName", skillCall.SkillName, tc.wantSkill)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Lower priority — reasoning details with no text fields → HasThinking false
+// ---------------------------------------------------------------------------
+
+func TestForgeReasoningNoText(t *testing.T) {
+	dbPath, seeder, db := newForgeTestDB(t)
+	defer db.Close()
+
+	context := `{
+	  "messages": [
+	    {
+	      "message": {
+	        "text": {
+	          "role": "User",
+	          "content": "Think but say nothing.",
+	          "timestamp": "2026-05-02T10:00:00Z"
+	        }
+	      }
+	    },
+	    {
+	      "message": {
+	        "text": {
+	          "role": "Assistant",
+	          "content": "Response.",
+	          "reasoning_details": [
+	            {"type": "thinking"},
+	            {"type": "thinking"}
+	          ],
+	          "timestamp": "2026-05-02T10:00:01Z"
+	        }
+	      }
+	    }
+	  ]
+	}`
+	seeder.AddConversation(
+		"reasoning-no-text", "No Reasoning Text", 1,
+		context,
+		"2026-05-02 10:00:00", "2026-05-02 10:00:01",
+		"",
+	)
+
+	sessions, err := ParseForgeDB(dbPath, "m")
+	if err != nil {
+		t.Fatalf("ParseForgeDB: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("want 1 session, got %d", len(sessions))
+	}
+	msgs := sessions[0].Messages
+	// User + assistant
+	if len(msgs) < 2 {
+		t.Fatalf("want at least 2 messages, got %d", len(msgs))
+	}
+	asst := msgs[1]
+	assertEq(t, "HasThinking", asst.HasThinking, false)
+}

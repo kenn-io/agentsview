@@ -2699,12 +2699,12 @@ func AggregateSignals(
 
 // TopSession holds summary info for a ranked session.
 type TopSession struct {
-	ID                string  `json:"id"`
-	Project           string  `json:"project"`
-	FirstMessage      *string `json:"first_message"`
-	MessageCount      int     `json:"message_count"`
-	OutputTokens      int     `json:"output_tokens"`
-	DurationMin       float64 `json:"duration_min"`
+	ID           string  `json:"id"`
+	Project      string  `json:"project"`
+	FirstMessage *string `json:"first_message"`
+	MessageCount int     `json:"message_count"`
+	OutputTokens int     `json:"output_tokens"`
+	DurationMin  float64 `json:"duration_min"`
 	// StartedAt and EndedAt are included so the frontend can
 	// derive a recency-based status tier — the StatusDot in the
 	// Top Sessions column needs the same time window inputs as

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -223,4 +224,274 @@ func TestSyncSingleSessionForge(t *testing.T) {
 	}
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
+}
+
+// ---------------------------------------------------------------------------
+// Priority 1 — Multi-conversation incremental sync
+// ---------------------------------------------------------------------------
+
+func TestSyncForgeMultiConversationIncremental(t *testing.T) {
+	env := setupTestEnv(t)
+	forge := createForgeDB(t, env.forgeDir)
+
+	// Seed two conversations.
+	forge.addConversation(
+		t,
+		"multi-conv-A", "Conversation A",
+		forgeTestContext("First prompt A.", "Answer A."),
+		"2026-05-02 09:00:00", "2026-05-02 09:01:00",
+		`{"input_tokens":100,"output_tokens":20}`,
+	)
+	forge.addConversation(
+		t,
+		"multi-conv-B", "Conversation B",
+		forgeTestContext("First prompt B.", "Answer B."),
+		"2026-05-02 09:00:00", "2026-05-02 09:02:00",
+		`{"input_tokens":120,"output_tokens":25}`,
+	)
+
+	// Full sync: both must be written.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2, Skipped: 0})
+	assertSessionProject(t, env.db, "forge:multi-conv-A", "agentsview")
+	assertSessionProject(t, env.db, "forge:multi-conv-B", "agentsview")
+
+	// Capture the stored mtime for A (should remain unchanged after the partial sync).
+	_, storedMtimeA, okA := env.db.GetSessionFileInfo("forge:multi-conv-A")
+	if !okA {
+		t.Fatal("session A file info not found after initial sync")
+	}
+
+	// Update only B's updated_at (and its context) to simulate a newer version.
+	updatedContextB := forgeTestContext("First prompt B updated.", "Answer B updated.")
+	forge.mustExec(t, "update B updated_at",
+		`UPDATE conversations SET updated_at = '2026-05-02 09:03:00', context = ? WHERE conversation_id = 'multi-conv-B'`,
+		updatedContextB,
+	)
+
+	// Partial sync: only B changed.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+
+	// A's stored mtime must be unchanged.
+	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo("forge:multi-conv-A")
+	if !okA2 {
+		t.Fatal("session A file info not found after partial sync")
+	}
+	if storedMtimeA != storedMtimeA2 {
+		t.Errorf("A's stored mtime changed: was %d, now %d", storedMtimeA, storedMtimeA2)
+	}
+
+	// B's stored mtime must have advanced.
+	_, storedMtimeB2, okB2 := env.db.GetSessionFileInfo("forge:multi-conv-B")
+	if !okB2 {
+		t.Fatal("session B file info not found after partial sync")
+	}
+	if storedMtimeB2 <= storedMtimeA {
+		t.Errorf("B's stored mtime did not advance: got %d, A had %d", storedMtimeB2, storedMtimeA)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Priority 3 — FindSourceFile / SourceMtime when conversation disappears
+// ---------------------------------------------------------------------------
+
+func TestSyncForgeMissingConversation(t *testing.T) {
+	env := setupTestEnv(t)
+	forge := createForgeDB(t, env.forgeDir)
+
+	forge.addConversation(
+		t,
+		"disappearing-conv", "Disappearing",
+		forgeTestContext("I will vanish.", "Gone soon."),
+		"2026-05-02 09:00:00", "2026-05-02 09:01:00",
+		`{"input_tokens":50,"output_tokens":10}`,
+	)
+
+	if err := env.engine.SyncSingleSession("forge:disappearing-conv"); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	// Now delete the conversation from .forge.db.
+	forge.mustExec(t, "delete conversation",
+		`DELETE FROM conversations WHERE conversation_id = 'disappearing-conv'`,
+	)
+
+	// FindSourceFile still returns the db path (it's a directory-level lookup).
+	// SourceMtime returns 0 because the conversation row is gone.
+	mtime := env.engine.SourceMtime("forge:disappearing-conv")
+	if mtime != 0 {
+		t.Errorf("SourceMtime after delete = %d, want 0", mtime)
+	}
+
+	src := env.engine.FindSourceFile("forge:disappearing-conv")
+	if src != "" {
+		t.Errorf("FindSourceFile after delete = %q, want empty", src)
+	}
+
+	// SyncSingleSession must return an error indicating the conversation
+	// could not be found (either "not found" or a db no-rows error).
+	err := env.engine.SyncSingleSession("forge:disappearing-conv")
+	if err == nil {
+		t.Fatal("expected error from SyncSingleSession for deleted conversation, got nil")
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "not found") && !strings.Contains(msg, "no rows") {
+		t.Errorf("expected 'not found' or 'no rows' error, got: %v", err)
+	}
+}
+
+func TestSyncForgeSyncSingleNonExistent(t *testing.T) {
+	env := setupTestEnv(t)
+	// Create an empty .forge.db so FindForgeDBPath finds it.
+	createForgeDB(t, env.forgeDir)
+
+	err := env.engine.SyncSingleSession("forge:does-not-exist")
+	if err == nil {
+		t.Fatal("expected error for non-existent session, got nil")
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "not found") && !strings.Contains(msg, "no rows") {
+		t.Errorf("expected 'not found' or 'no rows' error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Priority 4 — Subagent linking end-to-end
+// ---------------------------------------------------------------------------
+
+func forgeParentContext(childConvID string) string {
+	messages := []map[string]any{
+		{
+			"message": map[string]any{
+				"text": map[string]any{
+					"role":      "User",
+					"content":   "Run a sub-task.",
+					"timestamp": "2026-05-02T10:00:00Z",
+				},
+			},
+		},
+		{
+			"message": map[string]any{
+				"text": map[string]any{
+					"role": "Assistant",
+					"tool_calls": []map[string]any{{
+						"name":    "task",
+						"call_id": "call_task_parent",
+						"arguments": map[string]any{
+							"session_id": childConvID,
+							"prompt":     "do the child work",
+						},
+					}},
+					"timestamp": "2026-05-02T10:00:01Z",
+				},
+			},
+		},
+	}
+	raw, _ := json.Marshal(map[string]any{"messages": messages})
+	return string(raw)
+}
+
+func TestSyncForgeSubagentLinking(t *testing.T) {
+	env := setupTestEnv(t)
+	forge := createForgeDB(t, env.forgeDir)
+
+	childID := "child-conv"
+	parentID := "parent-conv"
+
+	forge.addConversation(
+		t,
+		parentID, "Parent",
+		forgeParentContext(childID),
+		"2026-05-02 09:00:00", "2026-05-02 09:01:00",
+		"",
+	)
+	forge.addConversation(
+		t,
+		childID, "Child",
+		forgeTestContext("Child work.", "Child done."),
+		"2026-05-02 09:00:30", "2026-05-02 09:01:30",
+		"",
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2, Skipped: 0})
+
+	// After SyncAll the tool_call row must already carry subagent_session_id.
+	// This is set by the parser before LinkSubagentSessions runs.
+	var subagentSessID sql.NullString
+	err := env.db.Reader().QueryRow(
+		`SELECT subagent_session_id FROM tool_calls WHERE session_id = ? AND tool_name = 'task'`,
+		"forge:"+parentID,
+	).Scan(&subagentSessID)
+	if err != nil {
+		t.Fatalf("query tool_calls for parent: %v", err)
+	}
+	if !subagentSessID.Valid || subagentSessID.String != "forge:"+childID {
+		t.Errorf("tool_calls.subagent_session_id = %v, want forge:%s", subagentSessID, childID)
+	}
+
+	// SyncSingleSession on the parent triggers LinkSubagentSessions, which
+	// sets parent_session_id and relationship_type on the child. This is the
+	// path that actually establishes the link for Forge sessions.
+	if err := env.engine.SyncSingleSession("forge:" + parentID); err != nil {
+		t.Fatalf("SyncSingleSession parent: %v", err)
+	}
+
+	var parentSessID sql.NullString
+	var relType sql.NullString
+	err = env.db.Reader().QueryRow(
+		`SELECT parent_session_id, relationship_type FROM sessions WHERE id = ?`,
+		"forge:"+childID,
+	).Scan(&parentSessID, &relType)
+	if err != nil {
+		t.Fatalf("query child session: %v", err)
+	}
+	if !parentSessID.Valid || parentSessID.String != "forge:"+parentID {
+		t.Errorf("child parent_session_id = %v, want forge:%s", parentSessID, parentID)
+	}
+	if !relType.Valid || relType.String != "subagent" {
+		t.Errorf("child relationship_type = %v, want subagent", relType)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Priority 6 — Failure isolation: malformed JSON in one conversation
+// ---------------------------------------------------------------------------
+
+func TestSyncForgeFailureIsolation(t *testing.T) {
+	env := setupTestEnv(t)
+	forge := createForgeDB(t, env.forgeDir)
+
+	// Valid conversation.
+	forge.addConversation(
+		t,
+		"valid-conv", "Valid",
+		forgeTestContext("Valid prompt.", "Valid answer."),
+		"2026-05-02 09:00:00", "2026-05-02 09:01:00",
+		`{"input_tokens":50,"output_tokens":10}`,
+	)
+
+	// Malformed JSON context — buildForgeSession will return nil, nil, nil
+	// (gjson.Parse(...).Get("messages").IsArray() == false).
+	forge.addConversation(
+		t,
+		"broken-conv", "Broken",
+		"{not valid json",
+		"2026-05-02 09:00:00", "2026-05-02 09:02:00",
+		"",
+	)
+
+	// Should not panic; valid session must be written.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+	assertSessionProject(t, env.db, "forge:valid-conv", "agentsview")
+
+	// Broken session must not be in the DB.
+	var count int
+	err := env.db.Reader().QueryRow(
+		"SELECT COUNT(*) FROM sessions WHERE id = 'forge:broken-conv'",
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("query broken session: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("broken session present in DB (count=%d), expected 0", count)
+	}
 }
