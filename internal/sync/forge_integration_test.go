@@ -428,13 +428,9 @@ func TestSyncForgeSubagentLinking(t *testing.T) {
 		t.Errorf("tool_calls.subagent_session_id = %v, want forge:%s", subagentSessID, childID)
 	}
 
-	// SyncSingleSession on the parent triggers LinkSubagentSessions, which
-	// sets parent_session_id and relationship_type on the child. This is the
-	// path that actually establishes the link for Forge sessions.
-	if err := env.engine.SyncSingleSession("forge:" + parentID); err != nil {
-		t.Fatalf("SyncSingleSession parent: %v", err)
-	}
-
+	// SyncAll must now call LinkSubagentSessions after the Forge write,
+	// so parent_session_id and relationship_type on the child must already
+	// be set without any SyncSingleSession workaround.
 	var parentSessID sql.NullString
 	var relType sql.NullString
 	err = env.db.Reader().QueryRow(
