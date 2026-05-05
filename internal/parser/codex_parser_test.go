@@ -309,6 +309,101 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Equal(t, "continuing", msgs[2].Content)
 	})
 
+	t.Run("codex app wait_agent and agent_path notifications link child session", func(t *testing.T) {
+		childID := "019df406-3bd3-7343-b3d8-f8d5996c428b"
+		summary := "Inspected only. I did not modify files."
+		notification := "<subagent_notification>\n" +
+			"{\"agent_path\":\"" + childID + "\",\"status\":{\"completed\":\"" + summary + "\"}}\n" +
+			"</subagent_notification>"
+		spawnEnd := "{\"timestamp\":\"2024-01-01T10:01:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"collab_agent_spawn_end\",\"call_id\":\"call_spawn\",\"sender_thread_id\":\"parent-thread\",\"new_thread_id\":\"" + childID + "\",\"new_agent_nickname\":\"Einstein\",\"new_agent_role\":\"explorer\",\"status\":\"pending_init\"}}"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-codex-app-subagent", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "explorer",
+				"message":    "Inspect the code",
+			}, tsEarlyS5),
+			spawnEnd,
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Einstein"}`, tsLate),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait_agent", "call_wait", map[string]any{
+				"targets":    []string{childID},
+				"timeout_ms": 10000,
+			}, tsLateS5),
+			testjsonl.CodexMsgJSON("user", notification, "2024-01-01T10:01:07Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 3, len(msgs))
+		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{
+			ToolUseID:         "call_spawn",
+			ToolName:          "spawn_agent",
+			Category:          "Task",
+			SubagentSessionID: "codex:" + childID,
+		}})
+		assertToolCalls(t, msgs[2].ToolCalls, []ParsedToolCall{{
+			ToolUseID: "call_wait",
+			ToolName:  "wait_agent",
+			Category:  "Other",
+		}})
+		assertToolResultEvents(t, msgs[2].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{{
+			ToolUseID:         "call_wait",
+			AgentID:           childID,
+			SubagentSessionID: "codex:" + childID,
+			Source:            "subagent_notification",
+			Status:            "completed",
+			Content:           summary,
+		}})
+	})
+
+	t.Run("codex app pending notification waits for later wait_agent binding", func(t *testing.T) {
+		childID := "019df406-3bd3-7343-b3d8-f8d5996c428b"
+		summary := "Inspected before wait_agent existed."
+		notification := "<subagent_notification>\n" +
+			"{\"agent_path\":\"" + childID + "\",\"status\":{\"completed\":\"" + summary + "\"}}\n" +
+			"</subagent_notification>"
+		spawnEnd := "{\"timestamp\":\"2024-01-01T10:01:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"collab_agent_spawn_end\",\"call_id\":\"call_spawn\",\"sender_thread_id\":\"parent-thread\",\"new_thread_id\":\"" + childID + "\",\"new_agent_nickname\":\"Einstein\",\"new_agent_role\":\"explorer\",\"status\":\"pending_init\"}}"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-codex-app-subagent-pending", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "run a child agent", tsEarlyS1),
+			testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+				"agent_type": "explorer",
+				"message":    "Inspect the code",
+			}, tsEarlyS5),
+			spawnEnd,
+			testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Einstein"}`, tsLate),
+			testjsonl.CodexMsgJSON("user", notification, "2024-01-01T10:01:07Z"),
+			testjsonl.CodexFunctionCallWithCallIDJSON("wait_agent", "call_wait", map[string]any{
+				"targets":    []string{childID},
+				"timeout_ms": 10000,
+			}, "2024-01-01T10:01:08Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		assert.Equal(t, 3, len(msgs))
+		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{
+			ToolUseID:         "call_spawn",
+			ToolName:          "spawn_agent",
+			Category:          "Task",
+			SubagentSessionID: "codex:" + childID,
+		}})
+		assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents)
+		assertToolCalls(t, msgs[2].ToolCalls, []ParsedToolCall{{
+			ToolUseID: "call_wait",
+			ToolName:  "wait_agent",
+			Category:  "Other",
+		}})
+		assertToolResultEvents(t, msgs[2].ToolCalls[0].ResultEvents, []ParsedToolResultEvent{{
+			ToolUseID:         "call_wait",
+			AgentID:           childID,
+			SubagentSessionID: "codex:" + childID,
+			Source:            "subagent_notification",
+			Status:            "completed",
+			Content:           summary,
+		}})
+	})
+
 	t.Run("duplicate pending notification preserves earliest chronology", func(t *testing.T) {
 		childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
 		summary := "Exit code: `1`\n\nFull output:\n```text\nTraceback...\n```"
@@ -1308,6 +1403,37 @@ func TestParseCodexSessionFrom_SubagentOutputRequiresFullParse(t *testing.T) {
 	assert.Contains(t, err.Error(), "full parse")
 }
 
+func TestParseCodexSessionFrom_CollabAgentSpawnEndRequiresFullParse(t *testing.T) {
+	t.Parallel()
+
+	childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("inc-sub-event", "/tmp", "codex_cli_rs", tsEarly),
+		testjsonl.CodexMsgJSON("user", "run child", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+			"agent_type": "awaiter",
+			"message":    "run it",
+		}, tsEarlyS5),
+	)
+	path := createTestFile(t, "codex-subagent-event-inc.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		"{\"timestamp\":\"2024-01-01T10:01:05Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"collab_agent_spawn_end\",\"call_id\":\"call_spawn\",\"new_thread_id\":\"" + childID + "\",\"status\":\"pending_init\"}}",
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "full parse")
+}
+
 func TestParseCodexSessionFrom_WaitCallRequiresFullParse(t *testing.T) {
 	t.Parallel()
 
@@ -1336,6 +1462,44 @@ func TestParseCodexSessionFrom_WaitCallRequiresFullParse(t *testing.T) {
 	_, err = f.WriteString(testjsonl.JoinJSONL(
 		testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
 			"ids": []string{childID},
+		}, "2024-01-01T10:01:06Z"),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 4, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "full parse")
+}
+
+func TestParseCodexSessionFrom_WaitAgentCallRequiresFullParse(t *testing.T) {
+	t.Parallel()
+
+	childID := "019c9c96-6ee7-77c0-ba4c-380f844289d5"
+	notification := "<subagent_notification>\n" +
+		"{\"agent_path\":\"" + childID + "\",\"status\":{\"completed\":\"Finished successfully\"}}\n" +
+		"</subagent_notification>"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("inc-wait-agent", "/tmp", "codex_cli_rs", tsEarly),
+		testjsonl.CodexMsgJSON("user", "run child", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON("spawn_agent", "call_spawn", map[string]any{
+			"agent_type": "awaiter",
+			"message":    "run it",
+		}, tsEarlyS5),
+		testjsonl.CodexFunctionCallOutputJSON("call_spawn", `{"agent_id":"`+childID+`","nickname":"Fennel"}`, tsLate),
+		testjsonl.CodexMsgJSON("user", notification, tsLateS5),
+	)
+	path := createTestFile(t, "codex-wait-agent-inc.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallWithCallIDJSON("wait_agent", "call_wait", map[string]any{
+			"targets": []string{childID},
 		}, "2024-01-01T10:01:06Z"),
 	))
 	require.NoError(t, err)

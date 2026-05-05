@@ -180,16 +180,20 @@ func (b *codexSessionBuilder) handleResponseItem(
 	b.ordinal++
 }
 
-func (b *codexSessionBuilder) handleEventMsg(
-	payload gjson.Result,
-) {
+func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 	switch payload.Get("type").Str {
 	case "task_started", "task_complete", "turn_aborted":
 		b.lastTaskEvent = payload.Get("type").Str
+	case "token_count":
+		b.handleTokenCountEvent(payload)
+	case "collab_agent_spawn_end":
+		b.handleCollabAgentSpawnEnd(payload)
 	}
-	if payload.Get("type").Str != "token_count" {
-		return
-	}
+}
+
+func (b *codexSessionBuilder) handleTokenCountEvent(
+	payload gjson.Result,
+) {
 	raw := payload.Get("info.last_token_usage").Raw
 	if raw == "" || raw == b.lastTokenUsageRaw {
 		return
@@ -209,6 +213,18 @@ func (b *codexSessionBuilder) handleEventMsg(
 			return
 		}
 	}
+}
+
+func (b *codexSessionBuilder) handleCollabAgentSpawnEnd(
+	payload gjson.Result,
+) {
+	callID := payload.Get("call_id").Str
+	agentID := strings.TrimSpace(payload.Get("new_thread_id").Str)
+	if callID == "" || agentID == "" {
+		return
+	}
+	b.agentSpawnCalls[agentID] = callID
+	b.setCallSubagentSessionID(callID, codexSubagentSessionID(agentID))
 }
 
 // applyCodexTokenUsage normalizes Codex token usage fields
@@ -264,7 +280,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
 	waitAgentIDs := []string(nil)
-	if name == "wait" && callID != "" {
+	if isCodexWaitAgentCall(name) && callID != "" {
 		args, _ := parseCodexFunctionArgs(payload)
 		waitAgentIDs = codexWaitAgentIDs(args)
 	}
@@ -292,7 +308,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	}
 	b.ordinal++
 
-	if name == "wait" && callID != "" {
+	if isCodexWaitAgentCall(name) && callID != "" {
 		for _, agentID := range waitAgentIDs {
 			b.agentWaitCalls[agentID] = callID
 			b.claimPendingAgentEvents(callID, agentID)
@@ -321,7 +337,7 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		}
 		b.agentSpawnCalls[agentID] = callID
 		b.setCallSubagentSessionID(callID, codexSubagentSessionID(agentID))
-	case "wait":
+	case "wait", "wait_agent":
 		status := output.Get("status")
 		if !status.Exists() || !status.IsObject() {
 			return
@@ -346,6 +362,13 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 	}
 }
 
+// setCallSubagentSessionID links a tool call to the session of
+// the subagent it spawned. Callers must invoke this only after
+// the originating function_call has been processed (which
+// populates b.callRefs[callID]); otherwise the link is silently
+// dropped. In real codex session files the spawn function_call
+// always precedes both its function_call_output and the
+// collab_agent_spawn_end event_msg.
 func (b *codexSessionBuilder) setCallSubagentSessionID(
 	callID, sessionID string,
 ) {
@@ -495,6 +518,9 @@ func codexSubagentSessionID(agentID string) string {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
 		return ""
+	}
+	if strings.HasPrefix(agentID, "codex:") {
+		return agentID
 	}
 	return "codex:" + agentID
 }
@@ -952,6 +978,9 @@ func codexWaitAgentIDs(args gjson.Result) []string {
 		return nil
 	}
 	ids := args.Get("ids")
+	if !ids.Exists() {
+		ids = args.Get("targets")
+	}
 	if !ids.Exists() || !ids.IsArray() {
 		return nil
 	}
@@ -965,6 +994,10 @@ func codexWaitAgentIDs(args gjson.Result) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+func isCodexWaitAgentCall(name string) bool {
+	return name == "wait" || name == "wait_agent"
 }
 
 func parseCodexSubagentNotification(
@@ -981,7 +1014,10 @@ func parseCodexSubagentNotification(
 		return "", "", ""
 	}
 	parsed := gjson.Parse(body)
-	agentID = strings.TrimSpace(parsed.Get("agent_id").Str)
+	agentID = firstNonEmpty(
+		parsed.Get("agent_id").Str,
+		parsed.Get("agent_path").Str,
+	)
 	status := parsed.Get("status")
 	statusName, text = codexTerminalSubagentEvent(status)
 	return agentID, statusName, text
@@ -1302,14 +1338,19 @@ func isCodexSubagentNotification(content string) bool {
 }
 
 func codexIncrementalNeedsFullParse(line string) bool {
-	if gjson.Get(line, "type").Str != codexTypeResponseItem {
+	switch gjson.Get(line, "type").Str {
+	case codexTypeEventMsg:
+		return gjson.Get(line, "payload.type").Str ==
+			"collab_agent_spawn_end"
+	case codexTypeResponseItem:
+	default:
 		return false
 	}
 
 	payload := gjson.Get(line, "payload")
 	switch payload.Get("type").Str {
 	case "function_call":
-		return payload.Get("name").Str == "wait"
+		return isCodexWaitAgentCall(payload.Get("name").Str)
 	case "function_call_output":
 		output, _ := parseCodexFunctionOutput(payload)
 		return isCodexSubagentFunctionOutput(output)

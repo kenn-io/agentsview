@@ -27,10 +27,15 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 24: Codex parser now annotates spawn_agent tool calls
+// Bumped to 25: Codex parser now also links codex_app subagents
+// via collab_agent_spawn_end event_msgs, wait_agent function
+// calls, and agent_path subagent notifications. Existing rows
+// need re-parsing so codex_app subagent linkage works.
+//
+// (24: Codex parser now annotates spawn_agent tool calls
 // with subagent_session_id once the spawned agent id is known.
 // Existing rows need re-parsing so inline subagent expansion can
-// resolve child sessions from persisted tool call metadata.
+// resolve child sessions from persisted tool call metadata.)
 //
 // (23: split termination_status into awaiting_user vs
 // clean (Claude end_turn / Codex task_complete vs other clean
@@ -63,7 +68,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 24
+const dataVersion = 25
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
