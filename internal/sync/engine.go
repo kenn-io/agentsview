@@ -1536,13 +1536,9 @@ func (e *Engine) syncAllLocked(
 	}
 
 	// Sync Warp sessions (DB-backed, not file-based).
-	// dbBackedWrote tracks whether any DB-backed agent (Warp or Forge)
-	// produced writes this sync cycle. Used to gate LinkSubagentSessions.
-	dbBackedWrote := false
 	tWarp := time.Now()
 	warpPending := e.syncWarp(ctx)
 	if len(warpPending) > 0 {
-		dbBackedWrote = true
 		stats.TotalSessions += len(warpPending)
 		tWrite := time.Now()
 		var warpWritten int
@@ -1587,11 +1583,6 @@ func (e *Engine) syncAllLocked(
 	}
 
 	if ctx.Err() != nil {
-		if dbBackedWrote {
-			if err := e.db.LinkSubagentSessions(); err != nil {
-				log.Printf("link subagent sessions: %v", err)
-			}
-		}
 		stats.Aborted = true
 		return stats
 	}
@@ -1600,7 +1591,6 @@ func (e *Engine) syncAllLocked(
 	tForge := time.Now()
 	forgePending := e.syncForge(ctx)
 	if len(forgePending) > 0 {
-		dbBackedWrote = true
 		stats.TotalSessions += len(forgePending)
 		tWrite := time.Now()
 		var forgeWritten int
@@ -1645,23 +1635,16 @@ func (e *Engine) syncAllLocked(
 	}
 
 	if ctx.Err() != nil {
-		if dbBackedWrote {
-			if err := e.db.LinkSubagentSessions(); err != nil {
-				log.Printf("link subagent sessions: %v", err)
-			}
-		}
 		stats.Aborted = true
 		return stats
 	}
 
 	// Link subagent child sessions to their parents after all DB-backed
-	// agent writes (Warp, Forge). Run once here to avoid per-agent calls
-	// and repeated full-table scans. Only runs if any DB-backed agent
-	// produced writes this cycle.
-	if dbBackedWrote {
-		if err := e.db.LinkSubagentSessions(); err != nil {
-			log.Printf("link subagent sessions: %v", err)
-		}
+	// agent writes (Warp, Forge). LinkSubagentSessions is idempotent — its
+	// WHERE filter and partial index make it a cheap no-op when nothing new
+	// was written — so no guard is needed.
+	if err := e.db.LinkSubagentSessions(); err != nil {
+		log.Printf("link subagent sessions: %v", err)
 	}
 
 	tPersist := time.Now()
