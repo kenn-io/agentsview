@@ -1105,6 +1105,16 @@ func claudeSnapshotIsCumulative(
 	if len(merged) == 0 || len(snapshot) == 0 {
 		return true
 	}
+	// Single-block snapshots have no structural backup beyond a
+	// coincidental text prefix. Two distinct additive text chunks
+	// where the second begins with the first byte-for-byte would
+	// otherwise be classified as cumulative growth and collapsed.
+	// Require exact-equal alignment in that case; multi-block
+	// snapshots can rely on prefix matching because additional
+	// aligned blocks supply structural evidence.
+	if len(snapshot) == 1 {
+		return claudeBlocksAlignStrict(merged[0], snapshot[0])
+	}
 	n := min(len(snapshot), len(merged))
 	for i := range n {
 		if !claudeBlocksAlign(merged[i], snapshot[i]) {
@@ -1125,6 +1135,29 @@ func claudeBlocksAlign(a, b gjson.Result) bool {
 		return ta == tb ||
 			strings.HasPrefix(tb, ta) ||
 			strings.HasPrefix(ta, tb)
+	case "tool_use":
+		ida := a.Get("id").Str
+		idb := b.Get("id").Str
+		if ida != "" && idb != "" {
+			return ida == idb
+		}
+		return a.Raw == b.Raw
+	default:
+		return a.Raw == b.Raw
+	}
+}
+
+// claudeBlocksAlignStrict is like claudeBlocksAlign but rejects
+// text prefix matches — only exact text equality counts. Tool_use
+// blocks still align by id (cumulative growth of input is fine
+// because the id ties them to one logical call).
+func claudeBlocksAlignStrict(a, b gjson.Result) bool {
+	if a.Get("type").Str != b.Get("type").Str {
+		return false
+	}
+	switch a.Get("type").Str {
+	case "text":
+		return a.Get("text").Str == b.Get("text").Str
 	case "tool_use":
 		ida := a.Get("id").Str
 		idb := b.Get("id").Str

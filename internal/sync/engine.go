@@ -1952,8 +1952,9 @@ func (e *Engine) collectAndBatch(
 		} else {
 			for _, pr := range r.results {
 				pending = append(pending, pendingWrite{
-					sess: pr.Session,
-					msgs: pr.Messages,
+					sess:         pr.Session,
+					msgs:         pr.Messages,
+					forceReplace: r.forceReplace,
 				})
 			}
 		}
@@ -2032,6 +2033,13 @@ type processResult struct {
 	err         error
 	incremental *incrementalUpdate
 	cacheSkip   bool
+	// forceReplace requests full message replacement on write,
+	// even when the existing rows would otherwise be left in
+	// place. Set when a fall-through to full parse is recovering
+	// from a cross-sync streaming split: the new merged messages
+	// reuse the existing ordinals, so the default append-only
+	// writeMessages would silently drop the rewrite.
+	forceReplace bool
 }
 
 func (e *Engine) processFile(
@@ -2302,13 +2310,18 @@ func (e *Engine) processClaude(
 	}
 
 	// Try incremental parse for append-only JSONL files
-	// that have already been synced.
-	if res, ok := e.tryIncrementalJSONL(
+	// that have already been synced. When the incremental path
+	// declines but signals forceReplace (e.g. cross-sync split
+	// recovery), carry the flag onto the full-parse result so the
+	// write path uses ReplaceSessionMessages.
+	res, ok := e.tryIncrementalJSONL(
 		file, info, parser.AgentClaude,
 		parser.ParseClaudeSessionFrom,
-	); ok {
+	)
+	if ok {
 		return res
 	}
+	forceReplace := res.forceReplace
 
 	// Determine project name from cwd if possible
 	project := parser.GetProjectName(file.Project)
@@ -2345,7 +2358,7 @@ func (e *Engine) processClaude(
 
 	parser.InferRelationshipTypes(results)
 
-	return processResult{results: results}
+	return processResult{results: results, forceReplace: forceReplace}
 }
 
 // incrementalParseFunc reads new JSONL lines from a file
@@ -2479,6 +2492,32 @@ func (e *Engine) tryIncrementalJSONL(
 			}, true
 		}
 		return processResult{skip: true}, true
+	}
+
+	// Claude cross-sync split detection: when the first appended
+	// assistant message shares its provider message id with the
+	// last already-stored assistant message for this session, the
+	// previous sync stopped mid-stream. The incremental path would
+	// store the new chunk as a separate message instead of merging
+	// it into the existing one — fall back to a full parse so the
+	// chunk merge sees the whole run. forceReplace tells the
+	// downstream write path to use ReplaceSessionMessages: the
+	// merged tail reuses existing ordinals, so the default
+	// append-only writeMessages would silently drop it.
+	if agent == parser.AgentClaude {
+		first := newMsgs[0]
+		if first.Role == parser.RoleAssistant &&
+			first.ClaudeMessageID != "" {
+			if e.db.LastClaudeMessageID(inc.ID) ==
+				first.ClaudeMessageID {
+				log.Printf(
+					"incremental %s %s: appended chunk shares"+
+						" message.id with stored tail, full parse",
+					agent, file.Path,
+				)
+				return processResult{forceReplace: true}, false
+			}
+		}
 	}
 
 	newUserCount := countUserMsgs(newMsgs)
@@ -3354,8 +3393,9 @@ func isAutomatedFromSession(s db.Session) bool {
 }
 
 type pendingWrite struct {
-	sess parser.ParsedSession
-	msgs []parser.ParsedMessage
+	sess         parser.ParsedSession
+	msgs         []parser.ParsedMessage
+	forceReplace bool
 }
 
 func (e *Engine) writeBatch(
@@ -3407,8 +3447,8 @@ func (e *Engine) writeBatch(
 			continue
 		}
 
-		replaceMessages := forceReplace || stale ||
-			pw.sess.Agent == parser.AgentOpenCode
+		replaceMessages := forceReplace || pw.forceReplace ||
+			stale || pw.sess.Agent == parser.AgentOpenCode
 
 		var werr error
 		if replaceMessages {
@@ -3487,7 +3527,7 @@ func (e *Engine) writeBatchBulk(
 		if !ok {
 			continue
 		}
-		replaceMessages := forceReplace ||
+		replaceMessages := forceReplace || pw.forceReplace ||
 			pw.sess.Agent == parser.AgentOpenCode
 		writes = append(writes, db.SessionBatchWrite{
 			Session:         s,

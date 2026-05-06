@@ -436,6 +436,29 @@ func (db *DB) MaxOrdinal(sessionID string) int {
 	return int(n.Int64)
 }
 
+// LastClaudeMessageID returns the claude_message_id of the
+// highest-ordinal assistant message in a session whose
+// claude_message_id is non-empty, or "" if none exists. The sync
+// engine uses this to detect cross-sync splits of a single
+// streaming response (next sync's first appended assistant entry
+// shares the message.id of the previously-stored last assistant).
+func (db *DB) LastClaudeMessageID(sessionID string) string {
+	var s sql.NullString
+	err := db.getReader().QueryRow(
+		`SELECT claude_message_id FROM messages
+		 WHERE session_id = ?
+		   AND role = 'assistant'
+		   AND claude_message_id != ''
+		 ORDER BY ordinal DESC
+		 LIMIT 1`,
+		sessionID,
+	).Scan(&s)
+	if err != nil || !s.Valid {
+		return ""
+	}
+	return s.String
+}
+
 // savedPin captures the minimal pin state needed to re-attach a pin
 // after a full message replacement. source_uuid is the preferred
 // identifier because it survives rewrites where the ordinal stream

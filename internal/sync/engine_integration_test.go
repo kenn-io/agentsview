@@ -5683,6 +5683,104 @@ func TestIncrementalSync_ClaudeFileReplaced(t *testing.T) {
 	}
 }
 
+// TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse covers
+// the cross-sync split case: the first sync stores a partial assistant
+// snapshot (one of several streaming snapshots) and the next sync
+// appends a later snapshot of the SAME response (same message.id).
+// The engine must detect the shared id and fall back to a full parse
+// so the chunk merge collapses both snapshots into one assistant
+// message instead of two.
+func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) {
+	env := setupTestEnv(t)
+
+	first, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": tsZeroS5,
+		"uuid":      "a1",
+		"message": map[string]any{
+			"id":    "msg_split",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 1,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello"},
+			},
+			"stop_reason": "tool_use",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal first snapshot: %v", err)
+	}
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsZero),
+		string(first),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "split-stream.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionMessageCount(t, env.db, "split-stream", 2)
+
+	// Append a continuation snapshot with the same message.id —
+	// this is the second half of the same streaming response.
+	second, err := json.Marshal(map[string]any{
+		"type":       "assistant",
+		"timestamp":  tsEarly,
+		"uuid":       "a2",
+		"parentUuid": "a1",
+		"message": map[string]any{
+			"id":    "msg_split",
+			"model": "claude-sonnet-4-20250514",
+			"usage": map[string]any{
+				"input_tokens":  10,
+				"output_tokens": 2,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hello world"},
+			},
+			"stop_reason": "end_turn",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal second snapshot: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	if _, err := f.WriteString(string(second) + "\n"); err != nil {
+		f.Close()
+		t.Fatalf("append: %v", err)
+	}
+	f.Close()
+
+	env.engine.SyncPaths([]string{path})
+
+	// After the full-parse fallback, the two same-message.id
+	// snapshots are merged into ONE assistant message — total
+	// message count stays at 2 (user + merged assistant).
+	assertSessionMessageCount(t, env.db, "split-stream", 2)
+
+	msgs := fetchMessages(t, env.db, "split-stream")
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2", len(msgs))
+	}
+	if string(msgs[1].Role) != "assistant" {
+		t.Fatalf("msgs[1].Role = %q, want assistant", msgs[1].Role)
+	}
+	if !strings.Contains(msgs[1].Content, "Hello world") {
+		t.Errorf(
+			"msgs[1].Content = %q, want it to contain %q",
+			msgs[1].Content, "Hello world",
+		)
+	}
+}
+
 func TestIncrementalSync_CodexAppend(t *testing.T) {
 	env := setupTestEnv(t)
 

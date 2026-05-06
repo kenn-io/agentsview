@@ -1179,6 +1179,29 @@ func TestParseClaudeSession_SameMessageIDAdditiveDistinctTextBlocks(t *testing.T
 	assert.Contains(t, msg.Content, "Third sentence.")
 }
 
+// Two single-text-block additive chunks where the second's text
+// begins byte-for-byte with the first. Without strict alignment
+// for single-block snapshots, the prefix relationship would be
+// classified as cumulative growth and the first block would be
+// overwritten by the second.
+func TestParseClaudeSession_SameMessageIDAdditivePrefixCollidingSingleBlocks(t *testing.T) {
+	lines := []string{
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_pref","content":[{"type":"text","text":"First."}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"end_turn"}}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_pref","content":[{"type":"text","text":"First. Continued."}],"usage":{"input_tokens":1,"output_tokens":2},"stop_reason":"end_turn"}}`,
+	}
+
+	_, msgs := runClaudeParserTest(
+		t, "additive-prefix-single.jsonl", testjsonl.JoinJSONL(lines...),
+	)
+
+	require.Len(t, msgs, 2)
+	msg := msgs[1]
+	require.Equal(t, RoleAssistant, msg.Role)
+	assert.Contains(t, msg.Content, "First.")
+	assert.Contains(t, msg.Content, "First. Continued.")
+}
+
 // Cumulative streaming snapshots of one response that contains
 // text + tool_use + text. The third block in the second snapshot
 // happens to start with the first text block's exact bytes. Snapshot-
