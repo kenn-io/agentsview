@@ -7,6 +7,7 @@ services:
     environment:
       CLAUDE_PROJECTS_DIR: /agents/claude
       CODEX_SESSIONS_DIR: /agents/codex
+      FORGE_DIR: /agents/forge
       OPENCODE_DIR: /agents/opencode
       # Set both of these to serve from PostgreSQL instead of the local archive.
       # PG_SERVE: "1"
@@ -15,6 +16,7 @@ services:
       - agentsview-data:/data
       - ${HOME}/.claude/projects:/agents/claude:ro
       - ${HOME}/.codex/sessions:/agents/codex:ro
+      - ${HOME}/.forge:/agents/forge:ro
       - ${HOME}/.local/share/opencode:/agents/opencode:ro
 
 volumes:

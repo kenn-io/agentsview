@@ -26,7 +26,9 @@ Or run the published Docker image:
 docker run --rm -p 127.0.0.1:8080:8080 \
   -v agentsview-data:/data \
   -v "$HOME/.claude/projects:/agents/claude:ro" \
+  -v "$HOME/.forge:/agents/forge:ro" \
   -e CLAUDE_PROJECTS_DIR=/agents/claude \
+  -e FORGE_DIR=/agents/forge \
   ghcr.io/wesm/agentsview:latest
 ```
 
@@ -53,7 +55,7 @@ docker compose -f docker-compose.prod.yaml up -d
 ```
 
 The included compose file persists the agentsview data directory in a named
-volume and mounts Claude, Codex, and OpenCode session roots read-only. The
+volume and mounts Claude, Codex, Forge, and OpenCode session roots read-only. The
 container runs as root, so prefer a named volume for `/data` over a host bind
 mount; if you do bind-mount, pre-create the directory with the desired ownership
 to avoid root-owned files in your home directory.
@@ -162,24 +164,29 @@ agentsview stats --include-git-outcomes
 
 agentsview auto-discovers sessions from all of these:
 
-| Agent          | Session Directory                                  |
-| -------------- | -------------------------------------------------- |
-| Claude Code    | `~/.claude/projects/`                              |
-| Codex          | `~/.codex/sessions/`                               |
-| Copilot CLI    | `~/.copilot/`                                      |
-| Gemini CLI     | `~/.gemini/`                                       |
-| OpenCode       | `~/.local/share/opencode/`                         |
-| OpenHands CLI  | `~/.openhands/conversations/`                      |
-| Cursor         | `~/.cursor/projects/`                              |
-| Amp            | `~/.local/share/amp/threads/`                      |
-| iFlow          | `~/.iflow/projects/`                               |
-| VSCode Copilot | `~/Library/Application Support/Code/User/` (macOS) |
-| Pi             | `~/.pi/agent/sessions/`                            |
-| OpenClaw       | `~/.openclaw/agents/`                              |
-| Kimi           | `~/.kimi/sessions/`                                |
-| Kiro CLI       | `~/.kiro/sessions/cli/`                            |
-| Kiro IDE       | `~/Library/Application Support/Kiro/` (macOS)      |
-| Cortex Code    | `~/.snowflake/cortex/conversations/`               |
+| Agent              | Session Directory                                      |
+| ------------------ | ------------------------------------------------------ |
+| Claude Code        | `~/.claude/projects/`                                  |
+| Codex              | `~/.codex/sessions/`                                   |
+| Copilot CLI        | `~/.copilot/`                                          |
+| Gemini CLI         | `~/.gemini/`                                           |
+| OpenCode           | `~/.local/share/opencode/`                             |
+| OpenHands CLI      | `~/.openhands/conversations/`                          |
+| Cursor             | `~/.cursor/projects/`                                  |
+| Amp                | `~/.local/share/amp/threads/`                          |
+| iFlow              | `~/.iflow/projects/`                                   |
+| Zencoder           | `~/.zencoder/sessions/`                                |
+| VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
+| Pi                 | `~/.pi/agent/sessions/`                                |
+| OpenClaw           | `~/.openclaw/agents/`                                  |
+| Kimi               | `~/.kimi/sessions/`                                    |
+| Kiro CLI           | `~/.kiro/sessions/cli/`                                |
+| Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |
+| Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
+| Hermes Agent       | `~/.hermes/sessions/`                                  |
+| Forge              | `~/.forge/`                                            |
+| Warp               | `~/.warp/` (platform-dependent)                        |
+| Positron Assistant | `~/Library/Application Support/Positron/User/` (macOS) |
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details.
@@ -211,7 +218,7 @@ Full docs at **[agentsview.io](https://agentsview.io)**:
 [Configuration](https://agentsview.io/configuration/) --
 [Architecture](https://agentsview.io/architecture/)
 
-______________________________________________________________________
+---
 
 ## Development
 
