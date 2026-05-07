@@ -17,7 +17,7 @@
   "dependencies": {
     "@tanstack/virtual-core": "3.14.0",
     "dompurify": "3.4.1",
-    "marked": "18.0.2"
+    "marked": "18.0.3"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",
