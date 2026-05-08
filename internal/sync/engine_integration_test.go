@@ -463,6 +463,44 @@ func TestSyncEngineProgress(t *testing.T) {
 	}
 }
 
+func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "msg").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
+
+	var events []sync.Progress
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		events = append(events, p)
+	})
+
+	var doneCount int
+	var firstDoneIdx = -1
+	for i, e := range events {
+		if e.Phase == sync.PhaseDone {
+			doneCount++
+			if firstDoneIdx == -1 {
+				firstDoneIdx = i
+			}
+		}
+	}
+	if doneCount != 1 {
+		t.Fatalf("PhaseDone emitted %d times, want exactly 1; events=%+v", doneCount, events)
+	}
+	if firstDoneIdx != len(events)-1 {
+		t.Fatalf("PhaseDone at index %d, want last event (index %d)", firstDoneIdx, len(events)-1)
+	}
+	last := events[len(events)-1]
+	if last.SessionsDone != last.SessionsTotal || last.SessionsTotal != 2 {
+		t.Fatalf("final progress = %d/%d, want 2/2", last.SessionsDone, last.SessionsTotal)
+	}
+}
+
 func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
 	env := setupTestEnv(t)
 

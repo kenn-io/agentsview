@@ -315,6 +315,92 @@ func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
 	}
 }
 
+func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
+	dbPath := newPiebaldTestDB(t)
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO chats (id, title, created_at, updated_at, is_deleted, message_count)
+		 VALUES (42, 'Nested', '2026-05-01T10:00:00Z', '2026-05-01T10:10:00Z', 0, 10)`)
+	// Tree:
+	//   100 (user)
+	//   └── 101 (assistant)
+	//       ├── 102 (main child of 101)         enabled=1
+	//       │   └── 103
+	//       └── 200 (fork at 101)               enabled=0
+	//           └── 201 (assistant)
+	//               ├── 202 (main child of 201) enabled=1
+	//               │   └── 203
+	//               └── 300 (nested fork at 201) enabled=0
+	//                   └── 301
+	execPiebaldTestSQL(t, dbPath,
+		`INSERT INTO messages (id, parent_chat_id, parent_message_id, role, created_at, updated_at, status, enabled)
+		 VALUES (100, 42, NULL, 'user',      '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed', 1),
+		        (101, 42, 100,  'assistant', '2026-05-01T10:00:02Z', '2026-05-01T10:00:02Z', 'completed', 1),
+		        (102, 42, 101,  'user',      '2026-05-01T10:00:03Z', '2026-05-01T10:00:03Z', 'completed', 1),
+		        (103, 42, 102,  'assistant', '2026-05-01T10:00:04Z', '2026-05-01T10:00:04Z', 'completed', 1),
+		        (200, 42, 101,  'user',      '2026-05-01T10:01:00Z', '2026-05-01T10:01:00Z', 'completed', 0),
+		        (201, 42, 200,  'assistant', '2026-05-01T10:01:01Z', '2026-05-01T10:01:01Z', 'completed', 1),
+		        (202, 42, 201,  'user',      '2026-05-01T10:01:02Z', '2026-05-01T10:01:02Z', 'completed', 1),
+		        (203, 42, 202,  'assistant', '2026-05-01T10:01:03Z', '2026-05-01T10:01:03Z', 'completed', 1),
+		        (300, 42, 201,  'user',      '2026-05-01T10:02:00Z', '2026-05-01T10:02:00Z', 'completed', 0),
+		        (301, 42, 300,  'assistant', '2026-05-01T10:02:01Z', '2026-05-01T10:02:01Z', 'completed', 1)`)
+	seedPiebaldTextPart(t, dbPath, 1100, 100, 0, "main start", false)
+	seedPiebaldTextPart(t, dbPath, 1101, 101, 0, "main answer", false)
+	seedPiebaldTextPart(t, dbPath, 1102, 102, 0, "main followup", false)
+	seedPiebaldTextPart(t, dbPath, 1103, 103, 0, "main final", false)
+	seedPiebaldTextPart(t, dbPath, 1200, 200, 0, "outer fork question", false)
+	seedPiebaldTextPart(t, dbPath, 1201, 201, 0, "outer fork answer", false)
+	seedPiebaldTextPart(t, dbPath, 1202, 202, 0, "outer fork followup", false)
+	seedPiebaldTextPart(t, dbPath, 1203, 203, 0, "outer fork final", false)
+	seedPiebaldTextPart(t, dbPath, 1300, 300, 0, "nested fork question", false)
+	seedPiebaldTextPart(t, dbPath, 1301, 301, 0, "nested fork answer", false)
+
+	results, err := ParsePiebaldSessionResults(dbPath, "42", "machine")
+	if err != nil {
+		t.Fatalf("ParsePiebaldSessionResults: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results len = %d, want 3 (main + outer fork + nested fork)", len(results))
+	}
+
+	byID := make(map[string]ParseResult, len(results))
+	for _, r := range results {
+		byID[r.Session.ID] = r
+	}
+
+	main, ok := byID["piebald:42"]
+	if !ok {
+		t.Fatal("missing main session piebald:42")
+	}
+	if main.Session.RelationshipType != RelNone || main.Session.ParentSessionID != "" {
+		t.Fatalf("bad main relationship: %#v", main.Session)
+	}
+	if len(main.Messages) != 4 {
+		t.Fatalf("main messages = %d, want 4", len(main.Messages))
+	}
+
+	outer, ok := byID["piebald:42-200"]
+	if !ok {
+		t.Fatal("missing outer fork session piebald:42-200")
+	}
+	if outer.Session.RelationshipType != RelFork || outer.Session.ParentSessionID != "piebald:42" {
+		t.Fatalf("bad outer fork relationship: %#v", outer.Session)
+	}
+	if len(outer.Messages) != 4 {
+		t.Fatalf("outer fork messages = %d, want 4", len(outer.Messages))
+	}
+
+	nested, ok := byID["piebald:42-300"]
+	if !ok {
+		t.Fatal("missing nested fork session piebald:42-300 (lost by append/walk evaluation order bug)")
+	}
+	if nested.Session.RelationshipType != RelFork || nested.Session.ParentSessionID != "piebald:42-200" {
+		t.Fatalf("bad nested fork relationship: %#v", nested.Session)
+	}
+	if len(nested.Messages) != 2 {
+		t.Fatalf("nested fork messages = %d, want 2", len(nested.Messages))
+	}
+}
+
 func TestListPiebaldSessionMetaSkipsDeletedAndEmpty(t *testing.T) {
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,

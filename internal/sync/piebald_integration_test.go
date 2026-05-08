@@ -161,6 +161,54 @@ func (p *piebaldTestDB) addToolPart(t *testing.T, partID, msgID int64, idx int) 
 	)
 }
 
+func (p *piebaldTestDB) addChatWithFork(t *testing.T, chatID int64) {
+	t.Helper()
+	p.mustExec(t, "insert project",
+		`INSERT OR IGNORE INTO projects (id, directory, name) VALUES (1, '/repo/app', 'app')`)
+	p.mustExec(t, "insert chat",
+		`INSERT INTO chats
+			(id, title, created_at, updated_at, is_deleted, message_count, current_directory, branch_name, project_id)
+		 VALUES (?, 'Forked chat', '2026-05-01T10:00:00Z', '2026-05-01T10:05:00Z', 0, 6, '/repo/app', 'main', 1)`,
+		chatID)
+	p.mustExec(t, "insert messages",
+		`INSERT INTO messages (id, parent_chat_id, parent_message_id, role, model, created_at, updated_at, status, enabled)
+		 VALUES (100, ?, NULL, 'user',      '',             '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed', 1),
+		        (101, ?, 100,  'assistant', 'claude-test',  '2026-05-01T10:00:02Z', '2026-05-01T10:00:02Z', 'completed', 1),
+		        (102, ?, 101,  'user',      '',             '2026-05-01T10:00:03Z', '2026-05-01T10:00:03Z', 'completed', 1),
+		        (103, ?, 102,  'assistant', 'claude-test',  '2026-05-01T10:00:04Z', '2026-05-01T10:00:04Z', 'completed', 1),
+		        (200, ?, 101,  'user',      '',             '2026-05-01T10:01:00Z', '2026-05-01T10:01:00Z', 'completed', 0),
+		        (201, ?, 200,  'assistant', 'claude-test',  '2026-05-01T10:01:01Z', '2026-05-01T10:01:01Z', 'completed', 1)`,
+		chatID, chatID, chatID, chatID, chatID, chatID)
+	p.addTextPart(t, 1100, 100, 0, "Main start", false)
+	p.addTextPart(t, 1101, 101, 0, "Main answer", false)
+	p.addTextPart(t, 1102, 102, 0, "Main followup", false)
+	p.addTextPart(t, 1103, 103, 0, "Main final", false)
+	p.addTextPart(t, 1200, 200, 0, "Fork question", false)
+	p.addTextPart(t, 1201, 201, 0, "Fork answer", false)
+}
+
+func TestSyncSingleSessionPiebaldFork(t *testing.T) {
+	env := setupTestEnv(t)
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChatWithFork(t, 42)
+
+	if err := env.engine.SyncSingleSession("piebald:42-200"); err != nil {
+		t.Fatalf("SyncSingleSession(fork): %v", err)
+	}
+	assertSessionMessageCount(t, env.db, "piebald:42-200", 2)
+	assertSessionMessageCount(t, env.db, "piebald:42", 4)
+
+	src := env.engine.FindSourceFile("piebald:42-200")
+	wantSrc := filepath.Join(env.piebaldDir, "app.db")
+	if src != wantSrc {
+		t.Fatalf("FindSourceFile(fork) = %q, want %q", src, wantSrc)
+	}
+
+	if mtime := env.engine.SourceMtime("piebald:42-200"); mtime == 0 {
+		t.Fatal("SourceMtime(fork) returned zero")
+	}
+}
+
 func TestSyncEnginePiebaldBulkSync(t *testing.T) {
 	env := setupTestEnv(t)
 	piebald := createPiebaldDB(t, env.piebaldDir)

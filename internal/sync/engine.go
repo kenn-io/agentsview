@@ -2159,11 +2159,8 @@ flush:
 		log.Printf("link subagent sessions: %v", err)
 	}
 
-	progress.Phase = PhaseDone
-	progress.SessionsDone = progressTotal
-	if onProgress != nil {
-		onProgress(progress)
-	}
+	// PhaseDone is emitted by syncAllLocked after DB-backed
+	// agents finish, so this stage stays in PhaseSyncing.
 	return stats
 }
 
@@ -4250,12 +4247,13 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 				}
 			}
 		case parser.AgentPiebald:
+			chatID, _, _ := strings.Cut(rawSessionID, "-")
 			for _, d := range e.agentDirs[def.Type] {
 				dbPath := parser.FindPiebaldDBPath(d)
 				if dbPath == "" {
 					continue
 				}
-				if _, _, err := parser.ParsePiebaldSession(dbPath, rawSessionID, e.machine); err == nil {
+				if _, _, err := parser.ParsePiebaldSession(dbPath, chatID, e.machine); err == nil {
 					return dbPath
 				}
 			}
@@ -4333,6 +4331,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 				}
 			}
 		case parser.AgentPiebald:
+			chatID, _, _ := strings.Cut(rawSessionID, "-")
 			for _, d := range e.agentDirs[def.Type] {
 				dbPath := parser.FindPiebaldDBPath(d)
 				if dbPath == "" {
@@ -4343,7 +4342,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 					continue
 				}
 				for _, meta := range metas {
-					if meta.SessionID == rawSessionID {
+					if meta.SessionID == chatID {
 						return meta.FileMtime
 					}
 				}
@@ -4960,11 +4959,14 @@ func (e *Engine) syncOnePiebald(
 	return pending
 }
 
-// syncSinglePiebald re-syncs a single Piebald chat.
+// syncSinglePiebald re-syncs a single Piebald chat. Fork session IDs of the
+// form "piebald:<chat>-<row>" are mapped back to their base chat so the parser
+// re-emits the main session and every fork branch together.
 func (e *Engine) syncSinglePiebald(
 	sessionID string,
 ) error {
 	rawID := strings.TrimPrefix(sessionID, "piebald:")
+	chatID, _, _ := strings.Cut(rawID, "-")
 
 	var lastErr error
 	for _, dir := range e.agentDirs[parser.AgentPiebald] {
@@ -4975,7 +4977,7 @@ func (e *Engine) syncSinglePiebald(
 		if dbPath == "" {
 			continue
 		}
-		results, err := parser.ParsePiebaldSessionResults(dbPath, rawID, e.machine)
+		results, err := parser.ParsePiebaldSessionResults(dbPath, chatID, e.machine)
 		if err != nil {
 			lastErr = err
 			continue

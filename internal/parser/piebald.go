@@ -104,7 +104,7 @@ func ParsePiebaldDB(dbPath, machine string) ([]PiebaldSession, error) {
 			continue
 		}
 		for _, parsed := range parsedResults {
-			results = append(results, PiebaldSession{Session: parsed.Session, Messages: parsed.Messages})
+			results = append(results, PiebaldSession(parsed))
 		}
 	}
 	return results, nil
@@ -255,14 +255,6 @@ type piebaldToolCallRow struct {
 	toolError         sql.NullString
 	toolState         string
 	subAgentChatID    sql.NullInt64
-}
-
-func buildPiebaldSession(db *sql.DB, c piebaldChatRow, dbPath, machine string) (*ParsedSession, []ParsedMessage, error) {
-	results, err := buildPiebaldSessionResults(db, c, dbPath, machine)
-	if err != nil || len(results) == 0 {
-		return nil, nil, err
-	}
-	return &results[0].Session, results[0].Messages, nil
 }
 
 func buildPiebaldSessionResults(db *sql.DB, c piebaldChatRow, dbPath, machine string) ([]ParseResult, error) {
@@ -477,8 +469,12 @@ func splitPiebaldBranches(rows []piebaldMessageRow) []piebaldBranch {
 					continue
 				}
 				forkID := fmt.Sprintf("piebald:%d-%d", kid.parentChatID, kid.id)
+				// Evaluate walk() before append so nested forks
+				// added by the recursive call aren't lost to
+				// unspecified Go evaluation order.
+				branchRows := walk(kid, forkID)
 				forkBranches = append(forkBranches, piebaldBranch{
-					rows:       walk(kid, forkID),
+					rows:       branchRows,
 					parentID:   ownerID,
 					firstRowID: kid.id,
 				})
