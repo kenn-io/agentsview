@@ -72,6 +72,24 @@ func loadConfigFromPFlags(t *testing.T, args ...string) (Config, error) {
 	return LoadPFlags(fs)
 }
 
+func TestDefault_IncludesCodexArchivedSessionsDir(t *testing.T) {
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := cfg.ResolveDirs(parser.AgentCodex)
+	if len(dirs) != 2 {
+		t.Fatalf("len(codex dirs) = %d, want 2", len(dirs))
+	}
+	if !strings.HasSuffix(dirs[0], filepath.Join(".codex", "sessions")) {
+		t.Fatalf("dirs[0] = %q", dirs[0])
+	}
+	if !strings.HasSuffix(dirs[1], filepath.Join(".codex", "archived_sessions")) {
+		t.Fatalf("dirs[1] = %q", dirs[1])
+	}
+}
+
 func TestLoadEnv_OverridesDataDir(t *testing.T) {
 	custom := setupTestEnv(t)
 

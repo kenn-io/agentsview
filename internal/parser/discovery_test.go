@@ -136,6 +136,7 @@ func TestDiscoverClaudeProjects(t *testing.T) {
 func TestDiscoverCodexSessions(t *testing.T) {
 	file1 := "rollout-123-abc-def-ghi-jkl-mno.jsonl"
 	file2 := "rollout-456-abc-def-ghi-jkl-mno.jsonl"
+	flat := "rollout-2026-05-04T02-10-04-019df19b-ad1a-7f82-bfc3-38701744cc66.jsonl"
 
 	tests := []struct {
 		name      string
@@ -149,6 +150,13 @@ func TestDiscoverCodexSessions(t *testing.T) {
 				filepath.Join("2024", "02", "01", file2): "{}",
 			},
 			wantFiles: []string{file1, file2},
+		},
+		{
+			name: "FlatArchivedDir",
+			files: map[string]string{
+				flat: "{}",
+			},
+			wantFiles: []string{flat},
 		},
 		{
 			name: "SkipsNonDigit",
@@ -330,6 +338,7 @@ func TestFindCodexSourceFile(t *testing.T) {
 	uuid := "abc12345-1234-5678-9abc-def012345678"
 	filename := "rollout-20240115-" + uuid + ".jsonl"
 	relPath := filepath.Join("2024", "01", "15", filename)
+	flatName := "rollout-2026-05-04T02-10-04-" + uuid + ".jsonl"
 
 	tests := []struct {
 		name     string
@@ -338,8 +347,23 @@ func TestFindCodexSourceFile(t *testing.T) {
 		wantFile string
 	}{
 		{
-			name:     "Found",
+			name:     "FoundDated",
 			files:    map[string]string{relPath: "{}"},
+			targetID: uuid,
+			wantFile: relPath,
+		},
+		{
+			name:     "FoundFlatArchived",
+			files:    map[string]string{flatName: "{}"},
+			targetID: uuid,
+			wantFile: flatName,
+		},
+		{
+			name: "PrefersDatedOverFlat",
+			files: map[string]string{
+				relPath:  "{}",
+				flatName: "{}",
+			},
 			targetID: uuid,
 			wantFile: relPath,
 		},

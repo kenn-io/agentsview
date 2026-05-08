@@ -1111,7 +1111,7 @@ func TestSyncPathsGeminiJSONL(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
 }
 
-func TestSyncPathsCodexRejectsFlat(t *testing.T) {
+func TestSyncPathsCodexAcceptsFlatArchived(t *testing.T) {
 	env := setupTestEnv(t)
 
 	uuid := "d4e5f6a7-4567-8901-bcde-f12345678901"
@@ -1123,7 +1123,6 @@ func TestSyncPathsCodexRejectsFlat(t *testing.T) {
 		AddCodexMessage(tsEarlyS1, "user", "Add tests").
 		String()
 
-	// Write directly under codexDir (no year/month/day)
 	path := env.writeSession(
 		t, env.codexDir,
 		"rollout-flat-"+uuid+".jsonl", content,
@@ -1131,15 +1130,60 @@ func TestSyncPathsCodexRejectsFlat(t *testing.T) {
 
 	env.engine.SyncPaths([]string{path})
 
-	sess, _ := env.db.GetSession(
+	sess, err := env.db.GetSession(
 		context.Background(), "codex:"+uuid,
 	)
-	if sess != nil {
-		t.Error(
-			"flat Codex file should be ignored " +
-				"(no year/month/day structure)",
-		)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
 	}
+	if sess == nil {
+		t.Fatal("expected flat archived Codex session to sync")
+	}
+	if got := env.db.GetSessionFilePath("codex:" + uuid); got != path {
+		t.Fatalf("file path = %q, want %q", got, path)
+	}
+}
+
+func TestSyncPathsCodexPrefersLivePathOverArchived(t *testing.T) {
+	env := setupTestEnv(t)
+
+	uuid := "e5f6a7b8-5678-9012-cdef-234567890123"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			tsEarly, uuid,
+			"/home/user/code/api", "user",
+		).
+		AddCodexMessage(tsEarlyS1, "user", "Dedupe me").
+		String()
+
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		content,
+	)
+	archivedPath := env.writeSession(
+		t, env.codexDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		content,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	sess, err := env.db.GetSession(
+		context.Background(), "codex:"+uuid,
+	)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("expected Codex session to sync")
+	}
+	if got := env.db.GetSessionFilePath("codex:" + uuid); got != livePath {
+		t.Fatalf("file path = %q, want %q", got, livePath)
+	}
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
+	_ = archivedPath
 }
 
 func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {

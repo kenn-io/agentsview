@@ -382,10 +382,27 @@ func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {
 	return files
 }
 
-// DiscoverCodexSessions finds all JSONL files under the Codex
-// sessions dir (year/month/day structure).
+// DiscoverCodexSessions finds all Codex JSONL session files under
+// either the standard year/month/day layout or a flat archived dir.
 func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
 	var files []DiscoveredFile
+
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if !isCodexSessionFilename(entry.Name()) {
+			continue
+		}
+		files = append(files, DiscoveredFile{
+			Path:  filepath.Join(sessionsDir, entry.Name()),
+			Agent: AgentCodex,
+		})
+	}
 
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
 		entries, err := os.ReadDir(dayPath)
@@ -396,7 +413,7 @@ func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
 			if sf.IsDir() {
 				continue
 			}
-			if !strings.HasSuffix(sf.Name(), ".jsonl") {
+			if !isCodexSessionFilename(sf.Name()) {
 				continue
 			}
 			files = append(files, DiscoveredFile{
@@ -473,16 +490,34 @@ func FindClaudeSourceFile(
 }
 
 // FindCodexSourceFile finds a Codex session file by UUID.
-// Searches the year/month/day directory structure for files matching
-// rollout-{timestamp}-{uuid}.jsonl.
+// Prefers the standard year/month/day live path when present,
+// then falls back to a flat archived dir entry.
 func FindCodexSourceFile(sessionsDir, sessionID string) string {
 	if !IsValidSessionID(sessionID) {
 		return ""
 	}
 
-	var result string
+	var archived string
+	entries, err := os.ReadDir(sessionsDir)
+	if err == nil {
+		for _, f := range entries {
+			if f.IsDir() {
+				continue
+			}
+			name := f.Name()
+			if !isCodexSessionFilename(name) {
+				continue
+			}
+			if extractUUIDFromRollout(name) == sessionID {
+				archived = filepath.Join(sessionsDir, name)
+				break
+			}
+		}
+	}
+
+	var live string
 	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if result != "" {
+		if live != "" {
 			return false
 		}
 		entries, err := os.ReadDir(dayPath)
@@ -494,18 +529,83 @@ func FindCodexSourceFile(sessionsDir, sessionID string) string {
 				continue
 			}
 			name := f.Name()
-			if !strings.HasPrefix(name, "rollout-") ||
-				!strings.HasSuffix(name, ".jsonl") {
+			if !isCodexSessionFilename(name) {
 				continue
 			}
 			if extractUUIDFromRollout(name) == sessionID {
-				result = filepath.Join(dayPath, name)
+				live = filepath.Join(dayPath, name)
 				return false
 			}
 		}
 		return true
 	})
-	return result
+	if live != "" {
+		return live
+	}
+	return archived
+}
+
+func isCodexSessionFilename(name string) bool {
+	return strings.HasPrefix(name, "rollout-") &&
+		strings.HasSuffix(name, ".jsonl")
+}
+
+// CodexSessionUUIDFromFilename extracts the canonical session UUID
+// from a Codex rollout filename. Returns "" when the filename does
+// not match Codex session naming.
+func CodexSessionUUIDFromFilename(name string) string {
+	if !isCodexSessionFilename(name) {
+		return ""
+	}
+	return extractUUIDFromRollout(name)
+}
+
+// CodexLayout reports which on-disk layout a Codex session path uses.
+type CodexLayout int
+
+const (
+	CodexLayoutUnknown CodexLayout = iota
+	CodexLayoutArchivedFlat
+	CodexLayoutDated
+)
+
+// CodexSessionPathInfo parses a Codex path relative to a configured
+// root and reports whether it is a valid session path plus its layout
+// and canonical session UUID.
+func CodexSessionPathInfo(root, path string) (CodexLayout, string, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return CodexLayoutUnknown, "", false
+	}
+	sep := string(filepath.Separator)
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+sep) {
+		return CodexLayoutUnknown, "", false
+	}
+	if !strings.HasSuffix(path, ".jsonl") {
+		return CodexLayoutUnknown, "", false
+	}
+	parts := strings.Split(rel, sep)
+	switch len(parts) {
+	case 1:
+		if !isCodexSessionFilename(parts[0]) {
+			return CodexLayoutUnknown, "", false
+		}
+		return CodexLayoutArchivedFlat,
+			CodexSessionUUIDFromFilename(parts[0]), true
+	case 4:
+		if !IsDigits(parts[0]) || !IsDigits(parts[1]) || !IsDigits(parts[2]) {
+			return CodexLayoutUnknown, "", false
+		}
+		if !isCodexSessionFilename(parts[3]) {
+			return CodexLayoutUnknown, "", false
+		}
+		return CodexLayoutDated,
+			CodexSessionUUIDFromFilename(parts[3]), true
+	default:
+		return CodexLayoutUnknown, "", false
+	}
 }
 
 // walkCodexDayDirs traverses a Codex sessions directory with

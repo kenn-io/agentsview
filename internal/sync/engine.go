@@ -310,7 +310,76 @@ func (e *Engine) classifyPaths(
 			files = append(files, df)
 		}
 	}
-	return files
+	return dedupeDiscoveredFiles(files)
+}
+
+func dedupeDiscoveredFiles(
+	files []parser.DiscoveredFile,
+) []parser.DiscoveredFile {
+	if len(files) < 2 {
+		return files
+	}
+
+	bestByKey := make(map[string]parser.DiscoveredFile, len(files))
+	for _, file := range files {
+		key := discoveredFileKey(file)
+		if current, ok := bestByKey[key]; ok {
+			if preferDiscoveredFile(file, current) {
+				bestByKey[key] = file
+			}
+			continue
+		}
+		bestByKey[key] = file
+	}
+
+	out := make([]parser.DiscoveredFile, 0, len(bestByKey))
+	for _, file := range files {
+		key := discoveredFileKey(file)
+		chosen, ok := bestByKey[key]
+		if !ok || chosen.Path != file.Path || chosen.Agent != file.Agent {
+			continue
+		}
+		out = append(out, file)
+		delete(bestByKey, key)
+	}
+	return out
+}
+
+func discoveredFileKey(file parser.DiscoveredFile) string {
+	if file.Agent == parser.AgentCodex {
+		if id := parser.CodexSessionUUIDFromFilename(filepath.Base(file.Path)); id != "" {
+			return string(file.Agent) + "\x00" + id
+		}
+	}
+	return string(file.Agent) + "\x00" + file.Path
+}
+
+func preferDiscoveredFile(
+	candidate, current parser.DiscoveredFile,
+) bool {
+	if candidate.Agent == parser.AgentCodex && current.Agent == parser.AgentCodex {
+		candLayout := codexLayoutForPath(candidate.Path)
+		currLayout := codexLayoutForPath(current.Path)
+		if candLayout != currLayout {
+			return candLayout == parser.CodexLayoutDated
+		}
+	}
+	return false
+}
+
+func codexLayoutForPath(path string) parser.CodexLayout {
+	path = filepath.Clean(path)
+	name := filepath.Base(path)
+	if parser.CodexSessionUUIDFromFilename(name) == "" {
+		return parser.CodexLayoutUnknown
+	}
+	day := filepath.Base(filepath.Dir(path))
+	month := filepath.Base(filepath.Dir(filepath.Dir(path)))
+	year := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path))))
+	if parser.IsDigits(day) && parser.IsDigits(month) && parser.IsDigits(year) {
+		return parser.CodexLayoutDated
+	}
+	return parser.CodexLayoutArchivedFlat
 }
 
 // isUnder checks whether path is strictly inside dir after
@@ -409,24 +478,13 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Codex: <codexDir>/<year>/<month>/<day>/<file>.jsonl
+	// Codex: either <codexDir>/<year>/<month>/<day>/<file>.jsonl
+	// or <codexDir>/<file>.jsonl for archived sessions.
 	for _, codexDir := range e.agentDirs[parser.AgentCodex] {
 		if codexDir == "" {
 			continue
 		}
-		if rel, ok := isUnder(codexDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 4 {
-				continue
-			}
-			if !parser.IsDigits(parts[0]) ||
-				!parser.IsDigits(parts[1]) ||
-				!parser.IsDigits(parts[2]) {
-				continue
-			}
-			if !strings.HasSuffix(parts[3], ".jsonl") {
-				continue
-			}
+		if _, _, ok := parser.CodexSessionPathInfo(codexDir, path); ok {
 			return parser.DiscoveredFile{
 				Path:  path,
 				Agent: parser.AgentCodex,
@@ -1425,6 +1483,8 @@ func (e *Engine) syncAllLocked(
 			all = append(all, found...)
 		}
 	}
+
+	all = dedupeDiscoveredFiles(all)
 
 	if !since.IsZero() {
 		all = filterFilesByMtime(all, since)
