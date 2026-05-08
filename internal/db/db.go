@@ -27,14 +27,18 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 26: Claude parser now (a) links Task / Agent tool
+// Bumped to 27: Piebald parser now persists normalized per-message
+// token_usage JSON. Existing Piebald rows need re-parsing so Usage
+// reports can include older Piebald sessions.
+//
+// (26: Claude parser now (a) links Task / Agent tool
 // calls to child subagent sessions via toolUseResult.agentId
 // when queue/progress mappings are absent, populating
 // tool_calls.subagent_session_id, and (b) merges additive
 // same-message.id assistant chunks instead of keeping only the
 // last entry, preserving sibling tool_use blocks and
 // progressively-built text. Existing rows need re-parsing so
-// these linkages and merged content show up.
+// these linkages and merged content show up.)
 //
 // (25: Codex parser now also links codex_app subagents
 // via collab_agent_spawn_end event_msgs, wait_agent function
@@ -77,7 +81,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 26
+const dataVersion = 27
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

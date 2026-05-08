@@ -64,9 +64,19 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"view", "Read"},
 		{"report_intent", "Tool"},
 
-		// Zencoder tools
-		{"WebFetch", "Read"},
+		// Piebald / Zencoder-style built-in tools
+		{"ReadFile", "Read"},
+		{"WriteFile", "Write"},
+		{"EditFile", "Edit"},
+		{"RunTerminalCommand", "Bash"},
+		{"LaunchSubagent", "Task"},
+		{"WebFetch", "Tool"},
+		{"WebSearch", "Tool"},
 		{"TodoWrite", "Tool"},
+		{"AskUserQuestion", "Tool"},
+		{"ProposePlanToUser", "Tool"},
+
+		// Zencoder tools (not already covered above).
 		{"subagent__ZencoderSubagent", "Task"},
 		{"zencoder-rag-mcp__web_search", "Read"},
 		// Zencoder MCP-prefixed subagent variants
@@ -88,7 +98,6 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"view_image", "Other"},
 		{"update_plan", "Other"},
 		{"list_mcp_resources", "Other"},
-		{"AskUserQuestion", "Other"},
 		{"EnterPlanMode", "Other"},
 		{"ExitPlanMode", "Other"},
 		{"", "Other"},

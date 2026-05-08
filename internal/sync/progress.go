@@ -31,9 +31,9 @@ type SyncResult struct {
 
 // SyncStats summarizes a full sync run.
 //
-// TotalSessions counts discovered files plus OpenCode sessions.
+// TotalSessions counts discovered files plus DB-backed sessions.
 // Synced counts sessions (one file can produce multiple via fork
-// detection; OpenCode adds sessions directly). Failed counts
+// detection; DB-backed agents add sessions directly). Failed counts
 // files with hard parse/stat errors. filesOK counts files that
 // produced at least one session — used by ResyncAll to compare
 // against Failed on the same unit.
@@ -47,7 +47,8 @@ type SyncStats struct {
 	Aborted        bool     `json:"aborted,omitempty"`
 
 	filesOK         int // unexported: file-level success counter
-	filesDiscovered int // file-based total, excludes OpenCode
+	filesDiscovered int // file-based total, excludes DB-backed agents
+	messagesIndexed int // unexported: progress message counter
 }
 
 // RecordSkip increments the skipped session counter.

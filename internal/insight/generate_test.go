@@ -201,7 +201,7 @@ func TestAgentEnv(t *testing.T) {
 
 func TestValidAgents(t *testing.T) {
 	for _, agent := range []string{
-		"claude", "codex", "copilot", "gemini",
+		"claude", "codex", "copilot", "gemini", "kiro",
 	} {
 		if !ValidAgents[agent] {
 			t.Errorf("%s should be valid", agent)

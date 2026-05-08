@@ -28,6 +28,7 @@ describe("KNOWN_AGENTS", () => {
       "kiro",
       "kiro-ide",
       "cortex",
+      "piebald",
     ]);
   });
 
@@ -73,6 +74,9 @@ describe("agentColor", () => {
     expect(agentColor("vscode-copilot")).toBe(
       "var(--accent-teal)",
     );
+    expect(agentColor("piebald")).toBe(
+      "var(--accent-orange)",
+    );
   });
 
   it("falls back to blue for unknown agents", () => {
@@ -91,6 +95,7 @@ describe("agentLabel", () => {
     expect(agentLabel("openhands")).toBe("OpenHands");
     expect(agentLabel("openclaw")).toBe("OpenClaw");
     expect(agentLabel("iflow")).toBe("iFlow");
+    expect(agentLabel("piebald")).toBe("Piebald");
   });
 
   it("capitalizes simple agent names", () => {

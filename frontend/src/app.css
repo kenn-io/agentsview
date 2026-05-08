@@ -33,6 +33,7 @@
   --accent-sky: #0284c7;
   --accent-pink: #ec4899;
   --accent-lime: #65a30d;
+  --accent-cyan: #0891b2;
   /* Tool-category color map (see internal/parser/taxonomy.go for normalized values) */
   --cat-read:  #4a7ba8; /* Read, Grep, Glob */
   --cat-edit:  #5a8b3a; /* Edit, Write */
@@ -102,6 +103,7 @@
   --accent-sky: #38bdf8;
   --accent-pink: #f472b6;
   --accent-lime: #a3e635;
+  --accent-cyan: #22d3ee;
   /* Lighter champagne for dark mode — keeps the same warm-gold
      identity without disappearing into the dark surface. */
   --status-waiting: #d4b878;

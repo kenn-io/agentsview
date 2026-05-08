@@ -275,6 +275,18 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentAmp,
 		AgentVSCodeCopilot,
 		AgentPi,
+		AgentOpenClaw,
+		AgentKimi,
+		AgentClaudeAI,
+		AgentChatGPT,
+		AgentKiro,
+		AgentKiroIDE,
+		AgentCortex,
+		AgentHermes,
+		AgentForge,
+		AgentPiebald,
+		AgentWarp,
+		AgentPositron,
 	}
 
 	registered := make(map[AgentType]bool)

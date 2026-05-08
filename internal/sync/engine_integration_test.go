@@ -27,6 +27,7 @@ type testEnv struct {
 	geminiDir   string
 	opencodeDir string
 	forgeDir    string
+	piebaldDir  string
 	iflowDir    string
 	ampDir      string
 	piDir       string
@@ -86,12 +87,13 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	}
 
 	env := &testEnv{
-		geminiDir: t.TempDir(),
-		forgeDir:  t.TempDir(),
-		iflowDir:  t.TempDir(),
-		ampDir:    t.TempDir(),
-		piDir:     t.TempDir(),
-		db:        dbtest.OpenTestDB(t),
+		geminiDir:  t.TempDir(),
+		forgeDir:   t.TempDir(),
+		piebaldDir: t.TempDir(),
+		iflowDir:   t.TempDir(),
+		ampDir:     t.TempDir(),
+		piDir:      t.TempDir(),
+		db:         dbtest.OpenTestDB(t),
 	}
 
 	claudeDirs := options.claudeDirs
@@ -134,6 +136,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentGemini:   {env.geminiDir},
 			parser.AgentOpenCode: opencodeDirs,
 			parser.AgentForge:    {env.forgeDir},
+			parser.AgentPiebald:  {env.piebaldDir},
 			parser.AgentIflow:    {env.iflowDir},
 			parser.AgentAmp:      {env.ampDir},
 			parser.AgentPi:       {env.piDir},
@@ -415,14 +418,76 @@ func TestSyncEngineProgress(t *testing.T) {
 			t, "test-proj", name+".jsonl", msg,
 		)
 	}
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(t, 42, "Piebald", "Prompt.", "Answer.", "2026-05-01T10:05:00Z")
 
 	var progressCalls int
+	var firstTotal int
+	var last sync.Progress
 	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
 		progressCalls++
+		if firstTotal == 0 {
+			firstTotal = p.SessionsTotal
+		}
+		last = p
 	})
 
 	if progressCalls == 0 {
 		t.Error("expected progress callbacks")
+	}
+	if firstTotal != 4 {
+		t.Errorf("first progress total = %d, want 4", firstTotal)
+	}
+	if last.SessionsDone != 4 || last.SessionsTotal != 4 {
+		t.Errorf("last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
+	}
+
+	progressCalls = 0
+	firstTotal = 0
+	last = sync.Progress{}
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		progressCalls++
+		if firstTotal == 0 {
+			firstTotal = p.SessionsTotal
+		}
+		last = p
+	})
+	if progressCalls == 0 {
+		t.Error("expected progress callbacks on second sync")
+	}
+	if firstTotal != 4 {
+		t.Errorf("second first progress total = %d, want 4", firstTotal)
+	}
+	if last.SessionsDone != 4 || last.SessionsTotal != 4 {
+		t.Errorf("second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
+	}
+}
+
+func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "msg").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
+	piebald.addChat(t, 2, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")
+
+	var seen []sync.Progress
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		seen = append(seen, p)
+	})
+	if len(seen) == 0 {
+		t.Fatal("expected progress callbacks")
+	}
+	last := seen[len(seen)-1]
+	if last.Phase != sync.PhaseDone {
+		t.Fatalf("last phase = %q, want done", last.Phase)
+	}
+	if last.SessionsDone != last.SessionsTotal || last.SessionsTotal != 3 {
+		t.Fatalf("last progress = %d/%d, want 3/3", last.SessionsDone, last.SessionsTotal)
 	}
 }
 

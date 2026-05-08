@@ -31,6 +31,7 @@ const (
 	AgentCortex        AgentType = "cortex"
 	AgentHermes        AgentType = "hermes"
 	AgentForge         AgentType = "forge"
+	AgentPiebald       AgentType = "piebald"
 	AgentWarp          AgentType = "warp"
 	AgentPositron      AgentType = "positron"
 )
@@ -306,6 +307,22 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".forge"},
 		IDPrefix:    "forge:",
 		FileBased:   false,
+	},
+	{
+		Type:        AgentPiebald,
+		DisplayName: "Piebald",
+		EnvVar:      "PIEBALD_DIR",
+		ConfigKey:   "piebald_dirs",
+		DefaultDirs: []string{
+			// Linux
+			".local/share/piebald",
+			// macOS
+			"Library/Application Support/piebald",
+			// Windows
+			"AppData/Roaming/piebald",
+		},
+		IDPrefix:  "piebald:",
+		FileBased: false,
 	},
 	{
 		Type:        AgentWarp,

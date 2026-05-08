@@ -272,7 +272,7 @@ func (e *Engine) SyncPaths(paths []string) {
 
 	results := e.startWorkers(context.Background(), files)
 	stats = e.collectAndBatch(
-		context.Background(), results, len(files), nil,
+		context.Background(), results, len(files), len(files), nil,
 		syncWriteDefault,
 	)
 	e.persistSkipCache()
@@ -1450,17 +1450,19 @@ func (e *Engine) syncAllLocked(
 		)
 	}
 
+	progressTotal := len(all)
 	if onProgress != nil {
+		progressTotal += e.countDBBackedSessions(ctx)
 		onProgress(Progress{
 			Phase:         PhaseSyncing,
-			SessionsTotal: len(all),
+			SessionsTotal: progressTotal,
 		})
 	}
 
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
 	stats := e.collectAndBatch(
-		ctx, results, len(all), onProgress, writeMode,
+		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
 	if verbose {
 		log.Printf(
@@ -1479,6 +1481,24 @@ func (e *Engine) syncAllLocked(
 	if stats.Aborted || ctx.Err() != nil {
 		stats.Aborted = true
 		return stats
+	}
+
+	dbProgress := Progress{
+		Phase:           PhaseSyncing,
+		SessionsTotal:   progressTotal,
+		SessionsDone:    stats.filesDiscovered,
+		MessagesIndexed: stats.messagesIndexed,
+	}
+
+	advanceDBProgress := func(total int, pending []pendingWrite) {
+		if onProgress == nil || total == 0 {
+			return
+		}
+		dbProgress.SessionsDone += total
+		for _, pw := range pending {
+			dbProgress.MessagesIndexed += len(pw.msgs)
+		}
+		onProgress(dbProgress)
 	}
 
 	// Sync OpenCode sessions (DB-backed, not file-based).
@@ -1529,6 +1549,7 @@ func (e *Engine) syncAllLocked(
 			time.Since(tOC).Round(time.Millisecond),
 		)
 	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentOpenCode), ocPending)
 
 	if ctx.Err() != nil {
 		stats.Aborted = true
@@ -1581,6 +1602,7 @@ func (e *Engine) syncAllLocked(
 			time.Since(tWarp).Round(time.Millisecond),
 		)
 	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentWarp), warpPending)
 
 	if ctx.Err() != nil {
 		stats.Aborted = true
@@ -1633,6 +1655,60 @@ func (e *Engine) syncAllLocked(
 			time.Since(tForge).Round(time.Millisecond),
 		)
 	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentForge), forgePending)
+
+	if ctx.Err() != nil {
+		stats.Aborted = true
+		return stats
+	}
+
+	// Sync Piebald sessions (DB-backed, not file-based).
+	tPiebald := time.Now()
+	piebaldPending := e.syncPiebald(ctx)
+	if len(piebaldPending) > 0 {
+		stats.TotalSessions += len(piebaldPending)
+		tWrite := time.Now()
+		var piebaldWritten int
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			piebaldWritten, _, failedWrites = e.writeBatch(
+				piebaldPending, writeMode, true,
+			)
+			for range failedWrites {
+				stats.RecordFailed()
+			}
+		} else {
+			for _, pw := range piebaldPending {
+				if ctx.Err() != nil {
+					break
+				}
+				switch err := e.writeSessionFull(pw); {
+				case err == nil:
+					piebaldWritten++
+				case errors.Is(err, db.ErrSessionExcluded),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
+			}
+		}
+		stats.RecordSynced(piebaldWritten)
+		if verbose {
+			log.Printf(
+				"piebald write: %d sessions in %s",
+				len(piebaldPending),
+				time.Since(tWrite).Round(time.Millisecond),
+			)
+		}
+	}
+	if verbose {
+		log.Printf(
+			"piebald sync: %s",
+			time.Since(tPiebald).Round(time.Millisecond),
+		)
+	}
+	advanceDBProgress(e.countDBBackedProgressTotal(parser.AgentPiebald), piebaldPending)
 
 	if ctx.Err() != nil {
 		stats.Aborted = true
@@ -1640,7 +1716,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	// Link subagent child sessions to their parents after all DB-backed
-	// agent writes (Warp, Forge). LinkSubagentSessions is idempotent — its
+	// agent writes (Warp, Forge, Piebald). LinkSubagentSessions is idempotent — its
 	// WHERE filter and partial index make it a cheap no-op when nothing new
 	// was written — so no guard is needed.
 	if err := e.db.LinkSubagentSessions(); err != nil {
@@ -1655,6 +1731,15 @@ func (e *Engine) syncAllLocked(
 			skipCount,
 			time.Since(tPersist).Round(time.Millisecond),
 		)
+	}
+
+	if onProgress != nil {
+		onProgress(Progress{
+			Phase:           PhaseDone,
+			SessionsTotal:   progressTotal,
+			SessionsDone:    progressTotal,
+			MessagesIndexed: stats.messagesIndexed,
+		})
 	}
 
 	e.mu.Lock()
@@ -1741,6 +1826,108 @@ func discoveredFileMtime(
 // syncOpenCode syncs sessions from OpenCode SQLite databases.
 // Uses per-session time_updated to detect changes, so only
 // modified sessions are fully parsed. Returns pending writes.
+func (e *Engine) openCodePendingSessionIDs(dir string) []string {
+	dbPath := filepath.Join(dir, "opencode.db")
+	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
+		return nil
+	}
+
+	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync opencode: %v", err)
+		return nil
+	}
+	storageIDs := parser.OpenCodeStorageSessionIDs(dir)
+	var changed []string
+	for _, m := range metas {
+		if _, ok := storageIDs[m.SessionID]; ok {
+			continue
+		}
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOneOpenCodeSessions(dir string) int {
+	dbPath := filepath.Join(dir, "opencode.db")
+	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
+		return 0
+	}
+	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync opencode: %v", err)
+		return 0
+	}
+	storageIDs := parser.OpenCodeStorageSessionIDs(dir)
+	count := 0
+	for _, m := range metas {
+		if _, ok := storageIDs[m.SessionID]; !ok {
+			count++
+		}
+	}
+	return count
+}
+
+func (e *Engine) countDBBackedProgressTotal(agent parser.AgentType) int {
+	total := 0
+	for _, dir := range e.agentDirs[agent] {
+		if dir == "" {
+			continue
+		}
+		switch agent {
+		case parser.AgentOpenCode:
+			total += e.countOneOpenCodeSessions(dir)
+		case parser.AgentWarp:
+			total += e.countOneWarpSessions(dir)
+		case parser.AgentForge:
+			total += e.countOneForgeSessions(dir)
+		case parser.AgentPiebald:
+			total += e.countOnePiebaldSessions(dir)
+		}
+	}
+	return total
+}
+
+func (e *Engine) countDBBackedSessions(ctx context.Context) int {
+	if ctx.Err() != nil {
+		return 0
+	}
+	total := 0
+	for _, dir := range e.agentDirs[parser.AgentOpenCode] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOneOpenCodeSessions(dir)
+	}
+	for _, dir := range e.agentDirs[parser.AgentWarp] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOneWarpSessions(dir)
+	}
+	for _, dir := range e.agentDirs[parser.AgentForge] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOneForgeSessions(dir)
+	}
+	for _, dir := range e.agentDirs[parser.AgentPiebald] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOnePiebaldSessions(dir)
+	}
+	return total
+}
+
+// syncOpenCode syncs sessions from OpenCode SQLite databases.
+// Uses per-session time_updated to detect changes, so only
+// modified sessions are fully parsed. Returns pending writes.
 func (e *Engine) syncOpenCode(
 	ctx context.Context,
 ) []pendingWrite {
@@ -1764,35 +1951,7 @@ func (e *Engine) syncOneOpenCode(
 	ctx context.Context, dir string,
 ) []pendingWrite {
 	dbPath := filepath.Join(dir, "opencode.db")
-	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
-		return nil
-	}
-
-	metas, err := parser.ListOpenCodeSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync opencode: %v", err)
-		return nil
-	}
-	if len(metas) == 0 {
-		return nil
-	}
-
-	storageIDs := parser.OpenCodeStorageSessionIDs(dir)
-
-	var changed []string
-	for _, m := range metas {
-		if _, ok := storageIDs[m.SessionID]; ok {
-			continue
-		}
-		_, storedMtime, ok :=
-			e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime &&
-			e.db.GetDataVersionByPath(m.VirtualPath) >=
-				db.CurrentDataVersion() {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
+	changed := e.openCodePendingSessionIDs(dir)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -1875,7 +2034,7 @@ func (e *Engine) startWorkers(
 // and returns partial stats.
 func (e *Engine) collectAndBatch(
 	ctx context.Context,
-	results <-chan syncJob, total int,
+	results <-chan syncJob, total int, progressTotal int,
 	onProgress ProgressFunc,
 	writeMode syncWriteMode,
 ) SyncStats {
@@ -1883,9 +2042,12 @@ func (e *Engine) collectAndBatch(
 	stats.TotalSessions = total
 	stats.filesDiscovered = total
 
+	if progressTotal == 0 {
+		progressTotal = total
+	}
 	progress := Progress{
 		Phase:         PhaseSyncing,
-		SessionsTotal: total,
+		SessionsTotal: progressTotal,
 	}
 
 	var pending []pendingWrite
@@ -1949,6 +2111,7 @@ func (e *Engine) collectAndBatch(
 			progress.MessagesIndexed += len(
 				r.incremental.msgs,
 			)
+			stats.messagesIndexed = progress.MessagesIndexed
 		} else {
 			for _, pr := range r.results {
 				pending = append(pending, pendingWrite{
@@ -1967,6 +2130,7 @@ func (e *Engine) collectAndBatch(
 				stats.RecordFailed()
 			}
 			progress.MessagesIndexed += writtenMessages
+			stats.messagesIndexed = progress.MessagesIndexed
 			pending = pending[:0]
 		}
 
@@ -1985,6 +2149,7 @@ flush:
 			stats.RecordFailed()
 		}
 		progress.MessagesIndexed += writtenMessages
+		stats.messagesIndexed = progress.MessagesIndexed
 	}
 
 	// Link subagent child sessions to their parents via
@@ -1995,6 +2160,7 @@ flush:
 	}
 
 	progress.Phase = PhaseDone
+	progress.SessionsDone = progressTotal
 	if onProgress != nil {
 		onProgress(progress)
 	}
@@ -4083,6 +4249,16 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 					return dbPath
 				}
 			}
+		case parser.AgentPiebald:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindPiebaldDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				if _, _, err := parser.ParsePiebaldSession(dbPath, rawSessionID, e.machine); err == nil {
+					return dbPath
+				}
+			}
 		}
 		return ""
 	}
@@ -4156,6 +4332,22 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 					}
 				}
 			}
+		case parser.AgentPiebald:
+			for _, d := range e.agentDirs[def.Type] {
+				dbPath := parser.FindPiebaldDBPath(d)
+				if dbPath == "" {
+					continue
+				}
+				metas, err := parser.ListPiebaldSessionMeta(dbPath)
+				if err != nil {
+					continue
+				}
+				for _, meta := range metas {
+					if meta.SessionID == rawSessionID {
+						return meta.FileMtime
+					}
+				}
+			}
 		}
 		return 0
 	}
@@ -4212,6 +4404,8 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 			return e.syncSingleWarp(sessionID)
 		case parser.AgentForge:
 			return e.syncSingleForge(sessionID)
+		case parser.AgentPiebald:
+			return e.syncSinglePiebald(sessionID)
 		default:
 			err = e.syncSingleOpenCode(sessionID)
 			if errors.Is(err, errSessionPreserved) {
@@ -4428,6 +4622,40 @@ func findOpenCodeStorageSessionIDByMessageID(
 	return ""
 }
 
+func (e *Engine) warpPendingSessionIDs(dir string) []string {
+	dbPath := parser.FindWarpDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+	metas, err := parser.ListWarpSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync warp: %v", err)
+		return nil
+	}
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOneWarpSessions(dir string) int {
+	dbPath := parser.FindWarpDBPath(dir)
+	if dbPath == "" {
+		return 0
+	}
+	metas, err := parser.ListWarpSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync warp: %v", err)
+		return 0
+	}
+	return len(metas)
+}
+
 // syncWarp syncs sessions from Warp SQLite databases.
 // Uses per-conversation last_modified_at to detect changes,
 // so only modified conversations are fully parsed.
@@ -4454,28 +4682,7 @@ func (e *Engine) syncOneWarp(
 	ctx context.Context, dir string,
 ) []pendingWrite {
 	dbPath := parser.FindWarpDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-
-	metas, err := parser.ListWarpSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync warp: %v", err)
-		return nil
-	}
-	if len(metas) == 0 {
-		return nil
-	}
-
-	var changed []string
-	for _, m := range metas {
-		_, storedMtime, ok :=
-			e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
+	changed := e.warpPendingSessionIDs(dir)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -4551,6 +4758,41 @@ func (e *Engine) syncSingleWarp(
 	return fmt.Errorf("warp session %s not found", sessionID)
 }
 
+func (e *Engine) forgePendingSessionIDs(dir string) []string {
+	dbPath := parser.FindForgeDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+	metas, err := parser.ListForgeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync forge: %v", err)
+		return nil
+	}
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOneForgeSessions(dir string) int {
+	dbPath := parser.FindForgeDBPath(dir)
+	if dbPath == "" {
+		return 0
+	}
+	metas, err := parser.ListForgeSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync forge: %v", err)
+		return 0
+	}
+	return len(metas)
+}
+
 // syncForge syncs sessions from Forge SQLite databases.
 func (e *Engine) syncForge(
 	ctx context.Context,
@@ -4573,28 +4815,7 @@ func (e *Engine) syncOneForge(
 	ctx context.Context, dir string,
 ) []pendingWrite {
 	dbPath := parser.FindForgeDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-
-	metas, err := parser.ListForgeSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync forge: %v", err)
-		return nil
-	}
-	if len(metas) == 0 {
-		return nil
-	}
-
-	var changed []string
-	for _, m := range metas {
-		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime &&
-			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
+	changed := e.forgePendingSessionIDs(dir)
 	if len(changed) == 0 {
 		return nil
 	}
@@ -4658,6 +4879,130 @@ func (e *Engine) syncSingleForge(
 		return fmt.Errorf("forge session %s: %w", sessionID, lastErr)
 	}
 	return fmt.Errorf("forge session %s not found", sessionID)
+}
+
+func (e *Engine) piebaldPendingSessionIDs(dir string) []string {
+	dbPath := parser.FindPiebaldDBPath(dir)
+	if dbPath == "" {
+		return nil
+	}
+	metas, err := parser.ListPiebaldSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync piebald: %v", err)
+		return nil
+	}
+	var changed []string
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == m.FileMtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			continue
+		}
+		changed = append(changed, m.SessionID)
+	}
+	return changed
+}
+
+func (e *Engine) countOnePiebaldSessions(dir string) int {
+	dbPath := parser.FindPiebaldDBPath(dir)
+	if dbPath == "" {
+		return 0
+	}
+	metas, err := parser.ListPiebaldSessionMeta(dbPath)
+	if err != nil {
+		log.Printf("sync piebald: %v", err)
+		return 0
+	}
+	return len(metas)
+}
+
+// syncPiebald syncs sessions from Piebald SQLite databases.
+func (e *Engine) syncPiebald(
+	ctx context.Context,
+) []pendingWrite {
+	var allPending []pendingWrite
+	for _, dir := range e.agentDirs[parser.AgentPiebald] {
+		if ctx.Err() != nil {
+			break
+		}
+		if dir == "" {
+			continue
+		}
+		allPending = append(allPending, e.syncOnePiebald(ctx, dir)...)
+	}
+	return allPending
+}
+
+// syncOnePiebald handles a single Piebald data directory.
+func (e *Engine) syncOnePiebald(
+	ctx context.Context, dir string,
+) []pendingWrite {
+	dbPath := parser.FindPiebaldDBPath(dir)
+	changed := e.piebaldPendingSessionIDs(dir)
+	if len(changed) == 0 {
+		return nil
+	}
+
+	var pending []pendingWrite
+	for _, cid := range changed {
+		if ctx.Err() != nil {
+			break
+		}
+		results, err := parser.ParsePiebaldSessionResults(dbPath, cid, e.machine)
+		if err != nil {
+			log.Printf("piebald chat %s: %v", cid, err)
+			continue
+		}
+		for _, result := range results {
+			pending = append(pending, pendingWrite{sess: result.Session, msgs: result.Messages})
+		}
+	}
+	return pending
+}
+
+// syncSinglePiebald re-syncs a single Piebald chat.
+func (e *Engine) syncSinglePiebald(
+	sessionID string,
+) error {
+	rawID := strings.TrimPrefix(sessionID, "piebald:")
+
+	var lastErr error
+	for _, dir := range e.agentDirs[parser.AgentPiebald] {
+		if dir == "" {
+			continue
+		}
+		dbPath := parser.FindPiebaldDBPath(dir)
+		if dbPath == "" {
+			continue
+		}
+		results, err := parser.ParsePiebaldSessionResults(dbPath, rawID, e.machine)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if len(results) == 0 {
+			continue
+		}
+		for _, result := range results {
+			if err := e.writeSessionFull(
+				pendingWrite{sess: result.Session, msgs: result.Messages},
+			); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
+				return fmt.Errorf("write session %s: %w", result.Session.ID, err)
+			}
+		}
+		if err := e.db.LinkSubagentSessions(); err != nil {
+			log.Printf("link subagent sessions: %v", err)
+		}
+		return nil
+	}
+
+	if len(e.agentDirs[parser.AgentPiebald]) == 0 {
+		return fmt.Errorf("piebald dir not configured")
+	}
+	if lastErr != nil {
+		return fmt.Errorf("piebald session %s: %w", sessionID, lastErr)
+	}
+	return fmt.Errorf("piebald session %s not found", sessionID)
 }
 
 func strPtr(s string) *string {

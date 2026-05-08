@@ -31,7 +31,8 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "chatgpt", color: "var(--accent-lime)", label: "ChatGPT" },
   { name: "kiro", color: "var(--accent-lime)", label: "Kiro" },
   { name: "kiro-ide", color: "var(--accent-lime)", label: "Kiro IDE" },
-  { name: "cortex", color: "var(--accent-cyan)", label: "Cortex Code" }
+  { name: "cortex", color: "var(--accent-cyan)", label: "Cortex Code" },
+  { name: "piebald", color: "var(--accent-orange)", label: "Piebald" },
 ];
 
 const agentColorMap = new Map(

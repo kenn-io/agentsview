@@ -16,6 +16,7 @@
     pi: "Pi",
     openclaw: "OpenClaw",
     kimi: "Kimi",
+    piebald: "Piebald",
   };
 </script>
 

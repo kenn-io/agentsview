@@ -185,6 +185,7 @@ agentsview auto-discovers sessions from all of these:
 | Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
 | Hermes Agent       | `~/.hermes/sessions/`                                  |
 | Forge              | `~/.forge/`                                            |
+| Piebald            | `~/.local/share/piebald/`                              |
 | Warp               | `~/.warp/` (platform-dependent)                        |
 | Positron Assistant | `~/Library/Application Support/Positron/User/` (macOS) |
 
