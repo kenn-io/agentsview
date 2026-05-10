@@ -464,7 +464,7 @@ func TestSyncSingleSessionAppliesWorktreeProjectMapping(t *testing.T) {
 	)
 }
 
-func TestSyncSingleSessionSkippedClaudeAppliesWorktreeProjectMapping(
+func TestSyncSingleSessionSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	t *testing.T,
 ) {
 	env := setupTestEnv(t)
@@ -525,12 +525,25 @@ func TestSyncSingleSessionSkippedClaudeAppliesWorktreeProjectMapping(
 		t.Fatalf("SyncSingleSession: %v", err)
 	}
 
-	assertSessionProject(
-		t, env.db, "mapped-worktree-single-skip", "canonical_app",
+	after, err := env.db.GetSession(
+		context.Background(), "mapped-worktree-single-skip",
 	)
+	if err != nil {
+		t.Fatalf("GetSession after skipped sync: %v", err)
+	}
+	if after == nil {
+		t.Fatal("session missing after skipped sync")
+	}
+	if after.Project != before.Project {
+		t.Fatalf(
+			"project after skipped sync = %q, want %q",
+			after.Project,
+			before.Project,
+		)
+	}
 }
 
-func TestSyncAllSkippedClaudeAppliesWorktreeProjectMapping(
+func TestSyncAllSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	t *testing.T,
 ) {
 	env := setupTestEnv(t)
@@ -584,12 +597,25 @@ func TestSyncAllSkippedClaudeAppliesWorktreeProjectMapping(
 		Skipped:       1,
 	})
 
-	assertSessionProject(
-		t, env.db, "mapped-worktree-syncall-skip", "canonical_app",
+	after, err := env.db.GetSession(
+		context.Background(), "mapped-worktree-syncall-skip",
 	)
+	if err != nil {
+		t.Fatalf("GetSession after skipped sync: %v", err)
+	}
+	if after == nil {
+		t.Fatal("session missing after skipped sync")
+	}
+	if after.Project != before.Project {
+		t.Fatalf(
+			"project after skipped sync = %q, want %q",
+			after.Project,
+			before.Project,
+		)
+	}
 }
 
-func TestSyncPathsSkippedClaudeAppliesWorktreeProjectMapping(
+func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	t *testing.T,
 ) {
 	env := setupTestEnv(t)
@@ -646,14 +672,19 @@ func TestSyncPathsSkippedClaudeAppliesWorktreeProjectMapping(
 
 	env.engine.SyncPaths([]string{path})
 
-	assertSessionProject(
-		t, env.db, "mapped-worktree-syncpaths-skip", "canonical_app",
-	)
 	after, err := env.db.GetSessionFull(
-		context.Background(), "mapped-worktree-syncpaths-skip",
+		context.Background(),
+		"mapped-worktree-syncpaths-skip",
 	)
 	if err != nil {
-		t.Fatalf("GetSessionFull after mapping: %v", err)
+		t.Fatalf("GetSessionFull after skipped path sync: %v", err)
+	}
+	if after.Project != beforeFull.Project {
+		t.Fatalf(
+			"project after skipped path sync = %q, want %q",
+			after.Project,
+			beforeFull.Project,
+		)
 	}
 	if testStringPtrValue(after.LocalModifiedAt) !=
 		testStringPtrValue(beforeFull.LocalModifiedAt) {

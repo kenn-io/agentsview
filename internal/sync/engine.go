@@ -1938,7 +1938,6 @@ func (e *Engine) collectAndBatch(
 			continue
 		}
 		if r.skip {
-			e.applyWorktreeMappingToSkippedPath(r.path)
 			stats.RecordSkip()
 			progress.SessionsDone++
 			if onProgress != nil {
@@ -4386,11 +4385,6 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		return res.err
 	}
 	if res.skip {
-		if err := e.applyWorktreeMappingToSingleSession(
-			sessionID,
-		); err != nil {
-			return err
-		}
 		return nil
 	}
 
@@ -4453,26 +4447,6 @@ func (e *Engine) applyWorktreeMappingToSingleSession(
 		)
 	}
 	return nil
-}
-
-func (e *Engine) applyWorktreeMappingToSkippedPath(path string) {
-	if path == "" {
-		return
-	}
-	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
-	if _, err := e.db.ApplyWorktreeProjectMappingsToSessionsByPathFromSync(
-		context.Background(),
-		lookupPath,
-	); err != nil {
-		log.Printf(
-			"apply worktree mapping to skipped path %s: %v",
-			lookupPath,
-			err,
-		)
-	}
 }
 
 // syncSingleOpenCode re-syncs a single OpenCode session.
