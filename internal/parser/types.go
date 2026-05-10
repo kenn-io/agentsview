@@ -137,11 +137,24 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindOpenHandsSourceFile,
 	},
 	{
-		Type:           AgentCursor,
-		DisplayName:    "Cursor",
-		EnvVar:         "CURSOR_PROJECTS_DIR",
-		ConfigKey:      "cursor_project_dirs",
-		DefaultDirs:    []string{".cursor/projects"},
+		Type:        AgentCursor,
+		DisplayName: "Cursor",
+		EnvVar:      "CURSOR_PROJECTS_DIR",
+		ConfigKey:   "cursor_project_dirs",
+		// AgentDirs[AgentCursor] holds two kinds of paths:
+		// the legacy JSONL transcripts root, and the platform
+		// state.vscdb file. Discovery skips state.vscdb-named
+		// entries; the sync engine finds the vscdb via
+		// FindCursorVscdb. Listing all platform vscdb paths
+		// keeps the registry table-driven the same way
+		// VSCode Copilot does — only the matching platform
+		// path will exist at runtime.
+		DefaultDirs: []string{
+			".cursor/projects",
+			"Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+			"AppData/Roaming/Cursor/User/globalStorage/state.vscdb",
+			".config/Cursor/User/globalStorage/state.vscdb",
+		},
 		IDPrefix:       "cursor:",
 		FileBased:      true,
 		DiscoverFunc:   DiscoverCursorSessions,

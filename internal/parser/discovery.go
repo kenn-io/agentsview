@@ -764,6 +764,14 @@ func DiscoverCursorSessions(
 	if projectsDir == "" {
 		return nil
 	}
+	// The cursor agent's configured paths can include the
+	// global state.vscdb file alongside the legacy
+	// transcripts root. Vscdb sessions are ingested by the
+	// sync engine via ListCursorVscdbSessions, not by walking
+	// a directory, so skip those entries here.
+	if IsCursorVscdbPath(projectsDir) {
+		return nil
+	}
 
 	// Canonicalize root once for containment checks.
 	resolvedRoot, err := filepath.EvalSymlinks(projectsDir)
@@ -895,6 +903,9 @@ func FindCursorSourceFile(
 	projectsDir, sessionID string,
 ) string {
 	if projectsDir == "" || !IsValidSessionID(sessionID) {
+		return ""
+	}
+	if IsCursorVscdbPath(projectsDir) {
 		return ""
 	}
 

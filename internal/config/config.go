@@ -569,6 +569,22 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
 	}
+	// CURSOR_STATE_DB overrides the platform-default vscdb
+	// path that lives inside the cursor agent's configured
+	// dirs. Append-and-replace: drop any existing
+	// state.vscdb-named entries (the per-platform defaults)
+	// and add the user-supplied path so the cursor sync code
+	// finds it through FindCursorVscdb.
+	if v := os.Getenv("CURSOR_STATE_DB"); v != "" {
+		dirs := c.AgentDirs[parser.AgentCursor]
+		filtered := dirs[:0]
+		for _, d := range dirs {
+			if !parser.IsCursorVscdbPath(d) {
+				filtered = append(filtered, d)
+			}
+		}
+		c.AgentDirs[parser.AgentCursor] = append(filtered, v)
+	}
 }
 
 type stringListFlag []string

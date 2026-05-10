@@ -6648,3 +6648,819 @@ func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
 		)
 	}
 }
+
+// --- Cursor vscdb integration tests ---
+
+// createCursorVscdbHelper creates a minimal Cursor state.vscdb at
+// the given path and returns a helper for inserting test data.
+func createCursorVscdbHelper(
+	t *testing.T, dbPath string,
+) *cursorVscdbHelper {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	d, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("opening cursor vscdb: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	if _, err := d.Exec(`
+		CREATE TABLE cursorDiskKV (
+			key TEXT UNIQUE ON CONFLICT REPLACE,
+			value BLOB
+		)
+	`); err != nil {
+		t.Fatalf("creating vscdb schema: %v", err)
+	}
+	return &cursorVscdbHelper{db: d, path: dbPath}
+}
+
+type cursorVscdbHelper struct {
+	db   *sql.DB
+	path string
+}
+
+func (h *cursorVscdbHelper) addSession(
+	t *testing.T,
+	sessionID, name string,
+	createdAt, lastUpdatedAt int64,
+	bubbles []string, // ordered bubble IDs
+) {
+	t.Helper()
+	headers := make([]map[string]any, 0, len(bubbles))
+	for _, bid := range bubbles {
+		// type 1 for odd positions, 2 for even (alternating)
+		btype := 1
+		if len(headers)%2 != 0 {
+			btype = 2
+		}
+		headers = append(headers, map[string]any{
+			"bubbleId": bid,
+			"type":     btype,
+		})
+	}
+	data := map[string]any{
+		"composerId":                  sessionID,
+		"name":                        name,
+		"createdAt":                   createdAt,
+		"lastUpdatedAt":               lastUpdatedAt,
+		"fullConversationHeadersOnly": headers,
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal composerData: %v", err)
+	}
+	if _, err := h.db.Exec(
+		"INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+		"composerData:"+sessionID, raw,
+	); err != nil {
+		t.Fatalf("insert composerData: %v", err)
+	}
+}
+
+func (h *cursorVscdbHelper) addSessionWithSubComposers(
+	t *testing.T,
+	sessionID, name string,
+	createdAt, lastUpdatedAt int64,
+	bubbles []string,
+	subIDs []string,
+) {
+	t.Helper()
+	headers := make([]map[string]any, 0, len(bubbles))
+	for _, bid := range bubbles {
+		btype := 1
+		if len(headers)%2 != 0 {
+			btype = 2
+		}
+		headers = append(headers, map[string]any{
+			"bubbleId": bid,
+			"type":     btype,
+		})
+	}
+	data := map[string]any{
+		"composerId":                  sessionID,
+		"name":                        name,
+		"createdAt":                   createdAt,
+		"lastUpdatedAt":               lastUpdatedAt,
+		"fullConversationHeadersOnly": headers,
+		"subComposerIds":              subIDs,
+	}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("marshal composerData: %v", err)
+	}
+	if _, err := h.db.Exec(
+		"INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+		"composerData:"+sessionID, raw,
+	); err != nil {
+		t.Fatalf("insert composerData: %v", err)
+	}
+}
+
+func (h *cursorVscdbHelper) addUserBubble(
+	t *testing.T, sessionID, bubbleID, text string,
+) {
+	t.Helper()
+	data := map[string]any{
+		"bubbleId":  bubbleID,
+		"type":      1,
+		"text":      text,
+		"createdAt": "2024-01-01T10:00:00.000Z",
+	}
+	raw, _ := json.Marshal(data)
+	if _, err := h.db.Exec(
+		"INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+		"bubbleId:"+sessionID+":"+bubbleID, raw,
+	); err != nil {
+		t.Fatalf("insert user bubble: %v", err)
+	}
+}
+
+func (h *cursorVscdbHelper) addAssistantBubble(
+	t *testing.T, sessionID, bubbleID, text string,
+) {
+	t.Helper()
+	data := map[string]any{
+		"bubbleId":  bubbleID,
+		"type":      2,
+		"text":      text,
+		"createdAt": "2024-01-01T10:00:01.000Z",
+	}
+	raw, _ := json.Marshal(data)
+	if _, err := h.db.Exec(
+		"INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+		"bubbleId:"+sessionID+":"+bubbleID, raw,
+	); err != nil {
+		t.Fatalf("insert assistant bubble: %v", err)
+	}
+}
+
+func (h *cursorVscdbHelper) addToolBubble(
+	t *testing.T,
+	sessionID, bubbleID, toolName, callID string,
+	params []byte,
+) {
+	t.Helper()
+	data := map[string]any{
+		"bubbleId":  bubbleID,
+		"type":      2,
+		"createdAt": "2024-01-01T10:00:01.000Z",
+		"toolFormerData": map[string]any{
+			"name":       toolName,
+			"toolCallId": callID,
+			"status":     "completed",
+			"params":     json.RawMessage(params),
+		},
+	}
+	raw, _ := json.Marshal(data)
+	if _, err := h.db.Exec(
+		"INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+		"bubbleId:"+sessionID+":"+bubbleID, raw,
+	); err != nil {
+		t.Fatalf("insert tool bubble: %v", err)
+	}
+}
+
+func (h *cursorVscdbHelper) updateLastUpdatedAt(
+	t *testing.T, sessionID string, newTime int64,
+) {
+	t.Helper()
+	var rawVal []byte
+	if err := h.db.QueryRow(
+		"SELECT value FROM cursorDiskKV WHERE key = ?",
+		"composerData:"+sessionID,
+	).Scan(&rawVal); err != nil {
+		t.Fatalf("read composerData: %v", err)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(rawVal, &data); err != nil {
+		t.Fatalf("unmarshal composerData: %v", err)
+	}
+	data["lastUpdatedAt"] = newTime
+	raw, _ := json.Marshal(data)
+	if _, err := h.db.Exec(
+		"INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)",
+		"composerData:"+sessionID, raw,
+	); err != nil {
+		t.Fatalf("update composerData: %v", err)
+	}
+}
+
+// TestSyncCursorVscdbBasic verifies that SyncAll discovers and
+// stores Cursor sessions from state.vscdb.
+func TestSyncCursorVscdbBasic(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "vscdb-session-001"
+	vscdb.addSession(
+		t, sessionID, "My Vscdb Session",
+		1704067200000, 1704067205000,
+		[]string{"b-user", "b-asst"},
+	)
+	vscdb.addUserBubble(t, sessionID, "b-user", "What is the answer?")
+	vscdb.addAssistantBubble(t, sessionID, "b-asst", "42.")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir(), dbPath},
+		},
+		Machine: "local",
+	})
+
+	stats := engine.SyncAll(context.Background(), nil)
+	if stats.Synced < 1 {
+		t.Fatalf("Synced = %d, want >= 1", stats.Synced)
+	}
+
+	agentviewID := "cursor:" + sessionID
+	assertSessionState(t, database, agentviewID,
+		func(sess *db.Session) {
+			if sess.Agent != "cursor" {
+				t.Errorf(
+					"agent = %q, want cursor",
+					sess.Agent,
+				)
+			}
+			if sess.Project == "" {
+				t.Error("expected non-empty project")
+			}
+		},
+	)
+	assertSessionMessageCount(t, database, agentviewID, 2)
+}
+
+// TestSyncCursorVscdbChangeDetection verifies that unchanged
+// sessions are not re-parsed but updated ones are.
+func TestSyncCursorVscdbChangeDetection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "vscdb-change-001"
+	vscdb.addSession(
+		t, sessionID, "Change Test",
+		1704067200000, 1704067205000,
+		[]string{"b1", "b2"},
+	)
+	vscdb.addUserBubble(t, sessionID, "b1", "original question")
+	vscdb.addAssistantBubble(t, sessionID, "b2", "original answer")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir(), dbPath},
+		},
+		Machine: "local",
+	})
+
+	// First sync.
+	stats1 := engine.SyncAll(context.Background(), nil)
+	if stats1.Synced < 1 {
+		t.Fatalf("first sync: Synced = %d, want >= 1", stats1.Synced)
+	}
+
+	// Second sync with no changes: should not re-parse.
+	stats2 := engine.SyncAll(context.Background(), nil)
+	if stats2.Synced != 0 {
+		t.Errorf(
+			"second sync (no change): Synced = %d, want 0",
+			stats2.Synced,
+		)
+	}
+
+	// Update lastUpdatedAt and re-sync.
+	vscdb.updateLastUpdatedAt(t, sessionID, 1704067210000)
+	stats3 := engine.SyncAll(context.Background(), nil)
+	if stats3.Synced < 1 {
+		t.Fatalf(
+			"third sync (after update): Synced = %d, want >= 1",
+			stats3.Synced,
+		)
+	}
+}
+
+// TestSyncSingleSessionCursorVscdbOnly verifies that an
+// explicit resync works for sessions that exist only in vscdb
+// (no discoverable JSONL fallback). Without the dispatch in
+// SyncSingleSession, FindSourceFile returns "" because the
+// stored virtual path fails os.Stat and no JSONL exists.
+func TestSyncSingleSessionCursorVscdbOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "vscdb-only-001"
+	vscdb.addSession(
+		t, sessionID, "Vscdb Only",
+		1704067200000, 1704067205000,
+		[]string{"u1", "a1"},
+	)
+	vscdb.addUserBubble(t, sessionID, "u1", "first message")
+	vscdb.addAssistantBubble(t, sessionID, "a1", "first reply")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir(), dbPath},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncAll(context.Background(), nil)
+
+	avID := "cursor:" + sessionID
+	stored := database.GetSessionFilePath(avID)
+	if !parser.IsCursorVscdbVirtualPath(stored) {
+		t.Fatalf(
+			"setup: file_path = %q, want vscdb virtual path",
+			stored,
+		)
+	}
+	// No JSONL fallback exists — without the SyncSingleSession
+	// vscdb dispatch, FindSourceFile returns "" and resync
+	// fails with "source file not found".
+	if err := engine.SyncSingleSession(avID); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+	if storedAfter := database.GetSessionFilePath(avID); !parser.IsCursorVscdbVirtualPath(
+		storedAfter,
+	) {
+		t.Errorf(
+			"after resync: file_path = %q, want vscdb virtual path",
+			storedAfter,
+		)
+	}
+
+	// Mutate vscdb by re-inserting composerData with extra
+	// bubbles + a bumped lastUpdatedAt. cursorDiskKV uses
+	// UNIQUE ON CONFLICT REPLACE so the new row supersedes.
+	vscdb.addAssistantBubble(t, sessionID, "a2", "follow-up reply")
+	vscdb.addSession(
+		t, sessionID, "Vscdb Only",
+		1704067200000, 1704067210000,
+		[]string{"u1", "a1", "u1b", "a2"},
+	)
+	vscdb.addUserBubble(t, sessionID, "u1b", "follow-up question")
+
+	if err := engine.SyncSingleSession(avID); err != nil {
+		t.Fatalf("SyncSingleSession after mutation: %v", err)
+	}
+	msgs, err := database.GetMessages(
+		context.Background(), avID, 0, 100, true,
+	)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	foundFollowUp := false
+	for _, m := range msgs {
+		if strings.Contains(m.Content, "follow-up question") {
+			foundFollowUp = true
+			break
+		}
+	}
+	if !foundFollowUp {
+		t.Error(
+			"explicit resync did not pick up the new vscdb bubble",
+		)
+	}
+}
+
+// TestSyncSingleSessionCursorVscdbPreservesParent verifies
+// that explicitly resyncing a vscdb subagent child session
+// preserves its parent_session_id / relationship_type set by
+// the bulk vscdb sync. UpsertSession unconditionally
+// overwrites those columns, so the single-session path has to
+// re-derive the parent from SubComposerIDs.
+func TestSyncSingleSessionCursorVscdbPreservesParent(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	parentID := "single-resync-parent"
+	childID := "single-resync-child"
+
+	vscdb.addSessionWithSubComposers(
+		t, parentID, "Parent",
+		1704067200000, 1704067205000,
+		[]string{"pb1", "pb2"},
+		[]string{childID},
+	)
+	vscdb.addUserBubble(t, parentID, "pb1", "parent question")
+	vscdb.addAssistantBubble(t, parentID, "pb2", "parent answer")
+
+	vscdb.addSession(
+		t, childID, "Child",
+		1704067201000, 1704067206000,
+		[]string{"cb1", "cb2"},
+	)
+	vscdb.addUserBubble(t, childID, "cb1", "child question")
+	vscdb.addAssistantBubble(t, childID, "cb2", "child answer")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir(), dbPath},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncAll(context.Background(), nil)
+
+	parentAv := "cursor:" + parentID
+	childAv := "cursor:" + childID
+
+	// Resync the child explicitly. Without re-deriving the
+	// parent, UpsertSession would clear ParentSessionID.
+	if err := engine.SyncSingleSession(childAv); err != nil {
+		t.Fatalf("SyncSingleSession child: %v", err)
+	}
+	assertSessionState(t, database, childAv,
+		func(sess *db.Session) {
+			if sess.ParentSessionID == nil ||
+				*sess.ParentSessionID != parentAv {
+				got := ""
+				if sess.ParentSessionID != nil {
+					got = *sess.ParentSessionID
+				}
+				t.Errorf(
+					"after single resync: ParentSessionID = %q, want %q",
+					got, parentAv,
+				)
+			}
+		},
+	)
+}
+
+// TestSyncCursorVscdbReparsesOnDataVersionBump verifies that
+// vscdb sessions get re-parsed when the stored data_version
+// falls behind db.CurrentDataVersion (e.g., after an agentsview
+// upgrade), even though the vscdb meta mtime is unchanged.
+func TestSyncCursorVscdbReparsesOnDataVersionBump(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "dataversion-001"
+	vscdb.addSession(
+		t, sessionID, "Data Version",
+		1704067200000, 1704067205000,
+		[]string{"b1", "b2"},
+	)
+	vscdb.addUserBubble(t, sessionID, "b1", "question")
+	vscdb.addAssistantBubble(t, sessionID, "b2", "answer")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir(), dbPath},
+		},
+		Machine: "local",
+	})
+
+	stats1 := engine.SyncAll(context.Background(), nil)
+	if stats1.Synced < 1 {
+		t.Fatalf("first sync: Synced = %d, want >= 1", stats1.Synced)
+	}
+
+	// Simulate an agentsview upgrade by stamping the session
+	// at an older data version while leaving the vscdb file
+	// untouched. The next SyncAll must re-parse it.
+	avID := "cursor:" + sessionID
+	if err := database.SetSessionDataVersion(
+		avID, db.CurrentDataVersion()-1,
+	); err != nil {
+		t.Fatalf("SetSessionDataVersion: %v", err)
+	}
+
+	stats2 := engine.SyncAll(context.Background(), nil)
+	if stats2.Synced < 1 {
+		t.Errorf(
+			"second sync after data_version bump: "+
+				"Synced = %d, want >= 1",
+			stats2.Synced,
+		)
+	}
+	if got := database.GetSessionDataVersion(avID); got !=
+		db.CurrentDataVersion() {
+		t.Errorf(
+			"after reparse: data_version = %d, want %d",
+			got, db.CurrentDataVersion(),
+		)
+	}
+}
+
+// TestSyncCursorVscdbDedup verifies that sessions present in
+// vscdb are not overwritten by the file-based cursor sync.
+func TestSyncCursorVscdbDedup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "dedup-session-001"
+	vscdb.addSession(
+		t, sessionID, "Dedup Test",
+		1704067200000, 1704067205000,
+		[]string{"b-user", "b-tool", "b-asst"},
+	)
+	vscdb.addUserBubble(t, sessionID, "b-user", "Do something")
+	vscdb.addToolBubble(
+		t, sessionID, "b-tool",
+		"read_file_v2", "call-1",
+		[]byte(`{"path":"/foo.txt"}`),
+	)
+	vscdb.addAssistantBubble(t, sessionID, "b-asst", "Done.")
+
+	// Create a cursor projects directory with a JSONL file
+	// for the same session (text-only, no tool calls).
+	cursorDir := t.TempDir()
+	jsonlDir := filepath.Join(
+		cursorDir, "myproject", "agent-transcripts",
+		sessionID,
+	)
+	if err := os.MkdirAll(jsonlDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Minimal JSONL with only text (no tool calls).
+	jsonlContent := `{"role":"user","message":{"content":[{"type":"text","text":"file-based text only"}]}}` + "\n"
+	if err := os.WriteFile(
+		filepath.Join(jsonlDir, sessionID+".jsonl"),
+		[]byte(jsonlContent), 0o644,
+	); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {cursorDir, dbPath},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncAll(context.Background(), nil)
+
+	agentviewID := "cursor:" + sessionID
+	// Session should be present (from vscdb).
+	assertSessionState(t, database, agentviewID,
+		func(sess *db.Session) {
+			if sess.Agent != "cursor" {
+				t.Errorf("agent = %q, want cursor", sess.Agent)
+			}
+		},
+	)
+
+	// Should have messages with tool use from vscdb.
+	// The file-based JSONL should NOT have replaced the vscdb data.
+	msgs, err := database.GetMessages(
+		context.Background(), agentviewID, 0, 100, true,
+	)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	hasToolUse := false
+	for _, m := range msgs {
+		if m.HasToolUse {
+			hasToolUse = true
+			break
+		}
+	}
+	if !hasToolUse {
+		t.Error(
+			"expected vscdb data (with tool call) to win over " +
+				"file-based text-only JSONL",
+		)
+	}
+}
+
+// TestSyncPathsCursorVscdbDedup verifies that processCursor
+// skips JSONL transcripts during SyncPaths/watcher events when
+// the session is already populated from vscdb. Without the
+// fallback dedup, a JSONL parse would overwrite the stored
+// session metadata (file_path, file_size, file_hash) and lose
+// the tie-back to the vscdb virtual path that syncCursorVscdb
+// uses for change detection. SyncSingleSession exercises the
+// same processCursor path and uses ReplaceSessionMessages, so
+// it surfaces both halves of the regression cleanly.
+func TestSyncPathsCursorVscdbDedup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	sessionID := "syncpaths-dedup-001"
+	vscdb.addSession(
+		t, sessionID, "SyncPaths Dedup",
+		1704067200000, 1704067205000,
+		[]string{"b-user", "b-tool", "b-asst"},
+	)
+	vscdb.addUserBubble(t, sessionID, "b-user", "Do something")
+	vscdb.addToolBubble(
+		t, sessionID, "b-tool",
+		"read_file_v2", "call-1",
+		[]byte(`{"path":"/foo.txt"}`),
+	)
+	vscdb.addAssistantBubble(t, sessionID, "b-asst", "Done.")
+
+	cursorDir := t.TempDir()
+	jsonlDir := filepath.Join(
+		cursorDir, "myproject", "agent-transcripts", sessionID,
+	)
+	if err := os.MkdirAll(jsonlDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	jsonlPath := filepath.Join(jsonlDir, sessionID+".jsonl")
+	jsonlContent := `{"role":"user","message":{"content":[{"type":"text","text":"file-based text only"}]}}` + "\n"
+	if err := os.WriteFile(
+		jsonlPath, []byte(jsonlContent), 0o644,
+	); err != nil {
+		t.Fatalf("write jsonl: %v", err)
+	}
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {cursorDir, dbPath},
+		},
+		Machine: "local",
+	})
+
+	// SyncAll first to populate the DB from vscdb.
+	engine.SyncAll(context.Background(), nil)
+
+	agentviewID := "cursor:" + sessionID
+	storedBefore := database.GetSessionFilePath(agentviewID)
+	if !parser.IsCursorVscdbVirtualPath(storedBefore) {
+		t.Fatalf(
+			"setup: stored file_path = %q, want vscdb virtual path",
+			storedBefore,
+		)
+	}
+
+	// Force a re-parse of this single session via the API
+	// path that powers /sessions/:id/resync. SyncSingleSession
+	// uses writeSessionFull → ReplaceSessionMessages, so it
+	// would silently overwrite the vscdb-backed messages and
+	// file_path if processCursor accepted the JSONL.
+	if err := engine.SyncSingleSession(agentviewID); err != nil {
+		t.Fatalf("SyncSingleSession: %v", err)
+	}
+
+	storedAfter := database.GetSessionFilePath(agentviewID)
+	if !parser.IsCursorVscdbVirtualPath(storedAfter) {
+		t.Errorf(
+			"after re-parse: file_path = %q, want vscdb virtual path",
+			storedAfter,
+		)
+	}
+
+	msgs, err := database.GetMessages(
+		context.Background(), agentviewID, 0, 100, true,
+	)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	hasToolUse := false
+	for _, m := range msgs {
+		if m.HasToolUse {
+			hasToolUse = true
+			break
+		}
+	}
+	if !hasToolUse {
+		t.Error(
+			"vscdb tool use lost after re-parse; JSONL overwrote " +
+				"richer vscdb messages",
+		)
+	}
+
+	// Drive the watcher path too: SyncPaths must also dedup,
+	// even though writeBatch's incremental message append makes
+	// the message-loss surface narrower than SyncSingleSession.
+	engine.SyncPaths([]string{jsonlPath})
+	storedAfterWatch := database.GetSessionFilePath(agentviewID)
+	if !parser.IsCursorVscdbVirtualPath(storedAfterWatch) {
+		t.Errorf(
+			"after SyncPaths: file_path = %q, want vscdb virtual path",
+			storedAfterWatch,
+		)
+	}
+}
+
+// TestSyncCursorVscdbSubagentLinking verifies that sessions
+// with subComposerIds get parent-child relationships set.
+func TestSyncCursorVscdbSubagentLinking(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	database := dbtest.OpenTestDB(t)
+	dir := t.TempDir()
+	dbPath := filepath.Join(
+		dir, "globalStorage", "state.vscdb",
+	)
+	vscdb := createCursorVscdbHelper(t, dbPath)
+
+	parentID := "parent-session-001"
+	childID := "child-session-001"
+
+	vscdb.addSessionWithSubComposers(
+		t, parentID, "Parent Session",
+		1704067200000, 1704067205000,
+		[]string{"pb1", "pb2"},
+		[]string{childID},
+	)
+	vscdb.addUserBubble(t, parentID, "pb1", "parent question")
+	vscdb.addAssistantBubble(t, parentID, "pb2", "parent answer")
+
+	vscdb.addSession(
+		t, childID, "Child Session",
+		1704067201000, 1704067206000,
+		[]string{"cb1", "cb2"},
+	)
+	vscdb.addUserBubble(t, childID, "cb1", "child question")
+	vscdb.addAssistantBubble(t, childID, "cb2", "child answer")
+
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCursor: {t.TempDir(), dbPath},
+		},
+		Machine: "local",
+	})
+
+	engine.SyncAll(context.Background(), nil)
+
+	parentAvID := "cursor:" + parentID
+	childAvID := "cursor:" + childID
+
+	assertSessionState(t, database, parentAvID,
+		func(sess *db.Session) {
+			if sess.ParentSessionID != nil {
+				t.Errorf(
+					"parent: ParentSessionID = %q, want nil",
+					*sess.ParentSessionID,
+				)
+			}
+		},
+	)
+	assertSessionState(t, database, childAvID,
+		func(sess *db.Session) {
+			if sess.ParentSessionID == nil ||
+				*sess.ParentSessionID != parentAvID {
+				got := ""
+				if sess.ParentSessionID != nil {
+					got = *sess.ParentSessionID
+				}
+				t.Errorf(
+					"child: ParentSessionID = %q, want %q",
+					got, parentAvID,
+				)
+			}
+		},
+	)
+}

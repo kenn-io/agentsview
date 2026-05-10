@@ -100,6 +100,12 @@ type Engine struct {
 	idPrefix     string
 	pathRewriter func(string) string
 	emitter      Emitter
+
+	// cursorVscdbSynced is the set of "cursor:<uuid>" session
+	// IDs synced from vscdb in the current sync cycle. It is
+	// populated before file workers start and cleared after.
+	// Read-only during worker execution; no lock needed.
+	cursorVscdbSynced map[string]bool
 }
 
 // codexExecMigrationKey is the pg_sync_state flag that
@@ -561,7 +567,7 @@ func (e *Engine) classifyOnePath(
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
 	for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
-		if cursorDir == "" {
+		if cursorDir == "" || parser.IsCursorVscdbPath(cursorDir) {
 			continue
 		}
 		if rel, ok := isUnder(cursorDir, path); ok {
@@ -1459,11 +1465,48 @@ func (e *Engine) syncAllLocked(
 		})
 	}
 
+	// Sync Cursor vscdb sessions before file workers so that
+	// file-based cursor sync can skip already-handled IDs.
+	tCV := time.Now()
+	cvPending, cvSynced := e.syncCursorVscdb()
+	e.cursorVscdbSynced = cvSynced
+	var cvWritten, cvFailed int
+	for _, pw := range cvPending {
+		switch err := e.writeSessionFull(pw); {
+		case err == nil:
+			cvWritten++
+		case errors.Is(err, db.ErrSessionExcluded),
+			errors.Is(err, errSessionPreserved):
+			// Intentional skip, not a failure.
+		default:
+			cvFailed++
+		}
+	}
+	if verbose && len(cvPending) > 0 {
+		log.Printf(
+			"cursor vscdb write: %d synced, %d failed in %s",
+			cvWritten, cvFailed,
+			time.Since(tCV).Round(time.Millisecond),
+		)
+	}
+
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
 	stats := e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
+	// Clear vscdb synced set after workers complete.
+	e.cursorVscdbSynced = nil
+
+	// Fold cursor vscdb stats into the combined stats.
+	if len(cvPending) > 0 {
+		stats.TotalSessions += len(cvPending)
+		stats.RecordSynced(cvWritten)
+		for i := 0; i < cvFailed; i++ {
+			stats.RecordFailed()
+		}
+	}
+
 	if verbose {
 		log.Printf(
 			"file sync: %d synced, %d skipped in %s",
@@ -1981,6 +2024,119 @@ func (e *Engine) syncOneOpenCode(
 	}
 
 	return pending
+}
+
+// cursorVscdbPath returns the configured Cursor state.vscdb
+// path from the cursor agent's dir slot, or "" when no vscdb
+// is configured / available on disk.
+func (e *Engine) cursorVscdbPath() string {
+	return parser.FindCursorVscdb(
+		e.agentDirs[parser.AgentCursor],
+	)
+}
+
+// cursorVscdbHasSession reports whether a Cursor session has
+// already been ingested from the global state.vscdb. It
+// consults the in-memory set populated during SyncAll first;
+// otherwise (SyncPaths, watcher events) it falls back to the
+// stored session row's file_path, which is set to the vscdb
+// virtual path when the session was synced from vscdb.
+func (e *Engine) cursorVscdbHasSession(sessionID string) bool {
+	if e.cursorVscdbSynced[sessionID] {
+		return true
+	}
+	if e.cursorVscdbPath() == "" {
+		return false
+	}
+	stored := e.db.GetSessionFilePath(sessionID)
+	return parser.IsCursorVscdbVirtualPath(stored)
+}
+
+// syncCursorVscdb syncs sessions from Cursor's global state.vscdb.
+// Returns pending writes and the set of synced session IDs (with
+// "cursor:" prefix) so the file-based sync can skip duplicates.
+func (e *Engine) syncCursorVscdb() (
+	[]pendingWrite, map[string]bool,
+) {
+	dbPath := e.cursorVscdbPath()
+	if dbPath == "" {
+		return nil, nil
+	}
+
+	metas, err := parser.ListCursorVscdbSessions(dbPath)
+	if err != nil {
+		log.Printf("sync cursor vscdb: %v", err)
+		return nil, nil
+	}
+	if len(metas) == 0 {
+		return nil, nil
+	}
+
+	// Build child→parent map from subComposerIds.
+	childToParent := make(map[string]string)
+	for _, m := range metas {
+		for _, childID := range m.SubComposerIDs {
+			if childID != "" {
+				childToParent[childID] = m.SessionID
+			}
+		}
+	}
+
+	syncedIDs := make(map[string]bool, len(metas))
+
+	var changed []parser.CursorVscdbMeta
+	for _, m := range metas {
+		_, storedMtime, ok :=
+			e.db.GetFileInfoByPath(m.VirtualPath)
+		dataVersionCurrent := e.db.GetDataVersionByPath(m.VirtualPath) >=
+			db.CurrentDataVersion()
+		if ok && storedMtime == m.FileMtime && dataVersionCurrent {
+			// Unchanged: still mark as synced to suppress
+			// file-based sync overwriting with text-only data.
+			// Also reparse when an agentsview upgrade bumped
+			// the parser data version — otherwise old vscdb
+			// sessions stay frozen until Cursor itself bumps
+			// lastUpdatedAt.
+			syncedIDs["cursor:"+m.SessionID] = true
+			continue
+		}
+		changed = append(changed, m)
+	}
+
+	if len(changed) == 0 {
+		return nil, syncedIDs
+	}
+
+	var pending []pendingWrite
+	for _, m := range changed {
+		sess, msgs, err := parser.ParseCursorVscdbSession(
+			dbPath, m.SessionID, m.Project, e.machine,
+		)
+		if err != nil {
+			log.Printf(
+				"cursor vscdb session %s: %v",
+				m.SessionID, err,
+			)
+			continue
+		}
+		if sess == nil {
+			continue
+		}
+
+		// Wire up parent-child relationship.
+		if parentID, ok := childToParent[m.SessionID]; ok {
+			sess.ParentSessionID = "cursor:" + parentID
+			sess.RelationshipType = parser.RelSubagent
+		}
+
+		syncedIDs["cursor:"+m.SessionID] = true
+		pending = append(pending, pendingWrite{
+			sess: *sess,
+			msgs: msgs,
+		})
+	}
+
+	return pending, syncedIDs
 }
 
 // startWorkers fans out file processing across a worker pool
@@ -3337,6 +3493,15 @@ func (e *Engine) processCursor(
 
 	sessionID := parser.CursorSessionID(file.Path)
 
+	// Skip if already synced from vscdb (richer data source).
+	// SyncAll populates cursorVscdbSynced inline; SyncPaths,
+	// SyncSingleSession, and watcher-driven syncs fall back to
+	// checking the stored session source path so a JSONL change
+	// does not overwrite the richer vscdb messages.
+	if e.cursorVscdbHasSession(sessionID) {
+		return processResult{skip: true}
+	}
+
 	if e.shouldSkipFile(sessionID, info) {
 		return processResult{skip: true}
 	}
@@ -4431,6 +4596,17 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		}
 	}
 
+	// Cursor sessions ingested from state.vscdb store a virtual
+	// file_path (state.vscdb#<id>) that won't os.Stat. Check for
+	// that case before FindSourceFile so explicit resync works
+	// even when no JSONL fallback exists for the session.
+	if def.Type == parser.AgentCursor {
+		stored := e.db.GetSessionFilePath(sessionID)
+		if parser.IsCursorVscdbVirtualPath(stored) {
+			return e.syncSingleCursorVscdb(sessionID)
+		}
+	}
+
 	path := e.FindSourceFile(sessionID)
 	if path == "" {
 		return fmt.Errorf(
@@ -4474,6 +4650,9 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	case parser.AgentCursor:
 		// Support both flat and nested transcript layouts.
 		for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
+			if parser.IsCursorVscdbPath(cursorDir) {
+				continue
+			}
 			rel, ok := isUnder(cursorDir, path)
 			if !ok {
 				continue
@@ -4545,6 +4724,83 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		log.Printf("link subagent sessions: %v", err)
 	}
 
+	return nil
+}
+
+// syncSingleCursorVscdb re-syncs a single Cursor session from
+// the global state.vscdb. Used by SyncSingleSession when the
+// stored source path is a vscdb virtual path; without this,
+// explicit resync would fail for vscdb-only sessions because
+// FindSourceFile cannot map the virtual path back to a real
+// file.
+func (e *Engine) syncSingleCursorVscdb(sessionID string) error {
+	dbPath := e.cursorVscdbPath()
+	if dbPath == "" {
+		return fmt.Errorf(
+			"cursor state.vscdb not found in configured paths",
+		)
+	}
+	rawID := strings.TrimPrefix(sessionID, "cursor:")
+
+	metas, err := parser.ListCursorVscdbSessions(dbPath)
+	if err != nil {
+		return fmt.Errorf(
+			"list cursor vscdb sessions: %w", err,
+		)
+	}
+
+	var meta *parser.CursorVscdbMeta
+	parentID := ""
+	for i := range metas {
+		if metas[i].SessionID == rawID {
+			meta = &metas[i]
+		}
+		// Detect parent: if rawID appears in another meta's
+		// SubComposerIDs, that meta is its parent. Same scan
+		// syncCursorVscdb runs in bulk; mirroring it here so
+		// explicit single-session resync does not clear
+		// parent_session_id / relationship_type via the
+		// UpsertSession overwrite.
+		for _, child := range metas[i].SubComposerIDs {
+			if child == rawID {
+				parentID = metas[i].SessionID
+			}
+		}
+	}
+	if meta == nil {
+		return fmt.Errorf(
+			"cursor session %s not found in vscdb", sessionID,
+		)
+	}
+
+	sess, msgs, err := parser.ParseCursorVscdbSession(
+		dbPath, meta.SessionID,
+		meta.Project, e.machine,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"parse cursor vscdb session %s: %w",
+			sessionID, err,
+		)
+	}
+	if sess == nil {
+		return nil
+	}
+
+	if parentID != "" {
+		sess.ParentSessionID = "cursor:" + parentID
+		sess.RelationshipType = parser.RelSubagent
+	}
+
+	if err := e.writeSessionFull(
+		pendingWrite{sess: *sess, msgs: msgs},
+	); err != nil && !errors.Is(err, db.ErrSessionExcluded) &&
+		!errors.Is(err, errSessionPreserved) {
+		return fmt.Errorf(
+			"write cursor vscdb session %s: %w",
+			sessionID, err,
+		)
+	}
 	return nil
 }
 
