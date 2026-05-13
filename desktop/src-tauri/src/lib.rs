@@ -7,8 +7,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -27,14 +27,24 @@ const PREFERRED_PORT: u16 = 8080;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
+const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 type DynError = Box<dyn Error>;
 type CommandRx = Receiver<CommandEvent>;
 
 #[derive(Default)]
 struct SidecarState {
-    child: Mutex<Option<CommandChild>>,
+    child: Mutex<Option<SidecarProcess>>,
     backend_port: Mutex<Option<u16>>,
+    active_generation: Mutex<Option<u64>>,
+    terminated_generation: Mutex<u64>,
+    termination: Condvar,
+    next_generation: AtomicU64,
+}
+
+struct SidecarProcess {
+    child: CommandChild,
+    generation: u64,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -94,9 +104,10 @@ pub fn run() {
 
 fn launch_backend(app: &mut App) -> Result<(), DynError> {
     let window = main_window(app)?;
-    let (rx, child) = spawn_sidecar(app)?;
+    let handle = app.handle().clone();
+    let (rx, child) = spawn_sidecar(&handle)?;
 
-    save_sidecar(app, child)?;
+    let generation = save_sidecar(&handle, child)?;
 
     let focus_window = window.clone();
     let focus_handle = app.handle().clone();
@@ -114,12 +125,20 @@ fn launch_backend(app: &mut App) -> Result<(), DynError> {
         }
     });
 
-    forward_sidecar_logs(rx, window);
+    forward_sidecar_logs(rx, window, generation);
 
     Ok(())
 }
 
-fn spawn_sidecar(app: &App) -> Result<(CommandRx, CommandChild), DynError> {
+fn launch_backend_from_handle(handle: &AppHandle) -> Result<(), DynError> {
+    let window = main_window_from_handle(handle)?;
+    let (rx, child) = spawn_sidecar(handle)?;
+    let generation = save_sidecar(handle, child)?;
+    forward_sidecar_logs(rx, window, generation);
+    Ok(())
+}
+
+fn spawn_sidecar(app: &AppHandle) -> Result<(CommandRx, CommandChild), DynError> {
     let port_arg = PREFERRED_PORT.to_string();
     let mut command = app.shell().sidecar("agentsview")?;
     for (key, value) in sidecar_env() {
@@ -523,14 +542,18 @@ where
     Some(PathBuf::from(combined))
 }
 
-fn save_sidecar(app: &App, child: CommandChild) -> Result<(), DynError> {
+fn save_sidecar(app: &AppHandle, child: CommandChild) -> Result<u64, DynError> {
     let state = app.state::<SidecarState>();
+    let generation = state.next_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let mut guard = state
         .child
         .lock()
         .map_err(|_| io::Error::other("sidecar state lock poisoned"))?;
-    *guard = Some(child);
-    Ok(())
+    *guard = Some(SidecarProcess { child, generation });
+    if let Ok(mut active_generation) = state.active_generation.lock() {
+        *active_generation = Some(generation);
+    }
+    Ok(generation)
 }
 
 fn save_sidecar_port(app: &AppHandle, port: u16) {
@@ -549,12 +572,80 @@ fn set_sidecar_port(state: &SidecarState, port: Option<u16>) {
     }
 }
 
-fn handle_sidecar_terminated(state: &SidecarState, startup_handled: &AtomicBool) -> bool {
-    set_sidecar_port(state, None);
+fn handle_sidecar_terminated(
+    state: &SidecarState,
+    startup_handled: &AtomicBool,
+    generation: u64,
+) -> bool {
+    if mark_sidecar_inactive_if_current(state, generation) {
+        set_sidecar_port(state, None);
+    }
+    clear_sidecar_child_if_current(state, generation);
+    record_sidecar_terminated(state, generation);
     !startup_handled.swap(true, Ordering::SeqCst)
 }
 
-fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow) {
+fn mark_sidecar_inactive_if_current(state: &SidecarState, generation: u64) -> bool {
+    let Ok(mut guard) = state.active_generation.lock() else {
+        return false;
+    };
+    if *guard == Some(generation) {
+        *guard = None;
+        return true;
+    }
+    false
+}
+
+fn clear_sidecar_child_if_current(state: &SidecarState, generation: u64) {
+    let Ok(mut guard) = state.child.lock() else {
+        return;
+    };
+    if guard
+        .as_ref()
+        .map(|process| process.generation)
+        .is_some_and(|active_generation| active_generation == generation)
+    {
+        *guard = None;
+    }
+}
+
+fn record_sidecar_terminated(state: &SidecarState, generation: u64) {
+    if let Ok(mut guard) = state.terminated_generation.lock() {
+        if *guard < generation {
+            *guard = generation;
+        }
+        state.termination.notify_all();
+    }
+}
+
+fn wait_for_sidecar_termination(state: &SidecarState, generation: u64, timeout: Duration) -> bool {
+    let Ok(mut guard) = state.terminated_generation.lock() else {
+        return false;
+    };
+    let deadline = Instant::now() + timeout;
+    loop {
+        if *guard >= generation {
+            return true;
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        match state.termination.wait_timeout(guard, remaining) {
+            Ok((next_guard, result)) => {
+                guard = next_guard;
+                if result.timed_out() && *guard < generation {
+                    return false;
+                }
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u64) {
     let startup_handled = Arc::new(AtomicBool::new(false));
     let first_output = Arc::new(AtomicBool::new(false));
     let timeout_window = window.clone();
@@ -610,7 +701,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow) {
                         payload.code, payload.signal
                     );
                     let state = window.app_handle().state::<SidecarState>();
-                    if handle_sidecar_terminated(&state, startup_handled.as_ref()) {
+                    if handle_sidecar_terminated(&state, startup_handled.as_ref(), generation) {
                         let _ = window.eval(
                             "window.__setStatus(\
                              'AgentsView backend exited before startup completed.');",
@@ -629,6 +720,12 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow) {
 
 fn main_window(app: &App) -> Result<WebviewWindow, DynError> {
     app.get_webview_window("main")
+        .ok_or_else(|| io::Error::other("missing main window").into())
+}
+
+fn main_window_from_handle(handle: &AppHandle) -> Result<WebviewWindow, DynError> {
+    handle
+        .get_webview_window("main")
         .ok_or_else(|| io::Error::other("missing main window").into())
 }
 
@@ -928,8 +1025,9 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         cfg!(target_os = "windows"),
         || {
             // Windows locks the bundled sidecar executable while it is running.
-            stop_backend(handle);
+            stop_backend_and_wait(handle, UPDATE_SIDECAR_STOP_TIMEOUT)
         },
+        || restart_backend_after_update_failure(handle),
         |bytes| update.install(bytes),
     ) {
         eprintln!("[agentsview] update install failed: {err}");
@@ -958,20 +1056,50 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
     }
 }
 
-fn install_downloaded_update<S, I, E>(
+#[derive(Debug, PartialEq, Eq)]
+enum InstallDownloadedUpdateError<E> {
+    BackendStopTimedOut,
+    Install(E),
+}
+
+impl<E: std::fmt::Display> std::fmt::Display for InstallDownloadedUpdateError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BackendStopTimedOut => write!(f, "backend did not stop before update install"),
+            Self::Install(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl<E: std::fmt::Debug + std::fmt::Display> Error for InstallDownloadedUpdateError<E> {}
+
+fn install_downloaded_update<S, R, I, E>(
     update_bytes: Vec<u8>,
     is_windows: bool,
     stop_backend: S,
+    restart_backend: R,
     install: I,
-) -> Result<(), E>
+) -> Result<(), InstallDownloadedUpdateError<E>>
 where
-    S: FnOnce(),
+    S: FnOnce() -> bool,
+    R: FnOnce(),
     I: FnOnce(Vec<u8>) -> Result<(), E>,
 {
     if is_windows {
-        stop_backend();
+        if !stop_backend() {
+            restart_backend();
+            return Err(InstallDownloadedUpdateError::BackendStopTimedOut);
+        }
     }
-    install(update_bytes)
+    match install(update_bytes) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if is_windows {
+                restart_backend();
+            }
+            Err(InstallDownloadedUpdateError::Install(err))
+        }
+    }
 }
 
 async fn dialog_confirm(handle: &AppHandle, title: &str, message: &str) -> bool {
@@ -990,17 +1118,49 @@ async fn dialog_confirm(handle: &AppHandle, title: &str, message: &str) -> bool 
 }
 
 fn stop_backend(app: &AppHandle) {
-    let state = app.state::<SidecarState>();
-    let Ok(mut guard) = state.child.lock() else {
-        return;
-    };
+    let _ = stop_backend_inner(app, None);
+}
 
-    if let Some(child) = guard.take() {
-        if let Err(err) = child.kill() {
+fn stop_backend_and_wait(app: &AppHandle, timeout: Duration) -> bool {
+    stop_backend_inner(app, Some(timeout))
+}
+
+fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
+    let state = app.state::<SidecarState>();
+    let process = {
+        let Ok(mut guard) = state.child.lock() else {
+            return false;
+        };
+        guard.take()
+    };
+    if let Some(process) = process.as_ref() {
+        let _ = mark_sidecar_inactive_if_current(&state, process.generation);
+    }
+
+    if let Some(process) = process {
+        if let Err(err) = process.child.kill() {
             eprintln!("[agentsview] failed to stop sidecar: {err}");
         }
+        clear_sidecar_port(app);
+        if let Some(timeout) = wait_timeout {
+            let terminated = wait_for_sidecar_termination(&state, process.generation, timeout);
+            if !terminated {
+                eprintln!(
+                    "[agentsview] timed out waiting for sidecar to stop before update install"
+                );
+            }
+            return terminated;
+        }
+        return true;
     }
     clear_sidecar_port(app);
+    true
+}
+
+fn restart_backend_after_update_failure(handle: &AppHandle) {
+    if let Err(err) = launch_backend_from_handle(handle) {
+        eprintln!("[agentsview] failed to restart backend after update failure: {err}");
+    }
 }
 
 fn wait_for_server(port: u16, timeout: Duration) -> bool {
@@ -1234,9 +1394,13 @@ mod tests {
     fn handle_sidecar_terminated_clears_port_and_marks_startup() {
         let state = SidecarState::default();
         set_sidecar_port(&state, Some(18080));
+        *state
+            .active_generation
+            .lock()
+            .expect("lock active_generation") = Some(1);
         let startup_handled = AtomicBool::new(false);
 
-        assert!(handle_sidecar_terminated(&state, &startup_handled));
+        assert!(handle_sidecar_terminated(&state, &startup_handled, 1));
         assert_eq!(
             state
                 .backend_port
@@ -1249,7 +1413,7 @@ mod tests {
 
         // Termination handling is idempotent for state and should only
         // report first-time transition once.
-        assert!(!handle_sidecar_terminated(&state, &startup_handled));
+        assert!(!handle_sidecar_terminated(&state, &startup_handled, 1));
     }
 
     #[test]
@@ -1259,7 +1423,11 @@ mod tests {
         let result = install_downloaded_update(
             b"update-bytes".to_vec(),
             true,
-            || events.lock().expect("lock events").push("stop"),
+            || {
+                events.lock().expect("lock events").push("stop");
+                true
+            },
+            || events.lock().expect("lock events").push("restart"),
             |bytes| {
                 assert_eq!(bytes, b"update-bytes");
                 events.lock().expect("lock events").push("install");
@@ -1281,7 +1449,11 @@ mod tests {
         let result = install_downloaded_update(
             b"update-bytes".to_vec(),
             false,
-            || events.lock().expect("lock events").push("stop"),
+            || {
+                events.lock().expect("lock events").push("stop");
+                true
+            },
+            || events.lock().expect("lock events").push("restart"),
             |bytes| {
                 assert_eq!(bytes, b"update-bytes");
                 events.lock().expect("lock events").push("install");
@@ -1291,6 +1463,63 @@ mod tests {
 
         assert_eq!(result, Ok(()));
         assert_eq!(events.lock().expect("lock events").as_slice(), ["install"]);
+    }
+
+    #[test]
+    fn install_downloaded_update_skips_install_and_restarts_backend_when_windows_stop_times_out() {
+        let events = Mutex::new(Vec::new());
+
+        let result = install_downloaded_update(
+            b"update-bytes".to_vec(),
+            true,
+            || {
+                events.lock().expect("lock events").push("stop");
+                false
+            },
+            || events.lock().expect("lock events").push("restart"),
+            |_| {
+                events.lock().expect("lock events").push("install");
+                Ok::<(), ()>(())
+            },
+        );
+
+        assert_eq!(
+            result,
+            Err(InstallDownloadedUpdateError::BackendStopTimedOut)
+        );
+        assert_eq!(
+            events.lock().expect("lock events").as_slice(),
+            ["stop", "restart"]
+        );
+    }
+
+    #[test]
+    fn install_downloaded_update_restarts_backend_after_windows_install_failure() {
+        let events = Mutex::new(Vec::new());
+
+        let result = install_downloaded_update(
+            b"update-bytes".to_vec(),
+            true,
+            || {
+                events.lock().expect("lock events").push("stop");
+                true
+            },
+            || events.lock().expect("lock events").push("restart"),
+            |bytes| {
+                assert_eq!(bytes, b"update-bytes");
+                events.lock().expect("lock events").push("install");
+                Err::<(), &str>("install failed")
+            },
+        );
+
+        assert_eq!(
+            result,
+            Err(InstallDownloadedUpdateError::Install("install failed"))
+        );
+        assert_eq!(
+            events.lock().expect("lock events").as_slice(),
+            ["stop", "install", "restart"]
+        );
     }
 
     #[test]
