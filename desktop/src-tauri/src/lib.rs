@@ -923,12 +923,15 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         }
     };
 
-    if should_stop_backend_before_update_install(cfg!(target_os = "windows")) {
-        // Windows locks the bundled sidecar executable while it is running.
-        stop_backend(handle);
-    }
-
-    if let Err(err) = update.install(update_bytes) {
+    if let Err(err) = install_downloaded_update(
+        update_bytes,
+        cfg!(target_os = "windows"),
+        || {
+            // Windows locks the bundled sidecar executable while it is running.
+            stop_backend(handle);
+        },
+        |bytes| update.install(bytes),
+    ) {
         eprintln!("[agentsview] update install failed: {err}");
         let h = handle.clone();
         handle
@@ -955,8 +958,20 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
     }
 }
 
-fn should_stop_backend_before_update_install(is_windows: bool) -> bool {
-    is_windows
+fn install_downloaded_update<S, I, E>(
+    update_bytes: Vec<u8>,
+    is_windows: bool,
+    stop_backend: S,
+    install: I,
+) -> Result<(), E>
+where
+    S: FnOnce(),
+    I: FnOnce(Vec<u8>) -> Result<(), E>,
+{
+    if is_windows {
+        stop_backend();
+    }
+    install(update_bytes)
 }
 
 async fn dialog_confirm(handle: &AppHandle, title: &str, message: &str) -> bool {
@@ -1238,9 +1253,44 @@ mod tests {
     }
 
     #[test]
-    fn should_stop_backend_before_update_install_only_on_windows() {
-        assert!(should_stop_backend_before_update_install(true));
-        assert!(!should_stop_backend_before_update_install(false));
+    fn install_downloaded_update_stops_backend_before_install_on_windows() {
+        let events = Mutex::new(Vec::new());
+
+        let result = install_downloaded_update(
+            b"update-bytes".to_vec(),
+            true,
+            || events.lock().expect("lock events").push("stop"),
+            |bytes| {
+                assert_eq!(bytes, b"update-bytes");
+                events.lock().expect("lock events").push("install");
+                Ok::<(), ()>(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            events.lock().expect("lock events").as_slice(),
+            ["stop", "install"]
+        );
+    }
+
+    #[test]
+    fn install_downloaded_update_does_not_stop_backend_on_non_windows() {
+        let events = Mutex::new(Vec::new());
+
+        let result = install_downloaded_update(
+            b"update-bytes".to_vec(),
+            false,
+            || events.lock().expect("lock events").push("stop"),
+            |bytes| {
+                assert_eq!(bytes, b"update-bytes");
+                events.lock().expect("lock events").push("install");
+                Ok::<(), ()>(())
+            },
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(events.lock().expect("lock events").as_slice(), ["install"]);
     }
 
     #[test]
