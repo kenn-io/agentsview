@@ -906,7 +906,29 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         return;
     }
 
-    if let Err(err) = update.download_and_install(|_, _| {}, || {}).await {
+    let update_bytes = match update.download(|_, _| {}, || {}).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            eprintln!("[agentsview] update download failed: {err}");
+            let h = handle.clone();
+            handle
+                .dialog()
+                .message(
+                    "Failed to download the update. \
+                     Please try downloading manually from the releases page.",
+                )
+                .title("Update Failed")
+                .show(move |_| restore_webview_focus(&h));
+            return;
+        }
+    };
+
+    if should_stop_backend_before_update_install(cfg!(target_os = "windows")) {
+        // Windows locks the bundled sidecar executable while it is running.
+        stop_backend(handle);
+    }
+
+    if let Err(err) = update.install(update_bytes) {
         eprintln!("[agentsview] update install failed: {err}");
         let h = handle.clone();
         handle
@@ -931,6 +953,10 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         let _ = handle.emit("restart", ());
         handle.restart();
     }
+}
+
+fn should_stop_backend_before_update_install(is_windows: bool) -> bool {
+    is_windows
 }
 
 async fn dialog_confirm(handle: &AppHandle, title: &str, message: &str) -> bool {
@@ -1209,6 +1235,12 @@ mod tests {
         // Termination handling is idempotent for state and should only
         // report first-time transition once.
         assert!(!handle_sidecar_terminated(&state, &startup_handled));
+    }
+
+    #[test]
+    fn should_stop_backend_before_update_install_only_on_windows() {
+        assert!(should_stop_backend_before_update_install(true));
+        assert!(!should_stop_backend_before_update_install(false));
     }
 
     #[test]
