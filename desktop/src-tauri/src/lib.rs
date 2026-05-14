@@ -1087,7 +1087,6 @@ where
 {
     if is_windows {
         if !stop_backend() {
-            restart_backend();
             return Err(InstallDownloadedUpdateError::BackendStopTimedOut);
         }
     }
@@ -1466,7 +1465,7 @@ mod tests {
     }
 
     #[test]
-    fn install_downloaded_update_skips_install_and_restarts_backend_when_windows_stop_times_out() {
+    fn install_downloaded_update_does_not_restart_after_windows_stop_timeout() {
         let events = Mutex::new(Vec::new());
 
         let result = install_downloaded_update(
@@ -1487,10 +1486,7 @@ mod tests {
             result,
             Err(InstallDownloadedUpdateError::BackendStopTimedOut)
         );
-        assert_eq!(
-            events.lock().expect("lock events").as_slice(),
-            ["stop", "restart"]
-        );
+        assert_eq!(events.lock().expect("lock events").as_slice(), ["stop"]);
     }
 
     #[test]

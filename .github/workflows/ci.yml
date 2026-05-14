@@ -100,6 +100,27 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+  desktop-windows-unit:
+    name: Desktop Unit Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Prepare placeholder sidecar resource
+        shell: pwsh
+        run: |
+          $hostTriple = (rustc -vV | Select-String '^host: ').ToString() -replace '^host:\s+', ''
+          if (-not $hostTriple) {
+            throw "could not determine Rust host triple"
+          }
+          New-Item -ItemType Directory -Force desktop/src-tauri/binaries | Out-Null
+          New-Item -ItemType File -Force "desktop/src-tauri/binaries/agentsview-$hostTriple.exe" | Out-Null
+
+      - name: Run Windows desktop update tests
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib install_downloaded_update
+
   coverage:
     runs-on: ubuntu-latest
     steps:
