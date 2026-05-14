@@ -1020,13 +1020,16 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         }
     };
 
+    let windows_backend_stopped = if cfg!(target_os = "windows") {
+        // Windows locks the bundled sidecar executable while it is running.
+        Some(stop_backend_and_wait(handle.clone(), UPDATE_SIDECAR_STOP_TIMEOUT).await)
+    } else {
+        None
+    };
+
     if let Err(err) = install_downloaded_update(
         update_bytes,
-        cfg!(target_os = "windows"),
-        || {
-            // Windows locks the bundled sidecar executable while it is running.
-            stop_backend_and_wait(handle, UPDATE_SIDECAR_STOP_TIMEOUT)
-        },
+        windows_backend_stopped,
         || restart_backend_after_update_failure(handle),
         |bytes| update.install(bytes),
     ) {
@@ -1073,27 +1076,23 @@ impl<E: std::fmt::Display> std::fmt::Display for InstallDownloadedUpdateError<E>
 
 impl<E: std::fmt::Debug + std::fmt::Display> Error for InstallDownloadedUpdateError<E> {}
 
-fn install_downloaded_update<S, R, I, E>(
+fn install_downloaded_update<R, I, E>(
     update_bytes: Vec<u8>,
-    is_windows: bool,
-    stop_backend: S,
+    windows_backend_stopped: Option<bool>,
     restart_backend: R,
     install: I,
 ) -> Result<(), InstallDownloadedUpdateError<E>>
 where
-    S: FnOnce() -> bool,
     R: FnOnce(),
     I: FnOnce(Vec<u8>) -> Result<(), E>,
 {
-    if is_windows {
-        if !stop_backend() {
-            return Err(InstallDownloadedUpdateError::BackendStopTimedOut);
-        }
+    if windows_backend_stopped == Some(false) {
+        return Err(InstallDownloadedUpdateError::BackendStopTimedOut);
     }
     match install(update_bytes) {
         Ok(()) => Ok(()),
         Err(err) => {
-            if is_windows {
+            if windows_backend_stopped.is_some() {
                 restart_backend();
             }
             Err(InstallDownloadedUpdateError::Install(err))
@@ -1120,12 +1119,40 @@ fn stop_backend(app: &AppHandle) {
     let _ = stop_backend_inner(app, None);
 }
 
-fn stop_backend_and_wait(app: &AppHandle, timeout: Duration) -> bool {
-    stop_backend_inner(app, Some(timeout))
+async fn stop_backend_and_wait(app: AppHandle, timeout: Duration) -> bool {
+    tauri::async_runtime::spawn_blocking(move || stop_backend_inner(&app, Some(timeout)))
+        .await
+        .unwrap_or(false)
 }
 
 fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
     let state = app.state::<SidecarState>();
+    if let Some(timeout) = wait_timeout {
+        let process = {
+            let Ok(mut guard) = state.child.lock() else {
+                return false;
+            };
+            guard.take()
+        };
+        let Some(process) = process else {
+            clear_sidecar_port(app);
+            return true;
+        };
+        let generation = process.generation;
+        if let Err(err) = process.child.kill() {
+            eprintln!("[agentsview] failed to stop sidecar: {err}");
+        }
+        let terminated = wait_for_sidecar_termination(&state, generation, timeout);
+        if terminated {
+            let _ = mark_sidecar_inactive_if_current(&state, generation);
+            clear_sidecar_child_if_current(&state, generation);
+            clear_sidecar_port(app);
+        } else {
+            eprintln!("[agentsview] timed out waiting for sidecar to stop before update install");
+        }
+        return terminated;
+    }
+
     let process = {
         let Ok(mut guard) = state.child.lock() else {
             return false;
@@ -1141,15 +1168,6 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
             eprintln!("[agentsview] failed to stop sidecar: {err}");
         }
         clear_sidecar_port(app);
-        if let Some(timeout) = wait_timeout {
-            let terminated = wait_for_sidecar_termination(&state, process.generation, timeout);
-            if !terminated {
-                eprintln!(
-                    "[agentsview] timed out waiting for sidecar to stop before update install"
-                );
-            }
-            return terminated;
-        }
         return true;
     }
     clear_sidecar_port(app);
@@ -1416,16 +1434,12 @@ mod tests {
     }
 
     #[test]
-    fn install_downloaded_update_stops_backend_before_install_on_windows() {
+    fn install_downloaded_update_installs_after_windows_backend_stop() {
         let events = Mutex::new(Vec::new());
 
         let result = install_downloaded_update(
             b"update-bytes".to_vec(),
-            true,
-            || {
-                events.lock().expect("lock events").push("stop");
-                true
-            },
+            Some(true),
             || events.lock().expect("lock events").push("restart"),
             |bytes| {
                 assert_eq!(bytes, b"update-bytes");
@@ -1435,23 +1449,16 @@ mod tests {
         );
 
         assert_eq!(result, Ok(()));
-        assert_eq!(
-            events.lock().expect("lock events").as_slice(),
-            ["stop", "install"]
-        );
+        assert_eq!(events.lock().expect("lock events").as_slice(), ["install"]);
     }
 
     #[test]
-    fn install_downloaded_update_does_not_stop_backend_on_non_windows() {
+    fn install_downloaded_update_installs_without_backend_stop_on_non_windows() {
         let events = Mutex::new(Vec::new());
 
         let result = install_downloaded_update(
             b"update-bytes".to_vec(),
-            false,
-            || {
-                events.lock().expect("lock events").push("stop");
-                true
-            },
+            None,
             || events.lock().expect("lock events").push("restart"),
             |bytes| {
                 assert_eq!(bytes, b"update-bytes");
@@ -1470,11 +1477,7 @@ mod tests {
 
         let result = install_downloaded_update(
             b"update-bytes".to_vec(),
-            true,
-            || {
-                events.lock().expect("lock events").push("stop");
-                false
-            },
+            Some(false),
             || events.lock().expect("lock events").push("restart"),
             |_| {
                 events.lock().expect("lock events").push("install");
@@ -1486,7 +1489,7 @@ mod tests {
             result,
             Err(InstallDownloadedUpdateError::BackendStopTimedOut)
         );
-        assert_eq!(events.lock().expect("lock events").as_slice(), ["stop"]);
+        assert!(events.lock().expect("lock events").is_empty());
     }
 
     #[test]
@@ -1495,11 +1498,7 @@ mod tests {
 
         let result = install_downloaded_update(
             b"update-bytes".to_vec(),
-            true,
-            || {
-                events.lock().expect("lock events").push("stop");
-                true
-            },
+            Some(true),
             || events.lock().expect("lock events").push("restart"),
             |bytes| {
                 assert_eq!(bytes, b"update-bytes");
@@ -1514,7 +1513,7 @@ mod tests {
         );
         assert_eq!(
             events.lock().expect("lock events").as_slice(),
-            ["stop", "install", "restart"]
+            ["install", "restart"]
         );
     }
 
