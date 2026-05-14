@@ -20,7 +20,7 @@
     "marked": "18.0.3"
   },
   "devDependencies": {
-    "@playwright/test": "1.58.2",
+    "@playwright/test": "1.60.0",
     "@sveltejs/vite-plugin-svelte": "7.1.1",
     "@tsconfig/svelte": "5.0.8",
     "@types/dompurify": "3.2.0",
