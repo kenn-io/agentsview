@@ -7,7 +7,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -39,6 +39,7 @@ struct SidecarState {
     active_generation: Mutex<Option<u64>>,
     stopping_generation: Mutex<Option<u64>>,
     restart_after_stop_timeout_generation: Mutex<Option<u64>>,
+    active_update_stop_waiters: AtomicUsize,
     terminated_generation: Mutex<u64>,
     termination: Condvar,
     next_generation: AtomicU64,
@@ -647,6 +648,14 @@ fn mark_restart_after_stop_timeout(state: &SidecarState, generation: u64) {
     }
 }
 
+fn clear_restart_after_stop_timeout_if_current(state: &SidecarState, generation: u64) {
+    if let Ok(mut guard) = state.restart_after_stop_timeout_generation.lock() {
+        if *guard == Some(generation) {
+            *guard = None;
+        }
+    }
+}
+
 fn take_restart_after_stop_timeout_if_current(state: &SidecarState, generation: u64) -> bool {
     let Ok(mut guard) = state.restart_after_stop_timeout_generation.lock() else {
         return false;
@@ -658,6 +667,46 @@ fn take_restart_after_stop_timeout_if_current(state: &SidecarState, generation: 
     false
 }
 
+fn begin_update_stop_wait(state: &SidecarState) {
+    state
+        .active_update_stop_waiters
+        .fetch_add(1, Ordering::SeqCst);
+}
+
+fn end_update_stop_wait(state: &SidecarState) {
+    let previous = state
+        .active_update_stop_waiters
+        .fetch_sub(1, Ordering::SeqCst);
+    debug_assert!(previous > 0);
+}
+
+fn has_active_update_stop_waiter(state: &SidecarState) -> bool {
+    state.active_update_stop_waiters.load(Ordering::SeqCst) > 0
+}
+
+fn take_restart_after_stop_timeout_for_terminated_sidecar(
+    state: &SidecarState,
+    generation: u64,
+) -> bool {
+    if has_active_update_stop_waiter(state) {
+        return false;
+    }
+    take_restart_after_stop_timeout_if_current(state, generation)
+}
+
+fn restart_backend_after_stop_timeout_if_terminated(
+    app: &AppHandle,
+    state: &SidecarState,
+    generation: u64,
+) {
+    if !sidecar_generation_terminated(state, generation) {
+        return;
+    }
+    if take_restart_after_stop_timeout_for_terminated_sidecar(state, generation) {
+        restart_backend_after_update(app.clone());
+    }
+}
+
 fn record_sidecar_terminated(state: &SidecarState, generation: u64) {
     if let Ok(mut guard) = state.terminated_generation.lock() {
         if *guard < generation {
@@ -665,6 +714,13 @@ fn record_sidecar_terminated(state: &SidecarState, generation: u64) {
         }
         state.termination.notify_all();
     }
+}
+
+fn sidecar_generation_terminated(state: &SidecarState, generation: u64) -> bool {
+    state
+        .terminated_generation
+        .lock()
+        .is_ok_and(|guard| *guard >= generation)
 }
 
 fn wait_for_sidecar_termination(state: &SidecarState, generation: u64, timeout: Duration) -> bool {
@@ -752,7 +808,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     let handle = window.app_handle().clone();
                     let state = handle.state::<SidecarState>();
                     let restart_after_stop_timeout =
-                        take_restart_after_stop_timeout_if_current(&state, generation);
+                        take_restart_after_stop_timeout_for_terminated_sidecar(&state, generation);
                     if handle_sidecar_terminated(&state, startup_handled.as_ref(), generation) {
                         let _ = window.eval(
                             "window.__setStatus(\
@@ -1211,35 +1267,45 @@ async fn stop_backend_and_wait(app: AppHandle, timeout: Duration) -> bool {
 fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
     let state = app.state::<SidecarState>();
     if let Some(timeout) = wait_timeout {
+        begin_update_stop_wait(&state);
+        let mut waited_generation = None;
         let process = {
             let Ok(mut guard) = state.child.lock() else {
+                end_update_stop_wait(&state);
                 return false;
             };
             guard.take()
         };
-        let Some(process) = process else {
-            if let Some(generation) = current_stopping_generation(&state) {
-                return finish_backend_stop_wait(
-                    app,
-                    &state,
-                    generation,
-                    wait_for_sidecar_termination(&state, generation, timeout),
-                );
+        let stopped = if let Some(process) = process {
+            let generation = process.generation;
+            waited_generation = Some(generation);
+            mark_sidecar_stopping(&state, generation);
+            if let Err(err) = process.child.kill() {
+                eprintln!("[agentsview] failed to stop sidecar: {err}");
             }
+            finish_backend_stop_wait(
+                app,
+                &state,
+                generation,
+                wait_for_sidecar_termination(&state, generation, timeout),
+            )
+        } else if let Some(generation) = current_stopping_generation(&state) {
+            waited_generation = Some(generation);
+            finish_backend_stop_wait(
+                app,
+                &state,
+                generation,
+                wait_for_sidecar_termination(&state, generation, timeout),
+            )
+        } else {
             clear_sidecar_port(app);
-            return true;
+            true
         };
-        let generation = process.generation;
-        mark_sidecar_stopping(&state, generation);
-        if let Err(err) = process.child.kill() {
-            eprintln!("[agentsview] failed to stop sidecar: {err}");
+        end_update_stop_wait(&state);
+        if let Some(generation) = waited_generation {
+            restart_backend_after_stop_timeout_if_terminated(app, &state, generation);
         }
-        return finish_backend_stop_wait(
-            app,
-            &state,
-            generation,
-            wait_for_sidecar_termination(&state, generation, timeout),
-        );
+        return stopped;
     }
 
     let process = {
@@ -1270,6 +1336,7 @@ fn finish_backend_stop_wait(
     terminated: bool,
 ) -> bool {
     if terminated {
+        clear_restart_after_stop_timeout_if_current(state, generation);
         let _ = mark_sidecar_inactive_if_current(state, generation);
         clear_sidecar_child_if_current(state, generation);
         clear_stopping_generation_if_current(state, generation);
@@ -1561,6 +1628,24 @@ mod tests {
         assert!(!take_restart_after_stop_timeout_if_current(&state, 1));
         assert!(take_restart_after_stop_timeout_if_current(&state, 2));
         assert!(!take_restart_after_stop_timeout_if_current(&state, 2));
+    }
+
+    #[test]
+    fn restart_after_stop_timeout_waits_for_active_update_stop_waiter() {
+        let state = SidecarState::default();
+
+        mark_restart_after_stop_timeout(&state, 2);
+        begin_update_stop_wait(&state);
+
+        assert!(!take_restart_after_stop_timeout_for_terminated_sidecar(
+            &state, 2
+        ));
+
+        end_update_stop_wait(&state);
+
+        assert!(take_restart_after_stop_timeout_for_terminated_sidecar(
+            &state, 2
+        ));
     }
 
     #[test]
