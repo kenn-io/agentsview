@@ -3,6 +3,7 @@ export interface VersionInfo {
   version: string;
   commit: string;
   build_date: string;
+  read_only?: boolean;
 }
 
 /** Matches Go Session struct in internal/db/sessions.go */

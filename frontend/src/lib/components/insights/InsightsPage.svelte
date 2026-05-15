@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { insights } from "../../stores/insights.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import type { InsightType, AgentName } from "../../api/types.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
@@ -12,6 +13,12 @@
     | "agent_analysis";
 
   let promptExpanded = $state(false);
+  const readOnly = $derived(
+    sync.serverVersion?.read_only === true,
+  );
+  const generationUnavailable = $derived(
+    sync.serverVersion === null || readOnly,
+  );
 
   const uiMode: UIMode = $derived.by(() => {
     if (insights.type === "agent_analysis") {
@@ -96,6 +103,7 @@
   }
 
   function handleGenerate() {
+    if (generationUnavailable) return;
     insights.generate();
   }
 
@@ -249,7 +257,12 @@
         <button
           class="generate-btn"
           onclick={handleGenerate}
-          disabled={insights.loading}
+          disabled={insights.loading || generationUnavailable}
+          title={readOnly
+            ? "Unavailable in read-only remote mode"
+            : sync.serverVersion === null
+              ? "Waiting for server version"
+              : "Generate insight"}
         >
           <svg
             class="generate-icon"
@@ -263,6 +276,11 @@
           Generate
         </button>
       </div>
+      {#if readOnly}
+        <div class="readonly-note">
+          Read-only remote mode cannot save generated insights.
+        </div>
+      {/if}
     </div>
 
     <div class="list-area">
@@ -736,6 +754,13 @@
 
   .generate-icon {
     opacity: 0.9;
+  }
+
+  .readonly-note {
+    padding: 4px 2px 0;
+    font-size: 10px;
+    line-height: 1.35;
+    color: var(--text-muted);
   }
 
   /* ── List Area ── */
