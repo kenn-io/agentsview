@@ -117,14 +117,36 @@ export class ApiError extends Error {
 }
 
 function apiErrorMessage(status: number, body: string): string {
-  return body.trim() || `API ${status}`;
+  const text = body.trim();
+  if (!text) return `API ${status}`;
+
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      "error" in parsed &&
+      typeof parsed.error === "string" &&
+      parsed.error
+    ) {
+      return parsed.error;
+    }
+  } catch {
+    // Plain-text error body.
+  }
+
+  return text;
+}
+
+async function responseErrorMessage(res: Response): Promise<string> {
+  const body = await res.text().catch(() => "");
+  return apiErrorMessage(res.status, body);
 }
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${getBase()}${path}`, authHeaders(init));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
   return res.json() as Promise<T>;
 }
@@ -694,8 +716,7 @@ export async function starSession(id: string): Promise<void> {
     method: "PUT",
   }));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -704,8 +725,7 @@ export async function unstarSession(id: string): Promise<void> {
     method: "DELETE",
   }));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -718,8 +738,7 @@ export async function bulkStarSessions(
     body: JSON.stringify({ session_ids: sessionIds }),
   }));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -871,8 +890,7 @@ export async function deleteWorktreeMapping(id: number): Promise<void> {
     authHeaders({ method: "DELETE" }),
   );
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -1022,8 +1040,7 @@ export async function deleteInsight(id: number): Promise<void> {
     method: "DELETE",
   }));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -1052,8 +1069,11 @@ export function generateInsight(
       signal: controller.signal,
     }));
 
-    if (!res.ok || !res.body) {
-      throw new Error(`Generate request failed: ${res.status}`);
+    if (!res.ok) {
+      throw new ApiError(res.status, await responseErrorMessage(res));
+    }
+    if (!res.body) {
+      throw new Error("Generate request failed: empty response");
     }
 
     const reader = res.body.getReader();
@@ -1163,8 +1183,7 @@ export async function deleteSession(id: string): Promise<void> {
     method: "DELETE",
   }));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -1173,8 +1192,7 @@ export async function restoreSession(id: string): Promise<void> {
     method: "POST",
   }));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -1185,8 +1203,7 @@ export async function permanentDeleteSession(
     method: "DELETE",
   }));
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 
@@ -1353,8 +1370,7 @@ export async function unpinMessage(
     authHeaders({ method: "DELETE" }),
   );
   if (!res.ok) {
-    const body = await res.text();
-    throw new ApiError(res.status, apiErrorMessage(res.status, body));
+    throw new ApiError(res.status, await responseErrorMessage(res));
   }
 }
 

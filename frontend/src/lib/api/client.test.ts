@@ -491,6 +491,7 @@ describe("generateInsight SSE parsing", () => {
         ok: false,
         status: 500,
         body: null,
+        text: () => Promise.resolve(""),
       }),
     );
 
@@ -503,6 +504,42 @@ describe("generateInsight SSE parsing", () => {
     activeHandles.push(handle);
 
     await expect(handle.done).rejects.toThrow("500");
+  });
+
+  it("surfaces backend error text on non-ok response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 501,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              error:
+                "insight generation is not available in read-only mode",
+            }),
+          ),
+      }),
+    );
+
+    const { generateInsight } = await import("./client.js");
+    const handle = generateInsight({
+      type: "daily_activity",
+      date_from: "2025-01-15",
+      date_to: "2025-01-15",
+    });
+    activeHandles.push(handle);
+
+    try {
+      await handle.done;
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ApiError);
+      expect((e as InstanceType<typeof ApiError>).status).toBe(501);
+      expect((e as InstanceType<typeof ApiError>).message).toBe(
+        "insight generation is not available in read-only mode",
+      );
+    }
   });
 });
 
