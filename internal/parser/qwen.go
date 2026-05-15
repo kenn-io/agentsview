@@ -84,6 +84,18 @@ func FindQwenSourceFile(projectsDir, rawID string) string {
 }
 
 // ParseQwenSession parses a Qwen Code JSONL chat transcript.
+//
+// Qwen emits one `type=assistant` line per model output, including
+// every tool-call iteration in a multi-step turn. Each iteration's
+// `message.parts` typically contains only a thought + a functionCall,
+// with the final iteration carrying the user-facing text. Counting
+// every iteration as a distinct message inflates MessageCount well
+// beyond what other agents report for the same turn. To keep counts
+// comparable across agents, consecutive tool-call-only assistant
+// entries are coalesced into the next text-bearing assistant entry,
+// aggregating their thinking text and token usage. A trailing run of
+// tool-call-only entries with no text follow-up is emitted as a single
+// coalesced assistant message so the data isn't lost.
 func ParseQwenSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
@@ -109,7 +121,15 @@ func ParseQwenSession(
 		ordinal      int
 		userCount    int
 		messages     []ParsedMessage
+		pending      qwenAssistantBuffer
 	)
+
+	flushPending := func() {
+		if msg, ok := pending.flush(ordinal); ok {
+			messages = append(messages, msg)
+			ordinal++
+		}
+	}
 
 	for {
 		line, ok := lr.next()
@@ -147,6 +167,8 @@ func ParseQwenSession(
 			if strings.TrimSpace(content) == "" {
 				continue
 			}
+			// A new user turn closes any pending tool-call-only run.
+			flushPending()
 			if firstMessage == "" {
 				firstMessage = truncate(
 					strings.ReplaceAll(content, "\n", " "),
@@ -168,28 +190,30 @@ func ParseQwenSession(
 				continue
 			}
 
-			content := qwenJoinedParts(root.Get("message.parts"), false)
-			thinking := qwenJoinedParts(root.Get("message.parts"), true)
-			hasThinking := qwenHasThought(root.Get("message.parts"))
+			parts := root.Get("message.parts")
+			content := qwenJoinedParts(parts, false)
+			thinking := qwenJoinedParts(parts, true)
+			hasThinking := qwenHasThought(parts)
 			if strings.TrimSpace(content) == "" && !hasThinking {
 				continue
 			}
 
-			msg := ParsedMessage{
-				Ordinal:       ordinal,
-				Role:          RoleAssistant,
-				Content:       content,
-				ThinkingText:  thinking,
-				Timestamp:     ts,
-				HasThinking:   hasThinking,
-				ContentLength: len(content),
-				Model:         root.Get("model").Str,
+			pending.absorb(qwenAssistantEntry{
+				content:     content,
+				thinking:    thinking,
+				hasThinking: hasThinking,
+				timestamp:   ts,
+				model:       root.Get("model").Str,
+				usage:       root.Get("usageMetadata"),
+			})
+
+			if strings.TrimSpace(content) != "" {
+				flushPending()
 			}
-			applyQwenTokenUsage(&msg, root.Get("usageMetadata"))
-			messages = append(messages, msg)
-			ordinal++
 		}
 	}
+
+	flushPending()
 
 	if err := lr.Err(); err != nil {
 		return nil, nil, fmt.Errorf("reading qwen %s: %w", path, err)
@@ -258,15 +282,63 @@ func qwenHasThought(parts gjson.Result) bool {
 	return hasThought
 }
 
-func applyQwenTokenUsage(msg *ParsedMessage, usage gjson.Result) {
-	if !usage.Exists() {
-		return
+// qwenAssistantEntry holds the fields extracted from a single
+// `type=assistant` JSONL line, ready to be folded into a turn buffer.
+type qwenAssistantEntry struct {
+	content     string
+	thinking    string
+	hasThinking bool
+	timestamp   time.Time
+	model       string
+	usage       gjson.Result
+}
+
+// qwenAssistantBuffer accumulates one logical assistant turn across
+// one or more JSONL entries. Tool-call-only iterations contribute
+// thinking and token usage; the closing text-bearing entry (or EOF /
+// next user turn) flushes the buffer to a single ParsedMessage.
+type qwenAssistantBuffer struct {
+	pending     bool
+	content     string
+	thinking    []string
+	hasThinking bool
+	timestamp   time.Time
+	model       string
+
+	sumOutput   int
+	hasOutput   bool
+	peakInput   int
+	peakCache   int
+	peakContext int
+	hasContext  bool
+}
+
+func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
+	b.pending = true
+	if e.content != "" {
+		b.content = e.content
+	}
+	if e.thinking != "" {
+		b.thinking = append(b.thinking, e.thinking)
+	}
+	if e.hasThinking {
+		b.hasThinking = true
+	}
+	if !e.timestamp.IsZero() {
+		b.timestamp = e.timestamp
+	}
+	if e.model != "" {
+		b.model = e.model
 	}
 
-	inputField := usage.Get("promptTokenCount")
-	outputField := usage.Get("candidatesTokenCount")
-	cacheReadField := usage.Get("cachedContentTokenCount")
-	if !inputField.Exists() && !outputField.Exists() && !cacheReadField.Exists() {
+	if !e.usage.Exists() {
+		return
+	}
+	inputField := e.usage.Get("promptTokenCount")
+	outputField := e.usage.Get("candidatesTokenCount")
+	cacheReadField := e.usage.Get("cachedContentTokenCount")
+	if !inputField.Exists() && !outputField.Exists() &&
+		!cacheReadField.Exists() {
 		return
 	}
 
@@ -274,19 +346,51 @@ func applyQwenTokenUsage(msg *ParsedMessage, usage gjson.Result) {
 	output := int(outputField.Int())
 	cacheRead := int(cacheReadField.Int())
 
-	normalized := map[string]int{
-		"input_tokens":            input,
-		"output_tokens":           output,
-		"cache_read_input_tokens": cacheRead,
+	if outputField.Exists() {
+		b.hasOutput = true
+		b.sumOutput += output
 	}
-	j, err := json.Marshal(normalized)
-	if err != nil {
-		return
+	if inputField.Exists() || cacheReadField.Exists() {
+		b.hasContext = true
+		if ctx := input + cacheRead; ctx >= b.peakContext {
+			b.peakContext = ctx
+			b.peakInput = input
+			b.peakCache = cacheRead
+		}
+	}
+}
+
+func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
+	if !b.pending {
+		return ParsedMessage{}, false
 	}
 
-	msg.TokenUsage = j
-	msg.OutputTokens = output
-	msg.HasOutputTokens = outputField.Exists()
-	msg.ContextTokens = input + cacheRead
-	msg.HasContextTokens = inputField.Exists() || cacheReadField.Exists()
+	msg := ParsedMessage{
+		Ordinal:       ordinal,
+		Role:          RoleAssistant,
+		Content:       b.content,
+		ThinkingText:  strings.Join(b.thinking, "\n"),
+		Timestamp:     b.timestamp,
+		HasThinking:   b.hasThinking,
+		ContentLength: len(b.content),
+		Model:         b.model,
+	}
+
+	if b.hasOutput || b.hasContext {
+		normalized := map[string]int{
+			"input_tokens":            b.peakInput,
+			"output_tokens":           b.sumOutput,
+			"cache_read_input_tokens": b.peakCache,
+		}
+		if j, err := json.Marshal(normalized); err == nil {
+			msg.TokenUsage = j
+		}
+		msg.OutputTokens = b.sumOutput
+		msg.HasOutputTokens = b.hasOutput
+		msg.ContextTokens = b.peakContext
+		msg.HasContextTokens = b.hasContext
+	}
+
+	*b = qwenAssistantBuffer{}
+	return msg, true
 }

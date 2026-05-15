@@ -54,6 +54,126 @@ func TestParseQwenSession(t *testing.T) {
 	assert.Equal(t, int64(12), gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int())
 }
 
+// TestParseQwenSession_CoalescesToolCallOnlyAssistants verifies that a
+// run of assistant entries whose parts are only [thought, functionCall]
+// (no user-facing text) is merged into the next text-bearing assistant
+// entry, so MessageCount reflects user-visible turns rather than every
+// tool-call iteration. Models the Session 9 pattern (`50510b6f`).
+func TestParseQwenSession_CoalescesToolCallOnlyAssistants(t *testing.T) {
+	t.Parallel()
+
+	content := `{"uuid":"u1","sessionId":"sess-coalesce","timestamp":"2026-05-15T10:26:54.209Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Find the bug"}]}}
+{"uuid":"u2","sessionId":"sess-coalesce","timestamp":"2026-05-15T10:26:55.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Looking at the code first.","thought":true},{"functionCall":{"id":"c1","name":"read_file","args":{"path":"a.go"}}}]},"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":10,"cachedContentTokenCount":0}}
+{"uuid":"u3","sessionId":"sess-coalesce","timestamp":"2026-05-15T10:26:56.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Now searching.","thought":true},{"functionCall":{"id":"c2","name":"grep","args":{"q":"bug"}}}]},"usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":20,"cachedContentTokenCount":50}}
+{"uuid":"u4","sessionId":"sess-coalesce","timestamp":"2026-05-15T10:26:57.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Putting it together.","thought":true},{"text":"The bug is on line 42."}]},"usageMetadata":{"promptTokenCount":300,"candidatesTokenCount":15,"cachedContentTokenCount":80}}`
+
+	path := createTestFile(t, "coalesce.jsonl", content)
+
+	sess, msgs, err := ParseQwenSession(path, "", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "expected user + single coalesced assistant turn")
+	require.Equal(t, 2, sess.MessageCount)
+	require.Equal(t, 1, sess.UserMessageCount)
+
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Find the bug", msgs[0].Content)
+
+	a := msgs[1]
+	assert.Equal(t, RoleAssistant, a.Role)
+	assert.Equal(t, "The bug is on line 42.", a.Content)
+	assert.True(t, a.HasThinking)
+	assert.Contains(t, a.ThinkingText, "Looking at the code first.")
+	assert.Contains(t, a.ThinkingText, "Now searching.")
+	assert.Contains(t, a.ThinkingText, "Putting it together.")
+
+	// Output tokens sum across coalesced entries; context tokens take
+	// the peak (input + cached) so PeakContextTokens stays correct.
+	assert.True(t, a.HasOutputTokens)
+	assert.Equal(t, 45, a.OutputTokens, "10 + 20 + 15")
+	assert.True(t, a.HasContextTokens)
+	assert.Equal(t, 380, a.ContextTokens, "max(100+0, 200+50, 300+80)")
+
+	// Session-level totals stay consistent with summed/maxed message values.
+	assert.Equal(t, 45, sess.TotalOutputTokens)
+	assert.Equal(t, 380, sess.PeakContextTokens)
+
+	// Timestamp tracks the final (text-bearing) entry in the coalesced run.
+	assert.Equal(t, "2026-05-15T10:26:57Z", a.Timestamp.UTC().Format("2006-01-02T15:04:05Z"))
+}
+
+// TestParseQwenSession_TrailingToolCallOnlyAssistants verifies that a
+// trailing run of tool-call-only assistant entries (no text follow-up
+// before EOF) is emitted as a single coalesced assistant message rather
+// than dropped or counted N times.
+func TestParseQwenSession_TrailingToolCallOnlyAssistants(t *testing.T) {
+	t.Parallel()
+
+	content := `{"uuid":"u1","sessionId":"sess-trail","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Run tests"}]}}
+{"uuid":"u2","sessionId":"sess-trail","timestamp":"2026-05-15T10:00:01.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Starting test run.","thought":true},{"functionCall":{"id":"c1","name":"shell","args":{"cmd":"go test"}}}]},"usageMetadata":{"promptTokenCount":50,"candidatesTokenCount":5,"cachedContentTokenCount":0}}
+{"uuid":"u3","sessionId":"sess-trail","timestamp":"2026-05-15T10:00:02.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Re-running with verbose.","thought":true},{"functionCall":{"id":"c2","name":"shell","args":{"cmd":"go test -v"}}}]},"usageMetadata":{"promptTokenCount":80,"candidatesTokenCount":7,"cachedContentTokenCount":10}}`
+
+	path := createTestFile(t, "trail.jsonl", content)
+
+	sess, msgs, err := ParseQwenSession(path, "", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "trailing tool-call run should coalesce into one assistant message")
+	require.Equal(t, 2, sess.MessageCount)
+	require.Equal(t, 1, sess.UserMessageCount)
+
+	a := msgs[1]
+	assert.Equal(t, RoleAssistant, a.Role)
+	assert.Empty(t, a.Content, "no text-bearing entry means content is empty")
+	assert.True(t, a.HasThinking)
+	assert.Contains(t, a.ThinkingText, "Starting test run.")
+	assert.Contains(t, a.ThinkingText, "Re-running with verbose.")
+	assert.Equal(t, 12, a.OutputTokens, "5 + 7")
+	assert.Equal(t, 90, a.ContextTokens, "max(50+0, 80+10)")
+}
+
+// TestParseQwenSession_AbortedNoAssistantResponse models the
+// `fa8d5d8e` / `96282bca` pattern — user typed something, the session
+// ended before any assistant entry was written. Should produce exactly
+// one user message and no assistant inflation.
+func TestParseQwenSession_AbortedNoAssistantResponse(t *testing.T) {
+	t.Parallel()
+
+	content := `{"uuid":"u1","sessionId":"sess-abort","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Hello"}]}}
+{"uuid":"u2","sessionId":"sess-abort","timestamp":"2026-05-15T10:00:01.000Z","type":"system","cwd":"/work","subtype":"ui_telemetry","systemPayload":{}}
+{"uuid":"u3","sessionId":"sess-abort","timestamp":"2026-05-15T10:00:02.000Z","type":"system","cwd":"/work","subtype":"ui_telemetry","systemPayload":{}}`
+
+	path := createTestFile(t, "abort.jsonl", content)
+
+	sess, msgs, err := ParseQwenSession(path, "", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, 1, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "Hello", msgs[0].Content)
+	assert.False(t, sess.HasTotalOutputTokens, "no assistant entries -> no output tokens")
+}
+
+// TestParseQwenSession_ShortClean models the Session 10 pattern
+// (`80a3069a`) — one user prompt and one text-bearing assistant
+// response. The baseline "clean" short session that should not change
+// shape under the new coalescing logic.
+func TestParseQwenSession_ShortClean(t *testing.T) {
+	t.Parallel()
+
+	content := `{"uuid":"u1","sessionId":"sess-short","timestamp":"2026-05-15T10:25:42.212Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"."}]}}
+{"uuid":"u2","sessionId":"sess-short","timestamp":"2026-05-15T10:25:53.402Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Ready when you are."}]},"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"cachedContentTokenCount":0}}`
+
+	path := createTestFile(t, "short.jsonl", content)
+
+	sess, msgs, err := ParseQwenSession(path, "", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "Ready when you are.", msgs[1].Content)
+	assert.False(t, msgs[1].HasThinking)
+}
+
 func TestDiscoverQwenSessions(t *testing.T) {
 	t.Parallel()
 
