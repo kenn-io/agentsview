@@ -163,11 +163,20 @@ func ParseQwenSession(
 			if root.Get("message.role").Str != "user" {
 				continue
 			}
-			content := qwenJoinedParts(root.Get("message.parts"), false)
+			parts := root.Get("message.parts")
+			content := qwenJoinedParts(parts, false)
+			toolResults := qwenExtractToolResults(parts)
 			if strings.TrimSpace(content) == "" {
+				// Tool-result-only user entries are part of the
+				// surrounding assistant turn; fold them into the
+				// pending buffer so the coalesced turn carries its
+				// own ToolResults without breaking message ordering.
+				if len(toolResults) > 0 {
+					pending.absorbToolResults(toolResults)
+				}
 				continue
 			}
-			// A new user turn closes any pending tool-call-only run.
+			// A new user text turn closes any pending tool-call-only run.
 			flushPending()
 			if firstMessage == "" {
 				firstMessage = truncate(
@@ -181,6 +190,7 @@ func ParseQwenSession(
 				Content:       content,
 				Timestamp:     ts,
 				ContentLength: len(content),
+				ToolResults:   toolResults,
 			})
 			ordinal++
 			userCount++
@@ -194,7 +204,9 @@ func ParseQwenSession(
 			content := qwenJoinedParts(parts, false)
 			thinking := qwenJoinedParts(parts, true)
 			hasThinking := qwenHasThought(parts)
-			if strings.TrimSpace(content) == "" && !hasThinking {
+			toolCalls := qwenExtractToolCalls(parts)
+			if strings.TrimSpace(content) == "" && !hasThinking &&
+				len(toolCalls) == 0 {
 				continue
 			}
 
@@ -202,6 +214,7 @@ func ParseQwenSession(
 				content:     content,
 				thinking:    thinking,
 				hasThinking: hasThinking,
+				toolCalls:   toolCalls,
 				timestamp:   ts,
 				model:       root.Get("model").Str,
 				usage:       root.Get("usageMetadata"),
@@ -282,12 +295,66 @@ func qwenHasThought(parts gjson.Result) bool {
 	return hasThought
 }
 
+// qwenExtractToolCalls pulls functionCall parts out of a Qwen
+// `message.parts` array into ParsedToolCall entries. Qwen uses the
+// Gemini-style shape: {"functionCall": {"id": ..., "name": ..., "args": {...}}}.
+func qwenExtractToolCalls(parts gjson.Result) []ParsedToolCall {
+	if !parts.IsArray() {
+		return nil
+	}
+	var calls []ParsedToolCall
+	parts.ForEach(func(_, part gjson.Result) bool {
+		fc := part.Get("functionCall")
+		if !fc.Exists() {
+			return true
+		}
+		name := fc.Get("name").Str
+		if name == "" {
+			return true
+		}
+		calls = append(calls, ParsedToolCall{
+			ToolUseID: fc.Get("id").Str,
+			ToolName:  name,
+			Category:  NormalizeToolCategory(name),
+			InputJSON: fc.Get("args").Raw,
+		})
+		return true
+	})
+	return calls
+}
+
+// qwenExtractToolResults pulls functionResponse parts out of a Qwen
+// user `message.parts` array into ParsedToolResult entries. Qwen emits
+// tool results as user messages with parts like
+// {"functionResponse": {"id": ..., "name": ..., "response": {...}}}.
+func qwenExtractToolResults(parts gjson.Result) []ParsedToolResult {
+	if !parts.IsArray() {
+		return nil
+	}
+	var results []ParsedToolResult
+	parts.ForEach(func(_, part gjson.Result) bool {
+		fr := part.Get("functionResponse")
+		if !fr.Exists() {
+			return true
+		}
+		response := fr.Get("response")
+		results = append(results, ParsedToolResult{
+			ToolUseID:     fr.Get("id").Str,
+			ContentLength: toolResultContentLength(response),
+			ContentRaw:    response.Raw,
+		})
+		return true
+	})
+	return results
+}
+
 // qwenAssistantEntry holds the fields extracted from a single
 // `type=assistant` JSONL line, ready to be folded into a turn buffer.
 type qwenAssistantEntry struct {
 	content     string
 	thinking    string
 	hasThinking bool
+	toolCalls   []ParsedToolCall
 	timestamp   time.Time
 	model       string
 	usage       gjson.Result
@@ -295,22 +362,26 @@ type qwenAssistantEntry struct {
 
 // qwenAssistantBuffer accumulates one logical assistant turn across
 // one or more JSONL entries. Tool-call-only iterations contribute
-// thinking and token usage; the closing text-bearing entry (or EOF /
-// next user turn) flushes the buffer to a single ParsedMessage.
+// thinking, tool calls, and token usage; the closing text-bearing
+// entry (or EOF / next user text turn) flushes the buffer to a single
+// ParsedMessage. Intermediate tool-result user entries fold their
+// ParsedToolResult entries into the same buffer so the coalesced turn
+// retains its tool-use evidence.
 type qwenAssistantBuffer struct {
 	pending     bool
 	content     string
 	thinking    []string
 	hasThinking bool
+	toolCalls   []ParsedToolCall
+	toolResults []ParsedToolResult
 	timestamp   time.Time
 	model       string
 
-	sumOutput   int
-	hasOutput   bool
-	peakInput   int
-	peakCache   int
-	peakContext int
-	hasContext  bool
+	sumOutput  int
+	hasOutput  bool
+	peakPrompt int
+	peakCache  int
+	hasContext bool
 }
 
 func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
@@ -323,6 +394,9 @@ func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
 	}
 	if e.hasThinking {
 		b.hasThinking = true
+	}
+	if len(e.toolCalls) > 0 {
+		b.toolCalls = append(b.toolCalls, e.toolCalls...)
 	}
 	if !e.timestamp.IsZero() {
 		b.timestamp = e.timestamp
@@ -342,7 +416,12 @@ func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
 		return
 	}
 
-	input := int(inputField.Int())
+	// Qwen reports promptTokenCount as the full input count with the
+	// cached portion already included (totalTokenCount = prompt +
+	// candidates). Track the peak prompt and its matching cached count
+	// so flush can split them into uncached + cached without double-
+	// counting cached tokens in normalized usage or context totals.
+	prompt := int(inputField.Int())
 	output := int(outputField.Int())
 	cacheRead := int(cacheReadField.Int())
 
@@ -352,12 +431,19 @@ func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
 	}
 	if inputField.Exists() || cacheReadField.Exists() {
 		b.hasContext = true
-		if ctx := input + cacheRead; ctx >= b.peakContext {
-			b.peakContext = ctx
-			b.peakInput = input
+		if prompt >= b.peakPrompt {
+			b.peakPrompt = prompt
 			b.peakCache = cacheRead
 		}
 	}
+}
+
+func (b *qwenAssistantBuffer) absorbToolResults(trs []ParsedToolResult) {
+	if len(trs) == 0 {
+		return
+	}
+	b.pending = true
+	b.toolResults = append(b.toolResults, trs...)
 }
 
 func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
@@ -372,13 +458,17 @@ func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
 		ThinkingText:  strings.Join(b.thinking, "\n"),
 		Timestamp:     b.timestamp,
 		HasThinking:   b.hasThinking,
+		HasToolUse:    len(b.toolCalls) > 0,
 		ContentLength: len(b.content),
 		Model:         b.model,
+		ToolCalls:     b.toolCalls,
+		ToolResults:   b.toolResults,
 	}
 
 	if b.hasOutput || b.hasContext {
+		uncached := max(b.peakPrompt-b.peakCache, 0)
 		normalized := map[string]int{
-			"input_tokens":            b.peakInput,
+			"input_tokens":            uncached,
 			"output_tokens":           b.sumOutput,
 			"cache_read_input_tokens": b.peakCache,
 		}
@@ -387,7 +477,7 @@ func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
 		}
 		msg.OutputTokens = b.sumOutput
 		msg.HasOutputTokens = b.hasOutput
-		msg.ContextTokens = b.peakContext
+		msg.ContextTokens = b.peakPrompt
 		msg.HasContextTokens = b.hasContext
 	}
 

@@ -34,7 +34,10 @@ func TestParseQwenSession(t *testing.T) {
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.Equal(t, 47, sess.TotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
-	assert.Equal(t, 18021, sess.PeakContextTokens)
+	// promptTokenCount already includes cachedContentTokenCount in Qwen
+	// usage; context tokens should equal the prompt count (not prompt
+	// + cached, which would double-count the cached portion).
+	assert.Equal(t, 18009, sess.PeakContextTokens)
 
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.Equal(t, "Calculate .089 * 7.85788", msgs[0].Content)
@@ -47,9 +50,11 @@ func TestParseQwenSession(t *testing.T) {
 	assert.True(t, msgs[1].HasOutputTokens)
 	assert.Equal(t, 47, msgs[1].OutputTokens)
 	assert.True(t, msgs[1].HasContextTokens)
-	assert.Equal(t, 18021, msgs[1].ContextTokens)
+	assert.Equal(t, 18009, msgs[1].ContextTokens)
 	require.NotEmpty(t, msgs[1].TokenUsage)
-	assert.Equal(t, int64(18009), gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
+	// Normalized input_tokens is the uncached remainder
+	// (promptTokenCount - cachedContentTokenCount).
+	assert.Equal(t, int64(17997), gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
 	assert.Equal(t, int64(47), gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())
 	assert.Equal(t, int64(12), gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int())
 }
@@ -87,15 +92,24 @@ func TestParseQwenSession_CoalescesToolCallOnlyAssistants(t *testing.T) {
 	assert.Contains(t, a.ThinkingText, "Putting it together.")
 
 	// Output tokens sum across coalesced entries; context tokens take
-	// the peak (input + cached) so PeakContextTokens stays correct.
+	// the peak promptTokenCount (which already includes cached) so we
+	// avoid double-counting the cached portion.
 	assert.True(t, a.HasOutputTokens)
 	assert.Equal(t, 45, a.OutputTokens, "10 + 20 + 15")
 	assert.True(t, a.HasContextTokens)
-	assert.Equal(t, 380, a.ContextTokens, "max(100+0, 200+50, 300+80)")
+	assert.Equal(t, 300, a.ContextTokens, "max(prompt) across coalesced entries")
+
+	// Tool calls from each iteration aggregate onto the coalesced turn.
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 2)
+	assert.Equal(t, "read_file", a.ToolCalls[0].ToolName)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "grep", a.ToolCalls[1].ToolName)
+	assert.Equal(t, "c2", a.ToolCalls[1].ToolUseID)
 
 	// Session-level totals stay consistent with summed/maxed message values.
 	assert.Equal(t, 45, sess.TotalOutputTokens)
-	assert.Equal(t, 380, sess.PeakContextTokens)
+	assert.Equal(t, 300, sess.PeakContextTokens)
 
 	// Timestamp tracks the final (text-bearing) entry in the coalesced run.
 	assert.Equal(t, "2026-05-15T10:26:57Z", a.Timestamp.UTC().Format("2006-01-02T15:04:05Z"))
@@ -127,7 +141,54 @@ func TestParseQwenSession_TrailingToolCallOnlyAssistants(t *testing.T) {
 	assert.Contains(t, a.ThinkingText, "Starting test run.")
 	assert.Contains(t, a.ThinkingText, "Re-running with verbose.")
 	assert.Equal(t, 12, a.OutputTokens, "5 + 7")
-	assert.Equal(t, 90, a.ContextTokens, "max(50+0, 80+10)")
+	assert.Equal(t, 80, a.ContextTokens, "max(prompt) across coalesced entries")
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 2)
+	assert.Equal(t, "shell", a.ToolCalls[0].ToolName)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "shell", a.ToolCalls[1].ToolName)
+	assert.Equal(t, "c2", a.ToolCalls[1].ToolUseID)
+}
+
+// TestParseQwenSession_ToolUseRoundTrip verifies that an assistant
+// turn made up of `[thought, functionCall]` parts followed by a
+// tool-result user entry (parts: `[functionResponse]`) and a final
+// text-bearing assistant entry is coalesced into a single assistant
+// message carrying both the ToolCalls and the matching ToolResults.
+// The synthetic tool-result user entry is folded into the assistant
+// turn rather than counted as a user message.
+func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	content := `{"uuid":"u1","sessionId":"sess-tools","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Read a.go"}]}}
+{"uuid":"u2","sessionId":"sess-tools","timestamp":"2026-05-15T10:00:01.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Calling read_file.","thought":true},{"functionCall":{"id":"c1","name":"read_file","args":{"path":"a.go"}}}]},"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":5,"cachedContentTokenCount":10}}
+{"uuid":"u3","sessionId":"sess-tools","timestamp":"2026-05-15T10:00:02.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"functionResponse":{"id":"c1","name":"read_file","response":{"output":"package main\n"}}}]}}
+{"uuid":"u4","sessionId":"sess-tools","timestamp":"2026-05-15T10:00:03.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"That's the file."}]},"usageMetadata":{"promptTokenCount":150,"candidatesTokenCount":7,"cachedContentTokenCount":20}}`
+
+	path := createTestFile(t, "tools.jsonl", content)
+
+	sess, msgs, err := ParseQwenSession(path, "", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2,
+		"tool-result user entry should fold into the assistant turn")
+	assert.Equal(t, 1, sess.UserMessageCount,
+		"only the typed user prompt counts as a user message")
+
+	a := msgs[1]
+	assert.Equal(t, RoleAssistant, a.Role)
+	assert.Equal(t, "That's the file.", a.Content)
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 1)
+	assert.Equal(t, "read_file", a.ToolCalls[0].ToolName)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	require.Len(t, a.ToolResults, 1)
+	assert.Equal(t, "c1", a.ToolResults[0].ToolUseID)
+	assert.Contains(t, a.ToolResults[0].ContentRaw, "package main")
+	// Peak prompt (150) becomes ContextTokens; uncached normalizes to
+	// 150 - 20 = 130.
+	assert.Equal(t, 150, a.ContextTokens)
+	assert.Equal(t, int64(130), gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(20), gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
 }
 
 // TestParseQwenSession_AbortedNoAssistantResponse models the
