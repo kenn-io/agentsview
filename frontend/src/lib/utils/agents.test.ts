@@ -20,6 +20,7 @@ describe("KNOWN_AGENTS", () => {
       "zencoder",
       "vscode-copilot",
       "pi",
+      "qwen",
       "openclaw",
       "iflow",
       "kimi",
@@ -71,6 +72,9 @@ describe("agentColor", () => {
     expect(agentColor("pi")).toBe(
       "var(--accent-indigo)",
     );
+    expect(agentColor("qwen")).toBe(
+      "var(--accent-cyan)",
+    );
     expect(agentColor("vscode-copilot")).toBe(
       "var(--accent-teal)",
     );
@@ -96,6 +100,7 @@ describe("agentLabel", () => {
     expect(agentLabel("openclaw")).toBe("OpenClaw");
     expect(agentLabel("iflow")).toBe("iFlow");
     expect(agentLabel("piebald")).toBe("Piebald");
+    expect(agentLabel("qwen")).toBe("Qwen Code");
   });
 
   it("capitalizes simple agent names", () => {

@@ -14,6 +14,7 @@
     iflow: "iFlow",
     "vscode-copilot": "VSCode Copilot",
     pi: "Pi",
+    qwen: "Qwen Code",
     openclaw: "OpenClaw",
     kimi: "Kimi",
     piebald: "Piebald",

@@ -178,6 +178,7 @@ agentsview auto-discovers sessions from all of these:
 | Zencoder           | `~/.zencoder/sessions/`                                |
 | VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
 | Pi                 | `~/.pi/agent/sessions/`                                |
+| Qwen Code          | `~/.qwen/projects/`                                    |
 | OpenClaw           | `~/.openclaw/agents/`                                  |
 | Kimi               | `~/.kimi/sessions/`                                    |
 | Kiro CLI           | `~/.kiro/sessions/cli/`                                |
