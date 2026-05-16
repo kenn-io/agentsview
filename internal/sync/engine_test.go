@@ -1554,6 +1554,63 @@ func TestEngine_ClassifyPathsOpenCodeRemovedPartFile(
 	}
 }
 
+func TestEngine_ClassifyPathsQwenSession(t *testing.T) {
+	db := openTestDB(t)
+	qwenDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQwen: {qwenDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		qwenDir, "-Users-alice-code-sample-project", "chats",
+		"adc026b4-c620-43e4-8cc4-295593889d18.jsonl",
+	)
+	if err := os.MkdirAll(filepath.Dir(sessionPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", sessionPath, err)
+	}
+	if err := os.WriteFile(sessionPath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", sessionPath, err)
+	}
+
+	files := engine.classifyPaths([]string{sessionPath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1", len(files))
+	}
+	if files[0].Path != sessionPath {
+		t.Fatalf("Path = %q, want %q", files[0].Path, sessionPath)
+	}
+	if files[0].Agent != parser.AgentQwen {
+		t.Fatalf("Agent = %q, want %q", files[0].Agent, parser.AgentQwen)
+	}
+	if files[0].Project != "sample_project" {
+		t.Fatalf("Project = %q, want %q", files[0].Project, "sample_project")
+	}
+
+	// Non-Qwen siblings (e.g. a stray file directly under projectsDir,
+	// or under <project>/<not-chats>/) must not classify as Qwen.
+	bogus := []string{
+		filepath.Join(qwenDir, "stray.jsonl"),
+		filepath.Join(qwenDir, "proj", "notes", "a.jsonl"),
+		filepath.Join(qwenDir, "proj", "chats", "a.txt"),
+	}
+	for _, p := range bogus {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q): %v", p, err)
+		}
+		if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q): %v", p, err)
+		}
+	}
+	files = engine.classifyPaths(bogus)
+	if len(files) != 0 {
+		t.Fatalf("expected no Qwen classifications for %v, got %v",
+			bogus, files)
+	}
+}
+
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 	fx := newEngineFixture(t)
 	em := &fakeEmitter{}

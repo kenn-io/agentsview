@@ -791,6 +791,25 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
+	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
+		if qwenDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(qwenDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 3 || parts[1] != "chats" ||
+				!strings.HasSuffix(parts[2], ".jsonl") {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parser.GetProjectName(parts[0]),
+				Agent:   parser.AgentQwen,
+			}, true
+		}
+	}
+
 	// OpenClaw: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl
 	//       or: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl.<archiveSuffix>
 	for _, ocDir := range e.agentDirs[parser.AgentOpenClaw] {

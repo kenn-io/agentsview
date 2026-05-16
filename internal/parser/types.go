@@ -230,7 +230,6 @@ var Registry = []AgentDef{
 		ConfigKey:      "qwen_project_dirs",
 		DefaultDirs:    []string{".qwen/projects"},
 		IDPrefix:       "qwen:",
-		WatchSubdirs:   []string{"chats"},
 		FileBased:      true,
 		DiscoverFunc:   DiscoverQwenSessions,
 		FindSourceFunc: FindQwenSourceFile,
