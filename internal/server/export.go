@@ -460,14 +460,14 @@ main { max-width: 900px; margin: 0 auto; padding: 16px; }
   margin-bottom: 4px; font-style: normal;
 }
 .message.thinking-only { display: none; }
-#transcript-focused:checked ~ main .message.focused-hidden {
-  display: none;
-}
 #thinking-toggle:checked ~ main .thinking-block {
   display: block;
 }
 #thinking-toggle:checked ~ main .message.thinking-only {
   display: block;
+}
+#transcript-focused:checked ~ main .message.focused-hidden {
+  display: none;
 }
 .tool-block {
   border-left: 2px solid var(--accent-amber);
@@ -613,7 +613,7 @@ var (
 	thinkingLegacyRe = regexp.MustCompile(
 		`(?s)\[Thinking\]\n?(.*?)(?:\n\[|\n\n|$)`)
 	toolBlockRe = regexp.MustCompile(
-		`(?s)\[(` + markdownToolNames +
+		`(?s)\[(` + exportToolNames +
 			`)([^\]]*)\](.*?)(?:\n\[|\n\n|$)`)
 )
 
@@ -655,16 +655,20 @@ func focusedExportOrdinals(msgs []db.Message) map[int]bool {
 	}
 
 	for _, m := range msgs {
+		if m.IsCompactBoundary {
+			flushPending()
+			visible[m.Ordinal] = true
+			continue
+		}
+
+		if m.IsSystem || isThinkingOnly(m.Content) {
+			continue
+		}
+
 		if isExportToolOnly(m) {
 			if hasPendingAssistant {
 				toolAfterPendingAssistant = true
 			}
-			continue
-		}
-
-		if m.IsCompactBoundary {
-			flushPending()
-			visible[m.Ordinal] = true
 			continue
 		}
 

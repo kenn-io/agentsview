@@ -260,8 +260,20 @@ func TestFormatContentForExport_Escaping(t *testing.T) {
 			nil,
 		},
 		{
+			"SkillBlock",
+			"[Skill: planner]\nuse the plan\n[/Skill]",
+			[]string{"[Skill: planner]"},
+			[]string{`class="tool-block"`},
+		},
+		{
 			"BashToolBlock",
 			"[Bash ls -la]\noutput",
+			[]string{`class="tool-block"`},
+			nil,
+		},
+		{
+			"TaskCreateToolBlock",
+			"[TaskCreate: worker]\nrun task",
 			[]string{`class="tool-block"`},
 			nil,
 		},
@@ -504,6 +516,15 @@ func TestGenerateExportHTML_TranscriptModeControls(t *testing.T) {
 		`class="message assistant focused-hidden" data-ordinal="2"`,
 		`class="message assistant" data-ordinal="3"`,
 	})
+	if strings.Index(
+		html,
+		`#transcript-focused:checked ~ main .message.focused-hidden`,
+	) < strings.Index(
+		html,
+		`#thinking-toggle:checked ~ main .message.thinking-only`,
+	) {
+		t.Error("focused hide rule must follow thinking display rule")
+	}
 	assertContainsNone(t, html, []string{
 		`class="message user focused-hidden" data-ordinal="0"`,
 		`class="message assistant focused-hidden" data-ordinal="3"`,
@@ -564,6 +585,38 @@ func TestFocusedExportOrdinals(t *testing.T) {
 			want: []int{0, 2, 3},
 		},
 		{
+			name: "ignores thinking-only tail after final assistant",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportAssistantMsg(1, "answer"),
+				exportAssistantMsg(2, "[Thinking]\nfollow-up notes"),
+			},
+			want: []int{0, 1},
+		},
+		{
+			name: "ignores system messages",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportAssistantMsg(1, "answer"),
+				{
+					SessionID: "test-id",
+					Ordinal:   2,
+					Role:      "assistant",
+					Content:   "system progress",
+					IsSystem:  true,
+				},
+				{
+					SessionID: "test-id",
+					Ordinal:   3,
+					Role:      "user",
+					Content:   "system user event",
+					IsSystem:  true,
+				},
+				exportUserMsg(4),
+			},
+			want: []int{0, 1, 4},
+		},
+		{
 			name: "keeps answer before compact boundary",
 			msgs: []db.Message{
 				exportUserMsg(0),
@@ -573,6 +626,7 @@ func TestFocusedExportOrdinals(t *testing.T) {
 					Ordinal:           2,
 					Role:              "assistant",
 					Content:           "[compact summary]",
+					IsSystem:          true,
 					IsCompactBoundary: true,
 				},
 				exportUserMsg(3),
