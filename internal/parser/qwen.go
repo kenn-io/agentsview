@@ -220,7 +220,12 @@ func ParseQwenSession(
 				usage:       root.Get("usageMetadata"),
 			})
 
-			if strings.TrimSpace(content) != "" {
+			// Only flush on a "closing" entry: text with no tool call.
+			// An entry that carries both text and a functionCall is an
+			// intermediate iteration awaiting its tool result; flushing
+			// here would orphan the upcoming functionResponse onto a new
+			// pending assistant turn and inflate MessageCount.
+			if strings.TrimSpace(content) != "" && len(toolCalls) == 0 {
 				flushPending()
 			}
 		}
@@ -394,7 +399,11 @@ type qwenAssistantBuffer struct {
 func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
 	b.pending = true
 	if e.content != "" {
-		b.content = e.content
+		if b.content != "" {
+			b.content += "\n" + e.content
+		} else {
+			b.content = e.content
+		}
 	}
 	if e.thinking != "" {
 		b.thinking = append(b.thinking, e.thinking)
