@@ -326,7 +326,11 @@ func qwenExtractToolCalls(parts gjson.Result) []ParsedToolCall {
 // qwenExtractToolResults pulls functionResponse parts out of a Qwen
 // user `message.parts` array into ParsedToolResult entries. Qwen emits
 // tool results as user messages with parts like
-// {"functionResponse": {"id": ..., "name": ..., "response": {...}}}.
+// {"functionResponse": {"id": ..., "name": ..., "response": {"output": ...}}}.
+// The typical "output" payload is unwrapped so the shared content
+// decoders (which expect a string, array, or iFlow-nested object) can
+// surface the result text; less common response shapes fall back to
+// the raw response object.
 func qwenExtractToolResults(parts gjson.Result) []ParsedToolResult {
 	if !parts.IsArray() {
 		return nil
@@ -337,11 +341,14 @@ func qwenExtractToolResults(parts gjson.Result) []ParsedToolResult {
 		if !fr.Exists() {
 			return true
 		}
-		response := fr.Get("response")
+		content := fr.Get("response.output")
+		if !content.Exists() {
+			content = fr.Get("response")
+		}
 		results = append(results, ParsedToolResult{
 			ToolUseID:     fr.Get("id").Str,
-			ContentLength: toolResultContentLength(response),
-			ContentRaw:    response.Raw,
+			ContentLength: toolResultContentLength(content),
+			ContentRaw:    content.Raw,
 		})
 		return true
 	})

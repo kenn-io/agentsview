@@ -182,8 +182,12 @@ func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
 	assert.Equal(t, "read_file", a.ToolCalls[0].ToolName)
 	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
 	require.Len(t, a.ToolResults, 1)
-	assert.Equal(t, "c1", a.ToolResults[0].ToolUseID)
-	assert.Contains(t, a.ToolResults[0].ContentRaw, "package main")
+	tr := a.ToolResults[0]
+	assert.Equal(t, "c1", tr.ToolUseID)
+	// The paired tool result must decode to the underlying output text,
+	// not be left empty by mismatched object-shape handling.
+	assert.Equal(t, "package main\n", DecodeContent(tr.ContentRaw))
+	assert.Equal(t, len("package main\n"), tr.ContentLength)
 	// Peak prompt (150) becomes ContextTokens; uncached normalizes to
 	// 150 - 20 = 130.
 	assert.Equal(t, 150, a.ContextTokens)
