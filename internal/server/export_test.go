@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -461,6 +462,168 @@ func TestGenerateExportHTML_NilStartedAt(t *testing.T) {
 	html := generateExportHTML(session, nil)
 	if !strings.Contains(html, "<!DOCTYPE html>") {
 		t.Error("expected valid HTML even with nil StartedAt")
+	}
+}
+
+func TestGenerateExportHTML_TranscriptModeControls(t *testing.T) {
+	t.Parallel()
+	session := testSession()
+	msgs := []db.Message{
+		{
+			SessionID: "test-id", Ordinal: 0,
+			Role: "user", Content: "Please inspect",
+			Timestamp: "2025-01-15T10:00:00Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 1,
+			Role: "assistant", Content: "I'll check that",
+			Timestamp: "2025-01-15T10:00:01Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 2,
+			Role: "assistant", Content: "[Bash]\nls",
+			Timestamp:  "2025-01-15T10:00:02Z",
+			HasToolUse: true,
+		},
+		{
+			SessionID: "test-id", Ordinal: 3,
+			Role: "assistant", Content: "The answer",
+			Timestamp: "2025-01-15T10:00:03Z",
+		},
+	}
+
+	html := generateExportHTML(session, msgs)
+
+	assertContainsAll(t, html, []string{
+		`id="transcript-normal" name="transcript-mode" class="toggle-input" checked`,
+		`id="transcript-focused" name="transcript-mode" class="toggle-input"`,
+		`<label for="transcript-normal" class="toggle-label">Normal</label>`,
+		`<label for="transcript-focused" class="toggle-label">Focused</label>`,
+		`#transcript-focused:checked ~ main .message.focused-hidden`,
+		`class="message assistant focused-hidden" data-ordinal="1"`,
+		`class="message assistant focused-hidden" data-ordinal="2"`,
+		`class="message assistant" data-ordinal="3"`,
+	})
+	assertContainsNone(t, html, []string{
+		`class="message user focused-hidden" data-ordinal="0"`,
+		`class="message assistant focused-hidden" data-ordinal="3"`,
+	})
+}
+
+func TestFocusedExportOrdinals(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		msgs []db.Message
+		want []int
+	}{
+		{
+			name: "keeps final assistant before next user",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportAssistantMsg(1, "working"),
+				exportToolMsg(2, "[Read]\nfile"),
+				exportAssistantMsg(3, "final"),
+				exportUserMsg(4),
+			},
+			want: []int{0, 3, 4},
+		},
+		{
+			name: "drops terminal tool-only stretch",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportToolMsg(1, "[Bash]\nmake test"),
+			},
+			want: []int{0},
+		},
+		{
+			name: "drops consecutive tool blocks in one message",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportToolMsg(1, "[Read]\nold\n[Write]\nnew"),
+			},
+			want: []int{0},
+		},
+		{
+			name: "keeps terminal final assistant",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportToolMsg(1, "[Bash]\nmake test"),
+				exportAssistantMsg(2, "done"),
+			},
+			want: []int{0, 2},
+		},
+		{
+			name: "keeps only last assistant in consecutive assistant run",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportAssistantMsg(1, "first"),
+				exportAssistantMsg(2, "second"),
+				exportUserMsg(3),
+			},
+			want: []int{0, 2, 3},
+		},
+		{
+			name: "keeps answer before compact boundary",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportAssistantMsg(1, "answer"),
+				{
+					SessionID:         "test-id",
+					Ordinal:           2,
+					Role:              "assistant",
+					Content:           "[compact summary]",
+					IsCompactBoundary: true,
+				},
+				exportUserMsg(3),
+			},
+			want: []int{0, 1, 2, 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			visible := focusedExportOrdinals(tt.msgs)
+			got := make([]int, 0, len(tt.msgs))
+			for _, msg := range tt.msgs {
+				if visible[msg.Ordinal] {
+					got = append(got, msg.Ordinal)
+				}
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Fatalf("visible ordinals = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func exportUserMsg(ordinal int) db.Message {
+	return db.Message{
+		SessionID: "test-id",
+		Ordinal:   ordinal,
+		Role:      "user",
+		Content:   "user",
+	}
+}
+
+func exportAssistantMsg(ordinal int, content string) db.Message {
+	return db.Message{
+		SessionID: "test-id",
+		Ordinal:   ordinal,
+		Role:      "assistant",
+		Content:   content,
+	}
+}
+
+func exportToolMsg(ordinal int, content string) db.Message {
+	return db.Message{
+		SessionID:   "test-id",
+		Ordinal:     ordinal,
+		Role:        "assistant",
+		Content:     content,
+		HasToolUse:  true,
+		HasThinking: strings.Contains(content, "[Thinking]"),
 	}
 }
 
