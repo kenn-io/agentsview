@@ -211,7 +211,7 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
 		assert.Equal(t, 2, sess.MessageCount)
 		assert.Equal(t, 1, sess.UserMessageCount)
-		assert.Equal(t, "/roborev-fix 450", sess.FirstMessage)
+		assert.Equal(t, "", sess.FirstMessage, "slash command with no follow-up yields empty first_message")
 		assert.Equal(t, RoleUser, msgs[0].Role)
 		assert.Equal(t, "/roborev-fix 450", msgs[0].Content)
 	})
@@ -1531,10 +1531,14 @@ func TestIsSkippablePreviewCommand(t *testing.T) {
 		{"/effortless", "/effortless", true},
 		{"/cleareffort", "/cleareffort", true},
 		{"arbitrary /unrelated", "/unrelated", true},
+		// Hyphenated and underscored command names are skipped.
+		{"/clear-xyz", "/clear-xyz", true},
+		{"/roborev-fix", "/roborev-fix", true},
+		{"/skill_name", "/skill_name", true},
+		{"/roborev-fix with args", "/roborev-fix some args", true},
 		// Non-commands are not skipped.
 		{"empty string", "", false},
 		{"prose containing /clear", "hello /clear", false},
-		{"/clear-xyz (hyphen terminates command word)", "/clear-xyz", false},
 		{"file path reference", "/usr/local/bin gives an error", false},
 		{"plain text", "Fix the login bug", false},
 	}
@@ -1598,7 +1602,7 @@ func TestParseClaudeSession_SkipClearEffortFirstMessage(t *testing.T) {
 		assert.Equal(t, 2, sess.UserMessageCount)
 	})
 
-	t.Run("non-skipped command still becomes first_message", func(t *testing.T) {
+	t.Run("hyphenated slash command is skipped, next message becomes first_message", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.ClaudeUserJSON(
 				"<command-message>roborev-fix</command-message>\n<command-name>/roborev-fix</command-name>\n<command-args>450</command-args>",
@@ -1607,6 +1611,6 @@ func TestParseClaudeSession_SkipClearEffortFirstMessage(t *testing.T) {
 			testjsonl.ClaudeUserJSON("follow-up", tsZeroS1),
 		)
 		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
-		assert.Equal(t, "/roborev-fix 450", sess.FirstMessage)
+		assert.Equal(t, "follow-up", sess.FirstMessage)
 	})
 }

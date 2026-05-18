@@ -1597,12 +1597,13 @@ func isCommandEnvelope(content string) bool {
 }
 
 // isSkippablePreviewCommand returns true when content is a Claude
-// Code slash command (e.g. /login, /plan, /clear). Detection is
-// generic: the trimmed content must start with "/" followed by one
-// or more letters or digits, then either end or be followed by
-// whitespace. This lets /login and /plan be skipped without
-// enumerating every command, while keeping file-path references
-// like "/usr/local/bin gives an error" visible as session titles.
+// Code slash command (e.g. /login, /plan, /roborev-fix). Detection
+// is generic: the trimmed content must start with "/" followed by one
+// or more letters, digits, hyphens, or underscores, then either end
+// or be followed by whitespace. Hyphens and underscores are included
+// because command envelopes normalise to names like /skill-name.
+// File-path references like "/usr/local/bin gives an error" are not
+// skipped because the embedded "/" terminates the match.
 func isSkippablePreviewCommand(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if !strings.HasPrefix(trimmed, "/") {
@@ -1615,9 +1616,9 @@ func isSkippablePreviewCommand(content string) bool {
 		if unicode.IsSpace(r) {
 			return i > 0
 		}
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-			// A non-letter/digit character (e.g. another "/") means
-			// this is not a plain slash command.
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' && r != '_' {
+			// Any other character (e.g. another "/") means this is not
+			// a plain slash command.
 			return false
 		}
 		i += size
