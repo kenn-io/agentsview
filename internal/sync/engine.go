@@ -791,6 +791,28 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
+	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
+		if qwenDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(qwenDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 3 || parts[1] != "chats" {
+				continue
+			}
+			sessionID, ok := strings.CutSuffix(parts[2], ".jsonl")
+			if !ok || !parser.IsValidSessionID(sessionID) {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parser.GetProjectName(parts[0]),
+				Agent:   parser.AgentQwen,
+			}, true
+		}
+	}
+
 	// OpenClaw: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl
 	//       or: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl.<archiveSuffix>
 	for _, ocDir := range e.agentDirs[parser.AgentOpenClaw] {
@@ -828,28 +850,6 @@ func (e *Engine) classifyOnePath(
 			return parser.DiscoveredFile{
 				Path:  path,
 				Agent: parser.AgentOpenClaw,
-			}, true
-		}
-	}
-
-	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
-	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
-		if qwenDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(qwenDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 3 || parts[1] != "chats" {
-				continue
-			}
-			sessionID, ok := strings.CutSuffix(parts[2], ".jsonl")
-			if !ok || !parser.IsValidSessionID(sessionID) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parser.GetProjectName(parts[0]),
-				Agent:   parser.AgentQwen,
 			}, true
 		}
 	}

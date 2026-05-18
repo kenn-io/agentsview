@@ -182,13 +182,54 @@ func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
 	assert.Equal(t, "read_file", a.ToolCalls[0].ToolName)
 	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
 	require.Len(t, a.ToolResults, 1)
-	assert.Equal(t, "c1", a.ToolResults[0].ToolUseID)
-	assert.Contains(t, a.ToolResults[0].ContentRaw, "package main")
+	tr := a.ToolResults[0]
+	assert.Equal(t, "c1", tr.ToolUseID)
+	// The paired tool result must decode to the underlying output text,
+	// not be left empty by mismatched object-shape handling.
+	assert.Equal(t, "package main\n", DecodeContent(tr.ContentRaw))
+	assert.Equal(t, len("package main\n"), tr.ContentLength)
 	// Peak prompt (150) becomes ContextTokens; uncached normalizes to
 	// 150 - 20 = 130.
 	assert.Equal(t, 150, a.ContextTokens)
 	assert.Equal(t, int64(130), gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
 	assert.Equal(t, int64(20), gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
+}
+
+// TestParseQwenSession_TextWithFunctionCallCoalesces verifies that an
+// assistant entry carrying both user-facing text and a functionCall is
+// kept open until its matching functionResponse and closing text arrive,
+// rather than flushing immediately and orphaning the tool result onto a
+// phantom empty assistant message. Intermediate text from the same turn
+// should also be preserved.
+func TestParseQwenSession_TextWithFunctionCallCoalesces(t *testing.T) {
+	t.Parallel()
+
+	content := `{"uuid":"u1","sessionId":"sess-interleaved","timestamp":"2026-05-15T10:00:00.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"text":"Read a.go"}]}}
+{"uuid":"u2","sessionId":"sess-interleaved","timestamp":"2026-05-15T10:00:01.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Looking at the file."},{"functionCall":{"id":"c1","name":"read_file","args":{"path":"a.go"}}}]},"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":5,"cachedContentTokenCount":0}}
+{"uuid":"u3","sessionId":"sess-interleaved","timestamp":"2026-05-15T10:00:02.000Z","type":"user","cwd":"/work","message":{"role":"user","parts":[{"functionResponse":{"id":"c1","name":"read_file","response":{"output":"package main\n"}}}]}}
+{"uuid":"u4","sessionId":"sess-interleaved","timestamp":"2026-05-15T10:00:03.000Z","type":"assistant","model":"qwen","message":{"role":"model","parts":[{"text":"Done."}]},"usageMetadata":{"promptTokenCount":150,"candidatesTokenCount":7,"cachedContentTokenCount":20}}`
+
+	path := createTestFile(t, "interleaved.jsonl", content)
+
+	sess, msgs, err := ParseQwenSession(path, "", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2,
+		"interleaved text+functionCall must not inflate MessageCount")
+	require.Equal(t, 2, sess.MessageCount)
+	require.Equal(t, 1, sess.UserMessageCount)
+
+	a := msgs[1]
+	require.Equal(t, RoleAssistant, a.Role)
+	require.True(t, a.HasToolUse)
+	require.Len(t, a.ToolCalls, 1)
+	assert.Equal(t, "c1", a.ToolCalls[0].ToolUseID)
+	require.Len(t, a.ToolResults, 1,
+		"tool result must be paired with the same assistant turn")
+	assert.Equal(t, "c1", a.ToolResults[0].ToolUseID)
+	// Both the intermediate "Looking at the file." lead-in and the
+	// closing "Done." text belong to the same logical turn.
+	assert.Contains(t, a.Content, "Looking at the file.")
+	assert.Contains(t, a.Content, "Done.")
 }
 
 // TestParseQwenSession_AbortedNoAssistantResponse models the
