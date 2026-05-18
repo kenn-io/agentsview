@@ -18,7 +18,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://agentsview.io/install.ps1 | i
 ```
 
 Or download the **desktop app** (macOS / Windows) from
-[GitHub Releases](https://github.com/wesm/agentsview/releases).
+[GitHub Releases](https://github.com/wesm/agentsview/releases) or via homebrew: `brew install --cask agentsview`
 
 Or run the published Docker image:
 
