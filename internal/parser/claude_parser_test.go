@@ -1514,6 +1514,7 @@ func TestIsSkippablePreviewCommand(t *testing.T) {
 		content string
 		want    bool
 	}{
+		// Explicit commands still work.
 		{"bare /clear", "/clear", true},
 		{"bare /effort", "/effort", true},
 		{"/clear with trailing space", "/clear ", true},
@@ -1522,13 +1523,19 @@ func TestIsSkippablePreviewCommand(t *testing.T) {
 		{"surrounded by whitespace", "  /clear  ", true},
 		{"/clear with tab", "/clear\tfoo", true},
 		{"/clear with newline", "/clear\nfoo", true},
+		// Generic slash commands are now skipped too.
+		{"bare /login", "/login", true},
+		{"bare /plan", "/plan", true},
+		{"/plan with args", "/plan my project", true},
+		{"/clearcache", "/clearcache", true},
+		{"/effortless", "/effortless", true},
+		{"/cleareffort", "/cleareffort", true},
+		{"arbitrary /unrelated", "/unrelated", true},
+		// Non-commands are not skipped.
 		{"empty string", "", false},
-		{"/clearcache (no word boundary)", "/clearcache", false},
-		{"/effortless (no word boundary)", "/effortless", false},
-		{"/cleareffort", "/cleareffort", false},
-		{"unrelated command", "/unrelated", false},
 		{"prose containing /clear", "hello /clear", false},
-		{"/clear-xyz (dash not whitespace)", "/clear-xyz", false},
+		{"/clear-xyz (hyphen terminates command word)", "/clear-xyz", false},
+		{"file path reference", "/usr/local/bin gives an error", false},
 		{"plain text", "Fix the login bug", false},
 	}
 	for _, tc := range cases {

@@ -1596,39 +1596,38 @@ func isCommandEnvelope(content string) bool {
 	return strings.TrimSpace(stripped) == ""
 }
 
-// previewSkippedCommands lists Claude Code commands that should
-// not be used as a session's first_message preview. When a
-// session opens with one of these, the parser skips past it and
-// picks the next real user message so the sidebar shows
-// something descriptive.
-var previewSkippedCommands = []string{"/clear", "/effort"}
-
-// isSkippablePreviewCommand returns true when content is a known
-// Claude Code command (optionally followed by arguments), for the
-// purpose of skipping it when computing first_message. Match is
-// word-boundary: the trimmed content must equal the command
-// exactly or be followed by a whitespace rune, so "/clearcache"
-// does not match "/clear".
+// isSkippablePreviewCommand returns true when content is a Claude
+// Code slash command (e.g. /login, /plan, /clear). Detection is
+// generic: the trimmed content must start with "/" followed by one
+// or more letters or digits, then either end or be followed by
+// whitespace. This lets /login and /plan be skipped without
+// enumerating every command, while keeping file-path references
+// like "/usr/local/bin gives an error" visible as session titles.
 func isSkippablePreviewCommand(content string) bool {
 	trimmed := strings.TrimSpace(content)
-	for _, cmd := range previewSkippedCommands {
-		if !strings.HasPrefix(trimmed, cmd) {
-			continue
-		}
-		if len(trimmed) == len(cmd) {
-			return true
-		}
-		r, _ := utf8.DecodeRuneInString(trimmed[len(cmd):])
-		if unicode.IsSpace(r) {
-			return true
-		}
+	if !strings.HasPrefix(trimmed, "/") {
+		return false
 	}
-	return false
+	rest := trimmed[1:]
+	i := 0
+	for i < len(rest) {
+		r, size := utf8.DecodeRuneInString(rest[i:])
+		if unicode.IsSpace(r) {
+			return i > 0
+		}
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			// A non-letter/digit character (e.g. another "/") means
+			// this is not a plain slash command.
+			return false
+		}
+		i += size
+	}
+	return i > 0
 }
 
 // firstMessageAndUserCount returns the preview string and the
 // total number of real (non-system) user turns. The preview skips
-// known Claude Code command envelopes like /clear and /effort so
+// Claude Code slash commands (e.g. /login, /plan, /clear) so
 // sessions that begin with a command still show a meaningful
 // preview; the user count always reflects every non-system user
 // turn, including skipped commands.
