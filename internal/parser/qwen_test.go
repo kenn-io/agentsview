@@ -99,6 +99,19 @@ func TestParseQwenSession_CoalescesToolCallOnlyAssistants(t *testing.T) {
 	assert.True(t, a.HasContextTokens)
 	assert.Equal(t, 300, a.ContextTokens, "max(prompt) across coalesced entries")
 
+	// Normalized input/cache usage sums across iterations so a turn
+	// with multiple tool-call API calls reports the total tokens that
+	// were billed, not just the peak call's contribution:
+	//   input_tokens = (100-0) + (200-50) + (300-80) = 470
+	//   cache_read_input_tokens = 0 + 50 + 80 = 130
+	require.NotEmpty(t, a.TokenUsage)
+	assert.Equal(t, int64(470),
+		gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(45),
+		gjson.GetBytes(a.TokenUsage, "output_tokens").Int())
+	assert.Equal(t, int64(130),
+		gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
+
 	// Tool calls from each iteration aggregate onto the coalesced turn.
 	require.True(t, a.HasToolUse)
 	require.Len(t, a.ToolCalls, 2)
@@ -142,6 +155,14 @@ func TestParseQwenSession_TrailingToolCallOnlyAssistants(t *testing.T) {
 	assert.Contains(t, a.ThinkingText, "Re-running with verbose.")
 	assert.Equal(t, 12, a.OutputTokens, "5 + 7")
 	assert.Equal(t, 80, a.ContextTokens, "max(prompt) across coalesced entries")
+	// Summed normalized input/cache usage:
+	//   input_tokens = (50-0) + (80-10) = 120
+	//   cache_read_input_tokens = 0 + 10 = 10
+	require.NotEmpty(t, a.TokenUsage)
+	assert.Equal(t, int64(120),
+		gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(10),
+		gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
 	require.True(t, a.HasToolUse)
 	require.Len(t, a.ToolCalls, 2)
 	assert.Equal(t, "shell", a.ToolCalls[0].ToolName)
@@ -188,11 +209,14 @@ func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
 	// not be left empty by mismatched object-shape handling.
 	assert.Equal(t, "package main\n", DecodeContent(tr.ContentRaw))
 	assert.Equal(t, len("package main\n"), tr.ContentLength)
-	// Peak prompt (150) becomes ContextTokens; uncached normalizes to
-	// 150 - 20 = 130.
+	// Peak prompt (150) becomes ContextTokens. Normalized input/cache
+	// usage sums across the two iterations so multi-call turns don't
+	// drop the earlier API call's tokens:
+	//   input_tokens = (100-10) + (150-20) = 220
+	//   cache_read_input_tokens = 10 + 20 = 30
 	assert.Equal(t, 150, a.ContextTokens)
-	assert.Equal(t, int64(130), gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
-	assert.Equal(t, int64(20), gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
+	assert.Equal(t, int64(220), gjson.GetBytes(a.TokenUsage, "input_tokens").Int())
+	assert.Equal(t, int64(30), gjson.GetBytes(a.TokenUsage, "cache_read_input_tokens").Int())
 }
 
 // TestParseQwenSession_TextWithFunctionCallCoalesces verifies that an

@@ -389,11 +389,12 @@ type qwenAssistantBuffer struct {
 	timestamp   time.Time
 	model       string
 
-	sumOutput  int
-	hasOutput  bool
-	peakPrompt int
-	peakCache  int
-	hasContext bool
+	sumOutput    int
+	sumUncached  int
+	sumCacheRead int
+	hasOutput    bool
+	peakPrompt   int
+	hasContext   bool
 }
 
 func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
@@ -434,9 +435,12 @@ func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
 
 	// Qwen reports promptTokenCount as the full input count with the
 	// cached portion already included (totalTokenCount = prompt +
-	// candidates). Track the peak prompt and its matching cached count
-	// so flush can split them into uncached + cached without double-
-	// counting cached tokens in normalized usage or context totals.
+	// candidates). For a turn coalesced from multiple model calls,
+	// normalized input/cache usage sums the per-call uncached and cache-
+	// read counts so we report total tokens billed across iterations.
+	// ContextTokens stays at the peak prompt to reflect the largest
+	// single-call context window (cached + uncached) without double-
+	// counting cached tokens across calls.
 	prompt := int(inputField.Int())
 	output := int(outputField.Int())
 	cacheRead := int(cacheReadField.Int())
@@ -447,9 +451,10 @@ func (b *qwenAssistantBuffer) absorb(e qwenAssistantEntry) {
 	}
 	if inputField.Exists() || cacheReadField.Exists() {
 		b.hasContext = true
-		if prompt >= b.peakPrompt {
+		b.sumUncached += max(prompt-cacheRead, 0)
+		b.sumCacheRead += cacheRead
+		if prompt > b.peakPrompt {
 			b.peakPrompt = prompt
-			b.peakCache = cacheRead
 		}
 	}
 }
@@ -482,11 +487,10 @@ func (b *qwenAssistantBuffer) flush(ordinal int) (ParsedMessage, bool) {
 	}
 
 	if b.hasOutput || b.hasContext {
-		uncached := max(b.peakPrompt-b.peakCache, 0)
 		normalized := map[string]int{
-			"input_tokens":            uncached,
+			"input_tokens":            b.sumUncached,
 			"output_tokens":           b.sumOutput,
-			"cache_read_input_tokens": b.peakCache,
+			"cache_read_input_tokens": b.sumCacheRead,
 		}
 		if j, err := json.Marshal(normalized); err == nil {
 			msg.TokenUsage = j
