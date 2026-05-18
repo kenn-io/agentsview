@@ -1554,6 +1554,71 @@ func TestEngine_ClassifyPathsOpenCodeRemovedPartFile(
 	}
 }
 
+// TestEngine_ClassifyPathsQwenSession verifies fsnotify events for
+// Qwen session files (which live two levels deep under the projects
+// root, at <projectsDir>/<encoded-project>/chats/<session>.jsonl) are
+// classified as AgentQwen — the original WatchSubdirs="chats" wiring
+// pointed the watcher at the wrong path, leaving live sync broken
+// even after the classifier branch is reachable.
+func TestEngine_ClassifyPathsQwenSession(t *testing.T) {
+	db := openTestDB(t)
+	qwenDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQwen: {qwenDir},
+		},
+		Machine: "local",
+	})
+
+	sessionID := "adc026b4-c620-43e4-8cc4-295593889d18"
+	encodedProject := "-Users-alice-code-sample-project"
+	chatsDir := filepath.Join(qwenDir, encodedProject, "chats")
+	if err := os.MkdirAll(chatsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", chatsDir, err)
+	}
+	sessionPath := filepath.Join(chatsDir, sessionID+".jsonl")
+	if err := os.WriteFile(sessionPath, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", sessionPath, err)
+	}
+
+	files := engine.classifyPaths([]string{sessionPath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1 (%v)", len(files), files)
+	}
+	if files[0].Agent != parser.AgentQwen {
+		t.Errorf("Agent = %q, want %q", files[0].Agent, parser.AgentQwen)
+	}
+	if files[0].Path != sessionPath {
+		t.Errorf("Path = %q, want %q", files[0].Path, sessionPath)
+	}
+	if files[0].Project != "sample_project" {
+		t.Errorf("Project = %q, want %q", files[0].Project, "sample_project")
+	}
+
+	// Sibling non-session paths (e.g. a stray chats/notes.txt) must
+	// not classify as Qwen.
+	stray := filepath.Join(chatsDir, "notes.txt")
+	if err := os.WriteFile(stray, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", stray, err)
+	}
+	if got := engine.classifyPaths([]string{stray}); len(got) != 0 {
+		t.Fatalf("non-jsonl path classified as %v, want no match", got)
+	}
+
+	// Paths outside the canonical <encoded-project>/chats/ shape must
+	// not classify either.
+	outside := filepath.Join(qwenDir, "chats", sessionID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(outside), err)
+	}
+	if err := os.WriteFile(outside, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", outside, err)
+	}
+	if got := engine.classifyPaths([]string{outside}); len(got) != 0 {
+		t.Fatalf("misnested path classified as %v, want no match", got)
+	}
+}
+
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 	fx := newEngineFixture(t)
 	em := &fakeEmitter{}

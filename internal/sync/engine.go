@@ -832,6 +832,28 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
+	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
+		if qwenDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(qwenDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 3 || parts[1] != "chats" {
+				continue
+			}
+			sessionID, ok := strings.CutSuffix(parts[2], ".jsonl")
+			if !ok || !parser.IsValidSessionID(sessionID) {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parser.GetProjectName(parts[0]),
+				Agent:   parser.AgentQwen,
+			}, true
+		}
+	}
+
 	// Cortex: <cortexDir>/<uuid>.json
 	//     or: <cortexDir>/<uuid>.history.jsonl → remap to .json
 	for _, cortexDir := range e.agentDirs[parser.AgentCortex] {
