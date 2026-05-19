@@ -213,6 +213,11 @@ type openCodeTestDB struct {
 	db   *sql.DB
 }
 
+type kiroSQLiteTestDB struct {
+	path string
+	db   *sql.DB
+}
+
 // createOpenCodeDB creates a minimal OpenCode SQLite database
 // with the required schema (project, session, message, part
 // tables). Returns a handle for inserting test data.
@@ -256,6 +261,96 @@ func createOpenCodeDB(t *testing.T, dir string) *openCodeTestDB {
 		t.Fatalf("creating opencode schema: %v", err)
 	}
 	return &openCodeTestDB{path: path, db: d}
+}
+
+func createKiroSQLiteDB(t *testing.T, dir string) *kiroSQLiteTestDB {
+	t.Helper()
+	path := filepath.Join(dir, "data.sqlite3")
+	d, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("opening kiro sqlite test db: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	schema := `
+		CREATE TABLE conversations_v2 (
+			key TEXT NOT NULL,
+			conversation_id TEXT NOT NULL,
+			value TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (key, conversation_id)
+		);
+	`
+	if _, err := d.Exec(schema); err != nil {
+		t.Fatalf("creating kiro sqlite schema: %v", err)
+	}
+	return &kiroSQLiteTestDB{path: path, db: d}
+}
+
+func readKiroSQLiteFixture(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(
+		"..", "parser", "testdata", "kiro_sqlite", name,
+	)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read kiro sqlite fixture %s: %v", name, err)
+	}
+	return string(data)
+}
+
+func (ks *kiroSQLiteTestDB) addSession(
+	t *testing.T, key, id, payload string,
+	createdAt, updatedAt int64,
+) {
+	t.Helper()
+	if _, err := ks.db.Exec(
+		`INSERT INTO conversations_v2
+			(key, conversation_id, value, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		key, id, payload, createdAt, updatedAt,
+	); err != nil {
+		t.Fatalf("insert kiro sqlite session: %v", err)
+	}
+}
+
+func (ks *kiroSQLiteTestDB) updateSession(
+	t *testing.T, id, payload string, updatedAt int64,
+) {
+	t.Helper()
+	if _, err := ks.db.Exec(
+		`UPDATE conversations_v2
+		    SET value = ?, updated_at = ?
+		  WHERE conversation_id = ?`,
+		payload, updatedAt, id,
+	); err != nil {
+		t.Fatalf("update kiro sqlite session: %v", err)
+	}
+}
+
+func writeLegacyKiroSession(
+	t *testing.T, dir, id, prompt string,
+) {
+	t.Helper()
+	jsonlPath := filepath.Join(dir, id+".jsonl")
+	metaPath := filepath.Join(dir, id+".json")
+	if err := os.WriteFile(
+		jsonlPath,
+		[]byte(`{"kind":"Prompt","data":{"content":[{"kind":"text","data":"`+
+			prompt+`"}]}}`+"\n"+
+			`{"kind":"AssistantMessage","data":{"content":[{"kind":"text","data":"legacy assistant"}]}}`+
+			"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write legacy kiro jsonl: %v", err)
+	}
+	if err := os.WriteFile(
+		metaPath,
+		[]byte(`{"session_id":"`+id+`","cwd":"/home/user/code/legacy-kiro","created_at":"2026-05-17T09:00:00Z","updated_at":"2026-05-17T09:01:00Z"}`),
+		0o644,
+	); err != nil {
+		t.Fatalf("write legacy kiro metadata: %v", err)
+	}
 }
 
 func (oc *openCodeTestDB) mustExec(t *testing.T, msg, query string, args ...any) {

@@ -50,6 +50,7 @@ var resumeAgents = map[string]string{
 	"gemini":   "gemini --resume %s",
 	"opencode": "opencode --session %s",
 	"amp":      "amp --resume %s",
+	"kiro":     "kiro-cli chat --resume-id %s",
 }
 
 // terminalCandidates lists terminal emulators to try on Linux, in
@@ -701,16 +702,31 @@ func resolveResumeDir(session *db.Session) string {
 	return launchDir
 }
 
+func isVirtualSessionPath(path string) bool {
+	if _, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
+		return true
+	}
+	if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+		return true
+	}
+	return false
+}
+
 // resolveSessionDir determines the project directory for a session.
-// It tries the session file's embedded cwd first, then Cursor's
-// transcript-derived workspace path, then falls back to the session's
-// project field. All returned candidates must be absolute paths
-// pointing to existing directories.
+// It tries the session file's embedded cwd first, then the cached cwd,
+// then Cursor's transcript-derived workspace path, then falls back to
+// the session's project field. Virtual DB-backed file paths are storage
+// locators only, so they skip source-file cwd reads and use cached cwd.
+// All returned candidates must be absolute paths pointing to existing
+// directories.
 func resolveSessionDir(session *db.Session) string {
-	if session.FilePath != nil {
+	if session.FilePath != nil && !isVirtualSessionPath(*session.FilePath) {
 		if cwd := readSessionCwd(*session.FilePath); isDir(cwd) {
 			return cwd
 		}
+	}
+	if isDir(session.Cwd) {
+		return session.Cwd
 	}
 	if session.Agent == "cursor" {
 		if dir := resolveCursorWorkspaceDir(session); dir != "" {

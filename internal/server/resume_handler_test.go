@@ -33,9 +33,15 @@ func assertSamePath(t *testing.T, label, got, want string) {
 	t.Helper()
 	got = canonicalTestPath(got)
 	want = canonicalTestPath(want)
-	if got != want {
-		t.Errorf("%s = %q, want %q", label, got, want)
+	if got == want {
+		return
 	}
+	gotInfo, gotErr := os.Stat(got)
+	wantInfo, wantErr := os.Stat(want)
+	if gotErr == nil && wantErr == nil && os.SameFile(gotInfo, wantInfo) {
+		return
+	}
+	t.Errorf("%s = %q, want %q", label, got, want)
 }
 
 func TestResumeSession(t *testing.T) {
@@ -104,6 +110,46 @@ func TestResumeSession(t *testing.T) {
 		if resp.Command != wantCmd {
 			t.Errorf("command = %q, want %q", resp.Command, wantCmd)
 		}
+	})
+
+	t.Run("kiro current-store command only", func(t *testing.T) {
+		projectDir := t.TempDir()
+		te.seedSession(t, "kiro:sqlite-chat", "kiro_app", 3, func(s *db.Session) {
+			s.Agent = "kiro"
+			s.Cwd = projectDir
+		})
+		w := te.post(t,
+			"/api/v1/sessions/kiro:sqlite-chat/resume",
+			`{"command_only":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+			Cwd      string `json:"cwd"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp.Launched {
+			t.Error("expected launched=false for command_only")
+		}
+		const cmdSuffix = "' && kiro-cli chat --resume-id sqlite-chat"
+		if !strings.HasPrefix(resp.Command, "cd '") ||
+			!strings.HasSuffix(resp.Command, cmdSuffix) {
+			t.Errorf(
+				"command = %q, want cd command ending with %q",
+				resp.Command,
+				cmdSuffix,
+			)
+		} else {
+			commandCwd := strings.TrimSuffix(
+				strings.TrimPrefix(resp.Command, "cd '"),
+				cmdSuffix,
+			)
+			assertSamePath(t, "command cwd", commandCwd, projectDir)
+		}
+		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 	})
 
 	t.Run("claude desktop rejects non-claude agent", func(t *testing.T) {

@@ -181,7 +181,7 @@ agentsview auto-discovers sessions from all of these:
 | Qwen Code          | `~/.qwen/projects/`                                    |
 | OpenClaw           | `~/.openclaw/agents/`                                  |
 | Kimi               | `~/.kimi/sessions/`                                    |
-| Kiro CLI           | `~/.kiro/sessions/cli/`                                |
+| Kiro CLI           | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`     |
 | Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |
 | Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
 | Hermes Agent       | `~/.hermes/sessions/`                                  |

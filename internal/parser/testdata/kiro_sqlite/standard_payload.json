@@ -1,0 +1,66 @@
+{
+  "conversation_id": "sqlite-session",
+  "history": [
+    {
+      "user": {
+        "env_context": {
+          "env_state": {
+            "current_working_directory": "/home/user/code/kiro-app"
+          }
+        },
+        "content": {
+          "Prompt": {
+            "prompt": "Build the Kiro parser"
+          }
+        },
+        "timestamp": "2026-05-17T10:00:00Z"
+      },
+      "assistant": {
+        "Response": {
+          "message_id": "assistant-1",
+          "content": "I can do that."
+        }
+      },
+      "request_metadata": {
+        "stream_end_timestamp_ms": 1779012010000
+      }
+    },
+    {
+      "user": {
+        "env_context": {
+          "env_state": {
+            "current_working_directory": "/home/user/code/kiro-app"
+          }
+        },
+        "content": {
+          "Prompt": {
+            "prompt": "Read the source first"
+          }
+        },
+        "timestamp": "2026-05-17T10:00:20Z"
+      },
+      "assistant": {
+        "ToolUse": {
+          "message_id": "assistant-2",
+          "content": "",
+          "tool_uses": [
+            {
+              "id": "tool-1",
+              "name": "execute_bash",
+              "args": {
+                "command": "sed -n '1,120p' internal/parser/kiro.go"
+              }
+            }
+          ]
+        }
+      },
+      "request_metadata": {
+        "stream_end_timestamp_ms": 1779012030000
+      }
+    }
+  ],
+  "transcript": [
+    "> Build the Kiro parser",
+    "I can do that."
+  ]
+}

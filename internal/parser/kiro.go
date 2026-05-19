@@ -74,6 +74,17 @@ func FindKiroSourceFile(sessionsDir, rawID string) string {
 	return candidate
 }
 
+// KiroSessionIDFromPath returns the logical raw session ID for a
+// legacy JSONL-backed Kiro session, preferring companion metadata
+// when present because the filename is only a storage detail.
+func KiroSessionIDFromPath(jsonlPath string) string {
+	if meta := loadKiroMeta(jsonlPath); meta != nil &&
+		meta.SessionID != "" {
+		return meta.SessionID
+	}
+	return strings.TrimSuffix(filepath.Base(jsonlPath), ".jsonl")
+}
+
 // loadKiroMeta reads the companion .json metadata file for a
 // session JSONL file.
 func loadKiroMeta(jsonlPath string) *kiroMeta {

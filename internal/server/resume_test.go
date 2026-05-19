@@ -567,6 +567,30 @@ func TestResolveSessionDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	kiroStoreDir := filepath.Join(tmpDir, "kiro-store")
+	if err := os.Mkdir(kiroStoreDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kiroProjectDir := filepath.Join(tmpDir, "kiro-project")
+	if err := os.Mkdir(kiroProjectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kiroVirtualPath := filepath.Join(kiroStoreDir, "data.sqlite3") + "#sqlite-session"
+
+	hashPathDir := filepath.Join(tmpDir, "project#dev")
+	hashPathCwd := filepath.Join(hashPathDir, "workspace")
+	if err := os.MkdirAll(hashPathCwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hashPathSessionFile := filepath.Join(hashPathDir, "session.jsonl")
+	hashPathCwdJSON, _ := json.Marshal(hashPathCwd)
+	hashPathContent := `{"cwd":` + string(hashPathCwdJSON) + `}` + "\n"
+	if err := os.WriteFile(
+		hashPathSessionFile, []byte(hashPathContent), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
 	cursorProject := filepath.Join(
 		tmpDir, "workspace-root", "li-openhouse",
 	)
@@ -655,6 +679,14 @@ func TestResolveSessionDir(t *testing.T) {
 			want: cwdDir,
 		},
 		{
+			name: "file_path takes precedence over cached cwd",
+			session: &db.Session{
+				Cwd:      tmpDir,
+				FilePath: &sessionFile,
+			},
+			want: cwdDir,
+		},
+		{
 			name: "nonexistent file_path falls back to project",
 			session: func() *db.Session {
 				bad := "/nonexistent/session.jsonl"
@@ -664,6 +696,24 @@ func TestResolveSessionDir(t *testing.T) {
 				}
 			}(),
 			want: tmpDir,
+		},
+		{
+			name: "kiro sqlite virtual path uses cached cwd not storage dir",
+			session: &db.Session{
+				Agent:    "kiro",
+				Cwd:      kiroProjectDir,
+				Project:  kiroStoreDir,
+				FilePath: &kiroVirtualPath,
+			},
+			want: kiroProjectDir,
+		},
+		{
+			name: "real file path with hash still reads embedded cwd",
+			session: &db.Session{
+				Cwd:      tmpDir,
+				FilePath: &hashPathSessionFile,
+			},
+			want: hashPathCwd,
 		},
 		{
 			name: "cursor transcript path resolves workspace dir",

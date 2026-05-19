@@ -1,0 +1,29 @@
+{
+  "conversation_id": "overlap-session",
+  "history": [
+    {
+      "user": {
+        "env_context": {
+          "env_state": {
+            "current_working_directory": "/home/user/code/current-kiro"
+          }
+        },
+        "content": {
+          "Prompt": {
+            "prompt": "Current store should win"
+          }
+        },
+        "timestamp": "2026-05-17T11:00:00Z"
+      },
+      "assistant": {
+        "Response": {
+          "message_id": "assistant-overlap",
+          "content": "Using the SQLite version."
+        }
+      },
+      "request_metadata": {
+        "stream_end_timestamp_ms": 1779015610000
+      }
+    }
+  ]
+}
