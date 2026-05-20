@@ -27,9 +27,16 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 27: Piebald parser now persists normalized per-message
+// Bumped to 28: Gemini parser now persists normalized
+// (Anthropic-style) per-message token_usage JSON instead of the raw
+// tokens object, and rolls thoughts tokens into OutputTokens so
+// per-message and session output totals match the cost JSON.
+// Existing Gemini rows need re-parsing so usage and cost reports
+// reflect the new shape and include thoughts tokens.
+//
+// (27: Piebald parser now persists normalized per-message
 // token_usage JSON. Existing Piebald rows need re-parsing so Usage
-// reports can include older Piebald sessions.
+// reports can include older Piebald sessions.)
 //
 // (26: Claude parser now (a) links Task / Agent tool
 // calls to child subagent sessions via toolUseResult.agentId
@@ -81,7 +88,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 27
+const dataVersion = 28
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
