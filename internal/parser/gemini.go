@@ -36,6 +36,10 @@ func extractGeminiTokens(msg gjson.Result) geminiTokens {
 	}
 }
 
+// normalizedGeminiTokenUsage maps Gemini's token counts onto the
+// Anthropic-style shape used by usage and cost queries. Thoughts
+// tokens are billed at the output rate, so they fold into
+// output_tokens here.
 func normalizedGeminiTokenUsage(tok geminiTokens) json.RawMessage {
 	payload := map[string]int{
 		"input_tokens":            tok.Input,
