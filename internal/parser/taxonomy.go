@@ -46,6 +46,20 @@ func NormalizeToolCategory(rawName string) string {
 	case "search_files", "grep", "grep_search":
 		return "Grep"
 
+	// Antigravity tools
+	case "view_file", "read_url_content":
+		return "Read"
+	case "replace_file_content", "multi_replace_file_content":
+		return "Edit"
+	case "write_to_file":
+		return "Write"
+	case "define_subagent", "invoke_subagent", "manage_subagents",
+		"send_message", "manage_task":
+		return "Task"
+	case "ask_permission", "ask_question", "schedule", "search_web",
+		"generate_image":
+		return "Tool"
+
 	// OpenCode tools (lowercase variants)
 	// Note: "grep" is handled above in the Gemini section.
 	case "read":
