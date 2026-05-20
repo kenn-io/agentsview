@@ -280,9 +280,10 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.False(t, msgs[0].HasOutputTokens)
 		assert.Empty(t, msgs[0].TokenUsage)
 
-		// First assistant message (a1): input=1500, cached=100, output=200
+		// First assistant message (a1): input=1500, cached=100,
+		// output=200, thoughts=50
 		assert.Equal(t, 1600, msgs[1].ContextTokens)
-		assert.Equal(t, 200, msgs[1].OutputTokens)
+		assert.Equal(t, 250, msgs[1].OutputTokens)
 		assert.True(t, msgs[1].HasContextTokens)
 		assert.True(t, msgs[1].HasOutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
@@ -293,15 +294,16 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.False(t, msgs[2].HasContextTokens)
 		assert.False(t, msgs[2].HasOutputTokens)
 
-		// Second assistant message (a2): input=2000, cached=50, output=300
+		// Second assistant message (a2): input=2000, cached=50,
+		// output=300, thoughts=100
 		assert.Equal(t, 2050, msgs[3].ContextTokens)
-		assert.Equal(t, 300, msgs[3].OutputTokens)
+		assert.Equal(t, 400, msgs[3].OutputTokens)
 		assert.True(t, msgs[3].HasContextTokens)
 		assert.True(t, msgs[3].HasOutputTokens)
 		assert.NotEmpty(t, msgs[3].TokenUsage)
 
 		// Session totals
-		assert.Equal(t, 500, sess.TotalOutputTokens)
+		assert.Equal(t, 650, sess.TotalOutputTokens)
 		assert.Equal(t, 2050, sess.PeakContextTokens)
 		assert.True(t, sess.HasTotalOutputTokens)
 		assert.True(t, sess.HasPeakContextTokens)
@@ -356,7 +358,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 
 		require.Equal(t, 2, len(msgs))
 		assert.Equal(t, 5200, msgs[1].ContextTokens)
-		assert.Equal(t, 800, msgs[1].OutputTokens)
+		assert.Equal(t, 900, msgs[1].OutputTokens)
 		assert.True(t, msgs[1].HasContextTokens)
 		assert.True(t, msgs[1].HasOutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
@@ -367,7 +369,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.Equal(t, int64(200),
 			gjson.GetBytes(msgs[1].TokenUsage,
 				"cache_read_input_tokens").Int())
-		assert.Equal(t, 800, sess.TotalOutputTokens)
+		assert.Equal(t, 900, sess.TotalOutputTokens)
 		assert.Equal(t, 5200, sess.PeakContextTokens)
 		assert.True(t, sess.HasTotalOutputTokens)
 		assert.True(t, sess.HasPeakContextTokens)

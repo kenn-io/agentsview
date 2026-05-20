@@ -267,10 +267,11 @@ func parseGeminiMessage(
 		Model:         msg.Get("model").String(),
 		TokenUsage:    tokenUsage,
 		ContextTokens: tok.Input + tok.Cached,
-		OutputTokens:  tok.Output,
+		OutputTokens:  tok.Output + tok.Thoughts,
 		HasContextTokens: tokResult.Get("input").Exists() ||
 			tokResult.Get("cached").Exists(),
-		HasOutputTokens:    tokResult.Get("output").Exists(),
+		HasOutputTokens: tokResult.Get("output").Exists() ||
+			tokResult.Get("thoughts").Exists(),
 		tokenPresenceKnown: true,
 	}, true
 }
