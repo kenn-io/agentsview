@@ -27,14 +27,16 @@ const (
 	AgentKimi          AgentType = "kimi"
 	AgentClaudeAI      AgentType = "claude-ai"
 	AgentChatGPT       AgentType = "chatgpt"
-	AgentKiro          AgentType = "kiro"
-	AgentKiroIDE       AgentType = "kiro-ide"
-	AgentCortex        AgentType = "cortex"
-	AgentHermes        AgentType = "hermes"
-	AgentForge         AgentType = "forge"
-	AgentPiebald       AgentType = "piebald"
-	AgentWarp          AgentType = "warp"
-	AgentPositron      AgentType = "positron"
+	AgentKiro           AgentType = "kiro"
+	AgentKiroIDE        AgentType = "kiro-ide"
+	AgentCortex         AgentType = "cortex"
+	AgentHermes         AgentType = "hermes"
+	AgentForge          AgentType = "forge"
+	AgentPiebald        AgentType = "piebald"
+	AgentWarp           AgentType = "warp"
+	AgentPositron       AgentType = "positron"
+	AgentAntigravity    AgentType = "antigravity"
+	AgentAntigravityCLI AgentType = "antigravity-cli"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -367,6 +369,30 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverPositronSessions,
 		FindSourceFunc: FindPositronSourceFile,
+	},
+	{
+		Type:           AgentAntigravity,
+		DisplayName:    "Antigravity",
+		EnvVar:         "ANTIGRAVITY_DIR",
+		ConfigKey:      "antigravity_dirs",
+		DefaultDirs:    []string{".gemini/antigravity"},
+		IDPrefix:       "antigravity:",
+		WatchSubdirs:   []string{"brain"},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverAntigravitySessions,
+		FindSourceFunc: FindAntigravitySourceFile,
+	},
+	{
+		Type:           AgentAntigravityCLI,
+		DisplayName:    "Antigravity CLI",
+		EnvVar:         "ANTIGRAVITY_CLI_DIR",
+		ConfigKey:      "antigravity_cli_dirs",
+		DefaultDirs:    []string{".gemini/antigravity-cli"},
+		IDPrefix:       "antigravity-cli:",
+		WatchSubdirs:   []string{"brain"},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverAntigravityCLISessions,
+		FindSourceFunc: FindAntigravityCLISourceFile,
 	},
 }
 
