@@ -360,7 +360,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.True(t, msgs[1].HasContextTokens)
 		assert.True(t, msgs[1].HasOutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
-		assert.Equal(t, int64(4800),
+		assert.Equal(t, int64(5000),
 			gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
 		assert.Equal(t, int64(900),
 			gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())

@@ -38,7 +38,7 @@ func extractGeminiTokens(msg gjson.Result) geminiTokens {
 
 func normalizedGeminiTokenUsage(tok geminiTokens) json.RawMessage {
 	payload := map[string]int{
-		"input_tokens":            max(tok.Input-tok.Cached, 0),
+		"input_tokens":            tok.Input,
 		"output_tokens":           tok.Output + tok.Thoughts,
 		"cache_read_input_tokens": tok.Cached,
 	}
