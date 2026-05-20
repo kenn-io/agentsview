@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 	"github.com/wesm/agentsview/internal/testjsonl"
 )
 
@@ -359,6 +360,13 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.True(t, msgs[1].HasContextTokens)
 		assert.True(t, msgs[1].HasOutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
+		assert.Equal(t, int64(4800),
+			gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
+		assert.Equal(t, int64(900),
+			gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())
+		assert.Equal(t, int64(200),
+			gjson.GetBytes(msgs[1].TokenUsage,
+				"cache_read_input_tokens").Int())
 		assert.Equal(t, 800, sess.TotalOutputTokens)
 		assert.Equal(t, 5200, sess.PeakContextTokens)
 		assert.True(t, sess.HasTotalOutputTokens)

@@ -15,9 +15,10 @@ import (
 
 // geminiTokens holds token usage counts from a Gemini message.
 type geminiTokens struct {
-	Input  int
-	Output int
-	Cached int
+	Input    int
+	Output   int
+	Cached   int
+	Thoughts int
 }
 
 // extractGeminiTokens reads the tokens object from a Gemini
@@ -28,10 +29,24 @@ func extractGeminiTokens(msg gjson.Result) geminiTokens {
 		return geminiTokens{}
 	}
 	return geminiTokens{
-		Input:  int(tok.Get("input").Int()),
-		Output: int(tok.Get("output").Int()),
-		Cached: int(tok.Get("cached").Int()),
+		Input:    int(tok.Get("input").Int()),
+		Output:   int(tok.Get("output").Int()),
+		Cached:   int(tok.Get("cached").Int()),
+		Thoughts: int(tok.Get("thoughts").Int()),
 	}
+}
+
+func normalizedGeminiTokenUsage(tok geminiTokens) json.RawMessage {
+	payload := map[string]int{
+		"input_tokens":            max(tok.Input-tok.Cached, 0),
+		"output_tokens":           tok.Output + tok.Thoughts,
+		"cache_read_input_tokens": tok.Cached,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return raw
 }
 
 // ParseGeminiSession parses a Gemini CLI session JSON file.
@@ -233,7 +248,7 @@ func parseGeminiMessage(
 	var tokenUsage json.RawMessage
 	tokResult := msg.Get("tokens")
 	if tokResult.Exists() {
-		tokenUsage = json.RawMessage(tokResult.Raw)
+		tokenUsage = normalizedGeminiTokenUsage(tok)
 	}
 	return ParsedMessage{
 		Ordinal:       ordinal,
