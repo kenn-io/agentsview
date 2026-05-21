@@ -18,6 +18,8 @@
     openclaw: "OpenClaw",
     kimi: "Kimi",
     piebald: "Piebald",
+    antigravity: "Antigravity",
+    "antigravity-cli": "Antigravity CLI",
   };
 </script>
 

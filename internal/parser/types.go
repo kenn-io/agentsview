@@ -10,23 +10,23 @@ import (
 type AgentType string
 
 const (
-	AgentClaude        AgentType = "claude"
-	AgentCodex         AgentType = "codex"
-	AgentCopilot       AgentType = "copilot"
-	AgentGemini        AgentType = "gemini"
-	AgentOpenCode      AgentType = "opencode"
-	AgentOpenHands     AgentType = "openhands"
-	AgentCursor        AgentType = "cursor"
-	AgentIflow         AgentType = "iflow"
-	AgentAmp           AgentType = "amp"
-	AgentZencoder      AgentType = "zencoder"
-	AgentVSCodeCopilot AgentType = "vscode-copilot"
-	AgentPi            AgentType = "pi"
-	AgentQwen          AgentType = "qwen"
-	AgentOpenClaw      AgentType = "openclaw"
-	AgentKimi          AgentType = "kimi"
-	AgentClaudeAI      AgentType = "claude-ai"
-	AgentChatGPT       AgentType = "chatgpt"
+	AgentClaude         AgentType = "claude"
+	AgentCodex          AgentType = "codex"
+	AgentCopilot        AgentType = "copilot"
+	AgentGemini         AgentType = "gemini"
+	AgentOpenCode       AgentType = "opencode"
+	AgentOpenHands      AgentType = "openhands"
+	AgentCursor         AgentType = "cursor"
+	AgentIflow          AgentType = "iflow"
+	AgentAmp            AgentType = "amp"
+	AgentZencoder       AgentType = "zencoder"
+	AgentVSCodeCopilot  AgentType = "vscode-copilot"
+	AgentPi             AgentType = "pi"
+	AgentQwen           AgentType = "qwen"
+	AgentOpenClaw       AgentType = "openclaw"
+	AgentKimi           AgentType = "kimi"
+	AgentClaudeAI       AgentType = "claude-ai"
+	AgentChatGPT        AgentType = "chatgpt"
 	AgentKiro           AgentType = "kiro"
 	AgentKiroIDE        AgentType = "kiro-ide"
 	AgentCortex         AgentType = "cortex"
@@ -371,25 +371,33 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindPositronSourceFile,
 	},
 	{
-		Type:           AgentAntigravity,
-		DisplayName:    "Antigravity",
-		EnvVar:         "ANTIGRAVITY_DIR",
-		ConfigKey:      "antigravity_dirs",
-		DefaultDirs:    []string{".gemini/antigravity"},
-		IDPrefix:       "antigravity:",
-		WatchSubdirs:   []string{"brain"},
+		Type:        AgentAntigravity,
+		DisplayName: "Antigravity",
+		EnvVar:      "ANTIGRAVITY_DIR",
+		ConfigKey:   "antigravity_dirs",
+		DefaultDirs: []string{".gemini/antigravity"},
+		IDPrefix:    "antigravity:",
+		WatchSubdirs: []string{
+			"conversations",
+			"brain",
+			"annotations",
+		},
 		FileBased:      true,
 		DiscoverFunc:   DiscoverAntigravitySessions,
 		FindSourceFunc: FindAntigravitySourceFile,
 	},
 	{
-		Type:           AgentAntigravityCLI,
-		DisplayName:    "Antigravity CLI",
-		EnvVar:         "ANTIGRAVITY_CLI_DIR",
-		ConfigKey:      "antigravity_cli_dirs",
-		DefaultDirs:    []string{".gemini/antigravity-cli"},
-		IDPrefix:       "antigravity-cli:",
-		WatchSubdirs:   []string{"brain"},
+		Type:        AgentAntigravityCLI,
+		DisplayName: "Antigravity CLI",
+		EnvVar:      "ANTIGRAVITY_CLI_DIR",
+		ConfigKey:   "antigravity_cli_dirs",
+		DefaultDirs: []string{".gemini/antigravity-cli"},
+		IDPrefix:    "antigravity-cli:",
+		WatchSubdirs: []string{
+			"conversations",
+			"implicit",
+			"brain",
+		},
 		FileBased:      true,
 		DiscoverFunc:   DiscoverAntigravityCLISessions,
 		FindSourceFunc: FindAntigravityCLISourceFile,

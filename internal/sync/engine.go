@@ -910,6 +910,62 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm)
+	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
+		if agDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(agDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 2 || parts[0] != "conversations" {
+				continue
+			}
+			name := parts[1]
+			name = strings.TrimSuffix(name, "-wal")
+			name = strings.TrimSuffix(name, "-shm")
+			if !strings.HasSuffix(name, ".db") {
+				continue
+			}
+			id := strings.TrimSuffix(name, ".db")
+			if !parser.IsValidSessionID(id) {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path: filepath.Join(
+					agDir, "conversations", name,
+				),
+				Agent: parser.AgentAntigravity,
+			}, true
+		}
+	}
+
+	// Antigravity CLI: <root>/conversations|implicit/<uuid>.pb
+	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
+		if agDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(agDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 2 ||
+				(parts[0] != "conversations" &&
+					parts[0] != "implicit") {
+				continue
+			}
+			name := parts[1]
+			if !strings.HasSuffix(name, ".pb") {
+				continue
+			}
+			id := strings.TrimSuffix(name, ".pb")
+			if !parser.IsValidSessionID(id) {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  path,
+				Agent: parser.AgentAntigravityCLI,
+			}, true
+		}
+	}
+
 	return parser.DiscoveredFile{}, false
 }
 
@@ -2687,6 +2743,10 @@ func (e *Engine) processFile(
 		res = e.processHermes(file, info)
 	case parser.AgentPositron:
 		res = e.processPositron(file, info)
+	case parser.AgentAntigravity:
+		res = e.processAntigravity(file, info)
+	case parser.AgentAntigravityCLI:
+		res = e.processAntigravityCLI(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -3747,6 +3807,64 @@ func (e *Engine) processPositron(
 	}
 
 	sess, msgs, err := parser.ParsePositronSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processAntigravity(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseAntigravitySession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processAntigravityCLI(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseAntigravityCLISession(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {

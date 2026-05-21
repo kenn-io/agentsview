@@ -1,0 +1,237 @@
+package parser
+
+import (
+	"encoding/binary"
+	"errors"
+	"unicode/utf8"
+)
+
+// Generic protobuf wire-format walker used by both Antigravity
+// agents. We do not have the official .proto schema, so the
+// walker extracts a permissive field tree and exposes helpers
+// for pulling out strings and Timestamp-like (seconds, nanos)
+// values by field number.
+
+const (
+	pbWireVarint     = 0
+	pbWireFixed64    = 1
+	pbWireBytes      = 2
+	pbWireStartGroup = 3 // deprecated, ignored
+	pbWireEndGroup   = 4 // deprecated, ignored
+	pbWireFixed32    = 5
+
+	// agProtoMaxDepth caps nested-message recursion to keep
+	// malformed payloads from exploding the call stack.
+	agProtoMaxDepth = 32
+)
+
+// agProtoField is one wire-format field decoded from a payload.
+// For length-delimited fields, Bytes holds the raw payload and
+// Nested holds the recursively-decoded sub-fields when the
+// payload looks like a well-formed message; Nested is nil when
+// the payload is opaque (likely a string or binary blob).
+type agProtoField struct {
+	Number int
+	Wire   int
+	// Varint holds the value when Wire == pbWireVarint.
+	Varint uint64
+	// Fixed holds the raw 4 or 8 bytes when Wire is fixed32/64.
+	Fixed []byte
+	// Bytes holds the length-delimited payload as-is.
+	Bytes []byte
+	// Nested is set when Bytes was successfully reparsed as a
+	// nested message. Nil if the payload is not a message.
+	Nested []agProtoField
+}
+
+// agProtoParse decodes a protobuf payload into a flat slice of
+// fields at the top level. Length-delimited sub-payloads are
+// speculatively re-parsed as nested messages.
+func agProtoParse(data []byte) ([]agProtoField, error) {
+	return agProtoParseDepth(data, 0)
+}
+
+func agProtoParseDepth(
+	data []byte, depth int,
+) ([]agProtoField, error) {
+	if depth > agProtoMaxDepth {
+		return nil, errors.New("antigravity proto: max depth")
+	}
+	var out []agProtoField
+	pos := 0
+	for pos < len(data) {
+		tag, n := binary.Uvarint(data[pos:])
+		if n <= 0 {
+			return nil, errors.New("antigravity proto: bad tag")
+		}
+		pos += n
+		number := int(tag >> 3)
+		wire := int(tag & 0x7)
+		if number <= 0 {
+			return nil, errors.New("antigravity proto: zero field")
+		}
+		f := agProtoField{Number: number, Wire: wire}
+		switch wire {
+		case pbWireVarint:
+			v, m := binary.Uvarint(data[pos:])
+			if m <= 0 {
+				return nil, errors.New(
+					"antigravity proto: bad varint",
+				)
+			}
+			f.Varint = v
+			pos += m
+		case pbWireFixed64:
+			if pos+8 > len(data) {
+				return nil, errors.New(
+					"antigravity proto: short fixed64",
+				)
+			}
+			f.Fixed = data[pos : pos+8]
+			pos += 8
+		case pbWireFixed32:
+			if pos+4 > len(data) {
+				return nil, errors.New(
+					"antigravity proto: short fixed32",
+				)
+			}
+			f.Fixed = data[pos : pos+4]
+			pos += 4
+		case pbWireBytes:
+			ln, m := binary.Uvarint(data[pos:])
+			if m <= 0 {
+				return nil, errors.New(
+					"antigravity proto: bad length",
+				)
+			}
+			pos += m
+			if uint64(pos)+ln > uint64(len(data)) {
+				return nil, errors.New(
+					"antigravity proto: short bytes",
+				)
+			}
+			f.Bytes = data[pos : pos+int(ln)]
+			pos += int(ln)
+			if nested, err := agProtoParseDepth(
+				f.Bytes, depth+1,
+			); err == nil && agProtoLooksLikeMessage(nested) {
+				f.Nested = nested
+			}
+		case pbWireStartGroup, pbWireEndGroup:
+			// Skip; deprecated and not used by Antigravity.
+		default:
+			return nil, errors.New(
+				"antigravity proto: unknown wire type",
+			)
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// agProtoLooksLikeMessage returns true when the decoded fields
+// look more like a nested message than coincidentally-parseable
+// random bytes (e.g. UTF-8 strings whose first byte happens to
+// decode as a valid tag). The heuristic: at least one field and
+// every field's number is in a reasonable range.
+func agProtoLooksLikeMessage(fields []agProtoField) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	for _, f := range fields {
+		if f.Number < 1 || f.Number > 100000 {
+			return false
+		}
+	}
+	return true
+}
+
+// agProtoString returns the payload of f as a UTF-8 string when
+// f is length-delimited and the bytes parse as valid UTF-8.
+func agProtoString(f agProtoField) (string, bool) {
+	if f.Wire != pbWireBytes {
+		return "", false
+	}
+	if !utf8.Valid(f.Bytes) {
+		return "", false
+	}
+	return string(f.Bytes), true
+}
+
+// agProtoFind returns the first sub-field with the given field
+// number, descending into Nested messages.
+func agProtoFind(
+	fields []agProtoField, number int,
+) (agProtoField, bool) {
+	for _, f := range fields {
+		if f.Number == number {
+			return f, true
+		}
+	}
+	return agProtoField{}, false
+}
+
+// agProtoFindAll returns all sub-fields at the top level with
+// the given field number.
+func agProtoFindAll(
+	fields []agProtoField, number int,
+) []agProtoField {
+	var out []agProtoField
+	for _, f := range fields {
+		if f.Number == number {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// agProtoCollectStrings walks the field tree and returns every
+// UTF-8 string with at least minLen runes. Returned in encounter
+// order. Duplicates are preserved (callers can dedupe).
+func agProtoCollectStrings(
+	fields []agProtoField, minLen int,
+) []string {
+	var out []string
+	var walk func([]agProtoField)
+	walk = func(fs []agProtoField) {
+		for _, f := range fs {
+			if f.Wire == pbWireBytes && f.Nested == nil {
+				if s, ok := agProtoString(f); ok &&
+					utf8.RuneCountInString(s) >= minLen {
+					out = append(out, s)
+				}
+			}
+			if f.Nested != nil {
+				walk(f.Nested)
+			}
+		}
+	}
+	walk(fields)
+	return out
+}
+
+// agProtoTimestamp returns (seconds, nanos, ok) when fields
+// match the google.protobuf.Timestamp shape: field 1 varint
+// seconds, optional field 2 varint nanos, and no other fields.
+func agProtoTimestamp(
+	fields []agProtoField,
+) (int64, int32, bool) {
+	var sec int64
+	var nanos int32
+	sawSec := false
+	for _, f := range fields {
+		if f.Wire != pbWireVarint {
+			return 0, 0, false
+		}
+		switch f.Number {
+		case 1:
+			sec = int64(f.Varint)
+			sawSec = true
+		case 2:
+			nanos = int32(f.Varint)
+		default:
+			return 0, 0, false
+		}
+	}
+	return sec, nanos, sawSec
+}
