@@ -30,6 +30,8 @@ describe("KNOWN_AGENTS", () => {
       "kiro-ide",
       "cortex",
       "piebald",
+      "antigravity",
+      "antigravity-cli",
     ]);
   });
 

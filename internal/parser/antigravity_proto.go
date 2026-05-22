@@ -171,20 +171,6 @@ func agProtoFind(
 	return agProtoField{}, false
 }
 
-// agProtoFindAll returns all sub-fields at the top level with
-// the given field number.
-func agProtoFindAll(
-	fields []agProtoField, number int,
-) []agProtoField {
-	var out []agProtoField
-	for _, f := range fields {
-		if f.Number == number {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
 // agProtoCollectStrings walks the field tree and returns every
 // UTF-8 string with at least minLen runes. Returned in encounter
 // order. Duplicates are preserved (callers can dedupe).
