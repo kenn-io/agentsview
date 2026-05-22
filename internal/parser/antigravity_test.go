@@ -1,6 +1,9 @@
 package parser
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"database/sql"
 	"encoding/binary"
 	"os"
@@ -297,6 +300,189 @@ func TestAntigravityKeyMissing(t *testing.T) {
 	// Cannot reset sync.Once without restructuring the source.
 	// At minimum verify hasAntigravityKey doesn't panic.
 	_ = hasAntigravityKey()
+}
+
+// ---- crypto: cipher round-trips -------------------------------
+
+// TestDecryptAesGCMRoundTrip encrypts a payload with stdlib AES-GCM
+// in the same layout decryptAesGCM expects (12-byte nonce prefix +
+// ciphertext-with-tag) and confirms recovery. GCM is Antigravity's
+// primary cipher per the handoff.
+func TestDecryptAesGCMRoundTrip(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	plaintext := []byte("hello antigravity gcm world")
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatalf("new cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("new gcm: %v", err)
+	}
+	nonce := bytes.Repeat([]byte{0x01}, 12)
+	ct := gcm.Seal(nil, nonce, plaintext, nil)
+	data := append(append([]byte{}, nonce...), ct...)
+
+	got := decryptAesGCM(data, key, 0)
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("decrypt: got %q want %q", got, plaintext)
+	}
+
+	// Wrong key → nil (auth tag fails).
+	bad := bytes.Repeat([]byte{0x43}, 32)
+	if out := decryptAesGCM(data, bad, 0); out != nil {
+		t.Fatalf("wrong key should fail, got %q", out)
+	}
+
+	// Too-short input → nil, not panic.
+	if out := decryptAesGCM([]byte{0x00}, key, 0); out != nil {
+		t.Fatalf("short input should return nil, got %q", out)
+	}
+}
+
+// TestDecryptAesGCMSkip confirms the leading-bytes skip works as
+// documented (the brute-forcer tries 0/1/2/4/8 byte prefixes).
+func TestDecryptAesGCMSkip(t *testing.T) {
+	key := bytes.Repeat([]byte{0x42}, 32)
+	plaintext := []byte("with leading junk bytes")
+
+	block, _ := aes.NewCipher(key)
+	gcm, _ := cipher.NewGCM(block)
+	nonce := bytes.Repeat([]byte{0x02}, 12)
+	ct := gcm.Seal(nil, nonce, plaintext, nil)
+
+	prefix := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	data := append(append([]byte{}, prefix...), nonce...)
+	data = append(data, ct...)
+
+	got := decryptAesGCM(data, key, len(prefix))
+	if !bytes.Equal(got, plaintext) {
+		t.Fatalf("decrypt with skip: got %q want %q", got, plaintext)
+	}
+}
+
+func TestStripPKCS7(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want []byte
+	}{
+		{
+			name: "valid one-byte pad",
+			in:   []byte{0x41, 0x42, 0x43, 0x01},
+			want: []byte{0x41, 0x42, 0x43},
+		},
+		{
+			name: "valid four-byte pad",
+			in: []byte{
+				0x41, 0x42, 0x43, 0x44,
+				0x04, 0x04, 0x04, 0x04,
+			},
+			want: []byte{0x41, 0x42, 0x43, 0x44},
+		},
+		{
+			name: "empty input passes through",
+			in:   []byte{},
+			want: []byte{},
+		},
+		{
+			name: "pad byte zero is invalid → unchanged",
+			in:   []byte{0x41, 0x00},
+			want: []byte{0x41, 0x00},
+		},
+		{
+			name: "pad larger than block size → unchanged",
+			in:   []byte{0x41, 0x42, 0xFF},
+			want: []byte{0x41, 0x42, 0xFF},
+		},
+		{
+			name: "inconsistent pad bytes → unchanged",
+			in:   []byte{0x41, 0x02, 0x03},
+			want: []byte{0x41, 0x02, 0x03},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stripPKCS7(tc.in); !bytes.Equal(got, tc.want) {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// ---- CLI parser: discovery edges ------------------------------
+
+// TestAntigravityCLIDiscoverImplicit confirms .pb files under
+// implicit/ are discovered alongside conversations/.
+func TestAntigravityCLIDiscoverImplicit(t *testing.T) {
+	root := t.TempDir()
+	convID := "aaaaaaaa-1111-2222-3333-444444444444"
+	implID := "bbbbbbbb-5555-6666-7777-888888888888"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "implicit"))
+	mustWrite(t,
+		filepath.Join(root, "conversations", convID+".pb"),
+		[]byte("x"))
+	mustWrite(t,
+		filepath.Join(root, "implicit", implID+".pb"),
+		[]byte("x"))
+
+	files := DiscoverAntigravityCLISessions(root)
+	if len(files) != 2 {
+		t.Fatalf("got %d files, want 2 (one per subdir)", len(files))
+	}
+	var sawConv, sawImpl bool
+	for _, f := range files {
+		if strings.Contains(f.Path, "/conversations/") {
+			sawConv = true
+		}
+		if strings.Contains(f.Path, "/implicit/") {
+			sawImpl = true
+		}
+	}
+	if !sawConv || !sawImpl {
+		t.Fatalf("missing subdir: conv=%v impl=%v",
+			sawConv, sawImpl)
+	}
+
+	// FindAntigravityCLISourceFile resolves either id.
+	if got := FindAntigravityCLISourceFile(root, implID); got == "" ||
+		!strings.HasSuffix(got, "implicit/"+implID+".pb") {
+		t.Fatalf("find implicit: %q", got)
+	}
+}
+
+func TestBuildAntigravityProjectMapRobust(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "history.jsonl")
+
+	// Missing file → empty map, no error.
+	if m := buildAntigravityProjectMap(path); len(m) != 0 {
+		t.Fatalf("missing file: got %d entries", len(m))
+	}
+
+	// Mix of valid rows, blank lines, garbage, and rows missing
+	// one of the two required fields. Only the valid rows survive.
+	mustWrite(t, path, []byte(
+		`{"conversationId":"id-1","workspace":"/tmp/a"}`+"\n"+
+			""+"\n"+
+			`not json at all`+"\n"+
+			`{"conversationId":"id-2"}`+"\n"+
+			`{"workspace":"/tmp/orphan"}`+"\n"+
+			`{"conversationId":"id-3","workspace":"/tmp/c"}`+"\n",
+	))
+	m := buildAntigravityProjectMap(path)
+	if len(m) != 2 {
+		t.Fatalf("got %d entries, want 2: %#v", len(m), m)
+	}
+	if m["id-1"] != "/tmp/a" || m["id-3"] != "/tmp/c" {
+		t.Fatalf("unexpected map: %#v", m)
+	}
+	if _, ok := m["id-2"]; ok {
+		t.Fatalf("id-2 had no workspace, should be absent")
+	}
 }
 
 // ---- helpers --------------------------------------------------
