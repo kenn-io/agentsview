@@ -85,8 +85,7 @@ func FindAntigravityCLISourceFile(root, id string) string {
 	if root == "" {
 		return ""
 	}
-	if strings.HasPrefix(id, antigravityImplicitTag) {
-		uuid := strings.TrimPrefix(id, antigravityImplicitTag)
+	if uuid, ok := strings.CutPrefix(id, antigravityImplicitTag); ok {
 		if !IsValidSessionID(uuid) {
 			return ""
 		}

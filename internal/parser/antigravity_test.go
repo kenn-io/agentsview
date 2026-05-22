@@ -106,7 +106,7 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 	tag := []byte{0x0A}
 	// Encode the largest uvarint (10 bytes, value 2^64-1).
 	huge := make([]byte, 10)
-	for i := 0; i < 9; i++ {
+	for i := range 9 {
 		huge[i] = 0xFF
 	}
 	huge[9] = 0x01
