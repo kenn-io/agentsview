@@ -22,6 +22,7 @@ describe("StatusBar", () => {
     sync.stats = null;
     sync.serverVersion = null;
     sync.versionMismatch = false;
+    sync.remoteUnreachable = false;
   });
 
   afterEach(() => {
@@ -31,6 +32,7 @@ describe("StatusBar", () => {
     sync.stats = null;
     sync.serverVersion = null;
     sync.versionMismatch = false;
+    sync.remoteUnreachable = false;
     sync.progress = null;
     sync.syncing = false;
   });
@@ -64,6 +66,25 @@ describe("StatusBar", () => {
 
     expect(document.body.textContent).toContain(
       "synced 1m ago",
+    );
+
+    unmount(component);
+  });
+
+  it("shows a remote-unreachable indicator only when flagged", async () => {
+    sync.remoteUnreachable = true;
+    const component = mount(StatusBar, {
+      target: document.body,
+    });
+    await tick();
+    expect(document.body.textContent).toContain(
+      "remote server unreachable",
+    );
+
+    sync.remoteUnreachable = false;
+    await tick();
+    expect(document.body.textContent).not.toContain(
+      "remote server unreachable",
     );
 
     unmount(component);

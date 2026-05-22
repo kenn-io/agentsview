@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
   import {
     formatNumber,
     formatRelativeTime,
@@ -59,6 +60,16 @@
   </div>
 
   <div class="status-right">
+    {#if sync.remoteUnreachable}
+      <button
+        class="remote-warn"
+        onclick={() => router.navigate("settings")}
+        title="Can't reach the remote server. Open settings to check the URL, token, or disconnect."
+      >
+        remote server unreachable
+      </button>
+      <span class="sep">&middot;</span>
+    {/if}
     {#if sync.isDesktop}
       <div class="zoom-controls">
         <button
@@ -182,6 +193,17 @@
   }
 
   .version-warn:hover {
+    text-decoration: underline;
+  }
+
+  .remote-warn {
+    color: var(--accent-red);
+    font-size: 10px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .remote-warn:hover {
     text-decoration: underline;
   }
 
