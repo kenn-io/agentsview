@@ -105,7 +105,11 @@ func agProtoParseDepth(
 				)
 			}
 			pos += m
-			if uint64(pos)+ln > uint64(len(data)) {
+			// Overflow-safe: pos <= len(data) is invariant (Uvarint
+			// caps m), so len(data)-pos is non-negative. Comparing
+			// against ln without addition avoids uint64 wrap on a
+			// malformed huge length varint.
+			if ln > uint64(len(data)-pos) {
 				return nil, errors.New(
 					"antigravity proto: short bytes",
 				)
@@ -194,6 +198,65 @@ func agProtoCollectStrings(
 	}
 	walk(fields)
 	return out
+}
+
+// agProtoLooksLikePrefix returns true when data starts with a
+// well-formed protobuf field sequence — even if the final field
+// runs off the end of data. Used to validate decryption
+// candidates against a fixed-size sniff (e.g. the first 4KB):
+// agProtoParse would reject a buffer truncated mid-field, which
+// can throw away valid large transcripts. This validator accepts
+// any clean prefix of fields plus a partially-read tail, as long
+// as at least one full field decoded cleanly first.
+func agProtoLooksLikePrefix(data []byte) bool {
+	pos := 0
+	parsed := 0
+	for pos < len(data) {
+		tag, n := binary.Uvarint(data[pos:])
+		if n <= 0 {
+			return parsed > 0
+		}
+		pos += n
+		number := int(tag >> 3)
+		wire := int(tag & 0x7)
+		if number < 1 || number > 100000 {
+			return false
+		}
+		switch wire {
+		case pbWireVarint:
+			_, m := binary.Uvarint(data[pos:])
+			if m <= 0 {
+				return parsed > 0
+			}
+			pos += m
+		case pbWireFixed64:
+			if pos+8 > len(data) {
+				return parsed > 0
+			}
+			pos += 8
+		case pbWireFixed32:
+			if pos+4 > len(data) {
+				return parsed > 0
+			}
+			pos += 4
+		case pbWireBytes:
+			ln, m := binary.Uvarint(data[pos:])
+			if m <= 0 {
+				return parsed > 0
+			}
+			pos += m
+			if ln > uint64(len(data)-pos) {
+				return parsed > 0
+			}
+			pos += int(ln)
+		case pbWireStartGroup, pbWireEndGroup:
+			// deprecated; skip
+		default:
+			return false
+		}
+		parsed++
+	}
+	return parsed > 0
 }
 
 // agProtoTimestamp returns (seconds, nanos, ok) when fields

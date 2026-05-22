@@ -186,15 +186,13 @@ func stripPKCS7(data []byte) []byte {
 // isLikelyAntigravityProto runs the wire walker over the first
 // chunk of a candidate plaintext and reports whether it looks
 // like a well-formed message. Caps work at 4KB to keep the
-// retry loop cheap.
+// retry loop cheap. Uses the prefix-tolerant validator so that
+// large valid transcripts whose 4KB sniff falls mid-field still
+// pass.
 func isLikelyAntigravityProto(data []byte) bool {
 	head := data
 	if len(head) > 4096 {
 		head = head[:4096]
 	}
-	fields, err := agProtoParse(head)
-	if err != nil || len(fields) == 0 {
-		return false
-	}
-	return agProtoLooksLikeMessage(fields)
+	return agProtoLooksLikePrefix(head)
 }

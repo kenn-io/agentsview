@@ -96,6 +96,72 @@ func TestAgProtoParseAndExtract(t *testing.T) {
 	}
 }
 
+// TestAgProtoLengthOverflow feeds a length-delimited field whose
+// declared length is near uint64-max. The pre-fix code computed
+// pos+ln in uint64 and wrapped, then sliced with int(ln) which
+// panicked. The fix compares ln against (len(data)-pos) without
+// addition.
+func TestAgProtoLengthOverflow(t *testing.T) {
+	// Tag for field 1, wire 2 (length-delimited).
+	tag := []byte{0x0A}
+	// Encode the largest uvarint (10 bytes, value 2^64-1).
+	huge := make([]byte, 10)
+	for i := 0; i < 9; i++ {
+		huge[i] = 0xFF
+	}
+	huge[9] = 0x01
+	payload := append(append([]byte{}, tag...), huge...)
+	payload = append(payload, []byte("only-a-few-bytes")...)
+
+	// Must return an error rather than panicking or returning a
+	// bogus slice.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("agProtoParse panicked: %v", r)
+		}
+	}()
+	if _, err := agProtoParse(payload); err == nil {
+		t.Fatalf("expected error for oversized length, got nil")
+	}
+}
+
+// TestAgProtoLooksLikePrefix exercises the prefix-tolerant
+// validator used by the decryption retry loop. It must accept a
+// well-formed prefix followed by a truncated final field, but
+// reject random bytes.
+func TestAgProtoLooksLikePrefix(t *testing.T) {
+	complete := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 42},
+		{num: 2, wire: pbWireBytes, bytes: []byte("hello there")},
+	})
+	if !agProtoLooksLikePrefix(complete) {
+		t.Fatalf("complete message rejected")
+	}
+
+	// Append a length-delimited field whose declared length runs
+	// past the end of the buffer — agProtoParse rejects this, but
+	// the prefix-tolerant check should accept since at least one
+	// full field decoded cleanly first.
+	truncated := append(append([]byte{}, complete...),
+		// tag for field 3, wire 2; length 100; only 3 actual bytes
+		0x1A, 0x64, 0x41, 0x42, 0x43,
+	)
+	if agProtoLooksLikePrefix(truncated) != true {
+		t.Fatalf("truncated tail rejected; want accepted")
+	}
+	if _, err := agProtoParse(truncated); err == nil {
+		t.Fatalf("agProtoParse should still reject truncated tail")
+	}
+
+	// Pure garbage with zero clean fields → reject.
+	if agProtoLooksLikePrefix([]byte{0x00, 0x00, 0x00}) {
+		t.Fatalf("zero-field-number garbage accepted")
+	}
+	if agProtoLooksLikePrefix(nil) {
+		t.Fatalf("empty input accepted")
+	}
+}
+
 func TestEarliestAntigravityTimestamp(t *testing.T) {
 	older := encodePB([]pbField{
 		{num: 1, wire: pbWireVarint, varint: 1700000000},
@@ -447,11 +513,66 @@ func TestAntigravityCLIDiscoverImplicit(t *testing.T) {
 			sawConv, sawImpl)
 	}
 
-	// FindAntigravityCLISourceFile resolves either id.
+	// FindAntigravityCLISourceFile routes implicit-tagged ids to
+	// the implicit/ subdir; bare ids resolve under conversations/.
 	wantImpl := filepath.Join("implicit", implID+".pb")
-	if got := FindAntigravityCLISourceFile(root, implID); got == "" ||
-		!strings.HasSuffix(got, wantImpl) {
+	if got := FindAntigravityCLISourceFile(
+		root, "implicit-"+implID,
+	); got == "" || !strings.HasSuffix(got, wantImpl) {
 		t.Fatalf("find implicit: %q", got)
+	}
+	wantConv := filepath.Join("conversations", convID+".pb")
+	if got := FindAntigravityCLISourceFile(root, convID); got == "" ||
+		!strings.HasSuffix(got, wantConv) {
+		t.Fatalf("find conv: %q", got)
+	}
+	// A bare implicit-only UUID must NOT resolve under conversations/.
+	if got := FindAntigravityCLISourceFile(root, implID); got != "" {
+		t.Fatalf("bare implicit id should not resolve: %q", got)
+	}
+}
+
+// TestAntigravityCLIImplicitSessionIDDistinct ensures a UUID that
+// appears under both conversations/ and implicit/ produces two
+// distinct storage IDs, so one record doesn't overwrite the other.
+func TestAntigravityCLIImplicitSessionIDDistinct(t *testing.T) {
+	root := t.TempDir()
+	id := "cccccccc-9999-aaaa-bbbb-dddddddddddd"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "implicit"))
+	convPath := filepath.Join(root, "conversations", id+".pb")
+	implPath := filepath.Join(root, "implicit", id+".pb")
+	mustWrite(t, convPath, []byte("x"))
+	mustWrite(t, implPath, []byte("x"))
+
+	convSess, _, err := ParseAntigravityCLISession(convPath, "", "m")
+	if err != nil {
+		t.Fatalf("parse conv: %v", err)
+	}
+	implSess, _, err := ParseAntigravityCLISession(implPath, "", "m")
+	if err != nil {
+		t.Fatalf("parse impl: %v", err)
+	}
+	if convSess.ID == implSess.ID {
+		t.Fatalf("session ids collide: conv=%q impl=%q",
+			convSess.ID, implSess.ID)
+	}
+	if convSess.ID != "antigravity-cli:"+id {
+		t.Fatalf("conv id: %q", convSess.ID)
+	}
+	if implSess.ID != "antigravity-cli:implicit-"+id {
+		t.Fatalf("impl id: %q", implSess.ID)
+	}
+
+	// Round-trip: each storage id resolves back to its own file.
+	if got := FindAntigravityCLISourceFile(root, id); got != convPath {
+		t.Fatalf("round-trip conv: %q", got)
+	}
+	if got := FindAntigravityCLISourceFile(
+		root, "implicit-"+id,
+	); got != implPath {
+		t.Fatalf("round-trip impl: %q", got)
 	}
 }
 

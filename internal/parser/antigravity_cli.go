@@ -25,7 +25,16 @@ import (
 // rows. With the key we additionally append the decrypted transcript
 // preview (raw extracted strings) as a synthetic assistant message.
 
-const antigravityCLIIDPrefix = "antigravity-cli:"
+const (
+	antigravityCLIIDPrefix = "antigravity-cli:"
+
+	// antigravityImplicitTag distinguishes implicit/<uuid>.pb from
+	// conversations/<uuid>.pb in the storage ID. Both can exist for
+	// the same UUID; without a tag they collide as
+	// "antigravity-cli:<uuid>" and one record overwrites the other.
+	// Hyphen keeps the tag inside the IsValidSessionID charset.
+	antigravityImplicitTag = "implicit-"
+)
 
 // DiscoverAntigravityCLISessions enumerates conversations/*.pb and
 // implicit/*.pb under the CLI root and tags each with its workspace
@@ -70,17 +79,29 @@ func DiscoverAntigravityCLISessions(root string) []DiscoveredFile {
 }
 
 // FindAntigravityCLISourceFile locates the .pb file for a session
-// id (without the agent prefix). Checks conversations/ then
-// implicit/.
+// id (without the agent prefix). An "implicit-" prefix routes to
+// the implicit/ subdir; bare ids resolve under conversations/.
 func FindAntigravityCLISourceFile(root, id string) string {
-	if root == "" || !IsValidSessionID(id) {
+	if root == "" {
 		return ""
 	}
-	for _, sub := range []string{"conversations", "implicit"} {
-		p := filepath.Join(root, sub, id+".pb")
+	if strings.HasPrefix(id, antigravityImplicitTag) {
+		uuid := strings.TrimPrefix(id, antigravityImplicitTag)
+		if !IsValidSessionID(uuid) {
+			return ""
+		}
+		p := filepath.Join(root, "implicit", uuid+".pb")
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
+		return ""
+	}
+	if !IsValidSessionID(id) {
+		return ""
+	}
+	p := filepath.Join(root, "conversations", id+".pb")
+	if _, err := os.Stat(p); err == nil {
+		return p
 	}
 	return ""
 }
@@ -103,6 +124,12 @@ func ParseAntigravityCLISession(
 	// Root = two levels up from the .pb file
 	// (conversations/<id>.pb or implicit/<id>.pb).
 	root := filepath.Dir(filepath.Dir(path))
+	// Tag implicit/ sessions so they don't collide with the
+	// conversations/ entry that may share the same UUID.
+	storageID := id
+	if filepath.Base(filepath.Dir(path)) == "implicit" {
+		storageID = antigravityImplicitTag + id
+	}
 
 	messages := collectAntigravityHistoryMessages(
 		filepath.Join(root, "history.jsonl"), id,
@@ -162,7 +189,7 @@ func ParseAntigravityCLISession(
 	}
 
 	sess := &ParsedSession{
-		ID:               antigravityCLIIDPrefix + id,
+		ID:               antigravityCLIIDPrefix + storageID,
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentAntigravityCLI,
