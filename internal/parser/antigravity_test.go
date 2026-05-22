@@ -435,10 +435,10 @@ func TestAntigravityCLIDiscoverImplicit(t *testing.T) {
 	}
 	var sawConv, sawImpl bool
 	for _, f := range files {
-		if strings.Contains(f.Path, "/conversations/") {
+		switch filepath.Base(filepath.Dir(f.Path)) {
+		case "conversations":
 			sawConv = true
-		}
-		if strings.Contains(f.Path, "/implicit/") {
+		case "implicit":
 			sawImpl = true
 		}
 	}
@@ -448,8 +448,9 @@ func TestAntigravityCLIDiscoverImplicit(t *testing.T) {
 	}
 
 	// FindAntigravityCLISourceFile resolves either id.
+	wantImpl := filepath.Join("implicit", implID+".pb")
 	if got := FindAntigravityCLISourceFile(root, implID); got == "" ||
-		!strings.HasSuffix(got, "implicit/"+implID+".pb") {
+		!strings.HasSuffix(got, wantImpl) {
 		t.Fatalf("find implicit: %q", got)
 	}
 }
