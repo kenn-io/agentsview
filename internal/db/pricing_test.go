@@ -164,3 +164,39 @@ func TestGetModelPricingNotFound(t *testing.T) {
 		t.Fatalf("expected nil, got %+v", got)
 	}
 }
+
+func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
+	d := testDB(t)
+
+	// Seed an existing row (simulating a LiteLLM rate already present).
+	if err := d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "claude-opus-4-6",
+		InputPerMTok:         5.0,
+		OutputPerMTok:        25.0,
+		CacheCreationPerMTok: 6.25,
+		CacheReadPerMTok:     0.5,
+	}}); err != nil {
+		t.Fatalf("UpsertModelPricing: %v", err)
+	}
+
+	// Insert-missing with a DIFFERENT rate for the same pattern, plus a
+	// brand-new pattern.
+	err := d.InsertMissingModelPricing([]ModelPricing{
+		{ModelPattern: "claude-opus-4-6", InputPerMTok: 999.0, OutputPerMTok: 999.0},
+		{ModelPattern: "gpt-5.4", InputPerMTok: 2.5, OutputPerMTok: 15.0},
+	})
+	requireNoError(t, err, "InsertMissingModelPricing")
+
+	// Existing row is untouched.
+	opus, err := d.GetModelPricing("claude-opus-4-6")
+	requireNoError(t, err, "GetModelPricing opus")
+	if opus == nil || opus.InputPerMTok != 5.0 {
+		t.Fatalf("opus InputPerMTok = %v, want 5.0 (not overwritten)", opus)
+	}
+	// New row was inserted.
+	gpt, err := d.GetModelPricing("gpt-5.4")
+	requireNoError(t, err, "GetModelPricing gpt")
+	if gpt == nil || gpt.InputPerMTok != 2.5 {
+		t.Fatalf("gpt-5.4 InputPerMTok = %v, want 2.5 (inserted)", gpt)
+	}
+}

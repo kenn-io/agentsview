@@ -103,6 +103,52 @@ func (db *DB) SetPricingMeta(key, value string) error {
 	return nil
 }
 
+// InsertMissingModelPricing inserts pricing rows only for model
+// patterns not already present, leaving existing rows untouched.
+// Used by the direct CLI usage path to guarantee fallback rates
+// exist without clobbering richer LiteLLM rows a running server may
+// have written. Unlike UpsertModelPricing (ON CONFLICT DO UPDATE),
+// this is non-destructive (ON CONFLICT DO NOTHING).
+func (db *DB) InsertMissingModelPricing(
+	prices []ModelPricing,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning pricing insert: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO model_pricing
+			(model_pattern, input_per_mtok, output_per_mtok,
+			 cache_creation_per_mtok, cache_read_per_mtok,
+			 updated_at)
+		VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		ON CONFLICT(model_pattern) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("preparing pricing insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, p := range prices {
+		if _, err := stmt.Exec(
+			p.ModelPattern,
+			p.InputPerMTok,
+			p.OutputPerMTok,
+			p.CacheCreationPerMTok,
+			p.CacheReadPerMTok,
+		); err != nil {
+			return fmt.Errorf(
+				"inserting pricing %q: %w", p.ModelPattern, err,
+			)
+		}
+	}
+	return tx.Commit()
+}
+
 // GetModelPricing returns pricing for an exact model match.
 // Returns nil, nil if not found.
 func (db *DB) GetModelPricing(
