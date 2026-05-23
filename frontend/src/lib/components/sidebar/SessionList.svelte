@@ -29,8 +29,6 @@
   let initialHydratingVersion: number | null = $state(null);
   let paintedDisplayItems: DisplayItem[] = $state([]);
   let paintedTotalSize = $state(0);
-  let requestedHydrationByVersion: Map<number, Set<string>> =
-    $state(new Map());
 
   let groupMode: GroupMode = $state(getInitialGroupMode());
   let manualExpanded: Set<string> = $state(new Set());
@@ -222,12 +220,7 @@
 
   function requestHydration(ids: string[], version: number) {
     if (ids.length === 0) return;
-    const requested = requestedHydrationByVersion.get(version) ?? new Set();
-    const next = ids.filter((id) => !requested.has(id));
-    if (next.length === 0) return;
-    for (const id of next) requested.add(id);
-    requestedHydrationByVersion.set(version, requested);
-    void sessions.hydrateVisibleSessions(next, version);
+    void sessions.hydrateVisibleSessions(ids, version);
   }
 
   $effect(() => {

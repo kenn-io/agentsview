@@ -66,7 +66,7 @@ describe("SessionList filter dropdown", () => {
     rafSpy = vi
       .spyOn(globalThis, "requestAnimationFrame")
       .mockImplementation((cb: FrameRequestCallback) => {
-        cb(0);
+        queueMicrotask(() => cb(0));
         return 1;
       });
     sessions.sessions = [];
@@ -141,7 +141,7 @@ describe("SessionList visible hydration", () => {
     rafSpy = vi
       .spyOn(globalThis, "requestAnimationFrame")
       .mockImplementation((cb: FrameRequestCallback) => {
-        cb(0);
+        queueMicrotask(() => cb(0));
         return 1;
       });
     sessions.sessions = [];
@@ -253,9 +253,38 @@ describe("SessionList visible hydration", () => {
     expect(scroller).not.toBeNull();
     scroller!.scrollTop = ITEM_HEIGHT * 20;
     scroller!.dispatchEvent(new Event("scroll"));
+    await Promise.resolve();
     await tick();
 
     expect(hydrate.mock.calls.some(([ids]) => ids.includes("s20"))).toBe(true);
+  });
+
+  it("retries visible hydration when an index-only row becomes visible again", async () => {
+    sessions.sessions = Array.from({ length: 50 }, (_, i) =>
+      makeSession({ id: `s${i}`, is_index_only: true }),
+    );
+    const hydrate = vi
+      .spyOn(sessions, "hydrateVisibleSessions")
+      .mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    hydrate.mockClear();
+
+    const scroller = document.querySelector<HTMLElement>(".session-list-scroll");
+    expect(scroller).not.toBeNull();
+    scroller!.scrollTop = ITEM_HEIGHT * 20;
+    scroller!.dispatchEvent(new Event("scroll"));
+    await Promise.resolve();
+    await tick();
+    hydrate.mockClear();
+
+    scroller!.scrollTop = 0;
+    scroller!.dispatchEvent(new Event("scroll"));
+    await Promise.resolve();
+    await tick();
+
+    expect(hydrate.mock.calls.some(([ids]) => ids.includes("s0"))).toBe(true);
   });
 
   it("keeps starred-only filtering after grouping", async () => {
