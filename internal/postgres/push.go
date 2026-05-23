@@ -1168,6 +1168,9 @@ func reconcilePinnedMessages(
 	// Move shifted source-backed pins out of the real ordinal range
 	// first. Pins already on their resolved target stay in place so
 	// duplicate repairs prefer the current target row's metadata.
+	// When multiple messages share a source_uuid (the schema allows
+	// it), prefer the message at the pin's current message_id so a
+	// correctly-placed pin is not relocated to a different duplicate.
 	if _, err := tx.ExecContext(ctx, `
 		WITH matched AS (
 			SELECT DISTINCT ON (p.id)
@@ -1179,7 +1182,9 @@ func reconcilePinnedMessages(
 				AND m.source_uuid = p.source_uuid
 			WHERE p.session_id = $1
 				AND p.source_uuid <> ''
-			ORDER BY p.id, m.ordinal
+			ORDER BY p.id,
+				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
+				m.ordinal
 		),
 		numbered AS (
 			SELECT id,
@@ -1211,7 +1216,9 @@ func reconcilePinnedMessages(
 				AND m.source_uuid = p.source_uuid
 			WHERE p.session_id = $1
 				AND p.source_uuid <> ''
-			ORDER BY p.id, m.ordinal
+			ORDER BY p.id,
+				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
+				m.ordinal
 		),
 		ranked AS (
 			SELECT id, target_ordinal,
@@ -1248,7 +1255,9 @@ func reconcilePinnedMessages(
 				AND m.source_uuid = p.source_uuid
 			WHERE p.session_id = $1
 				AND p.source_uuid <> ''
-			ORDER BY p.id, m.ordinal
+			ORDER BY p.id,
+				CASE WHEN m.ordinal = p.message_id THEN 0 ELSE 1 END,
+				m.ordinal
 		),
 		ranked AS (
 			SELECT id, target_ordinal,

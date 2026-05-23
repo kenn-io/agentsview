@@ -113,6 +113,9 @@ func (s *Store) BulkStarSessions(sessionIDs []string) error {
 
 // PinMessage creates or updates a shared PG pin for a message. PG
 // exposes message IDs as the message ordinal, matching scanPGMessages.
+// On conflict, ordinal and source_uuid are refreshed from the current
+// message so the pin tracks whatever is at message_id today;
+// created_at is preserved by being absent from the SET clause.
 func (s *Store) PinMessage(
 	sessionID string, messageID int64, note *string,
 ) (int64, error) {
@@ -127,7 +130,10 @@ func (s *Store) PinMessage(
 			FROM messages m
 			WHERE m.session_id = $1 AND m.ordinal = $2
 			ON CONFLICT (session_id, message_id)
-			DO UPDATE SET note = EXCLUDED.note
+			DO UPDATE SET
+				note = EXCLUDED.note,
+				ordinal = EXCLUDED.ordinal,
+				source_uuid = EXCLUDED.source_uuid
 			RETURNING id
 		)
 		SELECT id FROM upsert`,

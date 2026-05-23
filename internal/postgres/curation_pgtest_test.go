@@ -555,3 +555,239 @@ func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
 		)
 	}
 }
+
+// TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID
+// covers the case where multiple messages in the same session share
+// the same source_uuid (the schema permits it) and the pin sits on
+// the later duplicate. Reconciliation must keep the pin where it is
+// rather than relocating it to the lowest-ordinal duplicate.
+func TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_dup_uuid_test"
+	pg, err := Open(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	if _, err := pg.ExecContext(
+		ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+	); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+	if err := EnsureSchema(ctx, pg, schema); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-dup-uuid', 'machine-a', 'proj-curation',
+			 'claude', 'duplicate source uuid',
+			 '2026-05-01T00:00:00Z'::timestamptz, 3, 1)`,
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-dup-uuid', 0, 'user', 'question',
+			 '2026-05-01T00:00:00Z'::timestamptz, 8,
+			 'uuid-question'),
+			('pg-pin-dup-uuid', 1, 'assistant', 'first answer',
+			 '2026-05-01T00:00:01Z'::timestamptz, 12,
+			 'uuid-shared'),
+			('pg-pin-dup-uuid', 2, 'assistant', 'second answer',
+			 '2026-05-01T00:00:02Z'::timestamptz, 13,
+			 'uuid-shared')`,
+	); err != nil {
+		t.Fatalf("insert messages: %v", err)
+	}
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid,
+			 note, created_at)
+		VALUES
+			('pg-pin-dup-uuid', 2, 2, 'uuid-shared',
+			 'pin on later duplicate',
+			 '2026-05-01T00:01:00Z'::timestamptz)`,
+	); err != nil {
+		t.Fatalf("insert pin: %v", err)
+	}
+
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := reconcilePinnedMessages(
+		ctx, tx, "pg-pin-dup-uuid",
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("reconcilePinnedMessages: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	store, err := NewStore(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	pins, err := store.ListPinnedMessages(ctx, "pg-pin-dup-uuid", "")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages: %v", err)
+	}
+	if len(pins) != 1 {
+		t.Fatalf("pins = %d, want 1: %v", len(pins), pins)
+	}
+	if pins[0].MessageID != 2 || pins[0].Ordinal != 2 {
+		t.Fatalf(
+			"pin message/ordinal = %d/%d, want 2/2 (must not "+
+				"relocate to lower-ordinal duplicate)",
+			pins[0].MessageID, pins[0].Ordinal,
+		)
+	}
+}
+
+// TestPinMessageRepinRefreshesSourceUUID covers re-pinning the same
+// (session_id, message_id). The stored source_uuid must reflect the
+// message currently at message_id; otherwise the next reconciliation
+// would follow the stale uuid away from where the user just pinned.
+func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_repin_test"
+	pg, err := Open(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	if _, err := pg.ExecContext(
+		ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+	); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+	if err := EnsureSchema(ctx, pg, schema); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-repin', 'machine-a', 'proj-curation',
+			 'claude', 'repin refreshes uuid',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1)`,
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-repin', 0, 'user', 'question',
+			 '2026-05-01T00:00:00Z'::timestamptz, 8,
+			 'uuid-question'),
+			('pg-pin-repin', 1, 'assistant', 'original',
+			 '2026-05-01T00:00:01Z'::timestamptz, 8,
+			 'uuid-original')`,
+	); err != nil {
+		t.Fatalf("insert messages: %v", err)
+	}
+
+	store, err := NewStore(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	originalNote := "first"
+	if _, err := store.PinMessage("pg-pin-repin", 1, &originalNote); err != nil {
+		t.Fatalf("PinMessage initial: %v", err)
+	}
+	var initialSourceUUID, initialCreatedAt string
+	if err := pg.QueryRowContext(ctx, `
+		SELECT source_uuid, created_at::text
+		FROM pinned_messages
+		WHERE session_id = $1 AND message_id = $2`,
+		"pg-pin-repin", 1,
+	).Scan(&initialSourceUUID, &initialCreatedAt); err != nil {
+		t.Fatalf("query initial pin: %v", err)
+	}
+	if initialSourceUUID != "uuid-original" {
+		t.Fatalf(
+			"initial source_uuid = %q, want uuid-original",
+			initialSourceUUID,
+		)
+	}
+
+	// Simulate a session rewrite that replaces the message at
+	// ordinal 1 with a different message (different source_uuid)
+	// while reusing the ordinal.
+	if _, err := pg.ExecContext(ctx, `
+		UPDATE messages
+		SET source_uuid = 'uuid-replacement',
+			content = 'replaced'
+		WHERE session_id = $1 AND ordinal = $2`,
+		"pg-pin-repin", 1,
+	); err != nil {
+		t.Fatalf("update message source_uuid: %v", err)
+	}
+
+	updatedNote := "second"
+	if _, err := store.PinMessage("pg-pin-repin", 1, &updatedNote); err != nil {
+		t.Fatalf("PinMessage repin: %v", err)
+	}
+
+	var gotSourceUUID, gotCreatedAt string
+	var gotNote *string
+	if err := pg.QueryRowContext(ctx, `
+		SELECT source_uuid, note, created_at::text
+		FROM pinned_messages
+		WHERE session_id = $1 AND message_id = $2`,
+		"pg-pin-repin", 1,
+	).Scan(&gotSourceUUID, &gotNote, &gotCreatedAt); err != nil {
+		t.Fatalf("query repinned pin: %v", err)
+	}
+	if gotSourceUUID != "uuid-replacement" {
+		t.Fatalf(
+			"after repin source_uuid = %q, want uuid-replacement "+
+				"(stale source_uuid would steer the next reconciliation "+
+				"away from the current message)",
+			gotSourceUUID,
+		)
+	}
+	if gotNote == nil || *gotNote != updatedNote {
+		t.Fatalf("after repin note = %v, want %q", gotNote, updatedNote)
+	}
+	if gotCreatedAt != initialCreatedAt {
+		t.Fatalf(
+			"after repin created_at = %q, want %q (must be preserved)",
+			gotCreatedAt, initialCreatedAt,
+		)
+	}
+}
