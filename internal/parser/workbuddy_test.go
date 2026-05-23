@@ -303,3 +303,27 @@ func TestParseWorkBuddyProjectNamedSubagentsIsNotSubagent(t *testing.T) {
 		t.Fatalf("relationship = %q parent=%q", sess.RelationshipType, sess.ParentSessionID)
 	}
 }
+
+func TestParseWorkBuddySessionDecodesObjectToolResultText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proj", "11111111-1111-4111-8111-111111111111.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `{"id":"fr1","timestamp":1778749189168,"type":"function_call_result","name":"Bash","callId":"call_1","output":{"type":"text","text":"/tmp/proj"}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, msgs, err := ParseWorkBuddySession(path, "proj", "local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || len(msgs[0].ToolResults) != 1 {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	if got := DecodeContent(msgs[0].ToolResults[0].ContentRaw); got != "/tmp/proj" {
+		t.Fatalf("DecodeContent = %q, want %q; ContentRaw=%s",
+			got, "/tmp/proj", msgs[0].ToolResults[0].ContentRaw)
+	}
+}

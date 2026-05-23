@@ -331,6 +331,15 @@ func workBuddyInputJSON(arguments gjson.Result) string {
 }
 
 func workBuddyResultRaw(output gjson.Result) string {
+	// Object content items such as {"type":"text","text":"..."} are not
+	// recognized by DecodeContent's object branch (which handles only the
+	// iFlow shape), so extract their text and store it as a plain string.
+	if output.IsObject() {
+		if text := output.Get("text").Str; text != "" {
+			quoted, _ := json.Marshal(text)
+			return string(quoted)
+		}
+	}
 	if output.Exists() && output.Raw != "" && output.Type != gjson.String {
 		return output.Raw
 	}
