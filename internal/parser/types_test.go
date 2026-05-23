@@ -276,6 +276,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentVSCodeCopilot,
 		AgentPi,
 		AgentOpenClaw,
+		AgentQClaw,
 		AgentKimi,
 		AgentClaudeAI,
 		AgentChatGPT,

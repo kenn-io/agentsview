@@ -55,6 +55,7 @@ IFLOW_DIR="$EMPTY_DIR" \
 VSCODE_COPILOT_DIR="$EMPTY_DIR" \
 PI_DIR="$EMPTY_DIR" \
 OPENCLAW_DIR="$EMPTY_DIR" \
+QCLAW_DIR="$EMPTY_DIR" \
 exec "$SERVER" serve \
   --port 8090 \
   --no-browser

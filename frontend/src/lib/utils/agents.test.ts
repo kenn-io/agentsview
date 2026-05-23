@@ -22,6 +22,7 @@ describe("KNOWN_AGENTS", () => {
       "pi",
       "qwen",
       "openclaw",
+      "qclaw",
       "iflow",
       "kimi",
       "claude-ai",
@@ -80,6 +81,9 @@ describe("agentColor", () => {
     expect(agentColor("vscode-copilot")).toBe(
       "var(--accent-teal)",
     );
+    expect(agentColor("qclaw")).toBe(
+      "var(--accent-orange)",
+    );
     expect(agentColor("piebald")).toBe(
       "var(--accent-orange)",
     );
@@ -100,6 +104,7 @@ describe("agentLabel", () => {
     );
     expect(agentLabel("openhands")).toBe("OpenHands");
     expect(agentLabel("openclaw")).toBe("OpenClaw");
+    expect(agentLabel("qclaw")).toBe("QClaw");
     expect(agentLabel("iflow")).toBe("iFlow");
     expect(agentLabel("piebald")).toBe("Piebald");
     expect(agentLabel("qwen")).toBe("Qwen Code");

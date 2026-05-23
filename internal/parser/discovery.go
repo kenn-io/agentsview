@@ -1797,6 +1797,210 @@ func FindOpenClawSourceFile(agentsDir, rawID string) string {
 	return ""
 }
 
+// DiscoverQClawSessions finds all JSONL session files under the
+// QClaw agents directory. The directory structure is:
+// <agentsDir>/<agentId>/sessions/<sessionId>.jsonl
+//
+// When both active (.jsonl) and archived (.jsonl.deleted.*,
+// .jsonl.full.bak, .jsonl.reset.*) files exist for the same
+// logical session ID, only one file is returned per session:
+// the active .jsonl file is preferred; if absent, the newest
+// archived file (by filename, which embeds a timestamp, or by
+// file mtime as a fallback) is chosen.
+func DiscoverQClawSessions(agentsDir string) []DiscoveredFile {
+	if agentsDir == "" {
+		return nil
+	}
+
+	// Each agent has its own subdirectory.
+	agentEntries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return nil
+	}
+
+	var files []DiscoveredFile
+	for _, agentEntry := range agentEntries {
+		if !isDirOrSymlink(agentEntry, agentsDir) {
+			continue
+		}
+		if !IsValidSessionID(agentEntry.Name()) {
+			continue
+		}
+
+		sessionsDir := filepath.Join(
+			agentsDir, agentEntry.Name(), "sessions",
+		)
+		entries, err := os.ReadDir(sessionsDir)
+		if err != nil {
+			continue
+		}
+
+		// Deduplicate by logical session ID within each
+		// agent's sessions directory.
+		best := make(map[string]os.DirEntry) // sessionID -> best entry
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !IsQClawSessionFile(name) {
+				continue
+			}
+			sid := QClawSessionID(name)
+			prev, exists := best[sid]
+			if !exists {
+				best[sid] = entry
+				continue
+			}
+			best[sid] = bestQClawEntry(prev, entry)
+		}
+
+		for _, entry := range best {
+			files = append(files, DiscoveredFile{
+				Path: filepath.Join(
+					sessionsDir, entry.Name(),
+				),
+				Agent: AgentQClaw,
+			})
+		}
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
+	return files
+}
+
+// bestQClawEntry returns the preferred entry when two files
+// share the same logical session ID. Active .jsonl files always
+// win. Among archived files, the one with the newest embedded
+// timestamp wins; when no timestamp is parseable, mtime is used.
+func bestQClawEntry(a, b os.DirEntry) os.DirEntry {
+	aActive := strings.HasSuffix(a.Name(), ".jsonl")
+	bActive := strings.HasSuffix(b.Name(), ".jsonl")
+	if aActive && !bActive {
+		return a
+	}
+	if bActive && !aActive {
+		return b
+	}
+	aTime := qClawArchiveTime(a)
+	bTime := qClawArchiveTime(b)
+	if !aTime.IsZero() && !bTime.IsZero() {
+		if bTime.After(aTime) {
+			return b
+		}
+		return a
+	}
+	if !aTime.IsZero() {
+		return a
+	}
+	if !bTime.IsZero() {
+		return b
+	}
+	ai, errA := a.Info()
+	bi, errB := b.Info()
+	if errA == nil && errB == nil &&
+		bi.ModTime().After(ai.ModTime()) {
+		return b
+	}
+	return a
+}
+
+// qClawArchiveTime extracts the timestamp embedded in an
+// QClaw archive filename suffix (e.g. ".deleted.2026-02-19T08-59-24.951Z").
+func qClawArchiveTime(e os.DirEntry) time.Time {
+	name := e.Name()
+	idx := strings.Index(name, ".jsonl.")
+	if idx <= 0 {
+		return time.Time{}
+	}
+	suffix := name[idx+len(".jsonl."):]
+	// suffix is e.g. "deleted.2026-02-19T08-59-24.951Z" or "full.bak"
+	_, tsStr, ok := strings.Cut(suffix, ".")
+	if !ok {
+		return time.Time{}
+	}
+	// Convert dash-separated time back to colons: 08-59-24 → 08:59:24
+	if tIdx := strings.IndexByte(tsStr, 'T'); tIdx >= 0 {
+		datePart := tsStr[:tIdx+1]
+		timePart := tsStr[tIdx+1:]
+		// Only replace first two dashes in time portion (hh-mm-ss)
+		timePart = strings.Replace(timePart, "-", ":", 1)
+		timePart = strings.Replace(timePart, "-", ":", 1)
+		tsStr = datePart + timePart
+	}
+	t, err := time.Parse("2006-01-02T15:04:05.000Z", tsStr)
+	if err != nil {
+		t, err = time.Parse("2006-01-02T15:04:05Z", tsStr)
+	}
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// FindQClawSourceFile locates a QClaw session file by its
+// raw ID (without the "qclaw:" prefix). The raw ID has the
+// format "<agentId>:<sessionId>", which directly maps to the
+// file at <agentsDir>/<agentId>/sessions/<sessionId>.jsonl.
+//
+// If the active .jsonl file does not exist (archive-only session),
+// the sessions directory is scanned for any archived file whose
+// logical session ID matches. When multiple archived files match,
+// the best candidate (newest by filename timestamp) is returned.
+func FindQClawSourceFile(agentsDir, rawID string) string {
+	if agentsDir == "" {
+		return ""
+	}
+
+	// Split "agentId:sessionId" into its two parts.
+	agentID, sessionID, ok := strings.Cut(rawID, ":")
+	if !ok || !IsValidSessionID(agentID) ||
+		!IsValidSessionID(sessionID) {
+		return ""
+	}
+
+	sessionsDir := filepath.Join(
+		agentsDir, agentID, "sessions",
+	)
+
+	// Fast path: the active .jsonl file exists.
+	active := filepath.Join(sessionsDir, sessionID+".jsonl")
+	if _, err := os.Stat(active); err == nil {
+		return active
+	}
+
+	// Slow path: scan for archived files matching this session.
+	entries, err := os.ReadDir(sessionsDir)
+	if err != nil {
+		return ""
+	}
+
+	var best os.DirEntry
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !IsQClawSessionFile(name) {
+			continue
+		}
+		if QClawSessionID(name) != sessionID {
+			continue
+		}
+		if best == nil {
+			best = entry
+			continue
+		}
+		best = bestQClawEntry(best, entry)
+	}
+	if best != nil {
+		return filepath.Join(sessionsDir, best.Name())
+	}
+	return ""
+}
+
 // DiscoverIflowProjects finds all project directories under the
 // iFlow projects dir and returns their JSONL session files.
 // iFlow stores sessions in .iflow/projects/<project>/session-<uuid>.jsonl

@@ -24,6 +24,7 @@ const (
 	AgentPi             AgentType = "pi"
 	AgentQwen           AgentType = "qwen"
 	AgentOpenClaw       AgentType = "openclaw"
+	AgentQClaw          AgentType = "qclaw"
 	AgentKimi           AgentType = "kimi"
 	AgentClaudeAI       AgentType = "claude-ai"
 	AgentChatGPT        AgentType = "chatgpt"
@@ -249,6 +250,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverOpenClawSessions,
 		FindSourceFunc: FindOpenClawSourceFile,
+	},
+	{
+		Type:           AgentQClaw,
+		DisplayName:    "QClaw",
+		EnvVar:         "QCLAW_DIR",
+		ConfigKey:      "qclaw_dirs",
+		DefaultDirs:    []string{".qclaw/agents"},
+		IDPrefix:       "qclaw:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverQClawSessions,
+		FindSourceFunc: FindQClawSourceFile,
 	},
 	{
 		Type:           AgentKimi,

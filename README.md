@@ -181,6 +181,7 @@ agentsview auto-discovers sessions from all of these:
 | Pi                 | `~/.pi/agent/sessions/`                                |
 | Qwen Code          | `~/.qwen/projects/`                                    |
 | OpenClaw           | `~/.openclaw/agents/`                                  |
+| QClaw              | `~/.qclaw/agents/`                                     |
 | Kimi               | `~/.kimi/sessions/`                                    |
 | Kiro CLI           | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`    |
 | Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |

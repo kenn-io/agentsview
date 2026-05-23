@@ -874,6 +874,47 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// QClaw: <qclawDir>/<agentId>/sessions/<sessionId>.jsonl
+	//     or: <qclawDir>/<agentId>/sessions/<sessionId>.jsonl.<archiveSuffix>
+	for _, qcDir := range e.agentDirs[parser.AgentQClaw] {
+		if qcDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(qcDir, path); ok {
+			parts := strings.Split(rel, sep)
+			// Expect: <agentId>/sessions/<file>
+			if len(parts) != 3 || parts[1] != "sessions" {
+				continue
+			}
+			if !parser.IsValidSessionID(parts[0]) {
+				continue
+			}
+			if !parser.IsQClawSessionFile(parts[2]) {
+				continue
+			}
+			if !strings.HasSuffix(parts[2], ".jsonl") {
+				sid := parser.QClawSessionID(parts[2])
+				active := filepath.Join(
+					qcDir, parts[0], "sessions",
+					sid+".jsonl",
+				)
+				if _, err := os.Stat(active); err == nil {
+					continue
+				}
+				best := parser.FindQClawSourceFile(
+					qcDir, parts[0]+":"+sid,
+				)
+				if best != path {
+					continue
+				}
+			}
+			return parser.DiscoveredFile{
+				Path:  path,
+				Agent: parser.AgentQClaw,
+			}, true
+		}
+	}
+
 	// Cortex: <cortexDir>/<uuid>.json
 	//     or: <cortexDir>/<uuid>.history.jsonl → remap to .json
 	for _, cortexDir := range e.agentDirs[parser.AgentCortex] {
@@ -2732,6 +2773,8 @@ func (e *Engine) processFile(
 		res = e.processQwen(file, info)
 	case parser.AgentOpenClaw:
 		res = e.processOpenClaw(file, info)
+	case parser.AgentQClaw:
+		res = e.processQClaw(file, info)
 	case parser.AgentKimi:
 		res = e.processKimi(file, info)
 	case parser.AgentKiro:
@@ -3564,6 +3607,35 @@ func (e *Engine) processOpenClaw(
 	}
 
 	sess, msgs, err := parser.ParseOpenClawSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processQClaw(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseQClawSession(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {

@@ -16,6 +16,7 @@
     pi: "Pi",
     qwen: "Qwen Code",
     openclaw: "OpenClaw",
+    qclaw: "QClaw",
     kimi: "Kimi",
     piebald: "Piebald",
     antigravity: "Antigravity",

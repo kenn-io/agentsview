@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -1616,6 +1617,89 @@ func TestEngine_ClassifyPathsQwenSession(t *testing.T) {
 	if got := engine.classifyPaths(bogus); len(got) != 0 {
 		t.Fatalf("expected no Qwen classifications for %v, got %v",
 			bogus, got)
+	}
+}
+
+func TestEngine_ClassifyPathsQClawSession(t *testing.T) {
+	db := openTestDB(t)
+	qclawDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQClaw: {qclawDir},
+		},
+		Machine: "local",
+	})
+
+	agentID := "main"
+	sessionID := "adc026b4-c620-43e4-8cc4-295593889d18"
+	sessionsDir := filepath.Join(qclawDir, agentID, "sessions")
+	sessionPath := filepath.Join(sessionsDir, sessionID+".jsonl")
+	dbtest.WriteTestFile(t, sessionPath, []byte("{}\n"))
+
+	files := engine.classifyPaths([]string{sessionPath})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1 (%v)", len(files), files)
+	}
+	if files[0].Path != sessionPath {
+		t.Errorf("Path = %q, want %q", files[0].Path, sessionPath)
+	}
+	if files[0].Agent != parser.AgentQClaw {
+		t.Errorf("Agent = %q, want %q", files[0].Agent, parser.AgentQClaw)
+	}
+
+	bogus := []string{
+		filepath.Join(qclawDir, "stray.jsonl"),
+		filepath.Join(qclawDir, agentID, "notes", sessionID+".jsonl"),
+		filepath.Join(sessionsDir, "notes.txt"),
+		filepath.Join(qclawDir, "not a session id", "sessions", sessionID+".jsonl"),
+	}
+	for _, p := range bogus {
+		dbtest.WriteTestFile(t, p, []byte("{}"))
+	}
+	if got := engine.classifyPaths(bogus); len(got) != 0 {
+		t.Fatalf("expected no QClaw classifications for %v, got %v",
+			bogus, got)
+	}
+}
+
+func TestEngine_ClassifyPathsQClawArchivedSession(t *testing.T) {
+	db := openTestDB(t)
+	qclawDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQClaw: {qclawDir},
+		},
+		Machine: "local",
+	})
+
+	agentID := "main"
+	sessionID := "adc026b4-c620-43e4-8cc4-295593889d18"
+	sessionsDir := filepath.Join(qclawDir, agentID, "sessions")
+
+	active := filepath.Join(sessionsDir, sessionID+".jsonl")
+	archived := filepath.Join(
+		sessionsDir,
+		sessionID+".jsonl.deleted.2026-02-19T08-59-24.951Z",
+	)
+	dbtest.WriteTestFile(t, active, []byte("{}\n"))
+	dbtest.WriteTestFile(t, archived, []byte("{}\n"))
+
+	if got := engine.classifyPaths([]string{archived}); len(got) != 0 {
+		t.Fatalf("expected archived file shadowed by active to be ignored, got %v", got)
+	}
+
+	if err := os.Remove(active); err != nil {
+		t.Fatalf("Remove(%q): %v", active, err)
+	}
+	files := engine.classifyPaths([]string{archived})
+	if len(files) != 1 {
+		t.Fatalf("len(files) = %d, want 1 (%v)", len(files), files)
+	}
+	if files[0].Path != archived {
+		t.Errorf("Path = %q, want %q", files[0].Path, archived)
+	}
+	if files[0].Agent != parser.AgentQClaw {
+		t.Errorf("Agent = %q, want %q", files[0].Agent, parser.AgentQClaw)
 	}
 }
 
