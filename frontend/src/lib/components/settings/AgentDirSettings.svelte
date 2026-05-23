@@ -18,6 +18,7 @@
     openclaw: "OpenClaw",
     qclaw: "QClaw",
     kimi: "Kimi",
+    workbuddy: "WorkBuddy",
     piebald: "Piebald",
     antigravity: "Antigravity",
     "antigravity-cli": "Antigravity CLI",

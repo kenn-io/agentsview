@@ -38,6 +38,7 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "kiro", color: "var(--accent-lime)", label: "Kiro" },
   { name: "kiro-ide", color: "var(--accent-lime)", label: "Kiro IDE" },
   { name: "cortex", color: "var(--accent-cyan)", label: "Cortex Code" },
+  { name: "workbuddy", color: "var(--accent-violet)", label: "WorkBuddy" },
   { name: "piebald", color: "var(--accent-orange)", label: "Piebald" },
   {
     name: "antigravity",

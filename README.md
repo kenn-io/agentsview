@@ -187,6 +187,7 @@ agentsview auto-discovers sessions from all of these:
 | Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |
 | Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
 | Hermes Agent       | `~/.hermes/sessions/`                                  |
+| WorkBuddy          | `~/.workbuddy/projects/`                               |
 | Forge              | `~/.forge/`                                            |
 | Piebald            | `~/.local/share/piebald/`                              |
 | Warp               | `~/.warp/` (platform-dependent)                        |

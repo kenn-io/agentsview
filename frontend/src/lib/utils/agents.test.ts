@@ -30,6 +30,7 @@ describe("KNOWN_AGENTS", () => {
       "kiro",
       "kiro-ide",
       "cortex",
+      "workbuddy",
       "piebald",
       "antigravity",
       "antigravity-cli",
@@ -84,6 +85,9 @@ describe("agentColor", () => {
     expect(agentColor("qclaw")).toBe(
       "var(--accent-orange)",
     );
+    expect(agentColor("workbuddy")).toBe(
+      "var(--accent-violet)",
+    );
     expect(agentColor("piebald")).toBe(
       "var(--accent-orange)",
     );
@@ -106,6 +110,7 @@ describe("agentLabel", () => {
     expect(agentLabel("openclaw")).toBe("OpenClaw");
     expect(agentLabel("qclaw")).toBe("QClaw");
     expect(agentLabel("iflow")).toBe("iFlow");
+    expect(agentLabel("workbuddy")).toBe("WorkBuddy");
     expect(agentLabel("piebald")).toBe("Piebald");
     expect(agentLabel("qwen")).toBe("Qwen Code");
   });

@@ -32,6 +32,7 @@ const (
 	AgentKiroIDE        AgentType = "kiro-ide"
 	AgentCortex         AgentType = "cortex"
 	AgentHermes         AgentType = "hermes"
+	AgentWorkBuddy      AgentType = "workbuddy"
 	AgentForge          AgentType = "forge"
 	AgentPiebald        AgentType = "piebald"
 	AgentWarp           AgentType = "warp"
@@ -333,6 +334,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverHermesSessions,
 		FindSourceFunc: FindHermesSourceFile,
+	},
+	{
+		Type:           AgentWorkBuddy,
+		DisplayName:    "WorkBuddy",
+		EnvVar:         "WORKBUDDY_PROJECTS_DIR",
+		ConfigKey:      "workbuddy_project_dirs",
+		DefaultDirs:    []string{".workbuddy/projects"},
+		IDPrefix:       "workbuddy:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverWorkBuddySessions,
+		FindSourceFunc: FindWorkBuddySourceFile,
 	},
 	{
 		Type:        AgentForge,
