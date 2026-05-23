@@ -31,6 +31,7 @@
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let scrollRaf: number | null = null;
   let lastScrollRequest = 0;
+  let activeFollowScrollRequest: number | null = null;
   let followingScrollRaf: number | null = null;
   let followSettleTimer:
     | ReturnType<typeof setTimeout>
@@ -278,7 +279,13 @@
   });
 
   function cancelFollowLatestWork() {
-    lastScrollRequest += 1;
+    if (
+      activeFollowScrollRequest !== null &&
+      activeFollowScrollRequest === lastScrollRequest
+    ) {
+      lastScrollRequest += 1;
+    }
+    activeFollowScrollRequest = null;
     if (followingScrollRaf !== null) {
       cancelAnimationFrame(followingScrollRaf);
       followingScrollRaf = null;
@@ -368,6 +375,7 @@
 
   async function scrollToOrdinalInternal(ordinal: number) {
     const reqId = ++lastScrollRequest;
+    activeFollowScrollRequest = null;
 
     const idxAsc = displayItemsAsc.findIndex((item) =>
       item.ordinals.includes(ordinal),
@@ -407,6 +415,7 @@
 
   function scrollToLatestInternal() {
     const reqId = ++lastScrollRequest;
+    activeFollowScrollRequest = reqId;
     const idx = getLatestDisplayIndex(
       displayItemsAsc.length,
       ui.sortNewestFirst,
