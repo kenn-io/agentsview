@@ -846,23 +846,6 @@ func TestStoreWriteMethodsReturnReadOnly(t *testing.T) {
 		name string
 		fn   func() error
 	}{
-		{"StarSession", func() error {
-			_, err := store.StarSession("x")
-			return err
-		}},
-		{"UnstarSession", func() error {
-			return store.UnstarSession("x")
-		}},
-		{"BulkStarSessions", func() error {
-			return store.BulkStarSessions([]string{"x"})
-		}},
-		{"PinMessage", func() error {
-			_, err := store.PinMessage("x", 1, nil)
-			return err
-		}},
-		{"UnpinMessage", func() error {
-			return store.UnpinMessage("x", 1)
-		}},
 		{"InsertInsight", func() error {
 			_, err := store.InsertInsight(db.Insight{})
 			return err

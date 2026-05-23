@@ -130,6 +130,36 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events (occurred_at);
 
+CREATE TABLE IF NOT EXISTS starred_sessions (
+    session_id TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS pinned_messages (
+    id          BIGSERIAL PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    message_id  INT NOT NULL,
+    ordinal     INT NOT NULL,
+    source_uuid TEXT NOT NULL DEFAULT '',
+    note        TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    UNIQUE (session_id, message_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_pinned_session
+    ON pinned_messages (session_id);
+
+CREATE INDEX IF NOT EXISTS idx_pinned_created
+    ON pinned_messages (created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_pinned_source_uuid
+    ON pinned_messages (session_id, source_uuid)
+    WHERE source_uuid <> '';
+
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_pattern TEXT PRIMARY KEY,
     input_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -1190,6 +1220,27 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf(
 			"messages table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT session_id, created_at
+		 FROM starred_sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"starred_sessions table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT id, session_id, message_id, ordinal,
+			source_uuid, note, created_at
+		 FROM pinned_messages LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"pinned_messages table missing required columns: %w",
 			err,
 		)
 	}

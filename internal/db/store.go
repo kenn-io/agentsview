@@ -65,13 +65,13 @@ type Store interface {
 	GetTopSessionsByCost(ctx context.Context, f UsageFilter, limit int) ([]TopSessionEntry, error)
 	GetUsageSessionCounts(ctx context.Context, f UsageFilter) (UsageSessionCounts, error)
 
-	// Stars (local-only; PG returns ErrReadOnly).
+	// Stars.
 	StarSession(sessionID string) (bool, error)
 	UnstarSession(sessionID string) error
 	ListStarredSessionIDs(ctx context.Context) ([]string, error)
 	BulkStarSessions(sessionIDs []string) error
 
-	// Pins (local-only; PG returns ErrReadOnly).
+	// Pins.
 	PinMessage(sessionID string, messageID int64, note *string) (int64, error)
 	UnpinMessage(sessionID string, messageID int64) error
 	ListPinnedMessages(ctx context.Context, sessionID string, project string) ([]PinnedMessage, error)

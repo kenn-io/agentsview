@@ -46,7 +46,9 @@ func (s *Store) SetCursorSecret(secret []byte) {
 	s.cursorSecret = append([]byte(nil), secret...)
 }
 
-// ReadOnly returns true; this is a read-only data source.
+// ReadOnly returns true because PG serve does not mutate synced
+// session content. Small dashboard-owned curation metadata (stars
+// and pins) is writable through dedicated methods.
 func (s *Store) ReadOnly() bool { return true }
 
 // GetSessionVersion returns the message count and a hash of
@@ -73,49 +75,8 @@ func (s *Store) GetSessionVersion(
 }
 
 // ------------------------------------------------------------
-// Write stubs (all return db.ErrReadOnly)
+// Unsupported write stubs (return db.ErrReadOnly)
 // ------------------------------------------------------------
-
-// StarSession is not supported in read-only mode.
-func (s *Store) StarSession(_ string) (bool, error) {
-	return false, db.ErrReadOnly
-}
-
-// UnstarSession is not supported in read-only mode.
-func (s *Store) UnstarSession(_ string) error {
-	return db.ErrReadOnly
-}
-
-// ListStarredSessionIDs returns an empty slice.
-func (s *Store) ListStarredSessionIDs(
-	_ context.Context,
-) ([]string, error) {
-	return []string{}, nil
-}
-
-// BulkStarSessions is not supported in read-only mode.
-func (s *Store) BulkStarSessions(_ []string) error {
-	return db.ErrReadOnly
-}
-
-// PinMessage is not supported in read-only mode.
-func (s *Store) PinMessage(
-	_ string, _ int64, _ *string,
-) (int64, error) {
-	return 0, db.ErrReadOnly
-}
-
-// UnpinMessage is not supported in read-only mode.
-func (s *Store) UnpinMessage(_ string, _ int64) error {
-	return db.ErrReadOnly
-}
-
-// ListPinnedMessages returns an empty slice.
-func (s *Store) ListPinnedMessages(
-	_ context.Context, _ string, _ string,
-) ([]db.PinnedMessage, error) {
-	return []db.PinnedMessage{}, nil
-}
 
 // InsertInsight is not supported in read-only mode.
 func (s *Store) InsertInsight(

@@ -943,6 +943,11 @@ func (s *Sync) pushMessages(
 				"deleting stale pg messages: %w", err,
 			)
 		}
+		if err := reconcilePinnedMessages(
+			ctx, tx, sessionID,
+		); err != nil {
+			return 0, err
+		}
 		return 0, nil
 	}
 
@@ -1134,7 +1139,157 @@ func (s *Sync) pushMessages(
 		startOrdinal = nextOrdinal
 	}
 
+	if err := reconcilePinnedMessages(ctx, tx, sessionID); err != nil {
+		return count, err
+	}
+
 	return count, nil
+}
+
+func reconcilePinnedMessages(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE pinned_messages p
+		SET source_uuid = m.source_uuid
+		FROM messages m
+		WHERE p.session_id = $1
+			AND m.session_id = p.session_id
+			AND m.ordinal = p.message_id
+			AND p.source_uuid = ''
+			AND m.source_uuid <> ''`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"backfilling pg pin source_uuid: %w", err,
+		)
+	}
+
+	// Move shifted source-backed pins out of the real ordinal range
+	// first. Pins already on their resolved target stay in place so
+	// duplicate repairs prefer the current target row's metadata.
+	if _, err := tx.ExecContext(ctx, `
+		WITH matched AS (
+			SELECT DISTINCT ON (p.id)
+				p.id, p.message_id, p.ordinal,
+				m.ordinal AS target_ordinal
+			FROM pinned_messages p
+			JOIN messages m
+				ON m.session_id = p.session_id
+				AND m.source_uuid = p.source_uuid
+			WHERE p.session_id = $1
+				AND p.source_uuid <> ''
+			ORDER BY p.id, m.ordinal
+		),
+		numbered AS (
+			SELECT id,
+				ROW_NUMBER() OVER (ORDER BY id) AS temp_ordinal
+			FROM matched
+			WHERE target_ordinal <> message_id
+				OR target_ordinal <> ordinal
+		)
+		UPDATE pinned_messages p
+		SET message_id = (-2000000000 + numbered.temp_ordinal::INT),
+			ordinal = (-2000000000 + numbered.temp_ordinal::INT)
+		FROM numbered
+		WHERE p.id = numbered.id`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"staging pg pins for source_uuid realignment: %w", err,
+		)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		WITH matched AS (
+			SELECT DISTINCT ON (p.id)
+				p.id, p.message_id, p.created_at,
+				m.ordinal AS target_ordinal
+			FROM pinned_messages p
+			JOIN messages m
+				ON m.session_id = p.session_id
+				AND m.source_uuid = p.source_uuid
+			WHERE p.session_id = $1
+				AND p.source_uuid <> ''
+			ORDER BY p.id, m.ordinal
+		),
+		ranked AS (
+			SELECT id, target_ordinal,
+				ROW_NUMBER() OVER (
+					PARTITION BY target_ordinal
+					ORDER BY
+						(message_id = target_ordinal) DESC,
+						created_at DESC,
+						id DESC
+				) AS target_rank
+			FROM matched
+		)
+		DELETE FROM pinned_messages p
+		USING ranked r
+		WHERE p.session_id = $1
+			AND r.target_rank = 1
+			AND p.message_id = r.target_ordinal
+			AND p.id <> r.id`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing pg pin target conflicts: %w", err,
+		)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		WITH matched AS (
+			SELECT DISTINCT ON (p.id)
+				p.id, p.message_id, p.created_at,
+				m.ordinal AS target_ordinal
+			FROM pinned_messages p
+			JOIN messages m
+				ON m.session_id = p.session_id
+				AND m.source_uuid = p.source_uuid
+			WHERE p.session_id = $1
+				AND p.source_uuid <> ''
+			ORDER BY p.id, m.ordinal
+		),
+		ranked AS (
+			SELECT id, target_ordinal,
+				ROW_NUMBER() OVER (
+					PARTITION BY target_ordinal
+					ORDER BY
+						(message_id = target_ordinal) DESC,
+						created_at DESC,
+						id DESC
+				) AS target_rank
+			FROM matched
+		)
+		UPDATE pinned_messages p
+		SET message_id = r.target_ordinal,
+			ordinal = r.target_ordinal
+		FROM ranked r
+		WHERE p.id = r.id
+			AND r.target_rank = 1`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"realigning pg pins by source_uuid: %w", err,
+		)
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM pinned_messages p
+		WHERE p.session_id = $1
+			AND NOT EXISTS (
+				SELECT 1 FROM messages m
+				WHERE m.session_id = p.session_id
+					AND m.ordinal = p.message_id
+			)`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"pruning stale pg pins: %w", err,
+		)
+	}
+
+	return nil
 }
 
 func pgMessageTokenFingerprint(
