@@ -372,6 +372,29 @@ type SessionPage struct {
 	Total      int       `json:"total"`
 }
 
+type SidebarSessionIndexRow struct {
+	ID                string  `json:"id"`
+	ParentSessionID   *string `json:"parent_session_id,omitempty"`
+	RelationshipType  string  `json:"relationship_type,omitempty"`
+	Project           string  `json:"project"`
+	Machine           string  `json:"machine"`
+	Agent             string  `json:"agent"`
+	DisplayName       *string `json:"display_name,omitempty"`
+	StartedAt         *string `json:"started_at"`
+	EndedAt           *string `json:"ended_at"`
+	CreatedAt         string  `json:"created_at"`
+	TerminationStatus *string `json:"termination_status,omitempty"`
+	MessageCount      int     `json:"message_count"`
+	UserMessageCount  int     `json:"user_message_count"`
+	IsAutomated       bool    `json:"is_automated"`
+	IsTeammate        bool    `json:"is_teammate"`
+}
+
+type SidebarSessionIndex struct {
+	Sessions []SidebarSessionIndexRow `json:"sessions"`
+	Total    int                      `json:"total"`
+}
+
 // buildSessionFilter returns a WHERE clause and args for the
 // non-cursor predicates in SessionFilter.
 func buildSessionFilter(f SessionFilter) (string, []any) {
@@ -656,6 +679,84 @@ func (db *DB) ListSessions(
 	}
 
 	return page, nil
+}
+
+// GetSidebarSessionIndex returns the skinny session rows needed by
+// the sidebar grouper. It intentionally has no cursor or limit.
+func (db *DB) GetSidebarSessionIndex(
+	ctx context.Context, f SessionFilter,
+) (SidebarSessionIndex, error) {
+	f.IncludeChildren = true
+	f.Cursor = ""
+	f.Limit = 0
+
+	where, args := buildSessionFilter(f)
+	query := `
+		SELECT
+			id,
+			parent_session_id,
+			relationship_type,
+			project,
+			machine,
+			agent,
+			display_name,
+			started_at,
+			ended_at,
+			created_at,
+			termination_status,
+			message_count,
+			user_message_count,
+			is_automated,
+			INSTR(COALESCE(first_message, ''), '<teammate-message') > 0
+		FROM sessions
+		WHERE ` + where + `
+		ORDER BY COALESCE(
+			NULLIF(ended_at, ''),
+			NULLIF(started_at, ''),
+			created_at
+		) DESC, id DESC`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return SidebarSessionIndex{},
+			fmt.Errorf("querying sidebar session index: %w", err)
+	}
+	defer rows.Close()
+
+	index := SidebarSessionIndex{
+		Sessions: []SidebarSessionIndexRow{},
+	}
+	for rows.Next() {
+		var row SidebarSessionIndexRow
+		if err := rows.Scan(
+			&row.ID,
+			&row.ParentSessionID,
+			&row.RelationshipType,
+			&row.Project,
+			&row.Machine,
+			&row.Agent,
+			&row.DisplayName,
+			&row.StartedAt,
+			&row.EndedAt,
+			&row.CreatedAt,
+			&row.TerminationStatus,
+			&row.MessageCount,
+			&row.UserMessageCount,
+			&row.IsAutomated,
+			&row.IsTeammate,
+		); err != nil {
+			return SidebarSessionIndex{},
+				fmt.Errorf("scanning sidebar session index: %w", err)
+		}
+		index.Sessions = append(index.Sessions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return SidebarSessionIndex{},
+			fmt.Errorf("iterating sidebar session index: %w", err)
+	}
+	index.Total = len(index.Sessions)
+
+	return index, nil
 }
 
 // GetSession returns a single session by ID, excluding

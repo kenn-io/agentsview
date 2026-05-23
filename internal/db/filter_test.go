@@ -2,7 +2,10 @@ package db
 
 import (
 	"context"
+	"slices"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 func TestPruneFilterZeroValue(t *testing.T) {
@@ -1012,6 +1015,194 @@ func TestExcludeOneShotWithIncludeAutomated(t *testing.T) {
 			requireSessions(t, d, f, tt.want)
 		})
 	}
+}
+
+func TestSidebarSessionIndexExcludeAutomated(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "normal", "proj", func(s *Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "review", "proj", func(s *Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		ExcludeAutomated: true,
+	})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"normal"})
+	if index.Total != 1 {
+		t.Fatalf("total = %d, want 1", index.Total)
+	}
+}
+
+func TestSidebarSessionIndexIncludeAutomated(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "normal", "proj", func(s *Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "review", "proj", func(s *Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		ExcludeAutomated: false,
+	})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"normal", "review"})
+	if index.Total != 2 {
+		t.Fatalf("total = %d, want 2", index.Total)
+	}
+}
+
+func TestSidebarSessionIndexExcludeOneShotWithAutomatedIncluded(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "multi", "proj", func(s *Session) {
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "oneshot", "proj", func(s *Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "review", "proj", func(s *Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		ExcludeOneShot:   true,
+		ExcludeAutomated: false,
+	})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"multi", "review"})
+}
+
+func TestSidebarSessionIndexIncludesChildrenForMatchingRoot(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "sub", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("root")
+		s.RelationshipType = "subagent"
+	})
+	insertSession(t, d, "fork", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("sub")
+		s.RelationshipType = "fork"
+	})
+	insertSession(t, d, "other", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		Agent: "claude",
+	})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "sub", "fork"})
+}
+
+func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
+	d := testDB(t)
+
+	displayName := "Named session"
+	insertSession(t, d, "named", "proj", func(s *Session) {
+		s.DisplayName = &displayName
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	if len(index.Sessions) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(index.Sessions))
+	}
+	if index.Sessions[0].DisplayName == nil ||
+		*index.Sessions[0].DisplayName != displayName {
+		t.Fatalf("display_name = %v, want %q",
+			index.Sessions[0].DisplayName, displayName)
+	}
+}
+
+func TestSidebarSessionIndexComputesIsTeammate(t *testing.T) {
+	d := testDB(t)
+
+	teammateFirstMessage := "<teammate-message from=\"reviewer\">hi"
+	insertSession(t, d, "teammate", "proj", func(s *Session) {
+		s.FirstMessage = &teammateFirstMessage
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "normal", "proj", func(s *Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+
+	rows := sidebarIndexByID(index.Sessions)
+	if !rows["teammate"].IsTeammate {
+		t.Fatal("teammate IsTeammate = false, want true")
+	}
+	if rows["normal"].IsTeammate {
+		t.Fatal("normal IsTeammate = true, want false")
+	}
+}
+
+func requireSidebarIndexIDs(
+	t *testing.T, sessions []SidebarSessionIndexRow, wantIDs []string,
+) {
+	t.Helper()
+	gotIDs := make([]string, len(sessions))
+	for i, s := range sessions {
+		gotIDs[i] = s.ID
+	}
+	wantSorted := make([]string, len(wantIDs))
+	copy(wantSorted, wantIDs)
+	slices.Sort(wantSorted)
+
+	gotSorted := make([]string, len(gotIDs))
+	copy(gotSorted, gotIDs)
+	slices.Sort(gotSorted)
+
+	if diff := cmp.Diff(wantSorted, gotSorted); diff != "" {
+		t.Errorf("sidebar index sessions mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func sidebarIndexByID(
+	sessions []SidebarSessionIndexRow,
+) map[string]SidebarSessionIndexRow {
+	rows := make(map[string]SidebarSessionIndexRow, len(sessions))
+	for _, s := range sessions {
+		rows[s.ID] = s
+	}
+	return rows
 }
 
 func TestIsAutomatedSetOnUpsert(t *testing.T) {

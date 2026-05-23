@@ -203,6 +203,10 @@ func WithGenerateStreamFunc(f insight.GenerateStreamFunc) Option {
 func (s *Server) routes() {
 	// API v1 routes
 	s.mux.Handle("GET /api/v1/sessions", s.withTimeout(s.handleListSessions))
+	s.mux.Handle(
+		"GET /api/v1/sessions/sidebar-index",
+		s.withTimeout(s.handleSidebarSessionIndex),
+	)
 	s.mux.Handle("GET /api/v1/sessions/{id}", s.withTimeout(s.handleGetSession))
 	s.mux.Handle(
 		"GET /api/v1/sessions/{id}/messages", s.withTimeout(s.handleGetMessages),

@@ -21,6 +21,7 @@ type Store interface {
 
 	// Sessions.
 	ListSessions(ctx context.Context, f SessionFilter) (SessionPage, error)
+	GetSidebarSessionIndex(ctx context.Context, f SessionFilter) (SidebarSessionIndex, error)
 	GetSession(ctx context.Context, id string) (*Session, error)
 	GetSessionFull(ctx context.Context, id string) (*Session, error)
 	GetChildSessions(ctx context.Context, parentID string) ([]Session, error)

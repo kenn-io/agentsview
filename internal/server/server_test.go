@@ -505,6 +505,16 @@ func decode[T any](
 	return result
 }
 
+func sidebarIndexRowsByID(
+	sessions []db.SidebarSessionIndexRow,
+) map[string]db.SidebarSessionIndexRow {
+	rows := make(map[string]db.SidebarSessionIndexRow, len(sessions))
+	for _, s := range sessions {
+		rows[s.ID] = s
+	}
+	return rows
+}
+
 func assertStatus(
 	t *testing.T, w *httptest.ResponseRecorder, code int,
 ) {
@@ -794,6 +804,68 @@ func TestListSessions_ExcludeOneShotDefault(t *testing.T) {
 	if len(resp.Sessions) != 3 {
 		t.Fatalf("include: expected 3 sessions, got %d",
 			len(resp.Sessions))
+	}
+}
+
+func TestSidebarIndexReturnsSkinnyRows(t *testing.T) {
+	te := setup(t)
+
+	displayName := "Important investigation"
+	te.seedSession(t, "named", "my-app", 5, func(s *db.Session) {
+		s.DisplayName = &displayName
+		s.UserMessageCount = 2
+	})
+	teammateFirstMessage := "<teammate-message from=\"codex\">review"
+	te.seedSession(t, "teammate", "my-app", 5, func(s *db.Session) {
+		s.FirstMessage = &teammateFirstMessage
+		s.UserMessageCount = 2
+	})
+	te.seedSession(t, "review", "my-app", 3, func(s *db.Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.UserMessageCount = 1
+	})
+
+	w := te.get(t, "/api/v1/sessions/sidebar-index")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[db.SidebarSessionIndex](t, w)
+	rows := sidebarIndexRowsByID(resp.Sessions)
+
+	if got := rows["named"].DisplayName; got == nil || *got != displayName {
+		t.Fatalf("display_name = %v, want %q", got, displayName)
+	}
+	if !rows["teammate"].IsTeammate {
+		t.Fatal("teammate is_teammate = false, want true")
+	}
+	if _, ok := rows["review"]; ok {
+		t.Fatal("automated review row returned without include_automated=true")
+	}
+
+	w = te.get(t, "/api/v1/sessions/sidebar-index?include_automated=true")
+	assertStatus(t, w, http.StatusOK)
+	resp = decode[db.SidebarSessionIndex](t, w)
+	rows = sidebarIndexRowsByID(resp.Sessions)
+	if _, ok := rows["review"]; !ok {
+		t.Fatal("automated review row missing with include_automated=true")
+	}
+}
+
+func TestSidebarIndexValidatesParams(t *testing.T) {
+	tests := []string{
+		"/api/v1/sessions/sidebar-index?min_messages=bad",
+		"/api/v1/sessions/sidebar-index?max_messages=bad",
+		"/api/v1/sessions/sidebar-index?min_user_messages=bad",
+		"/api/v1/sessions/sidebar-index?date=2024-99-99",
+		"/api/v1/sessions/sidebar-index?date_from=2024-06-02&date_to=2024-06-01",
+		"/api/v1/sessions/sidebar-index?active_since=not-a-timestamp",
+	}
+
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			te := setup(t)
+			w := te.get(t, path)
+			assertStatus(t, w, http.StatusBadRequest)
+		})
 	}
 }
 
