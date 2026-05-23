@@ -455,3 +455,103 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 		t.Fatalf("pin note = %v, want current note", pins[0].Note)
 	}
 }
+
+// TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone covers the
+// case where a source-backed pin's source_uuid no longer exists in
+// the messages table, but a different message now occupies the
+// pin's original ordinal. The pin must be deleted: otherwise it
+// would silently re-anchor on an unrelated message.
+func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_pin_source_gone_test"
+	pg, err := Open(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer pg.Close()
+	defer func() {
+		_, _ = pg.ExecContext(
+			context.Background(),
+			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+		)
+	}()
+
+	ctx := context.Background()
+	if _, err := pg.ExecContext(
+		ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
+	); err != nil {
+		t.Fatalf("drop schema: %v", err)
+	}
+	if err := EnsureSchema(ctx, pg, schema); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('pg-pin-source-gone', 'machine-a', 'proj-curation',
+			 'codex', 'source uuid gone',
+			 '2026-05-01T00:00:00Z'::timestamptz, 2, 1)`,
+	); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp,
+			 content_length, source_uuid)
+		VALUES
+			('pg-pin-source-gone', 0, 'user', 'question',
+			 '2026-05-01T00:00:00Z'::timestamptz, 8,
+			 'uuid-question'),
+			('pg-pin-source-gone', 1, 'assistant', 'new answer',
+			 '2026-05-01T00:00:01Z'::timestamptz, 10,
+			 'uuid-new-answer')`,
+	); err != nil {
+		t.Fatalf("insert messages: %v", err)
+	}
+	if _, err := pg.ExecContext(ctx, `
+		INSERT INTO pinned_messages
+			(session_id, message_id, ordinal, source_uuid,
+			 note, created_at)
+		VALUES
+			('pg-pin-source-gone', 1, 1, 'uuid-gone-forever',
+			 'stale pin',
+			 '2026-05-01T00:01:00Z'::timestamptz)`,
+	); err != nil {
+		t.Fatalf("insert pin: %v", err)
+	}
+
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := reconcilePinnedMessages(
+		ctx, tx, "pg-pin-source-gone",
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("reconcilePinnedMessages: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	store, err := NewStore(pgURL, schema, true)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	pins, err := store.ListPinnedMessages(ctx, "pg-pin-source-gone", "")
+	if err != nil {
+		t.Fatalf("ListPinnedMessages: %v", err)
+	}
+	if len(pins) != 0 {
+		t.Fatalf(
+			"pins = %d, want 0 (stale source_uuid should be pruned): %v",
+			len(pins), pins,
+		)
+	}
+}

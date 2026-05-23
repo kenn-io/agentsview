@@ -1274,13 +1274,31 @@ func reconcilePinnedMessages(
 		)
 	}
 
+	// Prune pins whose anchor no longer exists. For source-backed
+	// pins (source_uuid <> '') the canonical anchor is source_uuid,
+	// so a pin must be dropped when no message in this session has
+	// that source_uuid — otherwise a stale pin can survive on top
+	// of an unrelated message that now occupies the same ordinal.
+	// The ordinal-NOT-EXISTS clause additionally removes legacy
+	// pins (source_uuid = '') with a stale ordinal and clears any
+	// non-rank-1 duplicate left at the sentinel ordinal by step 2.
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM pinned_messages p
 		WHERE p.session_id = $1
-			AND NOT EXISTS (
-				SELECT 1 FROM messages m
-				WHERE m.session_id = p.session_id
-					AND m.ordinal = p.message_id
+			AND (
+				(
+					p.source_uuid <> ''
+					AND NOT EXISTS (
+						SELECT 1 FROM messages m
+						WHERE m.session_id = p.session_id
+							AND m.source_uuid = p.source_uuid
+					)
+				)
+				OR NOT EXISTS (
+					SELECT 1 FROM messages m
+					WHERE m.session_id = p.session_id
+						AND m.ordinal = p.message_id
+				)
 			)`,
 		sessionID,
 	); err != nil {
