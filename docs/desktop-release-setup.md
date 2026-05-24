@@ -484,6 +484,37 @@ Delete the releases manually from the fork's GitHub Releases page.
 
 ## Troubleshooting
 
+### Desktop app does not prompt for a just-published version
+
+The desktop updater is published by `.github/workflows/desktop-release.yml`,
+separately from the CLI/PyPI release workflow. A versioned GitHub release can
+exist before the desktop workflow has uploaded installer assets and replaced the
+permanent `updater` release's `latest.json`.
+
+Check the desktop release workflow first:
+
+```bash
+gh run list \
+  --repo kenn-io/agentsview \
+  --workflow desktop-release.yml \
+  --limit 5
+```
+
+Then verify the updater manifest:
+
+```bash
+curl -fsSL \
+  https://github.com/kenn-io/agentsview/releases/download/updater/latest.json |
+  python3 -m json.tool
+```
+
+The manifest's `version` must match the tag, and its platform URLs should point
+at `https://github.com/kenn-io/agentsview/releases/download/updater/...`. If the
+manifest still shows the previous version, wait for the `Desktop Release`
+workflow to finish or rerun the failed job. The desktop app checks for updates
+on startup, so an app launched before `latest.json` is replaced may need a
+manual `Check for Updates...` after the workflow completes.
+
 ### Code signing: "no identity found" or "Developer ID Application" not found
 
 The `APPLE_SIGNING_IDENTITY` secret must exactly match the identity string from
