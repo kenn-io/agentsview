@@ -71,6 +71,18 @@ test.describe("Insights quality rollout", () => {
   test("renders saved deterministic quality recommendation metadata", async ({
     page,
   }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        value: {
+          writeText: async (text: string) => {
+            (
+              window as unknown as { __copiedInsightLink?: string }
+            ).__copiedInsightLink = text;
+          },
+        },
+        configurable: true,
+      });
+    });
     await page.route("**/api/v1/version", (route) =>
       route.fulfill({
         json: { version: "test", commit: "test", read_only: false },
@@ -93,6 +105,7 @@ test.describe("Insights quality rollout", () => {
     ).toBeVisible();
     await expect(savedInsight).toBeVisible();
     await savedInsight.click();
+    await expect(page).toHaveURL(/\/insights\?insight=42$/);
 
     await expect(
       page.locator(".generated-detail .badge", {
@@ -114,6 +127,30 @@ test.describe("Insights quality rollout", () => {
     ).toBeVisible();
     await expect(
       page.getByText("Deterministic health scores and signal rows were not modified."),
+    ).toBeVisible();
+
+    const copyLink = page.getByRole("button", {
+      name: "Copy generated insight link",
+    });
+    await expect(copyLink).toBeVisible();
+    await copyLink.click();
+    await expect(
+      page.getByRole("button", {
+        name: "Copied generated insight link",
+      }),
+    ).toBeVisible();
+    const copied = await page.evaluate(
+      () =>
+        (window as unknown as { __copiedInsightLink?: string })
+          .__copiedInsightLink,
+    );
+    expect(copied).toBe(`${new URL(page.url()).origin}/insights?insight=42`);
+
+    await page.goto("/insights?insight=42");
+    await expect(
+      page
+        .locator(".generated-detail")
+        .getByRole("heading", { name: "Prompt Maturity" }),
     ).toBeVisible();
   });
 

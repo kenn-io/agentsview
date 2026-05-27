@@ -2,9 +2,11 @@
   import { onMount, onDestroy, untrack } from "svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
+  import { getBasePath, router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { events } from "../../stores/events.svelte.js";
+  import { copyToClipboard } from "../../utils/clipboard.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import type {
@@ -13,6 +15,7 @@
     InsightType,
   } from "../../api/types.js";
   import DateRangeSelector from "../shared/DateRangeSelector.svelte";
+  import CopyButton from "../shared/CopyButton.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import {
     buildQualityPatterns,
@@ -26,6 +29,10 @@
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let unsubEvents: (() => void) | undefined;
+  let copiedInsightLinkId: number | null = $state(null);
+  let copiedInsightLinkTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
 
   const signals = $derived(analytics.signals);
   const summary = $derived(buildQualitySummary(signals));
@@ -93,6 +100,50 @@
   function handleRefresh() {
     fetchInsightSignals();
     insights.load();
+  }
+
+  function insightLinkPath(id: number): string {
+    const params = new URLSearchParams();
+    if (router.params.desktop) {
+      params.set("desktop", router.params.desktop);
+    }
+    params.set("insight", String(id));
+    return `${getBasePath()}/insights?${params.toString()}`;
+  }
+
+  function insightLinkUrl(id: number): string {
+    return new URL(
+      insightLinkPath(id),
+      window.location.origin,
+    ).toString();
+  }
+
+  async function handleCopyInsightLink(id: number) {
+    const ok = await copyToClipboard(insightLinkUrl(id));
+    if (!ok) return;
+    copiedInsightLinkId = id;
+    clearTimeout(copiedInsightLinkTimer);
+    copiedInsightLinkTimer = setTimeout(() => {
+      copiedInsightLinkId = null;
+    }, 1500);
+  }
+
+  function selectGeneratedInsight(id: number) {
+    insights.select(id);
+    router.replaceParams({ insight: String(id) });
+  }
+
+  function selectGeneratedTask(clientId: string) {
+    insights.selectTask(clientId);
+    router.replaceParams({});
+  }
+
+  function selectedInsightFromRoute(): number | null {
+    const raw = router.params.insight;
+    if (!raw) return null;
+    const id = Number.parseInt(raw, 10);
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+    return id;
   }
 
   function formatDateRange(from: string, to: string): string {
@@ -237,7 +288,16 @@
 
   onDestroy(() => {
     if (refreshTimer !== undefined) clearInterval(refreshTimer);
+    clearTimeout(copiedInsightLinkTimer);
     unsubEvents?.();
+  });
+
+  $effect(() => {
+    if (router.route !== "insights") return;
+    const id = selectedInsightFromRoute();
+    if (id === null || insights.selectedId === id) return;
+    if (!insights.items.some((item) => item.id === id)) return;
+    insights.select(id);
   });
 </script>
 
@@ -575,7 +635,7 @@
               <button
                 class:active={insights.selectedTaskId === task.clientId}
                 class:error-task={task.status === "error"}
-                onclick={() => insights.selectTask(task.clientId)}
+                onclick={() => selectGeneratedTask(task.clientId)}
               >
                 <span>{task.status === "error" ? "Error" : "Running"}</span>
                 <strong>{task.project || "global"}</strong>
@@ -587,7 +647,7 @@
             {#each insights.items as item (item.id)}
               <button
                 class:active={insights.selectedId === item.id}
-                onclick={() => insights.select(item.id)}
+                onclick={() => selectGeneratedInsight(item.id)}
               >
                 <span>
                   {insightTypeLabel(item.type, item.kind)}
@@ -640,16 +700,29 @@
                     {/if}
                   {/if}
                 </div>
-                <button
-                  class="text-btn danger"
-                  onclick={() => {
-                    if (insights.selectedItem) {
-                      insights.deleteItem(insights.selectedItem.id);
-                    }
-                  }}
-                >
-                  Delete
-                </button>
+                <div class="generated-actions">
+                  <CopyButton
+                    class="insight-link-copy"
+                    copied={copiedInsightLinkId === insights.selectedItem.id}
+                    ariaLabel="Copy generated insight link"
+                    copiedAriaLabel="Copied generated insight link"
+                    title="Copy link to generated insight"
+                    copiedTitle="Copied link"
+                    onclick={() =>
+                      handleCopyInsightLink(insights.selectedItem!.id)}
+                  />
+                  <button
+                    class="text-btn danger"
+                    onclick={() => {
+                      if (insights.selectedItem) {
+                        insights.deleteItem(insights.selectedItem.id);
+                        router.replaceParams({});
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
               <div class="markdown-body">
                 {@html renderMarkdown(insights.selectedItem.content)}
@@ -1263,6 +1336,23 @@
     flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
+  }
+
+  .generated-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .generated-actions :global(.insight-link-copy.copy-btn) {
+    opacity: 1;
+    border: 1px solid var(--border-muted);
+    background: var(--bg-inset);
+  }
+
+  .generated-actions :global(.insight-link-copy.copy-btn:hover) {
+    border-color: var(--border-default);
   }
 
   .detail-chip {
