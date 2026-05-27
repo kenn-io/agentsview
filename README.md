@@ -213,10 +213,43 @@ agentsview auto-discovers sessions from all of these:
 | Warp               | `~/.warp/` (platform-dependent)                        |
 | Positron Assistant | `~/Library/Application Support/Positron/User/` (macOS) |
 | Antigravity        | `~/.gemini/antigravity/`                               |
-| Antigravity CLI    | `~/.gemini/antigravity-cli/` (summary mode)            |
+| Antigravity CLI    | `~/.gemini/antigravity-cli/` (see note below)          |
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details.
+
+### Antigravity CLI: high-resolution transcripts
+
+By default, agentsview indexes Antigravity CLI sessions in **summary mode**:
+your prompts from `history.jsonl` plus any plain-text artifacts under `brain/`
+(plans, walkthroughs, checkpoints). Assistant turns and tool calls live in
+AES-GCM-encrypted `.pb` files and are not visible in this mode.
+
+To unlock full transcripts, run
+[agy-reader](https://github.com/mjacobs/agy-reader) alongside agentsview.
+agy-reader talks to the local Antigravity daemon, decrypts each conversation,
+and writes a `<uuid>.trajectory.json` sidecar next to the encrypted `.pb` file.
+agentsview's file watcher detects the sidecar automatically and parses it in
+place of summary mode -- no agentsview restart needed.
+
+```bash
+go install github.com/mjacobs/agy-reader@latest
+
+# Point agy-reader at the Antigravity daemon. The daemon uses a
+# per-session ephemeral port; see the agy-reader README for how to
+# discover it on your platform.
+export ANTIGRAVITY_DAEMON_URL=http://127.0.0.1:<PORT>
+
+# Generate sidecars for existing sessions...
+agy-reader --sync
+
+# ...or keep them fresh as you work.
+agy-reader --watch
+```
+
+Sidecars stay on your machine. agentsview makes no outbound request to produce
+or read them, and treats sidecars as untrusted structured input -- see
+[SECURITY.md](SECURITY.md) for the trust model.
 
 ## PostgreSQL Sync
 
