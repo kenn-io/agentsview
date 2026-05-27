@@ -441,6 +441,8 @@
     <DateRangeSelector
       from={analytics.from}
       to={analytics.to}
+      rollingDays={analytics.windowDays}
+      isPinned={analytics.isPinned}
       onChange={(from, to) => analytics.setDateRange(from, to)}
       onPreset={(days) => analytics.setRollingWindow(days)}
     />
@@ -1914,27 +1916,6 @@
 
     .icon-btn {
       margin-left: 0;
-    }
-
-    .toolbar :global(.date-range-picker) {
-      align-items: stretch;
-      flex-direction: column;
-      gap: 6px;
-      min-width: 0;
-    }
-
-    .toolbar :global(.presets) {
-      flex-wrap: wrap;
-    }
-
-    .toolbar :global(.date-inputs) {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    }
-
-    .toolbar :global(.date-input) {
-      min-width: 0;
-      width: 100%;
     }
 
     .filter-group {

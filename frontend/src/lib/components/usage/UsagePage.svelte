@@ -276,6 +276,8 @@
       <DateRangeSelector
         from={usage.from}
         to={usage.to}
+        rollingDays={usage.windowDays}
+        isPinned={usage.isPinned}
         onChange={(from, to) => usage.setDateRange(from, to)}
         onPreset={(days) => usage.setRollingWindow(days)}
       />

@@ -1,8 +1,8 @@
 <script lang="ts">
   import { sync } from "../../stores/sync.svelte.js";
   import {
+    activePresetDays,
     DATE_RANGE_PRESETS,
-    isPresetActive,
     presetRange,
   } from "./dateRangeSelector.js";
 
@@ -11,11 +11,29 @@
     to: string;
     onChange: (from: string, to: string) => void;
     onPreset?: (days: number) => void;
+    rollingDays?: number | null;
+    isPinned?: boolean;
   }
 
-  let { from, to, onChange, onPreset }: Props = $props();
+  let {
+    from,
+    to,
+    onChange,
+    onPreset,
+    rollingDays = null,
+    isPinned = true,
+  }: Props = $props();
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
+  const activeDays = $derived(
+    activePresetDays(
+      from,
+      to,
+      earliestSession,
+      rollingDays,
+      isPinned,
+    ),
+  );
 
   function applyPreset(days: number) {
     if (days > 0 && onPreset) {
@@ -46,12 +64,7 @@
     {#each DATE_RANGE_PRESETS as preset}
       <button
         class="preset-btn"
-        class:active={isPresetActive(
-          from,
-          to,
-          preset.days,
-          earliestSession,
-        )}
+        class:active={activeDays === preset.days}
         onclick={() => applyPreset(preset.days)}
       >
         {preset.label}
@@ -80,18 +93,23 @@
   .date-range-picker {
     display: flex;
     align-items: center;
-    gap: 12px;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    min-width: 0;
   }
 
   .presets {
     display: flex;
+    flex: 0 0 auto;
     gap: 2px;
   }
 
   .preset-btn {
     height: 24px;
     padding: 0 8px;
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
+    background: transparent;
     font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
@@ -106,13 +124,16 @@
 
   .preset-btn.active {
     background: var(--accent-blue);
-    color: #fff;
+    border-color: var(--accent-blue);
+    color: var(--text-on-accent, oklch(0.99 0.006 260));
   }
 
   .date-inputs {
     display: flex;
     align-items: center;
+    flex: 0 1 auto;
     gap: 4px;
+    min-width: 0;
   }
 
   .date-input {
@@ -134,5 +155,28 @@
   .date-sep {
     color: var(--text-muted);
     font-size: 11px;
+  }
+
+  @media (max-width: 680px) {
+    .date-range-picker {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 6px;
+      width: 100%;
+    }
+
+    .presets {
+      flex-wrap: wrap;
+    }
+
+    .date-inputs {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    }
+
+    .date-input {
+      min-width: 0;
+      width: 100%;
+    }
   }
 </style>

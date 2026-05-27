@@ -59,3 +59,24 @@ export function isPresetActive(
   const range = presetRange(days, earliestSession);
   return from === range.from && to === range.to;
 }
+
+export function activePresetDays(
+  from: string,
+  to: string,
+  earliestSession: string | null | undefined,
+  rollingDays?: number | null,
+  isPinned?: boolean,
+): number | null {
+  if (!isPinned && rollingDays != null) {
+    return rollingDays;
+  }
+
+  const matches = DATE_RANGE_PRESETS.filter((preset) =>
+    isPresetActive(from, to, preset.days, earliestSession),
+  );
+  if (matches.length === 0) return null;
+
+  const all = matches.find((preset) => preset.days === 0);
+  if (all) return all.days;
+  return matches[0]?.days ?? null;
+}
