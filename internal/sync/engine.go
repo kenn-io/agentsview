@@ -4456,7 +4456,8 @@ func (e *Engine) writeBatch(
 		}
 
 		replaceMessages := forceReplace || pw.forceReplace ||
-			stale || pw.sess.Agent == parser.AgentOpenCode
+			stale || pw.sess.Agent == parser.AgentOpenCode ||
+			pw.sess.Agent == parser.AgentAntigravityCLI
 
 		update, findings := computeSignalsAndSecrets(s, msgs)
 
@@ -4563,7 +4564,8 @@ func (e *Engine) writeBatchBulk(
 			continue
 		}
 		replaceMessages := forceReplace || pw.forceReplace ||
-			pw.sess.Agent == parser.AgentOpenCode
+			pw.sess.Agent == parser.AgentOpenCode ||
+			pw.sess.Agent == parser.AgentAntigravityCLI
 		tScan := time.Now()
 		update, findings := computeSignalsAndSecrets(s, msgs)
 		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
