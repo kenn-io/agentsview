@@ -35,6 +35,7 @@ type testEnv struct {
 	ampDir      string
 	piDir       string
 	kiroDir     string
+	antigravityCLIDir string
 	db          *db.DB
 	engine      *sync.Engine
 }
@@ -98,13 +99,14 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	}
 
 	env := &testEnv{
-		geminiDir:  t.TempDir(),
-		forgeDir:   t.TempDir(),
-		piebaldDir: t.TempDir(),
-		iflowDir:   t.TempDir(),
-		ampDir:     t.TempDir(),
-		piDir:      t.TempDir(),
-		db:         dbtest.OpenTestDB(t),
+		geminiDir:         t.TempDir(),
+		forgeDir:          t.TempDir(),
+		piebaldDir:        t.TempDir(),
+		iflowDir:          t.TempDir(),
+		ampDir:            t.TempDir(),
+		piDir:             t.TempDir(),
+		antigravityCLIDir: t.TempDir(),
+		db:                dbtest.OpenTestDB(t),
 	}
 
 	claudeDirs := options.claudeDirs
@@ -149,17 +151,18 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude:   claudeDirs,
-			parser.AgentCodex:    codexDirs,
-			parser.AgentCursor:   cursorDirs,
-			parser.AgentGemini:   {env.geminiDir},
-			parser.AgentOpenCode: opencodeDirs,
-			parser.AgentForge:    {env.forgeDir},
-			parser.AgentPiebald:  {env.piebaldDir},
-			parser.AgentIflow:    {env.iflowDir},
-			parser.AgentAmp:      {env.ampDir},
-			parser.AgentPi:       {env.piDir},
-			parser.AgentKiro:     kiroDirs,
+			parser.AgentClaude:          claudeDirs,
+			parser.AgentCodex:           codexDirs,
+			parser.AgentCursor:          cursorDirs,
+			parser.AgentGemini:          {env.geminiDir},
+			parser.AgentOpenCode:        opencodeDirs,
+			parser.AgentForge:           {env.forgeDir},
+			parser.AgentPiebald:         {env.piebaldDir},
+			parser.AgentIflow:           {env.iflowDir},
+			parser.AgentAmp:             {env.ampDir},
+			parser.AgentPi:              {env.piDir},
+			parser.AgentKiro:            kiroDirs,
+			parser.AgentAntigravityCLI: {env.antigravityCLIDir},
 		},
 		Machine: "local",
 		Emitter: options.emitter,
