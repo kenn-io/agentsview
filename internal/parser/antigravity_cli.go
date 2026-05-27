@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,16 +131,28 @@ func ParseAntigravityCLISession(
 		storageID = antigravityImplicitTag + id
 	}
 
-	messages := collectAntigravityHistoryMessages(
-		filepath.Join(root, "history.jsonl"), id,
-	)
+	sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
+	var messages []ParsedMessage
+	var hasTrajectory bool
+	if _, err := os.Stat(sidecarPath); err == nil {
+		if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
+			messages = tMsgs
+			hasTrajectory = true
+		}
+	}
+
+	if !hasTrajectory {
+		messages = collectAntigravityHistoryMessages(
+			filepath.Join(root, "history.jsonl"), id,
+		)
+	}
 	messages = append(messages,
 		collectAntigravityBrainMessages(
 			filepath.Join(root, "brain", id),
 		)...,
 	)
 
-	if hasAntigravityKey() {
+	if !hasTrajectory && hasAntigravityKey() {
 		if extra, ok := decryptAntigravityCLITranscript(path); ok {
 			messages = append(messages, extra)
 		}
@@ -187,6 +200,17 @@ func ParseAntigravityCLISession(
 		endedAt = info.ModTime()
 	}
 
+	var size int64
+	var mtime int64
+	effInfo, statErr := AntigravityCLIFileInfo(path)
+	if statErr == nil {
+		size = effInfo.Size()
+		mtime = effInfo.ModTime().UnixNano()
+	} else {
+		size = info.Size()
+		mtime = info.ModTime().UnixNano()
+	}
+
 	sess := &ParsedSession{
 		ID:               antigravityCLIIDPrefix + storageID,
 		Project:          project,
@@ -199,8 +223,8 @@ func ParseAntigravityCLISession(
 		UserMessageCount: userCount,
 		File: FileInfo{
 			Path:  path,
-			Size:  info.Size(),
-			Mtime: info.ModTime().UnixNano(),
+			Size:  size,
+			Mtime: mtime,
 		},
 	}
 	if len(messages) == 0 {
@@ -377,3 +401,504 @@ func decryptAntigravityCLITranscript(
 		Timestamp:     ts,
 	}, true
 }
+
+// AntigravityCLIFileInfo returns a fake os.FileInfo whose size and mtime are
+// computed by looking at both <uuid>.pb and <uuid>.trajectory.json.
+// If the trajectory file exists, its mtime and size are factored in.
+func AntigravityCLIFileInfo(pbPath string) (os.FileInfo, error) {
+	pbInfo, err := os.Stat(pbPath)
+	if err != nil {
+		return nil, err
+	}
+	size := pbInfo.Size()
+	mtime := pbInfo.ModTime().UnixNano()
+
+	sidecar := strings.TrimSuffix(pbPath, ".pb") + ".trajectory.json"
+	if sidecarInfo, err := os.Stat(sidecar); err == nil {
+		size += sidecarInfo.Size()
+		if sidecarInfo.ModTime().UnixNano() > mtime {
+			mtime = sidecarInfo.ModTime().UnixNano()
+		}
+	}
+
+	return fakeFileInfo{
+		name:  pbInfo.Name(),
+		size:  size,
+		mtime: mtime,
+	}, nil
+}
+
+type fakeFileInfo struct {
+	name  string
+	size  int64
+	mtime int64
+}
+
+func (f fakeFileInfo) Name() string      { return f.name }
+func (f fakeFileInfo) Size() int64       { return f.size }
+func (f fakeFileInfo) Mode() os.FileMode { return 0 }
+func (f fakeFileInfo) ModTime() time.Time {
+	return time.Unix(0, f.mtime)
+}
+func (f fakeFileInfo) IsDir() bool { return false }
+func (f fakeFileInfo) Sys() any    { return nil }
+
+type agyTrajectory struct {
+	TrajectoryID string    `json:"trajectoryId"`
+	CascadeID    string    `json:"cascadeId"`
+	Steps        []agyStep `json:"steps"`
+}
+
+type agyStep struct {
+	Type     string          `json:"type"`
+	Status   string          `json:"status"`
+	Metadata agyStepMetadata `json:"metadata"`
+
+	UserInput       *agyUserInput       `json:"userInput"`
+	PlannerResponse *agyPlannerResponse `json:"plannerResponse"`
+	RunCommand      *agyRunCommand      `json:"runCommand"`
+	ViewFile        *agyViewFile        `json:"viewFile"`
+	CodeAction      *agyCodeAction      `json:"codeAction"`
+	GrepSearch      *agyGrepSearch      `json:"grepSearch"`
+	ErrorMessage    *agyErrorMessage    `json:"errorMessage"`
+	SystemMessage   *agySystemMessage   `json:"systemMessage"`
+	Checkpoint      *agyCheckpoint      `json:"checkpoint"`
+	ListDirectory   *agyListDirectory   `json:"listDirectory"`
+}
+
+type agyStepMetadata struct {
+	CreatedAt   string `json:"createdAt"`
+	ExecutionID string `json:"executionId"`
+}
+
+type agyUserInput struct {
+	UserResponse string `json:"userResponse"`
+}
+
+type agyPlannerResponse struct {
+	Thinking  string        `json:"thinking"`
+	Response  string        `json:"response"`
+	ToolCalls []agyToolCall `json:"toolCalls"`
+}
+
+type agyToolCall struct {
+	Name          string `json:"name"`
+	ArgumentsJSON string `json:"argumentsJson"`
+	ID            string `json:"id"`
+}
+
+type agyRunCommand struct {
+	CommandLine         string          `json:"commandLine"`
+	ProposedCommandLine string          `json:"proposedCommandLine"`
+	Cwd                 string          `json:"cwd"`
+	ExitCode            *int            `json:"exitCode"`
+	CombinedOutput      json.RawMessage `json:"combinedOutput"`
+}
+
+func (rc *agyRunCommand) CombinedOutputString() string {
+	if rc == nil || len(rc.CombinedOutput) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(rc.CombinedOutput, &s); err == nil {
+		return s
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(rc.CombinedOutput, &obj); err == nil {
+		parts := make([]string, 0, 4)
+		for _, key := range []string{"stdout", "stderr", "output", "text", "full"} {
+			if raw, ok := obj[key]; ok {
+				var v string
+				if json.Unmarshal(raw, &v) == nil && v != "" {
+					parts = append(parts, v)
+				}
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
+	return string(rc.CombinedOutput)
+}
+
+type agyViewFile struct {
+	AbsolutePathURI string `json:"absolutePathUri"`
+	StartLine       int    `json:"startLine"`
+	EndLine         int    `json:"endLine"`
+	Content         string `json:"content"`
+}
+
+type agyCodeAction struct {
+	Description  string          `json:"description"`
+	ActionSpec   json.RawMessage `json:"actionSpec"`
+	ActionResult json.RawMessage `json:"actionResult"`
+}
+
+type agyCodeActionResult struct {
+	Edit *agyCodeActionEdit `json:"edit"`
+}
+
+type agyCodeActionEdit struct {
+	Diff *agyCodeActionDiff `json:"diff"`
+}
+
+type agyCodeActionDiff struct {
+	UnifiedDiff *agyCodeActionUD `json:"unifiedDiff"`
+}
+
+type agyCodeActionUD struct {
+	Lines []agyCodeActionDiffLine `json:"lines"`
+}
+
+type agyCodeActionDiffLine struct {
+	Text string `json:"text"`
+	Type string `json:"type"`
+}
+
+func (ca *agyCodeAction) FormattedDiff() string {
+	if ca == nil || len(ca.ActionResult) == 0 {
+		return ""
+	}
+	var res agyCodeActionResult
+	if err := json.Unmarshal(ca.ActionResult, &res); err != nil {
+		return ""
+	}
+	if res.Edit == nil || res.Edit.Diff == nil || res.Edit.Diff.UnifiedDiff == nil {
+		return ""
+	}
+	lines := res.Edit.Diff.UnifiedDiff.Lines
+	if len(lines) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("```diff\n")
+	for _, line := range lines {
+		switch line.Type {
+		case "UNIFIED_DIFF_LINE_TYPE_INSERT":
+			sb.WriteString("+" + line.Text + "\n")
+		case "UNIFIED_DIFF_LINE_TYPE_DELETE":
+			sb.WriteString("-" + line.Text + "\n")
+		default:
+			sb.WriteString(" " + line.Text + "\n")
+		}
+	}
+	sb.WriteString("```")
+	return sb.String()
+}
+
+type agyGrepSearch struct {
+	SearchPathURI string `json:"searchPathUri"`
+	Query         string `json:"query"`
+}
+
+type agyErrorMessage struct {
+	Error agyErrorMessageError `json:"error"`
+}
+
+type agyErrorMessageError struct {
+	UserErrorMessage  string `json:"userErrorMessage"`
+	ModelErrorMessage string `json:"modelErrorMessage"`
+}
+
+type agySystemMessage struct {
+	Message string `json:"message"`
+}
+
+type agyCheckpoint struct {
+	UserRequests   []string `json:"userRequests"`
+	SessionSummary string   `json:"sessionSummary"`
+}
+
+type agyListDirectory struct {
+	DirectoryPathURI string `json:"directoryPathUri"`
+}
+
+func parseTrajectoryTime(ts string) time.Time {
+	if ts == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t
+	}
+	if t, err := time.Parse(time.RFC3339, ts); err == nil {
+		return t
+	}
+	return time.Time{}
+}
+
+func agyToolDetail(name, inputJSON string) string {
+	if !strings.HasPrefix(strings.TrimSpace(inputJSON), "{") {
+		return name
+	}
+	var input map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(inputJSON), &input); err != nil {
+		return name
+	}
+	getString := func(keys ...string) string {
+		for _, k := range keys {
+			v, ok := input[k]
+			if !ok {
+				continue
+			}
+			var s string
+			if err := json.Unmarshal(v, &s); err == nil {
+				if t := strings.TrimSpace(s); t != "" {
+					return t
+				}
+			}
+		}
+		return ""
+	}
+	switch name {
+	case "view_file":
+		if p := getString("AbsolutePathURI", "AbsolutePath", "path"); p != "" {
+			p = strings.TrimPrefix(p, "file://")
+			return filepath.Base(p)
+		}
+	case "write_to_file", "replace_file_content", "multi_replace_file_content":
+		if p := getString("TargetFile", "file_path", "path"); p != "" {
+			return filepath.Base(p)
+		}
+	case "invoke_subagent", "define_subagent":
+		if p := getString("name", "TypeName"); p != "" {
+			return p
+		}
+	case "send_message":
+		if p := getString("Recipient"); p != "" {
+			return "to " + p
+		}
+	case "manage_task":
+		if action := getString("Action"); action != "" {
+			if id := getString("TaskId"); id != "" {
+				return action + " " + id
+			}
+			return action
+		}
+	case "search_web":
+		if q := getString("query"); q != "" {
+			return q
+		}
+	case "read_url_content":
+		if u := getString("Url"); u != "" {
+			return u
+		}
+	case "generate_image":
+		if n := getString("ImageName"); n != "" {
+			return n
+		}
+	case "ask_question":
+		if s := getString("toolSummary"); s != "" {
+			return s
+		}
+	case "schedule":
+		if p := getString("Prompt"); p != "" {
+			return p
+		}
+	}
+	return name
+}
+
+func parseAntigravityCLITrajectory(
+	trajectoryPath string,
+) ([]ParsedMessage, error) {
+	data, err := os.ReadFile(trajectoryPath)
+	if err != nil {
+		return nil, err
+	}
+	var traj agyTrajectory
+	if err := json.Unmarshal(data, &traj); err != nil {
+		return nil, err
+	}
+
+	var msgs []ParsedMessage
+
+	var pendingResults []ParsedToolResult
+	var pendingResultsTime time.Time
+
+	flushPendingResults := func() {
+		if len(pendingResults) == 0 {
+			return
+		}
+		msgs = append(msgs, ParsedMessage{
+			Role:        RoleUser,
+			Content:     "",
+			Timestamp:   pendingResultsTime,
+			ToolResults: pendingResults,
+		})
+		pendingResults = nil
+	}
+
+	for _, step := range traj.Steps {
+		stepTime := parseTrajectoryTime(step.Metadata.CreatedAt)
+
+		switch step.Type {
+		case "CORTEX_STEP_TYPE_USER_INPUT":
+			flushPendingResults()
+			if step.UserInput == nil {
+				continue
+			}
+			msgs = append(msgs, ParsedMessage{
+				Role:          RoleUser,
+				Content:       step.UserInput.UserResponse,
+				ContentLength: len(step.UserInput.UserResponse),
+				Timestamp:     stepTime,
+			})
+
+		case "CORTEX_STEP_TYPE_PLANNER_RESPONSE":
+			flushPendingResults()
+			if step.PlannerResponse == nil {
+				continue
+			}
+			pr := step.PlannerResponse
+			var toolCalls []ParsedToolCall
+			var toolHeaders []string
+
+			for _, tc := range pr.ToolCalls {
+				cat := NormalizeToolCategory(tc.Name)
+				detail := agyToolDetail(tc.Name, tc.ArgumentsJSON)
+				header := formatToolHeader(cat, detail)
+				toolHeaders = append(toolHeaders, header)
+
+				toolCalls = append(toolCalls, ParsedToolCall{
+					ToolUseID: tc.ID,
+					ToolName:  tc.Name,
+					Category:  cat,
+					InputJSON: tc.ArgumentsJSON,
+				})
+			}
+
+			content := pr.Response
+			if content == "" && len(toolHeaders) > 0 {
+				content = strings.Join(toolHeaders, "\n")
+			}
+
+			msg := ParsedMessage{
+				Role:          RoleAssistant,
+				Content:       content,
+				ContentLength: len(content),
+				Timestamp:     stepTime,
+				ToolCalls:     toolCalls,
+				HasToolUse:    len(toolCalls) > 0,
+			}
+			if pr.Thinking != "" {
+				msg.ThinkingText = pr.Thinking
+				msg.HasThinking = true
+			}
+			msgs = append(msgs, msg)
+
+		case "CORTEX_STEP_TYPE_RUN_COMMAND",
+			"CORTEX_STEP_TYPE_VIEW_FILE",
+			"CORTEX_STEP_TYPE_CODE_ACTION",
+			"CORTEX_STEP_TYPE_GREP_SEARCH",
+			"CORTEX_STEP_TYPE_LIST_DIRECTORY",
+			"CORTEX_STEP_TYPE_ERROR_MESSAGE":
+
+			tuid := step.Metadata.ExecutionID
+			if tuid == "" {
+				continue
+			}
+
+			var resultText string
+			switch step.Type {
+			case "CORTEX_STEP_TYPE_RUN_COMMAND":
+				if step.RunCommand != nil {
+					resultText = step.RunCommand.CombinedOutputString()
+				}
+			case "CORTEX_STEP_TYPE_VIEW_FILE":
+				if step.ViewFile != nil {
+					resultText = step.ViewFile.Content
+				}
+			case "CORTEX_STEP_TYPE_CODE_ACTION":
+				if step.CodeAction != nil {
+					diff := step.CodeAction.FormattedDiff()
+					if diff != "" {
+						resultText = diff
+					} else {
+						var actRes string
+						if len(step.CodeAction.ActionResult) > 0 {
+							if err := json.Unmarshal(step.CodeAction.ActionResult, &actRes); err == nil {
+								resultText = actRes
+							} else {
+								resultText = string(step.CodeAction.ActionResult)
+							}
+						}
+					}
+				}
+			case "CORTEX_STEP_TYPE_GREP_SEARCH":
+				if step.GrepSearch != nil {
+					resultText = fmt.Sprintf("Search for query %q in path %s", step.GrepSearch.Query, step.GrepSearch.SearchPathURI)
+				}
+			case "CORTEX_STEP_TYPE_LIST_DIRECTORY":
+				if step.ListDirectory != nil {
+					resultText = fmt.Sprintf("List directory: %s", step.ListDirectory.DirectoryPathURI)
+				}
+			case "CORTEX_STEP_TYPE_ERROR_MESSAGE":
+				if step.ErrorMessage != nil {
+					em := step.ErrorMessage
+					if em.Error.UserErrorMessage != "" {
+						resultText = em.Error.UserErrorMessage
+					}
+					if em.Error.ModelErrorMessage != "" {
+						if resultText != "" {
+							resultText += "\n"
+						}
+						resultText += "Model Error: " + em.Error.ModelErrorMessage
+					}
+				}
+			}
+
+			resJSON, _ := json.Marshal(resultText)
+			pendingResults = append(pendingResults, ParsedToolResult{
+				ToolUseID:     tuid,
+				ContentRaw:    string(resJSON),
+				ContentLength: len(resultText),
+			})
+			if pendingResultsTime.IsZero() || stepTime.After(pendingResultsTime) {
+				pendingResultsTime = stepTime
+			}
+
+		case "CORTEX_STEP_TYPE_SYSTEM_MESSAGE":
+			flushPendingResults()
+			if step.SystemMessage == nil {
+				continue
+			}
+			msgs = append(msgs, ParsedMessage{
+				Role:          RoleUser,
+				IsSystem:      true,
+				Content:       step.SystemMessage.Message,
+				ContentLength: len(step.SystemMessage.Message),
+				Timestamp:     stepTime,
+			})
+
+		case "CORTEX_STEP_TYPE_CHECKPOINT":
+			flushPendingResults()
+			if step.Checkpoint == nil {
+				continue
+			}
+			cp := step.Checkpoint
+			var parts []string
+			if len(cp.UserRequests) > 0 {
+				parts = append(parts, fmt.Sprintf("User Requests: %s", strings.Join(cp.UserRequests, ", ")))
+			}
+			if cp.SessionSummary != "" {
+				parts = append(parts, cp.SessionSummary)
+			}
+			if len(parts) > 0 {
+				content := "[Checkpoint]\n" + strings.Join(parts, "\n")
+				msgs = append(msgs, ParsedMessage{
+					Role:          RoleUser,
+					IsSystem:      true,
+					Content:       content,
+					ContentLength: len(content),
+					Timestamp:     stepTime,
+				})
+			}
+		}
+	}
+
+	flushPendingResults()
+	return msgs, nil
+}
+
+

@@ -51,6 +51,9 @@ func setupTestEnv(t *testing.T) string {
 
 func loadConfigFromFlags(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
+	if os.Getenv("AGENTSVIEW_DATA_DIR") == "" {
+		t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	RegisterServeFlags(fs)
 	if err := fs.Parse(args); err != nil {
@@ -61,6 +64,9 @@ func loadConfigFromFlags(t *testing.T, args ...string) (Config, error) {
 
 func loadConfigFromPFlags(t *testing.T, args ...string) (Config, error) {
 	t.Helper()
+	if os.Getenv("AGENTSVIEW_DATA_DIR") == "" {
+		t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	}
 	fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
 	RegisterServePFlags(fs)
 	if err := fs.Parse(args); err != nil {

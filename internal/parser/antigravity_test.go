@@ -574,3 +574,134 @@ func mustExec(
 // silence unused warning on time import in case the file is
 // trimmed in the future.
 var _ = time.Time{}
+
+func TestAntigravityCLITrajectoryParse(t *testing.T) {
+	root := t.TempDir()
+	id := "22222222-3333-4444-5555-666666666666"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "implicit"))
+
+	// Create stub .pb file
+	pbPath := filepath.Join(root, "conversations", id+".pb")
+	mustWrite(t, pbPath, []byte("pb-stub"))
+
+	// Create trajectory JSON sidecar
+	trajectoryJSON := `{
+		"trajectoryId": "traj-id",
+		"cascadeId": "` + id + `",
+		"steps": [
+			{
+				"type": "CORTEX_STEP_TYPE_USER_INPUT",
+				"status": "STATUS_COMPLETED",
+				"metadata": {
+					"createdAt": "2026-05-20T22:40:00Z"
+				},
+				"userInput": {
+					"userResponse": "check files please"
+				}
+			},
+			{
+				"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+				"status": "STATUS_COMPLETED",
+				"metadata": {
+					"createdAt": "2026-05-20T22:41:00Z"
+				},
+				"plannerResponse": {
+					"thinking": "I should run a command",
+					"response": "running command now",
+					"toolCalls": [
+						{
+							"name": "run_command",
+							"argumentsJson": "{\"command\":\"ls -la\"}",
+							"id": "tc-1"
+						}
+					]
+				}
+			},
+			{
+				"type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+				"status": "STATUS_COMPLETED",
+				"metadata": {
+					"createdAt": "2026-05-20T22:42:00Z",
+					"executionId": "tc-1"
+				},
+				"runCommand": {
+					"commandLine": "ls -la",
+					"cwd": "/tmp",
+					"combinedOutput": "\"file1.txt\nfile2.txt\""
+				}
+			},
+			{
+				"type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
+				"status": "STATUS_COMPLETED",
+				"metadata": {
+					"createdAt": "2026-05-20T22:43:00Z"
+				},
+				"systemMessage": {
+					"message": "system warning: low memory"
+				}
+			},
+			{
+				"type": "CORTEX_STEP_TYPE_CHECKPOINT",
+				"status": "STATUS_COMPLETED",
+				"metadata": {
+					"createdAt": "2026-05-20T22:44:00Z"
+				},
+				"checkpoint": {
+					"userRequests": ["request1"],
+					"sessionSummary": "everything is fine"
+				}
+			}
+		]
+	}`
+	sidecarPath := filepath.Join(root, "conversations", id+".trajectory.json")
+	mustWrite(t, sidecarPath, []byte(trajectoryJSON))
+
+	sess, msgs, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	assert.Equal(t, "antigravity-cli:"+id, sess.ID)
+	assert.Equal(t, "check files please", sess.FirstMessage)
+
+	// Expected messages:
+	// 1. User: check files please
+	// 2. Assistant: running command now (with tool call)
+	// 3. User: synthetic message with tool results
+	// 4. User (IsSystem): Low memory warning
+	// 5. User (IsSystem): Checkpoint info
+	require.Len(t, msgs, 5)
+
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "check files please", msgs[0].Content)
+
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "running command now", msgs[1].Content)
+	assert.True(t, msgs[1].HasThinking)
+	assert.Equal(t, "I should run a command", msgs[1].ThinkingText)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "tc-1", msgs[1].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "run_command", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal(t, "Bash", msgs[1].ToolCalls[0].Category)
+
+	assert.Equal(t, RoleUser, msgs[2].Role)
+	assert.Equal(t, "", msgs[2].Content)
+	require.Len(t, msgs[2].ToolResults, 1)
+	assert.Equal(t, "tc-1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Contains(t, msgs[2].ToolResults[0].ContentRaw, "file1.txt")
+
+	assert.Equal(t, RoleUser, msgs[3].Role)
+	assert.True(t, msgs[3].IsSystem)
+	assert.Equal(t, "system warning: low memory", msgs[3].Content)
+
+	assert.Equal(t, RoleUser, msgs[4].Role)
+	assert.True(t, msgs[4].IsSystem)
+	assert.Contains(t, msgs[4].Content, "everything is fine")
+
+	// Verify FileInfo size and mtime are effective (sum of sizes, max of mtimes)
+	pbStat, _ := os.Stat(pbPath)
+	sidecarStat, _ := os.Stat(sidecarPath)
+	expectedSize := pbStat.Size() + sidecarStat.Size()
+	assert.Equal(t, expectedSize, sess.File.Size)
+}
+
