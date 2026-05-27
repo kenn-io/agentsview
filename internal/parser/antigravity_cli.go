@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -12,6 +13,14 @@ import (
 
 	"github.com/tidwall/gjson"
 )
+
+// maxTrajectorySidecarBytes caps how much of a <uuid>.trajectory.json
+// sidecar the parser will read. Real transcripts observed at the time
+// of writing are well under 1 MB; the cap is a defense against a
+// buggy or hostile sidecar writer dropping a multi-GB file in the
+// session directory. See SECURITY.md ("Imports and new readers"):
+// sidecars are treated as untrusted structured input.
+const maxTrajectorySidecarBytes = 64 << 20
 
 // Antigravity CLI sessions live under ~/.gemini/antigravity-cli/:
 //
@@ -707,12 +716,33 @@ func agyToolDetail(name, inputJSON string) string {
 	return name
 }
 
+// parseAntigravityCLITrajectory reads a <uuid>.trajectory.json sidecar
+// produced out-of-process by agy-reader and returns the decoded
+// transcript as ParsedMessages.
+//
+// Trust posture (see SECURITY.md, "Imports and new readers" row of the
+// Trust boundaries table): the sidecar is treated as untrusted
+// structured input — same posture as any other agent session file.
+// The read is size-capped (maxTrajectorySidecarBytes) and unknown step
+// types are silently skipped further down. No content from the sidecar
+// is executed or echoed back over any outbound channel.
 func parseAntigravityCLITrajectory(
 	trajectoryPath string,
 ) ([]ParsedMessage, error) {
-	data, err := os.ReadFile(trajectoryPath)
+	f, err := os.Open(trajectoryPath)
 	if err != nil {
 		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxTrajectorySidecarBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxTrajectorySidecarBytes {
+		return nil, fmt.Errorf(
+			"trajectory sidecar %s exceeds %d-byte cap",
+			trajectoryPath, maxTrajectorySidecarBytes,
+		)
 	}
 	var traj agyTrajectory
 	if err := json.Unmarshal(data, &traj); err != nil {
@@ -914,5 +944,3 @@ func parseAntigravityCLITrajectory(
 	flushPendingResults()
 	return msgs, nil
 }
-
-

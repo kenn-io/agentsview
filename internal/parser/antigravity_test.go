@@ -704,4 +704,3 @@ func TestAntigravityCLITrajectoryParse(t *testing.T) {
 	expectedSize := pbStat.Size() + sidecarStat.Size()
 	assert.Equal(t, expectedSize, sess.File.Size)
 }
-
