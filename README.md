@@ -235,17 +235,17 @@ place of summary mode -- no agentsview restart needed.
 ```bash
 go install github.com/mjacobs/agy-reader@latest
 
-# Point agy-reader at the Antigravity daemon. The daemon uses a
-# per-session ephemeral port; see the agy-reader README for how to
-# discover it on your platform.
-export ANTIGRAVITY_DAEMON_URL=http://127.0.0.1:<PORT>
-
 # Generate sidecars for existing sessions...
 agy-reader --sync
 
 # ...or keep them fresh as you work.
 agy-reader --watch
 ```
+
+agy-reader auto-discovers the Antigravity daemon URL by parsing
+`~/.gemini/antigravity-cli/cli.log`. If discovery fails (e.g. the log has
+rotated), the command prints platform-specific instructions for locating the
+port and exporting `ANTIGRAVITY_DAEMON_URL` manually.
 
 Sidecars stay on your machine. agentsview makes no outbound request to produce
 or read them, and treats sidecars as untrusted structured input -- see
