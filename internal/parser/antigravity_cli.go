@@ -145,8 +145,10 @@ func ParseAntigravityCLISession(
 	var hasTrajectory bool
 	if _, err := os.Stat(sidecarPath); err == nil {
 		if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
-			messages = tMsgs
-			hasTrajectory = true
+			if len(tMsgs) > 0 {
+				messages = tMsgs
+				hasTrajectory = true
+			}
 		}
 	}
 

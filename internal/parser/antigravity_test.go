@@ -704,3 +704,56 @@ func TestAntigravityCLITrajectoryParse(t *testing.T) {
 	expectedSize := pbStat.Size() + sidecarStat.Size()
 	assert.Equal(t, expectedSize, sess.File.Size)
 }
+
+func TestAntigravityCLITrajectoryWithoutSupportedMessagesFallsBack(t *testing.T) {
+	tcs := []struct {
+		name    string
+		sidecar string
+	}{
+		{
+			name:    "empty object",
+			sidecar: `{}`,
+		},
+		{
+			name: "unknown step only",
+			sidecar: `{
+				"steps": [
+					{
+						"type": "CORTEX_STEP_TYPE_FUTURE_ONLY",
+						"metadata": {
+							"createdAt": "2026-05-20T22:40:00Z"
+						},
+						"futurePayload": {
+							"text": "not supported yet"
+						}
+					}
+				]
+			}`,
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "33333333-4444-5555-6666-777777777777"
+
+			mustMkdir(t, filepath.Join(root, "conversations"))
+
+			pbPath := filepath.Join(root, "conversations", id+".pb")
+			mustWrite(t, pbPath, []byte("pb-stub"))
+			mustWrite(t, filepath.Join(root, "conversations", id+".trajectory.json"), []byte(tc.sidecar))
+			mustWrite(t, filepath.Join(root, "history.jsonl"),
+				[]byte(`{"display":"history fallback","timestamp":1779000000000,`+
+					`"workspace":"/tmp/proj","conversationId":"`+id+`"}`))
+
+			sess, msgs, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
+			require.NoError(t, err)
+
+			require.Len(t, msgs, 1)
+			assert.Equal(t, RoleUser, msgs[0].Role)
+			assert.Equal(t, "history fallback", msgs[0].Content)
+			assert.Equal(t, 1, sess.MessageCount)
+			assert.Equal(t, "history fallback", sess.FirstMessage)
+		})
+	}
+}
