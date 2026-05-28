@@ -143,7 +143,8 @@ func ParseAntigravityCLISession(
 	sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
 	var messages []ParsedMessage
 	var hasTrajectory bool
-	if _, err := os.Stat(sidecarPath); err == nil {
+	if sidecarInfo, err := os.Stat(sidecarPath); err == nil &&
+		!sidecarInfo.ModTime().Before(info.ModTime()) {
 		if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
 			if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
 				messages = tMsgs

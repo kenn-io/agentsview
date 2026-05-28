@@ -775,3 +775,42 @@ func TestAntigravityCLITrajectoryWithoutSupportedMessagesFallsBack(t *testing.T)
 		})
 	}
 }
+
+func TestAntigravityCLIStaleTrajectoryFallsBack(t *testing.T) {
+	root := t.TempDir()
+	id := "44444444-5555-6666-7777-888888888888"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	pbPath := filepath.Join(root, "conversations", id+".pb")
+	mustWrite(t, pbPath, []byte("newer-pb-stub"))
+	sidecarPath := filepath.Join(root, "conversations", id+".trajectory.json")
+	mustWrite(t, sidecarPath, []byte(`{
+		"steps": [
+			{
+				"type": "CORTEX_STEP_TYPE_USER_INPUT",
+				"metadata": {
+					"createdAt": "2026-05-20T22:40:00Z"
+				},
+				"userInput": {
+					"userResponse": "stale trajectory prompt"
+				}
+			}
+		]
+	}`))
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"new history prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/proj","conversationId":"`+id+`"}`))
+
+	now := time.Now()
+	require.NoError(t, os.Chtimes(sidecarPath, now.Add(-time.Hour), now.Add(-time.Hour)))
+	require.NoError(t, os.Chtimes(pbPath, now, now))
+
+	sess, msgs, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "new history prompt", msgs[0].Content)
+	assert.Equal(t, "new history prompt", sess.FirstMessage)
+}
