@@ -145,7 +145,7 @@ func ParseAntigravityCLISession(
 	var hasTrajectory bool
 	if _, err := os.Stat(sidecarPath); err == nil {
 		if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
-			if len(tMsgs) > 0 {
+			if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
 				messages = tMsgs
 				hasTrajectory = true
 			}
@@ -242,6 +242,19 @@ func ParseAntigravityCLISession(
 		return sess, nil, nil
 	}
 	return sess, messages, nil
+}
+
+func hasDisplayableAntigravityCLITrajectoryMessage(
+	msgs []ParsedMessage,
+) bool {
+	for _, m := range msgs {
+		if strings.TrimSpace(m.Content) != "" ||
+			m.HasThinking ||
+			len(m.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // buildAntigravityProjectMap reads history.jsonl and returns a

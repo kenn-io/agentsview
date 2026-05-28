@@ -730,6 +730,24 @@ func TestAntigravityCLITrajectoryWithoutSupportedMessagesFallsBack(t *testing.T)
 				]
 			}`,
 		},
+		{
+			name: "tool result only",
+			sidecar: `{
+				"steps": [
+					{
+						"type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+						"metadata": {
+							"createdAt": "2026-05-20T22:40:00Z",
+							"executionId": "tc-1"
+						},
+						"runCommand": {
+							"commandLine": "ls",
+							"combinedOutput": "\"file1.txt\""
+						}
+					}
+				]
+			}`,
+		},
 	}
 
 	for _, tc := range tcs {

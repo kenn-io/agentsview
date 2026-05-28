@@ -2200,6 +2200,13 @@ func discoveredFileMtime(
 			return parser.OpenCodeSourceMtime(file.Path)
 		}
 	}
+	if file.Agent == parser.AgentAntigravityCLI {
+		info, err := parser.AntigravityCLIFileInfo(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return info.ModTime().UnixNano(), nil
+	}
 
 	info, err := os.Stat(file.Path)
 	if err != nil {
