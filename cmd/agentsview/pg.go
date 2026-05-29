@@ -24,19 +24,12 @@ type PGPushConfig struct {
 	ProjectsFlag    string
 	ExcludeProjects string
 	AllProjects     bool
+	Watch           bool
+	Debounce        time.Duration
+	Interval        time.Duration
 }
 
 func runPGPush(cfg PGPushConfig) {
-	if cfg.ProjectsFlag != "" && cfg.ExcludeProjects != "" {
-		fatal("pg push: --projects and --exclude-projects " +
-			"are mutually exclusive")
-	}
-	if cfg.AllProjects &&
-		(cfg.ProjectsFlag != "" || cfg.ExcludeProjects != "") {
-		fatal("pg push: --all-projects cannot be combined " +
-			"with --projects or --exclude-projects")
-	}
-
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -54,28 +47,9 @@ func runPGPush(cfg PGPushConfig) {
 		fatal("pg push: url not configured")
 	}
 
-	// CLI flags override config values entirely. When either
-	// flag is set, clear both config-derived lists so a CLI
-	// include can override a config exclude (and vice versa).
-	// --all-projects clears both lists for an unfiltered push.
-	projects := pgCfg.Projects
-	excludeProjects := pgCfg.ExcludeProjects
-	if cfg.AllProjects {
-		projects = nil
-		excludeProjects = nil
-	}
-	if cfg.ProjectsFlag != "" {
-		projects = splitProjectList(cfg.ProjectsFlag)
-		excludeProjects = nil
-	}
-	if cfg.ExcludeProjects != "" {
-		excludeProjects = splitProjectList(cfg.ExcludeProjects)
-		projects = nil
-	}
-
-	if len(projects) > 0 && len(excludeProjects) > 0 {
-		fatal("pg push: projects and exclude_projects " +
-			"are mutually exclusive")
+	projects, excludeProjects, err := resolvePushProjects(pgCfg, cfg)
+	if err != nil {
+		fatal("pg push: %v", err)
 	}
 
 	applyClassifierConfig(appCfg)
@@ -361,6 +335,47 @@ func runPGServe(appCfg config.Config, basePath string) {
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("pg serve: %v", err)
 	}
+}
+
+// resolvePushProjects merges configured project filters with CLI
+// flag overrides. A CLI include or exclude flag fully replaces the
+// configured lists; --all-projects clears both. Include and exclude
+// are mutually exclusive.
+func resolvePushProjects(
+	pgCfg config.PGConfig, cfg PGPushConfig,
+) (projects, exclude []string, err error) {
+	if cfg.ProjectsFlag != "" && cfg.ExcludeProjects != "" {
+		return nil, nil, fmt.Errorf(
+			"--projects and --exclude-projects are mutually exclusive",
+		)
+	}
+	if cfg.AllProjects &&
+		(cfg.ProjectsFlag != "" || cfg.ExcludeProjects != "") {
+		return nil, nil, fmt.Errorf(
+			"--all-projects cannot be combined with " +
+				"--projects or --exclude-projects",
+		)
+	}
+	projects = pgCfg.Projects
+	exclude = pgCfg.ExcludeProjects
+	if cfg.AllProjects {
+		projects = nil
+		exclude = nil
+	}
+	if cfg.ProjectsFlag != "" {
+		projects = splitProjectList(cfg.ProjectsFlag)
+		exclude = nil
+	}
+	if cfg.ExcludeProjects != "" {
+		exclude = splitProjectList(cfg.ExcludeProjects)
+		projects = nil
+	}
+	if len(projects) > 0 && len(exclude) > 0 {
+		return nil, nil, fmt.Errorf(
+			"projects and exclude_projects are mutually exclusive",
+		)
+	}
+	return projects, exclude, nil
 }
 
 // splitProjectList splits a comma-separated string into trimmed,

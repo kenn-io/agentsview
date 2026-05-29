@@ -965,6 +965,14 @@ func (s *Sync) pushMessages(
 				"deleting stale pg messages: %w", err,
 			)
 		}
+		// Usage events are independent of transcript messages: a
+		// session can carry token/cost accounting (e.g. a hermes
+		// state.db-only session) with zero messages. Sync them here
+		// too so their cost reaches PG instead of being dropped with
+		// the rest of the message-replace path below.
+		if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
+			return 0, err
+		}
 		if err := reconcilePinnedMessages(
 			ctx, tx, sessionID,
 		); err != nil {
@@ -1099,20 +1107,7 @@ func (s *Sync) pushMessages(
 			"deleting pg messages: %w", err,
 		)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM usage_events
-		WHERE session_id = $1
-	`, sessionID); err != nil {
-		return 0, fmt.Errorf(
-			"deleting pg usage_events: %w", err,
-		)
-	}
-
-	usageEvents, err := s.local.GetUsageEvents(ctx, sessionID)
-	if err != nil {
-		return 0, fmt.Errorf("reading local usage events: %w", err)
-	}
-	if err := bulkInsertUsageEvents(ctx, tx, usageEvents); err != nil {
+	if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
 		return 0, err
 	}
 
@@ -1166,6 +1161,31 @@ func (s *Sync) pushMessages(
 	}
 
 	return count, nil
+}
+
+// replaceUsageEvents replaces a session's usage_events in PG with the
+// current local set. Usage events are synced independently of transcript
+// messages because a session can have token/cost accounting with no
+// messages at all (e.g. a hermes state.db-only session). Both the
+// zero-message and the normal message-replace paths in pushMessages call
+// this so a session's cost always reaches PG.
+func (s *Sync) replaceUsageEvents(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM usage_events
+		WHERE session_id = $1
+	`, sessionID); err != nil {
+		return fmt.Errorf("deleting pg usage_events: %w", err)
+	}
+	usageEvents, err := s.local.GetUsageEvents(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("reading local usage events: %w", err)
+	}
+	if err := bulkInsertUsageEvents(ctx, tx, usageEvents); err != nil {
+		return err
+	}
+	return nil
 }
 
 func reconcilePinnedMessages(

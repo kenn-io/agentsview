@@ -253,7 +253,11 @@ func runServe(cfg config.Config) {
 	fmt.Printf("Database: %s\n", cfg.DBPath)
 
 	if engine != nil {
-		stopWatcher, unwatchedDirs := startFileWatcher(cfg, engine)
+		stopWatcher, unwatchedDirs := startFileWatcher(
+			cfg, engine, func(paths []string) {
+				engine.SyncPaths(paths)
+			},
+		)
 		defer stopWatcher()
 		if len(unwatchedDirs) > 0 {
 			go startUnwatchedPoll(engine)
@@ -281,7 +285,13 @@ func mustLoadConfig(cmd *cobra.Command) config.Config {
 const maxLogSize = 10 * 1024 * 1024 // 10 MB
 
 func setupLogFile(dataDir string) {
-	logPath := filepath.Join(dataDir, "debug.log")
+	setupLogFileNamed(dataDir, "debug.log")
+}
+
+// setupLogFileNamed redirects the standard logger to the named file
+// in dataDir, truncating it first if it exceeds maxLogSize.
+func setupLogFileNamed(dataDir, name string) {
+	logPath := filepath.Join(dataDir, name)
 	truncateLogFile(logPath, maxLogSize)
 	f, err := os.OpenFile(
 		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
@@ -443,12 +453,9 @@ func printSyncProgress(p sync.Progress) {
 }
 
 func startFileWatcher(
-	cfg config.Config, engine *sync.Engine,
+	cfg config.Config, engine *sync.Engine, onChange func(paths []string),
 ) (stopWatcher func(), unwatchedDirs []string) {
 	t := time.Now()
-	onChange := func(paths []string) {
-		engine.SyncPaths(paths)
-	}
 	watcher, err := sync.NewWatcher(watcherDebounce, onChange, cfg.WatchExcludePatterns)
 	if err != nil {
 		log.Printf(

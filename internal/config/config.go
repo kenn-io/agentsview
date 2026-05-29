@@ -1119,6 +1119,20 @@ var (
 	partialBareEnvPattern = regexp.MustCompile(`\$([A-Za-z_][A-Za-z0-9_]*)`)
 )
 
+// IsEnvDependentURL reports whether s would have environment variables
+// expanded by expandBracedEnv: it contains any ${VAR} reference, or the
+// whole string is a single bare $VAR shortcut. Embedded bare $VAR
+// references (e.g. "postgres://$USER@host") are deliberately NOT expanded
+// and so do not count. Callers that must persist a literal URL into a
+// context without the shell environment (e.g. a background service) use
+// this to reject env-dependent values. It shares the exact patterns
+// expandBracedEnv uses so the rejection check cannot drift from the
+// expansion semantics.
+func IsEnvDependentURL(s string) bool {
+	return bracedEnvPattern.MatchString(s) ||
+		bareEnvPattern.MatchString(strings.TrimSpace(s))
+}
+
 // bareEnvWarned tracks which bare $VAR names have already been warned
 // about, so each distinct variable triggers a warning at most once.
 var bareEnvWarned sync.Map

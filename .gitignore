@@ -63,4 +63,7 @@ html/
 
 # Antigravity CLI session dir created when AGY runs inside this repo
 .antigravitycli/
+
+# graphify knowledge-graph output (local analysis)
+graphify-out/
 .kata.local.toml

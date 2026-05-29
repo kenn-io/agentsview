@@ -190,6 +190,94 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+// TestPushSyncsUsageEventsForZeroMessageSession verifies that a session
+// carrying token/cost accounting as a usage_event but no transcript
+// messages still has its usage_event pushed to PG. This is the shape of a
+// hermes state.db-only session: parseHermesStateSession emits a single
+// usage_event (model + tokens) with MessageCount 0. The session row (and
+// its aggregate token columns) pushes via pushSession, but pushMessages
+// must not skip usage_event syncing just because the message count is 0 --
+// otherwise the dashboard shows tokens with a $0 cost.
+func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_zeromsg_usage_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "hermes:zero-msg-001"
+	started := "2026-05-26T10:00:00Z"
+	sess := db.Session{
+		ID:                   sessID,
+		Project:              "hermes-proj",
+		Machine:              "test-machine",
+		Agent:                "hermes",
+		MessageCount:         0,
+		StartedAt:            &started,
+		CreatedAt:            started,
+		TotalOutputTokens:    500000,
+		HasTotalOutputTokens: true,
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+
+	// gpt-5.5 usage event with NULL cost so it is priced from the catalog.
+	require.NoError(t, localDB.ReplaceSessionUsageEvents(sessID, []db.UsageEvent{{
+		SessionID:    sessID,
+		Source:       "session",
+		Model:        "gpt-5.5",
+		InputTokens:  1000000,
+		OutputTokens: 500000,
+		CostUSD:      nil,
+		OccurredAt:   started,
+		DedupKey:     "session:" + sessID,
+	}}), "ReplaceSessionUsageEvents")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+
+	// The usage_event must reach PG even though the session has no messages.
+	var pgUsageCount int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM usage_events WHERE session_id = $1`,
+		sessID,
+	).Scan(&pgUsageCount), "count pg usage_events")
+	assert.Equal(t, 1, pgUsageCount,
+		"usage_event for a zero-message session was not pushed")
+
+	// And the read side prices it from the gpt-5.5 catalog rate:
+	// input 5/Mtok, output 30/Mtok -> 1.0*5 + 0.5*30 = 20.
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:     "2026-05-26",
+		To:       "2026-05-26",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	assert.InDelta(t, 20.0, result.Totals.TotalCost, 1e-9,
+		"gpt-5.5 usage should be priced from the catalog")
+}
+
 // checkIsSystem asserts that PG contains exactly wantTotal rows for the
 // session with ordinals 0..wantTotal-1, and that each row's is_system
 // matches wantSystem. Tracking the exact ordinal set prevents false

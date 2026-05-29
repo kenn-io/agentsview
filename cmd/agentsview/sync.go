@@ -107,8 +107,9 @@ func runLocalSync(
 	cleanResyncTemp(appCfg.DBPath)
 
 	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs: appCfg.AgentDirs,
-		Machine:   "local",
+		AgentDirs:               appCfg.AgentDirs,
+		Machine:                 "local",
+		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 	})
 
 	didResync := full || database.NeedsResync()

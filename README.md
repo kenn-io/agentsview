@@ -283,6 +283,45 @@ agentsview pg push       # push local data to PG
 agentsview pg serve      # serve web UI from PG (read-only)
 ```
 
+### Automatic push (background service)
+
+To keep a shared PostgreSQL database current without running `pg push` by
+hand, run the auto-push daemon. It watches your session directories and
+pushes shortly after new sessions are recorded, with a periodic floor as a
+safety net:
+
+```bash
+agentsview pg push --watch                 # foreground, Ctrl-C to stop
+agentsview pg push --watch --debounce 1m   # custom coalesce window
+agentsview pg push --watch --interval 5m   # custom floor interval
+```
+
+The daemon reads the same `[pg]` config as `pg push`, so the PostgreSQL
+DSN must be set in your config file (or an environment variable it
+expands). Protect the config file, since it holds credentials:
+
+```bash
+chmod 600 ~/.agentsview/config.toml
+```
+
+To run it unattended as an OS service (launchd on macOS,
+`systemd --user` on Linux):
+
+```bash
+agentsview pg service install     # generate the unit, enable + start it
+agentsview pg service status      # show manager status
+agentsview pg service logs -f     # follow the service log
+agentsview pg service uninstall   # stop and remove
+```
+
+**Linux headless machines:** systemd `--user` services stop at logout and
+do not start at boot unless lingering is enabled for your user. `install`
+detects this and prints the command; you can also run it yourself:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
 See [PostgreSQL docs](https://agentsview.io/postgresql/) for setup and
 configuration.
 

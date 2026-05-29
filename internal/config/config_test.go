@@ -809,6 +809,31 @@ func TestResolvePG_ErrorsOnMissingBareEnvVar(t *testing.T) {
 	assert.Contains(t, err.Error(), "NONEXISTENT_PG_BARE_VAR")
 }
 
+// TestIsEnvDependentURL locks the helper to the same expansion semantics
+// as expandBracedEnv: any ${VAR}, or a whole-string bare $VAR, is
+// env-dependent; an embedded bare $VAR or literal dollar sequence is not.
+func TestIsEnvDependentURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"braced var", "${PGURL}", true},
+		{"braced var embedded", "postgres://h/db?password=${PGPASS}", true},
+		{"whole-string bare var", "$PGURL", true},
+		{"whole-string bare var with surrounding space", "  $PGURL  ", true},
+		{"embedded bare var not expanded", "postgres://$USER@host/db", false},
+		{"literal dollar sequence", "postgres://user:pa$word@host/db", false},
+		{"plain literal", "postgres://user:pass@localhost/db?sslmode=disable", false},
+		{"empty", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, IsEnvDependentURL(c.in))
+		})
+	}
+}
+
 // ResolvePG must not reject configs with both filter lists —
 // that's a push-specific concern validated in runPGPush after
 // CLI flags are merged. status and serve use ResolvePG too and
