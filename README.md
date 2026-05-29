@@ -256,7 +256,7 @@ agentsview's file watcher detects the sidecar automatically and parses it in
 place of summary mode -- no agentsview restart needed.
 
 ```bash
-go install github.com/mjacobs/agy-reader/cmd/agy-reader@latest
+go install github.com/mjacobs/agy-reader@latest
 
 # Generate sidecars for existing sessions...
 agy-reader --sync
