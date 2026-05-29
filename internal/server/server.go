@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	gosync "sync"
@@ -617,14 +618,50 @@ func hostCheckMiddleware(
 				hostAllowed = isAllowedBindAllHost(r.Host, port, allowedIPs)
 			}
 			if !hostAllowed {
+				allowed := sortedHosts(allowedHosts)
+				log.Printf(
+					"host check rejected %s %s: Host %q not in allowed "+
+						"set %v; if reaching agentsview through a forwarded "+
+						"port or remote host, restart with --public-url "+
+						"<origin> matching your browser URL",
+					r.Method, r.URL.Path, r.Host, allowed,
+				)
 				http.Error(
-					w, "Forbidden", http.StatusForbidden,
+					w, hostRejectionMessage(r.Host, allowed),
+					http.StatusForbidden,
 				)
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sortedHosts returns the allowed Host header values as a sorted
+// slice for deterministic log and error output.
+func sortedHosts(hosts map[string]bool) []string {
+	out := make([]string, 0, len(hosts))
+	for h := range hosts {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// hostRejectionMessage builds a self-explaining 403 body for a
+// rejected Host header. It names the offending Host, lists the
+// allowed values, and points at --public-url so users behind SSH
+// port-forwarding, reverse proxies, or remote dev environments
+// (exe.dev, Codespaces, Coder, WSL2) can diagnose without devtools.
+func hostRejectionMessage(host string, allowed []string) string {
+	return fmt.Sprintf(
+		"Forbidden: request Host %q is not in the allowed set %v. "+
+			"If you are reaching agentsview through SSH port-forwarding, "+
+			"a reverse proxy, or a remote dev environment, restart the "+
+			"server with --public-url <origin> matching the URL in your "+
+			"browser (for example --public-url http://%s).",
+		host, allowed, host,
+	)
 }
 
 // httpOrigin formats an HTTP origin string. It uses

@@ -44,6 +44,29 @@ On first run, agentsview discovers sessions from every supported agent on your
 machine, syncs them into a local SQLite database, and opens a web UI at
 `http://127.0.0.1:8080`.
 
+## Remote / forwarded access
+
+agentsview binds to loopback and validates the request `Host` header to guard
+against DNS-rebinding attacks. When you reach it through SSH port-forwarding, a
+reverse proxy, or a remote dev environment (exe.dev, Codespaces, Coder, WSL2),
+the browser sends a `Host` that the server does not recognize, so API requests
+such as `/api/v1/settings` are rejected with `403 Forbidden`.
+
+To fix this, restart the server with `--public-url` set to the exact origin you
+open in the browser:
+
+```bash
+# Browser opens http://127.0.0.1:18080 via `ssh -L 18080:127.0.0.1:8080 host`
+agentsview serve --public-url http://127.0.0.1:18080
+
+# Browser opens a forwarded hostname
+agentsview serve --public-url https://your-workspace.exe.dev
+```
+
+Use `--public-origin` (repeatable or comma-separated) to trust additional
+browser origins. If you expose the UI beyond loopback, also enable
+`--require-auth`.
+
 ## Docker
 
 The container image defaults to local `agentsview serve`. Set `PG_SERVE=1` to

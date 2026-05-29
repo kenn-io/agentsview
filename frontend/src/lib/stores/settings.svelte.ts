@@ -7,6 +7,25 @@ import {
   isRemoteConnection,
 } from "../api/client.js";
 
+/** Build an actionable message for a 403 from the settings API. A
+ *  403 means the server rejected the request origin/Host (not that a
+ *  token is required), which typically happens behind SSH
+ *  port-forwarding, a reverse proxy, or a remote dev environment.
+ *  Newer servers return a descriptive body; for older servers that
+ *  return a bare "Forbidden", supply the actionable hint ourselves. */
+function forbiddenMessage(serverMessage: string): string {
+  const detail = serverMessage.trim();
+  if (detail && detail.toLowerCase() !== "forbidden") {
+    return detail;
+  }
+  return (
+    "Server rejected this origin. If you are reaching agentsview " +
+    "through SSH port-forwarding, a reverse proxy, or a remote dev " +
+    "environment, restart it with --public-url <origin> matching the " +
+    "URL in your browser."
+  );
+}
+
 class SettingsStore {
   agentDirs: Record<string, string[]> = $state({});
   githubConfigured: boolean = $state(false);
@@ -46,6 +65,8 @@ class SettingsStore {
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         this.needsAuth = true;
+      } else if (e instanceof ApiError && e.status === 403) {
+        this.error = forbiddenMessage(e.message);
       } else {
         this.error =
           e instanceof Error ? e.message : "Failed to load settings";

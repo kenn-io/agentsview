@@ -48,7 +48,7 @@ describe("SettingsStore.load auth handling", () => {
     expect(settings.error).toBeNull();
   });
 
-  it("does not prompt for a token on non-auth 403 responses", async () => {
+  it("surfaces an actionable hint on a bare 403", async () => {
     vi.mocked(api.getSettings).mockRejectedValue(
       new ApiError(403, "Forbidden"),
     );
@@ -56,6 +56,21 @@ describe("SettingsStore.load auth handling", () => {
     await settings.load();
 
     expect(settings.needsAuth).toBe(false);
-    expect(settings.error).toBe("Forbidden");
+    expect(settings.error).toContain("--public-url");
+  });
+
+  it("preserves a descriptive 403 body from the server", async () => {
+    const detail =
+      'Forbidden: request Host "127.0.0.1:18080" is not in the ' +
+      "allowed set [127.0.0.1:8080 localhost:8080]. restart with " +
+      "--public-url http://127.0.0.1:18080.";
+    vi.mocked(api.getSettings).mockRejectedValue(
+      new ApiError(403, detail),
+    );
+
+    await settings.load();
+
+    expect(settings.needsAuth).toBe(false);
+    expect(settings.error).toBe(detail);
   });
 });

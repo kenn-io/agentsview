@@ -1577,6 +1577,23 @@ func TestHostHeaderRejectsDNSRebinding(t *testing.T) {
 	assertStatus(t, w, http.StatusForbidden)
 }
 
+func TestHostHeaderRejectionBodyIsDescriptive(t *testing.T) {
+	te := setup(t)
+
+	// A forwarded port produces a Host the server does not trust.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req.Host = "127.0.0.1:18080"
+	w := httptest.NewRecorder()
+	te.srv.Handler().ServeHTTP(w, req)
+
+	assertStatus(t, w, http.StatusForbidden)
+	body := w.Body.String()
+	// The body must name the rejected Host and point at the fix so a
+	// user can self-diagnose without devtools.
+	assert.Contains(t, body, "127.0.0.1:18080")
+	assert.Contains(t, body, "--public-url")
+}
+
 func TestHostHeaderAllowsLegitimate(t *testing.T) {
 	te := setup(t)
 
