@@ -267,6 +267,129 @@ func TestBuildHermesStateResultKeepsUsageOnlySessions(t *testing.T) {
 	assert.Equal(t, 10, res.UsageEvents[0].InputTokens)
 }
 
+func TestBuildHermesStateResultPopulatesSessionAggregateTokens(t *testing.T) {
+	res, ok := buildHermesStateResult(
+		hermesStateSession{
+			id:              "agg",
+			source:          "cli",
+			model:           "gpt-5.5",
+			startedAt:       time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
+			inputTokens:     300,
+			outputTokens:    70,
+			cacheReadTokens: 20,
+		},
+		nil, t.TempDir(), "state.db", "", "local",
+	)
+	require.True(t, ok)
+	// Session-aggregate columns (session list / detail / stats portfolio)
+	// must reflect Hermes's own authoritative accounting, not stay at 0.
+	assert.True(t, res.Session.HasTotalOutputTokens)
+	assert.Equal(t, 70, res.Session.TotalOutputTokens)
+	assert.True(t, res.Session.HasPeakContextTokens)
+	assert.Equal(t, 320, res.Session.PeakContextTokens)
+}
+
+func TestHermesUsageEvents_UnknownCostStatusLeavesCostUnpriced(t *testing.T) {
+	// estimated_cost_usd is a literal 0 with cost_status "unknown":
+	// Hermes does not actually know the cost, so the event must leave
+	// CostUSD nil and let agentsview price it from the catalog rather
+	// than asserting a false known $0.
+	events := hermesUsageEvents(hermesStateSession{
+		model:         "gpt-5.5",
+		inputTokens:   100,
+		outputTokens:  50,
+		estimatedCost: sql.NullFloat64{Float64: 0, Valid: true},
+		costStatus:    "unknown",
+	}, "hermes:unknown-cost")
+	require.Len(t, events, 1)
+	assert.Nil(t, events[0].CostUSD)
+}
+
+func TestHermesUsageEvents_IncludedCostStatusIsKnownZero(t *testing.T) {
+	// cost_status "included" backed by a real cost_source means the
+	// usage is genuinely covered/free, so a known $0 is correct even
+	// when no estimated cost is recorded.
+	events := hermesUsageEvents(hermesStateSession{
+		model:        "openrouter/owl-alpha",
+		inputTokens:  100,
+		outputTokens: 50,
+		costStatus:   "included",
+		costSource:   "provider_models_api",
+	}, "hermes:included-cost")
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].CostUSD)
+	assert.Equal(t, 0.0, *events[0].CostUSD)
+}
+
+func TestHermesUsageEvents_IncludedWithoutCostSourceLeavesCostUnpriced(t *testing.T) {
+	// Hermes marks models it does not price (e.g. gpt-5.5) cost_status
+	// "included" with cost_source "none". That is a default placeholder,
+	// not a confident free-usage signal, so the event must leave CostUSD
+	// nil and let agentsview price it from the catalog instead of
+	// reporting a false $0.
+	for _, src := range []string{"none", ""} {
+		events := hermesUsageEvents(hermesStateSession{
+			model:         "gpt-5.5",
+			inputTokens:   100,
+			outputTokens:  50,
+			estimatedCost: sql.NullFloat64{Float64: 0, Valid: true},
+			costStatus:    "included",
+			costSource:    src,
+		}, "hermes:included-no-source")
+		require.Len(t, events, 1)
+		assert.Nilf(t, events[0].CostUSD,
+			"cost_source %q must not produce a confident $0", src)
+	}
+}
+
+func TestHermesUsageEvents_ActualCostTakesPrecedence(t *testing.T) {
+	events := hermesUsageEvents(hermesStateSession{
+		model:         "gpt-5.5",
+		inputTokens:   100,
+		actualCost:    sql.NullFloat64{Float64: 1.23, Valid: true},
+		estimatedCost: sql.NullFloat64{Float64: 0, Valid: true},
+		costStatus:    "unknown",
+	}, "hermes:actual-cost")
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].CostUSD)
+	assert.Equal(t, 1.23, *events[0].CostUSD)
+}
+
+func TestHermesUsageEvents_PositiveEstimateUsedWhenStatusEmpty(t *testing.T) {
+	events := hermesUsageEvents(hermesStateSession{
+		model:         "gpt-5.5",
+		inputTokens:   100,
+		estimatedCost: sql.NullFloat64{Float64: 0.5, Valid: true},
+		costStatus:    "",
+	}, "hermes:estimate-cost")
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].CostUSD)
+	assert.Equal(t, 0.5, *events[0].CostUSD)
+}
+
+func TestBuildHermesStateResultLeavesAggregatesUnsetWhenNoTokens(t *testing.T) {
+	res, ok := buildHermesStateResult(
+		hermesStateSession{
+			id:        "no-usage",
+			source:    "cli",
+			model:     "gpt-5.5",
+			startedAt: time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC),
+			// No token counts: a session with messages but no recorded usage.
+		},
+		[]hermesStateMessage{{
+			role:      "user",
+			content:   "hi",
+			timestamp: time.Date(2026, 5, 14, 12, 0, 1, 0, time.UTC),
+		}},
+		t.TempDir(), "state.db", "", "local",
+	)
+	require.True(t, ok)
+	assert.False(t, res.Session.HasTotalOutputTokens)
+	assert.Zero(t, res.Session.TotalOutputTokens)
+	assert.False(t, res.Session.HasPeakContextTokens)
+	assert.Zero(t, res.Session.PeakContextTokens)
+}
+
 func TestCountHermesUsersSkipsToolResultOnlyMessages(t *testing.T) {
 	got := countHermesUsers([]ParsedMessage{
 		{Role: RoleUser, Content: "real prompt"},

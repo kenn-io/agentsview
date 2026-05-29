@@ -759,6 +759,27 @@ func applyHermesStateMetadata(
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
 	sess.DisplayName = ss.title
+
+	// Populate the session-aggregate token columns from Hermes's own
+	// authoritative state.db accounting. These feed the session list,
+	// session detail, and stats portfolio, which read the aggregate
+	// fields directly and do not fall back to usage_events. The
+	// transcript paths yield 0 here (per-message token_count is 0 in
+	// state.db), so these values are strictly better; set them
+	// unconditionally when present. PeakContextTokens uses the
+	// cumulative input + cache_read approximation (matching forge's
+	// convention); a truer last-prompt peak lives only in sessions.json.
+	if ss.outputTokens > 0 {
+		sess.TotalOutputTokens = ss.outputTokens
+		sess.HasTotalOutputTokens = true
+	}
+	if ctx := ss.inputTokens + ss.cacheReadTokens; ctx > 0 {
+		sess.PeakContextTokens = ctx
+		sess.HasPeakContextTokens = true
+	}
+	sess.aggregateTokenPresenceKnown =
+		sess.HasTotalOutputTokens || sess.HasPeakContextTokens
+
 	if selectedPath != "" {
 		if info, err := os.Stat(selectedPath); err == nil {
 			sess.File = FileInfo{
@@ -768,6 +789,14 @@ func applyHermesStateMetadata(
 			}
 		}
 	}
+}
+
+// hermesHasCostSource reports whether a Hermes cost_source represents a
+// real cost determination. "none" (and empty) mean Hermes had no basis
+// for the figure, so a $0 it pairs with cost_status "included" is a
+// default placeholder rather than a confident free-usage signal.
+func hermesHasCostSource(costSource string) bool {
+	return costSource != "" && costSource != "none"
 }
 
 func hermesUsageEvents(
@@ -782,11 +811,23 @@ func hermesUsageEvents(
 		!ss.actualCost.Valid {
 		return nil
 	}
+	// Only emit a cost_usd when Hermes actually knows it. Otherwise
+	// leave it nil so agentsview prices the row from its own model
+	// catalog. A "included" cost_status is a genuine known $0 only when
+	// a real cost_source backs it; Hermes also emits "included" with
+	// cost_source "none" (or empty) as a default for models it does not
+	// price (e.g. gpt-5.5), which is NOT a confident $0 and must fall
+	// through to catalog pricing. Likewise "unknown"/empty with a 0
+	// estimate is not a real figure and must not masquerade as $0.
 	var cost *float64
-	if ss.actualCost.Valid {
+	switch {
+	case ss.actualCost.Valid:
 		v := ss.actualCost.Float64
 		cost = &v
-	} else if ss.estimatedCost.Valid {
+	case ss.costStatus == "included" && hermesHasCostSource(ss.costSource):
+		zero := 0.0
+		cost = &zero
+	case ss.estimatedCost.Valid && ss.estimatedCost.Float64 > 0:
 		v := ss.estimatedCost.Float64
 		cost = &v
 	}

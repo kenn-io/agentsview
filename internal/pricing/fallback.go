@@ -2,7 +2,7 @@ package pricing
 
 // FallbackVersion must be bumped whenever FallbackPricing
 // rates change so the startup seeder knows to re-upsert.
-const FallbackVersion = "2026-05-28"
+const FallbackVersion = "2026-05-29"
 
 // FallbackPricing returns hardcoded pricing for key Claude
 // models. Used when the LiteLLM fetch fails.
@@ -42,6 +42,12 @@ func FallbackPricing() []ModelPricing {
 			CacheReadPerMTok:     0.10,
 		},
 		// Codex / OpenAI models
+		{
+			ModelPattern:     "gpt-5.5",
+			InputPerMTok:     5.0,
+			OutputPerMTok:    30.0,
+			CacheReadPerMTok: 0.50,
+		},
 		{
 			ModelPattern:  "gpt-5.4",
 			InputPerMTok:  2.50,
@@ -100,6 +106,12 @@ func FallbackPricing() []ModelPricing {
 			OutputPerMTok:        4.0,
 			CacheCreationPerMTok: 1.0,
 			CacheReadPerMTok:     0.08,
+		},
+		// Free OpenRouter model
+		{
+			ModelPattern:  "openrouter/owl-alpha",
+			InputPerMTok:  0,
+			OutputPerMTok: 0,
 		},
 	}
 }
