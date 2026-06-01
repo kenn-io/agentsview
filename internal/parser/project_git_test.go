@@ -80,7 +80,7 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 	}
 }
 
-func TestExtractProjectFromCwdContext_GitWorktreeMainRoot(t *testing.T) {
+func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T) {
 	skipIfNoGit(t)
 
 	root := t.TempDir()
