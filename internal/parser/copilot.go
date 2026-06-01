@@ -290,13 +290,17 @@ func formatCopilotToolCalls(
 }
 
 // normalizeCopilotModel converts the model identifier used in
-// Copilot session events (dots in version numbers, e.g.
-// "claude-sonnet-4.6") to the form used in the pricing catalog
-// (hyphens, e.g. "claude-sonnet-4-6"). Only dots that follow a
-// digit and precede a digit are replaced to avoid mangling
-// non-version dots in other model names.
+// Copilot session events to the form used in the pricing catalog.
+// Claude model IDs use dots in version numbers in Copilot events
+// (e.g. "claude-sonnet-4.6") but hyphens in the pricing catalog
+// (e.g. "claude-sonnet-4-6"). Other model families such as GPT
+// already use dots in the catalog (e.g. "gpt-5.4"), so only
+// claude-prefixed names are normalized.
 func normalizeCopilotModel(model string) string {
-	return strings.ReplaceAll(model, ".", "-")
+	if strings.HasPrefix(model, "claude-") {
+		return strings.ReplaceAll(model, ".", "-")
+	}
+	return model
 }
 
 // readCopilotWorkspaceName reads the session name from the

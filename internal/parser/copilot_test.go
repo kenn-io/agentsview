@@ -506,6 +506,28 @@ func TestParseCopilotSession_ModelReset(t *testing.T) {
 	assertEqual(t, "", msgs[3].Model, "msgs[3].Model (reset)")
 }
 
+func TestNormalizeCopilotModel(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"claude-sonnet-4.6", "claude-sonnet-4-6"},
+		{"claude-haiku-4.5", "claude-haiku-4-5"},
+		{"claude-opus-4.7", "claude-opus-4-7"},
+		// GPT models use dots in the pricing catalog and must not be changed.
+		{"gpt-5.4", "gpt-5.4"},
+		{"gpt-5.5", "gpt-5.5"},
+		{"gpt-4o", "gpt-4o"},
+		{"o3-mini", "o3-mini"},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.want, normalizeCopilotModel(tc.input))
+		})
+	}
+}
+
 func TestSessionIDFromPath(t *testing.T) {
 	tests := []struct {
 		path string
