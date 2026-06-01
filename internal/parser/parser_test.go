@@ -2,7 +2,6 @@ package parser
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -56,7 +55,6 @@ func TestGetProjectName(t *testing.T) {
 }
 
 func TestExtractProjectFromCwd(t *testing.T) {
-	repoProject := currentTestRepoProject()
 	tests := []struct {
 		cwd  string
 		want string
@@ -65,8 +63,8 @@ func TestExtractProjectFromCwd(t *testing.T) {
 		{cwd: "/home/user/projects/api-server", want: "api_server"},
 		{cwd: ""},
 		{cwd: "/"},
-		{cwd: ".", want: repoProject},
-		{cwd: "..", want: repoProject},
+		{cwd: "."},
+		{cwd: ".."},
 	}
 
 	// Windows drive-letter paths are normalized cross-platform.
@@ -92,14 +90,6 @@ func TestExtractProjectFromCwd(t *testing.T) {
 			assert.Equalf(t, tt.want, got, "ExtractProjectFromCwd(%q)", tt.cwd)
 		})
 	}
-}
-
-func currentTestRepoProject() string {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return ""
-	}
-	return NormalizeName(filepath.Base(strings.TrimSpace(string(out))))
 }
 
 func TestNeedsProjectReparse(t *testing.T) {

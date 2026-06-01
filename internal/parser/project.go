@@ -127,7 +127,7 @@ func extractProjectFromCwdWithBranch(
 	// an unbacked autofs prefix cascades through automountd into
 	// opendirectoryd (/usr/libexec/od_user_homes), so we probe
 	// the prefix once before walking.
-	if !isForeignOSPath(cwd, cleaned, winPath) {
+	if filepath.IsAbs(cleaned) && !isForeignOSPath(cwd, cleaned, winPath) {
 		if root := findGitRepoRoot(ctx, cleaned); root != "" {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
