@@ -87,7 +87,7 @@ func ExtractProjectFromCwd(cwd string) string {
 func ExtractProjectFromCwdWithBranch(
 	cwd, gitBranch string,
 ) string {
-	return extractProjectFromCwdWithBranch(nil, cwd, gitBranch)
+	return extractProjectFromCwdWithBranch(context.TODO(), false, cwd, gitBranch)
 }
 
 // ExtractProjectFromCwdWithBranchContext extracts a canonical project name
@@ -96,11 +96,11 @@ func ExtractProjectFromCwdWithBranch(
 func ExtractProjectFromCwdWithBranchContext(
 	ctx context.Context, cwd, gitBranch string,
 ) string {
-	return extractProjectFromCwdWithBranch(ctx, cwd, gitBranch)
+	return extractProjectFromCwdWithBranch(ctx, true, cwd, gitBranch)
 }
 
 func extractProjectFromCwdWithBranch(
-	ctx context.Context, cwd, gitBranch string,
+	ctx context.Context, useKitGit bool, cwd, gitBranch string,
 ) string {
 	if cwd == "" {
 		return ""
@@ -125,7 +125,7 @@ func extractProjectFromCwdWithBranch(
 	// opendirectoryd (/usr/libexec/od_user_homes), so we probe
 	// the prefix once before walking.
 	if !isForeignOSPath(cwd, cleaned, winPath) {
-		if root := findGitRepoRoot(ctx, cleaned); root != "" {
+		if root := findGitRepoRoot(ctx, useKitGit, cleaned); root != "" {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
 				return ""
@@ -413,7 +413,7 @@ func isInvalidPathBase(name string) bool {
 // and linked worktrees/submodules (.git file). When cwd no longer
 // exists on disk, sibling directories are checked for worktree
 // .git files that can reveal the true repo root.
-func findGitRepoRoot(ctx context.Context, cwd string) string {
+func findGitRepoRoot(ctx context.Context, useKitGit bool, cwd string) string {
 	if cwd == "" {
 		return ""
 	}
@@ -433,13 +433,11 @@ func findGitRepoRoot(ctx context.Context, cwd string) string {
 		dir = filepath.Dir(dir)
 	}
 
-	if !cwdMissing {
-		if ctx != nil {
-			opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			if root, err := gitrepo.MainRoot(opCtx, dir); err == nil {
-				return root
-			}
+	if useKitGit && !cwdMissing {
+		opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if root, err := gitrepo.MainRoot(opCtx, dir); err == nil {
+			return root
 		}
 	}
 
