@@ -183,13 +183,15 @@ func TestAggregateLog_UsesGlobalGitConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	globalConfig := filepath.Join(home, ".gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
 
 	attrsPath := filepath.Join(home, "attributes")
 	require.NoError(t, os.WriteFile(
 		attrsPath, []byte("*.txt binary\n"), 0o644,
 	), "write global attributes")
 	require.NoError(t, os.WriteFile(
-		filepath.Join(home, ".gitconfig"),
+		globalConfig,
 		[]byte("[core]\n\tattributesfile = "+filepath.ToSlash(attrsPath)+"\n"),
 		0o644,
 	), "write global git config")
