@@ -67,7 +67,7 @@ func (b *copilotSessionBuilder) processLine(line string) {
 		b.handleAssistantReasoning()
 	case copilotEventModelChange:
 		if v := data.Get("newModel"); v.Exists() {
-			b.currentModel = v.Str
+			b.currentModel = normalizeCopilotModel(v.Str)
 		}
 	case copilotEventSessionShutdown:
 		b.handleShutdown(data, ts)
@@ -265,7 +265,7 @@ func (b *copilotSessionBuilder) handleShutdown(
 
 			b.usageEvents = append(b.usageEvents, ParsedUsageEvent{
 				Source:                   "shutdown",
-				Model:                    modelKey.Str,
+				Model:                    normalizeCopilotModel(modelKey.Str),
 				InputTokens:              freshInput,
 				OutputTokens:             output,
 				CacheCreationInputTokens: cacheWrite,
@@ -287,6 +287,16 @@ func formatCopilotToolCalls(
 			formatToolHeader(tc.Category, tc.ToolName))
 	}
 	return strings.Join(parts, "\n")
+}
+
+// normalizeCopilotModel converts the model identifier used in
+// Copilot session events (dots in version numbers, e.g.
+// "claude-sonnet-4.6") to the form used in the pricing catalog
+// (hyphens, e.g. "claude-sonnet-4-6"). Only dots that follow a
+// digit and precede a digit are replaced to avoid mangling
+// non-version dots in other model names.
+func normalizeCopilotModel(model string) string {
+	return strings.ReplaceAll(model, ".", "-")
 }
 
 // readCopilotWorkspaceName reads the session name from the

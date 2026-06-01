@@ -455,7 +455,7 @@ func TestParseCopilotSession_ModelChange(t *testing.T) {
 
 	_, msgs := parseAndValidateHelper(t, path, "m", 2)
 
-	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model")
+	assertEqual(t, "claude-sonnet-4-6", msgs[1].Model, "msgs[1].Model")
 	assertEqual(t, "", msgs[0].Model, "msgs[0].Model")
 }
 
@@ -483,8 +483,8 @@ func TestParseCopilotSession_ModelMidSessionChange(t *testing.T) {
 
 	_, msgs := parseAndValidateHelper(t, path, "m", 4)
 
-	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model")
-	assertEqual(t, "claude-haiku-4.5", msgs[3].Model, "msgs[3].Model")
+	assertEqual(t, "claude-sonnet-4-6", msgs[1].Model, "msgs[1].Model")
+	assertEqual(t, "claude-haiku-4-5", msgs[3].Model, "msgs[3].Model")
 }
 
 func TestParseCopilotSession_ModelReset(t *testing.T) {
@@ -502,7 +502,7 @@ func TestParseCopilotSession_ModelReset(t *testing.T) {
 
 	_, msgs := parseAndValidateHelper(t, path, "m", 4)
 
-	assertEqual(t, "claude-sonnet-4.6", msgs[1].Model, "msgs[1].Model")
+	assertEqual(t, "claude-sonnet-4-6", msgs[1].Model, "msgs[1].Model")
 	assertEqual(t, "", msgs[3].Model, "msgs[3].Model (reset)")
 }
 
@@ -587,14 +587,14 @@ func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
 	u := usage[0]
 	assert.Equal(t, "copilot:shut-test", u.SessionID)
 	assert.Equal(t, "shutdown", u.Source)
-	assert.Equal(t, "claude-sonnet-4.6", u.Model)
+	assert.Equal(t, "claude-sonnet-4-6", u.Model)
 	// Fresh input = 931647 - 873267 - 51438 = 6942
 	assert.Equal(t, 6942, u.InputTokens, "InputTokens should be fresh only")
 	assert.Equal(t, 7150, u.OutputTokens)
 	assert.Equal(t, 873267, u.CacheReadInputTokens)
 	assert.Equal(t, 51438, u.CacheCreationInputTokens)
 	assert.Equal(t, 432, u.ReasoningTokens)
-	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4.6", u.DedupKey)
+	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4-6", u.DedupKey)
 }
 
 func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
@@ -613,12 +613,12 @@ func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
 		byModel[u.Model] = u
 	}
 
-	sonnet := byModel["claude-sonnet-4.6"]
+	sonnet := byModel["claude-sonnet-4-6"]
 	// fresh = 100 - 60 - 10 = 30
 	assert.Equal(t, 30, sonnet.InputTokens)
 	assert.Equal(t, 50, sonnet.OutputTokens)
 
-	haiku := byModel["claude-haiku-4.5"]
+	haiku := byModel["claude-haiku-4-5"]
 	// fresh = 200 - 120 - 20 = 60
 	assert.Equal(t, 60, haiku.InputTokens)
 	assert.Equal(t, 80, haiku.OutputTokens)
