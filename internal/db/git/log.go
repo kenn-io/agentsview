@@ -34,7 +34,9 @@ type LogResult struct {
 func AggregateLog(
 	ctx context.Context, repo, authorEmail, since, until string,
 ) (LogResult, error) {
-	out, stderr, err := gitcmd.New().Run(
+	runner := gitcmd.New()
+	runner.NullGlobalConfig = false
+	out, stderr, err := runner.Run(
 		ctx, repo, nil,
 		"log",
 		"--numstat",
