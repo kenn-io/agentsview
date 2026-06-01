@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	gitrepo "go.kenn.io/kit/git/repo"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -85,8 +87,26 @@ func ExtractProjectFromCwd(cwd string) string {
 func ExtractProjectFromCwdWithBranch(
 	cwd, gitBranch string,
 ) string {
+	return extractProjectFromCwdWithBranch(context.TODO(), cwd, gitBranch)
+}
+
+// ExtractProjectFromCwdWithBranchContext extracts a canonical project name
+// from cwd and optionally git branch metadata using ctx for git-backed
+// repository resolution.
+func ExtractProjectFromCwdWithBranchContext(
+	ctx context.Context, cwd, gitBranch string,
+) string {
+	return extractProjectFromCwdWithBranch(ctx, cwd, gitBranch)
+}
+
+func extractProjectFromCwdWithBranch(
+	ctx context.Context, cwd, gitBranch string,
+) string {
 	if cwd == "" {
 		return ""
+	}
+	if ctx == nil {
+		ctx = context.TODO()
 	}
 	winPath := looksLikeWindowsPath(cwd)
 	norm := cwd
@@ -107,8 +127,8 @@ func ExtractProjectFromCwdWithBranch(
 	// an unbacked autofs prefix cascades through automountd into
 	// opendirectoryd (/usr/libexec/od_user_homes), so we probe
 	// the prefix once before walking.
-	if !isForeignOSPath(cwd, cleaned, winPath) {
-		if root := findGitRepoRoot(cleaned); root != "" {
+	if filepath.IsAbs(cleaned) && !isForeignOSPath(cwd, cleaned, winPath) {
+		if root := findGitRepoRoot(ctx, cleaned); root != "" {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
 				return ""
@@ -396,7 +416,7 @@ func isInvalidPathBase(name string) bool {
 // and linked worktrees/submodules (.git file). When cwd no longer
 // exists on disk, sibling directories are checked for worktree
 // .git files that can reveal the true repo root.
-func findGitRepoRoot(cwd string) string {
+func findGitRepoRoot(ctx context.Context, cwd string) string {
 	if cwd == "" {
 		return ""
 	}
@@ -414,6 +434,14 @@ func findGitRepoRoot(cwd string) string {
 		}
 		cwdMissing = true
 		dir = filepath.Dir(dir)
+	}
+
+	if !cwdMissing {
+		opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if root, err := gitrepo.MainRoot(opCtx, dir); err == nil {
+			return root
+		}
 	}
 
 	// When the original path is gone, walk up to the first

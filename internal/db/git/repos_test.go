@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,7 +55,7 @@ func TestDiscoverRepos_FindsRootAndFiltersMissing(t *testing.T) {
 	sub := mkdirIn(t, repoA, "subdir")
 	outside := t.TempDir()
 
-	got := DiscoverRepos([]string{sub, outside})
+	got := DiscoverRepos(context.Background(), []string{sub, outside})
 	want := []string{repoA}
 	assert.Equal(t, canonAll(want), canonAll(got), "DiscoverRepos")
 }
@@ -65,17 +66,17 @@ func TestDiscoverRepos_Dedup(t *testing.T) {
 	sub1 := mkdirIn(t, repoA, "sub1")
 	sub2 := mkdirIn(t, repoA, "sub2/deeper")
 
-	got := DiscoverRepos([]string{sub1, sub2, repoA})
+	got := DiscoverRepos(context.Background(), []string{sub1, sub2, repoA})
 	require.Len(t, got, 1, "want exactly one entry (dedup)")
 	assert.Equal(t, canonAll([]string{repoA}), canonAll(got),
 		"DiscoverRepos")
 }
 
 func TestDiscoverRepos_EmptyInputReturnsEmptySlice(t *testing.T) {
-	got := DiscoverRepos(nil)
+	got := DiscoverRepos(context.Background(), nil)
 	require.NotNil(t, got, "DiscoverRepos(nil)")
 	assert.Empty(t, got, "DiscoverRepos(nil) should be empty slice")
-	got = DiscoverRepos([]string{})
+	got = DiscoverRepos(context.Background(), []string{})
 	require.NotNil(t, got, "DiscoverRepos([])")
 	assert.Empty(t, got, "DiscoverRepos([]) should be empty slice")
 }
@@ -98,7 +99,7 @@ func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
 		"worktree", "add", "-b", "feature", worktreeRoot,
 	)
 
-	got := DiscoverRepos([]string{worktreeRoot})
+	got := DiscoverRepos(context.Background(), []string{worktreeRoot})
 	require.Len(t, got, 1, "want one worktree root")
 	assert.Equal(t,
 		canonAll([]string{worktreeRoot}),
@@ -113,6 +114,6 @@ func TestDiscoverRepos_MissingCwdSkipped(t *testing.T) {
 	skipIfNoGit(t)
 	missing := filepath.Join(t.TempDir(), "no", "such", "path")
 
-	got := DiscoverRepos([]string{missing})
+	got := DiscoverRepos(context.Background(), []string{missing})
 	assert.Empty(t, got, "DiscoverRepos missing path")
 }

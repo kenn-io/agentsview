@@ -178,13 +178,49 @@ func TestAggregateLog_EmptyRepoReturnsZero(t *testing.T) {
 	assert.Equal(t, LogResult{}, got, "AggregateLog on empty repo")
 }
 
+func TestAggregateLog_UsesGlobalGitConfig(t *testing.T) {
+	skipIfNoGit(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	globalConfig := filepath.Join(home, ".gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+
+	attrsPath := filepath.Join(home, "attributes")
+	require.NoError(t, os.WriteFile(
+		attrsPath, []byte("*.txt binary\n"), 0o644,
+	), "write global attributes")
+	require.NoError(t, os.WriteFile(
+		globalConfig,
+		[]byte("[core]\n\tattributesfile = "+filepath.ToSlash(attrsPath)+"\n"),
+		0o644,
+	), "write global git config")
+
+	repo := initRepo(t)
+	writeFile(t, repo, "configured-binary.txt", []byte("a\nb\nc\n"))
+	commitAs(t, repo, "test@example.com", "Test User", "c1")
+
+	got, err := AggregateLog(
+		context.Background(),
+		repo, "test@example.com",
+		"1970-01-01T00:00:00Z", "2099-01-01T00:00:00Z",
+	)
+	require.NoError(t, err, "AggregateLog")
+	assert.Equal(t, LogResult{
+		Commits:      1,
+		LOCAdded:     0,
+		LOCRemoved:   0,
+		FilesChanged: 1,
+	}, got, "AggregateLog should respect global git config")
+}
+
 func TestAuthorEmail_LocalConfig(t *testing.T) {
 	skipIfNoGit(t)
 	repo := t.TempDir()
 	gitRun(t, repo, nil, "init", "-q", "-b", "main")
 	gitRun(t, repo, nil, "config", "user.email", "local@example.com")
 
-	got := AuthorEmail(repo)
+	got := AuthorEmail(context.Background(), repo)
 	assert.Equal(t, "local@example.com", got, "AuthorEmail")
 }
 
@@ -221,8 +257,38 @@ func TestAuthorEmail_FallsBackToGlobal(t *testing.T) {
 	out, err = initCmd.CombinedOutput()
 	require.NoError(t, err, "git init: %s", out)
 
-	got := AuthorEmail(repo)
+	got := AuthorEmail(context.Background(), repo)
 	assert.Equal(t, "global@example.com", got, "AuthorEmail (global fallback)")
+}
+
+func TestAuthorEmail_UsesIncludeIfGitdir(t *testing.T) {
+	skipIfNoGit(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	globalConfig := filepath.Join(home, ".gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+
+	repo := t.TempDir()
+	gitRun(t, repo, nil, "init", "-q", "-b", "main")
+
+	includePath := filepath.Join(home, "repo.gitconfig")
+	require.NoError(t, os.WriteFile(
+		includePath,
+		[]byte("[user]\n\temail = includeif@example.com\n"),
+		0o644,
+	), "write include config")
+	gitdir, err := filepath.EvalSymlinks(filepath.Join(repo, ".git"))
+	require.NoError(t, err, "resolve repo gitdir")
+	require.NoError(t, os.WriteFile(
+		globalConfig,
+		[]byte(`[includeIf "gitdir:`+filepath.ToSlash(gitdir)+`"]
+	path = `+filepath.ToSlash(includePath)+"\n"),
+		0o644,
+	), "write global config")
+
+	got := AuthorEmail(context.Background(), repo)
+	assert.Equal(t, "includeif@example.com", got, "AuthorEmail (includeIf.gitdir)")
 }
 
 func TestParseNumstat_SkipsBinaryLOCButCountsFile(t *testing.T) {

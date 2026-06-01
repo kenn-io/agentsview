@@ -317,8 +317,8 @@ func sessionUsageData(sessionID string) (*sessionUsageOutput, int, error) {
 			Machine:                 "local",
 			BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 		})
-		if syncErr := engine.SyncSingleSession(
-			resolvedID,
+		if syncErr := engine.SyncSingleSessionContext(
+			ctx, resolvedID,
 		); syncErr != nil {
 			// Not fatal: session may already be in the DB
 			// from a previous sync, or may not exist at all.

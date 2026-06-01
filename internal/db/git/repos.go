@@ -3,13 +3,12 @@
 package git
 
 import (
-	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
+
+	gitrepo "go.kenn.io/kit/git/repo"
 )
 
 // DiscoverRepos resolves each cwd to its enclosing git repository toplevel and
@@ -23,11 +22,11 @@ import (
 // helper falls back to walking upward from the nearest existing ancestor and
 // invoking `git rev-parse` from there — that mirrors how the parser package
 // recovers repo roots for archived sessions whose cwd has been deleted.
-func DiscoverRepos(cwds []string) []string {
+func DiscoverRepos(ctx context.Context, cwds []string) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
 	for _, cwd := range cwds {
-		root := findRepoRoot(cwd)
+		root := findRepoRoot(ctx, cwd)
 		if root == "" {
 			continue
 		}
@@ -42,7 +41,7 @@ func DiscoverRepos(cwds []string) []string {
 
 // findRepoRoot returns the absolute repo toplevel for start, or "" when no
 // enclosing repo can be resolved.
-func findRepoRoot(start string) string {
+func findRepoRoot(ctx context.Context, start string) string {
 	if start == "" {
 		return ""
 	}
@@ -50,7 +49,7 @@ func findRepoRoot(start string) string {
 	if dir == "" {
 		return ""
 	}
-	return gitToplevel(dir)
+	return gitToplevel(ctx, dir)
 }
 
 // existingAncestor returns the closest ancestor of path that exists on disk
@@ -79,18 +78,12 @@ func existingAncestor(path string) string {
 // gitToplevel runs `git rev-parse --show-toplevel` from dir and returns the
 // trimmed result, or "" if git fails or prints nothing. A 5s timeout guards
 // against hung git invocations on broken repos.
-func gitToplevel(dir string) string {
-	ctx, cancel := context.WithTimeout(
-		context.Background(), 5*time.Second,
-	)
+func gitToplevel(ctx context.Context, dir string) string {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
-	cmd.Dir = dir
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	root, err := gitrepo.Root(ctx, dir)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return root
 }

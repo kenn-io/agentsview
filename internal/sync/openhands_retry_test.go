@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,7 +58,7 @@ func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, oldDirMtime.UnixNano(), snapshot.Mtime)
 
-	res := engine.processFile(parser.DiscoveredFile{
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
 		Path:  sessionDir,
 		Agent: parser.AgentOpenHands,
 	})

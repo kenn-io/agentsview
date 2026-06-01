@@ -32,13 +32,16 @@ func TestDiscoverWorkBuddySessions(t *testing.T) {
 }
 
 func TestParseWorkBuddySession(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "proj", "11111111-1111-4111-8111-111111111111.jsonl")
+	tmp := t.TempDir()
+	cwd := filepath.Join(tmp, "cwd", "proj")
+	require.NoError(t, os.MkdirAll(cwd, 0o755))
+	path := filepath.Join(tmp, "proj", "11111111-1111-4111-8111-111111111111.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	content := `{"id":"u1","timestamp":1778749186168,"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}],"sessionId":"11111111-1111-4111-8111-111111111111","cwd":"/tmp/proj"}
+	content := fmt.Sprintf(`{"id":"u1","timestamp":1778749186168,"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}],"sessionId":"11111111-1111-4111-8111-111111111111","cwd":%q}
 {"id":"a1","timestamp":1778749187168,"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}],"sessionId":"11111111-1111-4111-8111-111111111111","providerData":{"model":"gpt-5.5","usage":{"inputTokens":20,"outputTokens":4,"cacheReadInputTokens":5}}}
 {"id":"fc1","timestamp":1778749188168,"type":"function_call","name":"Bash","callId":"call_1","arguments":"{\"command\":\"pwd\"}","providerData":{"model":"gpt-5.5","usage":{"inputTokens":10,"outputTokens":3,"cacheReadInputTokens":2}}}
-{"id":"fr1","timestamp":1778749189168,"type":"function_call_result","name":"Bash","callId":"call_1","output":{"type":"text","text":"/tmp/proj"}}
-`
+{"id":"fr1","timestamp":1778749189168,"type":"function_call_result","name":"Bash","callId":"call_1","output":{"type":"text","text":%q}}
+`, cwd, cwd)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	sess, msgs, err := ParseWorkBuddySession(path, "proj", "local")
@@ -46,7 +49,7 @@ func TestParseWorkBuddySession(t *testing.T) {
 	require.NotNil(t, sess, "session nil")
 	assert.Equal(t, "workbuddy:11111111-1111-4111-8111-111111111111", sess.ID)
 	assert.Equal(t, "proj", sess.Project)
-	assert.Equal(t, "/tmp/proj", sess.Cwd)
+	assert.Equal(t, cwd, sess.Cwd)
 	assert.Equal(t, "hello", sess.FirstMessage)
 	assert.Equal(t, 1, sess.UserMessageCount)
 	assert.True(t, sess.HasTotalOutputTokens)

@@ -2561,7 +2561,7 @@ func (e *Engine) startWorkers(
 					continue
 				}
 				results <- syncJob{
-					processResult: e.processFile(file),
+					processResult: e.processFile(ctx, file),
 					path:          file.Path,
 				}
 			}
@@ -2758,6 +2758,7 @@ type processResult struct {
 }
 
 func (e *Engine) processFile(
+	ctx context.Context,
 	file parser.DiscoveredFile,
 ) processResult {
 
@@ -2813,7 +2814,7 @@ func (e *Engine) processFile(
 	var res processResult
 	switch file.Agent {
 	case parser.AgentClaude:
-		res = e.processClaude(file, info)
+		res = e.processClaude(ctx, file, info)
 	case parser.AgentCodex:
 		res = e.processCodex(file, info)
 	case parser.AgentCopilot:
@@ -2827,7 +2828,7 @@ func (e *Engine) processFile(
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
 	case parser.AgentIflow:
-		res = e.processIflow(file, info)
+		res = e.processIflow(ctx, file, info)
 	case parser.AgentAmp:
 		res = e.processAmp(file, info)
 	case parser.AgentZencoder:
@@ -3036,6 +3037,7 @@ func (f fakeSnapshotInfo) IsDir() bool { return false }
 func (f fakeSnapshotInfo) Sys() any    { return nil }
 
 func (e *Engine) processClaude(
+	ctx context.Context,
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
 
@@ -3043,7 +3045,7 @@ func (e *Engine) processClaude(
 
 	if e.shouldSkipFile(sessionID, info) {
 		sess, _ := e.db.GetSession(
-			context.Background(), e.idPrefix+sessionID,
+			ctx, e.idPrefix+sessionID,
 		)
 		if sess != nil &&
 			sess.Project != "" &&
@@ -3072,8 +3074,8 @@ func (e *Engine) processClaude(
 		file.Path,
 	)
 	if cwd != "" {
-		if p := parser.ExtractProjectFromCwdWithBranch(
-			cwd, gitBranch,
+		if p := parser.ExtractProjectFromCwdWithBranchContext(
+			ctx, cwd, gitBranch,
 		); p != "" {
 			project = p
 		}
@@ -4232,6 +4234,7 @@ func validateCursorContainment(
 }
 
 func (e *Engine) processIflow(
+	ctx context.Context,
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
 	// Extract session ID from filename: session-<uuid>.jsonl
@@ -4239,7 +4242,7 @@ func (e *Engine) processIflow(
 
 	if e.shouldSkipFile(sessionID, info) {
 		sess, _ := e.db.GetSession(
-			context.Background(), e.idPrefix+sessionID,
+			ctx, e.idPrefix+sessionID,
 		)
 		if sess != nil &&
 			sess.Project != "" &&
@@ -4254,8 +4257,8 @@ func (e *Engine) processIflow(
 		file.Path,
 	)
 	if cwd != "" {
-		if p := parser.ExtractProjectFromCwdWithBranch(
-			cwd, gitBranch,
+		if p := parser.ExtractProjectFromCwdWithBranchContext(
+			ctx, cwd, gitBranch,
 		); p != "" {
 			project = p
 		}
@@ -5342,6 +5345,14 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 // SyncSingleSession re-syncs a single session by its ID and
 // uses the existing DB project as fallback where applicable.
 func (e *Engine) SyncSingleSession(sessionID string) (err error) {
+	return e.SyncSingleSessionContext(context.Background(), sessionID)
+}
+
+// SyncSingleSessionContext re-syncs a single session by its ID using ctx for
+// cancellable git-backed project resolution and database reads on this path.
+func (e *Engine) SyncSingleSessionContext(
+	ctx context.Context, sessionID string,
+) (err error) {
 	e.syncMu.Lock()
 	preserved := false
 	// Defers run LIFO: unlock runs first (releasing syncMu), then
@@ -5409,7 +5420,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	}
 	if def.Type == parser.AgentHermes {
 		hermesProject := ""
-		if sess, _ := e.db.GetSession(context.Background(), sessionID); sess != nil &&
+		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" && !parser.NeedsProjectReparse(sess.Project) {
 			hermesProject = sess.Project
 		}
@@ -5441,7 +5452,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	switch agent {
 	case parser.AgentClaude:
 		// Try to preserve existing project from DB first
-		if sess, _ := e.db.GetSession(context.Background(), sessionID); sess != nil &&
+		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project
@@ -5468,7 +5479,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 	case parser.AgentIflow:
 		// path is <iflowDir>/<project>/session-<uuid>.jsonl
 		// Extract project dir name from parent directory
-		if sess, _ := e.db.GetSession(context.Background(), sessionID); sess != nil &&
+		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project
@@ -5498,7 +5509,7 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 		}
 	}
 
-	res := e.processFile(file)
+	res := e.processFile(ctx, file)
 	if res.err != nil {
 		if res.cacheSkip && res.mtime != 0 {
 			e.cacheSkip(path, res.mtime)

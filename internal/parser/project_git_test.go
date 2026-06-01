@@ -1,9 +1,12 @@
 package parser
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -75,6 +78,32 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 				"ExtractProjectFromCwd(%q)", cwd)
 		})
 	}
+}
+
+func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T) {
+	skipIfNoGit(t)
+
+	root := t.TempDir()
+	mainRepo := filepath.Join(root, "agentsview")
+	mustMkdirAll(t, mainRepo)
+	gitRun(t, mainRepo, "init", "-q", "-b", "main")
+	gitRun(t, mainRepo, "config", "user.email", "test@example.com")
+	gitRun(t, mainRepo, "config", "user.name", "Test User")
+	gitRun(t, mainRepo, "config", "commit.gpgsign", "false")
+	mustWriteFile(t, filepath.Join(mainRepo, "README.md"), "seed\n")
+	gitRun(t, mainRepo, "add", "-A")
+	gitRun(t, mainRepo, "commit", "-q", "-m", "seed")
+
+	worktree := filepath.Join(root, "agentsview-feature")
+	gitRun(t, mainRepo, "worktree", "add", "-q", "-b", "feature", worktree)
+	subdir := filepath.Join(worktree, "internal", "parser")
+	mustMkdirAll(t, subdir)
+
+	got := ExtractProjectFromCwdWithBranchContext(
+		context.Background(), subdir, "feature",
+	)
+	assert.Equal(t, "agentsview", got,
+		"kit-backed worktree resolution should use the main repo name")
 }
 
 func TestExtractProjectFromCwd_DeletedNestedWorktree(t *testing.T) {
@@ -560,4 +589,19 @@ func mustWriteFile(t *testing.T, path, content string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644),
 		"WriteFile(%q)", path)
+}
+
+func skipIfNoGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available on PATH: %v", err)
+	}
+}
+
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)
 }

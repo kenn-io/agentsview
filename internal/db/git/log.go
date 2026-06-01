@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	gitcmd "go.kenn.io/kit/git/cmd"
 )
 
 // LogResult aggregates author-filtered counts from `git log --numstat` output.
@@ -33,20 +34,19 @@ type LogResult struct {
 func AggregateLog(
 	ctx context.Context, repo, authorEmail, since, until string,
 ) (LogResult, error) {
-	cmd := exec.CommandContext(
-		ctx, "git", "log",
+	runner := gitcmd.New()
+	runner.NullGlobalConfig = false
+	out, stderr, err := runner.Run(
+		ctx, repo, nil,
+		"log",
 		"--numstat",
 		"--format=%H",
 		"--since="+since,
 		"--until="+until,
 		"--author="+authorEmailPattern(authorEmail),
 	)
-	cmd.Dir = repo
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
 	if err != nil {
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(string(stderr))
 		// An empty repo (initialized but no commits, or a worktree
 		// pointed at an unborn branch) is a normal state, not an
 		// error — there is simply no log to aggregate. Treat as a
@@ -169,17 +169,19 @@ func authorEmailPattern(email string) string {
 // AuthorEmail returns `git config user.email` run from inside the repo,
 // falling back to the global config. Returns "" if neither is set or git
 // is not available.
-func AuthorEmail(repo string) string {
-	cmd := exec.Command("git", "config", "user.email")
-	cmd.Dir = repo
-	out, err := cmd.Output()
+func AuthorEmail(ctx context.Context, repo string) string {
+	localRunner := gitcmd.New()
+	localRunner.NullGlobalConfig = false
+	out, err := localRunner.Output(ctx, repo, "config", "user.email")
 	if err == nil {
 		if v := strings.TrimSpace(string(out)); v != "" {
 			return v
 		}
 	}
-	cmd = exec.Command("git", "config", "--global", "user.email")
-	out, err = cmd.Output()
+
+	globalRunner := gitcmd.New()
+	globalRunner.NullGlobalConfig = false
+	out, err = globalRunner.Output(ctx, "", "config", "--global", "user.email")
 	if err != nil {
 		return ""
 	}
