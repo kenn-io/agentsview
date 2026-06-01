@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	gitrepo "go.kenn.io/kit/git/repo"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -78,12 +80,33 @@ func ExtractProjectFromCwd(cwd string) string {
 	return ExtractProjectFromCwdWithBranch(cwd, "")
 }
 
+// ExtractProjectFromCwdContext extracts a project name from cwd using ctx for
+// git-backed repository resolution.
+func ExtractProjectFromCwdContext(ctx context.Context, cwd string) string {
+	return ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
+}
+
 // ExtractProjectFromCwdWithBranch extracts a canonical project
 // name from cwd and optionally git branch metadata. Branch is
 // used as a fallback heuristic when the original worktree path no
 // longer exists on disk.
 func ExtractProjectFromCwdWithBranch(
 	cwd, gitBranch string,
+) string {
+	return extractProjectFromCwdWithBranch(nil, cwd, gitBranch)
+}
+
+// ExtractProjectFromCwdWithBranchContext extracts a canonical project name
+// from cwd and optionally git branch metadata using ctx for git-backed
+// repository resolution.
+func ExtractProjectFromCwdWithBranchContext(
+	ctx context.Context, cwd, gitBranch string,
+) string {
+	return extractProjectFromCwdWithBranch(ctx, cwd, gitBranch)
+}
+
+func extractProjectFromCwdWithBranch(
+	ctx context.Context, cwd, gitBranch string,
 ) string {
 	if cwd == "" {
 		return ""
@@ -108,7 +131,7 @@ func ExtractProjectFromCwdWithBranch(
 	// opendirectoryd (/usr/libexec/od_user_homes), so we probe
 	// the prefix once before walking.
 	if !isForeignOSPath(cwd, cleaned, winPath) {
-		if root := findGitRepoRoot(cleaned); root != "" {
+		if root := findGitRepoRoot(ctx, cleaned); root != "" {
 			name := filepath.Base(root)
 			if isInvalidPathBase(name) {
 				return ""
@@ -396,7 +419,7 @@ func isInvalidPathBase(name string) bool {
 // and linked worktrees/submodules (.git file). When cwd no longer
 // exists on disk, sibling directories are checked for worktree
 // .git files that can reveal the true repo root.
-func findGitRepoRoot(cwd string) string {
+func findGitRepoRoot(ctx context.Context, cwd string) string {
 	if cwd == "" {
 		return ""
 	}
@@ -414,6 +437,12 @@ func findGitRepoRoot(cwd string) string {
 		}
 		cwdMissing = true
 		dir = filepath.Dir(dir)
+	}
+
+	if !cwdMissing {
+		if root := gitMainRoot(ctx, dir); root != "" {
+			return root
+		}
 	}
 
 	// When the original path is gone, walk up to the first
@@ -461,6 +490,19 @@ func findGitRepoRoot(cwd string) string {
 		}
 		dir = parent
 	}
+}
+
+func gitMainRoot(ctx context.Context, dir string) string {
+	if ctx == nil {
+		return ""
+	}
+	opCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	root, err := gitrepo.MainRoot(opCtx, dir)
+	if err != nil {
+		return ""
+	}
+	return root
 }
 
 // repoRootFromSiblings checks child directories of dir for
