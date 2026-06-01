@@ -5452,7 +5452,7 @@ func (e *Engine) SyncSingleSessionContext(
 	switch agent {
 	case parser.AgentClaude:
 		// Try to preserve existing project from DB first
-		if sess, _ := e.db.GetSession(context.Background(), sessionID); sess != nil &&
+		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project
@@ -5479,7 +5479,7 @@ func (e *Engine) SyncSingleSessionContext(
 	case parser.AgentIflow:
 		// path is <iflowDir>/<project>/session-<uuid>.jsonl
 		// Extract project dir name from parent directory
-		if sess, _ := e.db.GetSession(context.Background(), sessionID); sess != nil &&
+		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project

@@ -53,7 +53,12 @@ func AggregateLog(
 		if isEmptyRepoErr(msg) {
 			return LogResult{}, nil
 		}
-		return LogResult{}, fmt.Errorf("git log in %s: %w", repo, err)
+		if msg == "" {
+			return LogResult{}, fmt.Errorf("git log in %s: %w", repo, err)
+		}
+		return LogResult{}, fmt.Errorf(
+			"git log in %s: %w: %s", repo, err, msg,
+		)
 	}
 	return parseNumstat(out), nil
 }
@@ -164,6 +169,7 @@ func authorEmailPattern(email string) string {
 // is not available.
 func AuthorEmail(ctx context.Context, repo string) string {
 	localRunner := gitcmd.New()
+	localRunner.NullGlobalConfig = false
 	out, err := localRunner.Output(ctx, repo, "config", "user.email")
 	if err == nil {
 		if v := strings.TrimSpace(string(out)); v != "" {

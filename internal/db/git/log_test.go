@@ -225,6 +225,35 @@ func TestAuthorEmail_FallsBackToGlobal(t *testing.T) {
 	assert.Equal(t, "global@example.com", got, "AuthorEmail (global fallback)")
 }
 
+func TestAuthorEmail_UsesIncludeIfGitdir(t *testing.T) {
+	skipIfNoGit(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	repo := t.TempDir()
+	gitRun(t, repo, nil, "init", "-q", "-b", "main")
+
+	includePath := filepath.Join(home, "repo.gitconfig")
+	require.NoError(t, os.WriteFile(
+		includePath,
+		[]byte("[user]\n\temail = includeif@example.com\n"),
+		0o644,
+	), "write include config")
+	globalConfig := filepath.Join(home, ".gitconfig")
+	gitdir, err := filepath.EvalSymlinks(filepath.Join(repo, ".git"))
+	require.NoError(t, err, "resolve repo gitdir")
+	require.NoError(t, os.WriteFile(
+		globalConfig,
+		[]byte(`[includeIf "gitdir:`+filepath.ToSlash(gitdir)+`"]
+	path = `+filepath.ToSlash(includePath)+"\n"),
+		0o644,
+	), "write global config")
+
+	got := AuthorEmail(context.Background(), repo)
+	assert.Equal(t, "includeif@example.com", got, "AuthorEmail (includeIf.gitdir)")
+}
+
 func TestParseNumstat_SkipsBinaryLOCButCountsFile(t *testing.T) {
 	// Unit test of the pure parser, independent of git exec.
 	input := []byte(strings.Join([]string{
