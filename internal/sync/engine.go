@@ -3480,7 +3480,7 @@ func (e *Engine) processCopilot(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, err := parser.ParseCopilotSession(
+	sess, msgs, usageEvents, err := parser.ParseCopilotSession(
 		file.Path, e.machine,
 	)
 	if err != nil {
@@ -3501,7 +3501,7 @@ func (e *Engine) processCopilot(
 
 	return processResult{
 		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
+			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
 		},
 	}
 }

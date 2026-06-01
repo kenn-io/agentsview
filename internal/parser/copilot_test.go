@@ -28,7 +28,7 @@ func writeCopilotJSONL(
 // parseAndValidateHelper parses the session and fails the test on basic errors.
 func parseAndValidateHelper(t *testing.T, path string, machine string, wantMsgs int) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
-	sess, msgs, err := ParseCopilotSession(path, machine)
+	sess, msgs, _, err := ParseCopilotSession(path, machine)
 	require.NoError(t, err)
 	require.NotNil(t, sess, "expected non-nil session")
 	require.Len(t, msgs, wantMsgs)
@@ -349,7 +349,7 @@ func TestParseCopilotSession_EmptySession(t *testing.T) {
 		`{"type":"session.start","data":{"sessionId":"empty"},"timestamp":"2025-01-15T10:00:00Z"}`,
 	)
 
-	sess, msgs, err := ParseCopilotSession(path, "m")
+	sess, msgs, _, err := ParseCopilotSession(path, "m")
 	require.NoError(t, err)
 	assert.Nil(t, sess, "expected nil session for empty")
 	assert.Nil(t, msgs, "expected nil messages for empty")
@@ -358,7 +358,7 @@ func TestParseCopilotSession_EmptySession(t *testing.T) {
 func TestParseCopilotSession_NonexistentFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.jsonl")
 
-	sess, msgs, err := ParseCopilotSession(path, "m")
+	sess, msgs, _, err := ParseCopilotSession(path, "m")
 	require.NoError(t, err, "expected nil error")
 	assert.Nil(t, sess, "expected nil session for nonexistent file")
 	assert.Nil(t, msgs, "expected nil messages for nonexistent file")
@@ -559,4 +559,90 @@ func TestParseCopilotSession_OutputTokens_Missing(t *testing.T) {
 	assert.False(t, sess.HasTotalOutputTokens, "HasTotalOutputTokens should be false when field absent")
 	assert.Equal(t, 0, sess.TotalOutputTokens, "TotalOutputTokens should be zero")
 	assert.False(t, msgs[1].HasOutputTokens, "msgs[1].HasOutputTokens should be false")
+}
+
+// parseCopilotFull calls ParseCopilotSession and returns all four values.
+func parseCopilotFull(
+	t *testing.T, path, machine string,
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent) {
+	t.Helper()
+	sess, msgs, usage, err := ParseCopilotSession(path, machine)
+	require.NoError(t, err)
+	return sess, msgs, usage
+}
+
+func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
+	shutdownLine := `{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":931647,"outputTokens":7150,"cacheReadTokens":873267,"cacheWriteTokens":51438,"reasoningTokens":432}}}},"timestamp":"2025-01-15T10:01:00Z"}`
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"shut-test","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		shutdownLine,
+	)
+
+	sess, _, usage := parseCopilotFull(t, path, "m")
+	require.NotNil(t, sess)
+	require.Len(t, usage, 1)
+
+	u := usage[0]
+	assert.Equal(t, "copilot:shut-test", u.SessionID)
+	assert.Equal(t, "shutdown", u.Source)
+	assert.Equal(t, "claude-sonnet-4.6", u.Model)
+	// Fresh input = 931647 - 873267 - 51438 = 6942
+	assert.Equal(t, 6942, u.InputTokens, "InputTokens should be fresh only")
+	assert.Equal(t, 7150, u.OutputTokens)
+	assert.Equal(t, 873267, u.CacheReadInputTokens)
+	assert.Equal(t, 51438, u.CacheCreationInputTokens)
+	assert.Equal(t, 432, u.ReasoningTokens)
+	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4.6", u.DedupKey)
+}
+
+func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"multi-model","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}},"claude-haiku-4.5":{"usage":{"inputTokens":200,"outputTokens":80,"cacheReadTokens":120,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+	)
+
+	_, _, usage := parseCopilotFull(t, path, "m")
+	require.Len(t, usage, 2)
+
+	byModel := make(map[string]ParsedUsageEvent)
+	for _, u := range usage {
+		byModel[u.Model] = u
+	}
+
+	sonnet := byModel["claude-sonnet-4.6"]
+	// fresh = 100 - 60 - 10 = 30
+	assert.Equal(t, 30, sonnet.InputTokens)
+	assert.Equal(t, 50, sonnet.OutputTokens)
+
+	haiku := byModel["claude-haiku-4.5"]
+	// fresh = 200 - 120 - 20 = 60
+	assert.Equal(t, 60, haiku.InputTokens)
+	assert.Equal(t, 80, haiku.OutputTokens)
+}
+
+func TestParseCopilotSession_ShutdownZeroUsage_Skipped(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"zero-use","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"cacheWriteTokens":0,"reasoningTokens":0}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+	)
+
+	_, _, usage := parseCopilotFull(t, path, "m")
+	assert.Empty(t, usage, "zero-usage model entry should be skipped")
+}
+
+func TestParseCopilotSession_NoShutdown_NoUsageEvents(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"no-shut","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	)
+
+	_, _, usage := parseCopilotFull(t, path, "m")
+	assert.Empty(t, usage, "no shutdown event should produce no usage events")
 }
