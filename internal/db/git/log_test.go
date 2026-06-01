@@ -184,7 +184,7 @@ func TestAuthorEmail_LocalConfig(t *testing.T) {
 	gitRun(t, repo, nil, "init", "-q", "-b", "main")
 	gitRun(t, repo, nil, "config", "user.email", "local@example.com")
 
-	got := AuthorEmail(repo)
+	got := AuthorEmail(context.Background(), repo)
 	assert.Equal(t, "local@example.com", got, "AuthorEmail")
 }
 
@@ -221,7 +221,7 @@ func TestAuthorEmail_FallsBackToGlobal(t *testing.T) {
 	out, err = initCmd.CombinedOutput()
 	require.NoError(t, err, "git init: %s", out)
 
-	got := AuthorEmail(repo)
+	got := AuthorEmail(context.Background(), repo)
 	assert.Equal(t, "global@example.com", got, "AuthorEmail (global fallback)")
 }
 
