@@ -523,3 +523,40 @@ func TestSessionIDFromPath(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCopilotSession_OutputTokens(t *testing.T) {
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"tok-test","context":{"cwd":"/home/alice/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi there.","outputTokens":120},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"user.message","data":{"content":"How are you?"},"timestamp":"2025-01-15T10:00:03Z"}`,
+		`{"type":"assistant.message","data":{"content":"I am fine.","outputTokens":85},"timestamp":"2025-01-15T10:00:04Z"}`,
+	)
+
+	sess, msgs := parseAndValidateHelper(t, path, "m", 4)
+
+	// Session total should be sum of both assistant messages.
+	assert.True(t, sess.HasTotalOutputTokens, "HasTotalOutputTokens")
+	assert.Equal(t, 205, sess.TotalOutputTokens, "TotalOutputTokens")
+
+	// Per-message token presence.
+	assert.True(t, msgs[1].HasOutputTokens, "msgs[1].HasOutputTokens")
+	assert.Equal(t, 120, msgs[1].OutputTokens, "msgs[1].OutputTokens")
+	assert.True(t, msgs[3].HasOutputTokens, "msgs[3].HasOutputTokens")
+	assert.Equal(t, 85, msgs[3].OutputTokens, "msgs[3].OutputTokens")
+}
+
+func TestParseCopilotSession_OutputTokens_Missing(t *testing.T) {
+	// When outputTokens is absent, HasOutputTokens must be false.
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"no-tok","context":{"cwd":"/home/alice/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+	)
+
+	sess, msgs := parseAndValidateHelper(t, path, "m", 2)
+
+	assert.False(t, sess.HasTotalOutputTokens, "HasTotalOutputTokens should be false when field absent")
+	assert.Equal(t, 0, sess.TotalOutputTokens, "TotalOutputTokens should be zero")
+	assert.False(t, msgs[1].HasOutputTokens, "msgs[1].HasOutputTokens should be false")
+}

@@ -176,16 +176,21 @@ func (b *copilotSessionBuilder) handleAssistantMessage(
 		return
 	}
 
+	outputTokens := int(data.Get("outputTokens").Int())
+	hasOutputTokens := data.Get("outputTokens").Exists()
+
 	b.messages = append(b.messages, ParsedMessage{
-		Ordinal:       b.ordinal,
-		Role:          RoleAssistant,
-		Content:       displayContent,
-		Timestamp:     ts,
-		HasThinking:   hasThinking,
-		HasToolUse:    hasToolUse,
-		ContentLength: len(displayContent),
-		ToolCalls:     toolCalls,
-		Model:         b.currentModel,
+		Ordinal:         b.ordinal,
+		Role:            RoleAssistant,
+		Content:         displayContent,
+		Timestamp:       ts,
+		HasThinking:     hasThinking,
+		HasToolUse:      hasToolUse,
+		ContentLength:   len(displayContent),
+		ToolCalls:       toolCalls,
+		Model:           b.currentModel,
+		OutputTokens:    outputTokens,
+		HasOutputTokens: hasOutputTokens,
 	})
 	b.ordinal++
 }
@@ -359,6 +364,8 @@ func ParseCopilotSession(
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
+
+	accumulateMessageTokenUsage(sess, b.messages)
 
 	return sess, b.messages, nil
 }
