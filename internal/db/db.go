@@ -102,7 +102,9 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 30
+// (31: Copilot shutdown usage events use positional DedupKey to
+// handle multi-segment sessions correctly.)
+const dataVersion = 31
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

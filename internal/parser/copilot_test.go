@@ -594,7 +594,7 @@ func TestParseCopilotSession_ShutdownUsageEvents(t *testing.T) {
 	assert.Equal(t, 873267, u.CacheReadInputTokens)
 	assert.Equal(t, 51438, u.CacheCreationInputTokens)
 	assert.Equal(t, 432, u.ReasoningTokens)
-	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4-6", u.DedupKey)
+	assert.Equal(t, "shutdown:copilot:shut-test:claude-sonnet-4-6:0", u.DedupKey)
 }
 
 func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
@@ -622,6 +622,34 @@ func TestParseCopilotSession_ShutdownMultiModel(t *testing.T) {
 	// fresh = 200 - 120 - 20 = 60
 	assert.Equal(t, 60, haiku.InputTokens)
 	assert.Equal(t, 80, haiku.OutputTokens)
+}
+
+func TestParseCopilotSession_MultiShutdown_SameModel(t *testing.T) {
+	// Sessions with compaction have multiple shutdown events for the
+	// same model. All segments must be captured with distinct DedupKeys.
+	path := writeCopilotJSONL(t,
+		`{"type":"session.start","data":{"sessionId":"multi-shut","context":{"cwd":"/proj","branch":"main"}},"timestamp":"2025-01-15T10:00:00Z"}`,
+		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2025-01-15T10:00:01Z"}`,
+		`{"type":"assistant.message","data":{"content":"Hi."},"timestamp":"2025-01-15T10:00:02Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":100,"outputTokens":50,"cacheReadTokens":60,"cacheWriteTokens":10}}}},"timestamp":"2025-01-15T10:01:00Z"}`,
+		`{"type":"user.message","data":{"content":"Continue"},"timestamp":"2025-01-15T10:02:00Z"}`,
+		`{"type":"assistant.message","data":{"content":"Sure."},"timestamp":"2025-01-15T10:02:01Z"}`,
+		`{"type":"session.shutdown","data":{"modelMetrics":{"claude-sonnet-4.6":{"usage":{"inputTokens":300,"outputTokens":80,"cacheReadTokens":250,"cacheWriteTokens":20}}}},"timestamp":"2025-01-15T10:03:00Z"}`,
+	)
+
+	_, _, usage := parseCopilotFull(t, path, "m")
+	require.Len(t, usage, 2, "both shutdown segments must be captured")
+
+	assert.Equal(t, "shutdown:copilot:multi-shut:claude-sonnet-4-6:0", usage[0].DedupKey)
+	assert.Equal(t, "shutdown:copilot:multi-shut:claude-sonnet-4-6:1", usage[1].DedupKey)
+
+	// First segment: fresh = 100 - 60 - 10 = 30
+	assert.Equal(t, 30, usage[0].InputTokens)
+	assert.Equal(t, 50, usage[0].OutputTokens)
+
+	// Second segment: fresh = 300 - 250 - 20 = 30
+	assert.Equal(t, 30, usage[1].InputTokens)
+	assert.Equal(t, 80, usage[1].OutputTokens)
 }
 
 func TestParseCopilotSession_ShutdownZeroUsage_Skipped(t *testing.T) {

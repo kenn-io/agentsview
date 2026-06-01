@@ -421,11 +421,17 @@ func ParseCopilotSession(
 	accumulateMessageTokenUsage(sess, b.messages)
 
 	// Stamp the session ID on usage events (not known until here).
+	// DedupKey encodes the event's position in the slice so that
+	// multi-segment sessions (where the same model appears in
+	// several shutdown events) each get a distinct key.
 	for i := range b.usageEvents {
 		b.usageEvents[i].SessionID = sessionID
-		// Rebuild DedupKey with the fully-qualified session ID.
-		b.usageEvents[i].DedupKey = "shutdown:" + sessionID +
-			":" + b.usageEvents[i].Model
+		b.usageEvents[i].DedupKey = fmt.Sprintf(
+			"shutdown:%s:%s:%d",
+			sessionID,
+			b.usageEvents[i].Model,
+			i,
+		)
 	}
 
 	return sess, b.messages, b.usageEvents, nil
