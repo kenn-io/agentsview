@@ -341,9 +341,16 @@ configuration.
 
 ## Privacy
 
-No telemetry, no analytics, no accounts. All data stays on your machine. The
-server binds to `127.0.0.1` by default. The only outbound request is an optional
-update check on startup (disable with `--no-update-check`).
+agentsview sends a limited anonymous `user_active` telemetry ping to PostHog
+when the server starts and every 24 hours while it runs, using a random install
+ID stored in the data directory. It includes app version, commit, OS, and CPU
+architecture, but no session, project, prompt, file path, account, or machine
+identity. Disable telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0` or
+`TELEMETRY_ENABLED=0`.
+
+All session data stays on your machine. The server binds to `127.0.0.1` by
+default. The update check is optional and can be disabled with
+`--no-update-check`.
 
 ## Documentation
 
