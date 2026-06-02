@@ -306,7 +306,7 @@ func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter) {
 }
 
 func captureTelemetryPing(ctx context.Context, reporter *telemetry.Reporter) {
-	if err := reporter.CaptureActiveUser(ctx); err != nil && ctx.Err() == nil {
+	if err := reporter.CaptureDaemonActive(ctx); err != nil && ctx.Err() == nil {
 		log.Printf("capture telemetry event: %v", err)
 	}
 }

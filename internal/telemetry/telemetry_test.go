@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/posthog/posthog-go"
@@ -66,27 +67,59 @@ func TestLoadOrCreateInstallIDIsStableAndAnonymous(t *testing.T) {
 	assert.Equal(t, first+"\n", string(stored))
 }
 
-func TestReporterCaptureActiveUserUsesAnonymousDistinctID(t *testing.T) {
+func TestReporterCaptureDaemonActiveUsesAnonymousDistinctID(t *testing.T) {
 	client := &fakePostHogClient{}
 	reporter := &Reporter{
 		client:     client,
 		distinctID: "anonymous-install-id",
 		enabled:    true,
+		version:    "v1.2.3",
+		commit:     "abc123",
 	}
 
-	err := reporter.CaptureActiveUser(context.Background())
+	err := reporter.CaptureDaemonActive(context.Background())
 	require.NoError(t, err)
 
 	capture, ok := client.message.(posthog.Capture)
 	require.True(t, ok)
 	assert.Equal(t, "anonymous-install-id", capture.DistinctId)
-	assert.Equal(t, activeUserEvent, capture.Event)
+	assert.Equal(t, daemonActiveEvent, capture.Event)
+	assert.False(t, capture.Properties["$process_person_profile"].(bool))
 	assert.True(t, capture.Properties["$geoip_disable"].(bool))
+	assert.Equal(t, "agentsview", capture.Properties["application"])
+	assert.Equal(t, "v1.2.3", capture.Properties["version"])
+	assert.Equal(t, "abc123", capture.Properties["commit"])
+	assert.Equal(t, runtime.GOOS, capture.Properties["goos"])
+	assert.Equal(t, runtime.GOARCH, capture.Properties["goarch"])
+	assert.Equal(t, "daemon", capture.Properties["source"])
 	assert.NotContains(t, capture.Properties, "project")
 	assert.NotContains(t, capture.Properties, "session")
 }
 
-func TestReporterCaptureActiveUserHonorsCanceledContext(t *testing.T) {
+func TestDaemonActivePropertiesForcePrivacyFields(t *testing.T) {
+	props := daemonActiveProperties(map[string]any{
+		"$process_person_profile": true,
+		"$geoip_disable":          false,
+		"application":             "other",
+		"version":                 "caller-version",
+		"commit":                  "caller-commit",
+		"goos":                    "caller-os",
+		"goarch":                  "caller-arch",
+		"source":                  "caller-source",
+	}, "v1.2.3", "abc123")
+
+	assert.False(t, props["$process_person_profile"].(bool))
+	assert.True(t, props["$geoip_disable"].(bool))
+	assert.Equal(t, "agentsview", props["application"])
+	assert.Equal(t, "v1.2.3", props["version"])
+	assert.Equal(t, "abc123", props["commit"])
+	assert.Equal(t, runtime.GOOS, props["goos"])
+	assert.Equal(t, runtime.GOARCH, props["goarch"])
+	assert.Equal(t, "daemon", props["source"])
+	assert.NotContains(t, props, "app")
+}
+
+func TestReporterCaptureDaemonActiveHonorsCanceledContext(t *testing.T) {
 	client := &fakePostHogClient{}
 	reporter := &Reporter{
 		client:     client,
@@ -96,7 +129,7 @@ func TestReporterCaptureActiveUserHonorsCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := reporter.CaptureActiveUser(ctx)
+	err := reporter.CaptureDaemonActive(ctx)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Nil(t, client.message)
 }

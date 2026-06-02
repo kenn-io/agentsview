@@ -22,7 +22,8 @@ const (
 	installIDFilename        = "telemetry-install-id"
 	postHogAPIKey            = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
 	postHogEndpoint          = "https://us.i.posthog.com"
-	activeUserEvent          = "user_active"
+	daemonActiveEvent        = "daemon_active"
+	application              = "agentsview"
 	captureTimeout           = 2 * time.Second
 	defaultInstallIDFilePerm = 0o600
 )
@@ -31,6 +32,8 @@ type Reporter struct {
 	client     enqueueCloser
 	distinctID string
 	enabled    bool
+	version    string
+	commit     string
 }
 
 type enqueueCloser interface {
@@ -77,13 +80,12 @@ func NewReporter(opts Options) (*Reporter, error) {
 		ShutdownTimeout:    captureTimeout,
 		MaxRetries:         &maxRetries,
 		DefaultEventProperties: posthog.Properties{
-			"app":            "agentsview",
-			"source":         "backend",
-			"version":        opts.Version,
-			"commit":         opts.Commit,
-			"goos":           runtime.GOOS,
-			"goarch":         runtime.GOARCH,
-			"$geoip_disable": true,
+			"application": application,
+			"source":      "daemon",
+			"version":     opts.Version,
+			"commit":      opts.Commit,
+			"goos":        runtime.GOOS,
+			"goarch":      runtime.GOARCH,
 		},
 	})
 	if err != nil {
@@ -94,6 +96,8 @@ func NewReporter(opts Options) (*Reporter, error) {
 		client:     client,
 		distinctID: distinctID,
 		enabled:    true,
+		version:    opts.Version,
+		commit:     opts.Commit,
 	}, nil
 }
 
@@ -114,7 +118,7 @@ func (r *Reporter) Enabled() bool {
 	return r != nil && r.enabled && r.client != nil
 }
 
-func (r *Reporter) CaptureActiveUser(ctx context.Context) error {
+func (r *Reporter) CaptureDaemonActive(ctx context.Context) error {
 	if !r.Enabled() {
 		return nil
 	}
@@ -126,12 +130,29 @@ func (r *Reporter) CaptureActiveUser(ctx context.Context) error {
 
 	return r.client.Enqueue(posthog.Capture{
 		DistinctId: r.distinctID,
-		Event:      activeUserEvent,
+		Event:      daemonActiveEvent,
 		Timestamp:  time.Now().UTC(),
-		Properties: posthog.Properties{
-			"$geoip_disable": true,
-		},
+		Properties: daemonActiveProperties(nil, r.version, r.commit),
 	})
+}
+
+func daemonActiveProperties(
+	properties map[string]any,
+	version, commit string,
+) posthog.Properties {
+	safeProperties := posthog.Properties{}
+	for key, value := range properties {
+		safeProperties[key] = value
+	}
+	safeProperties["$process_person_profile"] = false
+	safeProperties["$geoip_disable"] = true
+	safeProperties["application"] = application
+	safeProperties["version"] = version
+	safeProperties["commit"] = commit
+	safeProperties["goos"] = runtime.GOOS
+	safeProperties["goarch"] = runtime.GOARCH
+	safeProperties["source"] = "daemon"
+	return safeProperties
 }
 
 func (r *Reporter) Close() error {
