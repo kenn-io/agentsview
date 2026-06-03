@@ -51,6 +51,19 @@ func TestGenericTelemetryEnvDisablesReporter(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
+	t.Setenv(AgentsViewEnabledEnv, "1")
+	t.Setenv(EnabledEnv, "1")
+	dir := t.TempDir()
+
+	reporter, err := NewReporter(Options{DataDir: dir})
+	require.NoError(t, err)
+
+	assert.False(t, reporter.Enabled())
+	_, err = os.Stat(filepath.Join(dir, installIDFilename))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestLoadOrCreateInstallIDIsStableAndAnonymous(t *testing.T) {
 	dir := t.TempDir()
 
@@ -67,21 +80,11 @@ func TestLoadOrCreateInstallIDIsStableAndAnonymous(t *testing.T) {
 	assert.Equal(t, first+"\n", string(stored))
 }
 
-func TestReporterCaptureDaemonActiveUsesAnonymousDistinctID(t *testing.T) {
-	client := &fakePostHogClient{}
-	reporter := &Reporter{
-		client:     client,
-		distinctID: "anonymous-install-id",
-		enabled:    true,
-		version:    "v1.2.3",
-		commit:     "abc123",
-	}
+func TestDaemonActiveCaptureUsesAnonymousDistinctID(t *testing.T) {
+	capture := daemonActiveCapture(
+		"anonymous-install-id", "v1.2.3", "abc123",
+	)
 
-	err := reporter.CaptureDaemonActive(context.Background())
-	require.NoError(t, err)
-
-	capture, ok := client.message.(posthog.Capture)
-	require.True(t, ok)
 	assert.Equal(t, "anonymous-install-id", capture.DistinctId)
 	assert.Equal(t, daemonActiveEvent, capture.Event)
 	assert.False(t, capture.Properties["$process_person_profile"].(bool))
@@ -94,6 +97,21 @@ func TestReporterCaptureDaemonActiveUsesAnonymousDistinctID(t *testing.T) {
 	assert.Equal(t, "daemon", capture.Properties["source"])
 	assert.NotContains(t, capture.Properties, "project")
 	assert.NotContains(t, capture.Properties, "session")
+}
+
+func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
+	client := &fakePostHogClient{}
+	reporter := &Reporter{
+		client:     client,
+		distinctID: "anonymous-install-id",
+		enabled:    true,
+		version:    "v1.2.3",
+		commit:     "abc123",
+	}
+
+	err := reporter.CaptureDaemonActive(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, client.message)
 }
 
 func TestDaemonActivePropertiesForcePrivacyFields(t *testing.T) {
@@ -119,7 +137,7 @@ func TestDaemonActivePropertiesForcePrivacyFields(t *testing.T) {
 	assert.NotContains(t, props, "app")
 }
 
-func TestReporterCaptureDaemonActiveHonorsCanceledContext(t *testing.T) {
+func TestReporterCaptureDaemonActiveTestBlockerWinsOverCanceledContext(t *testing.T) {
 	client := &fakePostHogClient{}
 	reporter := &Reporter{
 		client:     client,
@@ -130,6 +148,6 @@ func TestReporterCaptureDaemonActiveHonorsCanceledContext(t *testing.T) {
 	cancel()
 
 	err := reporter.CaptureDaemonActive(ctx)
-	require.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, err)
 	assert.Nil(t, client.message)
 }

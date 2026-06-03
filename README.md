@@ -348,6 +348,7 @@ install ID as the event `DistinctId`. The event includes
 `$process_person_profile=false` and `$geoip_disable=true`. It does not include
 session, project, prompt, file path, account, or machine identity. Disable
 telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0` or `TELEMETRY_ENABLED=0`.
+Telemetry is also hard-disabled in Go test binaries, regardless of environment.
 
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with

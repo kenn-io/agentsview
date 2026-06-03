@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -57,7 +58,7 @@ func EnabledFromEnv() bool {
 }
 
 func NewReporter(opts Options) (*Reporter, error) {
-	if !EnabledFromEnv() {
+	if runningUnderGoTest() || !EnabledFromEnv() {
 		return DisabledReporter(), nil
 	}
 	if strings.TrimSpace(opts.DataDir) == "" {
@@ -119,7 +120,7 @@ func (r *Reporter) Enabled() bool {
 }
 
 func (r *Reporter) CaptureDaemonActive(ctx context.Context) error {
-	if !r.Enabled() {
+	if runningUnderGoTest() || !r.Enabled() {
 		return nil
 	}
 	select {
@@ -128,12 +129,18 @@ func (r *Reporter) CaptureDaemonActive(ctx context.Context) error {
 	default:
 	}
 
-	return r.client.Enqueue(posthog.Capture{
-		DistinctId: r.distinctID,
+	return r.client.Enqueue(daemonActiveCapture(
+		r.distinctID, r.version, r.commit,
+	))
+}
+
+func daemonActiveCapture(distinctID, version, commit string) posthog.Capture {
+	return posthog.Capture{
+		DistinctId: distinctID,
 		Event:      daemonActiveEvent,
 		Timestamp:  time.Now().UTC(),
-		Properties: daemonActiveProperties(nil, r.version, r.commit),
-	})
+		Properties: daemonActiveProperties(nil, version, commit),
+	}
 }
 
 func daemonActiveProperties(
@@ -153,6 +160,13 @@ func daemonActiveProperties(
 	safeProperties["goarch"] = runtime.GOARCH
 	safeProperties["source"] = "daemon"
 	return safeProperties
+}
+
+func runningUnderGoTest() bool {
+	if flag.Lookup("test.v") != nil {
+		return true
+	}
+	return strings.HasSuffix(filepath.Base(os.Args[0]), ".test")
 }
 
 func (r *Reporter) Close() error {
