@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -24,6 +25,7 @@ const maxTrajectorySidecarBytes = 64 << 20
 
 // Antigravity CLI sessions live under ~/.gemini/antigravity-cli/:
 //
+//   conversations/<uuid>.db      SQLite trajectory DB (newer CLI releases)
 //   conversations/<uuid>.pb      AES-encrypted conversation stream
 //   implicit/<uuid>.pb           AES-encrypted implicit conversation
 //   brain/<uuid>/*.md(+.json)    plaintext task/plan/walkthrough docs
@@ -46,9 +48,9 @@ const (
 	antigravityImplicitTag = "implicit-"
 )
 
-// DiscoverAntigravityCLISessions enumerates conversations/*.pb and
-// implicit/*.pb under the CLI root and tags each with its workspace
-// (resolved via history.jsonl).
+// DiscoverAntigravityCLISessions enumerates conversations/*.db,
+// conversations/*.pb, and implicit/*.pb under the CLI root and tags each with
+// its workspace (resolved via history.jsonl).
 func DiscoverAntigravityCLISessions(root string) []DiscoveredFile {
 	if root == "" {
 		return nil
@@ -63,20 +65,26 @@ func DiscoverAntigravityCLISessions(root string) []DiscoveredFile {
 		if err != nil {
 			continue
 		}
+		byID := make(map[string]string)
 		for _, e := range entries {
 			if e.IsDir() {
 				continue
 			}
 			name := e.Name()
-			if !strings.HasSuffix(name, ".pb") {
+			id, ext, ok := antigravityCLIPathID(name)
+			if !ok || (sub == "implicit" && ext != ".pb") {
 				continue
 			}
-			id := strings.TrimSuffix(name, ".pb")
-			if !IsValidSessionID(id) {
-				continue
+			// Prefer the new SQLite source when both old and new files
+			// exist for a conversation. They share a storage ID.
+			if prev := byID[id]; prev == "" ||
+				(strings.HasSuffix(prev, ".pb") && ext == ".db") {
+				byID[id] = filepath.Join(dir, name)
 			}
+		}
+		for id, path := range byID {
 			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(dir, name),
+				Path:    path,
 				Project: projects[id],
 				Agent:   AgentAntigravityCLI,
 			})
@@ -88,7 +96,7 @@ func DiscoverAntigravityCLISessions(root string) []DiscoveredFile {
 	return files
 }
 
-// FindAntigravityCLISourceFile locates the .pb file for a session
+// FindAntigravityCLISourceFile locates the source file for a session
 // id (without the agent prefix). An "implicit-" prefix routes to
 // the implicit/ subdir; bare ids resolve under conversations/.
 func FindAntigravityCLISourceFile(root, id string) string {
@@ -99,20 +107,37 @@ func FindAntigravityCLISourceFile(root, id string) string {
 		if !IsValidSessionID(uuid) {
 			return ""
 		}
-		p := filepath.Join(root, "implicit", uuid+".pb")
-		if _, err := os.Stat(p); err == nil {
-			return p
+		for _, ext := range []string{".pb"} {
+			p := filepath.Join(root, "implicit", uuid+ext)
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
 		}
 		return ""
 	}
 	if !IsValidSessionID(id) {
 		return ""
 	}
-	p := filepath.Join(root, "conversations", id+".pb")
-	if _, err := os.Stat(p); err == nil {
-		return p
+	for _, ext := range []string{".db", ".pb"} {
+		p := filepath.Join(root, "conversations", id+ext)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
 	}
 	return ""
+}
+
+func antigravityCLIPathID(name string) (string, string, bool) {
+	for _, ext := range []string{".db", ".pb"} {
+		if !strings.HasSuffix(name, ext) {
+			continue
+		}
+		id := strings.TrimSuffix(name, ext)
+		if IsValidSessionID(id) {
+			return id, ext, true
+		}
+	}
+	return "", "", false
 }
 
 // ParseAntigravityCLISession parses one CLI session into the
@@ -120,18 +145,41 @@ func FindAntigravityCLISourceFile(root, id string) string {
 func ParseAntigravityCLISession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	sess, msgs, _, err := ParseAntigravityCLISessionWithStatus(
+		path, project, machine,
+	)
+	return sess, msgs, err
+}
+
+// AntigravityCLIParseStatus carries sync-relevant parser metadata
+// that is not part of the canonical session/message shape.
+type AntigravityCLIParseStatus struct {
+	// NeedsRetry is true when a high-resolution source failed to
+	// decode and the parser returned lower-resolution fallback
+	// messages instead. Sync can store the fallback while leaving
+	// data_version stale so the next pass retries.
+	NeedsRetry bool
+}
+
+// ParseAntigravityCLISessionWithStatus parses one CLI session into
+// the canonical ParsedSession + messages shape and reports whether
+// the result should be retried on the next sync.
+func ParseAntigravityCLISessionWithStatus(
+	path, project, machine string,
+) (*ParsedSession, []ParsedMessage, AntigravityCLIParseStatus, error) {
+	var status AntigravityCLIParseStatus
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, status, fmt.Errorf("stat %s: %w", path, err)
 	}
-	id := strings.TrimSuffix(filepath.Base(path), ".pb")
-	if !IsValidSessionID(id) {
-		return nil, nil, fmt.Errorf(
+	id, ext, ok := antigravityCLIPathID(filepath.Base(path))
+	if !ok {
+		return nil, nil, status, fmt.Errorf(
 			"invalid Antigravity CLI session filename: %s", path,
 		)
 	}
-	// Root = two levels up from the .pb file
-	// (conversations/<id>.pb or implicit/<id>.pb).
+	// Root = two levels up from the source file
+	// (conversations/<id>.db, conversations/<id>.pb, or implicit/<id>.pb).
 	root := filepath.Dir(filepath.Dir(path))
 	// Tag implicit/ sessions so they don't collide with the
 	// conversations/ entry that may share the same UUID.
@@ -140,15 +188,31 @@ func ParseAntigravityCLISession(
 		storageID = antigravityImplicitTag + id
 	}
 
-	sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
 	var messages []ParsedMessage
 	var hasTrajectory bool
-	if sidecarInfo, err := os.Stat(sidecarPath); err == nil &&
-		!sidecarInfo.ModTime().Before(info.ModTime()) {
-		if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
+	if ext == ".db" {
+		if tMsgs, err := loadAntigravityCLIDBSteps(path); err == nil {
 			if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
-				messages = tMsgs
+				messages = mergeAntigravityDBHistoryMessages(
+					tMsgs,
+					collectAntigravityHistoryMessages(
+						filepath.Join(root, "history.jsonl"), id,
+					),
+				)
 				hasTrajectory = true
+			}
+		} else {
+			status.NeedsRetry = true
+		}
+	} else {
+		sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
+		if sidecarInfo, err := os.Stat(sidecarPath); err == nil &&
+			!sidecarInfo.ModTime().Before(info.ModTime()) {
+			if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
+				if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
+					messages = tMsgs
+					hasTrajectory = true
+				}
 			}
 		}
 	}
@@ -164,7 +228,7 @@ func ParseAntigravityCLISession(
 		)...,
 	)
 
-	if !hasTrajectory && hasAntigravityKey() {
+	if ext == ".pb" && !hasTrajectory && hasAntigravityKey() {
 		if extra, ok := decryptAntigravityCLITranscript(path); ok {
 			messages = append(messages, extra)
 		}
@@ -240,9 +304,104 @@ func ParseAntigravityCLISession(
 		},
 	}
 	if len(messages) == 0 {
-		return sess, nil, nil
+		return sess, nil, status, nil
 	}
-	return sess, messages, nil
+	return sess, messages, status, nil
+}
+
+func loadAntigravityCLIDBSteps(path string) ([]ParsedMessage, error) {
+	dsn := "file:" + path + "?mode=ro&immutable=0"
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open antigravity cli db %s: %w", path, err)
+	}
+	defer db.Close()
+	return loadAntigravitySteps(db)
+}
+
+func mergeAntigravityDBHistoryMessages(
+	dbMessages []ParsedMessage, history []ParsedMessage,
+) []ParsedMessage {
+	if len(dbMessages) == 0 || len(history) == 0 {
+		return dbMessages
+	}
+	history = nonEmptyAntigravityHistoryMessages(history)
+	if len(history) == 0 {
+		return dbMessages
+	}
+	userCount := 0
+	for _, msg := range dbMessages {
+		if msg.Role == RoleUser {
+			userCount++
+		}
+	}
+	if userCount != len(history) {
+		return appendMissingAntigravityHistoryMessages(
+			dbMessages, history,
+		)
+	}
+	historyIdx := 0
+	for i := range dbMessages {
+		if dbMessages[i].Role != RoleUser {
+			continue
+		}
+		if historyIdx >= len(history) {
+			return appendMissingAntigravityHistoryMessages(
+				dbMessages, history,
+			)
+		}
+		dbMessages[i].Content = history[historyIdx].Content
+		dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		if !history[historyIdx].Timestamp.IsZero() {
+			dbMessages[i].Timestamp = history[historyIdx].Timestamp
+		}
+		historyIdx++
+	}
+	return dbMessages
+}
+
+func appendMissingAntigravityHistoryMessages(
+	dbMessages []ParsedMessage, history []ParsedMessage,
+) []ParsedMessage {
+	seen := make(map[string]struct{})
+	for _, msg := range dbMessages {
+		if msg.Role != RoleUser {
+			continue
+		}
+		if key := normalizedAntigravityPrompt(msg.Content); key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	out := dbMessages
+	for _, msg := range history {
+		key := normalizedAntigravityPrompt(msg.Content)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		out = append(out, msg)
+		seen[key] = struct{}{}
+	}
+	return out
+}
+
+func normalizedAntigravityPrompt(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func nonEmptyAntigravityHistoryMessages(
+	history []ParsedMessage,
+) []ParsedMessage {
+	var out []ParsedMessage
+	for _, msg := range history {
+		if strings.TrimSpace(msg.Content) == "" {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 func hasDisplayableAntigravityCLITrajectoryMessage(
@@ -430,15 +589,20 @@ func decryptAntigravityCLITranscript(
 // AntigravityCLIFileInfo returns a fake os.FileInfo whose size and mtime are
 // computed by looking at both <uuid>.pb and <uuid>.trajectory.json.
 // If the trajectory file exists, its mtime and size are factored in.
-func AntigravityCLIFileInfo(pbPath string) (os.FileInfo, error) {
-	pbInfo, err := os.Stat(pbPath)
+func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
-	size := pbInfo.Size()
-	mtime := pbInfo.ModTime().UnixNano()
+	if strings.HasSuffix(path, ".db") {
+		return antigravityCLICombinedFileInfo(
+			info, path+"-wal", path+"-shm",
+		), nil
+	}
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
 
-	sidecar := strings.TrimSuffix(pbPath, ".pb") + ".trajectory.json"
+	sidecar := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
 	if sidecarInfo, err := os.Stat(sidecar); err == nil {
 		size += sidecarInfo.Size()
 		if sidecarInfo.ModTime().UnixNano() > mtime {
@@ -447,10 +611,32 @@ func AntigravityCLIFileInfo(pbPath string) (os.FileInfo, error) {
 	}
 
 	return fakeFileInfo{
-		name:  pbInfo.Name(),
+		name:  info.Name(),
 		size:  size,
 		mtime: mtime,
 	}, nil
+}
+
+func antigravityCLICombinedFileInfo(
+	base os.FileInfo, companions ...string,
+) os.FileInfo {
+	size := base.Size()
+	mtime := base.ModTime().UnixNano()
+	for _, p := range companions {
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		size += info.Size()
+		if info.ModTime().UnixNano() > mtime {
+			mtime = info.ModTime().UnixNano()
+		}
+	}
+	return fakeFileInfo{
+		name:  base.Name(),
+		size:  size,
+		mtime: mtime,
+	}
 }
 
 type fakeFileInfo struct {

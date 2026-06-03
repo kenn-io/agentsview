@@ -13,6 +13,7 @@ import (
 func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 	dir := t.TempDir()
 	uuid := "11111111-2222-3333-4444-555555555555"
+	dbUUID := "33333333-4444-5555-6666-777777777777"
 
 	// Create conversations and implicit subdirectories
 	convDir := filepath.Join(dir, "conversations")
@@ -23,9 +24,15 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 	// Files under conversations
 	pbPath := filepath.Join(convDir, uuid+".pb")
 	trajPath := filepath.Join(convDir, uuid+".trajectory.json")
+	dbPath := filepath.Join(convDir, dbUUID+".db")
+	dbWalPath := dbPath + "-wal"
+	dbShmPath := dbPath + "-shm"
 
 	require.NoError(t, os.WriteFile(pbPath, []byte("pb-data"), 0o644))
 	require.NoError(t, os.WriteFile(trajPath, []byte("trajectory-data"), 0o644))
+	require.NoError(t, os.WriteFile(dbPath, []byte("sqlite-data"), 0o644))
+	require.NoError(t, os.WriteFile(dbWalPath, []byte("wal-data"), 0o644))
+	require.NoError(t, os.WriteFile(dbShmPath, []byte("shm-data"), 0o644))
 
 	// Files under implicit
 	implPbPath := filepath.Join(implDir, uuid+".pb")
@@ -58,6 +65,24 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 			path:    trajPath,
 			want:    true,
 			retPath: pbPath,
+		},
+		{
+			name:    "conversations db file is classified",
+			path:    dbPath,
+			want:    true,
+			retPath: dbPath,
+		},
+		{
+			name:    "conversations db wal maps to db file",
+			path:    dbWalPath,
+			want:    true,
+			retPath: dbPath,
+		},
+		{
+			name:    "conversations db shm maps to db file",
+			path:    dbShmPath,
+			want:    true,
+			retPath: dbPath,
 		},
 		{
 			name:    "implicit pb file is classified",

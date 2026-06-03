@@ -221,6 +221,92 @@ func TestAntigravityCLIDiscoverAndParse(t *testing.T) {
 	assert.Equal(t, int64(1779000000000), sess.StartedAt.UnixMilli())
 }
 
+func TestAntigravityCLIDiscoverAndParseDB(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+	mustWrite(t, filepath.Join(root, "conversations", id+".pb"),
+		[]byte("old-encrypted-placeholder"))
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"db prompt fallback","timestamp":1779000000000,`+
+			`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+
+	files := DiscoverAntigravityCLISessions(root)
+	require.Len(t, files, 1, "discover")
+	assert.Equal(t, dbPath, files[0].Path, "prefer db over pb")
+	assert.Equal(t, "/tmp/db-proj", files[0].Project, "project")
+	assert.Equal(t, dbPath, FindAntigravityCLISourceFile(root, id), "find")
+
+	sess, msgs, err := ParseAntigravityCLISession(
+		files[0].Path, files[0].Project, "test-machine",
+	)
+	require.NoError(t, err, "parse")
+	assert.Equal(t, "antigravity-cli:"+id, sess.ID)
+	assert.Equal(t, AgentAntigravityCLI, sess.Agent)
+	assert.Equal(t, dbPath, sess.File.Path)
+	assert.Equal(t, "/tmp/db-proj", sess.Project)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "db prompt fallback", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Contains(t, msgs[1].Content, "assistant reply content body")
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "db prompt fallback", sess.FirstMessage)
+}
+
+func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
+	root := t.TempDir()
+	id := "44444444-5555-6666-7777-888888888888"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	mustWrite(t, dbPath, []byte("db"))
+	mustWrite(t, dbPath+"-wal", []byte("wal"))
+	mustWrite(t, dbPath+"-shm", []byte("shm"))
+
+	early := time.Unix(1779000000, 0)
+	late := time.Unix(1779000300, 0)
+	require.NoError(t, os.Chtimes(dbPath, early, early))
+	require.NoError(t, os.Chtimes(dbPath+"-wal", late, late))
+	require.NoError(t, os.Chtimes(dbPath+"-shm", early, early))
+
+	info, err := AntigravityCLIFileInfo(dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, int64(len("dbwalshm")), info.Size())
+	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
+}
+
+func TestAntigravityCLIDBInsertsShortHistoryPrompt(t *testing.T) {
+	root := t.TempDir()
+	id := "55555555-6666-7777-8888-999999999999"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityShortPromptDB(t, dbPath)
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"fix lint","timestamp":1779000000000,`+
+			`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+
+	sess, msgs, err := ParseAntigravityCLISession(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "fix lint", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Contains(t, msgs[1].Content, "assistant reply content body")
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, "fix lint", sess.FirstMessage)
+}
+
 func TestAntigravityCLIDiscoverIgnoresJunk(t *testing.T) {
 	root := t.TempDir()
 	mustMkdir(t, filepath.Join(root, "conversations"))
@@ -288,6 +374,120 @@ func TestAntigravityIDEDiscoverAndParse(t *testing.T) {
 	// Annotation overrides endedAt to 2026-05-20T... =
 	// 1779326586
 	assert.Equal(t, int64(1779326586), sess.EndedAt.Unix())
+}
+
+func TestDecodeAntigravityStepFiltersInternalStrings(t *testing.T) {
+	ts := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1779000000},
+	})
+	payload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: ts},
+		{
+			num: 17, wire: pbWireBytes,
+			bytes: []byte("67fdbde7-4a15-4599-a206-5ed536cf1fc4"),
+		},
+		{
+			num: 18, wire: pbWireBytes,
+			bytes: []byte("can you review the proposed issues before filing?"),
+		},
+		{
+			num: 19, wire: pbWireBytes,
+			bytes: []byte("can you review the proposed issues before filing?"),
+		},
+		{
+			num: 20, wire: pbWireBytes,
+			bytes: []byte("/home/mj/.gemini/antigravity-cli/skills"),
+		},
+	})
+
+	msg, ok := decodeAntigravityStep(0, 14, payload)
+	require.True(t, ok)
+	assert.Equal(t, RoleUser, msg.Role)
+	assert.Equal(t, "can you review the proposed issues before filing?", msg.Content)
+	assert.NotContains(t, msg.Content, "[step")
+	assert.NotContains(t, msg.Content, "67fdbde7")
+	assert.NotContains(t, msg.Content, ".gemini")
+}
+
+func TestDecodeAntigravityStepKeepsCleanAssistantText(t *testing.T) {
+	payload := encodePB([]pbField{
+		{
+			num: 17, wire: pbWireBytes,
+			bytes: []byte("06b66779-eebe-4869-ba1b-ccf3d42be70b"),
+		},
+		{
+			num: 18, wire: pbWireBytes,
+			bytes: []byte("-3750763034362895579"),
+		},
+		{
+			num: 19, wire: pbWireBytes,
+			bytes: []byte("mYseaoyPDcS6qtsP7c6Z6QE"),
+		},
+		{
+			num: 20, wire: pbWireBytes,
+			bytes: []byte("I will start by listing the directory structure."),
+		},
+		{
+			num: 21, wire: pbWireBytes,
+			bytes: []byte(`{"DirectoryPath":"/tmp/project","toolAction":"Listing workspace files","toolSummary":"List directory contents"}`),
+		},
+		{
+			num: 22, wire: pbWireBytes,
+			bytes: []byte("MODEL_PLACEHOLDER_M20"),
+		},
+		{
+			num: 23, wire: pbWireBytes,
+			bytes: []byte("I will start by listing the directory structure."),
+		},
+	})
+
+	msg, ok := decodeAntigravityStep(1, 15, payload)
+	require.True(t, ok)
+	assert.Equal(t, RoleAssistant, msg.Role)
+	assert.Equal(t, "I will start by listing the directory structure.", msg.Content)
+	assert.NotContains(t, msg.Content, "[step")
+	assert.NotContains(t, msg.Content, "06b66779")
+	assert.NotContains(t, msg.Content, "-3750763034362895579")
+	assert.NotContains(t, msg.Content, "mYseaoyPDcS6qtsP7c6Z6QE")
+	assert.NotContains(t, msg.Content, "toolAction")
+	assert.NotContains(t, msg.Content, "MODEL_PLACEHOLDER")
+}
+
+func TestMergeAntigravityDBHistoryMessagesAppendsMissingPrompts(t *testing.T) {
+	msgs := []ParsedMessage{
+		{Role: RoleUser, Content: "first decoded prompt"},
+		{Role: RoleAssistant, Content: "assistant"},
+		{Role: RoleUser, Content: "second decoded prompt"},
+	}
+	history := []ParsedMessage{
+		{Role: RoleUser, Content: "only tagged history prompt"},
+	}
+
+	got := mergeAntigravityDBHistoryMessages(msgs, history)
+
+	require.Len(t, got, 4)
+	assert.Equal(t, "first decoded prompt", got[0].Content)
+	assert.Equal(t, "second decoded prompt", got[2].Content)
+	assert.Equal(t, "only tagged history prompt", got[3].Content)
+}
+
+func TestMergeAntigravityDBHistoryMessagesIgnoresBlankHistoryRows(t *testing.T) {
+	ts := time.Unix(1779000000, 0)
+	msgs := []ParsedMessage{
+		{Role: RoleUser, Content: "decoded prompt"},
+		{Role: RoleAssistant, Content: "assistant"},
+	}
+	history := []ParsedMessage{
+		{Role: RoleUser, Content: ""},
+		{Role: RoleUser, Content: "history prompt", Timestamp: ts},
+		{Role: RoleUser, Content: "   "},
+	}
+
+	got := mergeAntigravityDBHistoryMessages(msgs, history)
+
+	assert.Equal(t, "history prompt", got[0].Content)
+	assert.Equal(t, len("history prompt"), got[0].ContentLength)
+	assert.Equal(t, ts, got[0].Timestamp)
 }
 
 // ---- crypto: key loading --------------------------------------
@@ -516,19 +716,7 @@ func createAntigravityTestDB(t *testing.T, path string) {
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open")
 	defer db.Close()
-	mustExec(t, db, `CREATE TABLE trajectory_meta (
-		trajectory_id text, cascade_id text,
-		trajectory_type integer, source integer,
-		PRIMARY KEY (trajectory_id))`)
-	mustExec(t, db, `CREATE TABLE steps (
-		idx integer, step_type integer NOT NULL DEFAULT 0,
-		status integer NOT NULL DEFAULT 0,
-		has_subtrajectory numeric NOT NULL DEFAULT false,
-		metadata blob, error_details blob,
-		permissions blob, task_details blob,
-		render_info blob, step_payload blob,
-		step_format integer NOT NULL DEFAULT 0,
-		PRIMARY KEY (idx))`)
+	createAntigravityStepTables(t, db)
 
 	tsEarly := encodePB([]pbField{
 		{num: 1, wire: pbWireVarint, varint: 1779000000},
@@ -561,6 +749,63 @@ func createAntigravityTestDB(t *testing.T, path string) {
 		`INSERT INTO steps (idx, step_type, step_payload) `+
 			`VALUES (?, ?, ?)`,
 		1, 17, asstPayload)
+}
+
+func createAntigravityShortPromptDB(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open")
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+
+	tsEarly := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1779000000},
+	})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{
+			num:   17,
+			wire:  pbWireBytes,
+			bytes: []byte("fix lint"),
+		},
+	})
+	tsLate := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1779000100},
+	})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsLate},
+		{
+			num:   17,
+			wire:  pbWireBytes,
+			bytes: []byte("assistant reply content body"),
+		},
+	})
+
+	mustExec(t, db,
+		`INSERT INTO steps (idx, step_type, step_payload) `+
+			`VALUES (?, ?, ?)`,
+		0, 14, userPayload)
+	mustExec(t, db,
+		`INSERT INTO steps (idx, step_type, step_payload) `+
+			`VALUES (?, ?, ?)`,
+		1, 17, asstPayload)
+}
+
+func createAntigravityStepTables(t *testing.T, db *sql.DB) {
+	t.Helper()
+	mustExec(t, db, `CREATE TABLE trajectory_meta (
+		trajectory_id text, cascade_id text,
+		trajectory_type integer, source integer,
+		PRIMARY KEY (trajectory_id))`)
+	mustExec(t, db, `CREATE TABLE steps (
+		idx integer, step_type integer NOT NULL DEFAULT 0,
+		status integer NOT NULL DEFAULT 0,
+		has_subtrajectory numeric NOT NULL DEFAULT false,
+		metadata blob, error_details blob,
+		permissions blob, task_details blob,
+		render_info blob, step_payload blob,
+		step_format integer NOT NULL DEFAULT 0,
+		PRIMARY KEY (idx))`)
 }
 
 func mustExec(

@@ -255,12 +255,14 @@ Each directory can be overridden with an environment variable. See the
 
 ### Antigravity CLI: high-resolution transcripts
 
-By default, agentsview indexes Antigravity CLI sessions in **summary mode**:
-your prompts from `history.jsonl` plus any plain-text artifacts under `brain/`
-(plans, walkthroughs, checkpoints). Assistant turns and tool calls live in
-AES-GCM-encrypted `.pb` files and are not visible in this mode.
+Antigravity CLI sessions now appear in two on-disk formats. Newer releases
+store conversation trajectories as SQLite `.db` files, which agentsview indexes
+directly. Older releases stored assistant turns and tool calls in
+AES-GCM-encrypted `.pb` files; for those sessions, agentsview falls back to
+**summary mode** using your prompts from `history.jsonl` plus any plain-text
+artifacts under `brain/` (plans, walkthroughs, checkpoints).
 
-To unlock full transcripts, run
+To unlock full transcripts for older `.pb` sessions, run
 [agy-reader](https://github.com/mjacobs/agy-reader) alongside agentsview.
 agy-reader talks to the local Antigravity daemon, decrypts each conversation,
 and writes a `<uuid>.trajectory.json` sidecar next to the encrypted `.pb` file.

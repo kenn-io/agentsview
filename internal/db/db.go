@@ -28,12 +28,22 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 30: Hermes parser no longer treats cost_status
+// Bumped to 32: Antigravity DB parsers now filter internal
+// protocol strings from visible message content, remove raw step
+// headers, prefer prompt-like user text, and merge matching
+// Antigravity CLI history prompts when DB decoding drops short user
+// turns. Existing Antigravity DB rows need re-parsing so previously
+// indexed noisy or assistant-only transcripts are rewritten.
+//
+// (31: Copilot shutdown usage events use positional DedupKey to
+// handle multi-segment sessions correctly.)
+//
+// (30: Hermes parser no longer treats cost_status
 // "included" as a confident $0 when cost_source is "none"/empty (its
 // default for models it does not price, e.g. gpt-5.5). Such rows now
 // leave cost_usd nil so they are catalog-priced. Existing Hermes rows
 // need re-parsing so their usage cost reflects the catalog instead of a
-// baked-in $0.
+// baked-in $0.)
 //
 // (29: secret findings now record tool_result_event
 // coordinates by the persisted slice position (matching
@@ -102,9 +112,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-// (31: Copilot shutdown usage events use positional DedupKey to
-// handle multi-segment sessions correctly.)
-const dataVersion = 31
+const dataVersion = 32
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

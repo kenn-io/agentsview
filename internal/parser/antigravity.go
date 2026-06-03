@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -23,6 +24,10 @@ import (
 // per-session JSON). Each row of `steps` becomes one ParsedMessage.
 
 const antigravityIDPrefix = "antigravity:"
+
+var antigravityUUIDLikeRE = regexp.MustCompile(
+	`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
+)
 
 // DiscoverAntigravitySessions returns one DiscoveredFile per
 // conversations/<uuid>.db under the IDE root.
@@ -207,8 +212,10 @@ func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, error) {
 //   - role: step_type 14 has been observed to carry user prompts.
 //     Every other type is rendered as assistant. (TODO: refine
 //     when more sample data is available.)
-//   - content: concatenation of every UTF-8 string >= 20 chars
-//     found anywhere in the payload tree, deduped.
+//   - content: best-effort human-facing strings found in the
+//     payload tree. Internal ids, local Antigravity config paths,
+//     model placeholders, and duplicate payload echoes are filtered
+//     out. User-input steps prefer a single prompt-like string.
 //   - timestamp: earliest google.protobuf.Timestamp-shaped field.
 func decodeAntigravityStep(
 	idx, stepType int, payload []byte,
@@ -220,7 +227,9 @@ func decodeAntigravityStep(
 	if err != nil || len(fields) == 0 {
 		return ParsedMessage{}, false
 	}
-	strs := dedupeStrings(agProtoCollectStrings(fields, 20))
+	strs := cleanAntigravityStepStrings(
+		dedupeStrings(agProtoCollectStrings(fields, 20)), stepType,
+	)
 	ts := earliestAntigravityTimestamp(fields)
 	if len(strs) == 0 {
 		return ParsedMessage{}, false
@@ -229,10 +238,7 @@ func decodeAntigravityStep(
 	if stepType == 14 {
 		role = RoleUser
 	}
-	header := fmt.Sprintf(
-		"[step %d · type %d]", idx, stepType,
-	)
-	content := header + "\n" + strings.Join(strs, "\n\n")
+	content := strings.Join(strs, "\n\n")
 	return ParsedMessage{
 		Role:          role,
 		Content:       content,
@@ -252,6 +258,135 @@ func dedupeStrings(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+func cleanAntigravityStepStrings(
+	strs []string, stepType int,
+) []string {
+	var cleaned []string
+	for _, s := range strs {
+		s = strings.TrimSpace(s)
+		if isNoisyAntigravityStepString(s) {
+			continue
+		}
+		cleaned = append(cleaned, s)
+	}
+	cleaned = dedupeStrings(cleaned)
+	if stepType == 14 {
+		if prompt := bestAntigravityUserPrompt(cleaned); prompt != "" {
+			return []string{prompt}
+		}
+	}
+	return cleaned
+}
+
+func isNoisyAntigravityStepString(s string) bool {
+	if s == "" {
+		return true
+	}
+	if antigravityUUIDLikeRE.MatchString(s) {
+		return true
+	}
+	if strings.HasPrefix(s, "MODEL_PLACEHOLDER_") {
+		return true
+	}
+	if strings.HasPrefix(s, "{") &&
+		(strings.Contains(s, `"toolAction"`) ||
+			strings.Contains(s, `"toolSummary"`) ||
+			strings.Contains(s, `"DirectoryPath"`)) {
+		return true
+	}
+	if looksLikeAntigravityOpaqueID(s) {
+		return true
+	}
+	if strings.HasPrefix(s, "file:///home/") {
+		return true
+	}
+	if strings.HasPrefix(s, "/home/") &&
+		strings.Contains(s, "/.gemini/") {
+		return true
+	}
+	if strings.HasPrefix(s, "/Users/") &&
+		strings.Contains(s, "/.gemini/") {
+		return true
+	}
+	if strings.HasPrefix(s, `C:\Users\`) &&
+		strings.Contains(s, `\.gemini\`) {
+		return true
+	}
+	if strings.HasPrefix(s, "command(") ||
+		strings.HasPrefix(s, "execute_url(") ||
+		strings.HasPrefix(s, "read_url(") ||
+		strings.HasPrefix(s, "mcp(") {
+		return true
+	}
+	return false
+}
+
+func looksLikeAntigravityOpaqueID(s string) bool {
+	if strings.ContainsAny(s, " \n\t") {
+		return false
+	}
+	if len(s) < 16 || len(s) > 128 {
+		return false
+	}
+	var alpha, digit, symbol int
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+			alpha++
+		case r >= '0' && r <= '9':
+			digit++
+		case r == '_' || r == '-' || r == '.':
+			symbol++
+		default:
+			return false
+		}
+	}
+	if alpha+digit+symbol != len(s) {
+		return false
+	}
+	if digit == len(s) || digit+symbol == len(s) {
+		return true
+	}
+	return alpha > 0 && digit > 0
+}
+
+func bestAntigravityUserPrompt(strs []string) string {
+	var best string
+	bestScore := -1
+	for _, s := range strs {
+		score := antigravityPromptScore(s)
+		if score > bestScore {
+			best = s
+			bestScore = score
+		}
+	}
+	if bestScore <= 0 {
+		return ""
+	}
+	return best
+}
+
+func antigravityPromptScore(s string) int {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" || isNoisyAntigravityStepString(trimmed) {
+		return -1
+	}
+	score := len(trimmed)
+	if strings.ContainsAny(trimmed, " \n\t") {
+		score += 50
+	}
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		score -= 100
+	}
+	if strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "file://") {
+		score -= 100
+	}
+	if !strings.ContainsAny(trimmed, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+		score -= 100
+	}
+	return score
 }
 
 // earliestAntigravityTimestamp walks the field tree and returns

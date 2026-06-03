@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -250,6 +251,52 @@ func TestSyncEngineAntigravityCLI_MalformedSidecarFallback(t *testing.T) {
 	msgs := fetchMessages(t, env.db, "antigravity-cli:"+uuid)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "History Prompt", msgs[0].Content)
+}
+
+func TestSyncEngineAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
+	env := setupTestEnv(t)
+	uuid := "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+	sessionID := "antigravity-cli:" + uuid
+
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+
+	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-db", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
+
+	dbPath := filepath.Join(convDir, uuid+".db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertSessionMessageCount(t, env.db, sessionID, 1)
+	msgs := fetchMessages(t, env.db, sessionID)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "History Prompt", msgs[0].Content)
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"degraded DB fallback should stay stale so unchanged syncs retry")
+
+	require.NoError(t, env.db.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.ResetAllMtimes(), "force fallback rewrite")
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"DB decode fallback should demote previously current rows")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"unchanged DB decode fallback should keep retrying")
 }
 
 func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {

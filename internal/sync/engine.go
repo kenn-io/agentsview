@@ -1024,7 +1024,8 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Antigravity CLI: <root>/conversations|implicit/<uuid>.pb (+ trajectory.json sidecars)
+	// Antigravity CLI: <root>/conversations/<uuid>.db or
+	// <root>/conversations|implicit/<uuid>.pb (+ trajectory.json sidecars)
 	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
 		if agDir == "" {
 			continue
@@ -1037,13 +1038,20 @@ func (e *Engine) classifyOnePath(
 				continue
 			}
 			name := parts[1]
-			var pbPath string
+			var sourcePath string
 			var id string
 			if strings.HasSuffix(name, ".pb") {
-				pbPath = path
+				sourcePath = path
 				id = strings.TrimSuffix(name, ".pb")
+			} else if strings.HasSuffix(name, ".db") ||
+				strings.HasSuffix(name, ".db-wal") ||
+				strings.HasSuffix(name, ".db-shm") {
+				name = strings.TrimSuffix(name, "-wal")
+				name = strings.TrimSuffix(name, "-shm")
+				sourcePath = filepath.Join(agDir, parts[0], name)
+				id = strings.TrimSuffix(name, ".db")
 			} else if strings.HasSuffix(name, ".trajectory.json") {
-				pbPath = strings.TrimSuffix(path, ".trajectory.json") + ".pb"
+				sourcePath = strings.TrimSuffix(path, ".trajectory.json") + ".pb"
 				id = strings.TrimSuffix(name, ".trajectory.json")
 			} else {
 				continue
@@ -1051,11 +1059,18 @@ func (e *Engine) classifyOnePath(
 			if !parser.IsValidSessionID(id) {
 				continue
 			}
-			if _, err := os.Stat(pbPath); err != nil {
+			if parts[0] == "conversations" &&
+				strings.HasSuffix(sourcePath, ".pb") {
+				dbPath := filepath.Join(agDir, parts[0], id+".db")
+				if _, err := os.Stat(dbPath); err == nil {
+					sourcePath = dbPath
+				}
+			}
+			if _, err := os.Stat(sourcePath); err != nil {
 				continue
 			}
 			return parser.DiscoveredFile{
-				Path:  pbPath,
+				Path:  sourcePath,
 				Agent: parser.AgentAntigravityCLI,
 			}, true
 		}
@@ -2669,6 +2684,7 @@ func (e *Engine) collectAndBatch(
 					sess:         pr.Session,
 					msgs:         pr.Messages,
 					usageEvents:  pr.UsageEvents,
+					needsRetry:   r.needsRetry,
 					forceReplace: r.forceReplace,
 				})
 			}
@@ -2748,6 +2764,7 @@ type processResult struct {
 	err         error
 	incremental *incrementalUpdate
 	cacheSkip   bool
+	needsRetry  bool
 	// forceReplace requests full message replacement on write,
 	// even when the existing rows would otherwise be left in
 	// place. Set when a fall-through to full parse is recovering
@@ -4037,7 +4054,7 @@ func (e *Engine) processAntigravityCLI(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, err := parser.ParseAntigravityCLISession(
+	sess, msgs, parseStatus, err := parser.ParseAntigravityCLISessionWithStatus(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
@@ -4053,8 +4070,12 @@ func (e *Engine) processAntigravityCLI(
 	}
 
 	return processResult{
+		needsRetry: parseStatus.NeedsRetry,
 		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
+			{
+				Session:  *sess,
+				Messages: msgs,
+			},
 		},
 	}
 }
@@ -4371,7 +4392,21 @@ type pendingWrite struct {
 	sess         parser.ParsedSession
 	msgs         []parser.ParsedMessage
 	usageEvents  []parser.ParsedUsageEvent
+	needsRetry   bool
 	forceReplace bool
+}
+
+func dataVersionForWrite(pw pendingWrite) int {
+	if !pw.needsRetry {
+		return db.CurrentDataVersion()
+	}
+	// Keep successfully written fallback content visible while
+	// forcing the next sync to retry the higher-resolution source.
+	v := db.CurrentDataVersion() - 1
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 type worktreeProjectResolver func(
@@ -4502,7 +4537,7 @@ func (e *Engine) writeBatch(
 		// won't leave the session marked at the current
 		// parser version with stale messages.
 		if err := e.db.SetSessionDataVersion(
-			s.ID, db.CurrentDataVersion(),
+			s.ID, dataVersionForWrite(pw),
 		); err != nil {
 			log.Printf(
 				"set data_version for %s: %v", s.ID, err,
@@ -4585,7 +4620,7 @@ func (e *Engine) writeBatchBulk(
 			UsageEvents:     toDBUsageEvents(s.ID, pw.usageEvents),
 			Signals:         update,
 			Findings:        findings,
-			DataVersion:     db.CurrentDataVersion(),
+			DataVersion:     dataVersionForWrite(pw),
 			ReplaceMessages: replaceMessages,
 		})
 		if pw.sess.File.Path != "" {
@@ -4787,7 +4822,7 @@ func (e *Engine) writeSessionFullWithResolver(
 	// See writeBatch for why data_version is bumped here
 	// rather than inside UpsertSession.
 	if err := e.db.SetSessionDataVersion(
-		s.ID, db.CurrentDataVersion(),
+		s.ID, dataVersionForWrite(pw),
 	); err != nil {
 		log.Printf(
 			"set data_version for %s: %v", s.ID, err,
