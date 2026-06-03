@@ -5,13 +5,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/posthog/posthog-go"
@@ -163,10 +163,7 @@ func daemonActiveProperties(
 }
 
 func runningUnderGoTest() bool {
-	if flag.Lookup("test.v") != nil {
-		return true
-	}
-	return strings.HasSuffix(filepath.Base(os.Args[0]), ".test")
+	return testing.Testing()
 }
 
 func (r *Reporter) Close() error {
