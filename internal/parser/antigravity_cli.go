@@ -247,6 +247,11 @@ func ParseAntigravityCLISessionWithStatus(
 		project = inferAntigravityProject(
 			filepath.Join(root, "history.jsonl"), id,
 		)
+		if project == "" {
+			project = inferAntigravityProjectFromHistoryFallback(
+				filepath.Join(root, "history.jsonl"), messages, info.ModTime(),
+			)
+		}
 	}
 
 	var firstMessage string
@@ -451,6 +456,94 @@ func buildAntigravityProjectMap(path string) map[string]string {
 func inferAntigravityProject(path, id string) string {
 	m := buildAntigravityProjectMap(path)
 	return m[id]
+}
+
+func inferAntigravityProjectFromHistoryFallback(
+	historyPath string, messages []ParsedMessage, dbMtime time.Time,
+) string {
+	var sessionPrompt string
+	var sessionTime time.Time
+	for _, msg := range messages {
+		if msg.Role == RoleUser && msg.Content != "" {
+			sessionPrompt = msg.Content
+			sessionTime = msg.Timestamp
+			break
+		}
+	}
+
+	if sessionPrompt == "" {
+		return ""
+	}
+	if sessionTime.IsZero() {
+		sessionTime = dbMtime
+	}
+
+	normSession := strings.ToLower(strings.Join(strings.Fields(sessionPrompt), " "))
+	if len(normSession) < 3 {
+		return ""
+	}
+
+	f, err := os.Open(historyPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	var bestWorkspace string
+	var minDiff time.Duration
+	var found bool
+	var ambiguous bool
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		if gjson.GetBytes(line, "conversationId").Str != "" {
+			continue
+		}
+		display := gjson.GetBytes(line, "display").Str
+		workspace := gjson.GetBytes(line, "workspace").Str
+		tsMS := gjson.GetBytes(line, "timestamp").Int()
+
+		if display == "" || workspace == "" || tsMS == 0 {
+			continue
+		}
+
+		normRow := strings.ToLower(strings.Join(strings.Fields(display), " "))
+		if normRow != normSession {
+			continue
+		}
+
+		rowTime := time.UnixMilli(tsMS)
+		diff := rowTime.Sub(sessionTime)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > 60*time.Second {
+			continue
+		}
+
+		if !found {
+			bestWorkspace = workspace
+			minDiff = diff
+			found = true
+			ambiguous = false
+		} else if diff < minDiff {
+			bestWorkspace = workspace
+			minDiff = diff
+			ambiguous = false
+		} else if diff == minDiff && workspace != bestWorkspace {
+			ambiguous = true
+		}
+	}
+
+	if found && !ambiguous {
+		return bestWorkspace
+	}
+	return ""
 }
 
 // collectAntigravityHistoryMessages returns one user ParsedMessage
