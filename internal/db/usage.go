@@ -9,7 +9,15 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
+
+func lookupModelRates(
+	pricing map[string]modelRates, model string,
+) (modelRates, bool) {
+	return pricingpkg.Resolve(pricing, model)
+}
 
 // UsageFilter controls the date range, agent, and timezone
 // for daily usage aggregation queries.
@@ -303,7 +311,7 @@ func usageAmounts(
 		cacheRdTok = r.cacheReadInputTokens
 	}
 
-	rates := pricing[r.model]
+	rates, _ := lookupModelRates(pricing, r.model)
 	if r.costUSD.Valid {
 		cost = r.costUSD.Float64
 	} else {
@@ -1091,7 +1099,7 @@ func sessionRowCost(
 	if inTok == 0 && outTok == 0 && crTok == 0 && rdTok == 0 {
 		return 0, true, false
 	}
-	rates, ok := pricing[r.model]
+	rates, ok := lookupModelRates(pricing, r.model)
 	if !ok {
 		return 0, false, true
 	}

@@ -18,6 +18,12 @@ type modelRates struct {
 	cacheRead     float64
 }
 
+func lookupModelRates(
+	prices map[string]modelRates, model string,
+) (modelRates, bool) {
+	return pricing.Resolve(prices, model)
+}
+
 func fallbackPricingRows() []db.ModelPricing {
 	src := pricing.FallbackPricing()
 	out := make([]db.ModelPricing, len(src))
