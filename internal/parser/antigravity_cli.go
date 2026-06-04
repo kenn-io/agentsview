@@ -191,15 +191,17 @@ func ParseAntigravityCLISessionWithStatus(
 	var messages []ParsedMessage
 	var hasTrajectory bool
 	if ext == ".db" {
-		if tMsgs, err := loadAntigravityCLIDBSteps(path); err == nil {
-			if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
+		if result, err := loadAntigravityCLIDBSteps(path); err == nil {
+			if hasDisplayableAntigravityCLITrajectoryMessage(result.messages) {
 				messages = mergeAntigravityDBHistoryMessages(
-					tMsgs,
+					result.messages,
 					collectAntigravityHistoryMessages(
 						filepath.Join(root, "history.jsonl"), id,
 					),
 				)
 				hasTrajectory = true
+			} else if result.rawStepCount > 0 {
+				status.NeedsRetry = true
 			}
 		} else {
 			status.NeedsRetry = true
@@ -309,14 +311,18 @@ func ParseAntigravityCLISessionWithStatus(
 	return sess, messages, status, nil
 }
 
-func loadAntigravityCLIDBSteps(path string) ([]ParsedMessage, error) {
+func loadAntigravityCLIDBSteps(
+	path string,
+) (antigravityStepLoadResult, error) {
 	dsn := "file:" + path + "?mode=ro&immutable=0"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open antigravity cli db %s: %w", path, err)
+		return antigravityStepLoadResult{}, fmt.Errorf(
+			"open antigravity cli db %s: %w", path, err,
+		)
 	}
 	defer db.Close()
-	return loadAntigravitySteps(db)
+	return loadAntigravityStepsWithRawCount(db)
 }
 
 func mergeAntigravityDBHistoryMessages(

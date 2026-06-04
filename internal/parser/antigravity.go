@@ -177,15 +177,30 @@ func ParseAntigravitySession(
 }
 
 func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, error) {
+	result, err := loadAntigravityStepsWithRawCount(db)
+	if err != nil {
+		return nil, err
+	}
+	return result.messages, nil
+}
+
+type antigravityStepLoadResult struct {
+	messages     []ParsedMessage
+	rawStepCount int
+}
+
+func loadAntigravityStepsWithRawCount(
+	db *sql.DB,
+) (antigravityStepLoadResult, error) {
 	rows, err := db.Query(
 		`SELECT idx, step_type, step_payload FROM steps ` +
 			`ORDER BY idx`,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("query steps: %w", err)
+		return antigravityStepLoadResult{}, fmt.Errorf("query steps: %w", err)
 	}
 	defer rows.Close()
-	var out []ParsedMessage
+	var result antigravityStepLoadResult
 	for rows.Next() {
 		var (
 			idx      int
@@ -193,18 +208,19 @@ func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, error) {
 			payload  []byte
 		)
 		if err := rows.Scan(&idx, &stepType, &payload); err != nil {
-			return nil, fmt.Errorf("scan step: %w", err)
+			return antigravityStepLoadResult{}, fmt.Errorf("scan step: %w", err)
 		}
+		result.rawStepCount++
 		msg, ok := decodeAntigravityStep(idx, stepType, payload)
 		if !ok {
 			continue
 		}
-		out = append(out, msg)
+		result.messages = append(result.messages, msg)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate steps: %w", err)
+		return antigravityStepLoadResult{}, fmt.Errorf("iterate steps: %w", err)
 	}
-	return out, nil
+	return result, nil
 }
 
 // decodeAntigravityStep extracts a ParsedMessage from one step's

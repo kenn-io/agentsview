@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -299,6 +300,52 @@ func TestSyncEngineAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
 		"unchanged DB decode fallback should keep retrying")
 }
 
+func TestSyncEngineAntigravityCLI_DBUndisplayableStepsFallbackRetries(t *testing.T) {
+	env := setupTestEnv(t)
+	uuid := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	sessionID := "antigravity-cli:" + uuid
+
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+
+	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-db-filtered", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
+
+	dbPath := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIUndisplayableStepDB(t, dbPath)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertSessionMessageCount(t, env.db, sessionID, 1)
+	msgs := fetchMessages(t, env.db, sessionID)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "History Prompt", msgs[0].Content)
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"DB fallback after dropping all raw steps should stay stale so unchanged syncs retry")
+
+	require.NoError(t, env.db.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.ResetAllMtimes(), "force fallback rewrite")
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"DB fallback after dropping all raw steps should demote previously current rows")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"unchanged DB fallback after dropping all raw steps should keep retrying")
+}
+
 func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
 	env := setupTestEnv(t)
 	uuid := "99999999-aaaa-bbbb-cccc-dddddddddddd"
@@ -352,4 +399,26 @@ func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {
 		Synced:        0,
 		Skipped:       0,
 	})
+}
+
+func createAntigravityCLIUndisplayableStepDB(t *testing.T, path string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open antigravity cli test db")
+	defer conn.Close()
+
+	_, err = conn.Exec(`CREATE TABLE steps (
+		idx integer,
+		step_type integer NOT NULL DEFAULT 0,
+		step_payload blob,
+		PRIMARY KEY (idx))`)
+	require.NoError(t, err, "create steps table")
+
+	noisy := []byte("MODEL_PLACEHOLDER_0")
+	payload := append([]byte{0x8a, 0x01, byte(len(noisy))}, noisy...)
+	_, err = conn.Exec(
+		`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		0, 14, payload,
+	)
+	require.NoError(t, err, "insert undisplayable step")
 }
