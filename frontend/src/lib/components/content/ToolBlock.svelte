@@ -55,6 +55,7 @@
     if (!hq.trim()) {
       searchExpandedInput = false;
       searchExpandedOutput = false;
+      contentFullyExpanded = false;
       prevQuery = hq;
       return;
     }
@@ -71,6 +72,7 @@
     searchExpandedInput = inputText.includes(q);
     searchExpandedOutput = outputText.includes(q);
     searchExpandedHistory = historyText.includes(q);
+    if (searchExpandedInput) contentFullyExpanded = true;
     if (hq !== prevQuery) {
       userOverride = false;
       userOutputOverride = false;
@@ -347,26 +349,13 @@
     {/if}
     {#if taskPrompt}
       <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: taskPrompt }}>{@html escapeHTML(taskPrompt)}</pre>
-    {:else if content}
-      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: displayContent.text }}>{@html escapeHTML(displayContent.text)}</pre>
-      {#if displayContent.isLong}
-        <button
-          class="show-more-btn"
-          onclick={(e) => {
-            e.stopPropagation();
-            contentFullyExpanded = !contentFullyExpanded;
-          }}
-        >
-          {contentFullyExpanded ? "show less" : `show all ${displayContent.totalLines} lines`}
-        </button>
-      {/if}
     {:else if fallbackContent && isDiff}
       <div class="diff-view">
         {#each diffLines as line}
           <div class="diff-line {line.startsWith('@@') ? 'diff-hunk' : line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : 'diff-ctx'}">{line}</div>
         {/each}
       </div>
-    {:else if fallbackContent}
+    {:else if displayContent.text}
       <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: displayContent.text }}>{@html escapeHTML(displayContent.text)}</pre>
       {#if displayContent.isLong}
         <button
