@@ -312,6 +312,7 @@
       if (sel && sel.toString().length > 0) return;
       userCollapsed = !userCollapsed;
       userOverride = true;
+      if (userCollapsed) contentFullyExpanded = false;
     }}
   >
     <span class="tool-chevron" class:open={!collapsed}>
@@ -347,7 +348,18 @@
     {#if taskPrompt}
       <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: taskPrompt }}>{@html escapeHTML(taskPrompt)}</pre>
     {:else if content}
-      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}>{@html escapeHTML(content)}</pre>
+      <pre class="tool-content" use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content: displayContent.text }}>{@html escapeHTML(displayContent.text)}</pre>
+      {#if displayContent.isLong}
+        <button
+          class="show-more-btn"
+          onclick={(e) => {
+            e.stopPropagation();
+            contentFullyExpanded = !contentFullyExpanded;
+          }}
+        >
+          {contentFullyExpanded ? "show less" : `show all ${displayContent.totalLines} lines`}
+        </button>
+      {/if}
     {:else if fallbackContent && isDiff}
       <div class="diff-view">
         {#each diffLines as line}
