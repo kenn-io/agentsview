@@ -5574,6 +5574,7 @@ func (e *Engine) SyncSingleSessionContext(
 				sess:        pr.Session,
 				msgs:        pr.Messages,
 				usageEvents: pr.UsageEvents,
+				needsRetry:  res.needsRetry,
 			},
 		); err != nil &&
 			!isIntentionalSessionSkip(err) &&

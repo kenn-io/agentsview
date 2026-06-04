@@ -299,6 +299,42 @@ func TestSyncEngineAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
 		"unchanged DB decode fallback should keep retrying")
 }
 
+func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
+	env := setupTestEnv(t)
+	uuid := "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	sessionID := "antigravity-cli:" + uuid
+
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+
+	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-db-single", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
+
+	dbPath := filepath.Join(convDir, uuid+".db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
+
+	// An explicit single-session sync (the file-watcher path) of a .db
+	// whose decode fails must store the fallback at a stale data_version
+	// so a later sync retries the high-resolution source.
+	require.NoError(t, env.engine.SyncSingleSession(sessionID))
+
+	assertSessionMessageCount(t, env.db, sessionID, 1)
+	msgs := fetchMessages(t, env.db, sessionID)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "History Prompt", msgs[0].Content)
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"single-session DB fallback should stay stale so later syncs retry")
+
+	// A previously current row must be demoted when an explicit re-sync
+	// hits the same decode failure, otherwise the high-resolution DB is
+	// never retried once it has been stamped current.
+	require.NoError(t, env.db.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.ResetAllMtimes(), "force fallback rewrite")
+	require.NoError(t, env.engine.SyncSingleSession(sessionID))
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"single-session DB decode fallback should demote previously current rows")
+}
+
 func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {
 	env := setupTestEnv(t)
 	uuid := "66666666-7777-8888-9999-000000000000"
