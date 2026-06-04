@@ -373,6 +373,83 @@ describe("ToolBlock fallback content", () => {
   });
 });
 
+describe("ToolBlock show-more for long content", () => {
+  let component: ReturnType<typeof mount>;
+
+  afterEach(() => {
+    if (component) unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("shows 'show all' button for long Bash fallback content", async () => {
+    const longCommand = Array.from({ length: 30 }, (_, i) => `echo line${i}`).join("\n");
+    const toolCall: ToolCall = {
+      tool_name: "Bash",
+      category: "Bash",
+      input_json: JSON.stringify({ command: longCommand }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const showMoreBtn = document.querySelector(".show-more-btn");
+    expect(showMoreBtn).not.toBeNull();
+    expect(showMoreBtn!.textContent).toContain("show all");
+  });
+
+  it("expands to full content when 'show all' is clicked", async () => {
+    const longCommand = Array.from({ length: 30 }, (_, i) => `echo line${i}`).join("\n");
+    const toolCall: ToolCall = {
+      tool_name: "Bash",
+      category: "Bash",
+      input_json: JSON.stringify({ command: longCommand }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const contentBefore = document.querySelector(".tool-content")!.textContent!;
+    expect(contentBefore).not.toContain("echo line29");
+
+    document.querySelector<HTMLButtonElement>(".show-more-btn")!.click();
+    await tick();
+
+    const contentAfter = document.querySelector(".tool-content")!.textContent!;
+    expect(contentAfter).toContain("echo line29");
+
+    const showMoreBtn = document.querySelector(".show-more-btn");
+    expect(showMoreBtn!.textContent).toContain("show less");
+  });
+
+  it("does not show 'show all' button for short content", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "Bash",
+      category: "Bash",
+      input_json: JSON.stringify({ command: "npm test" }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    expect(document.querySelector(".show-more-btn")).toBeNull();
+  });
+});
+
 describe("ToolBlock collapsed preview", () => {
   let component: ReturnType<typeof mount>;
 
