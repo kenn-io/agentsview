@@ -539,6 +539,87 @@ describe("generateFallbackContent", () => {
   });
 });
 
+describe("generateFallbackContent - Bash", () => {
+  it("shows full command for Bash tool", () => {
+    const result = generateFallbackContent("Bash", {
+      command: "npm test",
+    });
+    expect(result).toBe("command: npm test");
+  });
+
+  it("shows description and command for Bash tool", () => {
+    const result = generateFallbackContent("Bash", {
+      command: "npm test",
+      description: "Run test suite",
+    });
+    expect(result).toBe("description: Run test suite\ncommand: npm test");
+  });
+
+  it("shows full multiline heredoc command without truncation", () => {
+    const heredoc = [
+      'cd /project && PYTHONIOENCODING=utf-8 python - <<\'PY\'',
+      "import json",
+      'F="data.jsonl"',
+      "rows=[json.loads(l) for l in open(F,encoding='utf-8')]",
+      "for r in rows:",
+      "    print(r)",
+      "PY",
+    ].join("\n");
+    const result = generateFallbackContent("Bash", {
+      command: heredoc,
+      description: "Inspect data",
+    });
+    expect(result).toContain("import json");
+    expect(result).toContain("for r in rows:");
+    expect(result).not.toContain("…");
+  });
+
+  it("caps Bash commands at MAX_DIFF_LINES", () => {
+    const longCommand = Array.from({ length: 250 }, (_, i) => `echo ${i}`).join("\n");
+    const result = generateFallbackContent("Bash", {
+      command: longCommand,
+    })!;
+    expect(result).toContain("lines total)");
+    const lines = result.split("\n");
+    expect(lines.length).toBeLessThanOrEqual(202);
+  });
+
+  it("handles run_command tool name (Gemini)", () => {
+    const result = generateFallbackContent("run_command", {
+      command: "go test ./...",
+    });
+    expect(result).toBe("command: go test ./...");
+  });
+
+  it("uses cmd param for codex exec_command", () => {
+    const result = generateFallbackContent("Bash", {
+      cmd: "ls -la /tmp",
+    });
+    expect(result).toBe("command: ls -la /tmp");
+  });
+});
+
+describe("generateFallbackContent - generic no-truncation", () => {
+  it("shows full long values without character truncation", () => {
+    const longValue = "x".repeat(500);
+    const result = generateFallbackContent("CustomTool", {
+      data: longValue,
+    })!;
+    expect(result).toBe(`data: ${longValue}`);
+    expect(result).not.toContain("…");
+  });
+
+  it("caps generic content at line count", () => {
+    const longValue = Array.from({ length: 250 }, (_, i) => `line ${i}`).join("\n");
+    const result = generateFallbackContent("CustomTool", {
+      data: longValue,
+    })!;
+    expect(result).toContain("lines total)");
+    const lines = result.split("\n");
+    expect(lines.length).toBeLessThanOrEqual(202);
+  });
+});
+
 describe("generateFallbackContent - agent__intent filtering", () => {
   it("does not include agent__intent in generic key-value output", () => {
     const result = generateFallbackContent("CustomTool", {

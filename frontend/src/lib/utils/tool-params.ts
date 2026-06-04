@@ -131,6 +131,22 @@ export function generateFallbackContent(
   params: Params,
 ): string | null {
   if (toolName === "Task" || toolName === "Agent") return null;
+  if (toolName === "Bash" || toolName === "run_command") {
+    const cmd = params.command ?? params.cmd;
+    if (cmd != null) {
+      const text = String(cmd);
+      const lines: string[] = [];
+      if (params.description)
+        lines.push(`description: ${String(params.description)}`);
+      lines.push(`command: ${text}`);
+      const allLines = lines.join("\n").split("\n");
+      if (allLines.length > MAX_DIFF_LINES) {
+        return allLines.slice(0, MAX_DIFF_LINES).join("\n")
+          + `\n... (${allLines.length} lines total)`;
+      }
+      return lines.join("\n");
+    }
+  }
   const isEdit =
     toolName === "Edit" ||
     params.command === "strReplace";
@@ -235,7 +251,13 @@ export function generateFallbackContent(
       typeof value === "string"
         ? value
         : JSON.stringify(value);
-    lines.push(`${key}: ${truncate(strVal, 200)}`);
+    lines.push(`${key}: ${strVal}`);
   }
-  return lines.length ? lines.join("\n") : null;
+  if (!lines.length) return null;
+  const allLines = lines.join("\n").split("\n");
+  if (allLines.length > MAX_DIFF_LINES) {
+    return allLines.slice(0, MAX_DIFF_LINES).join("\n")
+      + `\n... (${allLines.length} lines total)`;
+  }
+  return lines.join("\n");
 }
