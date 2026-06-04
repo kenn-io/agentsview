@@ -4048,9 +4048,11 @@ func (e *Engine) processAntigravity(
 }
 
 func (e *Engine) processAntigravityCLI(
-	file parser.DiscoveredFile, info os.FileInfo,
+	file parser.DiscoveredFile, effectiveInfo os.FileInfo,
 ) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
+	// processFile supplies AntigravityCLIFileInfo here, so .db WAL/SHM
+	// sidecars and .pb trajectory sidecars participate in skip checks.
+	if e.shouldSkipByPath(file.Path, effectiveInfo) {
 		return processResult{skip: true}
 	}
 
@@ -4500,7 +4502,7 @@ func (e *Engine) writeBatch(
 			continue
 		}
 
-		replaceMessages := forceReplace || pw.forceReplace ||
+		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
 			stale || pw.sess.Agent == parser.AgentOpenCode ||
 			pw.sess.Agent == parser.AgentAntigravityCLI
 
@@ -4608,7 +4610,7 @@ func (e *Engine) writeBatchBulk(
 		if !ok {
 			continue
 		}
-		replaceMessages := forceReplace || pw.forceReplace ||
+		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
 			pw.sess.Agent == parser.AgentOpenCode ||
 			pw.sess.Agent == parser.AgentAntigravityCLI
 		tScan := time.Now()

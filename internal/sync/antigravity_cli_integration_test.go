@@ -224,6 +224,59 @@ func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsSidecarUpdate(t *testing.T)
 	assert.Equal(t, "Prompt from SyncAllSince Trajectory", msgs[0].Content)
 }
 
+func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsDBWalUpdate(t *testing.T) {
+	env := setupTestEnv(t)
+	uuid := "22222222-3333-4444-5555-777777777777"
+	sessionID := "antigravity-cli:" + uuid
+
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+
+	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-db-wal", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
+
+	dbPath := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, dbPath, "Initial database prompt text")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	baseInfo, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	baseMtime := baseInfo.ModTime()
+
+	time.Sleep(10 * time.Millisecond)
+
+	writer := openAntigravityCLITestWALDB(t, dbPath)
+	defer writer.Close()
+	insertAntigravityCLIStep(t, writer, 1, 17, "Assistant response from WAL text")
+
+	walInfo, err := os.Stat(dbPath + "-wal")
+	require.NoError(t, err, "expected WAL sidecar after uncheckpointed write")
+	require.Greater(t, walInfo.ModTime().UnixNano(), baseMtime.UnixNano())
+
+	require.NoError(t, os.Chtimes(dbPath, baseMtime, baseMtime))
+	baseAfter, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	require.Equal(t, baseInfo.Size(), baseAfter.Size(), "base DB size changed")
+	require.Equal(t, baseMtime.UnixNano(), baseAfter.ModTime().UnixNano(),
+		"base DB mtime should not reveal WAL-only update")
+
+	stats := env.engine.SyncAllSince(context.Background(), baseMtime.Add(time.Nanosecond), nil)
+	assert.Equal(t, 1, stats.TotalSessions)
+	assert.Equal(t, 1, stats.Synced)
+	assert.Equal(t, 0, stats.Skipped)
+
+	assertSessionMessageCount(t, env.db, sessionID, 2)
+	msgs := fetchMessages(t, env.db, sessionID)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Assistant response from WAL text", msgs[0].Content)
+	assert.Equal(t, "History Prompt", msgs[1].Content)
+}
+
 func TestSyncEngineAntigravityCLI_MalformedSidecarFallback(t *testing.T) {
 	env := setupTestEnv(t)
 	uuid := "55555555-6666-7777-8888-999999999999"
@@ -298,6 +351,47 @@ func TestSyncEngineAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
 	})
 	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
 		"unchanged DB decode fallback should keep retrying")
+}
+
+func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T) {
+	env := setupTestEnv(t)
+	uuid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	sessionID := "antigravity-cli:" + uuid
+
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+
+	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-db-retry", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
+
+	dbPath := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, dbPath, "Initial database prompt text")
+	conn := openAntigravityCLITestDB(t, dbPath)
+	insertAntigravityCLIStep(t, conn, 1, 17, "Initial assistant response text")
+	require.NoError(t, conn.Close())
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assertSessionMessageCount(t, env.db, sessionID, 2)
+	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(sessionID))
+
+	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+
+	assertSessionMessageCount(t, env.db, sessionID, 1)
+	msgs := fetchMessages(t, env.db, sessionID)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "History Prompt", msgs[0].Content)
+	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+		"retry fallback should be written before the row is demoted")
 }
 
 func TestSyncEngineAntigravityCLI_DBUndisplayableStepsFallbackRetries(t *testing.T) {
@@ -403,22 +497,65 @@ func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {
 
 func createAntigravityCLIUndisplayableStepDB(t *testing.T, path string) {
 	t.Helper()
-	conn, err := sql.Open("sqlite3", path)
-	require.NoError(t, err, "open antigravity cli test db")
+	conn := openAntigravityCLITestDB(t, path)
 	defer conn.Close()
 
-	_, err = conn.Exec(`CREATE TABLE steps (
+	createAntigravityCLITestStepsTable(t, conn)
+	insertAntigravityCLIStep(t, conn, 0, 14, "MODEL_PLACEHOLDER_0")
+}
+
+func createAntigravityCLIDisplayStepDB(t *testing.T, path, prompt string) {
+	t.Helper()
+	conn := openAntigravityCLITestDB(t, path)
+	defer conn.Close()
+
+	createAntigravityCLITestStepsTable(t, conn)
+	insertAntigravityCLIStep(t, conn, 0, 14, prompt)
+}
+
+func openAntigravityCLITestDB(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open antigravity cli test db")
+
+	return conn
+}
+
+func openAntigravityCLITestWALDB(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	conn := openAntigravityCLITestDB(t, path)
+
+	_, err := conn.Exec(`PRAGMA journal_mode=WAL`)
+	require.NoError(t, err, "enable WAL mode")
+	_, err = conn.Exec(`PRAGMA wal_autocheckpoint=0`)
+	require.NoError(t, err, "disable WAL autocheckpoint")
+
+	return conn
+}
+
+func createAntigravityCLITestStepsTable(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	_, err := conn.Exec(`CREATE TABLE steps (
 		idx integer,
 		step_type integer NOT NULL DEFAULT 0,
 		step_payload blob,
 		PRIMARY KEY (idx))`)
 	require.NoError(t, err, "create steps table")
+}
 
-	noisy := []byte("MODEL_PLACEHOLDER_0")
-	payload := append([]byte{0x8a, 0x01, byte(len(noisy))}, noisy...)
-	_, err = conn.Exec(
+func insertAntigravityCLIStep(
+	t *testing.T, conn *sql.DB, idx, stepType int, content string,
+) {
+	t.Helper()
+	payload := antigravityCLIStringPayload(content)
+	_, err := conn.Exec(
 		`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
-		0, 14, payload,
+		idx, stepType, payload,
 	)
-	require.NoError(t, err, "insert undisplayable step")
+	require.NoError(t, err, "insert antigravity cli step")
+}
+
+func antigravityCLIStringPayload(s string) []byte {
+	content := []byte(s)
+	return append([]byte{0x8a, 0x01, byte(len(content))}, content...)
 }
