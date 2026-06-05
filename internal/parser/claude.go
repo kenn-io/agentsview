@@ -306,19 +306,7 @@ func ParseClaudeSession(
 			lastLineFailed,
 		)
 	}
-
-	// Drop content-free /usage probe sessions (e.g. CodexBar's
-	// ClaudeProbe) after the queued-command splice so both inline
-	// and queued /usage prompts are visible to the check. They never
-	// enter the archive.
-	kept := results[:0]
-	for _, r := range results {
-		if isUsageProbeSession(r.Messages) {
-			continue
-		}
-		kept = append(kept, r)
-	}
-	return kept, nil
+	return results, nil
 }
 
 // lastAssistantStopReason returns the StopReason of the most
@@ -1666,27 +1654,6 @@ func firstMessageAndUserCount(
 		}
 	}
 	return firstMsg, userCount
-}
-
-// isUsageProbeSession reports whether a parsed session's only real
-// user turn(s) are the /usage command — a content-free usage probe
-// (for example CodexBar's ClaudeProbe, which runs `claude /usage` to
-// read usage stats) with no actual prompt. Such sessions carry no
-// conversational content and are skipped during parsing. The notion
-// of a real user turn mirrors firstMessageAndUserCount: non-system,
-// role=user, non-empty content.
-func isUsageProbeSession(messages []ParsedMessage) bool {
-	sawUsage := false
-	for _, m := range messages {
-		if m.IsSystem || m.Role != RoleUser || m.Content == "" {
-			continue
-		}
-		if strings.TrimSpace(m.Content) != "/usage" {
-			return false
-		}
-		sawUsage = true
-	}
-	return sawUsage
 }
 
 // fileEndsWithNewline returns true when the byte at size-1

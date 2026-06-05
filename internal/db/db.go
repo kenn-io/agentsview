@@ -28,13 +28,10 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 33: Claude parser now skips content-free /usage probe
-// sessions (the only user turn is the /usage command), and the Codex
-// parser drops the initial user prompt when Codex re-emits it verbatim
-// while continuing a task across turns. Existing rows need re-parsing
-// so /usage probe sessions are dropped from the archive and Codex
-// code-review sessions are recounted to a single user turn and
-// re-flagged as automated.
+// Bumped to 33: force a full non-destructive re-sync for archives
+// whose stored rows need to be rebuilt from the current parser and
+// classifier behavior. No schema change; this bump only invalidates
+// version-32 stored parser output.
 //
 // (32: Antigravity DB parsers now filter internal protocol strings
 // from visible message content, remove raw step headers, prefer

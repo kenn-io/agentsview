@@ -35,8 +35,6 @@ var errCodexIncrementalNeedsFullParse = errors.New(
 type codexSessionBuilder struct {
 	messages             []ParsedMessage
 	firstMessage         string
-	firstUserContent     string
-	sawDistinctUserTurn  bool
 	startedAt            time.Time
 	endedAt              time.Time
 	sessionID            string
@@ -166,29 +164,10 @@ func (b *codexSessionBuilder) handleResponseItem(
 		return
 	}
 
-	if role == "user" {
-		switch {
-		case b.firstUserContent == "":
-			b.firstUserContent = content
-			b.firstMessage = truncate(
-				strings.ReplaceAll(content, "\n", " "), 300,
-			)
-		case content == b.firstUserContent:
-			if !b.sawDistinctUserTurn {
-				// Codex re-emits the initial prompt verbatim when
-				// it continues a task across turns (after tool use
-				// or a turn_aborted). Drop the verbatim replay so it
-				// is not counted as a second user turn. A later
-				// identical message that follows a distinct user turn
-				// is a deliberate repeat and is kept. The match is on
-				// full content, not the truncated preview, so a
-				// distinct prompt that merely shares the first 300
-				// runes is not dropped.
-				return
-			}
-		default:
-			b.sawDistinctUserTurn = true
-		}
+	if role == "user" && b.firstMessage == "" {
+		b.firstMessage = truncate(
+			strings.ReplaceAll(content, "\n", " "), 300,
+		)
 	}
 
 	b.messages = append(b.messages, ParsedMessage{
@@ -1287,55 +1266,6 @@ func readCodexModelAtOffset(
 	return model
 }
 
-// seedCodexUserDedup scans a Codex JSONL prefix [0, offset) to recover
-// the state the re-emitted-prompt dedup needs when resuming an
-// incremental parse: the full content of the first real user message
-// and whether a second, distinct user turn already occurred. It mirrors
-// handleResponseItem's user-message filtering and full-content matching
-// so the incremental path dedups re-emitted prompts identically to a
-// full parse, and early-exits once a distinct turn is found.
-func seedCodexUserDedup(
-	path string, offset int64,
-) (firstContent string, sawDistinct bool) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", false
-	}
-	defer f.Close()
-
-	lr := newLineReader(io.LimitReader(f, offset), maxLineSize)
-	for {
-		line, ok := lr.next()
-		if !ok {
-			break
-		}
-		if !gjson.Valid(line) {
-			continue
-		}
-		if gjson.Get(line, "type").Str != codexTypeResponseItem {
-			continue
-		}
-		payload := gjson.Get(line, "payload")
-		if payload.Get("role").Str != "user" {
-			continue
-		}
-		content := extractCodexContent(payload)
-		// isCodexSystemMessage already covers subagent
-		// notifications, so empty + system is the full set
-		// handleResponseItem skips before its dedup switch.
-		if strings.TrimSpace(content) == "" ||
-			isCodexSystemMessage(content) {
-			continue
-		}
-		if firstContent == "" {
-			firstContent = content
-		} else if content != firstContent {
-			return firstContent, true
-		}
-	}
-	return firstContent, false
-}
-
 // ParseCodexSessionFrom parses only new lines from a Codex
 // JSONL file starting at the given byte offset. Returns only
 // the newly parsed messages (with ordinals starting at
@@ -1350,12 +1280,6 @@ func ParseCodexSessionFrom(
 	b := newCodexSessionBuilder(includeExec)
 	b.ordinal = startOrdinal
 	b.currentModel = readCodexModelAtOffset(path, offset)
-	// Recover the re-emitted-prompt dedup state from the already-parsed
-	// prefix so a replay appended across syncs is dropped just as a
-	// full parse would.
-	b.firstUserContent, b.sawDistinctUserTurn = seedCodexUserDedup(
-		path, offset,
-	)
 	var fallbackErr error
 
 	consumed, err := readJSONLFrom(

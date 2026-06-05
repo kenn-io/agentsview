@@ -6501,67 +6501,6 @@ func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
 	assert.Equal(t, 2, updated.UserMessageCount, "UserMessageCount after append = %d, want 2", updated.UserMessageCount)
 }
 
-// TestIncrementalSync_CodexReemittedPromptDedupedOnAppend covers
-// the case where Codex re-emits the initial prompt verbatim on a
-// continued turn. The duplicate is appended after the first sync,
-// so the incremental parser starts past the original prompt and
-// only sees the re-emitted copy. It must still recognise it as a
-// duplicate via the stored first_message rather than counting it
-// as a second user turn — otherwise an automated session (here a
-// roborev code review) flips to UserMessageCount 2 and loses its
-// is_automated classification, resurfacing in the viewer.
-func TestIncrementalSync_CodexReemittedPromptDedupedOnAppend(t *testing.T) {
-	env := setupTestEnv(t)
-
-	uuid := "c3d4e5f6-3456-789a-bcde-f01234567890"
-	prompt := "You are a code reviewer. Review the code changes shown below."
-
-	initial := testjsonl.NewSessionBuilder().
-		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
-		AddCodexMessage(tsEarlyS1, "user", prompt).
-		AddCodexMessage(tsEarlyS5, "assistant", "Looks good.").
-		String()
-	path := env.writeCodexSession(
-		t, filepath.Join("2024", "01", "15"),
-		"rollout-20240115-"+uuid+".jsonl", initial,
-	)
-	env.engine.SyncAll(context.Background(), nil)
-
-	sessionID := "codex:" + uuid
-	full, err := env.db.GetSessionFull(context.Background(), sessionID)
-	require.NoError(t, err, "GetSessionFull after initial sync")
-	require.Equal(t, 1, full.UserMessageCount,
-		"initial UserMessageCount = %d, want 1", full.UserMessageCount)
-	require.True(t, full.IsAutomated,
-		"initial IsAutomated = false, want true for reviewer prompt")
-
-	// Codex continues the turn and re-emits the same prompt
-	// verbatim, then adds a fresh assistant reply.
-	appended := testjsonl.CodexMsgJSON(
-		"user", prompt, "2024-01-01T10:01:00Z",
-	) + "\n" + testjsonl.CodexMsgJSON(
-		"assistant", "Still good.", "2024-01-01T10:01:05Z",
-	) + "\n"
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err, "open for append")
-	_, err = f.WriteString(appended)
-	f.Close()
-	require.NoError(t, err, "append")
-
-	env.engine.SyncPaths([]string{path})
-
-	updated, err := env.db.GetSessionFull(context.Background(), sessionID)
-	require.NoError(t, err, "GetSessionFull after append")
-	assert.Equal(t, 1, updated.UserMessageCount,
-		"UserMessageCount after re-emitted prompt = %d, want 1 (duplicate must be dropped)",
-		updated.UserMessageCount)
-	assert.Equal(t, 3, updated.MessageCount,
-		"MessageCount after append = %d, want 3 (only the assistant reply is new)",
-		updated.MessageCount)
-	assert.True(t, updated.IsAutomated,
-		"IsAutomated after append = false, want true (dedup must preserve classification)")
-}
-
 func testStringPtrValue(v *string) string {
 	if v == nil {
 		return ""

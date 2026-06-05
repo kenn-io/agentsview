@@ -2,7 +2,6 @@ package parser
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1161,84 +1160,6 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 	})
 }
 
-// TestParseCodexSession_DeduplicatesReemittedPrompt covers Codex
-// re-emitting the initial user prompt verbatim when it continues a
-// task across turns (after tool use or a turn_aborted). The replay
-// must not inflate user_message_count past the single-turn gate that
-// drives automated-session classification, but a deliberate repeat
-// after a distinct user turn must be preserved.
-func TestParseCodexSession_DeduplicatesReemittedPrompt(t *testing.T) {
-	const prompt = "You are a code reviewer. Review the code changes shown below."
-
-	t.Run("drops re-emitted initial prompt", func(t *testing.T) {
-		content := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("rev", "/tmp", "user", tsEarly),
-			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
-			testjsonl.CodexMsgJSON("assistant", "looking", "2024-01-01T10:00:02Z"),
-			testjsonl.CodexMsgJSON("user", prompt, "2024-01-01T10:00:03Z"),
-			testjsonl.CodexMsgJSON("assistant", "No issues found.", "2024-01-01T10:00:04Z"),
-		)
-		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
-		require.NotNil(t, sess)
-		assert.Equal(t, 1, sess.UserMessageCount,
-			"re-emitted initial prompt must not count as a second user turn")
-		require.Len(t, msgs, 3)
-		assert.Equal(t, prompt, msgs[0].Content)
-		assert.Equal(t, RoleAssistant, msgs[1].Role)
-		assert.Equal(t, RoleAssistant, msgs[2].Role)
-	})
-
-	t.Run("drops re-emitted prompt after turn_aborted", func(t *testing.T) {
-		content := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("rev", "/tmp", "user", tsEarly),
-			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
-			testjsonl.CodexMsgJSON("user", "<turn_aborted>\ninterrupted", "2024-01-01T10:00:02Z"),
-			testjsonl.CodexMsgJSON("user", prompt, "2024-01-01T10:00:03Z"),
-			testjsonl.CodexMsgJSON("assistant", "No issues found.", "2024-01-01T10:00:04Z"),
-		)
-		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
-		require.NotNil(t, sess)
-		assert.Equal(t, 1, sess.UserMessageCount,
-			"re-emitted prompt after a turn_aborted must not count as a second user turn")
-		require.Len(t, msgs, 2)
-		assert.Equal(t, prompt, msgs[0].Content)
-	})
-
-	t.Run("keeps a genuine repeat after a distinct user turn", func(t *testing.T) {
-		content := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("chat", "/tmp", "user", tsEarly),
-			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
-			testjsonl.CodexMsgJSON("assistant", "ok", "2024-01-01T10:00:02Z"),
-			testjsonl.CodexMsgJSON("user", "something else entirely", "2024-01-01T10:00:03Z"),
-			testjsonl.CodexMsgJSON("assistant", "ok2", "2024-01-01T10:00:04Z"),
-			testjsonl.CodexMsgJSON("user", prompt, "2024-01-01T10:00:05Z"),
-		)
-		sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
-		require.NotNil(t, sess)
-		assert.Equal(t, 3, sess.UserMessageCount,
-			"a deliberate repeat after a distinct user turn must be preserved")
-	})
-
-	t.Run("keeps distinct prompts that share the first 300 runes", func(t *testing.T) {
-		// Two different prompts whose first 300 runes are identical
-		// collapse to the same first_message preview. The dedup must
-		// match on full content, not the preview, so the second turn
-		// is recognised as distinct and kept rather than dropped as a
-		// replay.
-		shared := strings.Repeat("x", 300)
-		content := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("chat", "/tmp", "user", tsEarly),
-			testjsonl.CodexMsgJSON("user", shared+" first", tsEarlyS1),
-			testjsonl.CodexMsgJSON("assistant", "ok", "2024-01-01T10:00:02Z"),
-			testjsonl.CodexMsgJSON("user", shared+" second", "2024-01-01T10:00:03Z"),
-		)
-		sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
-		require.NotNil(t, sess)
-		assert.Equal(t, 2, sess.UserMessageCount,
-			"distinct prompts sharing only the 300-rune preview must both be kept")
-	})
-}
-
 // codexEventMsgJSON builds a Codex event_msg line for lifecycle
 // events like task_complete / task_started / turn_aborted. The
 // shape mirrors what the Codex CLI emits in real session files.
@@ -1387,80 +1308,6 @@ func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 
 	// endedAt reflects the latest timestamp.
 	assert.False(t, endedAt.IsZero())
-}
-
-// TestParseCodexSessionFrom_DedupsReemittedPrompt covers the
-// incremental-sync case of the re-emitted-prompt dedup: when Codex
-// appends a verbatim replay of the initial prompt after the session
-// was already synced, the incremental parser must recover the prior
-// context (first-prompt preview, whether a distinct turn occurred) and
-// drop the replay, mirroring a full parse.
-func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
-	const prompt = "You are a code reviewer. Review the code changes shown below."
-
-	appendLines := func(t *testing.T, path, content string) {
-		t.Helper()
-		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-		require.NoError(t, err)
-		_, err = f.WriteString(content)
-		require.NoError(t, err)
-		require.NoError(t, f.Close())
-	}
-
-	t.Run("drops a re-emitted prompt appended after first sync", func(t *testing.T) {
-		initial := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("inc-rev", "/tmp", "codex_cli_rs", tsEarly),
-			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
-			testjsonl.CodexMsgJSON("assistant", "looking", tsEarlyS5),
-		)
-		path := createTestFile(t, "incremental.jsonl", initial)
-		sess, msgs, err := ParseCodexSession(path, "local", false)
-		require.NoError(t, err)
-		require.Equal(t, 1, sess.UserMessageCount)
-		require.Len(t, msgs, 2)
-
-		info, err := os.Stat(path)
-		require.NoError(t, err)
-		offset := info.Size()
-
-		appendLines(t, path, testjsonl.JoinJSONL(
-			testjsonl.CodexMsgJSON("user", prompt, tsLate),
-			testjsonl.CodexMsgJSON("assistant", "No issues found.", tsLateS5),
-		))
-
-		newMsgs, _, _, err := ParseCodexSessionFrom(path, offset, len(msgs), false)
-		require.NoError(t, err)
-		require.Len(t, newMsgs, 1)
-		assert.Equal(t, RoleAssistant, newMsgs[0].Role)
-		assert.Contains(t, newMsgs[0].Content, "No issues found.")
-		assert.Equal(t, len(msgs), newMsgs[0].Ordinal,
-			"kept message must keep contiguous ordinals (no gap from the dropped replay)")
-	})
-
-	t.Run("keeps a re-emitted prompt when the prefix already had a distinct turn", func(t *testing.T) {
-		initial := testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON("inc-chat", "/tmp", "codex_cli_rs", tsEarly),
-			testjsonl.CodexMsgJSON("user", prompt, tsEarlyS1),
-			testjsonl.CodexMsgJSON("assistant", "ok", "2024-01-01T10:00:02Z"),
-			testjsonl.CodexMsgJSON("user", "something else entirely", "2024-01-01T10:00:03Z"),
-		)
-		path := createTestFile(t, "incremental.jsonl", initial)
-		sess, msgs, err := ParseCodexSession(path, "local", false)
-		require.NoError(t, err)
-		require.Equal(t, 2, sess.UserMessageCount)
-
-		info, err := os.Stat(path)
-		require.NoError(t, err)
-		offset := info.Size()
-
-		appendLines(t, path, testjsonl.CodexMsgJSON("user", prompt, tsLate))
-
-		newMsgs, _, _, err := ParseCodexSessionFrom(path, offset, len(msgs), false)
-		require.NoError(t, err)
-		require.Len(t, newMsgs, 1)
-		assert.Equal(t, RoleUser, newMsgs[0].Role)
-		assert.Equal(t, prompt, newMsgs[0].Content)
-	})
 }
 
 func TestParseCodexSessionFrom_SkipsSessionMeta(t *testing.T) {

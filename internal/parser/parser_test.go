@@ -1027,15 +1027,12 @@ func TestParseCodexSessionOversizedLineSkipped(t *testing.T) {
 		`[{"type":"input_text","text":"`
 	suffix := `"}]}}` + "\n"
 
-	firstLine := prefix + "hello" + suffix
-	secondLine := prefix + "goodbye" + suffix
+	normalLine := prefix + "hello" + suffix
 	oversizedLine := prefix +
 		strings.Repeat("x", maxLineSize+1) + suffix
 
-	// Place the oversized line between two normal lines. The two
-	// normal messages differ so the assertion isolates oversized-line
-	// skipping from the re-emitted-prompt dedup.
-	content := meta + firstLine + oversizedLine + secondLine
+	// Place the oversized line between two normal lines.
+	content := meta + normalLine + oversizedLine + normalLine
 	path := createTestFile(t, "oversized.jsonl", content)
 	sess, msgs, err := ParseCodexSession(
 		path, "local", false,
