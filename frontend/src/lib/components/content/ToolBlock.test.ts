@@ -448,6 +448,34 @@ describe("ToolBlock show-more for long content", () => {
 
     expect(document.querySelector(".show-more-btn")).toBeNull();
   });
+
+  it("auto-expands hidden Bash fallback content on search match", async () => {
+    const longCommand = Array.from(
+      { length: 30 },
+      (_, i) => `echo hidden-line-${i}`,
+    ).join("\n");
+    const toolCall: ToolCall = {
+      tool_name: "Bash",
+      category: "Bash",
+      input_json: JSON.stringify({ command: longCommand }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: {
+        content: "",
+        toolCall,
+        highlightQuery: "hidden-line-29",
+      },
+    });
+    await tick();
+
+    const toolContent = document.querySelector(".tool-content");
+    expect(toolContent).not.toBeNull();
+    expect(toolContent!.textContent).toContain("hidden-line-29");
+    expect(document.querySelector(".show-more-btn")!.textContent).toContain(
+      "show less",
+    );
+  });
 });
 
 describe("ToolBlock collapsed preview", () => {

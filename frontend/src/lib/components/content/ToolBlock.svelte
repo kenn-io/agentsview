@@ -61,7 +61,7 @@
     }
     const q = hq.toLowerCase();
     const inputText = (
-      taskPrompt ?? content ?? fallbackContent ?? ""
+      taskPrompt ?? fallbackContent ?? content ?? ""
     ).toLowerCase();
     const historyText = (
       toolCall?.result_events?.map((event) => event.content).join("\n\n") ?? ""
