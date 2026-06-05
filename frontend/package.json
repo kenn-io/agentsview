@@ -28,7 +28,7 @@
     "@types/dompurify": "3.2.0",
     "jsdom": "29.1.1",
     "svelte": "5.55.10",
-    "svelte-check": "4.5.0",
+    "svelte-check": "4.6.0",
     "typescript": "6.0.3",
     "vite": "^8.0.14",
     "vitest": "^4.1.8"
