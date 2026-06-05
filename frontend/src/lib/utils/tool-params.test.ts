@@ -555,6 +555,26 @@ describe("generateFallbackContent - Bash", () => {
     expect(result).toBe("description: Run test suite\ncommand: npm test");
   });
 
+  it("shows remaining visible params after Bash command", () => {
+    const result = generateFallbackContent("Bash", {
+      command: "npm test",
+      description: "Run test suite",
+      workdir: "/repo/frontend",
+      timeout: 120000,
+      env: { CI: "true" },
+      agent__intent: "internal note",
+    });
+    expect(result).toBe(
+      [
+        "description: Run test suite",
+        "command: npm test",
+        "workdir: /repo/frontend",
+        "timeout: 120000",
+        'env: {"CI":"true"}',
+      ].join("\n"),
+    );
+  });
+
   it("shows full multiline heredoc command without truncation", () => {
     const heredoc = [
       'cd /project && PYTHONIOENCODING=utf-8 python - <<\'PY\'',
@@ -635,9 +655,8 @@ describe("generateFallbackContent - agent__intent filtering", () => {
       command: "npm test",
       agent__intent: "Running test suite",
     });
-    // Bash has no special handler for command; falls to generic loop
-    // agent__intent must not appear; command may appear
     expect(result).not.toContain("agent__intent");
+    expect(result).toBe("command: npm test");
   });
 
   it("does not include agent__intent for read tool (generic path)", () => {

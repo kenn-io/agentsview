@@ -124,6 +124,23 @@ export function extractToolParamMeta(
  *  These should not appear in the expanded content display. */
 const INTERNAL_PARAMS = new Set(["agent__intent", "_i"]);
 
+function visibleParamLines(
+  params: Params,
+  excluded = new Set<string>(),
+): string[] {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(params)) {
+    if (INTERNAL_PARAMS.has(key) || excluded.has(key)) continue;
+    if (value == null || value === "") continue;
+    const strVal =
+      typeof value === "string"
+        ? value
+        : JSON.stringify(value);
+    lines.push(`${key}: ${strVal}`);
+  }
+  return lines;
+}
+
 /** Generate displayable content from input params when
  *  the regex-captured content is empty. */
 export function generateFallbackContent(
@@ -139,6 +156,12 @@ export function generateFallbackContent(
       if (params.description)
         lines.push(`description: ${String(params.description)}`);
       lines.push(`command: ${text}`);
+      lines.push(
+        ...visibleParamLines(
+          params,
+          new Set(["description", "command", "cmd"]),
+        ),
+      );
       const allLines = lines.join("\n").split("\n");
       if (allLines.length > MAX_DIFF_LINES) {
         return allLines.slice(0, MAX_DIFF_LINES).join("\n")
@@ -243,16 +266,7 @@ export function generateFallbackContent(
       return header + body + suffix;
     }
   }
-  const lines: string[] = [];
-  for (const [key, value] of Object.entries(params)) {
-    if (INTERNAL_PARAMS.has(key)) continue;
-    if (value == null || value === "") continue;
-    const strVal =
-      typeof value === "string"
-        ? value
-        : JSON.stringify(value);
-    lines.push(`${key}: ${strVal}`);
-  }
+  const lines = visibleParamLines(params);
   if (!lines.length) return null;
   const allLines = lines.join("\n").split("\n");
   if (allLines.length > MAX_DIFF_LINES) {
