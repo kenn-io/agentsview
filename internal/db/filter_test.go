@@ -1114,6 +1114,27 @@ func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
 	assert.Equal(t, displayName, *index.Sessions[0].DisplayName, "display_name")
 }
 
+func TestSidebarIndexIncludesNameSource(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "p", func(s *Session) {
+		name := "My Name"
+		s.DisplayName = &name
+	})
+	requireNoError(t, d.RenameSession("s1", new("My Name")), "rename")
+	// Guarantee name_source regardless of RenameSession's current behavior:
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET name_source='user' WHERE id='s1'")
+	requireNoError(t, err, "set name_source")
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
+	requireNoError(t, err, "sidebar index")
+	require.Len(t, index.Sessions, 1)
+	require.NotNil(t, index.Sessions[0].NameSource, "name_source nil")
+	assert.Equal(t, "user", *index.Sessions[0].NameSource)
+}
+
 func TestSidebarSessionIndexComputesIsTeammate(t *testing.T) {
 	d := testDB(t)
 
