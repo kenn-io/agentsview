@@ -4,6 +4,7 @@
     type SessionGroupInput,
   } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
   import {
@@ -101,7 +102,10 @@
    * repetitive "You are a teammate on..." boilerplate.
    */
   let displayLabel = $derived.by((): { text: string; isShell: boolean } => {
-    if (session.display_name) {
+    if (
+      session.display_name &&
+      (session.name_source !== "agent" || ui.showSessionNames)
+    ) {
       return {
         text: truncate(session.display_name, 50),
         isShell: false,
