@@ -204,168 +204,53 @@ func pascalASCII(s string) string {
 	return string(s[0]-('a'-'A')) + s[1:]
 }
 
-func (s *Server) registerTypedAPIRoutes() {
-	s.api.UseMiddleware(humaRequestInfoMiddleware)
-
-	const (
-		tagAnalytics = "Analytics"
-		tagAssets    = "Assets"
-		tagConfig    = "Config"
-		tagHealth    = "Health"
-		tagImport    = "Import"
-		tagInsights  = "Insights"
-		tagMetadata  = "Metadata"
-		tagOpeners   = "Openers"
-		tagPins      = "Pins"
-		tagSearch    = "Search"
-		tagSecrets   = "Secrets"
-		tagSessions  = "Sessions"
-		tagSettings  = "Settings"
-		tagStarred   = "Starred"
-		tagSync      = "Sync"
-		tagTrends    = "Trends"
-		tagUsage     = "Usage"
-	)
-
-	get(s, tagHealth, "/api/ping", "Ping daemon", s.humaPing)
-
-	get(s, tagSessions, "/api/v1/sessions", "List sessions", s.humaListSessions)
-	get(s, tagSessions, "/api/v1/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)
-	get(s, tagSessions, "/api/v1/sessions/{id}", "Get session", s.humaGetSession)
-	get(s, tagSessions, "/api/v1/sessions/{id}/messages", "List session messages", s.humaGetMessages)
-	get(s, tagSessions, "/api/v1/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
-	get(s, tagSessions, "/api/v1/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
-	get(s, tagSessions, "/api/v1/sessions/{id}/activity", "Get session activity", s.humaGetSessionActivity)
-	get(s, tagSessions, "/api/v1/sessions/{id}/timing", "Get session timing", s.humaSessionTiming)
-	get(s, tagSessions, "/api/v1/sessions/{id}/usage", "Get session usage", s.humaSessionUsage)
-	stream(s, tagSessions, http.MethodGet, "/api/v1/sessions/{id}/watch", "Watch session events", s.humaWatchSession)
-	stream(s, tagSessions, http.MethodGet, "/api/v1/events", "Watch server events", s.humaEvents)
-	raw(s, tagSessions, http.MethodGet, "/api/v1/sessions/{id}/export", "Export session as HTML", s.humaExportSession)
-	raw(s, tagSessions, http.MethodGet, "/api/v1/sessions/{id}/md", "Export session as Markdown", s.humaMarkdownSession)
-	post(s, tagSessions, "/api/v1/sessions/{id}/publish", "Publish session", s.humaPublishSession)
-	post(s, tagSessions, "/api/v1/sessions/{id}/resume", "Resume session", s.humaResumeSession)
-	get(s, tagOpeners, "/api/v1/openers", "List openers", s.humaListOpeners)
-	get(s, tagSessions, "/api/v1/sessions/{id}/directory", "Get session directory", s.humaGetSessionDir)
-	get(s, tagSessions, "/api/v1/sessions/{id}/search", "Search within a session", s.humaSearchSession)
-	post(s, tagSessions, "/api/v1/sessions/{id}/open", "Open session directory", s.humaOpenSession)
-	post(s, tagSync, "/api/v1/sessions/sync", "Sync a session", s.humaSyncSession)
-	post(s, tagSessions, "/api/v1/sessions/upload", "Upload a session export", s.humaUploadSession)
-
-	get(s, tagAnalytics, "/api/v1/analytics/summary", "Get analytics summary", s.humaAnalyticsSummary)
-	get(s, tagAnalytics, "/api/v1/analytics/activity", "Get analytics activity", s.humaAnalyticsActivity)
-	get(s, tagAnalytics, "/api/v1/analytics/heatmap", "Get analytics heatmap", s.humaAnalyticsHeatmap)
-	get(s, tagAnalytics, "/api/v1/analytics/projects", "Get analytics by project", s.humaAnalyticsProjects)
-	get(s, tagAnalytics, "/api/v1/analytics/hour-of-week", "Get analytics by hour of week", s.humaAnalyticsHourOfWeek)
-	get(s, tagAnalytics, "/api/v1/analytics/sessions", "Get session shape analytics", s.humaAnalyticsSessionShape)
-	get(s, tagAnalytics, "/api/v1/analytics/velocity", "Get velocity analytics", s.humaAnalyticsVelocity)
-	get(s, tagAnalytics, "/api/v1/analytics/tools", "Get tool analytics", s.humaAnalyticsTools)
-	get(s, tagAnalytics, "/api/v1/analytics/top-sessions", "Get top sessions", s.humaAnalyticsTopSessions)
-	get(s, tagAnalytics, "/api/v1/analytics/signals", "Get signal analytics", s.humaAnalyticsSignals)
-	get(s, tagTrends, "/api/v1/trends/terms", "Get trend terms", s.humaTrendsTerms)
-
-	get(s, tagUsage, "/api/v1/usage/summary", "Get usage summary", s.humaUsageSummary)
-	get(s, tagUsage, "/api/v1/usage/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
-
-	get(s, tagInsights, "/api/v1/insights", "List insights", s.humaListInsights)
-	get(s, tagInsights, "/api/v1/insights/{id}", "Get insight", s.humaGetInsight)
-	deleteRoute(s, tagInsights, "/api/v1/insights/{id}", "Delete insight", s.humaDeleteInsight)
-	stream(s, tagInsights, http.MethodPost, "/api/v1/insights/generate", "Generate insight", s.humaGenerateInsight)
-
-	get(s, tagSearch, "/api/v1/search", "Search sessions", s.humaSearch)
-	get(s, tagSearch, "/api/v1/search/content", "Search session content", s.humaSearchContent)
-	get(s, tagSecrets, "/api/v1/secrets", "List secret findings", s.humaListSecrets)
-	get(s, tagMetadata, "/api/v1/projects", "List projects", s.humaListProjects)
-	get(s, tagMetadata, "/api/v1/machines", "List machines", s.humaListMachines)
-	get(s, tagMetadata, "/api/v1/agents", "List agents", s.humaListAgents)
-	get(s, tagMetadata, "/api/v1/stats", "Get stats", s.humaGetStats)
-	get(s, tagMetadata, "/api/v1/version", "Get server version", s.humaGetVersion)
-	stream(s, tagSecrets, http.MethodPost, "/api/v1/secrets/scan", "Scan secrets", s.humaScanSecrets)
-	stream(s, tagSync, http.MethodPost, "/api/v1/sync", "Trigger sync", s.humaTriggerSync)
-	stream(s, tagSync, http.MethodPost, "/api/v1/resync", "Trigger full resync", s.humaTriggerResync)
-	get(s, tagSync, "/api/v1/sync/status", "Get sync status", s.humaSyncStatus)
-	get(s, tagConfig, "/api/v1/config/github", "Get GitHub config", s.humaGetGithubConfig)
-	post(s, tagConfig, "/api/v1/config/github", "Set GitHub config", s.humaSetGithubConfig)
-	get(s, tagConfig, "/api/v1/config/terminal", "Get terminal config", s.humaGetTerminalConfig)
-	post(s, tagConfig, "/api/v1/config/terminal", "Set terminal config", s.humaSetTerminalConfig)
-	get(s, tagMetadata, "/api/v1/update/check", "Check for updates", s.humaCheckUpdate)
-
-	get(s, tagSettings, "/api/v1/settings", "Get settings", s.humaGetSettings)
-	put(s, tagSettings, "/api/v1/settings", "Update settings", s.humaUpdateSettings)
-	get(s, tagSettings, "/api/v1/settings/worktree-mappings", "List worktree mappings", s.humaListWorktreeMappings)
-	post(s, tagSettings, "/api/v1/settings/worktree-mappings", "Create worktree mapping", s.humaCreateWorktreeMapping)
-	put(s, tagSettings, "/api/v1/settings/worktree-mappings/{id}", "Update worktree mapping", s.humaUpdateWorktreeMapping)
-	deleteRoute(s, tagSettings, "/api/v1/settings/worktree-mappings/{id}", "Delete worktree mapping", s.humaDeleteWorktreeMapping)
-	post(s, tagSettings, "/api/v1/settings/worktree-mappings/apply", "Apply worktree mappings", s.humaApplyWorktreeMappings)
-
-	get(s, tagStarred, "/api/v1/starred", "List starred sessions", s.humaListStarred)
-	put(s, tagStarred, "/api/v1/sessions/{id}/star", "Star session", s.humaStarSession)
-	deleteRoute(s, tagStarred, "/api/v1/sessions/{id}/star", "Unstar session", s.humaUnstarSession)
-	post(s, tagStarred, "/api/v1/starred/bulk", "Bulk star sessions", s.humaBulkStar)
-
-	patch(s, tagSessions, "/api/v1/sessions/{id}/rename", "Rename session", s.humaRenameSession)
-	deleteRoute(s, tagSessions, "/api/v1/sessions/{id}", "Delete session", s.humaDeleteSession)
-	post(s, tagSessions, "/api/v1/sessions/{id}/restore", "Restore session", s.humaRestoreSession)
-	deleteRoute(s, tagSessions, "/api/v1/sessions/{id}/permanent", "Permanently delete session", s.humaPermanentDeleteSession)
-	get(s, tagSessions, "/api/v1/trash", "List trash", s.humaListTrash)
-	deleteRoute(s, tagSessions, "/api/v1/trash", "Empty trash", s.humaEmptyTrash)
-
-	get(s, tagPins, "/api/v1/pins", "List pins", s.humaListPins)
-	get(s, tagPins, "/api/v1/sessions/{id}/pins", "List session pins", s.humaListSessionPins)
-	post(s, tagPins, "/api/v1/sessions/{id}/messages/{messageId}/pin", "Pin message", s.humaPinMessage)
-	deleteRoute(s, tagPins, "/api/v1/sessions/{id}/messages/{messageId}/pin", "Unpin message", s.humaUnpinMessage)
-
-	stream(s, tagImport, http.MethodPost, "/api/v1/import/claude-ai", "Import Claude.ai archive", s.humaImportClaudeAI)
-	stream(s, tagImport, http.MethodPost, "/api/v1/import/chatgpt", "Import ChatGPT archive", s.humaImportChatGPT)
-	raw(s, tagAssets, http.MethodGet, "/api/v1/assets/{filename}", "Get imported asset", s.humaGetAsset)
-}
-
 func get[I, O any](
-	s *Server, tag, path, summary string,
+	s *Server, group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(s, http.MethodGet, tag, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodGet, path, summary, handler, s.humaTimeout())
 }
 
 func post[I, O any](
-	s *Server, tag, path, summary string,
+	s *Server, group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(s, http.MethodPost, tag, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPost, path, summary, handler, s.humaTimeout())
 }
 
 func put[I, O any](
-	s *Server, tag, path, summary string,
+	s *Server, group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(s, http.MethodPut, tag, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPut, path, summary, handler, s.humaTimeout())
 }
 
 func patch[I, O any](
-	s *Server, tag, path, summary string,
+	s *Server, group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(s, http.MethodPatch, tag, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodPatch, path, summary, handler, s.humaTimeout())
 }
 
 func deleteRoute[I, O any](
-	s *Server, tag, path, summary string,
+	s *Server, group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 ) {
-	registerRoute(s, http.MethodDelete, tag, path, summary, handler, s.humaTimeout())
+	registerRoute(group, http.MethodDelete, path, summary, handler, s.humaTimeout())
 }
 
 func stream[I any](
-	s *Server, tag, method, path, summary string,
+	_ *Server, group routeGroup, method, path, summary string,
 	handler func(context.Context, *I) (*huma.StreamResponse, error),
 ) {
-	registerRoute(s, method, tag, path, summary, handler, streamResponse())
+	registerRoute(group, method, path, summary, handler, streamResponse())
 }
 
 func raw[I any](
-	s *Server, tag, method, path, summary string,
+	_ *Server, group routeGroup, method, path, summary string,
 	handler func(context.Context, *I) (*bytesOutput, error),
 ) {
-	registerRoute(s, method, tag, path, summary, handler)
+	registerRoute(group, method, path, summary, handler)
 }
 
 func operationID(method, path string) string {
@@ -391,16 +276,15 @@ func operationID(method, path string) string {
 }
 
 func registerRoute[I, O any](
-	s *Server, method, tag, path, summary string,
+	group routeGroup, method, path, summary string,
 	handler func(context.Context, *I) (*O, error),
 	options ...func(*huma.Operation),
 ) {
 	op := huma.Operation{
-		OperationID: operationID(method, path),
+		OperationID: operationID(method, group.fullPath(path)),
 		Method:      method,
 		Path:        path,
 		Summary:     summary,
-		Tags:        []string{tag},
 		Errors: []int{
 			http.StatusBadRequest,
 			http.StatusUnauthorized,
@@ -417,7 +301,7 @@ func registerRoute[I, O any](
 	for _, option := range options {
 		option(&op)
 	}
-	huma.Register(s.api, op, handler)
+	huma.Register(group.api, op, handler)
 }
 
 func streamResponse() func(*huma.Operation) {
