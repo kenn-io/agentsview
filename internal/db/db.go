@@ -334,7 +334,7 @@ func Open(path string) (*DB, error) {
 
 	if err := d.BackfillNameSource(); err != nil {
 		d.Close()
-		return nil, err
+		return nil, fmt.Errorf("backfilling name_source: %w", err)
 	}
 
 	if dataStale && !schemaStale {
