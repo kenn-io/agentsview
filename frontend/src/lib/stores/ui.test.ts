@@ -492,12 +492,28 @@ describe("UIStore", () => {
   });
 
   describe("showSessionNames", () => {
-    beforeEach(() => {
-      ui.showSessionNames = false;
-    });
+    it("defaults to false on fresh construction (empty localStorage)", async () => {
+      const original = globalThis.localStorage;
+      const getItem = vi.fn(() => null);
+      const setItem = vi.fn();
 
-    it("defaults to false", () => {
-      expect(ui.showSessionNames).toBe(false);
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem, setItem },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?showSessionNamesDefault");
+        expect(mod.ui.showSessionNames).toBe(false);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
     });
 
     it("can be enabled and disabled via setter", () => {
