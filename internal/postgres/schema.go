@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent              TEXT NOT NULL,
     first_message      TEXT,
     display_name       TEXT,
+    name_source        TEXT,
     created_at         TIMESTAMPTZ,
     started_at         TIMESTAMPTZ,
     ended_at           TIMESTAMPTZ,
@@ -535,6 +536,11 @@ func EnsureSchema(
 			"sessions", "secrets_rules_version",
 			`secrets_rules_version TEXT NOT NULL DEFAULT ''`,
 			"adding sessions.secrets_rules_version",
+		},
+		{
+			"sessions", "name_source",
+			`name_source TEXT`,
+			"adding sessions.name_source",
 		},
 	}
 	step = time.Now()

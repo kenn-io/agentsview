@@ -765,7 +765,7 @@ func (s *Sync) pushSession(
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent,
-			first_message, display_name,
+			first_message, display_name, name_source,
 			created_at, started_at, ended_at, deleted_at,
 			message_count, user_message_count,
 			total_output_tokens, peak_context_tokens,
@@ -787,19 +787,19 @@ func (s *Sync) pushSession(
 			secret_leak_count, secrets_rules_version,
 			updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10,
-			$11, $12, $13, $14,
-			$15, $16, $17, $18,
-			$19, $20, $21, $22, $23, $24, $25,
-			$26, $27,
-			$28, $29, $30, $31,
-			$32, $33, $34, $35,
-			$36,
-			$37, $38,
-			$39,
-			$40, $41, $42, $43,
-			$44, $45,
+			$1, $2, $3, $4, $5, $6, $7,
+			$8, $9, $10, $11,
+			$12, $13, $14, $15,
+			$16, $17, $18, $19,
+			$20, $21, $22, $23, $24, $25, $26,
+			$27, $28,
+			$29, $30, $31, $32,
+			$33, $34, $35, $36,
+			$37,
+			$38, $39,
+			$40,
+			$41, $42, $43, $44,
+			$45, $46,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
@@ -808,6 +808,7 @@ func (s *Sync) pushSession(
 			agent = EXCLUDED.agent,
 			first_message = EXCLUDED.first_message,
 			display_name = EXCLUDED.display_name,
+			name_source = EXCLUDED.name_source,
 			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
 			ended_at = EXCLUDED.ended_at,
@@ -853,6 +854,7 @@ func (s *Sync) pushSession(
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
 			OR sessions.display_name IS DISTINCT FROM EXCLUDED.display_name
+			OR sessions.name_source IS DISTINCT FROM EXCLUDED.name_source
 			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
 			OR sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
@@ -897,6 +899,7 @@ func (s *Sync) pushSession(
 		sess.Agent,
 		nilStr(sess.FirstMessage),
 		nilStr(sess.DisplayName),
+		nilStr(sess.NameSource),
 		createdAt,
 		nilStrTS(sess.StartedAt),
 		nilStrTS(sess.EndedAt),
