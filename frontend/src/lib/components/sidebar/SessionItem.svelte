@@ -100,6 +100,10 @@
    * Clean display name: for teammate sessions, extract the unique task
    * description (e.g. "Task #2: Align ROADMAP.md...") instead of the
    * repetitive "You are a teammate on..." boilerplate.
+   *
+   * Agent-generated names (name_source === "agent") are hidden unless the
+   * user enables "Session names" in Appearance settings; all other sources
+   * (user-renamed, imported, legacy/null) always show.
    */
   let displayLabel = $derived.by((): { text: string; isShell: boolean } => {
     if (
