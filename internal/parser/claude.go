@@ -397,7 +397,8 @@ func ParseClaudeSessionFrom(
 		// non-message events (progress, queue-operation) so
 		// callers can update ended_at even when no new
 		// messages are found.
-		latestTS time.Time
+		latestTS  time.Time
+		sawRename bool
 	)
 
 	consumed, err := readJSONLFrom(
@@ -408,6 +409,14 @@ func ParseClaudeSessionFrom(
 				}
 			}
 			entryType := gjson.Get(line, "type").Str
+			if entryType == "system" {
+				if _, ok := extractRenameName(
+					gjson.Get(line, "content").Str,
+				); ok {
+					sawRename = true
+				}
+				return
+			}
 			if entryType == "attachment" {
 				if qc, ok := extractQueuedCommand(line); ok {
 					queuedCommands = append(queuedCommands, qc)
@@ -435,6 +444,10 @@ func ParseClaudeSessionFrom(
 			"reading claude %s from offset %d: %w",
 			path, offset, err,
 		)
+	}
+
+	if sawRename {
+		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {

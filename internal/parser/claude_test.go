@@ -373,6 +373,21 @@ func TestParseClaudeSession_LinearMetadata(t *testing.T) {
 	assert.Equal(t, "assistant", msgs[1].SourceType)
 }
 
+func TestClaudeIncrementalRenameTriggersFullParse(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rename-incremental.jsonl")
+
+	renameLine := `{"type":"system","subtype":"local_command","content":"<command-name>/rename</command-name>\n<command-args>new</command-args>","timestamp":"2026-06-01T00:00:02Z","sessionId":"s1"}`
+	err := os.WriteFile(path, []byte(renameLine+"\n"), 0o644)
+	require.NoError(t, err)
+
+	_, _, _, parseErr := ParseClaudeSessionFrom(path, 0, 0)
+	require.Error(t, parseErr)
+	assert.True(t, IsIncrementalFullParseFallback(parseErr))
+}
+
 func TestClaudeRenameSetsDisplayName(t *testing.T) {
 	t.Parallel()
 
