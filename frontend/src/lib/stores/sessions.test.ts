@@ -100,6 +100,7 @@ type SkinnySessionRow = {
   machine: string;
   agent: string;
   display_name?: string | null;
+  name_source?: string | null;
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
@@ -417,6 +418,16 @@ describe("SessionsStore", () => {
       expect(sessions.sessions[0]!.display_name).toBeNull();
       expect(sessions.sessions[0]!.first_message).toBe("hydrated detail");
       expect(sessions.sessions[0]!.is_index_only).toBe(false);
+    });
+
+    it("preserves name_source from the sidebar index row", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "s1", display_name: "agent-name", name_source: "agent" }),
+      ]);
+
+      await sessions.load();
+
+      expect(sessions.sessions[0]!.name_source).toBe("agent");
     });
 
     it("merges hydrated full rows without changing index order", async () => {
