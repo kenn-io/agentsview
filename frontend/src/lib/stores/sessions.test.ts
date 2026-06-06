@@ -430,6 +430,34 @@ describe("SessionsStore", () => {
       expect(sessions.sessions[0]!.name_source).toBe("agent");
     });
 
+    it("name_source survives session hydration merge", async () => {
+      // Skinny row carries name_source from the sidebar index.
+      mockSidebarIndex([
+        makeSkinnyRow({
+          id: "ns1",
+          display_name: "Agent Title",
+          name_source: "agent",
+        }),
+      ]);
+      // Fixed backend: full-session detail also returns name_source.
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({
+          id: "ns1",
+          display_name: "Agent Title",
+          name_source: "agent",
+          first_message: "full detail",
+        }),
+      );
+
+      await sessions.load();
+      await (sessions as any).hydrateVisibleSessions(["ns1"]);
+
+      // name_source must not be clobbered to undefined/null by the merge.
+      expect(sessions.sessions[0]!.name_source).toBe("agent");
+      expect(sessions.sessions[0]!.display_name).toBe("Agent Title");
+      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+    });
+
     it("merges hydrated full rows without changing index order", async () => {
       mockSidebarIndex([
         makeSkinnyRow({ id: "second" }),
