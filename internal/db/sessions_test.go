@@ -426,6 +426,7 @@ func TestUpsertNameSourceOwnership(t *testing.T) {
 	}), "update agent name")
 	got = getSessionRow(t, d, "s1")
 	assert.Equal(t, "agent-two", *got.DisplayName)
+	assert.Equal(t, "agent", *got.NameSource, "agent-owned row keeps agent source")
 
 	// A manual rename pins the row.
 	requireNoError(t, d.RenameSession("s1", Ptr("user-name")), "rename")

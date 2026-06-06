@@ -943,6 +943,8 @@ const upsertSessionSQL = `
 			machine = excluded.machine,
 			agent = excluded.agent,
 			first_message = excluded.first_message,
+			-- display_name and name_source move as a unit: a user-owned
+			-- row preserves both; otherwise both take the incoming values.
 			display_name = CASE WHEN sessions.name_source = 'user'
 				THEN sessions.display_name
 				ELSE excluded.display_name END,
