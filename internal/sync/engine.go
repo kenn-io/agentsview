@@ -5263,8 +5263,7 @@ func toDBSession(pw pendingWrite) db.Session {
 	}
 	if pw.sess.DisplayName != "" {
 		s.DisplayName = &pw.sess.DisplayName
-		src := "agent"
-		s.NameSource = &src
+		s.NameSource = strPtr("agent")
 	}
 	if !pw.sess.StartedAt.IsZero() {
 		s.StartedAt = timeutil.Ptr(pw.sess.StartedAt)
