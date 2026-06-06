@@ -462,6 +462,26 @@ describe("SessionItem displayLabel name_source gate", () => {
     expect(document.body.textContent).toContain("My Rename");
     expect(document.body.textContent).not.toContain("original first message");
   });
+
+  it("always shows display_name when name_source is absent (imported/legacy rows)", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "imported",
+        display_name: "Imported Title",
+        // name_source intentionally omitted — represents importer/legacy rows
+        first_message: "original preview text",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    // showSessionNames is false (set in beforeEach)
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("Imported Title");
+    expect(document.body.textContent).not.toContain("original preview text");
+  });
 });
 
 function makeSession(
