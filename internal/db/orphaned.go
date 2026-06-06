@@ -367,40 +367,46 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Copy display_name and deleted_at from the quiesced old DB.
-	// These columns may be NULL (user cleared a rename or
-	// restored a trashed session), so we copy the value as-is
-	// rather than using COALESCE — a NULL in old_db is an
-	// intentional clear that must be preserved.
-	// Probe columns first so older source DBs that lack these
-	// columns don't abort the migration.
+	// Copy user-managed metadata from the quiesced old DB. deleted_at
+	// is copied for all rows. display_name/name_source are overlaid
+	// ONLY for user-owned rows: the fresh DB already holds re-parsed
+	// agent names, so agent-owned and cleared rows must keep the fresh
+	// value. Probe columns first so older source DBs don't abort.
 	hasDisplayName := oldDBHasColumn(ctx, tx, "sessions", "display_name")
 	hasDeletedAt := oldDBHasColumn(ctx, tx, "sessions", "deleted_at")
+	hasNameSource := oldDBHasColumn(ctx, tx, "sessions", "name_source")
 
-	if hasDisplayName && hasDeletedAt {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE main.sessions
-			SET display_name = old_s.display_name,
-			    deleted_at   = old_s.deleted_at
-			FROM old_db.sessions old_s
-			WHERE main.sessions.id = old_s.id`); err != nil {
-			return fmt.Errorf("copying session metadata: %w", err)
-		}
-	} else if hasDisplayName {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE main.sessions
-			SET display_name = old_s.display_name
-			FROM old_db.sessions old_s
-			WHERE main.sessions.id = old_s.id`); err != nil {
-			return fmt.Errorf("copying display_name: %w", err)
-		}
-	} else if hasDeletedAt {
+	if hasDeletedAt {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
 			SET deleted_at = old_s.deleted_at
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id`); err != nil {
 			return fmt.Errorf("copying deleted_at: %w", err)
+		}
+	}
+
+	if hasDisplayName && hasNameSource {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET display_name = old_s.display_name,
+			    name_source  = 'user'
+			FROM old_db.sessions old_s
+			WHERE main.sessions.id = old_s.id
+			  AND old_s.name_source = 'user'`); err != nil {
+			return fmt.Errorf("copying user display_name: %w", err)
+		}
+	} else if hasDisplayName {
+		// Pre-feature source DB: every non-NULL display_name was a
+		// manual rename, so treat it as user-owned.
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET display_name = old_s.display_name,
+			    name_source  = 'user'
+			FROM old_db.sessions old_s
+			WHERE main.sessions.id = old_s.id
+			  AND old_s.display_name IS NOT NULL`); err != nil {
+			return fmt.Errorf("copying legacy display_name: %w", err)
 		}
 	}
 

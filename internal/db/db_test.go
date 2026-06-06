@@ -5254,3 +5254,46 @@ func TestNameSourceMigrationBackfillsUserRenames(t *testing.T) {
 	require.NotNil(t, nameSource, "name_source should be non-nil")
 	assert.Equal(t, "user", *nameSource, "name_source should be 'user'")
 }
+
+func TestCopySessionMetadataPreservesUserNotAgent(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.db")
+
+	// Old DB: one user-renamed session, one agent-named session.
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertSession(Session{
+		ID: "u", Project: "p", Machine: "local", Agent: "claude",
+	}), "upsert u")
+	requireNoError(t, oldDB.RenameSession("u", Ptr("User Name")), "rename u")
+	requireNoError(t, oldDB.UpsertSession(Session{
+		ID: "a", Project: "p", Machine: "local", Agent: "claude",
+		DisplayName: Ptr("Old Agent"), NameSource: Ptr("agent"),
+	}), "upsert a")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	// Fresh DB: both re-parsed with new agent names.
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertSession(Session{
+		ID: "u", Project: "p", Machine: "local", Agent: "claude",
+		DisplayName: Ptr("Fresh Agent U"), NameSource: Ptr("agent"),
+	}), "fresh u")
+	requireNoError(t, fresh.UpsertSession(Session{
+		ID: "a", Project: "p", Machine: "local", Agent: "claude",
+		DisplayName: Ptr("Fresh Agent A"), NameSource: Ptr("agent"),
+	}), "fresh a")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+
+	u := getSessionRow(t, fresh, "u")
+	require.NotNil(t, u.DisplayName)
+	assert.Equal(t, "User Name", *u.DisplayName, "user rename overlaid")
+	require.NotNil(t, u.NameSource)
+	assert.Equal(t, "user", *u.NameSource)
+
+	a := getSessionRow(t, fresh, "a")
+	require.NotNil(t, a.DisplayName)
+	assert.Equal(t, "Fresh Agent A", *a.DisplayName, "agent keeps fresh name")
+	require.NotNil(t, a.NameSource)
+	assert.Equal(t, "agent", *a.NameSource)
+}
