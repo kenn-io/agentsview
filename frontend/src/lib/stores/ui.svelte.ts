@@ -38,6 +38,7 @@ const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
 const VITALS_KEY = "agentsview-session-vitals";
 const SIGNAL_PANEL_KEY = "agentsview-signal-panel";
 const FOLLOW_LATEST_KEY = "agentsview-follow-latest";
+const SHOW_SESSION_NAMES_KEY = "agentsview-show-session-names";
 
 function readBlockFilters(): Set<BlockType> {
   try {
@@ -182,6 +183,9 @@ class UIStore {
     readStoredBool(FOLLOW_LATEST_KEY, false),
   );
   followLatestRequest: number = $state(0);
+  showSessionNames: boolean = $state(
+    readStoredBool(SHOW_SESSION_NAMES_KEY, false),
+  );
 
   /** Set of block types currently visible. */
   visibleBlocks: Set<BlockType> = $state(readBlockFilters());
@@ -281,6 +285,17 @@ class UIStore {
           localStorage?.setItem(
             FOLLOW_LATEST_KEY,
             String(this.followLatest),
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(
+            SHOW_SESSION_NAMES_KEY,
+            String(this.showSessionNames),
           );
         } catch {
           // ignore
@@ -427,6 +442,14 @@ class UIStore {
 
   toggleFollowLatest() {
     this.setFollowLatest(!this.followLatest);
+  }
+
+  setShowSessionNames(enabled: boolean) {
+    this.showSessionNames = enabled;
+  }
+
+  toggleShowSessionNames() {
+    this.setShowSessionNames(!this.showSessionNames);
   }
 
   zoomIn() {

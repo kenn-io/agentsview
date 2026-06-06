@@ -491,6 +491,81 @@ describe("UIStore", () => {
     });
   });
 
+  describe("showSessionNames", () => {
+    beforeEach(() => {
+      ui.showSessionNames = false;
+    });
+
+    it("defaults to false", () => {
+      expect(ui.showSessionNames).toBe(false);
+    });
+
+    it("can be enabled and disabled via setter", () => {
+      ui.setShowSessionNames(true);
+      expect(ui.showSessionNames).toBe(true);
+
+      ui.setShowSessionNames(false);
+      expect(ui.showSessionNames).toBe(false);
+    });
+
+    it("toggles showSessionNames and persists to localStorage", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      const getItem = vi.fn(() => null);
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem, setItem },
+        writable: true,
+        configurable: true,
+      });
+
+      try {
+        // @ts-expect-error -- cache bust for fresh UIStore
+        const mod = await import("./ui.svelte.js?showSessionNames");
+        setItem.mockClear();
+        mod.ui.toggleShowSessionNames();
+        await Promise.resolve();
+        expect(mod.ui.showSessionNames).toBe(true);
+        expect(setItem).toHaveBeenCalledWith(
+          "agentsview-show-session-names",
+          "true",
+        );
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("reads stored value on construction", async () => {
+      const original = globalThis.localStorage;
+
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) =>
+            key === "agentsview-show-session-names" ? "true" : null,
+          ),
+          setItem: vi.fn(),
+        },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- cache bust for fresh UIStore
+        const mod = await import("./ui.svelte.js?showSessionNamesStored");
+        expect(mod.ui.showSessionNames).toBe(true);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
   describe("toggles", () => {
     it("should toggle theme between light and dark", () => {
       ui.theme = "light";
