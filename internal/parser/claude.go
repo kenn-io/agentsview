@@ -99,6 +99,7 @@ func ParseClaudeSessionWithExclusions(
 		sourceVersion   string
 		cwd             string
 		gitBranch       string
+		displayName     string
 		foundParentSID  bool
 		lineIndex       int
 		malformedLines  int
@@ -191,6 +192,17 @@ func ParseClaudeSessionWithExclusions(
 			continue
 		}
 
+		// Handle system records. /rename local commands update the
+		// display name; last rename wins (empty arg clears it).
+		if entryType == "system" {
+			if name, ok := extractRenameName(
+				gjson.Get(line, "content").Str,
+			); ok {
+				displayName = name
+			}
+			continue
+		}
+
 		if entryType != "user" && entryType != "assistant" {
 			continue
 		}
@@ -272,6 +284,7 @@ func ParseClaudeSessionWithExclusions(
 		sourceVersion:   sourceVersion,
 		cwd:             cwd,
 		gitBranch:       gitBranch,
+		displayName:     displayName,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -649,6 +662,7 @@ type claudeSessionMeta struct {
 	sourceVersion   string
 	cwd             string
 	gitBranch       string
+	displayName     string
 	malformedLines  int
 	isTruncated     bool
 }
@@ -659,6 +673,7 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.SourceVersion = m.sourceVersion
 	sess.Cwd = m.cwd
 	sess.GitBranch = m.gitBranch
+	sess.DisplayName = m.displayName
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }
@@ -1560,6 +1575,26 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(r[:maxLen]) + "..."
+}
+
+// extractRenameName returns the argument of a Claude Code /rename
+// command envelope. The bool is true when content is a /rename
+// invocation (including an empty argument, which clears the name) and
+// false for any other command or non-command content.
+func extractRenameName(content string) (string, bool) {
+	m := xmlCmdNameRe.FindStringSubmatch(content)
+	if m == nil {
+		return "", false
+	}
+	name := strings.TrimPrefix(strings.TrimSpace(m[1]), "/")
+	if name != "rename" {
+		return "", false
+	}
+	args := ""
+	if am := xmlCmdArgsRe.FindStringSubmatch(content); am != nil {
+		args = strings.TrimSpace(am[1])
+	}
+	return args, true
 }
 
 // extractCommandText detects Claude Code command/skill invocation
