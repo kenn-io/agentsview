@@ -446,6 +446,9 @@ func ParseClaudeSessionFrom(
 		)
 	}
 
+	// A rename-only append produces no entries and no queued commands, so
+	// the empty-entries early return below would silently succeed. Check
+	// first and force a full parse so the display name is persisted.
 	if sawRename {
 		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
