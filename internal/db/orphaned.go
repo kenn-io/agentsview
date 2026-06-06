@@ -505,6 +505,9 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	if oldDBHasColumn(ctx, tx, "sessions", "display_name") {
 		cols = append(cols, "display_name")
 	}
+	if oldDBHasColumn(ctx, tx, "sessions", "name_source") {
+		cols = append(cols, "name_source")
+	}
 	cols = append(cols,
 		"started_at", "ended_at", "message_count",
 		"user_message_count", "file_path", "file_size",

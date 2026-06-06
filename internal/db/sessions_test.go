@@ -441,6 +441,39 @@ func TestUpsertNameSourceOwnership(t *testing.T) {
 	assert.Equal(t, "user", *got.NameSource)
 }
 
+func TestGetSessionReturnsNameSource(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Insert a session with an agent-provided display name.
+	requireNoError(t, d.UpsertSession(Session{
+		ID:           "s-ns",
+		Project:      "p",
+		Machine:      "local",
+		Agent:        "claude",
+		DisplayName:  Ptr("Agent Title"),
+		NameSource:   Ptr("agent"),
+		MessageCount: 1,
+	}), "upsert agent-named session")
+
+	// GetSession must return name_source via scanSessionRow.
+	s, err := d.GetSession(ctx, "s-ns")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, s, "session not found")
+	require.NotNil(t, s.NameSource, "NameSource is nil after GetSession")
+	assert.Equal(t, "agent", *s.NameSource, "NameSource should be 'agent'")
+	require.NotNil(t, s.DisplayName, "DisplayName is nil")
+	assert.Equal(t, "Agent Title", *s.DisplayName, "DisplayName")
+
+	// After a manual rename, GetSession must return name_source='user'.
+	requireNoError(t, d.RenameSession("s-ns", Ptr("User Title")), "rename")
+	s, err = d.GetSession(ctx, "s-ns")
+	require.NoError(t, err, "GetSession after rename")
+	require.NotNil(t, s, "session not found after rename")
+	require.NotNil(t, s.NameSource, "NameSource is nil after rename")
+	assert.Equal(t, "user", *s.NameSource, "NameSource should be 'user' after rename")
+}
+
 func TestRenameSessionSetsAndClearsNameSource(t *testing.T) {
 	d := testDB(t)
 	requireNoError(t, d.UpsertSession(Session{

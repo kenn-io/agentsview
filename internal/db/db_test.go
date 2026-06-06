@@ -3737,6 +3737,41 @@ func TestCopyOrphanedDataFrom_TokenMetadata(t *testing.T) {
 	assert.NotEmpty(t, m.TokenUsage, "TokenUsage should be preserved")
 }
 
+func TestCopyOrphanedDataFrom_NameSource(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source DB: one session with an agent-provided display name.
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	requireNoError(t, err, "Open src")
+	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
+		s.DisplayName = Ptr("Agent Generated Name")
+		s.NameSource = Ptr("agent")
+	})
+	insertMessages(t, srcDB, userMsg("s1", 0, "hello"))
+	srcDB.Close()
+
+	// Empty destination.
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	requireNoError(t, err, "Open dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	requireNoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "expected 1 orphaned session")
+
+	// name_source must survive the orphan copy.
+	ctx := context.Background()
+	s, err := dstDB.GetSession(ctx, "s1")
+	requireNoError(t, err, "GetSession s1")
+	require.NotNil(t, s, "orphaned session s1 not found in dst")
+	require.NotNil(t, s.DisplayName, "DisplayName should be copied")
+	assert.Equal(t, "Agent Generated Name", *s.DisplayName, "DisplayName")
+	require.NotNil(t, s.NameSource, "NameSource should be copied")
+	assert.Equal(t, "agent", *s.NameSource, "NameSource should be 'agent'")
+}
+
 func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
 	d := testDB(t)
 

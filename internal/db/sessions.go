@@ -29,7 +29,7 @@ var ErrSessionTrashed = errors.New("session trashed")
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
-	first_message, display_name, started_at, ended_at,
+	first_message, display_name, name_source, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -117,7 +117,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 	var s Session
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
+		&s.FirstMessage, &s.DisplayName, &s.NameSource, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
