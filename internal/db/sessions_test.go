@@ -142,7 +142,7 @@ func TestListSessions_MinToolFailuresFilter(t *testing.T) {
 	}), []string{"tf-1", "tf-2", "tf-3"})
 }
 
-func TestUpsertSession_DisplayNameInsertOnly(t *testing.T) {
+func TestUpsertSession_DisplayNameUpdateBehavior(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -153,6 +153,7 @@ func TestUpsertSession_DisplayNameInsertOnly(t *testing.T) {
 		Machine:      "local",
 		Agent:        "claude-ai",
 		DisplayName:  &displayName,
+		NameSource:   Ptr("agent"),
 		MessageCount: 1,
 	})
 	require.NoError(t, err, "UpsertSession insert")
@@ -164,7 +165,8 @@ func TestUpsertSession_DisplayNameInsertOnly(t *testing.T) {
 	require.NotNil(t, s.DisplayName, "DisplayName is nil after insert")
 	assert.Equal(t, "My Chat Title", *s.DisplayName, "DisplayName")
 
-	// Re-upsert with a different display_name.
+	// Re-upsert with a different agent display_name: should overwrite since
+	// name_source is 'agent', not 'user'.
 	newName := "Updated Title"
 	err = d.UpsertSession(Session{
 		ID:           "claude-ai:dn-test",
@@ -172,18 +174,19 @@ func TestUpsertSession_DisplayNameInsertOnly(t *testing.T) {
 		Machine:      "local",
 		Agent:        "claude-ai",
 		DisplayName:  &newName,
+		NameSource:   Ptr("agent"),
 		MessageCount: 2,
 	})
 	require.NoError(t, err, "UpsertSession update")
 
-	// display_name should NOT be overwritten by re-upsert.
+	// Agent display_name should be updated (not preserved) on re-upsert.
 	s, err = d.GetSession(ctx, "claude-ai:dn-test")
 	require.NoError(t, err, "GetSession after re-upsert")
 	require.NotNil(t, s, "GetSession returned nil after re-upsert")
 	require.NotNil(t, s.DisplayName, "DisplayName is nil after re-upsert")
-	assert.Equal(t, "My Chat Title", *s.DisplayName,
-		"DisplayName should be preserved")
-	// But other fields should update.
+	assert.Equal(t, "Updated Title", *s.DisplayName,
+		"agent DisplayName should be updated on re-upsert")
+	// Other fields should also update.
 	assert.Equal(t, 2, s.MessageCount, "MessageCount")
 }
 
@@ -389,4 +392,67 @@ func TestListSessionsTerminationFilter(t *testing.T) {
 func assertStringSetsEqual(t *testing.T, got, want []string) {
 	t.Helper()
 	assert.ElementsMatch(t, want, got)
+}
+
+// getSessionRow reads display_name and name_source directly from the
+// sessions table without going through scanSessionRow.
+func getSessionRow(t *testing.T, d *DB, id string) Session {
+	t.Helper()
+	var s Session
+	s.ID = id
+	requireNoError(t, d.getWriter().QueryRow(
+		"SELECT display_name, name_source FROM sessions WHERE id = ?", id).
+		Scan(&s.DisplayName, &s.NameSource), "get session row")
+	return s
+}
+
+func TestUpsertNameSourceOwnership(t *testing.T) {
+	d := testDB(t)
+
+	// Agent name lands on a fresh row.
+	requireNoError(t, d.UpsertSession(Session{
+		ID: "s1", Project: "p", Machine: "local", Agent: "claude",
+		DisplayName: Ptr("agent-one"), NameSource: Ptr("agent"),
+	}), "insert agent name")
+	got := getSessionRow(t, d, "s1")
+	require.NotNil(t, got.DisplayName)
+	assert.Equal(t, "agent-one", *got.DisplayName)
+	assert.Equal(t, "agent", *got.NameSource)
+
+	// A newer agent name overwrites an agent-owned row.
+	requireNoError(t, d.UpsertSession(Session{
+		ID: "s1", Project: "p", Machine: "local", Agent: "claude",
+		DisplayName: Ptr("agent-two"), NameSource: Ptr("agent"),
+	}), "update agent name")
+	got = getSessionRow(t, d, "s1")
+	assert.Equal(t, "agent-two", *got.DisplayName)
+
+	// A manual rename pins the row.
+	requireNoError(t, d.RenameSession("s1", Ptr("user-name")), "rename")
+
+	// A subsequent agent name must NOT overwrite the user name.
+	requireNoError(t, d.UpsertSession(Session{
+		ID: "s1", Project: "p", Machine: "local", Agent: "claude",
+		DisplayName: Ptr("agent-three"), NameSource: Ptr("agent"),
+	}), "agent after user")
+	got = getSessionRow(t, d, "s1")
+	assert.Equal(t, "user-name", *got.DisplayName, "user name must survive")
+	assert.Equal(t, "user", *got.NameSource)
+}
+
+func TestRenameSessionSetsAndClearsNameSource(t *testing.T) {
+	d := testDB(t)
+	requireNoError(t, d.UpsertSession(Session{
+		ID: "s1", Project: "p", Machine: "local", Agent: "claude",
+	}), "upsert")
+
+	requireNoError(t, d.RenameSession("s1", Ptr("Name")), "rename")
+	got := getSessionRow(t, d, "s1")
+	require.NotNil(t, got.NameSource)
+	assert.Equal(t, "user", *got.NameSource)
+
+	requireNoError(t, d.RenameSession("s1", nil), "clear")
+	got = getSessionRow(t, d, "s1")
+	assert.Nil(t, got.DisplayName, "display_name cleared")
+	assert.Nil(t, got.NameSource, "name_source cleared")
 }

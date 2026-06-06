@@ -924,7 +924,7 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 
 const upsertSessionSQL = `
 		INSERT INTO sessions (
-			id, project, machine, agent, first_message, display_name,
+			id, project, machine, agent, first_message, display_name, name_source,
 			started_at, ended_at, message_count,
 			user_message_count, parent_session_id,
 			relationship_type,
@@ -937,12 +937,18 @@ const upsertSessionSQL = `
 			is_truncated,
 			file_path, file_size, file_mtime,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
 			agent = excluded.agent,
 			first_message = excluded.first_message,
+			display_name = CASE WHEN sessions.name_source = 'user'
+				THEN sessions.display_name
+				ELSE excluded.display_name END,
+			name_source = CASE WHEN sessions.name_source = 'user'
+				THEN sessions.name_source
+				ELSE excluded.name_source END,
 			started_at = excluded.started_at,
 			ended_at = excluded.ended_at,
 			message_count = excluded.message_count,
@@ -976,7 +982,7 @@ func sessionIsAutomated(s Session) bool {
 
 func upsertSessionArgs(s Session) []any {
 	return []any{
-		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.DisplayName,
+		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.DisplayName, s.NameSource,
 		s.StartedAt, s.EndedAt, s.MessageCount,
 		s.UserMessageCount, s.ParentSessionID,
 		s.RelationshipType,
@@ -1850,12 +1856,18 @@ func (db *DB) RestoreSession(id string) (int64, error) {
 func (db *DB) RenameSession(id string, displayName *string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	var source *string
+	if displayName != nil {
+		s := "user"
+		source = &s
+	}
 	_, err := db.getWriter().Exec(
 		`UPDATE sessions
 		 SET display_name = ?,
+		     name_source = ?,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ? AND deleted_at IS NULL`,
-		displayName, id,
+		displayName, source, id,
 	)
 	return err
 }

@@ -1123,10 +1123,6 @@ func TestSidebarIndexIncludesNameSource(t *testing.T) {
 		s.DisplayName = &name
 	})
 	requireNoError(t, d.RenameSession("s1", new("My Name")), "rename")
-	// Guarantee name_source regardless of RenameSession's current behavior:
-	_, err := d.getWriter().Exec(
-		"UPDATE sessions SET name_source='user' WHERE id='s1'")
-	requireNoError(t, err, "set name_source")
 
 	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
 	requireNoError(t, err, "sidebar index")
