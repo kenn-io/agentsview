@@ -5297,3 +5297,35 @@ func TestCopySessionMetadataPreservesUserNotAgent(t *testing.T) {
 	require.NotNil(t, a.NameSource)
 	assert.Equal(t, "agent", *a.NameSource)
 }
+
+// A name the user cleared in the old DB (name_source NULL) must NOT be
+// re-applied on resync; the fresh re-parsed agent name wins ("clear
+// un-pins").
+func TestCopySessionMetadataClearedNameYieldsToAgent(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.db")
+
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertSession(Session{
+		ID: "c", Project: "p", Machine: "local", Agent: "claude",
+	}), "upsert c")
+	requireNoError(t, oldDB.RenameSession("c", Ptr("Once Named")), "rename")
+	requireNoError(t, oldDB.RenameSession("c", nil), "clear")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertSession(Session{
+		ID: "c", Project: "p", Machine: "local", Agent: "claude",
+		DisplayName: Ptr("Fresh Agent C"), NameSource: Ptr("agent"),
+	}), "fresh c")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+
+	c := getSessionRow(t, fresh, "c")
+	require.NotNil(t, c.DisplayName)
+	assert.Equal(t, "Fresh Agent C", *c.DisplayName,
+		"cleared old name must yield to fresh agent name")
+	require.NotNil(t, c.NameSource)
+	assert.Equal(t, "agent", *c.NameSource)
+}
