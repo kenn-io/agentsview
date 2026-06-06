@@ -28,13 +28,18 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 33: Claude parser now skips content-free /usage probe
+// Bumped to 34: added name_source column to sessions; existing rows
+// need re-parsing so the parser can populate agent-provided session
+// names (Claude /rename and native titles from other agents) and the
+// user/agent ownership distinction used by the sidebar display gate.
+//
+// (33: Claude parser now skips content-free /usage probe
 // sessions (the only user turn is the /usage command), and the Codex
 // parser drops the initial user prompt when Codex re-emits it verbatim
 // while continuing a task across turns. Existing rows need re-parsing
 // so /usage probe sessions are dropped from the archive and Codex
 // code-review sessions are recounted to a single user turn and
-// re-flagged as automated.
+// re-flagged as automated.)
 //
 // (32: Antigravity DB parsers now filter internal protocol strings
 // from visible message content, remove raw step headers, prefer
@@ -120,7 +125,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 33
+const dataVersion = 34
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -327,6 +332,11 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("migrating columns: %w", err)
 	}
 
+	if err := d.BackfillNameSource(); err != nil {
+		d.Close()
+		return nil, err
+	}
+
 	if dataStale && !schemaStale {
 		d.dataStale = true
 		log.Printf(
@@ -455,6 +465,10 @@ func (db *DB) migrateColumns() error {
 		{
 			"sessions", "display_name",
 			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
+		},
+		{
+			"sessions", "name_source",
+			"ALTER TABLE sessions ADD COLUMN name_source TEXT",
 		},
 		{
 			"sessions", "deleted_at",
@@ -754,6 +768,22 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
 		return err
+	}
+	return nil
+}
+
+// BackfillNameSource stamps name_source='user' on rows that have a
+// display_name but no name_source. Pre-feature databases stored only
+// manual renames in display_name, so every such row is user-owned.
+// Idempotent: rows already marked are skipped by the WHERE clause.
+func (db *DB) BackfillNameSource() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`UPDATE sessions SET name_source = 'user'
+		 WHERE display_name IS NOT NULL AND name_source IS NULL`)
+	if err != nil {
+		return fmt.Errorf("backfilling name_source: %w", err)
 	}
 	return nil
 }

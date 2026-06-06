@@ -5224,3 +5224,33 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 			*sessions.Sessions[0].TerminationStatus)
 	}
 }
+
+func TestNameSourceMigrationBackfillsUserRenames(t *testing.T) {
+	d := testDB(t)
+
+	// Insert a session.
+	insertSession(t, d, "s1", "p")
+
+	// Rename it to simulate a user-set display_name.
+	name := "Manual Name"
+	require.NoError(t, d.RenameSession("s1", &name), "RenameSession")
+
+	// Simulate a pre-feature row: clear name_source as if the column
+	// didn't exist when the rename was stored.
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET name_source = NULL WHERE id = 's1'",
+	)
+	require.NoError(t, err, "clear name_source")
+
+	// Run the backfill.
+	require.NoError(t, d.BackfillNameSource(), "BackfillNameSource")
+
+	// Verify name_source is now 'user'.
+	var nameSource *string
+	err = d.getWriter().QueryRow(
+		"SELECT name_source FROM sessions WHERE id = 's1'",
+	).Scan(&nameSource)
+	require.NoError(t, err, "select name_source")
+	require.NotNil(t, nameSource, "name_source should be non-nil")
+	assert.Equal(t, "user", *nameSource, "name_source should be 'user'")
+}
