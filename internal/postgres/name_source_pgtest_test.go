@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -113,4 +114,57 @@ func TestPushNameSourceRoundTrip(t *testing.T) {
 		sess.ID,
 	).Scan(&gotNameSource), "read back name_source after clear")
 	assert.Nil(t, gotNameSource, "name_source should be NULL after clearing")
+}
+
+// TestPushNameSourceViaPushPath verifies name_source survives the REAL push
+// path (Push -> ListSessionsModifiedBetween read), not just a direct
+// pushSession call. ListSessionsModifiedBetween reads sessionFullCols, so a
+// missing name_source there silently dropped the value on every real push
+// despite the pushSession-level round-trip passing.
+func TestPushNameSourceViaPushPath(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local, "machine-namesource-push", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating sync")
+	defer ps.Close()
+
+	ctx := context.Background()
+	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
+
+	started := time.Now().UTC().Format(time.RFC3339)
+	firstMsg := "real push path"
+	displayName := "plan-2b-review"
+	nameSource := "agent"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:           "ns-push-001",
+		Project:      "p",
+		Machine:      "local",
+		Agent:        "claude",
+		FirstMessage: &firstMsg,
+		DisplayName:  &displayName,
+		NameSource:   &nameSource,
+		StartedAt:    &started,
+		MessageCount: 1,
+	}), "upsert session")
+
+	pushResult, err := ps.Push(ctx, false, nil)
+	require.NoError(t, err, "push")
+	require.Equal(t, 1, pushResult.SessionsPushed)
+
+	store, err := NewStore(pgURL, "agentsview", true)
+	require.NoError(t, err, "opening store")
+	defer store.Close()
+
+	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Limit: 50})
+	require.NoError(t, err, "GetSidebarSessionIndex")
+	require.Len(t, index.Sessions, 1)
+	require.NotNil(t, index.Sessions[0].NameSource,
+		"name_source must survive the real push read path")
+	assert.Equal(t, "agent", *index.Sessions[0].NameSource)
 }
