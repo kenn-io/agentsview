@@ -7,6 +7,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import { visibleSessionName } from "../../utils/sessionName.js";
 
   let trashedSessions: Session[] = $state([]);
   let loading = $state(true);
@@ -75,7 +76,7 @@
   }
 
   function displayName(s: Session): string {
-    const raw = s.display_name ?? normalizeMessagePreview(s.first_message);
+    const raw = visibleSessionName(s) ?? normalizeMessagePreview(s.first_message);
     return raw ? truncate(raw, 70) : s.project;
   }
 </script>

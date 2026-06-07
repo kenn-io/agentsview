@@ -4,8 +4,8 @@
     type SessionGroupInput,
   } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
-  import { ui } from "../../stores/ui.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
+  import { visibleSessionName } from "../../utils/sessionName.js";
   import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
   import {
     normalizeMessagePreview,
@@ -106,14 +106,9 @@
    * (user-renamed, imported, legacy/null) always show.
    */
   let displayLabel = $derived.by((): { text: string; isShell: boolean } => {
-    if (
-      session.display_name &&
-      (session.name_source !== "agent" || ui.showSessionNames)
-    ) {
-      return {
-        text: truncate(session.display_name, 50),
-        isShell: false,
-      };
+    const name = visibleSessionName(session);
+    if (name) {
+      return { text: truncate(name, 50), isShell: false };
     }
     let msg = session.first_message ?? "";
     if (msg.includes("<teammate-message")) {
@@ -193,7 +188,7 @@
 
   function startRename() {
     renameValue =
-      session.display_name
+      visibleSessionName(session)
       ?? normalizeMessagePreview(session.first_message);
     renaming = true;
     closeContextMenu();

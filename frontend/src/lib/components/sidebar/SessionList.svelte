@@ -2,8 +2,8 @@
   import { onDestroy } from "svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
-  import { ui } from "../../stores/ui.svelte.js";
   import SessionItem from "./SessionItem.svelte";
+  import { visibleSessionName } from "../../utils/sessionName.js";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import {
     ChevronDownIcon,
@@ -206,10 +206,7 @@
     // will actually be rendered. Agent-provided names are hidden when
     // the "session names" preference is off (see SessionItem's
     // displayLabel), so those rows still need the preview fallback.
-    const showsName =
-      !!session.display_name &&
-      (session.name_source !== "agent" || ui.showSessionNames);
-    return !showsName;
+    return !visibleSessionName(session);
   }
 
   function hydrationIdsForItems(items: DisplayItem[]): string[] {

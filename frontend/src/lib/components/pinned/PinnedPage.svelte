@@ -14,6 +14,7 @@
   import { renderMarkdown } from "../../utils/markdown.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import { visibleSessionName } from "../../utils/sessionName.js";
 
   $effect(() => {
     pins.loadAll(sessions.filters.project || undefined);
@@ -56,7 +57,7 @@
           project: s.project,
           agent: s.agent,
           name:
-            s.display_name
+            visibleSessionName(s)
             ?? (normalizeMessagePreview(s.first_message) || s.project),
         }
       : {
