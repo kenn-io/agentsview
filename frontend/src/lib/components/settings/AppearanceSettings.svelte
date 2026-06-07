@@ -34,7 +34,7 @@
   </div>
 
   <div class="setting-row">
-    <span class="setting-label">Session names</span>
+    <span class="setting-label">Use session names</span>
     <button
       class="setting-toggle"
       onclick={() => ui.toggleShowSessionNames()}
