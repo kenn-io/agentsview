@@ -1303,7 +1303,8 @@ func CheckSchemaCompat(
 ) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, created_at, deleted_at, updated_at,
-			termination_status, secret_leak_count, secrets_rules_version
+			termination_status, secret_leak_count, secrets_rules_version,
+			name_source
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
