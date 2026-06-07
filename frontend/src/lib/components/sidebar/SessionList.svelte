@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import SessionItem from "./SessionItem.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import {
@@ -200,7 +201,15 @@
 
   function needsVisibleHydration(item: DisplayItem): boolean {
     const session = sessionForItem(item);
-    return !!session?.is_index_only && !session.display_name;
+    if (!session?.is_index_only) return false;
+    // A row needs its first_message hydrated unless its display_name
+    // will actually be rendered. Agent-provided names are hidden when
+    // the "session names" preference is off (see SessionItem's
+    // displayLabel), so those rows still need the preview fallback.
+    const showsName =
+      !!session.display_name &&
+      (session.name_source !== "agent" || ui.showSessionNames);
+    return !showsName;
   }
 
   function hydrationIdsForItems(items: DisplayItem[]): string[] {

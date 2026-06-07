@@ -251,6 +251,54 @@ describe("SessionList visible hydration", () => {
     expect(document.body.textContent).toContain("Renamed sidebar title");
   });
 
+  it("hydrates index-only agent-named rows when session names are off", async () => {
+    ui.setShowSessionNames(false);
+    sessions.sessions = [
+      makeSession({
+        id: "agent1",
+        display_name: "agent-title",
+        name_source: "agent",
+        is_index_only: true,
+      }),
+    ];
+    const hydrate = vi
+      .spyOn(sessions, "hydrateVisibleSessions")
+      .mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    // Name is hidden (toggle off), so the row still needs first_message
+    // hydrated for its preview fallback instead of the project name.
+    expect(hydrate.mock.calls.some(([ids]) => ids.includes("agent1"))).toBe(
+      true,
+    );
+  });
+
+  it("skips hydration for agent-named rows when session names are on", async () => {
+    ui.setShowSessionNames(true);
+    sessions.sessions = [
+      makeSession({
+        id: "agent1",
+        display_name: "agent-title",
+        name_source: "agent",
+        is_index_only: true,
+      }),
+    ];
+    const hydrate = vi
+      .spyOn(sessions, "hydrateVisibleSessions")
+      .mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    // Name is shown straight from the index, so no first_message needed.
+    expect(hydrate.mock.calls.some(([ids]) => ids.includes("agent1"))).toBe(
+      false,
+    );
+    ui.setShowSessionNames(false);
+  });
+
   it("hydrates newly visible rows after scrolling", async () => {
     sessions.sessions = Array.from({ length: 50 }, (_, i) =>
       makeSession({ id: `s${i}`, is_index_only: true }),
