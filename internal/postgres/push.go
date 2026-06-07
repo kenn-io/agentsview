@@ -646,6 +646,7 @@ func sessionPushFingerprint(
 		sess.Agent,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
+		stringValue(sess.NameSource),
 		stringValue(sess.StartedAt),
 		stringValue(sess.EndedAt),
 		stringValue(sess.DeletedAt),

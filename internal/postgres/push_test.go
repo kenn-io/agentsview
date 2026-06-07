@@ -147,6 +147,14 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 			},
 		},
 		{
+			name: "name_source change",
+			modify: func(s db.Session) db.Session {
+				src := "user"
+				s.NameSource = &src
+				return s
+			},
+		},
+		{
 			name: "ended at change",
 			modify: func(s db.Session) db.Session {
 				ended := "2026-03-11T13:00:00Z"
