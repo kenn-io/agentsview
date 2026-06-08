@@ -34,16 +34,6 @@
   </div>
 
   <div class="setting-row">
-    <span class="setting-label">Use session names</span>
-    <button
-      class="setting-toggle"
-      onclick={() => ui.toggleShowSessionNames()}
-    >
-      {ui.showSessionNames ? "On" : "Off"}
-    </button>
-  </div>
-
-  <div class="setting-row">
     <span class="setting-label">Message layout</span>
     <div class="setting-options">
       {#each LAYOUT_OPTIONS as opt}
