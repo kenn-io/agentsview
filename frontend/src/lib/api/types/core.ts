@@ -14,7 +14,6 @@ export interface Session {
   agent: string;
   first_message: string | null;
   display_name?: string | null;
-  name_source?: string | null;
   started_at: string | null;
   ended_at: string | null;
   message_count: number;
@@ -70,7 +69,6 @@ export interface SidebarSessionIndexRow {
   machine: string;
   agent: string;
   display_name?: string | null;
-  name_source?: string | null;
   started_at: string | null;
   ended_at: string | null;
   created_at: string;

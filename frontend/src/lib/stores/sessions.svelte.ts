@@ -35,7 +35,6 @@ export interface SessionGroupInput {
   agent: string;
   first_message?: string | null;
   display_name?: string | null;
-  name_source?: string | null;
   started_at: string | null;
   ended_at: string | null;
   created_at: string;
@@ -1105,7 +1104,6 @@ function sidebarIndexRowToSession(
     agent: row.agent,
     first_message: null,
     display_name: row.display_name ?? null,
-    name_source: row.name_source ?? null,
     started_at: row.started_at,
     ended_at: row.ended_at,
     message_count: row.message_count,
@@ -1130,7 +1128,6 @@ function sidebarIndexRowToSession(
     machine: skinny.machine,
     agent: skinny.agent,
     display_name: skinny.display_name,
-    name_source: skinny.name_source,
     started_at: skinny.started_at,
     ended_at: skinny.ended_at,
     message_count: skinny.message_count,

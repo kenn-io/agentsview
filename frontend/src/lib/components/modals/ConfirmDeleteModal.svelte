@@ -4,8 +4,6 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { truncate } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
-  import { visibleSessionName } from "../../utils/sessionName.js";
-
   let deleting = $state(false);
   let deleteBtn = $state<HTMLButtonElement>();
 
@@ -13,12 +11,10 @@
     const s = sessions.activeSession;
     if (!s) return "this session";
     const raw =
-      visibleSessionName(s)
-      ?? (
-        normalizeMessagePreview(s.first_message)
-        || s.project
-        || "this session"
-      );
+      s.display_name
+      ?? normalizeMessagePreview(s.first_message)
+      ?? s.project
+      ?? "this session";
     return truncate(raw, 60);
   });
 
