@@ -1105,6 +1105,20 @@ func (db *DB) GetSessionFileInfo(
 	return s.Int64, m.Int64, true
 }
 
+// ResetSessionFileState nulls out the stored file_size and file_mtime so
+// the next SyncPaths call re-parses the file unconditionally. Used when
+// a user-rename is cleared and we need the agent-provided name restored.
+func (db *DB) ResetSessionFileState(id string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`UPDATE sessions SET file_size = NULL, file_mtime = NULL
+		 WHERE id = ? AND deleted_at IS NULL`,
+		id,
+	)
+	return err
+}
+
 // GetSessionFilePath returns the stored file_path for a session,
 // or empty string if not found or NULL.
 func (db *DB) GetSessionFilePath(id string) string {
