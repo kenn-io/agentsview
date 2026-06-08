@@ -17,6 +17,15 @@ const api = vi.hoisted(() => ({
   getVersion: vi.fn(),
   checkForUpdate: vi.fn(),
   isRemoteConnection: vi.fn(),
+  ApiError: class MockGeneratedApiError extends Error {
+    status: number;
+
+    constructor(status: number, message: string) {
+      super(message);
+      this.name = "ApiError";
+      this.status = status;
+    }
+  },
 }));
 
 vi.mock("../api/client.js", () => ({
@@ -32,6 +41,7 @@ vi.mock("../api/runtime.js", () => ({
 }));
 
 vi.mock("../api/generated/index", () => ({
+  ApiError: api.ApiError,
   MetadataService: {
     getApiV1Stats: vi.fn((params) => api.getStats(params)),
     getApiV1Version: vi.fn(() => api.getVersion()),
@@ -318,6 +328,8 @@ describe("SyncStore.remoteUnreachable", () => {
     vi.clearAllMocks();
     const s = sync as unknown as Record<string, unknown>;
     s.remoteUnreachable = false;
+    s.backendDegraded = false;
+    s.backendDegradedMessage = null;
     s.statusHydrated = false;
   });
 
@@ -355,5 +367,50 @@ describe("SyncStore.remoteUnreachable", () => {
     await sync.loadStatus();
 
     expect(sync.remoteUnreachable).toBe(false);
+  });
+
+  it("flags backend degraded instead of unreachable on 5xx", async () => {
+    vi.mocked(api.isRemoteConnection).mockReturnValue(true);
+    vi.mocked(api.getSyncStatus).mockRejectedValue(
+      new api.ApiError(503, "pg unavailable"),
+    );
+
+    await sync.loadStatus();
+
+    expect(sync.remoteUnreachable).toBe(false);
+    expect(sync.backendDegraded).toBe(true);
+    expect(sync.backendDegradedMessage).toBe("sync not ready");
+  });
+
+  it("clears backend degraded when status recovers", async () => {
+    vi.mocked(api.isRemoteConnection).mockReturnValue(true);
+    const s = sync as unknown as Record<string, unknown>;
+    s.backendDegraded = true;
+    s.backendDegradedMessage = "sync not ready";
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+    });
+
+    await sync.loadStatus();
+
+    expect(sync.backendDegraded).toBe(false);
+    expect(sync.backendDegradedMessage).toBeNull();
+  });
+
+  it("clears backend degraded when the remote becomes unreachable", async () => {
+    vi.mocked(api.isRemoteConnection).mockReturnValue(true);
+    const s = sync as unknown as Record<string, unknown>;
+    s.backendDegraded = true;
+    s.backendDegradedMessage = "sync not ready";
+    vi.mocked(api.getSyncStatus).mockRejectedValue(
+      new TypeError("Failed to fetch"),
+    );
+
+    await sync.loadStatus();
+
+    expect(sync.backendDegraded).toBe(false);
+    expect(sync.backendDegradedMessage).toBeNull();
+    expect(sync.remoteUnreachable).toBe(true);
   });
 });

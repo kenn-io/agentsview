@@ -3,6 +3,11 @@ import { getAuthToken, isRemoteConnection } from "../api/runtime.js";
 const DEBOUNCE_MS = 5_000;
 const TIMEOUT_MS = 3_000;
 
+interface VisibilityHealthCheckOptions {
+  onBackendAvailable?: () => void;
+  onBackendDegraded?: (status: number) => void;
+}
+
 /**
  * Set up a visibilitychange listener that pings the backend when the
  * page becomes visible. If the backend is unreachable (network error or
@@ -25,6 +30,7 @@ const TIMEOUT_MS = 3_000;
  */
 export function setupVisibilityHealthCheck(
   getBaseUrl: () => string,
+  opts: VisibilityHealthCheckOptions = {},
 ): () => void {
   // In desktop mode with a local sidecar, Tauri owns recovery via
   // on_window_event focus. Skip the frontend handler to avoid racing
@@ -54,6 +60,11 @@ export function setupVisibilityHealthCheck(
     fetch(`${getBaseUrl()}/version`, init)
       .then((res) => {
         clearTimeout(timer);
+        if (res.status >= 500) {
+          opts.onBackendDegraded?.(res.status);
+          return;
+        }
+        opts.onBackendAvailable?.();
       })
       .catch(() => {
         clearTimeout(timer);

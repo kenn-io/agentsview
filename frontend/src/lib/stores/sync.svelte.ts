@@ -5,6 +5,7 @@ import {
   type SyncHandle,
 } from "../api/client.js";
 import {
+  ApiError as GeneratedApiError,
   MetadataService,
   SyncService,
 } from "../api/generated/index";
@@ -55,6 +56,11 @@ class SyncStore {
   // reach (network error, CSP block, or the server being down).
   // Surfaced in the status bar so the failure is not silent.
   remoteUnreachable: boolean = $state(false);
+  // True when the backend process answers but one of its dependencies
+  // is not ready yet, such as a PostgreSQL-backed server before PG
+  // becomes reachable.
+  backendDegraded: boolean = $state(false);
+  backendDegradedMessage: string | null = $state(null);
   updateAvailable: boolean = $state(false);
   latestVersion: string | null = $state(null);
   readonly buildCommit: string =
@@ -92,9 +98,35 @@ class SyncStore {
   private markRemoteReachable(reachable: boolean) {
     if (reachable) {
       this.remoteUnreachable = false;
-    } else if (isRemoteConnection()) {
+      this.clearBackendDegraded();
+      return;
+    }
+    this.clearBackendDegraded();
+    if (isRemoteConnection()) {
       this.remoteUnreachable = true;
     }
+  }
+
+  markBackendDegraded(message = "sync not ready") {
+    this.remoteUnreachable = false;
+    this.backendDegraded = true;
+    this.backendDegradedMessage = message;
+  }
+
+  clearBackendDegraded() {
+    this.backendDegraded = false;
+    this.backendDegradedMessage = null;
+  }
+
+  private markBackendFailure(error: unknown) {
+    if (
+      error instanceof GeneratedApiError &&
+      error.status >= 500
+    ) {
+      this.markBackendDegraded();
+      return;
+    }
+    this.markRemoteReachable(false);
   }
 
   async loadStatus() {
@@ -118,7 +150,7 @@ class SyncStore {
         this.notifySyncComplete();
       }
     } catch (error) {
-      this.markRemoteReachable(false);
+      this.markBackendFailure(error);
       this.pendingHydration = false;
       console.warn("Failed to load sync status:", error);
     }
@@ -158,6 +190,7 @@ class SyncStore {
         this.stats = result;
       }
     } catch (error) {
+      this.markBackendFailure(error);
       console.warn("Failed to load sync stats:", error);
     }
   }
@@ -173,7 +206,7 @@ class SyncStore {
         this.serverVersion.commit,
       );
     } catch (error) {
-      this.markRemoteReachable(false);
+      this.markBackendFailure(error);
       console.warn("Failed to load version info:", error);
     }
   }
