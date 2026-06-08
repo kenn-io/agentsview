@@ -170,16 +170,7 @@ func upsertConversation(
 	}
 	isNew := existing == nil
 
-	// Preserve user-renamed display_name on re-import.
-	displayName := strPtr(s.DisplayName)
-	if !isNew && existing != nil && existing.DisplayName != nil {
-		importName := strPtr(s.DisplayName)
-		nameChanged := importName == nil ||
-			*existing.DisplayName != *importName
-		if nameChanged {
-			displayName = existing.DisplayName
-		}
-	}
+	displayName, nameSource := db.ParsedSessionNameFields(s)
 
 	sess := db.Session{
 		ID:               s.ID,
@@ -188,6 +179,7 @@ func upsertConversation(
 		Agent:            string(s.Agent),
 		FirstMessage:     strPtr(s.FirstMessage),
 		DisplayName:      displayName,
+		NameSource:       nameSource,
 		StartedAt:        timeStr(s.StartedAt),
 		EndedAt:          timeStr(s.EndedAt),
 		MessageCount:     s.MessageCount,

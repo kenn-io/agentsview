@@ -172,6 +172,25 @@ func TestImportChatGPT(t *testing.T) {
 	assert.Equal(t, "chatgpt.com", s.Project)
 }
 
+func TestImportSetsAgentNameSource(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	stats, err := ImportClaudeAI(
+		ctx, d, strings.NewReader(testConversationsJSON), nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+
+	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "First Chat", *s.DisplayName)
+	require.NotNil(t, s.NameSource)
+	assert.Equal(t, "agent", *s.NameSource)
+}
+
 func TestImportChatGPT_SkipsExisting(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
