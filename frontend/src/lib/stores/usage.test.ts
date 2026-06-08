@@ -36,17 +36,28 @@ const usageServiceMocks = vi.hoisted(() => ({
       savingsVsUncached: 0,
     },
   }),
+  getApiV1UsageComparison: vi.fn().mockResolvedValue({
+    priorFrom: "2023-12-01",
+    priorTo: "2023-12-31",
+    priorTotalCost: 1,
+    deltaPct: 0.5,
+  }),
   getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("../api/runtime.js", () => ({
+const apiRuntimeMocks = vi.hoisted(() => ({
   configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  isAbortError: vi.fn(() => false),
 }));
+
+vi.mock("../api/runtime.js", () => apiRuntimeMocks);
 
 vi.mock("../api/generated/index", () => ({
   UsageService: {
     getApiV1UsageSummary: usageServiceMocks.getApiV1UsageSummary,
+    getApiV1UsageComparison:
+      usageServiceMocks.getApiV1UsageComparison,
     getApiV1UsageTopSessions: usageServiceMocks.getApiV1UsageTopSessions,
   },
 }));
@@ -219,6 +230,161 @@ describe("UsageStore session filter params", () => {
         includeAutomated: true,
       }),
     );
+  });
+
+  it("waits for summary before requesting follow-up usage data", async () => {
+    const calls: string[] = [];
+    let resolveSummary:
+      | ((value: unknown) => void)
+      | undefined;
+    const summaryPromise = new Promise((resolve) => {
+      resolveSummary = resolve;
+    });
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () => {
+        calls.push("summary");
+        return summaryPromise;
+      },
+    );
+    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(
+      () => {
+        calls.push("topSessions");
+        return Promise.resolve([]);
+      },
+    );
+    usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(
+      () => {
+        calls.push("comparison");
+        return Promise.resolve({
+          priorFrom: "2023-12-01",
+          priorTo: "2023-12-31",
+          priorTotalCost: 1,
+          deltaPct: 0.5,
+        });
+      },
+    );
+
+    const { usage } = await loadStore();
+    const fetch = usage.fetchAll();
+    await Promise.resolve();
+
+    expect(calls).toEqual(["summary"]);
+    expect(usage.summary).toBeNull();
+
+    resolveSummary?.({
+      from: "2024-01-01",
+      to: "2024-01-31",
+      totals: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        totalCost: 0,
+      },
+      daily: [],
+      projectTotals: [],
+      modelTotals: [],
+      agentTotals: [],
+      sessionCounts: {
+        total: 0,
+        byProject: {},
+        byAgent: {},
+      },
+      cacheStats: {
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+        hitRate: 0,
+        savingsVsUncached: 0,
+      },
+    });
+    await fetch;
+    await Promise.resolve();
+
+    expect(calls).toEqual(["summary", "topSessions", "comparison"]);
+    expect(usage.summary).not.toBeNull();
+    expect(usage.summary?.comparison).toEqual({
+      priorFrom: "2023-12-01",
+      priorTo: "2023-12-31",
+      priorTotalCost: 1,
+      deltaPct: 0.5,
+    });
+    expect(
+      usageServiceMocks.getApiV1UsageComparison,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ currentCost: 0 }),
+    );
+  });
+
+  it("refreshes comparison when summary is refreshed directly", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchSummary();
+    await Promise.resolve();
+
+    expect(
+      usageServiceMocks.getApiV1UsageComparison,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      usageServiceMocks.getApiV1UsageTopSessions,
+    ).not.toHaveBeenCalled();
+    expect(usage.summary?.comparison).toEqual({
+      priorFrom: "2023-12-01",
+      priorTo: "2023-12-31",
+      priorTotalCost: 1,
+      deltaPct: 0.5,
+    });
+  });
+
+  it("aborts stale summary requests when a newer fetch starts", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+    usageServiceMocks.getApiV1UsageSummary
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce({
+        from: "2024-01-01",
+        to: "2024-01-31",
+        totals: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          totalCost: 0,
+        },
+        daily: [],
+        projectTotals: [],
+        modelTotals: [],
+        agentTotals: [],
+        sessionCounts: {
+          total: 0,
+          byProject: {},
+          byAgent: {},
+        },
+        cacheStats: {
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+          hitRate: 0,
+          savingsVsUncached: 0,
+        },
+      });
+
+    const { usage } = await loadStore();
+
+    void usage.fetchSummary();
+    await Promise.resolve();
+    void usage.fetchSummary();
+    await Promise.resolve();
+
+    expect(signals[0]).toBeDefined();
+    expect(signals[0]?.aborted).toBe(true);
   });
 });
 

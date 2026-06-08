@@ -23,6 +23,9 @@ type Store struct {
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
+	pricingMu     sync.Mutex
+	pricingLoadMu sync.Mutex
+	pricingLoad   *pricingLoad
 	customPricing map[string]config.CustomModelRate
 }
 

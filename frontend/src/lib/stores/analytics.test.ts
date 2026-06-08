@@ -8,6 +8,7 @@ import {
 } from "vitest";
 import { analytics } from "./analytics.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
+import { callGenerated } from "../api/runtime.js";
 import type {
   AnalyticsSummary,
   ActivityResponse,
@@ -23,6 +24,7 @@ import type {
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
   callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -637,6 +639,27 @@ describe("executeFetch concurrency and error handling", () => {
     resolveSecond(makeSummary());
     await secondFetch;
     expect(analytics.loading.summary).toBe(false);
+  });
+
+  it("aborts stale panel requests when a newer fetch starts", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    vi.mocked(callGenerated).mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+    vi.mocked(analyticsService.getApiV1AnalyticsSummary)
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce(makeSummary());
+
+    void analytics.fetchSummary();
+    await Promise.resolve();
+    void analytics.fetchSummary();
+    await Promise.resolve();
+
+    expect(signals[0]).toBeDefined();
+    expect(signals[0]?.aborted).toBe(true);
   });
 });
 

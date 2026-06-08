@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,90 @@ func TestGetDailyUsageEmpty(t *testing.T) {
 	require.NotNil(t, result.Daily, "Daily should be non-nil empty slice")
 	assert.Len(t, result.Daily, 0, "got")
 	assert.Equal(t, 0.0, result.Totals.TotalCost, "TotalCost")
+}
+
+func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
+	query, args := usageRowQuery(UsageFilter{
+		From:             "2024-06-01",
+		To:               "2024-06-30",
+		ExcludeAutomated: true,
+	})
+
+	normalized := strings.ToLower(query)
+	assert.NotContains(t, normalized, "and u.ts >=")
+	assert.NotContains(t, normalized, "and u.ts <=")
+	assert.NotContains(t, normalized, " or ")
+	assert.NotContains(t, normalized, "display_name")
+	assert.NotContains(t, normalized, "first_message")
+	assert.NotContains(t, normalized, "cost_status")
+	assert.NotContains(t, normalized, "cost_source")
+	assert.NotContains(t, normalized, "reasoning_tokens")
+	assert.NotContains(t, normalized, "user_message_count")
+	assert.NotContains(t, normalized, "session_activity_at")
+	assert.NotContains(t, normalized, " as started_at")
+	assert.NotContains(t, normalized, "u.machine")
+	assert.Contains(t, normalized, "message_timestamp_rows as materialized")
+	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
+	assert.Contains(t, normalized, "from message_timestamp_rows m\njoin sessions s")
+	assert.Contains(t, normalized, "from usage_event_timestamp_rows ue\njoin sessions s")
+	assert.Contains(t, normalized, "m.timestamp is not null")
+	assert.Contains(t, normalized, "ue.occurred_at is not null")
+	assert.Contains(t, normalized, "m.timestamp is null")
+	assert.Contains(t, normalized, "ue.occurred_at is null")
+	assert.Contains(t, normalized, "m.timestamp >= ?")
+	assert.Contains(t, normalized, "ue.occurred_at >= ?")
+	assert.Contains(t, normalized, "s.started_at >= ?")
+	assert.Contains(t, normalized, "m.timestamp <= ?")
+	assert.Contains(t, normalized, "ue.occurred_at <= ?")
+	assert.Contains(t, normalized, "s.started_at <= ?")
+	require.Len(t, args, 8)
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[0])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[1])
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[2])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[3])
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[4])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[5])
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[6])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[7])
+}
+
+func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
+	query, args := topSessionsUsageRowQuery(UsageFilter{
+		From: "2024-06-01",
+		To:   "2024-06-30",
+	})
+
+	normalized := strings.ToLower(query)
+	assert.NotContains(t, normalized, "display_name")
+	assert.NotContains(t, normalized, "first_message")
+	assert.NotContains(t, normalized, "cost_status")
+	assert.NotContains(t, normalized, "cost_source")
+	assert.NotContains(t, normalized, "reasoning_tokens")
+	assert.NotContains(t, normalized, "user_message_count")
+	assert.NotContains(t, normalized, "session_activity_at")
+	assert.NotContains(t, normalized, " as started_at")
+	assert.NotContains(t, normalized, "u.machine")
+	assert.Contains(t, normalized, "m.timestamp is not null")
+	assert.Contains(t, normalized, "ue.occurred_at is not null")
+	assert.Contains(t, normalized, "m.timestamp is null")
+	assert.Contains(t, normalized, "ue.occurred_at is null")
+	assert.Contains(t, normalized, "m.timestamp >= ?")
+	assert.Contains(t, normalized, "ue.occurred_at >= ?")
+	assert.Contains(t, normalized,
+		"m.timestamp is null\n\tand s.started_at >= ?")
+	assert.Contains(t, normalized,
+		"ue.occurred_at is null\n\tand s.started_at >= ?")
+	assert.Contains(t, normalized, "m.timestamp <= ?")
+	assert.Contains(t, normalized, "ue.occurred_at <= ?")
+	require.Len(t, args, 8)
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[0])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[1])
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[2])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[3])
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[4])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[5])
+	assert.Equal(t, "2024-05-31T10:00:00Z", args[6])
+	assert.Equal(t, "2024-07-01T13:59:59Z", args[7])
 }
 
 func TestUsageEventsReplaceAndList(t *testing.T) {
@@ -1386,6 +1471,31 @@ func TestGetUsageSessionCounts(t *testing.T) {
 	assert.Equal(t, 1, counts.ByProject["proj-b"], "ByProject[proj-b]")
 	assert.Equal(t, 2, counts.ByAgent["claude"], "ByAgent[claude]")
 	assert.Equal(t, 1, counts.ByAgent["codex"], "ByAgent[codex]")
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2024-06-01",
+		To:   "2024-06-30",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+	assert.Equal(t, counts, daily.SessionCounts)
+}
+
+func TestNewUsageSessionCounts(t *testing.T) {
+	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
+		"s1": {Project: "proj-a", Agent: "claude"},
+		"s2": {Project: "proj-a", Agent: "codex"},
+		"s3": {Project: "proj-b", Agent: "claude"},
+	})
+
+	assert.Equal(t, 3, counts.Total, "Total")
+	assert.Equal(t, map[string]int{
+		"proj-a": 2,
+		"proj-b": 1,
+	}, counts.ByProject, "ByProject")
+	assert.Equal(t, map[string]int{
+		"claude": 2,
+		"codex":  1,
+	}, counts.ByAgent, "ByAgent")
 }
 
 // TestGetUsageSessionCounts_DedupesByClaudeMessageAndRequestID

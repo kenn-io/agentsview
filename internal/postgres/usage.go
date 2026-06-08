@@ -18,6 +18,20 @@ const pgUsageMessageEligibility = `
 	AND m.model != '<synthetic>'
 	AND s.deleted_at IS NULL`
 
+const pgUsageMessageSourceEligibility = `
+	m.token_usage != ''
+	AND m.model != ''
+	AND m.model != '<synthetic>'`
+
+const pgUsageEventEligibility = `
+	ue.model != ''
+	AND s.deleted_at IS NULL`
+
+const pgUsageEventSourceEligibility = `
+	ue.model != ''`
+
+const pgUsageSessionEligibility = `s.deleted_at IS NULL`
+
 func usageLocation(f db.UsageFilter) *time.Location {
 	if f.Timezone == "" {
 		return time.Local
@@ -88,7 +102,96 @@ func appendPGUsageRowFilterClauses(
 	return query, pb.args
 }
 
-const pgUsageRowsSQL = `
+func appendPGUsageBranchFilterClauses(
+	where string, pb *paramBuilder, f db.UsageFilter, modelCol string,
+) string {
+	where = appendPGUsageSourceFilterClauses(where, pb, f, modelCol)
+	return appendPGUsageSessionFilterClauses(where, pb, f)
+}
+
+func appendPGUsageSourceFilterClauses(
+	where string, pb *paramBuilder, f db.UsageFilter, modelCol string,
+) string {
+	appendCSV := func(q, col, csv string, include bool) string {
+		if csv == "" {
+			return q
+		}
+		vals := strings.Split(csv, ",")
+		op := "IN"
+		if !include {
+			op = "NOT IN"
+		}
+		if len(vals) == 1 {
+			if include {
+				return q + "\n\tAND " + col + " = " + pb.add(vals[0])
+			}
+			return q + "\n\tAND " + col + " != " + pb.add(vals[0])
+		}
+		placeholders := make([]string, len(vals))
+		for i, v := range vals {
+			placeholders[i] = pb.add(v)
+		}
+		return q + "\n\tAND " + col + " " + op + " (" +
+			strings.Join(placeholders, ",") + ")"
+	}
+
+	where = appendCSV(where, modelCol, f.Model, true)
+	where = appendCSV(where, modelCol, f.ExcludeModel, false)
+
+	return where
+}
+
+func appendPGUsageSessionFilterClauses(
+	where string, pb *paramBuilder, f db.UsageFilter,
+) string {
+	appendCSV := func(q, col, csv string, include bool) string {
+		if csv == "" {
+			return q
+		}
+		vals := strings.Split(csv, ",")
+		op := "IN"
+		if !include {
+			op = "NOT IN"
+		}
+		if len(vals) == 1 {
+			if include {
+				return q + "\n\tAND " + col + " = " + pb.add(vals[0])
+			}
+			return q + "\n\tAND " + col + " != " + pb.add(vals[0])
+		}
+		placeholders := make([]string, len(vals))
+		for i, v := range vals {
+			placeholders[i] = pb.add(v)
+		}
+		return q + "\n\tAND " + col + " " + op + " (" +
+			strings.Join(placeholders, ",") + ")"
+	}
+
+	where = appendCSV(where, "s.agent", f.Agent, true)
+	where = appendCSV(where, "s.project", f.Project, true)
+	where = appendCSV(where, "s.machine", f.Machine, true)
+	where = appendCSV(where, "s.project", f.ExcludeProject, false)
+	where = appendCSV(where, "s.agent", f.ExcludeAgent, false)
+
+	if f.MinUserMessages > 0 {
+		where += "\n\tAND s.user_message_count >= " +
+			pb.add(f.MinUserMessages)
+	}
+	if f.ExcludeOneShot {
+		where += "\n\tAND s.user_message_count > 1"
+	}
+	if f.ExcludeAutomated {
+		where += "\n\tAND COALESCE(s.is_automated, false) = false"
+	}
+	if f.ActiveSince != "" {
+		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= " +
+			pb.add(f.ActiveSince) + "::timestamptz"
+	}
+
+	return where
+}
+
+const pgUsageRowsSQLTemplate = `
 SELECT
 	m.session_id,
 	m.ordinal AS message_ordinal,
@@ -117,7 +220,7 @@ SELECT
 	s.started_at
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
-WHERE ` + pgUsageMessageEligibility + `
+WHERE %s
 
 UNION ALL
 
@@ -152,8 +255,189 @@ SELECT
 	s.started_at
 FROM usage_events ue
 JOIN sessions s ON s.id = ue.session_id
-WHERE ue.model != ''
-  AND s.deleted_at IS NULL`
+WHERE %s`
+
+func pgUsageRowsSQLWithWhere(
+	messageWhere, usageEventWhere string,
+) string {
+	return fmt.Sprintf(
+		pgUsageRowsSQLTemplate,
+		messageWhere,
+		usageEventWhere,
+	)
+}
+
+const pgDailyUsageRowsSQLTemplate = `
+SELECT
+	m.session_id,
+	m.ordinal AS message_ordinal,
+	'message' AS usage_source,
+	COALESCE(m.timestamp, s.started_at) AS ts,
+	m.model,
+	m.token_usage,
+	0 AS input_tokens,
+	0 AS output_tokens,
+	0 AS cache_creation_input_tokens,
+	0 AS cache_read_input_tokens,
+	NULL::double precision AS cost_usd,
+	m.claude_message_id,
+	m.claude_request_id,
+	'' AS usage_dedup_key,
+	s.project,
+	s.agent
+FROM messages m
+JOIN sessions s ON m.session_id = s.id
+WHERE %s
+
+UNION ALL
+
+SELECT
+	ue.session_id,
+	ue.message_ordinal,
+	ue.source AS usage_source,
+	COALESCE(ue.occurred_at, s.started_at) AS ts,
+	ue.model,
+	'' AS token_usage,
+	ue.input_tokens,
+	ue.output_tokens,
+	ue.cache_creation_input_tokens,
+	ue.cache_read_input_tokens,
+	ue.cost_usd,
+	'' AS claude_message_id,
+	'' AS claude_request_id,
+	CASE
+		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
+		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
+	END AS usage_dedup_key,
+	s.project,
+	s.agent
+FROM usage_events ue
+JOIN sessions s ON s.id = ue.session_id
+WHERE %s`
+
+const pgDailyUsageMessageRowsSQLTemplate = `
+SELECT
+	m.session_id,
+	m.ordinal AS message_ordinal,
+	'message' AS usage_source,
+	COALESCE(m.timestamp, s.started_at) AS ts,
+	m.model,
+	m.token_usage,
+	0 AS input_tokens,
+	0 AS output_tokens,
+	0 AS cache_creation_input_tokens,
+	0 AS cache_read_input_tokens,
+	NULL::double precision AS cost_usd,
+	m.claude_message_id,
+	m.claude_request_id,
+	'' AS usage_dedup_key,
+	s.project,
+	s.agent
+FROM %s m
+JOIN sessions s ON m.session_id = s.id
+WHERE %s`
+
+const pgDailyUsageEventRowsSQLTemplate = `
+SELECT
+	ue.session_id,
+	ue.message_ordinal,
+	ue.source AS usage_source,
+	COALESCE(ue.occurred_at, s.started_at) AS ts,
+	ue.model,
+	'' AS token_usage,
+	ue.input_tokens,
+	ue.output_tokens,
+	ue.cache_creation_input_tokens,
+	ue.cache_read_input_tokens,
+	ue.cost_usd,
+	'' AS claude_message_id,
+	'' AS claude_request_id,
+	CASE
+		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
+		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
+	END AS usage_dedup_key,
+	s.project,
+	s.agent
+FROM %s ue
+JOIN sessions s ON s.id = ue.session_id
+WHERE %s`
+
+func pgDailyUsageRowsSQLWithWhere(
+	messageWhere, usageEventWhere string,
+) string {
+	return fmt.Sprintf(
+		pgDailyUsageRowsSQLTemplate,
+		messageWhere,
+		usageEventWhere,
+	)
+}
+
+func pgDailyUsageRowsSQLWithTimestampCTEs(
+	messageTimestampWhere, eventTimestampWhere string,
+	messageTimestampJoinWhere, eventTimestampJoinWhere string,
+	messageFallbackWhere, eventFallbackWhere string,
+) string {
+	return `
+WITH
+message_timestamp_rows AS MATERIALIZED (
+	SELECT
+		m.session_id,
+		m.ordinal,
+		m.timestamp,
+		m.model,
+		m.token_usage,
+		m.claude_message_id,
+		m.claude_request_id
+	FROM messages m
+	WHERE ` + messageTimestampWhere + `
+),
+usage_event_timestamp_rows AS MATERIALIZED (
+	SELECT
+		ue.id,
+		ue.session_id,
+		ue.message_ordinal,
+		ue.source,
+		ue.occurred_at,
+		ue.model,
+		ue.input_tokens,
+		ue.output_tokens,
+		ue.cache_creation_input_tokens,
+		ue.cache_read_input_tokens,
+		ue.cost_usd,
+		ue.dedup_key
+	FROM usage_events ue
+	WHERE ` + eventTimestampWhere + `
+)
+` + fmt.Sprintf(
+		pgDailyUsageMessageRowsSQLTemplate,
+		"message_timestamp_rows",
+		messageTimestampJoinWhere,
+	) + `
+
+UNION ALL
+
+` + fmt.Sprintf(
+		pgDailyUsageEventRowsSQLTemplate,
+		"usage_event_timestamp_rows",
+		eventTimestampJoinWhere,
+	) + `
+
+UNION ALL
+
+` + fmt.Sprintf(
+		pgDailyUsageMessageRowsSQLTemplate,
+		"messages",
+		messageFallbackWhere,
+	) + `
+
+UNION ALL
+
+` + fmt.Sprintf(
+		pgDailyUsageEventRowsSQLTemplate,
+		"usage_events",
+		eventFallbackWhere,
+	)
+}
 
 type pgUsageScanRow struct {
 	sessionID                string
@@ -183,7 +467,33 @@ type pgUsageScanRow struct {
 	startedAt                sql.NullTime
 }
 
-func pgUsageRowSelect() string {
+type pgDailyUsageScanRow struct {
+	sessionID                string
+	messageOrdinal           sql.NullInt64
+	usageSource              string
+	ts                       sql.NullTime
+	model                    string
+	tokenJSON                string
+	inputTokens              int
+	outputTokens             int
+	cacheCreationInputTokens int
+	cacheReadInputTokens     int
+	costUSD                  sql.NullFloat64
+	claudeMessageID          string
+	claudeRequestID          string
+	usageDedupKey            string
+	project                  string
+	agent                    string
+}
+
+type pgTopSessionMetadata struct {
+	displayName string
+	agent       string
+	project     string
+	startedAt   string
+}
+
+func pgUsageRowSelectFromRows(rowsSQL string) string {
 	return `
 SELECT
 	u.session_id,
@@ -211,8 +521,183 @@ SELECT
 	u.session_activity_at,
 	u.display_name,
 	u.started_at
-FROM (` + pgUsageRowsSQL + `) u
+FROM (` + rowsSQL + `) u
 WHERE 1=1`
+}
+
+func pgUsageRowSelect() string {
+	return pgUsageRowSelectFromRows(pgUsageRowsSQLWithWhere(
+		pgUsageMessageEligibility,
+		pgUsageEventEligibility,
+	))
+}
+
+func pgDailyUsageRowSelectFromRows(rowsSQL string) string {
+	return `
+SELECT
+	u.session_id,
+	u.message_ordinal,
+	u.usage_source,
+	u.ts,
+	u.model,
+	u.token_usage,
+	u.input_tokens,
+	u.output_tokens,
+	u.cache_creation_input_tokens,
+	u.cache_read_input_tokens,
+	u.cost_usd,
+	u.claude_message_id,
+	u.claude_request_id,
+	u.usage_dedup_key,
+	u.project,
+	u.agent
+FROM (` + rowsSQL + `) u
+WHERE 1=1`
+}
+
+type pgUsageBounds struct {
+	from string
+	to   string
+}
+
+func (b pgUsageBounds) bounded() bool {
+	return b.from != "" || b.to != ""
+}
+
+func pgUsageBoundsForFilter(
+	pb *paramBuilder, f db.UsageFilter,
+) pgUsageBounds {
+	var b pgUsageBounds
+	if f.From != "" {
+		padded := paddedUTCBound(f.From+"T00:00:00Z", -14)
+		b.from = pb.add(padded)
+	}
+	if f.To != "" {
+		padded := paddedUTCBound(f.To+"T23:59:59Z", 14)
+		b.to = pb.add(padded)
+	}
+	return b
+}
+
+func appendPGUsageColumnBounds(
+	where, col string, b pgUsageBounds,
+) string {
+	if b.from != "" {
+		where += "\n\tAND " + col + " >= " + b.from + "::timestamptz"
+	}
+	if b.to != "" {
+		where += "\n\tAND " + col + " <= " + b.to + "::timestamptz"
+	}
+	return where
+}
+
+func pgUsageRowsSQLForBounds(b pgUsageBounds) string {
+	if !b.bounded() {
+		return pgUsageRowsSQLWithWhere(
+			pgUsageMessageEligibility,
+			pgUsageEventEligibility,
+		)
+	}
+
+	messageTimestampWhere := pgUsageMessageEligibility +
+		"\n\tAND m.timestamp IS NOT NULL"
+	messageTimestampWhere = appendPGUsageColumnBounds(
+		messageTimestampWhere, "m.timestamp", b)
+	eventTimestampWhere := pgUsageEventEligibility +
+		"\n\tAND ue.occurred_at IS NOT NULL"
+	eventTimestampWhere = appendPGUsageColumnBounds(
+		eventTimestampWhere, "ue.occurred_at", b)
+
+	messageFallbackWhere := pgUsageMessageEligibility +
+		"\n\tAND m.timestamp IS NULL"
+	messageFallbackWhere = appendPGUsageColumnBounds(
+		messageFallbackWhere, "s.started_at", b)
+	eventFallbackWhere := pgUsageEventEligibility +
+		"\n\tAND ue.occurred_at IS NULL"
+	eventFallbackWhere = appendPGUsageColumnBounds(
+		eventFallbackWhere, "s.started_at", b)
+
+	return strings.Join([]string{
+		pgUsageRowsSQLWithWhere(
+			messageTimestampWhere,
+			eventTimestampWhere,
+		),
+		pgUsageRowsSQLWithWhere(
+			messageFallbackWhere,
+			eventFallbackWhere,
+		),
+	}, "\n\nUNION ALL\n\n")
+}
+
+func pgDailyUsageRowsSQLForBounds(
+	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
+) string {
+	if !b.bounded() {
+		messageWhere := appendPGUsageBranchFilterClauses(
+			pgUsageMessageEligibility, pb, f, "m.model")
+		eventWhere := appendPGUsageBranchFilterClauses(
+			pgUsageEventEligibility, pb, f, "ue.model")
+		return pgDailyUsageRowsSQLWithWhere(messageWhere, eventWhere)
+	}
+
+	messageTimestampSourceWhere := pgUsageMessageSourceEligibility +
+		"\n\tAND m.timestamp IS NOT NULL"
+	messageTimestampSourceWhere = appendPGUsageSourceFilterClauses(
+		messageTimestampSourceWhere, pb, f, "m.model")
+	messageTimestampSourceWhere = appendPGUsageColumnBounds(
+		messageTimestampSourceWhere, "m.timestamp", b)
+
+	eventTimestampSourceWhere := pgUsageEventSourceEligibility +
+		"\n\tAND ue.occurred_at IS NOT NULL"
+	eventTimestampSourceWhere = appendPGUsageSourceFilterClauses(
+		eventTimestampSourceWhere, pb, f, "ue.model")
+	eventTimestampSourceWhere = appendPGUsageColumnBounds(
+		eventTimestampSourceWhere, "ue.occurred_at", b)
+
+	messageTimestampJoinWhere := appendPGUsageSessionFilterClauses(
+		pgUsageSessionEligibility, pb, f)
+	eventTimestampJoinWhere := appendPGUsageSessionFilterClauses(
+		pgUsageSessionEligibility, pb, f)
+
+	messageFallbackWhere := pgUsageMessageEligibility +
+		"\n\tAND m.timestamp IS NULL"
+	messageFallbackWhere = appendPGUsageBranchFilterClauses(
+		messageFallbackWhere, pb, f, "m.model")
+	messageFallbackWhere = appendPGUsageColumnBounds(
+		messageFallbackWhere, "s.started_at", b)
+	eventFallbackWhere := pgUsageEventEligibility +
+		"\n\tAND ue.occurred_at IS NULL"
+	eventFallbackWhere = appendPGUsageBranchFilterClauses(
+		eventFallbackWhere, pb, f, "ue.model")
+	eventFallbackWhere = appendPGUsageColumnBounds(
+		eventFallbackWhere, "s.started_at", b)
+
+	return pgDailyUsageRowsSQLWithTimestampCTEs(
+		messageTimestampSourceWhere,
+		eventTimestampSourceWhere,
+		messageTimestampJoinWhere,
+		eventTimestampJoinWhere,
+		messageFallbackWhere,
+		eventFallbackWhere,
+	)
+}
+
+func pgUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
+	bounds := pgUsageBoundsForFilter(pb, f)
+	return pgDailyUsageRowSelectFromRows(pgDailyUsageRowsSQLForBounds(
+		pb, f, bounds,
+	))
+}
+
+func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
+	return pgUsageRowQuery(pb, f)
+}
+
+func pgUsageFullRowQuery(pb *paramBuilder, f db.UsageFilter) string {
+	bounds := pgUsageBoundsForFilter(pb, f)
+	query := pgUsageRowSelectFromRows(pgUsageRowsSQLForBounds(bounds))
+	query, _ = appendPGUsageRowFilterClauses(query, pb, f)
+	return query
 }
 
 func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
@@ -247,8 +732,64 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 	return r, err
 }
 
+func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
+	var r pgDailyUsageScanRow
+	err := rows.Scan(
+		&r.sessionID,
+		&r.messageOrdinal,
+		&r.usageSource,
+		&r.ts,
+		&r.model,
+		&r.tokenJSON,
+		&r.inputTokens,
+		&r.outputTokens,
+		&r.cacheCreationInputTokens,
+		&r.cacheReadInputTokens,
+		&r.costUSD,
+		&r.claudeMessageID,
+		&r.claudeRequestID,
+		&r.usageDedupKey,
+		&r.project,
+		&r.agent,
+	)
+	return r, err
+}
+
 func pgUsageAmounts(
 	r pgUsageScanRow, pricing map[string]modelRates,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
+	if r.usageSource == "message" {
+		usage := gjson.Parse(r.tokenJSON)
+		inputTok = int(usage.Get("input_tokens").Int())
+		outputTok = int(usage.Get("output_tokens").Int())
+		cacheCrTok = int(usage.Get("cache_creation_input_tokens").Int())
+		cacheRdTok = int(usage.Get("cache_read_input_tokens").Int())
+	} else {
+		inputTok = r.inputTokens
+		outputTok = r.outputTokens
+		cacheCrTok = r.cacheCreationInputTokens
+		cacheRdTok = r.cacheReadInputTokens
+	}
+
+	rates, _ := lookupModelRates(pricing, r.model)
+	if r.costUSD.Valid {
+		cost = r.costUSD.Float64
+	} else {
+		cost = (float64(inputTok)*rates.input +
+			float64(outputTok)*rates.output +
+			float64(cacheCrTok)*rates.cacheCreation +
+			float64(cacheRdTok)*rates.cacheRead) / 1_000_000
+	}
+	readDelta := float64(cacheRdTok) *
+		(rates.input - rates.cacheRead) / 1_000_000
+	createDelta := float64(cacheCrTok) *
+		(rates.input - rates.cacheCreation) / 1_000_000
+	savings = readDelta + createDelta
+	return
+}
+
+func pgDailyUsageAmounts(
+	r pgDailyUsageScanRow, pricing map[string]modelRates,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
@@ -326,6 +867,58 @@ func startedAtString(ts sql.NullTime) string {
 		return ""
 	}
 	return FormatISO8601(ts.Time)
+}
+
+func (s *Store) loadPGTopSessionMetadata(
+	ctx context.Context, sessionIDs []string,
+) (map[string]pgTopSessionMetadata, error) {
+	out := make(map[string]pgTopSessionMetadata, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return out, nil
+	}
+
+	pb := &paramBuilder{}
+	placeholders := make([]string, 0, len(sessionIDs))
+	for _, id := range sessionIDs {
+		placeholders = append(placeholders, pb.add(id))
+	}
+	query := `
+SELECT
+	id,
+	COALESCE(NULLIF(display_name, ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
+	agent,
+	project,
+	started_at
+FROM sessions
+WHERE id IN (` + strings.Join(placeholders, ",") + `)`
+	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying pg top session metadata: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var meta pgTopSessionMetadata
+		var startedAt sql.NullTime
+		if err := rows.Scan(
+			&id,
+			&meta.displayName,
+			&meta.agent,
+			&meta.project,
+			&startedAt,
+		); err != nil {
+			return nil,
+				fmt.Errorf("scanning pg top session metadata: %w", err)
+		}
+		meta.startedAt = startedAtString(startedAt)
+		out[id] = meta
+	}
+	if err := rows.Err(); err != nil {
+		return nil,
+			fmt.Errorf("iterating pg top session metadata: %w", err)
+	}
+	return out, nil
 }
 
 // GetSessionUsage returns one session's token totals and cost
@@ -452,17 +1045,8 @@ func (s *Store) GetDailyUsage(
 			fmt.Errorf("loading pg pricing: %w", err)
 	}
 
-	query := pgUsageRowSelect()
 	pb := &paramBuilder{}
-	if f.From != "" {
-		padded := paddedUTCBound(f.From+"T00:00:00Z", -14)
-		query += " AND u.ts >= " + pb.add(padded) + "::timestamptz"
-	}
-	if f.To != "" {
-		padded := paddedUTCBound(f.To+"T23:59:59Z", 14)
-		query += " AND u.ts <= " + pb.add(padded) + "::timestamptz"
-	}
-	query, _ = appendPGUsageRowFilterClauses(query, pb, f)
+	query := pgUsageRowQuery(pb, f)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -493,10 +1077,11 @@ func (s *Store) GetDailyUsage(
 
 	accum := make(map[accumKey]*bucket)
 	seen := make(map[dedupKey]struct{})
+	seenSessions := make(map[string]db.UsageSessionInfo)
 	var totalSavings float64
 
 	for rows.Next() {
-		r, scanErr := scanPGUsageRow(rows)
+		r, scanErr := scanPGDailyUsageRow(rows)
 		if scanErr != nil {
 			return db.DailyUsageResult{},
 				fmt.Errorf("scanning daily usage row: %w", scanErr)
@@ -524,8 +1109,15 @@ func (s *Store) GetDailyUsage(
 			seen[key] = struct{}{}
 		}
 
+		if _, ok := seenSessions[r.sessionID]; !ok {
+			seenSessions[r.sessionID] = db.UsageSessionInfo{
+				Project: r.project,
+				Agent:   r.agent,
+			}
+		}
+
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
-			pgUsageAmounts(r, pricing)
+			pgDailyUsageAmounts(r, pricing)
 		totalSavings += savings
 
 		key := accumKey{
@@ -651,7 +1243,12 @@ func (s *Store) GetDailyUsage(
 			daily = []db.DailyUsageEntry{}
 		}
 		totals.CacheSavings = totalSavings
-		return db.DailyUsageResult{Daily: daily, Totals: totals}, nil
+		sessionCounts := db.NewUsageSessionCounts(seenSessions)
+		return db.DailyUsageResult{
+			Daily:         daily,
+			Totals:        totals,
+			SessionCounts: sessionCounts,
+		}, nil
 	}
 
 	type dayMaps struct {
@@ -793,7 +1390,12 @@ func (s *Store) GetDailyUsage(
 		daily = []db.DailyUsageEntry{}
 	}
 	totals.CacheSavings = totalSavings
-	return db.DailyUsageResult{Daily: daily, Totals: totals}, nil
+	sessionCounts := db.NewUsageSessionCounts(seenSessions)
+	return db.DailyUsageResult{
+		Daily:         daily,
+		Totals:        totals,
+		SessionCounts: sessionCounts,
+	}, nil
 }
 
 // GetTopSessionsByCost returns sessions ranked by total cost.
@@ -812,17 +1414,8 @@ func (s *Store) GetTopSessionsByCost(
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
 	}
 
-	query := pgUsageRowSelect()
 	pb := &paramBuilder{}
-	if f.From != "" {
-		padded := paddedUTCBound(f.From+"T00:00:00Z", -14)
-		query += " AND u.ts >= " + pb.add(padded) + "::timestamptz"
-	}
-	if f.To != "" {
-		padded := paddedUTCBound(f.To+"T23:59:59Z", 14)
-		query += " AND u.ts <= " + pb.add(padded) + "::timestamptz"
-	}
-	query, _ = appendPGUsageRowFilterClauses(query, pb, f)
+	query := pgTopSessionsUsageRowQuery(pb, f)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -834,10 +1427,6 @@ func (s *Store) GetTopSessionsByCost(
 
 	loc := usageLocation(f)
 	type sessAccum struct {
-		displayName string
-		agent       string
-		project     string
-		startedAt   string
 		totalTokens int
 		cost        float64
 	}
@@ -851,7 +1440,7 @@ func (s *Store) GetTopSessionsByCost(
 	seen := make(map[dedupKey]struct{})
 
 	for rows.Next() {
-		r, err := scanPGUsageRow(rows)
+		r, err := scanPGDailyUsageRow(rows)
 		if err != nil {
 			return nil,
 				fmt.Errorf("scanning top sessions row: %w", err)
@@ -880,16 +1469,11 @@ func (s *Store) GetTopSessionsByCost(
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _ :=
-			pgUsageAmounts(r, pricing)
+			pgDailyUsageAmounts(r, pricing)
 
 		sa, ok := accum[r.sessionID]
 		if !ok {
-			sa = &sessAccum{
-				displayName: r.displayName,
-				agent:       r.agent,
-				project:     r.project,
-				startedAt:   startedAtString(r.startedAt),
-			}
+			sa = &sessAccum{}
 			accum[r.sessionID] = sa
 			order = append(order, r.sessionID)
 		}
@@ -909,10 +1493,7 @@ func (s *Store) GetTopSessionsByCost(
 		}
 		result = append(result, db.TopSessionEntry{
 			SessionID:   id,
-			DisplayName: sa.displayName,
-			Agent:       sa.agent,
-			Project:     sa.project,
-			StartedAt:   sa.startedAt,
+			DisplayName: id,
 			TotalTokens: sa.totalTokens,
 			Cost:        sa.cost,
 		})
@@ -927,6 +1508,23 @@ func (s *Store) GetTopSessionsByCost(
 	if len(result) > limit {
 		result = result[:limit]
 	}
+
+	sessionIDs := make([]string, len(result))
+	for i := range result {
+		sessionIDs[i] = result[i].SessionID
+	}
+	metadata, err := s.loadPGTopSessionMetadata(ctx, sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range result {
+		if meta, ok := metadata[result[i].SessionID]; ok {
+			result[i].DisplayName = meta.displayName
+			result[i].Agent = meta.agent
+			result[i].Project = meta.project
+			result[i].StartedAt = meta.startedAt
+		}
+	}
 	return result, nil
 }
 
@@ -934,17 +1532,8 @@ func (s *Store) GetTopSessionsByCost(
 func (s *Store) GetUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.UsageSessionCounts, error) {
-	query := pgUsageRowSelect()
 	pb := &paramBuilder{}
-	if f.From != "" {
-		padded := paddedUTCBound(f.From+"T00:00:00Z", -14)
-		query += " AND u.ts >= " + pb.add(padded) + "::timestamptz"
-	}
-	if f.To != "" {
-		padded := paddedUTCBound(f.To+"T23:59:59Z", 14)
-		query += " AND u.ts <= " + pb.add(padded) + "::timestamptz"
-	}
-	query, _ = appendPGUsageRowFilterClauses(query, pb, f)
+	query := pgUsageRowQuery(pb, f)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
@@ -969,7 +1558,7 @@ func (s *Store) GetUsageSessionCounts(
 	dedup := make(map[dedupKey]struct{})
 
 	for rows.Next() {
-		r, err := scanPGUsageRow(rows)
+		r, err := scanPGDailyUsageRow(rows)
 		if err != nil {
 			return db.UsageSessionCounts{},
 				fmt.Errorf("scanning session counts: %w", err)

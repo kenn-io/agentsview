@@ -1,12 +1,144 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
+
+type usageSummaryCountsSpy struct {
+	db.Store
+	dailyCalls  int
+	countsCalls int
+}
+
+func (s *usageSummaryCountsSpy) GetDailyUsage(
+	_ context.Context, _ db.UsageFilter,
+) (db.DailyUsageResult, error) {
+	s.dailyCalls++
+	return db.DailyUsageResult{
+		Daily: []db.DailyUsageEntry{{
+			Date:      "2024-06-01",
+			TotalCost: 1,
+		}},
+		Totals: db.UsageTotals{TotalCost: 1},
+		SessionCounts: db.UsageSessionCounts{
+			Total:     1,
+			ByProject: map[string]int{"proj": 1},
+			ByAgent:   map[string]int{"claude": 1},
+		},
+	}, nil
+}
+
+func (s *usageSummaryCountsSpy) GetUsageSessionCounts(
+	_ context.Context, _ db.UsageFilter,
+) (db.UsageSessionCounts, error) {
+	s.countsCalls++
+	return db.UsageSessionCounts{}, nil
+}
+
+func TestUsageSummaryScansCurrentPeriodOnly(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := &Server{
+		cfg: config.Config{Host: "127.0.0.1"},
+		db:  spy,
+		mux: http.NewServeMux(),
+	}
+	s.routes()
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/usage/summary?from=2024-06-01&to=2024-06-01",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	assert.Equal(t, 1, spy.dailyCalls, "current summary only")
+	assert.Zero(t, spy.countsCalls)
+}
+
+func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := &Server{
+		cfg: config.Config{Host: "127.0.0.1"},
+		db:  spy,
+		mux: http.NewServeMux(),
+	}
+	s.routes()
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/usage/comparison?from=2024-06-01&to=2024-06-01&current_cost=3",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	assert.Equal(t, 1, spy.dailyCalls, "prior comparison only")
+	assert.Zero(t, spy.countsCalls)
+
+	var out Comparison
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, "2024-05-31", out.PriorFrom)
+	assert.Equal(t, "2024-05-31", out.PriorTo)
+	assert.Equal(t, 1.0, out.PriorTotalCost)
+	assert.Equal(t, 2.0, out.DeltaPct)
+}
+
+func TestUsageComparisonRequiresCurrentCost(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := &Server{
+		cfg: config.Config{Host: "127.0.0.1"},
+		db:  spy,
+		mux: http.NewServeMux(),
+	}
+	s.routes()
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/usage/comparison?from=2024-06-01&to=2024-06-01",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+	assert.Zero(t, spy.dailyCalls)
+	assert.Zero(t, spy.countsCalls)
+}
+
+func TestUsageComparisonAllowsZeroCurrentCost(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := &Server{
+		cfg: config.Config{Host: "127.0.0.1"},
+		db:  spy,
+		mux: http.NewServeMux(),
+	}
+	s.routes()
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/api/v1/usage/comparison?from=2024-06-01&to=2024-06-01&current_cost=0",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	assert.Equal(t, 1, spy.dailyCalls, "prior comparison only")
+	assert.Zero(t, spy.countsCalls)
+}
 
 func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
 	// SavingsVsUncached is now computed per-model in the DB

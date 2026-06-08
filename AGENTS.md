@@ -29,6 +29,27 @@ Instructions for autonomous coding agents working in this repository.
 - After Go code changes, run `go fmt ./...` and `go vet ./...` before
   committing.
 
+## Backend Parity
+
+- Preserve behavior and query-shape parity between supported storage backends
+  whenever practical. SQLite and PostgreSQL/Cockroach queries, indexes,
+  aggregations, filtering, and ordering should match until there is a concrete,
+  documented reason for them to differ.
+- Do not implement a performance or correctness fix for only one backend and
+  call the problem solved unless the user explicitly scopes the work to that
+  backend, for example "this is only for PostgreSQL". If one backend needs a
+  different implementation, explain why and keep the observable behavior the
+  same.
+
+## Test Style
+
+- Go tests use `github.com/stretchr/testify` for assertions. Use `require.X`
+  when a failed check should abort the test (setup, nil receivers, length checks
+  before indexing) and `assert.X` for independent checks that should keep
+  running. Don't write `if got != want { t.Fatalf(...) }` in new tests.
+- Domain-specific helpers are fine, but they must use testify internally rather
+  than stdlib comparisons.
+
 ## Safety
 
 - Do not revert user-authored or unrelated local changes unless explicitly

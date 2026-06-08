@@ -84,6 +84,81 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 	assert.Equal(t, 1.00, got.CacheReadPerMTok)
 }
 
+func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
+	existing := []ModelPricing{
+		{
+			ModelPattern:         "_fallback_version",
+			InputPerMTok:         0,
+			OutputPerMTok:        0,
+			CacheCreationPerMTok: 0,
+			CacheReadPerMTok:     0,
+			UpdatedAt:            "v1",
+		},
+		{
+			ModelPattern:         "same-model",
+			InputPerMTok:         1,
+			OutputPerMTok:        2,
+			CacheCreationPerMTok: 3,
+			CacheReadPerMTok:     4,
+			UpdatedAt:            "old",
+		},
+		{
+			ModelPattern:         "changed-model",
+			InputPerMTok:         1,
+			OutputPerMTok:        2,
+			CacheCreationPerMTok: 3,
+			CacheReadPerMTok:     4,
+			UpdatedAt:            "old",
+		},
+	}
+	desired := []ModelPricing{
+		{
+			ModelPattern:         "_fallback_version",
+			InputPerMTok:         0,
+			OutputPerMTok:        0,
+			CacheCreationPerMTok: 0,
+			CacheReadPerMTok:     0,
+			UpdatedAt:            "v2",
+		},
+		{
+			ModelPattern:         "same-model",
+			InputPerMTok:         1,
+			OutputPerMTok:        2,
+			CacheCreationPerMTok: 3,
+			CacheReadPerMTok:     4,
+			UpdatedAt:            "new",
+		},
+		{
+			ModelPattern:         "changed-model",
+			InputPerMTok:         1,
+			OutputPerMTok:        9,
+			CacheCreationPerMTok: 3,
+			CacheReadPerMTok:     4,
+			UpdatedAt:            "new",
+		},
+		{
+			ModelPattern:         "missing-model",
+			InputPerMTok:         5,
+			OutputPerMTok:        6,
+			CacheCreationPerMTok: 7,
+			CacheReadPerMTok:     8,
+			UpdatedAt:            "new",
+		},
+	}
+
+	gotSummary, gotRows := FilterChangedModelPricing(existing, desired)
+
+	assert.Equal(t, PricingChangeSummary{
+		Total:     4,
+		Missing:   1,
+		Changed:   1,
+		Unchanged: 2,
+	}, gotSummary)
+	require.Len(t, gotRows, 2)
+	assert.Equal(t, "changed-model", gotRows[0].ModelPattern)
+	assert.Equal(t, "missing-model", gotRows[1].ModelPattern)
+}
+
 func TestPricingMeta(t *testing.T) {
 	d := testDB(t)
 

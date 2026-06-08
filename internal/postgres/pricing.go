@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -16,6 +17,14 @@ type modelRates struct {
 	output        float64
 	cacheCreation float64
 	cacheRead     float64
+}
+
+type pricingLoad struct {
+	done    chan struct{}
+	cancel  context.CancelFunc
+	waiters int
+	prices  map[string]modelRates
+	err     error
 }
 
 func lookupModelRates(
@@ -59,15 +68,87 @@ func fallbackPricingMap() map[string]modelRates {
 	return pricingRowsToMap(fallbackPricingRows())
 }
 
+func clonePricingMap(in map[string]modelRates) map[string]modelRates {
+	out := make(map[string]modelRates, len(in))
+	maps.Copy(out, in)
+	return out
+}
+
 func (s *Store) loadPricingMap(
 	ctx context.Context,
 ) (map[string]modelRates, error) {
-	out := fallbackPricingMap()
-	if err := s.mergeDBPricing(ctx, out); err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.applyCustomPricing(out)
-	return out, nil
+	load := s.startPricingLoad()
+	defer s.leavePricingLoad(load)
+
+	select {
+	case <-load.done:
+		if load.err != nil {
+			return nil, load.err
+		}
+		return clonePricingMap(load.prices), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (s *Store) startPricingLoad() *pricingLoad {
+	s.pricingLoadMu.Lock()
+	defer s.pricingLoadMu.Unlock()
+	if s.pricingLoad != nil {
+		s.pricingLoad.waiters++
+		return s.pricingLoad
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	load := &pricingLoad{
+		done:    make(chan struct{}),
+		cancel:  cancel,
+		waiters: 1,
+	}
+	s.pricingLoad = load
+	go s.runPricingLoad(ctx, load)
+	return load
+}
+
+func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
+	out := fallbackPricingMap()
+	err := s.mergeDBPricing(ctx, out)
+	load.cancel()
+
+	var prices map[string]modelRates
+	if err == nil {
+		s.pricingMu.Lock()
+		s.applyCustomPricing(out)
+		s.pricingMu.Unlock()
+		prices = clonePricingMap(out)
+	}
+
+	s.pricingLoadMu.Lock()
+	defer s.pricingLoadMu.Unlock()
+	load.err = err
+	load.prices = prices
+	if s.pricingLoad == load {
+		s.pricingLoad = nil
+	}
+	close(load.done)
+}
+
+func (s *Store) leavePricingLoad(load *pricingLoad) {
+	s.pricingLoadMu.Lock()
+	defer s.pricingLoadMu.Unlock()
+	load.waiters--
+	if load.waiters == 0 && s.pricingLoad == load {
+		load.cancel()
+	}
+}
+
+func (s *Store) forgetPricingLoad() {
+	s.pricingLoadMu.Lock()
+	defer s.pricingLoadMu.Unlock()
+	s.pricingLoad = nil
 }
 
 // mergeDBPricing layers rows from the PG model_pricing table onto
@@ -135,6 +216,94 @@ func (s *Store) applyCustomPricing(out map[string]modelRates) {
 	}
 }
 
+const pricingUpsertBatch = 100
+
+func pgPricingUpsertStatement(
+	prices []db.ModelPricing, defaultUpdatedAt string,
+) (string, []any) {
+	var b strings.Builder
+	b.WriteString(`INSERT INTO model_pricing
+		(model_pattern, input_per_mtok, output_per_mtok,
+		 cache_creation_per_mtok, cache_read_per_mtok,
+		 updated_at)
+	VALUES `)
+	args := make([]any, 0, len(prices)*6)
+	for i, p := range prices {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		base := i*6 + 1
+		fmt.Fprintf(
+			&b,
+			"($%d, $%d, $%d, $%d, $%d, $%d)",
+			base, base+1, base+2, base+3, base+4, base+5,
+		)
+		updatedAt := p.UpdatedAt
+		if updatedAt == "" {
+			updatedAt = defaultUpdatedAt
+		}
+		args = append(args,
+			sanitizePG(p.ModelPattern),
+			p.InputPerMTok,
+			p.OutputPerMTok,
+			p.CacheCreationPerMTok,
+			p.CacheReadPerMTok,
+			sanitizePG(updatedAt),
+		)
+	}
+	b.WriteString(`
+	ON CONFLICT (model_pattern) DO UPDATE SET
+		input_per_mtok = EXCLUDED.input_per_mtok,
+		output_per_mtok = EXCLUDED.output_per_mtok,
+		cache_creation_per_mtok = EXCLUDED.cache_creation_per_mtok,
+		cache_read_per_mtok = EXCLUDED.cache_read_per_mtok,
+		updated_at = EXCLUDED.updated_at
+	WHERE model_pricing.input_per_mtok IS DISTINCT FROM
+			EXCLUDED.input_per_mtok
+		OR model_pricing.output_per_mtok IS DISTINCT FROM
+			EXCLUDED.output_per_mtok
+		OR model_pricing.cache_creation_per_mtok IS DISTINCT FROM
+			EXCLUDED.cache_creation_per_mtok
+		OR model_pricing.cache_read_per_mtok IS DISTINCT FROM
+			EXCLUDED.cache_read_per_mtok`)
+	return b.String(), args
+}
+
+func listPGModelPricing(
+	ctx context.Context, pg *sql.DB,
+) ([]db.ModelPricing, error) {
+	rows, err := pg.QueryContext(ctx,
+		`SELECT model_pattern, input_per_mtok,
+			output_per_mtok, cache_creation_per_mtok,
+			cache_read_per_mtok, updated_at
+		 FROM model_pricing`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing pg pricing: %w", err)
+	}
+	defer rows.Close()
+
+	var out []db.ModelPricing
+	for rows.Next() {
+		var p db.ModelPricing
+		if err := rows.Scan(
+			&p.ModelPattern,
+			&p.InputPerMTok,
+			&p.OutputPerMTok,
+			&p.CacheCreationPerMTok,
+			&p.CacheReadPerMTok,
+			&p.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning pg pricing: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating pg pricing: %w", err)
+	}
+	return out, nil
+}
+
 func upsertModelPricing(
 	ctx context.Context, pg *sql.DB, prices []db.ModelPricing,
 ) error {
@@ -148,40 +317,16 @@ func upsertModelPricing(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO model_pricing
-			(model_pattern, input_per_mtok, output_per_mtok,
-			 cache_creation_per_mtok, cache_read_per_mtok,
-			 updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (model_pattern) DO UPDATE SET
-			input_per_mtok = EXCLUDED.input_per_mtok,
-			output_per_mtok = EXCLUDED.output_per_mtok,
-			cache_creation_per_mtok = EXCLUDED.cache_creation_per_mtok,
-			cache_read_per_mtok = EXCLUDED.cache_read_per_mtok,
-			updated_at = EXCLUDED.updated_at`)
-	if err != nil {
-		return fmt.Errorf("preparing pg pricing upsert: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, p := range prices {
-		updatedAt := p.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-		}
-		if _, err := stmt.ExecContext(
-			ctx,
-			sanitizePG(p.ModelPattern),
-			p.InputPerMTok,
-			p.OutputPerMTok,
-			p.CacheCreationPerMTok,
-			p.CacheReadPerMTok,
-			sanitizePG(updatedAt),
-		); err != nil {
+	defaultUpdatedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := 0; i < len(prices); i += pricingUpsertBatch {
+		end := min(i+pricingUpsertBatch, len(prices))
+		query, args := pgPricingUpsertStatement(
+			prices[i:end], defaultUpdatedAt,
+		)
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return fmt.Errorf(
-				"upserting pg pricing %q: %w",
-				p.ModelPattern, err,
+				"upserting pg pricing batch starting at %d: %w",
+				i, err,
 			)
 		}
 	}
@@ -200,7 +345,17 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(prices) == 0 {
 		prices = fallbackPricingRows()
 	}
-	if err := upsertModelPricing(ctx, s.pg, prices); err != nil {
+	existing, err := listPGModelPricing(ctx, s.pg)
+	if err != nil {
+		return fmt.Errorf("listing pg model pricing: %w", err)
+	}
+	_, changedPrices := db.FilterChangedModelPricing(
+		existing, prices,
+	)
+	if len(changedPrices) == 0 {
+		return nil
+	}
+	if err := upsertModelPricing(ctx, s.pg, changedPrices); err != nil {
 		return fmt.Errorf("syncing model pricing to pg: %w", err)
 	}
 	return nil

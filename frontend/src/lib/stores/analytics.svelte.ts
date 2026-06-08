@@ -11,7 +11,10 @@ import type {
   SignalsAnalyticsResponse,
 } from "../api/types.js";
 import { AnalyticsService } from "../api/generated/index";
-import { callGenerated } from "../api/runtime.js";
+import {
+  callGenerated,
+  isAbortError,
+} from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 
 type AnalyticsParams = Parameters<
@@ -128,6 +131,7 @@ class AnalyticsStore {
     topSessions: 0,
     signals: 0,
   };
+  private abortControllers: Partial<Record<Panel, AbortController>> = {};
 
   get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -400,6 +404,7 @@ class AnalyticsStore {
     hasExistingData: () => boolean = () => false,
   ) {
     const v = ++this.versions[panel];
+    const signal = this.nextAbortSignal(panel);
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
     // replace data in place instead of flashing to loading state.
@@ -410,12 +415,13 @@ class AnalyticsStore {
     // fresh.
     if (isFirstLoad) this.errors[panel] = null;
     try {
-      const data = await callGenerated(fetchRequest);
+      const data = await callGenerated(fetchRequest, signal);
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;
       }
     } catch (e) {
+      if (isAbortError(e)) return;
       if (this.versions[panel] === v) {
         // On refetch failure with cached data, swallow the error so
         // existing values stay visible instead of flipping to an
@@ -428,9 +434,26 @@ class AnalyticsStore {
         }
       }
     } finally {
+      this.clearAbortSignal(panel, signal);
       if (this.versions[panel] === v) {
         this.loading[panel] = false;
       }
+    }
+  }
+
+  private nextAbortSignal(panel: Panel): AbortSignal {
+    this.abortControllers[panel]?.abort();
+    const controller = new AbortController();
+    this.abortControllers[panel] = controller;
+    return controller.signal;
+  }
+
+  private clearAbortSignal(
+    panel: Panel,
+    signal: AbortSignal,
+  ): void {
+    if (this.abortControllers[panel]?.signal === signal) {
+      delete this.abortControllers[panel];
     }
   }
 

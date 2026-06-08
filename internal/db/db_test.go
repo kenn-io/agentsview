@@ -5124,6 +5124,21 @@ func TestSessionsTerminationStatusIndex(t *testing.T) {
 		count)
 }
 
+func TestMessagesUsageTimestampIndex(t *testing.T) {
+	d := testDB(t)
+
+	var count int
+	err := d.getReader().QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'index' AND name = 'idx_messages_usage_timestamp'`,
+	).Scan(&count)
+	requireNoError(t, err, "probing idx_messages_usage_timestamp")
+
+	require.Equal(t, 1, count,
+		"expected idx_messages_usage_timestamp to exist, got count=%d",
+		count)
+}
+
 // TestMigration_TerminationStatusColumn simulates upgrading from a
 // pre-termination_status schema. Drops the column and its index from
 // a freshly-opened DB, reopens, and verifies the migration restores

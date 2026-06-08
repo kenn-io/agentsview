@@ -119,6 +119,8 @@ CREATE INDEX IF NOT EXISTS idx_sessions_machine
     ON sessions(machine);
 CREATE INDEX IF NOT EXISTS idx_messages_session_ordinal
     ON messages(session_id, ordinal);
+CREATE INDEX IF NOT EXISTS idx_messages_velocity
+    ON messages(session_id, ordinal, role, timestamp, content_length);
 CREATE INDEX IF NOT EXISTS idx_messages_session_role
     ON messages(session_id, role);
 
@@ -188,6 +190,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
     ON tool_calls(session_id);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_session_category
+    ON tool_calls(session_id, category);
 -- idx_tool_calls_message backs the ON DELETE CASCADE from
 -- messages(id). Without it SQLite full-scans tool_calls per
 -- deleted message row, which makes ReplaceSessionMessages

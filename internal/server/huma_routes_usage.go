@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"time"
 
@@ -14,6 +13,7 @@ func (s *Server) registerUsageRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/usage", "Usage")
 
 	get(s, group, "/summary", "Get usage summary", s.humaUsageSummary)
+	get(s, group, "/comparison", "Get usage comparison", s.humaUsageComparison)
 	get(s, group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
 }
 
@@ -37,6 +37,11 @@ type UsageFilterInput struct {
 type usageTopSessionsInput struct {
 	UsageFilterInput
 	Limit int `query:"limit" minimum:"0" maximum:"100" default:"20" doc:"Maximum number of sessions"`
+}
+
+type usageComparisonInput struct {
+	UsageFilterInput
+	CurrentCost float64 `query:"current_cost" required:"true" doc:"Current period total cost"`
 }
 
 func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
@@ -94,18 +99,6 @@ func (s *Server) humaUsageSummary(
 		}
 		return nil, internalError("usage summary error", err)
 	}
-	scFilter := f
-	scFilter.Breakdowns = false
-	sessionCounts, err := s.db.GetUsageSessionCounts(ctx, scFilter)
-	if err != nil {
-		if handled := handleHumaContextError(err); handled != nil {
-			return nil, handled
-		}
-		if handled := handleHumaReadOnly(err); handled != nil {
-			return nil, handled
-		}
-		return nil, internalError("usage session counts error", err)
-	}
 	resp := UsageSummaryResponse{
 		From:          f.From,
 		To:            f.To,
@@ -114,25 +107,45 @@ func (s *Server) humaUsageSummary(
 		ProjectTotals: foldProjectTotals(result.Daily),
 		ModelTotals:   foldModelTotals(result.Daily),
 		AgentTotals:   foldAgentTotals(result.Daily),
-		SessionCounts: sessionCounts,
+		SessionCounts: result.SessionCounts,
 		CacheStats:    computeCacheStats(result.Totals),
-		Comparison:    s.computeUsageComparison(ctx, f, result.Totals.TotalCost),
 	}
 	return &jsonOutput[UsageSummaryResponse]{Body: resp}, nil
+}
+
+func (s *Server) humaUsageComparison(
+	ctx context.Context,
+	in *usageComparisonInput,
+) (*jsonOutput[Comparison], error) {
+	f, err := usageFilterFromInput(in.UsageFilterInput)
+	if err != nil {
+		return nil, err
+	}
+	comparison, err := s.computeUsageComparison(ctx, f, in.CurrentCost)
+	if err != nil {
+		if handled := handleHumaContextError(err); handled != nil {
+			return nil, handled
+		}
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("usage comparison error", err)
+	}
+	return &jsonOutput[Comparison]{Body: *comparison}, nil
 }
 
 func (s *Server) computeUsageComparison(
 	ctx context.Context,
 	f db.UsageFilter,
 	currentCost float64,
-) *Comparison {
+) (*Comparison, error) {
 	fromT, err := time.Parse("2006-01-02", f.From)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	toT, err := time.Parse("2006-01-02", f.To)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	days := int(toT.Sub(fromT).Hours()/24) + 1
 	priorTo := fromT.AddDate(0, 0, -1)
@@ -156,8 +169,7 @@ func (s *Server) computeUsageComparison(
 	}
 	priorResult, err := s.db.GetDailyUsage(ctx, priorFilter)
 	if err != nil {
-		log.Printf("usage comparison error: %v", err)
-		return nil
+		return nil, err
 	}
 	c := &Comparison{
 		PriorFrom:      priorFilter.From,
@@ -167,7 +179,7 @@ func (s *Server) computeUsageComparison(
 	if c.PriorTotalCost > 0 {
 		c.DeltaPct = (currentCost - c.PriorTotalCost) / c.PriorTotalCost
 	}
-	return c
+	return c, nil
 }
 
 func (s *Server) humaUsageTopSessions(

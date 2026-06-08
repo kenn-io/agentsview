@@ -1491,6 +1491,13 @@ type ToolsAnalyticsResponse struct {
 	Trend      []ToolTrendEntry     `json:"trend"`
 }
 
+func analyticsToolsQuery(placeholders string) string {
+	return `SELECT session_id, category, COUNT(*)
+		FROM tool_calls
+		WHERE session_id IN ` + placeholders + `
+		GROUP BY session_id, category`
+}
+
 // GetAnalyticsTools returns tool usage analytics aggregated
 // from the tool_calls table.
 func (db *DB) GetAnalyticsTools(
@@ -1562,15 +1569,14 @@ func (db *DB) GetAnalyticsTools(
 	type toolRow struct {
 		sessionID string
 		category  string
+		count     int
 	}
 	var toolRows []toolRow
 
 	err = queryChunked(sessionIDs,
 		func(chunk []string) error {
 			ph, chunkArgs := inPlaceholders(chunk)
-			q := `SELECT session_id, category
-				FROM tool_calls
-				WHERE session_id IN ` + ph
+			q := analyticsToolsQuery(ph)
 			rows, qErr := db.getReader().QueryContext(
 				ctx, q, chunkArgs...,
 			)
@@ -1582,13 +1588,18 @@ func (db *DB) GetAnalyticsTools(
 			defer rows.Close()
 			for rows.Next() {
 				var sid, cat string
-				if err := rows.Scan(&sid, &cat); err != nil {
+				var count int
+				if err := rows.Scan(
+					&sid, &cat, &count,
+				); err != nil {
 					return fmt.Errorf(
 						"scanning tool_call: %w", err,
 					)
 				}
 				toolRows = append(toolRows, toolRow{
-					sessionID: sid, category: cat,
+					sessionID: sid,
+					category:  cat,
+					count:     count,
 				})
 			}
 			return rows.Err()
@@ -1608,21 +1619,23 @@ func (db *DB) GetAnalyticsTools(
 
 	for _, tr := range toolRows {
 		info := sessionMap[tr.sessionID]
-		catCounts[tr.category]++
+		catCounts[tr.category] += tr.count
 
 		if agentCats[info.agent] == nil {
 			agentCats[info.agent] = make(map[string]int)
 		}
-		agentCats[info.agent][tr.category]++
+		agentCats[info.agent][tr.category] += tr.count
 
 		week := bucketDate(info.date, "week")
 		if trendBuckets[week] == nil {
 			trendBuckets[week] = make(map[string]int)
 		}
-		trendBuckets[week][tr.category]++
+		trendBuckets[week][tr.category] += tr.count
 	}
 
-	resp.TotalCalls = len(toolRows)
+	for _, count := range catCounts {
+		resp.TotalCalls += count
+	}
 
 	// Build ByCategory sorted by count desc.
 	resp.ByCategory = make(

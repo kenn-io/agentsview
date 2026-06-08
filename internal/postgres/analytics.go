@@ -1468,6 +1468,7 @@ func (s *Store) GetAnalyticsTools(
 	type toolRow struct {
 		sessionID string
 		category  string
+		count     int
 	}
 	var toolRows []toolRow
 
@@ -1475,9 +1476,10 @@ func (s *Store) GetAnalyticsTools(
 		func(chunk []string) error {
 			chunkPB := &paramBuilder{}
 			ph := pgInPlaceholders(chunk, chunkPB)
-			q := `SELECT session_id, category
+			q := `SELECT session_id, category, COUNT(*)
 				FROM tool_calls
-				WHERE session_id IN ` + ph
+				WHERE session_id IN ` + ph + `
+				GROUP BY session_id, category`
 			rows, qErr := s.pg.QueryContext(
 				ctx, q, chunkPB.args...,
 			)
@@ -1489,13 +1491,18 @@ func (s *Store) GetAnalyticsTools(
 			defer rows.Close()
 			for rows.Next() {
 				var sid, cat string
-				if err := rows.Scan(&sid, &cat); err != nil {
+				var count int
+				if err := rows.Scan(
+					&sid, &cat, &count,
+				); err != nil {
 					return fmt.Errorf(
 						"scanning tool_call: %w", err,
 					)
 				}
 				toolRows = append(toolRows, toolRow{
-					sessionID: sid, category: cat,
+					sessionID: sid,
+					category:  cat,
+					count:     count,
 				})
 			}
 			return rows.Err()
@@ -1514,21 +1521,23 @@ func (s *Store) GetAnalyticsTools(
 
 	for _, tr := range toolRows {
 		info := sessionMap[tr.sessionID]
-		catCounts[tr.category]++
+		catCounts[tr.category] += tr.count
 
 		if agentCats[info.agent] == nil {
 			agentCats[info.agent] = make(map[string]int)
 		}
-		agentCats[info.agent][tr.category]++
+		agentCats[info.agent][tr.category] += tr.count
 
 		week := bucketDate(info.date, "week")
 		if trendBuckets[week] == nil {
 			trendBuckets[week] = make(map[string]int)
 		}
-		trendBuckets[week][tr.category]++
+		trendBuckets[week][tr.category] += tr.count
 	}
 
-	resp.TotalCalls = len(toolRows)
+	for _, count := range catCounts {
+		resp.TotalCalls += count
+	}
 
 	resp.ByCategory = make(
 		[]db.ToolCategoryCount, 0, len(catCounts),
@@ -1629,8 +1638,7 @@ func (s *Store) queryVelocityMsgs(
 	pb := &paramBuilder{}
 	ph := pgInPlaceholders(chunk, pb)
 	q := `SELECT session_id, ordinal, role,
-		TO_CHAR(timestamp AT TIME ZONE 'UTC',
-			'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+		timestamp,
 		content_length
 		FROM messages
 		WHERE session_id IN ` + ph + `
@@ -1648,7 +1656,7 @@ func (s *Store) queryVelocityMsgs(
 		var sid string
 		var ordinal int
 		var role string
-		var ts *string
+		var ts *time.Time
 		var cl int
 		if err := rows.Scan(
 			&sid, &ordinal, &role, &ts, &cl,
@@ -1657,11 +1665,12 @@ func (s *Store) queryVelocityMsgs(
 				"scanning velocity msg: %w", err,
 			)
 		}
-		tsStr := ""
+		t := time.Time{}
+		ok := false
 		if ts != nil {
-			tsStr = *ts
+			t = ts.In(loc)
+			ok = true
 		}
-		t, ok := localTime(tsStr, loc)
 		sessionMsgs[sid] = append(sessionMsgs[sid],
 			velocityMsg{
 				role: role, ts: t, valid: ok,

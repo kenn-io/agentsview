@@ -1,8 +1,10 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // ModelPricing holds per-model token pricing (per million tokens).
@@ -15,13 +17,138 @@ type ModelPricing struct {
 	UpdatedAt            string  `json:"updated_at"`
 }
 
+// PricingChangeSummary describes how desired pricing rows compare
+// with rows already stored in a backend.
+type PricingChangeSummary struct {
+	Total     int
+	Missing   int
+	Changed   int
+	Unchanged int
+}
+
+const pricingWriteBatch = 100
+
+// FilterChangedModelPricing returns the subset of desired rows that
+// would actually insert or update pricing fields. UpdatedAt-only
+// differences are intentionally ignored to match the upsert WHERE
+// clause used by both SQLite and PostgreSQL.
+func FilterChangedModelPricing(
+	existing, desired []ModelPricing,
+) (PricingChangeSummary, []ModelPricing) {
+	byPattern := make(map[string]ModelPricing, len(existing))
+	for _, p := range existing {
+		byPattern[p.ModelPattern] = p
+	}
+
+	summary := PricingChangeSummary{Total: len(desired)}
+	changed := make([]ModelPricing, 0, len(desired))
+	for _, p := range desired {
+		current, ok := byPattern[p.ModelPattern]
+		if !ok {
+			summary.Missing++
+			changed = append(changed, p)
+			continue
+		}
+		if pricingFieldsEqual(current, p) {
+			summary.Unchanged++
+			continue
+		}
+		summary.Changed++
+		changed = append(changed, p)
+	}
+	return summary, changed
+}
+
+func pricingFieldsEqual(a, b ModelPricing) bool {
+	return a.InputPerMTok == b.InputPerMTok &&
+		a.OutputPerMTok == b.OutputPerMTok &&
+		a.CacheCreationPerMTok == b.CacheCreationPerMTok &&
+		a.CacheReadPerMTok == b.CacheReadPerMTok
+}
+
+func sqlitePricingValues(
+	b *strings.Builder, args *[]any, prices []ModelPricing,
+) {
+	for i, p := range prices {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(
+			"(?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
+		)
+		*args = append(*args,
+			p.ModelPattern,
+			p.InputPerMTok,
+			p.OutputPerMTok,
+			p.CacheCreationPerMTok,
+			p.CacheReadPerMTok,
+		)
+	}
+}
+
+func sqlitePricingUpsertStatement(prices []ModelPricing) (string, []any) {
+	var b strings.Builder
+	b.WriteString(`INSERT INTO model_pricing
+		(model_pattern, input_per_mtok, output_per_mtok,
+		 cache_creation_per_mtok, cache_read_per_mtok,
+		 updated_at)
+	VALUES `)
+	args := make([]any, 0, len(prices)*5)
+	sqlitePricingValues(&b, &args, prices)
+	b.WriteString(`
+	ON CONFLICT(model_pattern) DO UPDATE SET
+		input_per_mtok          = excluded.input_per_mtok,
+		output_per_mtok         = excluded.output_per_mtok,
+		cache_creation_per_mtok = excluded.cache_creation_per_mtok,
+		cache_read_per_mtok     = excluded.cache_read_per_mtok,
+		updated_at              = excluded.updated_at
+	WHERE model_pricing.input_per_mtok IS NOT excluded.input_per_mtok
+		OR model_pricing.output_per_mtok IS NOT excluded.output_per_mtok
+		OR model_pricing.cache_creation_per_mtok IS NOT
+			excluded.cache_creation_per_mtok
+		OR model_pricing.cache_read_per_mtok IS NOT
+			excluded.cache_read_per_mtok`)
+	return b.String(), args
+}
+
+func sqlitePricingInsertMissingStatement(
+	prices []ModelPricing,
+) (string, []any) {
+	var b strings.Builder
+	b.WriteString(`INSERT INTO model_pricing
+		(model_pattern, input_per_mtok, output_per_mtok,
+		 cache_creation_per_mtok, cache_read_per_mtok,
+		 updated_at)
+	VALUES `)
+	args := make([]any, 0, len(prices)*5)
+	sqlitePricingValues(&b, &args, prices)
+	b.WriteString(`
+	ON CONFLICT(model_pattern) DO NOTHING`)
+	return b.String(), args
+}
+
 // UpsertModelPricing inserts or replaces pricing rows in a
 // single transaction.
 func (db *DB) UpsertModelPricing(
 	prices []ModelPricing,
 ) error {
+	if len(prices) == 0 {
+		return nil
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	existing, err := db.listModelPricing(context.Background())
+	if err != nil {
+		return fmt.Errorf(
+			"listing current pricing before upsert: %w", err,
+		)
+	}
+	_, prices = FilterChangedModelPricing(existing, prices)
+	if len(prices) == 0 {
+		return nil
+	}
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
@@ -29,34 +156,13 @@ func (db *DB) UpsertModelPricing(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO model_pricing
-			(model_pattern, input_per_mtok, output_per_mtok,
-			 cache_creation_per_mtok, cache_read_per_mtok,
-			 updated_at)
-		VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		ON CONFLICT(model_pattern) DO UPDATE SET
-			input_per_mtok          = excluded.input_per_mtok,
-			output_per_mtok         = excluded.output_per_mtok,
-			cache_creation_per_mtok = excluded.cache_creation_per_mtok,
-			cache_read_per_mtok     = excluded.cache_read_per_mtok,
-			updated_at              = excluded.updated_at`)
-	if err != nil {
-		return fmt.Errorf("preparing pricing upsert: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, p := range prices {
-		if _, err := stmt.Exec(
-			p.ModelPattern,
-			p.InputPerMTok,
-			p.OutputPerMTok,
-			p.CacheCreationPerMTok,
-			p.CacheReadPerMTok,
-		); err != nil {
+	for i := 0; i < len(prices); i += pricingWriteBatch {
+		end := min(i+pricingWriteBatch, len(prices))
+		query, args := sqlitePricingUpsertStatement(prices[i:end])
+		if _, err := tx.Exec(query, args...); err != nil {
 			return fmt.Errorf(
-				"upserting pricing %q: %w",
-				p.ModelPattern, err,
+				"upserting pricing batch starting at %d: %w",
+				i, err,
 			)
 		}
 	}
@@ -121,28 +227,13 @@ func (db *DB) InsertMissingModelPricing(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO model_pricing
-			(model_pattern, input_per_mtok, output_per_mtok,
-			 cache_creation_per_mtok, cache_read_per_mtok,
-			 updated_at)
-		VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-		ON CONFLICT(model_pattern) DO NOTHING`)
-	if err != nil {
-		return fmt.Errorf("preparing pricing insert: %w", err)
-	}
-	defer stmt.Close()
-
-	for _, p := range prices {
-		if _, err := stmt.Exec(
-			p.ModelPattern,
-			p.InputPerMTok,
-			p.OutputPerMTok,
-			p.CacheCreationPerMTok,
-			p.CacheReadPerMTok,
-		); err != nil {
+	for i := 0; i < len(prices); i += pricingWriteBatch {
+		end := min(i+pricingWriteBatch, len(prices))
+		query, args := sqlitePricingInsertMissingStatement(prices[i:end])
+		if _, err := tx.Exec(query, args...); err != nil {
 			return fmt.Errorf(
-				"inserting pricing %q: %w", p.ModelPattern, err,
+				"inserting pricing batch starting at %d: %w",
+				i, err,
 			)
 		}
 	}

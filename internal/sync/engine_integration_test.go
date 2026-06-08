@@ -24,20 +24,20 @@ import (
 )
 
 type testEnv struct {
-	claudeDir   string
-	codexDir    string
-	cursorDir   string
-	geminiDir   string
-	opencodeDir string
-	forgeDir    string
-	piebaldDir  string
-	iflowDir    string
-	ampDir      string
-	piDir       string
-	kiroDir     string
+	claudeDir         string
+	codexDir          string
+	cursorDir         string
+	geminiDir         string
+	opencodeDir       string
+	forgeDir          string
+	piebaldDir        string
+	iflowDir          string
+	ampDir            string
+	piDir             string
+	kiroDir           string
 	antigravityCLIDir string
-	db          *db.DB
-	engine      *sync.Engine
+	db                *db.DB
+	engine            *sync.Engine
 }
 
 type testEnvOpts struct {
@@ -151,17 +151,17 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentClaude:          claudeDirs,
-			parser.AgentCodex:           codexDirs,
-			parser.AgentCursor:          cursorDirs,
-			parser.AgentGemini:          {env.geminiDir},
-			parser.AgentOpenCode:        opencodeDirs,
-			parser.AgentForge:           {env.forgeDir},
-			parser.AgentPiebald:         {env.piebaldDir},
-			parser.AgentIflow:           {env.iflowDir},
-			parser.AgentAmp:             {env.ampDir},
-			parser.AgentPi:              {env.piDir},
-			parser.AgentKiro:            kiroDirs,
+			parser.AgentClaude:         claudeDirs,
+			parser.AgentCodex:          codexDirs,
+			parser.AgentCursor:         cursorDirs,
+			parser.AgentGemini:         {env.geminiDir},
+			parser.AgentOpenCode:       opencodeDirs,
+			parser.AgentForge:          {env.forgeDir},
+			parser.AgentPiebald:        {env.piebaldDir},
+			parser.AgentIflow:          {env.iflowDir},
+			parser.AgentAmp:            {env.ampDir},
+			parser.AgentPi:             {env.piDir},
+			parser.AgentKiro:           kiroDirs,
 			parser.AgentAntigravityCLI: {env.antigravityCLIDir},
 		},
 		Machine: "local",
@@ -1928,7 +1928,7 @@ func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {
 	sess, _ := env.db.GetSession(
 		context.Background(), "gemini:"+sessionID,
 	)
-	assert.Nil(t, sess, "Gemini file outside tmp/<hash>/chats " + "should be ignored")
+	assert.Nil(t, sess, "Gemini file outside tmp/<hash>/chats "+"should be ignored")
 }
 
 func TestSyncPathsAmp(t *testing.T) {
@@ -2322,7 +2322,7 @@ func TestSyncPathsClaudeRejectsNonAgentInSubagents(t *testing.T) {
 	sess, _ := env.db.GetSession(
 		context.Background(), "not-agent",
 	)
-	assert.Nil(t, sess, "non-agent file in subagents dir " + "should be rejected")
+	assert.Nil(t, sess, "non-agent file in subagents dir "+"should be rejected")
 }
 
 func TestSyncPathsClaudeRejectsNested(t *testing.T) {
@@ -2344,7 +2344,7 @@ func TestSyncPathsClaudeRejectsNested(t *testing.T) {
 	sess, _ := env.db.GetSession(
 		context.Background(), "nested",
 	)
-	assert.Nil(t, sess, "nested Claude path should be rejected " + "(only <project>/<session>.jsonl allowed)")
+	assert.Nil(t, sess, "nested Claude path should be rejected "+"(only <project>/<session>.jsonl allowed)")
 }
 
 // TestSyncEngineOpenCodeBulkSync verifies that SyncAll
@@ -3253,7 +3253,7 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 		timeCreated,
 	)
 	sqlite.updateSessionTime(t, sessionID, timeUpdated+2000)
-	require.NoError(t, env.engine.SyncSingleSession("opencode:" + sessionID), "SyncSingleSession")
+	require.NoError(t, env.engine.SyncSingleSession("opencode:"+sessionID), "SyncSingleSession")
 	assertMessageContent(
 		t, env.db, "opencode:"+sessionID,
 		"updated by single sync",
@@ -4405,7 +4405,7 @@ func TestSyncEngineMultiCursorDir(t *testing.T) {
 
 	// FindSourceFile should work across directories.
 	src := env.engine.FindSourceFile("cursor:sess2")
-	assert.NotEmpty(t, src, "FindSourceFile failed for cursor:sess2 " + "in second directory")
+	assert.NotEmpty(t, src, "FindSourceFile failed for cursor:sess2 "+"in second directory")
 }
 
 func TestSyncPathsCursorNestedLayout(t *testing.T) {
@@ -4929,7 +4929,7 @@ func TestResyncAllAbortsWithForkAndFailures(t *testing.T) {
 			hasAbortWarning = true
 		}
 	}
-	assert.True(t, hasAbortWarning, "expected abort: Failed(2) > filesOK(1) " + "should trigger even though Failed == Synced")
+	assert.True(t, hasAbortWarning, "expected abort: Failed(2) > filesOK(1) "+"should trigger even though Failed == Synced")
 
 	// Original data preserved.
 	assertSessionMessageCount(t, env.db, "forked", 10)
@@ -5108,7 +5108,7 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 			hasAbortWarning = true
 		}
 	}
-	assert.True(t, hasAbortWarning, "expected abort when discovery returns zero files " + "but old DB has sessions")
+	assert.True(t, hasAbortWarning, "expected abort when discovery returns zero files "+"but old DB has sessions")
 
 	// Original data must be preserved.
 	assertSessionMessageCount(t, env.db, "keep", 2)
@@ -5158,7 +5158,7 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 	stats := env.engine.ResyncAll(context.Background(), nil)
 
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for OpenCode-only "+ "dataset: %s", w)
+		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for OpenCode-only "+"dataset: %s", w)
 	}
 	require.NotZero(t, stats.Synced, "expected OpenCode sessions to be synced")
 
@@ -5485,7 +5485,7 @@ func TestResyncAllAbortsMixedSourceEmptyFiles(t *testing.T) {
 			hasAbortWarning = true
 		}
 	}
-	assert.True(t, hasAbortWarning, "expected abort when file dirs are empty " + "but old DB has file-backed sessions")
+	assert.True(t, hasAbortWarning, "expected abort when file dirs are empty "+"but old DB has file-backed sessions")
 
 	// Both file-backed and OpenCode data preserved.
 	assertSessionMessageCount(t, env.db, "mixed-file", 2)
@@ -6371,7 +6371,7 @@ func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 	// Sync again — the excluded session should not be
 	// counted as a failure.
 	stats := env.engine.SyncAll(context.Background(), nil)
-	assert.LessOrEqual(t, stats.Failed, 0, "Failed = %d, want 0 (excluded session "+ "should not count as failure)", stats.Failed)
+	assert.LessOrEqual(t, stats.Failed, 0, "Failed = %d, want 0 (excluded session "+"should not count as failure)", stats.Failed)
 }
 
 // TestSyncSingleSessionExcludedIsNoOp verifies that
@@ -6489,7 +6489,7 @@ func TestSyncSingleSessionTrashedIsNoOp(t *testing.T) {
 
 	require.NoError(t, env.db.SoftDeleteSession("trashed-single"), "SoftDeleteSession")
 
-	require.NoError(t, env.engine.SyncSingleSession("trashed-single"), "SyncSingleSession on trashed session "+ "returned error")
+	require.NoError(t, env.engine.SyncSingleSession("trashed-single"), "SyncSingleSession on trashed session "+"returned error")
 }
 
 // TestSyncSingleSessionOpenCodeExcludedIsNoOp verifies that

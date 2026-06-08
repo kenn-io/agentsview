@@ -1,12 +1,22 @@
 import type {
+  UsageComparison,
   UsageSummaryResponse,
   TopUsageSessionsResponse,
 } from "../api/types/usage.js";
 import { UsageService } from "../api/generated/index";
-import { callGenerated } from "../api/runtime.js";
+import {
+  callGenerated,
+  isAbortError,
+} from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
+type UsagePanel = "summary" | "comparison" | "topSessions";
+type LoadedUsageSummary = {
+  version: number;
+  summary: UsageSummaryResponse;
+  params: UsageParams;
+};
 
 export type GroupBy = "project" | "model" | "agent";
 export type TimeSeriesView = "stacked-area" | "bars" | "lines";
@@ -192,6 +202,8 @@ class UsageStore {
     summary: 0,
     topSessions: 0,
   };
+  private fetchAllVersion = 0;
+  private abortControllers: Partial<Record<UsagePanel, AbortController>> = {};
 
   private get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -380,16 +392,30 @@ class UsageStore {
   }
 
   async fetchAll() {
+    const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     saveUsageFilters(this);
-    await Promise.all([
-      this.fetchSummary(),
-      this.fetchTopSessions(),
-    ]);
+    const loadedSummary = await this.fetchSummary({
+      loadComparison: false,
+    });
+    if (fetchVersion !== this.fetchAllVersion) return;
+    await this.fetchTopSessions();
+    if (fetchVersion !== this.fetchAllVersion) return;
+    if (loadedSummary) {
+      void this.fetchComparison(
+        loadedSummary.version,
+        loadedSummary.summary,
+        loadedSummary.params,
+      );
+    }
   }
 
-  async fetchSummary() {
+  async fetchSummary(
+    options: { loadComparison?: boolean } = {},
+  ): Promise<LoadedUsageSummary | null> {
+    const loadComparison = options.loadComparison ?? true;
     const v = ++this.versions.summary;
+    const signal = this.nextAbortSignal("summary");
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
     // replace data in place instead of flashing to loading state.
@@ -399,14 +425,22 @@ class UsageStore {
     // error state in place until we have a definitive result.
     if (isFirstLoad) this.errors.summary = null;
     try {
+      const params = this.baseParams();
       const data = await callGenerated(() =>
-        UsageService.getApiV1UsageSummary(this.baseParams()),
+        UsageService.getApiV1UsageSummary(params),
+        signal,
       ) as unknown as UsageSummaryResponse;
       if (this.versions.summary === v) {
         this.summary = data;
         this.errors.summary = null;
+        const loaded = { version: v, summary: data, params };
+        if (loadComparison) {
+          void this.fetchComparison(v, data, params);
+        }
+        return loaded;
       }
     } catch (e) {
+      if (isAbortError(e)) return null;
       if (this.versions.summary === v) {
         // On refetch failure with cached data, swallow the error so
         // existing values stay visible instead of flipping to a "--"
@@ -419,26 +453,58 @@ class UsageStore {
         }
       }
     } finally {
+      this.clearAbortSignal("summary", signal);
       if (this.versions.summary === v) {
         this.loading.summary = false;
       }
+    }
+    return null;
+  }
+
+  private async fetchComparison(
+    summaryVersion: number,
+    summary: UsageSummaryResponse,
+    params: UsageParams,
+  ) {
+    const signal = this.nextAbortSignal("comparison");
+    try {
+      const comparison = await callGenerated(() =>
+        UsageService.getApiV1UsageComparison({
+          ...params,
+          currentCost: summary.totals.totalCost,
+        }),
+        signal,
+      ) as unknown as UsageComparison;
+      if (this.versions.summary === summaryVersion) {
+        this.summary = { ...summary, comparison };
+      }
+    } catch (e) {
+      if (isAbortError(e)) return;
+      if (this.versions.summary === summaryVersion) {
+        console.warn("usage.fetchComparison failed:", e);
+      }
+    } finally {
+      this.clearAbortSignal("comparison", signal);
     }
   }
 
   async fetchTopSessions() {
     const v = ++this.versions.topSessions;
+    const signal = this.nextAbortSignal("topSessions");
     const isFirstLoad = this.topSessions === null;
     if (isFirstLoad) this.loading.topSessions = true;
     if (isFirstLoad) this.errors.topSessions = null;
     try {
       const data = await callGenerated(() =>
         UsageService.getApiV1UsageTopSessions(this.baseParams()),
+        signal,
       ) as unknown as TopUsageSessionsResponse;
       if (this.versions.topSessions === v) {
         this.topSessions = data;
         this.errors.topSessions = null;
       }
     } catch (e) {
+      if (isAbortError(e)) return;
       if (this.versions.topSessions === v) {
         if (this.topSessions === null) {
           this.errors.topSessions =
@@ -448,9 +514,26 @@ class UsageStore {
         }
       }
     } finally {
+      this.clearAbortSignal("topSessions", signal);
       if (this.versions.topSessions === v) {
         this.loading.topSessions = false;
       }
+    }
+  }
+
+  private nextAbortSignal(panel: UsagePanel): AbortSignal {
+    this.abortControllers[panel]?.abort();
+    const controller = new AbortController();
+    this.abortControllers[panel] = controller;
+    return controller.signal;
+  }
+
+  private clearAbortSignal(
+    panel: UsagePanel,
+    signal: AbortSignal,
+  ): void {
+    if (this.abortControllers[panel]?.signal === signal) {
+      delete this.abortControllers[panel];
     }
   }
 }

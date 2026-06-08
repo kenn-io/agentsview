@@ -28,6 +28,7 @@ type schemaProbeRows struct {
 type schemaProbeState struct {
 	mu                  sync.Mutex
 	informationQueries  int
+	execs               []string
 	alterTableExecs     []string
 	currentSchema       string
 	existingColumnNames map[string][]string
@@ -93,6 +94,9 @@ func (c *schemaProbeConn) Begin() (driver.Tx, error) {
 func (c *schemaProbeConn) ExecContext(
 	_ context.Context, query string, _ []driver.NamedValue,
 ) (driver.Result, error) {
+	c.state.mu.Lock()
+	c.state.execs = append(c.state.execs, query)
+	c.state.mu.Unlock()
 	if strings.Contains(strings.ToLower(query), "alter table") {
 		c.state.mu.Lock()
 		c.state.alterTableExecs = append(
@@ -141,6 +145,12 @@ func (c *schemaProbeConn) QueryContext(
 				"user_message_count", "is_automated",
 			},
 		}, nil
+	case strings.Contains(normalized, "select exists") &&
+		strings.Contains(normalized, "from sync_metadata"):
+		return &schemaProbeRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{true}},
+		}, nil
 	case strings.Contains(normalized, "select exists"):
 		return &schemaProbeRows{
 			columns: []string{"exists"},
@@ -174,6 +184,12 @@ func (s *schemaProbeState) alterTableExecCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.alterTableExecs)
+}
+
+func (s *schemaProbeState) executedSQL() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.execs, "\n")
 }
 
 func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
@@ -215,6 +231,51 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 
 	assert.Equal(t, 1, state.informationQueryCount(),
 		"information_schema.columns queries")
+}
+
+func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {
+	db, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"total_output_tokens", "peak_context_tokens",
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"context_tokens", "output_tokens",
+			"has_context_tokens", "has_output_tokens",
+		},
+		"tool_calls": {},
+	})
+
+	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
+
+	sql := state.executedSQL()
+	assert.Contains(t, sql,
+		"CREATE INDEX IF NOT EXISTS idx_tool_calls_session_category")
+	assert.Contains(t, sql,
+		"CREATE INDEX IF NOT EXISTS idx_messages_velocity")
+	assert.Contains(t, sql,
+		"CREATE INDEX IF NOT EXISTS idx_messages_usage_timestamp")
+}
+
+func TestEnsureSchemaCreatesSessionTraversalIndex(t *testing.T) {
+	db, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"total_output_tokens", "peak_context_tokens",
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"context_tokens", "output_tokens",
+			"has_context_tokens", "has_output_tokens",
+		},
+		"tool_calls": {},
+	})
+
+	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
+
+	assert.Contains(t, state.executedSQL(),
+		"CREATE INDEX IF NOT EXISTS idx_sessions_parent")
 }
 
 func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {

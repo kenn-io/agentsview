@@ -70,6 +70,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_parent
+    ON sessions (parent_session_id)
+    WHERE parent_session_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS messages (
     session_id     TEXT NOT NULL,
     ordinal        INT NOT NULL,
@@ -99,6 +103,9 @@ CREATE TABLE IF NOT EXISTS messages (
     FOREIGN KEY (session_id)
         REFERENCES sessions(id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_messages_velocity
+    ON messages (session_id, ordinal, role, timestamp, content_length);
 
 CREATE TABLE IF NOT EXISTS usage_events (
     id BIGSERIAL PRIMARY KEY,
@@ -191,6 +198,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_calls_dedup
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
     ON tool_calls (session_id);
+
+CREATE INDEX IF NOT EXISTS idx_tool_calls_session_category
+    ON tool_calls (session_id, category);
 
 CREATE TABLE IF NOT EXISTS tool_result_events (
     id                        BIGSERIAL PRIMARY KEY,
@@ -644,6 +654,11 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		 ON messages(session_id) WHERE is_sidechain = TRUE`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_usage_timestamp
+		 ON messages(timestamp, session_id, ordinal)
+		 WHERE token_usage != ''
+		   AND model != ''
+		   AND model != '<synthetic>'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
 	}

@@ -36,7 +36,10 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
+	s.pricingMu.Lock()
+	defer s.pricingMu.Unlock()
 	s.customPricing = p
+	s.forgetPricingLoad()
 }
 
 // SetCursorSecret sets the HMAC key used for cursor signing.

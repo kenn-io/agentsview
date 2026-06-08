@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1301,6 +1302,16 @@ func TestGetAnalyticsTools(t *testing.T) {
 		require.NoError(t, err, "GetAnalyticsTools")
 		assert.Equal(t, 0, resp.TotalCalls, "TotalCalls")
 	})
+}
+
+func TestAnalyticsToolsToolCallsQueryAggregatesInSQL(t *testing.T) {
+	q := analyticsToolsQuery("(?,?)")
+	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
+
+	assert.Contains(t, normalized,
+		"select session_id, category, count(*)")
+	assert.Contains(t, normalized,
+		"group by session_id, category")
 }
 
 func TestGetAnalyticsToolsCanceled(t *testing.T) {
