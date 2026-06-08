@@ -711,9 +711,13 @@ func createContentSearchIndexesPG(ctx context.Context, db *sql.DB) {
 		log.Printf("pg schema: invalid pg_trgm schema %q: %v", extSchema, err)
 		return
 	}
+	// fastupdate=off keeps the index bounded: the default fastupdate=on
+	// buffers inserts into a pending list that only VACUUM merges, which grows
+	// unbounded when continuous ingest starves autovacuum.
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(
 		`CREATE INDEX IF NOT EXISTS idx_messages_content_trgm
-		 ON messages USING gin (content %s.gin_trgm_ops)`, quotedExt,
+		 ON messages USING gin (content %s.gin_trgm_ops)
+		 WITH (fastupdate = off)`, quotedExt,
 	)); err != nil {
 		log.Printf(
 			"pg schema: creating messages.content trigram index failed: %v", err,
