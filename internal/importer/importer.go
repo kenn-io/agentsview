@@ -296,13 +296,15 @@ func ImportChatGPT(
 				return nil
 			}
 
+			displayName, nameSource := db.ParsedSessionNameFields(s)
 			sess := db.Session{
 				ID:               s.ID,
 				Project:          s.Project,
 				Machine:          s.Machine,
 				Agent:            string(s.Agent),
 				FirstMessage:     strPtr(s.FirstMessage),
-				DisplayName:      strPtr(s.DisplayName),
+				DisplayName:      displayName,
+				NameSource:       nameSource,
 				StartedAt:        timeStr(s.StartedAt),
 				EndedAt:          timeStr(s.EndedAt),
 				MessageCount:     s.MessageCount,
