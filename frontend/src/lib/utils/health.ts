@@ -5,11 +5,13 @@ const TIMEOUT_MS = 3_000;
 
 /**
  * Set up a visibilitychange listener that pings the backend when the
- * page becomes visible. If the backend is unreachable (network error,
- * timeout, or 5xx), the page reloads automatically.
+ * page becomes visible. If the backend is unreachable (network error or
+ * timeout), the page reloads automatically.
  *
  * 4xx responses (401/403) are treated as proof the backend is alive
- * and do not trigger a reload — auth recovery is handled elsewhere.
+ * and do not trigger a reload — auth recovery is handled elsewhere. The same
+ * is true for 5xx responses: the backend process answered, so reloading the
+ * SPA is unlikely to repair a degraded dependency such as PostgreSQL.
  *
  * In desktop mode with a local sidecar, this handler is a no-op
  * because Tauri's on_window_event focus handler owns recovery.
@@ -52,7 +54,6 @@ export function setupVisibilityHealthCheck(
     fetch(`${getBaseUrl()}/version`, init)
       .then((res) => {
         clearTimeout(timer);
-        if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
       })
       .catch(() => {
         clearTimeout(timer);

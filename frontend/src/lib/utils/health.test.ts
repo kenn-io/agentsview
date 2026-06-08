@@ -82,14 +82,14 @@ describe("setupVisibilityHealthCheck", () => {
     cleanup();
   });
 
-  it("reloads on 5xx server error", async () => {
+  it("does not reload on 5xx server error", async () => {
     globalThis.fetch = vi
       .fn()
       .mockResolvedValue(new Response("", { status: 502 }));
     const cleanup = setupVisibilityHealthCheck(() => "/api/v1");
     fireVisible();
     await new Promise((r) => setTimeout(r, 50));
-    expect(reloadSpy).toHaveBeenCalledOnce();
+    expect(reloadSpy).not.toHaveBeenCalled();
     cleanup();
   });
 
