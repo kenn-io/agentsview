@@ -1114,7 +1114,7 @@ func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
 	assert.Equal(t, displayName, *index.Sessions[0].DisplayName, "display_name")
 }
 
-func TestSidebarIndexIncludesNameSource(t *testing.T) {
+func TestSidebarIndexDoesNotIncludeNameSource(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -1127,8 +1127,11 @@ func TestSidebarIndexIncludesNameSource(t *testing.T) {
 	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
 	requireNoError(t, err, "sidebar index")
 	require.Len(t, index.Sessions, 1)
-	require.NotNil(t, index.Sessions[0].NameSource, "name_source nil")
-	assert.Equal(t, "user", *index.Sessions[0].NameSource)
+	// name_source is a backend write guard and must not appear in API responses.
+	assert.Nil(t, index.Sessions[0].NameSource, "name_source must not be in sidebar rows")
+	// display_name must still be present.
+	require.NotNil(t, index.Sessions[0].DisplayName, "display_name must be present")
+	assert.Equal(t, "My Name", *index.Sessions[0].DisplayName, "display_name value")
 }
 
 func TestSidebarSessionIndexComputesIsTeammate(t *testing.T) {

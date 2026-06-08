@@ -150,7 +150,7 @@ type Session struct {
 	Agent                string  `json:"agent"`
 	FirstMessage         *string `json:"first_message"`
 	DisplayName          *string `json:"display_name,omitempty"`
-	NameSource           *string `json:"name_source,omitempty"`
+	NameSource           *string `json:"-"`
 	StartedAt            *string `json:"started_at"`
 	EndedAt              *string `json:"ended_at"`
 	MessageCount         int     `json:"message_count"`
@@ -392,7 +392,7 @@ type SidebarSessionIndexRow struct {
 	Machine           string  `json:"machine"`
 	Agent             string  `json:"agent"`
 	DisplayName       *string `json:"display_name,omitempty"`
-	NameSource        *string `json:"name_source,omitempty"`
+	NameSource        *string `json:"-"`
 	StartedAt         *string `json:"started_at"`
 	EndedAt           *string `json:"ended_at"`
 	CreatedAt         string  `json:"created_at"`
@@ -731,7 +731,6 @@ func (db *DB) GetSidebarSessionIndex(
 			machine,
 			agent,
 			display_name,
-			name_source,
 			started_at,
 			ended_at,
 			created_at,
@@ -768,7 +767,6 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.Machine,
 			&row.Agent,
 			&row.DisplayName,
-			&row.NameSource,
 			&row.StartedAt,
 			&row.EndedAt,
 			&row.CreatedAt,

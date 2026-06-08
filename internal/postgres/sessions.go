@@ -33,7 +33,7 @@ type Store struct {
 // queries. PG has no file_path, file_size, file_mtime,
 // file_hash, or local_modified_at columns.
 const pgSessionCols = `id, project, machine, agent,
-	first_message, display_name, name_source, created_at, started_at,
+	first_message, display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -139,7 +139,7 @@ func scanPGSession(
 	var startedAt, endedAt, deletedAt *time.Time
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.FirstMessage, &s.DisplayName, &s.NameSource,
+		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
@@ -602,7 +602,6 @@ func (s *Store) GetSidebarSessionIndex(
 			machine,
 			agent,
 			display_name,
-			name_source,
 			started_at,
 			ended_at,
 			created_at,
@@ -638,7 +637,6 @@ func (s *Store) GetSidebarSessionIndex(
 			&row.Machine,
 			&row.Agent,
 			&row.DisplayName,
-			&row.NameSource,
 			&startedAt,
 			&endedAt,
 			&createdAt,
