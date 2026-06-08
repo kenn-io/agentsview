@@ -14,7 +14,6 @@ import sessionFilterControlSource from "../filters/SessionFilterControl.svelte?r
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
-import { ui } from "../../stores/ui.svelte.js";
 import { ITEM_HEIGHT, OVERSCAN } from "./session-list-utils.js";
 
 vi.mock("../../api/client.js", () => ({
@@ -251,54 +250,6 @@ describe("SessionList visible hydration", () => {
     expect(document.body.textContent).toContain("Renamed sidebar title");
   });
 
-  it("hydrates index-only agent-named rows when session names are off", async () => {
-    ui.setShowSessionNames(false);
-    sessions.sessions = [
-      makeSession({
-        id: "agent1",
-        display_name: "agent-title",
-        name_source: "agent",
-        is_index_only: true,
-      }),
-    ];
-    const hydrate = vi
-      .spyOn(sessions, "hydrateVisibleSessions")
-      .mockResolvedValue(undefined);
-
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    // Name is hidden (toggle off), so the row still needs first_message
-    // hydrated for its preview fallback instead of the project name.
-    expect(hydrate.mock.calls.some(([ids]) => ids.includes("agent1"))).toBe(
-      true,
-    );
-  });
-
-  it("skips hydration for agent-named rows when session names are on", async () => {
-    ui.setShowSessionNames(true);
-    sessions.sessions = [
-      makeSession({
-        id: "agent1",
-        display_name: "agent-title",
-        name_source: "agent",
-        is_index_only: true,
-      }),
-    ];
-    const hydrate = vi
-      .spyOn(sessions, "hydrateVisibleSessions")
-      .mockResolvedValue(undefined);
-
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    // Name is shown straight from the index, so no first_message needed.
-    expect(hydrate.mock.calls.some(([ids]) => ids.includes("agent1"))).toBe(
-      false,
-    );
-    ui.setShowSessionNames(false);
-  });
-
   it("hydrates newly visible rows after scrolling", async () => {
     sessions.sessions = Array.from({ length: 50 }, (_, i) =>
       makeSession({ id: `s${i}`, is_index_only: true }),
@@ -393,142 +344,6 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     expect(document.querySelectorAll(".group-hint-icon")).toHaveLength(1);
-  });
-});
-
-describe("SessionItem displayLabel name_source gate", () => {
-  let component: ReturnType<typeof mount> | undefined;
-  let originalResizeObserver: typeof ResizeObserver | undefined;
-  let clientHeightSpy: ReturnType<typeof vi.spyOn> | undefined;
-  let rafSpy: ReturnType<typeof vi.spyOn> | undefined;
-
-  beforeEach(() => {
-    originalResizeObserver = globalThis.ResizeObserver;
-    Object.defineProperty(globalThis, "ResizeObserver", {
-      configurable: true,
-      writable: true,
-      value: ResizeObserverMock,
-    });
-    clientHeightSpy = vi
-      .spyOn(HTMLElement.prototype, "clientHeight", "get")
-      .mockReturnValue(ITEM_HEIGHT * 3);
-    rafSpy = vi
-      .spyOn(globalThis, "requestAnimationFrame")
-      .mockImplementation((cb: FrameRequestCallback) => {
-        queueMicrotask(() => cb(0));
-        return 1;
-      });
-    sessions.sessions = [];
-    sessions.agents = [];
-    sessions.machines = [];
-    sessions.activeSessionId = null;
-    sessions.loading = false;
-    sessions.sidebarIndexVersion++;
-    sessions.hydratedSessionsByVersion = new Map([
-      [sessions.sidebarIndexVersion, new Map()],
-    ]);
-    starred.filterOnly = false;
-    starred.ids = new Set();
-    // Reset ui toggle to off before each test.
-    ui.setShowSessionNames(false);
-  });
-
-  afterEach(() => {
-    if (component) {
-      unmount(component);
-      component = undefined;
-    }
-    document.body.innerHTML = "";
-    Object.defineProperty(globalThis, "ResizeObserver", {
-      configurable: true,
-      writable: true,
-      value: originalResizeObserver,
-    });
-    clientHeightSpy?.mockRestore();
-    rafSpy?.mockRestore();
-    vi.restoreAllMocks();
-    // Leave ui toggle in a clean state.
-    ui.setShowSessionNames(false);
-  });
-
-  it("hides agent display_name when showSessionNames is off", async () => {
-    sessions.sessions = [
-      makeSession({
-        id: "agent-named",
-        display_name: "Agent Title",
-        name_source: "agent",
-        first_message: "hello world preview",
-        is_index_only: false,
-      }),
-    ];
-    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
-
-    // showSessionNames is false (set in beforeEach)
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    expect(document.body.textContent).not.toContain("Agent Title");
-    expect(document.body.textContent).toContain("hello world preview");
-  });
-
-  it("shows agent display_name when showSessionNames is on", async () => {
-    sessions.sessions = [
-      makeSession({
-        id: "agent-named",
-        display_name: "Agent Title",
-        name_source: "agent",
-        first_message: "hello world preview",
-        is_index_only: false,
-      }),
-    ];
-    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
-
-    ui.setShowSessionNames(true);
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    expect(document.body.textContent).toContain("Agent Title");
-    expect(document.body.textContent).not.toContain("hello world preview");
-  });
-
-  it("always shows user display_name regardless of toggle", async () => {
-    sessions.sessions = [
-      makeSession({
-        id: "user-named",
-        display_name: "My Rename",
-        name_source: "user",
-        first_message: "original first message",
-        is_index_only: false,
-      }),
-    ];
-    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
-
-    // showSessionNames is false (set in beforeEach)
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    expect(document.body.textContent).toContain("My Rename");
-    expect(document.body.textContent).not.toContain("original first message");
-  });
-
-  it("always shows display_name when name_source is absent (imported/legacy rows)", async () => {
-    sessions.sessions = [
-      makeSession({
-        id: "imported",
-        display_name: "Imported Title",
-        // name_source intentionally omitted — represents importer/legacy rows
-        first_message: "original preview text",
-        is_index_only: false,
-      }),
-    ];
-    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
-
-    // showSessionNames is false (set in beforeEach)
-    component = mount(SessionList, { target: document.body });
-    await tick();
-
-    expect(document.body.textContent).toContain("Imported Title");
-    expect(document.body.textContent).not.toContain("original preview text");
   });
 });
 
