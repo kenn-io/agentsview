@@ -722,6 +722,18 @@ func createContentSearchIndexesPG(ctx context.Context, db *sql.DB) {
 		log.Printf(
 			"pg schema: creating messages.content trigram index failed: %v", err,
 		)
+		return
+	}
+	// CREATE INDEX IF NOT EXISTS only applies WITH (fastupdate = off) on
+	// first creation. Re-apply on every boot so stores upgraded from a
+	// prior schema (which left fastupdate=on) also get the bounded index.
+	if _, err := db.ExecContext(ctx,
+		`ALTER INDEX idx_messages_content_trgm SET (fastupdate = off)`,
+	); err != nil {
+		log.Printf(
+			"pg schema: disabling fastupdate on messages.content trigram index failed: %v",
+			err,
+		)
 	}
 }
 

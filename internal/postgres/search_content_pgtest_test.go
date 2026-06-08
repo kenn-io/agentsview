@@ -481,6 +481,24 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 	).Scan(&hasIdx), "query pg_indexes")
 	assert.True(t, hasIdx,
 		"idx_messages_content_trgm missing after EnsureSchema")
+
+	// fastupdate=off must be set so the pending list cannot grow
+	// unbounded under continuous ingest. The schema bootstrap applies
+	// this on every boot (including stores upgraded from an earlier
+	// schema that created the index with the default fastupdate=on).
+	var fastupdateOff bool
+	require.NoError(t, store.DB().QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1
+			  FROM pg_class c
+			  JOIN pg_namespace n ON n.oid = c.relnamespace
+			 WHERE n.nspname = $1
+			   AND c.relname = 'idx_messages_content_trgm'
+			   AND 'fastupdate=off' = ANY(c.reloptions)
+		)`, contentSearchSchema,
+	).Scan(&fastupdateOff), "query pg_class.reloptions")
+	assert.True(t, fastupdateOff,
+		"idx_messages_content_trgm must have fastupdate=off")
 }
 
 // TestPGSearchContentRegex verifies regex mode.
