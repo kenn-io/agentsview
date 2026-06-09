@@ -1079,29 +1079,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Zed: <zedDir>/threads/threads.db or SQLite WAL/journal siblings
-	zedDBRel := filepath.Join("threads", "threads.db")
-	for _, zedDir := range e.agentDirs[parser.AgentZed] {
-		if zedDir == "" {
-			continue
-		}
-		rel, ok := isUnder(zedDir, path)
-		if !ok {
-			continue
-		}
-		base := filepath.Base(rel)
-		if rel != zedDBRel && !strings.HasPrefix(base, "threads.db-") {
-			continue
-		}
-		dbPath := filepath.Join(zedDir, zedDBRel)
-		if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
-			return parser.DiscoveredFile{
-				Path:  dbPath,
-				Agent: parser.AgentZed,
-			}, true
-		}
-	}
-
 	return parser.DiscoveredFile{}, false
 }
 
@@ -1269,6 +1246,7 @@ func (e *Engine) classifyKiroSQLitePath(
 func (e *Engine) classifyZedSQLitePath(
 	path string,
 ) (parser.DiscoveredFile, bool) {
+	// Virtual path: threads.db#<sessionID>
 	if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
 		for _, zedDir := range e.agentDirs[parser.AgentZed] {
 			if _, under := isUnder(zedDir, dbPath); under {
@@ -1277,6 +1255,31 @@ func (e *Engine) classifyZedSQLitePath(
 					Agent: parser.AgentZed,
 				}, true
 			}
+		}
+	}
+	// Real path: threads/threads.db or WAL/SHM siblings.
+	// Handled here (before the !pathExists guard) so that delete
+	// and rename events on threads.db-wal / threads.db-shm are
+	// not dropped when the sibling no longer exists on disk.
+	zedDBRel := filepath.Join("threads", "threads.db")
+	for _, zedDir := range e.agentDirs[parser.AgentZed] {
+		if zedDir == "" {
+			continue
+		}
+		rel, ok := isUnder(zedDir, path)
+		if !ok {
+			continue
+		}
+		base := filepath.Base(rel)
+		if rel != zedDBRel && !strings.HasPrefix(base, "threads.db-") {
+			continue
+		}
+		dbPath := filepath.Join(zedDir, zedDBRel)
+		if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
+			return parser.DiscoveredFile{
+				Path:  dbPath,
+				Agent: parser.AgentZed,
+			}, true
 		}
 	}
 	return parser.DiscoveredFile{}, false
@@ -2886,6 +2889,8 @@ func (e *Engine) processFile(
 	} else {
 		statPath := file.Path
 		if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
+			statPath = dbPath
+		} else if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
 		}
 		info, err = os.Stat(statPath)
