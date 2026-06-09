@@ -19,7 +19,7 @@ if [ -n "$FIXTURE" ] && [ -f "$FIXTURE" ] && [ -x "$FIXTURE" ]; then
 else
     echo "Building test fixture..."
     FIXTURE="$TMPDIR/testfixture"
-    CGO_ENABLED=1 go build -tags fts5 \
+    CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
       -o "$FIXTURE" "$ROOT/cmd/testfixture"
 fi
 "$FIXTURE" -out "$DB_PATH"
@@ -35,7 +35,7 @@ else
     printf '%s\n' \
       'keep embed dir for generated frontend assets' \
       > "$ROOT/internal/web/dist/.keep"
-    CGO_ENABLED=1 go build -tags fts5 \
+    CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
       -o "$SERVER" "$ROOT/cmd/agentsview"
 fi
 

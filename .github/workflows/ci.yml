@@ -240,9 +240,9 @@ jobs:
 
       - name: Pre-build Go binaries
         run: |
-          CGO_ENABLED=1 go build -tags fts5 \
+          CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
             -o /tmp/testfixture ./cmd/testfixture
-          CGO_ENABLED=1 go build -tags fts5 \
+          CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
             -o /tmp/agentsview ./cmd/agentsview
         env:
           CGO_ENABLED: "1"
