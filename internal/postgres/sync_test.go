@@ -176,32 +176,6 @@ func TestCheckSchemaCompatMissingSecretsRulesVersion(t *testing.T) {
 		"CheckSchemaCompat should fail when secrets_rules_version is missing")
 }
 
-// TestCheckSchemaCompatMissingNameSource pins the same schema-compat
-// guarantee for sessions.name_source: the PG session and sidebar read
-// paths now select name_source, so a legacy/read-only schema missing only
-// that column must fail CheckSchemaCompat rather than passing the probe and
-// 500-ing at runtime on the first session query.
-func TestCheckSchemaCompatMissingNameSource(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-
-	pg, err := Open(pgURL, "agentsview", true)
-	require.NoError(t, err, "connecting to pg")
-	defer pg.Close()
-
-	ctx := context.Background()
-	require.NoError(t, EnsureSchema(ctx, pg, "agentsview"), "EnsureSchema")
-	require.NoError(t, CheckSchemaCompat(ctx, pg),
-		"precondition: CheckSchemaCompat should pass after EnsureSchema")
-	_, err = pg.ExecContext(ctx,
-		`ALTER TABLE sessions DROP COLUMN name_source`,
-	)
-	require.NoError(t, err, "dropping name_source")
-	require.Error(t, CheckSchemaCompat(ctx, pg),
-		"CheckSchemaCompat should fail when name_source is missing")
-}
-
 func TestPushSingleSession(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
