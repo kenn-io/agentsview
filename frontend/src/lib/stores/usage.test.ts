@@ -486,6 +486,50 @@ describe("UsageStore session filter params", () => {
     await currentComparison;
   });
 
+  it("aborts active comparison when a newer summary starts", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+
+    const { usage } = await loadStore();
+    const loaded = await usage.fetchSummary({ loadComparison: false });
+    expect(loaded).not.toBeNull();
+    if (!loaded) return;
+    const loadedSummary = loaded;
+
+    usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    const compare = usage as unknown as {
+      fetchComparison: (
+        summaryVersion: number,
+        summary: UsageSummaryResponse,
+        params: typeof loadedSummary.params,
+      ) => Promise<void>;
+    };
+    void compare.fetchComparison(
+      loadedSummary.version,
+      loadedSummary.summary,
+      loadedSummary.params,
+    );
+    await Promise.resolve();
+    const comparisonSignal = signals[1];
+    expect(comparisonSignal).toBeDefined();
+    expect(comparisonSignal?.aborted).toBe(false);
+
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    void usage.fetchSummary({ loadComparison: false });
+    await Promise.resolve();
+
+    expect(comparisonSignal?.aborted).toBe(true);
+  });
+
   it("refreshes comparison when summary is refreshed directly", async () => {
     const { usage } = await loadStore();
 

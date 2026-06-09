@@ -416,6 +416,7 @@ class UsageStore {
   ): Promise<LoadedUsageSummary | null> {
     const loadComparison = options.loadComparison ?? true;
     const v = ++this.versions.summary;
+    this.abortPanel("comparison");
     const signal = this.nextAbortSignal("summary");
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
@@ -527,6 +528,10 @@ class UsageStore {
 
   private invalidatePanel(panel: Endpoint): void {
     this.versions[panel]++;
+    this.abortPanel(panel);
+  }
+
+  private abortPanel(panel: UsagePanel): void {
     this.abortControllers[panel]?.abort();
     delete this.abortControllers[panel];
   }
