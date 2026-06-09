@@ -6,6 +6,10 @@ import {
   it,
   vi,
 } from "vitest";
+import type {
+  UsageComparison,
+  UsageSummaryResponse,
+} from "../api/types/usage.js";
 
 const usageServiceMocks = vi.hoisted(() => ({
   getApiV1UsageSummary: vi.fn().mockResolvedValue({
@@ -90,6 +94,52 @@ async function loadStore() {
   vi.resetModules();
   return import("./usage.svelte.js");
 }
+
+function usageSummary(totalCost = 0): UsageSummaryResponse {
+  return {
+    from: "2024-01-01",
+    to: "2024-01-31",
+    totals: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost,
+    },
+    daily: [],
+    projectTotals: [],
+    modelTotals: [],
+    agentTotals: [],
+    sessionCounts: {
+      total: 0,
+      byProject: {},
+      byAgent: {},
+    },
+    cacheStats: {
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      hitRate: 0,
+      savingsVsUncached: 0,
+    },
+  };
+}
+
+function usageComparison(): UsageComparison {
+  return {
+    priorFrom: "2023-12-01",
+    priorTo: "2023-12-31",
+    priorTotalCost: 1,
+    deltaPct: 0.5,
+  };
+}
+
+afterEach(() => {
+  apiRuntimeMocks.callGenerated.mockImplementation(
+    (request: () => Promise<unknown>) => request(),
+  );
+});
 
 describe("UsageStore filter persistence", () => {
   beforeEach(() => {
@@ -315,6 +365,125 @@ describe("UsageStore session filter params", () => {
     ).toHaveBeenCalledWith(
       expect.objectContaining({ currentCost: 0 }),
     );
+  });
+
+  it("aborts stale top sessions when a new full refresh starts", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+    usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    const { usage } = await loadStore();
+
+    void usage.fetchTopSessions();
+    await Promise.resolve();
+    expect(signals[0]?.aborted).toBe(false);
+
+    void usage.fetchAll();
+    await Promise.resolve();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("reuses summary params for top sessions during full refresh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-04-25T12:00:00"));
+      let resolveSummary:
+        | ((value: UsageSummaryResponse) => void)
+        | undefined;
+      usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSummary = resolve;
+          }),
+      );
+
+      const { usage } = await loadStore();
+      const { sessions } = await import("./sessions.svelte.js");
+      sessions.filters.recentlyActive = true;
+
+      const fetch = usage.fetchAll();
+      await Promise.resolve();
+      const summaryParams =
+        usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
+
+      vi.setSystemTime(new Date("2026-04-26T12:00:00"));
+      resolveSummary?.(usageSummary());
+      await fetch;
+
+      const topSessionParams =
+        usageServiceMocks.getApiV1UsageTopSessions.mock.lastCall?.[0];
+      expect(topSessionParams?.activeSince).toBe(summaryParams?.activeSince);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let stale comparison abort the current comparison", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation(
+      (request: () => Promise<unknown>, signal?: AbortSignal) => {
+        signals.push(signal);
+        return request();
+      },
+    );
+
+    const { usage } = await loadStore();
+    const loaded = await usage.fetchSummary({ loadComparison: false });
+    expect(loaded).not.toBeNull();
+    if (!loaded) return;
+    const loadedSummary = loaded;
+
+    let resolveComparison:
+      | ((value: UsageComparison) => void)
+      | undefined;
+    usageServiceMocks.getApiV1UsageComparison.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveComparison = resolve;
+        }),
+    );
+    const compare = usage as unknown as {
+      fetchComparison: (
+        summaryVersion: number,
+        summary: UsageSummaryResponse,
+        params: typeof loadedSummary.params,
+      ) => Promise<void>;
+    };
+
+    const currentComparison = compare.fetchComparison(
+      loadedSummary.version,
+      loadedSummary.summary,
+      loadedSummary.params,
+    );
+    await Promise.resolve();
+    const currentSignal = signals[1];
+    expect(currentSignal).toBeDefined();
+    expect(currentSignal?.aborted).toBe(false);
+
+    await compare.fetchComparison(
+      loadedSummary.version - 1,
+      loadedSummary.summary,
+      loadedSummary.params,
+    );
+
+    expect(currentSignal?.aborted).toBe(false);
+    expect(
+      usageServiceMocks.getApiV1UsageComparison,
+    ).toHaveBeenCalledTimes(1);
+
+    resolveComparison?.(usageComparison());
+    await currentComparison;
   });
 
   it("refreshes comparison when summary is refreshed directly", async () => {

@@ -393,13 +393,14 @@ class UsageStore {
 
   async fetchAll() {
     const fetchVersion = ++this.fetchAllVersion;
+    this.invalidatePanel("topSessions");
     this.rollDates();
     saveUsageFilters(this);
     const loadedSummary = await this.fetchSummary({
       loadComparison: false,
     });
-    if (fetchVersion !== this.fetchAllVersion) return;
-    await this.fetchTopSessions();
+    if (fetchVersion !== this.fetchAllVersion || !loadedSummary) return;
+    await this.fetchTopSessions(loadedSummary.params);
     if (fetchVersion !== this.fetchAllVersion) return;
     if (loadedSummary) {
       void this.fetchComparison(
@@ -466,6 +467,7 @@ class UsageStore {
     summary: UsageSummaryResponse,
     params: UsageParams,
   ) {
+    if (this.versions.summary !== summaryVersion) return;
     const signal = this.nextAbortSignal("comparison");
     try {
       const comparison = await callGenerated(() =>
@@ -488,7 +490,7 @@ class UsageStore {
     }
   }
 
-  async fetchTopSessions() {
+  async fetchTopSessions(params: UsageParams | null = null) {
     const v = ++this.versions.topSessions;
     const signal = this.nextAbortSignal("topSessions");
     const isFirstLoad = this.topSessions === null;
@@ -496,7 +498,9 @@ class UsageStore {
     if (isFirstLoad) this.errors.topSessions = null;
     try {
       const data = await callGenerated(() =>
-        UsageService.getApiV1UsageTopSessions(this.baseParams()),
+        UsageService.getApiV1UsageTopSessions(
+          params ?? this.baseParams(),
+        ),
         signal,
       ) as unknown as TopUsageSessionsResponse;
       if (this.versions.topSessions === v) {
@@ -519,6 +523,12 @@ class UsageStore {
         this.loading.topSessions = false;
       }
     }
+  }
+
+  private invalidatePanel(panel: Endpoint): void {
+    this.versions[panel]++;
+    this.abortControllers[panel]?.abort();
+    delete this.abortControllers[panel];
   }
 
   private nextAbortSignal(panel: UsagePanel): AbortSignal {
