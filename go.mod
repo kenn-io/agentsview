@@ -10,6 +10,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/klauspost/compress v1.18.6
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/spf13/cobra v1.10.2

@@ -39,6 +39,7 @@ const (
 	AgentPositron       AgentType = "positron"
 	AgentAntigravity    AgentType = "antigravity"
 	AgentAntigravityCLI AgentType = "antigravity-cli"
+	AgentZed            AgentType = "zed"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -393,6 +394,18 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverPositronSessions,
 		FindSourceFunc: FindPositronSourceFile,
+	},
+	{
+		Type:           AgentZed,
+		DisplayName:    "Zed",
+		EnvVar:         "ZED_DIR",
+		ConfigKey:      "zed_dirs",
+		DefaultDirs:    zedDefaultDirs(),
+		IDPrefix:       "zed:",
+		FileBased:      true,
+		WatchSubdirs:   []string{"threads"},
+		DiscoverFunc:   DiscoverZedSessions,
+		FindSourceFunc: FindZedSourceFile,
 	},
 	{
 		Type:        AgentAntigravity,

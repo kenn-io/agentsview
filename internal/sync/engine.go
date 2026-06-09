@@ -1076,6 +1076,29 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Zed: <zedDir>/threads/threads.db or SQLite WAL/journal siblings
+	zedDBRel := filepath.Join("threads", "threads.db")
+	for _, zedDir := range e.agentDirs[parser.AgentZed] {
+		if zedDir == "" {
+			continue
+		}
+		rel, ok := isUnder(zedDir, path)
+		if !ok {
+			continue
+		}
+		base := filepath.Base(rel)
+		if rel != zedDBRel && !strings.HasPrefix(base, "threads.db-") {
+			continue
+		}
+		dbPath := filepath.Join(zedDir, zedDBRel)
+		if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
+			return parser.DiscoveredFile{
+				Path:  dbPath,
+				Agent: parser.AgentZed,
+			}, true
+		}
+	}
+
 	return parser.DiscoveredFile{}, false
 }
 
@@ -1776,7 +1799,7 @@ func (e *Engine) syncAllLocked(
 
 	if verbose {
 		log.Printf(
-			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d pi, %d kiro) in %s",
+			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d pi, %d kiro, %d zed) in %s",
 			len(all),
 			counts[parser.AgentClaude],
 			counts[parser.AgentCodex],
@@ -1789,6 +1812,7 @@ func (e *Engine) syncAllLocked(
 			counts[parser.AgentVSCodeCopilot],
 			counts[parser.AgentPi],
 			counts[parser.AgentKiro],
+			counts[parser.AgentZed],
 			time.Since(t0).Round(time.Millisecond),
 		)
 	}
@@ -2903,6 +2927,8 @@ func (e *Engine) processFile(
 		res = e.processWorkBuddy(file, info)
 	case parser.AgentPositron:
 		res = e.processPositron(file, info)
+	case parser.AgentZed:
+		res = e.processZed(file, info)
 	case parser.AgentAntigravity:
 		res = e.processAntigravity(file, info)
 	case parser.AgentAntigravityCLI:
@@ -3805,6 +3831,66 @@ func (e *Engine) processKimi(
 			{Session: *sess, Messages: msgs},
 		},
 	}
+}
+
+func (e *Engine) processZed(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if dbPath, sessionID, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
+		result, err := parser.ParseZedThreadDirect(
+			dbPath, sessionID, e.machine, info,
+		)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if result == nil {
+			return processResult{}
+		}
+		if hash, err := ComputeFileHash(dbPath); err == nil {
+			result.Session.File.Hash = hash
+		}
+		return processResult{
+			results:      []parser.ParseResult{*result},
+			forceReplace: true,
+		}
+	}
+	conn, err := parser.OpenZedDB(file.Path)
+	if err != nil {
+		return processResult{err: err}
+	}
+	defer conn.Close()
+
+	metas, err := parser.ListZedThreadMetas(conn, file.Path)
+	if err != nil {
+		return processResult{err: err}
+	}
+
+	hash, _ := ComputeFileHash(file.Path)
+
+	var results []parser.ParseResult
+	for _, meta := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
+		if ok && storedMtime == meta.FileMtime &&
+			e.db.GetDataVersionByPath(meta.VirtualPath) >=
+				db.CurrentDataVersion() {
+			continue
+		}
+		result, err := parser.ParseZedThreadFromDB(
+			conn, file.Path, meta.RawID, e.machine, info,
+		)
+		if err != nil {
+			log.Printf("zed thread %s: %v", meta.RawID, err)
+			continue
+		}
+		if result == nil {
+			continue
+		}
+		if hash != "" {
+			result.Session.File.Hash = hash
+		}
+		results = append(results, *result)
+	}
+	return processResult{results: results, forceReplace: true}
 }
 
 func (e *Engine) processKiro(
@@ -5412,6 +5498,15 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 			return mtime
 		}
 	}
+	if def.Type == parser.AgentZed {
+		if _, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
+			mtime, err := parser.ZedSQLiteSourceMtime(path)
+			if err != nil {
+				return 0
+			}
+			return mtime
+		}
+	}
 	if def.Type == parser.AgentAntigravityCLI {
 		info, err := parser.AntigravityCLIFileInfo(path)
 		if err != nil {
@@ -5477,6 +5572,15 @@ func (e *Engine) SyncSingleSessionContext(
 			}
 			return err
 		}
+	}
+
+	if def.Type == parser.AgentZed {
+		err = e.syncSingleZed(sessionID)
+		if errors.Is(err, errSessionPreserved) {
+			preserved = true
+			return nil
+		}
+		return err
 	}
 
 	path := e.FindSourceFile(sessionID)
@@ -5819,6 +5923,56 @@ func (e *Engine) syncSingleKiroSQLite(
 		)
 	}
 	return fmt.Errorf("kiro sqlite session %s not found", sessionID)
+}
+
+func (e *Engine) syncSingleZed(sessionID string) error {
+	rawID := strings.TrimPrefix(sessionID, "zed:")
+
+	var lastErr error
+	for _, dir := range e.agentDirs[parser.AgentZed] {
+		dbPath := filepath.Join(dir, parser.ZedThreadsDBRelPath)
+		if !parser.IsRegularFile(dbPath) {
+			continue
+		}
+		info, err := os.Stat(dbPath)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		result, err := parser.ParseZedThreadDirect(dbPath, rawID, e.machine, info)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if result == nil {
+			continue
+		}
+		if hash, err := ComputeFileHash(dbPath); err == nil {
+			result.Session.File.Hash = hash
+		}
+		pw := pendingWrite{
+			sess:         result.Session,
+			msgs:         result.Messages,
+			usageEvents:  result.UsageEvents,
+			forceReplace: true,
+		}
+		if err := e.writeSessionFull(pw); err != nil &&
+			!isIntentionalSessionSkip(err) &&
+			!errors.Is(err, errSessionPreserved) {
+			return fmt.Errorf("write session %s: %w", result.Session.ID, err)
+		} else if errors.Is(err, errSessionPreserved) {
+			return err
+		}
+		return nil
+	}
+
+	if len(e.agentDirs[parser.AgentZed]) == 0 {
+		return fmt.Errorf("zed dir not configured")
+	}
+	if lastErr != nil {
+		return fmt.Errorf("zed session %s: %w", sessionID, lastErr)
+	}
+	return fmt.Errorf("zed session %s not found", sessionID)
 }
 
 func isKiroSQLiteVirtualPath(path string) bool {

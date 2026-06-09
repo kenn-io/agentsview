@@ -232,6 +232,7 @@ agentsview auto-discovers sessions from all of these:
 | Amp                | `~/.local/share/amp/threads/`                          |
 | iFlow              | `~/.iflow/projects/`                                   |
 | Zencoder           | `~/.zencoder/sessions/`                                |
+| Zed                | `~/Library/Application Support/Zed/` (macOS)           |
 | VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
 | Pi                 | `~/.pi/agent/sessions/`                                |
 | Qwen Code          | `~/.qwen/projects/`                                    |

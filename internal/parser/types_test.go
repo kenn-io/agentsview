@@ -223,6 +223,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"zed prefix",
+			"zed:sess-id",
+			AgentZed,
+			true,
+		},
+		{
 			"unknown prefix",
 			"future:sess-id",
 			"",
@@ -272,6 +278,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentPiebald,
 		AgentWarp,
 		AgentPositron,
+		AgentZed,
 	}
 
 	registered := make(map[AgentType]bool)
@@ -382,6 +389,28 @@ func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
 		assert.NotEmptyf(t, def.ConfigKey,
 			"file-based agent %q (%s) has empty ConfigKey",
 			def.DisplayName, def.Type)
+	}
+}
+
+func TestZedRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentZed)
+	if !ok {
+		t.Fatalf("AgentZed missing from Registry")
+	}
+	if !def.FileBased {
+		t.Fatalf("Zed FileBased = false, want true")
+	}
+	if def.EnvVar != "ZED_DIR" {
+		t.Fatalf("Zed EnvVar = %q", def.EnvVar)
+	}
+	if def.ConfigKey != "zed_dirs" {
+		t.Fatalf("Zed ConfigKey = %q", def.ConfigKey)
+	}
+	if def.IDPrefix != "zed:" {
+		t.Fatalf("Zed IDPrefix = %q", def.IDPrefix)
+	}
+	if def.DiscoverFunc == nil || def.FindSourceFunc == nil {
+		t.Fatalf("Zed discover/source funcs must be set")
 	}
 }
 
