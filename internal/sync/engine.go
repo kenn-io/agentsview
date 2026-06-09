@@ -2247,6 +2247,13 @@ func discoveredFileMtime(
 			return parser.OpenCodeSourceMtime(file.Path)
 		}
 	}
+	if file.Agent == parser.AgentZed {
+		dbPath := file.Path
+		if p, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
+			dbPath = p
+		}
+		return zedDBCompositeMtime(dbPath)
+	}
 	if file.Agent == parser.AgentAntigravityCLI {
 		info, err := parser.AntigravityCLIFileInfo(file.Path)
 		if err != nil {
@@ -2265,6 +2272,27 @@ func discoveredFileMtime(
 	}
 
 	return info.ModTime().UnixNano(), nil
+}
+
+// zedDBCompositeMtime returns the maximum mtime across the Zed
+// threads.db main file and its WAL/SHM siblings. WAL-only updates
+// do not touch threads.db itself, so the composite is needed to
+// detect all changes.
+func zedDBCompositeMtime(dbPath string) (int64, error) {
+	var maxMtime int64
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(dbPath + suffix)
+		if err != nil {
+			continue
+		}
+		if t := info.ModTime().UnixNano(); t > maxMtime {
+			maxMtime = t
+		}
+	}
+	if maxMtime == 0 {
+		return 0, &os.PathError{Op: "stat", Path: dbPath, Err: os.ErrNotExist}
+	}
+	return maxMtime, nil
 }
 
 // syncOpenCode syncs sessions from OpenCode SQLite databases.
@@ -2953,6 +2981,14 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentZed {
+		if filepath.Base(file.Path) == "threads.db" {
+			return false
+		}
+		if _, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
 			return false
 		}
 	}
