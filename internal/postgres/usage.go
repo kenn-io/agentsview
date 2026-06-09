@@ -51,57 +51,6 @@ func paddedUTCBound(ts string, hours int) string {
 	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
 }
 
-func appendPGUsageRowFilterClauses(
-	query string, pb *paramBuilder, f db.UsageFilter,
-) (string, []any) {
-	appendCSV := func(q, col, csv string, include bool) string {
-		if csv == "" {
-			return q
-		}
-		vals := strings.Split(csv, ",")
-		op := "IN"
-		if !include {
-			op = "NOT IN"
-		}
-		if len(vals) == 1 {
-			if include {
-				return q + " AND " + col + " = " + pb.add(vals[0])
-			}
-			return q + " AND " + col + " != " + pb.add(vals[0])
-		}
-		placeholders := make([]string, len(vals))
-		for i, v := range vals {
-			placeholders[i] = pb.add(v)
-		}
-		return q + " AND " + col + " " + op + " (" +
-			strings.Join(placeholders, ",") + ")"
-	}
-
-	query = appendCSV(query, "u.agent", f.Agent, true)
-	query = appendCSV(query, "u.project", f.Project, true)
-	query = appendCSV(query, "u.machine", f.Machine, true)
-	query = appendCSV(query, "u.model", f.Model, true)
-	query = appendCSV(query, "u.project", f.ExcludeProject, false)
-	query = appendCSV(query, "u.agent", f.ExcludeAgent, false)
-	query = appendCSV(query, "u.model", f.ExcludeModel, false)
-
-	if f.MinUserMessages > 0 {
-		query += " AND u.user_message_count >= " + pb.add(f.MinUserMessages)
-	}
-	if f.ExcludeOneShot {
-		query += " AND u.user_message_count > 1"
-	}
-	if f.ExcludeAutomated {
-		query += " AND COALESCE(u.is_automated, false) = false"
-	}
-	if f.ActiveSince != "" {
-		query += " AND u.session_activity_at >= " +
-			pb.add(f.ActiveSince) + "::timestamptz"
-	}
-
-	return query, pb.args
-}
-
 func appendPGUsageBranchFilterClauses(
 	where string, pb *paramBuilder, f db.UsageFilter, modelCol string,
 ) string {
@@ -591,44 +540,6 @@ func appendPGUsageColumnBounds(
 	return where
 }
 
-func pgUsageRowsSQLForBounds(b pgUsageBounds) string {
-	if !b.bounded() {
-		return pgUsageRowsSQLWithWhere(
-			pgUsageMessageEligibility,
-			pgUsageEventEligibility,
-		)
-	}
-
-	messageTimestampWhere := pgUsageMessageEligibility +
-		"\n\tAND m.timestamp IS NOT NULL"
-	messageTimestampWhere = appendPGUsageColumnBounds(
-		messageTimestampWhere, "m.timestamp", b)
-	eventTimestampWhere := pgUsageEventEligibility +
-		"\n\tAND ue.occurred_at IS NOT NULL"
-	eventTimestampWhere = appendPGUsageColumnBounds(
-		eventTimestampWhere, "ue.occurred_at", b)
-
-	messageFallbackWhere := pgUsageMessageEligibility +
-		"\n\tAND m.timestamp IS NULL"
-	messageFallbackWhere = appendPGUsageColumnBounds(
-		messageFallbackWhere, "s.started_at", b)
-	eventFallbackWhere := pgUsageEventEligibility +
-		"\n\tAND ue.occurred_at IS NULL"
-	eventFallbackWhere = appendPGUsageColumnBounds(
-		eventFallbackWhere, "s.started_at", b)
-
-	return strings.Join([]string{
-		pgUsageRowsSQLWithWhere(
-			messageTimestampWhere,
-			eventTimestampWhere,
-		),
-		pgUsageRowsSQLWithWhere(
-			messageFallbackWhere,
-			eventFallbackWhere,
-		),
-	}, "\n\nUNION ALL\n\n")
-}
-
 func pgDailyUsageRowsSQLForBounds(
 	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
 ) string {
@@ -693,13 +604,6 @@ func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
 	return pgUsageRowQuery(pb, f)
 }
 
-func pgUsageFullRowQuery(pb *paramBuilder, f db.UsageFilter) string {
-	bounds := pgUsageBoundsForFilter(pb, f)
-	query := pgUsageRowSelectFromRows(pgUsageRowsSQLForBounds(bounds))
-	query, _ = appendPGUsageRowFilterClauses(query, pb, f)
-	return query
-}
-
 func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 	var r pgUsageScanRow
 	err := rows.Scan(
@@ -753,39 +657,6 @@ func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
 		&r.agent,
 	)
 	return r, err
-}
-
-func pgUsageAmounts(
-	r pgUsageScanRow, pricing map[string]modelRates,
-) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
-	if r.usageSource == "message" {
-		usage := gjson.Parse(r.tokenJSON)
-		inputTok = int(usage.Get("input_tokens").Int())
-		outputTok = int(usage.Get("output_tokens").Int())
-		cacheCrTok = int(usage.Get("cache_creation_input_tokens").Int())
-		cacheRdTok = int(usage.Get("cache_read_input_tokens").Int())
-	} else {
-		inputTok = r.inputTokens
-		outputTok = r.outputTokens
-		cacheCrTok = r.cacheCreationInputTokens
-		cacheRdTok = r.cacheReadInputTokens
-	}
-
-	rates, _ := lookupModelRates(pricing, r.model)
-	if r.costUSD.Valid {
-		cost = r.costUSD.Float64
-	} else {
-		cost = (float64(inputTok)*rates.input +
-			float64(outputTok)*rates.output +
-			float64(cacheCrTok)*rates.cacheCreation +
-			float64(cacheRdTok)*rates.cacheRead) / 1_000_000
-	}
-	readDelta := float64(cacheRdTok) *
-		(rates.input - rates.cacheRead) / 1_000_000
-	createDelta := float64(cacheCrTok) *
-		(rates.input - rates.cacheCreation) / 1_000_000
-	savings = readDelta + createDelta
-	return
 }
 
 func pgDailyUsageAmounts(

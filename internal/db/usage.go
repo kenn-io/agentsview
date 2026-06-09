@@ -39,69 +39,6 @@ type UsageFilter struct {
 	Breakdowns       bool   // populate Project/AgentBreakdowns per day
 }
 
-func (f UsageFilter) appendUsageRowFilterClauses(
-	query string, args []any,
-) (string, []any) {
-	appendCSV := func(
-		q string, a []any, col, csv string, include bool,
-	) (string, []any) {
-		if csv == "" {
-			return q, a
-		}
-		vals := strings.Split(csv, ",")
-		op := "IN"
-		if !include {
-			op = "NOT IN"
-		}
-		if len(vals) == 1 {
-			if include {
-				q += " AND " + col + " = ?"
-			} else {
-				q += " AND " + col + " != ?"
-			}
-			a = append(a, vals[0])
-		} else {
-			ph := make([]string, len(vals))
-			for i, v := range vals {
-				ph[i] = "?"
-				a = append(a, v)
-			}
-			q += " AND " + col + " " + op +
-				" (" + strings.Join(ph, ",") + ")"
-		}
-		return q, a
-	}
-
-	query, args = appendCSV(query, args, "u.agent", f.Agent, true)
-	query, args = appendCSV(query, args, "u.project", f.Project, true)
-	query, args = appendCSV(query, args, "u.machine", f.Machine, true)
-	query, args = appendCSV(query, args, "u.model", f.Model, true)
-
-	query, args = appendCSV(
-		query, args, "u.project", f.ExcludeProject, false)
-	query, args = appendCSV(
-		query, args, "u.agent", f.ExcludeAgent, false)
-	query, args = appendCSV(
-		query, args, "u.model", f.ExcludeModel, false)
-
-	if f.MinUserMessages > 0 {
-		query += " AND u.user_message_count >= ?"
-		args = append(args, f.MinUserMessages)
-	}
-	if f.ExcludeOneShot {
-		query += " AND u.user_message_count > 1"
-	}
-	if f.ExcludeAutomated {
-		query += " AND COALESCE(u.is_automated, 0) = 0"
-	}
-	if f.ActiveSince != "" {
-		query += " AND u.session_activity_at >= ?"
-		args = append(args, f.ActiveSince)
-	}
-
-	return query, args
-}
-
 func (f UsageFilter) appendUsageBranchFilterClauses(
 	where string, args []any, modelCol string,
 ) (string, []any) {
@@ -649,60 +586,6 @@ func appendUsageColumnBounds(
 	return where, args
 }
 
-func usageRowsSQLForBounds(b usageBounds) (string, []any) {
-	if !b.bounded() {
-		return usageRowsSQLWithWhere(
-			usageMessageEligibility,
-			usageEventEligibility,
-		), nil
-	}
-
-	messageTimestampWhere := usageMessageEligibility +
-		"\n\tAND m.timestamp IS NOT NULL"
-	var messageTimestampArgs []any
-	messageTimestampWhere, messageTimestampArgs = appendUsageColumnBounds(
-		messageTimestampWhere, "m.timestamp", b, messageTimestampArgs)
-
-	eventTimestampWhere := usageEventEligibility +
-		"\n\tAND ue.occurred_at IS NOT NULL"
-	var eventTimestampArgs []any
-	eventTimestampWhere, eventTimestampArgs = appendUsageColumnBounds(
-		eventTimestampWhere, "ue.occurred_at", b, eventTimestampArgs)
-
-	messageFallbackWhere := usageMessageEligibility +
-		"\n\tAND m.timestamp IS NULL"
-	var messageFallbackArgs []any
-	messageFallbackWhere, messageFallbackArgs = appendUsageColumnBounds(
-		messageFallbackWhere, "s.started_at", b, messageFallbackArgs)
-
-	eventFallbackWhere := usageEventEligibility +
-		"\n\tAND ue.occurred_at IS NULL"
-	var eventFallbackArgs []any
-	eventFallbackWhere, eventFallbackArgs = appendUsageColumnBounds(
-		eventFallbackWhere, "s.started_at", b, eventFallbackArgs)
-
-	rowsSQL := strings.Join([]string{
-		usageRowsSQLWithWhere(
-			messageTimestampWhere,
-			eventTimestampWhere,
-		),
-		usageRowsSQLWithWhere(
-			messageFallbackWhere,
-			eventFallbackWhere,
-		),
-	}, "\n\nUNION ALL\n\n")
-	args := make(
-		[]any, 0,
-		len(messageTimestampArgs)+len(eventTimestampArgs)+
-			len(messageFallbackArgs)+len(eventFallbackArgs),
-	)
-	args = append(args, messageTimestampArgs...)
-	args = append(args, eventTimestampArgs...)
-	args = append(args, messageFallbackArgs...)
-	args = append(args, eventFallbackArgs...)
-	return rowsSQL, args
-}
-
 func dailyUsageRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
 ) (string, []any) {
@@ -797,13 +680,6 @@ func topSessionsUsageRowQuery(f UsageFilter) (string, []any) {
 	return usageRowQuery(f)
 }
 
-func usageFullRowQuery(f UsageFilter) (string, []any) {
-	rowsSQL, args := usageRowsSQLForBounds(usageBoundsForFilter(f))
-	query := usageRowSelectFromRows(rowsSQL)
-	query, args = f.appendUsageRowFilterClauses(query, args)
-	return query, args
-}
-
 func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 	var r usageScanRow
 	err := rows.Scan(
@@ -857,42 +733,6 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 		&r.agent,
 	)
 	return r, err
-}
-
-func usageAmounts(
-	r usageScanRow, pricing map[string]modelRates,
-) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
-	if r.usageSource == "message" {
-		usage := gjson.Parse(r.tokenJSON)
-		inputTok = int(usage.Get("input_tokens").Int())
-		outputTok = int(usage.Get("output_tokens").Int())
-		cacheCrTok = int(
-			usage.Get("cache_creation_input_tokens").Int())
-		cacheRdTok = int(
-			usage.Get("cache_read_input_tokens").Int())
-	} else {
-		inputTok = r.inputTokens
-		outputTok = r.outputTokens
-		cacheCrTok = r.cacheCreationInputTokens
-		cacheRdTok = r.cacheReadInputTokens
-	}
-
-	rates, _ := lookupModelRates(pricing, r.model)
-	if r.costUSD.Valid {
-		cost = r.costUSD.Float64
-	} else {
-		cost = (float64(inputTok)*rates.input +
-			float64(outputTok)*rates.output +
-			float64(cacheCrTok)*rates.cacheCreation +
-			float64(cacheRdTok)*rates.cacheRead) / 1_000_000
-	}
-
-	readDelta := float64(cacheRdTok) *
-		(rates.input - rates.cacheRead) / 1_000_000
-	crDelta := float64(cacheCrTok) *
-		(rates.input - rates.cacheCreation) / 1_000_000
-	savings = readDelta + crDelta
-	return
 }
 
 func dailyUsageAmounts(
@@ -1714,8 +1554,7 @@ type SessionUsage struct {
 
 // sessionRowCost computes one usage row's cost and reports whether
 // it was priced and whether it contributes to the estimate. A row
-// contributes when it carries an explicit cost or any tokens.
-// Unlike usageAmounts (which zero-fills missing pricing), this does
+// contributes when it carries an explicit cost or any tokens. It does
 // an explicit map lookup so callers can distinguish "unpriced" from
 // "$0".
 func sessionRowCost(

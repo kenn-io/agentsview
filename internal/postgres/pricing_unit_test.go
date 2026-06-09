@@ -30,13 +30,14 @@ type pricingProbeRows struct {
 }
 
 type pricingProbeState struct {
-	mu       sync.Mutex
-	doneOnce sync.Once
-	queries  int
-	err      error
-	rows     [][]driver.Value
-	block    <-chan struct{}
-	done     chan struct{}
+	mu               sync.Mutex
+	doneOnce         sync.Once
+	queries          int
+	err              error
+	rows             [][]driver.Value
+	block            <-chan struct{}
+	afterCancelBlock <-chan struct{}
+	done             chan struct{}
 }
 
 var (
@@ -98,11 +99,15 @@ func (c *pricingProbeConn) QueryContext(
 	err := c.state.err
 	values := append([][]driver.Value(nil), c.state.rows...)
 	block := c.state.block
+	afterCancelBlock := c.state.afterCancelBlock
 	c.state.mu.Unlock()
 	if block != nil {
 		select {
 		case <-block:
 		case <-ctx.Done():
+			if afterCancelBlock != nil {
+				<-afterCancelBlock
+			}
 			return nil, ctx.Err()
 		}
 	}
@@ -145,6 +150,13 @@ func (s *pricingProbeState) setRows(rows [][]driver.Value) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rows = rows
+}
+
+func (s *pricingProbeState) unblockNextQuery() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.block = nil
+	s.afterCancelBlock = nil
 }
 
 func TestCustomPricingOverridesPricingMap(t *testing.T) {
@@ -321,6 +333,46 @@ func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 	require.ErrorIs(t, <-result, context.Canceled)
+}
+
+func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
+	block := make(chan struct{})
+	releaseCanceledQuery := make(chan struct{})
+	defer close(releaseCanceledQuery)
+	state := &pricingProbeState{
+		rows: [][]driver.Value{{
+			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+		}},
+		block:            block,
+		afterCancelBlock: releaseCanceledQuery,
+	}
+	pg := newPricingProbeDB(t, state)
+	store := &Store{pg: pg}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	firstResult := make(chan error, 1)
+	go func() {
+		_, err := store.loadPricingMap(ctx)
+		firstResult <- err
+	}()
+	require.Eventually(t, func() bool {
+		return state.queryCount() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-firstResult, context.Canceled)
+	state.unblockNextQuery()
+
+	secondResult := make(chan error, 1)
+	go func() {
+		_, err := store.loadPricingMap(context.Background())
+		secondResult <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		return state.queryCount() == 2
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, <-secondResult, "second loadPricingMap")
 }
 
 func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {

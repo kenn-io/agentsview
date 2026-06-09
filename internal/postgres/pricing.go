@@ -137,11 +137,16 @@ func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
 }
 
 func (s *Store) leavePricingLoad(load *pricingLoad) {
+	var cancel context.CancelFunc
 	s.pricingLoadMu.Lock()
-	defer s.pricingLoadMu.Unlock()
 	load.waiters--
 	if load.waiters == 0 && s.pricingLoad == load {
-		load.cancel()
+		s.pricingLoad = nil
+		cancel = load.cancel
+	}
+	s.pricingLoadMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
