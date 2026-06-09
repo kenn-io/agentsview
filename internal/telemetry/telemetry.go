@@ -9,37 +9,27 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/posthog/posthog-go"
+	kittelemetry "go.kenn.io/kit/telemetry"
 )
 
 const (
-	EnabledEnv               = "TELEMETRY_ENABLED"
-	AgentsViewEnabledEnv     = "AGENTSVIEW_TELEMETRY_ENABLED"
+	EnabledEnv               = "AGENTSVIEW_TELEMETRY_ENABLED"
+	GenericEnabledEnv        = kittelemetry.GenericTelemetryEnabledEnv
 	installIDFilename        = "telemetry-install-id"
 	postHogAPIKey            = "phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf"
-	postHogEndpoint          = "https://us.i.posthog.com"
-	daemonActiveEvent        = "daemon_active"
+	EventDaemonActive        = "daemon_active"
 	application              = "agentsview"
-	captureTimeout           = 2 * time.Second
+	envPrefix                = "AGENTSVIEW"
 	defaultInstallIDFilePerm = 0o600
 )
 
-type Reporter struct {
-	client     enqueueCloser
-	distinctID string
-	enabled    bool
-	version    string
-	commit     string
-}
+var ErrUnsupportedEvent = kittelemetry.ErrUnsupportedTelemetryEvent
 
-type enqueueCloser interface {
-	Enqueue(posthog.Message) error
-	Close() error
+type Reporter struct {
+	client *kittelemetry.PostHogReporter
 }
 
 type Options struct {
@@ -49,12 +39,7 @@ type Options struct {
 }
 
 func EnabledFromEnv() bool {
-	for _, name := range []string{EnabledEnv, AgentsViewEnabledEnv} {
-		if strings.TrimSpace(os.Getenv(name)) == "0" {
-			return false
-		}
-	}
-	return true
+	return kittelemetry.PostHogTelemetryEnabledFromEnv(envPrefix)
 }
 
 func NewReporter(opts Options) (*Reporter, error) {
@@ -70,40 +55,15 @@ func NewReporter(opts Options) (*Reporter, error) {
 		return nil, err
 	}
 
-	disableGeoIP := true
-	maxRetries := 0
-	client, err := posthog.NewWithConfig(postHogAPIKey, posthog.Config{
-		Endpoint:           postHogEndpoint,
-		DisableGeoIP:       &disableGeoIP,
-		BatchSize:          1,
-		Interval:           time.Second,
-		BatchUploadTimeout: captureTimeout,
-		ShutdownTimeout:    captureTimeout,
-		MaxRetries:         &maxRetries,
-		DefaultEventProperties: posthog.Properties{
-			"application": application,
-			"source":      "daemon",
-			"version":     opts.Version,
-			"commit":      opts.Commit,
-			"goos":        runtime.GOOS,
-			"goarch":      runtime.GOARCH,
-		},
-	})
+	client, err := newKitReporter(distinctID, opts.Version, opts.Commit)
 	if err != nil {
 		return nil, err
 	}
-
-	return &Reporter{
-		client:     client,
-		distinctID: distinctID,
-		enabled:    true,
-		version:    opts.Version,
-		commit:     opts.Commit,
-	}, nil
+	return &Reporter{client: client}, nil
 }
 
 func DisabledReporter() *Reporter {
-	return &Reporter{}
+	return &Reporter{client: kittelemetry.DisabledPostHogReporter()}
 }
 
 func NewReporterOrDisabled(opts Options) *Reporter {
@@ -116,7 +76,7 @@ func NewReporterOrDisabled(opts Options) *Reporter {
 }
 
 func (r *Reporter) Enabled() bool {
-	return r != nil && r.enabled && r.client != nil
+	return r != nil && r.client != nil && r.client.Enabled()
 }
 
 func (r *Reporter) CaptureDaemonActive(ctx context.Context) error {
@@ -129,37 +89,21 @@ func (r *Reporter) CaptureDaemonActive(ctx context.Context) error {
 	default:
 	}
 
-	return r.client.Enqueue(daemonActiveCapture(
-		r.distinctID, r.version, r.commit,
-	))
+	return r.client.Capture(EventDaemonActive, nil)
 }
 
-func daemonActiveCapture(distinctID, version, commit string) posthog.Capture {
-	return posthog.Capture{
-		DistinctId: distinctID,
-		Event:      daemonActiveEvent,
-		Timestamp:  time.Now().UTC(),
-		Properties: daemonActiveProperties(nil, version, commit),
-	}
+func (r *Reporter) EventAllowed(event string) bool {
+	return r != nil && r.client != nil && r.client.EventAllowed(event)
 }
 
-func daemonActiveProperties(
+func (r *Reporter) SanitizeProperties(
+	event string,
 	properties map[string]any,
-	version, commit string,
-) posthog.Properties {
-	safeProperties := posthog.Properties{}
-	for key, value := range properties {
-		safeProperties[key] = value
+) (map[string]any, error) {
+	if r == nil || r.client == nil {
+		return nil, ErrUnsupportedEvent
 	}
-	safeProperties["$process_person_profile"] = false
-	safeProperties["$geoip_disable"] = true
-	safeProperties["application"] = application
-	safeProperties["version"] = version
-	safeProperties["commit"] = commit
-	safeProperties["goos"] = runtime.GOOS
-	safeProperties["goarch"] = runtime.GOARCH
-	safeProperties["source"] = "daemon"
-	return safeProperties
+	return r.client.SanitizeProperties(event, properties)
 }
 
 func runningUnderGoTest() bool {
@@ -167,10 +111,30 @@ func runningUnderGoTest() bool {
 }
 
 func (r *Reporter) Close() error {
-	if !r.Enabled() {
+	if r == nil || r.client == nil {
 		return nil
 	}
 	return r.client.Close()
+}
+
+func newKitReporter(
+	distinctID, version, commit string,
+) (*kittelemetry.PostHogReporter, error) {
+	return kittelemetry.NewPostHogReporter(kittelemetry.PostHogOptions{
+		APIKey:      postHogAPIKey,
+		Application: application,
+		EnvPrefix:   envPrefix,
+		DistinctID:  distinctID,
+		Version:     version,
+		Commit:      commit,
+		Source:      "daemon",
+	}, allowedEventOptions()...)
+}
+
+func allowedEventOptions() []kittelemetry.PostHogOption {
+	return []kittelemetry.PostHogOption{
+		kittelemetry.WithAllowedEvent(EventDaemonActive),
+	}
 }
 
 func loadOrCreateInstallID(dataDir string) (string, error) {

@@ -7,39 +7,23 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/posthog/posthog-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	kittelemetry "go.kenn.io/kit/telemetry"
 )
 
-type fakePostHogClient struct {
-	message posthog.Message
-	closed  bool
-}
+func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
+	t.Setenv(EnabledEnv, "0")
+	assert.False(t, EnabledFromEnv())
 
-func (f *fakePostHogClient) Enqueue(message posthog.Message) error {
-	f.message = message
-	return nil
-}
+	t.Setenv(EnabledEnv, "1")
+	assert.True(t, EnabledFromEnv())
 
-func (f *fakePostHogClient) Close() error {
-	f.closed = true
-	return nil
+	t.Setenv(GenericEnabledEnv, "0")
+	assert.False(t, EnabledFromEnv())
 }
 
 func TestNewReporterDisabledByEnvDoesNotCreateInstallID(t *testing.T) {
-	t.Setenv(AgentsViewEnabledEnv, "0")
-	dir := t.TempDir()
-
-	reporter, err := NewReporter(Options{DataDir: dir})
-	require.NoError(t, err)
-
-	assert.False(t, reporter.Enabled())
-	_, err = os.Stat(filepath.Join(dir, installIDFilename))
-	assert.ErrorIs(t, err, os.ErrNotExist)
-}
-
-func TestGenericTelemetryEnvDisablesReporter(t *testing.T) {
 	t.Setenv(EnabledEnv, "0")
 	dir := t.TempDir()
 
@@ -51,9 +35,21 @@ func TestGenericTelemetryEnvDisablesReporter(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestGenericTelemetryEnvDisablesReporter(t *testing.T) {
+	t.Setenv(GenericEnabledEnv, "0")
+	dir := t.TempDir()
+
+	reporter, err := NewReporter(Options{DataDir: dir})
+	require.NoError(t, err)
+
+	assert.False(t, reporter.Enabled())
+	_, err = os.Stat(filepath.Join(dir, installIDFilename))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
-	t.Setenv(AgentsViewEnabledEnv, "1")
 	t.Setenv(EnabledEnv, "1")
+	t.Setenv(GenericEnabledEnv, "1")
 	dir := t.TempDir()
 
 	reporter, err := NewReporter(Options{DataDir: dir})
@@ -80,42 +76,22 @@ func TestLoadOrCreateInstallIDIsStableAndAnonymous(t *testing.T) {
 	assert.Equal(t, first+"\n", string(stored))
 }
 
-func TestDaemonActiveCaptureUsesAnonymousDistinctID(t *testing.T) {
-	capture := daemonActiveCapture(
+func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
+	t.Setenv(EnabledEnv, "1")
+	t.Setenv(GenericEnabledEnv, "1")
+
+	client, err := newKitReporter(
 		"anonymous-install-id", "v1.2.3", "abc123",
 	)
-
-	assert.Equal(t, "anonymous-install-id", capture.DistinctId)
-	assert.Equal(t, daemonActiveEvent, capture.Event)
-	assert.False(t, capture.Properties["$process_person_profile"].(bool))
-	assert.True(t, capture.Properties["$geoip_disable"].(bool))
-	assert.Equal(t, "agentsview", capture.Properties["application"])
-	assert.Equal(t, "v1.2.3", capture.Properties["version"])
-	assert.Equal(t, "abc123", capture.Properties["commit"])
-	assert.Equal(t, runtime.GOOS, capture.Properties["goos"])
-	assert.Equal(t, runtime.GOARCH, capture.Properties["goarch"])
-	assert.Equal(t, "daemon", capture.Properties["source"])
-	assert.NotContains(t, capture.Properties, "project")
-	assert.NotContains(t, capture.Properties, "session")
-}
-
-func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
-	client := &fakePostHogClient{}
-	reporter := &Reporter{
-		client:     client,
-		distinctID: "anonymous-install-id",
-		enabled:    true,
-		version:    "v1.2.3",
-		commit:     "abc123",
-	}
-
-	err := reporter.CaptureDaemonActive(context.Background())
 	require.NoError(t, err)
-	assert.Nil(t, client.message)
-}
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
 
-func TestDaemonActivePropertiesForcePrivacyFields(t *testing.T) {
-	props := daemonActiveProperties(map[string]any{
+	reporter := &Reporter{client: client}
+
+	assert.True(t, reporter.EventAllowed(EventDaemonActive))
+	assert.False(t, reporter.EventAllowed("daemon_started"))
+
+	props, err := reporter.SanitizeProperties(EventDaemonActive, map[string]any{
 		"$process_person_profile": true,
 		"$geoip_disable":          false,
 		"application":             "other",
@@ -124,7 +100,11 @@ func TestDaemonActivePropertiesForcePrivacyFields(t *testing.T) {
 		"goos":                    "caller-os",
 		"goarch":                  "caller-arch",
 		"source":                  "caller-source",
-	}, "v1.2.3", "abc123")
+		"app":                     "legacy-app",
+		"project":                 "private-project",
+		"session":                 "private-session",
+	})
+	require.NoError(t, err)
 
 	assert.False(t, props["$process_person_profile"].(bool))
 	assert.True(t, props["$geoip_disable"].(bool))
@@ -135,19 +115,33 @@ func TestDaemonActivePropertiesForcePrivacyFields(t *testing.T) {
 	assert.Equal(t, runtime.GOARCH, props["goarch"])
 	assert.Equal(t, "daemon", props["source"])
 	assert.NotContains(t, props, "app")
+	assert.NotContains(t, props, "project")
+	assert.NotContains(t, props, "session")
+}
+
+func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
+	t.Setenv(EnabledEnv, "1")
+	t.Setenv(GenericEnabledEnv, "1")
+
+	client, err := newKitReporter(
+		"anonymous-install-id", "v1.2.3", "abc123",
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+
+	reporter := &Reporter{client: client}
+	assert.True(t, reporter.Enabled())
+
+	err = reporter.CaptureDaemonActive(context.Background())
+	require.NoError(t, err)
 }
 
 func TestReporterCaptureDaemonActiveTestBlockerWinsOverCanceledContext(t *testing.T) {
-	client := &fakePostHogClient{}
-	reporter := &Reporter{
-		client:     client,
-		distinctID: "anonymous-install-id",
-		enabled:    true,
-	}
+	client := kittelemetry.DisabledPostHogReporter()
+	reporter := &Reporter{client: client}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	err := reporter.CaptureDaemonActive(ctx)
 	require.NoError(t, err)
-	assert.Nil(t, client.message)
 }
