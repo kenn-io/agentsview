@@ -453,6 +453,9 @@ func (e *Engine) classifyOnePath(
 	if df, ok := e.classifyKiroSQLitePath(path); ok {
 		return df, true
 	}
+	if df, ok := e.classifyZedSQLitePath(path); ok {
+		return df, true
+	}
 	if !pathExists {
 		return parser.DiscoveredFile{}, false
 	}
@@ -1258,6 +1261,22 @@ func (e *Engine) classifyKiroSQLitePath(
 				Path:  dbPath,
 				Agent: parser.AgentKiro,
 			}, true
+		}
+	}
+	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) classifyZedSQLitePath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
+		for _, zedDir := range e.agentDirs[parser.AgentZed] {
+			if _, under := isUnder(zedDir, dbPath); under {
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: parser.AgentZed,
+				}, true
+			}
 		}
 	}
 	return parser.DiscoveredFile{}, false
