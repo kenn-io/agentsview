@@ -1105,6 +1105,22 @@ func (db *DB) GetSessionFileInfo(
 	return s.Int64, m.Int64, true
 }
 
+// ResetFileStateByPath nulls out file_size and file_mtime for every session
+// sharing the given file path. This ensures shouldSkipFile returns false for
+// all sessions in the file — including Claude fork sessions that share a
+// .jsonl file with a root session whose stored state would otherwise cause
+// the re-parse to be skipped.
+func (db *DB) ResetFileStateByPath(path string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`UPDATE sessions SET file_size = NULL, file_mtime = NULL
+		 WHERE file_path = ? AND deleted_at IS NULL`,
+		path,
+	)
+	return err
+}
+
 // ResetSessionFileState nulls out the stored file_size and file_mtime so
 // the next SyncPaths call re-parses the file unconditionally. Used when
 // a user-rename is cleared and we need the agent-provided name restored.

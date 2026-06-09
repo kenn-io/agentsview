@@ -542,7 +542,9 @@ func (s *Server) humaRenameSession(
 	if displayName == nil && s.engine != nil {
 		if localDB, ok := s.db.(*db.DB); ok {
 			if path := localDB.GetSessionFilePath(in.ID); path != "" {
-				_ = localDB.ResetSessionFileState(in.ID)
+				// Reset by path so all sessions sharing the file
+				// (e.g. Claude fork sessions) are re-parsed too.
+				_ = localDB.ResetFileStateByPath(path)
 				s.engine.SyncPaths([]string{path})
 			}
 		}
