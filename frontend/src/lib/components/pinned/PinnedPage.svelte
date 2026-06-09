@@ -54,10 +54,10 @@
       ? {
           project: s.project,
           agent: s.agent,
+          // normalizeMessagePreview can return "" — use || not ?? to fall through.
           name:
             s.display_name
-            ?? normalizeMessagePreview(s.first_message)
-            ?? s.project,
+            ?? (normalizeMessagePreview(s.first_message) || s.project),
         }
       : {
           project: "unknown",

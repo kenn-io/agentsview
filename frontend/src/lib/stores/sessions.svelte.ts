@@ -1036,7 +1036,15 @@ class SessionsStore {
     }) as unknown as Session;
     const idx = this.sessions.findIndex((s) => s.id === id);
     if (idx !== -1) {
-      this.sessions[idx] = { ...this.sessions[idx]!, ...updated };
+      const merged = { ...this.sessions[idx]!, ...updated };
+      // When the caller cleared the rename and the backend found no agent name
+      // to restore, display_name is absent from the response (omitempty on nil).
+      // Explicitly null it out so the store reflects the cleared state rather
+      // than keeping the stale value until the next SSE-triggered refresh.
+      if (displayName === null && updated.display_name === undefined) {
+        merged.display_name = null;
+      }
+      this.sessions[idx] = merged;
     }
   }
 
