@@ -92,8 +92,9 @@ func TestPushNameSourceRoundTrip(t *testing.T) {
 		}
 	}
 	require.NotNil(t, found, "session not found in sidebar index")
-	require.NotNil(t, found.NameSource, "NameSource should not be nil in sidebar index")
-	assert.Equal(t, "agent", *found.NameSource, "NameSource round-trip via sidebar index")
+	// name_source is a backend-only write guard; the read path intentionally
+	// does not return it to callers, so NameSource is always nil here.
+	assert.Nil(t, found.NameSource, "NameSource is not exposed via read path")
 	require.NotNil(t, found.DisplayName, "DisplayName should not be nil in sidebar index")
 	assert.Equal(t, "My renamed session", *found.DisplayName, "DisplayName round-trip via sidebar index")
 
@@ -161,10 +162,22 @@ func TestPushNameSourceViaPushPath(t *testing.T) {
 	require.NoError(t, err, "opening store")
 	defer store.Close()
 
+	// Verify name_source was pushed correctly via direct SQL —
+	// the store read path intentionally omits it (backend-only field).
+	var pushedNameSource *string
+	require.NoError(t, ps.DB().QueryRow(
+		`SELECT name_source FROM agentsview.sessions WHERE id = $1`,
+		"ns-push-001",
+	).Scan(&pushedNameSource), "read name_source via direct SQL")
+	require.NotNil(t, pushedNameSource, "name_source must be stored in PG after push")
+	assert.Equal(t, "agent", *pushedNameSource)
+
 	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Limit: 50})
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	require.Len(t, index.Sessions, 1)
-	require.NotNil(t, index.Sessions[0].NameSource,
-		"name_source must survive the real push read path")
-	assert.Equal(t, "agent", *index.Sessions[0].NameSource)
+	// name_source is not exposed via read path; DisplayName still round-trips.
+	assert.Nil(t, index.Sessions[0].NameSource,
+		"name_source is not exposed via read path")
+	require.NotNil(t, index.Sessions[0].DisplayName)
+	assert.Equal(t, "plan-2b-review", *index.Sessions[0].DisplayName)
 }
