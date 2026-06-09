@@ -5263,8 +5263,9 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 func TestNameSourceMigrationBackfillsUserRenames(t *testing.T) {
 	d := testDB(t)
 
-	// Insert a session.
-	insertSession(t, d, "s1", "p")
+	// Insert a file-backed session (file_path required for backfill).
+	fp := "/home/user/.claude/sessions/s1.jsonl"
+	insertSession(t, d, "s1", "p", func(s *Session) { s.FilePath = &fp })
 
 	// Rename it to simulate a user-set display_name.
 	name := "Manual Name"
@@ -5288,6 +5289,35 @@ func TestNameSourceMigrationBackfillsUserRenames(t *testing.T) {
 	require.NoError(t, err, "select name_source")
 	require.NotNil(t, nameSource, "name_source should be non-nil")
 	assert.Equal(t, "user", *nameSource, "name_source should be 'user'")
+}
+
+func TestBackfillNameSourceSkipsImportedSessions(t *testing.T) {
+	d := testDB(t)
+
+	filePath := "/home/user/.claude/sessions/abc.jsonl"
+	// File-backed session: has file_path; pre-feature display_name is a user rename.
+	insertSession(t, d, "file-backed", "p", func(s *Session) {
+		s.DisplayName = Ptr("User Rename")
+		s.FilePath = &filePath
+	})
+	// Imported session: no file_path; display_name is the imported conversation title.
+	insertSession(t, d, "imported", "p", func(s *Session) {
+		s.DisplayName = Ptr("Imported Title")
+	})
+
+	require.NoError(t, d.BackfillNameSource(), "BackfillNameSource")
+
+	var ns *string
+	require.NoError(t, d.getWriter().QueryRow(
+		"SELECT name_source FROM sessions WHERE id = 'file-backed'",
+	).Scan(&ns))
+	require.NotNil(t, ns, "file-backed user rename should be stamped 'user'")
+	assert.Equal(t, "user", *ns)
+
+	require.NoError(t, d.getWriter().QueryRow(
+		"SELECT name_source FROM sessions WHERE id = 'imported'",
+	).Scan(&ns))
+	assert.Nil(t, ns, "imported session title should not be pinned as user-owned")
 }
 
 func TestCopySessionMetadataPreservesUserNotAgent(t *testing.T) {
