@@ -216,11 +216,11 @@ desktop-app: desktop-macos-app
 
 # Run tests
 test: ensure-embed-dir
-	go test -tags fts5 ./... -v -count=1
+	go test -tags "fts5,kit_posthog_disabled" ./... -v -count=1
 
 # Run fast tests only
 test-short: ensure-embed-dir
-	go test -tags fts5 ./... -short -count=1
+	go test -tags "fts5,kit_posthog_disabled" ./... -short -count=1
 
 # Start test PostgreSQL container
 postgres-up:
@@ -235,11 +235,11 @@ test-postgres: ensure-embed-dir postgres-up
 	@echo "Waiting for postgres to be ready..."
 	@sleep 2
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-		CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -count=1
+		CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,pgtest" -v ./internal/postgres/... -count=1
 
 # PostgreSQL integration tests for CI (postgres already running as service)
 test-postgres-ci: ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -count=1
+	CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,pgtest" -v ./internal/postgres/... -count=1
 
 # Start test SSH container
 ssh-up:
@@ -255,11 +255,11 @@ ssh-down:
 test-ssh: ensure-embed-dir ssh-up
 	TEST_SSH_HOST=localhost TEST_SSH_PORT=2222 TEST_SSH_USER=testuser \
 		TEST_SSH_KEY=$(CURDIR)/testdata/ssh/test_key \
-		CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
+		CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,sshtest" -v ./internal/ssh/... -count=1
 
 # SSH integration tests for CI (sshd already running)
 test-ssh-ci: ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
+	CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,sshtest" -v ./internal/ssh/... -count=1
 
 # Run Playwright E2E tests
 e2e:

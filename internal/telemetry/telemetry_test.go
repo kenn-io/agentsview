@@ -17,6 +17,10 @@ func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
 	assert.False(t, EnabledFromEnv())
 
 	t.Setenv(EnabledEnv, "1")
+	if kittelemetry.PostHogTelemetryDisabled() {
+		assert.False(t, EnabledFromEnv())
+		return
+	}
 	assert.True(t, EnabledFromEnv())
 
 	t.Setenv(GenericEnabledEnv, "0")
@@ -77,6 +81,7 @@ func TestLoadOrCreateInstallIDIsStableAndAnonymous(t *testing.T) {
 }
 
 func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
+	skipWhenPostHogDisabledByBuildTag(t)
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
 
@@ -120,6 +125,7 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 }
 
 func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
+	skipWhenPostHogDisabledByBuildTag(t)
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
 
@@ -144,4 +150,11 @@ func TestReporterCaptureDaemonActiveTestBlockerWinsOverCanceledContext(t *testin
 
 	err := reporter.CaptureDaemonActive(ctx)
 	require.NoError(t, err)
+}
+
+func skipWhenPostHogDisabledByBuildTag(t *testing.T) {
+	t.Helper()
+	if kittelemetry.PostHogTelemetryDisabled() {
+		t.Skip("kit_posthog_disabled disables enabled PostHog reporter setup")
+	}
 }

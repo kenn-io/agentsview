@@ -90,13 +90,13 @@ jobs:
           path-type: inherit
 
       - name: Run Go tests
-        run: go test -tags fts5 ./... -v -count=1
+        run: go test -tags "fts5,kit_posthog_disabled" ./... -v -count=1
         env:
           CGO_ENABLED: "1"
 
       - name: Run Go tests (race detector)
         if: runner.os == 'Linux'
-        run: go test -tags fts5 -race ./... -count=1
+        run: go test -tags "fts5,kit_posthog_disabled" -race ./... -count=1
         env:
           CGO_ENABLED: "1"
 
@@ -133,7 +133,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Test with coverage
-        run: go test -tags fts5 -race -coverprofile=coverage.out ./...
+        run: go test -tags "fts5,kit_posthog_disabled" -race -coverprofile=coverage.out ./...
         env:
           CGO_ENABLED: "1"
 
