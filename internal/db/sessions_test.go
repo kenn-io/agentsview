@@ -441,7 +441,11 @@ func TestUpsertNameSourceOwnership(t *testing.T) {
 	assert.Equal(t, "user", *got.NameSource)
 }
 
-func TestGetSessionReturnsNameSource(t *testing.T) {
+// TestGetSessionPopulatesNameSourceInternally verifies that GetSession
+// reads name_source from the DB into the Go struct (needed by the PG push
+// path). name_source is a backend-only write guard: it is NOT serialised in
+// JSON responses (json:"-" on Session.NameSource).
+func TestGetSessionPopulatesNameSourceInternally(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -456,7 +460,7 @@ func TestGetSessionReturnsNameSource(t *testing.T) {
 		MessageCount: 1,
 	}), "upsert agent-named session")
 
-	// GetSession must return name_source via scanSessionRow.
+	// GetSession populates Session.NameSource from the DB for internal use.
 	s, err := d.GetSession(ctx, "s-ns")
 	require.NoError(t, err, "GetSession")
 	require.NotNil(t, s, "session not found")
@@ -465,7 +469,7 @@ func TestGetSessionReturnsNameSource(t *testing.T) {
 	require.NotNil(t, s.DisplayName, "DisplayName is nil")
 	assert.Equal(t, "Agent Title", *s.DisplayName, "DisplayName")
 
-	// After a manual rename, GetSession must return name_source='user'.
+	// After a manual rename, Session.NameSource reflects the 'user' guard.
 	requireNoError(t, d.RenameSession("s-ns", Ptr("User Title")), "rename")
 	s, err = d.GetSession(ctx, "s-ns")
 	require.NoError(t, err, "GetSession after rename")
