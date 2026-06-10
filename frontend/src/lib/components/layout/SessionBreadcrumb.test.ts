@@ -533,7 +533,7 @@ describe("SessionBreadcrumb", () => {
       component.$destroy();
     });
 
-    it("refetches when a resync changes file metadata without token movement", async () => {
+    it("refetches when a resync changes context tokens without output movement", async () => {
       sessionsService.getApiV1SessionsIdUsage
         .mockResolvedValueOnce(
           makeUsage({ has_cost: true, cost_usd: 1 }),
@@ -546,7 +546,7 @@ describe("SessionBreadcrumb", () => {
         component: SessionBreadcrumb,
         target: document.body,
         props: {
-          session: makeSession("claude", { file_mtime: 1000 }),
+          session: makeSession("claude", { peak_context_tokens: 1000 }),
           onBack: () => {},
         },
       });
@@ -555,10 +555,10 @@ describe("SessionBreadcrumb", () => {
         expect(badge?.textContent?.trim()).toBe("$1.00");
       });
 
-      // A cost-only usage event arrives via resync: same message
-      // count and output tokens, only the file mtime moves.
+      // A resync grows context tokens in place: same message count
+      // and output tokens, only peak context moves.
       component.$set({
-        session: makeSession("claude", { file_mtime: 2000 }),
+        session: makeSession("claude", { peak_context_tokens: 2000 }),
       });
       await vi.waitFor(() => {
         const badge = document.querySelector(".cost-badge");

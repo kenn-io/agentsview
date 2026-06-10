@@ -110,8 +110,11 @@
   let sessionCost = $state<number | null>(null);
   // Key of the last successful usage fetch. Cost depends on more
   // than output tokens (input/cache tokens and explicit usage-event
-  // costs), so the key includes every cost-affecting session field,
-  // with file mtime/size catching resyncs that change none of them.
+  // costs), so the key includes every cost-affecting field present
+  // in API session responses. A resync that changes none of these
+  // (e.g. a cost-only usage event) keeps a stale cost until the
+  // next keyed field moves; closing that would need a freshness
+  // marker in the session API.
   let costFetchKey: string | null = null;
   let costSessionId: string | null = null;
   let costRequestSeq = 0;
@@ -132,8 +135,6 @@
       session.has_peak_context_tokens ?? "",
       session.message_count ?? 0,
       session.ended_at ?? "",
-      session.file_mtime ?? "",
-      session.file_size ?? "",
     ].join("\n");
     if (id !== costSessionId) {
       // Entering a different session invalidates both the displayed
