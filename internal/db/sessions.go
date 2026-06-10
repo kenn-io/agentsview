@@ -338,42 +338,11 @@ const activityExprSQLite = "CAST(strftime('%s', " +
 // signal that something is wrong. Active is purely time-based:
 // any session written to in the last activeWindow qualifies.
 func buildTerminationPredSQLite(status string) (string, []any) {
-	if status == "" || status == "all" {
-		return "", nil
-	}
-	now := time.Now().Unix()
-	activeCutoff := now - int64(activeWindow.Seconds())
-	staleCutoff := now - int64(staleWindow.Seconds())
-	const flagged = "termination_status IN ('tool_call_pending', 'truncated')"
-
-	parts := strings.Split(status, ",")
-	preds := make([]string, 0, len(parts))
-	args := make([]any, 0, len(parts)*2)
-	for _, p := range parts {
-		switch strings.TrimSpace(p) {
-		case "active":
-			preds = append(preds, activityExprSQLite+" > ?")
-			args = append(args, activeCutoff)
-		case "stale":
-			preds = append(preds, "("+activityExprSQLite+" > ? AND "+
-				activityExprSQLite+" <= ? AND "+flagged+")")
-			args = append(args, staleCutoff, activeCutoff)
-		case "unclean":
-			preds = append(preds, "("+activityExprSQLite+" <= ? AND "+flagged+")")
-			args = append(args, staleCutoff)
-		case "clean":
-			preds = append(preds, "termination_status = 'clean'")
-		case "awaiting_user":
-			preds = append(preds, "termination_status = 'awaiting_user'")
-		}
-	}
-	if len(preds) == 0 {
-		return "", nil
-	}
-	if len(preds) == 1 {
-		return preds[0], args
-	}
-	return "(" + strings.Join(preds, " OR ") + ")", args
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	pred := terminationPredicate(status, b, func(col string) string {
+		return col
+	})
+	return pred, b.Args()
 }
 
 // SessionPage is a page of session results.
@@ -409,223 +378,7 @@ type SidebarSessionIndex struct {
 // buildSessionFilter returns a WHERE clause and args for the
 // non-cursor predicates in SessionFilter.
 func buildSessionFilter(f SessionFilter) (string, []any) {
-	// Base predicates apply to every row.
-	basePreds := []string{
-		"message_count > 0",
-		"deleted_at IS NULL",
-	}
-	if !f.IncludeChildren {
-		basePreds = append(basePreds,
-			"relationship_type NOT IN ('subagent', 'fork')")
-	}
-
-	// Filter predicates narrow results based on user criteria.
-	// When IncludeChildren is true these only apply to root
-	// sessions; children are included via a subquery on their
-	// parent instead.
-	var filterPreds []string
-	var filterArgs []any
-
-	if f.Project != "" {
-		filterPreds = append(filterPreds, "project = ?")
-		filterArgs = append(filterArgs, f.Project)
-	}
-	if f.ExcludeProject != "" {
-		filterPreds = append(filterPreds, "project != ?")
-		filterArgs = append(filterArgs, f.ExcludeProject)
-	}
-	if f.Machine != "" {
-		machines := strings.Split(f.Machine, ",")
-		if len(machines) == 1 {
-			filterPreds = append(filterPreds, "machine = ?")
-			filterArgs = append(filterArgs, machines[0])
-		} else {
-			placeholders := make(
-				[]string, len(machines),
-			)
-			for i, m := range machines {
-				placeholders[i] = "?"
-				filterArgs = append(filterArgs, m)
-			}
-			filterPreds = append(filterPreds,
-				"machine IN ("+
-					strings.Join(placeholders, ",")+
-					")")
-		}
-	}
-	if f.Agent != "" {
-		agents := strings.Split(f.Agent, ",")
-		if len(agents) == 1 {
-			filterPreds = append(filterPreds, "agent = ?")
-			filterArgs = append(filterArgs, agents[0])
-		} else {
-			placeholders := make(
-				[]string, len(agents),
-			)
-			for i, a := range agents {
-				placeholders[i] = "?"
-				filterArgs = append(filterArgs, a)
-			}
-			filterPreds = append(filterPreds,
-				"agent IN ("+
-					strings.Join(placeholders, ",")+
-					")")
-		}
-	}
-	if f.Date != "" {
-		filterPreds = append(filterPreds,
-			"date(COALESCE(NULLIF(started_at, ''), created_at)) = ?")
-		filterArgs = append(filterArgs, f.Date)
-	}
-	if f.DateFrom != "" {
-		filterPreds = append(filterPreds,
-			"date(COALESCE(NULLIF(started_at, ''), created_at)) >= ?")
-		filterArgs = append(filterArgs, f.DateFrom)
-	}
-	if f.DateTo != "" {
-		filterPreds = append(filterPreds,
-			"date(COALESCE(NULLIF(started_at, ''), created_at)) <= ?")
-		filterArgs = append(filterArgs, f.DateTo)
-	}
-	if f.ActiveSince != "" {
-		filterPreds = append(filterPreds,
-			"COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at) >= ?")
-		filterArgs = append(filterArgs, f.ActiveSince)
-	}
-	if f.MinMessages > 0 {
-		filterPreds = append(filterPreds, "message_count >= ?")
-		filterArgs = append(filterArgs, f.MinMessages)
-	}
-	if f.MaxMessages > 0 {
-		filterPreds = append(filterPreds, "message_count <= ?")
-		filterArgs = append(filterArgs, f.MaxMessages)
-	}
-	if f.MinUserMessages > 0 {
-		filterPreds = append(filterPreds, "user_message_count >= ?")
-		filterArgs = append(filterArgs, f.MinUserMessages)
-	}
-	if pred, args := buildTerminationPredSQLite(f.Termination); pred != "" {
-		filterPreds = append(filterPreds, pred)
-		filterArgs = append(filterArgs, args...)
-	}
-	// "" and "all" add no predicate.
-
-	// ExcludeOneShot is handled separately from filterPreds
-	// when IncludeChildren is true. Children (subagents, forks)
-	// are almost always one-shot by nature and must not be
-	// excluded. The one-shot filter applies only to root
-	// sessions that match the filter directly.
-	// When ExcludeOneShot is true but automated sessions are
-	// included, exempt them from the one-shot filter — automated
-	// sessions are single-turn by definition, so a strict
-	// user_message_count > 1 predicate would always hide them.
-	oneShotPred := ""
-	if f.ExcludeOneShot {
-		pred := "user_message_count > 1"
-		if !f.ExcludeAutomated {
-			pred = "(user_message_count > 1 OR is_automated = 1)"
-		}
-		if f.IncludeChildren {
-			oneShotPred = pred
-		} else {
-			filterPreds = append(filterPreds, pred)
-		}
-	}
-
-	if f.ExcludeAutomated {
-		filterPreds = append(filterPreds, "is_automated = 0")
-	}
-
-	if len(f.Outcome) > 0 {
-		placeholders := make([]string, len(f.Outcome))
-		for i, v := range f.Outcome {
-			placeholders[i] = "?"
-			filterArgs = append(filterArgs, v)
-		}
-		filterPreds = append(filterPreds,
-			"outcome IN ("+strings.Join(placeholders, ",")+")")
-	}
-	if len(f.HealthGrade) > 0 {
-		placeholders := make([]string, len(f.HealthGrade))
-		for i, v := range f.HealthGrade {
-			placeholders[i] = "?"
-			filterArgs = append(filterArgs, v)
-		}
-		filterPreds = append(filterPreds,
-			"health_grade IN ("+
-				strings.Join(placeholders, ",")+
-				")")
-	}
-	if f.MinToolFailures != nil {
-		filterPreds = append(filterPreds,
-			"tool_failure_signal_count >= ?")
-		filterArgs = append(filterArgs, *f.MinToolFailures)
-	}
-	if f.HasSecret {
-		pred := "secret_leak_count > 0"
-		if len(f.SecretsRulesVersions) > 0 {
-			placeholders := make([]string, 0, len(f.SecretsRulesVersions))
-			for _, v := range f.SecretsRulesVersions {
-				if v == "" {
-					continue
-				}
-				placeholders = append(placeholders, "?")
-				filterArgs = append(filterArgs, v)
-			}
-			if len(placeholders) > 0 {
-				pred += " AND secrets_rules_version IN (" +
-					strings.Join(placeholders, ",") + ")"
-			}
-		}
-		filterPreds = append(filterPreds, pred)
-	}
-
-	// Simple case: children not included — basePreds already
-	// carries the relationship_type guard, so subagent/fork
-	// rows are dropped and no OR-branch is needed.
-	if !f.IncludeChildren {
-		allPreds := append(basePreds, filterPreds...)
-		if oneShotPred != "" {
-			allPreds = append(allPreds, oneShotPred)
-		}
-		return strings.Join(allPreds, " AND "), filterArgs
-	}
-
-	// IncludeChildren: compute the transitive closure of rows
-	// reachable from qualifying roots via parent_session_id,
-	// then restrict the outer query to that set. A plain
-	// single-level parent subquery is not sufficient — a
-	// subagent that passes the user filters can appear in
-	// that subquery and drag its own children through as fake
-	// roots, even when the subagent itself is filtered out by
-	// the relationship guard. The CTE invariant "every
-	// included row has a full parent chain back to a
-	// rootMatch-passing root" handles this at any depth.
-	baseWhere := strings.Join(basePreds, " AND ")
-
-	rootMatchParts := append([]string{}, filterPreds...)
-	if oneShotPred != "" {
-		rootMatchParts = append(rootMatchParts, oneShotPred)
-	}
-	rootMatchParts = append(rootMatchParts,
-		"relationship_type NOT IN ('subagent', 'fork')")
-	rootMatch := strings.Join(rootMatchParts, " AND ")
-
-	// UNION (not UNION ALL) in the recursive step deduplicates
-	// and guards against cyclic parent chains. Depth in real
-	// data is 1-2, so the perf cost is negligible.
-	cte := "WITH RECURSIVE tree(id) AS (" +
-		"SELECT id FROM sessions" +
-		" WHERE message_count > 0 AND deleted_at IS NULL AND " +
-		rootMatch +
-		" UNION " +
-		"SELECT s.id FROM sessions s" +
-		" JOIN tree t ON s.parent_session_id = t.id" +
-		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
-		") SELECT id FROM tree"
-
-	where := baseWhere + " AND id IN (" + cte + ")"
-	return where, filterArgs
+	return BuildSessionFilterSQL(f, SQLiteQueryDialect())
 }
 
 // ListSessions returns a cursor-paginated list of sessions.
@@ -663,12 +416,11 @@ func (db *DB) ListSessions(
 
 	// Paginated results
 	cursorArgs := append([]any{}, args...)
+	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(args))
 	cursorWhere := where
 	if f.Cursor != "" {
-		cursorWhere += ` AND (
-				COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at), id
-			) < (?, ?)`
-		cursorArgs = append(cursorArgs, cur.EndedAt, cur.ID)
+		cursorWhere += " AND " +
+			pageBuilder.CursorBeforePredicate(cur)
 	}
 
 	query := "SELECT " + sessionBaseCols +
@@ -678,8 +430,8 @@ func (db *DB) ListSessions(
 			NULLIF(started_at, ''),
 			created_at
 		) DESC, id DESC
-		LIMIT ?`
-	cursorArgs = append(cursorArgs, f.Limit+1)
+		` + pageBuilder.Limit(f.Limit+1)
+	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 
 	rows, err := db.getReader().QueryContext(ctx, query, cursorArgs...)
 	if err != nil {
@@ -1716,10 +1468,7 @@ func (f PruneFilter) HasFilters() bool {
 // escapeLike escapes SQL LIKE wildcard characters so user
 // input is matched literally.
 func escapeLike(s string) string {
-	r := strings.NewReplacer(
-		`\`, `\\`, `%`, `\%`, `_`, `\_`,
-	)
-	return r.Replace(s)
+	return EscapeLikePattern(s)
 }
 
 // FindPruneCandidates returns sessions matching all filter

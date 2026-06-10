@@ -127,6 +127,7 @@ describe("SyncStore.loadStats", () => {
     vi.clearAllMocks();
     const s = sync as unknown as Record<string, unknown>;
     s.stats = null;
+    s.serverVersion = null;
   });
 
   it("discards stale response when a newer request exists", async () => {
@@ -215,6 +216,60 @@ describe("SyncStore.loadStats", () => {
   });
 });
 
+describe("SyncStore.triggerSync", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const s = sync as unknown as Record<string, unknown>;
+    s.syncing = false;
+    s.progress = null;
+    s.lastSync = null;
+    s.lastSyncStats = null;
+    s.serverVersion = null;
+    s.statusHydrated = false;
+    s.pendingHydration = false;
+    s.syncCompleteListeners = [];
+  });
+
+  it("refreshes read-only data without starting a sync", async () => {
+    const s = sync as unknown as Record<string, unknown>;
+    s.serverVersion = {
+      build_date: "",
+      commit: "unknown",
+      read_only: true,
+      version: "dev",
+    };
+    const stats = {
+      earliest_session: null,
+      machine_count: 1,
+      message_count: 100,
+      project_count: 3,
+      session_count: 8,
+    };
+    vi.mocked(api.getStats).mockResolvedValue(stats);
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "2024-01-01T00:00:00Z",
+      stats: MOCK_STATS,
+    });
+    const onComplete = vi.fn();
+    const listener = vi.fn();
+    sync.onSyncComplete(listener);
+
+    sync.triggerSync(onComplete);
+
+    expect(api.triggerSync).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(onComplete).toHaveBeenCalled();
+    });
+    expect(api.getSyncStatus).toHaveBeenCalled();
+    expect(api.getStats).toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(sync.lastSync).toBe("2024-01-01T00:00:00Z");
+    expect(sync.lastSyncStats).toEqual(MOCK_STATS);
+    expect(sync.stats).toEqual(stats);
+    expect(sync.syncing).toBe(false);
+  });
+});
+
 describe("SyncStore.triggerResync", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -222,6 +277,8 @@ describe("SyncStore.triggerResync", () => {
     const s = sync as unknown as Record<string, unknown>;
     s.syncing = false;
     s.progress = null;
+    s.serverVersion = null;
+    s.syncCompleteListeners = [];
   });
 
   it("returns false when already syncing", () => {
@@ -296,6 +353,28 @@ describe("SyncStore.triggerResync", () => {
     });
     expect(sync.syncing).toBe(false);
     expect(sync.lastSyncStats).toEqual(MOCK_STATS);
+  });
+
+  it("rejects full resync for read-only backends", () => {
+    const s = sync as unknown as Record<string, unknown>;
+    s.serverVersion = {
+      build_date: "",
+      commit: "unknown",
+      read_only: true,
+      version: "dev",
+    };
+    const onError = vi.fn();
+
+    const started = sync.triggerResync(undefined, onError);
+
+    expect(started).toBe(false);
+    expect(api.triggerResync).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Full resync is unavailable for read-only backends.",
+      }),
+    );
   });
 });
 

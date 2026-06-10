@@ -211,194 +211,7 @@ const pgRootSessionFilter = `message_count > 0
 func buildPGSessionFilter(
 	f db.SessionFilter,
 ) (string, []any) {
-	pb := &paramBuilder{}
-	basePreds := []string{
-		"message_count > 0",
-		"deleted_at IS NULL",
-	}
-	if !f.IncludeChildren {
-		basePreds = append(basePreds,
-			"relationship_type NOT IN ('subagent', 'fork')")
-	}
-
-	var filterPreds []string
-
-	if f.Project != "" {
-		filterPreds = append(filterPreds,
-			"project = "+pb.add(f.Project))
-	}
-	if f.ExcludeProject != "" {
-		filterPreds = append(filterPreds,
-			"project != "+pb.add(f.ExcludeProject))
-	}
-	if f.Machine != "" {
-		machines := strings.Split(f.Machine, ",")
-		if len(machines) == 1 {
-			filterPreds = append(filterPreds,
-				"machine = "+pb.add(machines[0]))
-		} else {
-			placeholders := make([]string, len(machines))
-			for i, m := range machines {
-				placeholders[i] = pb.add(m)
-			}
-			filterPreds = append(filterPreds,
-				"machine IN ("+
-					strings.Join(placeholders, ",")+
-					")",
-			)
-		}
-	}
-	if f.Agent != "" {
-		agents := strings.Split(f.Agent, ",")
-		if len(agents) == 1 {
-			filterPreds = append(filterPreds,
-				"agent = "+pb.add(agents[0]))
-		} else {
-			placeholders := make([]string, len(agents))
-			for i, a := range agents {
-				placeholders[i] = pb.add(a)
-			}
-			filterPreds = append(filterPreds,
-				"agent IN ("+
-					strings.Join(placeholders, ",")+
-					")",
-			)
-		}
-	}
-	if f.Date != "" {
-		filterPreds = append(filterPreds,
-			"DATE(COALESCE(started_at, created_at) AT TIME ZONE 'UTC') = "+
-				pb.add(f.Date)+"::date")
-	}
-	if f.DateFrom != "" {
-		filterPreds = append(filterPreds,
-			"DATE(COALESCE(started_at, created_at) AT TIME ZONE 'UTC') >= "+
-				pb.add(f.DateFrom)+"::date")
-	}
-	if f.DateTo != "" {
-		filterPreds = append(filterPreds,
-			"DATE(COALESCE(started_at, created_at) AT TIME ZONE 'UTC') <= "+
-				pb.add(f.DateTo)+"::date")
-	}
-	if f.ActiveSince != "" {
-		filterPreds = append(filterPreds,
-			"COALESCE(ended_at, started_at, created_at) >= "+
-				pb.add(f.ActiveSince)+"::timestamptz")
-	}
-	if f.MinMessages > 0 {
-		filterPreds = append(filterPreds,
-			"message_count >= "+pb.add(f.MinMessages))
-	}
-	if f.MaxMessages > 0 {
-		filterPreds = append(filterPreds,
-			"message_count <= "+pb.add(f.MaxMessages))
-	}
-	if f.MinUserMessages > 0 {
-		filterPreds = append(filterPreds,
-			"user_message_count >= "+
-				pb.add(f.MinUserMessages))
-	}
-	if pred := pgTerminationPred(f.Termination, pb); pred != "" {
-		filterPreds = append(filterPreds, pred)
-	}
-	// "" and "all" add no predicate.
-
-	oneShotPred := ""
-	if f.ExcludeOneShot {
-		pred := "user_message_count > 1"
-		if !f.ExcludeAutomated {
-			pred = "(user_message_count > 1 OR is_automated = TRUE)"
-		}
-		if f.IncludeChildren {
-			oneShotPred = pred
-		} else {
-			filterPreds = append(filterPreds, pred)
-		}
-	}
-
-	if f.ExcludeAutomated {
-		filterPreds = append(filterPreds,
-			"is_automated = FALSE")
-	}
-
-	if len(f.Outcome) > 0 {
-		phs := make([]string, len(f.Outcome))
-		for i, v := range f.Outcome {
-			phs[i] = pb.add(v)
-		}
-		filterPreds = append(filterPreds,
-			"outcome IN ("+strings.Join(phs, ",")+")")
-	}
-	if len(f.HealthGrade) > 0 {
-		phs := make([]string, len(f.HealthGrade))
-		for i, v := range f.HealthGrade {
-			phs[i] = pb.add(v)
-		}
-		filterPreds = append(filterPreds,
-			"health_grade IN ("+
-				strings.Join(phs, ",")+
-				")")
-	}
-	if f.MinToolFailures != nil {
-		filterPreds = append(filterPreds,
-			"tool_failure_signal_count >= "+
-				pb.add(*f.MinToolFailures))
-	}
-	if f.HasSecret {
-		pred := "secret_leak_count > 0"
-		if len(f.SecretsRulesVersions) > 0 {
-			var versionParams []string
-			for _, v := range f.SecretsRulesVersions {
-				if v == "" {
-					continue
-				}
-				versionParams = append(versionParams, pb.add(v))
-			}
-			if len(versionParams) > 0 {
-				pred += " AND secrets_rules_version IN (" +
-					strings.Join(versionParams, ",") + ")"
-			}
-		}
-		filterPreds = append(filterPreds, pred)
-	}
-
-	if !f.IncludeChildren {
-		allPreds := append(basePreds, filterPreds...)
-		if oneShotPred != "" {
-			allPreds = append(allPreds, oneShotPred)
-		}
-		return strings.Join(allPreds, " AND "), pb.args
-	}
-
-	// Mirrors SQLite buildSessionFilter. The CTE computes the
-	// transitive closure of rows reachable from qualifying
-	// roots, so children only surface when their full parent
-	// chain terminates at a rootMatch-passing root — a plain
-	// single-level parent subquery would let a subagent that
-	// incidentally matches user filters drag its descendants
-	// through as fake roots.
-	baseWhere := strings.Join(basePreds, " AND ")
-
-	rootMatchParts := append([]string{}, filterPreds...)
-	if oneShotPred != "" {
-		rootMatchParts = append(rootMatchParts, oneShotPred)
-	}
-	rootMatchParts = append(rootMatchParts,
-		"relationship_type NOT IN ('subagent', 'fork')")
-	rootMatch := strings.Join(rootMatchParts, " AND ")
-
-	cte := "WITH RECURSIVE tree(id) AS (" +
-		"SELECT id FROM sessions" +
-		" WHERE message_count > 0 AND deleted_at IS NULL AND " +
-		rootMatch +
-		" UNION " +
-		"SELECT s.id FROM sessions s" +
-		" JOIN tree t ON s.parent_session_id = t.id" +
-		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
-		") SELECT id FROM tree"
-
-	where := baseWhere + " AND id IN (" + cte + ")"
-	return where, pb.args
+	return db.BuildSessionFilterSQL(f, db.PostgresQueryDialect())
 }
 
 // EncodeCursor returns a base64-encoded, HMAC-signed cursor.
@@ -527,31 +340,26 @@ func (s *Store) ListSessions(
 		}
 	}
 
-	cursorPB := &paramBuilder{
-		n:    len(args),
-		args: append([]any{}, args...),
-	}
+	cursorArgs := append([]any{}, args...)
+	pageBuilder := db.NewQueryBuilder(
+		db.PostgresQueryDialect(), len(args),
+	)
 	cursorWhere := where
 	if f.Cursor != "" {
-		eaParam := cursorPB.add(cur.EndedAt)
-		idParam := cursorPB.add(cur.ID)
-		cursorWhere += ` AND (
-			COALESCE(ended_at, started_at, created_at),
-			id
-		) < (` + eaParam + `::timestamptz, ` +
-			idParam + `)`
+		cursorWhere += " AND " +
+			pageBuilder.CursorBeforePredicate(cur)
 	}
 
-	limitParam := cursorPB.add(f.Limit + 1)
 	query := "SELECT " + pgSessionCols +
 		" FROM sessions WHERE " + cursorWhere + `
 		ORDER BY COALESCE(
 			ended_at, started_at, created_at
 		) DESC, id DESC
-		LIMIT ` + limitParam
+		` + pageBuilder.Limit(f.Limit+1)
+	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 
 	rows, err := s.pg.QueryContext(
-		ctx, query, cursorPB.args...,
+		ctx, query, cursorArgs...,
 	)
 	if err != nil {
 		return db.SessionPage{},

@@ -6,7 +6,9 @@ TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
 DB_PATH="$TMPDIR/sessions.db"
+DUCKDB_PATH="$TMPDIR/sessions.duckdb"
 EMPTY_DIR="$TMPDIR/empty"
+BACKEND="${AGENTSVIEW_E2E_BACKEND:-sqlite}"
 mkdir -p "$EMPTY_DIR"
 
 # Use pre-built binaries if available (CI sets these),
@@ -22,7 +24,11 @@ else
     CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
       -o "$FIXTURE" "$ROOT/cmd/testfixture"
 fi
-"$FIXTURE" -out "$DB_PATH"
+fixture_args=(-out "$DB_PATH")
+if [ "$BACKEND" = "duckdb" ]; then
+  fixture_args+=(-duckdb-out "$DUCKDB_PATH")
+fi
+"$FIXTURE" "${fixture_args[@]}"
 
 if [ -n "$SERVER" ] && [ -f "$SERVER" ] && [ -x "$SERVER" ]; then
     echo "Using pre-built server: $SERVER"
@@ -42,22 +48,41 @@ fi
 # Run server with test DB, no sync dirs, fixed port.
 # Every agent dir must point to EMPTY_DIR to prevent
 # the server from discovering real sessions on the host.
-echo "Starting e2e server on :8090..."
-AGENTSVIEW_DATA_DIR="$TMPDIR" \
-CLAUDE_PROJECTS_DIR="$EMPTY_DIR" \
-CODEX_SESSIONS_DIR="$EMPTY_DIR" \
-COPILOT_DIR="$EMPTY_DIR" \
-GEMINI_DIR="$EMPTY_DIR" \
-OPENCODE_DIR="$EMPTY_DIR" \
-CURSOR_PROJECTS_DIR="$EMPTY_DIR" \
-AMP_DIR="$EMPTY_DIR" \
-IFLOW_DIR="$EMPTY_DIR" \
-ZED_DIR="$EMPTY_DIR" \
-VSCODE_COPILOT_DIR="$EMPTY_DIR" \
-PI_DIR="$EMPTY_DIR" \
-OPENCLAW_DIR="$EMPTY_DIR" \
-QCLAW_DIR="$EMPTY_DIR" \
-WORKBUDDY_PROJECTS_DIR="$EMPTY_DIR" \
-exec "$SERVER" serve \
-  --port 8090 \
-  --no-browser
+agent_env=(
+  "AGENTSVIEW_DATA_DIR=$TMPDIR"
+  "CLAUDE_PROJECTS_DIR=$EMPTY_DIR"
+  "CODEX_SESSIONS_DIR=$EMPTY_DIR"
+  "COPILOT_DIR=$EMPTY_DIR"
+  "GEMINI_DIR=$EMPTY_DIR"
+  "OPENCODE_DIR=$EMPTY_DIR"
+  "CURSOR_PROJECTS_DIR=$EMPTY_DIR"
+  "AMP_DIR=$EMPTY_DIR"
+  "IFLOW_DIR=$EMPTY_DIR"
+  "ZED_DIR=$EMPTY_DIR"
+  "VSCODE_COPILOT_DIR=$EMPTY_DIR"
+  "PI_DIR=$EMPTY_DIR"
+  "OPENCLAW_DIR=$EMPTY_DIR"
+  "QCLAW_DIR=$EMPTY_DIR"
+  "WORKBUDDY_PROJECTS_DIR=$EMPTY_DIR"
+)
+
+case "$BACKEND" in
+  sqlite)
+    echo "Starting sqlite e2e server on :8090..."
+    exec env "${agent_env[@]}" "$SERVER" serve \
+      --port 8090 \
+      --no-browser
+    ;;
+  duckdb)
+    echo "Starting duckdb e2e server on :8090..."
+    exec env "${agent_env[@]}" \
+      AGENTSVIEW_DUCKDB_PATH="$DUCKDB_PATH" \
+      "$SERVER" duckdb serve \
+      --port 8090 \
+      --no-browser
+    ;;
+  *)
+    echo "unsupported AGENTSVIEW_E2E_BACKEND=$BACKEND" >&2
+    exit 1
+    ;;
+esac
