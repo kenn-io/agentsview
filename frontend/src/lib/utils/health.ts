@@ -4,7 +4,6 @@ const DEBOUNCE_MS = 5_000;
 const TIMEOUT_MS = 3_000;
 
 interface VisibilityHealthCheckOptions {
-  onBackendAvailable?: () => void;
   onBackendDegraded?: (status: number) => void;
 }
 
@@ -64,7 +63,6 @@ export function setupVisibilityHealthCheck(
           opts.onBackendDegraded?.(res.status);
           return;
         }
-        opts.onBackendAvailable?.();
       })
       .catch(() => {
         clearTimeout(timer);

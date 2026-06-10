@@ -350,7 +350,6 @@
     sync.startPolling();
 
     const healthCleanup = setupVisibilityHealthCheck(getBase, {
-      onBackendAvailable: () => sync.clearBackendDegraded(),
       onBackendDegraded: () => sync.markBackendDegraded(),
     });
 

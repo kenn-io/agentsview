@@ -92,13 +92,14 @@ class SyncStore {
     }
   }
 
-  /** Record whether the backend responded. Only flags a failure
-   * when a remote server is configured — local failures are handled
-   * by the visibility health check, which reloads the page. */
+  /** Record whether the backend process responded. Only flags a
+   * failure when a remote server is configured — local failures are
+   * handled by the visibility health check, which reloads the page.
+   * A successful liveness-style response does not prove PG-backed
+   * reads are healthy, so it must not clear backendDegraded. */
   private markRemoteReachable(reachable: boolean) {
     if (reachable) {
       this.remoteUnreachable = false;
-      this.clearBackendDegraded();
       return;
     }
     this.clearBackendDegraded();
@@ -188,6 +189,7 @@ class SyncStore {
       ) as unknown as Stats;
       if (this.statsVersion === version) {
         this.stats = result;
+        this.clearBackendDegraded();
       }
     } catch (error) {
       this.markBackendFailure(error);
