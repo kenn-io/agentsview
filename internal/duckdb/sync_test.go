@@ -457,9 +457,10 @@ func TestSyncFilteredFullClearsGlobalWatermarkForLaterUnfilteredPush(t *testing.
 	watermark, err := local.GetSyncState(lastPushStateKey)
 	require.NoError(t, err)
 	assert.Empty(t, watermark)
-	fingerprints, err := local.GetSyncState(lastPushBoundaryStateKey)
+	fingerprints, err := readSyncFingerprints(local)
 	require.NoError(t, err)
-	assert.Empty(t, fingerprints)
+	assert.Contains(t, fingerprints, fixture.alphaID)
+	assert.NotContains(t, fingerprints, "stale")
 	require.NoError(t, filtered.Close())
 
 	unfiltered := newTestSync(t, target, local, SyncOptions{})
@@ -467,6 +468,62 @@ func TestSyncFilteredFullClearsGlobalWatermarkForLaterUnfilteredPush(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, 2, second.SessionsPushed)
 	assertDuckDBCountWhere(t, unfiltered.DB(), "sessions", "id = ?", fixture.betaID, 1)
+}
+
+func TestSyncFilteredFullPushKeepsNextFilteredPushIncremental(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local)
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "filtered-incremental.duckdb"),
+		local, SyncOptions{Projects: []string{"alpha"}})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.SessionsPushed)
+
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, second.SessionsPushed)
+	assert.Equal(t, 0, second.MessagesPushed)
+
+	watermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.Empty(t, watermark)
+}
+
+func TestSyncFilteredIncrementalPersistsFingerprintsWithoutAdvancingWatermark(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	target := filepath.Join(t.TempDir(), "filtered-watermark.duckdb")
+
+	unfiltered := newTestSync(t, target, local, SyncOptions{})
+	first, err := unfiltered.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	require.NoError(t, unfiltered.Close())
+
+	watermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	require.NotEmpty(t, watermark)
+
+	time.Sleep(time.Millisecond)
+	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
+	updateSession(t, local, fixture.alphaID, "alpha filtered change", modifiedAt)
+
+	filtered := newTestSync(t, target, local, SyncOptions{Projects: []string{"alpha"}})
+	second, err := filtered.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.SessionsPushed)
+
+	got, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.Equal(t, watermark, got)
+
+	third, err := filtered.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, third.SessionsPushed)
 }
 
 func TestSyncFilteredIncrementalUpdatesPinsWithoutSessionChange(t *testing.T) {

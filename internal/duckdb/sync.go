@@ -291,13 +291,14 @@ func (s *Sync) Push(
 		return result, fmt.Errorf("commit duckdb tx: %w", err)
 	}
 	if full && s.isFiltered() {
+		// Clear the global watermark so the next unfiltered push
+		// starts from scratch; finalizeState then persists fresh
+		// fingerprints keyed at cutoff for later filtered runs.
 		if err := clearDuckDBSyncState(s.local); err != nil {
 			return result, err
 		}
-		result.Duration = time.Since(start)
-		return result, nil
 	}
-	if err := s.finalizeState(cutoff, pushed, priorFingerprints, sessionFingerprints); err != nil {
+	if err := s.finalizeState(lastPush, cutoff, pushed, priorFingerprints, sessionFingerprints); err != nil {
 		return result, err
 	}
 	result.Duration = time.Since(start)
@@ -333,13 +334,25 @@ func (s *Sync) sessionCount(ctx context.Context) (int, error) {
 }
 
 func (s *Sync) finalizeState(
-	cutoff string,
+	lastPush, cutoff string,
 	pushed []db.Session,
 	priorFingerprints map[string]string,
 	sessionFingerprints map[string]string,
 ) error {
 	if s.isFiltered() {
-		return nil
+		// Filtered pushes must not advance the global watermark
+		// past sessions from other projects, but still persist
+		// fingerprints so repeated filtered runs stay incremental.
+		// Use cutoff as the boundary key when lastPush is empty
+		// (--full or mirror reset) so the next filtered run can
+		// match fingerprints, mirroring the PostgreSQL push.
+		boundaryKey := lastPush
+		if boundaryKey == "" {
+			boundaryKey = cutoff
+		}
+		return writeSyncFingerprints(
+			s.local, boundaryKey, pushed, priorFingerprints, sessionFingerprints,
+		)
 	}
 	if err := s.local.SetSyncState(lastPushStateKey, cutoff); err != nil {
 		return fmt.Errorf("updating %s: %w", lastPushStateKey, err)
