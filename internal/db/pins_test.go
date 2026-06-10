@@ -115,3 +115,28 @@ func TestListPinnedMessages_SessionFilterIgnoresProject(t *testing.T) {
 	require.NoError(t, err, "ListPinnedMessages by session")
 	require.Len(t, pins, 1)
 }
+
+// TestListPinnedMessages_SessionNameFallback verifies that a session
+// with only session_name set (no user rename / display_name) returns
+// the session_name value in SessionDisplayName rather than NULL.
+func TestListPinnedMessages_SessionNameFallback(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	agentName := "My Agent Session"
+	insertSession(t, d, "s1", "alpha", func(s *Session) {
+		s.SessionName = &agentName
+		// DisplayName intentionally left nil (no user rename).
+	})
+	insertMessages(t, d, userMsg("s1", 0, "hello from agent"))
+	pinFirstMessage(t, d, "s1")
+
+	pins, err := d.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1)
+
+	require.NotNil(t, pins[0].SessionDisplayName,
+		"SessionDisplayName should fall back to session_name, got nil")
+	assert.Equal(t, agentName, *pins[0].SessionDisplayName,
+		"SessionDisplayName should equal session_name when display_name is NULL")
+}
