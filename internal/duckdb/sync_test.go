@@ -66,6 +66,52 @@ func TestSessionFingerprintsStoreDigestOnly(t *testing.T) {
 	assert.False(t, strings.Contains(fp, "pin alpha"))
 }
 
+func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
+	base := db.Session{
+		ID:               "sess-001",
+		Project:          "proj",
+		Machine:          "laptop",
+		Agent:            "claude",
+		MessageCount:     5,
+		UserMessageCount: 2,
+		CreatedAt:        "2026-03-11T12:00:00Z",
+	}
+	encode := func(s db.Session) string {
+		data, err := json.Marshal(duckSessionFingerprintFields(s, "laptop"))
+		require.NoError(t, err)
+		return string(data)
+	}
+	fp1 := encode(base)
+
+	tests := []struct {
+		name   string
+		modify func(s db.Session) db.Session
+	}{
+		{
+			name: "display name change",
+			modify: func(s db.Session) db.Session {
+				name := "new name"
+				s.DisplayName = &name
+				return s
+			},
+		},
+		{
+			name: "session_name change",
+			modify: func(s db.Session) db.Session {
+				n := "agent-provided-title"
+				s.SessionName = &n
+				return s
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.NotEqual(t, fp1, encode(tt.modify(base)))
+		})
+	}
+}
+
 func TestWriteSyncFingerprintsNormalizesRetainedLegacyValues(t *testing.T) {
 	local := newLocalDB(t)
 	legacy := `{"Messages":[{"content":"secret token sk-legacy"}]}`

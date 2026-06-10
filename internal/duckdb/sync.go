@@ -551,6 +551,7 @@ func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 	return []any{
 		sess.ID, sess.Project, machine, sess.Agent,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
+		nilString(sess.SessionName),
 		nilTime(sess.StartedAt), nilTime(sess.EndedAt),
 		sess.MessageCount, sess.UserMessageCount,
 		nilString(sess.FilePath), sess.FileSize, sess.FileMtime,
