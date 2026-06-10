@@ -11,4 +11,3 @@ func ParsedSessionName(sess parser.ParsedSession) *string {
 	n := sess.SessionName
 	return &n
 }
-

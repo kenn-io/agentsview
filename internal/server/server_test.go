@@ -1046,9 +1046,9 @@ func TestListSessions_ExcludeOneShotDefault(t *testing.T) {
 func TestSidebarIndexReturnsSkinnyRows(t *testing.T) {
 	te := setup(t)
 
-	displayName := "Important investigation"
+	sessionName := "Important investigation"
 	te.seedSession(t, "named", "my-app", 5, func(s *db.Session) {
-		s.DisplayName = &displayName
+		s.SessionName = &sessionName
 		s.UserMessageCount = 2
 	})
 	teammateFirstMessage := "<teammate-message from=\"codex\">review"
@@ -1067,8 +1067,8 @@ func TestSidebarIndexReturnsSkinnyRows(t *testing.T) {
 	resp := decode[db.SidebarSessionIndex](t, w)
 	rows := sidebarIndexRowsByID(resp.Sessions)
 
-	if got := rows["named"].DisplayName; got == nil || *got != displayName {
-		t.Fatalf("display_name = %v, want %q", got, displayName)
+	if got := rows["named"].DisplayName; got == nil || *got != sessionName {
+		t.Fatalf("display_name = %v, want %q", got, sessionName)
 	}
 	if !rows["teammate"].IsTeammate {
 		t.Fatal("teammate is_teammate = false, want true")

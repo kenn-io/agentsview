@@ -147,10 +147,10 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 			},
 		},
 		{
-			name: "name_source change",
+			name: "session_name change",
 			modify: func(s db.Session) db.Session {
-				src := "user"
-				s.NameSource = &src
+				n := "agent-provided-title"
+				s.SessionName = &n
 				return s
 			},
 		},

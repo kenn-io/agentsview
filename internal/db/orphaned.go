@@ -368,10 +368,10 @@ func (d *DB) CopySessionMetadataFrom(
 	defer func() { _ = tx.Rollback() }()
 
 	// Copy user-managed metadata from the quiesced old DB. deleted_at
-	// is copied for all rows. display_name/name_source are overlaid
-	// ONLY for user-owned rows: the fresh DB already holds re-parsed
-	// agent names, so agent-owned and cleared rows must keep the fresh
-	// value. Probe columns first so older source DBs don't abort.
+	// is copied for all rows. display_name is overlaid ONLY for
+	// user-owned rows: the fresh DB already holds re-parsed session_name
+	// values, so agent-owned and cleared rows must keep the fresh value.
+	// Probe columns first so older source DBs don't abort.
 	hasDisplayName := oldDBHasColumn(ctx, tx, "sessions", "display_name")
 	hasDeletedAt := oldDBHasColumn(ctx, tx, "sessions", "deleted_at")
 	hasNameSource := oldDBHasColumn(ctx, tx, "sessions", "name_source")
@@ -387,22 +387,21 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 
 	if hasDisplayName && hasNameSource {
+		// Source DB used name_source='user' to mark user renames.
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
-			SET display_name = old_s.display_name,
-			    name_source  = 'user'
+			SET display_name = old_s.display_name
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id
 			  AND old_s.name_source = 'user'`); err != nil {
 			return fmt.Errorf("copying user display_name: %w", err)
 		}
 	} else if hasDisplayName {
-		// Pre-feature source DB: every non-NULL display_name was a
-		// manual rename, so treat it as user-owned.
+		// Pre-name_source source DB: every non-NULL display_name was a
+		// manual rename, so copy it directly.
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
-			SET display_name = old_s.display_name,
-			    name_source  = 'user'
+			SET display_name = old_s.display_name
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id
 			  AND old_s.display_name IS NOT NULL`); err != nil {
@@ -505,9 +504,10 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	if oldDBHasColumn(ctx, tx, "sessions", "display_name") {
 		cols = append(cols, "display_name")
 	}
-	if oldDBHasColumn(ctx, tx, "sessions", "name_source") {
-		cols = append(cols, "name_source")
+	if oldDBHasColumn(ctx, tx, "sessions", "session_name") {
+		cols = append(cols, "session_name")
 	}
+	// name_source was removed from the schema; do not copy it.
 	cols = append(cols,
 		"started_at", "ended_at", "message_count",
 		"user_message_count", "file_path", "file_size",

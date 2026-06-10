@@ -646,7 +646,7 @@ func sessionPushFingerprint(
 		sess.Agent,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
-		stringValue(sess.NameSource),
+		stringValue(sess.SessionName),
 		stringValue(sess.StartedAt),
 		stringValue(sess.EndedAt),
 		stringValue(sess.DeletedAt),
@@ -766,7 +766,7 @@ func (s *Sync) pushSession(
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent,
-			first_message, display_name, name_source,
+			first_message, display_name, session_name,
 			created_at, started_at, ended_at, deleted_at,
 			message_count, user_message_count,
 			total_output_tokens, peak_context_tokens,
@@ -809,7 +809,7 @@ func (s *Sync) pushSession(
 			agent = EXCLUDED.agent,
 			first_message = EXCLUDED.first_message,
 			display_name = EXCLUDED.display_name,
-			name_source = EXCLUDED.name_source,
+			session_name = EXCLUDED.session_name,
 			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
 			ended_at = EXCLUDED.ended_at,
@@ -855,7 +855,7 @@ func (s *Sync) pushSession(
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
 			OR sessions.display_name IS DISTINCT FROM EXCLUDED.display_name
-			OR sessions.name_source IS DISTINCT FROM EXCLUDED.name_source
+			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
 			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
 			OR sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
@@ -900,7 +900,7 @@ func (s *Sync) pushSession(
 		sess.Agent,
 		nilStr(sess.FirstMessage),
 		nilStr(sess.DisplayName),
-		nilStr(sess.NameSource),
+		nilStr(sess.SessionName),
 		createdAt,
 		nilStrTS(sess.StartedAt),
 		nilStrTS(sess.EndedAt),

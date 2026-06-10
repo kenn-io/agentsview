@@ -3768,16 +3768,15 @@ func TestCopyOrphanedDataFrom_TokenMetadata(t *testing.T) {
 	assert.NotEmpty(t, m.TokenUsage, "TokenUsage should be preserved")
 }
 
-func TestCopyOrphanedDataFrom_NameSource(t *testing.T) {
+func TestCopyOrphanedDataFrom_SessionName(t *testing.T) {
 	dir := t.TempDir()
 
-	// Source DB: one session with an agent-provided display name.
+	// Source DB: one session with an agent-provided session_name.
 	srcPath := filepath.Join(dir, "old.db")
 	srcDB, err := Open(srcPath)
 	requireNoError(t, err, "Open src")
 	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
-		s.DisplayName = Ptr("Agent Generated Name")
-		s.NameSource = Ptr("agent")
+		s.SessionName = Ptr("Agent Generated Name")
 	})
 	insertMessages(t, srcDB, userMsg("s1", 0, "hello"))
 	srcDB.Close()
@@ -3792,15 +3791,13 @@ func TestCopyOrphanedDataFrom_NameSource(t *testing.T) {
 	requireNoError(t, err, "CopyOrphanedDataFrom")
 	require.Equal(t, 1, count, "expected 1 orphaned session")
 
-	// name_source must survive the orphan copy.
+	// session_name must survive the orphan copy (visible via COALESCE).
 	ctx := context.Background()
 	s, err := dstDB.GetSession(ctx, "s1")
 	requireNoError(t, err, "GetSession s1")
 	require.NotNil(t, s, "orphaned session s1 not found in dst")
-	require.NotNil(t, s.DisplayName, "DisplayName should be copied")
-	assert.Equal(t, "Agent Generated Name", *s.DisplayName, "DisplayName")
-	require.NotNil(t, s.NameSource, "NameSource should be copied")
-	assert.Equal(t, "agent", *s.NameSource, "NameSource should be 'agent'")
+	require.NotNil(t, s.DisplayName, "DisplayName should be populated via COALESCE")
+	assert.Equal(t, "Agent Generated Name", *s.DisplayName, "DisplayName via COALESCE(display_name, session_name)")
 }
 
 func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
@@ -5291,64 +5288,44 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 	}
 }
 
-func TestNameSourceMigrationBackfillsUserRenames(t *testing.T) {
+// TestDisplayNameNotOverwrittenByUpsert verifies that display_name (the user
+// override column) is never touched by UpsertSession. Only RenameSession
+// may write it. This replaces the old BackfillNameSource tests which tested
+// a migration helper that no longer exists.
+func TestDisplayNameNotOverwrittenByUpsert(t *testing.T) {
 	d := testDB(t)
+	ctx := context.Background()
 
-	// Insert a file-backed session (file_path required for backfill).
 	fp := "/home/user/.claude/sessions/s1.jsonl"
-	insertSession(t, d, "s1", "p", func(s *Session) { s.FilePath = &fp })
+	// Fresh session with a session_name from the parser.
+	requireNoError(t, d.UpsertSession(Session{
+		ID:          "s1",
+		Project:     "p",
+		Machine:     "local",
+		Agent:       "claude",
+		SessionName: Ptr("Agent Name"),
+		FilePath:    &fp,
+	}), "initial upsert")
 
-	// Rename it to simulate a user-set display_name.
-	name := "Manual Name"
-	require.NoError(t, d.RenameSession("s1", &name), "RenameSession")
+	// User renames it.
+	requireNoError(t, d.RenameSession("s1", Ptr("Manual Name")), "RenameSession")
 
-	// Simulate a pre-feature row: clear name_source as if the column
-	// didn't exist when the rename was stored.
-	_, err := d.getWriter().Exec(
-		"UPDATE sessions SET name_source = NULL WHERE id = 's1'",
-	)
-	require.NoError(t, err, "clear name_source")
+	// Re-parse with a new agent name: display_name must NOT be overwritten.
+	requireNoError(t, d.UpsertSession(Session{
+		ID:          "s1",
+		Project:     "p",
+		Machine:     "local",
+		Agent:       "claude",
+		SessionName: Ptr("New Agent Name"),
+		FilePath:    &fp,
+	}), "re-upsert with new agent name")
 
-	// Run the backfill.
-	require.NoError(t, d.BackfillNameSource(), "BackfillNameSource")
-
-	// Verify name_source is now 'user'.
-	var nameSource *string
-	err = d.getWriter().QueryRow(
-		"SELECT name_source FROM sessions WHERE id = 's1'",
-	).Scan(&nameSource)
-	require.NoError(t, err, "select name_source")
-	require.NotNil(t, nameSource, "name_source should be non-nil")
-	assert.Equal(t, "user", *nameSource, "name_source should be 'user'")
-}
-
-func TestBackfillNameSourceSkipsImportedSessions(t *testing.T) {
-	d := testDB(t)
-
-	filePath := "/home/user/.claude/sessions/abc.jsonl"
-	// File-backed session: has file_path; pre-feature display_name is a user rename.
-	insertSession(t, d, "file-backed", "p", func(s *Session) {
-		s.DisplayName = Ptr("User Rename")
-		s.FilePath = &filePath
-	})
-	// Imported session: no file_path; display_name is the imported conversation title.
-	insertSession(t, d, "imported", "p", func(s *Session) {
-		s.DisplayName = Ptr("Imported Title")
-	})
-
-	require.NoError(t, d.BackfillNameSource(), "BackfillNameSource")
-
-	var ns *string
-	require.NoError(t, d.getWriter().QueryRow(
-		"SELECT name_source FROM sessions WHERE id = 'file-backed'",
-	).Scan(&ns))
-	require.NotNil(t, ns, "file-backed user rename should be stamped 'user'")
-	assert.Equal(t, "user", *ns)
-
-	require.NoError(t, d.getWriter().QueryRow(
-		"SELECT name_source FROM sessions WHERE id = 'imported'",
-	).Scan(&ns))
-	assert.Nil(t, ns, "imported session title should not be pinned as user-owned")
+	s, err := d.GetSession(ctx, "s1")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, s, "session not found")
+	require.NotNil(t, s.DisplayName, "display_name must not be nil")
+	assert.Equal(t, "Manual Name", *s.DisplayName,
+		"user's display_name must survive re-parse")
 }
 
 func TestCopySessionMetadataPreservesUserNotAgent(t *testing.T) {
@@ -5364,7 +5341,7 @@ func TestCopySessionMetadataPreservesUserNotAgent(t *testing.T) {
 	requireNoError(t, oldDB.RenameSession("u", Ptr("User Name")), "rename u")
 	requireNoError(t, oldDB.UpsertSession(Session{
 		ID: "a", Project: "p", Machine: "local", Agent: "claude",
-		DisplayName: Ptr("Old Agent"), NameSource: Ptr("agent"),
+		SessionName: Ptr("Old Agent"),
 	}), "upsert a")
 	requireNoError(t, oldDB.Close(), "close old")
 
@@ -5372,31 +5349,27 @@ func TestCopySessionMetadataPreservesUserNotAgent(t *testing.T) {
 	fresh := testDB(t)
 	requireNoError(t, fresh.UpsertSession(Session{
 		ID: "u", Project: "p", Machine: "local", Agent: "claude",
-		DisplayName: Ptr("Fresh Agent U"), NameSource: Ptr("agent"),
+		SessionName: Ptr("Fresh Agent U"),
 	}), "fresh u")
 	requireNoError(t, fresh.UpsertSession(Session{
 		ID: "a", Project: "p", Machine: "local", Agent: "claude",
-		DisplayName: Ptr("Fresh Agent A"), NameSource: Ptr("agent"),
+		SessionName: Ptr("Fresh Agent A"),
 	}), "fresh a")
 
 	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
 
 	u := getSessionRow(t, fresh, "u")
-	require.NotNil(t, u.DisplayName)
+	require.NotNil(t, u.DisplayName, "user rename overlaid")
 	assert.Equal(t, "User Name", *u.DisplayName, "user rename overlaid")
-	require.NotNil(t, u.NameSource)
-	assert.Equal(t, "user", *u.NameSource)
 
 	a := getSessionRow(t, fresh, "a")
-	require.NotNil(t, a.DisplayName)
-	assert.Equal(t, "Fresh Agent A", *a.DisplayName, "agent keeps fresh name")
-	require.NotNil(t, a.NameSource)
-	assert.Equal(t, "agent", *a.NameSource)
+	assert.Nil(t, a.DisplayName, "agent session has no user display_name")
+	require.NotNil(t, a.SessionName, "fresh session_name preserved")
+	assert.Equal(t, "Fresh Agent A", *a.SessionName, "agent keeps fresh session_name")
 }
 
-// A name the user cleared in the old DB (name_source NULL) must NOT be
-// re-applied on resync; the fresh re-parsed agent name wins ("clear
-// un-pins").
+// A name the user cleared in the old DB (display_name NULL) must NOT be
+// re-applied on resync; the fresh re-parsed session_name wins.
 func TestCopySessionMetadataClearedNameYieldsToAgent(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.db")
@@ -5413,15 +5386,15 @@ func TestCopySessionMetadataClearedNameYieldsToAgent(t *testing.T) {
 	fresh := testDB(t)
 	requireNoError(t, fresh.UpsertSession(Session{
 		ID: "c", Project: "p", Machine: "local", Agent: "claude",
-		DisplayName: Ptr("Fresh Agent C"), NameSource: Ptr("agent"),
+		SessionName: Ptr("Fresh Agent C"),
 	}), "fresh c")
 
 	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
 
 	c := getSessionRow(t, fresh, "c")
-	require.NotNil(t, c.DisplayName)
-	assert.Equal(t, "Fresh Agent C", *c.DisplayName,
-		"cleared old name must yield to fresh agent name")
-	require.NotNil(t, c.NameSource)
-	assert.Equal(t, "agent", *c.NameSource)
+	assert.Nil(t, c.DisplayName,
+		"cleared old display_name must not be re-applied")
+	require.NotNil(t, c.SessionName, "fresh session_name preserved")
+	assert.Equal(t, "Fresh Agent C", *c.SessionName,
+		"cleared old name must yield to fresh session_name")
 }

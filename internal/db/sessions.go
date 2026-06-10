@@ -29,7 +29,7 @@ var ErrSessionTrashed = errors.New("session trashed")
 // sessionBaseCols is the column list for standard session queries
 // (list, get). Keep in sync with scanSessionRow.
 const sessionBaseCols = `id, project, machine, agent,
-	first_message, display_name, name_source, started_at, ended_at,
+	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -53,7 +53,7 @@ const sessionBaseCols = `id, project, machine, agent,
 // sessionPruneCols extends sessionBaseCols with file metadata
 // needed by FindPruneCandidates.
 const sessionPruneCols = `id, project, machine, agent,
-	first_message, display_name, started_at, ended_at,
+	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -76,7 +76,7 @@ const sessionPruneCols = `id, project, machine, agent,
 
 // sessionFullCols includes all columns for a complete session record.
 const sessionFullCols = `id, project, machine, agent,
-	first_message, display_name, name_source, started_at, ended_at,
+	first_message, display_name, session_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -117,7 +117,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 	var s Session
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.FirstMessage, &s.DisplayName, &s.NameSource, &s.StartedAt, &s.EndedAt,
+		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
@@ -729,7 +729,7 @@ func (db *DB) GetSidebarSessionIndex(
 			project,
 			machine,
 			agent,
-			display_name,
+			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
 			created_at,
@@ -823,7 +823,7 @@ func (db *DB) GetSessionFull(
 	var s Session
 	err := row.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
-		&s.FirstMessage, &s.DisplayName, &s.NameSource, &s.StartedAt, &s.EndedAt,
+		&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
 		&s.ParentSessionID, &s.RelationshipType,
 		&s.TotalOutputTokens, &s.PeakContextTokens,
@@ -921,7 +921,7 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 
 const upsertSessionSQL = `
 		INSERT INTO sessions (
-			id, project, machine, agent, first_message, display_name, name_source,
+			id, project, machine, agent, first_message, session_name,
 			started_at, ended_at, message_count,
 			user_message_count, parent_session_id,
 			relationship_type,
@@ -934,20 +934,15 @@ const upsertSessionSQL = `
 			is_truncated,
 			file_path, file_size, file_mtime,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
 			agent = excluded.agent,
 			first_message = excluded.first_message,
-			-- display_name and name_source move as a unit: a user-owned
-			-- row preserves both; otherwise both take the incoming values.
-			display_name = CASE WHEN sessions.name_source = 'user'
-				THEN sessions.display_name
-				ELSE excluded.display_name END,
-			name_source = CASE WHEN sessions.name_source = 'user'
-				THEN sessions.name_source
-				ELSE excluded.name_source END,
+			-- session_name is always overwritten by re-parse; display_name
+			-- is the user override and is only touched by RenameSession.
+			session_name = excluded.session_name,
 			started_at = excluded.started_at,
 			ended_at = excluded.ended_at,
 			message_count = excluded.message_count,
@@ -981,7 +976,7 @@ func sessionIsAutomated(s Session) bool {
 
 func upsertSessionArgs(s Session) []any {
 	return []any{
-		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.DisplayName, s.NameSource,
+		s.ID, s.Project, s.Machine, s.Agent, s.FirstMessage, s.SessionName,
 		s.StartedAt, s.EndedAt, s.MessageCount,
 		s.UserMessageCount, s.ParentSessionID,
 		s.RelationshipType,
@@ -1867,22 +1862,16 @@ func (db *DB) RestoreSession(id string) (int64, error) {
 }
 
 // RenameSession sets or clears the display_name for a session.
-// Pass nil to clear a custom name (reverts to first_message).
+// Pass nil to clear a custom name (reverts to session_name or first_message).
 func (db *DB) RenameSession(id string, displayName *string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	var source *string
-	if displayName != nil {
-		s := "user"
-		source = &s
-	}
 	_, err := db.getWriter().Exec(
 		`UPDATE sessions
 		 SET display_name = ?,
-		     name_source = ?,
 		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ? AND deleted_at IS NULL`,
-		displayName, source, id,
+		displayName, id,
 	)
 	return err
 }
@@ -2086,7 +2075,7 @@ func (db *DB) ListSessionsModifiedBetween(
 		var s Session
 		err := rows.Scan(
 			&s.ID, &s.Project, &s.Machine, &s.Agent,
-			&s.FirstMessage, &s.DisplayName, &s.NameSource, &s.StartedAt, &s.EndedAt,
+			&s.FirstMessage, &s.DisplayName, &s.SessionName, &s.StartedAt, &s.EndedAt,
 			&s.MessageCount, &s.UserMessageCount,
 			&s.ParentSessionID, &s.RelationshipType,
 			&s.TotalOutputTokens, &s.PeakContextTokens,
