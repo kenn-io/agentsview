@@ -172,6 +172,26 @@ func TestImportChatGPT(t *testing.T) {
 	assert.Equal(t, "chatgpt.com", s.Project)
 }
 
+func TestImportAdvancesLocalModifiedAt(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	_, err := ImportClaudeAI(
+		ctx, d, strings.NewReader(testConversationsJSON), nil,
+	)
+	require.NoError(t, err)
+
+	// local_modified_at must be non-NULL after import so incremental PG push
+	// picks up session_name changes without relying on file_mtime.
+	// In practice this is set by replaceSecretFindingsTx which is called
+	// inside ReplaceSessionMessages on every message-replacing import.
+	full, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, full)
+	require.NotNil(t, full.LocalModifiedAt,
+		"local_modified_at must be set after import so PG push picks up session_name changes")
+}
+
 func TestImportSetsDisplayName(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
