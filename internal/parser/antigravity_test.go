@@ -1123,45 +1123,6 @@ func TestAntigravityCLITrajectoryWithoutSupportedMessagesFallsBack(t *testing.T)
 	}
 }
 
-func TestAntigravityCLIStaleTrajectoryFallsBack(t *testing.T) {
-	root := t.TempDir()
-	id := "44444444-5555-6666-7777-888888888888"
-
-	mustMkdir(t, filepath.Join(root, "conversations"))
-
-	pbPath := filepath.Join(root, "conversations", id+".pb")
-	mustWrite(t, pbPath, []byte("newer-pb-stub"))
-	sidecarPath := filepath.Join(root, "conversations", id+".trajectory.json")
-	mustWrite(t, sidecarPath, []byte(`{
-		"steps": [
-			{
-				"type": "CORTEX_STEP_TYPE_USER_INPUT",
-				"metadata": {
-					"createdAt": "2026-05-20T22:40:00Z"
-				},
-				"userInput": {
-					"userResponse": "stale trajectory prompt"
-				}
-			}
-		]
-	}`))
-	mustWrite(t, filepath.Join(root, "history.jsonl"),
-		[]byte(`{"display":"new history prompt","timestamp":1779000000000,`+
-			`"workspace":"/tmp/proj","conversationId":"`+id+`"}`))
-
-	now := time.Now()
-	require.NoError(t, os.Chtimes(sidecarPath, now.Add(-time.Hour), now.Add(-time.Hour)))
-	require.NoError(t, os.Chtimes(pbPath, now, now))
-
-	sess, msgs, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
-	require.NoError(t, err)
-
-	require.Len(t, msgs, 1)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "new history prompt", msgs[0].Content)
-	assert.Equal(t, "new history prompt", sess.FirstMessage)
-}
-
 // writeAntigravityTestSidecar writes a trajectory sidecar with the first
 // numSteps of a fixed user-input / planner-response / run-command sequence.
 func writeAntigravityTestSidecar(
@@ -1308,4 +1269,34 @@ func TestAntigravityCLIDBFileInfoIncludesTrajectorySidecar(t *testing.T) {
 	assert.Equal(t, int64(len("db")+len("sidecar")), info.Size())
 	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano(),
 		"agy-reader sidecar update must change the .db fingerprint")
+}
+
+func TestAntigravityCLIPBUsesSidecarDespiteOlderMtime(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	pbPath := filepath.Join(root, "conversations", id+".pb")
+	mustWrite(t, pbPath, []byte("pb-stub"))
+	sidecarPath := writeAntigravityTestSidecar(t, root, id, 2)
+
+	// Sidecar predates the .pb -- e.g. the encrypted file was touched
+	// after the final agy-reader sync. The old mtime gate rejected the
+	// sidecar here and fell back to low-fidelity history rows; the
+	// sidecar must win regardless because .pb has no richer decode.
+	early := time.Unix(1779000000, 0)
+	late := time.Unix(1779000300, 0)
+	require.NoError(t, os.Chtimes(sidecarPath, early, early))
+	require.NoError(t, os.Chtimes(pbPath, late, late))
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"history prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/pb-proj","conversationId":"`+id+`"}`))
+
+	sess, msgs, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "sidecar prompt", sess.FirstMessage)
 }

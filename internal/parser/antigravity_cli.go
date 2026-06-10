@@ -220,15 +220,17 @@ func ParseAntigravityCLISessionWithStatus(
 			status.NeedsRetry = true
 		}
 	} else {
+		// Legacy .pb: the file itself is AES-encrypted, so the sidecar is
+		// the only high-fidelity decode and every fallback (history rows,
+		// brain docs, decrypt preview) is strictly lower fidelity. Use any
+		// sidecar that parses with displayable content -- no mtime gate;
+		// .pb files are no longer produced, so their sidecars are final,
+		// and even a sidecar older than the .pb beats the fallbacks.
 		sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
-		if sidecarInfo, err := os.Stat(sidecarPath); err == nil &&
-			!sidecarInfo.ModTime().Before(info.ModTime()) {
-			if tMsgs, _, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
-				if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
-					messages = tMsgs
-					hasTrajectory = true
-				}
-			}
+		if tMsgs, _, err := parseAntigravityCLITrajectory(sidecarPath); err == nil &&
+			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
+			messages = tMsgs
+			hasTrajectory = true
 		}
 	}
 
