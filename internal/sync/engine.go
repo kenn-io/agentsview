@@ -4253,7 +4253,7 @@ func (e *Engine) processAntigravity(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, err := parser.ParseAntigravitySession(
+	sess, msgs, usageEvents, err := parser.ParseAntigravitySession(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
@@ -4270,7 +4270,7 @@ func (e *Engine) processAntigravity(
 
 	return processResult{
 		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
+			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
 		},
 	}
 }
@@ -4284,7 +4284,7 @@ func (e *Engine) processAntigravityCLI(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, parseStatus, err := parser.ParseAntigravityCLISessionWithStatus(
+	sess, msgs, usageEvents, parseStatus, err := parser.ParseAntigravityCLISessionWithStatus(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
@@ -4303,8 +4303,9 @@ func (e *Engine) processAntigravityCLI(
 		needsRetry: parseStatus.NeedsRetry,
 		results: []parser.ParseResult{
 			{
-				Session:  *sess,
-				Messages: msgs,
+				Session:     *sess,
+				Messages:    msgs,
+				UsageEvents: usageEvents,
 			},
 		},
 	}
@@ -5406,17 +5407,16 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 	return pairAndFilter(msgs, blocked)
 }
 
+// toDBUsageEvents converts parser usage events for one session.
+// sessionID is the final ID after remote rewrites; parser-stamped
+// event session IDs predate the idPrefix and are ignored.
 func toDBUsageEvents(
 	sessionID string, events []parser.ParsedUsageEvent,
 ) []db.UsageEvent {
 	out := make([]db.UsageEvent, 0, len(events))
 	for _, ev := range events {
-		sid := ev.SessionID
-		if sid == "" {
-			sid = sessionID
-		}
 		out = append(out, db.UsageEvent{
-			SessionID:                sid,
+			SessionID:                sessionID,
 			MessageOrdinal:           ev.MessageOrdinal,
 			Source:                   ev.Source,
 			Model:                    ev.Model,

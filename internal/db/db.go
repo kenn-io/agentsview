@@ -28,12 +28,19 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 36: the Antigravity CLI .pb branch dropped its sidecar
+// Bumped to 37: Antigravity and Antigravity CLI parsers now extract
+// per-generation model names and token usage (input, output,
+// reasoning) from the gen_metadata table into per-message token
+// fields, session totals, and usage events. Existing Antigravity
+// rows need re-parsing so usage and cost reports include older
+// sessions.
+//
+// (36: the Antigravity CLI .pb branch dropped its sidecar
 // mtime gate: a trajectory.json older than the .pb was rejected in
 // favor of low-fidelity history fallbacks, but the encrypted .pb has no
 // richer decode, .pb files are no longer produced, and their sidecars
 // are final. Existing .pb rows whose sidecar was previously rejected
-// need re-parsing to pick up the full-fidelity transcript.
+// need re-parsing to pick up the full-fidelity transcript.)
 //
 // (35: Antigravity CLI parser changed persisted data in two
 // ways: (a) project inference (GitHub #579) now resolves a workspace
@@ -142,7 +149,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 36
+const dataVersion = 37
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

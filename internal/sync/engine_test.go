@@ -799,6 +799,115 @@ func TestApplyRemoteRewrites(t *testing.T) {
 	}
 }
 
+func TestToDBUsageEventsStampsFinalSessionID(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		events    []parser.ParsedUsageEvent
+		wantIDs   []string
+	}{
+		{
+			name:      "empty event session id gets final id",
+			sessionID: "antigravity:abc",
+			events: []parser.ParsedUsageEvent{
+				{Source: "generation", Model: "gemini"},
+			},
+			wantIDs: []string{"antigravity:abc"},
+		},
+		{
+			name:      "parser-stamped id matching final id is kept",
+			sessionID: "antigravity:abc",
+			events: []parser.ParsedUsageEvent{
+				{
+					SessionID: "antigravity:abc",
+					Source:    "generation",
+					Model:     "gemini",
+				},
+			},
+			wantIDs: []string{"antigravity:abc"},
+		},
+		{
+			name:      "remote prefix overrides parser-stamped id",
+			sessionID: "host~antigravity:abc",
+			events: []parser.ParsedUsageEvent{
+				{
+					SessionID: "antigravity:abc",
+					Source:    "generation",
+					Model:     "gemini",
+				},
+				{
+					SessionID: "antigravity:abc",
+					Source:    "generation",
+					Model:     "claude",
+				},
+			},
+			wantIDs: []string{
+				"host~antigravity:abc",
+				"host~antigravity:abc",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toDBUsageEvents(tt.sessionID, tt.events)
+			require.Len(t, got, len(tt.wantIDs))
+			for i, ev := range got {
+				assert.Equal(t, tt.wantIDs[i], ev.SessionID)
+			}
+		})
+	}
+}
+
+func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database, idPrefix: "host~"}
+
+	ts := time.Unix(1700000000, 0).UTC()
+	pw := pendingWrite{
+		sess: parser.ParsedSession{
+			ID:           "antigravity:abc",
+			Project:      "proj",
+			Machine:      "host",
+			Agent:        parser.AgentAntigravity,
+			StartedAt:    ts,
+			EndedAt:      ts,
+			MessageCount: 1,
+		},
+		msgs: []parser.ParsedMessage{{
+			Role:      parser.RoleUser,
+			Content:   "hello",
+			Timestamp: ts,
+		}},
+		usageEvents: []parser.ParsedUsageEvent{{
+			// Parsers stamp the unprefixed session ID; the
+			// write path must replace it with the final
+			// remote-prefixed ID.
+			SessionID:    "antigravity:abc",
+			Source:       "generation",
+			Model:        "gemini",
+			InputTokens:  100,
+			OutputTokens: 50,
+			OccurredAt:   ts.Format(time.RFC3339Nano),
+		}},
+	}
+
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed, "no session writes may fail")
+	require.Equal(t, 1, written)
+
+	events, err := database.GetUsageEvents(
+		context.Background(), "host~antigravity:abc",
+	)
+	require.NoError(t, err, "GetUsageEvents")
+	require.Len(t, events, 1)
+	assert.Equal(t, "host~antigravity:abc", events[0].SessionID)
+	assert.Equal(t, "gemini", events[0].Model)
+	assert.Equal(t, 100, events[0].InputTokens)
+	assert.Equal(t, 50, events[0].OutputTokens)
+}
+
 func TestShouldSkipFileWithIDPrefix(t *testing.T) {
 	database := openTestDB(t)
 

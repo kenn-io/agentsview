@@ -145,7 +145,7 @@ func antigravityCLIPathID(name string) (string, string, bool) {
 func ParseAntigravityCLISession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, _, err := ParseAntigravityCLISessionWithStatus(
+	sess, msgs, _, _, err := ParseAntigravityCLISessionWithStatus(
 		path, project, machine,
 	)
 	return sess, msgs, err
@@ -166,15 +166,15 @@ type AntigravityCLIParseStatus struct {
 // the result should be retried on the next sync.
 func ParseAntigravityCLISessionWithStatus(
 	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, AntigravityCLIParseStatus, error) {
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, AntigravityCLIParseStatus, error) {
 	var status AntigravityCLIParseStatus
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, nil, status, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, nil, status, fmt.Errorf("stat %s: %w", path, err)
 	}
 	id, ext, ok := antigravityCLIPathID(filepath.Base(path))
 	if !ok {
-		return nil, nil, status, fmt.Errorf(
+		return nil, nil, nil, status, fmt.Errorf(
 			"invalid Antigravity CLI session filename: %s", path,
 		)
 	}
@@ -189,9 +189,14 @@ func ParseAntigravityCLISessionWithStatus(
 	}
 
 	var messages []ParsedMessage
+	var usageEvents []ParsedUsageEvent
 	var hasTrajectory bool
 	if ext == ".db" {
 		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
+		// gen_metadata token usage describes the session's actual
+		// consumption no matter which transcript source wins below;
+		// the trajectory sidecar carries no token data.
+		usageEvents = dbResult.usageEvents
 		dbOK := dbErr == nil &&
 			hasDisplayableAntigravityCLITrajectoryMessage(dbResult.messages)
 
@@ -338,10 +343,14 @@ func ParseAntigravityCLISessionWithStatus(
 			Mtime: mtime,
 		},
 	}
-	if len(messages) == 0 {
-		return sess, nil, status, nil
+	accumulateMessageTokenUsage(sess, messages)
+	for i := range usageEvents {
+		usageEvents[i].SessionID = sess.ID
 	}
-	return sess, messages, status, nil
+	if len(messages) == 0 {
+		return sess, nil, nil, status, nil
+	}
+	return sess, messages, usageEvents, status, nil
 }
 
 func loadAntigravityCLIDBSteps(

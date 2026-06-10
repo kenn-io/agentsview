@@ -79,14 +79,14 @@ func FindAntigravitySourceFile(root, id string) string {
 // ParseAntigravitySession parses one IDE session DB.
 func ParseAntigravitySession(
 	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("stat %s: %w", path, err)
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	if !IsValidSessionID(id) {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"invalid Antigravity IDE session filename: %s", path,
 		)
 	}
@@ -97,15 +97,15 @@ func ParseAntigravitySession(
 	dsn := "file:" + path + "?mode=ro&immutable=0"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"open antigravity db %s: %w", path, err,
 		)
 	}
 	defer db.Close()
 
-	messages, err := loadAntigravitySteps(db)
+	messages, usageEvents, err := loadAntigravitySteps(db)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	messages = append(messages,
 		collectAntigravityBrainMessages(
@@ -170,22 +170,27 @@ func ParseAntigravitySession(
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
-	if len(messages) == 0 {
-		return sess, nil, nil
+	accumulateMessageTokenUsage(sess, messages)
+	for i := range usageEvents {
+		usageEvents[i].SessionID = sess.ID
 	}
-	return sess, messages, nil
+	if len(messages) == 0 {
+		return sess, nil, nil, nil
+	}
+	return sess, messages, usageEvents, nil
 }
 
-func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, error) {
+func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, []ParsedUsageEvent, error) {
 	result, err := loadAntigravityStepsWithRawCount(db)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return result.messages, nil
+	return result.messages, result.usageEvents, nil
 }
 
 type antigravityStepLoadResult struct {
 	messages     []ParsedMessage
+	usageEvents  []ParsedUsageEvent
 	rawStepCount int
 }
 
@@ -200,6 +205,21 @@ func loadAntigravityStepsWithRawCount(
 		return antigravityStepLoadResult{}, fmt.Errorf("query steps: %w", err)
 	}
 	defer rows.Close()
+
+	// Gracefully query gen_metadata if the table exists
+	var genMeta map[int][]byte
+	if genRows, err := db.Query("SELECT idx, data FROM gen_metadata"); err == nil {
+		defer genRows.Close()
+		genMeta = make(map[int][]byte)
+		for genRows.Next() {
+			var idx int
+			var data []byte
+			if err := genRows.Scan(&idx, &data); err == nil {
+				genMeta[idx] = data
+			}
+		}
+	}
+
 	var result antigravityStepLoadResult
 	for rows.Next() {
 		var (
@@ -215,12 +235,129 @@ func loadAntigravityStepsWithRawCount(
 		if !ok {
 			continue
 		}
+
+		// Look up and apply token usage / model details from gen_metadata
+		if genMeta != nil {
+			if data, ok := genMeta[idx]; ok {
+				if input, output, reasoning, okUsage := extractTokenUsage(data); okUsage {
+					msg.ContextTokens = input
+					msg.OutputTokens = output
+					msg.HasContextTokens = input > 0
+					msg.HasOutputTokens = output > 0
+
+					// Add to usage events if we have tokens to report
+					var occurredAt string
+					if !msg.Timestamp.IsZero() {
+						occurredAt = msg.Timestamp.Format(time.RFC3339Nano)
+					}
+
+					model := extractModelName(data)
+					if model == "" {
+						model = msg.Model
+					}
+
+					result.usageEvents = append(result.usageEvents, ParsedUsageEvent{
+						Source:          "generation",
+						Model:           model,
+						InputTokens:     input,
+						OutputTokens:    output,
+						ReasoningTokens: reasoning,
+						OccurredAt:      occurredAt,
+					})
+				}
+				if model := extractModelName(data); model != "" {
+					msg.Model = model
+				}
+			}
+		}
+
 		result.messages = append(result.messages, msg)
 	}
 	if err := rows.Err(); err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf("iterate steps: %w", err)
 	}
 	return result, nil
+}
+
+// extractTokenUsage walks the decoded protobuf fields recursively to find
+// the token usage block containing Field 1 = 1020, Field 2 = output,
+// Field 3 = reasoning, and Field 5 = input.
+//
+// maxPlausibleTokens caps the output-token value accepted by the heuristic.
+// Other nested messages can coincidentally satisfy field1 ∈ [1000, 5000)
+// while field2 holds a large integer (e.g. a nanosecond latency).
+// No real LLM response has produced more than a few million output tokens,
+// so values above this threshold are treated as false positives and skipped.
+const maxPlausibleTokens = 2_000_000
+
+func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
+	fields, err := agProtoParse(data)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	var found bool
+	var walk func([]agProtoField)
+	walk = func(fs []agProtoField) {
+		if found {
+			return
+		}
+		f1, ok1 := agProtoFind(fs, 1)
+		f2, ok2 := agProtoFind(fs, 2)
+		if ok1 && ok2 && f1.Wire == pbWireVarint && f2.Wire == pbWireVarint &&
+			f1.Varint >= 1000 && f1.Varint < 5000 &&
+			f2.Varint <= maxPlausibleTokens {
+			output = int(f2.Varint)
+			if f3, ok := agProtoFind(fs, 3); ok && f3.Wire == pbWireVarint {
+				reasoning = int(f3.Varint)
+			}
+			if f5, ok := agProtoFind(fs, 5); ok && f5.Wire == pbWireVarint {
+				input = int(f5.Varint)
+			}
+			found = true
+			return
+		}
+		for _, f := range fs {
+			if f.Nested != nil {
+				walk(f.Nested)
+			}
+		}
+	}
+	walk(fields)
+	return input, output, reasoning, found
+}
+
+// extractModelName recursively walks fields to extract the model name from Field 21 or Field 19.
+func extractModelName(data []byte) string {
+	fields, err := agProtoParse(data)
+	if err != nil {
+		return ""
+	}
+	var model string
+	var walk func([]agProtoField)
+	walk = func(fs []agProtoField) {
+		if model != "" {
+			return
+		}
+		if f21, ok := agProtoFind(fs, 21); ok {
+			if s, ok := agProtoString(f21); ok && s != "" {
+				model = s
+				return
+			}
+		}
+		if f19, ok := agProtoFind(fs, 19); ok {
+			if s, ok := agProtoString(f19); ok && s != "" {
+				model = s
+				return
+			}
+		}
+		for _, f := range fs {
+			if f.Nested != nil {
+				walk(f.Nested)
+			}
+		}
+	}
+	walk(fields)
+	return model
 }
 
 // decodeAntigravityStep extracts a ParsedMessage from one step's
