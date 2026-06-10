@@ -301,7 +301,12 @@ func ImportChatGPT(
 				// a partial UpsertSession would overwrite first_message,
 				// timestamps, and counts with zero values.
 				if localDB, ok := store.(*db.DB); ok {
-					_ = localDB.RefreshSessionName(s.ID, db.ParsedSessionName(s))
+					if err := localDB.RefreshSessionName(s.ID, db.ParsedSessionName(s)); err != nil {
+						stats.Errors++
+						log.Printf("import: refreshing session_name for %s: %v", s.ID, err)
+						cb.progress(stats)
+						return nil
+					}
 				}
 				stats.Skipped++
 				cb.progress(stats)
