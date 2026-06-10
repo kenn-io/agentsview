@@ -150,7 +150,7 @@ type Session struct {
 	Agent                string  `json:"agent"`
 	FirstMessage         *string `json:"first_message"`
 	DisplayName          *string `json:"display_name,omitempty"`
-	NameSource           *string `json:"-"`
+	SessionName          *string `json:"-"`
 	StartedAt            *string `json:"started_at"`
 	EndedAt              *string `json:"ended_at"`
 	MessageCount         int     `json:"message_count"`
@@ -392,7 +392,6 @@ type SidebarSessionIndexRow struct {
 	Machine           string  `json:"machine"`
 	Agent             string  `json:"agent"`
 	DisplayName       *string `json:"display_name,omitempty"`
-	NameSource        *string `json:"-"`
 	StartedAt         *string `json:"started_at"`
 	EndedAt           *string `json:"ended_at"`
 	CreatedAt         string  `json:"created_at"`

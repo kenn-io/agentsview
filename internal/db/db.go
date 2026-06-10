@@ -332,11 +332,6 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("migrating columns: %w", err)
 	}
 
-	if err := d.BackfillNameSource(); err != nil {
-		d.Close()
-		return nil, fmt.Errorf("backfilling name_source: %w", err)
-	}
-
 	if dataStale && !schemaStale {
 		d.dataStale = true
 		log.Printf(
@@ -467,8 +462,8 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
 		},
 		{
-			"sessions", "name_source",
-			"ALTER TABLE sessions ADD COLUMN name_source TEXT",
+			"sessions", "session_name",
+			"ALTER TABLE sessions ADD COLUMN session_name TEXT",
 		},
 		{
 			"sessions", "deleted_at",
@@ -768,27 +763,6 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
 		return err
-	}
-	return nil
-}
-
-// BackfillNameSource stamps name_source='user' on file-backed rows that have a
-// display_name but no name_source. Pre-feature databases stored only manual
-// renames in display_name for file-backed sessions (parsers didn't set it).
-// Imported sessions (file_path IS NULL) had display_name written by the
-// importer, not the user, so they must not be pinned as user-owned — doing
-// so would prevent future re-imports from updating their titles.
-// Idempotent: rows already marked are skipped by the WHERE clause.
-func (db *DB) BackfillNameSource() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
-		`UPDATE sessions SET name_source = 'user'
-		 WHERE display_name IS NOT NULL
-		   AND name_source IS NULL
-		   AND file_path IS NOT NULL`)
-	if err != nil {
-		return fmt.Errorf("backfilling name_source: %w", err)
 	}
 	return nil
 }
