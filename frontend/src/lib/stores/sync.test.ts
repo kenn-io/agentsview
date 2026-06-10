@@ -175,6 +175,44 @@ describe("SyncStore.loadStats", () => {
     await p1;
     expect(sync.stats).toEqual(newer);
   });
+
+  it("ignores stale failure when a newer request succeeds", async () => {
+    const newer = {
+      session_count: 5,
+      message_count: 30,
+      project_count: 1,
+      machine_count: 1,
+      earliest_session: null,
+    };
+
+    let rejectOlder!: (err: Error) => void;
+    let resolveNewer!: (v: typeof newer) => void;
+
+    vi.mocked(api.getStats)
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          rejectOlder = reject;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((r) => {
+          resolveNewer = r;
+        }),
+      );
+
+    const p1 = sync.loadStats({ includeOneShot: true });
+    const p2 = sync.loadStats({});
+
+    resolveNewer(newer);
+    await p2;
+    expect(sync.stats).toEqual(newer);
+    expect(sync.backendDegraded).toBe(false);
+
+    rejectOlder(new api.ApiError(503, "stale pg outage"));
+    await p1;
+    expect(sync.stats).toEqual(newer);
+    expect(sync.backendDegraded).toBe(false);
+  });
 });
 
 describe("SyncStore.triggerResync", () => {
@@ -391,12 +429,39 @@ describe("SyncStore.remoteUnreachable", () => {
       last_sync: "",
       stats: MOCK_STATS,
     });
+    vi.mocked(api.getStats).mockRejectedValue(
+      new api.ApiError(503, "pg unavailable"),
+    );
 
     await sync.loadStatus();
 
     expect(sync.remoteUnreachable).toBe(false);
     expect(sync.backendDegraded).toBe(true);
     expect(sync.backendDegradedMessage).toBe("sync not ready");
+  });
+
+  it("retries stats when status loads while backend is degraded", async () => {
+    vi.mocked(api.isRemoteConnection).mockReturnValue(true);
+    const s = sync as unknown as Record<string, unknown>;
+    s.backendDegraded = true;
+    s.backendDegradedMessage = "sync not ready";
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+    });
+    vi.mocked(api.getStats).mockResolvedValue({
+      earliest_session: null,
+      machine_count: 1,
+      message_count: 100,
+      project_count: 3,
+      session_count: 8,
+    });
+
+    await sync.loadStatus();
+
+    expect(api.getStats).toHaveBeenCalled();
+    expect(sync.backendDegraded).toBe(false);
+    expect(sync.backendDegradedMessage).toBeNull();
   });
 
   it("keeps backend degraded when version loads", async () => {

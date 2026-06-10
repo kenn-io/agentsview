@@ -142,13 +142,16 @@ class SyncStore {
         newLastSync !== null && newLastSync !== this.lastSync;
       this.lastSync = newLastSync;
       this.lastSyncStats = status.stats as unknown as SyncStats | null;
+      const shouldRetryStats = this.backendDegraded;
       // Suppress notifications on initial hydration and
       // when a local sync just completed (pendingHydration).
       if (this.pendingHydration) {
         this.pendingHydration = false;
       } else if (changed && !isInitial) {
-        this.loadStats();
+        await this.loadStats();
         this.notifySyncComplete();
+      } else if (shouldRetryStats) {
+        await this.loadStats();
       }
     } catch (error) {
       this.markBackendFailure(error);
@@ -192,8 +195,10 @@ class SyncStore {
         this.clearBackendDegraded();
       }
     } catch (error) {
-      this.markBackendFailure(error);
-      console.warn("Failed to load sync stats:", error);
+      if (this.statsVersion === version) {
+        this.markBackendFailure(error);
+        console.warn("Failed to load sync stats:", error);
+      }
     }
   }
 

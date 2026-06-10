@@ -73,7 +73,7 @@
     {#if sync.backendDegraded}
       <button
         class="backend-warn"
-        onclick={() => sync.loadStatus()}
+        onclick={() => sync.loadStats()}
         title={sync.backendDegradedMessage ?? "sync not ready"}
       >
         sync not ready
