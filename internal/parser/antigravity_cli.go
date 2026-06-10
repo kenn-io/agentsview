@@ -708,7 +708,7 @@ func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasSuffix(path, ".db") {
+	if base, ok := strings.CutSuffix(path, ".db"); ok {
 		// The trajectory sidecar is a transcript source for .db sessions
 		// too, so an agy-reader sync must change the fingerprint even when
 		// the database files themselves are untouched.
@@ -716,7 +716,7 @@ func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 			info,
 			path+"-wal",
 			path+"-shm",
-			strings.TrimSuffix(path, ".db")+".trajectory.json",
+			base+".trajectory.json",
 		), nil
 	}
 	size := info.Size()
