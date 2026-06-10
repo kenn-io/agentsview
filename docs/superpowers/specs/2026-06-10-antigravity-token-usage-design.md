@@ -46,10 +46,11 @@ We will implement two new recursive protobuf field walkers in
   in range. To reject these, `extractTokenUsage` requires `field5` (input) to be
   present as a varint — a real generation always consumes input context, while
   observed false-positive blocks lack the field — and requires `field2`,
-  `field5`, and (when present) `field3` to be `≤ maxPlausibleTokens`
+  `field5`, and (when present) `field3` to be varints `≤ maxPlausibleTokens`
   (2,000,000). `field3` stays optional because zero reasoning tokens is
-  legitimate and proto3 omits zero values from the wire. Blocks failing any
-  check are skipped and the walk continues to find a legitimate block.
+  legitimate and proto3 omits zero values from the wire, but a present `field3`
+  with a non-varint wire type rejects the block. Blocks failing any check are
+  skipped and the walk continues to find a legitimate block.
 
 - `extractModelName(data []byte) string`: Recursively locates the model string
   from `Field 21` (or `Field 19`).

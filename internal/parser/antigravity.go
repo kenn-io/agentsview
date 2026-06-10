@@ -320,11 +320,12 @@ func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
 // tokenBlockFrom reports whether fs is a plausible token usage block:
 // field 1 holds a model-kind varint in [1000, 5000), fields 2 (output)
 // and 5 (input) are varints within maxPlausibleTokens, and field 3
-// (reasoning), when present, is too. Field 5 is required: a real
-// generation always consumes input context (proto3 omits only zero
-// values), while observed false-positive blocks (e.g. latency
-// counters) lack it. Field 3 stays optional because zero reasoning is
-// legitimate and omitted from the wire.
+// (reasoning), when present, is a varint within the cap too. Field 5
+// is required: a real generation always consumes input context (proto3
+// omits only zero values), while observed false-positive blocks (e.g.
+// latency counters) lack it. Field 3 stays optional because zero
+// reasoning is legitimate and omitted from the wire, but a present
+// field 3 with a non-varint wire type marks the block as a decoy.
 func tokenBlockFrom(fs []agProtoField) (input, output, reasoning int, ok bool) {
 	f1, ok1 := agProtoFind(fs, 1)
 	f2, ok2 := agProtoFind(fs, 2)
@@ -340,8 +341,8 @@ func tokenBlockFrom(fs []agProtoField) (input, output, reasoning int, ok bool) {
 	if f2.Varint > maxPlausibleTokens || f5.Varint > maxPlausibleTokens {
 		return 0, 0, 0, false
 	}
-	if f3, hasF3 := agProtoFind(fs, 3); hasF3 && f3.Wire == pbWireVarint {
-		if f3.Varint > maxPlausibleTokens {
+	if f3, hasF3 := agProtoFind(fs, 3); hasF3 {
+		if f3.Wire != pbWireVarint || f3.Varint > maxPlausibleTokens {
 			return 0, 0, 0, false
 		}
 		reasoning = int(f3.Varint)

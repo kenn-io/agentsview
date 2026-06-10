@@ -1541,6 +1541,15 @@ func TestExtractTokenUsageFalsePositiveGuards(t *testing.T) {
 				{num: 5, wire: pbWireVarint, varint: 2000},
 			},
 		},
+		{
+			name: "decoy with wrong-typed reasoning",
+			decoy: []pbField{
+				{num: 1, wire: pbWireVarint, varint: 1371},
+				{num: 2, wire: pbWireVarint, varint: 1234},
+				{num: 3, wire: pbWireBytes, bytes: []byte("not a varint")},
+				{num: 5, wire: pbWireVarint, varint: 2000},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
