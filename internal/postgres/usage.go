@@ -756,7 +756,7 @@ func (s *Store) loadPGTopSessionMetadata(
 	query := `
 SELECT
 	id,
-	COALESCE(NULLIF(display_name, ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
+	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
 	agent,
 	project,
 	started_at
