@@ -36,6 +36,7 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"Usage Commands:",
 		"Other Commands:",
 		"serve                  Start server",
+		"duckdb status          Show DuckDB sync status",
 		"pg push                Push local data to PostgreSQL",
 		"usage daily            Daily cost summary",
 		"completion             Generate the autocompletion script for the specified shell",
@@ -50,6 +51,46 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 	} {
 		assert.NotContains(t, help, unwanted,
 			"root help should not include serve flag %q", unwanted)
+	}
+}
+
+func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "--help")
+	require.NoError(t, err, "Execute")
+	for _, want := range []string{
+		"AGENTSVIEW_DUCKDB_PATH",
+		"AGENTSVIEW_DUCKDB_URL",
+		"AGENTSVIEW_DUCKDB_TOKEN",
+		"AGENTSVIEW_DUCKDB_MACHINE",
+	} {
+		assert.Contains(t, help, want, "help missing %q", want)
+	}
+	assert.NotContains(t, help, "env-token")
+}
+
+func TestDuckDBPushHelpShowsProjectFlags(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "duckdb", "push", "--help")
+	require.NoError(t, err, "Execute")
+	for _, want := range []string{
+		"--full",
+		"--projects",
+		"--exclude-projects",
+		"--all-projects",
+	} {
+		assert.Contains(t, help, want)
+	}
+}
+
+func TestDuckDBQuackServeHelpShowsSafetyFlags(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "duckdb", "quack", "serve", "--help")
+	require.NoError(t, err, "Execute")
+	for _, want := range []string{
+		"--bind",
+		"--path",
+		"--token",
+		"--allow-insecure",
+	} {
+		assert.Contains(t, help, want)
 	}
 }
 

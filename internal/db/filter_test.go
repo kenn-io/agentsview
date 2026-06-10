@@ -1100,9 +1100,9 @@ func TestSidebarSessionIndexIncludesChildrenForMatchingRoot(t *testing.T) {
 func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
 	d := testDB(t)
 
-	displayName := "Named session"
+	sessionName := "Named session"
 	insertSession(t, d, "named", "proj", func(s *Session) {
-		s.DisplayName = &displayName
+		s.SessionName = &sessionName
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
@@ -1110,8 +1110,34 @@ func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
 	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{})
 	require.NoError(t, err, "GetSidebarSessionIndex")
 	require.Len(t, index.Sessions, 1)
-	require.NotNil(t, index.Sessions[0].DisplayName, "display_name")
-	assert.Equal(t, displayName, *index.Sessions[0].DisplayName, "display_name")
+	require.NotNil(t, index.Sessions[0].DisplayName, "display_name via COALESCE")
+	assert.Equal(t, sessionName, *index.Sessions[0].DisplayName, "display_name via COALESCE")
+}
+
+func TestSidebarIndexDisplayNameResolvesViaCoalesce(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Session has an agent-provided name but no user rename.
+	insertSession(t, d, "s1", "p", func(s *Session) {
+		name := "Agent Name"
+		s.SessionName = &name
+	})
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
+	requireNoError(t, err, "sidebar index")
+	require.Len(t, index.Sessions, 1)
+	// display_name is resolved via COALESCE(display_name, session_name).
+	require.NotNil(t, index.Sessions[0].DisplayName, "display_name must be present via COALESCE")
+	assert.Equal(t, "Agent Name", *index.Sessions[0].DisplayName, "COALESCE returns session_name")
+
+	// User renames override session_name.
+	requireNoError(t, d.RenameSession("s1", Ptr("My Name")), "rename")
+	index, err = d.GetSidebarSessionIndex(ctx, SessionFilter{})
+	requireNoError(t, err, "sidebar index after rename")
+	require.Len(t, index.Sessions, 1)
+	require.NotNil(t, index.Sessions[0].DisplayName, "display_name must be present after rename")
+	assert.Equal(t, "My Name", *index.Sessions[0].DisplayName, "display_name wins over session_name")
 }
 
 func TestSidebarSessionIndexComputesIsTeammate(t *testing.T) {

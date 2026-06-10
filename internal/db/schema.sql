@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent       TEXT NOT NULL DEFAULT 'claude',
     first_message TEXT,
     display_name TEXT,
+    session_name TEXT,
     started_at  TEXT,
     ended_at    TEXT,
     message_count INTEGER NOT NULL DEFAULT 0,

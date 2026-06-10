@@ -104,7 +104,7 @@ func TestParseChatGPTExport(t *testing.T) {
 	assert.Equal(t, "chatgpt.com", s.Project)
 	assert.Equal(t, "local", s.Machine)
 	assert.Equal(t, AgentChatGPT, s.Agent)
-	assert.Equal(t, "Hello Chat", s.DisplayName)
+	assert.Equal(t, "Hello Chat", s.SessionName)
 	assert.Equal(t, "What is Go?", s.FirstMessage)
 	assert.Equal(t, 3, s.MessageCount)
 	assert.Equal(t, 2, s.UserMessageCount)

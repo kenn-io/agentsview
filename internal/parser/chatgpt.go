@@ -192,7 +192,7 @@ func convertChatGPTConversation(
 		Machine:          "local",
 		Agent:            AgentChatGPT,
 		FirstMessage:     firstMsg,
-		DisplayName:      conv.Title,
+		SessionName:      conv.Title,
 		StartedAt:        unixFloatToTime(conv.CreateTime),
 		EndedAt:          unixFloatToTime(conv.UpdateTime),
 		MessageCount:     len(msgs),

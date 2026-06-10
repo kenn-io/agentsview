@@ -7,7 +7,6 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
-
   let trashedSessions: Session[] = $state([]);
   let loading = $state(true);
   let emptying = $state(false);

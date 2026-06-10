@@ -2037,3 +2037,34 @@ func TestLocalTime(t *testing.T) {
 		})
 	}
 }
+
+func TestSQLiteTimeModifier(t *testing.T) {
+	t.Run("UTC", func(t *testing.T) {
+		modifier, ok := AnalyticsFilter{
+			From:     "2026-06-01",
+			To:       "2026-06-07",
+			Timezone: "UTC",
+		}.sqliteTimeModifier()
+		require.True(t, ok)
+		assert.Equal(t, "", modifier)
+	})
+
+	t.Run("StableOffset", func(t *testing.T) {
+		modifier, ok := AnalyticsFilter{
+			From:     "2026-06-01",
+			To:       "2026-06-07",
+			Timezone: "America/New_York",
+		}.sqliteTimeModifier()
+		require.True(t, ok)
+		assert.Equal(t, "-04:00", modifier)
+	})
+
+	t.Run("DSTCrossingFallsBack", func(t *testing.T) {
+		_, ok := AnalyticsFilter{
+			From:     "2026-03-01",
+			To:       "2026-03-31",
+			Timezone: "America/New_York",
+		}.sqliteTimeModifier()
+		assert.False(t, ok)
+	})
+}

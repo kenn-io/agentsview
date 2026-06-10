@@ -557,16 +557,21 @@
       class:syncing={sync.syncing}
       onclick={() => sync.triggerSync()}
       disabled={sync.syncing}
-      title="Sync sessions (r)"
-      aria-label="Sync sessions"
+      title={sync.readOnly ? "Refresh data (r)" : "Sync sessions (r)"}
+      aria-label={sync.readOnly ? "Refresh data" : "Sync sessions"}
     >
       <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
     </button>
 
     <button
       class="import-btn"
-      onclick={() => showImportModal = true}
-      title="Import conversations"
+      onclick={() => {
+        if (!sync.readOnly) showImportModal = true;
+      }}
+      disabled={sync.readOnly}
+      title={sync.readOnly
+        ? "Import unavailable in read-only mode"
+        : "Import conversations"}
       aria-label="Import conversations"
     >
       <DownloadIcon size="12" strokeWidth="2" aria-hidden="true" />
@@ -987,6 +992,11 @@
     color: var(--text-secondary);
   }
 
+  .header-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
   .header-btn.active {
     color: var(--accent-purple);
   }
@@ -1010,9 +1020,14 @@
     transition: background 0.12s, color 0.12s;
   }
 
-  .import-btn:hover {
+  .import-btn:hover:not(:disabled) {
     background: var(--bg-surface-hover);
     color: var(--text-primary);
+  }
+
+  .import-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 
   .header-divider {

@@ -1608,3 +1608,25 @@ func TestToDBSessionTerminationStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestToDBSessionCarriesSessionName(t *testing.T) {
+	pw := pendingWrite{sess: parser.ParsedSession{
+		ID:          "s1",
+		Project:     "p",
+		Agent:       parser.AgentClaude,
+		SessionName: "agent-name",
+	}}
+	s := toDBSession(pw)
+	require.NotNil(t, s.SessionName)
+	assert.Equal(t, "agent-name", *s.SessionName)
+	// converter must not touch display_name — only RenameSession may write it.
+	assert.Nil(t, s.DisplayName)
+
+	s2 := toDBSession(pendingWrite{sess: parser.ParsedSession{
+		ID:      "s2",
+		Project: "p",
+		Agent:   parser.AgentClaude,
+	}})
+	assert.Nil(t, s2.SessionName)
+	assert.Nil(t, s2.DisplayName)
+}

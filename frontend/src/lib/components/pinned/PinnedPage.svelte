@@ -14,7 +14,6 @@
   import { renderMarkdown } from "../../utils/markdown.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
-
   $effect(() => {
     pins.loadAll(sessions.filters.project || undefined);
   });
@@ -55,6 +54,7 @@
       ? {
           project: s.project,
           agent: s.agent,
+          // normalizeMessagePreview can return "" — use || not ?? to fall through.
           name:
             s.display_name
             ?? (normalizeMessagePreview(s.first_message) || s.project),

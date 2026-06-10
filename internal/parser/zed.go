@@ -345,7 +345,7 @@ func buildZedParseResult(
 		RelationshipType:     zedRelationshipType(row.parentID),
 		Cwd:                  zedFirstFolderPath(row.folderPaths),
 		FirstMessage:         firstMessage,
-		DisplayName:          row.summary,
+		SessionName:          row.summary,
 		StartedAt:            startedAt,
 		EndedAt:              endedAt,
 		MessageCount:         len(messages),

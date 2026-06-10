@@ -541,7 +541,7 @@ type ParsedSession struct {
 	MalformedLines   int
 	IsTruncated      bool
 	FirstMessage     string
-	DisplayName      string
+	SessionName      string
 	StartedAt        time.Time
 	EndedAt          time.Time
 	MessageCount     int

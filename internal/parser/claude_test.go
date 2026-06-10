@@ -372,3 +372,108 @@ func TestParseClaudeSession_LinearMetadata(t *testing.T) {
 	assert.Equal(t, "user", msgs[0].SourceType)
 	assert.Equal(t, "assistant", msgs[1].SourceType)
 }
+
+func TestClaudeIncrementalRenameTriggersFullParse(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rename-incremental.jsonl")
+
+	renameLine := `{"type":"system","subtype":"local_command","content":"<command-name>/rename</command-name>\n<command-args>new</command-args>","timestamp":"2026-06-01T00:00:02Z","sessionId":"s1"}`
+	err := os.WriteFile(path, []byte(renameLine+"\n"), 0o644)
+	require.NoError(t, err)
+
+	_, _, _, parseErr := ParseClaudeSessionFrom(path, 0, 0)
+	require.Error(t, parseErr)
+	assert.True(t, IsIncrementalFullParseFallback(parseErr))
+}
+
+func TestClaudeRenameSetsDisplayName(t *testing.T) {
+	t.Parallel()
+
+	// userLine is a minimal user message that causes the parser
+	// to emit a session (without it, ParseClaudeSession returns
+	// no results).
+	userLine := map[string]any{
+		"type":       "user",
+		"uuid":       "u1",
+		"parentUuid": "",
+		"timestamp":  tsZero,
+		"sessionId":  "rename-test",
+		"cwd":        "/x",
+		"message": map[string]any{
+			"content": "hi",
+		},
+	}
+
+	// renameLine builds a system/local_command line for /rename.
+	renameLine := func(name string) map[string]any {
+		return map[string]any{
+			"type":      "system",
+			"subtype":   "local_command",
+			"content":   "<command-name>/rename</command-name>\n<command-args>" + name + "</command-args>",
+			"timestamp": tsZeroS1,
+			"sessionId": "rename-test",
+		}
+	}
+
+	tests := []struct {
+		name        string
+		lines       []map[string]any
+		wantDisplay string
+	}{
+		{
+			name: "single rename",
+			lines: []map[string]any{
+				userLine,
+				renameLine("My Session"),
+			},
+			wantDisplay: "My Session",
+		},
+		{
+			name: "two renames last wins",
+			lines: []map[string]any{
+				userLine,
+				renameLine("First"),
+				renameLine("Second"),
+			},
+			wantDisplay: "Second",
+		},
+		{
+			name: "rename then empty rename clears",
+			lines: []map[string]any{
+				userLine,
+				renameLine("Named"),
+				renameLine(""),
+			},
+			wantDisplay: "",
+		},
+		{
+			name: "no rename",
+			lines: []map[string]any{
+				userLine,
+			},
+			wantDisplay: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "rename-session.jsonl")
+
+			var sb strings.Builder
+			for _, m := range tc.lines {
+				sb.WriteString(buildMetadataLine(m) + "\n")
+			}
+			err := os.WriteFile(path, []byte(sb.String()), 0o644)
+			require.NoError(t, err)
+
+			results, err := ParseClaudeSession(path, "proj", "local")
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, tc.wantDisplay, results[0].Session.SessionName)
+		})
+	}
+}

@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent              TEXT NOT NULL,
     first_message      TEXT,
     display_name       TEXT,
+    session_name       TEXT,
     created_at         TIMESTAMPTZ,
     started_at         TIMESTAMPTZ,
     ended_at           TIMESTAMPTZ,
@@ -535,6 +536,11 @@ func EnsureSchema(
 			"sessions", "secrets_rules_version",
 			`secrets_rules_version TEXT NOT NULL DEFAULT ''`,
 			"adding sessions.secrets_rules_version",
+		},
+		{
+			"sessions", "session_name",
+			`session_name TEXT`,
+			"adding sessions.session_name",
 		},
 	}
 	step = time.Now()
@@ -1297,7 +1303,8 @@ func CheckSchemaCompat(
 ) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, created_at, deleted_at, updated_at,
-			termination_status, secret_leak_count, secrets_rules_version
+			termination_status, secret_leak_count, secrets_rules_version,
+			session_name
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

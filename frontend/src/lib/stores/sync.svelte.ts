@@ -69,6 +69,10 @@ class SyncStore {
     typeof window !== "undefined" &&
     new URLSearchParams(window.location.search).has("desktop");
 
+  get readOnly(): boolean {
+    return this.serverVersion?.read_only === true;
+  }
+
   private watchEventSource: EventSource | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null =
     null;
@@ -235,6 +239,10 @@ class SyncStore {
   }
 
   triggerSync(onComplete?: () => void) {
+    if (this.readOnly) {
+      void this.refreshReadOnly(onComplete);
+      return;
+    }
     this.runSync(triggerSync, onComplete);
   }
 
@@ -242,11 +250,37 @@ class SyncStore {
     onComplete?: () => void,
     onError?: (err: Error) => void,
   ): boolean {
+    if (this.readOnly) {
+      onError?.(
+        new Error(
+          "Full resync is unavailable for read-only backends.",
+        ),
+      );
+      return false;
+    }
     return this.runSync(
       triggerResync,
       onComplete,
       onError,
     );
+  }
+
+  private async refreshReadOnly(
+    onComplete?: () => void,
+  ): Promise<boolean> {
+    if (this.syncing) return false;
+    this.syncing = true;
+    this.progress = null;
+    try {
+      this.pendingHydration = true;
+      await Promise.all([this.loadStatus(), this.loadStats()]);
+      this.notifySyncComplete();
+      onComplete?.();
+      return true;
+    } finally {
+      this.syncing = false;
+      this.progress = null;
+    }
   }
 
   private runSync(

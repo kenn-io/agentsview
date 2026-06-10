@@ -37,6 +37,7 @@
         .filter(
           (s) =>
             s.project.toLowerCase().includes(q) ||
+            (s.display_name?.toLowerCase().includes(q) ?? false) ||
             (s.first_message?.toLowerCase().includes(q) ?? false),
         )
         .slice(0, 10);
@@ -224,7 +225,7 @@
       {:else}
         <div class="palette-section-label">Recent Sessions</div>
         {#each recentSessions as session, i}
-          {@const preview = normalizeMessagePreview(session.first_message)}
+          {@const preview = session.display_name ?? normalizeMessagePreview(session.first_message)}
           <button
             class="palette-item"
             class:selected={i === selectedIndex}

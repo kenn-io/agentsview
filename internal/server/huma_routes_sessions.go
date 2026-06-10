@@ -533,6 +533,7 @@ func (s *Server) humaRenameSession(
 		}
 		return nil, internalError("rename session", err)
 	}
+
 	updated, err := s.db.GetSession(ctx, in.ID)
 	if err != nil {
 		return nil, internalError("rename session readback", err)

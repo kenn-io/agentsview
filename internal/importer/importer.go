@@ -170,24 +170,13 @@ func upsertConversation(
 	}
 	isNew := existing == nil
 
-	// Preserve user-renamed display_name on re-import.
-	displayName := strPtr(s.DisplayName)
-	if !isNew && existing != nil && existing.DisplayName != nil {
-		importName := strPtr(s.DisplayName)
-		nameChanged := importName == nil ||
-			*existing.DisplayName != *importName
-		if nameChanged {
-			displayName = existing.DisplayName
-		}
-	}
-
 	sess := db.Session{
 		ID:               s.ID,
 		Project:          s.Project,
 		Machine:          s.Machine,
 		Agent:            string(s.Agent),
 		FirstMessage:     strPtr(s.FirstMessage),
-		DisplayName:      displayName,
+		SessionName:      db.ParsedSessionName(s),
 		StartedAt:        timeStr(s.StartedAt),
 		EndedAt:          timeStr(s.EndedAt),
 		MessageCount:     s.MessageCount,
@@ -199,6 +188,15 @@ func upsertConversation(
 			return importSkipped, nil
 		}
 		return importNew, fmt.Errorf("upserting session: %w", err)
+	}
+
+	// Bump local_modified_at so incremental PG push picks up session_name
+	// changes even when the skip path below returns importSkipped (message
+	// count unchanged) and ReplaceSessionMessages is never called.
+	if localDB, ok := store.(*db.DB); ok {
+		if err := localDB.BumpLocalModifiedAt(s.ID); err != nil {
+			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
+		}
 	}
 
 	// Skip expensive message replacement when the conversation
@@ -299,6 +297,17 @@ func ImportChatGPT(
 				return nil
 			}
 			if existing != nil {
+				// Refresh session_name without touching any other fields —
+				// a partial UpsertSession would overwrite first_message,
+				// timestamps, and counts with zero values.
+				if localDB, ok := store.(*db.DB); ok {
+					if err := localDB.RefreshSessionName(s.ID, db.ParsedSessionName(s)); err != nil {
+						stats.Errors++
+						log.Printf("import: refreshing session_name for %s: %v", s.ID, err)
+						cb.progress(stats)
+						return nil
+					}
+				}
 				stats.Skipped++
 				cb.progress(stats)
 				return nil
@@ -310,7 +319,7 @@ func ImportChatGPT(
 				Machine:          s.Machine,
 				Agent:            string(s.Agent),
 				FirstMessage:     strPtr(s.FirstMessage),
-				DisplayName:      strPtr(s.DisplayName),
+				SessionName:      db.ParsedSessionName(s),
 				StartedAt:        timeStr(s.StartedAt),
 				EndedAt:          timeStr(s.EndedAt),
 				MessageCount:     s.MessageCount,
