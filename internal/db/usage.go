@@ -789,7 +789,7 @@ func (db *DB) loadTopSessionMetadata(
 	query := `
 SELECT
 	id,
-	COALESCE(NULLIF(display_name, ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
+	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
 	agent,
 	project,
 	COALESCE(started_at, '') AS started_at
