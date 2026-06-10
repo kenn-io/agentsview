@@ -191,26 +191,39 @@ func ParseAntigravityCLISessionWithStatus(
 	var messages []ParsedMessage
 	var hasTrajectory bool
 	if ext == ".db" {
-		if result, err := loadAntigravityCLIDBSteps(path); err == nil {
-			if hasDisplayableAntigravityCLITrajectoryMessage(result.messages) {
-				messages = mergeAntigravityDBHistoryMessages(
-					result.messages,
-					collectAntigravityHistoryMessages(
-						filepath.Join(root, "history.jsonl"), id,
-					),
-				)
-				hasTrajectory = true
-			} else if result.rawStepCount > 0 {
-				status.NeedsRetry = true
-			}
-		} else {
+		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
+		dbOK := dbErr == nil &&
+			hasDisplayableAntigravityCLITrajectoryMessage(dbResult.messages)
+
+		// Prefer the agy-reader trajectory sidecar: it is the daemon's own
+		// decode, with structured tool calls/results and thinking, where the
+		// heuristic DB decode only recovers loose strings. Selection is
+		// content-based, not mtime-based: the sidecar wins when it covers at
+		// least as many steps as the raw DB decode, so a sidecar lagging
+		// behind a live session loses until agy-reader catches up.
+		sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
+		tMsgs, tSteps, tErr := parseAntigravityCLITrajectory(sidecarPath)
+		if tErr == nil &&
+			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) &&
+			(!dbOK || tSteps >= dbResult.rawStepCount) {
+			messages = tMsgs
+			hasTrajectory = true
+		} else if dbOK {
+			messages = mergeAntigravityDBHistoryMessages(
+				dbResult.messages,
+				collectAntigravityHistoryMessages(
+					filepath.Join(root, "history.jsonl"), id,
+				),
+			)
+			hasTrajectory = true
+		} else if dbErr != nil || dbResult.rawStepCount > 0 {
 			status.NeedsRetry = true
 		}
 	} else {
 		sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
 		if sidecarInfo, err := os.Stat(sidecarPath); err == nil &&
 			!sidecarInfo.ModTime().Before(info.ModTime()) {
-			if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
+			if tMsgs, _, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
 				if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
 					messages = tMsgs
 					hasTrajectory = true
@@ -694,8 +707,14 @@ func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 		return nil, err
 	}
 	if strings.HasSuffix(path, ".db") {
+		// The trajectory sidecar is a transcript source for .db sessions
+		// too, so an agy-reader sync must change the fingerprint even when
+		// the database files themselves are untouched.
 		return antigravityCLICombinedFileInfo(
-			info, path+"-wal", path+"-shm",
+			info,
+			path+"-wal",
+			path+"-shm",
+			strings.TrimSuffix(path, ".db")+".trajectory.json",
 		), nil
 	}
 	size := info.Size()
@@ -1027,27 +1046,30 @@ func agyToolDetail(name, inputJSON string) string {
 // The read is size-capped (maxTrajectorySidecarBytes) and unknown step
 // types are silently skipped further down. No content from the sidecar
 // is executed or echoed back over any outbound channel.
+// parseAntigravityCLITrajectory parses an agy-reader trajectory sidecar.
+// The int is the raw step count of the trajectory, used by callers to
+// compare coverage against other decode sources for the same session.
 func parseAntigravityCLITrajectory(
 	trajectoryPath string,
-) ([]ParsedMessage, error) {
+) ([]ParsedMessage, int, error) {
 	f, err := os.Open(trajectoryPath)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxTrajectorySidecarBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if int64(len(data)) > maxTrajectorySidecarBytes {
-		return nil, fmt.Errorf(
+		return nil, 0, fmt.Errorf(
 			"trajectory sidecar %s exceeds %d-byte cap",
 			trajectoryPath, maxTrajectorySidecarBytes,
 		)
 	}
 	var traj agyTrajectory
 	if err := json.Unmarshal(data, &traj); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var msgs []ParsedMessage
@@ -1243,5 +1265,5 @@ func parseAntigravityCLITrajectory(
 	}
 
 	flushPendingResults()
-	return msgs, nil
+	return msgs, len(traj.Steps), nil
 }
