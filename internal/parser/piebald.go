@@ -361,7 +361,7 @@ func buildPiebaldSessionMeta(c piebaldChatRow, dbPath, machine string) ParsedSes
 		GitBranch:       c.branchName,
 		SourceSessionID: fmt.Sprintf("%d", c.id),
 		SourceVersion:   "piebald-appdb-v1",
-		DisplayName:     c.title,
+		SessionName:     c.title,
 		File: FileInfo{
 			Path:  fmt.Sprintf("%s#%d", dbPath, c.id),
 			Mtime: parsePiebaldTimestamp(c.updatedAt).UnixNano(),

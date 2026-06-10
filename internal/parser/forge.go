@@ -345,7 +345,7 @@ func buildForgeSession(c forgeConversationRow, dbPath, machine string) (*ParsedS
 		Machine:          machine,
 		Agent:            AgentForge,
 		Cwd:              cwd,
-		DisplayName:      c.title,
+		SessionName:      c.title,
 		FirstMessage:     firstMsg,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,

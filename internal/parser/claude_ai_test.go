@@ -91,7 +91,7 @@ func TestParseClaudeAIExport(t *testing.T) {
 	assert.Equal(t, "local", s.Machine)
 	assert.Equal(t, AgentClaudeAI, s.Agent)
 	assert.Equal(t, "Hello, how are you?", s.FirstMessage)
-	assert.Equal(t, "Test Chat", s.DisplayName)
+	assert.Equal(t, "Test Chat", s.SessionName)
 	assert.Equal(t, 2, s.MessageCount)
 	assert.Equal(t, 1, s.UserMessageCount)
 	assert.Equal(t,

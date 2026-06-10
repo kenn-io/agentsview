@@ -473,7 +473,7 @@ func TestClaudeRenameSetsDisplayName(t *testing.T) {
 			results, err := ParseClaudeSession(path, "proj", "local")
 			require.NoError(t, err)
 			require.Len(t, results, 1)
-			assert.Equal(t, tc.wantDisplay, results[0].Session.DisplayName)
+			assert.Equal(t, tc.wantDisplay, results[0].Session.SessionName)
 		})
 	}
 }

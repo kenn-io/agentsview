@@ -175,7 +175,7 @@ func TestParseForgeDB_StandardConversation(t *testing.T) {
 	assertEq(t, "Agent", s.Session.Agent, AgentForge)
 	assertEq(t, "Machine", s.Session.Machine, "testmachine")
 	assertEq(t, "Project", s.Session.Project, "agentsview")
-	assertEq(t, "DisplayName", s.Session.DisplayName, "Add Forge Support")
+	assertEq(t, "SessionName", s.Session.SessionName, "Add Forge Support")
 	assertEq(t, "UserMessageCount", s.Session.UserMessageCount, 1)
 	assertEq(t, "FirstMessage", s.Session.FirstMessage, "Please add Forge support.")
 	assertEq(t, "Cwd", s.Session.Cwd, "/home/mj/dev/projects/agentsview")

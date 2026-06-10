@@ -689,7 +689,7 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.SourceVersion = m.sourceVersion
 	sess.Cwd = m.cwd
 	sess.GitBranch = m.gitBranch
-	sess.DisplayName = m.displayName
+	sess.SessionName = m.displayName
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }

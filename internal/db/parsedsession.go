@@ -2,15 +2,24 @@ package db
 
 import "go.kenn.io/agentsview/internal/parser"
 
-// ParsedSessionNameFields returns the display_name and name_source values
-// to store when upserting a parsed session. Both are nil when the parser
-// did not extract a name. This is the single place that couples the two
-// fields — callers must not set them independently.
+// ParsedSessionName returns the session_name value to store when upserting
+// a parsed session. Returns nil when the parser did not extract a name.
+func ParsedSessionName(sess parser.ParsedSession) *string {
+	if sess.SessionName == "" {
+		return nil
+	}
+	n := sess.SessionName
+	return &n
+}
+
+// ParsedSessionNameFields is a compatibility shim retained while callers
+// are migrated to use ParsedSessionName. It will be removed in the
+// session_name two-field refactor (Task 5).
 func ParsedSessionNameFields(sess parser.ParsedSession) (displayName *string, nameSource *string) {
-	if sess.DisplayName == "" {
+	n := ParsedSessionName(sess)
+	if n == nil {
 		return nil, nil
 	}
-	name := sess.DisplayName
 	src := "agent"
-	return &name, &src
+	return n, &src
 }
