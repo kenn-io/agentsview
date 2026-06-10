@@ -389,6 +389,14 @@ func (d *DB) CopySessionMetadataFrom(
 	// In the two-field design display_name is always user-owned, so any
 	// non-NULL value is a user rename worth preserving.
 	// session_name is repopulated by re-parse and does not need copying.
+	//
+	// Note: the name_source discriminator column (which would have distinguished
+	// user renames from parser-owned titles) was introduced and removed in the
+	// same PR as the two-field split and was never present in any released build.
+	// Any non-NULL display_name in an upgrading database therefore came from
+	// RenameSession (user action) or a pre-feature import — the latter being
+	// acceptable to treat as a user rename since there is no lossless heuristic
+	// to separate them without name_source.
 	if hasDisplayName {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
