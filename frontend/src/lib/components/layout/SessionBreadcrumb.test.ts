@@ -533,6 +533,74 @@ describe("SessionBreadcrumb", () => {
       component.$destroy();
     });
 
+    it("refetches on return navigation and rejects the other session's late response", async () => {
+      const bRequest = deferred<SessionUsage>();
+      const aRefetch = deferred<SessionUsage>();
+      sessionsService.getApiV1SessionsIdUsage
+        .mockResolvedValueOnce(
+          makeUsage({
+            session_id: "run:aaa",
+            has_cost: true,
+            cost_usd: 1.5,
+          }),
+        )
+        .mockReturnValueOnce(bRequest.promise)
+        .mockReturnValueOnce(aRefetch.promise);
+
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude", { id: "run:aaa" }),
+          onBack: () => {},
+        },
+      });
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.50");
+      });
+
+      // Switch to B (request stays in flight), then back to A
+      // before B resolves.
+      component.$set({
+        session: makeSession("claude", { id: "run:bbb" }),
+      });
+      await flushPromises();
+      component.$set({
+        session: makeSession("claude", { id: "run:aaa" }),
+      });
+      await flushPromises();
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledTimes(3);
+
+      // B's late response must not be shown on A.
+      bRequest.resolve(
+        makeUsage({
+          session_id: "run:bbb",
+          has_cost: true,
+          cost_usd: 9.99,
+        }),
+      );
+      await flushPromises();
+      expect(document.querySelector(".cost-badge")).toBeNull();
+
+      // A's refetch lands and restores A's cost.
+      aRefetch.resolve(
+        makeUsage({
+          session_id: "run:aaa",
+          has_cost: true,
+          cost_usd: 1.5,
+        }),
+      );
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.50");
+      });
+
+      component.$destroy();
+    });
+
     it("keeps the newer cost when same-session responses resolve out of order", async () => {
       const first = deferred<SessionUsage>();
       const second = deferred<SessionUsage>();

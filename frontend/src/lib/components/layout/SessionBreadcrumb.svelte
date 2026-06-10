@@ -128,8 +128,15 @@
       session.message_count ?? 0,
       session.ended_at ?? "",
     ].join("\n");
+    if (id !== costSessionId) {
+      // Entering a different session invalidates both the displayed
+      // cost and the fetch cache; the cached key must never satisfy
+      // the early return below while another session's request is
+      // still in flight.
+      sessionCost = null;
+      costFetchKey = null;
+    }
     if (key === costFetchKey) return;
-    if (id !== costSessionId) sessionCost = null;
     costSessionId = id;
     const seq = ++costRequestSeq;
     configureGeneratedClient();
