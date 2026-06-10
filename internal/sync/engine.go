@@ -863,6 +863,46 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Command Code: <projectsDir>/<slugified-cwd>/<session>.jsonl
+	for _, commandCodeDir := range e.agentDirs[parser.AgentCommandCode] {
+		if commandCodeDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(commandCodeDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) != 2 {
+				continue
+			}
+			if sessionID, ok := strings.CutSuffix(parts[1], ".meta.json"); ok {
+				if !parser.IsValidSessionID(sessionID) {
+					continue
+				}
+				jsonlPath := filepath.Join(commandCodeDir, parts[0], sessionID+".jsonl")
+				if _, err := os.Stat(jsonlPath); err != nil {
+					continue
+				}
+				return parser.DiscoveredFile{
+					Path:    jsonlPath,
+					Project: parser.NormalizeName(parts[0]),
+					Agent:   parser.AgentCommandCode,
+				}, true
+			}
+			if strings.HasSuffix(parts[1], ".checkpoints.jsonl") ||
+				strings.HasSuffix(parts[1], ".prompts.jsonl") {
+				continue
+			}
+			sessionID, ok := strings.CutSuffix(parts[1], ".jsonl")
+			if !ok || !parser.IsValidSessionID(sessionID) {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parser.NormalizeName(parts[0]),
+				Agent:   parser.AgentCommandCode,
+			}, true
+		}
+	}
+
 	// OpenClaw: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl
 	//       or: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl.<archiveSuffix>
 	for _, ocDir := range e.agentDirs[parser.AgentOpenClaw] {
@@ -2283,6 +2323,13 @@ func discoveredFileMtime(
 		}
 		return info.ModTime().UnixNano(), nil
 	}
+	if file.Agent == parser.AgentCommandCode {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return commandCodeEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
+	}
 
 	info, err := os.Stat(file.Path)
 	if err != nil {
@@ -2961,6 +3008,8 @@ func (e *Engine) processFile(
 		res = e.processPi(file, info)
 	case parser.AgentQwen:
 		res = e.processQwen(file, info)
+	case parser.AgentCommandCode:
+		res = e.processCommandCode(file, info)
 	case parser.AgentOpenClaw:
 		res = e.processOpenClaw(file, info)
 	case parser.AgentQClaw:
@@ -4410,6 +4459,52 @@ func (e *Engine) processQwen(
 	}
 }
 
+func (e *Engine) processCommandCode(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	effectiveInfo := commandCodeEffectiveInfo(file.Path, info)
+	if e.shouldSkipByPath(file.Path, effectiveInfo) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseCommandCodeSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+	sess.File.Size = effectiveInfo.Size()
+	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
+
+	return processResult{
+		results: []parser.ParseResult{{
+			Session:  *sess,
+			Messages: msgs,
+		}},
+	}
+}
+
+func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
+	metaPath := strings.TrimSuffix(path, ".jsonl") + ".meta.json"
+	if metaInfo, err := os.Stat(metaPath); err == nil {
+		size += metaInfo.Size()
+		if metaMtime := metaInfo.ModTime().UnixNano(); metaMtime > mtime {
+			mtime = metaMtime
+		}
+	}
+	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
+}
+
 // validateCursorContainment re-resolves both root and path
 // to verify the file still resides within the cursor projects
 // directory. Returns an error if containment fails.
@@ -5574,6 +5669,13 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 			return 0
 		}
 		return info.ModTime().UnixNano()
+	}
+	if def.Type == parser.AgentCommandCode {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		return commandCodeEffectiveInfo(path, info).ModTime().UnixNano()
 	}
 
 	info, err := os.Stat(path)

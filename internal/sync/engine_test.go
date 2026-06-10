@@ -928,6 +928,23 @@ func TestShouldSkipByPathWithRewriter(t *testing.T) {
 	assert.False(t, got2, "shouldSkipByPath without rewriter should return false")
 }
 
+func TestToDBSessionStoresSessionName(t *testing.T) {
+	pw := pendingWrite{sess: parser.ParsedSession{
+		ID:           "commandcode:test",
+		Project:      "sample_project",
+		Machine:      "local",
+		Agent:        parser.AgentCommandCode,
+		SessionName:  "Startup investigation",
+		FirstMessage: "Inspect server logs",
+	}}
+
+	got := toDBSession(pw)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Startup investigation", *got.SessionName)
+	require.NotNil(t, got.FirstMessage)
+	assert.Equal(t, "Inspect server logs", *got.FirstMessage)
+}
+
 func TestBlockedCategorySet(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1480,6 +1497,50 @@ func TestEngine_ClassifyPathsQwenSession(t *testing.T) {
 	}
 	got := engine.classifyPaths(bogus)
 	assert.Empty(t, got, "expected no Qwen classifications for %v, got %v", bogus, got)
+}
+
+func TestEngine_ClassifyPathsCommandCodeSession(t *testing.T) {
+	db := openTestDB(t)
+	commandCodeDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCommandCode: {commandCodeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionID := "adc026b4-c620-43e4-8cc4-295593889d18"
+	projectDir := filepath.Join(commandCodeDir, "users-alice-code-sample-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755), "MkdirAll(%q)", projectDir)
+	sessionPath := filepath.Join(projectDir, sessionID+".jsonl")
+	dbtest.WriteTestFile(t, sessionPath, []byte("{}\n"))
+
+	files := engine.classifyPaths([]string{sessionPath})
+	require.Len(t, files, 1, "len(files) = %d, want 1 (%v)", len(files), files)
+	assert.Equal(t, sessionPath, files[0].Path)
+	assert.Equal(t, parser.AgentCommandCode, files[0].Agent)
+	assert.Equal(t, "users_alice_code_sample_project", files[0].Project)
+
+	bogus := []string{
+		filepath.Join(commandCodeDir, "stray.jsonl"),
+		filepath.Join(projectDir, "notes.txt"),
+		filepath.Join(projectDir, sessionID+".checkpoints.jsonl"),
+		filepath.Join(projectDir, sessionID+".prompts.jsonl"),
+		filepath.Join(projectDir, "nested", sessionID+".jsonl"),
+	}
+	for _, p := range bogus {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755), "MkdirAll(%q)", p)
+		dbtest.WriteTestFile(t, p, []byte("{}"))
+	}
+	got := engine.classifyPaths(bogus)
+	assert.Empty(t, got, "expected no Command Code classifications for %v, got %v", bogus, got)
+
+	metaPath := filepath.Join(projectDir, sessionID+".meta.json")
+	dbtest.WriteTestFile(t, metaPath, []byte("{}"))
+	files = engine.classifyPaths([]string{metaPath})
+	require.Len(t, files, 1, "len(files) = %d, want 1 (%v)", len(files), files)
+	assert.Equal(t, sessionPath, files[0].Path)
+	assert.Equal(t, parser.AgentCommandCode, files[0].Agent)
 }
 
 func TestEngine_ClassifyPathsQClawSession(t *testing.T) {

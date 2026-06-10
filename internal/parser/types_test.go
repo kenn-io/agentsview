@@ -265,6 +265,8 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentAmp,
 		AgentVSCodeCopilot,
 		AgentPi,
+		AgentQwen,
+		AgentCommandCode,
 		AgentOpenClaw,
 		AgentQClaw,
 		AgentKimi,
@@ -427,6 +429,16 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	}
 	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
 		"OpenCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
+func TestCommandCodeRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentCommandCode)
+	require.True(t, ok, "AgentCommandCode missing from Registry")
+	require.True(t, def.FileBased, "Command Code FileBased")
+	require.NotNil(t, def.DiscoverFunc, "Command Code DiscoverFunc")
+	require.NotNil(t, def.FindSourceFunc, "Command Code FindSourceFunc")
+	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
+	assert.Equal(t, "commandcode:", def.IDPrefix)
 }
 
 func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {

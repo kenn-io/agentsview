@@ -23,6 +23,7 @@ const (
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
 	AgentPi             AgentType = "pi"
 	AgentQwen           AgentType = "qwen"
+	AgentCommandCode    AgentType = "commandcode"
 	AgentOpenClaw       AgentType = "openclaw"
 	AgentQClaw          AgentType = "qclaw"
 	AgentKimi           AgentType = "kimi"
@@ -241,6 +242,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverQwenSessions,
 		FindSourceFunc: FindQwenSourceFile,
+	},
+	{
+		Type:           AgentCommandCode,
+		DisplayName:    "Command Code",
+		EnvVar:         "COMMANDCODE_PROJECTS_DIR",
+		ConfigKey:      "commandcode_project_dirs",
+		DefaultDirs:    []string{".commandcode/projects"},
+		IDPrefix:       "commandcode:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverCommandCodeSessions,
+		FindSourceFunc: FindCommandCodeSourceFile,
 	},
 	{
 		Type:           AgentOpenClaw,
