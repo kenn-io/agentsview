@@ -200,15 +200,21 @@ func ParseAntigravityCLISessionWithStatus(
 		// heuristic DB decode only recovers loose strings. Selection is
 		// content-based, not mtime-based: the sidecar wins when it covers at
 		// least as many steps as the raw DB decode, so a sidecar lagging
-		// behind a live session loses until agy-reader catches up.
+		// behind a live session loses until agy-reader catches up. Coverage
+		// is required whenever the DB loaded with raw rows -- even rows the
+		// heuristic cannot decode -- so a partial sidecar is never persisted
+		// as a current transcript.
 		sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
 		tMsgs, tSteps, tErr := parseAntigravityCLITrajectory(sidecarPath)
-		if tErr == nil &&
-			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) &&
-			(!dbOK || tSteps >= dbResult.rawStepCount) {
+		sidecarOK := tErr == nil &&
+			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs)
+		sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
+			tSteps >= dbResult.rawStepCount
+		switch {
+		case sidecarOK && sidecarCovers:
 			messages = tMsgs
 			hasTrajectory = true
-		} else if dbOK {
+		case dbOK:
 			messages = mergeAntigravityDBHistoryMessages(
 				dbResult.messages,
 				collectAntigravityHistoryMessages(
@@ -216,7 +222,14 @@ func ParseAntigravityCLISessionWithStatus(
 				),
 			)
 			hasTrajectory = true
-		} else if dbErr != nil || dbResult.rawStepCount > 0 {
+		case sidecarOK:
+			// Partial sidecar and an undecodable DB: store the best
+			// available transcript but leave the row stale so the next
+			// pass re-parses once agy-reader catches up.
+			messages = tMsgs
+			hasTrajectory = true
+			status.NeedsRetry = true
+		case dbErr != nil || dbResult.rawStepCount > 0:
 			status.NeedsRetry = true
 		}
 	} else {

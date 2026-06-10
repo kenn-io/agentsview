@@ -1300,3 +1300,59 @@ func TestAntigravityCLIPBUsesSidecarDespiteOlderMtime(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "sidecar prompt", sess.FirstMessage)
 }
+
+// createAntigravityUndecodableDB writes a .db whose steps rows carry
+// payloads the heuristic decoder cannot turn into displayable messages.
+func createAntigravityUndecodableDB(t *testing.T, path string, rows int) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+	for i := range rows {
+		mustExec(t, db,
+			`INSERT INTO steps (idx, step_type, step_payload) `+
+				`VALUES (?, ?, ?)`,
+			i, 99, []byte{0xff, 0xff, 0xff})
+	}
+}
+
+func TestAntigravityCLIDBPartialSidecarNotPersistedAsCurrent(t *testing.T) {
+	root := t.TempDir()
+	id := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityUndecodableDB(t, dbPath, 3)
+	// Sidecar lags the DB (2 of 3 steps): best available transcript, but
+	// the row must stay retryable rather than persist as current.
+	writeAntigravityTestSidecar(t, root, id, 2)
+
+	_, msgs, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.True(t, status.NeedsRetry,
+		"partial sidecar with undecodable DB rows must leave the row stale")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+}
+
+func TestAntigravityCLIDBCoveringSidecarRescuesUndecodableRows(t *testing.T) {
+	root := t.TempDir()
+	id := "cccccccc-dddd-eeee-ffff-000000000000"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityUndecodableDB(t, dbPath, 3)
+	writeAntigravityTestSidecar(t, root, id, 3)
+
+	_, msgs, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry,
+		"covering sidecar is full-resolution data; no retry needed")
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
+}
