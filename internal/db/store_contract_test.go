@@ -140,6 +140,14 @@ func contractSessionsCursorFiltersAndDates(
 	require.NotNil(t, full)
 	require.NotNil(t, full.DeletedAt)
 
+	// GetSessionFull returns the visible name on every backend:
+	// the user rename when set, else the agent-provided session name.
+	named, err := store.GetSessionFull(ctx, fixture.oldID)
+	require.NoError(t, err)
+	require.NotNil(t, named)
+	require.NotNil(t, named.DisplayName)
+	require.Equal(t, "Old Contract Name", *named.DisplayName)
+
 	index, err := store.GetSidebarSessionIndex(ctx, SessionFilter{
 		Project: "alpha",
 	})

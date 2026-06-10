@@ -440,9 +440,12 @@ func TestUpsertSessionNameOwnership(t *testing.T) {
 }
 
 // TestGetSessionFullPopulatesSessionName verifies that GetSessionFull
-// reads session_name from the DB into the Go struct (needed by the PG push
-// path). session_name is a backend-only field: it is NOT serialised in
-// JSON responses (json:"-" on Session.SessionName).
+// keeps the raw session_name on the Go struct while DisplayName carries
+// the visible name (user rename, else session_name), matching the PG and
+// DuckDB GetSessionFull implementations. session_name is a backend-only
+// field: it is NOT serialised in JSON responses (json:"-" on
+// Session.SessionName). Push paths that need display_name unmerged read
+// via ListSessionsModifiedBetween, not GetSessionFull.
 func TestGetSessionFullPopulatesSessionName(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -463,8 +466,9 @@ func TestGetSessionFullPopulatesSessionName(t *testing.T) {
 	require.NotNil(t, s, "session not found")
 	require.NotNil(t, s.SessionName, "SessionName is nil after GetSessionFull")
 	assert.Equal(t, "Agent Title", *s.SessionName, "SessionName round-trips")
-	// display_name is nil; COALESCE in the read path returns session_name.
-	assert.Nil(t, s.DisplayName, "DisplayName is nil (no user rename yet)")
+	// No user rename yet: DisplayName falls back to session_name.
+	require.NotNil(t, s.DisplayName, "DisplayName coalesces to session_name")
+	assert.Equal(t, "Agent Title", *s.DisplayName, "visible name before rename")
 
 	// After a manual rename, display_name is set; session_name is unchanged.
 	requireNoError(t, d.RenameSession("s-ns", Ptr("User Title")), "rename")
