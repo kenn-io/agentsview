@@ -5367,3 +5367,49 @@ func TestCopySessionMetadataClearedNameYieldsToAgent(t *testing.T) {
 	assert.Equal(t, "Fresh Agent C", *c.SessionName,
 		"cleared old name must yield to fresh session_name")
 }
+
+func TestUpsertSessionPersistsSessionName(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Simulate what a converter should produce: SessionName set, DisplayName nil.
+	require.NoError(t, d.UpsertSession(Session{
+		ID:           "conv-test-1",
+		Project:      "p",
+		Machine:      "local",
+		Agent:        "claude",
+		SessionName:  Ptr("My /rename Title"),
+		MessageCount: 1,
+	}), "upsert")
+
+	s, err := d.GetSession(ctx, "conv-test-1")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName,
+		"COALESCE should expose session_name as display_name")
+	assert.Equal(t, "My /rename Title", *s.DisplayName)
+}
+
+func TestUpsertWithDisplayNameInsteadOfSessionNameDropsName(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Bug: converter sets DisplayName instead of SessionName.
+	// The upsert only writes session_name from SessionName field,
+	// so setting DisplayName is silently dropped.
+	require.NoError(t, d.UpsertSession(Session{
+		ID:           "conv-test-2",
+		Project:      "p",
+		Machine:      "local",
+		Agent:        "claude",
+		DisplayName:  Ptr("Wrongly set in DisplayName"),
+		MessageCount: 1,
+	}), "upsert")
+
+	s, err := d.GetSession(ctx, "conv-test-2")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	// display_name was passed in but upsert never writes it — should be nil.
+	assert.Nil(t, s.DisplayName,
+		"upsert must not write display_name; only RenameSession should")
+}

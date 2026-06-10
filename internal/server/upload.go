@@ -194,7 +194,7 @@ func sessionBatchWriteFromParsed(
 	if sess.FirstMessage != "" {
 		dbSess.FirstMessage = &sess.FirstMessage
 	}
-	dbSess.DisplayName = db.ParsedSessionName(sess)
+	dbSess.SessionName = db.ParsedSessionName(sess)
 	if !sess.StartedAt.IsZero() {
 		dbSess.StartedAt = timeutil.Ptr(sess.StartedAt)
 	}
