@@ -28,13 +28,23 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 33: Claude parser now skips content-free /usage probe
+// Bumped to 34: Antigravity CLI parser changed persisted data in two
+// ways: (a) project inference (GitHub #579) now resolves a workspace
+// for sessions whose history.jsonl rows lack a conversationId, changing
+// stored session.Project, and (b) .db sessions now prefer the
+// agy-reader trajectory.json sidecar (structured tool calls/results and
+// thinking) over the heuristic SQLite decode. Existing Antigravity CLI
+// rows would otherwise be skipped while file size/mtime and
+// data_version look current, so they need a non-destructive resync to
+// pick up inferred projects and sidecar-fidelity transcripts.
+//
+// (33: Claude parser now skips content-free /usage probe
 // sessions (the only user turn is the /usage command), and the Codex
 // parser drops the initial user prompt when Codex re-emits it verbatim
 // while continuing a task across turns. Existing rows need re-parsing
 // so /usage probe sessions are dropped from the archive and Codex
 // code-review sessions are recounted to a single user turn and
-// re-flagged as automated.
+// re-flagged as automated.)
 //
 // (32: Antigravity DB parsers now filter internal protocol strings
 // from visible message content, remove raw step headers, prefer
@@ -120,7 +130,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 33
+const dataVersion = 34
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
