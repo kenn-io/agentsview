@@ -58,7 +58,8 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 		schema:     schema,
 		schemaDone: true,
 	}
-	require.NoError(t, sync.Push(ctx, PushOptions{Full: true}), "Push")
+	_, pushErr := sync.Push(ctx, true, nil)
+	require.NoError(t, pushErr, "Push")
 
 	// Verify PG stored session_name correctly.
 	var pgSessionName sql.NullString

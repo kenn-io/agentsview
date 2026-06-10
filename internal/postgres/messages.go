@@ -249,14 +249,14 @@ func (s *Store) Search(
 				-1 AS ordinal,
 				0 AS match_pos,
 				CASE
-					WHEN s.display_name ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
-						THEN COALESCE(s.display_name, '')
+					WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+						THEN COALESCE(s.display_name, s.session_name, '')
 					WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 						THEN COALESCE(s.first_message, '')
-					ELSE COALESCE(s.display_name, s.first_message, '')
+					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet
 			FROM sessions s
-			WHERE (s.display_name ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+			WHERE (COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 				OR s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\')
 				AND s.deleted_at IS NULL
 				AND EXISTS (
