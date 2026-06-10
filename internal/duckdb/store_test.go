@@ -1693,6 +1693,47 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	assert.InDelta(t, 0.00001, got.Totals.CacheSavings, 0.000001)
 }
 
+func TestGetChildSessionsOrderedByStartedAt(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+
+	parent := syncSession("duck-parent", "alpha", "parent first", "2026-01-10T00:00:00.000Z", 1)
+	early := syncSession("duck-child-early", "alpha", "early child", "2026-01-10T01:00:00.000Z", 1)
+	late := syncSession("duck-child-late", "alpha", "late child", "2026-01-10T02:00:00.000Z", 1)
+	deleted := syncSession("duck-child-deleted", "alpha", "deleted child", "2026-01-10T01:30:00.000Z", 1)
+	parentID := parent.ID
+	for _, child := range []*db.Session{&early, &late, &deleted} {
+		child.ParentSessionID = &parentID
+		child.RelationshipType = "subagent"
+	}
+
+	writes := make([]db.SessionBatchWrite, 0, 4)
+	for _, sess := range []db.Session{parent, early, late, deleted} {
+		writes = append(writes, db.SessionBatchWrite{
+			Session:         sess,
+			Messages:        []db.Message{syncMessage(sess.ID, 0, "user", *sess.FirstMessage, *sess.StartedAt)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		})
+	}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.NoError(t, local.SoftDeleteSession("duck-child-deleted"))
+
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "mirror.duckdb"),
+		local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	children, err := store.GetChildSessions(ctx, "duck-parent")
+	require.NoError(t, err)
+	assert.Equal(t,
+		[]string{"duck-child-early", "duck-child-late"},
+		duckSessionIDs(children))
+}
+
 func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	t.Helper()
 	ctx := context.Background()

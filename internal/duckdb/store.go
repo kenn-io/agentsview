@@ -387,7 +387,7 @@ func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Ses
 	rows, err := s.duck.QueryContext(ctx,
 		"SELECT "+duckSessionCols+` FROM sessions
 		 WHERE parent_session_id = ? AND deleted_at IS NULL
-		 ORDER BY COALESCE(ended_at, started_at, created_at) DESC, id DESC`,
+		 ORDER BY COALESCE(started_at, created_at) ASC`,
 		parentID,
 	)
 	if err != nil {
