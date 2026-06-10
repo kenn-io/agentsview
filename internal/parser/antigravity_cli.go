@@ -195,7 +195,7 @@ func ParseAntigravityCLISessionWithStatus(
 		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
 		// gen_metadata token usage describes the session's actual
 		// consumption no matter which transcript source wins below;
-		// the trajectory sidecar carries no token data.
+		// the sidecar decode does not extract token data.
 		usageEvents = dbResult.usageEvents
 		dbOK := dbErr == nil &&
 			hasDisplayableAntigravityCLITrajectoryMessage(dbResult.messages)

@@ -1502,6 +1502,82 @@ func createAntigravityMockGenMetadataWithField(t *testing.T, fieldNum int, input
 	return encodePB(topFields)
 }
 
+// TestExtractTokenUsageFalsePositiveGuards verifies that decoy blocks
+// satisfying the field1 model-kind range are rejected when the expected
+// token fields are missing or implausible, so the walk continues to the
+// real token block instead of stopping early with junk values.
+func TestExtractTokenUsageFalsePositiveGuards(t *testing.T) {
+	realToken := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1187},
+		{num: 2, wire: pbWireVarint, varint: 2497},
+		{num: 3, wire: pbWireVarint, varint: 100},
+		{num: 5, wire: pbWireVarint, varint: 44769},
+	})
+	tests := []struct {
+		name  string
+		decoy []pbField
+	}{
+		{
+			name: "decoy without input field",
+			decoy: []pbField{
+				{num: 1, wire: pbWireVarint, varint: 1371},
+				{num: 2, wire: pbWireVarint, varint: 1234},
+			},
+		},
+		{
+			name: "decoy with implausible input",
+			decoy: []pbField{
+				{num: 1, wire: pbWireVarint, varint: 1371},
+				{num: 2, wire: pbWireVarint, varint: 1234},
+				{num: 5, wire: pbWireVarint, varint: 679261000},
+			},
+		},
+		{
+			name: "decoy with implausible reasoning",
+			decoy: []pbField{
+				{num: 1, wire: pbWireVarint, varint: 1371},
+				{num: 2, wire: pbWireVarint, varint: 1234},
+				{num: 3, wire: pbWireVarint, varint: 679261000},
+				{num: 5, wire: pbWireVarint, varint: 2000},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Decoy first in DFS order so acceptance would
+			// shadow the real block.
+			data := encodePB([]pbField{
+				{num: 1, wire: pbWireBytes, bytes: encodePB(tt.decoy)},
+				{num: 2, wire: pbWireBytes, bytes: realToken},
+			})
+			inp, out, reasoning, ok := extractTokenUsage(data)
+			require.True(t, ok, "real token block should be found")
+			assert.Equal(t, 44769, inp, "input tokens")
+			assert.Equal(t, 2497, out, "output tokens")
+			assert.Equal(t, 100, reasoning, "reasoning tokens")
+		})
+	}
+}
+
+// TestExtractTokenUsageNoReasoningField verifies a real token block is
+// accepted when field 3 is absent: proto3 omits zero values, and zero
+// reasoning tokens is a legitimate generation.
+func TestExtractTokenUsageNoReasoningField(t *testing.T) {
+	block := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1187},
+		{num: 2, wire: pbWireVarint, varint: 2497},
+		{num: 5, wire: pbWireVarint, varint: 44769},
+	})
+	data := encodePB([]pbField{
+		{num: 1, wire: pbWireBytes, bytes: block},
+	})
+	inp, out, reasoning, ok := extractTokenUsage(data)
+	require.True(t, ok, "token block without reasoning should be accepted")
+	assert.Equal(t, 44769, inp, "input tokens")
+	assert.Equal(t, 2497, out, "output tokens")
+	assert.Equal(t, 0, reasoning, "reasoning tokens")
+}
+
 // TestExtractTokenUsageLargeValueFalsePositive is a regression test for the
 // case where a nested message has field1 ∈ [1000, 5000) but field2 holds an
 // implausibly large value (e.g. a nanosecond-latency counter). The real token

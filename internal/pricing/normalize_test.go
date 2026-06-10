@@ -74,6 +74,50 @@ func TestResolve(t *testing.T) {
 	require.True(t, ok, "should resolve without prefix if map has prefix")
 	assert.Equal(t, 40, got)
 
+	// 5. Bracketed long-context tag strips to the base model
+	got, ok = Resolve(rates, "claude-opus-4.6[1m]")
+	require.True(t, ok, "bracketed decoration should strip to base model")
+	assert.Equal(t, 99, got)
+
+	// 6. Trailing release date strips to the base model
+	got, ok = Resolve(rates, "claude-opus-4-7-20260101")
+	require.True(t, ok, "release-date suffix should strip to base model")
+	assert.Equal(t, 5, got)
+
 	_, ok = Resolve(rates, "unknown-model")
 	assert.False(t, ok, "unknown model stays unresolved")
+}
+
+func TestResolveProviderPrefixes(t *testing.T) {
+	rates := map[string]int{
+		"openrouter/owl-alpha": 7,
+		"gpt-5.5":              30,
+	}
+
+	_, ok := Resolve(rates, "other/owl-alpha")
+	assert.False(t, ok,
+		"provider-qualified model must not take another provider's pricing")
+
+	got, ok := Resolve(rates, "owl-alpha")
+	require.True(t, ok, "unqualified model may match a qualified key")
+	assert.Equal(t, 7, got)
+
+	got, ok = Resolve(rates, "openai/gpt-5.5")
+	require.True(t, ok, "qualified model may match an unqualified key")
+	assert.Equal(t, 30, got)
+}
+
+func TestResolveRejectsArbitrarySubstrings(t *testing.T) {
+	rates := map[string]int{
+		"openai/gpt-5.5":   30,
+		"gemini-3.5-flash": 20,
+	}
+
+	_, ok := Resolve(rates, "gpt-5.5-codex")
+	assert.False(t, ok,
+		"distinct variant must stay unpriced, not take base pricing")
+
+	_, ok = Resolve(rates, "wrapped-gemini-3.5-flash-pro")
+	assert.False(t, ok,
+		"key inside an unrelated longer name must not match")
 }

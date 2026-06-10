@@ -283,11 +283,12 @@ func loadAntigravityStepsWithRawCount(
 // the token usage block containing Field 1 = 1020, Field 2 = output,
 // Field 3 = reasoning, and Field 5 = input.
 //
-// maxPlausibleTokens caps the output-token value accepted by the heuristic.
+// maxPlausibleTokens caps the token values accepted by the heuristic.
 // Other nested messages can coincidentally satisfy field1 ∈ [1000, 5000)
-// while field2 holds a large integer (e.g. a nanosecond latency).
-// No real LLM response has produced more than a few million output tokens,
-// so values above this threshold are treated as false positives and skipped.
+// while carrying large integers (e.g. a nanosecond latency).
+// No real LLM generation involves more than a few million tokens,
+// so blocks with values above this threshold are treated as false
+// positives and skipped.
 const maxPlausibleTokens = 2_000_000
 
 func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
@@ -301,18 +302,8 @@ func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
 		if found {
 			return
 		}
-		f1, ok1 := agProtoFind(fs, 1)
-		f2, ok2 := agProtoFind(fs, 2)
-		if ok1 && ok2 && f1.Wire == pbWireVarint && f2.Wire == pbWireVarint &&
-			f1.Varint >= 1000 && f1.Varint < 5000 &&
-			f2.Varint <= maxPlausibleTokens {
-			output = int(f2.Varint)
-			if f3, ok := agProtoFind(fs, 3); ok && f3.Wire == pbWireVarint {
-				reasoning = int(f3.Varint)
-			}
-			if f5, ok := agProtoFind(fs, 5); ok && f5.Wire == pbWireVarint {
-				input = int(f5.Varint)
-			}
+		if in, out, reas, blockOK := tokenBlockFrom(fs); blockOK {
+			input, output, reasoning = in, out, reas
 			found = true
 			return
 		}
@@ -324,6 +315,38 @@ func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
 	}
 	walk(fields)
 	return input, output, reasoning, found
+}
+
+// tokenBlockFrom reports whether fs is a plausible token usage block:
+// field 1 holds a model-kind varint in [1000, 5000), fields 2 (output)
+// and 5 (input) are varints within maxPlausibleTokens, and field 3
+// (reasoning), when present, is too. Field 5 is required: a real
+// generation always consumes input context (proto3 omits only zero
+// values), while observed false-positive blocks (e.g. latency
+// counters) lack it. Field 3 stays optional because zero reasoning is
+// legitimate and omitted from the wire.
+func tokenBlockFrom(fs []agProtoField) (input, output, reasoning int, ok bool) {
+	f1, ok1 := agProtoFind(fs, 1)
+	f2, ok2 := agProtoFind(fs, 2)
+	f5, ok5 := agProtoFind(fs, 5)
+	if !ok1 || !ok2 || !ok5 ||
+		f1.Wire != pbWireVarint || f2.Wire != pbWireVarint ||
+		f5.Wire != pbWireVarint {
+		return 0, 0, 0, false
+	}
+	if f1.Varint < 1000 || f1.Varint >= 5000 {
+		return 0, 0, 0, false
+	}
+	if f2.Varint > maxPlausibleTokens || f5.Varint > maxPlausibleTokens {
+		return 0, 0, 0, false
+	}
+	if f3, hasF3 := agProtoFind(fs, 3); hasF3 && f3.Wire == pbWireVarint {
+		if f3.Varint > maxPlausibleTokens {
+			return 0, 0, 0, false
+		}
+		reasoning = int(f3.Varint)
+	}
+	return int(f5.Varint), int(f2.Varint), reasoning, true
 }
 
 // extractModelName recursively walks fields to extract the model name from Field 21 or Field 19.
