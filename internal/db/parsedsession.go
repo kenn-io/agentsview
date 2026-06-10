@@ -12,14 +12,3 @@ func ParsedSessionName(sess parser.ParsedSession) *string {
 	return &n
 }
 
-// ParsedSessionNameFields is a compatibility shim retained while callers
-// are migrated to use ParsedSessionName. It will be removed in the
-// session_name two-field refactor (Task 5).
-func ParsedSessionNameFields(sess parser.ParsedSession) (displayName *string, nameSource *string) {
-	n := ParsedSessionName(sess)
-	if n == nil {
-		return nil, nil
-	}
-	src := "agent"
-	return n, &src
-}

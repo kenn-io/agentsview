@@ -172,7 +172,7 @@ func TestImportChatGPT(t *testing.T) {
 	assert.Equal(t, "chatgpt.com", s.Project)
 }
 
-func TestImportSetsAgentNameSource(t *testing.T) {
+func TestImportSetsDisplayName(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -187,8 +187,6 @@ func TestImportSetsAgentNameSource(t *testing.T) {
 	require.NotNil(t, s)
 	require.NotNil(t, s.DisplayName)
 	assert.Equal(t, "First Chat", *s.DisplayName)
-	require.NotNil(t, s.NameSource)
-	assert.Equal(t, "agent", *s.NameSource)
 }
 
 func TestImportChatGPT_SkipsExisting(t *testing.T) {

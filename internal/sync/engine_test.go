@@ -1609,18 +1609,16 @@ func TestToDBSessionTerminationStatus(t *testing.T) {
 	}
 }
 
-func TestToDBSessionCarriesNameSource(t *testing.T) {
+func TestToDBSessionCarriesDisplayName(t *testing.T) {
 	pw := pendingWrite{sess: parser.ParsedSession{
 		ID:          "s1",
 		Project:     "p",
 		Agent:       parser.AgentClaude,
-		DisplayName: "agent-name",
+		SessionName: "agent-name",
 	}}
 	s := toDBSession(pw)
 	require.NotNil(t, s.DisplayName)
 	assert.Equal(t, "agent-name", *s.DisplayName)
-	require.NotNil(t, s.NameSource)
-	assert.Equal(t, "agent", *s.NameSource)
 
 	s2 := toDBSession(pendingWrite{sess: parser.ParsedSession{
 		ID:      "s2",
@@ -1628,5 +1626,4 @@ func TestToDBSessionCarriesNameSource(t *testing.T) {
 		Agent:   parser.AgentClaude,
 	}})
 	assert.Nil(t, s2.DisplayName)
-	assert.Nil(t, s2.NameSource)
 }
