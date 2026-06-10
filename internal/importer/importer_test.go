@@ -289,6 +289,53 @@ func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
 		"session_name should be refreshed on ChatGPT re-import")
 }
 
+func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(testChatGPTConv), 0o644,
+	))
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	// Capture original fields.
+	orig, err := d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, orig)
+	origFirstMsg := orig.FirstMessage
+	origStarted := orig.StartedAt
+	origEnded := orig.EndedAt
+	origMsgCount := orig.MessageCount
+
+	// Re-import with only the title changed.
+	renamed := strings.ReplaceAll(testChatGPTConv, `"title":"Test"`, `"title":"New Title"`)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(renamed), 0o644,
+	))
+	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	after, err := d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+
+	// session_name updated.
+	require.NotNil(t, after.DisplayName)
+	assert.Equal(t, "New Title", *after.DisplayName)
+
+	// All other fields preserved.
+	assert.Equal(t, origFirstMsg, after.FirstMessage, "first_message must not change")
+	assert.Equal(t, origStarted, after.StartedAt, "started_at must not change")
+	assert.Equal(t, origEnded, after.EndedAt, "ended_at must not change")
+	assert.Equal(t, origMsgCount, after.MessageCount, "message_count must not change")
+}
+
 func TestImportChatGPT_SkipsExisting(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

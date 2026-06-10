@@ -297,20 +297,11 @@ func ImportChatGPT(
 				return nil
 			}
 			if existing != nil {
-				// Still upsert session metadata so session_name stays
-				// current even when messages are not re-imported.
-				metaSess := db.Session{
-					ID:           s.ID,
-					Project:      s.Project,
-					Machine:      s.Machine,
-					Agent:        string(s.Agent),
-					SessionName:  db.ParsedSessionName(s),
-					MessageCount: existing.MessageCount,
-				}
-				if uerr := store.UpsertSession(metaSess); uerr == nil {
-					if localDB, ok := store.(*db.DB); ok {
-						_ = localDB.BumpLocalModifiedAt(s.ID)
-					}
+				// Refresh session_name without touching any other fields —
+				// a partial UpsertSession would overwrite first_message,
+				// timestamps, and counts with zero values.
+				if localDB, ok := store.(*db.DB); ok {
+					_ = localDB.RefreshSessionName(s.ID, db.ParsedSessionName(s))
 				}
 				stats.Skipped++
 				cb.progress(stats)

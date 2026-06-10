@@ -1126,6 +1126,23 @@ func (db *DB) BumpLocalModifiedAt(id string) error {
 	return err
 }
 
+// RefreshSessionName updates only session_name and bumps local_modified_at
+// in a single targeted UPDATE. Use this on re-import skip paths where the
+// full UpsertSession is unsafe because the caller does not have a complete
+// row to avoid overwriting existing fields with zero values.
+func (db *DB) RefreshSessionName(id string, sessionName *string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`UPDATE sessions
+		 SET session_name = ?,
+		     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ? AND deleted_at IS NULL`,
+		sessionName, id,
+	)
+	return err
+}
+
 // FindSessionIDsByPartial returns up to limit session IDs that
 // contain the given substring. Used by CLI lookups so users can
 // reference sessions by a short prefix shown in list output.
