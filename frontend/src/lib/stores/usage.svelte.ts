@@ -191,6 +191,11 @@ class UsageStore {
   topSessions = $state<TopUsageSessionsResponse | null>(null);
 
   loading = $state({ summary: false, topSessions: false });
+  querying = $state<Record<UsagePanel, boolean>>({
+    summary: false,
+    comparison: false,
+    topSessions: false,
+  });
   errors = $state<Record<Endpoint, string | null>>({
     summary: null,
     topSessions: null,
@@ -361,6 +366,10 @@ class UsageStore {
 
   get hasActiveFilters(): boolean {
     return this.excludedProjects !== "" || this.selectedModels !== "";
+  }
+
+  get isQuerying(): boolean {
+    return Object.values(this.querying).some(Boolean);
   }
 
   setTimeSeriesGroupBy(g: GroupBy) {
@@ -534,22 +543,27 @@ class UsageStore {
   private abortPanel(panel: UsagePanel): void {
     this.abortControllers[panel]?.abort();
     delete this.abortControllers[panel];
+    this.querying[panel] = false;
   }
 
   private nextAbortSignal(panel: UsagePanel): AbortSignal {
     this.abortControllers[panel]?.abort();
     const controller = new AbortController();
     this.abortControllers[panel] = controller;
+    this.querying[panel] = true;
     return controller.signal;
   }
 
   private clearAbortSignal(
     panel: UsagePanel,
     signal: AbortSignal,
-  ): void {
+  ): boolean {
     if (this.abortControllers[panel]?.signal === signal) {
       delete this.abortControllers[panel];
+      this.querying[panel] = false;
+      return true;
     }
+    return false;
   }
 }
 

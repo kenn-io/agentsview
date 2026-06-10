@@ -8,6 +8,12 @@
   let errorMessage: string = $state("");
 
   function startResync() {
+    if (sync.readOnly) {
+      errorMessage =
+        "Full resync is unavailable for read-only backends.";
+      view = "error";
+      return;
+    }
     const started = sync.triggerResync(
       () => {
         view = "done";
@@ -19,7 +25,7 @@
     );
     if (started) {
       view = "progress";
-    } else {
+    } else if (!errorMessage) {
       errorMessage = "A sync is already in progress.";
       view = "error";
     }

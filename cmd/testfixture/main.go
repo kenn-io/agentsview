@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 )
 
 type sessionSpec struct {
@@ -49,6 +51,7 @@ var specs = []sessionSpec{
 
 func main() {
 	out := flag.String("out", "", "output database path")
+	duckDBOut := flag.String("duckdb-out", "", "optional output DuckDB mirror path")
 	flag.Parse()
 	if *out == "" {
 		fmt.Fprintln(os.Stderr, "usage: testfixture -out <path>")
@@ -110,6 +113,37 @@ func main() {
 	}
 
 	fmt.Printf("Fixture DB written to %s\n", *out)
+	if *duckDBOut != "" {
+		if err := writeDuckDBMirror(database, *duckDBOut); err != nil {
+			log.Fatalf("writing DuckDB mirror: %v", err)
+		}
+		fmt.Printf("Fixture DuckDB mirror written to %s\n", *duckDBOut)
+	}
+}
+
+func writeDuckDBMirror(database *db.DB, path string) error {
+	if err := os.Remove(path); err != nil &&
+		!errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing existing DuckDB mirror: %w", err)
+	}
+	syncer, err := duckdbsync.New(path, database, "test-machine", duckdbsync.SyncOptions{})
+	if err != nil {
+		return err
+	}
+	defer syncer.Close()
+
+	ctx := context.Background()
+	if err := syncer.EnsureSchema(ctx); err != nil {
+		return err
+	}
+	result, err := syncer.Push(ctx, true, nil)
+	if err != nil {
+		return err
+	}
+	if result.Errors > 0 {
+		return fmt.Errorf("DuckDB push had %d session error(s)", result.Errors)
+	}
+	return nil
 }
 
 func createSessionFixture(

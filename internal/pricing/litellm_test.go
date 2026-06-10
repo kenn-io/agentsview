@@ -99,6 +99,7 @@ func TestFallbackPricing(t *testing.T) {
 		"claude-opus-4-6":           false,
 		"claude-opus-4-7":           false,
 		"claude-opus-4-8":           false,
+		"claude-fable-5":            false,
 		"claude-haiku-4-5-20251001": false,
 		"claude-sonnet-4-20250514":  false,
 		"claude-opus-4-20250514":    false,

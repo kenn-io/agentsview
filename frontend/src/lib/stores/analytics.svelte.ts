@@ -106,6 +106,19 @@ class AnalyticsStore {
     signals: false,
   });
 
+  querying = $state({
+    summary: false,
+    activity: false,
+    heatmap: false,
+    projects: false,
+    hourOfWeek: false,
+    sessionShape: false,
+    velocity: false,
+    tools: false,
+    topSessions: false,
+    signals: false,
+  });
+
   errors = $state<Record<Panel, string | null>>({
     summary: null,
     activity: null,
@@ -151,6 +164,10 @@ class AnalyticsStore {
       this.selectedDow !== null ||
       this.selectedHour !== null
     );
+  }
+
+  get isQuerying(): boolean {
+    return Object.values(this.querying).some(Boolean);
   }
 
   clearAllFilters() {
@@ -409,6 +426,7 @@ class AnalyticsStore {
     // display. Refetches triggered by live events or filter changes
     // replace data in place instead of flashing to loading state.
     const isFirstLoad = !hasExistingData();
+    this.querying[panel] = true;
     if (isFirstLoad) this.loading[panel] = true;
     // On refetch, keep any prior error state in place until we have
     // a definitive result. First-load clears up front so we start
@@ -436,6 +454,7 @@ class AnalyticsStore {
     } finally {
       this.clearAbortSignal(panel, signal);
       if (this.versions[panel] === v) {
+        this.querying[panel] = false;
         this.loading[panel] = false;
       }
     }

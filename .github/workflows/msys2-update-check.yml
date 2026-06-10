@@ -33,6 +33,6 @@ jobs:
         run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
 
       - name: Run Go tests
-        run: go test -tags fts5 ./... -v -count=1
+        run: go test -tags "fts5,kit_posthog_disabled" ./... -v -count=1
         env:
           CGO_ENABLED: "1"

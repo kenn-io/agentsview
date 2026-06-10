@@ -11,8 +11,10 @@ type errReadOnly struct{}
 func (errReadOnly) Error() string { return "not available in remote mode" }
 
 // Store is the interface the HTTP server uses for all data access.
-// The concrete *DB (SQLite) satisfies it implicitly. The pgdb
-// package provides a read-only PostgreSQL implementation.
+// Any new server-visible query or mutation belongs here, not only on
+// the SQLite *DB type, so PostgreSQL and DuckDB fail compilation until
+// they implement the same capability surface. The backendcontract package
+// centralizes compile-time assertions for every concrete provider.
 type Store interface {
 	// Cursor pagination.
 	SetCursorSecret(secret []byte)

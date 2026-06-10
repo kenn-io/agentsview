@@ -65,6 +65,17 @@ type PGConfig struct {
 	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
+// DuckDBConfig holds DuckDB mirror and Quack connection settings.
+type DuckDBConfig struct {
+	Path            string   `toml:"path" json:"path"`
+	URL             string   `toml:"url" json:"url"`
+	Token           string   `toml:"token" json:"token,omitempty"`
+	MachineName     string   `toml:"machine_name" json:"machine_name"`
+	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
+	Projects        []string `toml:"projects" json:"projects,omitempty"`
+	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
+}
+
 // AutomatedConfig holds user-supplied additions to the
 // automated-session classifier. Parse-only; all semantic
 // normalization (trim, dedupe, length cap, built-in overlap
@@ -113,6 +124,7 @@ type Config struct {
 	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
 	NoSync               bool                   `json:"-" toml:"-"`
 	PG                   PGConfig               `json:"pg,omitempty" toml:"pg"`
+	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
@@ -306,6 +318,20 @@ func LoadPGServePFlags(fs *pflag.FlagSet) (Config, error) {
 	return cfg, nil
 }
 
+// LoadDuckDBServePFlags builds a DuckDB serve config from a parsed Cobra/pflag
+// FlagSet. It intentionally uses the same isolated serve defaults as pg serve.
+func LoadDuckDBServePFlags(fs *pflag.FlagSet) (Config, error) {
+	cfg, err := loadPGServeBase()
+	if err != nil {
+		return cfg, err
+	}
+	applyPFlags(&cfg, fs)
+	if err := finalize(&cfg); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
 func loadPGServeBase() (Config, error) {
 	cfg, err := Default()
 	if err != nil {
@@ -426,6 +452,7 @@ func (c *Config) loadFile() error {
 		RemoteAccess                   bool                       `toml:"remote_access"`
 		DisableUpdateCheck             bool                       `toml:"disable_update_check"`
 		PG                             PGConfig                   `toml:"pg"`
+		DuckDB                         DuckDBConfig               `toml:"duckdb"`
 		Automated                      AutomatedConfig            `toml:"automated"`
 		Agent                          map[string]AgentConfig     `toml:"agent"`
 		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
@@ -487,6 +514,29 @@ func (c *Config) loadFile() error {
 	}
 	if file.PG.ExcludeProjects != nil && c.PG.ExcludeProjects == nil {
 		c.PG.ExcludeProjects = file.PG.ExcludeProjects
+	}
+	// Merge duckdb field-by-field so env vars override only
+	// the fields they set, preserving config-file settings.
+	if file.DuckDB.Path != "" && c.DuckDB.Path == "" {
+		c.DuckDB.Path = file.DuckDB.Path
+	}
+	if file.DuckDB.URL != "" && c.DuckDB.URL == "" {
+		c.DuckDB.URL = file.DuckDB.URL
+	}
+	if file.DuckDB.Token != "" && c.DuckDB.Token == "" {
+		c.DuckDB.Token = file.DuckDB.Token
+	}
+	if file.DuckDB.MachineName != "" && c.DuckDB.MachineName == "" {
+		c.DuckDB.MachineName = file.DuckDB.MachineName
+	}
+	if file.DuckDB.AllowInsecure {
+		c.DuckDB.AllowInsecure = true
+	}
+	if file.DuckDB.Projects != nil && c.DuckDB.Projects == nil {
+		c.DuckDB.Projects = file.DuckDB.Projects
+	}
+	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
+		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -653,6 +703,18 @@ func (c *Config) loadEnv() {
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
 		c.PG.MachineName = v
+	}
+	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
+		c.DuckDB.Path = v
+	}
+	if v := os.Getenv("AGENTSVIEW_DUCKDB_URL"); v != "" {
+		c.DuckDB.URL = v
+	}
+	if v := os.Getenv("AGENTSVIEW_DUCKDB_TOKEN"); v != "" {
+		c.DuckDB.Token = v
+	}
+	if v := os.Getenv("AGENTSVIEW_DUCKDB_MACHINE"); v != "" {
+		c.DuckDB.MachineName = v
 	}
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
@@ -1178,6 +1240,44 @@ func (c *Config) ResolvePG() (PGConfig, error) {
 		pg.MachineName = h
 	}
 	return pg, nil
+}
+
+// ResolveDuckDB returns a copy of DuckDB config with defaults applied
+// and environment variables expanded in path, URL, and token.
+func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
+	duck := c.DuckDB
+	if duck.Path != "" {
+		expanded, err := expandBracedEnv(duck.Path)
+		if err != nil {
+			return duck, fmt.Errorf("expanding path: %w", err)
+		}
+		duck.Path = expanded
+	}
+	if duck.URL != "" {
+		expanded, err := expandBracedEnv(duck.URL)
+		if err != nil {
+			return duck, fmt.Errorf("expanding url: %w", err)
+		}
+		duck.URL = expanded
+	}
+	if duck.Token != "" {
+		expanded, err := expandBracedEnv(duck.Token)
+		if err != nil {
+			return duck, fmt.Errorf("expanding token: %w", err)
+		}
+		duck.Token = expanded
+	}
+	if duck.Path == "" {
+		duck.Path = filepath.Join(c.DataDir, "sessions.duckdb")
+	}
+	if duck.MachineName == "" {
+		h, err := os.Hostname()
+		if err != nil {
+			return duck, fmt.Errorf("os.Hostname failed (%w); set machine_name explicitly in config", err)
+		}
+		duck.MachineName = h
+	}
+	return duck, nil
 }
 
 var (

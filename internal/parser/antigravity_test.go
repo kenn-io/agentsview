@@ -260,6 +260,108 @@ func TestAntigravityCLIDiscoverAndParseDB(t *testing.T) {
 	assert.Equal(t, "db prompt fallback", sess.FirstMessage)
 }
 
+func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
+	root := t.TempDir()
+	id := "f0f0f0f0-f1f1-f2f2-f3f3-f4f4f4f4f4f4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // user prompt: "user prompt text goes here", ts: 1779000000
+
+	// Create history.jsonl with a row omitting conversationId, matching text, and close timestamp (1779000000000 ms)
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"  user prompt text goes here  ","timestamp":1779000010000,"workspace":"/tmp/fallback-proj"}`))
+
+	sess, msgs, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "/tmp/fallback-proj", sess.Project, "should successfully fallback infer project")
+}
+
+func TestAntigravityCLIProjectFallbackStrictWindow(t *testing.T) {
+	root := t.TempDir()
+	id := "e0e0e0e0-e1e1-e2e2-e3e3-e4e4e4e4e4e4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // user prompt: "user prompt text goes here", ts: 1779000000
+
+	// Create history.jsonl with timestamp outside the 1-minute window (e.g., 65 seconds later)
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"user prompt text goes here","timestamp":1779000065000,"workspace":"/tmp/too-late-proj"}`))
+
+	sess, _, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	assert.Empty(t, sess.Project, "should reject match outside 1-minute window")
+}
+
+func TestAntigravityCLIProjectFallbackAmbiguous(t *testing.T) {
+	root := t.TempDir()
+	id := "d0d0d0d0-d1d1-d2d2-d3d3-d4d4d4d4d4d4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // user prompt: "user prompt text goes here", ts: 1779000000
+
+	// Create history.jsonl with two rows having matching prompts, same timestamp difference, but different workspaces
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"user prompt text goes here","timestamp":1779000005000,"workspace":"/tmp/proj-a"}
+{"display":"user prompt text goes here","timestamp":1779000005000,"workspace":"/tmp/proj-b"}`))
+
+	sess, _, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	assert.Empty(t, sess.Project, "should reject ambiguous match with different workspaces at same time closeness")
+}
+
+func TestAntigravityCLIProjectFallbackShortPrompt(t *testing.T) {
+	root := t.TempDir()
+	id := "c0c0c0c0-c1c1-c2c2-c3c3-c4c4c4c4c4c4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityOvershortPromptDB(t, dbPath) // user prompt: "hi", ts: 1779000000
+
+	// Create history.jsonl with matching short prompt "hi"
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"hi","timestamp":1779000005000,"workspace":"/tmp/short-proj"}`))
+
+	sess, _, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	assert.Empty(t, sess.Project, "should reject matching short prompts")
+}
+
+func createAntigravityOvershortPromptDB(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open")
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+
+	tsEarly := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1779000000},
+	})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{
+			num:   17,
+			wire:  pbWireBytes,
+			bytes: []byte("hi"),
+		},
+	})
+	mustExec(t, db,
+		`INSERT INTO steps (idx, step_type, step_payload) `+
+			`VALUES (?, ?, ?)`,
+		0, 14, userPayload)
+}
+
 func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
 	root := t.TempDir()
 	id := "44444444-5555-6666-7777-888888888888"

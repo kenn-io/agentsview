@@ -261,6 +261,116 @@ func (f AnalyticsFilter) matchesTimeFilter(
 	return true
 }
 
+func (f AnalyticsFilter) canUseSQLiteTimeSQL() bool {
+	_, ok := f.sqliteTimeModifier()
+	return ok
+}
+
+func (f AnalyticsFilter) sqliteTimeModifier() (string, bool) {
+	if f.Timezone == "" || f.Timezone == "UTC" {
+		return "", true
+	}
+	if f.From == "" || f.To == "" {
+		return "", false
+	}
+	loc, err := time.LoadLocation(f.Timezone)
+	if err != nil {
+		return "", false
+	}
+	start, err := time.Parse("2006-01-02", f.From)
+	if err != nil {
+		return "", false
+	}
+	end, err := time.Parse("2006-01-02", f.To)
+	if err != nil {
+		return "", false
+	}
+	var offset *int
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		checks := []time.Time{
+			time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, loc),
+			time.Date(d.Year(), d.Month(), d.Day(), 23, 59, 59, 0, loc),
+		}
+		for _, local := range checks {
+			_, current := local.Zone()
+			if current%60 != 0 {
+				return "", false
+			}
+			if offset == nil {
+				v := current
+				offset = &v
+				continue
+			}
+			if *offset != current {
+				return "", false
+			}
+		}
+	}
+	if offset == nil {
+		return "", false
+	}
+	sign := "+"
+	value := *offset
+	if value < 0 {
+		sign = "-"
+		value = -value
+	}
+	return fmt.Sprintf("%s%02d:%02d", sign, value/3600, (value%3600)/60), true
+}
+
+func sqliteDateExpr(dateCol string, modifier string) string {
+	if modifier == "" {
+		return "strftime('%Y-%m-%d', " + dateCol + ")"
+	}
+	return "strftime('%Y-%m-%d', " + dateCol + ", '" + modifier + "')"
+}
+
+func sqliteAnalyticsWhereSQL(
+	f AnalyticsFilter,
+	dateCol string,
+	sessionIDExpr string,
+	includeTime bool,
+) (string, []any) {
+	where, args := f.buildWhere(dateCol)
+	modifier, _ := f.sqliteTimeModifier()
+	dateExpr := sqliteDateExpr(dateCol, modifier)
+	if f.From != "" {
+		where += " AND " + dateExpr + " >= ?"
+		args = append(args, f.From)
+	}
+	if f.To != "" {
+		where += " AND " + dateExpr + " <= ?"
+		args = append(args, f.To)
+	}
+	if includeTime && f.HasTimeFilter() {
+		preds := []string{
+			"m.session_id = " + sessionIDExpr,
+			"m.timestamp != ''",
+		}
+		if f.DayOfWeek != nil {
+			dowExpr := "strftime('%w', m.timestamp)"
+			if modifier != "" {
+				dowExpr = "strftime('%w', m.timestamp, '" + modifier + "')"
+			}
+			preds = append(preds,
+				"((CAST("+dowExpr+" AS INTEGER) + 6) % 7) = ?")
+			args = append(args, *f.DayOfWeek)
+		}
+		if f.Hour != nil {
+			hourExpr := "strftime('%H', m.timestamp)"
+			if modifier != "" {
+				hourExpr = "strftime('%H', m.timestamp, '" + modifier + "')"
+			}
+			preds = append(preds,
+				"CAST("+hourExpr+" AS INTEGER) = ?")
+			args = append(args, *f.Hour)
+		}
+		where += " AND EXISTS (SELECT 1 FROM messages m WHERE " +
+			strings.Join(preds, " AND ") + ")"
+	}
+	return where, args
+}
+
 // filteredSessionIDs returns the set of session IDs that have
 // at least one message matching the hour/dow filter. Used by
 // session-level queries to restrict results when time filters
@@ -406,6 +516,148 @@ type AnalyticsSummary struct {
 
 // GetAnalyticsSummary returns aggregate statistics.
 func (db *DB) GetAnalyticsSummary(
+	ctx context.Context, f AnalyticsFilter,
+) (AnalyticsSummary, error) {
+	if !f.canUseSQLiteTimeSQL() {
+		return db.getAnalyticsSummaryGo(ctx, f)
+	}
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
+	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "sessions.id", true)
+	modifier, _ := f.sqliteTimeModifier()
+	dateExpr := sqliteDateExpr(dateCol, modifier)
+
+	query := `
+		WITH filtered AS (
+			SELECT id, project, agent, message_count,
+				total_output_tokens, has_total_output_tokens,
+				` + dateExpr + ` AS local_date
+			FROM sessions
+			WHERE ` + where + `
+		),
+		ranked AS (
+			SELECT message_count,
+				ROW_NUMBER() OVER (ORDER BY message_count ASC) AS rn,
+				COUNT(*) OVER () AS n
+			FROM filtered
+		),
+		project_totals AS (
+			SELECT project, SUM(message_count) AS messages
+			FROM filtered
+			GROUP BY project
+		)
+		SELECT
+			COUNT(*) AS total_sessions,
+			COALESCE(SUM(message_count), 0) AS total_messages,
+			COALESCE(SUM(CASE WHEN has_total_output_tokens
+				THEN total_output_tokens ELSE 0 END), 0) AS total_output_tokens,
+			COALESCE(SUM(CASE WHEN has_total_output_tokens
+				THEN 1 ELSE 0 END), 0) AS token_reporting_sessions,
+			COUNT(DISTINCT project) AS active_projects,
+			COUNT(DISTINCT local_date) AS active_days,
+			COALESCE(ROUND(AVG(message_count), 1), 0) AS avg_messages,
+			COALESCE((
+				SELECT CAST(AVG(message_count) AS INTEGER)
+				FROM ranked
+				WHERE rn IN (
+					CAST(((n + 1) / 2) AS INTEGER),
+					CAST(((n + 2) / 2) AS INTEGER)
+				)
+			), 0) AS median_messages,
+			COALESCE((
+				SELECT message_count
+				FROM ranked
+				WHERE rn = MIN(CAST(n * 0.9 AS INTEGER) + 1, n)
+				LIMIT 1
+			), 0) AS p90_messages,
+			COALESCE((
+				SELECT project
+				FROM project_totals
+				ORDER BY messages DESC, project ASC
+				LIMIT 1
+			), '') AS most_active,
+			COALESCE(ROUND((
+				SELECT SUM(messages)
+				FROM (
+					SELECT messages
+					FROM project_totals
+					ORDER BY messages DESC
+					LIMIT 3
+				)
+			) * 1.0 / NULLIF(SUM(message_count), 0), 3), 0) AS concentration
+		FROM filtered`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return AnalyticsSummary{},
+			fmt.Errorf("querying analytics summary: %w", err)
+	}
+	s := AnalyticsSummary{Agents: make(map[string]*AgentSummary)}
+	if !rows.Next() {
+		rows.Close()
+		return s, nil
+	}
+	if err := rows.Scan(
+		&s.TotalSessions,
+		&s.TotalMessages,
+		&s.TotalOutputTokens,
+		&s.TokenReportingSessions,
+		&s.ActiveProjects,
+		&s.ActiveDays,
+		&s.AvgMessages,
+		&s.MedianMessages,
+		&s.P90Messages,
+		&s.MostActive,
+		&s.Concentration,
+	); err != nil {
+		rows.Close()
+		return AnalyticsSummary{},
+			fmt.Errorf("scanning summary row: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return AnalyticsSummary{},
+			fmt.Errorf("iterating summary rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return AnalyticsSummary{},
+			fmt.Errorf("closing summary rows: %w", err)
+	}
+
+	agentRows, err := db.getReader().QueryContext(ctx, `
+		WITH filtered AS (
+			SELECT agent, message_count
+			FROM sessions
+			WHERE `+where+`
+		)
+		SELECT agent, COUNT(*), COALESCE(SUM(message_count), 0)
+		FROM filtered
+		GROUP BY agent`,
+		args...,
+	)
+	if err != nil {
+		return AnalyticsSummary{},
+			fmt.Errorf("querying analytics summary agents: %w", err)
+	}
+	defer agentRows.Close()
+	for agentRows.Next() {
+		var agent string
+		var summary AgentSummary
+		if err := agentRows.Scan(
+			&agent, &summary.Sessions, &summary.Messages,
+		); err != nil {
+			return AnalyticsSummary{},
+				fmt.Errorf("scanning summary agent: %w", err)
+		}
+		s.Agents[agent] = &summary
+	}
+	if err := agentRows.Err(); err != nil {
+		return AnalyticsSummary{},
+			fmt.Errorf("iterating summary agents: %w", err)
+	}
+	return s, nil
+}
+
+func (db *DB) getAnalyticsSummaryGo(
 	ctx context.Context, f AnalyticsFilter,
 ) (AnalyticsSummary, error) {
 	loc := f.location()
@@ -2742,6 +2994,67 @@ func (db *DB) GetAnalyticsTopSessions(
 	if metric == "" {
 		metric = "messages"
 	}
+	if !f.canUseSQLiteTimeSQL() {
+		return db.getAnalyticsTopSessionsGo(ctx, f, metric)
+	}
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
+	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "sessions.id", true)
+
+	durationExpr := `ROUND((julianday(ended_at) -
+		julianday(started_at)) * 1440, 1)`
+	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
+	var orderExpr string
+	switch metric {
+	case "output_tokens":
+		where += " AND has_total_output_tokens = TRUE"
+		orderExpr = "total_output_tokens DESC, id ASC"
+	case "duration":
+		orderExpr = durationExpr + " DESC, id ASC"
+		where += " AND NULLIF(started_at, '') IS NOT NULL" +
+			" AND NULLIF(ended_at, '') IS NOT NULL" +
+			" AND julianday(ended_at) >= julianday(started_at)"
+	default:
+		metric = "messages"
+		orderExpr = "message_count DESC, id ASC"
+	}
+
+	query := `SELECT id, project, first_message, message_count,
+		total_output_tokens, ` + durationSelectExpr + `,
+		started_at, ended_at, termination_status
+		FROM sessions WHERE ` + where +
+		` ORDER BY ` + orderExpr + ` LIMIT 10`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return TopSessionsResponse{},
+			fmt.Errorf("querying top sessions: %w", err)
+	}
+	defer rows.Close()
+
+	resp := TopSessionsResponse{Metric: metric}
+	for rows.Next() {
+		var row TopSession
+		if err := rows.Scan(
+			&row.ID, &row.Project, &row.FirstMessage,
+			&row.MessageCount, &row.OutputTokens,
+			&row.DurationMin, &row.StartedAt, &row.EndedAt,
+			&row.TerminationStatus,
+		); err != nil {
+			return TopSessionsResponse{},
+				fmt.Errorf("scanning top session: %w", err)
+		}
+		resp.Sessions = append(resp.Sessions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return TopSessionsResponse{},
+			fmt.Errorf("iterating top sessions: %w", err)
+	}
+	return resp, nil
+}
+
+func (db *DB) getAnalyticsTopSessionsGo(
+	ctx context.Context, f AnalyticsFilter, metric string,
+) (TopSessionsResponse, error) {
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)

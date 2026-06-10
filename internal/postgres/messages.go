@@ -146,10 +146,7 @@ func (s *Store) HasFTS() bool { return true }
 // escapeLike escapes SQL LIKE metacharacters so the bind
 // parameter is treated as a literal substring.
 func escapeLike(v string) string {
-	r := strings.NewReplacer(
-		`\`, `\\`, `%`, `\%`, `_`, `\_`,
-	)
-	return r.Replace(v)
+	return db.EscapeLikePattern(v)
 }
 
 // stripFTSQuotes removes surrounding double quotes that

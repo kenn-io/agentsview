@@ -8,9 +8,15 @@ import {
   afterEach,
 } from "vitest";
 import { mount, unmount, tick } from "svelte";
+import { createClassComponent } from "svelte/legacy";
 // @ts-ignore
 import SessionBreadcrumb from "./SessionBreadcrumb.svelte";
-import type { Session } from "../../api/types.js";
+import type { Message, Session } from "../../api/types.js";
+import {
+  OpenersService,
+  SessionsService,
+} from "../../api/generated/index";
+import { messages } from "../../stores/messages.svelte.js";
 
 vi.mock("../../api/client.js", () => ({
   listOpeners: vi.fn().mockResolvedValue({ openers: [] }),
@@ -24,6 +30,32 @@ vi.mock("../../api/client.js", () => ({
 vi.mock("../../utils/clipboard.js", () => ({
   copyToClipboard: vi.fn().mockResolvedValue(true),
 }));
+
+vi.mock("../../api/generated/index", async (importOriginal) => {
+  const orig =
+    await importOriginal<typeof import("../../api/generated/index")>();
+  return {
+    ...orig,
+    OpenersService: {
+      getApiV1Openers: vi.fn(),
+    },
+    SessionsService: {
+      getApiV1SessionsIdDirectory: vi.fn(),
+      getApiV1SessionsIdUsage: vi.fn(),
+      postApiV1SessionsIdResume: vi.fn(),
+      postApiV1SessionsIdOpen: vi.fn(),
+    },
+  };
+});
+
+const openersService = OpenersService as unknown as {
+  getApiV1Openers: ReturnType<typeof vi.fn>;
+};
+
+const sessionsService = SessionsService as unknown as {
+  getApiV1SessionsIdDirectory: ReturnType<typeof vi.fn>;
+  getApiV1SessionsIdUsage: ReturnType<typeof vi.fn>;
+};
 
 type SessionWithTokenFlags = Session & {
   has_peak_context_tokens?: boolean;
@@ -51,6 +83,86 @@ function makeSession(
     ...overrides,
   };
 }
+
+interface SessionUsage {
+  session_id: string;
+  agent: string;
+  project: string;
+  total_output_tokens: number;
+  peak_context_tokens: number;
+  has_token_data: boolean;
+  cost_usd: number;
+  has_cost: boolean;
+  models: string[];
+  unpriced_models: string[];
+  server_running: boolean;
+}
+
+function makeUsage(
+  overrides: Partial<SessionUsage> = {},
+): SessionUsage {
+  return {
+    session_id: "run:123456789abcdef",
+    agent: "claude",
+    project: "proj-a",
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
+    has_token_data: false,
+    cost_usd: 0,
+    has_cost: false,
+    models: [],
+    unpriced_models: [],
+    server_running: true,
+    ...overrides,
+  };
+}
+
+function makeAssistantMessage(model: string): Message {
+  return {
+    id: 1,
+    session_id: "run:123456789abcdef",
+    ordinal: 0,
+    role: "assistant",
+    content: "hi",
+    timestamp: "2026-02-20T12:30:30Z",
+    has_thinking: false,
+    thinking_text: "",
+    has_tool_use: false,
+    content_length: 2,
+    model,
+    token_usage: null,
+    context_tokens: 0,
+    output_tokens: 0,
+    has_context_tokens: false,
+    has_output_tokens: false,
+    is_system: false,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await tick();
+}
+
+beforeEach(() => {
+  openersService.getApiV1Openers
+    .mockReset()
+    .mockResolvedValue({ openers: [] });
+  sessionsService.getApiV1SessionsIdDirectory
+    .mockReset()
+    .mockResolvedValue({ path: "" });
+  sessionsService.getApiV1SessionsIdUsage
+    .mockReset()
+    .mockResolvedValue(makeUsage());
+});
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -247,6 +359,327 @@ describe("SessionBreadcrumb", () => {
     expect(resumeBtn).toBeNull();
 
     unmount(component);
+  });
+
+  describe("cost badge", () => {
+    afterEach(() => {
+      messages.clear();
+      messages.sessionId = null;
+    });
+
+    it("renders the session cost when usage reports a priced cost", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({ has_cost: true, cost_usd: 1.234 }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.23");
+      });
+
+      unmount(component);
+    });
+
+    it("renders the cost badge between the token badges and the model badge", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({ has_cost: true, cost_usd: 4.12 }),
+      );
+      messages.sessionId = "run:123456789abcdef";
+      messages.messages = [makeAssistantMessage("claude-opus-4-8")];
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            peak_context_tokens: 2400,
+            total_output_tokens: 180,
+            has_peak_context_tokens: true,
+            has_total_output_tokens: true,
+          }),
+          onBack: () => {},
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(document.querySelector(".cost-badge")).toBeTruthy();
+      });
+
+      const meta = document.querySelector(".breadcrumb-meta");
+      expect(meta).toBeTruthy();
+      const children = Array.from(meta!.children);
+      const desktopTokenIdx = children.findIndex((el) =>
+        el.classList.contains("token-badge--desktop"),
+      );
+      const mobileTokenIdx = children.findIndex((el) =>
+        el.classList.contains("token-badge--mobile"),
+      );
+      const costIdx = children.findIndex((el) =>
+        el.classList.contains("cost-badge"),
+      );
+      const modelIdx = children.findIndex((el) =>
+        el.classList.contains("model-badge"),
+      );
+
+      expect(desktopTokenIdx).toBeGreaterThanOrEqual(0);
+      expect(mobileTokenIdx).toBeGreaterThan(desktopTokenIdx);
+      expect(costIdx).toBeGreaterThan(mobileTokenIdx);
+      expect(modelIdx).toBeGreaterThan(costIdx);
+
+      unmount(component);
+    });
+
+    it("renders no cost badge when the session has no priced cost", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({ has_cost: false, cost_usd: 0 }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await flushPromises();
+      await vi.waitFor(() => {
+        expect(
+          sessionsService.getApiV1SessionsIdUsage,
+        ).toHaveBeenCalled();
+      });
+      await flushPromises();
+      expect(document.querySelector(".cost-badge")).toBeNull();
+
+      unmount(component);
+    });
+
+    it("renders no cost badge when the usage request fails", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockRejectedValue(
+        new Error("boom"),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await flushPromises();
+      await vi.waitFor(() => {
+        expect(
+          sessionsService.getApiV1SessionsIdUsage,
+        ).toHaveBeenCalled();
+      });
+      await flushPromises();
+      expect(document.querySelector(".cost-badge")).toBeNull();
+
+      unmount(component);
+    });
+
+    it("ignores a stale usage response after switching sessions", async () => {
+      const first = deferred<SessionUsage>();
+      sessionsService.getApiV1SessionsIdUsage
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValueOnce(
+          makeUsage({
+            session_id: "run:bbb",
+            has_cost: true,
+            cost_usd: 2,
+          }),
+        );
+
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude", { id: "run:aaa" }),
+          onBack: () => {},
+        },
+      });
+      await flushPromises();
+
+      component.$set({
+        session: makeSession("claude", { id: "run:bbb" }),
+      });
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$2.00");
+      });
+
+      // The first session's response arrives late and must not
+      // overwrite the newer session's cost.
+      first.resolve(
+        makeUsage({
+          session_id: "run:aaa",
+          has_cost: true,
+          cost_usd: 9.99,
+        }),
+      );
+      await flushPromises();
+      expect(
+        document.querySelector(".cost-badge")?.textContent?.trim(),
+      ).toBe("$2.00");
+
+      component.$destroy();
+    });
+
+    it("refetches when a resync changes context tokens without output movement", async () => {
+      sessionsService.getApiV1SessionsIdUsage
+        .mockResolvedValueOnce(
+          makeUsage({ has_cost: true, cost_usd: 1 }),
+        )
+        .mockResolvedValueOnce(
+          makeUsage({ has_cost: true, cost_usd: 1.75 }),
+        );
+
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude", { peak_context_tokens: 1000 }),
+          onBack: () => {},
+        },
+      });
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.00");
+      });
+
+      // A resync grows context tokens in place: same message count
+      // and output tokens, only peak context moves.
+      component.$set({
+        session: makeSession("claude", { peak_context_tokens: 2000 }),
+      });
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.75");
+      });
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledTimes(2);
+
+      component.$destroy();
+    });
+
+    it("refetches on return navigation and rejects the other session's late response", async () => {
+      const bRequest = deferred<SessionUsage>();
+      const aRefetch = deferred<SessionUsage>();
+      sessionsService.getApiV1SessionsIdUsage
+        .mockResolvedValueOnce(
+          makeUsage({
+            session_id: "run:aaa",
+            has_cost: true,
+            cost_usd: 1.5,
+          }),
+        )
+        .mockReturnValueOnce(bRequest.promise)
+        .mockReturnValueOnce(aRefetch.promise);
+
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude", { id: "run:aaa" }),
+          onBack: () => {},
+        },
+      });
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.50");
+      });
+
+      // Switch to B (request stays in flight), then back to A
+      // before B resolves.
+      component.$set({
+        session: makeSession("claude", { id: "run:bbb" }),
+      });
+      await flushPromises();
+      component.$set({
+        session: makeSession("claude", { id: "run:aaa" }),
+      });
+      await flushPromises();
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledTimes(3);
+
+      // B's late response must not be shown on A.
+      bRequest.resolve(
+        makeUsage({
+          session_id: "run:bbb",
+          has_cost: true,
+          cost_usd: 9.99,
+        }),
+      );
+      await flushPromises();
+      expect(document.querySelector(".cost-badge")).toBeNull();
+
+      // A's refetch lands and restores A's cost.
+      aRefetch.resolve(
+        makeUsage({
+          session_id: "run:aaa",
+          has_cost: true,
+          cost_usd: 1.5,
+        }),
+      );
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.50");
+      });
+
+      component.$destroy();
+    });
+
+    it("keeps the newer cost when same-session responses resolve out of order", async () => {
+      const first = deferred<SessionUsage>();
+      const second = deferred<SessionUsage>();
+      sessionsService.getApiV1SessionsIdUsage
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(second.promise);
+
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude", { message_count: 2 }),
+          onBack: () => {},
+        },
+      });
+      await flushPromises();
+
+      // A live-session update bumps message_count and triggers a
+      // second fetch while the first is still in flight.
+      component.$set({
+        session: makeSession("claude", { message_count: 3 }),
+      });
+      await flushPromises();
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledTimes(2);
+
+      second.resolve(makeUsage({ has_cost: true, cost_usd: 3.5 }));
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$3.50");
+      });
+
+      first.resolve(makeUsage({ has_cost: true, cost_usd: 1 }));
+      await flushPromises();
+      expect(
+        document.querySelector(".cost-badge")?.textContent?.trim(),
+      ).toBe("$3.50");
+
+      component.$destroy();
+    });
   });
 
 });

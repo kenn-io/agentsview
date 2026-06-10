@@ -850,6 +850,80 @@ func TestResolvePG_AllowsBothFilterLists(t *testing.T) {
 	require.NoError(t, err, "ResolvePG should not reject filter conflicts")
 }
 
+func TestDuckDBConfig_LoadsFileAndEnv(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeConfig(t, dir, map[string]any{
+		"duckdb": map[string]any{
+			"path":             "/from/config/sessions.duckdb",
+			"url":              "quack:config-host",
+			"token":            "config-token",
+			"machine_name":     "config-machine",
+			"allow_insecure":   true,
+			"projects":         []string{"alpha", "beta"},
+			"exclude_projects": []string{"gamma"},
+		},
+	})
+	t.Setenv("AGENTSVIEW_DUCKDB_PATH", "/from/env/sessions.duckdb")
+	t.Setenv("AGENTSVIEW_DUCKDB_URL", "quack:env-host")
+	t.Setenv("AGENTSVIEW_DUCKDB_TOKEN", "env-token")
+	t.Setenv("AGENTSVIEW_DUCKDB_MACHINE", "env-machine")
+
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	assert.Equal(t, "/from/env/sessions.duckdb", cfg.DuckDB.Path)
+	assert.Equal(t, "quack:env-host", cfg.DuckDB.URL)
+	assert.Equal(t, "env-token", cfg.DuckDB.Token)
+	assert.Equal(t, "env-machine", cfg.DuckDB.MachineName)
+	assert.True(t, cfg.DuckDB.AllowInsecure)
+	assert.Equal(t, []string{"alpha", "beta"}, cfg.DuckDB.Projects)
+	assert.Equal(t, []string{"gamma"}, cfg.DuckDB.ExcludeProjects)
+}
+
+func TestResolveDuckDB_Defaults(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{DataDir: dir}
+
+	resolved, err := cfg.ResolveDuckDB()
+	require.NoError(t, err, "ResolveDuckDB")
+
+	assert.Equal(t, filepath.Join(dir, "sessions.duckdb"), resolved.Path)
+	assert.NotEmpty(t, resolved.MachineName, "MachineName should default to hostname")
+}
+
+func TestResolveDuckDB_ExpandsEnvVars(t *testing.T) {
+	t.Setenv("DUCKDB_URL", "quack:localhost")
+	t.Setenv("DUCKDB_TOKEN", "secret-token")
+	t.Setenv("DUCKDB_PATH", filepath.Join(t.TempDir(), "remote.duckdb"))
+
+	cfg := Config{
+		DuckDB: DuckDBConfig{
+			Path:  "$DUCKDB_PATH",
+			URL:   "${DUCKDB_URL}",
+			Token: "${DUCKDB_TOKEN}",
+		},
+	}
+
+	resolved, err := cfg.ResolveDuckDB()
+	require.NoError(t, err, "ResolveDuckDB")
+
+	assert.Equal(t, os.Getenv("DUCKDB_PATH"), resolved.Path)
+	assert.Equal(t, "quack:localhost", resolved.URL)
+	assert.Equal(t, "secret-token", resolved.Token)
+}
+
+func TestResolveDuckDB_ErrorsOnMissingEnvVar(t *testing.T) {
+	cfg := Config{
+		DuckDB: DuckDBConfig{
+			URL: "${MISSING_DUCKDB_URL}",
+		},
+	}
+
+	_, err := cfg.ResolveDuckDB()
+	require.Error(t, err, "expected error for unset env var")
+	assert.Contains(t, err.Error(), "MISSING_DUCKDB_URL")
+}
+
 func TestAutomatedPrefixesRoundTrip(t *testing.T) {
 	dir := setupTestEnv(t)
 	writeConfig(t, dir, map[string]any{

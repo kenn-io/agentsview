@@ -367,6 +367,39 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("tracks cached usage refetches as querying without first-load skeletons", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+    expect(usage.summary).not.toBeNull();
+    expect(usage.loading.summary).toBe(false);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+
+    let resolveSummary:
+      | ((value: UsageSummaryResponse) => void)
+      | undefined;
+    usageServiceMocks.getApiV1UsageSummary.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSummary = resolve;
+        }),
+    );
+
+    const refetch = usage.fetchAll();
+    await Promise.resolve();
+
+    expect(usage.loading.summary).toBe(false);
+    expect(usage.querying.summary).toBe(true);
+    expect(usage.isQuerying).toBe(true);
+
+    resolveSummary?.(usageSummary(2));
+    await refetch;
+
+    expect(usage.querying.summary).toBe(false);
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    expect(usage.summary?.totals.totalCost).toBe(2);
+  });
+
   it("aborts stale top sessions when a new full refresh starts", async () => {
     const signals: (AbortSignal | undefined)[] = [];
     apiRuntimeMocks.callGenerated.mockImplementation(

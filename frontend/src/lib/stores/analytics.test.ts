@@ -218,6 +218,18 @@ function resetStore() {
   analytics.tools = null;
   analytics.topSessions = null;
   analytics.signals = null;
+  analytics.querying = {
+    summary: false,
+    activity: false,
+    heatmap: false,
+    projects: false,
+    hourOfWeek: false,
+    sessionShape: false,
+    velocity: false,
+    tools: false,
+    topSessions: false,
+    signals: false,
+  };
 }
 
 // Note: selectDate and setDateRange invoke API mocks
@@ -528,6 +540,26 @@ describe("executeFetch concurrency and error handling", () => {
     resolve(makeSummary());
     await p;
     expect(analytics.loading.summary).toBe(false);
+  });
+
+  it("should expose query progress during cached refetches", async () => {
+    analytics.summary = makeSummary();
+    let resolve!: (v: AnalyticsSummary) => void;
+    vi.mocked(analyticsService.getApiV1AnalyticsSummary).mockReturnValue(
+      new Promise((r) => { resolve = r; }),
+    );
+
+    const p = analytics.fetchSummary();
+
+    expect(analytics.loading.summary).toBe(false);
+    expect(analytics.querying.summary).toBe(true);
+    expect(analytics.isQuerying).toBe(true);
+
+    resolve(makeSummary());
+    await p;
+
+    expect(analytics.querying.summary).toBe(false);
+    expect(analytics.isQuerying).toBe(false);
   });
 
   it("should clear error on new request", async () => {

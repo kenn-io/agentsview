@@ -86,6 +86,13 @@ export function formatTokenUsage(
   return `${contextLabel} / ${outputLabel}`;
 }
 
+/** Formats a USD cost as a compact string (e.g. $0.42, $12.34, $123) */
+export function formatCost(v: number): string {
+  if (v > 0 && v < 0.01) return "<$0.01";
+  if (v >= 100) return `$${v.toFixed(0)}`;
+  return `$${v.toFixed(2)}`;
+}
+
 let nonceCounter = 0;
 
 /** Reset the nonce counter. Exported for testing only. */
