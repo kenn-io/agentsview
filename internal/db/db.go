@@ -28,10 +28,10 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 34: added name_source column to sessions; existing rows
+// Bumped to 34: added session_name column to sessions; existing rows
 // need re-parsing so the parser can populate agent-provided session
-// names (Claude /rename and native titles from other agents) and the
-// user/agent ownership distinction used by the sidebar display gate.
+// names (Claude /rename and native titles from other agents) into the
+// new session_name field.
 //
 // (33: Claude parser now skips content-free /usage probe
 // sessions (the only user turn is the /usage command), and the Codex

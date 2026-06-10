@@ -1372,37 +1372,6 @@ func TestGetSessionFilePath(t *testing.T) {
 	assert.Equal(t, "", got, "GetSessionFilePath(missing)")
 }
 
-func TestResetFileStateByPathClearsAllSharers(t *testing.T) {
-	d := testDB(t)
-
-	fp := "/home/user/.claude/sessions/abc.jsonl"
-	size := int64(99999)
-	mtime := int64(1700000000)
-
-	// Root and fork share the same file path.
-	insertSession(t, d, "root", "p", func(s *Session) {
-		s.FilePath = &fp
-		s.FileSize = &size
-		s.FileMtime = &mtime
-	})
-	insertSession(t, d, "fork", "p", func(s *Session) {
-		s.FilePath = &fp
-		s.FileSize = &size
-		s.FileMtime = &mtime
-	})
-
-	require.NoError(t, d.ResetFileStateByPath(fp))
-
-	for _, id := range []string{"root", "fork"} {
-		var gotSize, gotMtime *int64
-		require.NoError(t, d.getReader().QueryRow(
-			"SELECT file_size, file_mtime FROM sessions WHERE id = ?", id,
-		).Scan(&gotSize, &gotMtime), id)
-		assert.Nil(t, gotSize, "%s: file_size should be NULL", id)
-		assert.Nil(t, gotMtime, "%s: file_mtime should be NULL", id)
-	}
-}
-
 func TestLinkSubagentSessionsOverridesContinuation(t *testing.T) {
 	d := testDB(t)
 

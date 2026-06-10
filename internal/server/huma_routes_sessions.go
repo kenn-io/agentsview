@@ -534,22 +534,6 @@ func (s *Server) humaRenameSession(
 		return nil, internalError("rename session", err)
 	}
 
-	// When clearing a user rename, immediately re-parse the session file so
-	// the agent-provided name (if any) is restored in this response rather
-	// than waiting for the next periodic sync (up to 15 minutes).
-	// Reset file_size/file_mtime first so shouldSkipFile doesn't short-circuit
-	// the re-parse (the file itself hasn't changed on disk).
-	if displayName == nil && s.engine != nil {
-		if localDB, ok := s.db.(*db.DB); ok {
-			if path := localDB.GetSessionFilePath(in.ID); path != "" {
-				// Reset by path so all sessions sharing the file
-				// (e.g. Claude fork sessions) are re-parsed too.
-				_ = localDB.ResetFileStateByPath(path)
-				s.engine.SyncPaths([]string{path})
-			}
-		}
-	}
-
 	updated, err := s.db.GetSession(ctx, in.ID)
 	if err != nil {
 		return nil, internalError("rename session readback", err)

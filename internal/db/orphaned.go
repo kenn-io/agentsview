@@ -374,7 +374,6 @@ func (d *DB) CopySessionMetadataFrom(
 	// Probe columns first so older source DBs don't abort.
 	hasDisplayName := oldDBHasColumn(ctx, tx, "sessions", "display_name")
 	hasDeletedAt := oldDBHasColumn(ctx, tx, "sessions", "deleted_at")
-	hasNameSource := oldDBHasColumn(ctx, tx, "sessions", "name_source")
 
 	if hasDeletedAt {
 		if _, err := tx.ExecContext(ctx, `
@@ -386,26 +385,18 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
-	if hasDisplayName && hasNameSource {
-		// Source DB used name_source='user' to mark user renames.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE main.sessions
-			SET display_name = old_s.display_name
-			FROM old_db.sessions old_s
-			WHERE main.sessions.id = old_s.id
-			  AND old_s.name_source = 'user'`); err != nil {
-			return fmt.Errorf("copying user display_name: %w", err)
-		}
-	} else if hasDisplayName {
-		// Pre-name_source source DB: every non-NULL display_name was a
-		// manual rename, so copy it directly.
+	// Copy user-set display_name (renames via RenameSession) from the old DB.
+	// In the two-field design display_name is always user-owned, so any
+	// non-NULL value is a user rename worth preserving.
+	// session_name is repopulated by re-parse and does not need copying.
+	if hasDisplayName {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
 			SET display_name = old_s.display_name
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id
 			  AND old_s.display_name IS NOT NULL`); err != nil {
-			return fmt.Errorf("copying legacy display_name: %w", err)
+			return fmt.Errorf("copying user display_name: %w", err)
 		}
 	}
 
