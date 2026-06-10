@@ -33,7 +33,7 @@ type Store struct {
 // queries. PG has no file_path, file_size, file_mtime,
 // file_hash, or local_modified_at columns.
 const pgSessionCols = `id, project, machine, agent,
-	first_message, display_name, created_at, started_at,
+	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
 	total_output_tokens, peak_context_tokens,
@@ -601,7 +601,7 @@ func (s *Store) GetSidebarSessionIndex(
 			project,
 			machine,
 			agent,
-			display_name,
+			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
 			created_at,

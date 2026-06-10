@@ -182,7 +182,7 @@ func (s *Store) ListPinnedMessages(
 		query := `
 			SELECT p.id, p.session_id, p.message_id, p.ordinal,
 				p.note, p.created_at, m.content, m.role,
-				s.project, s.agent, s.display_name, s.first_message
+				s.project, s.agent, COALESCE(s.display_name, s.session_name), s.first_message
 			FROM pinned_messages p
 			JOIN sessions s
 				ON p.session_id = s.id
