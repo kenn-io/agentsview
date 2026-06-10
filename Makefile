@@ -64,7 +64,7 @@ frontend:
 		'keep embed dir for generated frontend assets' \
 		> internal/web/dist/.keep
 
-# Run Vite dev server (use alongside `make dev`)
+# Run Vite+ dev server (use alongside `make dev`)
 frontend-dev:
 	cd frontend && npm run dev
 
@@ -391,7 +391,7 @@ help:
 	@echo "  dev-snapshot   - Run agentsview against a fresh snapshot of prod sessions.db"
 	@echo "  air-install    - Install air for backend live reload"
 	@echo "  frontend       - Build frontend SPA"
-	@echo "  frontend-dev   - Run Vite dev server"
+	@echo "  frontend-dev   - Run Vite+ dev server"
 	@echo "  desktop-dev    - Run Tauri desktop wrapper in dev mode"
 	@echo "  desktop-build  - Build Tauri desktop app bundles"
 	@echo "  desktop-macos-app - Build macOS .app bundle only"

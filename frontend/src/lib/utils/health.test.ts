@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { setupVisibilityHealthCheck } from "./health.js";
 import { setAuthToken, setServerUrl } from "../api/runtime.js";
 

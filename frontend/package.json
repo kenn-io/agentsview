@@ -7,12 +7,12 @@
     "node": "^20.19 || ^22.12 || >=24"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "vp dev",
+    "build": "vp build",
     "generate:api": "node scripts/generate-api-client.mjs",
-    "preview": "vite preview",
+    "preview": "vp preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run",
+    "test": "vp test run",
     "e2e": "playwright test"
   },
   "dependencies": {
@@ -32,7 +32,12 @@
     "svelte": "5.56.1",
     "svelte-check": "4.6.0",
     "typescript": "6.0.3",
-    "vite": "^8.0.14",
-    "vitest": "^4.1.8"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.1.24",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.24",
+    "vite-plus": "0.1.24"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.1.24",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.24"
   }
 }

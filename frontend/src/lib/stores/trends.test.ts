@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { trends } from "./trends.svelte.js";
 import { TrendsService } from "../api/generated/index";
 import type { TrendsTermsResponse } from "../api/types.js";

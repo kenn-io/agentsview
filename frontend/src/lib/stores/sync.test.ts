@@ -4,7 +4,7 @@ import {
   expect,
   vi,
   beforeEach,
-} from "vitest";
+} from "vite-plus/test";
 import { commitsDisagree, sync } from "./sync.svelte.js";
 import type { SyncStats, UpdateCheck } from "../api/types.js";
 

@@ -6,7 +6,7 @@ import {
   expect,
   it,
   vi,
-} from "vitest";
+} from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { trends } from "../../stores/trends.svelte.js";
 import type { TrendsTermsResponse } from "../../api/types.js";

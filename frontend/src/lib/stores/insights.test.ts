@@ -4,7 +4,7 @@ import {
   expect,
   vi,
   beforeEach,
-} from "vitest";
+} from "vite-plus/test";
 import { insights } from "./insights.svelte.js";
 import type { Insight } from "../api/types.js";
 

@@ -5,7 +5,7 @@ import {
   expect,
   vi,
   beforeEach,
-} from "vitest";
+} from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 
 const { mockUi, mockSessions, mockSearchStore, mockCopyToClipboard } = vi.hoisted(

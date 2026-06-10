@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { defineConfig } from "vite";
+import { defineConfig } from "vite-plus";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 function gitCommit(): string {
@@ -51,6 +51,19 @@ function requestOriginMatchesLoopbackDevServer(
 }
 
 export default defineConfig({
+  fmt: {},
+  lint: {
+    jsPlugins: [
+      { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
+    ],
+    rules: {
+      "vite-plus/prefer-vite-plus-imports": "error",
+    },
+    options: {
+      typeAware: true,
+      typeCheck: true,
+    },
+  },
   base: "/",
   plugins: [svelte()],
   define: {

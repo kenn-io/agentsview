@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { formatMessageForCopy } from "./copy-message.js";
 import type { Message } from "../api/types/core.js";
 

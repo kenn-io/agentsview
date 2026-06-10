@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { searchStore } from "./search.svelte.js";
 import { SearchService } from "../api/generated/index";
 import type { SearchResponse } from "../api/types.js";

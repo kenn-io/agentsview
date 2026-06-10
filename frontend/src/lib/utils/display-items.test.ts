@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { buildDisplayItems } from "./display-items.js";
 import { hasVisibleSegments } from "./content-parser.js";
 import type { Message } from "../api/types.js";

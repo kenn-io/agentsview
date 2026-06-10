@@ -7,7 +7,7 @@ import {
   afterEach,
   beforeEach,
   type MockInstance,
-} from "vitest";
+} from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 // @ts-ignore
 import TopSessions from "./TopSessions.svelte";

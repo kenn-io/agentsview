@@ -6,7 +6,7 @@ import {
   vi,
   beforeEach,
   afterEach,
-} from "vitest";
+} from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 const mocks = vi.hoisted(() => ({
   downloadExport: vi.fn().mockResolvedValue(undefined),

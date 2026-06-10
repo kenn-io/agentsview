@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { computeMainModel } from "./model.js";
 import type { Message } from "../api/types.js";
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import type { Session } from "../../api/types.js";
 import type { SessionGroup } from "../../stores/sessions.svelte.js";
 import {

@@ -4,7 +4,7 @@ import {
   expect,
   vi,
   afterEach,
-} from "vitest";
+} from "vite-plus/test";
 import {
   parsePath,
   RouterStore,

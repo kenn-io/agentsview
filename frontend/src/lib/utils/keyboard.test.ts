@@ -5,7 +5,7 @@ import {
   vi,
   beforeEach,
   afterEach,
-} from "vitest";
+} from "vite-plus/test";
 import { ui } from "../stores/ui.svelte.js";
 import { sessions } from "../stores/sessions.svelte.js";
 import { starred } from "../stores/starred.svelte.js";

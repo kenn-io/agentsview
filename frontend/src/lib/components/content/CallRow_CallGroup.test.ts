@@ -6,7 +6,7 @@
 // Note: this test lives in the frontend tree so vitest picks it up, but its
 // captured HTML artifacts are written to ../../.test-data18/ at the worktree
 // root for human inspection. Don't delete that directory.
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore -- @types/node is not in devDependencies; harmless at runtime.
 import { mkdirSync, writeFileSync } from "node:fs";

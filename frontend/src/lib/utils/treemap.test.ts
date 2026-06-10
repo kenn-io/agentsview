@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "vite-plus/test";
 import { squarify, type TreemapTile } from "./treemap.js";
 
 describe("squarify", () => {

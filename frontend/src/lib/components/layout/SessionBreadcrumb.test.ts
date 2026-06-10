@@ -6,7 +6,7 @@ import {
   vi,
   beforeEach,
   afterEach,
-} from "vitest";
+} from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import { createClassComponent } from "svelte/legacy";
 // @ts-ignore

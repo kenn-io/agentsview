@@ -4,7 +4,7 @@ import {
   expect,
   vi,
   beforeEach,
-} from "vitest";
+} from "vite-plus/test";
 import { tick } from "svelte";
 import {
   SIDEBAR_WIDTH_DEFAULT,

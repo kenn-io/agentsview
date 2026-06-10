@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { mount, unmount } from "svelte";
 // @ts-ignore
 import CompactBoundaryDivider from "./CompactBoundaryDivider.svelte";

@@ -6,7 +6,7 @@ import {
   expect,
   it,
   vi,
-} from "vitest";
+} from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import SessionList from "./SessionList.svelte";

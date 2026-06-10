@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // ABOUTME: Unit tests for ToolBlock's output section behavior.
 // ABOUTME: Covers visibility, collapse/expand, and preview of result_content.
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import type { ToolCall } from "../../api/types.js";
 
