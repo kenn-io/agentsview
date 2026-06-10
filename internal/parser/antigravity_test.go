@@ -362,7 +362,6 @@ func createAntigravityOvershortPromptDB(t *testing.T, path string) {
 		0, 14, userPayload)
 }
 
-
 func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
 	root := t.TempDir()
 	id := "44444444-5555-6666-7777-888888888888"
