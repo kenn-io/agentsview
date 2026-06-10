@@ -2,9 +2,25 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   sanitizeSnippet,
   _resetNonceCounter,
+  formatCost,
   formatTokenCount,
   formatTokenUsage,
 } from "./format.js";
+
+describe("formatCost", () => {
+  it.each([
+    [0, "$0.00"],
+    [0.004, "<$0.01"],
+    [0.01, "$0.01"],
+    [0.42, "$0.42"],
+    [12.345, "$12.35"],
+    [99.994, "$99.99"],
+    [100, "$100"],
+    [1234.5, "$1235"],
+  ])("formats %d as %s", (value, expected) => {
+    expect(formatCost(value)).toBe(expected);
+  });
+});
 
 describe("sanitizeSnippet", () => {
   beforeEach(() => {

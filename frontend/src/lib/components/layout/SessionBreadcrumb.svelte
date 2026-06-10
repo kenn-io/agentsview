@@ -24,7 +24,7 @@
   import { configureGeneratedClient } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
-  import { formatTokenUsage } from "../../utils/format.js";
+  import { formatCost, formatTokenUsage } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
   import SignalPanel from "../content/SignalPanel.svelte";
@@ -106,6 +106,48 @@
         // session refresh retries the lookup.
       });
   });
+
+  let sessionCost = $state<number | null>(null);
+  // Key of the last successful usage fetch:
+  // id \n outputTokens \n messageCount \n endedAt.
+  let costFetchKey: string | null = null;
+  let costSessionId: string | null = null;
+  let costRequestSeq = 0;
+  $effect(() => {
+    if (!session) {
+      sessionCost = null;
+      costFetchKey = null;
+      costSessionId = null;
+      costRequestSeq++;
+      return;
+    }
+    const id = session.id;
+    const key = [
+      id,
+      session.total_output_tokens ?? 0,
+      session.message_count ?? 0,
+      session.ended_at ?? "",
+    ].join("\n");
+    if (key === costFetchKey) return;
+    if (id !== costSessionId) sessionCost = null;
+    costSessionId = id;
+    const seq = ++costRequestSeq;
+    configureGeneratedClient();
+    SessionsService.getApiV1SessionsIdUsage({ id })
+      .then((res) => {
+        if (seq !== costRequestSeq) return;
+        costFetchKey = key;
+        sessionCost = res.has_cost ? res.cost_usd : null;
+      })
+      .catch(() => {
+        // Leave the fetch key unset so the next
+        // session refresh retries the lookup.
+      });
+  });
+
+  let sessionCostLabel = $derived(
+    sessionCost !== null ? formatCost(sessionCost) : null,
+  );
 
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
   let sessionOutputTokens = $derived(session?.total_output_tokens ?? 0);
@@ -610,6 +652,11 @@
           {sessionTokenSummary}
         </span>
       {/if}
+      {#if sessionCostLabel}
+        <span class="cost-badge" title="Estimated session cost">
+          {sessionCostLabel}
+        </span>
+      {/if}
       {#if mainModel}
         <span class="model-badge" title={mainModel}>{mainModel}</span>
       {/if}
@@ -908,6 +955,17 @@
   .token-badge--mobile {
     display: none;
     white-space: nowrap;
+  }
+
+  .cost-badge {
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .model-badge {
