@@ -190,6 +190,15 @@ func upsertConversation(
 		return importNew, fmt.Errorf("upserting session: %w", err)
 	}
 
+	// Bump local_modified_at so incremental PG push picks up session_name
+	// changes even when the skip path below returns importSkipped (message
+	// count unchanged) and ReplaceSessionMessages is never called.
+	if localDB, ok := store.(*db.DB); ok {
+		if err := localDB.BumpLocalModifiedAt(s.ID); err != nil {
+			log.Printf("import: bumping local_modified_at for %s: %v", s.ID, err)
+		}
+	}
+
 	// Skip expensive message replacement when the conversation
 	// has not changed since the last import. Compare both
 	// message count and ended_at (source updated_at) to detect

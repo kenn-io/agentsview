@@ -1112,6 +1112,20 @@ func (db *DB) GetSessionFilePath(id string) string {
 	return fp.String
 }
 
+// BumpLocalModifiedAt stamps the current time as local_modified_at so
+// incremental PG push picks up metadata changes (e.g. session_name updates
+// on the importer skip path) that don't go through the file-based sync path.
+func (db *DB) BumpLocalModifiedAt(id string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	_, err := db.getWriter().Exec(
+		`UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ? AND deleted_at IS NULL`,
+		id,
+	)
+	return err
+}
+
 // FindSessionIDsByPartial returns up to limit session IDs that
 // contain the given substring. Used by CLI lookups so users can
 // reference sessions by a short prefix shown in list output.

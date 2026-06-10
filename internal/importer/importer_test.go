@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -190,6 +191,46 @@ func TestImportAdvancesLocalModifiedAt(t *testing.T) {
 	require.NotNil(t, full)
 	require.NotNil(t, full.LocalModifiedAt,
 		"local_modified_at must be set after import so PG push picks up session_name changes")
+}
+
+func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// First import — establishes session_name and local_modified_at.
+	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
+	require.NoError(t, err)
+
+	full1, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, full1.LocalModifiedAt)
+	t1 := *full1.LocalModifiedAt
+
+	// Ensure wall-clock advances so a bumped timestamp is detectably later.
+	time.Sleep(2 * time.Millisecond)
+
+	// Re-import with same messages but a different name. Message count and
+	// ended_at are unchanged, so upsertConversation takes the skip path and
+	// returns importSkipped without calling ReplaceSessionMessages.
+	renamed := strings.ReplaceAll(testConversationsJSON, `"First Chat"`, `"Renamed Chat"`)
+	_, err = ImportClaudeAI(ctx, d, strings.NewReader(renamed), nil)
+	require.NoError(t, err)
+
+	full2, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, full2.LocalModifiedAt)
+	t2 := *full2.LocalModifiedAt
+
+	// local_modified_at must be bumped on the skip path so incremental PG
+	// push picks up the session_name change.
+	assert.True(t, t2 > t1,
+		"local_modified_at must advance on skip-path reimport (t1=%s t2=%s)", t1, t2)
+
+	// Confirm session_name was also updated.
+	s, err := d.GetSession(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Renamed Chat", *s.DisplayName)
 }
 
 func TestImportSetsDisplayName(t *testing.T) {
