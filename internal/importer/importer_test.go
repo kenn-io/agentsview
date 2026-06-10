@@ -250,6 +250,45 @@ func TestImportSetsDisplayName(t *testing.T) {
 	assert.Equal(t, "First Chat", *s.DisplayName)
 }
 
+func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(testChatGPTConv), 0o644,
+	))
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+
+	// First import.
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	// testChatGPTConv has title "Test" and id "cg-1".
+	s, err := d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Test", *s.DisplayName)
+
+	// Re-import with updated title.
+	updated := strings.ReplaceAll(testChatGPTConv, `"title":"Test"`, `"title":"Renamed GPT Session"`)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(updated), 0o644,
+	))
+	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	// session_name must be updated even though messages are skipped.
+	s, err = d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Renamed GPT Session", *s.DisplayName,
+		"session_name should be refreshed on ChatGPT re-import")
+}
+
 func TestImportChatGPT_SkipsExisting(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
