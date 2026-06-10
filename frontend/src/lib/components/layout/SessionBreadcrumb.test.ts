@@ -533,6 +533,44 @@ describe("SessionBreadcrumb", () => {
       component.$destroy();
     });
 
+    it("refetches when a resync changes file metadata without token movement", async () => {
+      sessionsService.getApiV1SessionsIdUsage
+        .mockResolvedValueOnce(
+          makeUsage({ has_cost: true, cost_usd: 1 }),
+        )
+        .mockResolvedValueOnce(
+          makeUsage({ has_cost: true, cost_usd: 1.75 }),
+        );
+
+      const component = createClassComponent({
+        component: SessionBreadcrumb,
+        target: document.body,
+        props: {
+          session: makeSession("claude", { file_mtime: 1000 }),
+          onBack: () => {},
+        },
+      });
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.00");
+      });
+
+      // A cost-only usage event arrives via resync: same message
+      // count and output tokens, only the file mtime moves.
+      component.$set({
+        session: makeSession("claude", { file_mtime: 2000 }),
+      });
+      await vi.waitFor(() => {
+        const badge = document.querySelector(".cost-badge");
+        expect(badge?.textContent?.trim()).toBe("$1.75");
+      });
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledTimes(2);
+
+      component.$destroy();
+    });
+
     it("refetches on return navigation and rejects the other session's late response", async () => {
       const bRequest = deferred<SessionUsage>();
       const aRefetch = deferred<SessionUsage>();
