@@ -14,6 +14,19 @@ import (
 // tries CTR (primary) then CBC / GCM with various skip offsets.
 // We mirror that strategy with Go stdlib primitives.
 //
+// LAST RESORT. This is the lowest-priority decode path for
+// legacy .pb sessions; agy-reader trajectory.json sidecars are
+// the documented, preferred path, and the history.jsonl + brain
+// fallbacks rank above this too (priority: sidecar > history
+// fallback > this). It is kept because it is the only decode
+// that works with zero agy-reader setup on archived .pb files.
+// Current Antigravity CLI versions no longer produce .pb files,
+// so this path serves only pre-existing archives; every parallel
+// reimplementation of the undocumented agy format is a breakage
+// surface per agy release, so this code is deliberately not
+// extended and is a removal candidate once archived .pb sessions
+// without sidecars are no longer a concern.
+//
 // Key sources (v1, in order):
 //  1. ANTIGRAVITY_KEY env var, base64-encoded (matches the
 //     Python tool's env-var fallback).

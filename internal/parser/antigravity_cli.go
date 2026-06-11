@@ -276,6 +276,9 @@ func ParseAntigravityCLISessionWithStatus(
 		)...,
 	)
 
+	// Last resort for legacy .pb archives: AES decrypt via
+	// ANTIGRAVITY_KEY; the sidecar and history fallbacks above
+	// take precedence.
 	if ext == ".pb" && !hasTrajectory && hasAntigravityKey() {
 		if extra, ok := decryptAntigravityCLITranscript(path); ok {
 			messages = append(messages, extra)
@@ -702,7 +705,9 @@ func readAntigravityArtifactMeta(
 // decryptAntigravityCLITranscript attempts to decrypt a .pb file
 // and returns a single assistant ParsedMessage holding the raw
 // strings extracted from the plaintext. Returns ok=false when
-// decryption fails or yields no usable text.
+// decryption fails or yields no usable text. Last-resort decode
+// path: sidecar and history fallbacks take precedence; see the
+// header of antigravity_crypto.go for the retention rationale.
 func decryptAntigravityCLITranscript(
 	path string,
 ) (ParsedMessage, bool) {
