@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { copyToClipboard } from "../../utils/clipboard.js";
-  import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
+  import { applyHighlight, applyMarks, clearMarks, escapeHTML } from "../../utils/highlight.js";
   import { highlightToHtml } from "../../utils/syntax-highlight.js";
   import CopyButton from "../shared/CopyButton.svelte";
 
@@ -17,6 +17,7 @@
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
   let highlighted = $state<string | null>(null);
+  let preEl = $state<HTMLElement | undefined>(undefined);
 
   $effect(() => {
     highlighted = null;
@@ -35,6 +36,19 @@
     return () => {
       cancelled = true;
     };
+  });
+
+  $effect(() => {
+    // Track all three reactive values so Svelte re-runs when any changes.
+    const _h = highlighted;
+    const _q = highlightQuery;
+    const _c = isCurrentHighlight;
+
+    void tick().then(() => {
+      if (!preEl) return;
+      clearMarks(preEl);
+      if (_q.trim()) applyMarks(preEl, _q, _c);
+    });
   });
 
   async function handleCopy() {
@@ -68,6 +82,7 @@
   {/if}
   <pre
     class="code-content"
+    bind:this={preEl}
     use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}
   ><code>{@html highlighted ?? escapeHTML(content)}</code></pre>
 </div>
