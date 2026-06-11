@@ -1740,6 +1740,45 @@ func TestAntigravityCLIDBWithoutGenMetadataGetsSidecarUsage(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 }
 
+func TestAntigravityCLINonCoveringSidecarUsageRejected(t *testing.T) {
+	root := t.TempDir()
+	id := "acacacac-bdbd-cece-dfdf-565656565656"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps, no gen_metadata table
+
+	// Sidecar lags the DB: 1 step vs 2 raw rows. Its generatorMetadata
+	// would decode to a usage event, but a lagging sidecar has only seen
+	// part of the session, so persisting it would underreport totals on
+	// a row that looks current.
+	genJSON := `[{
+		"stepIndices": [0],
+		"chatModel": {
+			"model": "MODEL_PLACEHOLDER_M20",
+			"usage": {
+				"inputTokens": "1500",
+				"outputTokens": "77"
+			}
+		}
+	}]`
+	writeAntigravityTestSidecarWithGenMetadata(t, root, id, 1, genJSON)
+
+	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "user prompt text goes here", msgs[0].Content,
+		"non-covering sidecar must lose the transcript to the DB decode")
+
+	assert.Empty(t, usageEvents,
+		"non-covering sidecar usage must be rejected like its transcript")
+	assert.False(t, sess.HasTotalOutputTokens)
+	assert.False(t, sess.HasPeakContextTokens)
+}
+
 func TestAgyTokenCountUnmarshal(t *testing.T) {
 	tcs := []struct {
 		name string

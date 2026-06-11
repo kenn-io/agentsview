@@ -241,7 +241,13 @@ func ParseAntigravityCLISessionWithStatus(
 		case dbErr != nil || dbResult.rawStepCount > 0:
 			status.NeedsRetry = true
 		}
-		if len(usageEvents) == 0 && tErr == nil {
+		// Coverage gates usage just like the transcript: a lagging
+		// sidecar carries only the generations it has seen, and
+		// persisting those would underreport totals on a row that
+		// looks current. sidecarCovers stays true when the DB offers
+		// no coverage signal (unreadable or zero rows), so gap-fill
+		// still applies there.
+		if len(usageEvents) == 0 && tErr == nil && sidecarCovers {
 			usageEvents = tRes.usageEvents
 		}
 	} else {
