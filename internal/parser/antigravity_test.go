@@ -1450,6 +1450,47 @@ func TestAntigravityCLISidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 }
 
+// TestAntigravitySessionFileMetadataIncludesWAL verifies the persisted
+// file fingerprint covers WAL sidecars: WAL-only commits do not touch
+// the main .db, so size/mtime must combine the sidecar set or the sync
+// skip check will never reparse a live session.
+func TestAntigravitySessionFileMetadataIncludesWAL(t *testing.T) {
+	root := t.TempDir()
+	id := "12121212-3434-5656-7878-909090909090"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+
+	mainInfo, err := os.Stat(dbPath)
+	require.NoError(t, err)
+
+	walPath := dbPath + "-wal"
+	mustWrite(t, walPath, []byte("wal bytes"))
+	walTime := mainInfo.ModTime().Add(5 * time.Second)
+	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
+
+	sess, _, _, err := ParseAntigravitySession(dbPath, "p", "m")
+	require.NoError(t, err)
+
+	// The parse's own read-only open can create or touch -shm/-wal
+	// siblings, so the expected composite comes from post-parse disk
+	// state — the same state the next sync's skip check will stat.
+	var wantSize int64
+	for _, p := range []string{dbPath, walPath, dbPath + "-shm"} {
+		fi, statErr := os.Stat(p)
+		if statErr != nil {
+			continue
+		}
+		wantSize += fi.Size()
+	}
+	require.Greater(t, wantSize, mainInfo.Size(),
+		"setup: WAL sidecar must contribute to the composite")
+	assert.Equal(t, wantSize, sess.File.Size,
+		"file size must include WAL/SHM sidecars")
+	assert.Equal(t, walTime.UnixNano(), sess.File.Mtime,
+		"file mtime must reflect the newest sidecar")
+}
+
 func TestAntigravityTokenUsage(t *testing.T) {
 	root := t.TempDir()
 	id := "55555555-6666-7777-8888-999999999999"

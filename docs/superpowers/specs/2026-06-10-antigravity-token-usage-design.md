@@ -109,6 +109,20 @@ We will update `loadAntigravityStepsWithRawCount` to:
 - Update sync orchestration in `internal/sync/engine.go` to pass the returned
   usage events into the final `ParseResult`.
 
+### 3. WAL-Aware Skip Checks for IDE Sessions
+
+IDE conversation `.db` files run in WAL mode: live updates land in `<id>.db-wal`
+without changing the main file's size or mtime, so skip checks keyed on the main
+file alone never reparse an active session. `AntigravityFileInfo` combines the
+`.db` with its `-wal`/`-shm` siblings and the `annotations/<id>.pbtxt` sidecar,
+mirroring `AntigravityCLIFileInfo`. The sync engine uses it for `processFile`
+skip checks, `discoveredFileMtime` cutoff filtering, and watcher `SourceMtime`
+polling, and the parser persists the same composite as the session's file
+fingerprint. The fingerprint is computed after the parse's own read-only open,
+which can itself touch the `-shm` sidecar; statting afterwards keeps the
+persisted value identical to what the next sync observes, so unchanged sessions
+still skip.
+
 ## Testing Plan
 
 1. **Unit Tests:** Add unit tests to `internal/parser/antigravity_test.go`

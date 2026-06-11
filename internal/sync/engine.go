@@ -2323,6 +2323,13 @@ func discoveredFileMtime(
 		}
 		return info.ModTime().UnixNano(), nil
 	}
+	if file.Agent == parser.AgentAntigravity {
+		info, err := parser.AntigravityFileInfo(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return info.ModTime().UnixNano(), nil
+	}
 	if file.Agent == parser.AgentCommandCode {
 		info, err := os.Stat(file.Path)
 		if err != nil {
@@ -2931,9 +2938,14 @@ func (e *Engine) processFile(
 
 	var info os.FileInfo
 	var err error
-	if file.Agent == parser.AgentAntigravityCLI {
+	switch file.Agent {
+	case parser.AgentAntigravityCLI:
 		info, err = parser.AntigravityCLIFileInfo(file.Path)
-	} else {
+	case parser.AgentAntigravity:
+		// WAL-only commits and annotation updates do not touch
+		// the main .db, so skip checks need the composite stat.
+		info, err = parser.AntigravityFileInfo(file.Path)
+	default:
 		statPath := file.Path
 		if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
@@ -5667,6 +5679,13 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	if def.Type == parser.AgentAntigravityCLI {
 		info, err := parser.AntigravityCLIFileInfo(path)
+		if err != nil {
+			return 0
+		}
+		return info.ModTime().UnixNano()
+	}
+	if def.Type == parser.AgentAntigravity {
+		info, err := parser.AntigravityFileInfo(path)
 		if err != nil {
 			return 0
 		}

@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -964,6 +965,67 @@ func TestWriteBatchAntigravityReplacesMessages(t *testing.T) {
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "Test Gemini 3.5", msgs[0].Model,
 		"re-parsed model metadata must reach existing message rows")
+}
+
+// TestProcessAntigravityWALOnlyUpdateNotSkipped covers a live IDE
+// session whose gen_metadata commits land in the SQLite WAL: the main
+// .db file's size/mtime are unchanged, so the skip check must consult
+// the sidecar set or the session never reparses.
+func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+	ctx := context.Background()
+
+	root := t.TempDir()
+	convDir := filepath.Join(root, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	dbPath := filepath.Join(
+		convDir, "abcdabcd-1111-2222-3333-444455556666.db",
+	)
+	sqlDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(
+		`CREATE TABLE steps (idx integer, step_type integer, ` +
+			`step_payload blob, PRIMARY KEY (idx))`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	file := parser.DiscoveredFile{
+		Agent:   parser.AgentAntigravity,
+		Path:    dbPath,
+		Project: "proj",
+	}
+
+	res := e.processFile(ctx, file)
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+
+	pw := pendingWrite{
+		sess:        res.results[0].Session,
+		msgs:        res.results[0].Messages,
+		usageEvents: res.results[0].UsageEvents,
+	}
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	res = e.processFile(ctx, file)
+	require.True(t, res.skip, "unchanged session should skip")
+
+	// WAL-only update: the main .db is untouched.
+	walPath := dbPath + "-wal"
+	require.NoError(t, os.WriteFile(walPath, []byte("wal bytes"), 0o644))
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	walTime := info.ModTime().Add(5 * time.Second)
+	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
+
+	res = e.processFile(ctx, file)
+	assert.False(t, res.skip, "WAL-only update must trigger a reparse")
 }
 
 func TestShouldSkipFileWithIDPrefix(t *testing.T) {

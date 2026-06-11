@@ -76,6 +76,27 @@ func FindAntigravitySourceFile(root, id string) string {
 	return ""
 }
 
+// AntigravityFileInfo returns the effective file info for an IDE
+// session .db, combining the main file with its -wal/-shm sidecars
+// and the annotations/<id>.pbtxt sidecar. WAL-only commits and
+// annotation updates do not touch the main file, so skip checks and
+// persisted file metadata must use this composite or live sessions
+// never reparse.
+func AntigravityFileInfo(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	id := strings.TrimSuffix(filepath.Base(path), ".db")
+	root := filepath.Dir(filepath.Dir(path))
+	return antigravityCLICombinedFileInfo(
+		info,
+		path+"-wal",
+		path+"-shm",
+		filepath.Join(root, "annotations", id+".pbtxt"),
+	), nil
+}
+
 // ParseAntigravitySession parses one IDE session DB.
 func ParseAntigravitySession(
 	path, project, machine string,
@@ -154,6 +175,16 @@ func ParseAntigravitySession(
 		endedAt = info.ModTime()
 	}
 
+	var size int64
+	var mtime int64
+	if effInfo, statErr := AntigravityFileInfo(path); statErr == nil {
+		size = effInfo.Size()
+		mtime = effInfo.ModTime().UnixNano()
+	} else {
+		size = info.Size()
+		mtime = info.ModTime().UnixNano()
+	}
+
 	sess := &ParsedSession{
 		ID:               antigravityIDPrefix + id,
 		Project:          project,
@@ -166,8 +197,8 @@ func ParseAntigravitySession(
 		UserMessageCount: userCount,
 		File: FileInfo{
 			Path:  path,
-			Size:  info.Size(),
-			Mtime: info.ModTime().UnixNano(),
+			Size:  size,
+			Mtime: mtime,
 		},
 	}
 	accumulateMessageTokenUsage(sess, messages)
