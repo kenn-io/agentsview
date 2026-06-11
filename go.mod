@@ -22,7 +22,7 @@ require (
 	github.com/tidwall/gjson v1.19.0
 	go.kenn.io/kit v0.1.4
 	golang.org/x/mod v0.36.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.21.0
 	golang.org/x/term v0.43.0
 )
 
