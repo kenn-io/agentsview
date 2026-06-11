@@ -28,12 +28,18 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 37: Antigravity and Antigravity CLI parsers now extract
+// Bumped to 38: Antigravity CLI parser extracts generatorMetadata
+// token usage from agy-reader trajectory sidecars: usage events for
+// legacy .pb sessions (and .db sessions without gen_metadata) and
+// per-message model/token attribution on sidecar transcripts. Existing
+// Antigravity CLI rows need re-parsing so usage reports include them.
+//
+// (37: Antigravity and Antigravity CLI parsers now extract
 // per-generation model names and token usage (input, output,
 // reasoning) from the gen_metadata table into per-message token
 // fields, session totals, and usage events. Existing Antigravity
 // rows need re-parsing so usage and cost reports include older
-// sessions.
+// sessions.)
 //
 // (36: the Antigravity CLI .pb branch dropped its sidecar
 // mtime gate: a trajectory.json older than the .pb was rejected in
@@ -149,7 +155,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 37
+const dataVersion = 38
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

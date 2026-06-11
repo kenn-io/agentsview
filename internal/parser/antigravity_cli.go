@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,8 +195,11 @@ func ParseAntigravityCLISessionWithStatus(
 	if ext == ".db" {
 		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
 		// gen_metadata token usage describes the session's actual
-		// consumption no matter which transcript source wins below;
-		// the sidecar decode does not extract token data.
+		// consumption no matter which transcript source wins below.
+		// The sidecar also extracts generatorMetadata usage, but
+		// gen_metadata events win and sidecar events only fill the gap
+		// (unreadable DB or missing gen_metadata table) so the same
+		// generation is never counted twice.
 		usageEvents = dbResult.usageEvents
 		dbOK := dbErr == nil &&
 			hasDisplayableAntigravityCLITrajectoryMessage(dbResult.messages)
@@ -210,14 +214,14 @@ func ParseAntigravityCLISessionWithStatus(
 		// heuristic cannot decode -- so a partial sidecar is never persisted
 		// as a current transcript.
 		sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
-		tMsgs, tSteps, tErr := parseAntigravityCLITrajectory(sidecarPath)
+		tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
 		sidecarOK := tErr == nil &&
-			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs)
+			hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
 		sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
-			tSteps >= dbResult.rawStepCount
+			tRes.rawSteps >= dbResult.rawStepCount
 		switch {
 		case sidecarOK && sidecarCovers:
-			messages = tMsgs
+			messages = tRes.messages
 			hasTrajectory = true
 		case dbOK:
 			messages = mergeAntigravityDBHistoryMessages(
@@ -231,11 +235,14 @@ func ParseAntigravityCLISessionWithStatus(
 			// Partial sidecar and an undecodable DB: store the best
 			// available transcript but leave the row stale so the next
 			// pass re-parses once agy-reader catches up.
-			messages = tMsgs
+			messages = tRes.messages
 			hasTrajectory = true
 			status.NeedsRetry = true
 		case dbErr != nil || dbResult.rawStepCount > 0:
 			status.NeedsRetry = true
+		}
+		if len(usageEvents) == 0 && tErr == nil {
+			usageEvents = tRes.usageEvents
 		}
 	} else {
 		// Legacy .pb: the file itself is AES-encrypted, so the sidecar is
@@ -245,10 +252,16 @@ func ParseAntigravityCLISessionWithStatus(
 		// .pb files are no longer produced, so their sidecars are final,
 		// and even a sidecar older than the .pb beats the fallbacks.
 		sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
-		if tMsgs, _, err := parseAntigravityCLITrajectory(sidecarPath); err == nil &&
-			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
-			messages = tMsgs
-			hasTrajectory = true
+		if tRes, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
+			// Usage events flow whenever the sidecar parses, even when
+			// no message is displayable, matching the message-less
+			// usage stance of the .db branch. The displayable gate
+			// below applies to the transcript decision only.
+			usageEvents = tRes.usageEvents
+			if hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages) {
+				messages = tRes.messages
+				hasTrajectory = true
+			}
 		}
 	}
 
@@ -831,9 +844,71 @@ func (f fakeFileInfo) Sys() any    { return nil }
 // We parse this trajectory JSON on a best-effort basis. If the JSON contains unknown step types,
 // they are silently ignored/skipped in the switch statements of the parser.
 type agyTrajectory struct {
-	TrajectoryID string    `json:"trajectoryId"`
-	CascadeID    string    `json:"cascadeId"`
-	Steps        []agyStep `json:"steps"`
+	TrajectoryID      string                 `json:"trajectoryId"`
+	CascadeID         string                 `json:"cascadeId"`
+	Steps             []agyStep              `json:"steps"`
+	GeneratorMetadata []agyGeneratorMetadata `json:"generatorMetadata"`
+}
+
+// agyGeneratorMetadata records one model generation: the trajectory
+// step indices it produced and the chat-model accounting for the call.
+// Empirically (26 real sidecars / 1839 generations at the time of
+// writing) stepIndices[0] is always a PLANNER_RESPONSE step and no
+// planner step is claimed by two generations.
+type agyGeneratorMetadata struct {
+	StepIndices []int         `json:"stepIndices"`
+	ChatModel   *agyChatModel `json:"chatModel"`
+}
+
+type agyChatModel struct {
+	Model             string                `json:"model"`
+	Usage             *agyChatModelUsage    `json:"usage"`
+	ChatStartMetadata *agyChatStartMetadata `json:"chatStartMetadata"`
+}
+
+type agyChatStartMetadata struct {
+	CreatedAt string `json:"createdAt"`
+}
+
+// agyChatModelUsage carries the daemon's own token accounting for one
+// generation. Empirically OutputTokens already INCLUDES
+// ThinkingOutputTokens, so reasoning must NOT be re-folded into output
+// (unlike the .db gen_metadata path, which splits candidates and
+// thoughts Gemini-style). responseOutputTokens is deliberately
+// omitted: it is derivable (output - thinking) and unused.
+// chatModel.retryInfos[] per-attempt usage is intentionally not
+// summed - an accepted undercount on retried generations.
+type agyChatModelUsage struct {
+	Model                string        `json:"model"`
+	InputTokens          agyTokenCount `json:"inputTokens"`
+	OutputTokens         agyTokenCount `json:"outputTokens"`
+	ThinkingOutputTokens agyTokenCount `json:"thinkingOutputTokens"`
+	CacheReadTokens      agyTokenCount `json:"cacheReadTokens"`
+}
+
+// agyTokenCount decodes a token count the daemon serializes as a JSON
+// string ("19733"), tolerating bare numbers as well. Garbage, null, or
+// empty values decode to 0 WITHOUT returning an error: the sidecar is
+// untrusted structured input (see the trust-posture note above), and
+// an unmarshal error here would fail the whole trajectory decode and
+// destroy the transcript.
+type agyTokenCount int
+
+func (c *agyTokenCount) UnmarshalJSON(data []byte) error {
+	*c = 0
+	s := strings.TrimSpace(string(data))
+	if s == "" || s == "null" {
+		return nil
+	}
+	if unquoted, err := strconv.Unquote(s); err == nil {
+		s = unquoted
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return nil
+	}
+	*c = agyTokenCount(n)
+	return nil
 }
 
 type agyStep struct {
@@ -1096,33 +1171,46 @@ func agyToolDetail(name, inputJSON string) string {
 // The read is size-capped (maxTrajectorySidecarBytes) and unknown step
 // types are silently skipped further down. No content from the sidecar
 // is executed or echoed back over any outbound channel.
+// agyTrajectoryParseResult is the decoded output of one trajectory
+// sidecar: the transcript messages, the raw step count (used by
+// callers to compare coverage against other decode sources for the
+// same session), and the usage events extracted from
+// generatorMetadata.
+type agyTrajectoryParseResult struct {
+	messages    []ParsedMessage
+	rawSteps    int
+	usageEvents []ParsedUsageEvent
+}
+
 // parseAntigravityCLITrajectory parses an agy-reader trajectory sidecar.
-// The int is the raw step count of the trajectory, used by callers to
-// compare coverage against other decode sources for the same session.
 func parseAntigravityCLITrajectory(
 	trajectoryPath string,
-) ([]ParsedMessage, int, error) {
+) (agyTrajectoryParseResult, error) {
 	f, err := os.Open(trajectoryPath)
 	if err != nil {
-		return nil, 0, err
+		return agyTrajectoryParseResult{}, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxTrajectorySidecarBytes+1))
 	if err != nil {
-		return nil, 0, err
+		return agyTrajectoryParseResult{}, err
 	}
 	if int64(len(data)) > maxTrajectorySidecarBytes {
-		return nil, 0, fmt.Errorf(
+		return agyTrajectoryParseResult{}, fmt.Errorf(
 			"trajectory sidecar %s exceeds %d-byte cap",
 			trajectoryPath, maxTrajectorySidecarBytes,
 		)
 	}
 	var traj agyTrajectory
 	if err := json.Unmarshal(data, &traj); err != nil {
-		return nil, 0, err
+		return agyTrajectoryParseResult{}, err
 	}
 
 	var msgs []ParsedMessage
+	// plannerMsgIdx maps a PLANNER_RESPONSE step index to the index of
+	// the assistant message it produced in msgs, so generatorMetadata
+	// usage can be attributed to the right message.
+	plannerMsgIdx := make(map[int]int)
 
 	var pendingResults []ParsedToolResult
 	var pendingResultsTime time.Time
@@ -1146,7 +1234,7 @@ func parseAntigravityCLITrajectory(
 		pendingResults = nil
 	}
 
-	for _, step := range traj.Steps {
+	for stepIdx, step := range traj.Steps {
 		stepTime := parseTrajectoryTime(step.Metadata.CreatedAt)
 
 		switch step.Type {
@@ -1203,6 +1291,7 @@ func parseAntigravityCLITrajectory(
 				msg.HasThinking = true
 			}
 			msgs = append(msgs, msg)
+			plannerMsgIdx[stepIdx] = len(msgs) - 1
 
 		case "CORTEX_STEP_TYPE_RUN_COMMAND",
 			"CORTEX_STEP_TYPE_VIEW_FILE",
@@ -1315,5 +1404,117 @@ func parseAntigravityCLITrajectory(
 	}
 
 	flushPendingResults()
-	return msgs, len(traj.Steps), nil
+	return agyTrajectoryParseResult{
+		messages:    msgs,
+		rawSteps:    len(traj.Steps),
+		usageEvents: extractAgyGeneratorUsage(traj, plannerMsgIdx, msgs),
+	}, nil
+}
+
+// extractAgyGeneratorUsage turns trajectory generatorMetadata entries
+// into usage events and attributes each generation's tokens to the
+// planner message it produced (the first stepIndices entry that maps
+// to a PLANNER_RESPONSE message; empirically always stepIndices[0]).
+//
+// Per-message attribution sets Model, ContextTokens (input +
+// cacheRead, the full context window, matching the Claude parser's
+// semantics), and OutputTokens, but deliberately never sets
+// msg.TokenUsage raw JSON: the usage analytics count message rows with
+// a non-empty token_usage and that would double-count against the
+// emitted usage_events (the .db gen_metadata path leaves it empty for
+// the same reason).
+//
+// MessageOrdinal is left nil: ordinals are reassigned after the
+// timestamp re-sort and brain-doc merge in
+// ParseAntigravityCLISessionWithStatus, so any ordinal computed here
+// would be wrong. Cost fields stay zero/empty - MODEL_PLACEHOLDER_*
+// models are unpriced.
+func extractAgyGeneratorUsage(
+	traj agyTrajectory,
+	plannerMsgIdx map[int]int,
+	msgs []ParsedMessage,
+) []ParsedUsageEvent {
+	var events []ParsedUsageEvent
+	for _, gen := range traj.GeneratorMetadata {
+		if gen.ChatModel == nil || gen.ChatModel.Usage == nil {
+			continue
+		}
+		usage := gen.ChatModel.Usage
+		input := int(usage.InputTokens)
+		output := int(usage.OutputTokens)
+		thinking := int(usage.ThinkingOutputTokens)
+		cacheRead := int(usage.CacheReadTokens)
+		if input == 0 && output == 0 && cacheRead == 0 {
+			// Empty usage:{} marks a failed/retried generation.
+			continue
+		}
+
+		// Keep MODEL_PLACEHOLDER_* verbatim: it is lossless and
+		// groupable in the Usage view. isNoisyAntigravityStepString
+		// filters MODEL_PLACEHOLDER_ from message CONTENT only; the
+		// Model field is data.
+		model := gen.ChatModel.Model
+		if model == "" {
+			model = usage.Model
+		}
+
+		// Find the planner message this generation produced.
+		target := -1
+		fallbackStep := -1
+		for _, si := range gen.StepIndices {
+			k, ok := plannerMsgIdx[si]
+			if !ok || k < 0 || k >= len(msgs) {
+				continue
+			}
+			target = k
+			fallbackStep = si
+			break
+		}
+
+		var occurred time.Time
+		if gen.ChatModel.ChatStartMetadata != nil {
+			occurred = parseTrajectoryTime(
+				gen.ChatModel.ChatStartMetadata.CreatedAt,
+			)
+		}
+		if occurred.IsZero() &&
+			fallbackStep >= 0 && fallbackStep < len(traj.Steps) {
+			occurred = parseTrajectoryTime(
+				traj.Steps[fallbackStep].Metadata.CreatedAt,
+			)
+		}
+		var occurredAt string
+		if !occurred.IsZero() {
+			occurredAt = occurred.Format(time.RFC3339Nano)
+		}
+
+		// Attribute tokens to the planner message unless another
+		// generation already claimed it (should not happen: no planner
+		// step is claimed by two generations in observed sidecars).
+		// Either way the usage event below is still emitted.
+		if target >= 0 &&
+			!msgs[target].HasContextTokens &&
+			!msgs[target].HasOutputTokens {
+			if model != "" {
+				msgs[target].Model = model
+			}
+			msgs[target].ContextTokens = input + cacheRead
+			msgs[target].OutputTokens = output
+			msgs[target].HasContextTokens = input+cacheRead > 0
+			msgs[target].HasOutputTokens = output > 0
+		}
+
+		// OutputTokens already includes thinking (empirical invariant)
+		// so reasoning is NOT re-folded into output here.
+		events = append(events, ParsedUsageEvent{
+			Source:               "sidecar",
+			Model:                model,
+			InputTokens:          input,
+			OutputTokens:         output,
+			ReasoningTokens:      thinking,
+			CacheReadInputTokens: cacheRead,
+			OccurredAt:           occurredAt,
+		})
+	}
+	return events
 }

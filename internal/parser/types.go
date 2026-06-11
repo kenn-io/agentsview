@@ -706,6 +706,12 @@ func accumulateMessageTokenUsage(
 // therefore covers transcripts that dropped steps (sidecar wins,
 // undecodable rows) without double counting. Message-derived totals
 // are kept where the events are silent.
+//
+// Peak context counts the full context window per event: fresh input
+// plus cache-creation and cache-read tokens. That keeps event-derived
+// session totals consistent with per-message ContextTokens attribution
+// (input + cacheRead) from parsers whose events carry cache fields,
+// such as the Antigravity CLI sidecar parser.
 func applyUsageEventTokenTotals(
 	sess *ParsedSession,
 	events []ParsedUsageEvent,
@@ -719,10 +725,13 @@ func applyUsageEventTokenTotals(
 			hasOutput = true
 			totalOutput += ev.OutputTokens
 		}
-		if ev.InputTokens > 0 {
+		context := ev.InputTokens +
+			ev.CacheCreationInputTokens +
+			ev.CacheReadInputTokens
+		if context > 0 {
 			hasContext = true
-			if ev.InputTokens > peakContext {
-				peakContext = ev.InputTokens
+			if context > peakContext {
+				peakContext = context
 			}
 		}
 	}

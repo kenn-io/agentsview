@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1179,6 +1180,20 @@ func writeAntigravityTestSidecar(
 	t *testing.T, root, id string, numSteps int,
 ) string {
 	t.Helper()
+	return writeAntigravityTestSidecarWithGenMetadata(
+		t, root, id, numSteps, "",
+	)
+}
+
+// writeAntigravityTestSidecarWithGenMetadata writes the same fixed
+// step sequence as writeAntigravityTestSidecar plus an optional
+// generatorMetadata JSON array (steps: 0=USER_INPUT,
+// 1=PLANNER_RESPONSE, 2=RUN_COMMAND; realistic generations use
+// stepIndices [1,2]).
+func writeAntigravityTestSidecarWithGenMetadata(
+	t *testing.T, root, id string, numSteps int, genMetadataJSON string,
+) string {
+	t.Helper()
 	allSteps := []string{
 		`{
 			"type": "CORTEX_STEP_TYPE_USER_INPUT",
@@ -1213,7 +1228,11 @@ func writeAntigravityTestSidecar(
 	}
 	require.LessOrEqual(t, numSteps, len(allSteps))
 	body := `{"trajectoryId":"traj","cascadeId":"` + id + `","steps":[` +
-		strings.Join(allSteps[:numSteps], ",") + `]}`
+		strings.Join(allSteps[:numSteps], ",") + `]`
+	if genMetadataJSON != "" {
+		body += `,"generatorMetadata":` + genMetadataJSON
+	}
+	body += `}`
 	p := filepath.Join(root, "conversations", id+".trajectory.json")
 	mustWrite(t, p, []byte(body))
 	return p
@@ -1436,7 +1455,9 @@ func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	// Sidecar covers both raw steps, so its transcript wins over the
-	// DB decode and the selected messages carry no token fields.
+	// DB decode. This sidecar has no generatorMetadata, so the selected
+	// messages carry no token fields and usage flows only from the DB
+	// gen_metadata events.
 	writeAntigravityTestSidecar(t, root, id, 2)
 
 	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
@@ -1498,6 +1519,345 @@ func TestAntigravityCLISidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 	assert.Equal(t, 30, usageEvents[0].ReasoningTokens)
 	assert.Equal(t, 210, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
+}
+
+func TestAntigravityCLIPBSidecarEmitsUsageEvents(t *testing.T) {
+	root := t.TempDir()
+	id := "ffffffff-0000-1111-2222-333333333333"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	pbPath := filepath.Join(root, "conversations", id+".pb")
+	mustWrite(t, pbPath, []byte("pb-junk-bytes"))
+
+	// Gen A claims the planner step (1) and its tool step (2). Gen B
+	// only claims a non-planner step. Gen C is the failed/retried
+	// usage:{} case and must be skipped.
+	genJSON := `[
+		{
+			"stepIndices": [1, 2],
+			"chatModel": {
+				"model": "MODEL_PLACEHOLDER_M20",
+				"chatStartMetadata": {"createdAt": "2026-06-10T20:40:30Z"},
+				"usage": {
+					"inputTokens": "19733",
+					"outputTokens": "253",
+					"thinkingOutputTokens": "208"
+				}
+			}
+		},
+		{
+			"stepIndices": [2],
+			"chatModel": {
+				"model": "MODEL_PLACEHOLDER_M20",
+				"usage": {
+					"inputTokens": "1820",
+					"outputTokens": "97",
+					"cacheReadTokens": "18661"
+				}
+			}
+		},
+		{
+			"stepIndices": [2],
+			"chatModel": {
+				"model": "MODEL_PLACEHOLDER_M20",
+				"usage": {}
+			}
+		}
+	]`
+	writeAntigravityTestSidecarWithGenMetadata(t, root, id, 3, genJSON)
+
+	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
+		pbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry)
+
+	require.Len(t, usageEvents, 2, "usage:{} generation must be skipped")
+
+	evA := usageEvents[0]
+	assert.Equal(t, "sidecar", evA.Source)
+	assert.Equal(t, "MODEL_PLACEHOLDER_M20", evA.Model,
+		"placeholder model names are kept verbatim")
+	assert.Equal(t, 19733, evA.InputTokens)
+	assert.Equal(t, 253, evA.OutputTokens,
+		"outputTokens already includes thinking; no re-fold")
+	assert.Equal(t, 208, evA.ReasoningTokens)
+	assert.Equal(t, 0, evA.CacheReadInputTokens)
+	assert.Equal(t, "2026-06-10T20:40:30Z", evA.OccurredAt,
+		"chatStartMetadata.createdAt formatted RFC3339Nano")
+	assert.Empty(t, evA.DedupKey)
+	assert.Nil(t, evA.MessageOrdinal)
+	assert.Equal(t, sess.ID, evA.SessionID)
+
+	evB := usageEvents[1]
+	assert.Equal(t, "sidecar", evB.Source)
+	assert.Equal(t, 1820, evB.InputTokens)
+	assert.Equal(t, 97, evB.OutputTokens)
+	assert.Equal(t, 0, evB.ReasoningTokens)
+	assert.Equal(t, 18661, evB.CacheReadInputTokens)
+	assert.Empty(t, evB.OccurredAt,
+		"no chatStartMetadata and no mapped planner step")
+	assert.Equal(t, sess.ID, evB.SessionID)
+
+	// Gen A attributes its tokens to the planner message.
+	require.Len(t, msgs, 3)
+	planner := msgs[1]
+	assert.Equal(t, RoleAssistant, planner.Role)
+	assert.Equal(t, "MODEL_PLACEHOLDER_M20", planner.Model)
+	assert.Equal(t, 19733, planner.ContextTokens,
+		"context = input + cacheRead of the first attributing gen")
+	assert.Equal(t, 253, planner.OutputTokens)
+	assert.True(t, planner.HasContextTokens)
+	assert.True(t, planner.HasOutputTokens)
+	assert.Empty(t, planner.TokenUsage,
+		"raw token_usage must stay empty or analytics double-count")
+
+	// Session totals come from the events: output sums, peak context
+	// is max(input + cacheRead).
+	assert.Equal(t, 253+97, sess.TotalOutputTokens)
+	assert.Equal(t, 1820+18661, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+}
+
+func TestAntigravityCLIDBGenMetadataWinsOverSidecarUsage(t *testing.T) {
+	root := t.TempDir()
+	id := "abababab-cdcd-efef-0101-232323232323"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+
+	tsEarly := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{num: 17, wire: pbWireBytes, bytes: []byte("user question text goes here and is long")},
+	})
+	tsLate := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000100}})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsLate},
+		{num: 17, wire: pbWireBytes, bytes: []byte("assistant response body goes here and is long")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, userPayload)
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
+
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
+	require.NoError(t, db.Close())
+
+	// Covering sidecar whose generatorMetadata carries DIFFERENT
+	// numbers than the DB gen_metadata: the DB events must win so the
+	// generation is not double counted, while the sidecar transcript
+	// still carries per-message attribution from the sidecar numbers.
+	genJSON := `[{
+		"stepIndices": [1],
+		"chatModel": {
+			"model": "MODEL_PLACEHOLDER_M132",
+			"usage": {
+				"inputTokens": "5000",
+				"outputTokens": "111",
+				"thinkingOutputTokens": "60"
+			}
+		}
+	}]`
+	writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+
+	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content, "sidecar transcript should win")
+
+	// Exactly one event: gen_metadata wins, sidecar events fill gaps only.
+	require.Len(t, usageEvents, 1)
+	assert.Equal(t, "generation", usageEvents[0].Source)
+	assert.Equal(t, 2400, usageEvents[0].InputTokens)
+	assert.Equal(t, 210, usageEvents[0].OutputTokens)
+
+	// Session totals follow the winning gen_metadata events.
+	assert.Equal(t, 210, sess.TotalOutputTokens)
+	assert.Equal(t, 2400, sess.PeakContextTokens)
+
+	// Per-message attribution comes from the sidecar generatorMetadata.
+	require.Len(t, msgs, 2)
+	planner := msgs[1]
+	assert.Equal(t, RoleAssistant, planner.Role)
+	assert.Equal(t, "MODEL_PLACEHOLDER_M132", planner.Model)
+	assert.Equal(t, 5000, planner.ContextTokens)
+	assert.Equal(t, 111, planner.OutputTokens)
+	assert.True(t, planner.HasContextTokens)
+	assert.True(t, planner.HasOutputTokens)
+}
+
+func TestAntigravityCLIDBWithoutGenMetadataGetsSidecarUsage(t *testing.T) {
+	root := t.TempDir()
+	id := "acacacac-bdbd-cece-dfdf-454545454545"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps, no gen_metadata table
+
+	genJSON := `[{
+		"stepIndices": [1],
+		"chatModel": {
+			"model": "MODEL_PLACEHOLDER_M20",
+			"usage": {
+				"inputTokens": "1500",
+				"outputTokens": "77",
+				"thinkingOutputTokens": "20",
+				"cacheReadTokens": "300"
+			}
+		}
+	}]`
+	writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+
+	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+
+	// No gen_metadata table: sidecar generatorMetadata fills the gap.
+	require.Len(t, usageEvents, 1)
+	assert.Equal(t, "sidecar", usageEvents[0].Source)
+	assert.Equal(t, "MODEL_PLACEHOLDER_M20", usageEvents[0].Model)
+	assert.Equal(t, 1500, usageEvents[0].InputTokens)
+	assert.Equal(t, 77, usageEvents[0].OutputTokens)
+	assert.Equal(t, 20, usageEvents[0].ReasoningTokens)
+	assert.Equal(t, 300, usageEvents[0].CacheReadInputTokens)
+	assert.Equal(t, sess.ID, usageEvents[0].SessionID)
+
+	assert.Equal(t, 77, sess.TotalOutputTokens)
+	assert.Equal(t, 1800, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+}
+
+func TestAgyTokenCountUnmarshal(t *testing.T) {
+	tcs := []struct {
+		name string
+		json string
+		want int
+	}{
+		{"quoted number", `"21186"`, 21186},
+		{"bare number", `21186`, 21186},
+		{"empty string", `""`, 0},
+		{"null", `null`, 0},
+		{"garbage string", `"abc"`, 0},
+		{"object garbage", `{"bogus":true}`, 0},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			var c agyTokenCount
+			require.NoError(t, json.Unmarshal([]byte(tc.json), &c),
+				"garbage must decode to 0, never error")
+			assert.Equal(t, tc.want, int(c))
+		})
+	}
+
+	t.Run("surrounding object survives garbage", func(t *testing.T) {
+		var u agyChatModelUsage
+		require.NoError(t, json.Unmarshal([]byte(
+			`{"inputTokens":{"bogus":true},"outputTokens":"5"}`,
+		), &u))
+		assert.Equal(t, 0, int(u.InputTokens))
+		assert.Equal(t, 5, int(u.OutputTokens))
+	})
+}
+
+func TestAntigravityCLISidecarUsageStepIndexEdgeCases(t *testing.T) {
+	const usageJSON = `"usage":{"inputTokens":"100","outputTokens":"10"}`
+	tcs := []struct {
+		name        string
+		gens        string
+		wantEvents  int
+		wantAttrib  bool
+		wantContext int
+		wantOutput  int
+	}{
+		{
+			name: "non-planner step indices emit event without attribution",
+			gens: `[{"stepIndices":[2],"chatModel":{` +
+				`"model":"MODEL_PLACEHOLDER_M20",` + usageJSON + `}}]`,
+			wantEvents: 1,
+		},
+		{
+			name: "empty step indices",
+			gens: `[{"stepIndices":[],"chatModel":{` +
+				`"model":"MODEL_PLACEHOLDER_M20",` + usageJSON + `}}]`,
+			wantEvents: 1,
+		},
+		{
+			name: "out of range step index does not panic",
+			gens: `[{"stepIndices":[99],"chatModel":{` +
+				`"model":"MODEL_PLACEHOLDER_M20",` + usageJSON + `}}]`,
+			wantEvents: 1,
+		},
+		{
+			name: "two gens claiming one planner: first attributes",
+			gens: `[{"stepIndices":[1],"chatModel":{` +
+				`"model":"MODEL_PLACEHOLDER_M20",` + usageJSON + `}},` +
+				`{"stepIndices":[1],"chatModel":{` +
+				`"model":"MODEL_PLACEHOLDER_M132",` +
+				`"usage":{"inputTokens":"999","outputTokens":"99"}}}]`,
+			wantEvents:  2,
+			wantAttrib:  true,
+			wantContext: 100,
+			wantOutput:  10,
+		},
+		{
+			name:       "missing chatModel skipped",
+			gens:       `[{"stepIndices":[1]}]`,
+			wantEvents: 0,
+		},
+	}
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "edededed-0101-2323-4545-676767676767"
+			mustMkdir(t, filepath.Join(root, "conversations"))
+			pbPath := filepath.Join(root, "conversations", id+".pb")
+			mustWrite(t, pbPath, []byte("pb-junk-bytes"))
+			writeAntigravityTestSidecarWithGenMetadata(
+				t, root, id, 3, tc.gens,
+			)
+
+			_, msgs, usageEvents, _, err := ParseAntigravityCLISessionWithStatus(
+				pbPath, "", "test-machine",
+			)
+			require.NoError(t, err)
+			assert.Len(t, usageEvents, tc.wantEvents)
+
+			var planner *ParsedMessage
+			for i := range msgs {
+				if msgs[i].Role == RoleAssistant {
+					planner = &msgs[i]
+					break
+				}
+			}
+			require.NotNil(t, planner)
+			if tc.wantAttrib {
+				assert.True(t, planner.HasContextTokens)
+				assert.True(t, planner.HasOutputTokens)
+				assert.Equal(t, tc.wantContext, planner.ContextTokens)
+				assert.Equal(t, tc.wantOutput, planner.OutputTokens)
+				assert.Equal(t, "MODEL_PLACEHOLDER_M20", planner.Model,
+					"second gen claiming the planner stays event-only")
+			} else {
+				assert.False(t, planner.HasContextTokens)
+				assert.False(t, planner.HasOutputTokens)
+				assert.Zero(t, planner.ContextTokens)
+				assert.Zero(t, planner.OutputTokens)
+			}
+		})
+	}
 }
 
 // TestAntigravitySessionFileMetadataIncludesWAL verifies the persisted
