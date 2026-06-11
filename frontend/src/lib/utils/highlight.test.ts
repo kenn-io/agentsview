@@ -227,6 +227,50 @@ describe("applyMarks cross-text-node matching", () => {
     const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
     expect(markEls.map((m) => m.textContent ?? "")).toEqual(["foo", "foo"]);
   });
+
+  it("finds two matches inside a single segment (cursor no-skip guard)", () => {
+    // Two occurrences of "foo" within one text node — the outer cursor must not
+    // advance past the segment after the first match.
+    const div = document.createElement("div");
+    div.innerHTML = "<span>foo bar foo</span>";
+
+    applyMarks(div, "foo", false);
+
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
+    expect(markEls.map((m) => m.textContent ?? "")).toEqual(["foo", "foo"]);
+  });
+
+  it("handles many small segments with a 1-char query", () => {
+    // Build ~200 sibling spans of 1-2 chars each. The letter "a" appears in
+    // every even-indexed span ("a", "bc", "a", "bc", ...).
+    const div = document.createElement("div");
+    const count = 200;
+    let html = "";
+    for (let i = 0; i < count; i++) {
+      html += i % 2 === 0 ? "<span>a</span>" : "<span>bc</span>";
+    }
+    div.innerHTML = html;
+
+    applyMarks(div, "a", false);
+
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
+    // 100 even-indexed spans each contribute one "a"
+    expect(markEls).toHaveLength(100);
+    expect(markEls.every((m) => m.textContent === "a")).toBe(true);
+  });
+
+  it("marks a match starting exactly at a segment boundary", () => {
+    // "cd" begins at offset 2, which is exactly the start of the second segment.
+    // The <= boundary in the outer cursor skip must not overshoot.
+    const div = document.createElement("div");
+    div.innerHTML = "<span>ab</span><span>cd</span>";
+
+    applyMarks(div, "cd", false);
+
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
+    expect(markEls).toHaveLength(1);
+    expect(markEls[0]!.textContent).toBe("cd");
+  });
 });
 
 describe("escapeHTML", () => {

@@ -92,19 +92,25 @@ export function applyMarks(
   // Map from segment index to list of pieces within that node
   const segPieces: Map<number, Piece[]> = new Map();
 
+  let segIdx = 0; // monotonic outer cursor over segments
   for (const match of matches) {
-    for (let si = 0; si < segments.length; si++) {
-      const seg = segments[si as number];
-      if (!seg) continue;
-      // Check overlap: [match.start, match.end) ∩ [seg.start, seg.end)
+    // Skip segments that end at or before this match starts. Safe to advance
+    // permanently: matches are ascending and non-overlapping, so a segment that
+    // ends <= match.start cannot overlap this or any later match.
+    while (segIdx < segments.length && segments[segIdx]!.end <= match.start) {
+      segIdx++;
+    }
+    // Walk segments overlapping [match.start, match.end) using a LOCAL index so a
+    // segment shared by a later match is not skipped by the outer cursor.
+    for (let j = segIdx; j < segments.length && segments[j]!.start < match.end; j++) {
+      const seg = segments[j]!;
       const overlapStart = Math.max(match.start, seg.start);
       const overlapEnd = Math.min(match.end, seg.end);
       if (overlapStart >= overlapEnd) continue;
-
       const localStart = overlapStart - seg.start;
       const localEnd = overlapEnd - seg.start;
-      if (!segPieces.has(si)) segPieces.set(si, []);
-      segPieces.get(si)!.push({ localStart, localEnd });
+      if (!segPieces.has(j)) segPieces.set(j, []);
+      segPieces.get(j)!.push({ localStart, localEnd });
     }
   }
 
