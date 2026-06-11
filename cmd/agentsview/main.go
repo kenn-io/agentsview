@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/telemetry"
 )
 
 var (
@@ -31,6 +32,7 @@ var (
 
 const (
 	periodicSyncInterval  = 15 * time.Minute
+	telemetryPingInterval = 24 * time.Hour
 	unwatchedPollInterval = 2 * time.Minute
 	watcherDebounce       = 500 * time.Millisecond
 	recursiveWatchBudget  = 8192
@@ -123,6 +125,17 @@ func runServe(cfg config.Config) {
 		context.Background(), os.Interrupt, syscall.SIGTERM,
 	)
 	defer stop()
+
+	telemetryReporter := telemetry.NewReporterOrDisabled(telemetry.Options{
+		DataDir: cfg.DataDir,
+		Version: version,
+		Commit:  commit,
+	})
+	defer func() {
+		if err := telemetryReporter.Close(); err != nil {
+			log.Printf("close telemetry: %v", err)
+		}
+	}()
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
@@ -254,6 +267,8 @@ func runServe(cfg config.Config) {
 	}
 	fmt.Printf("Database: %s\n", cfg.DBPath)
 
+	startTelemetryPings(ctx, telemetryReporter)
+
 	if engine != nil {
 		stopWatcher, unwatchedDirs := startFileWatcher(
 			cfg, engine, func(paths []string) {
@@ -268,6 +283,31 @@ func runServe(cfg config.Config) {
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
+	}
+}
+
+func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter) {
+	if reporter == nil || !reporter.Enabled() {
+		return
+	}
+	captureTelemetryPing(ctx, reporter)
+	go func() {
+		ticker := time.NewTicker(telemetryPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				captureTelemetryPing(ctx, reporter)
+			}
+		}
+	}()
+}
+
+func captureTelemetryPing(ctx context.Context, reporter *telemetry.Reporter) {
+	if err := reporter.CaptureDaemonActive(ctx); err != nil && ctx.Err() == nil {
+		log.Printf("capture telemetry event: %v", err)
 	}
 }
 

@@ -3,13 +3,19 @@ import { getAuthToken, isRemoteConnection } from "../api/runtime.js";
 const DEBOUNCE_MS = 5_000;
 const TIMEOUT_MS = 3_000;
 
+interface VisibilityHealthCheckOptions {
+  onBackendDegraded?: (status: number) => void;
+}
+
 /**
  * Set up a visibilitychange listener that pings the backend when the
- * page becomes visible. If the backend is unreachable (network error,
- * timeout, or 5xx), the page reloads automatically.
+ * page becomes visible. If the backend is unreachable (network error or
+ * timeout), the page reloads automatically.
  *
  * 4xx responses (401/403) are treated as proof the backend is alive
- * and do not trigger a reload — auth recovery is handled elsewhere.
+ * and do not trigger a reload — auth recovery is handled elsewhere. The same
+ * is true for 5xx responses: the backend process answered, so reloading the
+ * SPA is unlikely to repair a degraded dependency such as PostgreSQL.
  *
  * In desktop mode with a local sidecar, this handler is a no-op
  * because Tauri's on_window_event focus handler owns recovery.
@@ -23,6 +29,7 @@ const TIMEOUT_MS = 3_000;
  */
 export function setupVisibilityHealthCheck(
   getBaseUrl: () => string,
+  opts: VisibilityHealthCheckOptions = {},
 ): () => void {
   // In desktop mode with a local sidecar, Tauri owns recovery via
   // on_window_event focus. Skip the frontend handler to avoid racing
@@ -52,7 +59,10 @@ export function setupVisibilityHealthCheck(
     fetch(`${getBaseUrl()}/version`, init)
       .then((res) => {
         clearTimeout(timer);
-        if (res.status >= 500) throw new Error(`HTTP ${res.status}`);
+        if (res.status >= 500) {
+          opts.onBackendDegraded?.(res.status);
+          return;
+        }
       })
       .catch(() => {
         clearTimeout(timer);

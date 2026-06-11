@@ -54,11 +54,11 @@ func TestSearch(t *testing.T) {
 	sysMsg.IsSystem = true
 	insertMessages(t, d, sysMsg)
 
-	// Session s-sysonly-dn: only display_name matches, system messages only.
+	// Session s-sysonly-dn: only session_name matches, system messages only.
 	insertSession(t, d, "s-sysonly-dn", "proj-sysonly",
 		func(s *Session) {
 			s.Agent = "claude"
-			s.DisplayName = new("sysonlydnterm unique display")
+			s.SessionName = new("sysonlydnterm unique display")
 			s.FirstMessage = new("no match here")
 			s.StartedAt = new("2024-01-04T10:00:00Z")
 			s.EndedAt = new("2024-01-04T11:00:00Z")
@@ -86,7 +86,7 @@ func TestSearch(t *testing.T) {
 	insertSession(t, d, "s-prefixonly", "proj-prefixonly",
 		func(s *Session) {
 			s.Agent = "claude"
-			s.DisplayName = new("prefixonlydnterm unique display")
+			s.SessionName = new("prefixonlydnterm unique display")
 			s.StartedAt = new("2024-01-06T10:00:00Z")
 			s.EndedAt = new("2024-01-06T11:00:00Z")
 		},
@@ -140,15 +140,15 @@ func TestSearch(t *testing.T) {
 		assert.Empty(t, page.Results, "system-only session results")
 	})
 
-	t.Run("name branch excludes system-only sessions via display_name", func(t *testing.T) {
-		// s-sysonly-dn has display_name matching "sysonlydnterm" but only
+	t.Run("name branch excludes system-only sessions via session_name", func(t *testing.T) {
+		// s-sysonly-dn has session_name matching "sysonlydnterm" but only
 		// system messages. The EXISTS guard must prevent it from appearing.
 		page, err := d.Search(context.Background(), SearchFilter{
 			Query: "sysonlydnterm", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
 		assert.Empty(t, page.Results,
-			"system-only session via display_name")
+			"system-only session via session_name")
 	})
 
 	t.Run("name branch excludes system-only sessions via first_message", func(t *testing.T) {
@@ -163,7 +163,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("name branch excludes prefix-only sessions", func(t *testing.T) {
-		// s-prefixonly has display_name matching "prefixonlydnterm" but only
+		// s-prefixonly has session_name matching "prefixonlydnterm" but only
 		// prefix-detected system messages (is_system=false). The EXISTS guard
 		// with prefix exclusion must prevent it from appearing.
 		page, err := d.Search(context.Background(), SearchFilter{

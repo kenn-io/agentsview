@@ -200,7 +200,8 @@
 
   function needsVisibleHydration(item: DisplayItem): boolean {
     const session = sessionForItem(item);
-    return !!session?.is_index_only && !session.display_name;
+    if (!session?.is_index_only) return false;
+    return !session.display_name;
   }
 
   function hydrationIdsForItems(items: DisplayItem[]): string[] {

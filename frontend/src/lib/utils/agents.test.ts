@@ -18,6 +18,7 @@ describe("KNOWN_AGENTS", () => {
       "cursor",
       "amp",
       "zencoder",
+      "zed",
       "vscode-copilot",
       "pi",
       "qwen",
@@ -73,6 +74,9 @@ describe("agentColor", () => {
     expect(agentColor("zencoder")).toBe(
       "var(--accent-red)",
     );
+    expect(agentColor("zed")).toBe(
+      "var(--accent-green)",
+    );
     expect(agentColor("pi")).toBe(
       "var(--accent-indigo)",
     );
@@ -112,6 +116,7 @@ describe("agentLabel", () => {
     expect(agentLabel("iflow")).toBe("iFlow");
     expect(agentLabel("workbuddy")).toBe("WorkBuddy");
     expect(agentLabel("piebald")).toBe("Piebald");
+    expect(agentLabel("zed")).toBe("Zed");
     expect(agentLabel("qwen")).toBe("Qwen Code");
   });
 

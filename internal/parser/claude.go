@@ -99,6 +99,7 @@ func ParseClaudeSessionWithExclusions(
 		sourceVersion   string
 		cwd             string
 		gitBranch       string
+		displayName     string
 		foundParentSID  bool
 		lineIndex       int
 		malformedLines  int
@@ -191,6 +192,17 @@ func ParseClaudeSessionWithExclusions(
 			continue
 		}
 
+		// Handle system records. /rename local commands update the
+		// display name; last rename wins (empty arg clears it).
+		if entryType == "system" {
+			if name, ok := extractRenameName(
+				gjson.Get(line, "content").Str,
+			); ok {
+				displayName = name
+			}
+			continue
+		}
+
 		if entryType != "user" && entryType != "assistant" {
 			continue
 		}
@@ -272,6 +284,7 @@ func ParseClaudeSessionWithExclusions(
 		sourceVersion:   sourceVersion,
 		cwd:             cwd,
 		gitBranch:       gitBranch,
+		displayName:     displayName,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -384,7 +397,8 @@ func ParseClaudeSessionFrom(
 		// non-message events (progress, queue-operation) so
 		// callers can update ended_at even when no new
 		// messages are found.
-		latestTS time.Time
+		latestTS  time.Time
+		sawRename bool
 	)
 
 	consumed, err := readJSONLFrom(
@@ -395,6 +409,14 @@ func ParseClaudeSessionFrom(
 				}
 			}
 			entryType := gjson.Get(line, "type").Str
+			if entryType == "system" {
+				if _, ok := extractRenameName(
+					gjson.Get(line, "content").Str,
+				); ok {
+					sawRename = true
+				}
+				return
+			}
 			if entryType == "attachment" {
 				if qc, ok := extractQueuedCommand(line); ok {
 					queuedCommands = append(queuedCommands, qc)
@@ -422,6 +444,13 @@ func ParseClaudeSessionFrom(
 			"reading claude %s from offset %d: %w",
 			path, offset, err,
 		)
+	}
+
+	// A rename-only append produces no entries and no queued commands, so
+	// the empty-entries early return below would silently succeed. Check
+	// first and force a full parse so the display name is persisted.
+	if sawRename {
+		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
@@ -649,6 +678,7 @@ type claudeSessionMeta struct {
 	sourceVersion   string
 	cwd             string
 	gitBranch       string
+	displayName     string
 	malformedLines  int
 	isTruncated     bool
 }
@@ -659,6 +689,7 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.SourceVersion = m.sourceVersion
 	sess.Cwd = m.cwd
 	sess.GitBranch = m.gitBranch
+	sess.SessionName = m.displayName
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }
@@ -1560,6 +1591,26 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(r[:maxLen]) + "..."
+}
+
+// extractRenameName returns the argument of a Claude Code /rename
+// command envelope. The bool is true when content is a /rename
+// invocation (including an empty argument, which clears the name) and
+// false for any other command or non-command content.
+func extractRenameName(content string) (string, bool) {
+	m := xmlCmdNameRe.FindStringSubmatch(content)
+	if m == nil {
+		return "", false
+	}
+	name := strings.TrimPrefix(strings.TrimSpace(m[1]), "/")
+	if name != "rename" {
+		return "", false
+	}
+	args := ""
+	if am := xmlCmdArgsRe.FindStringSubmatch(content); am != nil {
+		args = strings.TrimSpace(am[1])
+	}
+	return args, true
 }
 
 // extractCommandText detects Claude Code command/skill invocation

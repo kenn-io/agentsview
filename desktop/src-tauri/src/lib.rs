@@ -963,16 +963,14 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
     let check_updates =
         MenuItemBuilder::with_id("check_updates", "Check for Updates...").build(app)?;
 
-    let mut builder = SubmenuBuilder::new(app, "File")
+    let builder = SubmenuBuilder::new(app, "File")
         .item(&about)
         .separator()
         .item(&check_updates)
         .separator();
 
     #[cfg(target_os = "macos")]
-    {
-        builder = builder.hide().hide_others().separator();
-    }
+    let builder = builder.hide().hide_others().separator();
 
     let app_submenu = builder.quit().build()?;
 
@@ -2117,10 +2115,24 @@ mod tests {
         perms.set_mode(0o700);
         fs::set_permissions(&script_path, perms).expect("set executable permissions");
 
-        let result = try_run_login_shell_env(
-            script_path.to_str().expect("script path utf-8"),
-            Duration::from_secs(2),
-        );
+        let mut attempts_left = 5;
+        let result = loop {
+            let result = try_run_login_shell_env(
+                script_path.to_str().expect("script path utf-8"),
+                Duration::from_secs(2),
+            );
+            match &result {
+                Err(LoginShellEnvError::Spawn(e)) if e.raw_os_error() == Some(26) => {
+                    attempts_left -= 1;
+                    if attempts_left == 0 {
+                        break result;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                _ => break result,
+            }
+        };
         let _ = fs::remove_file(&script_path);
 
         match result {

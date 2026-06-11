@@ -146,10 +146,7 @@ func (s *Store) HasFTS() bool { return true }
 // escapeLike escapes SQL LIKE metacharacters so the bind
 // parameter is treated as a literal substring.
 func escapeLike(v string) string {
-	r := strings.NewReplacer(
-		`\`, `\\`, `%`, `\%`, `_`, `\_`,
-	)
-	return r.Replace(v)
+	return db.EscapeLikePattern(v)
 }
 
 // stripFTSQuotes removes surrounding double quotes that
@@ -214,7 +211,7 @@ func (s *Store) Search(
 				m.session_id,
 				s.project,
 				s.agent,
-				COALESCE(s.display_name, s.first_message, '') AS name,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
 				m.ordinal,
 				POSITION(LOWER($2) IN LOWER(m.content)) AS match_pos,
@@ -244,19 +241,19 @@ func (s *Store) Search(
 				s.id AS session_id,
 				s.project,
 				s.agent,
-				COALESCE(s.display_name, s.first_message, '') AS name,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at) AS session_ended_at,
 				-1 AS ordinal,
 				0 AS match_pos,
 				CASE
-					WHEN s.display_name ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
-						THEN COALESCE(s.display_name, '')
+					WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+						THEN COALESCE(s.display_name, s.session_name, '')
 					WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 						THEN COALESCE(s.first_message, '')
-					ELSE COALESCE(s.display_name, s.first_message, '')
+					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet
 			FROM sessions s
-			WHERE (s.display_name ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+			WHERE (COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
 				OR s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\')
 				AND s.deleted_at IS NULL
 				AND EXISTS (

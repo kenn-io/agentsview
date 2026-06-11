@@ -223,6 +223,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"zed prefix",
+			"zed:sess-id",
+			AgentZed,
+			true,
+		},
+		{
 			"unknown prefix",
 			"future:sess-id",
 			"",
@@ -259,6 +265,8 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentAmp,
 		AgentVSCodeCopilot,
 		AgentPi,
+		AgentQwen,
+		AgentCommandCode,
 		AgentOpenClaw,
 		AgentQClaw,
 		AgentKimi,
@@ -272,6 +280,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentPiebald,
 		AgentWarp,
 		AgentPositron,
+		AgentZed,
 	}
 
 	registered := make(map[AgentType]bool)
@@ -385,6 +394,28 @@ func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
 	}
 }
 
+func TestZedRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentZed)
+	if !ok {
+		t.Fatalf("AgentZed missing from Registry")
+	}
+	if !def.FileBased {
+		t.Fatalf("Zed FileBased = false, want true")
+	}
+	if def.EnvVar != "ZED_DIR" {
+		t.Fatalf("Zed EnvVar = %q", def.EnvVar)
+	}
+	if def.ConfigKey != "zed_dirs" {
+		t.Fatalf("Zed ConfigKey = %q", def.ConfigKey)
+	}
+	if def.IDPrefix != "zed:" {
+		t.Fatalf("Zed IDPrefix = %q", def.IDPrefix)
+	}
+	if def.DiscoverFunc == nil || def.FindSourceFunc == nil {
+		t.Fatalf("Zed discover/source funcs must be set")
+	}
+}
+
 func TestOpenCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentOpenCode)
 	require.True(t, ok, "AgentOpenCode missing from Registry")
@@ -398,6 +429,16 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	}
 	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
 		"OpenCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
+func TestCommandCodeRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentCommandCode)
+	require.True(t, ok, "AgentCommandCode missing from Registry")
+	require.True(t, def.FileBased, "Command Code FileBased")
+	require.NotNil(t, def.DiscoverFunc, "Command Code DiscoverFunc")
+	require.NotNil(t, def.FindSourceFunc, "Command Code FindSourceFunc")
+	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
+	assert.Equal(t, "commandcode:", def.IDPrefix)
 }
 
 func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {

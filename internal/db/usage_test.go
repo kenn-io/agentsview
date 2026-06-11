@@ -1133,7 +1133,7 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	// Expensive session
 	insertSession(t, d, "sBig", "proj-a", func(s *Session) {
 		s.Agent = "claude"
-		s.DisplayName = new("Big Session")
+		s.SessionName = new("Big Session")
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
 	insertMessages(t, d, Message{
@@ -1149,7 +1149,7 @@ func TestGetTopSessionsByCost(t *testing.T) {
 	// Cheap session
 	insertSession(t, d, "sSmall", "proj-b", func(s *Session) {
 		s.Agent = "codex"
-		s.DisplayName = new("Small Session")
+		s.SessionName = new("Small Session")
 		s.StartedAt = new("2024-06-15T11:00:00Z")
 	})
 	insertMessages(t, d, Message{
@@ -1199,10 +1199,10 @@ func TestGetTopSessionsByCost_DisplayNameFallback(t *testing.T) {
 	tokenJSON := `{"input_tokens":100,"output_tokens":50,` +
 		`"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`
 
-	// Session with display_name set — should use display_name.
+	// Session with session_name set — should use session_name via COALESCE.
 	insertSession(t, d, "s-dn", "proj-a", func(s *Session) {
 		s.Agent = "claude"
-		s.DisplayName = new("My Custom Name")
+		s.SessionName = new("My Custom Name")
 		s.FirstMessage = new("some first message")
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})

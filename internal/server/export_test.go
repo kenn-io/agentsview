@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"net/http"
@@ -1114,7 +1115,7 @@ func TestCreateGist(t *testing.T) {
 			}
 
 			got, err := createGistWithURL(
-				ctx, ts.URL, "tok", "f.html", "desc", "content",
+				ctx, ts.URL, "tok", "f.html", "desc", "content", true,
 			)
 
 			if tt.cancelCtx {
@@ -1131,6 +1132,45 @@ func TestCreateGist(t *testing.T) {
 			assert.Equal(t, tt.wantID, got.ID)
 			assert.Equal(t, tt.wantURL, got.HTMLURL)
 			assert.Equal(t, tt.wantLogin, got.Owner.Login)
+		})
+	}
+}
+
+func TestCreateGistVisibility(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		public bool
+	}{
+		{name: "Public", public: true},
+		{name: "Secret", public: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var payload struct {
+				Public bool `json:"public"`
+			}
+			ts := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, r *http.Request) {
+					assert.NoError(t,
+						json.NewDecoder(r.Body).Decode(&payload))
+					w.WriteHeader(http.StatusCreated)
+					w.Write([]byte(`{"id":"abc123",` +
+						`"html_url":"https://gist.github.com/abc123",` +
+						`"owner":{"login":"testuser"}}`))
+				},
+			))
+			defer ts.Close()
+
+			_, err := createGistWithURL(
+				context.Background(), ts.URL,
+				"tok", "f.html", "desc", "content", tt.public,
+			)
+			require.NoError(t, err)
+			assert.Equal(t, tt.public, payload.Public)
 		})
 	}
 }

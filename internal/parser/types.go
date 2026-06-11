@@ -23,6 +23,7 @@ const (
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
 	AgentPi             AgentType = "pi"
 	AgentQwen           AgentType = "qwen"
+	AgentCommandCode    AgentType = "commandcode"
 	AgentOpenClaw       AgentType = "openclaw"
 	AgentQClaw          AgentType = "qclaw"
 	AgentKimi           AgentType = "kimi"
@@ -39,6 +40,7 @@ const (
 	AgentPositron       AgentType = "positron"
 	AgentAntigravity    AgentType = "antigravity"
 	AgentAntigravityCLI AgentType = "antigravity-cli"
+	AgentZed            AgentType = "zed"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -242,6 +244,17 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindQwenSourceFile,
 	},
 	{
+		Type:           AgentCommandCode,
+		DisplayName:    "Command Code",
+		EnvVar:         "COMMANDCODE_PROJECTS_DIR",
+		ConfigKey:      "commandcode_project_dirs",
+		DefaultDirs:    []string{".commandcode/projects"},
+		IDPrefix:       "commandcode:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverCommandCodeSessions,
+		FindSourceFunc: FindCommandCodeSourceFile,
+	},
+	{
 		Type:           AgentOpenClaw,
 		DisplayName:    "OpenClaw",
 		EnvVar:         "OPENCLAW_DIR",
@@ -395,6 +408,18 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindPositronSourceFile,
 	},
 	{
+		Type:           AgentZed,
+		DisplayName:    "Zed",
+		EnvVar:         "ZED_DIR",
+		ConfigKey:      "zed_dirs",
+		DefaultDirs:    zedDefaultDirs(),
+		IDPrefix:       "zed:",
+		FileBased:      true,
+		WatchSubdirs:   []string{"threads"},
+		DiscoverFunc:   DiscoverZedSessions,
+		FindSourceFunc: FindZedSourceFile,
+	},
+	{
 		Type:        AgentAntigravity,
 		DisplayName: "Antigravity",
 		EnvVar:      "ANTIGRAVITY_DIR",
@@ -528,7 +553,7 @@ type ParsedSession struct {
 	MalformedLines   int
 	IsTruncated      bool
 	FirstMessage     string
-	DisplayName      string
+	SessionName      string
 	StartedAt        time.Time
 	EndedAt          time.Time
 	MessageCount     int

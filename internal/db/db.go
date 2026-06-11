@@ -28,13 +28,35 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 33: Claude parser now skips content-free /usage probe
+// Bumped to 36: the Antigravity CLI .pb branch dropped its sidecar
+// mtime gate: a trajectory.json older than the .pb was rejected in
+// favor of low-fidelity history fallbacks, but the encrypted .pb has no
+// richer decode, .pb files are no longer produced, and their sidecars
+// are final. Existing .pb rows whose sidecar was previously rejected
+// need re-parsing to pick up the full-fidelity transcript.
+//
+// (35: Antigravity CLI parser changed persisted data in two
+// ways: (a) project inference (GitHub #579) now resolves a workspace
+// for sessions whose history.jsonl rows lack a conversationId, changing
+// stored session.Project, and (b) .db sessions now prefer the
+// agy-reader trajectory.json sidecar (structured tool calls/results and
+// thinking) over the heuristic SQLite decode. Existing Antigravity CLI
+// rows would otherwise be skipped while file size/mtime and
+// data_version look current, so they need a non-destructive resync to
+// pick up inferred projects and sidecar-fidelity transcripts.)
+//
+// (34: added session_name column to sessions; existing rows
+// need re-parsing so the parser can populate agent-provided session
+// names (Claude /rename and native titles from other agents) into the
+// new session_name field.)
+//
+// (33: Claude parser now skips content-free /usage probe
 // sessions (the only user turn is the /usage command), and the Codex
 // parser drops the initial user prompt when Codex re-emits it verbatim
 // while continuing a task across turns. Existing rows need re-parsing
 // so /usage probe sessions are dropped from the archive and Codex
 // code-review sessions are recounted to a single user turn and
-// re-flagged as automated.
+// re-flagged as automated.)
 //
 // (32: Antigravity DB parsers now filter internal protocol strings
 // from visible message content, remove raw step headers, prefer
@@ -120,7 +142,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 33
+const dataVersion = 36
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -455,6 +477,10 @@ func (db *DB) migrateColumns() error {
 		{
 			"sessions", "display_name",
 			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
+		},
+		{
+			"sessions", "session_name",
+			"ALTER TABLE sessions ADD COLUMN session_name TEXT",
 		},
 		{
 			"sessions", "deleted_at",

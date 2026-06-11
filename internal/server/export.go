@@ -29,21 +29,23 @@ type gistResponse struct {
 func createGist(
 	ctx context.Context,
 	token, filename, description, content string,
+	public bool,
 ) (*gistResponse, error) {
 	return createGistWithURL(
 		ctx,
 		"https://api.github.com/gists",
-		token, filename, description, content,
+		token, filename, description, content, public,
 	)
 }
 
 func createGistWithURL(
 	ctx context.Context,
 	apiURL, token, filename, description, content string,
+	public bool,
 ) (*gistResponse, error) {
 	payload, err := json.Marshal(map[string]any{
 		"description": description,
-		"public":      true,
+		"public":      public,
 		"files": map[string]any{
 			filename: map[string]string{"content": content},
 		},

@@ -175,6 +175,7 @@ export function registerShortcuts(
       },
       p: () => {
         if (sessions.activeSessionId) {
+          ui.publishSecret = false;
           ui.activeModal = "publish";
         }
       },

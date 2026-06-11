@@ -17,6 +17,7 @@
     qwen: "Qwen Code",
     openclaw: "OpenClaw",
     qclaw: "QClaw",
+    zed: "Zed",
     kimi: "Kimi",
     workbuddy: "WorkBuddy",
     piebald: "Piebald",

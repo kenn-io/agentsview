@@ -70,6 +70,16 @@
       </button>
       <span class="sep">&middot;</span>
     {/if}
+    {#if sync.backendDegraded}
+      <button
+        class="backend-warn"
+        onclick={() => sync.loadStats()}
+        title={sync.backendDegradedMessage ?? "sync not ready"}
+      >
+        sync not ready
+      </button>
+      <span class="sep">&middot;</span>
+    {/if}
     {#if sync.isDesktop}
       <div class="zoom-controls">
         <button
@@ -203,7 +213,15 @@
     font-weight: 500;
   }
 
-  .remote-warn:hover {
+  .backend-warn {
+    color: var(--accent-red);
+    font-size: 10px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+
+  .remote-warn:hover,
+  .backend-warn:hover {
     text-decoration: underline;
   }
 

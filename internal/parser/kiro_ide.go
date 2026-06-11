@@ -384,7 +384,7 @@ func parseKiroIDENewFormat(
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentKiroIDE,
-		DisplayName:      title,
+		SessionName:      title,
 		FirstMessage:     firstMessage,
 		StartedAt:        info.ModTime(),
 		EndedAt:          info.ModTime(),

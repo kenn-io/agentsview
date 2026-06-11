@@ -260,6 +260,108 @@ func TestAntigravityCLIDiscoverAndParseDB(t *testing.T) {
 	assert.Equal(t, "db prompt fallback", sess.FirstMessage)
 }
 
+func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
+	root := t.TempDir()
+	id := "f0f0f0f0-f1f1-f2f2-f3f3-f4f4f4f4f4f4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // user prompt: "user prompt text goes here", ts: 1779000000
+
+	// Create history.jsonl with a row omitting conversationId, matching text, and close timestamp (1779000000000 ms)
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"  user prompt text goes here  ","timestamp":1779000010000,"workspace":"/tmp/fallback-proj"}`))
+
+	sess, msgs, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "/tmp/fallback-proj", sess.Project, "should successfully fallback infer project")
+}
+
+func TestAntigravityCLIProjectFallbackStrictWindow(t *testing.T) {
+	root := t.TempDir()
+	id := "e0e0e0e0-e1e1-e2e2-e3e3-e4e4e4e4e4e4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // user prompt: "user prompt text goes here", ts: 1779000000
+
+	// Create history.jsonl with timestamp outside the 1-minute window (e.g., 65 seconds later)
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"user prompt text goes here","timestamp":1779000065000,"workspace":"/tmp/too-late-proj"}`))
+
+	sess, _, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	assert.Empty(t, sess.Project, "should reject match outside 1-minute window")
+}
+
+func TestAntigravityCLIProjectFallbackAmbiguous(t *testing.T) {
+	root := t.TempDir()
+	id := "d0d0d0d0-d1d1-d2d2-d3d3-d4d4d4d4d4d4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // user prompt: "user prompt text goes here", ts: 1779000000
+
+	// Create history.jsonl with two rows having matching prompts, same timestamp difference, but different workspaces
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"user prompt text goes here","timestamp":1779000005000,"workspace":"/tmp/proj-a"}
+{"display":"user prompt text goes here","timestamp":1779000005000,"workspace":"/tmp/proj-b"}`))
+
+	sess, _, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	assert.Empty(t, sess.Project, "should reject ambiguous match with different workspaces at same time closeness")
+}
+
+func TestAntigravityCLIProjectFallbackShortPrompt(t *testing.T) {
+	root := t.TempDir()
+	id := "c0c0c0c0-c1c1-c2c2-c3c3-c4c4c4c4c4c4"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	mustMkdir(t, filepath.Join(root, "brain", id))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityOvershortPromptDB(t, dbPath) // user prompt: "hi", ts: 1779000000
+
+	// Create history.jsonl with matching short prompt "hi"
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"hi","timestamp":1779000005000,"workspace":"/tmp/short-proj"}`))
+
+	sess, _, err := ParseAntigravityCLISession(dbPath, "", "m")
+	require.NoError(t, err)
+	assert.Empty(t, sess.Project, "should reject matching short prompts")
+}
+
+func createAntigravityOvershortPromptDB(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open")
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+
+	tsEarly := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1779000000},
+	})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{
+			num:   17,
+			wire:  pbWireBytes,
+			bytes: []byte("hi"),
+		},
+	})
+	mustExec(t, db,
+		`INSERT INTO steps (idx, step_type, step_payload) `+
+			`VALUES (?, ?, ?)`,
+		0, 14, userPayload)
+}
+
 func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
 	root := t.TempDir()
 	id := "44444444-5555-6666-7777-888888888888"
@@ -1021,41 +1123,236 @@ func TestAntigravityCLITrajectoryWithoutSupportedMessagesFallsBack(t *testing.T)
 	}
 }
 
-func TestAntigravityCLIStaleTrajectoryFallsBack(t *testing.T) {
-	root := t.TempDir()
-	id := "44444444-5555-6666-7777-888888888888"
+// writeAntigravityTestSidecar writes a trajectory sidecar with the first
+// numSteps of a fixed user-input / planner-response / run-command sequence.
+func writeAntigravityTestSidecar(
+	t *testing.T, root, id string, numSteps int,
+) string {
+	t.Helper()
+	allSteps := []string{
+		`{
+			"type": "CORTEX_STEP_TYPE_USER_INPUT",
+			"status": "STATUS_COMPLETED",
+			"metadata": {"createdAt": "2026-06-10T20:40:00Z"},
+			"userInput": {"userResponse": "sidecar prompt"}
+		}`,
+		`{
+			"type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
+			"status": "STATUS_COMPLETED",
+			"metadata": {"createdAt": "2026-06-10T20:41:00Z"},
+			"plannerResponse": {
+				"thinking": "sidecar thinking",
+				"response": "sidecar assistant reply",
+				"toolCalls": [{
+					"name": "run_command",
+					"argumentsJson": "{\"command\":\"ls\"}",
+					"id": "tc-1"
+				}]
+			}
+		}`,
+		`{
+			"type": "CORTEX_STEP_TYPE_RUN_COMMAND",
+			"status": "STATUS_COMPLETED",
+			"metadata": {"createdAt": "2026-06-10T20:42:00Z", "executionId": "tc-1"},
+			"runCommand": {
+				"commandLine": "ls",
+				"cwd": "/tmp",
+				"combinedOutput": "\"out.txt\""
+			}
+		}`,
+	}
+	require.LessOrEqual(t, numSteps, len(allSteps))
+	body := `{"trajectoryId":"traj","cascadeId":"` + id + `","steps":[` +
+		strings.Join(allSteps[:numSteps], ",") + `]}`
+	p := filepath.Join(root, "conversations", id+".trajectory.json")
+	mustWrite(t, p, []byte(body))
+	return p
+}
 
+func TestAntigravityCLIDBPrefersSidecarWithEqualCoverage(t *testing.T) {
+	root := t.TempDir()
+	id := "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps
+	writeAntigravityTestSidecar(t, root, id, 2)
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"history prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+
+	sess, msgs, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry)
+
+	// Sidecar messages win: structured tool call, thinking, and the
+	// sidecar's own user prompt (no history.jsonl merge).
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "sidecar assistant reply", msgs[1].Content)
+	assert.True(t, msgs[1].HasThinking)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "tc-1", msgs[1].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "sidecar prompt", sess.FirstMessage)
+}
+
+func TestAntigravityCLIDBKeepsDBDecodeWhenSidecarLags(t *testing.T) {
+	root := t.TempDir()
+	id := "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps
+	// Sidecar covers only 1 of 2 steps -- a live session agy-reader has
+	// not caught up with yet. The fuller DB decode must win.
+	writeAntigravityTestSidecar(t, root, id, 1)
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"history prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+
+	_, msgs, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "history prompt", msgs[0].Content, "history merge applies")
+	assert.Contains(t, msgs[1].Content, "assistant reply content body")
+}
+
+func TestAntigravityCLIDBSidecarUsedWhenDBDecodeEmpty(t *testing.T) {
+	root := t.TempDir()
+	id := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	createAntigravityStepTables(t, db)
+	require.NoError(t, db.Close())
+	writeAntigravityTestSidecar(t, root, id, 2)
+
+	_, msgs, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry,
+		"sidecar provided full-resolution data; no retry needed")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	require.Len(t, msgs[1].ToolCalls, 1)
+}
+
+func TestAntigravityCLIDBFileInfoIncludesTrajectorySidecar(t *testing.T) {
+	root := t.TempDir()
+	id := "99999999-aaaa-bbbb-cccc-dddddddddddd"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	mustWrite(t, dbPath, []byte("db"))
+	sidecarPath := filepath.Join(
+		root, "conversations", id+".trajectory.json",
+	)
+	mustWrite(t, sidecarPath, []byte("sidecar"))
+
+	early := time.Unix(1779000000, 0)
+	late := time.Unix(1779000300, 0)
+	require.NoError(t, os.Chtimes(dbPath, early, early))
+	require.NoError(t, os.Chtimes(sidecarPath, late, late))
+
+	info, err := AntigravityCLIFileInfo(dbPath)
+	require.NoError(t, err)
+	assert.Equal(t, int64(len("db")+len("sidecar")), info.Size())
+	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano(),
+		"agy-reader sidecar update must change the .db fingerprint")
+}
+
+func TestAntigravityCLIPBUsesSidecarDespiteOlderMtime(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	mustMkdir(t, filepath.Join(root, "conversations"))
 
 	pbPath := filepath.Join(root, "conversations", id+".pb")
-	mustWrite(t, pbPath, []byte("newer-pb-stub"))
-	sidecarPath := filepath.Join(root, "conversations", id+".trajectory.json")
-	mustWrite(t, sidecarPath, []byte(`{
-		"steps": [
-			{
-				"type": "CORTEX_STEP_TYPE_USER_INPUT",
-				"metadata": {
-					"createdAt": "2026-05-20T22:40:00Z"
-				},
-				"userInput": {
-					"userResponse": "stale trajectory prompt"
-				}
-			}
-		]
-	}`))
-	mustWrite(t, filepath.Join(root, "history.jsonl"),
-		[]byte(`{"display":"new history prompt","timestamp":1779000000000,`+
-			`"workspace":"/tmp/proj","conversationId":"`+id+`"}`))
+	mustWrite(t, pbPath, []byte("pb-stub"))
+	sidecarPath := writeAntigravityTestSidecar(t, root, id, 2)
 
-	now := time.Now()
-	require.NoError(t, os.Chtimes(sidecarPath, now.Add(-time.Hour), now.Add(-time.Hour)))
-	require.NoError(t, os.Chtimes(pbPath, now, now))
+	// Sidecar predates the .pb -- e.g. the encrypted file was touched
+	// after the final agy-reader sync. The old mtime gate rejected the
+	// sidecar here and fell back to low-fidelity history rows; the
+	// sidecar must win regardless because .pb has no richer decode.
+	early := time.Unix(1779000000, 0)
+	late := time.Unix(1779000300, 0)
+	require.NoError(t, os.Chtimes(sidecarPath, early, early))
+	require.NoError(t, os.Chtimes(pbPath, late, late))
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"history prompt","timestamp":1779000000000,`+
+			`"workspace":"/tmp/pb-proj","conversationId":"`+id+`"}`))
 
 	sess, msgs, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
 	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "sidecar prompt", sess.FirstMessage)
+}
 
-	require.Len(t, msgs, 1)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "new history prompt", msgs[0].Content)
-	assert.Equal(t, "new history prompt", sess.FirstMessage)
+// createAntigravityUndecodableDB writes a .db whose steps rows carry
+// payloads the heuristic decoder cannot turn into displayable messages.
+func createAntigravityUndecodableDB(t *testing.T, path string, rows int) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+	for i := range rows {
+		mustExec(t, db,
+			`INSERT INTO steps (idx, step_type, step_payload) `+
+				`VALUES (?, ?, ?)`,
+			i, 99, []byte{0xff, 0xff, 0xff})
+	}
+}
+
+func TestAntigravityCLIDBPartialSidecarNotPersistedAsCurrent(t *testing.T) {
+	root := t.TempDir()
+	id := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityUndecodableDB(t, dbPath, 3)
+	// Sidecar lags the DB (2 of 3 steps): best available transcript, but
+	// the row must stay retryable rather than persist as current.
+	writeAntigravityTestSidecar(t, root, id, 2)
+
+	_, msgs, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.True(t, status.NeedsRetry,
+		"partial sidecar with undecodable DB rows must leave the row stale")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+}
+
+func TestAntigravityCLIDBCoveringSidecarRescuesUndecodableRows(t *testing.T) {
+	root := t.TempDir()
+	id := "cccccccc-dddd-eeee-ffff-000000000000"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityUndecodableDB(t, dbPath, 3)
+	writeAntigravityTestSidecar(t, root, id, 3)
+
+	_, msgs, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry,
+		"covering sidecar is full-resolution data; no retry needed")
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
 }

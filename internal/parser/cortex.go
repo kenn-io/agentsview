@@ -434,7 +434,7 @@ func ParseCortexSession(
 		Agent:            AgentCortex,
 		Cwd:              meta.WorkingDirectory,
 		FirstMessage:     firstMessage,
-		DisplayName:      displayName,
+		SessionName:      displayName,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,
 		MessageCount:     len(msgs),

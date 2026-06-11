@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent              TEXT NOT NULL,
     first_message      TEXT,
     display_name       TEXT,
+    session_name       TEXT,
     created_at         TIMESTAMPTZ,
     started_at         TIMESTAMPTZ,
     ended_at           TIMESTAMPTZ,
@@ -536,6 +537,11 @@ func EnsureSchema(
 			`secrets_rules_version TEXT NOT NULL DEFAULT ''`,
 			"adding sessions.secrets_rules_version",
 		},
+		{
+			"sessions", "session_name",
+			`session_name TEXT`,
+			"adding sessions.session_name",
+		},
 	}
 	step = time.Now()
 	existingColumns, err := loadExistingColumns(ctx, db, alters)
@@ -705,12 +711,28 @@ func createContentSearchIndexesPG(ctx context.Context, db *sql.DB) {
 		log.Printf("pg schema: invalid pg_trgm schema %q: %v", extSchema, err)
 		return
 	}
+	// fastupdate=off keeps the index bounded: the default fastupdate=on
+	// buffers inserts into a pending list that only VACUUM merges, which grows
+	// unbounded when continuous ingest starves autovacuum.
 	if _, err := db.ExecContext(ctx, fmt.Sprintf(
 		`CREATE INDEX IF NOT EXISTS idx_messages_content_trgm
-		 ON messages USING gin (content %s.gin_trgm_ops)`, quotedExt,
+		 ON messages USING gin (content %s.gin_trgm_ops)
+		 WITH (fastupdate = off)`, quotedExt,
 	)); err != nil {
 		log.Printf(
 			"pg schema: creating messages.content trigram index failed: %v", err,
+		)
+		return
+	}
+	// CREATE INDEX IF NOT EXISTS only applies WITH (fastupdate = off) on
+	// first creation. Re-apply on every boot so stores upgraded from a
+	// prior schema (which left fastupdate=on) also get the bounded index.
+	if _, err := db.ExecContext(ctx,
+		`ALTER INDEX idx_messages_content_trgm SET (fastupdate = off)`,
+	); err != nil {
+		log.Printf(
+			"pg schema: disabling fastupdate on messages.content trigram index failed: %v",
+			err,
 		)
 	}
 }
@@ -1297,7 +1319,8 @@ func CheckSchemaCompat(
 ) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT id, created_at, deleted_at, updated_at,
-			termination_status, secret_leak_count, secrets_rules_version
+			termination_status, secret_leak_count, secrets_rules_version,
+			session_name
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

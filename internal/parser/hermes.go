@@ -758,7 +758,7 @@ func applyHermesStateMetadata(
 	}
 	sess.SourceSessionID = ss.id
 	sess.SourceVersion = "hermes-state-db"
-	sess.DisplayName = ss.title
+	sess.SessionName = ss.title
 
 	// Populate the session-aggregate token columns from Hermes's own
 	// authoritative state.db accounting. These feed the session list,

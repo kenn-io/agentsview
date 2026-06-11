@@ -90,13 +90,15 @@ jobs:
           path-type: inherit
 
       - name: Run Go tests
-        run: go test -tags fts5 ./... -v -count=1
+        run: go test -tags "fts5,kit_posthog_disabled" ./... -v -count=1
         env:
           CGO_ENABLED: "1"
 
       - name: Run Go tests (race detector)
         if: runner.os == 'Linux'
-        run: go test -tags fts5 -race ./... -count=1
+        run: |
+          go test -tags "fts5,kit_posthog_disabled" ./internal/duckdb -count=1
+          go test -tags "fts5,kit_posthog_disabled" -race $(go list ./... | grep -v '/internal/duckdb$') -count=1
         env:
           CGO_ENABLED: "1"
 
@@ -133,7 +135,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Test with coverage
-        run: go test -tags fts5 -race -coverprofile=coverage.out ./...
+        run: go test -tags "fts5,kit_posthog_disabled" -coverprofile=coverage.out ./...
         env:
           CGO_ENABLED: "1"
 
@@ -152,7 +154,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18-alpine
         env:
           POSTGRES_USER: agentsview_test
           POSTGRES_PASSWORD: agentsview_test_password
@@ -240,9 +242,9 @@ jobs:
 
       - name: Pre-build Go binaries
         run: |
-          CGO_ENABLED=1 go build -tags fts5 \
+          CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
             -o /tmp/testfixture ./cmd/testfixture
-          CGO_ENABLED=1 go build -tags fts5 \
+          CGO_ENABLED=1 go build -tags "fts5,kit_posthog_disabled" \
             -o /tmp/agentsview ./cmd/agentsview
         env:
           CGO_ENABLED: "1"

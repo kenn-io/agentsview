@@ -782,17 +782,25 @@ export class SessionsService {
    */
   public static postApiV1SessionsIdPublish({
     id,
+    secret,
   }: {
     /**
      * Session ID
      */
     id: string,
+    /**
+     * Create a secret gist instead of a public one
+     */
+    secret?: boolean,
   }): CancelablePromise<PublishResponse> {
     return __request(OpenAPI, {
       method: 'POST',
       url: '/api/v1/sessions/{id}/publish',
       path: {
         'id': id,
+      },
+      query: {
+        'secret': secret,
       },
       errors: {
         400: `Bad Request`,

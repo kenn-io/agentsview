@@ -102,6 +102,46 @@ docker run --rm -p 127.0.0.1:8080:8080 \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
+Example DuckDB mirror startup:
+
+```bash
+# Populate /data/sessions.duckdb from the mounted SQLite archive.
+docker run --rm \
+  -v agentsview-data:/data \
+  -v "$HOME/.claude/projects:/agents/claude:ro" \
+  -e CLAUDE_PROJECTS_DIR=/agents/claude \
+  ghcr.io/kenn-io/agentsview:latest duckdb push --full
+
+# Serve the populated mirror read-only.
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -v agentsview-data:/data \
+  ghcr.io/kenn-io/agentsview:latest duckdb serve
+```
+
+Example Quack startup:
+
+```bash
+# Expose the local DuckDB mirror over Quack from the host/container.
+QUACK_TOKEN="$(openssl rand -base64 32)"
+docker run --rm -p 127.0.0.1:9494:9494 \
+  -v agentsview-data:/data \
+  ghcr.io/kenn-io/agentsview:latest \
+  duckdb quack serve \
+    --bind quack:0.0.0.0:9494 \
+    --token "$QUACK_TOKEN" \
+    --allow-insecure
+
+# Serve the web UI from a remote Quack endpoint.
+docker run --rm -p 127.0.0.1:8080:8080 \
+  -e AGENTSVIEW_DUCKDB_URL='quack:https://duckdb.example.com' \
+  -e AGENTSVIEW_DUCKDB_TOKEN="$QUACK_TOKEN" \
+  ghcr.io/kenn-io/agentsview:latest duckdb serve
+```
+
+Keep Quack on loopback or behind TLS. Plain HTTP Quack on a non-loopback bind
+requires `--allow-insecure` and should only be used behind a trusted tunnel or
+reverse proxy.
+
 ## Token Usage and Cost Tracking
 
 `agentsview usage` is a fast, local replacement for ccusage and similar tools.
@@ -232,6 +272,7 @@ agentsview auto-discovers sessions from all of these:
 | Amp                | `~/.local/share/amp/threads/`                          |
 | iFlow              | `~/.iflow/projects/`                                   |
 | Zencoder           | `~/.zencoder/sessions/`                                |
+| Zed                | `~/Library/Application Support/Zed/` (macOS)           |
 | VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
 | Pi                 | `~/.pi/agent/sessions/`                                |
 | Qwen Code          | `~/.qwen/projects/`                                    |
@@ -255,8 +296,8 @@ Each directory can be overridden with an environment variable. See the
 
 ### Antigravity CLI: high-resolution transcripts
 
-Antigravity CLI sessions now appear in two on-disk formats. Newer releases
-store conversation trajectories as SQLite `.db` files, which agentsview indexes
+Antigravity CLI sessions now appear in two on-disk formats. Newer releases store
+conversation trajectories as SQLite `.db` files, which agentsview indexes
 directly. Older releases stored assistant turns and tool calls in
 AES-GCM-encrypted `.pb` files; for those sessions, agentsview falls back to
 **summary mode** using your prompts from `history.jsonl` plus any plain-text
@@ -299,10 +340,9 @@ agentsview pg serve      # serve web UI from PG (read-only)
 
 ### Automatic push (background service)
 
-To keep a shared PostgreSQL database current without running `pg push` by
-hand, run the auto-push daemon. It watches your session directories and
-pushes shortly after new sessions are recorded, with a periodic floor as a
-safety net:
+To keep a shared PostgreSQL database current without running `pg push` by hand,
+run the auto-push daemon. It watches your session directories and pushes shortly
+after new sessions are recorded, with a periodic floor as a safety net:
 
 ```bash
 agentsview pg push --watch                 # foreground, Ctrl-C to stop
@@ -310,16 +350,16 @@ agentsview pg push --watch --debounce 1m   # custom coalesce window
 agentsview pg push --watch --interval 5m   # custom floor interval
 ```
 
-The daemon reads the same `[pg]` config as `pg push`, so the PostgreSQL
-DSN must be set in your config file (or an environment variable it
-expands). Protect the config file, since it holds credentials:
+The daemon reads the same `[pg]` config as `pg push`, so the PostgreSQL DSN must
+be set in your config file (or an environment variable it expands). Protect the
+config file, since it holds credentials:
 
 ```bash
 chmod 600 ~/.agentsview/config.toml
 ```
 
-To run it unattended as an OS service (launchd on macOS,
-`systemd --user` on Linux):
+To run it unattended as an OS service (launchd on macOS, `systemd --user` on
+Linux):
 
 ```bash
 agentsview pg service install     # generate the unit, enable + start it
@@ -328,9 +368,9 @@ agentsview pg service logs -f     # follow the service log
 agentsview pg service uninstall   # stop and remove
 ```
 
-**Linux headless machines:** systemd `--user` services stop at logout and
-do not start at boot unless lingering is enabled for your user. `install`
-detects this and prints the command; you can also run it yourself:
+**Linux headless machines:** systemd `--user` services stop at logout and do not
+start at boot unless lingering is enabled for your user. `install` detects this
+and prints the command; you can also run it yourself:
 
 ```bash
 loginctl enable-linger "$USER"
@@ -339,11 +379,62 @@ loginctl enable-linger "$USER"
 See [PostgreSQL docs](https://agentsview.io/postgresql/) for setup and
 configuration.
 
+## DuckDB Mirror and Quack
+
+DuckDB support is a mirror backend, not a replacement for the local SQLite
+archive. `agentsview serve` still performs primary ingestion into SQLite. Use
+DuckDB when you want a portable analytics file, read-only local serving from a
+mirror, or remote read access through DuckDB's Quack protocol.
+
+```bash
+agentsview duckdb push          # mirror SQLite into DuckDB
+agentsview duckdb status        # show mirror sync status
+agentsview duckdb serve         # serve web UI from DuckDB (read-only)
+agentsview duckdb quack serve   # expose the local DuckDB file over Quack
+```
+
+`agentsview duckdb serve` reads `[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH`. To
+serve from a remote Quack endpoint, set `AGENTSVIEW_DUCKDB_URL` and
+`AGENTSVIEW_DUCKDB_TOKEN` instead. Quack is still a new DuckDB protocol, so
+agentsview keeps conservative defaults: local Quack serving binds to loopback,
+requires a token, and rejects non-loopback plain HTTP unless `--allow-insecure`
+is explicit. For remote use, prefer a TLS URL or put Quack behind an
+authenticated tunnel/proxy.
+
+Backend modes:
+
+- SQLite: primary local archive, file sync, FTS5 search, and writable UI.
+- PostgreSQL: optional shared team backend; push from SQLite, serve read-only.
+- DuckDB: optional mirror file or Quack endpoint; push from SQLite, serve
+  read-only.
+
+Troubleshooting:
+
+- If `duckdb push` fails to open the mirror, confirm the binary was built with
+  the DuckDB Go driver for your platform and that `AGENTSVIEW_DUCKDB_PATH`
+  points to a writable file location.
+- If Quack commands fail with extension errors, update the agentsview binary so
+  the embedded DuckDB runtime includes the Quack extension.
+- If a remote attach fails, check the token, the `quack:` URL, TLS/proxy
+  termination, and whether the server was intentionally started with
+  `--allow-insecure` for plain non-loopback binds.
+- DuckDB search currently uses substring/regex fallback behavior. SQLite FTS5
+  remains the indexed search path for primary local serving.
+
 ## Privacy
 
-No telemetry, no analytics, no accounts. All data stays on your machine. The
-server binds to `127.0.0.1` by default. The only outbound request is an optional
-update check on startup (disable with `--no-update-check`).
+agentsview sends a limited anonymous `daemon_active` telemetry ping to PostHog
+when the server starts and every 24 hours while it runs, using a stable random
+install ID as the event `DistinctId`. The event includes
+`application=agentsview`, app version, commit, OS, and CPU architecture, with
+`$process_person_profile=false` and `$geoip_disable=true`. It does not include
+session, project, prompt, file path, account, or machine identity. Disable
+telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0` or `TELEMETRY_ENABLED=0`.
+Telemetry is also hard-disabled in Go test binaries, regardless of environment.
+
+All session data stays on your machine. The server binds to `127.0.0.1` by
+default. The update check is optional and can be disabled with
+`--no-update-check`.
 
 ## Documentation
 
@@ -368,11 +459,20 @@ make install        # install to ~/.local/bin
 ```
 
 ```bash
-make test           # Go tests (CGO_ENABLED=1 -tags fts5)
+make test           # Go tests (CGO_ENABLED=1 -tags "fts5,kit_posthog_disabled")
+make bench-backends # compare SQLite, DuckDB, and PostgreSQL store reads
 make lint           # golangci-lint + NilAway
 make nilaway        # NilAway through custom golangci-lint
 make e2e            # Playwright E2E tests
 ```
+
+`make bench-backends` requires Docker. It starts a PostgreSQL container with
+testcontainers, mirrors the same SQLite fixture into DuckDB and PostgreSQL, and
+benchmarks the shared `db.Store` read queries for relative comparison. The
+default fixture is 1,000 sessions and 64,000 messages; use
+`BENCH_BACKENDS_SESSIONS` and `BENCH_BACKENDS_MESSAGES_PER_SESSION` to scale it.
+When the Docker CLI uses a non-default socket, export `DOCKER_HOST` for that
+socket before running the benchmark.
 
 Pre-commit hooks via [prek](https://github.com/j178/prek): run `make lint-tools`
 and `make install-hooks` after cloning (requires `prek` and `uv`).

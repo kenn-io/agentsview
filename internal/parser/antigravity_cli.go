@@ -191,31 +191,59 @@ func ParseAntigravityCLISessionWithStatus(
 	var messages []ParsedMessage
 	var hasTrajectory bool
 	if ext == ".db" {
-		if result, err := loadAntigravityCLIDBSteps(path); err == nil {
-			if hasDisplayableAntigravityCLITrajectoryMessage(result.messages) {
-				messages = mergeAntigravityDBHistoryMessages(
-					result.messages,
-					collectAntigravityHistoryMessages(
-						filepath.Join(root, "history.jsonl"), id,
-					),
-				)
-				hasTrajectory = true
-			} else if result.rawStepCount > 0 {
-				status.NeedsRetry = true
-			}
-		} else {
+		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
+		dbOK := dbErr == nil &&
+			hasDisplayableAntigravityCLITrajectoryMessage(dbResult.messages)
+
+		// Prefer the agy-reader trajectory sidecar: it is the daemon's own
+		// decode, with structured tool calls/results and thinking, where the
+		// heuristic DB decode only recovers loose strings. Selection is
+		// content-based, not mtime-based: the sidecar wins when it covers at
+		// least as many steps as the raw DB decode, so a sidecar lagging
+		// behind a live session loses until agy-reader catches up. Coverage
+		// is required whenever the DB loaded with raw rows -- even rows the
+		// heuristic cannot decode -- so a partial sidecar is never persisted
+		// as a current transcript.
+		sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
+		tMsgs, tSteps, tErr := parseAntigravityCLITrajectory(sidecarPath)
+		sidecarOK := tErr == nil &&
+			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs)
+		sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
+			tSteps >= dbResult.rawStepCount
+		switch {
+		case sidecarOK && sidecarCovers:
+			messages = tMsgs
+			hasTrajectory = true
+		case dbOK:
+			messages = mergeAntigravityDBHistoryMessages(
+				dbResult.messages,
+				collectAntigravityHistoryMessages(
+					filepath.Join(root, "history.jsonl"), id,
+				),
+			)
+			hasTrajectory = true
+		case sidecarOK:
+			// Partial sidecar and an undecodable DB: store the best
+			// available transcript but leave the row stale so the next
+			// pass re-parses once agy-reader catches up.
+			messages = tMsgs
+			hasTrajectory = true
+			status.NeedsRetry = true
+		case dbErr != nil || dbResult.rawStepCount > 0:
 			status.NeedsRetry = true
 		}
 	} else {
+		// Legacy .pb: the file itself is AES-encrypted, so the sidecar is
+		// the only high-fidelity decode and every fallback (history rows,
+		// brain docs, decrypt preview) is strictly lower fidelity. Use any
+		// sidecar that parses with displayable content -- no mtime gate;
+		// .pb files are no longer produced, so their sidecars are final,
+		// and even a sidecar older than the .pb beats the fallbacks.
 		sidecarPath := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
-		if sidecarInfo, err := os.Stat(sidecarPath); err == nil &&
-			!sidecarInfo.ModTime().Before(info.ModTime()) {
-			if tMsgs, err := parseAntigravityCLITrajectory(sidecarPath); err == nil {
-				if hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
-					messages = tMsgs
-					hasTrajectory = true
-				}
-			}
+		if tMsgs, _, err := parseAntigravityCLITrajectory(sidecarPath); err == nil &&
+			hasDisplayableAntigravityCLITrajectoryMessage(tMsgs) {
+			messages = tMsgs
+			hasTrajectory = true
 		}
 	}
 
@@ -247,6 +275,11 @@ func ParseAntigravityCLISessionWithStatus(
 		project = inferAntigravityProject(
 			filepath.Join(root, "history.jsonl"), id,
 		)
+		if project == "" {
+			project = inferAntigravityProjectFromHistoryFallback(
+				filepath.Join(root, "history.jsonl"), messages, info.ModTime(),
+			)
+		}
 	}
 
 	var firstMessage string
@@ -453,6 +486,94 @@ func inferAntigravityProject(path, id string) string {
 	return m[id]
 }
 
+func inferAntigravityProjectFromHistoryFallback(
+	historyPath string, messages []ParsedMessage, dbMtime time.Time,
+) string {
+	var sessionPrompt string
+	var sessionTime time.Time
+	for _, msg := range messages {
+		if msg.Role == RoleUser && msg.Content != "" {
+			sessionPrompt = msg.Content
+			sessionTime = msg.Timestamp
+			break
+		}
+	}
+
+	if sessionPrompt == "" {
+		return ""
+	}
+	if sessionTime.IsZero() {
+		sessionTime = dbMtime
+	}
+
+	normSession := strings.ToLower(strings.Join(strings.Fields(sessionPrompt), " "))
+	if len(normSession) < 3 {
+		return ""
+	}
+
+	f, err := os.Open(historyPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	var bestWorkspace string
+	var minDiff time.Duration
+	var found bool
+	var ambiguous bool
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		if gjson.GetBytes(line, "conversationId").Str != "" {
+			continue
+		}
+		display := gjson.GetBytes(line, "display").Str
+		workspace := gjson.GetBytes(line, "workspace").Str
+		tsMS := gjson.GetBytes(line, "timestamp").Int()
+
+		if display == "" || workspace == "" || tsMS == 0 {
+			continue
+		}
+
+		normRow := strings.ToLower(strings.Join(strings.Fields(display), " "))
+		if normRow != normSession {
+			continue
+		}
+
+		rowTime := time.UnixMilli(tsMS)
+		diff := rowTime.Sub(sessionTime)
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff > 60*time.Second {
+			continue
+		}
+
+		if !found {
+			bestWorkspace = workspace
+			minDiff = diff
+			found = true
+			ambiguous = false
+		} else if diff < minDiff {
+			bestWorkspace = workspace
+			minDiff = diff
+			ambiguous = false
+		} else if diff == minDiff && workspace != bestWorkspace {
+			ambiguous = true
+		}
+	}
+
+	if found && !ambiguous {
+		return bestWorkspace
+	}
+	return ""
+}
+
 // collectAntigravityHistoryMessages returns one user ParsedMessage
 // per history.jsonl row matching the conversationId.
 func collectAntigravityHistoryMessages(
@@ -600,9 +721,15 @@ func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasSuffix(path, ".db") {
+	if base, ok := strings.CutSuffix(path, ".db"); ok {
+		// The trajectory sidecar is a transcript source for .db sessions
+		// too, so an agy-reader sync must change the fingerprint even when
+		// the database files themselves are untouched.
 		return antigravityCLICombinedFileInfo(
-			info, path+"-wal", path+"-shm",
+			info,
+			path+"-wal",
+			path+"-shm",
+			base+".trajectory.json",
 		), nil
 	}
 	size := info.Size()
@@ -934,27 +1061,30 @@ func agyToolDetail(name, inputJSON string) string {
 // The read is size-capped (maxTrajectorySidecarBytes) and unknown step
 // types are silently skipped further down. No content from the sidecar
 // is executed or echoed back over any outbound channel.
+// parseAntigravityCLITrajectory parses an agy-reader trajectory sidecar.
+// The int is the raw step count of the trajectory, used by callers to
+// compare coverage against other decode sources for the same session.
 func parseAntigravityCLITrajectory(
 	trajectoryPath string,
-) ([]ParsedMessage, error) {
+) ([]ParsedMessage, int, error) {
 	f, err := os.Open(trajectoryPath)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxTrajectorySidecarBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if int64(len(data)) > maxTrajectorySidecarBytes {
-		return nil, fmt.Errorf(
+		return nil, 0, fmt.Errorf(
 			"trajectory sidecar %s exceeds %d-byte cap",
 			trajectoryPath, maxTrajectorySidecarBytes,
 		)
 	}
 	var traj agyTrajectory
 	if err := json.Unmarshal(data, &traj); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var msgs []ParsedMessage
@@ -1150,5 +1280,5 @@ func parseAntigravityCLITrajectory(
 	}
 
 	flushPendingResults()
-	return msgs, nil
+	return msgs, len(traj.Steps), nil
 }

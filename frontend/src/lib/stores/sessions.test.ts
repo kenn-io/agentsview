@@ -1475,6 +1475,43 @@ describe("SessionsStore", () => {
     });
   });
 
+  describe("renameSession", () => {
+    it("clears display_name in store when rename is cleared and response omits the field", async () => {
+      // Session starts with a custom user rename.
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "s1", display_name: "custom-name" }),
+      ]);
+      await sessions.load();
+      expect(sessions.sessions[0]!.display_name).toBe("custom-name");
+
+      // Backend clears the name but finds no agent name to restore, so
+      // display_name is absent from the JSON response (omitempty on nil).
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "s1" }),
+      );
+
+      await sessions.renameSession("s1", null);
+
+      expect(sessions.sessions[0]!.display_name).toBeNull();
+    });
+
+    it("keeps agent name restored by backend when rename is cleared", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "s1", display_name: "custom-name" }),
+      ]);
+      await sessions.load();
+
+      // Backend re-parsed the file and restored the agent name.
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "s1", display_name: "agent-name" }),
+      );
+
+      await sessions.renameSession("s1", null);
+
+      expect(sessions.sessions[0]!.display_name).toBe("agent-name");
+    });
+  });
+
   describe("loadProjects dedup", () => {
     beforeEach(() => {
       mockGetProjects();

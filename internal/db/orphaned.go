@@ -367,40 +367,44 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Copy display_name and deleted_at from the quiesced old DB.
-	// These columns may be NULL (user cleared a rename or
-	// restored a trashed session), so we copy the value as-is
-	// rather than using COALESCE — a NULL in old_db is an
-	// intentional clear that must be preserved.
-	// Probe columns first so older source DBs that lack these
-	// columns don't abort the migration.
+	// Copy user-managed metadata from the quiesced old DB. deleted_at
+	// is copied for all rows. display_name is overlaid ONLY for
+	// user-owned rows: the fresh DB already holds re-parsed session_name
+	// values, so agent-owned and cleared rows must keep the fresh value.
+	// Probe columns first so older source DBs don't abort.
 	hasDisplayName := oldDBHasColumn(ctx, tx, "sessions", "display_name")
 	hasDeletedAt := oldDBHasColumn(ctx, tx, "sessions", "deleted_at")
 
-	if hasDisplayName && hasDeletedAt {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE main.sessions
-			SET display_name = old_s.display_name,
-			    deleted_at   = old_s.deleted_at
-			FROM old_db.sessions old_s
-			WHERE main.sessions.id = old_s.id`); err != nil {
-			return fmt.Errorf("copying session metadata: %w", err)
-		}
-	} else if hasDisplayName {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE main.sessions
-			SET display_name = old_s.display_name
-			FROM old_db.sessions old_s
-			WHERE main.sessions.id = old_s.id`); err != nil {
-			return fmt.Errorf("copying display_name: %w", err)
-		}
-	} else if hasDeletedAt {
+	if hasDeletedAt {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE main.sessions
 			SET deleted_at = old_s.deleted_at
 			FROM old_db.sessions old_s
 			WHERE main.sessions.id = old_s.id`); err != nil {
 			return fmt.Errorf("copying deleted_at: %w", err)
+		}
+	}
+
+	// Copy user-set display_name (renames via RenameSession) from the old DB.
+	// In the two-field design display_name is always user-owned, so any
+	// non-NULL value is a user rename worth preserving.
+	// session_name is repopulated by re-parse and does not need copying.
+	//
+	// Note: the name_source discriminator column (which would have distinguished
+	// user renames from parser-owned titles) was introduced and removed in the
+	// same PR as the two-field split and was never present in any released build.
+	// Any non-NULL display_name in an upgrading database therefore came from
+	// RenameSession (user action) or a pre-feature import — the latter being
+	// acceptable to treat as a user rename since there is no lossless heuristic
+	// to separate them without name_source.
+	if hasDisplayName {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE main.sessions
+			SET display_name = old_s.display_name
+			FROM old_db.sessions old_s
+			WHERE main.sessions.id = old_s.id
+			  AND old_s.display_name IS NOT NULL`); err != nil {
+			return fmt.Errorf("copying user display_name: %w", err)
 		}
 	}
 
@@ -499,6 +503,10 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 	if oldDBHasColumn(ctx, tx, "sessions", "display_name") {
 		cols = append(cols, "display_name")
 	}
+	if oldDBHasColumn(ctx, tx, "sessions", "session_name") {
+		cols = append(cols, "session_name")
+	}
+	// name_source was removed from the schema; do not copy it.
 	cols = append(cols,
 		"started_at", "ended_at", "message_count",
 		"user_message_count", "file_path", "file_size",

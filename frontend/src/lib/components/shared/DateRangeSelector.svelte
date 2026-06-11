@@ -9,11 +9,18 @@
   interface Props {
     from: string;
     to: string;
+    busy?: boolean;
     onChange: (from: string, to: string) => void;
     onPreset?: (days: number) => void;
   }
 
-  let { from, to, onChange, onPreset }: Props = $props();
+  let {
+    from,
+    to,
+    busy = false,
+    onChange,
+    onPreset,
+  }: Props = $props();
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
@@ -41,7 +48,7 @@
   }
 </script>
 
-<div class="date-range-picker">
+<div class="date-range-picker" class:busy aria-busy={busy}>
   <div class="presets">
     {#each DATE_RANGE_PRESETS as preset}
       <button
@@ -74,6 +81,13 @@
       onchange={handleToChange}
     />
   </div>
+
+  {#if busy}
+    <span class="range-busy" aria-live="polite">
+      <span class="range-spinner" aria-hidden="true"></span>
+      Updating
+    </span>
+  {/if}
 </div>
 
 <style>
@@ -81,6 +95,14 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+
+  .date-range-picker.busy .preset-btn.active {
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 72%,
+      var(--bg-surface)
+    );
   }
 
   .presets {
@@ -134,5 +156,34 @@
   .date-sep {
     color: var(--text-muted);
     font-size: 11px;
+  }
+
+  .range-busy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--accent-blue);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .range-spinner {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    border: 2px solid color-mix(
+      in srgb,
+      var(--accent-blue) 28%,
+      transparent
+    );
+    border-top-color: var(--accent-blue);
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

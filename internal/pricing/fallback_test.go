@@ -77,6 +77,30 @@ func TestFallbackPricing_Opus48Rates(t *testing.T) {
 	assert.Equal(t, want, *got)
 }
 
+func TestFallbackPricing_Fable5Rates(t *testing.T) {
+	prices := FallbackPricing()
+	var got *ModelPricing
+	for i := range prices {
+		if prices[i].ModelPattern == "claude-fable-5" {
+			got = &prices[i]
+			break
+		}
+	}
+	require.NotNil(t, got, "claude-fable-5 entry missing from FallbackPricing")
+
+	// Source: https://platform.claude.com/docs/en/about-claude/pricing
+	// Fable 5 launched at double the Opus 4.8 rates and is not yet in
+	// the LiteLLM catalog, so the shipped fallback must price it.
+	want := ModelPricing{
+		ModelPattern:         "claude-fable-5",
+		InputPerMTok:         10.0,
+		OutputPerMTok:        50.0,
+		CacheCreationPerMTok: 12.50,
+		CacheReadPerMTok:     1.0,
+	}
+	assert.Equal(t, want, *got)
+}
+
 func TestFallbackPricing_HermesModels(t *testing.T) {
 	byPattern := make(map[string]ModelPricing)
 	for _, p := range FallbackPricing() {

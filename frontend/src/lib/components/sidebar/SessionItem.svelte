@@ -101,11 +101,9 @@
    * repetitive "You are a teammate on..." boilerplate.
    */
   let displayLabel = $derived.by((): { text: string; isShell: boolean } => {
-    if (session.display_name) {
-      return {
-        text: truncate(session.display_name, 50),
-        isShell: false,
-      };
+    const name = session.display_name ?? null;
+    if (name) {
+      return { text: truncate(name, 50), isShell: false };
     }
     let msg = session.first_message ?? "";
     if (msg.includes("<teammate-message")) {
@@ -186,7 +184,8 @@
   function startRename() {
     renameValue =
       session.display_name
-      ?? normalizeMessagePreview(session.first_message);
+      ?? normalizeMessagePreview(session.first_message)
+      ?? "";
     renaming = true;
     closeContextMenu();
     requestAnimationFrame(() => renameInput?.select());

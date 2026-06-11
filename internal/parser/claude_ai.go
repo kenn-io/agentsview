@@ -162,7 +162,7 @@ func convertClaudeAIConversation(
 			Machine:          "local",
 			Agent:            AgentClaudeAI,
 			FirstMessage:     firstUserMessage,
-			DisplayName:      conv.Name,
+			SessionName:      conv.Name,
 			StartedAt:        startedAt,
 			EndedAt:          endedAt,
 			MessageCount:     len(conv.Messages),

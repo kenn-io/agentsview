@@ -158,12 +158,15 @@
     <DateRangeSelector
       from={analytics.from}
       to={analytics.to}
+      busy={analytics.isQuerying}
       onChange={(from, to) => analytics.setDateRange(from, to)}
       onPreset={(days) => analytics.setRollingWindow(days)}
     />
     <button
       class="refresh-btn"
+      class:querying={analytics.isQuerying}
       onclick={() => analytics.fetchAll()}
+      disabled={analytics.isQuerying}
       title="Refresh analytics"
       aria-label="Refresh analytics"
     >
@@ -176,7 +179,15 @@
 
   <ActiveFilters />
 
-  <div class="analytics-content">
+  <div
+    class="analytics-content"
+    class:querying={analytics.isQuerying}
+    aria-busy={analytics.isQuerying}
+  >
+    {#if analytics.isQuerying}
+      <div class="query-progress" aria-hidden="true"></div>
+    {/if}
+
     <SummaryCards />
 
     <div class="chart-grid">
@@ -260,11 +271,21 @@
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
+    transition: background 0.1s, color 0.1s, opacity 0.1s;
   }
 
-  .refresh-btn:hover {
+  .refresh-btn:hover:not(:disabled) {
     background: var(--bg-surface-hover);
     color: var(--text-primary);
+  }
+
+  .refresh-btn:disabled {
+    cursor: default;
+    opacity: 0.75;
+  }
+
+  .refresh-btn.querying :global(svg) {
+    animation: spin 0.8s linear infinite;
   }
 
   .export-btn {
@@ -291,6 +312,36 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+    position: relative;
+    transition: opacity 0.12s;
+  }
+
+  .analytics-content.querying {
+    opacity: 0.88;
+  }
+
+  .query-progress {
+    position: sticky;
+    top: 0;
+    z-index: 4;
+    height: 2px;
+    margin: -16px -16px 14px;
+    overflow: hidden;
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 16%,
+      transparent
+    );
+  }
+
+  .query-progress::before {
+    content: "";
+    display: block;
+    width: 38%;
+    height: 100%;
+    background: var(--accent-blue);
+    border-radius: 999px;
+    animation: query-progress 1s ease-in-out infinite;
   }
 
   .chart-grid {
@@ -344,6 +395,21 @@
   @media (max-width: 800px) {
     .chart-grid {
       grid-template-columns: 1fr;
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  @keyframes query-progress {
+    0% {
+      transform: translateX(-105%);
+    }
+    100% {
+      transform: translateX(265%);
     }
   }
 </style>

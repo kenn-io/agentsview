@@ -2,7 +2,7 @@ package pricing
 
 // FallbackVersion must be bumped whenever FallbackPricing
 // rates change so the startup seeder knows to re-upsert.
-const FallbackVersion = "2026-05-30"
+const FallbackVersion = "2026-06-10"
 
 // FallbackPricing returns hardcoded pricing for key Claude
 // models. Used when the LiteLLM fetch fails.
@@ -40,6 +40,16 @@ func FallbackPricing() []ModelPricing {
 			OutputPerMTok:        25.0,
 			CacheCreationPerMTok: 6.25,
 			CacheReadPerMTok:     0.50,
+		},
+		{
+			// Fable 5 launched at double the Opus 4.8 rates and is
+			// not yet in the LiteLLM catalog, so it ships here so
+			// usage is priced until LiteLLM adds it.
+			ModelPattern:         "claude-fable-5",
+			InputPerMTok:         10.0,
+			OutputPerMTok:        50.0,
+			CacheCreationPerMTok: 12.50,
+			CacheReadPerMTok:     1.0,
 		},
 		{
 			ModelPattern:         "claude-haiku-4-5-20251001",

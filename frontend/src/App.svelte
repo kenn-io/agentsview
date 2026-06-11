@@ -349,7 +349,9 @@
     sync.checkForUpdate();
     sync.startPolling();
 
-    const healthCleanup = setupVisibilityHealthCheck(getBase);
+    const healthCleanup = setupVisibilityHealthCheck(getBase, {
+      onBackendDegraded: () => sync.markBackendDegraded(),
+    });
 
     window.addEventListener("show-about", showAbout);
     const cleanup = registerShortcuts({ navigateMessage });

@@ -19,7 +19,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -216,11 +216,21 @@ desktop-app: desktop-macos-app
 
 # Run tests
 test: ensure-embed-dir
-	go test -tags fts5 ./... -v -count=1
+	go test -tags "fts5,kit_posthog_disabled" ./... -v -count=1
 
 # Run fast tests only
 test-short: ensure-embed-dir
-	go test -tags fts5 ./... -short -count=1
+	go test -tags "fts5,kit_posthog_disabled" ./... -short -count=1
+
+# Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
+# Requires Docker because the PostgreSQL backend is started with testcontainers.
+BENCH_BACKENDS_FLAGS ?= -bench . -run '^$$' -benchmem
+BENCH_BACKENDS_SESSIONS ?= 1000
+BENCH_BACKENDS_MESSAGES_PER_SESSION ?= 64
+bench-backends: ensure-embed-dir
+	AGENTSVIEW_BENCH_SESSIONS=$(BENCH_BACKENDS_SESSIONS) \
+		AGENTSVIEW_BENCH_MESSAGES_PER_SESSION=$(BENCH_BACKENDS_MESSAGES_PER_SESSION) \
+		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
 
 # Start test PostgreSQL container
 postgres-up:
@@ -235,11 +245,11 @@ test-postgres: ensure-embed-dir postgres-up
 	@echo "Waiting for postgres to be ready..."
 	@sleep 2
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
-		CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -count=1
+		CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,pgtest" -v ./internal/postgres/... -count=1
 
 # PostgreSQL integration tests for CI (postgres already running as service)
 test-postgres-ci: ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... -count=1
+	CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,pgtest" -v ./internal/postgres/... -count=1
 
 # Start test SSH container
 ssh-up:
@@ -255,15 +265,20 @@ ssh-down:
 test-ssh: ensure-embed-dir ssh-up
 	TEST_SSH_HOST=localhost TEST_SSH_PORT=2222 TEST_SSH_USER=testuser \
 		TEST_SSH_KEY=$(CURDIR)/testdata/ssh/test_key \
-		CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
+		CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,sshtest" -v ./internal/ssh/... -count=1
 
 # SSH integration tests for CI (sshd already running)
 test-ssh-ci: ensure-embed-dir
-	CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
+	CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,sshtest" -v ./internal/ssh/... -count=1
 
 # Run Playwright E2E tests
 e2e:
 	cd frontend && npx playwright test
+
+# Run focused Playwright smoke tests against duckdb serve.
+e2e-duckdb:
+	cd frontend && AGENTSVIEW_E2E_BACKEND=duckdb npx playwright test \
+		e2e/duckdb-backend.spec.ts e2e/session-list.spec.ts --project=chromium
 
 # Vet
 vet: ensure-embed-dir
@@ -387,6 +402,7 @@ help:
 	@echo ""
 	@echo "  test           - Run all tests"
 	@echo "  test-short     - Run fast tests only"
+	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
 	@echo "  postgres-up    - Start test PostgreSQL container"
 	@echo "  postgres-down  - Stop test PostgreSQL container"
@@ -394,6 +410,7 @@ help:
 	@echo "  ssh-up         - Start test SSH container"
 	@echo "  ssh-down       - Stop test SSH container"
 	@echo "  e2e            - Run Playwright E2E tests"
+	@echo "  e2e-duckdb     - Run DuckDB-backed Playwright smoke tests"
 	@echo "  vet            - Run go vet"
 	@echo "  lint           - Run golangci-lint and NilAway (auto-fix golangci issues)"
 	@echo "  lint-ci        - Run golangci-lint and NilAway (no fix, for CI)"

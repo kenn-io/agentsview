@@ -213,7 +213,7 @@ SELECT
 	s.user_message_count,
 	COALESCE(s.is_automated, 0) AS is_automated,
 	COALESCE(s.ended_at, s.started_at, s.created_at) AS session_activity_at,
-	COALESCE(NULLIF(s.display_name, ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
+	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
 	COALESCE(s.started_at, '') AS started_at
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
@@ -248,7 +248,7 @@ SELECT
 	s.user_message_count,
 	COALESCE(s.is_automated, 0) AS is_automated,
 	COALESCE(s.ended_at, s.started_at, s.created_at) AS session_activity_at,
-	COALESCE(NULLIF(s.display_name, ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
+	COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
 	COALESCE(s.started_at, '') AS started_at
 FROM usage_events ue
 JOIN sessions s ON s.id = ue.session_id
@@ -789,7 +789,7 @@ func (db *DB) loadTopSessionMetadata(
 	query := `
 SELECT
 	id,
-	COALESCE(NULLIF(display_name, ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
+	COALESCE(NULLIF(COALESCE(display_name, session_name), ''), NULLIF(first_message, ''), NULLIF(project, ''), id) AS display_name,
 	agent,
 	project,
 	COALESCE(started_at, '') AS started_at

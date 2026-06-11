@@ -146,26 +146,26 @@ func (db *DB) Search(
 	// Position 0 (? AS best_query in the ROW_NUMBER SELECT) is
 	// prepended after this block — see args2 below.
 	//
-	//  pos | SQL clause                              | value
-	//  ----+-----------------------------------------+------------
-	//   0  | SELECT ? AS best_query (ROW_NUMBER)     | plainQuery  ← prepended in args2
-	//   1  | WHERE messages_fts MATCH ? (ROW_NUMBER) | ftsArgs[0] (f.Query)
-	//  [1+]| AND s2.project = ? (if project set)     | ftsArgs[1] (f.Project)
-	//   2  | WHERE messages_fts MATCH ? (outer JOIN) | f.Query
-	//   3  | WHEN s.display_name LIKE ? (CASE)       | likePattern
-	//   4  | WHEN s.first_message LIKE ? (CASE)      | likePattern
-	//   5  | WHERE s.display_name LIKE ? (name WHERE)| likePattern
-	//   6  | WHERE s.first_message LIKE ? (name WHERE)| likePattern
-	//  [7] | AND s.project = ? (name branch, optional)| f.Project
-	//   8  | WHERE messages_fts MATCH ? (NOT IN)     | ftsArgs[0]
-	//  [8+]| AND s2.project = ? (NOT IN, if set)     | ftsArgs[1]
-	//   9  | LIMIT ? OFFSET ?                        | f.Limit+1, f.Cursor
+	//  pos | SQL clause                                  | value
+	//  ----+---------------------------------------------+------------
+	//   0  | SELECT ? AS best_query (ROW_NUMBER)         | plainQuery  ← prepended in args2
+	//   1  | WHERE messages_fts MATCH ? (ROW_NUMBER)     | ftsArgs[0] (f.Query)
+	//  [1+]| AND s2.project = ? (if project set)         | ftsArgs[1] (f.Project)
+	//   2  | WHERE messages_fts MATCH ? (outer JOIN)     | f.Query
+	//   3  | WHEN COALESCE(display_name,session_name) LIKE ? (CASE) | likePattern
+	//   4  | WHEN s.first_message LIKE ? (CASE)          | likePattern
+	//   5  | WHERE COALESCE(display_name,session_name) LIKE ? (name WHERE) | likePattern
+	//   6  | WHERE s.first_message LIKE ? (name WHERE)   | likePattern
+	//  [7] | AND s.project = ? (name branch, optional)   | f.Project
+	//   8  | WHERE messages_fts MATCH ? (NOT IN)         | ftsArgs[0]
+	//  [8+]| AND s2.project = ? (NOT IN, if set)         | ftsArgs[1]
+	//   9  | LIMIT ? OFFSET ?                            | f.Limit+1, f.Cursor
 	args := make([]any, 0, len(ftsArgs)*2+6+len(nameProjectArgs))
 	args = append(args, ftsArgs...)          // (1) ROW_NUMBER WHERE
 	args = append(args, f.Query)             // (2) outer MATCH re-filter
-	args = append(args, likePattern)         // (3) CASE display_name LIKE
+	args = append(args, likePattern)         // (3) CASE COALESCE(display_name,session_name) LIKE
 	args = append(args, likePattern)         // (4) CASE first_message LIKE
-	args = append(args, likePattern)         // (5) name WHERE display_name LIKE
+	args = append(args, likePattern)         // (5) name WHERE COALESCE(display_name,session_name) LIKE
 	args = append(args, likePattern)         // (6) name WHERE first_message LIKE
 	args = append(args, nameProjectArgs...)  // (7) optional name branch project
 	args = append(args, ftsArgs...)          // (8) NOT IN WHERE
@@ -177,7 +177,7 @@ func (db *DB) Search(
 		FROM (
 			-- FTS branch: message content matches
 			SELECT m.session_id, s.project, s.agent,
-				COALESCE(s.display_name, s.first_message, '') AS name,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
 				best.best_ordinal AS ordinal,
 				snippet(messages_fts, 0, '<mark>', '</mark>',
@@ -212,22 +212,22 @@ func (db *DB) Search(
 
 			UNION ALL
 
-			-- Name branch: display_name / first_message matches not in FTS branch
+			-- Name branch: display_name / session_name / first_message matches not in FTS branch
 			SELECT s.id, s.project, s.agent,
-				COALESCE(s.display_name, s.first_message, '') AS name,
+				COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 				COALESCE(s.ended_at, s.started_at, '') AS session_ended_at,
 				-1 AS ordinal,
 				CASE
-					WHEN s.display_name LIKE ? ESCAPE '\'
-						THEN COALESCE(s.display_name, '')
+					WHEN COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
+						THEN COALESCE(s.display_name, s.session_name, '')
 					WHEN s.first_message LIKE ? ESCAPE '\'
 						THEN COALESCE(s.first_message, '')
-					ELSE COALESCE(s.display_name, s.first_message, '')
+					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '')
 				END AS snippet,
 				0.0 AS rank,
 				0 AS match_pos
 			FROM sessions s
-			WHERE (s.display_name LIKE ? ESCAPE '\'
+			WHERE (COALESCE(s.display_name, s.session_name) LIKE ? ESCAPE '\'
 				OR s.first_message LIKE ? ESCAPE '\')
 				AND s.deleted_at IS NULL
 				AND EXISTS (

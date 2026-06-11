@@ -143,7 +143,7 @@ func TestParseHermesArchive_StateDBMetadataUsageAndTranscriptChoice(
 	assert.Equal(t, "hermes:child", res.Session.ID)
 	assert.Equal(t, "hermes:parent", res.Session.ParentSessionID)
 	assert.Equal(t, RelContinuation, res.Session.RelationshipType)
-	assert.Equal(t, "Child Session", res.Session.DisplayName)
+	assert.Equal(t, "Child Session", res.Session.SessionName)
 	assert.Equal(t, "hermes-discord", res.Session.Project)
 	assert.Equal(t, "child", res.Session.SourceSessionID)
 	assert.Equal(t, "hermes-state-db", res.Session.SourceVersion)

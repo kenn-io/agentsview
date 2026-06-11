@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settings } from "../../stores/settings.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, isRemoteConnection } from "../../api/runtime.js";
   import AppearanceSettings from "./AppearanceSettings.svelte";
@@ -95,12 +96,20 @@
       <div class="settings-actions">
         <button
           class="resync-btn"
-          onclick={() => (ui.activeModal = "resync")}
+          onclick={() => {
+            if (!sync.readOnly) ui.activeModal = "resync";
+          }}
+          disabled={sync.readOnly}
+          title={sync.readOnly
+            ? "Full resync unavailable in read-only mode"
+            : "Full resync"}
         >
           Full Resync
         </button>
         <span class="settings-actions-hint">
-          Re-scan all session files from scratch
+          {sync.readOnly
+            ? "Unavailable while connected to a read-only backend"
+            : "Re-scan all session files from scratch"}
         </span>
       </div>
     </div>
@@ -173,8 +182,13 @@
     transition: opacity 0.12s;
   }
 
-  .resync-btn:hover {
+  .resync-btn:hover:not(:disabled) {
     opacity: 0.8;
+  }
+
+  .resync-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
   }
 
   .settings-actions-hint {
