@@ -164,6 +164,8 @@ class UIStore {
   );
   sidebarWidth: number = $state(readStoredSidebarWidth());
   activeModal: ModalType = $state(null);
+  /** Whether the next gist publish should be secret instead of public. */
+  publishSecret: boolean = $state(false);
   selectedOrdinal: number | null = $state(null);
   pendingScrollOrdinal: number | null = $state(null);
   pendingScrollSession: string | null = $state(null);

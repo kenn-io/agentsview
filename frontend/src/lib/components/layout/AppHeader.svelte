@@ -8,11 +8,13 @@
     DownloadIcon,
     EllipsisIcon,
     FunnelIcon,
+    GlobeIcon,
     Grid2x2Icon,
     LayoutGridIcon,
     LayoutListIcon,
     LinkIcon,
     ListCollapseIcon,
+    LockIcon,
     LogsIcon,
     MenuIcon,
     MoonIcon,
@@ -46,6 +48,7 @@
   let showImportModal = $state(false);
   let showBlockFilter = $state(false);
   let showExportMenu = $state(false);
+  let showPublishMenu = $state(false);
   let showOverflow = $state(false);
   let copiedMarkdownLink = $state(false);
   let copiedMarkdownLinkTimer:
@@ -59,6 +62,10 @@
   let exportBtnRef: HTMLButtonElement | undefined =
     $state(undefined);
   let exportDropRef: HTMLDivElement | undefined =
+    $state(undefined);
+  let publishBtnRef: HTMLButtonElement | undefined =
+    $state(undefined);
+  let publishDropRef: HTMLDivElement | undefined =
     $state(undefined);
   let overflowBtnRef: HTMLButtonElement | undefined =
     $state(undefined);
@@ -112,6 +119,13 @@
     showOverflow = false;
   }
 
+  function openPublish(secret: boolean) {
+    ui.publishSecret = secret;
+    ui.activeModal = "publish";
+    showPublishMenu = false;
+    showOverflow = false;
+  }
+
   const hasActiveSession = $derived(
     sessions.activeSessionId !== null,
   );
@@ -148,6 +162,27 @@
       )
         return;
       showExportMenu = false;
+    }
+    document.addEventListener("click", onClickOutside, true);
+    return () =>
+      document.removeEventListener(
+        "click",
+        onClickOutside,
+        true,
+      );
+  });
+
+  // Close publish menu on outside click
+  $effect(() => {
+    if (!showPublishMenu) return;
+    function onClickOutside(e: MouseEvent) {
+      const target = e.target as Node;
+      if (
+        publishBtnRef?.contains(target) ||
+        publishDropRef?.contains(target)
+      )
+        return;
+      showPublishMenu = false;
     }
     document.addEventListener("click", onClickOutside, true);
     return () =>
@@ -485,15 +520,42 @@
         {/if}
       </div>
 
-      <button
-        class="header-btn collapsible"
-        onclick={() => (ui.activeModal = "publish")}
-        disabled={!sessions.activeSessionId}
-        title="Publish to Gist (p)"
-        aria-label="Publish to Gist"
-      >
-        <UploadIcon size="14" strokeWidth="2" aria-hidden="true" />
-      </button>
+      <div class="export-wrap collapsible">
+        <button
+          class="header-btn"
+          bind:this={publishBtnRef}
+          onclick={() => {
+            showPublishMenu = !showPublishMenu;
+            showExportMenu = false;
+            showOverflow = false;
+          }}
+          disabled={!sessions.activeSessionId}
+          title="Publish to Gist (p)"
+          aria-label="Publish to Gist"
+          aria-expanded={showPublishMenu}
+        >
+          <UploadIcon size="14" strokeWidth="2" aria-hidden="true" />
+        </button>
+
+        {#if showPublishMenu}
+          <div class="export-dropdown" bind:this={publishDropRef}>
+            <button
+              class="overflow-item"
+              onclick={() => openPublish(false)}
+            >
+              <GlobeIcon size="13" strokeWidth="2" aria-hidden="true" />
+              <span>Publish public Gist</span>
+            </button>
+            <button
+              class="overflow-item"
+              onclick={() => openPublish(true)}
+            >
+              <LockIcon size="13" strokeWidth="2" aria-hidden="true" />
+              <span>Publish secret Gist</span>
+            </button>
+          </div>
+        {/if}
+      </div>
 
       <!-- Overflow menu (visible only at narrow widths) -->
       <div class="overflow-wrap">
@@ -542,10 +604,17 @@
             </button>
             <button
               class="overflow-item"
-              onclick={() => { ui.activeModal = "publish"; showOverflow = false; }}
+              onclick={() => openPublish(false)}
             >
               <UploadIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>Publish to Gist</span>
+              <span>Publish public Gist</span>
+            </button>
+            <button
+              class="overflow-item"
+              onclick={() => openPublish(true)}
+            >
+              <LockIcon size="13" strokeWidth="2" aria-hidden="true" />
+              <span>Publish secret Gist</span>
             </button>
           </div>
         {/if}

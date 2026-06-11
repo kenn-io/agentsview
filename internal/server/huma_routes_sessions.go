@@ -382,6 +382,11 @@ type openSessionResponse struct {
 	Path     string `json:"path"`
 }
 
+type publishSessionInput struct {
+	ID     string `path:"id" required:"true" doc:"Session ID"`
+	Secret bool   `query:"secret" doc:"Create a secret gist instead of a public one"`
+}
+
 type publishResponse struct {
 	GistID  string `json:"gist_id"`
 	GistURL string `json:"gist_url"`
@@ -469,7 +474,7 @@ func (s *Server) humaOpenSession(
 
 func (s *Server) humaPublishSession(
 	ctx context.Context,
-	in *idPathInput,
+	in *publishSessionInput,
 ) (*jsonOutput[publishResponse], error) {
 	token := s.githubToken()
 	if token == "" {
@@ -486,7 +491,7 @@ func (s *Server) humaPublishSession(
 		first = truncateStr(*session.FirstMessage, 100)
 	}
 	description := fmt.Sprintf("Agent session: %s - %s", session.Project, first)
-	gist, err := createGist(ctx, token, filename, description, htmlContent)
+	gist, err := createGist(ctx, token, filename, description, htmlContent, !in.Secret)
 	if err != nil {
 		return nil, apiError(http.StatusBadGateway, err.Error())
 	}

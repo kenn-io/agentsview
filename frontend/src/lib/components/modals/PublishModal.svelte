@@ -61,6 +61,7 @@
       result =
         await SessionsService.postApiV1SessionsIdPublish({
           id,
+          secret: ui.publishSecret,
         }) as unknown as PublishResponse;
       view = "success";
     } catch (err) {
@@ -97,7 +98,9 @@
 >
   <div class="modal-panel publish-panel">
     <div class="modal-header">
-      <h3 class="modal-title">Publish to GitHub Gist</h3>
+      <h3 class="modal-title">
+        Publish to {ui.publishSecret ? "secret" : "public"} GitHub Gist
+      </h3>
       <button
         class="modal-close"
         onclick={() => ui.activeModal = null}
@@ -144,7 +147,9 @@
       {:else if view === "progress"}
         <div class="progress-view">
           <div class="modal-spinner"></div>
-          <p>Creating GitHub Gist...</p>
+          <p>
+            Creating {ui.publishSecret ? "secret" : "public"} GitHub Gist...
+          </p>
         </div>
 
       {:else if view === "success" && result}
