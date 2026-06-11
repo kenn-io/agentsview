@@ -456,6 +456,13 @@ func (e *Engine) classifyOnePath(
 	if df, ok := e.classifyZedSQLitePath(path); ok {
 		return df, true
 	}
+	// Antigravity sidecar events classify before the existence
+	// check: a deleted brain artifact or annotation must still
+	// reparse its session, and only the mapped source file needs
+	// to exist for that.
+	if df, ok := e.classifyAntigravitySidecarPath(path); ok {
+		return df, true
+	}
 	if !pathExists {
 		return parser.DiscoveredFile{}, false
 	}
@@ -1039,9 +1046,9 @@ func (e *Engine) classifyOnePath(
 	}
 
 	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm).
-	// annotations/<uuid>.pbtxt and brain/<uuid>/* sidecars map to the
-	// conversation .db: both feed the parse and its composite
-	// fingerprint, so their updates must trigger a session resync.
+	// annotations/<uuid>.pbtxt and brain/<uuid>/* sidecar events are
+	// handled by classifyAntigravitySidecarPath before the existence
+	// check above.
 	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
 		if agDir == "" {
 			continue
@@ -1051,39 +1058,20 @@ func (e *Engine) classifyOnePath(
 			continue
 		}
 		parts := strings.Split(rel, sep)
-		var id string
-		var sidecar bool
-		switch {
-		case len(parts) == 2 && parts[0] == "conversations":
-			name := strings.TrimSuffix(parts[1], "-wal")
-			name = strings.TrimSuffix(name, "-shm")
-			if !strings.HasSuffix(name, ".db") {
-				continue
-			}
-			id = strings.TrimSuffix(name, ".db")
-		case len(parts) == 2 && parts[0] == "annotations" &&
-			strings.HasSuffix(parts[1], ".pbtxt"):
-			id = strings.TrimSuffix(parts[1], ".pbtxt")
-			sidecar = true
-		case len(parts) == 3 && parts[0] == "brain":
-			id = parts[1]
-			sidecar = true
-		default:
+		if len(parts) != 2 || parts[0] != "conversations" {
 			continue
 		}
+		name := strings.TrimSuffix(parts[1], "-wal")
+		name = strings.TrimSuffix(name, "-shm")
+		if !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		id := strings.TrimSuffix(name, ".db")
 		if !parser.IsValidSessionID(id) {
 			continue
 		}
-		dbPath := filepath.Join(agDir, "conversations", id+".db")
-		if sidecar {
-			// Sidecar events only make sense for sessions whose
-			// conversation DB exists.
-			if _, err := os.Stat(dbPath); err != nil {
-				continue
-			}
-		}
 		return parser.DiscoveredFile{
-			Path:  dbPath,
+			Path:  filepath.Join(agDir, "conversations", id+".db"),
 			Agent: parser.AgentAntigravity,
 		}, true
 	}
@@ -1140,6 +1128,96 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	return parser.DiscoveredFile{}, false
+}
+
+// classifyAntigravitySidecarPath maps Antigravity sidecar events --
+// IDE annotations/<id>.pbtxt plus IDE and CLI brain/<id>/* artifacts
+// -- to the session source file that renders them. The sidecar path
+// itself may no longer exist (deletes must reparse the session too),
+// so only the mapped source file is required to exist.
+func (e *Engine) classifyAntigravitySidecarPath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	if df, ok := e.classifyAntigravityIDESidecar(path); ok {
+		return df, true
+	}
+	return e.classifyAntigravityCLIBrainPath(path)
+}
+
+func (e *Engine) classifyAntigravityIDESidecar(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
+		if agDir == "" {
+			continue
+		}
+		rel, ok := isUnder(agDir, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		var id string
+		switch {
+		case len(parts) == 2 && parts[0] == "annotations" &&
+			strings.HasSuffix(parts[1], ".pbtxt"):
+			id = strings.TrimSuffix(parts[1], ".pbtxt")
+		case len(parts) == 3 && parts[0] == "brain":
+			id = parts[1]
+		default:
+			continue
+		}
+		if !parser.IsValidSessionID(id) {
+			continue
+		}
+		dbPath := filepath.Join(agDir, "conversations", id+".db")
+		if _, err := os.Stat(dbPath); err != nil {
+			continue
+		}
+		return parser.DiscoveredFile{
+			Path:  dbPath,
+			Agent: parser.AgentAntigravity,
+		}, true
+	}
+	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) classifyAntigravityCLIBrainPath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
+		if agDir == "" {
+			continue
+		}
+		rel, ok := isUnder(agDir, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		if len(parts) != 3 || parts[0] != "brain" {
+			continue
+		}
+		id := parts[1]
+		if !parser.IsValidSessionID(id) {
+			continue
+		}
+		// Prefer the SQLite conversation source when both old and
+		// new files exist, matching discovery.
+		for _, src := range []string{
+			filepath.Join(agDir, "conversations", id+".db"),
+			filepath.Join(agDir, "conversations", id+".pb"),
+			filepath.Join(agDir, "implicit", id+".pb"),
+		} {
+			if _, err := os.Stat(src); err == nil {
+				return parser.DiscoveredFile{
+					Path:  src,
+					Agent: parser.AgentAntigravityCLI,
+				}, true
+			}
+		}
+	}
 	return parser.DiscoveredFile{}, false
 }
 

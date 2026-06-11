@@ -14,6 +14,8 @@ func TestClassifyOnePath_Antigravity(t *testing.T) {
 	dir := t.TempDir()
 	uuid := "11111111-2222-3333-4444-555555555555"
 	orphan := "22222222-3333-4444-5555-666666666666"
+	// Session whose sidecars were deleted: only the .db remains.
+	bare := "33333333-4444-5555-6666-777777777777"
 
 	convDir := filepath.Join(dir, "conversations")
 	annDir := filepath.Join(dir, "annotations")
@@ -30,6 +32,7 @@ func TestClassifyOnePath_Antigravity(t *testing.T) {
 	annPath := filepath.Join(annDir, uuid+".pbtxt")
 	brainMdPath := filepath.Join(brainDir, "task.md")
 	brainMetaPath := filepath.Join(brainDir, "task.md.metadata.json")
+	bareDBPath := filepath.Join(convDir, bare+".db")
 
 	// Sidecars whose conversation .db does not exist.
 	orphanAnnPath := filepath.Join(annDir, orphan+".pbtxt")
@@ -40,7 +43,7 @@ func TestClassifyOnePath_Antigravity(t *testing.T) {
 	for _, p := range []string{
 		dbPath, dbWalPath, dbShmPath, annPath, brainMdPath,
 		brainMetaPath, orphanAnnPath, orphanBrainPath, badAnnPath,
-		filepath.Join(convDir, "readme.md"),
+		bareDBPath, filepath.Join(convDir, "readme.md"),
 	} {
 		require.NoError(t, os.WriteFile(p, []byte("x"), 0o644))
 	}
@@ -93,6 +96,22 @@ func TestClassifyOnePath_Antigravity(t *testing.T) {
 			path:    brainMetaPath,
 			want:    true,
 			retPath: dbPath,
+		},
+		{
+			// Deleted sidecar paths must still classify so the
+			// session reparses and drops the stale message.
+			name:    "deleted annotation maps to db file",
+			path:    filepath.Join(annDir, bare+".pbtxt"),
+			want:    true,
+			retPath: bareDBPath,
+		},
+		{
+			name: "deleted brain artifact maps to db file",
+			path: filepath.Join(
+				dir, "brain", bare, "gone.md",
+			),
+			want:    true,
+			retPath: bareDBPath,
 		},
 		{
 			name: "annotation without db is ignored",

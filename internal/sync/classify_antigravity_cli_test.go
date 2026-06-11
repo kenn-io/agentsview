@@ -41,6 +41,27 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 	require.NoError(t, os.WriteFile(implPbPath, []byte("pb-data"), 0o644))
 	require.NoError(t, os.WriteFile(implTrajPath, []byte("trajectory-data"), 0o644))
 
+	// Sessions for brain-artifact mapping: one with both .db and .pb
+	// sources, one implicit-only, and one with no source at all.
+	bothUUID := "44444444-5555-6666-7777-888888888888"
+	implUUID := "55555555-6666-7777-8888-999999999999"
+	orphanUUID := "66666666-7777-8888-9999-aaaaaaaaaaaa"
+	bothDBPath := filepath.Join(convDir, bothUUID+".db")
+	bothPbPath := filepath.Join(convDir, bothUUID+".pb")
+	implOnlyPbPath := filepath.Join(implDir, implUUID+".pb")
+	require.NoError(t, os.WriteFile(bothDBPath, []byte("db"), 0o644))
+	require.NoError(t, os.WriteFile(bothPbPath, []byte("pb"), 0o644))
+	require.NoError(t, os.WriteFile(implOnlyPbPath, []byte("pb"), 0o644))
+
+	brainFiles := map[string]string{}
+	for _, id := range []string{uuid, dbUUID, bothUUID, implUUID, orphanUUID} {
+		brainDir := filepath.Join(dir, "brain", id)
+		require.NoError(t, os.MkdirAll(brainDir, 0o755))
+		p := filepath.Join(brainDir, "task.md")
+		require.NoError(t, os.WriteFile(p, []byte("brain"), 0o644))
+		brainFiles[id] = p
+	}
+
 	eng := &Engine{
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentAntigravityCLI: {dir},
@@ -95,6 +116,55 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 			path:    implTrajPath,
 			want:    true,
 			retPath: implPbPath,
+		},
+		{
+			name:    "brain artifact maps to db source",
+			path:    brainFiles[dbUUID],
+			want:    true,
+			retPath: dbPath,
+		},
+		{
+			name:    "brain artifact prefers db over pb source",
+			path:    brainFiles[bothUUID],
+			want:    true,
+			retPath: bothDBPath,
+		},
+		{
+			name:    "brain artifact maps to conversations pb source",
+			path:    brainFiles[uuid],
+			want:    true,
+			retPath: pbPath,
+		},
+		{
+			name:    "brain artifact maps to implicit pb source",
+			path:    brainFiles[implUUID],
+			want:    true,
+			retPath: implOnlyPbPath,
+		},
+		{
+			// Deleted brain paths must still classify so the session
+			// reparses and drops the stale message.
+			name:    "deleted brain artifact maps to db source",
+			path:    filepath.Join(dir, "brain", dbUUID, "gone.md"),
+			want:    true,
+			retPath: dbPath,
+		},
+		{
+			name: "brain artifact without source is ignored",
+			path: brainFiles[orphanUUID],
+			want: false,
+		},
+		{
+			name: "brain artifact with invalid id is ignored",
+			path: filepath.Join(dir, "brain", "not-a-uuid", "task.md"),
+			want: false,
+		},
+		{
+			name: "nested brain files are ignored",
+			path: filepath.Join(
+				dir, "brain", dbUUID, "sub", "task.md",
+			),
+			want: false,
 		},
 		{
 			name: "unrelated files are ignored",
