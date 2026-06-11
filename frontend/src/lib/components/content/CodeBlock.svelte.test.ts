@@ -1,8 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, tick } from "svelte";
-import { vi } from "vitest";
-// @ts-ignore
 import CodeBlock from "./CodeBlock.svelte";
 
 function marks(el: HTMLElement): string[] {
@@ -25,7 +23,7 @@ describe("CodeBlock syntax highlighting and search marks", () => {
     document.body.innerHTML = "";
   });
 
-  it("case 1: marks survive Shiki swap (regression guard)", async () => {
+  it("marks survive Shiki swap", async () => {
     component = mount(CodeBlock, {
       target: document.body,
       props: {
@@ -55,22 +53,26 @@ describe("CodeBlock syntax highlighting and search marks", () => {
     expect(marks(document.body)).toContain("foo");
   });
 
-  it("case 2: query change after Shiki resolved updates marks correctly", async () => {
-    // Mount with query "foo".
+  it("query change after Shiki resolved updates marks correctly", async () => {
+    // Use $state to hold props so we can mutate them for a live update.
+    const props = $state({
+      language: "typescript",
+      content: "const foo = 1;\nconst bar = foo;",
+      highlightQuery: "foo",
+      isCurrentHighlight: false,
+    });
+
     component = mount(CodeBlock, {
       target: document.body,
-      props: {
-        language: "typescript",
-        content: "const foo = 1;\nconst bar = foo;",
-        highlightQuery: "foo",
-        isCurrentHighlight: false,
-      },
+      props,
     });
 
     const codeEl = document.body.querySelector("code")!;
+
+    // Wait for Shiki to resolve and marks for "foo" to appear.
     await vi.waitFor(
       () => {
-        if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
+        if (!codeEl.innerHTML.includes("<span")) throw new Error("shiki not yet");
       },
       { timeout: 10_000 },
     );
@@ -79,27 +81,8 @@ describe("CodeBlock syntax highlighting and search marks", () => {
 
     expect(marks(document.body)).toContain("foo");
 
-    // Unmount and remount with a different query to simulate a query change.
-    unmount(component);
-    document.body.innerHTML = "";
-
-    component = mount(CodeBlock, {
-      target: document.body,
-      props: {
-        language: "typescript",
-        content: "const foo = 1;\nconst bar = foo;",
-        highlightQuery: "bar",
-        isCurrentHighlight: false,
-      },
-    });
-
-    const codeEl2 = document.body.querySelector("code")!;
-    await vi.waitFor(
-      () => {
-        if (!codeEl2.innerHTML.includes("<span")) throw new Error("not yet");
-      },
-      { timeout: 10_000 },
-    );
+    // Live prop update — change the query without remounting.
+    props.highlightQuery = "bar";
     await tick();
     await tick();
 
@@ -109,7 +92,7 @@ describe("CodeBlock syntax highlighting and search marks", () => {
     expect(foundMarks).not.toContain("foo");
   });
 
-  it("case 3: unknown language falls back gracefully and still marks", async () => {
+  it("unknown language falls back gracefully and still marks", async () => {
     component = mount(CodeBlock, {
       target: document.body,
       props: {
@@ -120,8 +103,15 @@ describe("CodeBlock syntax highlighting and search marks", () => {
       },
     });
 
-    // Wait long enough that Shiki would have responded if it were going to.
-    await new Promise((r) => setTimeout(r, 200));
+    // highlightToHtml resolves null quickly for unknown languages; use
+    // deterministic microtask flushing instead of a wall-clock wait.
+    await vi.waitFor(
+      () => {
+        // The action must have run; marks are set once tick settles.
+        if (marks(document.body).length === 0) throw new Error("not yet");
+      },
+      { timeout: 5_000 },
+    );
     await tick();
 
     const codeEl = document.body.querySelector("code")!;
@@ -131,7 +121,7 @@ describe("CodeBlock syntax highlighting and search marks", () => {
     expect(marks(document.body)).toContain("special");
   });
 
-  it("case 4: no double-marking after Shiki resolves with query active", async () => {
+  it("no double-marking after Shiki resolves with query active", async () => {
     const content = "const foo = 1;\nconst bar = foo;";
     // "foo" appears exactly twice in the content.
     const expectedCount = 2;

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick } from "svelte";
+  import { onDestroy, tick, untrack } from "svelte";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { applyHighlight, applyMarks, clearMarks, escapeHTML } from "../../utils/highlight.js";
   import { highlightToHtml } from "../../utils/syntax-highlight.js";
@@ -27,28 +27,27 @@
     const effectLang = language;
     let cancelled = false;
 
-    highlightToHtml(effectContent, effectLang).then((html) => {
-      if (!cancelled) {
-        highlighted = html;
+    highlightToHtml(effectContent, effectLang).then(async (html) => {
+      if (cancelled) return;
+      highlighted = html;
+      // Flush the {@html} swap to the DOM before re-applying marks.
+      await tick();
+      if (cancelled) return;
+      // Read current prop values after the await — intentionally untracked
+      // because we are inside an async continuation, not during the sync
+      // reactive evaluation.
+      const q = untrack(() => highlightQuery);
+      const current = untrack(() => isCurrentHighlight);
+      const el = untrack(() => preEl);
+      if (el && q.trim()) {
+        clearMarks(el);
+        applyMarks(el, q, current);
       }
     });
 
     return () => {
       cancelled = true;
     };
-  });
-
-  $effect(() => {
-    // Track all three reactive values so Svelte re-runs when any changes.
-    const _h = highlighted;
-    const _q = highlightQuery;
-    const _c = isCurrentHighlight;
-
-    void tick().then(() => {
-      if (!preEl) return;
-      clearMarks(preEl);
-      if (_q.trim()) applyMarks(preEl, _q, _c);
-    });
   });
 
   async function handleCopy() {
