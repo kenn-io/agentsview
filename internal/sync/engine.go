@@ -319,9 +319,18 @@ func (e *Engine) classifyPaths(
 	seen := make(map[string]struct{}, len(paths))
 	var files []parser.DiscoveredFile
 	for _, p := range paths {
-		if df, ok := e.classifyOnePath(
-			p, geminiProjectsByDir,
-		); ok {
+		// Antigravity sidecar events map to potentially several
+		// session sources and must classify even when the event
+		// path was deleted, so they bypass classifyOnePath.
+		dfs := e.classifyAntigravitySidecarPath(p)
+		if len(dfs) == 0 {
+			if df, ok := e.classifyOnePath(
+				p, geminiProjectsByDir,
+			); ok {
+				dfs = []parser.DiscoveredFile{df}
+			}
+		}
+		for _, df := range dfs {
 			key := string(df.Agent) + "\x00" + df.Path
 			if _, ok := seen[key]; ok {
 				continue
@@ -454,13 +463,6 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 	if df, ok := e.classifyZedSQLitePath(path); ok {
-		return df, true
-	}
-	// Antigravity sidecar events classify before the existence
-	// check: a deleted brain artifact or annotation must still
-	// reparse its session, and only the mapped source file needs
-	// to exist for that.
-	if df, ok := e.classifyAntigravitySidecarPath(path); ok {
 		return df, true
 	}
 	if !pathExists {
@@ -1047,8 +1049,8 @@ func (e *Engine) classifyOnePath(
 
 	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm).
 	// annotations/<uuid>.pbtxt and brain/<uuid>/* sidecar events are
-	// handled by classifyAntigravitySidecarPath before the existence
-	// check above.
+	// handled in classifyPaths via classifyAntigravitySidecarPath,
+	// which runs without the path-existence requirement above.
 	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
 		if agDir == "" {
 			continue
@@ -1133,14 +1135,16 @@ func (e *Engine) classifyOnePath(
 
 // classifyAntigravitySidecarPath maps Antigravity sidecar events --
 // IDE annotations/<id>.pbtxt plus IDE and CLI brain/<id>/* artifacts
-// -- to the session source file that renders them. The sidecar path
-// itself may no longer exist (deletes must reparse the session too),
-// so only the mapped source file is required to exist.
+// -- to every session source file that renders them. A CLI storage
+// UUID can hold both a conversation and an implicit session, so one
+// brain event can affect two sources. The sidecar path itself may no
+// longer exist (deletes must reparse the session too), so only the
+// mapped source files are required to exist.
 func (e *Engine) classifyAntigravitySidecarPath(
 	path string,
-) (parser.DiscoveredFile, bool) {
+) []parser.DiscoveredFile {
 	if df, ok := e.classifyAntigravityIDESidecar(path); ok {
-		return df, true
+		return []parser.DiscoveredFile{df}
 	}
 	return e.classifyAntigravityCLIBrainPath(path)
 }
@@ -1185,7 +1189,7 @@ func (e *Engine) classifyAntigravityIDESidecar(
 
 func (e *Engine) classifyAntigravityCLIBrainPath(
 	path string,
-) (parser.DiscoveredFile, bool) {
+) []parser.DiscoveredFile {
 	sep := string(filepath.Separator)
 	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
 		if agDir == "" {
@@ -1203,22 +1207,35 @@ func (e *Engine) classifyAntigravityCLIBrainPath(
 		if !parser.IsValidSessionID(id) {
 			continue
 		}
-		// Prefer the SQLite conversation source when both old and
-		// new files exist, matching discovery.
+		var out []parser.DiscoveredFile
+		// Conversation session: prefer the SQLite source when both
+		// old and new files exist, matching discovery.
 		for _, src := range []string{
 			filepath.Join(agDir, "conversations", id+".db"),
 			filepath.Join(agDir, "conversations", id+".pb"),
-			filepath.Join(agDir, "implicit", id+".pb"),
 		} {
 			if _, err := os.Stat(src); err == nil {
-				return parser.DiscoveredFile{
+				out = append(out, parser.DiscoveredFile{
 					Path:  src,
 					Agent: parser.AgentAntigravityCLI,
-				}, true
+				})
+				break
 			}
 		}
+		// The implicit session is distinct from the conversation
+		// session and renders the same brain artifacts.
+		implicit := filepath.Join(agDir, "implicit", id+".pb")
+		if _, err := os.Stat(implicit); err == nil {
+			out = append(out, parser.DiscoveredFile{
+				Path:  implicit,
+				Agent: parser.AgentAntigravityCLI,
+			})
+		}
+		if len(out) > 0 {
+			return out
+		}
 	}
-	return parser.DiscoveredFile{}, false
+	return nil
 }
 
 func (e *Engine) classifyOpenCodePath(

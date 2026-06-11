@@ -124,16 +124,18 @@ the parser persists the same composite as the session's file fingerprint. The
 file-watcher classifier also maps sidecar events to the session source so
 sidecar-only updates trigger the watcher path rather than waiting for periodic
 sync: IDE `annotations/<id>.pbtxt` and `brain/<id>/*` events map to
-`conversations/<id>.db`, and CLI `brain/<id>/*` events map to the session source
-with the same preference as discovery (`conversations/<id>.db`, then
-`conversations/<id>.pb`, then `implicit/<id>.pb`). Sidecar classification runs
-before the classifier's path-existence check — a deleted artifact must still
-reparse its session, and only the mapped source needs to exist — which matters
-because brain deletes do not raise the composite mtime, so cutoff-filtered
-incremental syncs would otherwise never notice them. The fingerprint is computed
-after the parse's own read-only open, which can itself touch the `-shm` sidecar;
-statting afterwards keeps the persisted value identical to what the next sync
-observes, so unchanged sessions still skip.
+`conversations/<id>.db`, and CLI `brain/<id>/*` events map to every session
+source that renders them — the conversation source with the same preference as
+discovery (`conversations/<id>.db` over `conversations/<id>.pb`) plus
+`implicit/<id>.pb` when it exists, since one storage UUID can hold both a
+conversation and an implicit session. Sidecar classification runs without the
+classifier's path-existence requirement — a deleted artifact must still reparse
+its session, and only the mapped sources need to exist — which matters because
+brain deletes do not raise the composite mtime, so cutoff-filtered incremental
+syncs would otherwise never notice them. The fingerprint is computed after the
+parse's own read-only open, which can itself touch the `-shm` sidecar; statting
+afterwards keeps the persisted value identical to what the next sync observes,
+so unchanged sessions still skip.
 
 ## Testing Plan
 

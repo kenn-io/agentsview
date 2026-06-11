@@ -53,101 +53,92 @@ func TestClassifyOnePath_Antigravity(t *testing.T) {
 			parser.AgentAntigravity: {dir},
 		},
 	}
-	geminiMap := make(map[string]map[string]string)
 
 	tests := []struct {
-		name    string
-		path    string
-		want    bool
-		retPath string // expected Path in DiscoveredFile
+		name      string
+		path      string
+		wantPaths []string
 	}{
 		{
-			name:    "conversations db file is classified",
-			path:    dbPath,
-			want:    true,
-			retPath: dbPath,
+			name:      "conversations db file is classified",
+			path:      dbPath,
+			wantPaths: []string{dbPath},
 		},
 		{
-			name:    "db wal maps to db file",
-			path:    dbWalPath,
-			want:    true,
-			retPath: dbPath,
+			name:      "db wal maps to db file",
+			path:      dbWalPath,
+			wantPaths: []string{dbPath},
 		},
 		{
-			name:    "db shm maps to db file",
-			path:    dbShmPath,
-			want:    true,
-			retPath: dbPath,
+			name:      "db shm maps to db file",
+			path:      dbShmPath,
+			wantPaths: []string{dbPath},
 		},
 		{
-			name:    "annotation maps to db file",
-			path:    annPath,
-			want:    true,
-			retPath: dbPath,
+			name:      "annotation maps to db file",
+			path:      annPath,
+			wantPaths: []string{dbPath},
 		},
 		{
-			name:    "brain artifact maps to db file",
-			path:    brainMdPath,
-			want:    true,
-			retPath: dbPath,
+			name:      "brain artifact maps to db file",
+			path:      brainMdPath,
+			wantPaths: []string{dbPath},
 		},
 		{
-			name:    "brain artifact metadata maps to db file",
-			path:    brainMetaPath,
-			want:    true,
-			retPath: dbPath,
+			name:      "brain artifact metadata maps to db file",
+			path:      brainMetaPath,
+			wantPaths: []string{dbPath},
 		},
 		{
 			// Deleted sidecar paths must still classify so the
 			// session reparses and drops the stale message.
-			name:    "deleted annotation maps to db file",
-			path:    filepath.Join(annDir, bare+".pbtxt"),
-			want:    true,
-			retPath: bareDBPath,
+			name:      "deleted annotation maps to db file",
+			path:      filepath.Join(annDir, bare+".pbtxt"),
+			wantPaths: []string{bareDBPath},
 		},
 		{
 			name: "deleted brain artifact maps to db file",
 			path: filepath.Join(
 				dir, "brain", bare, "gone.md",
 			),
-			want:    true,
-			retPath: bareDBPath,
+			wantPaths: []string{bareDBPath},
 		},
 		{
-			name: "annotation without db is ignored",
-			path: orphanAnnPath,
-			want: false,
+			name:      "annotation without db is ignored",
+			path:      orphanAnnPath,
+			wantPaths: nil,
 		},
 		{
-			name: "brain artifact without db is ignored",
-			path: orphanBrainPath,
-			want: false,
+			name:      "brain artifact without db is ignored",
+			path:      orphanBrainPath,
+			wantPaths: nil,
 		},
 		{
-			name: "annotation with invalid id is ignored",
-			path: badAnnPath,
-			want: false,
+			name:      "annotation with invalid id is ignored",
+			path:      badAnnPath,
+			wantPaths: nil,
 		},
 		{
-			name: "unrelated conversations file is ignored",
-			path: filepath.Join(convDir, "readme.md"),
-			want: false,
+			name:      "unrelated conversations file is ignored",
+			path:      filepath.Join(convDir, "readme.md"),
+			wantPaths: nil,
 		},
 		{
-			name: "nested files under conversations subdirs are ignored",
-			path: filepath.Join(convDir, "subdir", uuid+".db"),
-			want: false,
+			name:      "nested files under conversations subdirs are ignored",
+			path:      filepath.Join(convDir, "subdir", uuid+".db"),
+			wantPaths: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := eng.classifyOnePath(tt.path, geminiMap)
-			assert.Equal(t, tt.want, ok)
-			if ok {
-				assert.Equal(t, parser.AgentAntigravity, got.Agent)
-				assert.Equal(t, tt.retPath, got.Path)
+			got := eng.classifyPaths([]string{tt.path})
+			var gotPaths []string
+			for _, df := range got {
+				assert.Equal(t, parser.AgentAntigravity, df.Agent)
+				gotPaths = append(gotPaths, df.Path)
 			}
+			assert.ElementsMatch(t, tt.wantPaths, gotPaths)
 		})
 	}
 }

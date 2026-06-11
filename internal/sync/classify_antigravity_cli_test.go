@@ -118,55 +118,6 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 			retPath: implPbPath,
 		},
 		{
-			name:    "brain artifact maps to db source",
-			path:    brainFiles[dbUUID],
-			want:    true,
-			retPath: dbPath,
-		},
-		{
-			name:    "brain artifact prefers db over pb source",
-			path:    brainFiles[bothUUID],
-			want:    true,
-			retPath: bothDBPath,
-		},
-		{
-			name:    "brain artifact maps to conversations pb source",
-			path:    brainFiles[uuid],
-			want:    true,
-			retPath: pbPath,
-		},
-		{
-			name:    "brain artifact maps to implicit pb source",
-			path:    brainFiles[implUUID],
-			want:    true,
-			retPath: implOnlyPbPath,
-		},
-		{
-			// Deleted brain paths must still classify so the session
-			// reparses and drops the stale message.
-			name:    "deleted brain artifact maps to db source",
-			path:    filepath.Join(dir, "brain", dbUUID, "gone.md"),
-			want:    true,
-			retPath: dbPath,
-		},
-		{
-			name: "brain artifact without source is ignored",
-			path: brainFiles[orphanUUID],
-			want: false,
-		},
-		{
-			name: "brain artifact with invalid id is ignored",
-			path: filepath.Join(dir, "brain", "not-a-uuid", "task.md"),
-			want: false,
-		},
-		{
-			name: "nested brain files are ignored",
-			path: filepath.Join(
-				dir, "brain", dbUUID, "sub", "task.md",
-			),
-			want: false,
-		},
-		{
 			name: "unrelated files are ignored",
 			path: filepath.Join(convDir, "readme.md"),
 			want: false,
@@ -198,4 +149,71 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 		_, ok := eng.classifyOnePath(orphanTraj, geminiMap)
 		assert.False(t, ok, "should not classify sidecar when pb file does not exist")
 	})
+
+	// Brain artifact events can affect more than one session (the
+	// same storage UUID can hold a conversation and an implicit
+	// session, and both render brain artifacts), so they classify
+	// through classifyPaths, which returns every affected source.
+	brainTests := []struct {
+		name      string
+		path      string
+		wantPaths []string
+	}{
+		{
+			name:      "brain artifact maps to db source",
+			path:      brainFiles[dbUUID],
+			wantPaths: []string{dbPath},
+		},
+		{
+			name:      "brain artifact prefers db over pb for the conversation",
+			path:      brainFiles[bothUUID],
+			wantPaths: []string{bothDBPath},
+		},
+		{
+			name:      "brain artifact maps to conversation and implicit sources",
+			path:      brainFiles[uuid],
+			wantPaths: []string{pbPath, implPbPath},
+		},
+		{
+			name:      "brain artifact maps to implicit pb source",
+			path:      brainFiles[implUUID],
+			wantPaths: []string{implOnlyPbPath},
+		},
+		{
+			// Deleted brain paths must still classify so the session
+			// reparses and drops the stale message.
+			name:      "deleted brain artifact maps to db source",
+			path:      filepath.Join(dir, "brain", dbUUID, "gone.md"),
+			wantPaths: []string{dbPath},
+		},
+		{
+			name:      "brain artifact without source is ignored",
+			path:      brainFiles[orphanUUID],
+			wantPaths: nil,
+		},
+		{
+			name:      "brain artifact with invalid id is ignored",
+			path:      filepath.Join(dir, "brain", "not-a-uuid", "task.md"),
+			wantPaths: nil,
+		},
+		{
+			name: "nested brain files are ignored",
+			path: filepath.Join(
+				dir, "brain", dbUUID, "sub", "task.md",
+			),
+			wantPaths: nil,
+		},
+	}
+
+	for _, tt := range brainTests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := eng.classifyPaths([]string{tt.path})
+			var gotPaths []string
+			for _, df := range got {
+				assert.Equal(t, parser.AgentAntigravityCLI, df.Agent)
+				gotPaths = append(gotPaths, df.Path)
+			}
+			assert.ElementsMatch(t, tt.wantPaths, gotPaths)
+		})
+	}
 }
