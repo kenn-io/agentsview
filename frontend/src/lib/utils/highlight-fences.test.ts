@@ -15,6 +15,12 @@ function marks(el: HTMLElement): string[] {
   );
 }
 
+function styledSpans(el: HTMLElement): HTMLSpanElement[] {
+  return Array.from(el.querySelectorAll("span")).filter(
+    (s) => s.style.color !== "",
+  ) as HTMLSpanElement[];
+}
+
 function makeMarkdownCodeBlock(lang: string, code: string): string {
   const cls = lang ? ` class="language-${lang}"` : "";
   return `<pre><code${cls}>${code}\n</code></pre>`;
@@ -36,7 +42,9 @@ describe("highlightCodeFences", () => {
           },
           { timeout: 10_000 },
         );
-        expect(codeEl.innerHTML).toContain("<span");
+        expect(styledSpans(codeEl).length).toBeGreaterThanOrEqual(1);
+        const colors = new Set(styledSpans(codeEl).map((s) => s.getAttribute("style")));
+        expect(colors.size).toBeGreaterThanOrEqual(2);
       } finally {
         action.destroy();
       }
@@ -77,7 +85,9 @@ describe("highlightCodeFences", () => {
           },
           { timeout: 10_000 },
         );
-        expect(codeEl.innerHTML).toContain("<span");
+        expect(styledSpans(codeEl).length).toBeGreaterThanOrEqual(1);
+        const colors = new Set(styledSpans(codeEl).map((s) => s.getAttribute("style")));
+        expect(colors.size).toBeGreaterThanOrEqual(2);
       } finally {
         action.destroy();
       }
@@ -167,7 +177,7 @@ describe("highlightCodeFences", () => {
           },
           { timeout: 10_000 },
         );
-        expect(codeEl.innerHTML).toContain("<span");
+        expect(styledSpans(codeEl).length).toBeGreaterThanOrEqual(1);
         const codeMarks = Array.from(
           codeEl.querySelectorAll("mark.search-highlight"),
         ).map((m) => m.textContent ?? "");

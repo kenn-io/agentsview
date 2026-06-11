@@ -1,5 +1,17 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { highlightToHtml, HIGHLIGHT_MAX_BYTES, HIGHLIGHT_MAX_LINES } from "./syntax-highlight.js";
+
+function spans(html: string): HTMLSpanElement[] {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const all = Array.from(div.querySelectorAll("span"));
+  return all.filter((s) => s.style.color !== "");
+}
+
+function distinctColors(html: string): Set<string> {
+  return new Set(spans(html).map((s) => s.getAttribute("style") ?? ""));
+}
 
 describe("highlightToHtml", () => {
   describe("known languages", () => {
@@ -14,7 +26,7 @@ describe("highlightToHtml", () => {
     ])("highlights %s code", async (lang, code) => {
       const result = await highlightToHtml(code, lang);
       expect(result).not.toBeNull();
-      expect(result).toContain("<span");
+      expect(spans(result!).length).toBeGreaterThanOrEqual(1);
     });
 
     it("preserves the source tokens in the output", async () => {
@@ -24,49 +36,36 @@ describe("highlightToHtml", () => {
       expect(result).toContain("greeting");
       expect(result).toContain("hello");
     });
+
+    it("uses the catppuccin-mocha palette (keyword color is stable)", async () => {
+      // Determinism guard: theme + engine are pinned by the lockfile (shiki 4.2.0,
+      // catppuccin-mocha). `const` is a keyword -> #CBA6F7. If this breaks, the
+      // theme or engine changed; update intentionally, don't loosen.
+      const result = await highlightToHtml("const x = 1;", "typescript");
+      expect(result).not.toBeNull();
+      const colors = spans(result!).map((s) => s.getAttribute("style"));
+      expect(colors).toContain("color:#CBA6F7");
+      expect(distinctColors(result!).size).toBeGreaterThanOrEqual(2);
+    });
   });
 
   describe("alias resolution", () => {
-    it("resolves ts alias to typescript", async () => {
-      const result = await highlightToHtml("const x = 1;", "ts");
-      expect(result).not.toBeNull();
-      expect(result).toContain("<span");
-    });
-
-    it("resolves py alias to python", async () => {
-      const result = await highlightToHtml("x = 1", "py");
-      expect(result).not.toBeNull();
-      expect(result).toContain("<span");
-    });
-
-    it("resolves sh alias to bash", async () => {
-      const result = await highlightToHtml("echo hi", "sh");
-      expect(result).not.toBeNull();
-      expect(result).toContain("<span");
-    });
-
-    it("resolves shell alias to bash", async () => {
-      const result = await highlightToHtml("echo hi", "shell");
-      expect(result).not.toBeNull();
-      expect(result).toContain("<span");
-    });
-
-    it("resolves yml alias to yaml", async () => {
-      const result = await highlightToHtml("key: value", "yml");
-      expect(result).not.toBeNull();
-      expect(result).toContain("<span");
-    });
-
-    it("resolves golang alias to go", async () => {
-      const result = await highlightToHtml("func main() {}", "golang");
-      expect(result).not.toBeNull();
-      expect(result).toContain("<span");
-    });
-
-    it("resolves js alias to javascript", async () => {
-      const result = await highlightToHtml("var x = 1;", "js");
-      expect(result).not.toBeNull();
-      expect(result).toContain("<span");
+    it.each([
+      ["ts", "typescript", "const x = 1;"],
+      ["py", "python", "x = 1"],
+      ["sh", "bash", "echo hi"],
+      ["shell", "bash", "echo hi"],
+      ["yml", "yaml", "key: value"],
+      ["golang", "go", "func main() {}"],
+      ["js", "javascript", "var x = 1;"],
+    ])("resolves %s alias to %s (identical output)", async (alias, canonical, code) => {
+      const [aliasResult, canonicalResult] = await Promise.all([
+        highlightToHtml(code, alias),
+        highlightToHtml(code, canonical),
+      ]);
+      expect(canonicalResult).not.toBeNull();
+      expect(spans(canonicalResult!).length).toBeGreaterThanOrEqual(1);
+      expect(aliasResult).toBe(canonicalResult);
     });
   });
 
@@ -165,6 +164,8 @@ describe("highlightToHtml", () => {
       // We check that the literal source string (with raw brackets) is absent.
       expect(result).not.toContain("a < b");
       expect(result).not.toContain("b > c");
+      // Escaping is proven by presence of the escaped entity, not just absence.
+      expect(result).toContain("&#x3C;");
     });
 
     it("output has no <pre> wrapper (structure: inline)", async () => {
