@@ -1464,14 +1464,14 @@ func extractAgyGeneratorUsage(
 		}
 
 		// Find the planner message this generation produced.
-		target := -1
+		var targetMsg *ParsedMessage
 		fallbackStep := -1
 		for _, si := range gen.StepIndices {
 			k, ok := plannerMsgIdx[si]
 			if !ok || k < 0 || k >= len(msgs) {
 				continue
 			}
-			target = k
+			targetMsg = &msgs[k]
 			fallbackStep = si
 			break
 		}
@@ -1497,16 +1497,16 @@ func extractAgyGeneratorUsage(
 		// generation already claimed it (should not happen: no planner
 		// step is claimed by two generations in observed sidecars).
 		// Either way the usage event below is still emitted.
-		if target >= 0 &&
-			!msgs[target].HasContextTokens &&
-			!msgs[target].HasOutputTokens {
+		if targetMsg != nil &&
+			!targetMsg.HasContextTokens &&
+			!targetMsg.HasOutputTokens {
 			if model != "" {
-				msgs[target].Model = model
+				targetMsg.Model = model
 			}
-			msgs[target].ContextTokens = input + cacheRead
-			msgs[target].OutputTokens = output
-			msgs[target].HasContextTokens = input+cacheRead > 0
-			msgs[target].HasOutputTokens = output > 0
+			targetMsg.ContextTokens = input + cacheRead
+			targetMsg.OutputTokens = output
+			targetMsg.HasContextTokens = input+cacheRead > 0
+			targetMsg.HasOutputTokens = output > 0
 		}
 
 		// OutputTokens already includes thinking (empirical invariant)
