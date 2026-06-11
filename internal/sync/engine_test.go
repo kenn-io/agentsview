@@ -908,6 +908,64 @@ func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
 	assert.Equal(t, 50, events[0].OutputTokens)
 }
 
+// TestWriteBatchAntigravityReplacesMessages covers a live Antigravity
+// IDE session synced before its gen_metadata rows exist: the next sync
+// re-parses the same ordinals with model/token metadata attached, and
+// that enrichment must reach the stored message rows rather than being
+// dropped by the append-only write path.
+func TestWriteBatchAntigravityReplacesMessages(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+
+	ts := time.Unix(1700000000, 0).UTC()
+	mkWrite := func(withMeta bool) pendingWrite {
+		msg := parser.ParsedMessage{
+			Role:      parser.RoleAssistant,
+			Content:   "assistant reply",
+			Timestamp: ts,
+		}
+		if withMeta {
+			msg.Model = "Test Gemini 3.5"
+			msg.ContextTokens = 2400
+			msg.OutputTokens = 210
+			msg.HasContextTokens = true
+			msg.HasOutputTokens = true
+		}
+		return pendingWrite{
+			sess: parser.ParsedSession{
+				ID:           "antigravity:meta",
+				Project:      "proj",
+				Machine:      "m",
+				Agent:        parser.AgentAntigravity,
+				StartedAt:    ts,
+				EndedAt:      ts,
+				MessageCount: 1,
+			},
+			msgs: []parser.ParsedMessage{msg},
+		}
+	}
+
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{mkWrite(false)}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	written, _, failed = e.writeBatch(
+		[]pendingWrite{mkWrite(true)}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	msgs, err := database.GetMessages(
+		context.Background(), "antigravity:meta", 0, 10, true,
+	)
+	require.NoError(t, err, "GetMessages")
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "Test Gemini 3.5", msgs[0].Model,
+		"re-parsed model metadata must reach existing message rows")
+}
+
 func TestShouldSkipFileWithIDPrefix(t *testing.T) {
 	database := openTestDB(t)
 

@@ -4779,6 +4779,7 @@ func (e *Engine) writeBatch(
 
 		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
 			stale || pw.sess.Agent == parser.AgentOpenCode ||
+			pw.sess.Agent == parser.AgentAntigravity ||
 			pw.sess.Agent == parser.AgentAntigravityCLI
 
 		update, findings := computeSignalsAndSecrets(s, msgs)
@@ -4887,6 +4888,7 @@ func (e *Engine) writeBatchBulk(
 		}
 		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
 			pw.sess.Agent == parser.AgentOpenCode ||
+			pw.sess.Agent == parser.AgentAntigravity ||
 			pw.sess.Agent == parser.AgentAntigravityCLI
 		tScan := time.Now()
 		update, findings := computeSignalsAndSecrets(s, msgs)
