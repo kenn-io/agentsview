@@ -1,5 +1,6 @@
 <script lang="ts">
   import { renderMarkdown } from "../../utils/markdown.js";
+  import { highlightCodeFences } from "../../utils/highlight-fences.js";
 
   interface Props {
     content: string;
@@ -32,7 +33,10 @@
     {/if}
   </button>
   {#if !collapsed}
-    <div class="skill-content markdown">
+    <div
+      class="skill-content markdown"
+      use:highlightCodeFences={{ content }}
+    >
       {@html renderMarkdown(content)}
     </div>
   {/if}

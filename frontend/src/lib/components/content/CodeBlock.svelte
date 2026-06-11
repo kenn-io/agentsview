@@ -2,6 +2,7 @@
   import { onDestroy } from "svelte";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
+  import { highlightToHtml } from "../../utils/syntax-highlight.js";
   import CopyButton from "../shared/CopyButton.svelte";
 
   interface Props {
@@ -14,6 +15,27 @@
   let { content, language, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
   let copied = $state(false);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
+
+  let highlighted = $state<string | null>(null);
+
+  $effect(() => {
+    highlighted = null;
+    if (!language) return;
+
+    const effectContent = content;
+    const effectLang = language;
+    let cancelled = false;
+
+    highlightToHtml(effectContent, effectLang).then((html) => {
+      if (!cancelled) {
+        highlighted = html;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  });
 
   async function handleCopy() {
     const ok = await copyToClipboard(content);
@@ -47,7 +69,7 @@
   <pre
     class="code-content"
     use:applyHighlight={{ q: highlightQuery, current: isCurrentHighlight, content }}
-  ><code>{@html escapeHTML(content)}</code></pre>
+  ><code>{@html highlighted ?? escapeHTML(content)}</code></pre>
 </div>
 
 <style>

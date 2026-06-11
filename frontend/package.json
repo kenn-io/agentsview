@@ -19,7 +19,8 @@
     "@lucide/svelte": "1.17.0",
     "@tanstack/virtual-core": "3.17.0",
     "dompurify": "3.4.8",
-    "marked": "18.0.4"
+    "marked": "18.0.4",
+    "shiki": "4.2.0"
   },
   "devDependencies": {
     "@playwright/test": "1.60.0",

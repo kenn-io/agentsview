@@ -25,6 +25,7 @@
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { applyHighlight } from "../../utils/highlight.js";
+  import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { PinIcon } from "../../icons.js";
@@ -378,6 +379,11 @@
               q: highlightQuery,
               current: isCurrentHighlight,
               content: segment.content,
+            }}
+            use:highlightCodeFences={{
+              q: highlightQuery,
+              content: segment.content,
+              current: isCurrentHighlight,
             }}
           >
             {@html renderMarkdown(segment.content)}
