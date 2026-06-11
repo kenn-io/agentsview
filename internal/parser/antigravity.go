@@ -176,7 +176,10 @@ func ParseAntigravitySession(
 		usageEvents[i].SessionID = sess.ID
 	}
 	if len(messages) == 0 {
-		return sess, nil, nil, nil
+		// Usage events still flow for message-less parses (e.g. an
+		// undecodable DB with gen_metadata) so daily usage analytics
+		// match the event-derived session totals stamped above.
+		return sess, nil, usageEvents, nil
 	}
 	return sess, messages, usageEvents, nil
 }

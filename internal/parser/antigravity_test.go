@@ -1599,6 +1599,64 @@ func TestAntigravityCLITokenUsageMixedDecode(t *testing.T) {
 	assert.Equal(t, 3000, sess.PeakContextTokens, "peak must include undecoded gen usage")
 }
 
+// TestAntigravityZeroMessageKeepsUsageEvents covers a DB whose only
+// step is undecodable but carries gen_metadata usage: the parse yields
+// no messages, yet the usage events (and the totals derived from
+// them) must still be returned so daily usage analytics see them.
+func TestAntigravityZeroMessageKeepsUsageEvents(t *testing.T) {
+	root := t.TempDir()
+	id := "55555555-6666-7777-8888-999999999996"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 99, ?)`, []byte{0xff, 0xff, 0xff})
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genData, len(genData))
+
+	sess, msgs, usageEvents, err := ParseAntigravitySession(dbPath, "test-project", "test-machine")
+	require.NoError(t, err)
+	assert.Empty(t, msgs)
+	require.Len(t, usageEvents, 1, "usage events must survive zero-message parses")
+	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
+	assert.Equal(t, 180, sess.TotalOutputTokens)
+	assert.Equal(t, 2400, sess.PeakContextTokens)
+}
+
+// TestAntigravityCLIZeroMessageKeepsUsageEvents is the CLI variant: an
+// undecodable .db with gen_metadata, no sidecar, and no history still
+// returns its usage events alongside the retry-flagged session.
+func TestAntigravityCLIZeroMessageKeepsUsageEvents(t *testing.T) {
+	root := t.TempDir()
+	id := "00000000-1111-2222-3333-444444444444"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 99, ?)`, []byte{0xff, 0xff, 0xff})
+	genData := createAntigravityMockGenMetadata(t, 3000, 220, 10, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genData, len(genData))
+	require.NoError(t, db.Close())
+
+	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.True(t, status.NeedsRetry, "undecodable rows stay retryable")
+	assert.Empty(t, msgs)
+	require.Len(t, usageEvents, 1, "usage events must survive zero-message parses")
+	assert.Equal(t, 220, usageEvents[0].OutputTokens)
+	assert.Equal(t, 220, sess.TotalOutputTokens)
+	assert.Equal(t, 3000, sess.PeakContextTokens)
+}
+
 func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 	root := t.TempDir()
 	id := "55555555-6666-7777-8888-999999999998"

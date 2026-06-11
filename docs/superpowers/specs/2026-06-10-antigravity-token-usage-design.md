@@ -65,7 +65,9 @@ We will update `loadAntigravityStepsWithRawCount` to:
   extraction is independent of step decoding: a step the heuristic cannot render
   into a message (later rescued by the CLI trajectory sidecar transcript) still
   contributes its usage event, with token fields and model attached to the
-  message only when the step decoded.
+  message only when the step decoded. Both parsers return usage events even for
+  zero-message parses, so persisted sessions never carry event-derived token
+  totals without the matching usage rows.
 
 ### 2. Caller Signatures & Rollups
 
