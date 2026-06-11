@@ -1752,6 +1752,8 @@ func TestAgyTokenCountUnmarshal(t *testing.T) {
 		{"null", `null`, 0},
 		{"garbage string", `"abc"`, 0},
 		{"object garbage", `{"bogus":true}`, 0},
+		{"negative quoted", `"-5"`, 0},
+		{"negative bare", `-5`, 0},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {

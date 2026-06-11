@@ -256,7 +256,12 @@ func ParseAntigravityCLISessionWithStatus(
 			// Usage events flow whenever the sidecar parses, even when
 			// no message is displayable, matching the message-less
 			// usage stance of the .db branch. The displayable gate
-			// below applies to the transcript decision only.
+			// below applies to the transcript decision only. A
+			// metadata-only sidecar can therefore pair usage events
+			// with a history/decrypt transcript; events without a
+			// generation timestamp bucket at session start in daily
+			// usage (occurred_at stored as NULL, COALESCEd to
+			// started_at).
 			usageEvents = tRes.usageEvents
 			if hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages) {
 				messages = tRes.messages
@@ -909,7 +914,9 @@ func (c *agyTokenCount) UnmarshalJSON(data []byte) error {
 		s = unquoted
 	}
 	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	if err != nil {
+	if err != nil || n < 0 {
+		// Negative counts are garbage too: emitting them would
+		// subtract from session and daily usage totals.
 		return nil
 	}
 	*c = agyTokenCount(n)
@@ -1166,16 +1173,6 @@ func agyToolDetail(name, inputJSON string) string {
 	return name
 }
 
-// parseAntigravityCLITrajectory reads a <uuid>.trajectory.json sidecar
-// produced out-of-process by agy-reader and returns the decoded
-// transcript as ParsedMessages.
-//
-// Trust posture (see SECURITY.md, "Imports and new readers" row of the
-// Trust boundaries table): the sidecar is treated as untrusted
-// structured input — same posture as any other agent session file.
-// The read is size-capped (maxTrajectorySidecarBytes) and unknown step
-// types are silently skipped further down. No content from the sidecar
-// is executed or echoed back over any outbound channel.
 // agyTrajectoryParseResult is the decoded output of one trajectory
 // sidecar: the transcript messages, the raw step count (used by
 // callers to compare coverage against other decode sources for the
@@ -1187,7 +1184,16 @@ type agyTrajectoryParseResult struct {
 	usageEvents []ParsedUsageEvent
 }
 
-// parseAntigravityCLITrajectory parses an agy-reader trajectory sidecar.
+// parseAntigravityCLITrajectory reads a <uuid>.trajectory.json sidecar
+// produced out-of-process by agy-reader and returns the decoded
+// transcript as ParsedMessages.
+//
+// Trust posture (see SECURITY.md, "Imports and new readers" row of the
+// Trust boundaries table): the sidecar is treated as untrusted
+// structured input — same posture as any other agent session file.
+// The read is size-capped (maxTrajectorySidecarBytes) and unknown step
+// types are silently skipped further down. No content from the sidecar
+// is executed or echoed back over any outbound channel.
 func parseAntigravityCLITrajectory(
 	trajectoryPath string,
 ) (agyTrajectoryParseResult, error) {
