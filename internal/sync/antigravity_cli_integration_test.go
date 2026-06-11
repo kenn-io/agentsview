@@ -3,6 +3,7 @@ package sync_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -474,6 +475,102 @@ func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
 	require.NoError(t, env.engine.SyncSingleSession(sessionID))
 	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
 		"single-session DB decode fallback should demote previously current rows")
+}
+
+// writeAntigravityCLIInferredProjectFixture writes a .db session whose
+// history.jsonl row omits conversationId, so the workspace can only reach
+// the session row through the GH #579 prompt/timestamp inference fallback.
+// The fixture step carries no timestamp, so the parser falls back to the
+// .db mtime; pinning it with Chtimes keeps the 60s window deterministic.
+func writeAntigravityCLIInferredProjectFixture(
+	t *testing.T, env *testEnv, uuid, display, workspace string,
+	dbMtime, rowTime time.Time,
+) {
+	t.Helper()
+
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+
+	historyLine := fmt.Sprintf(
+		`{"workspace": %q, "timestamp": %d, "display": %q}`+"\n",
+		workspace, rowTime.UnixMilli(), display,
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(env.antigravityCLIDir, "history.jsonl"),
+		[]byte(historyLine), 0o644,
+	))
+
+	dbPath := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, dbPath, "Fix the flux capacitor BUG")
+	require.NoError(t, os.Chtimes(dbPath, dbMtime, dbMtime))
+}
+
+func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testing.T) {
+	base := time.UnixMilli(1716244800000)
+	// Display differs from the stored prompt in case and extra
+	// leading/trailing/internal whitespace; only the normalized
+	// (lowercased, whitespace-collapsed) forms match.
+	const display = "  fix  THE Flux   Capacitor Bug "
+	const workspace = "/home/user/inferred-project"
+
+	tests := []struct {
+		name        string
+		rowTime     time.Time
+		wantProject string
+	}{
+		{
+			name:        "normalized match within window infers project",
+			rowTime:     base.Add(10 * time.Second),
+			wantProject: workspace,
+		},
+		{
+			name:        "match outside 60s window leaves project empty",
+			rowTime:     base.Add(2 * time.Minute),
+			wantProject: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := setupTestEnv(t)
+			uuid := "ab12cd34-1111-2222-3333-444455556666"
+			sessionID := "antigravity-cli:" + uuid
+
+			writeAntigravityCLIInferredProjectFixture(
+				t, env, uuid, display, workspace, base, tt.rowTime,
+			)
+
+			runSyncAndAssert(t, env.engine, sync.SyncStats{
+				TotalSessions: 1,
+				Synced:        1,
+				Skipped:       0,
+			})
+
+			assertSessionProject(t, env.db, sessionID, tt.wantProject)
+			assertSessionMessageCount(t, env.db, sessionID, 1)
+			msgs := fetchMessages(t, env.db, sessionID)
+			require.Len(t, msgs, 1)
+			assert.Equal(t, "Fix the flux capacitor BUG", msgs[0].Content)
+		})
+	}
+}
+
+func TestSyncSingleSessionAntigravityCLI_InferredProjectWithoutConversationID(t *testing.T) {
+	base := time.UnixMilli(1716244800000)
+	env := setupTestEnv(t)
+	uuid := "cd34ef56-7777-8888-9999-aaaabbbbcccc"
+	sessionID := "antigravity-cli:" + uuid
+
+	writeAntigravityCLIInferredProjectFixture(
+		t, env, uuid, "  fix  THE Flux   Capacitor Bug ",
+		"/home/user/inferred-project-single",
+		base, base.Add(10*time.Second),
+	)
+
+	// The file-watcher path must persist the inferred project too.
+	require.NoError(t, env.engine.SyncSingleSession(sessionID))
+
+	assertSessionProject(t, env.db, sessionID, "/home/user/inferred-project-single")
+	assertSessionMessageCount(t, env.db, sessionID, 1)
 }
 
 func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {
