@@ -171,6 +171,7 @@ func ParseAntigravitySession(
 		},
 	}
 	accumulateMessageTokenUsage(sess, messages)
+	applyUsageEventTokenTotals(sess, usageEvents)
 	for i := range usageEvents {
 		usageEvents[i].SessionID = sess.ID
 	}

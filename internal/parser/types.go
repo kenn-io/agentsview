@@ -697,30 +697,42 @@ func accumulateMessageTokenUsage(
 	}
 }
 
-// accumulateUsageEventTokenUsage fills session token totals from
-// session-level usage events when the selected transcript carries no
-// per-message token metadata — e.g. an Antigravity CLI sidecar
-// transcript paired with gen_metadata usage from the .db decode. It
-// is a no-op when message rollup already provided coverage, so totals
-// are never double counted.
-func accumulateUsageEventTokenUsage(
+// applyUsageEventTokenTotals recomputes session token totals from the
+// usage-event set whenever events exist. Callers must only use it when
+// events are a superset of per-message token metadata — true for the
+// Antigravity gen_metadata parsers, where every token-bearing message
+// derives from a gen row that also emits an event and undecodable
+// steps emit events with no message. Deriving totals from events
+// therefore covers transcripts that dropped steps (sidecar wins,
+// undecodable rows) without double counting. Message-derived totals
+// are kept where the events are silent.
+func applyUsageEventTokenTotals(
 	sess *ParsedSession,
 	events []ParsedUsageEvent,
 ) {
-	if sess.HasTotalOutputTokens || sess.HasPeakContextTokens {
-		return
-	}
+	totalOutput := 0
+	peakContext := 0
+	hasOutput := false
+	hasContext := false
 	for _, ev := range events {
 		if ev.OutputTokens > 0 {
-			sess.HasTotalOutputTokens = true
-			sess.TotalOutputTokens += ev.OutputTokens
+			hasOutput = true
+			totalOutput += ev.OutputTokens
 		}
 		if ev.InputTokens > 0 {
-			sess.HasPeakContextTokens = true
-			if ev.InputTokens > sess.PeakContextTokens {
-				sess.PeakContextTokens = ev.InputTokens
+			hasContext = true
+			if ev.InputTokens > peakContext {
+				peakContext = ev.InputTokens
 			}
 		}
+	}
+	if hasOutput {
+		sess.HasTotalOutputTokens = true
+		sess.TotalOutputTokens = totalOutput
+	}
+	if hasContext {
+		sess.HasPeakContextTokens = true
+		sess.PeakContextTokens = peakContext
 	}
 }
 

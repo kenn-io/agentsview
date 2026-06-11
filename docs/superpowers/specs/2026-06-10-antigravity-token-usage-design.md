@@ -90,11 +90,14 @@ We will update `loadAntigravityStepsWithRawCount` to:
   ```
 
   Call `accumulateMessageTokenUsage(sess, messages)` to compute session totals
-  before returning. When the trajectory sidecar transcript wins over the DB
-  decode, the selected messages carry no per-message token fields, so
-  `accumulateUsageEventTokenUsage` fills the session totals from the
-  `gen_metadata` usage events instead (and is a no-op when message rollup
-  already provided coverage).
+  before returning, then `applyUsageEventTokenTotals(sess, usageEvents)`. The
+  usage-event set is a superset of per-message token metadata (every
+  token-bearing message derives from a gen row that also emits an event, and
+  undecodable steps emit events with no message), so when events exist the
+  session totals are recomputed from the full event set. This covers transcripts
+  that dropped steps — sidecar wins, undecodable rows — without double counting.
+  Both `ParseAntigravitySession` and `ParseAntigravityCLISessionWithStatus`
+  apply it.
 
 - Update sync orchestration in `internal/sync/engine.go` to pass the returned
   usage events into the final `ParseResult`.

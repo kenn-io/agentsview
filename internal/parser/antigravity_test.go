@@ -1513,6 +1513,92 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 }
 
+// TestAntigravityTokenUsageMixedDecode covers a session where one
+// gen_metadata row belongs to a decoded step and another to a step the
+// heuristic cannot render. Session totals must include both, not just
+// the tokens reachable through decoded messages.
+func TestAntigravityTokenUsageMixedDecode(t *testing.T) {
+	root := t.TempDir()
+	id := "55555555-6666-7777-8888-999999999997"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+
+	tsEarly := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{num: 17, wire: pbWireBytes, bytes: []byte("user question text goes here and is long")},
+	})
+	tsLate := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000100}})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsLate},
+		{num: 17, wire: pbWireBytes, bytes: []byte("assistant response body goes here and is long")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, userPayload)
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
+	// Undecodable step with its own gen_metadata usage.
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (2, 99, ?)`, []byte{0xff, 0xff, 0xff})
+
+	genDecoded := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genDecoded, len(genDecoded))
+	genUndecoded := createAntigravityMockGenMetadata(t, 3000, 220, 10, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (2, ?, ?)`, genUndecoded, len(genUndecoded))
+
+	sess, msgs, usageEvents, err := ParseAntigravitySession(dbPath, "test-project", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2, "undecodable step contributes no message")
+	require.Len(t, usageEvents, 2, "both gen rows emit usage events")
+
+	assert.Equal(t, 400, sess.TotalOutputTokens, "totals must include undecoded gen usage")
+	assert.Equal(t, 3000, sess.PeakContextTokens, "peak must include undecoded gen usage")
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+}
+
+// TestAntigravityCLITokenUsageMixedDecode is the CLI-path variant: the
+// DB decode wins (no sidecar), one gen row maps to a decoded step and
+// one to an undecodable step.
+func TestAntigravityCLITokenUsageMixedDecode(t *testing.T) {
+	root := t.TempDir()
+	id := "ffffffff-0000-1111-2222-333333333333"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+
+	tsLate := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000100}})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsLate},
+		{num: 17, wire: pbWireBytes, bytes: []byte("assistant response body goes here and is long")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 17, ?)`, asstPayload)
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 99, ?)`, []byte{0xff, 0xff, 0xff})
+
+	genDecoded := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genDecoded, len(genDecoded))
+	genUndecoded := createAntigravityMockGenMetadata(t, 3000, 220, 10, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genUndecoded, len(genUndecoded))
+	require.NoError(t, db.Close())
+
+	sess, msgs, usageEvents, _, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	require.Len(t, usageEvents, 2, "both gen rows emit usage events")
+
+	assert.Equal(t, 400, sess.TotalOutputTokens, "totals must include undecoded gen usage")
+	assert.Equal(t, 3000, sess.PeakContextTokens, "peak must include undecoded gen usage")
+}
+
 func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 	root := t.TempDir()
 	id := "55555555-6666-7777-8888-999999999998"

@@ -344,7 +344,7 @@ func ParseAntigravityCLISessionWithStatus(
 		},
 	}
 	accumulateMessageTokenUsage(sess, messages)
-	accumulateUsageEventTokenUsage(sess, usageEvents)
+	applyUsageEventTokenTotals(sess, usageEvents)
 	for i := range usageEvents {
 		usageEvents[i].SessionID = sess.ID
 	}
