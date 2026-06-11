@@ -1409,6 +1409,47 @@ func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 }
 
+func TestAntigravityCLISidecarRescueKeepsGenMetadataUsage(t *testing.T) {
+	root := t.TempDir()
+	id := "eeeeeeee-ffff-0000-1111-222222222222"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+	// Two raw steps the heuristic cannot decode.
+	for i := range 2 {
+		mustExec(t, db,
+			`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+			i, 99, []byte{0xff, 0xff, 0xff})
+	}
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
+	require.NoError(t, db.Close())
+
+	// Covering sidecar rescues the undecodable rows.
+	writeAntigravityTestSidecar(t, root, id, 2)
+
+	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry, "covering sidecar is full-resolution data")
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content, "sidecar transcript should win")
+
+	// gen_metadata usage must survive even though no DB step decoded.
+	require.Len(t, usageEvents, 1)
+	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
+	assert.Equal(t, 2400, usageEvents[0].InputTokens)
+	assert.Equal(t, 180, usageEvents[0].OutputTokens)
+	assert.Equal(t, 30, usageEvents[0].ReasoningTokens)
+	assert.Equal(t, 180, sess.TotalOutputTokens)
+	assert.Equal(t, 2400, sess.PeakContextTokens)
+}
+
 func TestAntigravityTokenUsage(t *testing.T) {
 	root := t.TempDir()
 	id := "55555555-6666-7777-8888-999999999999"

@@ -61,7 +61,11 @@ We will update `loadAntigravityStepsWithRawCount` to:
 - Decode and map the metadata to the corresponding steps.
 - Set `ContextTokens`, `OutputTokens`, `HasContextTokens`, `HasOutputTokens`,
   and `Model` on `ParsedMessage` instances.
-- Append `ParsedUsageEvent` structs to populate the daily cost analytics.
+- Append `ParsedUsageEvent` structs to populate the daily cost analytics. Usage
+  extraction is independent of step decoding: a step the heuristic cannot render
+  into a message (later rescued by the CLI trajectory sidecar transcript) still
+  contributes its usage event, with token fields and model attached to the
+  message only when the step decoded.
 
 ### 2. Caller Signatures & Rollups
 

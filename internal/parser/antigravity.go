@@ -231,52 +231,60 @@ func loadAntigravityStepsWithRawCount(
 			return antigravityStepLoadResult{}, fmt.Errorf("scan step: %w", err)
 		}
 		result.rawStepCount++
-		msg, ok := decodeAntigravityStep(idx, stepType, payload)
-		if !ok {
+		msg, decoded := decodeAntigravityStep(idx, stepType, payload)
+		if data, ok := genMeta[idx]; ok {
+			msg = result.appendGenMetadataUsage(data, msg, decoded)
+		}
+		if !decoded {
 			continue
 		}
-
-		// Look up and apply token usage / model details from gen_metadata
-		if genMeta != nil {
-			if data, ok := genMeta[idx]; ok {
-				if input, output, reasoning, okUsage := extractTokenUsage(data); okUsage {
-					msg.ContextTokens = input
-					msg.OutputTokens = output
-					msg.HasContextTokens = input > 0
-					msg.HasOutputTokens = output > 0
-
-					// Add to usage events if we have tokens to report
-					var occurredAt string
-					if !msg.Timestamp.IsZero() {
-						occurredAt = msg.Timestamp.Format(time.RFC3339Nano)
-					}
-
-					model := extractModelName(data)
-					if model == "" {
-						model = msg.Model
-					}
-
-					result.usageEvents = append(result.usageEvents, ParsedUsageEvent{
-						Source:          "generation",
-						Model:           model,
-						InputTokens:     input,
-						OutputTokens:    output,
-						ReasoningTokens: reasoning,
-						OccurredAt:      occurredAt,
-					})
-				}
-				if model := extractModelName(data); model != "" {
-					msg.Model = model
-				}
-			}
-		}
-
 		result.messages = append(result.messages, msg)
 	}
 	if err := rows.Err(); err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf("iterate steps: %w", err)
 	}
 	return result, nil
+}
+
+// appendGenMetadataUsage records a usage event from one gen_metadata
+// payload and, when the step decoded into a message, attaches token
+// counts and the model name to the returned copy. Usage extraction is
+// deliberately independent of message decoding: a step the heuristic
+// cannot render can still be rescued by the CLI trajectory sidecar
+// transcript, and its usage must not be dropped.
+func (r *antigravityStepLoadResult) appendGenMetadataUsage(
+	data []byte, msg ParsedMessage, decoded bool,
+) ParsedMessage {
+	genModel := extractModelName(data)
+	input, output, reasoning, okUsage := extractTokenUsage(data)
+	if okUsage {
+		eventModel := genModel
+		var occurredAt string
+		if decoded {
+			if eventModel == "" {
+				eventModel = msg.Model
+			}
+			if !msg.Timestamp.IsZero() {
+				occurredAt = msg.Timestamp.Format(time.RFC3339Nano)
+			}
+			msg.ContextTokens = input
+			msg.OutputTokens = output
+			msg.HasContextTokens = input > 0
+			msg.HasOutputTokens = output > 0
+		}
+		r.usageEvents = append(r.usageEvents, ParsedUsageEvent{
+			Source:          "generation",
+			Model:           eventModel,
+			InputTokens:     input,
+			OutputTokens:    output,
+			ReasoningTokens: reasoning,
+			OccurredAt:      occurredAt,
+		})
+	}
+	if decoded && genModel != "" {
+		msg.Model = genModel
+	}
+	return msg
 }
 
 // extractTokenUsage walks the decoded protobuf fields recursively to find
