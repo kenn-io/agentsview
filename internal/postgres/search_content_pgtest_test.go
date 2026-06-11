@@ -501,6 +501,53 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 		"idx_messages_content_trgm must have fastupdate=off")
 }
 
+// TestPGContentSearchTrigramIndexUpgrade verifies the upgrade path: a store
+// whose trigram index was created by an earlier schema with the default
+// fastupdate=on gets fastupdate=off reapplied on the next EnsureSchema run.
+func TestPGContentSearchTrigramIndexUpgrade(t *testing.T) {
+	store := setupContentSearch(t)
+	ctx := context.Background()
+
+	hasFastupdateOff := func() bool {
+		var off bool
+		require.NoError(t, store.DB().QueryRowContext(ctx,
+			`SELECT EXISTS (
+				SELECT 1
+				  FROM pg_class c
+				  JOIN pg_namespace n ON n.oid = c.relnamespace
+				 WHERE n.nspname = $1
+				   AND c.relname = 'idx_messages_content_trgm'
+				   AND 'fastupdate=off' = ANY(c.reloptions)
+			)`, contentSearchSchema,
+		).Scan(&off), "query pg_class.reloptions")
+		return off
+	}
+
+	var hasIdx bool
+	require.NoError(t, store.DB().QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = $1 AND indexname = 'idx_messages_content_trgm'
+		)`, contentSearchSchema,
+	).Scan(&hasIdx), "query pg_indexes")
+	if !hasIdx {
+		t.Skip("trigram index not created on this instance; index is best-effort")
+	}
+
+	// Simulate an index left behind by the pre-#606 schema, which created
+	// it with the PostgreSQL default fastupdate=on.
+	_, err := store.DB().ExecContext(ctx,
+		`ALTER INDEX idx_messages_content_trgm SET (fastupdate = on)`)
+	require.NoError(t, err, "reset index to fastupdate=on")
+	require.False(t, hasFastupdateOff(),
+		"precondition: index should report fastupdate=on")
+
+	require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema),
+		"rerun EnsureSchema")
+	assert.True(t, hasFastupdateOff(),
+		"EnsureSchema must reapply fastupdate=off to a pre-existing index")
+}
+
 // TestPGSearchContentRegex verifies regex mode.
 func TestPGSearchContentRegex(t *testing.T) {
 	store := setupContentSearch(t)
