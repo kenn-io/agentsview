@@ -1399,11 +1399,11 @@ func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
 
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
-	assert.Equal(t, 180, usageEvents[0].OutputTokens)
+	assert.Equal(t, 210, usageEvents[0].OutputTokens)
 
 	// Session totals must come from gen_metadata usage even though
 	// the sidecar transcript has no per-message token metadata.
-	assert.Equal(t, 180, sess.TotalOutputTokens)
+	assert.Equal(t, 210, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
@@ -1444,9 +1444,9 @@ func TestAntigravityCLISidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
-	assert.Equal(t, 180, usageEvents[0].OutputTokens)
+	assert.Equal(t, 210, usageEvents[0].OutputTokens)
 	assert.Equal(t, 30, usageEvents[0].ReasoningTokens)
-	assert.Equal(t, 180, sess.TotalOutputTokens)
+	assert.Equal(t, 210, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 }
 
@@ -1494,7 +1494,7 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
 	assert.Equal(t, "Test Gemini 3.5", msgs[1].Model)
 	assert.Equal(t, 2400, msgs[1].ContextTokens)
-	assert.Equal(t, 180, msgs[1].OutputTokens)
+	assert.Equal(t, 210, msgs[1].OutputTokens)
 	assert.True(t, msgs[1].HasContextTokens)
 	assert.True(t, msgs[1].HasOutputTokens)
 
@@ -1503,11 +1503,11 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	assert.Equal(t, "generation", usageEvents[0].Source)
 	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
-	assert.Equal(t, 180, usageEvents[0].OutputTokens)
+	assert.Equal(t, 210, usageEvents[0].OutputTokens)
 	assert.Equal(t, 30, usageEvents[0].ReasoningTokens)
 
 	// 3. Verify session rollup
-	assert.Equal(t, 180, sess.TotalOutputTokens)
+	assert.Equal(t, 210, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
@@ -1554,7 +1554,7 @@ func TestAntigravityTokenUsageMixedDecode(t *testing.T) {
 	require.Len(t, msgs, 2, "undecodable step contributes no message")
 	require.Len(t, usageEvents, 2, "both gen rows emit usage events")
 
-	assert.Equal(t, 400, sess.TotalOutputTokens, "totals must include undecoded gen usage")
+	assert.Equal(t, 440, sess.TotalOutputTokens, "totals must include undecoded gen usage")
 	assert.Equal(t, 3000, sess.PeakContextTokens, "peak must include undecoded gen usage")
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
@@ -1595,7 +1595,7 @@ func TestAntigravityCLITokenUsageMixedDecode(t *testing.T) {
 	require.NotEmpty(t, msgs)
 	require.Len(t, usageEvents, 2, "both gen rows emit usage events")
 
-	assert.Equal(t, 400, sess.TotalOutputTokens, "totals must include undecoded gen usage")
+	assert.Equal(t, 440, sess.TotalOutputTokens, "totals must include undecoded gen usage")
 	assert.Equal(t, 3000, sess.PeakContextTokens, "peak must include undecoded gen usage")
 }
 
@@ -1623,7 +1623,7 @@ func TestAntigravityZeroMessageKeepsUsageEvents(t *testing.T) {
 	assert.Empty(t, msgs)
 	require.Len(t, usageEvents, 1, "usage events must survive zero-message parses")
 	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
-	assert.Equal(t, 180, sess.TotalOutputTokens)
+	assert.Equal(t, 210, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 }
 
@@ -1652,8 +1652,8 @@ func TestAntigravityCLIZeroMessageKeepsUsageEvents(t *testing.T) {
 	assert.True(t, status.NeedsRetry, "undecodable rows stay retryable")
 	assert.Empty(t, msgs)
 	require.Len(t, usageEvents, 1, "usage events must survive zero-message parses")
-	assert.Equal(t, 220, usageEvents[0].OutputTokens)
-	assert.Equal(t, 220, sess.TotalOutputTokens)
+	assert.Equal(t, 230, usageEvents[0].OutputTokens)
+	assert.Equal(t, 230, sess.TotalOutputTokens)
 	assert.Equal(t, 3000, sess.PeakContextTokens)
 }
 
@@ -1698,15 +1698,15 @@ func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "Test Gemini 3.5 Flash", msgs[1].Model)
 	assert.Equal(t, 5000, msgs[1].ContextTokens)
-	assert.Equal(t, 400, msgs[1].OutputTokens)
+	assert.Equal(t, 480, msgs[1].OutputTokens)
 
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, "Test Gemini 3.5 Flash", usageEvents[0].Model)
 	assert.Equal(t, 5000, usageEvents[0].InputTokens)
-	assert.Equal(t, 400, usageEvents[0].OutputTokens)
+	assert.Equal(t, 480, usageEvents[0].OutputTokens)
 	assert.Equal(t, 80, usageEvents[0].ReasoningTokens)
 
-	assert.Equal(t, 400, sess.TotalOutputTokens)
+	assert.Equal(t, 480, sess.TotalOutputTokens)
 	assert.Equal(t, 5000, sess.PeakContextTokens)
 }
 

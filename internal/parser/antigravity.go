@@ -262,6 +262,12 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 	genModel := extractModelName(data)
 	input, output, reasoning, okUsage := extractTokenUsage(data)
 	if okUsage {
+		// gen_metadata splits candidates (field 2) and thoughts
+		// (field 3) Gemini-style, but cost paths price OutputTokens
+		// only. Fold reasoning into the billable output — matching
+		// the Gemini parser — and keep ReasoningTokens as a
+		// breakdown.
+		billableOutput := output + reasoning
 		eventModel := genModel
 		var occurredAt string
 		if decoded {
@@ -272,15 +278,15 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 				occurredAt = msg.Timestamp.Format(time.RFC3339Nano)
 			}
 			msg.ContextTokens = input
-			msg.OutputTokens = output
+			msg.OutputTokens = billableOutput
 			msg.HasContextTokens = input > 0
-			msg.HasOutputTokens = output > 0
+			msg.HasOutputTokens = billableOutput > 0
 		}
 		r.usageEvents = append(r.usageEvents, ParsedUsageEvent{
 			Source:          "generation",
 			Model:           eventModel,
 			InputTokens:     input,
-			OutputTokens:    output,
+			OutputTokens:    billableOutput,
 			ReasoningTokens: reasoning,
 			OccurredAt:      occurredAt,
 		})

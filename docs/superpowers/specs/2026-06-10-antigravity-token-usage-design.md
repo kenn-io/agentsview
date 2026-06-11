@@ -40,6 +40,11 @@ We will implement two new recursive protobuf field walkers in
   - `Field 2` = Output/Candidate tokens
   - `Field 3` = Reasoning tokens
 
+  Persisted `OutputTokens` (message fields, usage events, session totals) is
+  `field2 + field3`: cost paths price `OutputTokens` only, so reasoning folds
+  into the billable output — matching the Gemini parser's thoughts handling —
+  while `ReasoningTokens` is kept separately as a breakdown.
+
   **False-positive guard:** the heuristic (`field1 ∈ [1000, 5000)`) is broad
   enough to match other unrelated nested messages — for example, a
   nanosecond-latency counter in a scheduler event whose `field1` happens to fall
