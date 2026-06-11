@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -134,90 +135,90 @@ func ParseAntigravitySession(
 		return nil, nil, nil, err
 	}
 	messages = append(messages,
-		collectAntigravityBrainMessages(
-			filepath.Join(root, "brain", id),
-		)...,
-	)
+	collectAntigravityBrainMessages(
+		filepath.Join(root, "brain", id),
+	)...,
+)
 
-	sort.SliceStable(messages, func(i, j int) bool {
-		return messages[i].Timestamp.Before(messages[j].Timestamp)
-	})
-	for i := range messages {
-		messages[i].Ordinal = i
-	}
+sort.SliceStable(messages, func(i, j int) bool {
+	return messages[i].Timestamp.Before(messages[j].Timestamp)
+})
+for i := range messages {
+	messages[i].Ordinal = i
+}
 
-	var firstMessage string
-	var userCount int
-	var startedAt, endedAt time.Time
-	for _, m := range messages {
-		if m.Role == RoleUser {
-			userCount++
-			if firstMessage == "" && m.Content != "" {
-				firstMessage = truncate(
-					strings.ReplaceAll(m.Content, "\n", " "),
-					300,
-				)
-			}
-		}
-		if !m.Timestamp.IsZero() {
-			if startedAt.IsZero() || m.Timestamp.Before(startedAt) {
-				startedAt = m.Timestamp
-			}
-			if m.Timestamp.After(endedAt) {
-				endedAt = m.Timestamp
-			}
+var firstMessage string
+var userCount int
+var startedAt, endedAt time.Time
+for _, m := range messages {
+	if m.Role == RoleUser {
+		userCount++
+		if firstMessage == "" && m.Content != "" {
+			firstMessage = truncate(
+				strings.ReplaceAll(m.Content, "\n", " "),
+				300,
+			)
 		}
 	}
-	if ann := readAntigravityAnnotation(
-		filepath.Join(root, "annotations", id+".pbtxt"),
-	); !ann.IsZero() && ann.After(endedAt) {
-		endedAt = ann
+	if !m.Timestamp.IsZero() {
+		if startedAt.IsZero() || m.Timestamp.Before(startedAt) {
+			startedAt = m.Timestamp
+		}
+		if m.Timestamp.After(endedAt) {
+			endedAt = m.Timestamp
+		}
 	}
-	if startedAt.IsZero() {
-		startedAt = info.ModTime()
-	}
-	if endedAt.IsZero() {
-		endedAt = info.ModTime()
-	}
+}
+if ann := readAntigravityAnnotation(
+	filepath.Join(root, "annotations", id+".pbtxt"),
+); !ann.IsZero() && ann.After(endedAt) {
+	endedAt = ann
+}
+if startedAt.IsZero() {
+	startedAt = info.ModTime()
+}
+if endedAt.IsZero() {
+	endedAt = info.ModTime()
+}
 
-	var size int64
-	var mtime int64
-	if effInfo, statErr := AntigravityFileInfo(path); statErr == nil {
-		size = effInfo.Size()
-		mtime = effInfo.ModTime().UnixNano()
-	} else {
-		size = info.Size()
-		mtime = info.ModTime().UnixNano()
-	}
+var size int64
+var mtime int64
+if effInfo, statErr := AntigravityFileInfo(path); statErr == nil {
+	size = effInfo.Size()
+	mtime = effInfo.ModTime().UnixNano()
+} else {
+	size = info.Size()
+	mtime = info.ModTime().UnixNano()
+}
 
-	sess := &ParsedSession{
-		ID:               antigravityIDPrefix + id,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentAntigravity,
-		FirstMessage:     firstMessage,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: userCount,
-		File: FileInfo{
-			Path:  path,
-			Size:  size,
-			Mtime: mtime,
-		},
-	}
-	accumulateMessageTokenUsage(sess, messages)
-	applyUsageEventTokenTotals(sess, usageEvents)
-	for i := range usageEvents {
-		usageEvents[i].SessionID = sess.ID
-	}
-	if len(messages) == 0 {
-		// Usage events still flow for message-less parses (e.g. an
-		// undecodable DB with gen_metadata) so daily usage analytics
-		// match the event-derived session totals stamped above.
-		return sess, nil, usageEvents, nil
-	}
-	return sess, messages, usageEvents, nil
+sess := &ParsedSession{
+	ID:               antigravityIDPrefix + id,
+	Project:          project,
+	Machine:          machine,
+	Agent:            AgentAntigravity,
+	FirstMessage:     firstMessage,
+	StartedAt:        startedAt,
+	EndedAt:          endedAt,
+	MessageCount:     len(messages),
+	UserMessageCount: userCount,
+	File: FileInfo{
+		Path:  path,
+		Size:  size,
+		Mtime: mtime,
+	},
+}
+accumulateMessageTokenUsage(sess, messages)
+applyUsageEventTokenTotals(sess, usageEvents)
+for i := range usageEvents {
+	usageEvents[i].SessionID = sess.ID
+}
+if len(messages) == 0 {
+	// Usage events still flow for message-less parses (e.g. an
+	// undecodable DB with gen_metadata) so daily usage analytics
+	// match the event-derived session totals stamped above.
+	return sess, nil, usageEvents, nil
+}
+return sess, messages, usageEvents, nil
 }
 
 func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, []ParsedUsageEvent, error) {
@@ -239,7 +240,7 @@ func loadAntigravityStepsWithRawCount(
 ) (antigravityStepLoadResult, error) {
 	rows, err := db.Query(
 		`SELECT idx, step_type, step_payload FROM steps ` +
-			`ORDER BY idx`,
+		`ORDER BY idx`,
 	)
 	if err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf("query steps: %w", err)
@@ -296,16 +297,16 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 	data []byte, msg ParsedMessage, decoded bool,
 ) ParsedMessage {
 	genModel := extractModelName(data)
-	input, output, reasoning, okUsage := extractTokenUsage(data)
+	input, output, cached, reasoning, okUsage := extractTokenUsage(data)
 	if okUsage {
 		// gen_metadata splits candidates (field 2) and thoughts
-		// (field 3) Gemini-style, but cost paths price OutputTokens
-		// only. Fold reasoning into the billable output — matching
-		// the Gemini parser — and keep ReasoningTokens as a
-		// breakdown.
-		billableOutput := output + reasoning
+		// (field 3) Gemini-style. The candidate tokens (output) already
+		// include the reasoning tokens. We keep ReasoningTokens as a
+		// breakdown but do not add them to billable output again.
+		billableOutput := output
 		eventModel := genModel
 		var occurredAt string
+		uncached := max(input-cached, 0)
 		if decoded {
 			if eventModel == "" {
 				eventModel = msg.Model
@@ -315,13 +316,27 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 			}
 			msg.ContextTokens = input
 			msg.OutputTokens = billableOutput
-			msg.HasContextTokens = input > 0
+			msg.HasContextTokens = input > 0 || cached > 0
 			msg.HasOutputTokens = billableOutput > 0
+
+			payload := map[string]int{
+				"input_tokens":  uncached,
+				"output_tokens": output,
+			}
+			if reasoning > 0 {
+				payload["reasoning_tokens"] = reasoning
+			}
+			if cached > 0 {
+				payload["cache_read_input_tokens"] = cached
+			}
+			if j, err := json.Marshal(payload); err == nil {
+				msg.TokenUsage = j
+			}
 		}
 		r.usageEvents = append(r.usageEvents, ParsedUsageEvent{
 			Source:          "generation",
 			Model:           eventModel,
-			InputTokens:     input,
+			InputTokens:     uncached,
 			OutputTokens:    billableOutput,
 			ReasoningTokens: reasoning,
 			OccurredAt:      occurredAt,
@@ -345,10 +360,10 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 // positives and skipped.
 const maxPlausibleTokens = 2_000_000
 
-func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
+func extractTokenUsage(data []byte) (input, output, cached, reasoning int, ok bool) {
 	fields, err := agProtoParse(data)
 	if err != nil {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	var found bool
 	var walk func([]agProtoField)
@@ -356,8 +371,8 @@ func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
 		if found {
 			return
 		}
-		if in, out, reas, blockOK := tokenBlockFrom(fs); blockOK {
-			input, output, reasoning = in, out, reas
+		if in, out, cach, reas, blockOK := tokenBlockFrom(fs); blockOK {
+			input, output, cached, reasoning = in, out, cach, reas
 			found = true
 			return
 		}
@@ -368,7 +383,7 @@ func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
 		}
 	}
 	walk(fields)
-	return input, output, reasoning, found
+	return input, output, cached, reasoning, found
 }
 
 // tokenBlockFrom reports whether fs is a plausible token usage block:
@@ -380,32 +395,34 @@ func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
 // latency counters) lack it. Field 3 stays optional because zero
 // reasoning is legitimate and omitted from the wire, but a present
 // field 3 with a non-varint wire type marks the block as a decoy.
-// The cap also applies to output+reasoning combined, because that sum
-// is the billable output the caller persists: capping the fields only
-// individually would let a decoy block persist up to twice the cap.
-func tokenBlockFrom(fs []agProtoField) (input, output, reasoning int, ok bool) {
+func tokenBlockFrom(fs []agProtoField) (input, output, cached, reasoning int, ok bool) {
 	f1, ok1 := agProtoFind(fs, 1)
 	f2, ok2 := agProtoFind(fs, 2)
 	f5, ok5 := agProtoFind(fs, 5)
 	if !ok1 || !ok2 || !ok5 ||
 		f1.Wire != pbWireVarint || f2.Wire != pbWireVarint ||
 		f5.Wire != pbWireVarint {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	if f1.Varint < 1000 || f1.Varint >= 5000 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	if f2.Varint > maxPlausibleTokens || f5.Varint > maxPlausibleTokens {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	if f3, hasF3 := agProtoFind(fs, 3); hasF3 {
-		if f3.Wire != pbWireVarint || f3.Varint > maxPlausibleTokens ||
-			f2.Varint+f3.Varint > maxPlausibleTokens {
-			return 0, 0, 0, false
+		if f3.Wire != pbWireVarint || f3.Varint > maxPlausibleTokens {
+			return 0, 0, 0, 0, false
 		}
 		reasoning = int(f3.Varint)
 	}
-	return int(f5.Varint), int(f2.Varint), reasoning, true
+	if f4, hasF4 := agProtoFind(fs, 4); hasF4 {
+		if f4.Wire != pbWireVarint || f4.Varint > maxPlausibleTokens {
+			return 0, 0, 0, 0, false
+		}
+		cached = int(f4.Varint)
+	}
+	return int(f5.Varint), int(f2.Varint), cached, reasoning, true
 }
 
 // extractModelName recursively walks fields to extract the model name from Field 21 or Field 19.
@@ -477,6 +494,9 @@ func isPlausibleModelName(s string) bool {
 //     model placeholders, and duplicate payload echoes are filtered
 //     out. User-input steps prefer a single prompt-like string.
 //   - timestamp: earliest google.protobuf.Timestamp-shaped field.
+//   - tool calls: assistant steps whose payloads contain known tool
+//     name strings emit structured ParsedToolCall entries so that
+//     the timing panel can compute turns, categories, and counts.
 func decodeAntigravityStep(
 	idx, stepType int, payload []byte,
 ) (ParsedMessage, bool) {
@@ -499,12 +519,111 @@ func decodeAntigravityStep(
 		role = RoleUser
 	}
 	content := strings.Join(strs, "\n\n")
-	return ParsedMessage{
+	msg := ParsedMessage{
 		Role:          role,
 		Content:       content,
 		ContentLength: len(content),
 		Timestamp:     ts,
-	}, true
+	}
+	if role == RoleAssistant {
+		calls := extractAntigravityToolCalls(idx, fields)
+		if len(calls) > 0 {
+			msg.ToolCalls = calls
+			msg.HasToolUse = true
+		}
+	}
+	return msg, true
+}
+
+// isLikelyToolName returns true if s is a reasonable candidate for a tool name:
+// - length between 1 and 64 characters
+// - contains only ASCII letters, digits, underscores, hyphens, and colons.
+func isLikelyToolName(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		r := s[i]
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+// extractAntigravityToolCalls walks the decoded protobuf field tree
+// and returns one ParsedToolCall per tool invocation found. Uses the
+// same heuristic-walker approach as extractTokenUsage / extractModelName:
+// we identify strings that exactly match known tool names, collect any
+// adjacent UUID-like string as the ToolUseID, and any adjacent JSON
+// object string as the InputJSON.
+//
+// When no UUID-like ID is found, a synthetic deterministic ID is
+// generated so the timing pipeline still has a stable key per call.
+func extractAntigravityToolCalls(
+	stepIdx int, fields []agProtoField,
+) []ParsedToolCall {
+	// Collect all string values reachable from this step's field tree.
+	// minLen=1 so we catch even short tool names like "Bash" or "Read".
+	all := agProtoCollectStrings(fields, 1)
+
+	var calls []ParsedToolCall
+	seen := map[string]bool{}
+	for i, s := range all {
+		if !isLikelyToolName(s) {
+			continue
+		}
+		cat := NormalizeToolCategory(s)
+		if cat == "Other" {
+			continue
+		}
+		// Avoid emitting duplicate tool-name hits from the same payload
+		// (the walker may surface the same string via multiple paths).
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+
+		// Look for an adjacent UUID-like string to use as ToolUseID.
+		// We scan the neighbouring strings (within a small window on
+		// either side) since the proto walker returns siblings in
+		// encounter order.
+		toolUseID := ""
+		for _, offset := range []int{-2, -1, 1, 2} {
+			j := i + offset
+			if j < 0 || j >= len(all) {
+				continue
+			}
+			if antigravityUUIDLikeRE.MatchString(all[j]) {
+				toolUseID = all[j]
+				break
+			}
+		}
+		if toolUseID == "" {
+			toolUseID = fmt.Sprintf("ag-step-%d-%d", stepIdx, len(calls))
+		}
+
+		// Look for an adjacent JSON-object string to use as InputJSON.
+		inputJSON := ""
+		for _, offset := range []int{1, 2, -1} {
+			j := i + offset
+			if j < 0 || j >= len(all) {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimSpace(all[j]), "{") {
+				inputJSON = all[j]
+				break
+			}
+		}
+
+		calls = append(calls, ParsedToolCall{
+			ToolUseID: toolUseID,
+			ToolName:  s,
+			Category:  cat,
+			InputJSON: inputJSON,
+		})
+	}
+	return calls
 }
 
 func dedupeStrings(in []string) []string {

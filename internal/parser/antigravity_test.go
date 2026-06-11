@@ -1056,9 +1056,207 @@ func mustExec(
 	require.NoError(t, err, "exec %q", q)
 }
 
+// createAntigravityToolCallDB creates a .db with two steps:
+//   - step_type=14 (user): plain text prompt
+//   - step_type=17 (assistant): payload containing the string "view_file"
+//     embedded as a protobuf string field, simulating a planner response
+//     that invoked the view_file tool.
+func createAntigravityToolCallDB(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open")
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+
+	tsEarly := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1779000000},
+	})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{num: 17, wire: pbWireBytes, bytes: []byte("please check the file")},
+	})
+
+	tsLate := encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1779000100},
+	})
+	// Embed "view_file" as a string field inside a nested message
+	// that also contains a UUID-like tool-use ID. This mirrors the
+	// protobuf shape observed in real Antigravity .db step payloads.
+	toolCallNested := encodePB([]pbField{
+		{num: 3, wire: pbWireBytes, bytes: []byte("view_file")},
+		{num: 4, wire: pbWireBytes, bytes: []byte("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")},
+	})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsLate},
+		{num: 17, wire: pbWireBytes, bytes: []byte("I will read the file for you")},
+		{num: 8, wire: pbWireBytes, bytes: toolCallNested},
+	})
+
+	mustExec(t, db,
+		`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		0, 14, userPayload)
+	mustExec(t, db,
+		`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		1, 17, asstPayload)
+}
+
+// TestDecodeAntigravityStepToolCall is the tracer bullet: parsing a .db
+// session whose assistant step contains a known tool name ("view_file")
+// produces a message with HasToolUse=true and one ToolCall entry.
+func TestDecodeAntigravityStepToolCall(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityToolCallDB(t, dbPath)
+
+	sess, msgs, _, err := ParseAntigravitySession(dbPath, "/tmp/proj", "m")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Find the assistant message.
+	var asstMsg *ParsedMessage
+	for i := range msgs {
+		if msgs[i].Role == RoleAssistant {
+			asstMsg = &msgs[i]
+			break
+		}
+	}
+	require.NotNil(t, asstMsg, "expected an assistant message")
+
+	assert.True(t, asstMsg.HasToolUse, "assistant message should have HasToolUse=true")
+	require.Len(t, asstMsg.ToolCalls, 1, "expected one tool call")
+	assert.Equal(t, "view_file", asstMsg.ToolCalls[0].ToolName)
+	assert.Equal(t, "Read", asstMsg.ToolCalls[0].Category)
+}
+
 // silence unused warning on time import in case the file is
 // trimmed in the future.
 var _ = time.Time{}
+
+// TestDecodeAntigravityStepUserNoToolCalls asserts that a user step
+// (step_type=14) whose payload happens to contain a known tool name string
+// does NOT produce any ToolCall entries — tool calls only belong on assistant
+// messages.
+func TestDecodeAntigravityStepUserNoToolCalls(t *testing.T) {
+	root := t.TempDir()
+	id := "bbbb2222-cccc-dddd-eeee-ffffffffffff"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+
+	// Build a .db where the USER step payload contains "view_file".
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+
+	ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
+	// User step (step_type=14) whose payload includes a tool name string.
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: ts},
+		{num: 17, wire: pbWireBytes, bytes: []byte("please use view_file on that path")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		0, 14, userPayload)
+
+	sess, msgs, _, err := ParseAntigravitySession(dbPath, "/tmp/proj", "m")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.False(t, msgs[0].HasToolUse, "user step should not have HasToolUse=true")
+	assert.Empty(t, msgs[0].ToolCalls, "user step should have no ToolCalls")
+}
+
+// TestDecodeAntigravityStepNoFalsePositives asserts that an assistant step
+// whose payload contains only plain prose (no known tool name strings)
+// produces no ToolCall entries and HasToolUse=false.
+func TestDecodeAntigravityStepNoFalsePositives(t *testing.T) {
+	root := t.TempDir()
+	id := "cccc3333-dddd-eeee-ffff-000000000000"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+
+	ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
+	// Assistant step with no known tool names — just prose.
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: ts},
+		{num: 17, wire: pbWireBytes, bytes: []byte("Here is my analysis of the codebase and recommendations for improvement.")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		0, 17, asstPayload)
+
+	sess, msgs, _, err := ParseAntigravitySession(dbPath, "/tmp/proj", "m")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleAssistant, msgs[0].Role)
+	assert.False(t, msgs[0].HasToolUse, "plain-prose step should not have HasToolUse=true")
+	assert.Empty(t, msgs[0].ToolCalls, "plain-prose step should have no ToolCalls")
+}
+
+// TestDecodeAntigravityStepMultipleToolCalls asserts that an assistant step
+// whose payload contains two distinct known tool names produces two ToolCall
+// entries with the correct names and categories.
+func TestDecodeAntigravityStepMultipleToolCalls(t *testing.T) {
+	root := t.TempDir()
+	id := "dddd4444-eeee-ffff-0000-111111111111"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	createAntigravityStepTables(t, db)
+
+	ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
+	// Two tool call nested messages in the same assistant step.
+	tc1 := encodePB([]pbField{
+		{num: 3, wire: pbWireBytes, bytes: []byte("view_file")},
+		{num: 4, wire: pbWireBytes, bytes: []byte("11111111-2222-3333-4444-555555555555")},
+	})
+	tc2 := encodePB([]pbField{
+		{num: 3, wire: pbWireBytes, bytes: []byte("run_command")},
+		{num: 4, wire: pbWireBytes, bytes: []byte("66666666-7777-8888-9999-aaaaaaaaaaaa")},
+	})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: ts},
+		{num: 17, wire: pbWireBytes, bytes: []byte("reading file and running command")},
+		{num: 8, wire: pbWireBytes, bytes: tc1},
+		{num: 9, wire: pbWireBytes, bytes: tc2},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		0, 17, asstPayload)
+
+	sess, msgs, _, err := ParseAntigravitySession(dbPath, "/tmp/proj", "m")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	require.Len(t, msgs, 1)
+	assert.True(t, msgs[0].HasToolUse)
+	require.Len(t, msgs[0].ToolCalls, 2, "expected two tool calls")
+
+	toolNames := []string{msgs[0].ToolCalls[0].ToolName, msgs[0].ToolCalls[1].ToolName}
+	assert.ElementsMatch(t, []string{"view_file", "run_command"}, toolNames)
+
+	for _, tc := range msgs[0].ToolCalls {
+		switch tc.ToolName {
+		case "view_file":
+			assert.Equal(t, "Read", tc.Category)
+		case "run_command":
+			assert.Equal(t, "Bash", tc.Category)
+		}
+	}
+}
 
 func TestAntigravityCLITrajectoryParse(t *testing.T) {
 	root := t.TempDir()
@@ -1537,7 +1735,7 @@ func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, userPayload)
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
 
-	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, 30, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
 	require.NoError(t, db.Close())
 
@@ -1557,11 +1755,11 @@ func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
 
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
-	assert.Equal(t, 210, usageEvents[0].OutputTokens)
+	assert.Equal(t, 180, usageEvents[0].OutputTokens)
 
 	// Session totals must come from gen_metadata usage even though
 	// the sidecar transcript has no per-message token metadata.
-	assert.Equal(t, 210, sess.TotalOutputTokens)
+	assert.Equal(t, 180, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
@@ -1583,7 +1781,7 @@ func TestAntigravityCLISidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 			`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
 			i, 99, []byte{0xff, 0xff, 0xff})
 	}
-	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, 30, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
 	require.NoError(t, db.Close())
 
@@ -1602,9 +1800,9 @@ func TestAntigravityCLISidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
-	assert.Equal(t, 210, usageEvents[0].OutputTokens)
+	assert.Equal(t, 180, usageEvents[0].OutputTokens)
 	assert.Equal(t, 30, usageEvents[0].ReasoningTokens)
-	assert.Equal(t, 210, sess.TotalOutputTokens)
+	assert.Equal(t, 180, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 }
 
@@ -2102,7 +2300,7 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
 
 	// Create gen_metadata entry for the assistant step (idx=1)
-	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, 30, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
 
 	sess, msgs, usageEvents, err := ParseAntigravitySession(dbPath, "test-project", "test-machine")
@@ -2114,7 +2312,7 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
 	assert.Equal(t, "Test Gemini 3.5", msgs[1].Model)
 	assert.Equal(t, 2400, msgs[1].ContextTokens)
-	assert.Equal(t, 210, msgs[1].OutputTokens)
+	assert.Equal(t, 180, msgs[1].OutputTokens)
 	assert.True(t, msgs[1].HasContextTokens)
 	assert.True(t, msgs[1].HasOutputTokens)
 
@@ -2123,11 +2321,11 @@ func TestAntigravityTokenUsage(t *testing.T) {
 	assert.Equal(t, "generation", usageEvents[0].Source)
 	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
-	assert.Equal(t, 210, usageEvents[0].OutputTokens)
+	assert.Equal(t, 180, usageEvents[0].OutputTokens)
 	assert.Equal(t, 30, usageEvents[0].ReasoningTokens)
 
 	// 3. Verify session rollup
-	assert.Equal(t, 210, sess.TotalOutputTokens)
+	assert.Equal(t, 180, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
@@ -2164,9 +2362,9 @@ func TestAntigravityTokenUsageMixedDecode(t *testing.T) {
 	// Undecodable step with its own gen_metadata usage.
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (2, 99, ?)`, []byte{0xff, 0xff, 0xff})
 
-	genDecoded := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	genDecoded := createAntigravityMockGenMetadata(t, 2400, 180, 0, 30, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genDecoded, len(genDecoded))
-	genUndecoded := createAntigravityMockGenMetadata(t, 3000, 220, 10, "Test Gemini 3.5")
+	genUndecoded := createAntigravityMockGenMetadata(t, 3000, 220, 0, 10, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (2, ?, ?)`, genUndecoded, len(genUndecoded))
 
 	sess, msgs, usageEvents, err := ParseAntigravitySession(dbPath, "test-project", "test-machine")
@@ -2174,7 +2372,7 @@ func TestAntigravityTokenUsageMixedDecode(t *testing.T) {
 	require.Len(t, msgs, 2, "undecodable step contributes no message")
 	require.Len(t, usageEvents, 2, "both gen rows emit usage events")
 
-	assert.Equal(t, 440, sess.TotalOutputTokens, "totals must include undecoded gen usage")
+	assert.Equal(t, 400, sess.TotalOutputTokens, "totals must include undecoded gen usage")
 	assert.Equal(t, 3000, sess.PeakContextTokens, "peak must include undecoded gen usage")
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.True(t, sess.HasPeakContextTokens)
@@ -2202,9 +2400,9 @@ func TestAntigravityCLITokenUsageMixedDecode(t *testing.T) {
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 17, ?)`, asstPayload)
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 99, ?)`, []byte{0xff, 0xff, 0xff})
 
-	genDecoded := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	genDecoded := createAntigravityMockGenMetadata(t, 2400, 180, 0, 30, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genDecoded, len(genDecoded))
-	genUndecoded := createAntigravityMockGenMetadata(t, 3000, 220, 10, "Test Gemini 3.5")
+	genUndecoded := createAntigravityMockGenMetadata(t, 3000, 220, 0, 10, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genUndecoded, len(genUndecoded))
 	require.NoError(t, db.Close())
 
@@ -2215,7 +2413,7 @@ func TestAntigravityCLITokenUsageMixedDecode(t *testing.T) {
 	require.NotEmpty(t, msgs)
 	require.Len(t, usageEvents, 2, "both gen rows emit usage events")
 
-	assert.Equal(t, 440, sess.TotalOutputTokens, "totals must include undecoded gen usage")
+	assert.Equal(t, 400, sess.TotalOutputTokens, "totals must include undecoded gen usage")
 	assert.Equal(t, 3000, sess.PeakContextTokens, "peak must include undecoded gen usage")
 }
 
@@ -2235,7 +2433,7 @@ func TestAntigravityZeroMessageKeepsUsageEvents(t *testing.T) {
 	createAntigravityStepTables(t, db)
 	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 99, ?)`, []byte{0xff, 0xff, 0xff})
-	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, 30, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genData, len(genData))
 
 	sess, msgs, usageEvents, err := ParseAntigravitySession(dbPath, "test-project", "test-machine")
@@ -2243,7 +2441,7 @@ func TestAntigravityZeroMessageKeepsUsageEvents(t *testing.T) {
 	assert.Empty(t, msgs)
 	require.Len(t, usageEvents, 1, "usage events must survive zero-message parses")
 	assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
-	assert.Equal(t, 210, sess.TotalOutputTokens)
+	assert.Equal(t, 180, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 }
 
@@ -2261,7 +2459,7 @@ func TestAntigravityCLIZeroMessageKeepsUsageEvents(t *testing.T) {
 	createAntigravityStepTables(t, db)
 	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 99, ?)`, []byte{0xff, 0xff, 0xff})
-	genData := createAntigravityMockGenMetadata(t, 3000, 220, 10, "Test Gemini 3.5")
+	genData := createAntigravityMockGenMetadata(t, 3000, 220, 0, 10, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genData, len(genData))
 	require.NoError(t, db.Close())
 
@@ -2272,8 +2470,8 @@ func TestAntigravityCLIZeroMessageKeepsUsageEvents(t *testing.T) {
 	assert.True(t, status.NeedsRetry, "undecodable rows stay retryable")
 	assert.Empty(t, msgs)
 	require.Len(t, usageEvents, 1, "usage events must survive zero-message parses")
-	assert.Equal(t, 230, usageEvents[0].OutputTokens)
-	assert.Equal(t, 230, sess.TotalOutputTokens)
+	assert.Equal(t, 220, usageEvents[0].OutputTokens)
+	assert.Equal(t, 220, sess.TotalOutputTokens)
 	assert.Equal(t, 3000, sess.PeakContextTokens)
 }
 
@@ -2309,7 +2507,7 @@ func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
 
 	// Create gen_metadata entry with a dynamic model field number: 1187 (for MODEL_PLACEHOLDER_M187)
-	genData := createAntigravityMockGenMetadataWithField(t, 1187, 5000, 400, 80, "Test Gemini 3.5 Flash")
+	genData := createAntigravityMockGenMetadataWithField(t, 1187, 5000, 400, 0, 80, "Test Gemini 3.5 Flash")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
 
 	sess, msgs, usageEvents, err := ParseAntigravitySession(dbPath, "test-project", "test-machine")
@@ -2318,28 +2516,29 @@ func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "Test Gemini 3.5 Flash", msgs[1].Model)
 	assert.Equal(t, 5000, msgs[1].ContextTokens)
-	assert.Equal(t, 480, msgs[1].OutputTokens)
+	assert.Equal(t, 400, msgs[1].OutputTokens)
 
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, "Test Gemini 3.5 Flash", usageEvents[0].Model)
 	assert.Equal(t, 5000, usageEvents[0].InputTokens)
-	assert.Equal(t, 480, usageEvents[0].OutputTokens)
+	assert.Equal(t, 400, usageEvents[0].OutputTokens)
 	assert.Equal(t, 80, usageEvents[0].ReasoningTokens)
 
-	assert.Equal(t, 480, sess.TotalOutputTokens)
+	assert.Equal(t, 400, sess.TotalOutputTokens)
 	assert.Equal(t, 5000, sess.PeakContextTokens)
 }
 
-func createAntigravityMockGenMetadata(t *testing.T, input, output, reasoning int, model string) []byte {
-	return createAntigravityMockGenMetadataWithField(t, 1020, input, output, reasoning, model)
+func createAntigravityMockGenMetadata(t *testing.T, input, output, cached, reasoning int, model string) []byte {
+	return createAntigravityMockGenMetadataWithField(t, 1020, input, output, cached, reasoning, model)
 }
 
-func createAntigravityMockGenMetadataWithField(t *testing.T, fieldNum int, input, output, reasoning int, model string) []byte {
-	// Build token usage inner block: Field 1 = fieldNum, Field 2 = output, Field 3 = reasoning, Field 5 = input
+func createAntigravityMockGenMetadataWithField(t *testing.T, fieldNum int, input, output, cached, reasoning int, model string) []byte {
+	// Build token usage inner block: Field 1 = fieldNum, Field 2 = output, Field 3 = reasoning, Field 4 = cached, Field 5 = input
 	usageInner := encodePB([]pbField{
 		{num: 1, wire: pbWireVarint, varint: uint64(fieldNum)},
 		{num: 2, wire: pbWireVarint, varint: uint64(output)},
 		{num: 3, wire: pbWireVarint, varint: uint64(reasoning)},
+		{num: 4, wire: pbWireVarint, varint: uint64(cached)},
 		{num: 5, wire: pbWireVarint, varint: uint64(input)},
 	})
 
@@ -2428,7 +2627,7 @@ func TestExtractTokenUsageFalsePositiveGuards(t *testing.T) {
 				{num: 1, wire: pbWireBytes, bytes: encodePB(tt.decoy)},
 				{num: 2, wire: pbWireBytes, bytes: realToken},
 			})
-			inp, out, reasoning, ok := extractTokenUsage(data)
+			inp, out, _, reasoning, ok := extractTokenUsage(data)
 			require.True(t, ok, "real token block should be found")
 			assert.Equal(t, 44769, inp, "input tokens")
 			assert.Equal(t, 2497, out, "output tokens")
@@ -2516,7 +2715,7 @@ func TestExtractTokenUsageNoReasoningField(t *testing.T) {
 	data := encodePB([]pbField{
 		{num: 1, wire: pbWireBytes, bytes: block},
 	})
-	inp, out, reasoning, ok := extractTokenUsage(data)
+	inp, out, _, reasoning, ok := extractTokenUsage(data)
 	require.True(t, ok, "token block without reasoning should be accepted")
 	assert.Equal(t, 44769, inp, "input tokens")
 	assert.Equal(t, 2497, out, "output tokens")
@@ -2561,7 +2760,7 @@ func TestExtractTokenUsageLargeValueFalsePositive(t *testing.T) {
 		{num: 2, wire: pbWireBytes, bytes: realWrapper},  // real token block second
 	})
 
-	inp, out, reasoning, ok := extractTokenUsage(data)
+	inp, out, _, reasoning, ok := extractTokenUsage(data)
 	require.True(t, ok, "extractTokenUsage should find a token block")
 	assert.Equal(t, 44769, inp, "input tokens")
 	assert.Equal(t, 2497, out, "output tokens")
