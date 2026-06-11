@@ -28,6 +28,11 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
 const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+// Delay after navigating to the backend before probing whether the
+// Linux WebKitGTK web content process is actually alive. Gives the
+// process time to spawn so we don't false-positive on slow startup.
+#[cfg(target_os = "linux")]
+const WEBVIEW_HEALTH_PROBE_DELAY: Duration = Duration::from_secs(5);
 
 type DynError = Box<dyn Error>;
 type CommandRx = Receiver<CommandEvent>;
@@ -895,6 +900,13 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
                     if let Err(err) = window.navigate(url) {
                         eprintln!("[agentsview] navigate failed: {err}");
                     }
+                    // On Linux a failed WebKitGTK GPU/EGL init aborts the
+                    // web content process, leaving a blank window while the
+                    // backend keeps serving. Detect that and fall back to
+                    // the system browser. See
+                    // https://github.com/kenn-io/agentsview/issues/635
+                    #[cfg(target_os = "linux")]
+                    spawn_webview_health_fallback(window.clone(), port);
                 }
                 Err(err) => {
                     eprintln!("[agentsview] invalid redirect URL: {err}");
@@ -907,6 +919,62 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
             "document.getElementById('status').textContent = \
              'AgentsView backend did not start within 30 seconds.';",
         );
+    });
+}
+
+/// Fall back to the system browser when the Linux WebView fails to render.
+///
+/// On some Linux GPU/driver/compositor combinations (e.g. Wayland + AMD,
+/// headless, certain NVIDIA setups) WebKitGTK cannot initialize EGL and
+/// aborts the web content process with
+/// `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...`.
+/// The Tauri UI process survives, so the user is left staring at a blank
+/// window even though the backend is up and the web UI is fully usable.
+///
+/// We reuse the same signal `recover_webview` relies on: when the content
+/// process is gone, `eval` returns `Err`. This check is purely additive —
+/// if the WebView is healthy (`eval` succeeds) it does nothing, so it can
+/// never disrupt the working path. When the WebView is dead we open the
+/// backend URL in the system browser, hide the blank window, and tell the
+/// user where the UI went.
+#[cfg(target_os = "linux")]
+fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
+    // One-shot guard so focus/navigation retries can't open many tabs.
+    static FALLBACK_TRIGGERED: AtomicBool = AtomicBool::new(false);
+
+    thread::spawn(move || {
+        thread::sleep(WEBVIEW_HEALTH_PROBE_DELAY);
+
+        // A trivial eval round-trips through the web content process; an
+        // error means it is gone (e.g. the EGL_BAD_PARAMETER abort above).
+        if window.eval("void 0").is_ok() {
+            return;
+        }
+        if FALLBACK_TRIGGERED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        let url = format!("http://{HOST}:{port}");
+        eprintln!(
+            "[agentsview] WebView content process is not responding \
+             (likely a GPU/EGL initialization failure); opening {url} \
+             in the system browser instead"
+        );
+
+        let handle = window.app_handle().clone();
+        if let Err(err) = handle.opener().open_url(url.as_str(), Option::<&str>::None) {
+            eprintln!("[agentsview] failed to open system browser fallback: {err}");
+        }
+        let _ = window.hide();
+        handle
+            .dialog()
+            .message(format!(
+                "AgentsView could not render its window, likely due to a \
+                 graphics driver (EGL) issue. It has been opened in your \
+                 web browser instead:\n\n{url}"
+            ))
+            .title("AgentsView")
+            .show(|_| {});
     });
 }
 
