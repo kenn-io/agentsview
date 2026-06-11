@@ -250,6 +250,26 @@ describe("SessionList visible hydration", () => {
     expect(document.body.textContent).toContain("Renamed sidebar title");
   });
 
+  it("keeps long session labels intact for responsive CSS clipping", async () => {
+    const title =
+      "test: validate GitLab write parity against a real GitLab instance";
+    sessions.sessions = [
+      makeSession({
+        id: "long-title",
+        first_message: title,
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const name = document.querySelector<HTMLElement>(".session-name");
+    expect(name).not.toBeNull();
+    expect(name?.textContent).toBe(title);
+  });
+
   it("hydrates newly visible rows after scrolling", async () => {
     sessions.sessions = Array.from({ length: 50 }, (_, i) =>
       makeSession({ id: `s${i}`, is_index_only: true }),

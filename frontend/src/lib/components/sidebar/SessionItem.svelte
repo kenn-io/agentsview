@@ -103,7 +103,7 @@
   let displayLabel = $derived.by((): { text: string; isShell: boolean } => {
     const name = session.display_name ?? null;
     if (name) {
-      return { text: truncate(name, 50), isShell: false };
+      return { text: name, isShell: false };
     }
     let msg = session.first_message ?? "";
     if (msg.includes("<teammate-message")) {
@@ -114,18 +114,18 @@
       // Extract "Task #N: description" from the boilerplate.
       const taskMatch = msg.match(/Task\s*#?\d+[:\s]+(.+?)(?:\s+\d+\.|$)/s);
       if (taskMatch) {
-        return { text: truncate(taskMatch[1]!.trim(), 50), isShell: false };
+        return { text: taskMatch[1]!.trim(), isShell: false };
       }
       // Fallback: skip the "You are a teammate on ..." boilerplate.
       const afterTeam = msg.match(/team[."]\s*[^.]*?[.]\s+(.+)/s)
         ?? msg.match(/You are a teammate[^.]*\.\s+(.+)/s);
       if (afterTeam) {
-        return { text: truncate(afterTeam[1]!.trim(), 50), isShell: false };
+        return { text: afterTeam[1]!.trim(), isShell: false };
       }
     }
     const p = previewMessage(msg);
-    if (p.text) return { text: truncate(p.text, 50), isShell: p.isShell };
-    return { text: truncate(session.project, 30), isShell: false };
+    if (p.text) return { text: p.text, isShell: p.isShell };
+    return { text: session.project, isShell: false };
   });
 
   let timeStr = $derived(
