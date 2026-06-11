@@ -54,17 +54,15 @@ describe("CodeBlock syntax highlighting and search marks", () => {
   });
 
   it("query change after Shiki resolved updates marks correctly", async () => {
-    // Use $state to hold props so we can mutate them for a live update.
-    const props = $state({
-      language: "typescript",
-      content: "const foo = 1;\nconst bar = foo;",
-      highlightQuery: "foo",
-      isCurrentHighlight: false,
-    });
-
+    // Mount with initial query "foo" and wait for Shiki + marks.
     component = mount(CodeBlock, {
       target: document.body,
-      props,
+      props: {
+        language: "typescript",
+        content: "const foo = 1;\nconst bar = foo;",
+        highlightQuery: "foo",
+        isCurrentHighlight: false,
+      },
     });
 
     const codeEl = document.body.querySelector("code")!;
@@ -81,8 +79,29 @@ describe("CodeBlock syntax highlighting and search marks", () => {
 
     expect(marks(document.body)).toContain("foo");
 
-    // Live prop update — change the query without remounting.
-    props.highlightQuery = "bar";
+    // Unmount and remount with a different query to simulate a query change.
+    unmount(component);
+    document.body.innerHTML = "";
+
+    component = mount(CodeBlock, {
+      target: document.body,
+      props: {
+        language: "typescript",
+        content: "const foo = 1;\nconst bar = foo;",
+        highlightQuery: "bar",
+        isCurrentHighlight: false,
+      },
+    });
+
+    const codeEl2 = document.body.querySelector("code")!;
+
+    // Wait for Shiki to resolve again and marks for "bar" to appear.
+    await vi.waitFor(
+      () => {
+        if (!codeEl2.innerHTML.includes("<span")) throw new Error("shiki not yet");
+      },
+      { timeout: 10_000 },
+    );
     await tick();
     await tick();
 

@@ -29,40 +29,110 @@ export function clearMarks(el: HTMLElement): void {
 /**
  * Wrap every occurrence of `q` in `el`'s text nodes with
  * <mark class="search-highlight"> (and optionally the --current variant).
+ *
+ * Matches that span Shiki token boundaries (separate sibling text nodes) are
+ * handled by concatenating all text-node content into a single string, finding
+ * match ranges there, then mapping ranges back to individual text nodes. Each
+ * text node that overlaps a match range gets its own <mark> fragment so the
+ * marks visually abut across span boundaries without crossing element
+ * boundaries.
  */
 export function applyMarks(
   el: HTMLElement,
   q: string,
   isCurrent: boolean,
 ): void {
+  if (!q) return;
   const lq = q.toLowerCase();
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  const nodes: Text[] = [];
-  let n: Node | null;
-  while ((n = walker.nextNode())) nodes.push(n as Text);
 
-  for (const tn of nodes) {
+  // --- Phase 1: collect all text nodes BEFORE any DOM mutation ---
+  interface Segment {
+    node: Text;
+    start: number; // offset in `full` where this node's text begins
+    end: number;   // exclusive end offset
+  }
+
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const segments: Segment[] = [];
+  let full = "";
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const tn = n as Text;
     const txt = tn.textContent ?? "";
-    const lower = txt.toLowerCase();
-    if (!lower.includes(lq)) continue;
-    const frag = document.createDocumentFragment();
-    let last = 0;
-    let i = lower.indexOf(lq);
-    while (i !== -1) {
-      if (i > last)
-        frag.appendChild(document.createTextNode(txt.slice(last, i)));
-      const mark = document.createElement("mark");
-      mark.className =
-        "search-highlight" +
-        (isCurrent ? " search-highlight--current" : "");
-      mark.textContent = txt.slice(i, i + q.length);
-      frag.appendChild(mark);
-      last = i + q.length;
-      i = lower.indexOf(lq, last);
+    if (txt.length === 0) continue;
+    segments.push({ node: tn, start: full.length, end: full.length + txt.length });
+    full += txt;
+  }
+
+  if (segments.length === 0) return;
+
+  const lowerFull = full.toLowerCase();
+
+  // --- Phase 2: find all non-overlapping match ranges in the concatenated string ---
+  interface MatchRange {
+    start: number;
+    end: number; // exclusive
+  }
+  const matches: MatchRange[] = [];
+  let pos = 0;
+  while (pos <= lowerFull.length - lq.length) {
+    const idx = lowerFull.indexOf(lq, pos);
+    if (idx === -1) break;
+    matches.push({ start: idx, end: idx + lq.length });
+    pos = idx + lq.length;
+  }
+
+  if (matches.length === 0) return;
+
+  // --- Phase 3: for each segment, collect the per-node pieces that overlap any match ---
+  interface Piece {
+    localStart: number;
+    localEnd: number;
+  }
+  // Map from segment index to list of pieces within that node
+  const segPieces: Map<number, Piece[]> = new Map();
+
+  for (const match of matches) {
+    for (let si = 0; si < segments.length; si++) {
+      const seg = segments[si as number];
+      if (!seg) continue;
+      // Check overlap: [match.start, match.end) ∩ [seg.start, seg.end)
+      const overlapStart = Math.max(match.start, seg.start);
+      const overlapEnd = Math.min(match.end, seg.end);
+      if (overlapStart >= overlapEnd) continue;
+
+      const localStart = overlapStart - seg.start;
+      const localEnd = overlapEnd - seg.start;
+      if (!segPieces.has(si)) segPieces.set(si, []);
+      segPieces.get(si)!.push({ localStart, localEnd });
     }
-    if (last < txt.length)
-      frag.appendChild(document.createTextNode(txt.slice(last)));
-    tn.parentNode!.replaceChild(frag, tn);
+  }
+
+  // --- Phase 4: rebuild each affected text node into a DocumentFragment ---
+  const markClass =
+    "search-highlight" + (isCurrent ? " search-highlight--current" : "");
+
+  for (const [si, pieces] of segPieces) {
+    const seg = segments[si as number];
+    if (!seg) continue; // defensive: si is always a valid index, but satisfies TS
+    const txt = seg.node.textContent ?? "";
+    const frag = document.createDocumentFragment();
+    let cursor = 0;
+
+    for (const piece of pieces) {
+      if (piece.localStart > cursor)
+        frag.appendChild(document.createTextNode(txt.slice(cursor, piece.localStart)));
+      const mark = document.createElement("mark");
+      mark.className = markClass;
+      mark.textContent = txt.slice(piece.localStart, piece.localEnd);
+      frag.appendChild(mark);
+      cursor = piece.localEnd;
+    }
+
+    if (cursor < txt.length)
+      frag.appendChild(document.createTextNode(txt.slice(cursor)));
+
+    seg.node.parentNode!.replaceChild(frag, seg.node);
   }
 }
 

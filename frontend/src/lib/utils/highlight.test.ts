@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { applyHighlight, escapeHTML } from "./highlight.js";
+import { applyHighlight, applyMarks, escapeHTML } from "./highlight.js";
 
 function makeDiv(html: string): HTMLElement {
   const div = document.createElement("div");
@@ -157,6 +157,75 @@ describe("applyHighlight", () => {
       expect(marks(el)).toEqual(["world"]);
       expect(el.textContent).toBe("Hello world");
     });
+  });
+});
+
+describe("applyMarks cross-text-node matching", () => {
+  it("marks a phrase that spans sibling <span> elements", () => {
+    // Shiki splits "const foo" across three token spans.
+    const div = document.createElement("div");
+    div.innerHTML =
+      "<span>const</span><span> </span><span>foo</span>";
+
+    applyMarks(div, "const foo", false);
+
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
+    // The concatenated textContent of all mark fragments must equal the query.
+    const combined = markEls.map((m) => m.textContent ?? "").join("");
+    expect(combined).toBe("const foo");
+    // No --current class since isCurrent is false.
+    expect(
+      div.querySelectorAll("mark.search-highlight--current"),
+    ).toHaveLength(0);
+  });
+
+  it("marks a phrase spanning exactly two adjacent text nodes", () => {
+    const div = document.createElement("div");
+    // Two sibling spans, match straddles the boundary "ello wo"
+    div.innerHTML = "<span>hello </span><span>world</span>";
+
+    applyMarks(div, "ello wo", false);
+
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
+    const combined = markEls.map((m) => m.textContent ?? "").join("");
+    expect(combined).toBe("ello wo");
+  });
+
+  it("handles partial+full+partial overlap across three nodes", () => {
+    const div = document.createElement("div");
+    // "ab" spans end of node1, full node2, start of node3: "xab" "cd" "aby"
+    // query "abcda" crosses all three: node1 tail "ab", node2 "cd", node3 head "a"
+    div.innerHTML = "<span>xab</span><span>cda</span><span>by</span>";
+
+    applyMarks(div, "abcda", false);
+
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
+    const combined = markEls.map((m) => m.textContent ?? "").join("");
+    expect(combined).toBe("abcda");
+  });
+
+  it("propagates --current class to all mark fragments across nodes", () => {
+    const div = document.createElement("div");
+    div.innerHTML = "<span>const</span><span> </span><span>foo</span>";
+
+    applyMarks(div, "const foo", true);
+
+    const markEls = Array.from(
+      div.querySelectorAll("mark.search-highlight--current"),
+    );
+    const combined = markEls.map((m) => m.textContent ?? "").join("");
+    expect(combined).toBe("const foo");
+    expect(markEls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("still marks single-node matches (regression guard)", () => {
+    const div = document.createElement("div");
+    div.innerHTML = "<span>foo bar foo</span>";
+
+    applyMarks(div, "foo", false);
+
+    const markEls = Array.from(div.querySelectorAll("mark.search-highlight"));
+    expect(markEls.map((m) => m.textContent ?? "")).toEqual(["foo", "foo"]);
   });
 });
 

@@ -208,6 +208,40 @@ describe("highlightCodeFences", () => {
       }
     });
 
+    it("marks a query that crosses Shiki token boundaries", async () => {
+      // "const foo" is split by Shiki into separate <span> tokens;
+      // the cross-node applyMarks must still mark the full phrase.
+      const code = "const foo = 1;";
+      const html = makeMarkdownCodeBlock("typescript", code);
+      const div = makeDiv(html);
+
+      const fenceAction = highlightCodeFences(div, {
+        content: code,
+        q: "const foo",
+        current: false,
+      });
+
+      const codeEl = div.querySelector("code")!;
+
+      try {
+        await vi.waitFor(
+          () => {
+            if (!codeEl.innerHTML.includes("<span")) throw new Error("not yet");
+          },
+          { timeout: 10_000 },
+        );
+
+        const codeMarks = Array.from(
+          codeEl.querySelectorAll("mark.search-highlight"),
+        );
+        // The mark fragments across token boundaries must concatenate to the query.
+        const combined = codeMarks.map((m) => m.textContent ?? "").join("");
+        expect(combined).toBe("const foo");
+      } finally {
+        fenceAction.destroy();
+      }
+    });
+
     it("applyHighlight and highlightCodeFences co-applied on the same container", async () => {
       // Mirrors the real MessageContent.svelte call pattern: applyHighlight and
       // highlightCodeFences both mounted on the same <div>.
