@@ -384,6 +384,56 @@ func TestAntigravityCLIDBFileInfoIncludesSQLiteSidecars(t *testing.T) {
 	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
 }
 
+// TestAntigravityCLIFileInfoIncludesBrainArtifacts pins brain
+// artifacts into the CLI composite fingerprint: the parser renders
+// brain/<id>/*.md (+ .metadata.json) as messages, so a brain-only
+// add/edit/delete must change the effective file info or skip checks
+// keep stale brain messages.
+func TestAntigravityCLIFileInfoIncludesBrainArtifacts(t *testing.T) {
+	early := time.Unix(1779000000, 0)
+	late := time.Unix(1779000300, 0)
+
+	t.Run("db session", func(t *testing.T) {
+		root := t.TempDir()
+		id := "14141414-2525-3636-4747-585858585858"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		mustWrite(t, dbPath, []byte("db"))
+
+		brainDir := filepath.Join(root, "brain", id)
+		mustMkdir(t, brainDir)
+		mdPath := filepath.Join(brainDir, "task.md")
+		mustWrite(t, mdPath, []byte("brain doc"))
+		require.NoError(t, os.Chtimes(dbPath, early, early))
+		require.NoError(t, os.Chtimes(mdPath, late, late))
+
+		info, err := AntigravityCLIFileInfo(dbPath)
+		require.NoError(t, err)
+		assert.Equal(t, int64(len("db")+len("brain doc")), info.Size())
+		assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
+	})
+
+	t.Run("pb session", func(t *testing.T) {
+		root := t.TempDir()
+		id := "15151515-2626-3737-4848-595959595959"
+		mustMkdir(t, filepath.Join(root, "implicit"))
+		pbPath := filepath.Join(root, "implicit", id+".pb")
+		mustWrite(t, pbPath, []byte("pb"))
+
+		brainDir := filepath.Join(root, "brain", id)
+		mustMkdir(t, brainDir)
+		mdPath := filepath.Join(brainDir, "task.md")
+		mustWrite(t, mdPath, []byte("brain doc"))
+		require.NoError(t, os.Chtimes(pbPath, early, early))
+		require.NoError(t, os.Chtimes(mdPath, late, late))
+
+		info, err := AntigravityCLIFileInfo(pbPath)
+		require.NoError(t, err)
+		assert.Equal(t, int64(len("pb")+len("brain doc")), info.Size())
+		assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano())
+	})
+}
+
 func TestAntigravityCLIDBInsertsShortHistoryPrompt(t *testing.T) {
 	root := t.TempDir()
 	id := "55555555-6666-7777-8888-999999999999"
@@ -1489,6 +1539,47 @@ func TestAntigravitySessionFileMetadataIncludesWAL(t *testing.T) {
 		"file size must include WAL/SHM sidecars")
 	assert.Equal(t, walTime.UnixNano(), sess.File.Mtime,
 		"file mtime must reflect the newest sidecar")
+}
+
+// TestAntigravityFileInfoIncludesBrainArtifacts pins brain artifacts
+// into the IDE composite fingerprint: ParseAntigravitySession renders
+// brain/<id>/*.md (+ .metadata.json) as messages, so a brain-only
+// add/edit/delete must change the effective file info or skip checks
+// keep stale brain messages.
+func TestAntigravityFileInfoIncludesBrainArtifacts(t *testing.T) {
+	root := t.TempDir()
+	id := "13131313-2424-3535-4646-575757575757"
+
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	mustWrite(t, dbPath, []byte("db"))
+
+	brainDir := filepath.Join(root, "brain", id)
+	mustMkdir(t, brainDir)
+	mdPath := filepath.Join(brainDir, "task.md")
+	metaPath := filepath.Join(brainDir, "task.md.metadata.json")
+	strayPath := filepath.Join(brainDir, "scratch.txt")
+	mustWrite(t, mdPath, []byte("plan body"))
+	mustWrite(t, metaPath, []byte(`{"summary":"s"}`))
+	// Files the parser never reads must not affect the fingerprint.
+	mustWrite(t, strayPath, []byte("xxxxxxxx"))
+
+	early := time.Unix(1779000000, 0)
+	late := time.Unix(1779000300, 0)
+	require.NoError(t, os.Chtimes(dbPath, early, early))
+	require.NoError(t, os.Chtimes(mdPath, early, early))
+	require.NoError(t, os.Chtimes(metaPath, late, late))
+	require.NoError(t, os.Chtimes(strayPath, early, early))
+
+	info, err := AntigravityFileInfo(dbPath)
+	require.NoError(t, err)
+	wantSize := int64(
+		len("db") + len("plan body") + len(`{"summary":"s"}`),
+	)
+	assert.Equal(t, wantSize, info.Size(),
+		"brain artifacts must contribute to the composite size")
+	assert.Equal(t, late.UnixNano(), info.ModTime().UnixNano(),
+		"newest brain file must drive the composite mtime")
 }
 
 func TestAntigravityTokenUsage(t *testing.T) {

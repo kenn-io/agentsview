@@ -726,41 +726,63 @@ func decryptAntigravityCLITranscript(
 	}, true
 }
 
-// AntigravityCLIFileInfo returns a fake os.FileInfo whose size and mtime are
-// computed by looking at both <uuid>.pb and <uuid>.trajectory.json.
-// If the trajectory file exists, its mtime and size are factored in.
+// AntigravityCLIFileInfo returns a fake os.FileInfo whose size and
+// mtime combine the session file with everything else the parser
+// renders: SQLite WAL/SHM siblings, the .trajectory.json sidecar,
+// and the brain/<id> artifacts.
 func AntigravityCLIFileInfo(path string) (os.FileInfo, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
+	root := filepath.Dir(filepath.Dir(path))
 	if base, ok := strings.CutSuffix(path, ".db"); ok {
 		// The trajectory sidecar is a transcript source for .db sessions
 		// too, so an agy-reader sync must change the fingerprint even when
 		// the database files themselves are untouched.
-		return antigravityCLICombinedFileInfo(
-			info,
-			path+"-wal",
-			path+"-shm",
-			base+".trajectory.json",
-		), nil
-	}
-	size := info.Size()
-	mtime := info.ModTime().UnixNano()
-
-	sidecar := strings.TrimSuffix(path, ".pb") + ".trajectory.json"
-	if sidecarInfo, err := os.Stat(sidecar); err == nil {
-		size += sidecarInfo.Size()
-		if sidecarInfo.ModTime().UnixNano() > mtime {
-			mtime = sidecarInfo.ModTime().UnixNano()
+		companions := []string{
+			path + "-wal",
+			path + "-shm",
+			base + ".trajectory.json",
 		}
+		companions = append(companions, antigravityBrainCompanions(
+			filepath.Join(root, "brain", filepath.Base(base)),
+		)...)
+		return antigravityCLICombinedFileInfo(info, companions...), nil
 	}
 
-	return fakeFileInfo{
-		name:  info.Name(),
-		size:  size,
-		mtime: mtime,
-	}, nil
+	id := strings.TrimSuffix(filepath.Base(path), ".pb")
+	companions := []string{
+		strings.TrimSuffix(path, ".pb") + ".trajectory.json",
+	}
+	companions = append(companions, antigravityBrainCompanions(
+		filepath.Join(root, "brain", id),
+	)...)
+	return antigravityCLICombinedFileInfo(info, companions...), nil
+}
+
+// antigravityBrainCompanions lists the brain artifact files the
+// parsers render as messages (brain/<id>/*.md plus their
+// .metadata.json sidecars) so composite fingerprints change on
+// brain-only adds, edits, and deletes.
+func antigravityBrainCompanions(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".md") &&
+			!strings.HasSuffix(name, ".md.metadata.json") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, name))
+	}
+	return out
 }
 
 func antigravityCLICombinedFileInfo(

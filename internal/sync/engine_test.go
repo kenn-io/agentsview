@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	gosync "sync"
 	"sync/atomic"
 	"testing"
@@ -1026,6 +1027,72 @@ func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 
 	res = e.processFile(ctx, file)
 	assert.False(t, res.skip, "WAL-only update must trigger a reparse")
+}
+
+func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+	ctx := context.Background()
+
+	root := t.TempDir()
+	convDir := filepath.Join(root, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	id := "abcdabcd-1111-2222-3333-444455557777"
+	dbPath := filepath.Join(convDir, id+".db")
+	sqlDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(
+		`CREATE TABLE steps (idx integer, step_type integer, ` +
+			`step_payload blob, PRIMARY KEY (idx))`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	file := parser.DiscoveredFile{
+		Agent:   parser.AgentAntigravity,
+		Path:    dbPath,
+		Project: "proj",
+	}
+
+	res := e.processFile(ctx, file)
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+
+	pw := pendingWrite{
+		sess:        res.results[0].Session,
+		msgs:        res.results[0].Messages,
+		usageEvents: res.results[0].UsageEvents,
+	}
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	res = e.processFile(ctx, file)
+	require.True(t, res.skip, "unchanged session should skip")
+
+	// Brain-only update: the conversation DB files are untouched.
+	brainDir := filepath.Join(root, "brain", id)
+	require.NoError(t, os.MkdirAll(brainDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(brainDir, "task.md"),
+		[]byte("brain artifact body"), 0o644,
+	))
+
+	res = e.processFile(ctx, file)
+	require.False(t, res.skip,
+		"brain-only update must trigger a reparse")
+	require.Len(t, res.results, 1)
+	var found bool
+	for _, m := range res.results[0].Messages {
+		if strings.Contains(m.Content, "brain artifact body") {
+			found = true
+		}
+	}
+	assert.True(t, found,
+		"reparse must pick up the brain artifact message")
 }
 
 func TestShouldSkipFileWithIDPrefix(t *testing.T) {

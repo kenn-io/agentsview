@@ -77,9 +77,10 @@ func FindAntigravitySourceFile(root, id string) string {
 }
 
 // AntigravityFileInfo returns the effective file info for an IDE
-// session .db, combining the main file with its -wal/-shm sidecars
-// and the annotations/<id>.pbtxt sidecar. WAL-only commits and
-// annotation updates do not touch the main file, so skip checks and
+// session .db, combining the main file with its -wal/-shm sidecars,
+// the annotations/<id>.pbtxt sidecar, and the brain/<id> artifacts
+// the parse renders as messages. WAL-only commits and annotation or
+// brain updates do not touch the main file, so skip checks and
 // persisted file metadata must use this composite or live sessions
 // never reparse.
 func AntigravityFileInfo(path string) (os.FileInfo, error) {
@@ -89,12 +90,15 @@ func AntigravityFileInfo(path string) (os.FileInfo, error) {
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	root := filepath.Dir(filepath.Dir(path))
-	return antigravityCLICombinedFileInfo(
-		info,
-		path+"-wal",
-		path+"-shm",
+	companions := []string{
+		path + "-wal",
+		path + "-shm",
 		filepath.Join(root, "annotations", id+".pbtxt"),
-	), nil
+	}
+	companions = append(companions, antigravityBrainCompanions(
+		filepath.Join(root, "brain", id),
+	)...)
+	return antigravityCLICombinedFileInfo(info, companions...), nil
 }
 
 // ParseAntigravitySession parses one IDE session DB.

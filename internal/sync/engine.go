@@ -1038,33 +1038,54 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm)
+	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm).
+	// annotations/<uuid>.pbtxt and brain/<uuid>/* sidecars map to the
+	// conversation .db: both feed the parse and its composite
+	// fingerprint, so their updates must trigger a session resync.
 	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
 		if agDir == "" {
 			continue
 		}
-		if rel, ok := isUnder(agDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 || parts[0] != "conversations" {
-				continue
-			}
-			name := parts[1]
-			name = strings.TrimSuffix(name, "-wal")
+		rel, ok := isUnder(agDir, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		var id string
+		var sidecar bool
+		switch {
+		case len(parts) == 2 && parts[0] == "conversations":
+			name := strings.TrimSuffix(parts[1], "-wal")
 			name = strings.TrimSuffix(name, "-shm")
 			if !strings.HasSuffix(name, ".db") {
 				continue
 			}
-			id := strings.TrimSuffix(name, ".db")
-			if !parser.IsValidSessionID(id) {
+			id = strings.TrimSuffix(name, ".db")
+		case len(parts) == 2 && parts[0] == "annotations" &&
+			strings.HasSuffix(parts[1], ".pbtxt"):
+			id = strings.TrimSuffix(parts[1], ".pbtxt")
+			sidecar = true
+		case len(parts) == 3 && parts[0] == "brain":
+			id = parts[1]
+			sidecar = true
+		default:
+			continue
+		}
+		if !parser.IsValidSessionID(id) {
+			continue
+		}
+		dbPath := filepath.Join(agDir, "conversations", id+".db")
+		if sidecar {
+			// Sidecar events only make sense for sessions whose
+			// conversation DB exists.
+			if _, err := os.Stat(dbPath); err != nil {
 				continue
 			}
-			return parser.DiscoveredFile{
-				Path: filepath.Join(
-					agDir, "conversations", name,
-				),
-				Agent: parser.AgentAntigravity,
-			}, true
 		}
+		return parser.DiscoveredFile{
+			Path:  dbPath,
+			Agent: parser.AgentAntigravity,
+		}, true
 	}
 
 	// Antigravity CLI: <root>/conversations/<uuid>.db or

@@ -114,14 +114,19 @@ We will update `loadAntigravityStepsWithRawCount` to:
 IDE conversation `.db` files run in WAL mode: live updates land in `<id>.db-wal`
 without changing the main file's size or mtime, so skip checks keyed on the main
 file alone never reparse an active session. `AntigravityFileInfo` combines the
-`.db` with its `-wal`/`-shm` siblings and the `annotations/<id>.pbtxt` sidecar,
-mirroring `AntigravityCLIFileInfo`. The sync engine uses it for `processFile`
-skip checks, `discoveredFileMtime` cutoff filtering, and watcher `SourceMtime`
-polling, and the parser persists the same composite as the session's file
-fingerprint. The fingerprint is computed after the parse's own read-only open,
-which can itself touch the `-shm` sidecar; statting afterwards keeps the
-persisted value identical to what the next sync observes, so unchanged sessions
-still skip.
+`.db` with its `-wal`/`-shm` siblings, the `annotations/<id>.pbtxt` sidecar, and
+the `brain/<id>` artifacts (`*.md` plus `.metadata.json`) the parse renders as
+messages, mirroring `AntigravityCLIFileInfo` — which includes the same brain set
+for both `.db` and `.pb` sessions, since the CLI parser renders brain artifacts
+too. The sync engine uses it for `processFile` skip checks,
+`discoveredFileMtime` cutoff filtering, and watcher `SourceMtime` polling, and
+the parser persists the same composite as the session's file fingerprint. The
+file-watcher classifier also maps `annotations/<id>.pbtxt` and `brain/<id>/*`
+events to `conversations/<id>.db` (when that DB exists) so sidecar-only updates
+trigger the watcher path rather than waiting for periodic sync. The fingerprint
+is computed after the parse's own read-only open, which can itself touch the
+`-shm` sidecar; statting afterwards keeps the persisted value identical to what
+the next sync observes, so unchanged sessions still skip.
 
 ## Testing Plan
 
