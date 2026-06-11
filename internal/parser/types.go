@@ -697,6 +697,33 @@ func accumulateMessageTokenUsage(
 	}
 }
 
+// accumulateUsageEventTokenUsage fills session token totals from
+// session-level usage events when the selected transcript carries no
+// per-message token metadata — e.g. an Antigravity CLI sidecar
+// transcript paired with gen_metadata usage from the .db decode. It
+// is a no-op when message rollup already provided coverage, so totals
+// are never double counted.
+func accumulateUsageEventTokenUsage(
+	sess *ParsedSession,
+	events []ParsedUsageEvent,
+) {
+	if sess.HasTotalOutputTokens || sess.HasPeakContextTokens {
+		return
+	}
+	for _, ev := range events {
+		if ev.OutputTokens > 0 {
+			sess.HasTotalOutputTokens = true
+			sess.TotalOutputTokens += ev.OutputTokens
+		}
+		if ev.InputTokens > 0 {
+			sess.HasPeakContextTokens = true
+			if ev.InputTokens > sess.PeakContextTokens {
+				sess.PeakContextTokens = ev.InputTokens
+			}
+		}
+	}
+}
+
 // InferTokenPresence determines whether context/output tokens were
 // present in a provider payload. It starts from explicit boolean
 // flags (and non-zero numeric values), then inspects tokenUsage JSON

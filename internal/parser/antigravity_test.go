@@ -1357,6 +1357,58 @@ func TestAntigravityCLIDBCoveringSidecarRescuesUndecodableRows(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 }
 
+func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
+	root := t.TempDir()
+	id := "dddddddd-eeee-ffff-0000-111111111111"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+
+	tsEarly := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{num: 17, wire: pbWireBytes, bytes: []byte("user question text goes here and is long")},
+	})
+	tsLate := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000100}})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsLate},
+		{num: 17, wire: pbWireBytes, bytes: []byte("assistant response body goes here and is long")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, userPayload)
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
+
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
+	require.NoError(t, db.Close())
+
+	// Sidecar covers both raw steps, so its transcript wins over the
+	// DB decode and the selected messages carry no token fields.
+	writeAntigravityTestSidecar(t, root, id, 2)
+
+	sess, msgs, usageEvents, status, err := ParseAntigravityCLISessionWithStatus(
+		dbPath, "", "test-machine",
+	)
+	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content, "sidecar transcript should win")
+
+	require.Len(t, usageEvents, 1)
+	assert.Equal(t, 2400, usageEvents[0].InputTokens)
+	assert.Equal(t, 180, usageEvents[0].OutputTokens)
+
+	// Session totals must come from gen_metadata usage even though
+	// the sidecar transcript has no per-message token metadata.
+	assert.Equal(t, 180, sess.TotalOutputTokens)
+	assert.Equal(t, 2400, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+}
+
 func TestAntigravityTokenUsage(t *testing.T) {
 	root := t.TempDir()
 	id := "55555555-6666-7777-8888-999999999999"

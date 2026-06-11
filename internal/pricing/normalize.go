@@ -66,51 +66,87 @@ func Resolve[T any](m map[string]T, model string) (T, bool) {
 // date removed. Earlier (less-stripped) candidates win. Arbitrary
 // substring matching is deliberately avoided: a shorter pricing key
 // inside a longer model name (gpt-5.5 inside gpt-5.5-codex) would
-// silently misprice a distinct model that should stay unpriced. When
-// both the model and a key carry a provider prefix, the prefixes must
-// match so one provider's model never takes another's pricing.
+// silently misprice a distinct model that should stay unpriced.
+//
+// Keys are ranked so resolution is deterministic when several keys
+// canonicalize alike: a key whose provider prefix matches the model's
+// wins, then an unqualified key, then a provider-qualified key for an
+// unqualified model. Distinct keys tied within one rank are ambiguous
+// and stay unresolved. Keys whose provider conflicts with a qualified
+// model are never considered.
 func resolveCanonical[T any](m map[string]T, model string) (T, bool) {
-	var candidates []string
-	addCandidate := func(s string) {
-		c := canonicalize(s)
-		if c != "" && !slices.Contains(candidates, c) {
-			candidates = append(candidates, c)
-		}
-	}
-	addCandidate(model)
-	undecorated := stripTrailingGroup(model)
-	addCandidate(undecorated)
-	addCandidate(stripTrailingDate(undecorated))
+	var zero T
+	candidates := canonicalCandidates(model)
 	if len(candidates) == 0 {
-		var zero T
 		return zero, false
 	}
 
-	var bestVal T
-	bestIdx := len(candidates)
+	const ranks = 3
 	modelProvider := canonicalProvider(model)
+	counts := make([][ranks]int, len(candidates))
+	vals := make([][ranks]T, len(candidates))
 	for k, v := range m {
-		if p := canonicalProvider(k); p != "" &&
-			modelProvider != "" && p != modelProvider {
+		keyProvider := canonicalProvider(k)
+		if keyProvider != "" && modelProvider != "" &&
+			keyProvider != modelProvider {
 			continue
 		}
 		kCanon := canonicalize(k)
 		if kCanon == "" {
 			continue
 		}
-		for i, c := range candidates[:bestIdx] {
+		rank := keyRank(modelProvider, keyProvider)
+		for i, c := range candidates {
 			if kCanon == c {
-				bestVal = v
-				bestIdx = i
+				counts[i][rank]++
+				vals[i][rank] = v
 				break
 			}
 		}
 	}
-	if bestIdx < len(candidates) {
-		return bestVal, true
+	for i := range candidates {
+		for r := range ranks {
+			if counts[i][r] == 1 {
+				return vals[i][r], true
+			}
+			if counts[i][r] > 1 {
+				return zero, false
+			}
+		}
 	}
-	var zero T
 	return zero, false
+}
+
+// keyRank orders canonical matches: same-provider key (0), unqualified
+// key (1), provider-qualified key for an unqualified model (2).
+func keyRank(modelProvider, keyProvider string) int {
+	switch keyProvider {
+	case "":
+		return 1
+	case modelProvider:
+		return 0
+	default:
+		return 2
+	}
+}
+
+// canonicalCandidates returns the canonical forms of model to try, in
+// decreasing specificity: as reported, with one trailing bracketed or
+// parenthesized decoration removed, and additionally with a trailing
+// -YYYYMMDD release date removed.
+func canonicalCandidates(model string) []string {
+	var candidates []string
+	add := func(s string) {
+		c := canonicalize(s)
+		if c != "" && !slices.Contains(candidates, c) {
+			candidates = append(candidates, c)
+		}
+	}
+	add(model)
+	undecorated := stripTrailingGroup(model)
+	add(undecorated)
+	add(stripTrailingDate(undecorated))
+	return candidates
 }
 
 // canonicalProvider returns the canonicalized provider prefix of a

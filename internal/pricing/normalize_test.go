@@ -107,6 +107,41 @@ func TestResolveProviderPrefixes(t *testing.T) {
 	assert.Equal(t, 30, got)
 }
 
+func TestResolveCanonicalDeterminism(t *testing.T) {
+	// Two providers share one canonical name: ambiguous, unpriced.
+	rates := map[string]int{
+		"openai/foo": 1,
+		"other/foo":  2,
+	}
+	_, ok := Resolve(rates, "Foo")
+	assert.False(t, ok,
+		"multiple provider keys for one canonical name are ambiguous")
+
+	// A provider-qualified model resolves its own provider's key.
+	got, ok := Resolve(rates, "openai/foo[1m]")
+	require.True(t, ok, "matching provider key should resolve")
+	assert.Equal(t, 1, got)
+
+	// An unqualified key beats provider-qualified keys.
+	withBase := map[string]int{
+		"openai/bar": 5,
+		"other/bar":  6,
+		"bar":        7,
+	}
+	got, ok = Resolve(withBase, "Bar[1m]")
+	require.True(t, ok, "unqualified key should disambiguate")
+	assert.Equal(t, 7, got)
+
+	// Distinct keys tied within one rank stay ambiguous.
+	dupes := map[string]int{
+		"fo.o": 1,
+		"fo-o": 2,
+	}
+	_, ok = Resolve(dupes, "Foo")
+	assert.False(t, ok,
+		"duplicate unqualified canonical keys are ambiguous")
+}
+
 func TestResolveRejectsArbitrarySubstrings(t *testing.T) {
 	rates := map[string]int{
 		"openai/gpt-5.5":   30,
