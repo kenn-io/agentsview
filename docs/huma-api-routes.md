@@ -5,13 +5,13 @@ self-contained so OpenAPI ownership stays close to runtime behavior.
 
 ## File Ownership
 
-- Put route registration, endpoint-specific input types, response wrapper
-  types, enums, and handlers in the route group file that owns the path.
-- Keep `internal/server/huma_routes.go` limited to shared Huma plumbing:
-  API configuration, route registration helpers, common path/query inputs,
-  error conversion, schema naming, SSE/write helpers, and middleware.
-- Move a helper into shared plumbing only when at least two route groups use
-  it and it has no domain-specific policy.
+- Put route registration, endpoint-specific input types, response wrapper types,
+  enums, and handlers in the route group file that owns the path.
+- Keep `internal/server/huma_routes.go` limited to shared Huma plumbing: API
+  configuration, route registration helpers, common path/query inputs, error
+  conversion, schema naming, SSE/write helpers, and middleware.
+- Move a helper into shared plumbing only when at least two route groups use it
+  and it has no domain-specific policy.
 - Do not add new typed handlers to a catch-all API file. Add a new group file
   when a new API area does not fit an existing group.
 

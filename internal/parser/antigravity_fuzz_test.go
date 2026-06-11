@@ -23,8 +23,9 @@ package parser
 //     bytes are all < 0x80 is valid UTF-8, leaked into
 //     messages.model, and broke pg push with SQLSTATE 22021).
 //   - extractTokenUsage: counts are non-negative and bounded by
-//     maxPlausibleTokens, including the output+reasoning sum the
-//     caller persists as billable output.
+//     maxPlausibleTokens, including the input+output sum used as a
+//     combined plausibility guard. Reasoning is always 0 (no per-field
+//     breakdown available in gen_metadata).
 //
 // Plain `go test` runs the f.Add seeds plus any regression inputs
 // committed under testdata/fuzz/<Target>/, so the corpus is enforced
@@ -73,11 +74,13 @@ func fuzzAgWireSeeds() [][]byte {
 			"abcdefghij\x00klmnopqrstuvwxyz now twenty-plus runes",
 		)},
 	})
+	// f2=5529 (uncached input), f3=72 (total output), f5=38885 (cache-read).
+	// Remapped field semantics cross-validated against sidecar ground truth.
 	usageBlock := encodePB([]pbField{
 		{num: 1, wire: pbWireVarint, varint: 1020},
-		{num: 2, wire: pbWireVarint, varint: 1542},
-		{num: 3, wire: pbWireVarint, varint: 256},
-		{num: 5, wire: pbWireVarint, varint: 8133},
+		{num: 2, wire: pbWireVarint, varint: 5529},
+		{num: 3, wire: pbWireVarint, varint: 72},
+		{num: 5, wire: pbWireVarint, varint: 38885},
 	})
 	genMeta := encodePB([]pbField{
 		{num: 17, wire: pbWireBytes, bytes: usageBlock},
@@ -88,22 +91,23 @@ func fuzzAgWireSeeds() [][]byte {
 			{num: 21, wire: pbWireBytes, bytes: agIncidentFragment},
 		})},
 	})
+	// Decoy: f2 input above cap.
 	usageDecoyLatency := encodePB([]pbField{
 		{num: 1, wire: pbWireVarint, varint: 1020},
 		{num: 2, wire: pbWireVarint, varint: 2_000_001},
-		{num: 5, wire: pbWireVarint, varint: 1},
+		{num: 3, wire: pbWireVarint, varint: 1},
 	})
+	// Decoy: f3 output with wrong wire type.
 	usageDecoyWire := encodePB([]pbField{
 		{num: 1, wire: pbWireVarint, varint: 1020},
 		{num: 2, wire: pbWireVarint, varint: 5},
 		{num: 3, wire: pbWireBytes, bytes: []byte("xx")},
-		{num: 5, wire: pbWireVarint, varint: 9},
 	})
+	// Decoy: f2+f3 sum above cap (each individually plausible).
 	usageDecoyFoldedCap := encodePB([]pbField{
 		{num: 1, wire: pbWireVarint, varint: 1020},
 		{num: 2, wire: pbWireVarint, varint: 2_000_000},
 		{num: 3, wire: pbWireVarint, varint: 2_000_000},
-		{num: 5, wire: pbWireVarint, varint: 2_000_000},
 	})
 	onion := []byte("core")
 	for range agProtoMaxDepth + 4 {
@@ -296,23 +300,24 @@ func FuzzExtractTokenUsage(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		input, output, reasoning, ok := extractTokenUsage(data)
+		block, ok := extractTokenUsage(data)
 		if !ok {
-			assert.Zero(t, input)
-			assert.Zero(t, output)
-			assert.Zero(t, reasoning)
+			assert.Zero(t, block.UncachedInput)
+			assert.Zero(t, block.TotalOutput)
+			assert.Zero(t, block.CacheRead)
 			return
 		}
 		for name, v := range map[string]int{
-			"input": input, "output": output, "reasoning": reasoning,
+			"uncachedInput": block.UncachedInput, "totalOutput": block.TotalOutput, "cacheRead": block.CacheRead,
 		} {
 			assert.GreaterOrEqual(t, v, 0, "%s tokens negative", name)
 			assert.LessOrEqual(t, v, maxPlausibleTokens,
 				"%s tokens above plausibility cap", name)
 		}
-		// The caller persists output+reasoning as billable output,
-		// so the plausibility cap must hold for the sum as well.
-		assert.LessOrEqual(t, output+reasoning, maxPlausibleTokens,
-			"billable output+reasoning above plausibility cap")
+		// The caller uses input+output as a combined plausibility guard
+		// (each independently bounded, but decoys with both near the cap
+		// are implausible for a single generation).
+		assert.LessOrEqual(t, block.UncachedInput+block.TotalOutput, maxPlausibleTokens,
+			"input+output above plausibility cap")
 	})
 }

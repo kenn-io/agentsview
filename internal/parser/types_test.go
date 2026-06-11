@@ -840,3 +840,34 @@ func TestVSCodeCopilotDefaultDirs(t *testing.T) {
 			"missing default dir: %s", path)
 	}
 }
+
+func TestApplyUsageEventTokenTotals(t *testing.T) {
+	// Verify that applyUsageEventTokenTotals computes PeakContextTokens
+	// correctly including cache-creation and cache-read tokens.
+	sess := &ParsedSession{}
+	events := []ParsedUsageEvent{
+		{
+			InputTokens:              1000,
+			OutputTokens:             200,
+			CacheReadInputTokens:     500,
+			CacheCreationInputTokens: 300,
+		},
+		{
+			InputTokens:              800,
+			OutputTokens:             150,
+			CacheReadInputTokens:     1200,
+			CacheCreationInputTokens: 100,
+		},
+	}
+
+	applyUsageEventTokenTotals(sess, events)
+
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(t, 350, sess.TotalOutputTokens)
+
+	assert.True(t, sess.HasPeakContextTokens)
+	// Peak context should be max of context window (InputTokens + CacheRead + CacheCreation)
+	// Event 1 context = 1000 + 500 + 300 = 1800
+	// Event 2 context = 800 + 1200 + 100 = 2100
+	assert.Equal(t, 2100, sess.PeakContextTokens)
+}

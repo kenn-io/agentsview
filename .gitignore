@@ -67,3 +67,5 @@ html/
 # graphify knowledge-graph output (local analysis)
 graphify-out/
 .kata.local.toml
+# roborev snapshots
+/.roborev/
