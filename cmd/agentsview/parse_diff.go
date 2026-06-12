@@ -55,10 +55,16 @@ func newParseDiffCommand() *cobra.Command {
 		Short: "Re-parse session files and diff against the archive",
 		Long: "Re-parses session source files with the current binary, runs\n" +
 			"the result through the same normalization sync applies, and\n" +
-			"compares it against the stored rows. Writes nothing: no\n" +
-			"sessions, no skip cache, no sync state.\n\n" +
+			"compares it against the stored rows. It does not write\n" +
+			"session, skip-cache, or sync-state data; opening the archive\n" +
+			"still creates the database and runs schema migrations if\n" +
+			"needed.\n\n" +
 			"Use it to vet parser changes against the real archive before\n" +
-			"bumping the data version, or to detect upstream format drift.",
+			"bumping the data version, or to detect upstream format drift.\n" +
+			"Run it against a quiescent archive: sessions still being\n" +
+			"written, and sessions last written through the incremental\n" +
+			"append path, can show benign drift against a full re-parse. A\n" +
+			"freshly resynced archive gives the cleanest baseline.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -132,6 +138,9 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 	if err != nil {
 		fatal("parse-diff: %v", err)
 	}
+	// Stamp the archive identity so an attached JSON report is
+	// self-describing.
+	report.DBPath = appCfg.DBPath
 
 	if cfg.JSON {
 		writeJSON(cfg.stdout(), report)
@@ -239,12 +248,74 @@ func renderParseDiffReport(
 	}
 	fmt.Fprintln(w)
 
+	if r.VacuousResync() {
+		fmt.Fprintln(w,
+			"Warning: this binary's data version is ahead of every "+
+				"examined session, so all of them are pending resync "+
+				"and no drift can be detected. Run parse-diff with a "+
+				"binary built before the data-version bump, or against "+
+				"a freshly resynced archive, to vet a parser change.")
+		fmt.Fprintln(w)
+	}
+
 	renderParseDiffSummary(w, r.Totals)
 	renderParseDiffFieldCounts(w, r.FieldCounts)
+	renderParseDiffParseErrors(w, r.Sessions)
 	renderParseDiffChanged(w, r.Sessions, verbose)
+	if verbose {
+		renderParseDiffPendingResync(w, r.Sessions)
+	}
 
 	fmt.Fprintf(w, "%d sessions changed, %d identical.\n",
 		r.Totals.Changed, r.Totals.Identical)
+}
+
+// renderParseDiffPendingResync lists pending-resync sessions that
+// carry attached field diffs (verbose only). These are not counted as
+// drift — a resync rewrites them — but showing the diffs lets an
+// operator see what would change, which is the only signal available
+// when the whole run is vacuous (data version ahead of the archive).
+func renderParseDiffPendingResync(w io.Writer, sessions []sync.SessionDiff) {
+	var pending []sync.SessionDiff
+	for _, s := range sessions {
+		if s.Class == sync.DiffPendingResync && len(s.Fields) > 0 {
+			pending = append(pending, s)
+		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	fmt.Fprintln(w,
+		"Pending-resync sessions (not counted; resync rewrites these)")
+	for _, s := range pending {
+		renderParseDiffSessionVerbose(w, s)
+	}
+	fmt.Fprintln(w)
+}
+
+// renderParseDiffParseErrors lists files the current binary could not
+// parse, with the path and error. Parse errors trip --fail-on-change,
+// so the human report must explain why a run failed; the summary count
+// alone is not actionable.
+func renderParseDiffParseErrors(w io.Writer, sessions []sync.SessionDiff) {
+	var errs []sync.SessionDiff
+	for _, s := range sessions {
+		if s.Class == sync.DiffParseError {
+			errs = append(errs, s)
+		}
+	}
+	if len(errs) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "Parse errors")
+	for _, s := range errs {
+		path := s.FilePath
+		if path == "" {
+			path = "(unknown file)"
+		}
+		fmt.Fprintf(w, "  %s  %s\n    %s\n", s.Agent, path, s.Reason)
+	}
+	fmt.Fprintln(w)
 }
 
 // renderParseDiffSummary prints one line per non-zero total, with
@@ -270,7 +341,7 @@ func renderParseDiffSummary(w io.Writer, t sync.ParseDiffTotals) {
 	line("Skipped", t.Skipped,
 		"(source not re-parsed: missing, remote, trashed, or not sampled)")
 	line("Excluded by parser", t.ExcludedByParser,
-		"(parser no longer emits these; sync would delete them)")
+		"(parser intentionally drops these; sync would delete them)")
 	line("Parse errors", t.ParseErrors,
 		"(current binary failed to parse the source file)")
 	line("Needs retry", t.NeedsRetry,

@@ -6,14 +6,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // isolateParseDiffEnv points the data dir, HOME, and every per-agent
@@ -410,4 +413,167 @@ func TestRenderParseDiffReport_NonZeroTotalsOnly(t *testing.T) {
 		assert.NotContains(t, out, unwanted,
 			"zero totals must not render a summary line")
 	}
+}
+
+func TestRenderParseDiffReport_ParseErrorsListed(t *testing.T) {
+	r := &sync.ParseDiffReport{
+		DataVersion: 39,
+		Totals:      sync.ParseDiffTotals{ParseErrors: 2},
+		FieldCounts: map[string]int{},
+		Sessions: []sync.SessionDiff{
+			{
+				SessionID: "broken-1", Agent: "claude",
+				FilePath: "/data/proj/broken-1.jsonl",
+				Class:    sync.DiffParseError,
+				Reason:   "unexpected end of JSON input",
+			},
+			{
+				Agent:    "gemini",
+				FilePath: "/data/proj/headless.json",
+				Class:    sync.DiffParseError,
+				Reason:   "invalid character '}'",
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderParseDiffReport(&buf, r, "db", "all agents", false)
+	out := buf.String()
+
+	assert.Contains(t, out, "Parse errors")
+	assert.Contains(t, out, "/data/proj/broken-1.jsonl",
+		"parse-error file path must be shown, not just the count")
+	assert.Contains(t, out, "unexpected end of JSON input",
+		"parse-error reason must be shown")
+	assert.Contains(t, out, "/data/proj/headless.json")
+	assert.Contains(t, out, "invalid character")
+}
+
+func TestRenderParseDiffReport_VacuousResyncWarning(t *testing.T) {
+	r := &sync.ParseDiffReport{
+		DataVersion: 40,
+		Totals: sync.ParseDiffTotals{
+			Examined: 5, PendingResync: 5,
+		},
+		FieldCounts: map[string]int{},
+	}
+
+	var buf bytes.Buffer
+	renderParseDiffReport(&buf, r, "db", "all agents", false)
+	out := buf.String()
+	assert.Contains(t, out, "Warning:")
+	assert.Contains(t, out, "data version is ahead",
+		"vacuous run must warn that no drift can be detected")
+
+	// A run with at least one comparable session is not vacuous.
+	r.Totals = sync.ParseDiffTotals{Examined: 5, Identical: 1, PendingResync: 4}
+	var buf2 bytes.Buffer
+	renderParseDiffReport(&buf2, r, "db", "all agents", false)
+	assert.NotContains(t, buf2.String(), "Warning:",
+		"a run with comparable sessions must not warn")
+}
+
+func TestRenderParseDiffReport_PendingResyncVerbose(t *testing.T) {
+	r := &sync.ParseDiffReport{
+		DataVersion: 40,
+		Totals:      sync.ParseDiffTotals{Examined: 1, PendingResync: 1},
+		FieldCounts: map[string]int{},
+		Sessions: []sync.SessionDiff{{
+			SessionID:         "stale-1",
+			Agent:             "claude",
+			Class:             sync.DiffPendingResync,
+			StoredDataVersion: 38,
+			Fields: []sync.FieldDiff{{
+				Field: sync.FieldFirstMessage, Stored: "old", Parsed: "new",
+			}},
+		}},
+	}
+
+	var plain bytes.Buffer
+	renderParseDiffReport(&plain, r, "db", "all agents", false)
+	assert.NotContains(t, plain.String(), "stale-1",
+		"pending-resync drill-down is verbose-only")
+
+	var verbose bytes.Buffer
+	renderParseDiffReport(&verbose, r, "db", "all agents", true)
+	out := verbose.String()
+	assert.Contains(t, out, "Pending-resync sessions")
+	assert.Contains(t, out, "stale-1")
+	assert.Contains(t, out, "first_message: old -> new")
+}
+
+func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
+	isolateParseDiffEnv(t)
+
+	out, err := executeCommand(newRootCommand(), "parse-diff", "--json")
+	require.NoError(t, err)
+
+	var got map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+
+	// A clean run must serialize an empty array, never null, so jq
+	// pipelines and typed consumers do not break.
+	require.Contains(t, got, "sessions")
+	assert.Equal(t, "[]", strings.TrimSpace(string(got["sessions"])),
+		"clean run must emit sessions: [] not null")
+	// The archive identity must be present so the report is
+	// self-describing when attached to a PR.
+	require.Contains(t, got, "db_path")
+	var dbPath string
+	require.NoError(t, json.Unmarshal(got["db_path"], &dbPath))
+	assert.NotEmpty(t, dbPath, "db_path must identify the vetted archive")
+}
+
+// TestDoParseDiff_FailOnChangeDirections exercises both directions of
+// the exit-code conjunction (cfg.FailOnChange && report.HasFailures()).
+// A stored session at the current data version whose source file no
+// longer emits it is a presence change, so HasFailures() is true; the
+// flag then decides the exit. Staging it via a valid source file plus a
+// phantom stored row keeps the test independent of the parser's session
+// ID derivation.
+func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("HOME", t.TempDir())
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
+
+	// A valid Claude source file so discovery and parse succeed.
+	projDir := filepath.Join(claudeDir, "-home-proj")
+	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	srcPath := filepath.Join(projDir, "real-session.jsonl")
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "hello").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
+		String()
+	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
+
+	// A phantom stored row under that file at the current data version:
+	// the re-parse never emits this id, so it reports as a presence
+	// change (HasFailures() == true).
+	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, d.UpsertSession(db.Session{
+		ID: "phantom-session", Project: "proj", Machine: "m",
+		Agent: "claude", MessageCount: 4, UserMessageCount: 2,
+		FilePath: &srcPath,
+	}))
+	require.NoError(t,
+		d.SetSessionDataVersion("phantom-session", db.CurrentDataVersion()))
+	require.NoError(t, d.Close())
+
+	var failBuf bytes.Buffer
+	failed := doParseDiff(ParseDiffConfig{
+		FailOnChange: true, Stdout: &failBuf, Stderr: &failBuf,
+	})
+	assert.True(t, failed,
+		"a presence change with --fail-on-change must fail")
+	assert.Contains(t, failBuf.String(), "sessions changed")
+
+	var cleanBuf bytes.Buffer
+	notFailed := doParseDiff(ParseDiffConfig{
+		FailOnChange: false, Stdout: &cleanBuf, Stderr: &cleanBuf,
+	})
+	assert.False(t, notFailed,
+		"without --fail-on-change the same drift must not fail")
 }
