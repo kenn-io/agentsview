@@ -178,15 +178,15 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 	env := setupTestEnv(t)
 
 	ids := []string{
-		"pd-count", "pd-first", "pd-model",
-		"pd-term", "pd-usage", "pd-control",
+		"pd-count", "pd-first", "pd-model", "pd-role",
+		"pd-time", "pd-term", "pd-usage", "pd-control",
 	}
 	for _, id := range ids {
 		env.writeClaudeSession(t, "test-proj", id+".jsonl",
 			parseDiffClaudeContent(id+" prompt", id+" reply"))
 	}
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 6, Synced: 6,
+		TotalSessions: 8, Synced: 8,
 	})
 
 	// Simulate drift between the stored rows and what the current
@@ -200,6 +200,17 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 	mutateDB(t, env,
 		"UPDATE messages SET model = ? WHERE session_id = ?",
 		"drifted-model", "pd-model")
+	// Role-only and timestamp-only drift: neither moves the token or
+	// content-length fingerprints, so the dedicated role/time
+	// fingerprint is the only thing that can trigger the row-level
+	// comparison. A regression here reports these sessions identical.
+	mutateDB(t, env,
+		"UPDATE messages SET role = 'assistant'"+
+			" WHERE session_id = ? AND ordinal = 0", "pd-role")
+	mutateDB(t, env,
+		"UPDATE messages SET timestamp = ?"+
+			" WHERE session_id = ? AND ordinal = 1",
+		"2024-01-01T10:00:06Z", "pd-time")
 	// The parser classifies this fixture's termination; store a
 	// different non-null value so the diff is real drift, not the
 	// informational cleared-to-NULL case.
@@ -218,25 +229,30 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 
 	report := runParseDiff(t, env, sync.ParseDiffOptions{})
 
-	assert.Equal(t, 6, report.FilesExamined, "files examined")
+	assert.Equal(t, 8, report.FilesExamined, "files examined")
 	assert.Equal(t, sync.ParseDiffTotals{
-		Examined: 6, Identical: 1, Changed: 5,
+		Examined: 8, Identical: 1, Changed: 7,
 	}, report.Totals, "totals")
 
 	cases := []struct {
 		name      string
 		sessionID string
 		field     string
+		// fieldCount is the expected FieldCounts entry; message_metadata
+		// is shared by the role and timestamp drift sessions.
+		fieldCount int
 		// exact asserts the drifted field is the only
 		// non-informational diff; otherwise presence suffices
 		// (a synthetic usage event may also move totals).
 		exact bool
 	}{
-		{"message count drift", "pd-count", sync.FieldMessageCount, true},
-		{"first message drift", "pd-first", sync.FieldFirstMessage, true},
-		{"model drift", "pd-model", sync.FieldModels, true},
-		{"termination status drift", "pd-term", sync.FieldTerminationStatus, true},
-		{"usage event drift", "pd-usage", sync.FieldUsageEventCount, false},
+		{"message count drift", "pd-count", sync.FieldMessageCount, 1, true},
+		{"first message drift", "pd-first", sync.FieldFirstMessage, 1, true},
+		{"model drift", "pd-model", sync.FieldModels, 1, true},
+		{"role-only drift", "pd-role", sync.FieldMessageMetadata, 2, true},
+		{"timestamp-only drift", "pd-time", sync.FieldMessageMetadata, 2, true},
+		{"termination status drift", "pd-term", sync.FieldTerminationStatus, 1, true},
+		{"usage event drift", "pd-usage", sync.FieldUsageEventCount, 1, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,7 +268,7 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 				assert.Contains(t, got, tc.field,
 					"fields for %q", tc.sessionID)
 			}
-			assert.Equal(t, 1, report.FieldCounts[tc.field],
+			assert.Equal(t, tc.fieldCount, report.FieldCounts[tc.field],
 				"FieldCounts[%s]", tc.field)
 		})
 	}
@@ -611,6 +627,147 @@ func TestParseDiffCoversKiroSQLite(t *testing.T) {
 	}, report.Totals, "kiro sqlite session must be examined, not skipped")
 	assert.Equal(t, 1, report.FilesExamined, "data.sqlite3 examined")
 	assert.False(t, report.HasFailures(), "clean kiro sqlite run")
+}
+
+// TestParseDiffCoversMixedOpenCodeRoot proves a storage-mode OpenCode
+// root that still carries DB-only legacy sessions in opencode.db gets
+// BOTH sources re-parsed. Normal sync reads opencode.db regardless of
+// source mode, so parse-diff must too; a mode-gated synthesized
+// discovery would leave the legacy session "not discovered" and let
+// --fail-on-change pass without vetting it.
+func TestParseDiffCoversMixedOpenCodeRoot(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// File-backed storage session: this makes ResolveOpenCodeSource
+	// pick storage mode for the root.
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const storageID = "oc-mixed-storage"
+	storage.addSession(
+		t, "global", storageID,
+		"/home/user/code/storage-app", "Mixed Storage",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, storageID, "msg-a1", "assistant", 1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, storageID, "msg-a1", "part-a1",
+		"storage reply", 1704067201000,
+	)
+
+	// DB-only legacy session in the same root, plus a SQLite duplicate
+	// of the storage session that the storage-ID filter must drop.
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/legacy-app")
+	const legacyID = "oc-mixed-legacy"
+	timeCreated := int64(1704067200000)
+	sqlite.addSession(t, legacyID, "proj-1", timeCreated, timeCreated+5000)
+	sqlite.addMessage(t, "lg-msg-u1", legacyID, "user", timeCreated)
+	sqlite.addMessage(t, "lg-msg-a1", legacyID, "assistant", timeCreated+1)
+	sqlite.addTextPart(
+		t, "lg-part-u1", legacyID, "lg-msg-u1",
+		"legacy question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "lg-part-a1", legacyID, "lg-msg-a1",
+		"legacy answer", timeCreated+1,
+	)
+	sqlite.addSession(t, storageID, "proj-1", timeCreated, timeCreated+5000)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
+	})
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentOpenCode},
+	})
+	// Examined:2/Identical:2 proves the DB-only legacy session was
+	// re-parsed and compared alongside the storage session. A Skipped
+	// count here means opencode.db was not synthesized for the
+	// storage-mode root; a Changed count means the storage-ID filter
+	// let the SQLite duplicate shadow the storage transcript.
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 2, Identical: 2,
+	}, report.Totals, "both opencode sources must be examined")
+	assert.Equal(t, 2, report.FilesExamined,
+		"storage session file and opencode.db examined")
+	assert.False(t, report.HasFailures(), "clean mixed opencode run")
+}
+
+// TestParseDiffKiroSQLitePerSessionError proves a malformed session
+// inside the shared Kiro store surfaces as DiffParseError instead of
+// being silently dropped (unstored) or misclassified as presence
+// drift (stored), so --fail-on-change stays trustworthy.
+func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
+	t.Run("stored session turned malformed", func(t *testing.T) {
+		env := setupTestEnv(t)
+		ks := createKiroSQLiteDB(t, env.kiroDir)
+		ks.addSession(
+			t, "/home/user/code/kiro-app", "sqlite-session",
+			readKiroSQLiteFixture(t, "standard_payload.json"),
+			1779012000000, 1779012030000,
+		)
+		runSyncAndAssert(t, env.engine, sync.SyncStats{
+			TotalSessions: 1, Synced: 1,
+		})
+
+		ks.updateSession(t, "sqlite-session", "{corrupt", 1779012060000)
+
+		report := runParseDiff(t, env, sync.ParseDiffOptions{
+			Agents: []parser.AgentType{parser.AgentKiro},
+		})
+		assert.Equal(t, sync.ParseDiffTotals{
+			ParseErrors: 1,
+		}, report.Totals,
+			"a malformed stored session is a parse error, not presence drift")
+		assert.Empty(t, report.FieldCounts,
+			"no presence diff for a session that failed to parse")
+
+		sd := findSessionDiff(report, "kiro:sqlite-session")
+		require.NotNil(t, sd, "stored session must be attributed by ID")
+		assert.Equal(t, sync.DiffParseError, sd.Class, "class")
+		assert.Contains(t, sd.Reason, "malformed payload", "reason")
+		assert.True(t, report.HasFailures(),
+			"per-session parse errors must trip --fail-on-change")
+	})
+
+	t.Run("unstored malformed session still reported", func(t *testing.T) {
+		env := setupTestEnv(t)
+		ks := createKiroSQLiteDB(t, env.kiroDir)
+		ks.addSession(
+			t, "/home/user/code/kiro-app", "good-session",
+			readKiroSQLiteFixture(t, "standard_payload.json"),
+			1779012000000, 1779012030000,
+		)
+		runSyncAndAssert(t, env.engine, sync.SyncStats{
+			TotalSessions: 1, Synced: 1,
+		})
+
+		// Never synced: written to the store after the sync.
+		ks.addSession(
+			t, "/home/user/code/kiro-app", "bad-session",
+			"{corrupt", 1779012040000, 1779012050000,
+		)
+
+		report := runParseDiff(t, env, sync.ParseDiffOptions{
+			Agents: []parser.AgentType{parser.AgentKiro},
+		})
+		assert.Equal(t, sync.ParseDiffTotals{
+			Examined: 1, Identical: 1, ParseErrors: 1,
+		}, report.Totals,
+			"good session compared; bad session is a parse error")
+
+		var errEntry *sync.SessionDiff
+		for i := range report.Sessions {
+			if report.Sessions[i].Class == sync.DiffParseError {
+				errEntry = &report.Sessions[i]
+			}
+		}
+		require.NotNil(t, errEntry, "parse error entry listed")
+		assert.Contains(t, errEntry.FilePath, "data.sqlite3#bad-session",
+			"error attributed to the per-session virtual path")
+		assert.True(t, report.HasFailures(), "HasFailures")
+	})
 }
 
 func TestParseDiffPresenceSweep(t *testing.T) {

@@ -3035,15 +3035,30 @@ type incrementalUpdate struct {
 	hasPeakContextTokens bool
 }
 
+// sessionParseError is a per-session parse failure inside a shared
+// SQLite store (OpenCode, Zed, Kiro), where one file path fans out to
+// many sessions and a single bad payload must not fail the whole db.
+type sessionParseError struct {
+	sessionID   string // raw parser-side ID, no engine prefix
+	virtualPath string // dbPath#rawID source path
+	err         error
+}
+
 type processResult struct {
 	results            []parser.ParseResult
 	excludedSessionIDs []string
-	skip               bool
-	mtime              int64
-	err                error
-	incremental        *incrementalUpdate
-	cacheSkip          bool
-	needsRetry         bool
+	// sessionErrs carries per-session parse failures from the
+	// shared-db fan-out loops. Normal sync logs and skips these;
+	// parse-diff (forceParse) surfaces them as DiffParseError report
+	// entries so --fail-on-change cannot pass over a session the
+	// current binary failed to parse.
+	sessionErrs []sessionParseError
+	skip        bool
+	mtime       int64
+	err         error
+	incremental *incrementalUpdate
+	cacheSkip   bool
+	needsRetry  bool
 	// forceReplace requests full message replacement on write,
 	// even when the existing rows would otherwise be left in
 	// place. Set when a fall-through to full parse is recovering
@@ -3715,6 +3730,7 @@ func (e *Engine) processOpenCode(
 			filepath.Dir(file.Path),
 		)
 		var results []parser.ParseResult
+		var sessionErrs []sessionParseError
 		for _, meta := range metas {
 			if _, ok := storageIDs[meta.SessionID]; ok {
 				continue
@@ -3730,10 +3746,18 @@ func (e *Engine) processOpenCode(
 				file.Path, meta.SessionID, e.machine,
 			)
 			if err != nil {
-				log.Printf(
-					"opencode sqlite watch session %s: %v",
-					meta.SessionID, err,
-				)
+				if e.forceParse {
+					sessionErrs = append(sessionErrs, sessionParseError{
+						sessionID:   meta.SessionID,
+						virtualPath: meta.VirtualPath,
+						err:         err,
+					})
+				} else {
+					log.Printf(
+						"opencode sqlite watch session %s: %v",
+						meta.SessionID, err,
+					)
+				}
 				continue
 			}
 			if sess == nil {
@@ -3744,7 +3768,11 @@ func (e *Engine) processOpenCode(
 				Messages: msgs,
 			})
 		}
-		return processResult{results: results, forceReplace: true}
+		return processResult{
+			results:      results,
+			sessionErrs:  sessionErrs,
+			forceReplace: true,
+		}
 	}
 	if e.shouldSkipOpenCodeByPath(file.Path) {
 		return processResult{skip: true}
@@ -4127,6 +4155,7 @@ func (e *Engine) processZed(
 	hash, _ := ComputeFileHash(file.Path)
 
 	var results []parser.ParseResult
+	var sessionErrs []sessionParseError
 	for _, meta := range metas {
 		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
 		// parse-diff: !e.forceParse disables the stored-state skip.
@@ -4139,7 +4168,15 @@ func (e *Engine) processZed(
 			conn, file.Path, meta.RawID, e.machine, info,
 		)
 		if err != nil {
-			log.Printf("zed thread %s: %v", meta.RawID, err)
+			if e.forceParse {
+				sessionErrs = append(sessionErrs, sessionParseError{
+					sessionID:   meta.RawID,
+					virtualPath: meta.VirtualPath,
+					err:         err,
+				})
+			} else {
+				log.Printf("zed thread %s: %v", meta.RawID, err)
+			}
 			continue
 		}
 		if result == nil {
@@ -4150,7 +4187,11 @@ func (e *Engine) processZed(
 		}
 		results = append(results, *result)
 	}
-	return processResult{results: results, forceReplace: true}
+	return processResult{
+		results:      results,
+		sessionErrs:  sessionErrs,
+		forceReplace: true,
+	}
 }
 
 func (e *Engine) processKiro(
@@ -4184,6 +4225,7 @@ func (e *Engine) processKiro(
 			return processResult{err: err}
 		}
 		var results []parser.ParseResult
+		var sessionErrs []sessionParseError
 		for _, meta := range metas {
 			_, storedMtime, ok := e.db.GetFileInfoByPath(
 				meta.VirtualPath,
@@ -4198,10 +4240,18 @@ func (e *Engine) processKiro(
 				meta.SessionID, e.machine,
 			)
 			if err != nil {
-				log.Printf(
-					"kiro sqlite watch session %s: %v",
-					meta.SessionID, err,
-				)
+				if e.forceParse {
+					sessionErrs = append(sessionErrs, sessionParseError{
+						sessionID:   meta.SessionID,
+						virtualPath: meta.VirtualPath,
+						err:         err,
+					})
+				} else {
+					log.Printf(
+						"kiro sqlite watch session %s: %v",
+						meta.SessionID, err,
+					)
+				}
 				continue
 			}
 			if sess == nil {
@@ -4212,7 +4262,11 @@ func (e *Engine) processKiro(
 				Messages: msgs,
 			})
 		}
-		return processResult{results: results, forceReplace: true}
+		return processResult{
+			results:      results,
+			sessionErrs:  sessionErrs,
+			forceReplace: true,
+		}
 	}
 	if e.isShadowedLegacyKiroPath(file.Path) {
 		return processResult{skip: true}

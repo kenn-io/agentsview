@@ -234,14 +234,19 @@ func parseDiffSupportedAgents() []string {
 }
 
 // renderParseDiffReport writes the human-readable report. An empty
-// archive renders a zero-count summary with no tables.
+// archive renders a zero-count summary with no tables. Every value
+// that originates in session files or archive rows (IDs, paths,
+// agents, field values, error reasons) passes through
+// sanitizeTerminal: session content can carry ESC/OSC sequences that
+// would otherwise reach the terminal. JSON output is left raw.
 func renderParseDiffReport(
 	w io.Writer, r *sync.ParseDiffReport, dbPath, agentsLabel string,
 	verbose bool,
 ) {
 	fmt.Fprintf(w,
 		"Parse diff: %d files re-parsed (%s) against %s (data version %d)\n",
-		r.FilesExamined, agentsLabel, dbPath, r.DataVersion)
+		r.FilesExamined, sanitizeTerminal(agentsLabel),
+		sanitizeTerminal(dbPath), r.DataVersion)
 	if r.FilesLimited {
 		fmt.Fprintln(w,
 			"Note: --limit truncated discovery; totals cover a sample.")
@@ -313,7 +318,9 @@ func renderParseDiffParseErrors(w io.Writer, sessions []sync.SessionDiff) {
 		if path == "" {
 			path = "(unknown file)"
 		}
-		fmt.Fprintf(w, "  %s  %s\n    %s\n", s.Agent, path, s.Reason)
+		fmt.Fprintf(w, "  %s  %s\n    %s\n",
+			sanitizeTerminal(s.Agent), sanitizeTerminal(path),
+			sanitizeTerminal(s.Reason))
 	}
 	fmt.Fprintln(w)
 }
@@ -361,7 +368,7 @@ func renderParseDiffFieldCounts(w io.Writer, counts map[string]int) {
 	fmt.Fprintln(w, "Changed fields (sessions affected)")
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	for _, e := range sortedIntMap(counts) {
-		fmt.Fprintf(tw, "  %s\t%d\n", e.key, e.val)
+		fmt.Fprintf(tw, "  %s\t%d\n", sanitizeTerminal(e.key), e.val)
 	}
 	tw.Flush()
 	fmt.Fprintln(w)
@@ -397,8 +404,9 @@ func renderParseDiffChanged(
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	for _, s := range shown {
 		fmt.Fprintf(tw, "  %s\t%s\t%s\n",
-			s.Agent, shortID(s.SessionID),
-			parseDiffFieldSummary(s.Fields))
+			sanitizeTerminal(s.Agent),
+			sanitizeTerminal(shortID(s.SessionID)),
+			sanitizeTerminal(parseDiffFieldSummary(s.Fields)))
 	}
 	tw.Flush()
 	if extra := len(changed) - len(shown); extra > 0 {
@@ -412,15 +420,18 @@ func renderParseDiffChanged(
 // every field diff: Field, Stored -> Parsed, Detail, and an
 // [informational] tag where applicable.
 func renderParseDiffSessionVerbose(w io.Writer, s sync.SessionDiff) {
-	fmt.Fprintf(w, "  %s  %s", s.Agent, s.SessionID)
+	fmt.Fprintf(w, "  %s  %s",
+		sanitizeTerminal(s.Agent), sanitizeTerminal(s.SessionID))
 	if s.FilePath != "" {
-		fmt.Fprintf(w, "  %s", s.FilePath)
+		fmt.Fprintf(w, "  %s", sanitizeTerminal(s.FilePath))
 	}
 	fmt.Fprintln(w)
 	for _, f := range s.Fields {
-		fmt.Fprintf(w, "    %s: %s -> %s", f.Field, f.Stored, f.Parsed)
+		fmt.Fprintf(w, "    %s: %s -> %s",
+			sanitizeTerminal(f.Field),
+			sanitizeTerminal(f.Stored), sanitizeTerminal(f.Parsed))
 		if f.Detail != "" {
-			fmt.Fprintf(w, " (%s)", f.Detail)
+			fmt.Fprintf(w, " (%s)", sanitizeTerminal(f.Detail))
 		}
 		if f.Informational {
 			fmt.Fprint(w, " [informational]")

@@ -1050,6 +1050,41 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 	return b.String(), rows.Err()
 }
 
+// MessageRoleTimeFingerprint returns an exact ordered fingerprint of
+// per-message role and timestamp for a session's messages. The
+// parse-diff comparator uses it as a tier-1 fast path alongside
+// MessageTokenFingerprint, which deliberately excludes these two
+// columns; without it, role-only or timestamp-only parser drift would
+// never trigger the tier-2 row comparison. Role is sanitized to mirror
+// the tier-2 compare in messageMetadataDiff; timestamp is compared raw
+// there, so it stays raw here.
+func (db *DB) MessageRoleTimeFingerprint(sessionID string) (string, error) {
+	rows, err := db.getReader().Query(
+		`SELECT ordinal, role, timestamp
+		 FROM messages
+		 WHERE session_id = ?
+		 ORDER BY ordinal ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var ordinal int
+		var role, timestamp string
+		if err := rows.Scan(&ordinal, &role, &timestamp); err != nil {
+			return "", err
+		}
+		role = SanitizeUTF8(role)
+		fmt.Fprintf(&b, "%d|%d:%s|%d:%s;",
+			ordinal, len(role), role, len(timestamp), timestamp)
+	}
+	return b.String(), rows.Err()
+}
+
 // ToolCallCount returns the number of tool_calls rows for a session.
 func (db *DB) ToolCallCount(sessionID string) (int, error) {
 	var n int

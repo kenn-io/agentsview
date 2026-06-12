@@ -647,6 +647,15 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 		t, storedFP, messageTokenFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageTokenFingerprint exactly",
 	)
+
+	storedRoleTimeFP, err := d.MessageRoleTimeFingerprint(prepared.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, storedRoleTimeFP)
+
+	assert.Equal(
+		t, storedRoleTimeFP, messageRoleTimeFingerprintTwin(msgs),
+		"in-memory twin must match db.MessageRoleTimeFingerprint exactly",
+	)
 }
 
 // TestCompareStoredSessionRoundTrip proves that a session written

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -247,13 +248,20 @@ func resolveParseDiffAgents(
 
 // parseDiffDatabaseSources synthesizes DiscoveredFile entries for the
 // shared-SQLite agent stores that DiscoverFunc does not emit: Kiro's
-// data.sqlite3 and db-mode OpenCode's opencode.db. processKiro and
+// data.sqlite3 and OpenCode's opencode.db. processKiro and
 // processOpenCode recognize those base filenames and fan one db path
 // out to every contained session, so routing them through the normal
-// worker loop re-parses every CLI Kiro / db-mode OpenCode session.
+// worker loop re-parses every CLI Kiro / DB-backed OpenCode session.
 // Without this, those sessions fall to the "not discovered" sweep and
 // an --agent kiro / --agent opencode run would pass while comparing
 // nothing.
+//
+// The OpenCode db is added whenever it exists, regardless of which
+// source mode ResolveOpenCodeSource picks: normal sync reads
+// opencode.db in storage-mode roots too (openCodePendingSessionIDs),
+// because a migrated root can still hold DB-only legacy sessions.
+// processOpenCode's storage-ID filtering keeps file-backed sessions
+// from being compared twice.
 func (e *Engine) parseDiffDatabaseSources(
 	resolved []parser.AgentDef,
 ) []parser.DiscoveredFile {
@@ -276,11 +284,11 @@ func (e *Engine) parseDiffDatabaseSources(
 				if dir == "" {
 					continue
 				}
-				src := parser.ResolveOpenCodeSource(dir)
-				if src.Mode == parser.OpenCodeSourceSQLite &&
-					src.DBPath != "" {
+				dbPath := filepath.Join(dir, "opencode.db")
+				if info, err := os.Stat(dbPath); err == nil &&
+					!info.IsDir() {
 					extra = append(extra, parser.DiscoveredFile{
-						Path: src.DBPath, Agent: parser.AgentOpenCode,
+						Path: dbPath, Agent: parser.AgentOpenCode,
 					})
 				}
 			}
@@ -479,6 +487,34 @@ func (e *Engine) parseDiffCollectFile(
 				report.Sessions = append(report.Sessions, entry)
 			}
 		}
+	}
+
+	// Per-session parse failures inside a shared SQLite store: the db
+	// itself opened fine, so job.err is nil, but individual sessions
+	// could not be parsed. Each becomes a DiffParseError; matching the
+	// stored row by its virtual source path marks it visited so the
+	// presence sweep does not double-report it as "not emitted".
+	for _, se := range job.sessionErrs {
+		entry := SessionDiff{
+			Agent:    string(fileAgents[job.path]),
+			FilePath: se.virtualPath,
+			Class:    DiffParseError,
+			Reason:   se.err.Error(),
+		}
+		if entry.FilePath == "" {
+			entry.FilePath = job.path
+		}
+		for _, s := range storedByPath[base] {
+			if derefString(s.FilePath) == se.virtualPath {
+				visited[s.ID] = true
+				entry.SessionID = s.ID
+				entry.Agent = s.Agent
+				entry.StoredDataVersion = s.DataVersion
+				break
+			}
+		}
+		report.Sessions = append(report.Sessions, entry)
+		report.Totals.ParseErrors++
 	}
 
 	for _, exID := range e.applyIDPrefixToSessionIDs(

@@ -449,6 +449,67 @@ func TestRenderParseDiffReport_ParseErrorsListed(t *testing.T) {
 	assert.Contains(t, out, "invalid character")
 }
 
+// TestRenderParseDiffReport_SanitizesControlSequences proves the
+// human renderer strips terminal control bytes from every
+// session-derived value (agents, IDs, paths, field values, details,
+// parse-error reasons). Session files control these strings, so
+// without sanitization a crafted session could emit OSC 52 clipboard
+// writes, OSC 8 phishing hyperlinks, or cursor movement on a plain
+// `parse-diff --verbose` run.
+func TestRenderParseDiffReport_SanitizesControlSequences(t *testing.T) {
+	r := &sync.ParseDiffReport{
+		DataVersion: 42,
+		Totals: sync.ParseDiffTotals{
+			Examined: 1, Changed: 1, ParseErrors: 1,
+		},
+		FieldCounts: map[string]int{
+			sync.FieldFirstMessage + "\x1b[31m": 1,
+		},
+		Sessions: []sync.SessionDiff{
+			changedSession(
+				"claude\x1b[31m",
+				"evil\x1b]0;title\x07session",
+				sync.FieldDiff{
+					Field:  sync.FieldFirstMessage,
+					Stored: "safe\x1b]52;c;ZXZpbA==\x07clip",
+					Parsed: "new\x1b[2K\rvalue",
+					Detail: "detail\x1b[1;31mred",
+				},
+			),
+			{
+				Agent:    "gemini",
+				FilePath: "/data/evil\x1b[8mhidden.jsonl",
+				Class:    sync.DiffParseError,
+				Reason:   "bad\x1b]8;;https://evil.example\x07link",
+			},
+		},
+	}
+
+	for _, verbose := range []bool{false, true} {
+		var buf bytes.Buffer
+		renderParseDiffReport(&buf, r,
+			"/tmp/db\x1b[5m", "all agents", verbose)
+		out := buf.String()
+
+		assert.NotContains(t, out, "\x1b",
+			"verbose=%v output must contain no ESC bytes", verbose)
+		assert.NotContains(t, out, "\x07",
+			"verbose=%v output must contain no BEL bytes", verbose)
+		assert.NotContains(t, out, "\r",
+			"verbose=%v output must contain no carriage returns", verbose)
+		// The text around the stripped sequences must survive.
+		assert.Contains(t, out, "link", "reason text retained")
+		assert.Contains(t, out, "hidden.jsonl", "path text retained")
+	}
+
+	var verbose bytes.Buffer
+	renderParseDiffReport(&verbose, r, "db", "all agents", true)
+	out := verbose.String()
+	assert.Contains(t, out, "clip", "stored value text retained")
+	assert.Contains(t, out, "value", "parsed value text retained")
+	assert.Contains(t, out, "red", "detail text retained")
+}
+
 func TestRenderParseDiffReport_VacuousResyncWarning(t *testing.T) {
 	r := &sync.ParseDiffReport{
 		DataVersion: 40,

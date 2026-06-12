@@ -35,16 +35,24 @@ func (e *Engine) compareStoredSession(
 ) ([]FieldDiff, error) {
 	diffs := compareSessionFields(stored, prepared)
 
-	// Tier 1: two cheap aggregate fingerprints over the stored
-	// messages. The token fingerprint covers per-message model and
-	// token metadata; the content fingerprint covers body length
-	// (sum/max/min), which the token fingerprint does not. Equal
-	// fingerprints prove the messages match on the compared fields
-	// without loading any rows.
+	// Tier 1: three cheap fingerprints over the stored messages. The
+	// token fingerprint covers per-message model and token metadata;
+	// the role/time fingerprint covers per-message role and timestamp,
+	// which the token fingerprint deliberately excludes (its shape is
+	// shared with the PG push fast-path); the content fingerprint
+	// covers body length (sum/max/min). Equal fingerprints prove the
+	// messages match on the compared fields without loading any rows.
 	storedTokenFP, err := e.db.MessageTokenFingerprint(stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: message fingerprint for %s: %w",
+			stored.ID, err,
+		)
+	}
+	storedRoleTimeFP, err := e.db.MessageRoleTimeFingerprint(stored.ID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"parse-diff: role/time fingerprint for %s: %w",
 			stored.ID, err,
 		)
 	}
@@ -59,9 +67,11 @@ func (e *Engine) compareStoredSession(
 	parsedSum, parsedMax, parsedMin := contentLengthAggregate(msgs)
 
 	tokenFPDiffers := messageTokenFingerprintTwin(msgs) != storedTokenFP
+	roleTimeFPDiffers :=
+		messageRoleTimeFingerprintTwin(msgs) != storedRoleTimeFP
 	contentFPDiffers := storedSum != parsedSum ||
 		storedMax != parsedMax || storedMin != parsedMin
-	if tokenFPDiffers || contentFPDiffers {
+	if tokenFPDiffers || roleTimeFPDiffers || contentFPDiffers {
 		// Tier 2: load stored rows and attribute the mismatch to the
 		// per-message contract fields. A mismatch that lands on none
 		// of them still yields a fallback diff so a fingerprint
@@ -73,7 +83,8 @@ func (e *Engine) compareStoredSession(
 			)
 		}
 		diffs = append(diffs, compareMessageMetadata(
-			storedMsgs, msgs, tokenFPDiffers, contentFPDiffers,
+			storedMsgs, msgs,
+			tokenFPDiffers || roleTimeFPDiffers, contentFPDiffers,
 		)...)
 	}
 
@@ -325,14 +336,41 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 	return b.String()
 }
 
+// messageRoleTimeFingerprintTwin is the in-memory twin of
+// db.MessageRoleTimeFingerprint (internal/db/messages.go): identical
+// field order, identical sanitization, identical format string, over
+// a slice ordered by ordinal ascending. Like the token twin above,
+// parity with the DB query is pinned by a white-box test through the
+// real write pipeline.
+func messageRoleTimeFingerprintTwin(msgs []db.Message) string {
+	ordered := make([]db.Message, len(msgs))
+	copy(ordered, msgs)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Ordinal < ordered[j].Ordinal
+	})
+
+	var b strings.Builder
+	for _, m := range ordered {
+		role := db.SanitizeUTF8(m.Role)
+		fmt.Fprintf(&b, "%d|%d:%s|%d:%s;",
+			m.Ordinal, len(role), role,
+			len(m.Timestamp), m.Timestamp,
+		)
+	}
+	return b.String()
+}
+
 // compareMessageMetadata is the tier-2 per-message comparison, run
-// when either tier-1 fingerprint (token or content) mismatched. Both
-// slices are aligned by ordinal value and only the overlap is
-// compared; a length mismatch is message_count's job. The two
-// FP-differ flags guarantee a non-empty result: if the fingerprints
-// proved inequality but none of the attributed fields differ on the
-// overlap, a fallback diff is emitted so the session never classifies
-// identical after its own fingerprint proved otherwise.
+// when any tier-1 fingerprint (token, role/time, or content)
+// mismatched. tokenFPDiffers carries the token and role/time
+// fingerprint results combined, since both attribute to the same
+// per-message fields. Both slices are aligned by ordinal value and
+// only the overlap is compared; a length mismatch is message_count's
+// job. The two FP-differ flags guarantee a non-empty result: if the
+// fingerprints proved inequality but none of the attributed fields
+// differ on the overlap, a fallback diff is emitted so the session
+// never classifies identical after its own fingerprint proved
+// otherwise.
 func compareMessageMetadata(
 	storedMsgs, parsedMsgs []db.Message,
 	tokenFPDiffers, contentFPDiffers bool,
