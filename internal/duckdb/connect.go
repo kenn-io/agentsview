@@ -7,7 +7,6 @@ import (
 	neturl "net/url"
 	"strings"
 
-	_ "github.com/duckdb/duckdb-go/v2"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -16,7 +15,7 @@ func Open(path string) (*sql.DB, error) {
 	if path == "" {
 		return nil, fmt.Errorf("duckdb path is required")
 	}
-	db, err := sql.Open("duckdb", path)
+	db, err := openDuckDB(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening duckdb file: %w", err)
 	}
@@ -43,7 +42,7 @@ func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
 	if err := ValidateQuackClientURL(rawURL, token, allowInsecure); err != nil {
 		return nil, err
 	}
-	conn, err := sql.Open("duckdb", "")
+	conn, err := openDuckDB("")
 	if err != nil {
 		return nil, fmt.Errorf("opening duckdb client: %w", err)
 	}
