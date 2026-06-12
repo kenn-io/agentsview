@@ -1933,7 +1933,7 @@ func TestAntigravityCLIDBGenMetadataWinsOverSidecarUsage(t *testing.T) {
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, userPayload)
 	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
 
-	genData := createAntigravityMockGenMetadata(t, 2400, 180, 30, "Test Gemini 3.5")
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, 30, "Test Gemini 3.5")
 	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
 	require.NoError(t, db.Close())
 
@@ -1966,10 +1966,10 @@ func TestAntigravityCLIDBGenMetadataWinsOverSidecarUsage(t *testing.T) {
 	require.Len(t, usageEvents, 1)
 	assert.Equal(t, "generation", usageEvents[0].Source)
 	assert.Equal(t, 2400, usageEvents[0].InputTokens)
-	assert.Equal(t, 210, usageEvents[0].OutputTokens)
+	assert.Equal(t, 180, usageEvents[0].OutputTokens)
 
 	// Session totals follow the winning gen_metadata events.
-	assert.Equal(t, 210, sess.TotalOutputTokens)
+	assert.Equal(t, 180, sess.TotalOutputTokens)
 	assert.Equal(t, 2400, sess.PeakContextTokens)
 
 	// Per-message attribution comes from the sidecar generatorMetadata.

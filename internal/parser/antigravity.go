@@ -411,7 +411,8 @@ func tokenBlockFrom(fs []agProtoField) (input, output, cached, reasoning int, ok
 		return 0, 0, 0, 0, false
 	}
 	if f3, hasF3 := agProtoFind(fs, 3); hasF3 {
-		if f3.Wire != pbWireVarint || f3.Varint > maxPlausibleTokens {
+		if f3.Wire != pbWireVarint || f3.Varint > maxPlausibleTokens ||
+			f2.Varint+f3.Varint > maxPlausibleTokens {
 			return 0, 0, 0, 0, false
 		}
 		reasoning = int(f3.Varint)

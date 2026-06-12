@@ -296,15 +296,16 @@ func FuzzExtractTokenUsage(f *testing.F) {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {
-		input, output, reasoning, ok := extractTokenUsage(data)
+		input, output, cached, reasoning, ok := extractTokenUsage(data)
 		if !ok {
 			assert.Zero(t, input)
 			assert.Zero(t, output)
+			assert.Zero(t, cached)
 			assert.Zero(t, reasoning)
 			return
 		}
 		for name, v := range map[string]int{
-			"input": input, "output": output, "reasoning": reasoning,
+			"input": input, "output": output, "cached": cached, "reasoning": reasoning,
 		} {
 			assert.GreaterOrEqual(t, v, 0, "%s tokens negative", name)
 			assert.LessOrEqual(t, v, maxPlausibleTokens,

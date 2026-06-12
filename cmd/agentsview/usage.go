@@ -65,6 +65,8 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	database, appCfg := openUsageDB()
 	defer database.Close()
 
+	applyCustomPricing(database, appCfg)
+
 	ensureFreshData(appCfg, database, cfg.NoSync)
 	ensurePricing(database, cfg.Offline)
 
@@ -114,6 +116,8 @@ type UsageStatuslineConfig struct {
 func runUsageStatusline(cfg UsageStatuslineConfig) {
 	database, appCfg := openUsageDB()
 	defer database.Close()
+
+	applyCustomPricing(database, appCfg)
 
 	ensureFreshData(appCfg, database, cfg.NoSync)
 	ensurePricing(database, cfg.Offline)
