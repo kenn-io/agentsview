@@ -45,6 +45,10 @@ type SyncStats struct {
 	OrphanedCopied int      `json:"orphaned_copied,omitempty"`
 	Warnings       []string `json:"warnings,omitempty"`
 	Aborted        bool     `json:"aborted,omitempty"`
+	// SidecarRejected counts sessions where a trajectory.json
+	// sidecar was available but the parser fell back to the
+	// heuristic DB decode because the sidecar lagged behind.
+	SidecarRejected int `json:"sidecar_rejected,omitempty"`
 
 	filesOK             int // unexported: file-level success counter
 	filesDiscovered     int // file-based total, excludes DB-backed agents

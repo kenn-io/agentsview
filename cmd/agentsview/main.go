@@ -472,6 +472,12 @@ func printSyncSummary(stats sync.SyncStats, t time.Time) {
 			stats.OrphanedCopied,
 		)
 	}
+	if stats.SidecarRejected > 0 {
+		summary += fmt.Sprintf(
+			", %d sidecar-rejected",
+			stats.SidecarRejected,
+		)
+	}
 	if stats.Failed > 0 {
 		summary += fmt.Sprintf(", %d failed", stats.Failed)
 	}

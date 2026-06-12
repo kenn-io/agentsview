@@ -1540,6 +1540,8 @@ func TestAntigravityCLIDBPrefersSidecarWithEqualCoverage(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.False(t, status.NeedsRetry)
+	assert.False(t, status.SidecarRejected,
+		"sidecar won, should not be marked as rejected")
 
 	// Sidecar messages win: structured tool call, thinking, and the
 	// sidecar's own user prompt (no history.jsonl merge).
@@ -1573,6 +1575,8 @@ func TestAntigravityCLIDBKeepsDBDecodeWhenSidecarLags(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.False(t, status.NeedsRetry)
+	assert.True(t, status.SidecarRejected,
+		"valid sidecar exists but was rejected because it lags the DB")
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "history prompt", msgs[0].Content, "history merge applies")
 	assert.Contains(t, msgs[1].Content, "assistant reply content body")

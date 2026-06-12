@@ -2920,6 +2920,9 @@ func (e *Engine) collectAndBatch(
 				excludedSessionIDs...,
 			)
 		}
+		if r.sidecarRejected {
+			stats.SidecarRejected++
+		}
 		if len(r.results) == 0 && r.incremental == nil {
 			if len(r.excludedSessionIDs) > 0 {
 				stats.filesOK++
@@ -3038,6 +3041,7 @@ type processResult struct {
 	incremental        *incrementalUpdate
 	cacheSkip          bool
 	needsRetry         bool
+	sidecarRejected    bool
 	// forceReplace requests full message replacement on write,
 	// even when the existing rows would otherwise be left in
 	// place. Set when a fall-through to full parse is recovering
@@ -4428,7 +4432,8 @@ func (e *Engine) processAntigravityCLI(
 	}
 
 	return processResult{
-		needsRetry: parseStatus.NeedsRetry,
+		needsRetry:      parseStatus.NeedsRetry,
+		sidecarRejected: parseStatus.SidecarRejected,
 		results: []parser.ParseResult{
 			{
 				Session:     *sess,

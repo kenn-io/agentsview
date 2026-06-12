@@ -160,6 +160,13 @@ type AntigravityCLIParseStatus struct {
 	// messages instead. Sync can store the fallback while leaving
 	// data_version stale so the next pass retries.
 	NeedsRetry bool
+
+	// SidecarRejected is true when a valid, displayable
+	// trajectory.json sidecar exists for a .db session but the
+	// parser used the heuristic DB decode instead because the
+	// sidecar covers fewer steps than the raw DB (it is lagging
+	// behind a live session).
+	SidecarRejected bool
 }
 
 // ParseAntigravityCLISessionWithStatus parses one CLI session into
@@ -224,6 +231,12 @@ func ParseAntigravityCLISessionWithStatus(
 			messages = tRes.messages
 			hasTrajectory = true
 		case dbOK:
+			if sidecarOK {
+				// A valid trajectory.json sidecar exists but
+				// doesn't cover enough steps; the heuristic
+				// DB decode won the transcript race.
+				status.SidecarRejected = true
+			}
 			messages = mergeAntigravityDBHistoryMessages(
 				dbResult.messages,
 				collectAntigravityHistoryMessages(
