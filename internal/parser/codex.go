@@ -1368,89 +1368,38 @@ func classifyCodexTermination(lastTaskEvent string) TerminationStatus {
 	return ""
 }
 
-// readCodexModelAtOffset scans a Codex JSONL file from the
-// start up to the given byte offset and returns the model
-// from the most recent turn_context entry. Returns "" when
-// no turn_context is found before the offset. Used to seed
-// currentModel for incremental parses that resume past turn
-// boundaries.
-// readCodexModelAtOffset scans a Codex JSONL file from the
-// start up to the given byte offset and returns the model
-// from the most recent turn_context entry. Mirrors the full
-// parser: every turn_context unconditionally overwrites the
-// model, including empty strings. Returns "" when no
-// turn_context is found before the offset.
-func readCodexModelAtOffset(
-	path string, offset int64,
-) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-
-	lr := newLineReader(
-		io.LimitReader(f, offset), maxLineSize,
-	)
-	var model string
-	var gate codexForkGate
-	sawMeta := false
-	for {
-		line, ok := lr.next()
-		if !ok {
-			break
-		}
-		if !gjson.Valid(line) {
-			continue
-		}
-		lineType := gjson.Get(line, "type").Str
-		if lineType == codexTypeSessionMeta {
-			if !sawMeta {
-				sawMeta = true
-				gate.armFromMeta(
-					gjson.Get(line, "payload"),
-					parseTimestamp(gjson.Get(line, "timestamp").Str),
-				)
-			}
-			continue
-		}
-		if lineType != codexTypeTurnContext {
-			continue
-		}
-		// Skip turn_contexts replayed into a forked rollout (#643)
-		// so the seeded model mirrors the full parser's view.
-		if gate.suppresses(lineType, gjson.Get(line, "payload")) {
-			continue
-		}
-		model = gjson.Get(line, "payload.model").Str
-	}
-	return model
+// codexIncrementalSeed carries the builder state recovered from the
+// already-parsed prefix [0, offset) of a Codex JSONL file so an
+// incremental parse resumes with the same view a full parse would
+// have at that offset: the current model, the re-emitted-prompt
+// dedup state, and the fork replay gate (#643).
+type codexIncrementalSeed struct {
+	model                    string
+	firstUserContent         string
+	sawUserTurnAfterFirst    bool
+	mayReplayFirstUserPrompt bool
+	forkGate                 codexForkGate
 }
 
-// seedCodexUserDedup scans a Codex JSONL prefix [0, offset) to recover
-// the state the re-emitted-prompt dedup needs when resuming an
-// incremental parse: the full content of the first real user message,
-// whether another real user turn already occurred, and whether a
-// turn_aborted signal allows the next identical first prompt to be
-// dropped. It mirrors handleResponseItem's user-message filtering and
-// full-content matching so the incremental path dedups re-emitted
-// prompts identically to a full parse.
-func seedCodexUserDedup(
+// seedCodexIncrementalState scans a Codex JSONL prefix [0, offset)
+// and mirrors processLine's dispatch: every turn_context overwrites
+// the model (including empty strings), user messages feed the
+// re-emitted-prompt dedup exactly as handleResponseItem would, and
+// the fork gate arms/opens on the same lines as a full parse. A gate
+// still active at the end of the scan means the stored offset landed
+// inside the replayed parent history of a forked rollout, so the
+// incremental parse must keep suppressing appended replay lines.
+func seedCodexIncrementalState(
 	path string, offset int64,
-) (
-	firstContent string,
-	sawUserTurnAfterFirst bool,
-	mayReplayFirstUserPrompt bool,
-) {
+) codexIncrementalSeed {
+	var seed codexIncrementalSeed
 	f, err := os.Open(path)
 	if err != nil {
-		return "", false, false
+		return seed
 	}
 	defer f.Close()
 
 	lr := newLineReader(io.LimitReader(f, offset), maxLineSize)
-	var gate codexForkGate
-	sawMeta := false
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -1460,65 +1409,73 @@ func seedCodexUserDedup(
 			continue
 		}
 		lineType := gjson.Get(line, "type").Str
-		// Mirror the full parser's fork handling (#643): the dedup
-		// state must come from genuine turns, not replayed history.
+		payload := gjson.Get(line, "payload")
 		if lineType == codexTypeSessionMeta {
-			if !sawMeta {
-				sawMeta = true
-				gate.armFromMeta(
-					gjson.Get(line, "payload"),
+			// Mirror processLine: the fork's own meta arms the
+			// gate, and replayed parent metas are dropped while
+			// it is active.
+			if !seed.forkGate.active {
+				seed.forkGate.armFromMeta(
+					payload,
 					parseTimestamp(gjson.Get(line, "timestamp").Str),
 				)
 			}
 			continue
 		}
-		if gate.suppresses(lineType, gjson.Get(line, "payload")) {
+		if seed.forkGate.suppresses(lineType, payload) {
 			continue
 		}
 		switch lineType {
+		case codexTypeTurnContext:
+			seed.model = payload.Get("model").Str
 		case codexTypeEventMsg:
-			if gjson.Get(line, "payload.type").Str == "turn_aborted" &&
-				firstContent != "" &&
-				!sawUserTurnAfterFirst {
-				mayReplayFirstUserPrompt = true
+			if payload.Get("type").Str == "turn_aborted" &&
+				seed.firstUserContent != "" &&
+				!seed.sawUserTurnAfterFirst {
+				seed.mayReplayFirstUserPrompt = true
 			}
-			continue
 		case codexTypeResponseItem:
-		default:
-			continue
-		}
-		payload := gjson.Get(line, "payload")
-		if payload.Get("role").Str != "user" {
-			continue
-		}
-		content := extractCodexContent(payload)
-		if strings.TrimSpace(content) == "" {
-			continue
-		}
-		if isCodexTurnAbortedMessage(content) &&
-			firstContent != "" &&
-			!sawUserTurnAfterFirst {
-			mayReplayFirstUserPrompt = true
-		}
-		if isCodexSystemMessage(content) {
-			continue
-		}
-		switch {
-		case firstContent == "":
-			firstContent = content
-		case content == firstContent &&
-			!sawUserTurnAfterFirst &&
-			mayReplayFirstUserPrompt:
-			mayReplayFirstUserPrompt = false
-		case content == firstContent:
-			sawUserTurnAfterFirst = true
-			mayReplayFirstUserPrompt = false
-		default:
-			sawUserTurnAfterFirst = true
-			mayReplayFirstUserPrompt = false
+			seed.observeUserMessage(payload)
 		}
 	}
-	return firstContent, sawUserTurnAfterFirst, mayReplayFirstUserPrompt
+	return seed
+}
+
+// observeUserMessage feeds one response_item into the
+// re-emitted-prompt dedup state, mirroring handleResponseItem's
+// user-message filtering and full-content matching.
+func (s *codexIncrementalSeed) observeUserMessage(
+	payload gjson.Result,
+) {
+	if payload.Get("role").Str != "user" {
+		return
+	}
+	content := extractCodexContent(payload)
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	if isCodexTurnAbortedMessage(content) &&
+		s.firstUserContent != "" &&
+		!s.sawUserTurnAfterFirst {
+		s.mayReplayFirstUserPrompt = true
+	}
+	if isCodexSystemMessage(content) {
+		return
+	}
+	switch {
+	case s.firstUserContent == "":
+		s.firstUserContent = content
+	case content == s.firstUserContent &&
+		!s.sawUserTurnAfterFirst &&
+		s.mayReplayFirstUserPrompt:
+		s.mayReplayFirstUserPrompt = false
+	case content == s.firstUserContent:
+		s.sawUserTurnAfterFirst = true
+		s.mayReplayFirstUserPrompt = false
+	default:
+		s.sawUserTurnAfterFirst = true
+		s.mayReplayFirstUserPrompt = false
+	}
 }
 
 // ParseCodexSessionFrom parses only new lines from a Codex
@@ -1534,13 +1491,16 @@ func ParseCodexSessionFrom(
 ) ([]ParsedMessage, time.Time, int64, error) {
 	b := newCodexSessionBuilder(includeExec)
 	b.ordinal = startOrdinal
-	b.currentModel = readCodexModelAtOffset(path, offset)
-	// Recover the re-emitted-prompt dedup state from the already-parsed
-	// prefix so a replay appended across syncs is dropped just as a
-	// full parse would.
-	b.firstUserContent,
-		b.sawUserTurnAfterFirst,
-		b.mayReplayFirstUserPrompt = seedCodexUserDedup(path, offset)
+	// Recover model, re-emitted-prompt dedup state, and the fork
+	// replay gate from the already-parsed prefix so appended lines —
+	// including a replay that spans the stored offset — are handled
+	// just as a full parse would.
+	seed := seedCodexIncrementalState(path, offset)
+	b.currentModel = seed.model
+	b.firstUserContent = seed.firstUserContent
+	b.sawUserTurnAfterFirst = seed.sawUserTurnAfterFirst
+	b.mayReplayFirstUserPrompt = seed.mayReplayFirstUserPrompt
+	b.forkGate = seed.forkGate
 	var fallbackErr error
 
 	consumed, err := readJSONLFrom(

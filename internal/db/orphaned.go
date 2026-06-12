@@ -141,12 +141,31 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	// Snapshot orphaned session IDs before any inserts
 	// change main.sessions. Exclude permanently deleted sessions
 	// so they are not resurrected as orphans.
+	//
+	// Also exclude stale Codex rows whose file was reparsed into
+	// the new DB under a different session id: before dataVersion
+	// 40 a forked rollout's replayed parent session_meta overwrote
+	// the fork's id (#643), so the fork file's row was stored under
+	// the parent's identity with double-counted totals. That row is
+	// a stale duplicate of a live file, not an archive of a lost
+	// one. Scoped to Codex because it is strictly one session per
+	// file; SQLite-backed agents share a file_path across many
+	// sessions, where an id missing from the fresh parse can be a
+	// genuinely evicted chat that must survive as an orphan.
 	if _, err := conn.ExecContext(ctx, `
 		CREATE TEMP TABLE _orphaned_ids AS
 		SELECT id FROM old_db.sessions
 		WHERE id NOT IN (SELECT id FROM main.sessions)
 		  AND id NOT IN (SELECT id FROM main.excluded_sessions)
-		  AND id NOT IN (SELECT id FROM _extra_excluded_orphan_ids)`,
+		  AND id NOT IN (SELECT id FROM _extra_excluded_orphan_ids)
+		  AND id NOT IN (
+			SELECT old_s.id
+			FROM old_db.sessions old_s
+			JOIN main.sessions new_s
+				ON new_s.file_path = old_s.file_path
+			WHERE old_s.agent = 'codex'
+			  AND new_s.agent = 'codex'
+		  )`,
 	); err != nil {
 		return 0, fmt.Errorf(
 			"identifying orphaned sessions: %w", err,

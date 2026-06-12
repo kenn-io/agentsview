@@ -34,7 +34,11 @@ import (
 // the fork's own session id instead of letting the replayed parent
 // session_meta overwrite it. Existing forked rows persist the
 // double-counted totals under the parent's identity, so they need
-// re-parsing to be rewritten with post-fork activity only.
+// re-parsing to be rewritten with post-fork activity only. Resync's
+// orphan copy also skips stale Codex rows whose file_path was
+// reparsed under a different session id, so the old parent-ID row
+// does not survive the rebuild when the parent's own file is gone
+// (see CopyOrphanedDataFromExcluding).
 //
 // (39: the Antigravity wire-walk hardened its output
 // invariants (issue #648): model-name candidates must be printable,

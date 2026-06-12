@@ -3356,6 +3356,75 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 		"expected 0 tool_calls for s2, got %d", tcCount)
 }
 
+// TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows covers the
+// dataVersion 40 upgrade path (#643): a pre-fix DB stored a forked
+// Codex rollout under the replayed parent's id with double-counted
+// totals. After the fresh sync reparses the same file under the
+// fork's own id, the stale parent-ID row must not be resurrected as
+// an orphan — but genuine Codex orphans (file gone) and SQLite-backed
+// agents that share a file_path across sessions must still be copied.
+func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
+	dir := t.TempDir()
+	forkFile := filepath.Join(dir, "fork.jsonl")
+	goneFile := filepath.Join(dir, "gone.jsonl")
+	sharedDB := filepath.Join(dir, "chats.db")
+
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err, "Open src")
+	// Stale pre-fix row: the fork file stored under the parent's id.
+	insertSession(t, srcDB, "codex:parent-1", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.FilePath = &forkFile
+	})
+	// Genuine Codex orphan: its file no longer exists.
+	insertSession(t, srcDB, "codex:gone-1", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.FilePath = &goneFile
+	})
+	// SQLite-backed agent: many sessions share one file_path. An id
+	// missing from the fresh parse is an evicted chat, not a stale
+	// duplicate, and must survive as an orphan.
+	insertSession(t, srcDB, "piebald:old-chat", "proj", func(s *Session) {
+		s.Agent = "piebald"
+		s.FilePath = &sharedDB
+	})
+	srcDB.Close()
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "Open dst")
+	defer dstDB.Close()
+	// The fork file reparsed under the fork's own id.
+	insertSession(t, dstDB, "codex:fork-1", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.FilePath = &forkFile
+	})
+	insertSession(t, dstDB, "piebald:new-chat", "proj", func(s *Session) {
+		s.Agent = "piebald"
+		s.FilePath = &sharedDB
+	})
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	assert.Equal(t, 2, count, "gone-1 and old-chat are the only orphans")
+
+	ctx := context.Background()
+	stale, err := dstDB.GetSession(ctx, "codex:parent-1")
+	require.NoError(t, err, "GetSession codex:parent-1")
+	assert.Nil(t, stale,
+		"stale parent-ID row for a reparsed fork file must not be copied")
+
+	gone, err := dstDB.GetSession(ctx, "codex:gone-1")
+	require.NoError(t, err, "GetSession codex:gone-1")
+	assert.NotNil(t, gone, "genuine codex orphan must be copied")
+
+	evicted, err := dstDB.GetSession(ctx, "piebald:old-chat")
+	require.NoError(t, err, "GetSession piebald:old-chat")
+	assert.NotNil(t, evicted,
+		"evicted chat sharing a file_path must be copied")
+}
+
 func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
 	dir := t.TempDir()
 
