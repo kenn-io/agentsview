@@ -124,7 +124,7 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 	})
 
 	opts := sync.ParseDiffOptions{Agents: agents, Limit: cfg.Limit}
-	if !cfg.JSON {
+	if !cfg.JSON && isTerminalWriter(cfg.stderr()) {
 		opts.Progress = parseDiffProgress(cfg.stderr())
 	}
 
@@ -136,8 +136,15 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 	if cfg.JSON {
 		writeJSON(cfg.stdout(), report)
 	} else {
+		// The header says "all agents" only when the user did not
+		// restrict the run; report.Agents always carries the full
+		// resolved list.
+		agentsLabel := "all agents"
+		if len(agents) > 0 {
+			agentsLabel = strings.Join(report.Agents, ", ")
+		}
 		renderParseDiffReport(
-			cfg.stdout(), report, appCfg.DBPath, cfg.Verbose,
+			cfg.stdout(), report, appCfg.DBPath, agentsLabel, cfg.Verbose,
 		)
 	}
 	return cfg.FailOnChange && report.HasFailures()
@@ -153,6 +160,21 @@ func parseDiffProgress(w io.Writer) func(done, total int) {
 			fmt.Fprintln(w)
 		}
 	}
+}
+
+// isTerminalWriter reports whether w is an interactive terminal, so
+// the carriage-return progress ticker never spams piped output or CI
+// logs.
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 // parseDiffAgentTypes validates --agent values against the parser
@@ -205,15 +227,12 @@ func parseDiffSupportedAgents() []string {
 // renderParseDiffReport writes the human-readable report. An empty
 // archive renders a zero-count summary with no tables.
 func renderParseDiffReport(
-	w io.Writer, r *sync.ParseDiffReport, dbPath string, verbose bool,
+	w io.Writer, r *sync.ParseDiffReport, dbPath, agentsLabel string,
+	verbose bool,
 ) {
-	agents := "all agents"
-	if len(r.Agents) > 0 {
-		agents = strings.Join(r.Agents, ", ")
-	}
 	fmt.Fprintf(w,
 		"Parse diff: %d files re-parsed (%s) against %s (data version %d)\n",
-		r.FilesExamined, agents, dbPath, r.DataVersion)
+		r.FilesExamined, agentsLabel, dbPath, r.DataVersion)
 	if r.FilesLimited {
 		fmt.Fprintln(w,
 			"Note: --limit truncated discovery; totals cover a sample.")

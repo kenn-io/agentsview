@@ -6,13 +6,31 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
+
+// isolateParseDiffEnv points the data dir, HOME, and every per-agent
+// directory override at empty temp dirs so end-to-end runs never
+// discover the developer machine's real session files.
+func isolateParseDiffEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, def := range parser.Registry {
+		if def.EnvVar != "" {
+			t.Setenv(def.EnvVar,
+				filepath.Join(home, "agent-dirs", string(def.Type)))
+		}
+	}
+}
 
 func TestParseDiff_RegisteredInRootHelp(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
@@ -130,7 +148,7 @@ func TestParseDiffAgentTypes(t *testing.T) {
 }
 
 func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	isolateParseDiffEnv(t)
 
 	out, err := executeCommand(newRootCommand(), "parse-diff")
 	require.NoError(t, err)
@@ -143,7 +161,7 @@ func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {
 }
 
 func TestParseDiff_JSONShape(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	isolateParseDiffEnv(t)
 
 	out, err := executeCommand(newRootCommand(), "parse-diff", "--json")
 	require.NoError(t, err)
@@ -163,7 +181,7 @@ func TestParseDiff_JSONShape(t *testing.T) {
 }
 
 func TestDoParseDiff_FailOnChangeFalseOnEmptyArchive(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	isolateParseDiffEnv(t)
 
 	var buf bytes.Buffer
 	failed := doParseDiff(ParseDiffConfig{
@@ -234,7 +252,7 @@ func TestRenderParseDiffReport_ChangedSessions(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	renderParseDiffReport(&buf, r, "/tmp/sessions.db", false)
+	renderParseDiffReport(&buf, r, "/tmp/sessions.db", "claude, codex", false)
 	out := buf.String()
 
 	assert.Contains(t, out,
@@ -263,7 +281,7 @@ func TestRenderParseDiffReport_FieldCountOrdering(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	renderParseDiffReport(&buf, r, "db", false)
+	renderParseDiffReport(&buf, r, "db", "all agents", false)
 	out := buf.String()
 
 	big := strings.Index(out, "big_field")
@@ -310,7 +328,7 @@ func TestRenderParseDiffReport_CapAndVerbose(t *testing.T) {
 
 	t.Run("capped", func(t *testing.T) {
 		var buf bytes.Buffer
-		renderParseDiffReport(&buf, r, "db", false)
+		renderParseDiffReport(&buf, r, "db", "all agents", false)
 		out := buf.String()
 
 		assert.Contains(t, out,
@@ -327,7 +345,7 @@ func TestRenderParseDiffReport_CapAndVerbose(t *testing.T) {
 
 	t.Run("verbose", func(t *testing.T) {
 		var buf bytes.Buffer
-		renderParseDiffReport(&buf, r, "db", true)
+		renderParseDiffReport(&buf, r, "db", "all agents", true)
 		out := buf.String()
 
 		assert.NotContains(t, out, "more; use --verbose",
@@ -350,7 +368,7 @@ func TestRenderParseDiffReport_EmptyReport(t *testing.T) {
 
 	var buf bytes.Buffer
 	require.NotPanics(t, func() {
-		renderParseDiffReport(&buf, r, "/data/sessions.db", false)
+		renderParseDiffReport(&buf, r, "/data/sessions.db", "all agents", false)
 	})
 	out := buf.String()
 
@@ -376,7 +394,7 @@ func TestRenderParseDiffReport_NonZeroTotalsOnly(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	renderParseDiffReport(&buf, r, "db", false)
+	renderParseDiffReport(&buf, r, "db", "all agents", false)
 	out := buf.String()
 
 	for _, want := range []string{
