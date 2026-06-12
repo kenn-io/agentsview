@@ -567,10 +567,8 @@ func TestParseDiffAgentScope(t *testing.T) {
 		assert.NotEqual(t, "pd-claude", s.SessionID,
 			"claude session listed in codex-scoped run: %+v", s)
 	}
-	if len(report.Agents) > 0 {
-		assert.Contains(t, report.Agents, "codex", "report agents")
-		assert.NotContains(t, report.Agents, "claude", "report agents")
-	}
+	assert.Equal(t, []string{"codex"}, report.Agents,
+		"report.Agents must reflect the scoped run")
 
 	// Database-backed agents have no on-disk source to re-parse.
 	_, err = engine.ParseDiff(
@@ -580,6 +578,39 @@ func TestParseDiffAgentScope(t *testing.T) {
 	)
 	require.Error(t, err,
 		"ParseDiff must reject database-backed agents")
+}
+
+// TestParseDiffCoversKiroSQLite proves that Kiro's shared data.sqlite3
+// store — which DiscoverFunc never emits and which normal sync reaches
+// through a dedicated phase — is actually re-parsed by parse-diff. A
+// regressed force-parse guard or missing synthesized discovery would
+// surface here as the session being skipped/"not discovered" with
+// Examined 0 rather than compared.
+func TestParseDiffCoversKiroSQLite(t *testing.T) {
+	env := setupTestEnv(t)
+	ks := createKiroSQLiteDB(t, env.kiroDir)
+	ks.addSession(
+		t, "/home/user/code/kiro-app", "sqlite-session",
+		readKiroSQLiteFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentKiro},
+	})
+	// Examined:1/Identical:1 proves the data.sqlite3 session was
+	// re-parsed and compared (not bucketed skipped/"not discovered").
+	// Identical sessions are intentionally not listed, so a Skipped or
+	// NewOnDisk count here would mean the synthesized discovery or the
+	// force-parse guard regressed.
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1,
+	}, report.Totals, "kiro sqlite session must be examined, not skipped")
+	assert.Equal(t, 1, report.FilesExamined, "data.sqlite3 examined")
+	assert.False(t, report.HasFailures(), "clean kiro sqlite run")
 }
 
 func TestParseDiffPresenceSweep(t *testing.T) {

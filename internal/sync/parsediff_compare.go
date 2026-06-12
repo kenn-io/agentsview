@@ -799,7 +799,12 @@ func classifyParseDiffSession(
 	case !hasStored:
 		return DiffNewOnDisk, ""
 	case storedTrashed:
-		return DiffExcluded, "trashed in archive"
+		// The parser still emits this session, but the user trashed it
+		// in the archive; sync preserves trash (UpsertSession returns
+		// ErrSessionTrashed) rather than deleting, so this is neither a
+		// parser exclusion nor drift. Bucket it as skipped, matching
+		// how a not-re-parsed trashed row is reported.
+		return DiffSkipped, "trashed in archive"
 	case pendingResync:
 		return DiffPendingResync, ""
 	case realDiffs > 0:

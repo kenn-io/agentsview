@@ -915,10 +915,10 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 			wantClass: DiffNewOnDisk,
 		},
 		{
-			name:     "trashed stored row wins over pending resync",
+			name:     "trashed stored row is skipped, not excluded",
 			prepared: true, hasStored: true, storedTrashed: true,
 			pendingResync: true, realDiffs: 2,
-			wantClass:  DiffExcluded,
+			wantClass:  DiffSkipped,
 			wantReason: "trashed in archive",
 		},
 		{

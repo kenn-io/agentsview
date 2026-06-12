@@ -57,6 +57,9 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		DataVersion: db.CurrentDataVersion(),
 		FieldCounts: map[string]int{},
+		// Non-nil so a clean run serializes "sessions": [] rather than
+		// null, which jq pipelines and typed consumers expect.
+		Sessions: []SessionDiff{},
 	}
 	for _, def := range resolved {
 		resolvedSet[def.Type] = true
@@ -72,6 +75,12 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 			files = append(files, def.DiscoverFunc(d)...)
 		}
 	}
+	// DiscoverFunc does not emit the shared-SQLite source for Kiro
+	// (data.sqlite3) or db-mode OpenCode (opencode.db) — normal sync
+	// reaches those through dedicated phases. Synthesize them here so
+	// their sessions are actually re-parsed; processKiro/processOpenCode
+	// fan one db path out to every contained session under forceParse.
+	files = append(files, e.parseDiffDatabaseSources(resolved)...)
 	files = dedupeDiscoveredFiles(files)
 	files = e.filterShadowedLegacyKiroFiles(files)
 
@@ -118,22 +127,29 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	if opts.Progress != nil {
 		opts.Progress(0, total)
 	}
-	results := e.startWorkers(ctx, files)
+	// A local cancel lets the error-return paths stop the worker pool
+	// instead of parsing every remaining file just to drain it.
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := e.startWorkers(runCtx, files)
 	for i := range total {
 		var r syncJob
 		select {
-		case <-ctx.Done():
+		case <-runCtx.Done():
+			cancel()
 			drainResults(results, total-i)
 			return nil, ctx.Err()
 		case r = <-results:
 		}
-		if r.err != nil && ctx.Err() != nil {
+		if r.err != nil && runCtx.Err() != nil {
 			// Workers emit ctx.Err() for files skipped after
 			// cancellation.
+			cancel()
 			drainResults(results, total-i-1)
 			return nil, ctx.Err()
 		}
 		if r.incremental != nil {
+			cancel()
 			drainResults(results, total-i-1)
 			return nil, fmt.Errorf(
 				"parse-diff: internal error: incremental parse of %s "+
@@ -144,6 +160,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 			ctx, report, r, fileAgents, storedByID, storedByPath,
 			visited, resolver, &presencePaths,
 		); err != nil {
+			cancel()
 			drainResults(results, total-i-1)
 			return nil, err
 		}
@@ -226,6 +243,50 @@ func resolveParseDiffAgents(
 		}
 	}
 	return out, nil
+}
+
+// parseDiffDatabaseSources synthesizes DiscoveredFile entries for the
+// shared-SQLite agent stores that DiscoverFunc does not emit: Kiro's
+// data.sqlite3 and db-mode OpenCode's opencode.db. processKiro and
+// processOpenCode recognize those base filenames and fan one db path
+// out to every contained session, so routing them through the normal
+// worker loop re-parses every CLI Kiro / db-mode OpenCode session.
+// Without this, those sessions fall to the "not discovered" sweep and
+// an --agent kiro / --agent opencode run would pass while comparing
+// nothing.
+func (e *Engine) parseDiffDatabaseSources(
+	resolved []parser.AgentDef,
+) []parser.DiscoveredFile {
+	var extra []parser.DiscoveredFile
+	for _, def := range resolved {
+		switch def.Type {
+		case parser.AgentKiro:
+			for _, dir := range e.agentDirs[def.Type] {
+				if dir == "" {
+					continue
+				}
+				if dbPath := parser.FindKiroSQLiteDBPath(dir); dbPath != "" {
+					extra = append(extra, parser.DiscoveredFile{
+						Path: dbPath, Agent: parser.AgentKiro,
+					})
+				}
+			}
+		case parser.AgentOpenCode:
+			for _, dir := range e.agentDirs[def.Type] {
+				if dir == "" {
+					continue
+				}
+				src := parser.ResolveOpenCodeSource(dir)
+				if src.Mode == parser.OpenCodeSourceSQLite &&
+					src.DBPath != "" {
+					extra = append(extra, parser.DiscoveredFile{
+						Path: src.DBPath, Agent: parser.AgentOpenCode,
+					})
+				}
+			}
+		}
+	}
+	return extra
 }
 
 // sortAndLimitParseDiffFiles orders files newest-first by source
@@ -403,6 +464,11 @@ func (e *Engine) parseDiffCollectFile(
 					report.FieldCounts[f.Field]++
 				}
 			}
+			report.Sessions = append(report.Sessions, entry)
+		case DiffSkipped:
+			// A re-parsed but trashed session: counted with the rest
+			// of the skipped (not-re-parsed) trashed rows.
+			report.Totals.Skipped++
 			report.Sessions = append(report.Sessions, entry)
 		case DiffIdentical:
 			report.Totals.Identical++
