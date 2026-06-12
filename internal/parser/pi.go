@@ -83,6 +83,7 @@ func ParsePiSession(
 	var (
 		messages     []ParsedMessage
 		firstMessage string
+		sessionName  string
 		ordinal      int
 		userCount    int
 		currentModel string
@@ -158,6 +159,11 @@ func ParsePiSession(
 		case "compaction":
 			continue
 
+		case "session_info":
+			if name := gjson.Get(line, "name"); name.Exists() {
+				sessionName = name.Str
+			}
+
 		default:
 			// skip silently (e.g., thinking_level_change)
 		}
@@ -194,6 +200,7 @@ func ParsePiSession(
 		Agent:            AgentPi,
 		ParentSessionID:  parentSessionID,
 		FirstMessage:     firstMessage,
+		SessionName:      sessionName,
 		StartedAt:        startedAt,
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),

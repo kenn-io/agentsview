@@ -52,6 +52,39 @@ func TestParsePiSession_SessionHeader(t *testing.T) {
 	_ = msgs // not the focus of this sub-test
 }
 
+func TestParsePiSession_SessionInfoName(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"named-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
+		`{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","name":"Original name"}`,
+		`{"type":"message","id":"msg-1","parentId":"info-1","timestamp":"2025-01-01T10:00:02Z","message":{"role":"user","content":"hello"}}`,
+		`{"type":"session_info","id":"info-2","parentId":"msg-1","timestamp":"2025-01-01T10:00:03Z","name":"Renamed session"}`,
+		"",
+	}, "\n")
+
+	sess, msgs := runPiParserTest(t, content)
+
+	assert.Equal(t, "Renamed session", sess.SessionName)
+	assert.Equal(t, 1, sess.MessageCount,
+		"session_info entries must not count as messages")
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+}
+
+func TestParsePiSession_SessionInfoLastNameWins(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"renamed-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
+		`{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","name":"Initial name"}`,
+		`{"type":"session_info","id":"info-2","parentId":"info-1","timestamp":"2025-01-01T10:00:02Z","name":"Second name"}`,
+		`{"type":"session_info","id":"info-3","parentId":"info-2","timestamp":"2025-01-01T10:00:03Z","name":"Final name"}`,
+		`{"type":"message","id":"msg-1","parentId":"info-3","timestamp":"2025-01-01T10:00:04Z","message":{"role":"user","content":"hello"}}`,
+		"",
+	}, "\n")
+
+	sess, _ := runPiParserTest(t, content)
+
+	assert.Equal(t, "Final name", sess.SessionName)
+}
+
 // TestParsePiSession_UserMessages verifies user message content and ordinals
 // (PRSR-02, PRSR-01).
 func TestParsePiSession_UserMessages(t *testing.T) {
