@@ -79,7 +79,10 @@ type PeakContextDistribution struct {
 	ScopeAll   ScopedDistribution `json:"scope_all"`
 	ScopeHuman ScopedDistribution `json:"scope_human"`
 	NullCount  int                `json:"null_count"`
-	ClaudeOnly bool               `json:"claude_only"`
+	// ClaudeOnly is kept for v1 schema compatibility and is always
+	// false: since #646 the distribution covers every agent that
+	// reports peak context (claude, hermes, kimi, forge, zed, ...).
+	ClaudeOnly bool `json:"claude_only"`
 }
 
 type StatsArchetypes struct {

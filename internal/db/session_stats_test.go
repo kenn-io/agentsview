@@ -655,8 +655,8 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 		"peak_context scope_human: %+v", gotPC)
 	assert.Equal(t, 1, gotPC[4].Count,
 		"peak_context scope_human: %+v", gotPC)
-	assert.True(t, stats.Distributions.PeakContextTokens.ClaudeOnly,
-		"peak_context.claude_only")
+	assert.False(t, stats.Distributions.PeakContextTokens.ClaudeOnly,
+		"peak_context.claude_only is always false since #646")
 	assert.Equal(t, 0,
 		stats.Distributions.PeakContextTokens.NullCount,
 		"peak_context.null_count")
@@ -727,10 +727,10 @@ func TestGetSessionStats_Distributions_NullPeakContext(t *testing.T) {
 		peakContext:    20_000,
 		hasPeakContext: true,
 	})
-	// Non-Claude session without peak-context must NOT increment
-	// NullCount: peak_context is Claude-only, so codex/cursor rows are
-	// outside the metric entirely. Guards against regressions that
-	// remove the r.agent == "claude" gate on the null branch.
+	// Session from an agent that never reports peak context in this
+	// window must NOT increment NullCount: such agents are outside the
+	// metric entirely, only data-less rows of peak-context-reporting
+	// agents tally as null (#646).
 	insertSessionFixture(t, d, sessionFixture{
 		id: "cx1", agent: "codex", userMsgs: 5,
 		startedAt:   hoursAgo(5),
@@ -751,6 +751,60 @@ func TestGetSessionStats_Distributions_NullPeakContext(t *testing.T) {
 	assert.Equal(t, 1, total,
 		"scope_all bucket total want 1 "+
 			"(the one Claude session with hasPeakContext=true)")
+}
+
+func TestGetSessionStats_Distributions_PeakContextNonClaude(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Regression for #646: hermes (and kimi/forge/zed) sessions carry
+	// peak_context_tokens, but the distribution only counted rows with
+	// agent == "claude" — an agent-filtered stats run reported all-zero
+	// buckets despite has_peak_context_tokens being true on every row.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "h1", agent: "hermes", userMsgs: 5,
+		startedAt:      hoursAgo(5),
+		durationMin:    3.0,
+		peakContext:    25_000,
+		hasPeakContext: true,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "h2", agent: "hermes", userMsgs: 5,
+		startedAt:      hoursAgo(5),
+		durationMin:    3.0,
+		peakContext:    120_000,
+		hasPeakContext: true,
+	})
+	// A hermes row without the data lands in NullCount, because hermes
+	// demonstrably reports the metric in this window.
+	insertSessionFixture(t, d, sessionFixture{
+		id: "h3", agent: "hermes", userMsgs: 5,
+		startedAt:   hoursAgo(5),
+		durationMin: 3.0,
+		// hasPeakContext left at false
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d", Agent: "hermes"})
+	require.NoError(t, err, "GetSessionStats")
+
+	pc := stats.Distributions.PeakContextTokens
+	total := 0
+	for _, b := range pc.ScopeAll.Buckets {
+		total += b.Count
+	}
+	assert.Equal(t, 2, total,
+		"scope_all bucket total want 2 (both hermes rows with data): %+v",
+		pc.ScopeAll.Buckets)
+	// peakContextEdges: 25k → [10k,50k) bucket 1; 120k → [100k,150k) bucket 3.
+	assert.Equal(t, 1, pc.ScopeAll.Buckets[1].Count,
+		"25k hermes session in bucket 1: %+v", pc.ScopeAll.Buckets)
+	assert.Equal(t, 1, pc.ScopeAll.Buckets[3].Count,
+		"120k hermes session in bucket 3: %+v", pc.ScopeAll.Buckets)
+	assert.InDelta(t, (25_000.0+120_000.0)/2.0, pc.ScopeAll.Mean, 0.01,
+		"scope_all mean over the two hermes rows with data")
+	assert.Equal(t, 1, pc.NullCount,
+		"null_count want 1 (h3: hermes reports the metric, h3 lacks it)")
+	assert.False(t, pc.ClaudeOnly, "claude_only must be false")
 }
 
 // seedVelocityMessages inserts len(offsetsSec) messages for sessionID,
