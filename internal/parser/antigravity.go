@@ -380,6 +380,9 @@ func extractTokenUsage(data []byte) (input, output, reasoning int, ok bool) {
 // latency counters) lack it. Field 3 stays optional because zero
 // reasoning is legitimate and omitted from the wire, but a present
 // field 3 with a non-varint wire type marks the block as a decoy.
+// The cap also applies to output+reasoning combined, because that sum
+// is the billable output the caller persists: capping the fields only
+// individually would let a decoy block persist up to twice the cap.
 func tokenBlockFrom(fs []agProtoField) (input, output, reasoning int, ok bool) {
 	f1, ok1 := agProtoFind(fs, 1)
 	f2, ok2 := agProtoFind(fs, 2)
@@ -396,7 +399,8 @@ func tokenBlockFrom(fs []agProtoField) (input, output, reasoning int, ok bool) {
 		return 0, 0, 0, false
 	}
 	if f3, hasF3 := agProtoFind(fs, 3); hasF3 {
-		if f3.Wire != pbWireVarint || f3.Varint > maxPlausibleTokens {
+		if f3.Wire != pbWireVarint || f3.Varint > maxPlausibleTokens ||
+			f2.Varint+f3.Varint > maxPlausibleTokens {
 			return 0, 0, 0, false
 		}
 		reasoning = int(f3.Varint)

@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/binary"
 	"errors"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -23,7 +24,28 @@ const (
 	// agProtoMaxDepth caps nested-message recursion to keep
 	// malformed payloads from exploding the call stack.
 	agProtoMaxDepth = 32
+
+	// agProtoMaxFields caps the total number of fields decoded
+	// across one parse, including speculative nested re-parses.
+	// Each wire field can be as small as two bytes but decodes
+	// into a ~100-byte agProtoField, so without a budget a flat
+	// run of minimal varint fields amplifies memory by two
+	// orders of magnitude (an 8 MiB blob allocates over 1 GiB).
+	// Step payloads, gen_metadata, and decrypted .pb transcripts
+	// are unbounded blobs, so the depth cap alone does not bound
+	// allocation: the blowup is breadth, not nesting. On
+	// exhaustion the walk truncates rather than fails (see
+	// agProtoParse), so a payload past the budget degrades to a
+	// decoded prefix instead of losing everything. Real payloads
+	// sit well under the cap (the largest observed gen_metadata
+	// blob, 186 KB, could hold at most ~95k minimal fields).
+	agProtoMaxFields = 1 << 20
 )
+
+// errAgProtoBudget signals that the shared total-fields budget ran
+// out mid-walk. It never escapes agProtoParse: the partial result is
+// returned instead.
+var errAgProtoBudget = errors.New("antigravity proto: too many fields")
 
 // agProtoField is one wire-format field decoded from a payload.
 // For length-delimited fields, Bytes holds the raw payload and
@@ -46,13 +68,29 @@ type agProtoField struct {
 
 // agProtoParse decodes a protobuf payload into a flat slice of
 // fields at the top level. Length-delimited sub-payloads are
-// speculatively re-parsed as nested messages.
+// speculatively re-parsed as nested messages. A payload that runs
+// past the total-fields budget yields the decoded prefix rather
+// than an error: the memory bound holds either way, and a huge
+// transcript should degrade to partial content, not disappear.
 func agProtoParse(data []byte) ([]agProtoField, error) {
-	return agProtoParseDepth(data, 0)
+	budget := agProtoMaxFields
+	fields, err := agProtoParseDepth(data, 0, &budget)
+	if errors.Is(err, errAgProtoBudget) {
+		return fields, nil
+	}
+	return fields, err
 }
 
+// agProtoParseDepth decodes one message level. budget is shared
+// across the whole parse tree (failed speculative nested parses
+// included, since their discarded fields were still allocated)
+// and makes total allocation independent of how adversarially
+// dense the input packs its fields. On exhaustion it returns the
+// fields decoded so far alongside errAgProtoBudget; a nested
+// caller drops the partial slice (the payload stays opaque) while
+// the top-level caller keeps it.
 func agProtoParseDepth(
-	data []byte, depth int,
+	data []byte, depth int, budget *int,
 ) ([]agProtoField, error) {
 	if depth > agProtoMaxDepth {
 		return nil, errors.New("antigravity proto: max depth")
@@ -60,6 +98,10 @@ func agProtoParseDepth(
 	var out []agProtoField
 	pos := 0
 	for pos < len(data) {
+		if *budget <= 0 {
+			return out, errAgProtoBudget
+		}
+		*budget--
 		tag, n := binary.Uvarint(data[pos:])
 		if n <= 0 {
 			return nil, errors.New("antigravity proto: bad tag")
@@ -117,7 +159,7 @@ func agProtoParseDepth(
 			f.Bytes = data[pos : pos+int(ln)]
 			pos += int(ln)
 			if nested, err := agProtoParseDepth(
-				f.Bytes, depth+1,
+				f.Bytes, depth+1, budget,
 			); err == nil && agProtoLooksLikeMessage(nested) {
 				f.Nested = nested
 			}
@@ -177,7 +219,12 @@ func agProtoFind(
 
 // agProtoCollectStrings walks the field tree and returns every
 // UTF-8 string with at least minLen runes. Returned in encounter
-// order. Duplicates are preserved (callers can dedupe).
+// order. Duplicates are preserved (callers can dedupe). NUL runes
+// are replaced with U+FFFD: they are valid UTF-8 (NUL-delimited
+// tool output like `git ls-files -z` is realistic content), but a
+// NUL that leaks into persisted content breaks `pg push`
+// (PostgreSQL rejects NUL in text columns with SQLSTATE 22021),
+// so the strings are sanitized rather than dropped.
 func agProtoCollectStrings(
 	fields []agProtoField, minLen int,
 ) []string {
@@ -188,7 +235,8 @@ func agProtoCollectStrings(
 			if f.Wire == pbWireBytes && f.Nested == nil {
 				if s, ok := agProtoString(f); ok &&
 					utf8.RuneCountInString(s) >= minLen {
-					out = append(out, s)
+					out = append(out,
+						strings.ReplaceAll(s, "\x00", "\uFFFD"))
 				}
 			}
 			if f.Nested != nil {
@@ -262,6 +310,11 @@ func agProtoLooksLikePrefix(data []byte) bool {
 // agProtoTimestamp returns (seconds, nanos, ok) when fields
 // match the google.protobuf.Timestamp shape: field 1 varint
 // seconds, optional field 2 varint nanos, and no other fields.
+// A nanos value outside [0, 1e9) marks the message as not a
+// Timestamp: the spec bounds nanos to that range, and a larger
+// varint cast to int32 could go negative and shift time.Unix
+// results outside the plausibility window callers check on
+// seconds alone.
 func agProtoTimestamp(
 	fields []agProtoField,
 ) (int64, int32, bool) {
@@ -277,6 +330,9 @@ func agProtoTimestamp(
 			sec = int64(f.Varint)
 			sawSec = true
 		case 2:
+			if f.Varint >= 1_000_000_000 {
+				return 0, 0, false
+			}
 			nanos = int32(f.Varint)
 		default:
 			return 0, 0, false

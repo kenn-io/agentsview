@@ -28,7 +28,17 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 38: two Antigravity parsing changes. (a) The Antigravity
+// Bumped to 39: the Antigravity wire-walk hardened its output
+// invariants (issue #648): model-name candidates must be printable,
+// collected strings replace NUL bytes with U+FFFD, nanos values
+// outside the protobuf Timestamp range no longer match
+// timestamp-shaped fields, token blocks whose output+reasoning sum
+// breaches the plausibility cap are rejected, and parses truncate
+// at a total-fields allocation budget. Existing Antigravity rows
+// may hold content/model/usage values the parser no longer
+// produces and need re-parsing.
+//
+// (38: two Antigravity parsing changes. (a) The Antigravity
 // CLI parser extracts generatorMetadata token usage from agy-reader
 // trajectory sidecars: usage events for legacy .pb sessions (and .db
 // sessions without gen_metadata) and per-message model/token
@@ -38,7 +48,7 @@ import (
 // sometimes carries a nested protobuf message whose low bytes are
 // valid UTF-8, and the raw fragment (including NUL bytes) was
 // persisted as messages.model, so existing Antigravity rows need
-// re-parsing to clear the corrupt model values.
+// re-parsing to clear the corrupt model values.)
 //
 // (37: Antigravity and Antigravity CLI parsers now extract
 // per-generation model names and token usage (input, output,
@@ -161,7 +171,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 38
+const dataVersion = 39
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

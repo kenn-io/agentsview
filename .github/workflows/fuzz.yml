@@ -1,0 +1,61 @@
+name: Fuzz
+
+# Long-running fuzz exploration of the Antigravity wire-walk
+# (GitHub #648). Every CI run already executes the committed seed
+# corpus via plain `go test`; this workflow spends real fuzz time
+# searching for new invariant violations on a schedule. A found
+# failure is written to testdata/fuzz/ by the fuzz engine and
+# uploaded as an artifact so it can be committed as a regression
+# case.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # weekly, Monday 05:17 UTC
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Fuzz time per target (Go duration)"
+        required: false
+        default: "10m"
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - FuzzAgProtoParse
+          - FuzzAgProtoLooksLikePrefix
+          - FuzzDecodeAntigravityStep
+          - FuzzExtractModelName
+          - FuzzExtractTokenUsage
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      # The dispatch input goes through an env var, never directly
+      # into the run script, so it cannot inject shell commands.
+      - name: Fuzz ${{ matrix.target }}
+        run: >
+          go test -tags "fts5,kit_posthog_disabled"
+          -fuzz "^${TARGET}$"
+          -fuzztime "$FUZZTIME"
+          ./internal/parser/
+        env:
+          CGO_ENABLED: "1"
+          TARGET: ${{ matrix.target }}
+          FUZZTIME: ${{ github.event.inputs.fuzztime || '10m' }}
+
+      - name: Upload failing inputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: fuzz-failures-${{ matrix.target }}
+          path: internal/parser/testdata/fuzz/
+          if-no-files-found: ignore

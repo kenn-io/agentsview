@@ -118,6 +118,42 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 	require.Error(t, err, "expected error for oversized length")
 }
 
+// TestAgProtoFieldBudget verifies the total-fields cap: a flat run
+// of minimal two-byte varint fields amplifies into ~100-byte field
+// structs, so without the budget an unbounded blob could allocate
+// two orders of magnitude more memory than its size. Exhaustion
+// truncates instead of failing, so a payload past the budget keeps
+// its decoded prefix rather than losing all content.
+func TestAgProtoFieldBudget(t *testing.T) {
+	// One field per two bytes: tag 0x08 (field 1, varint), value 0.
+	dense := func(fields int) []byte {
+		return bytes.Repeat([]byte{0x08, 0x00}, fields)
+	}
+
+	within, err := agProtoParse(dense(1000))
+	require.NoError(t, err)
+	assert.Len(t, within, 1000)
+
+	truncated, err := agProtoParse(dense(agProtoMaxFields + 10))
+	require.NoError(t, err)
+	assert.Len(t, truncated, agProtoMaxFields,
+		"expected truncation at the field budget")
+
+	// Speculative nested re-parses consume the shared budget too: a
+	// small envelope around a dense payload must not bypass it. The
+	// exhausted child stays opaque (no Nested) and the field after
+	// it is truncated away, but the parse itself still succeeds.
+	fields, err := agProtoParse(encodePB([]pbField{
+		{num: 1, wire: pbWireBytes, bytes: dense(agProtoMaxFields)},
+		{num: 2, wire: pbWireVarint, varint: 1},
+	}))
+	require.NoError(t, err)
+	require.Len(t, fields, 1,
+		"expected the post-exhaustion field to be truncated")
+	assert.Nil(t, fields[0].Nested,
+		"expected the budget-exhausted child to stay opaque")
+}
+
 // TestAgProtoLooksLikePrefix exercises the prefix-tolerant
 // validator used by the decryption retry loop. It must accept a
 // well-formed prefix followed by a truncated final field, but
@@ -604,6 +640,25 @@ func TestDecodeAntigravityStepKeepsCleanAssistantText(t *testing.T) {
 	assert.NotContains(t, msg.Content, "mYseaoyPDcS6qtsP7c6Z6QE")
 	assert.NotContains(t, msg.Content, "toolAction")
 	assert.NotContains(t, msg.Content, "MODEL_PLACEHOLDER")
+}
+
+// TestDecodeAntigravityStepSanitizesNUL verifies that NUL bytes in
+// otherwise-valid content are replaced rather than the string (or
+// the whole message) being dropped: NUL-delimited tool output such
+// as `git ls-files -z` is realistic transcript content, while a NUL
+// that leaks into persisted text breaks `pg push` (SQLSTATE 22021).
+func TestDecodeAntigravityStepSanitizesNUL(t *testing.T) {
+	payload := encodePB([]pbField{
+		{
+			num: 17, wire: pbWireBytes,
+			bytes: []byte("file_a.go\x00file_b.go\x00file_c.go"),
+		},
+	})
+	msg, ok := decodeAntigravityStep(0, 2, payload)
+	require.True(t, ok, "NUL-bearing content must survive, not drop")
+	assert.NotContains(t, msg.Content, "\x00")
+	assert.Equal(t,
+		"file_a.go�file_b.go�file_c.go", msg.Content)
 }
 
 func TestMergeAntigravityDBHistoryMessagesAppendsMissingPrompts(t *testing.T) {
@@ -2317,6 +2372,18 @@ func TestExtractTokenUsageFalsePositiveGuards(t *testing.T) {
 				{num: 1, wire: pbWireVarint, varint: 1371},
 				{num: 2, wire: pbWireVarint, varint: 1234},
 				{num: 3, wire: pbWireBytes, bytes: []byte("not a varint")},
+				{num: 5, wire: pbWireVarint, varint: 2000},
+			},
+		},
+		{
+			// Output and reasoning are each within the cap, but the
+			// caller persists output+reasoning as billable output, so
+			// the sum must satisfy the cap too.
+			name: "decoy with folded output+reasoning above cap",
+			decoy: []pbField{
+				{num: 1, wire: pbWireVarint, varint: 1371},
+				{num: 2, wire: pbWireVarint, varint: 1_999_999},
+				{num: 3, wire: pbWireVarint, varint: 1_999_999},
 				{num: 5, wire: pbWireVarint, varint: 2000},
 			},
 		},
