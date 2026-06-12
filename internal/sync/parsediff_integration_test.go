@@ -581,3 +581,72 @@ func TestParseDiffAgentScope(t *testing.T) {
 	require.Error(t, err,
 		"ParseDiff must reject database-backed agents")
 }
+
+func TestParseDiffPresenceSweep(t *testing.T) {
+	t.Run("current-version row no longer emitted", func(t *testing.T) {
+		env := setupTestEnv(t)
+		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
+			parseDiffClaudeContent("real prompt", "real reply"))
+		runSyncAndAssert(t, env.engine, sync.SyncStats{
+			TotalSessions: 1, Synced: 1,
+		})
+
+		// A current-version row under the same source file with an ID
+		// today's parser never derives: the loudest drift signal.
+		require.NoError(t, env.db.UpsertSession(db.Session{
+			ID: "pd-phantom", Project: "test-proj", Machine: "local",
+			Agent: "claude", FilePath: &path,
+		}), "insert phantom session")
+		require.NoError(t,
+			env.db.SetSessionDataVersion(
+				"pd-phantom", db.CurrentDataVersion(),
+			), "stamp current data version")
+
+		report := runParseDiff(t, env, sync.ParseDiffOptions{})
+		assert.Equal(t, sync.ParseDiffTotals{
+			Examined: 2, Identical: 1, Changed: 1,
+		}, report.Totals, "totals")
+		assert.Equal(t, map[string]int{sync.FieldPresence: 1},
+			report.FieldCounts, "field counts")
+
+		sd := findSessionDiff(report, "pd-phantom")
+		require.NotNil(t, sd, "phantom session not listed")
+		assert.Equal(t, sync.DiffChanged, sd.Class, "class")
+		assert.Contains(t, sessionDiffFieldNames(sd, false),
+			sync.FieldPresence, "presence diff")
+		assert.True(t, report.HasFailures(),
+			"a current-version presence drop is parser drift")
+	})
+
+	t.Run("stale row no longer emitted is pending resync", func(t *testing.T) {
+		env := setupTestEnv(t)
+		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
+			parseDiffClaudeContent("real prompt", "real reply"))
+		runSyncAndAssert(t, env.engine, sync.SyncStats{
+			TotalSessions: 1, Synced: 1,
+		})
+
+		// Data version 0: an incomplete write preserved by the
+		// archive (e.g. a transient fork row left by a live sync).
+		require.NoError(t, env.db.UpsertSession(db.Session{
+			ID: "pd-zombie", Project: "test-proj", Machine: "local",
+			Agent: "claude", FilePath: &path,
+		}), "insert zombie session")
+
+		report := runParseDiff(t, env, sync.ParseDiffOptions{})
+		assert.Equal(t, sync.ParseDiffTotals{
+			Examined: 2, Identical: 1, PendingResync: 1,
+		}, report.Totals, "totals")
+		assert.Empty(t, report.FieldCounts,
+			"stale presence is pipeline history, not drift")
+
+		sd := findSessionDiff(report, "pd-zombie")
+		require.NotNil(t, sd, "zombie session not listed")
+		assert.Equal(t, sync.DiffPendingResync, sd.Class, "class")
+		assert.Contains(t, sessionDiffFieldNames(sd, true),
+			sync.FieldPresence,
+			"presence field attached for drill-down")
+		assert.False(t, report.HasFailures(),
+			"stale rows must not trip --fail-on-change")
+	})
+}

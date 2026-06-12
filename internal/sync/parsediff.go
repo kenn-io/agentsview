@@ -463,7 +463,7 @@ func (e *Engine) parseDiffPresenceSweep(
 				continue
 			}
 			visited[s.ID] = true
-			report.Sessions = append(report.Sessions, SessionDiff{
+			diff := SessionDiff{
 				SessionID:         s.ID,
 				Agent:             s.Agent,
 				FilePath:          derefString(s.FilePath),
@@ -474,7 +474,21 @@ func (e *Engine) parseDiffPresenceSweep(
 					Stored: "stored",
 					Parsed: "(not emitted)",
 				}},
-			})
+			}
+			// A row below the current data version is pipeline
+			// history, not drift: incomplete writes (data_version 0)
+			// and orphan-copied rows from earlier resyncs commonly
+			// survive in the archive under IDs the current parser no
+			// longer derives. Only a current-version row that vanished
+			// from its file's parse output is a real presence change.
+			if s.DataVersion < db.CurrentDataVersion() {
+				diff.Class = DiffPendingResync
+				diff.Reason = "stale row; parser no longer emits this ID"
+				report.Sessions = append(report.Sessions, diff)
+				report.Totals.PendingResync++
+				continue
+			}
+			report.Sessions = append(report.Sessions, diff)
 			report.Totals.Changed++
 			report.FieldCounts[FieldPresence]++
 		}
