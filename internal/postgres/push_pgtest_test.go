@@ -315,3 +315,82 @@ func checkIsSystem(
 		assert.True(t, seen[i], "ordinal %d missing from PG messages", i)
 	}
 }
+
+// TestPushMessagesSanitizesNULBytes verifies that a message whose
+// model and source fields carry NUL bytes (observed in production:
+// the Antigravity gen_metadata heuristic persisted a raw protobuf
+// fragment as the model name) pushes to PG without the whole-session
+// rollback caused by SQLSTATE 22021 (invalid byte sequence for
+// encoding "UTF8": 0x00). Model and source fields come from
+// third-party session files, so the push boundary must be defensive
+// regardless of any single parser fix.
+func TestPushMessagesSanitizesNULBytes(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_nul_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(
+		filepath.Join(t.TempDir(), "local.db"),
+	)
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	// The exact 10-byte protobuf fragment persisted as a model
+	// name by the pre-fix Antigravity parser (hex
+	// 080020022A0201024001, contains 0x00).
+	badModel := "\x08\x00\x20\x02\x2a\x02\x01\x02\x40\x01"
+
+	const sessID = "nul-bytes-001"
+	sess := db.Session{
+		ID:           sessID,
+		Project:      "test-proj",
+		Machine:      "test-machine",
+		Agent:        "antigravity",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+		Cwd:          "/tmp/with\x00nul",
+		GitBranch:    "main\x00",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+
+	msgs := []db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "thinking summary",
+		ContentLength: 16,
+		Model:         badModel,
+		SourceUUID:    "uuid\x00tail",
+	}}
+	require.NoError(t, localDB.InsertMessages(msgs), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+	assert.Zero(t, res.Errors, "push should report no failed sessions")
+
+	var model, sourceUUID string
+	err = pg.QueryRow(
+		`SELECT model, source_uuid FROM messages
+		 WHERE session_id = $1 AND ordinal = 0`, sessID,
+	).Scan(&model, &sourceUUID)
+	require.NoError(t, err, "querying pushed message")
+	assert.Equal(t, sanitizePG(badModel), model, "model stripped of NUL")
+	assert.NotContains(t, model, "\x00")
+	assert.Equal(t, "uuidtail", sourceUUID, "source_uuid stripped of NUL")
+}

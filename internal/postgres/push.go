@@ -909,15 +909,17 @@ func (s *Sync) pushSession(
 		sess.TotalOutputTokens, sess.PeakContextTokens,
 		sess.HasTotalOutputTokens, sess.HasPeakContextTokens,
 		isAutomated, sess.DataVersion,
-		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
-		sess.SourceVersion, sess.ParserMalformedLines,
+		sanitizePG(sess.Cwd), sanitizePG(sess.GitBranch),
+		sanitizePG(sess.SourceSessionID),
+		sanitizePG(sess.SourceVersion),
+		sess.ParserMalformedLines,
 		sess.IsTruncated, nilStr(sess.TerminationStatus),
 		nilStr(sess.ParentSessionID),
 		sess.RelationshipType,
 		sess.ToolFailureSignalCount, sess.ToolRetryCount,
 		sess.EditChurnCount, sess.ConsecutiveFailureMax,
 		sess.Outcome, sess.OutcomeConfidence,
-		sess.EndedWithRole, sess.FinalFailureStreak,
+		sanitizePG(sess.EndedWithRole), sess.FinalFailureStreak,
 		nilStr(sess.SignalsPendingSince),
 		sess.CompactionCount, sess.MidTaskCompactionCount,
 		sess.ContextPressureMax,
@@ -1528,18 +1530,28 @@ func bulkInsertMessages(
 					ts = t
 				}
 			}
+			// Sanitize every parser-derived string, not just
+			// content: model and source fields come from
+			// third-party session files and have carried NUL
+			// bytes (e.g. raw protobuf fragments), which PG
+			// rejects with SQLSTATE 22021.
 			args = append(args,
-				sessionID, m.Ordinal, m.Role,
+				sessionID, m.Ordinal, sanitizePG(m.Role),
 				sanitizePG(m.Content),
 				sanitizePG(m.ThinkingText), ts,
 				m.HasThinking,
 				m.HasToolUse, m.ContentLength, m.IsSystem,
-				m.Model, string(m.TokenUsage),
+				sanitizePG(m.Model),
+				sanitizePG(string(m.TokenUsage)),
 				m.ContextTokens, m.OutputTokens,
 				m.HasContextTokens, m.HasOutputTokens,
-				m.ClaudeMessageID, m.ClaudeRequestID,
-				m.SourceType, m.SourceSubtype, m.SourceUUID,
-				m.SourceParentUUID, m.IsSidechain,
+				sanitizePG(m.ClaudeMessageID),
+				sanitizePG(m.ClaudeRequestID),
+				sanitizePG(m.SourceType),
+				sanitizePG(m.SourceSubtype),
+				sanitizePG(m.SourceUUID),
+				sanitizePG(m.SourceParentUUID),
+				m.IsSidechain,
 				m.IsCompactBoundary,
 			)
 		}
@@ -1836,7 +1848,7 @@ func (s *Sync) pushSecretFindings(
 				f.LocationKind, f.MessageOrdinal,
 				f.CallIndex, f.EventIndex,
 				f.MatchStart, f.MatchEnd, f.MatchIndex,
-				f.RedactedMatch, f.RulesVersion,
+				sanitizePG(f.RedactedMatch), f.RulesVersion,
 			)
 		}
 		if _, err := tx.ExecContext(
