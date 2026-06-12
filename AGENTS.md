@@ -19,8 +19,8 @@ Instructions for autonomous coding agents working in this repository.
 - Keep commits focused and related to the requested task.
 - Use clear conventional commit messages.
 - Do not push, pull, or rebase unless explicitly requested.
-- Do not include generated-with lines, attribution blocks, validation footers, or
-  command transcripts in commit messages.
+- Do not include generated-with lines, attribution blocks, validation footers,
+  or command transcripts in commit messages.
 
 ## Validation
 
@@ -59,8 +59,8 @@ Instructions for autonomous coding agents working in this repository.
   recreate it to handle data version changes. Schema changes use non-destructive
   migrations such as `ALTER TABLE` and `UPDATE`; parser changes trigger a full
   resync that builds a fresh DB, syncs files, copies orphaned sessions from the
-  old DB, and swaps atomically. Existing session data must be preserved even when
-  source files no longer exist on disk.
+  old DB, and swaps atomically. Existing session data must be preserved even
+  when source files no longer exist on disk.
 
 ## Project Overview
 
@@ -94,8 +94,9 @@ CLI (agentsview) -> Config -> DB (SQLite/FTS5)
   directories.
 - PG sync: on-demand push sync from SQLite to PostgreSQL via `pg push`.
 - Frontend: Svelte 5 SPA embedded in the Go binary at build time.
-- Config: `AGENTSVIEW_DATA_DIR` plus per-agent directory overrides and CLI flags.
-  Per-agent env vars are listed on each entry in `internal/parser/types.go`.
+- Config: `AGENTSVIEW_DATA_DIR` plus per-agent directory overrides and CLI
+  flags. Per-agent env vars are listed on each entry in
+  `internal/parser/types.go`.
 
 ## Project Structure
 
@@ -109,7 +110,8 @@ CLI (agentsview) -> Config -> DB (SQLite/FTS5)
 - `internal/server/` - HTTP handlers, SSE, middleware, search, and export.
 - `internal/sync/` - Sync engine, file watcher, discovery, and hashing.
 - `internal/timeutil/` - Time parsing utilities.
-- `internal/web/` - Embedded frontend copied from `frontend/dist/` at build time.
+- `internal/web/` - Embedded frontend copied from `frontend/dist/` at build
+  time.
 - `frontend/` - Svelte 5 SPA with Vite and TypeScript.
 - `scripts/` - Utility scripts for E2E server setup and changelog work.
 
