@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // maxRenderedValueRunes caps rendered string values in FieldDiff;
@@ -34,28 +35,46 @@ func (e *Engine) compareStoredSession(
 ) ([]FieldDiff, error) {
 	diffs := compareSessionFields(stored, prepared)
 
-	// Tier 1: cheap exact fingerprint over per-message model and
-	// token metadata. Equal fingerprints prove models and message
-	// tokens are identical without loading any message rows.
-	storedFP, err := e.db.MessageTokenFingerprint(stored.ID)
+	// Tier 1: two cheap aggregate fingerprints over the stored
+	// messages. The token fingerprint covers per-message model and
+	// token metadata; the content fingerprint covers body length
+	// (sum/max/min), which the token fingerprint does not. Equal
+	// fingerprints prove the messages match on the compared fields
+	// without loading any rows.
+	storedTokenFP, err := e.db.MessageTokenFingerprint(stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: message fingerprint for %s: %w",
 			stored.ID, err,
 		)
 	}
-	if messageTokenFingerprintTwin(msgs) != storedFP {
-		// Tier 2: load stored rows and attribute the mismatch to
-		// the contract fields (models, message tokens).
+	storedSum, storedMax, storedMin, err :=
+		e.db.MessageContentFingerprint(stored.ID)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"parse-diff: content fingerprint for %s: %w",
+			stored.ID, err,
+		)
+	}
+	parsedSum, parsedMax, parsedMin := contentLengthAggregate(msgs)
+
+	tokenFPDiffers := messageTokenFingerprintTwin(msgs) != storedTokenFP
+	contentFPDiffers := storedSum != parsedSum ||
+		storedMax != parsedMax || storedMin != parsedMin
+	if tokenFPDiffers || contentFPDiffers {
+		// Tier 2: load stored rows and attribute the mismatch to the
+		// per-message contract fields. A mismatch that lands on none
+		// of them still yields a fallback diff so a fingerprint
+		// inequality is never reported identical.
 		storedMsgs, err := e.db.GetAllMessages(ctx, stored.ID)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"parse-diff: messages for %s: %w", stored.ID, err,
 			)
 		}
-		diffs = append(
-			diffs, compareMessageMetadata(storedMsgs, msgs)...,
-		)
+		diffs = append(diffs, compareMessageMetadata(
+			storedMsgs, msgs, tokenFPDiffers, contentFPDiffers,
+		)...)
 	}
 
 	storedEvents, err := e.db.GetUsageEvents(ctx, stored.ID)
@@ -66,6 +85,23 @@ func (e *Engine) compareStoredSession(
 	}
 	diffs = append(diffs, compareUsageEvents(storedEvents, events)...)
 	return diffs, nil
+}
+
+// contentLengthAggregate mirrors db.MessageContentFingerprint over the
+// in-memory prepared messages: sum, max, and min of content_length
+// (max/min are 0 for an empty slice, matching the SQL COALESCE).
+func contentLengthAggregate(msgs []db.Message) (sum, max, min int64) {
+	for i, m := range msgs {
+		l := int64(m.ContentLength)
+		sum += l
+		if i == 0 || l > max {
+			max = l
+		}
+		if i == 0 || l < min {
+			min = l
+		}
+	}
+	return sum, max, min
 }
 
 // compareSessionFields compares the session-row contract fields.
@@ -97,6 +133,14 @@ func compareSessionFields(
 	diffs = appendTextFieldDiff(
 		diffs, FieldSessionName,
 		stored.SessionName, prepared.SessionName,
+	)
+	diffs = appendTextFieldDiff(
+		diffs, FieldStartedAt,
+		stored.StartedAt, prepared.StartedAt,
+	)
+	diffs = appendTextFieldDiff(
+		diffs, FieldEndedAt,
+		stored.EndedAt, prepared.EndedAt,
 	)
 
 	if tokenAggregateDiffers(
@@ -131,9 +175,13 @@ func compareSessionFields(
 	}
 
 	// termination_status: NULL and "" are the same pipeline state.
-	// Stored NULL with a parsed value is explained by incremental
-	// appends (UpdateSessionIncremental clears the column to NULL by
-	// design), so it is informational rather than parser drift.
+	// Stored NULL with a parsed value is only explained as pipeline
+	// history for the incremental-append agents: UpdateSessionIncremental
+	// clears the column to NULL by design, and only Claude and Codex
+	// take that path. For full-replace agents a stored NULL means the
+	// writing parser emitted nothing, so newly producing a value is
+	// real parser drift (precisely the new-field detection the tool
+	// exists to catch).
 	ts := derefString(stored.TerminationStatus)
 	tp := derefString(prepared.TerminationStatus)
 	if ts != tp {
@@ -142,13 +190,22 @@ func compareSessionFields(
 			Stored: renderNullableScalar(ts),
 			Parsed: renderNullableScalar(tp),
 		}
-		if ts == "" {
+		if ts == "" && usesIncrementalAppend(prepared.Agent) {
 			d.Informational = true
 			d.Detail = "incremental-append history"
 		}
 		diffs = append(diffs, d)
 	}
 	return diffs
+}
+
+// usesIncrementalAppend reports whether an agent's sync path can clear
+// termination_status to NULL via UpdateSessionIncremental. Only the
+// JSONL-tail agents (Claude, Codex) take that path; see
+// tryIncrementalJSONL call sites in engine.go.
+func usesIncrementalAppend(agent string) bool {
+	return agent == string(parser.AgentClaude) ||
+		agent == string(parser.AgentCodex)
 }
 
 // tokenAggregateDiffers compares a session token aggregate as a
@@ -268,17 +325,20 @@ func messageTokenFingerprintTwin(msgs []db.Message) string {
 	return b.String()
 }
 
-// compareMessageMetadata is the tier-2 per-message comparison. Both
+// compareMessageMetadata is the tier-2 per-message comparison, run
+// when either tier-1 fingerprint (token or content) mismatched. Both
 // slices are aligned by ordinal value and only the overlap is
-// compared; a length mismatch is message_count's job.
+// compared; a length mismatch is message_count's job. The two
+// FP-differ flags guarantee a non-empty result: if the fingerprints
+// proved inequality but none of the attributed fields differ on the
+// overlap, a fallback diff is emitted so the session never classifies
+// identical after its own fingerprint proved otherwise.
 func compareMessageMetadata(
 	storedMsgs, parsedMsgs []db.Message,
+	tokenFPDiffers, contentFPDiffers bool,
 ) []FieldDiff {
 	pairs := alignByOrdinal(storedMsgs, parsedMsgs)
 	n := len(pairs)
-	if n == 0 {
-		return nil
-	}
 
 	var (
 		modelDiffs       int
@@ -290,6 +350,14 @@ func compareMessageMetadata(
 		firstTokenOrd    int
 		firstTokenStored string
 		firstTokenParsed string
+
+		contentDiffs     int
+		firstContentOrd  int
+		firstContentSize string
+
+		metaDiffs     int
+		firstMetaOrd  int
+		firstMetaWhat string
 	)
 	for _, p := range pairs {
 		sModel := db.SanitizeUTF8(p.stored.Model)
@@ -309,6 +377,23 @@ func compareMessageMetadata(
 				firstTokenParsed = renderMessageTokenState(p.parsed)
 			}
 			tokenDiffs++
+		}
+		if p.stored.ContentLength != p.parsed.ContentLength {
+			if contentDiffs == 0 {
+				firstContentOrd = p.stored.Ordinal
+				firstContentSize = fmt.Sprintf(
+					"%d -> %d bytes",
+					p.stored.ContentLength, p.parsed.ContentLength,
+				)
+			}
+			contentDiffs++
+		}
+		if what := messageMetadataDiff(p.stored, p.parsed); what != "" {
+			if metaDiffs == 0 {
+				firstMetaOrd = p.stored.Ordinal
+				firstMetaWhat = what
+			}
+			metaDiffs++
 		}
 	}
 
@@ -337,7 +422,93 @@ func compareMessageMetadata(
 			),
 		})
 	}
+	if contentDiffs > 0 {
+		diffs = append(diffs, FieldDiff{
+			Field:  FieldMessageContent,
+			Stored: "see detail",
+			Parsed: "see detail",
+			Detail: fmt.Sprintf(
+				"%d/%d messages differ; first at ordinal %d: %s",
+				contentDiffs, n, firstContentOrd, firstContentSize,
+			),
+		})
+	}
+	if metaDiffs > 0 {
+		diffs = append(diffs, FieldDiff{
+			Field:  FieldMessageMetadata,
+			Stored: "see detail",
+			Parsed: "see detail",
+			Detail: fmt.Sprintf(
+				"%d/%d messages differ; first at ordinal %d: %s",
+				metaDiffs, n, firstMetaOrd, firstMetaWhat,
+			),
+		})
+	}
+
+	// The fingerprints proved inequality but nothing on the aligned
+	// overlap accounts for it (e.g. an equal-count ordinal-set shift,
+	// or content drift that only changed a non-overlapping message).
+	// Emit a fallback so the session is never reported identical.
+	if len(diffs) == 0 && (tokenFPDiffers || contentFPDiffers) {
+		which := "content"
+		if tokenFPDiffers {
+			which = "token/metadata"
+		}
+		diffs = append(diffs, FieldDiff{
+			Field:  FieldMessageMetadata,
+			Stored: "fingerprint",
+			Parsed: "fingerprint",
+			Detail: "per-message " + which +
+				" fingerprint differs but no aligned-ordinal field " +
+				"accounts for it (likely an ordinal-set change)",
+		})
+	}
 	return diffs
+}
+
+// messageMetadataDiff reports the first differing per-message field
+// among the fingerprint-covered identity columns that models/tokens do
+// not separately surface: role, timestamp, source-tracking ids, and
+// the sidechain/compact-boundary flags. Returns "" when they match.
+func messageMetadataDiff(stored, parsed db.Message) string {
+	switch {
+	case db.SanitizeUTF8(stored.Role) != db.SanitizeUTF8(parsed.Role):
+		return fmt.Sprintf("role %q -> %q", stored.Role, parsed.Role)
+	case stored.Timestamp != parsed.Timestamp:
+		return fmt.Sprintf(
+			"timestamp %q -> %q", stored.Timestamp, parsed.Timestamp,
+		)
+	case stored.IsSidechain != parsed.IsSidechain:
+		return fmt.Sprintf(
+			"is_sidechain %t -> %t",
+			stored.IsSidechain, parsed.IsSidechain,
+		)
+	case stored.IsCompactBoundary != parsed.IsCompactBoundary:
+		return fmt.Sprintf(
+			"is_compact_boundary %t -> %t",
+			stored.IsCompactBoundary, parsed.IsCompactBoundary,
+		)
+	case db.SanitizeUTF8(stored.SourceType) !=
+		db.SanitizeUTF8(parsed.SourceType):
+		return "source_type differs"
+	case db.SanitizeUTF8(stored.SourceSubtype) !=
+		db.SanitizeUTF8(parsed.SourceSubtype):
+		return "source_subtype differs"
+	case db.SanitizeUTF8(stored.SourceUUID) !=
+		db.SanitizeUTF8(parsed.SourceUUID):
+		return "source_uuid differs"
+	case db.SanitizeUTF8(stored.SourceParentUUID) !=
+		db.SanitizeUTF8(parsed.SourceParentUUID):
+		return "source_parent_uuid differs"
+	case db.SanitizeUTF8(stored.ClaudeMessageID) !=
+		db.SanitizeUTF8(parsed.ClaudeMessageID):
+		return "claude_message_id differs"
+	case db.SanitizeUTF8(stored.ClaudeRequestID) !=
+		db.SanitizeUTF8(parsed.ClaudeRequestID):
+		return "claude_request_id differs"
+	default:
+		return ""
+	}
 }
 
 type ordinalPair struct {
@@ -481,10 +652,15 @@ func usageTotalsDetail(stored, parsed usageTokenTotals) string {
 }
 
 // usageEventKey identifies one event inside the order-insensitive
-// multiset: DedupKey when present, otherwise the full content tuple.
+// multiset. The DedupKey form still folds in source and model so that
+// attribution drift (e.g. the same event re-tagged to a different
+// model) under a stable dedup key surfaces as a composition diff
+// rather than passing silently.
 func usageEventKey(ev db.UsageEvent) string {
 	if ev.DedupKey != "" {
-		return "dedup:" + ev.DedupKey
+		return strings.Join([]string{
+			"dedup", ev.DedupKey, ev.Source, ev.Model,
+		}, "|")
 	}
 	ord := "-"
 	if ev.MessageOrdinal != nil {

@@ -209,6 +209,50 @@ func TestCompareSessionFields(t *testing.T) {
 				s.TerminationStatus = nil
 			},
 		},
+		{
+			name: "termination stored null parsed value is real drift for full-replace agents",
+			stored: func(s *db.Session) {
+				s.Agent = "antigravity-cli"
+				s.TerminationStatus = nil
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "antigravity-cli"
+			},
+			want: []want{{
+				field:         FieldTerminationStatus,
+				stored:        "(null)",
+				parsed:        "clean",
+				informational: false,
+			}},
+		},
+		{
+			name: "started_at drift is a real diff",
+			stored: func(s *db.Session) {
+				s.StartedAt = new("2026-01-01T00:00:00Z")
+			},
+			prepared: func(s *db.Session) {
+				s.StartedAt = new("2026-01-02T00:00:00Z")
+			},
+			want: []want{{
+				field:  FieldStartedAt,
+				stored: "2026-01-01T00:00:00Z",
+				parsed: "2026-01-02T00:00:00Z",
+			}},
+		},
+		{
+			name: "ended_at drift is a real diff",
+			stored: func(s *db.Session) {
+				s.EndedAt = new("2026-01-01T01:00:00Z")
+			},
+			prepared: func(s *db.Session) {
+				s.EndedAt = new("2026-01-01T02:00:00Z")
+			},
+			want: []want{{
+				field:  FieldEndedAt,
+				stored: "2026-01-01T01:00:00Z",
+				parsed: "2026-01-01T02:00:00Z",
+			}},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -281,7 +325,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 		parsed := []db.Message{
 			pdMsg(0, "", 0, 0), pdMsg(1, "model-a", 100, 5),
 		}
-		assert.Empty(t, compareMessageMetadata(stored, parsed))
+		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false))
 	})
 
 	t.Run("model drift reports count and first ordinal", func(t *testing.T) {
@@ -295,7 +339,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			pdMsg(1, "model-b", 0, 0),
 			pdMsg(2, "model-b", 0, 0),
 		}
-		diffs := compareMessageMetadata(stored, parsed)
+		diffs := compareMessageMetadata(stored, parsed, true, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldModels, diffs[0].Field)
 		assert.Equal(t, "model-a", diffs[0].Stored)
@@ -310,7 +354,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 	t.Run("token value drift reports message tokens", func(t *testing.T) {
 		stored := []db.Message{pdMsg(0, "m", 100, 5)}
 		parsed := []db.Message{pdMsg(0, "m", 110, 5)}
-		diffs := compareMessageMetadata(stored, parsed)
+		diffs := compareMessageMetadata(stored, parsed, true, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
 		assert.Equal(
@@ -334,7 +378,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			Ordinal: 0, Role: "assistant",
 			OutputTokens: 0, HasOutputTokens: false,
 		}}
-		diffs := compareMessageMetadata(stored, parsed)
+		diffs := compareMessageMetadata(stored, parsed, true, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
 		assert.Contains(t, diffs[0].Stored, "output=0")
@@ -350,7 +394,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			Ordinal: 0, Role: "assistant",
 			TokenUsage: json.RawMessage(`{"input_tokens":2}`),
 		}}
-		diffs := compareMessageMetadata(stored, parsed)
+		diffs := compareMessageMetadata(stored, parsed, true, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
 	})
@@ -361,7 +405,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			pdMsg(0, "m", 100, 5),
 			pdMsg(1, "different-model", 999, 9),
 		}
-		assert.Empty(t, compareMessageMetadata(stored, parsed))
+		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false))
 	})
 
 	t.Run("alignment matches ordinal values not indices", func(t *testing.T) {
@@ -371,7 +415,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 		parsed := []db.Message{
 			pdMsg(2, "m", 200, 6), pdMsg(0, "m", 100, 5),
 		}
-		assert.Empty(t, compareMessageMetadata(stored, parsed))
+		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false))
 	})
 }
 
@@ -456,7 +500,22 @@ func TestCompareUsageEvents(t *testing.T) {
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldUsageEventTotals, diffs[0].Field)
 		assert.Contains(t, diffs[0].Detail, "event composition differs")
-		assert.Contains(t, diffs[0].Detail, "dedup:k1")
+		assert.Contains(t, diffs[0].Detail, "dedup|k1")
+	})
+
+	t.Run("model drift under stable dedup key surfaces", func(t *testing.T) {
+		// Same dedup key and equal token totals, but the event is
+		// re-attributed to a different model: must not pass silently.
+		stored := []db.UsageEvent{
+			pdEvent("api", "m1", 10, 2, "2026-01-01T00:00:00Z", "k1", nil),
+		}
+		parsed := []db.UsageEvent{
+			pdEvent("api", "m2", 10, 2, "2026-01-01T00:00:00Z", "k1", nil),
+		}
+		diffs := compareUsageEvents(stored, parsed)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldUsageEventTotals, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "event composition differs")
 	})
 
 	t.Run("tuple fallback detects occurred_at drift", func(t *testing.T) {
@@ -727,6 +786,87 @@ func TestCompareStoredSessionDetectsDrift(t *testing.T) {
 	assert.Equal(t, "claude-sonnet", diffs[0].Stored)
 	assert.Equal(t, "claude-haiku", diffs[0].Parsed)
 	assert.Contains(t, diffs[0].Detail, "first at ordinal 0")
+}
+
+// pdWriteSingleMessageSession writes a one-message session through the
+// real pipeline and returns the engine plus DB for re-parse comparison.
+func pdWriteSingleMessageSession(
+	t *testing.T, id string, msg parser.ParsedMessage,
+) (*Engine, *db.DB, pendingWrite) {
+	t.Helper()
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	pw := pendingWrite{
+		sess: parser.ParsedSession{
+			ID: id, Project: "proj", Machine: "test-machine",
+			Agent: parser.AgentClaude, FirstMessage: "x",
+			StartedAt: ts, MessageCount: 1,
+			File: parser.FileInfo{
+				Path: "/tmp/" + id + ".jsonl", Size: 32, Mtime: ts.UnixNano(),
+			},
+		},
+		msgs: []parser.ParsedMessage{msg},
+	}
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteBulk, false,
+	)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	return e, d, pw
+}
+
+// TestCompareStoredSessionDetectsContentDrift proves the content tier
+// catches a message-body change the token fingerprint cannot see: only
+// the content length moves, model and tokens are unchanged.
+func TestCompareStoredSessionDetectsContentDrift(t *testing.T) {
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	e, d, pw := pdWriteSingleMessageSession(t, "pd-content", parser.ParsedMessage{
+		Ordinal: 0, Role: parser.RoleAssistant,
+		Content: "short", ContentLength: 5, Timestamp: ts,
+		Model: "claude-sonnet",
+	})
+
+	// New parse: same model and tokens, longer body.
+	pw.msgs[0].Content = "a much longer reply body"
+	pw.msgs[0].ContentLength = len(pw.msgs[0].Content)
+	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
+	require.True(t, ok)
+
+	stored := pdFetchStored(t, d, prepared.ID)
+	diffs, err := e.compareStoredSession(
+		context.Background(), stored, prepared, msgs, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	assert.Equal(t, FieldMessageContent, diffs[0].Field)
+	assert.Contains(t, diffs[0].Detail, "first at ordinal 0")
+}
+
+// TestCompareStoredSessionDetectsMetadataDrift proves a fingerprint
+// mismatch confined to a non-model/token field (is_sidechain) is
+// surfaced as message_metadata rather than silently reported identical.
+func TestCompareStoredSessionDetectsMetadataDrift(t *testing.T) {
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	e, d, pw := pdWriteSingleMessageSession(t, "pd-meta", parser.ParsedMessage{
+		Ordinal: 0, Role: parser.RoleAssistant,
+		Content: "body", ContentLength: 4, Timestamp: ts,
+		Model: "claude-sonnet", IsSidechain: false,
+	})
+
+	// New parse flips only is_sidechain: same model, tokens, content.
+	pw.msgs[0].IsSidechain = true
+	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
+	require.True(t, ok)
+
+	stored := pdFetchStored(t, d, prepared.ID)
+	diffs, err := e.compareStoredSession(
+		context.Background(), stored, prepared, msgs, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
+	assert.Contains(t, diffs[0].Detail, "is_sidechain")
 }
 
 func pdFetchStored(t *testing.T, d *db.DB, id string) *db.Session {

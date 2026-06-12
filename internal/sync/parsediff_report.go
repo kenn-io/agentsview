@@ -48,10 +48,20 @@ const (
 	FieldUserMessageCount  = "user_message_count"
 	FieldFirstMessage      = "first_message"
 	FieldSessionName       = "session_name"
+	FieldStartedAt         = "started_at"
+	FieldEndedAt           = "ended_at"
 	FieldModels            = "models"
 	FieldTotalOutputTokens = "total_output_tokens"
 	FieldPeakContextTokens = "peak_context_tokens"
 	FieldMessageTokens     = "message_tokens"
+	// FieldMessageContent aggregates per-message content-length drift
+	// (sum/max/min), catching body changes the token fingerprint does
+	// not cover.
+	FieldMessageContent = "message_content"
+	// FieldMessageMetadata catches per-message drift in fields that are
+	// in the fingerprint but not separately surfaced (role, timestamp,
+	// source ids, sidechain/compact flags).
+	FieldMessageMetadata   = "message_metadata"
 	FieldUsageEventCount   = "usage_event_count"
 	FieldUsageEventTotals  = "usage_event_totals"
 	FieldTerminationStatus = "termination_status"
@@ -81,7 +91,7 @@ type FieldDiff struct {
 // SessionDiff is one listed session. Identical sessions appear only
 // when they carry informational-only diffs.
 type SessionDiff struct {
-	SessionID         string      `json:"session_id"`
+	SessionID         string      `json:"session_id,omitempty"`
 	Agent             string      `json:"agent"`
 	FilePath          string      `json:"file_path,omitempty"`
 	Class             DiffClass   `json:"class"`
@@ -114,8 +124,11 @@ type ParseDiffTotals struct {
 type ParseDiffReport struct {
 	GeneratedAt string `json:"generated_at"`
 	// DataVersion is db.CurrentDataVersion() of the running binary.
-	DataVersion int      `json:"data_version"`
-	Agents      []string `json:"agents"`
+	DataVersion int `json:"data_version"`
+	// DBPath identifies the archive that was vetted, so an attached
+	// report is self-describing. Set by the CLI after the run.
+	DBPath string   `json:"db_path,omitempty"`
+	Agents []string `json:"agents"`
 	// FilesExamined counts source files re-parsed; FilesLimited reports
 	// whether --limit truncated discovery.
 	FilesExamined int  `json:"files_examined"`
@@ -132,4 +145,16 @@ type ParseDiffReport struct {
 // real per-session changes or files the current binary cannot parse.
 func (r *ParseDiffReport) HasFailures() bool {
 	return r.Totals.Changed > 0 || r.Totals.ParseErrors > 0
+}
+
+// VacuousResync reports that every examined session is pending_resync,
+// i.e. the running binary's data version is ahead of the whole
+// archive. In that state the comparison detects no drift by
+// construction (resync will rewrite every row), so a clean result is
+// not evidence the parser is unchanged. Parser PRs that bump
+// dataVersion in the same commit hit this; the caller should warn and
+// not treat the run as a passing vet.
+func (r *ParseDiffReport) VacuousResync() bool {
+	return r.Totals.Examined > 0 &&
+		r.Totals.Examined == r.Totals.PendingResync
 }
