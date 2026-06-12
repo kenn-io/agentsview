@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -416,13 +417,15 @@ func extractModelName(data []byte) string {
 			return
 		}
 		if f21, ok := agProtoFind(fs, 21); ok {
-			if s, ok := agProtoString(f21); ok && s != "" {
+			if s, ok := agProtoString(f21); ok &&
+				isPlausibleModelName(s) {
 				model = s
 				return
 			}
 		}
 		if f19, ok := agProtoFind(fs, 19); ok {
-			if s, ok := agProtoString(f19); ok && s != "" {
+			if s, ok := agProtoString(f19); ok &&
+				isPlausibleModelName(s) {
 				model = s
 				return
 			}
@@ -435,6 +438,29 @@ func extractModelName(data []byte) string {
 	}
 	walk(fields)
 	return model
+}
+
+// isPlausibleModelName reports whether s looks like a human-readable
+// model identifier. Field 21/19 sometimes carries a nested protobuf
+// message whose low bytes (tags, varints, NULs) are valid UTF-8 --
+// agProtoString cannot tell those apart from text, and the raw bytes
+// previously leaked into messages.model (and broke `pg push`, which
+// rejects NUL bytes). Require every rune to be printable and at least
+// one letter to be present.
+func isPlausibleModelName(s string) bool {
+	if s == "" {
+		return false
+	}
+	hasLetter := false
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			return false
+		}
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+	}
+	return hasLetter
 }
 
 // decodeAntigravityStep extracts a ParsedMessage from one step's

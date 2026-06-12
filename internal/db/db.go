@@ -28,11 +28,17 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 38: Antigravity CLI parser extracts generatorMetadata
-// token usage from agy-reader trajectory sidecars: usage events for
-// legacy .pb sessions (and .db sessions without gen_metadata) and
-// per-message model/token attribution on sidecar transcripts. Existing
-// Antigravity CLI rows need re-parsing so usage reports include them.
+// Bumped to 38: two Antigravity parsing changes. (a) The Antigravity
+// CLI parser extracts generatorMetadata token usage from agy-reader
+// trajectory sidecars: usage events for legacy .pb sessions (and .db
+// sessions without gen_metadata) and per-message model/token
+// attribution on sidecar transcripts, so existing Antigravity CLI rows
+// need re-parsing to gain usage data. (b) The gen_metadata model-name
+// heuristic now rejects non-printable candidates: field 21/19
+// sometimes carries a nested protobuf message whose low bytes are
+// valid UTF-8, and the raw fragment (including NUL bytes) was
+// persisted as messages.model, so existing Antigravity rows need
+// re-parsing to clear the corrupt model values.
 //
 // (37: Antigravity and Antigravity CLI parsers now extract
 // per-generation model names and token usage (input, output,

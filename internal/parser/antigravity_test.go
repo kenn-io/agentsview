@@ -2338,6 +2338,73 @@ func TestExtractTokenUsageFalsePositiveGuards(t *testing.T) {
 	}
 }
 
+// TestExtractModelNameRejectsNonPrintable verifies that field 21/19
+// payloads that are valid UTF-8 but not human-readable text (nested
+// protobuf messages whose low bytes pass utf8.Valid) are rejected
+// instead of being persisted as the model name. The fragment bytes are
+// the exact gen_metadata field-21 payload observed in production
+// sessions, which leaked into messages.model with an embedded NUL byte
+// and broke `pg push` (PG rejects NUL with SQLSTATE 22021).
+func TestExtractModelNameRejectsNonPrintable(t *testing.T) {
+	// hex 080020022A0201024001: a nested message (field 1 varint,
+	// field 4 varint, field 5 bytes, field 8 varint), all bytes
+	// < 0x80 so utf8.Valid accepts it.
+	protoFragment := []byte{
+		0x08, 0x00, 0x20, 0x02, 0x2A, 0x02,
+		0x01, 0x02, 0x40, 0x01,
+	}
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{
+			name: "real protobuf fragment in field 21",
+			data: encodePB([]pbField{
+				{num: 21, wire: pbWireBytes, bytes: protoFragment},
+			}),
+			want: "",
+		},
+		{
+			name: "fragment in field 21 falls back to field 19",
+			data: encodePB([]pbField{
+				{num: 21, wire: pbWireBytes, bytes: protoFragment},
+				{num: 19, wire: pbWireBytes, bytes: []byte("gemini-3-pro")},
+			}),
+			want: "gemini-3-pro",
+		},
+		{
+			name: "fragment at top level falls through to nested model",
+			data: encodePB([]pbField{
+				{num: 21, wire: pbWireBytes, bytes: protoFragment},
+				{num: 2, wire: pbWireBytes, bytes: encodePB([]pbField{
+					{num: 21, wire: pbWireBytes, bytes: []byte("gemini-3-flash")},
+				})},
+			}),
+			want: "gemini-3-flash",
+		},
+		{
+			name: "digits-only value is rejected",
+			data: encodePB([]pbField{
+				{num: 21, wire: pbWireBytes, bytes: []byte("12345678")},
+			}),
+			want: "",
+		},
+		{
+			name: "plain model name still accepted",
+			data: encodePB([]pbField{
+				{num: 21, wire: pbWireBytes, bytes: []byte("Test Gemini 3.5")},
+			}),
+			want: "Test Gemini 3.5",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractModelName(tt.data))
+		})
+	}
+}
+
 // TestExtractTokenUsageNoReasoningField verifies a real token block is
 // accepted when field 3 is absent: proto3 omits zero values, and zero
 // reasoning tokens is a legitimate generation.
