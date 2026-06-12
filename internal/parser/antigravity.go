@@ -135,90 +135,90 @@ func ParseAntigravitySession(
 		return nil, nil, nil, err
 	}
 	messages = append(messages,
-	collectAntigravityBrainMessages(
-		filepath.Join(root, "brain", id),
-	)...,
-)
+		collectAntigravityBrainMessages(
+			filepath.Join(root, "brain", id),
+		)...,
+	)
 
-sort.SliceStable(messages, func(i, j int) bool {
-	return messages[i].Timestamp.Before(messages[j].Timestamp)
-})
-for i := range messages {
-	messages[i].Ordinal = i
-}
+	sort.SliceStable(messages, func(i, j int) bool {
+		return messages[i].Timestamp.Before(messages[j].Timestamp)
+	})
+	for i := range messages {
+		messages[i].Ordinal = i
+	}
 
-var firstMessage string
-var userCount int
-var startedAt, endedAt time.Time
-for _, m := range messages {
-	if m.Role == RoleUser {
-		userCount++
-		if firstMessage == "" && m.Content != "" {
-			firstMessage = truncate(
-				strings.ReplaceAll(m.Content, "\n", " "),
-				300,
-			)
+	var firstMessage string
+	var userCount int
+	var startedAt, endedAt time.Time
+	for _, m := range messages {
+		if m.Role == RoleUser {
+			userCount++
+			if firstMessage == "" && m.Content != "" {
+				firstMessage = truncate(
+					strings.ReplaceAll(m.Content, "\n", " "),
+					300,
+				)
+			}
+		}
+		if !m.Timestamp.IsZero() {
+			if startedAt.IsZero() || m.Timestamp.Before(startedAt) {
+				startedAt = m.Timestamp
+			}
+			if m.Timestamp.After(endedAt) {
+				endedAt = m.Timestamp
+			}
 		}
 	}
-	if !m.Timestamp.IsZero() {
-		if startedAt.IsZero() || m.Timestamp.Before(startedAt) {
-			startedAt = m.Timestamp
-		}
-		if m.Timestamp.After(endedAt) {
-			endedAt = m.Timestamp
-		}
+	if ann := readAntigravityAnnotation(
+		filepath.Join(root, "annotations", id+".pbtxt"),
+	); !ann.IsZero() && ann.After(endedAt) {
+		endedAt = ann
 	}
-}
-if ann := readAntigravityAnnotation(
-	filepath.Join(root, "annotations", id+".pbtxt"),
-); !ann.IsZero() && ann.After(endedAt) {
-	endedAt = ann
-}
-if startedAt.IsZero() {
-	startedAt = info.ModTime()
-}
-if endedAt.IsZero() {
-	endedAt = info.ModTime()
-}
+	if startedAt.IsZero() {
+		startedAt = info.ModTime()
+	}
+	if endedAt.IsZero() {
+		endedAt = info.ModTime()
+	}
 
-var size int64
-var mtime int64
-if effInfo, statErr := AntigravityFileInfo(path); statErr == nil {
-	size = effInfo.Size()
-	mtime = effInfo.ModTime().UnixNano()
-} else {
-	size = info.Size()
-	mtime = info.ModTime().UnixNano()
-}
+	var size int64
+	var mtime int64
+	if effInfo, statErr := AntigravityFileInfo(path); statErr == nil {
+		size = effInfo.Size()
+		mtime = effInfo.ModTime().UnixNano()
+	} else {
+		size = info.Size()
+		mtime = info.ModTime().UnixNano()
+	}
 
-sess := &ParsedSession{
-	ID:               antigravityIDPrefix + id,
-	Project:          project,
-	Machine:          machine,
-	Agent:            AgentAntigravity,
-	FirstMessage:     firstMessage,
-	StartedAt:        startedAt,
-	EndedAt:          endedAt,
-	MessageCount:     len(messages),
-	UserMessageCount: userCount,
-	File: FileInfo{
-		Path:  path,
-		Size:  size,
-		Mtime: mtime,
-	},
-}
-accumulateMessageTokenUsage(sess, messages)
-applyUsageEventTokenTotals(sess, usageEvents)
-for i := range usageEvents {
-	usageEvents[i].SessionID = sess.ID
-}
-if len(messages) == 0 {
-	// Usage events still flow for message-less parses (e.g. an
-	// undecodable DB with gen_metadata) so daily usage analytics
-	// match the event-derived session totals stamped above.
-	return sess, nil, usageEvents, nil
-}
-return sess, messages, usageEvents, nil
+	sess := &ParsedSession{
+		ID:               antigravityIDPrefix + id,
+		Project:          project,
+		Machine:          machine,
+		Agent:            AgentAntigravity,
+		FirstMessage:     firstMessage,
+		StartedAt:        startedAt,
+		EndedAt:          endedAt,
+		MessageCount:     len(messages),
+		UserMessageCount: userCount,
+		File: FileInfo{
+			Path:  path,
+			Size:  size,
+			Mtime: mtime,
+		},
+	}
+	accumulateMessageTokenUsage(sess, messages)
+	applyUsageEventTokenTotals(sess, usageEvents)
+	for i := range usageEvents {
+		usageEvents[i].SessionID = sess.ID
+	}
+	if len(messages) == 0 {
+		// Usage events still flow for message-less parses (e.g. an
+		// undecodable DB with gen_metadata) so daily usage analytics
+		// match the event-derived session totals stamped above.
+		return sess, nil, usageEvents, nil
+	}
+	return sess, messages, usageEvents, nil
 }
 
 func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, []ParsedUsageEvent, error) {
@@ -240,7 +240,7 @@ func loadAntigravityStepsWithRawCount(
 ) (antigravityStepLoadResult, error) {
 	rows, err := db.Query(
 		`SELECT idx, step_type, step_payload FROM steps ` +
-		`ORDER BY idx`,
+			`ORDER BY idx`,
 	)
 	if err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf("query steps: %w", err)
