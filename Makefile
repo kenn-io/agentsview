@@ -18,6 +18,10 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -n "$$(go env GOBIN)" ] && [ -x "$$(go env GOBIN)/air" ]; then printf "%s" "$$(go env GOBIN)/air"; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
+GOLANGCI_LINT := $(shell if command -v golangci-lint >/dev/null 2>&1; then command -v golangci-lint; \
+	elif [ -n "$$(go env GOBIN)" ] && [ -x "$$(go env GOBIN)/golangci-lint" ]; then printf "%s" "$$(go env GOBIN)/golangci-lint"; \
+	elif [ -x "$(GOPATH_FIRST)/bin/golangci-lint" ]; then printf "%s" "$(GOPATH_FIRST)/bin/golangci-lint"; \
+	fi)
 
 .PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
 
@@ -289,22 +293,22 @@ lint: lint-golangci nilaway
 
 # Run golangci-lint with auto-fixes for local development.
 lint-golangci: ensure-embed-dir
-	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+	@if [ -z "$(GOLANGCI_LINT)" ]; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
-	golangci-lint run --fix ./...
+	"$(GOLANGCI_LINT)" run --fix ./...
 
 # Lint Go code without fixing (for CI)
 lint-ci: lint-golangci-ci nilaway
 
 # Run golangci-lint without auto-fixes for CI.
 lint-golangci-ci: ensure-embed-dir
-	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+	@if [ -z "$(GOLANGCI_LINT)" ]; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
-	golangci-lint run ./...
+	"$(GOLANGCI_LINT)" run ./...
 
 # Build a custom golangci-lint binary with the NilAway module plugin.
 # Strip every repo-local Git env var (GIT_DIR, GIT_INDEX_FILE,
@@ -316,13 +320,13 @@ lint-golangci-ci: ensure-embed-dir
 # `git rev-parse --local-env-vars` so it tracks whatever Git considers
 # repo-local at runtime.
 nilaway-golangci-build:
-	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+	@if [ -z "$(GOLANGCI_LINT)" ]; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
 	@unset_args=$$(git rev-parse --local-env-vars 2>/dev/null | sed 's/^/-u /' | tr '\n' ' '); \
 	env $$unset_args GOFLAGS=-buildvcs=false \
-		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
+		"$(GOLANGCI_LINT)" custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
 
 # Run NilAway through the custom golangci-lint module plugin.
 nilaway: ensure-embed-dir nilaway-golangci-build
