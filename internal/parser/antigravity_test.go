@@ -90,6 +90,38 @@ func TestAgProtoParseAndExtract(t *testing.T) {
 	assert.Equal(t, "Hi, what's up next?", strs[0])
 }
 
+// TestAgProtoTimestampNanosRange pins the nanos guard: the protobuf
+// Timestamp spec bounds nanos to [0, 1e9), and an out-of-range varint
+// cast to int32 could go negative and shift time.Unix results outside
+// the plausibility window callers check on seconds alone.
+func TestAgProtoTimestampNanosRange(t *testing.T) {
+	tests := []struct {
+		name   string
+		nanos  uint64
+		wantOK bool
+	}{
+		{"max valid nanos", 999_999_999, true},
+		{"one past the cap", 1_000_000_000, false},
+		{"int32-overflowing nanos", 4_000_000_000, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := encodePB([]pbField{
+				{num: 1, wire: pbWireVarint, varint: 1_779_326_586},
+				{num: 2, wire: pbWireVarint, varint: tt.nanos},
+			})
+			fields, err := agProtoParse(payload)
+			require.NoError(t, err, "parse")
+			sec, nanos, ok := agProtoTimestamp(fields)
+			assert.Equal(t, tt.wantOK, ok, "timestamp ok")
+			if tt.wantOK {
+				assert.Equal(t, int64(1_779_326_586), sec, "timestamp sec")
+				assert.Equal(t, int32(tt.nanos), nanos, "timestamp nanos")
+			}
+		})
+	}
+}
+
 // TestAgProtoLengthOverflow feeds a length-delimited field whose
 // declared length is near uint64-max. The pre-fix code computed
 // pos+ln in uint64 and wrapped, then sliced with int(ln) which

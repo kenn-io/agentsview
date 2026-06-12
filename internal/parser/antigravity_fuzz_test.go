@@ -145,10 +145,14 @@ func fuzzAgWireSeeds() [][]byte {
 		onion,
 		bytes.Repeat([]byte{0x08, 0x00}, 64), // dense minimal fields
 		fuzzAgTimestamp(1_779_326_586, 4_000_000_000), // nanos out of range
-		stepWithTS(946_684_800, 0),                    // window lower bound (excluded)
-		stepWithTS(946_684_801, 999_999_999),          // first inside window
-		stepWithTS(4_102_444_799, 999_999_999),        // last inside window
-		stepWithTS(4_102_444_800, 0),                  // window upper bound (excluded)
+		// Out-of-range nanos behind collectable content: the
+		// timestamp is rejected, so the decoded message keeps a
+		// zero Timestamp instead of a shifted one.
+		stepWithTS(1_779_326_586, 4_000_000_000),
+		stepWithTS(946_684_800, 0),             // window lower bound (excluded)
+		stepWithTS(946_684_801, 999_999_999),   // first inside window
+		stepWithTS(4_102_444_799, 999_999_999), // last inside window
+		stepWithTS(4_102_444_800, 0),           // window upper bound (excluded)
 		encodePB([]pbField{
 			{num: 21, wire: pbWireBytes, bytes: []byte("   ")},
 		}), // whitespace-only model candidate
