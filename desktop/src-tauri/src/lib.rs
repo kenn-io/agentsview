@@ -936,7 +936,8 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
 /// if the WebView is healthy (`eval` succeeds) it does nothing, so it can
 /// never disrupt the working path. When the WebView is dead we open the
 /// backend URL in the system browser, hide the blank window, and tell the
-/// user where the UI went.
+/// user where the UI went. If no browser can be opened the window stays
+/// visible and the dialog shows the URL to open manually.
 #[cfg(target_os = "linux")]
 fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
     // One-shot guard so focus/navigation retries can't open many tabs.
@@ -962,19 +963,34 @@ fn spawn_webview_health_fallback(window: WebviewWindow, port: u16) {
         );
 
         let handle = window.app_handle().clone();
-        if let Err(err) = handle.opener().open_url(url.as_str(), Option::<&str>::None) {
-            eprintln!("[agentsview] failed to open system browser fallback: {err}");
+        match handle.opener().open_url(url.as_str(), Option::<&str>::None) {
+            Ok(()) => {
+                let _ = window.hide();
+                handle
+                    .dialog()
+                    .message(format!(
+                        "AgentsView could not render its window, likely due to a \
+                         graphics driver (EGL) issue. It has been opened in your \
+                         web browser instead:\n\n{url}"
+                    ))
+                    .title("AgentsView")
+                    .show(|_| {});
+            }
+            Err(err) => {
+                eprintln!("[agentsview] failed to open system browser fallback: {err}");
+                // Keep the window up so the app stays visible and quittable.
+                handle
+                    .dialog()
+                    .message(format!(
+                        "AgentsView could not render its window, likely due to a \
+                         graphics driver (EGL) issue, and no web browser could be \
+                         opened automatically. Open this URL in a browser to use \
+                         AgentsView:\n\n{url}"
+                    ))
+                    .title("AgentsView")
+                    .show(|_| {});
+            }
         }
-        let _ = window.hide();
-        handle
-            .dialog()
-            .message(format!(
-                "AgentsView could not render its window, likely due to a \
-                 graphics driver (EGL) issue. It has been opened in your \
-                 web browser instead:\n\n{url}"
-            ))
-            .title("AgentsView")
-            .show(|_| {});
     });
 }
 
