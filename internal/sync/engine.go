@@ -103,6 +103,12 @@ type Engine struct {
 	pathRewriter func(string) string
 	emitter      Emitter
 
+	// forceParse disables every stored-state skip (skip cache,
+	// size/mtime/data_version checks, incremental JSONL deltas) so
+	// parse-diff fully re-parses every discovered file. Normal sync
+	// never sets it; behavior must be identical when false.
+	forceParse bool
+
 	// phaseStats accumulates per-phase wall-clock time inside the bulk
 	// write path. Exposed via PhaseStats() so a CLI driver can log the
 	// totals after a sync pass completes.
@@ -3095,7 +3101,7 @@ func (e *Engine) processFile(
 	// migrateLegacyCodexExecSkips, so this check can treat
 	// the skip cache as authoritative without per-file
 	// re-validation.
-	if cacheSkip {
+	if cacheSkip && !e.forceParse { // parse-diff: ignore the skip cache
 		e.skipMu.RLock()
 		cachedMtime, cached := e.skipCache[file.Path]
 		e.skipMu.RUnlock()
@@ -3283,6 +3289,9 @@ func (e *Engine) persistSkipCache() int {
 func (e *Engine) shouldSkipFile(
 	sessionID string, info os.FileInfo,
 ) bool {
+	if e.forceParse { // parse-diff: always re-parse
+		return false
+	}
 	fullID := e.idPrefix + sessionID
 	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(
 		fullID,
@@ -3307,6 +3316,9 @@ func (e *Engine) shouldSkipFile(
 func (e *Engine) shouldSkipByPath(
 	path string, info os.FileInfo,
 ) bool {
+	if e.forceParse { // parse-diff: always re-parse
+		return false
+	}
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
@@ -3441,6 +3453,9 @@ func (e *Engine) tryIncrementalJSONL(
 	agent parser.AgentType,
 	parseFn incrementalParseFunc,
 ) (processResult, bool) {
+	if e.forceParse { // parse-diff: never produce append deltas
+		return processResult{}, false
+	}
 	lookupPath := file.Path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(file.Path)
@@ -3705,7 +3720,8 @@ func (e *Engine) processOpenCode(
 				continue
 			}
 			_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
-			if ok && storedMtime == meta.FileMtime &&
+			// parse-diff: !e.forceParse disables the stored-state skip.
+			if !e.forceParse && ok && storedMtime == meta.FileMtime &&
 				e.db.GetDataVersionByPath(meta.VirtualPath) >=
 					db.CurrentDataVersion() {
 				continue
@@ -3759,6 +3775,9 @@ func (e *Engine) processOpenCode(
 }
 
 func (e *Engine) shouldSkipOpenCodeByPath(path string) bool {
+	if e.forceParse { // parse-diff: always re-parse
+		return false
+	}
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
@@ -3847,6 +3866,9 @@ func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
 func (e *Engine) shouldSkipCopilot(
 	path string, info os.FileInfo, effectiveMtime int64,
 ) bool {
+	if e.forceParse { // parse-diff: always re-parse
+		return false
+	}
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
@@ -4107,7 +4129,8 @@ func (e *Engine) processZed(
 	var results []parser.ParseResult
 	for _, meta := range metas {
 		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
-		if ok && storedMtime == meta.FileMtime &&
+		// parse-diff: !e.forceParse disables the stored-state skip.
+		if !e.forceParse && ok && storedMtime == meta.FileMtime &&
 			e.db.GetDataVersionByPath(meta.VirtualPath) >=
 				db.CurrentDataVersion() {
 			continue
@@ -4165,7 +4188,8 @@ func (e *Engine) processKiro(
 			_, storedMtime, ok := e.db.GetFileInfoByPath(
 				meta.VirtualPath,
 			)
-			if ok && storedMtime == meta.FileMtime &&
+			// parse-diff: !e.forceParse disables the stored-state skip.
+			if !e.forceParse && ok && storedMtime == meta.FileMtime &&
 				e.db.GetDataVersionByPath(meta.VirtualPath) >=
 					db.CurrentDataVersion() {
 				continue
