@@ -74,6 +74,40 @@ shipping an oversized, unbounded sidebar payload, (c) running a non-covering
 range scan whose all-time residual is CPU-bound, and (d) giving no progressive
 feedback, so the wait feels like a hang.
 
+### 2.1 Re-measure addendum (2026-06-12, post-rebase, live prod)
+
+Context: the desktop app updated (v0.33.0) and ran a **full resync** at 15:18
+(`data version outdated; full resync required` in debug.log; dataVersion went
+33→40 upstream in three days, two full archive rewrites since Jun 8). Measured
+read-only against live prod (94,935 sidebar rows; writer active; **WAL = 5.9
+GB**, equal to the main DB):
+
+| query                       | Jun 9 baseline  | 2026-06-12 live  | change    |
+| --------------------------- | --------------- | ---------------- | --------- |
+| usage/summary all-time      | 3.0–3.6s        | 5.0–5.2s         | +~50%     |
+| usage/top-sessions all-time | 3.0–3.6s        | 5.0s             | +~50%     |
+| usage/summary 30-day        | ~0.99s          | ~1.0s            | unchanged |
+| sidebar-index (server)      | 0.43s / 30.7 MB | 0.35s / 31.65 MB | unchanged |
+| concurrent fetchAll         | ~5.5s           | 6.4s             | +16%      |
+| metadata endpoints          | 0.03–0.11s      | same             | unchanged |
+
+Attribution of the +50% on the heavy scans: ~5% data growth, ~10–15% live-writer
+contention (measured Jun 9), remainder (~20%) giant-WAL read overhead. Per-query
+latency degraded moderately — no cliff. `PRAGMA quick_check` on prod: **ok**
+(7s).
+
+Observed live in debug.log while a tab is open: `GET /sessions/sidebar-index`
+(the ~31 MB payload) every **5–10 seconds**, plus the
+stats/projects/agents/machines fan-out (stats twice) every ~10s — the Group A
+storm, measured in production. The file watcher triggers a sync every ~1 second
+under constant agent writes; large active transcripts intermittently hit the
+"appended Claude lines require full parse" fallback (multi-MB re-parse on the
+write path).
+
+Conclusion of the re-measure: the dominant interactive cost remains Group A
+(unimplemented); the resync left behind a WAL the app can never reclaim (new
+problem E1 below); query latency (Group C) is moderately worse but secondary.
+
 ## 3. Problem catalog (distinct, de-conflated)
 
 ### Group A — Wasted/repeated work (the CPU "hammering")
@@ -149,6 +183,27 @@ Two independent loops both fire on every live session update; both must be cut.
   time-to-complete.
 - **D3. No staleness signal.** With auto-refresh removed (A1), the user needs to
   know how old the data is and when new data exists.
+
+### Group E — Storage lifecycle (found 2026-06-12)
+
+- **E1. The WAL grows unboundedly after a full resync and the app never
+  checkpoints.** The codebase contains no `wal_checkpoint`, no
+  `journal_size_limit`, and no `wal_autocheckpoint` tuning (only
+  `_journal_mode=WAL` in `makeDSN`). A full resync rewrites the entire archive
+  through the WAL (~5.9 GB observed, equal to the DB itself), and SQLite's
+  default passive checkpoints can backfill pages but can never *reset* the WAL
+  while any reader holds a snapshot — which, under this app's constant
+  read/write load (Group A storm + per-second watcher syncs), is always. Every
+  page read then pays a wal-index lookup against ~1.4M frames (~20% on the heavy
+  scans), and ~6 GB of disk stays wasted until the app happens to close its last
+  connection. Upstream bumps `dataVersion` frequently (6 bumps in 3 days), so
+  this recurs on every app update. SQLite-only by nature (PG has no client-side
+  WAL); no parity concern.
+- **E2 (observation, Phase 2 candidate).** Constant agent writes drive a
+  watcher→sync cycle every ~1s, and appended lines on large active Claude
+  transcripts intermittently fall back to a full re-parse of the multi-MB file.
+  Each cycle is sub-second, so this is background load rather than a latency
+  driver; record and revisit after Phase 1.
 
 ## 4. Goals / non-goals
 
@@ -247,6 +302,21 @@ Each maps to a problem above.
   useful even after the usage tab stops fetching the index (it still helps the
   sessions route and the summary endpoint). Backend-agnostic.
 
+### E — Storage lifecycle
+
+- **E1 → bounded WAL via explicit checkpoints.** Three small, standard pieces,
+  all on the SQLite writer connection: (a) set `PRAGMA journal_size_limit`
+  (e.g., 256 MB) at open so any successful reset shrinks the WAL file; (b) after
+  `ResyncAll` completes — the known balloon event — run
+  `PRAGMA wal_checkpoint(TRUNCATE)` with a short retry loop; (c) a periodic
+  (e.g., every 5 min) `wal_checkpoint(TRUNCATE)` attempt when the WAL exceeds a
+  threshold, tolerating failure (readers win; the next attempt retries). No
+  semantic change; readers are never blocked beyond the existing `busy_timeout`.
+  Phase 1's Group A fixes make these attempts actually succeed by creating
+  reader-free windows. One-time operator remediation available today with no
+  code: quitting the app closes the last connection, which auto-checkpoints and
+  resets the 5.9 GB WAL.
+
 ## 6. Decisions (locked)
 
 - **D-1 (query depth): covering index only this round.** Widen the existing
@@ -258,6 +328,10 @@ Each maps to a problem above.
 - **D-3 (phasing): ship Phase 1 = A + D + gzip (W1) + widened covering index
   (C1) + sidebar load coalescing (A4). Re-measure, then decide** whether C2 or
   sidebar pagination is still worth the added complexity.
+- **D-4 (proposed 2026-06-12, pending sign-off): add E1 (WAL checkpoint
+  management) to Phase 1.** Small, isolated, SQLite-only; fixes the recurring
+  post-resync 5.9 GB WAL and its ~20% read overhead. E2 stays an observation for
+  Phase 2.
 
 ## 7. Phasing
 
@@ -271,6 +345,7 @@ Each maps to a problem above.
 - D3 — staleness "Updated X ago" + new-data hint.
 - C1 — widened covering index (SQLite + PG/Cockroach parity).
 - W1 — gzip API responses.
+- E1 — WAL checkpoint management (proposed addition per D-4, pending sign-off).
 
 **Phase 2 (deferred, decided after the Phase 1 re-measure):**
 
