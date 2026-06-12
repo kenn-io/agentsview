@@ -968,6 +968,17 @@ func (db *DB) MessageContentFingerprint(sessionID string) (sum, max, min int64, 
 	return sum, max, min, err
 }
 
+// SanitizeUTF8 strips NUL bytes and replaces invalid UTF-8
+// sequences. PostgreSQL enforces strict UTF-8 and rejects NUL in
+// text columns, so the push boundary applies this to every
+// parser-derived string; the local fingerprint builders below apply
+// it too so local fingerprints stay comparable to PG-readback
+// fingerprints when a stored row carries NUL bytes.
+func SanitizeUTF8(s string) string {
+	s = strings.ReplaceAll(s, "\x00", "")
+	return strings.ToValidUTF8(s, "")
+}
+
 // MessageTokenFingerprint returns an exact ordered fingerprint of
 // stored token metadata for a session's messages. Used by PG push
 // fast-paths to detect token metadata changes without rewriting
@@ -1007,6 +1018,19 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 		); err != nil {
 			return "", err
 		}
+		// Sanitize before measuring: the PG-readback
+		// fingerprint sees values sanitized at insert time,
+		// so raw values (e.g. NUL bytes from a corrupt parse)
+		// would never match and the fast path would rewrite
+		// the session on every push.
+		model = SanitizeUTF8(model)
+		tokenUsage = SanitizeUTF8(tokenUsage)
+		claudeMsgID = SanitizeUTF8(claudeMsgID)
+		claudeReqID = SanitizeUTF8(claudeReqID)
+		srcType = SanitizeUTF8(srcType)
+		srcSubtype = SanitizeUTF8(srcSubtype)
+		srcUUID = SanitizeUTF8(srcUUID)
+		srcParentUUID = SanitizeUTF8(srcParentUUID)
 		fmt.Fprintf(&b,
 			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
 				"%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",

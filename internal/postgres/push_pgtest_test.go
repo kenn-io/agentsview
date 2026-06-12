@@ -393,4 +393,34 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 	assert.Equal(t, sanitizePG(badModel), model, "model stripped of NUL")
 	assert.NotContains(t, model, "\x00")
 	assert.Equal(t, "uuidtail", sourceUUID, "source_uuid stripped of NUL")
+
+	// Second push with sync state cleared: the local token
+	// fingerprint (sanitized, see db.SanitizeUTF8) must match the
+	// PG-readback fingerprint despite the NUL bytes still stored
+	// locally, so the metadata fast path skips the rewrite. ctid
+	// changes on DELETE+reinsert, so an unchanged ctid proves the
+	// row was left alone.
+	var ctidBefore string
+	require.NoError(t, pg.QueryRow(
+		`SELECT ctid::text FROM messages
+		 WHERE session_id = $1 AND ordinal = 0`, sessID,
+	).Scan(&ctidBefore), "reading ctid before second push")
+
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+	require.NoError(t,
+		localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		"clearing boundary state")
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push (second)")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+
+	var ctidAfter string
+	require.NoError(t, pg.QueryRow(
+		`SELECT ctid::text FROM messages
+		 WHERE session_id = $1 AND ordinal = 0`, sessID,
+	).Scan(&ctidAfter), "reading ctid after second push")
+	assert.Equal(t, ctidBefore, ctidAfter,
+		"fast path should skip rewriting a NUL-field session")
 }

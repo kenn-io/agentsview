@@ -213,6 +213,14 @@ func (db *DB) appendUsageEventFingerprints(
 		if occurredAt.Valid {
 			occurred = occurredAt.String
 		}
+		// Sanitize before measuring so fingerprints match the
+		// PG-readback fingerprint, whose values were sanitized
+		// at insert time (see SanitizeUTF8).
+		source = SanitizeUTF8(source)
+		model = SanitizeUTF8(model)
+		costStatus = SanitizeUTF8(costStatus)
+		costSource = SanitizeUTF8(costSource)
+		dedupKey.String = SanitizeUTF8(dedupKey.String)
 		fmt.Fprintf(b,
 			"%t|%d|%d:%s|%d:%s|%d|%d|%d|%d|%d|%t|%g|%d:%s|%d:%s|%d:%s|%d:%s;",
 			ordinal.Valid,

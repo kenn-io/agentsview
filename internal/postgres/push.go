@@ -1883,11 +1883,11 @@ func (s *Sync) normalizeSyncTimestamps(
 
 // sanitizePG strips null bytes and replaces invalid UTF-8
 // sequences so text can be safely inserted into PostgreSQL,
-// which enforces strict UTF-8 encoding.
+// which enforces strict UTF-8 encoding. It delegates to
+// db.SanitizeUTF8 so the local fingerprint builders apply the
+// exact same normalization.
 func sanitizePG(s string) string {
-	s = strings.ReplaceAll(s, "\x00", "")
-	s = strings.ToValidUTF8(s, "")
-	return s
+	return db.SanitizeUTF8(s)
 }
 
 func nilIfEmpty(s string) any {
