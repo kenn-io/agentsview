@@ -148,6 +148,39 @@ func CodexSessionMetaJSON(
 	return mustMarshal(m)
 }
 
+// CodexForkedSessionMetaJSON returns the session_meta of a forked
+// Codex session (payload carries forked_from_id).
+func CodexForkedSessionMetaJSON(
+	id, forkedFromID, cwd, originator, timestamp string,
+) string {
+	m := map[string]any{
+		"type":      "session_meta",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"id":             id,
+			"forked_from_id": forkedFromID,
+			"cwd":            cwd,
+			"originator":     originator,
+		},
+	}
+	return mustMarshal(m)
+}
+
+// CodexTurnContextWithIDJSON returns a Codex turn_context entry
+// carrying a turn_id, as newer CLI versions write.
+func CodexTurnContextWithIDJSON(model, turnID, timestamp string) string {
+	m := map[string]any{
+		"type":      "turn_context",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"model":   model,
+			"cwd":     "/tmp",
+			"turn_id": turnID,
+		},
+	}
+	return mustMarshal(m)
+}
+
 // CodexMsgJSON returns a Codex response_item message as a JSON
 // string.
 func CodexMsgJSON(role, text, timestamp string) string {

@@ -28,7 +28,15 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
-// Bumped to 39: the Antigravity wire-walk hardened its output
+// Bumped to 40: the Codex parser now suppresses the parent history
+// that `codex fork` replays at the top of a forked rollout, which was
+// double counted as the fork's own messages and token usage, and kept
+// the fork's own session id instead of letting the replayed parent
+// session_meta overwrite it. Existing forked rows persist the
+// double-counted totals under the parent's identity, so they need
+// re-parsing to be rewritten with post-fork activity only.
+//
+// (39: the Antigravity wire-walk hardened its output
 // invariants (issue #648): model-name candidates must be printable,
 // collected strings replace NUL bytes with U+FFFD, nanos values
 // outside the protobuf Timestamp range no longer match
@@ -36,7 +44,7 @@ import (
 // breaches the plausibility cap are rejected, and parses truncate
 // at a total-fields allocation budget. Existing Antigravity rows
 // may hold content/model/usage values the parser no longer
-// produces and need re-parsing.
+// produces and need re-parsing.)
 //
 // (38: two Antigravity parsing changes. (a) The Antigravity
 // CLI parser extracts generatorMetadata token usage from agy-reader
@@ -171,7 +179,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 39
+const dataVersion = 40
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

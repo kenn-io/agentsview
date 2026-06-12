@@ -58,6 +58,94 @@ type codexSessionBuilder struct {
 	// matching task_complete after) means the agent was working
 	// when the file was last written.
 	lastTaskEvent string
+
+	// Suppresses the parent history a forked rollout replays at the
+	// top of the file, which would otherwise double count messages
+	// and token usage across the parent and the fork (#643).
+	forkGate codexForkGate
+}
+
+// codexForkGate drops the replayed parent history at the top of a
+// forked Codex rollout (#643).
+//
+// `codex fork` copies the parent's lines — its session_meta, turns,
+// messages and token_count events — into the new file with re-stamped
+// envelope timestamps, so the same usage exists in two session files
+// and gets counted twice. Envelope timestamps cannot locate the
+// boundary (the replay is re-stamped at fork creation), but turn ids
+// are UUIDv7 values minted when the turn originally ran: every
+// replayed turn predates the fork instant, and the first genuine turn
+// is minted at or after it. The gate stays closed until the first
+// turn_context whose turn_id timestamp is >= the fork's own creation
+// time, then everything flows normally.
+//
+// Replayed turn_context entries from parents recorded before Codex
+// stamped turn ids carry no turn_id at all; a CLI new enough to write
+// forked_from_id always stamps genuine turns, so a missing turn_id
+// while gated means replayed history. An unparseable turn_id fails
+// open (pre-#643 behaviour) rather than risk dropping live data.
+type codexForkGate struct {
+	active    bool
+	createdMs int64
+}
+
+// armFromMeta activates the gate when the session_meta belongs to a
+// forked session and its creation instant can be anchored: from the
+// fork's UUIDv7 id, the payload timestamp, or the JSONL envelope
+// timestamp, in that order.
+func (g *codexForkGate) armFromMeta(payload gjson.Result, envelopeTS time.Time) {
+	if payload.Get("forked_from_id").Str == "" {
+		return
+	}
+	ms := uuidV7Millis(payload.Get("id").Str)
+	if ms == 0 {
+		if t := parseTimestamp(payload.Get("timestamp").Str); !t.IsZero() {
+			ms = t.UnixMilli()
+		}
+	}
+	if ms == 0 && !envelopeTS.IsZero() {
+		ms = envelopeTS.UnixMilli()
+	}
+	if ms == 0 {
+		return // no anchor for the boundary — fail open
+	}
+	g.active = true
+	g.createdMs = ms
+}
+
+// suppresses reports whether the line is replayed parent history.
+// turn_context lines open the gate when their turn id was minted at
+// or after the fork instant.
+func (g *codexForkGate) suppresses(lineType string, payload gjson.Result) bool {
+	if !g.active {
+		return false
+	}
+	if lineType != codexTypeTurnContext {
+		return true
+	}
+	tid := payload.Get("turn_id").Str
+	if tid == "" {
+		return true // pre-turn_id parent history
+	}
+	if ms := uuidV7Millis(tid); ms != 0 && ms < g.createdMs {
+		return true
+	}
+	g.active = false
+	return false
+}
+
+// uuidV7Millis extracts the millisecond timestamp embedded in a
+// UUIDv7, returning 0 for anything that is not a v7 UUID.
+func uuidV7Millis(id string) int64 {
+	hex := strings.ReplaceAll(id, "-", "")
+	if len(hex) != 32 || hex[12] != '7' {
+		return 0
+	}
+	ms, err := strconv.ParseInt(hex[:12], 16, 64)
+	if err != nil {
+		return 0
+	}
+	return ms
 }
 
 type codexToolCallRef struct {
@@ -109,19 +197,33 @@ func (b *codexSessionBuilder) processLine(
 
 	switch gjson.Get(line, "type").Str {
 	case codexTypeSessionMeta:
-		return b.handleSessionMeta(payload)
+		if b.forkGate.active {
+			// A forked rollout replays the parent's session_meta
+			// too — the fork's own meta came first and wins.
+			return false
+		}
+		return b.handleSessionMeta(payload, ts)
 	case codexTypeTurnContext:
+		if b.forkGate.suppresses(codexTypeTurnContext, payload) {
+			return false
+		}
 		b.currentModel = payload.Get("model").Str
 	case codexTypeResponseItem:
+		if b.forkGate.suppresses(codexTypeResponseItem, payload) {
+			return false
+		}
 		b.handleResponseItem(payload, ts)
 	case codexTypeEventMsg:
+		if b.forkGate.suppresses(codexTypeEventMsg, payload) {
+			return false
+		}
 		b.handleEventMsg(payload)
 	}
 	return false
 }
 
 func (b *codexSessionBuilder) handleSessionMeta(
-	payload gjson.Result,
+	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
 	b.sessionID = payload.Get("id").Str
 
@@ -133,6 +235,8 @@ func (b *codexSessionBuilder) handleSessionMeta(
 			b.project = "unknown"
 		}
 	}
+
+	b.forkGate.armFromMeta(payload, envelopeTS)
 
 	return false
 }
@@ -1289,6 +1393,8 @@ func readCodexModelAtOffset(
 		io.LimitReader(f, offset), maxLineSize,
 	)
 	var model string
+	var gate codexForkGate
+	sawMeta := false
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -1297,7 +1403,23 @@ func readCodexModelAtOffset(
 		if !gjson.Valid(line) {
 			continue
 		}
-		if gjson.Get(line, "type").Str != codexTypeTurnContext {
+		lineType := gjson.Get(line, "type").Str
+		if lineType == codexTypeSessionMeta {
+			if !sawMeta {
+				sawMeta = true
+				gate.armFromMeta(
+					gjson.Get(line, "payload"),
+					parseTimestamp(gjson.Get(line, "timestamp").Str),
+				)
+			}
+			continue
+		}
+		if lineType != codexTypeTurnContext {
+			continue
+		}
+		// Skip turn_contexts replayed into a forked rollout (#643)
+		// so the seeded model mirrors the full parser's view.
+		if gate.suppresses(lineType, gjson.Get(line, "payload")) {
 			continue
 		}
 		model = gjson.Get(line, "payload.model").Str
@@ -1327,6 +1449,8 @@ func seedCodexUserDedup(
 	defer f.Close()
 
 	lr := newLineReader(io.LimitReader(f, offset), maxLineSize)
+	var gate codexForkGate
+	sawMeta := false
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -1335,7 +1459,23 @@ func seedCodexUserDedup(
 		if !gjson.Valid(line) {
 			continue
 		}
-		switch gjson.Get(line, "type").Str {
+		lineType := gjson.Get(line, "type").Str
+		// Mirror the full parser's fork handling (#643): the dedup
+		// state must come from genuine turns, not replayed history.
+		if lineType == codexTypeSessionMeta {
+			if !sawMeta {
+				sawMeta = true
+				gate.armFromMeta(
+					gjson.Get(line, "payload"),
+					parseTimestamp(gjson.Get(line, "timestamp").Str),
+				)
+			}
+			continue
+		}
+		if gate.suppresses(lineType, gjson.Get(line, "payload")) {
+			continue
+		}
+		switch lineType {
 		case codexTypeEventMsg:
 			if gjson.Get(line, "payload.type").Str == "turn_aborted" &&
 				firstContent != "" &&
