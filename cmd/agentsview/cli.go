@@ -68,6 +68,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newDuckDBCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newStatsCommand())
+	root.AddCommand(newParseDiffCommand())
 	root.AddCommand(newClassifierCommand())
 	root.AddCommand(newSecretsCommand())
 	root.AddCommand(newVersionCommand())
