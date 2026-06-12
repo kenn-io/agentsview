@@ -2,7 +2,6 @@ package parser
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -319,27 +318,15 @@ func (r *antigravityStepLoadResult) appendGenMetadataUsage(
 			msg.HasContextTokens = input > 0 || cached > 0
 			msg.HasOutputTokens = billableOutput > 0
 
-			payload := map[string]int{
-				"input_tokens":  uncached,
-				"output_tokens": output,
-			}
-			if reasoning > 0 {
-				payload["reasoning_tokens"] = reasoning
-			}
-			if cached > 0 {
-				payload["cache_read_input_tokens"] = cached
-			}
-			if j, err := json.Marshal(payload); err == nil {
-				msg.TokenUsage = j
-			}
 		}
 		r.usageEvents = append(r.usageEvents, ParsedUsageEvent{
-			Source:          "generation",
-			Model:           eventModel,
-			InputTokens:     uncached,
-			OutputTokens:    billableOutput,
-			ReasoningTokens: reasoning,
-			OccurredAt:      occurredAt,
+			Source:               "generation",
+			Model:                eventModel,
+			InputTokens:          uncached,
+			OutputTokens:         billableOutput,
+			CacheReadInputTokens: cached,
+			ReasoningTokens:      reasoning,
+			OccurredAt:           occurredAt,
 		})
 	}
 	if decoded && genModel != "" {
