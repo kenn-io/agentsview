@@ -13,6 +13,17 @@ import (
 
 const backgroundServeReadyTimeout = 5 * time.Second
 
+// backgroundChildEnvVar marks the re-exec'd serve process as the child of a
+// background launch. The child reads it to keep the auth token out of
+// serve.log; the parent prints the token to the invoking terminal instead.
+const backgroundChildEnvVar = "AGENTSVIEW_BACKGROUND_CHILD"
+
+// runningAsBackgroundChild reports whether this process was spawned by
+// runServeBackground.
+func runningAsBackgroundChild() bool {
+	return os.Getenv(backgroundChildEnvVar) == "1"
+}
+
 func runServeBackground(cfg config.Config, args []string) {
 	if cfg.RequireAuth {
 		if err := cfg.EnsureAuthToken(); err != nil {
@@ -82,8 +93,10 @@ func startServeBackgroundProcess(
 		return nil, "", fmt.Errorf("finding executable: %w", err)
 	}
 	logPath := filepath.Join(cfg.DataDir, "serve.log")
+	// 0o600: the child writes its startup output here, which can include
+	// auth details, so keep the log readable only by the owner.
 	logFile, err := os.OpenFile(
-		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644,
+		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf("opening log file: %w", err)
@@ -106,6 +119,7 @@ func startServeBackgroundProcess(
 
 	childArgs := serveBackgroundChildArgs(args)
 	cmd := exec.Command(exe, childArgs...)
+	cmd.Env = append(os.Environ(), backgroundChildEnvVar+"=1")
 	cmd.Stdin = devNull
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -119,13 +133,27 @@ func startServeBackgroundProcess(
 func serveBackgroundChildArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
-		if arg == "--background" ||
-			strings.HasPrefix(arg, "--background=") {
+		if isBackgroundFlagArg(arg) {
 			continue
 		}
 		out = append(out, arg)
 	}
 	return out
+}
+
+// isBackgroundFlagArg reports whether arg is the --background flag in any
+// spelling the CLI accepts. The legacy flag normalizer rewrites the
+// single-dash form -background to --background before Cobra parses, so the
+// raw args handed to the child still carry -background. Stripping both
+// spellings stops the child from re-entering background mode and spawning
+// itself recursively.
+func isBackgroundFlagArg(arg string) bool {
+	for _, name := range []string{"--background", "-background"} {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
 }
 
 func waitForBackgroundServeReady(
