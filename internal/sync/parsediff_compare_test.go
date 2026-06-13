@@ -253,6 +253,183 @@ func TestCompareSessionFields(t *testing.T) {
 				parsed: "2026-01-01T02:00:00Z",
 			}},
 		},
+		{
+			name: "cwd drift is informational for incremental agents",
+			stored: func(s *db.Session) {
+				s.Cwd = "/home/me/old"
+			},
+			prepared: func(s *db.Session) {
+				s.Cwd = "/home/me/new"
+			},
+			want: []want{{
+				field:         FieldCwd,
+				stored:        "/home/me/old",
+				parsed:        "/home/me/new",
+				informational: true,
+			}},
+		},
+		{
+			name: "cwd drift is a real diff for full-replace agents",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.Cwd = "/home/me/old"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.Cwd = "/home/me/new"
+			},
+			want: []want{{
+				field:  FieldCwd,
+				stored: "/home/me/old",
+				parsed: "/home/me/new",
+			}},
+		},
+		{
+			name: "git_branch drift is a real diff for full-replace agents",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.GitBranch = "main"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.GitBranch = "feature"
+			},
+			want: []want{{
+				field:  FieldGitBranch,
+				stored: "main",
+				parsed: "feature",
+			}},
+		},
+		{
+			name: "relationship_type drift is a real diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.RelationshipType = "continuation"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.RelationshipType = "fork"
+			},
+			want: []want{{
+				field:  FieldRelationshipType,
+				stored: "continuation",
+				parsed: "fork",
+			}},
+		},
+		{
+			name: "source_session_id drift is a real diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.SourceSessionID = "abc"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.SourceSessionID = "xyz"
+			},
+			want: []want{{
+				field:  FieldSourceSessionID,
+				stored: "abc",
+				parsed: "xyz",
+			}},
+		},
+		{
+			name: "source_version drift is a real diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.SourceVersion = "1.0.0"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.SourceVersion = "1.1.0"
+			},
+			want: []want{{
+				field:  FieldSourceVersion,
+				stored: "1.0.0",
+				parsed: "1.1.0",
+			}},
+		},
+		{
+			name: "parent_session_id nil stored vs empty parsed is no diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.ParentSessionID = nil
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.ParentSessionID = new("")
+			},
+		},
+		{
+			name: "parent_session_id drift renders (null) for nil stored",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.ParentSessionID = nil
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.ParentSessionID = new("parent-1")
+			},
+			want: []want{{
+				field:  FieldParentSessionID,
+				stored: "(null)",
+				parsed: "parent-1",
+			}},
+		},
+		{
+			name: "parser_malformed_lines drift is a real diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.ParserMalformedLines = 0
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.ParserMalformedLines = 3
+			},
+			want: []want{{
+				field:  FieldParserMalformedLines,
+				stored: "0",
+				parsed: "3",
+			}},
+		},
+		{
+			name: "parser_malformed_lines drift is informational for incremental agents",
+			prepared: func(s *db.Session) {
+				s.ParserMalformedLines = 2
+			},
+			want: []want{{
+				field:         FieldParserMalformedLines,
+				stored:        "0",
+				parsed:        "2",
+				informational: true,
+			}},
+		},
+		{
+			name: "is_truncated drift is a real diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.IsTruncated = false
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.IsTruncated = true
+			},
+			want: []want{{
+				field:  FieldIsTruncated,
+				stored: "false",
+				parsed: "true",
+			}},
+		},
+		{
+			name: "project is not compared (resolver-derived)",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.Project = "project-old"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.Project = "project-new"
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,7 +502,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 		parsed := []db.Message{
 			pdMsg(0, "", 0, 0), pdMsg(1, "model-a", 100, 5),
 		}
-		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false))
+		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false, false))
 	})
 
 	t.Run("model drift reports count and first ordinal", func(t *testing.T) {
@@ -339,7 +516,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			pdMsg(1, "model-b", 0, 0),
 			pdMsg(2, "model-b", 0, 0),
 		}
-		diffs := compareMessageMetadata(stored, parsed, true, false)
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldModels, diffs[0].Field)
 		assert.Equal(t, "model-a", diffs[0].Stored)
@@ -354,7 +531,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 	t.Run("token value drift reports message tokens", func(t *testing.T) {
 		stored := []db.Message{pdMsg(0, "m", 100, 5)}
 		parsed := []db.Message{pdMsg(0, "m", 110, 5)}
-		diffs := compareMessageMetadata(stored, parsed, true, false)
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
 		assert.Equal(
@@ -378,7 +555,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			Ordinal: 0, Role: "assistant",
 			OutputTokens: 0, HasOutputTokens: false,
 		}}
-		diffs := compareMessageMetadata(stored, parsed, true, false)
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
 		assert.Contains(t, diffs[0].Stored, "output=0")
@@ -394,7 +571,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			Ordinal: 0, Role: "assistant",
 			TokenUsage: json.RawMessage(`{"input_tokens":2}`),
 		}}
-		diffs := compareMessageMetadata(stored, parsed, true, false)
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
 	})
@@ -408,7 +585,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			Ordinal: 0, Role: "assistant",
 			Content: "bbb", ContentLength: 3,
 		}}
-		diffs := compareMessageMetadata(stored, parsed, false, true)
+		diffs := compareMessageMetadata(stored, parsed, false, true, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageContent, diffs[0].Field)
 		assert.Contains(t, diffs[0].Detail,
@@ -421,7 +598,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 			pdMsg(0, "m", 100, 5),
 			pdMsg(1, "different-model", 999, 9),
 		}
-		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false))
+		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false, false))
 	})
 
 	t.Run("alignment matches ordinal values not indices", func(t *testing.T) {
@@ -431,8 +608,119 @@ func TestCompareMessageMetadata(t *testing.T) {
 		parsed := []db.Message{
 			pdMsg(2, "m", 200, 6), pdMsg(0, "m", 100, 5),
 		}
-		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false))
+		assert.Empty(t, compareMessageMetadata(stored, parsed, false, false, false))
 	})
+
+	t.Run("is_system flip is a metadata diff", func(t *testing.T) {
+		stored := []db.Message{{Ordinal: 0, Role: "user", IsSystem: false}}
+		parsed := []db.Message{{Ordinal: 0, Role: "user", IsSystem: true}}
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "is_system false -> true")
+	})
+
+	t.Run("has_thinking flip is a metadata diff", func(t *testing.T) {
+		stored := []db.Message{{Ordinal: 0, Role: "assistant"}}
+		parsed := []db.Message{{Ordinal: 0, Role: "assistant", HasThinking: true}}
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "has_thinking false -> true")
+	})
+
+	t.Run("has_tool_use flip is a metadata diff", func(t *testing.T) {
+		stored := []db.Message{{Ordinal: 0, Role: "assistant"}}
+		parsed := []db.Message{{Ordinal: 0, Role: "assistant", HasToolUse: true}}
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "has_tool_use false -> true")
+	})
+
+	t.Run("thinking_text drift is a metadata diff", func(t *testing.T) {
+		stored := []db.Message{{
+			Ordinal: 0, Role: "assistant", ThinkingText: "old reasoning",
+		}}
+		parsed := []db.Message{{
+			Ordinal: 0, Role: "assistant", ThinkingText: "new reasoning",
+		}}
+		diffs := compareMessageMetadata(stored, parsed, true, false, false)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "thinking_text differs")
+	})
+
+	t.Run("tool_name drift is a tool_calls diff", func(t *testing.T) {
+		stored := []db.Message{{
+			Ordinal: 0, Role: "assistant", HasToolUse: true,
+			ToolCalls: []db.ToolCall{
+				{ToolName: "Read", Category: "Read", ToolUseID: "tu1"},
+			},
+		}}
+		parsed := []db.Message{{
+			Ordinal: 0, Role: "assistant", HasToolUse: true,
+			ToolCalls: []db.ToolCall{
+				{ToolName: "Bash", Category: "Read", ToolUseID: "tu1"},
+			},
+		}}
+		diffs := compareMessageMetadata(stored, parsed, false, false, true)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldToolCalls, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, `tool_name "Read" -> "Bash"`)
+		assert.Contains(t, diffs[0].Detail, "first at ordinal 0")
+	})
+
+	t.Run("tool_call count drift is a tool_calls diff", func(t *testing.T) {
+		stored := []db.Message{{
+			Ordinal: 0, Role: "assistant",
+			ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "tu1"}},
+		}}
+		parsed := []db.Message{{
+			Ordinal: 0, Role: "assistant",
+			ToolCalls: []db.ToolCall{
+				{ToolName: "Read", ToolUseID: "tu1"},
+				{ToolName: "Bash", ToolUseID: "tu2"},
+			},
+		}}
+		diffs := compareMessageMetadata(stored, parsed, false, false, true)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldToolCalls, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "tool_call count 1 -> 2")
+	})
+
+	t.Run("result_content_length drift is a tool_calls diff", func(t *testing.T) {
+		stored := []db.Message{{
+			Ordinal: 0, Role: "assistant",
+			ToolCalls: []db.ToolCall{
+				{ToolName: "Read", ToolUseID: "tu1", ResultContentLength: 100},
+			},
+		}}
+		parsed := []db.Message{{
+			Ordinal: 0, Role: "assistant",
+			ToolCalls: []db.ToolCall{
+				{ToolName: "Read", ToolUseID: "tu1", ResultContentLength: 250},
+			},
+		}}
+		diffs := compareMessageMetadata(stored, parsed, false, false, true)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldToolCalls, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail, "result_content_length 100 -> 250")
+	})
+
+	t.Run("tool fingerprint differs but overlap matches yields fallback",
+		func(t *testing.T) {
+			// No aligned-ordinal tool diff (e.g. an ordinal-set shift),
+			// but the tool fingerprint asserted inequality: the session
+			// must not report identical.
+			stored := []db.Message{{Ordinal: 0, Role: "assistant"}}
+			parsed := []db.Message{{Ordinal: 0, Role: "assistant"}}
+			diffs := compareMessageMetadata(stored, parsed, false, false, true)
+			require.Len(t, diffs, 1)
+			assert.Equal(t, FieldToolCalls, diffs[0].Field)
+			assert.Equal(t, "fingerprint", diffs[0].Stored)
+			assert.Contains(t, diffs[0].Detail, "tool-call fingerprint differs")
+		})
 }
 
 func pdEvent(
@@ -901,6 +1189,152 @@ func TestCompareStoredSessionDetectsMetadataDrift(t *testing.T) {
 	require.Len(t, diffs, 1)
 	assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
 	assert.Contains(t, diffs[0].Detail, "is_sidechain")
+}
+
+// pdToolSession builds a Claude pendingWrite that exercises the
+// flags and tool-call comparison paths: a thinking block, two tool calls
+// (one with a paired result), and a system message.
+func pdToolSession(id string) pendingWrite {
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+	return pendingWrite{
+		sess: parser.ParsedSession{
+			ID: id, Project: "proj", Machine: "test-machine",
+			Agent: parser.AgentClaude, FirstMessage: "do a thing",
+			StartedAt: ts, MessageCount: 3,
+			File: parser.FileInfo{
+				Path: "/tmp/" + id + ".jsonl", Size: 128, Mtime: ts.UnixNano(),
+			},
+		},
+		msgs: []parser.ParsedMessage{
+			{
+				Ordinal: 0, Role: parser.RoleUser,
+				Content: "do a thing", ContentLength: 10, Timestamp: ts,
+			},
+			{
+				Ordinal: 1, Role: parser.RoleAssistant,
+				Content: "working on it", ContentLength: 13,
+				Timestamp:   ts.Add(time.Second),
+				Model:       "claude-sonnet",
+				HasThinking: true, ThinkingText: "let me reason about this",
+				HasToolUse: true,
+				ToolCalls: []parser.ParsedToolCall{
+					{
+						ToolUseID: "tu1", ToolName: "Read",
+						Category: "Read", InputJSON: `{"file":"a.go"}`,
+					},
+					{
+						ToolUseID: "tu2", ToolName: "Bash",
+						Category: "Bash", InputJSON: `{"cmd":"ls"}`,
+					},
+				},
+			},
+			{
+				Ordinal: 2, Role: parser.RoleUser,
+				Content: "looks good", ContentLength: 10,
+				Timestamp: ts.Add(2 * time.Second),
+				IsSystem:  true,
+				ToolResults: []parser.ParsedToolResult{
+					{
+						ToolUseID: "tu1", ContentLength: 18,
+						ContentRaw: `"file contents x"`,
+					},
+				},
+			},
+		},
+	}
+}
+
+// pdWriteToolSession writes pdToolSession through the real pipeline.
+func pdWriteToolSession(
+	t *testing.T, id string,
+) (*Engine, *db.DB, pendingWrite) {
+	t.Helper()
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	pw := pdToolSession(id)
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteBulk, false,
+	)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	return e, d, pw
+}
+
+// TestToolCallAndFlagsFingerprintTwinsMatchDB pins the two new in-memory
+// twins against their DB queries through the real write pipeline, the
+// way TestFingerprintTwinMatchesDB does for the message fingerprints.
+func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
+	e, d, pw := pdWriteToolSession(t, "pd-tool-twin")
+	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
+	require.True(t, ok)
+
+	storedFlagsFP, err := d.MessageFlagsFingerprint(prepared.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, storedFlagsFP)
+	assert.Equal(t, storedFlagsFP, messageFlagsFingerprintTwin(msgs),
+		"flags twin must match db.MessageFlagsFingerprint exactly")
+
+	storedToolFP, err := d.ToolCallFingerprint(prepared.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, storedToolFP)
+	assert.Equal(t, storedToolFP, toolCallFingerprintTwin(msgs),
+		"tool-call twin must match db.ToolCallFingerprint exactly")
+}
+
+// TestCompareStoredSessionRoundTripToolCalls is the false-diff acid test
+// for the new fields: a session with tool calls, a thinking block, and a
+// system message must compare identical against itself.
+func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
+	e, d, pw := pdWriteToolSession(t, "pd-tool-rt")
+	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
+	require.True(t, ok)
+
+	stored := pdFetchStored(t, d, prepared.ID)
+	diffs, err := e.compareStoredSession(
+		context.Background(), stored, prepared, msgs, nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, diffs,
+		"tool calls, thinking, and a system message must round-trip clean")
+}
+
+// TestCompareStoredSessionDetectsToolCallDrift proves a change confined
+// to a tool_call column is caught: none of the message
+// token/role/content/flags fingerprints move, so it surfaces only if the
+// tool-call fingerprint triggers the tier-2 comparison.
+func TestCompareStoredSessionDetectsToolCallDrift(t *testing.T) {
+	e, d, pw := pdWriteToolSession(t, "pd-tool-drift")
+	pw.msgs[1].ToolCalls[0].ToolName = "Grep"
+	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
+	require.True(t, ok)
+
+	stored := pdFetchStored(t, d, prepared.ID)
+	diffs, err := e.compareStoredSession(
+		context.Background(), stored, prepared, msgs, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	assert.Equal(t, FieldToolCalls, diffs[0].Field)
+	assert.Contains(t, diffs[0].Detail, `tool_name "Read" -> "Grep"`)
+}
+
+// TestCompareStoredSessionDetectsFlagDrift proves a change confined to a
+// per-message flag (has_thinking) is caught only via the flags
+// fingerprint triggering the tier-2 comparison.
+func TestCompareStoredSessionDetectsFlagDrift(t *testing.T) {
+	e, d, pw := pdWriteToolSession(t, "pd-flag-drift")
+	pw.msgs[1].HasThinking = false
+	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
+	require.True(t, ok)
+
+	stored := pdFetchStored(t, d, prepared.ID)
+	diffs, err := e.compareStoredSession(
+		context.Background(), stored, prepared, msgs, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, diffs, 1)
+	assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
+	assert.Contains(t, diffs[0].Detail, "has_thinking true -> false")
 }
 
 func pdFetchStored(t *testing.T, d *db.DB, id string) *db.Session {

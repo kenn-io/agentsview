@@ -60,12 +60,35 @@ const (
 	// Bodies are never included in the diff; only sizes are reported.
 	FieldMessageContent = "message_content"
 	// FieldMessageMetadata catches per-message drift in fields that are
-	// in the fingerprint but not separately surfaced (role, timestamp,
-	// source ids, sidechain/compact flags).
-	FieldMessageMetadata   = "message_metadata"
+	// in the fingerprint but not separately surfaced: role, timestamp,
+	// source ids, sidechain/compact flags, and the thinking/system/
+	// tool-use flags (is_system, has_thinking, has_tool_use, thinking_text).
+	FieldMessageMetadata = "message_metadata"
+	// FieldToolCalls covers per-message tool_call drift in the
+	// parser-owned columns: tool_name, category, tool_use_id, input_json,
+	// skill_name, subagent_session_id, and result_content_length. The
+	// database-assigned ids and the (possibly blocked) result body are
+	// never compared; result content is represented only by its length.
+	FieldToolCalls         = "tool_calls"
 	FieldUsageEventCount   = "usage_event_count"
 	FieldUsageEventTotals  = "usage_event_totals"
 	FieldTerminationStatus = "termination_status"
+	// Session metadata fields written only on the full-replace path.
+	// UpdateSessionIncremental leaves them frozen, so for the
+	// incremental-append agents (Claude, Codex) a difference is benign
+	// pipeline history rather than parser drift and is marked
+	// informational, mirroring termination_status. The session "project"
+	// column is deliberately not compared: it is rewritten from the
+	// mutable worktree_project_mappings table, so its parser-owned input
+	// (cwd) is compared instead.
+	FieldCwd                  = "cwd"
+	FieldGitBranch            = "git_branch"
+	FieldParentSessionID      = "parent_session_id"
+	FieldRelationshipType     = "relationship_type"
+	FieldSourceSessionID      = "source_session_id"
+	FieldSourceVersion        = "source_version"
+	FieldParserMalformedLines = "parser_malformed_lines"
+	FieldIsTruncated          = "is_truncated"
 	// FieldPresence is the synthetic diff attached when a stored,
 	// non-excluded session disappears from its file's parse output.
 	FieldPresence = "presence"
