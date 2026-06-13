@@ -23,14 +23,69 @@ type managedCaddy struct {
 }
 
 func browserURL(cfg config.Config) string {
+	return browserURLWithPlatform(cfg, runningInWSL, interfaceIPv4)
+}
+
+func browserURLWithPlatform(
+	cfg config.Config,
+	isWSL func() bool,
+	ifaceIPv4 func(string) (string, bool),
+) string {
 	if cfg.PublicURL != "" {
 		return cfg.PublicURL
 	}
 	host := cfg.Host
 	if host == "0.0.0.0" || host == "::" {
-		host = "127.0.0.1"
+		if isWSL != nil && isWSL() {
+			if ip, ok := ifaceIPv4("eth0"); ok {
+				host = ip
+			} else {
+				host = "127.0.0.1"
+			}
+		} else {
+			host = "127.0.0.1"
+		}
 	}
 	return fmt.Sprintf("http://%s:%d", host, cfg.Port)
+}
+
+func runningInWSL() bool {
+	if os.Getenv("WSL_DISTRO_NAME") != "" {
+		return true
+	}
+	if _, err := os.Stat("/proc/sys/fs/binfmt_misc/WSLInterop"); err == nil {
+		return true
+	}
+	return false
+}
+
+func interfaceIPv4(name string) (string, bool) {
+	iface, err := net.InterfaceByName(name)
+	if err != nil || iface == nil {
+		return "", false
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return "", false
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		default:
+			continue
+		}
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		if v4 := ip.To4(); v4 != nil {
+			return v4.String(), true
+		}
+	}
+	return "", false
 }
 
 func rewriteConfiguredPublicURLPort(

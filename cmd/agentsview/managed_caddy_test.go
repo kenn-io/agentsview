@@ -23,6 +23,48 @@ func TestBrowserURLUsesPublicURL(t *testing.T) {
 	assert.Equal(t, "https://viewer.example.test", browserURL(cfg))
 }
 
+func TestBrowserURLWithPlatformUsesWSLEth0ForBindAll(t *testing.T) {
+	cfg := config.Config{Host: "0.0.0.0", Port: 8080}
+
+	got := browserURLWithPlatform(
+		cfg,
+		func() bool { return true },
+		func(name string) (string, bool) {
+			assert.Equal(t, "eth0", name)
+			return "172.20.10.5", true
+		},
+	)
+
+	assert.Equal(t, "http://172.20.10.5:8080", got)
+}
+
+func TestBrowserURLWithPlatformKeepsLoopbackOutsideWSL(t *testing.T) {
+	cfg := config.Config{Host: "0.0.0.0", Port: 8080}
+
+	got := browserURLWithPlatform(
+		cfg,
+		func() bool { return false },
+		func(string) (string, bool) {
+			t.Fatal("interface lookup should not run outside WSL")
+			return "", false
+		},
+	)
+
+	assert.Equal(t, "http://127.0.0.1:8080", got)
+}
+
+func TestBrowserURLWithPlatformKeepsLoopbackWhenWSLEth0Missing(t *testing.T) {
+	cfg := config.Config{Host: "0.0.0.0", Port: 8080}
+
+	got := browserURLWithPlatform(
+		cfg,
+		func() bool { return true },
+		func(string) (string, bool) { return "", false },
+	)
+
+	assert.Equal(t, "http://127.0.0.1:8080", got)
+}
+
 func TestValidateServeConfigManagedCaddyAllowsHTTPS(t *testing.T) {
 	dir := t.TempDir()
 	certPath := filepath.Join(dir, "viewer.crt")
