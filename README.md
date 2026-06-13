@@ -37,6 +37,7 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 ```bash
 agentsview serve           # start server, open web UI
+agentsview serve --background  # start server and return to the shell
 agentsview usage daily     # print daily cost summary
 ```
 

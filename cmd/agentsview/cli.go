@@ -87,6 +87,7 @@ func newRootCommand() *cobra.Command {
 }
 
 func newServeCommand() *cobra.Command {
+	var background bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Start server",
@@ -94,9 +95,20 @@ func newServeCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServe(mustLoadConfig(cmd))
+			cfg := mustLoadConfig(cmd)
+			if background {
+				runServeBackground(cfg, os.Args[1:])
+				return
+			}
+			runServe(cfg)
 		},
 	}
+	cmd.Flags().BoolVar(
+		&background,
+		"background",
+		false,
+		"Start server in the background and return to the shell",
+	)
 	config.RegisterServePFlags(cmd.Flags())
 	return cmd
 }
