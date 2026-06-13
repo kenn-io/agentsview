@@ -33,6 +33,7 @@ const { mockUi, mockSessions, mockSearchStore, mockRouter, mockCopyToClipboard }
       }>,
       filters: { project: "" },
       selectSession: vi.fn(),
+      navigateToSession: vi.fn(),
     },
     mockSearchStore: {
       results: [] as Array<unknown>,
@@ -223,7 +224,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("name-only result (ordinal === -1) selects session and clears selection without scrolling", async () => {
+  it("name-only result (ordinal === -1) hydrates session and clears selection without scrolling", async () => {
     mockSearchStore.results = [
       {
         session_id: "claude:nameonly123",
@@ -248,7 +249,8 @@ describe("CommandPalette", () => {
     item.click();
     await tick();
 
-    expect(mockSessions.selectSession).toHaveBeenCalledWith("claude:nameonly123");
+    expect(mockSessions.selectSession).not.toHaveBeenCalled();
+    expect(mockSessions.navigateToSession).toHaveBeenCalledWith("claude:nameonly123");
     expect(mockRouter.navigateToSession).toHaveBeenCalledWith("claude:nameonly123");
     expect(mockUi.scrollToOrdinal).not.toHaveBeenCalled();
     expect(mockUi.clearScrollState).toHaveBeenCalled();
@@ -280,7 +282,8 @@ describe("CommandPalette", () => {
     item.click();
     await tick();
 
-    expect(mockSessions.selectSession).toHaveBeenCalledWith("codex:search123");
+    expect(mockSessions.selectSession).not.toHaveBeenCalled();
+    expect(mockSessions.navigateToSession).toHaveBeenCalledWith("codex:search123");
     expect(mockUi.scrollToOrdinal).toHaveBeenCalledWith(7, "codex:search123");
     expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");
 

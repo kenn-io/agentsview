@@ -107,7 +107,7 @@
   }
 
   function selectSearchResult(r: SearchResult) {
-    sessions.selectSession(r.session_id);
+    void sessions.navigateToSession(r.session_id);
     if (r.ordinal !== -1) {
       ui.scrollToOrdinal(r.ordinal, r.session_id);
     } else {
