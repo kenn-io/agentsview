@@ -84,6 +84,8 @@ func NormalizeToolCategory(rawName string) string {
 		return "Tool"
 
 	// Cursor tools
+	case "ApplyPatch":
+		return "Edit"
 	case "Shell":
 		return "Bash"
 	case "StrReplace":

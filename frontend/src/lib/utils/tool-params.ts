@@ -190,6 +190,15 @@ export function generateFallbackContent(
       }
       return diffText;
     }
+    const patchText = params.patch ?? params.patch_text ?? params.patchText;
+    if (!lines.length && typeof patchText === "string" && patchText) {
+      const patchLines = patchText.split("\n");
+      if (patchLines.length > MAX_DIFF_LINES) {
+        return patchLines.slice(0, MAX_DIFF_LINES).join("\n")
+          + `\n... (${patchLines.length} lines total)`;
+      }
+      return patchText;
+    }
     if (oldStr != null || newStr != null) {
       const oldText = String(oldStr ?? "");
       const newText = String(newStr ?? "");

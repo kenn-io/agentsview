@@ -194,7 +194,9 @@ func formatToolUse(block gjson.Result) string {
 	case "look_at":
 		return fmt.Sprintf("[Read: %s]", input.Get("path").Str)
 	case "apply_patch":
-		return fmt.Sprintf("[Patch: %s]", input.Get("path").Str)
+		return formatPatch(input)
+	case "ApplyPatch":
+		return formatPatch(input)
 	case "undo_edit":
 		return fmt.Sprintf("[Undo: %s]", input.Get("path").Str)
 	case "finder":
@@ -324,6 +326,17 @@ func formatBash(input gjson.Result) string {
 		return fmt.Sprintf("[Bash: %s]\n$ %s", desc, cmd)
 	}
 	return fmt.Sprintf("[Bash]\n$ %s", cmd)
+}
+
+func formatPatch(input gjson.Result) string {
+	path := resolveFilePath(input)
+	if path == "" {
+		path = input.Get("file").Str
+	}
+	if path == "" {
+		return "[Patch]"
+	}
+	return fmt.Sprintf("[Patch: %s]", path)
 }
 
 func formatTask(input gjson.Result) string {

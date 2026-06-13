@@ -115,6 +115,25 @@ func TestExtractAssistantContent(t *testing.T) {
 	}
 }
 
+func TestExtractAssistantContentCursorApplyPatch(t *testing.T) {
+	patch := "@@ -1,1 +1,1 @@\n-old\n+new"
+	lines := []string{
+		"[Tool call] ApplyPatch",
+		`  {"patch":"` + strings.ReplaceAll(patch, "\n", `\n`) + `","path":"src/app.ts"}`,
+	}
+
+	text, hasThinking, toolCalls := extractAssistantContent(lines)
+
+	assert.Empty(t, text)
+	assert.False(t, hasThinking)
+	require.Len(t, toolCalls, 1)
+	assert.Equal(t, "ApplyPatch", toolCalls[0].ToolName)
+	assert.Equal(t, "Edit", toolCalls[0].Category)
+	assert.JSONEq(t,
+		`{"patch":"@@ -1,1 +1,1 @@\n-old\n+new","path":"src/app.ts"}`,
+		toolCalls[0].InputJSON)
+}
+
 func TestIsContainedIn_EdgeCases(t *testing.T) {
 	// isContainedIn is in sync/discovery.go; we test
 	// isBlockBodyEnd here since it's in cursor.go.
@@ -262,6 +281,18 @@ func TestParseCursorJSONL(t *testing.T) {
 			wantCount:        2,
 			wantFirstRole:    RoleUser,
 			wantFirstContent: "Fix it",
+			wantToolUse:      true,
+			wantToolCount:    1,
+		},
+		{
+			name: "assistant with Cursor ApplyPatch",
+			lines: []string{
+				`{"role":"user","message":{"content":"Patch it"}}`,
+				`{"role":"assistant","message":{"content":[{"type":"tool_use","id":"tu_patch","name":"ApplyPatch","input":{"patch":"@@ -1,1 +1,1 @@\n-old\n+new","path":"src/app.ts"}}]}}`,
+			},
+			wantCount:        2,
+			wantFirstRole:    RoleUser,
+			wantFirstContent: "Patch it",
 			wantToolUse:      true,
 			wantToolCount:    1,
 		},

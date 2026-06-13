@@ -259,6 +259,17 @@ describe("generateFallbackContent", () => {
     ).toBeNull();
   });
 
+  it("renders Cursor ApplyPatch patch text from input_json", () => {
+    const patch = "@@ -1,1 +1,1 @@\n-old\n+new";
+
+    expect(
+      generateFallbackContent("Edit", {
+        path: "src/app.ts",
+        patch,
+      }),
+    ).toBe(patch);
+  });
+
   it("shows diff for Edit tool", () => {
     const result = generateFallbackContent("Edit", {
       file_path: "/src/app.ts",

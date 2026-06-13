@@ -279,6 +279,30 @@ describe("ToolBlock fallback content", () => {
     expect(toolContent!.textContent).toContain("patch_file: /path/to/patch.diff");
   });
 
+  it("renders Cursor ApplyPatch patch input as a diff", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "ApplyPatch",
+      category: "Edit",
+      input_json: JSON.stringify({
+        path: "src/app.ts",
+        patch: "@@ -1,1 +1,1 @@\n-old\n+new",
+      }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const diffView = document.querySelector(".diff-view");
+    expect(diffView).not.toBeNull();
+    expect(diffView!.textContent).toContain("-old");
+    expect(diffView!.textContent).toContain("+new");
+  });
+
   it("renders fallback content when no category is provided", async () => {
     // Tool without category - should use tool_name directly
     const toolCall: ToolCall = {

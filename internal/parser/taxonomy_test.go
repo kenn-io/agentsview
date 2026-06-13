@@ -68,6 +68,9 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"view", "Read"},
 		{"report_intent", "Tool"},
 
+		// Cursor tools
+		{"ApplyPatch", "Edit"},
+
 		// Piebald / Zencoder-style built-in tools
 		{"ReadFile", "Read"},
 		{"WriteFile", "Write"},

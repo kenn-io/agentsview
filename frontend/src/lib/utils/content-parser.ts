@@ -37,7 +37,7 @@ const TOOL_NAMES =
   "Tool|Read|Write|Edit|Bash|Glob|Grep|Other|TaskCreate|TaskUpdate|TaskGet|TaskList|Task|Agent|Skill|" +
   "SendMessage|Question|Todo List|Entering Plan Mode|" +
   "Exiting Plan Mode|exec_command|shell_command|" +
-  "write_stdin|apply_patch|shell|parallel|view_image|" +
+  "write_stdin|apply_patch|ApplyPatch|shell|parallel|view_image|" +
   "request_user_input|update_plan";
 
 const TOOL_ALIASES: Record<string, string> = {
@@ -47,6 +47,7 @@ const TOOL_ALIASES: Record<string, string> = {
   write_stdin: "Bash",
   shell: "Bash",
   apply_patch: "Edit",
+  ApplyPatch: "Edit",
   // Pi tool names
   str_replace: "Edit",
   run_command: "Bash",

@@ -2,6 +2,7 @@ package parser
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -238,17 +239,22 @@ func extractAssistantContent(
 		if toolName, ok := strings.CutPrefix(
 			trimmed, "[Tool call] ",
 		); ok {
-			toolCalls = append(toolCalls, ParsedToolCall{
-				ToolName: toolName,
-				Category: NormalizeToolCategory(toolName),
-			})
 			i++
+			bodyStart := i
 			for i < len(lines) {
 				if isBlockBodyEnd(lines[i]) {
 					break
 				}
 				i++
 			}
+			toolCalls = append(toolCalls, ParsedToolCall{
+				ToolName: toolName,
+				Category: NormalizeToolCategory(toolName),
+				InputJSON: cursorToolInputJSON(
+					toolName,
+					lines[bodyStart:i],
+				),
+			})
 			continue
 		}
 
@@ -271,6 +277,49 @@ func extractAssistantContent(
 
 	content := strings.TrimSpace(strings.Join(textParts, "\n"))
 	return content, hasThinking, toolCalls
+}
+
+func cursorToolInputJSON(toolName string, lines []string) string {
+	raw := strings.TrimSpace(strings.Join(lines, "\n"))
+	if raw == "" {
+		return ""
+	}
+	if gjson.Valid(raw) {
+		return raw
+	}
+	if strings.EqualFold(toolName, "ApplyPatch") &&
+		(strings.Contains(raw, "*** Begin Patch") ||
+			strings.HasPrefix(raw, "@@")) {
+		return marshalCursorToolParams(map[string]string{
+			"patch": raw,
+		})
+	}
+
+	params := make(map[string]string)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return ""
+		}
+		params[key] = strings.TrimSpace(value)
+	}
+	if len(params) == 0 {
+		return ""
+	}
+	return marshalCursorToolParams(params)
+}
+
+func marshalCursorToolParams(params map[string]string) string {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // isAssistantMarker returns true if the line is a structural
