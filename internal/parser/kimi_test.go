@@ -28,12 +28,12 @@ func writeKimiWireJSONL(
 }
 
 func writeKimiCodeWireJSONL(
-	t *testing.T, workdirDir, sessionDir string,
+	t *testing.T, workdirDir, sessionDir, agentID string,
 	lines []string,
 ) string {
 	t.Helper()
 	dir := filepath.Join(
-		t.TempDir(), workdirDir, sessionDir, "agents", "main",
+		t.TempDir(), workdirDir, sessionDir, "agents", agentID,
 	)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, "wire.jsonl")
@@ -479,6 +479,23 @@ func TestDiscoverKimiSessions_NewLayout(t *testing.T) {
 	assert.Equal(t, workdirDir, files[0].Project)
 }
 
+func TestDiscoverKimiSessions_NewLayout_NonMainAgent(t *testing.T) {
+	dir := t.TempDir()
+
+	workdirDir := "wd_kimi-code_6dc514e1caf6"
+	sessionDir := "session_c0517a58-48ee-4632-a1fd-08be3f4f9b0f"
+	sessDir := filepath.Join(dir, workdirDir, sessionDir, "agents", "agent-0")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+	wirePath := filepath.Join(sessDir, "wire.jsonl")
+	require.NoError(t, os.WriteFile(
+		wirePath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
+	))
+
+	files := DiscoverKimiSessions(dir)
+	require.Equal(t, 1, len(files))
+	assert.Equal(t, wirePath, files[0].Path)
+}
+
 func TestFindKimiSourceFile_NewLayout(t *testing.T) {
 	dir := t.TempDir()
 
@@ -491,17 +508,19 @@ func TestFindKimiSourceFile_NewLayout(t *testing.T) {
 		wirePath, []byte("{}"), 0o644,
 	))
 
-	rawID := workdirDir + ":" + sessionDir
+	rawID := workdirDir + ":main:" + sessionDir
 	found := FindKimiSourceFile(dir, rawID)
 	assert.Equal(t, wirePath, found)
 
 	assert.Equal(t, "",
-		FindKimiSourceFile(dir, workdirDir+":nonexistent"))
+		FindKimiSourceFile(dir, workdirDir+":main:nonexistent"))
+	assert.Equal(t, "",
+		FindKimiSourceFile(dir, workdirDir+":"+sessionDir))
 }
 
 func TestParseKimiSession_NewLayoutSessionID(t *testing.T) {
 	path := writeKimiCodeWireJSONL(t,
-		"wd_myproject_a1b2c3d4", "session_uuid-1234",
+		"wd_myproject_a1b2c3d4", "session_uuid-1234", "main",
 		[]string{
 			`{"type": "metadata", "protocol_version": "1.3"}`,
 			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello Kimi Code"}]}}}`,
@@ -515,7 +534,7 @@ func TestParseKimiSession_NewLayoutSessionID(t *testing.T) {
 	require.NotNil(t, sess)
 
 	assertSessionMeta(t, sess,
-		"kimi:wd_myproject_a1b2c3d4:session_uuid-1234",
+		"kimi:wd_myproject_a1b2c3d4:main:session_uuid-1234",
 		"myproject", AgentKimi,
 	)
 	assert.Equal(t, "Hello Kimi Code", sess.FirstMessage)
@@ -523,6 +542,27 @@ func TestParseKimiSession_NewLayoutSessionID(t *testing.T) {
 	require.Equal(t, 2, len(msgs))
 	assertMessage(t, msgs[0], RoleUser, "Hello Kimi Code")
 	assertMessage(t, msgs[1], RoleAssistant, "Hi there!")
+}
+
+func TestParseKimiSession_NewLayout_AgentZero(t *testing.T) {
+	path := writeKimiCodeWireJSONL(t,
+		"wd_myproject_a1b2c3d4", "session_uuid-5678", "agent-0",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello subagent"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Done."}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	sess, _, err := ParseKimiSession(path, "myproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assertSessionMeta(t, sess,
+		"kimi:wd_myproject_a1b2c3d4:agent-0:session_uuid-5678",
+		"myproject", AgentKimi,
+	)
 }
 
 func TestDiscoverKimiSessions_MixedLayouts(t *testing.T) {
@@ -551,4 +591,21 @@ func TestDiscoverKimiSessions_MixedLayouts(t *testing.T) {
 	paths := []string{files[0].Path, files[1].Path}
 	assert.Contains(t, paths, legacyPath)
 	assert.Contains(t, paths, newPath)
+}
+
+func TestKimiSessionIDFromPath(t *testing.T) {
+	t.Run("legacy", func(t *testing.T) {
+		path := filepath.Join("/home", "user", ".kimi", "sessions", "abc123", "uuid-1", "wire.jsonl")
+		assert.Equal(t, "abc123:uuid-1", kimiSessionIDFromPath(path))
+	})
+
+	t.Run("kimi-code-main", func(t *testing.T) {
+		path := filepath.Join("/home", "user", ".kimi-code", "sessions", "wd_foo_a1b2", "session_uuid-1", "agents", "main", "wire.jsonl")
+		assert.Equal(t, "wd_foo_a1b2:main:session_uuid-1", kimiSessionIDFromPath(path))
+	})
+
+	t.Run("kimi-code-agent-zero", func(t *testing.T) {
+		path := filepath.Join("/home", "user", ".kimi-code", "sessions", "wd_foo_a1b2", "session_uuid-1", "agents", "agent-0", "wire.jsonl")
+		assert.Equal(t, "wd_foo_a1b2:agent-0:session_uuid-1", kimiSessionIDFromPath(path))
+	})
 }

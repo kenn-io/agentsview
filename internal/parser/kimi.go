@@ -21,7 +21,7 @@ import (
 //
 // New (".kimi-code/sessions"):
 //
-//	<sessionsDir>/<workdir>_<hash>/session_<uuid>/agents/main/wire.jsonl
+//	<sessionsDir>/<workdir>_<hash>/session_<uuid>/agents/<agent>/wire.jsonl
 func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 	if sessionsDir == "" {
 		return nil
@@ -63,15 +63,25 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 			}
 
 			// New .kimi-code layout.
-			wirePath = filepath.Join(
-				sessDir, "agents", "main", "wire.jsonl",
-			)
-			if _, err := os.Stat(wirePath); err == nil {
-				files = append(files, DiscoveredFile{
-					Path:    wirePath,
-					Project: projEntry.Name(),
-					Agent:   AgentKimi,
-				})
+			agentsDir := filepath.Join(sessDir, "agents")
+			agentEntries, err := os.ReadDir(agentsDir)
+			if err != nil {
+				continue
+			}
+			for _, agentEntry := range agentEntries {
+				if !isDirOrSymlink(agentEntry, agentsDir) {
+					continue
+				}
+				wirePath = filepath.Join(
+					agentsDir, agentEntry.Name(), "wire.jsonl",
+				)
+				if _, err := os.Stat(wirePath); err == nil {
+					files = append(files, DiscoveredFile{
+						Path:    wirePath,
+						Project: projEntry.Name(),
+						Agent:   AgentKimi,
+					})
+				}
 			}
 		}
 	}
@@ -83,58 +93,70 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 }
 
 // FindKimiSourceFile locates a Kimi session file by its raw
-// session ID (without the "kimi:" prefix). The raw ID has the
-// format "<project-or-workdir-dir>:<session-uuid>", which maps to
-// either the legacy layout or the new .kimi-code layout:
+// session ID (without the "kimi:" prefix). Supported raw ID formats:
 //
-//	<sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl
-//	<sessionsDir>/<workdir>_<hash>/session_<uuid>/agents/main/wire.jsonl
+// Legacy:
+//
+//	<project-hash>:<session-uuid>
+//	  → <sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl
+//
+// New (.kimi-code):
+//
+//	<workdir>_<hash>:<agent>:<session-uuid>
+//	  → <sessionsDir>/<workdir>_<hash>/<session-uuid>/agents/<agent>/wire.jsonl
 func FindKimiSourceFile(sessionsDir, rawID string) string {
 	if sessionsDir == "" {
 		return ""
 	}
 
-	projHash, sessionUUID, ok := strings.Cut(rawID, ":")
-	if !ok || !IsValidSessionID(projHash) ||
-		!IsValidSessionID(sessionUUID) {
-		return ""
+	parts := strings.Split(rawID, ":")
+	for _, p := range parts {
+		if !IsValidSessionID(p) {
+			return ""
+		}
 	}
 
-	// Legacy layout.
-	candidate := filepath.Join(
-		sessionsDir, projHash, sessionUUID, "wire.jsonl",
-	)
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
-
-	// New .kimi-code layout.
-	candidate = filepath.Join(
-		sessionsDir, projHash, sessionUUID, "agents", "main", "wire.jsonl",
-	)
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
+	switch len(parts) {
+	case 2:
+		// Legacy layout.
+		candidate := filepath.Join(
+			sessionsDir, parts[0], parts[1], "wire.jsonl",
+		)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	case 3:
+		// New .kimi-code layout.
+		candidate := filepath.Join(
+			sessionsDir, parts[0], parts[2], "agents", parts[1], "wire.jsonl",
+		)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 	return ""
 }
 
-// kimiSessionIDFromPath extracts the "<project>:<session-uuid>" part
-// of a Kimi session ID from its wire.jsonl path. It handles both the
-// legacy layout and the .kimi-code layout.
+// kimiSessionIDFromPath extracts the raw Kimi session ID from its
+// wire.jsonl path. Legacy paths yield "<project>:<session>"; .kimi-code
+// paths yield "<workdir>:<agent>:<session>".
 func kimiSessionIDFromPath(path string) string {
 	dir := filepath.Dir(path)
-	if filepath.Base(dir) == "main" {
-		// New layout: .../<workdir>_<hash>/session_<uuid>/agents/main/wire.jsonl
-		sessionDir := filepath.Dir(filepath.Dir(dir))
+	base := filepath.Base(dir)
+	parent := filepath.Dir(dir)
+	if filepath.Base(parent) == "agents" {
+		// New layout: .../<workdir>_<hash>/session_<uuid>/agents/<agent>/wire.jsonl
+		agentID := base
+		sessionDir := filepath.Dir(parent)
 		sessionUUID := filepath.Base(sessionDir)
 		workdirDir := filepath.Dir(sessionDir)
 		projHash := filepath.Base(workdirDir)
-		return projHash + ":" + sessionUUID
+		return projHash + ":" + agentID + ":" + sessionUUID
 	}
 
 	// Legacy layout: .../<project-hash>/<session-uuid>/wire.jsonl
-	sessionUUID := filepath.Base(dir)
-	projHash := filepath.Base(filepath.Dir(dir))
+	sessionUUID := base
+	projHash := filepath.Base(parent)
 	return projHash + ":" + sessionUUID
 }
 
