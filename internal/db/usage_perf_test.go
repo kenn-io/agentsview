@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestRealDBUsagePayload measures the JSON payload the dashboard must
@@ -60,7 +64,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 	t.Logf("sidebar-index: %d rows, JSON %.2f MB, marshal=%s",
 		len(ix.Sessions), float64(len(sb))/1e6, round(time.Since(start)))
 	if out := os.Getenv("DUMP_SIDEBAR"); out != "" {
-		if err := os.WriteFile(out, sb, 0o644); err != nil {
+		if err := dumpSidebarJSON(out, path, sb); err != nil {
 			t.Fatalf("dump sidebar: %v", err)
 		}
 		t.Logf("wrote sidebar JSON to %s", out)
@@ -137,7 +141,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 			r, err := d.GetDailyUsage(ctx, f)
 			return fmt.Sprintf("%d days, $%.0f", len(r.Daily), r.Totals.TotalCost), err
 		}},
-		{"usage/summary: GetUsageSessionCounts allHist", func() (string, error) {
+		{"usage/session-counts diagnostic allHist (not live path)", func() (string, error) {
 			c, err := d.GetUsageSessionCounts(ctx, allHist)
 			return fmt.Sprintf("%d sessions", c.Total), err
 		}},
@@ -185,11 +189,10 @@ func TestRealDBUsagePerf(t *testing.T) {
 	}
 
 	// Concurrent pattern 1: usage.fetchAll() = summary + comparison +
-	// top-sessions firing at once (3 heavy scans, 4-conn pool).
+	// top-sessions firing at once (3 live dashboard endpoints, 4-conn pool).
 	t.Logf("")
-	timeConcurrent(t, "CONCURRENT fetchAll (summary+counts+comparison+top, allHist)", []func() error{
+	timeConcurrent(t, "CONCURRENT fetchAll (summary+comparison+top, allHist)", []func() error{
 		func() error { f := allHist; f.Breakdowns = true; _, e := d.GetDailyUsage(ctx, f); return e },
-		func() error { _, e := d.GetUsageSessionCounts(ctx, allHist); return e },
 		func() error {
 			f := UsageFilter{From: "1900-01-01", To: "1999-12-31", Timezone: tz}
 			_, e := d.GetDailyUsage(ctx, f)
@@ -207,9 +210,103 @@ func TestRealDBUsagePerf(t *testing.T) {
 		func() error { _, e := d.GetMachines(ctx, false, false); return e },
 		func() error { _, e := d.GetSidebarSessionIndex(ctx, SessionFilter{}); return e },
 		func() error { f := allHist; f.Breakdowns = true; _, e := d.GetDailyUsage(ctx, f); return e },
-		func() error { _, e := d.GetUsageSessionCounts(ctx, allHist); return e },
+		func() error {
+			f := UsageFilter{From: "1900-01-01", To: "1999-12-31", Timezone: tz}
+			_, e := d.GetDailyUsage(ctx, f)
+			return e
+		},
 		func() error { _, e := d.GetTopSessionsByCost(ctx, allHist, 20); return e },
 	})
+}
+
+func TestDumpSidebarJSONRejectsDBAndSidecars(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sessions.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+
+	for _, out := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		t.Run(filepath.Base(out), func(t *testing.T) {
+			err := dumpSidebarJSON(out, dbPath, []byte(`{"sessions":[]}`))
+			require.Error(t, err)
+
+			got, readErr := os.ReadFile(dbPath)
+			require.NoError(t, readErr)
+			assert.Equal(t, "db", string(got))
+		})
+	}
+}
+
+func TestDumpSidebarJSONDoesNotClobberExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sessions.db")
+	outPath := filepath.Join(dir, "sidebar.json")
+	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+	require.NoError(t, os.WriteFile(outPath, []byte("existing"), 0o644))
+
+	err := dumpSidebarJSON(outPath, dbPath, []byte(`{"sessions":[]}`))
+	require.Error(t, err)
+
+	got, readErr := os.ReadFile(outPath)
+	require.NoError(t, readErr)
+	assert.Equal(t, "existing", string(got))
+}
+
+func TestDumpSidebarJSONCreatesNewFile(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sessions.db")
+	outPath := filepath.Join(dir, "sidebar.json")
+	payload := []byte(`{"sessions":[]}`)
+	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+
+	require.NoError(t, dumpSidebarJSON(outPath, dbPath, payload))
+
+	got, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+}
+
+func dumpSidebarJSON(out, dbPath string, payload []byte) error {
+	if err := rejectSidebarDumpPath(out, dbPath); err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(out, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("create sidebar dump %q: %w", out, err)
+	}
+	if _, err := f.Write(payload); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write sidebar dump %q: %w", out, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close sidebar dump %q: %w", out, err)
+	}
+	return nil
+}
+
+func rejectSidebarDumpPath(out, dbPath string) error {
+	outPath, err := cleanAbsPath(out)
+	if err != nil {
+		return fmt.Errorf("resolve sidebar dump path: %w", err)
+	}
+	for _, forbidden := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		forbiddenPath, err := cleanAbsPath(forbidden)
+		if err != nil {
+			return fmt.Errorf("resolve protected DB path %q: %w", forbidden, err)
+		}
+		if outPath == forbiddenPath {
+			return fmt.Errorf("refusing to write sidebar dump over protected DB path %q", out)
+		}
+	}
+	return nil
+}
+
+func cleanAbsPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(abs), nil
 }
 
 func timeConcurrent(t *testing.T, label string, fns []func() error) {
