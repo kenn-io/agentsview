@@ -89,6 +89,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     exclude: ["e2e/**", "node_modules/**"],
+    setupFiles: ["./src/vitest-setup.ts"],
     server: {
       deps: {
         inline: ["svelte"],

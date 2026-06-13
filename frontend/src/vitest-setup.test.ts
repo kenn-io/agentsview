@@ -1,0 +1,32 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { installFallbackStorage } from "./vitest-setup";
+
+describe("vitest setup storage fallback", () => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "localStorage",
+  );
+
+  afterEach(() => {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "localStorage", originalDescriptor);
+    } else {
+      delete (globalThis as { localStorage?: Storage }).localStorage;
+    }
+  });
+
+  it("installs localStorage when the Node global getter returns undefined", () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get: () => undefined,
+    });
+
+    installFallbackStorage("localStorage");
+
+    localStorage.setItem("agentsview-test-key", "value");
+
+    expect(localStorage.getItem("agentsview-test-key")).toBe("value");
+    expect(localStorage.length).toBe(1);
+    expect(localStorage.key(0)).toBe("agentsview-test-key");
+  });
+});
