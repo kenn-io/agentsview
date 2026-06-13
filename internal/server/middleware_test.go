@@ -239,7 +239,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
-			handler := cspMiddleware(tt.host, tt.port, tt.basePath, inner)
+			handler := cspMiddleware(tt.host, tt.port, tt.basePath, "", nil, inner)
 
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			w := httptest.NewRecorder()
@@ -269,7 +269,7 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 func TestBuildCSPPolicyWidensConnectSrcOnly(t *testing.T) {
 	t.Parallel()
 
-	directives := parseCSP(buildCSPPolicy("127.0.0.1", 8081, ""))
+	directives := parseCSP(buildCSPPolicy("127.0.0.1", 8081, "", "", nil))
 
 	assert.Equal(t, "'self' http: https: ws: wss:", directives["connect-src"],
 		"connect-src should be widened to any http/https/ws/wss origin")
@@ -288,6 +288,46 @@ func TestBuildCSPPolicyWidensConnectSrcOnly(t *testing.T) {
 				name, field, directives[name])
 		}
 	}
+}
+
+func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
+	t.Parallel()
+
+	directives := parseCSP(buildCSPPolicy(
+		"0.0.0.0", 8080, "",
+		"https://agentsview.example.com/app",
+		nil,
+	))
+
+	assert.Equal(t,
+		"'self' https://agentsview.example.com",
+		directives["default-src"],
+	)
+	assert.Equal(t,
+		"'self' https://agentsview.example.com",
+		directives["script-src"],
+	)
+	assert.Equal(t,
+		"'self' https://agentsview.example.com data:",
+		directives["img-src"],
+	)
+	assert.NotContains(t, directives["default-src"], "0.0.0.0")
+}
+
+func TestBuildCSPPolicyPinsPublicOriginWhenPublicURLUnset(t *testing.T) {
+	t.Parallel()
+
+	directives := parseCSP(buildCSPPolicy(
+		"0.0.0.0", 8080, "",
+		"",
+		[]string{"https://viewer.example.test"},
+	))
+
+	assert.Equal(t,
+		"'self' https://viewer.example.test",
+		directives["default-src"],
+	)
+	assert.NotContains(t, directives["default-src"], "0.0.0.0")
 }
 
 func TestCORSMiddlewareMergesVaryHeader(t *testing.T) {

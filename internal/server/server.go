@@ -346,7 +346,9 @@ func (s *Server) Handler() http.Handler {
 	if bindAll {
 		bindAllIPs = localInterfaceIPs()
 	}
-	h := cspMiddleware(s.cfg.Host, s.cfg.Port, s.basePath,
+	h := cspMiddleware(
+		s.cfg.Host, s.cfg.Port, s.basePath,
+		s.cfg.PublicURL, s.cfg.PublicOrigins,
 		s.authMiddleware(
 			hostCheckMiddleware(
 				allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
@@ -386,8 +388,15 @@ func (s *Server) Handler() http.Handler {
 // responses. The policy pins the exact host:port origin so that
 // even if Tauri's compile-time CSP uses a wildcard port, the
 // intersection narrows to the actual runtime port.
-func cspMiddleware(host string, port int, basePath string, next http.Handler) http.Handler {
-	policy := buildCSPPolicy(host, port, basePath)
+func cspMiddleware(
+	host string,
+	port int,
+	basePath string,
+	publicURL string,
+	publicOrigins []string,
+	next http.Handler,
+) http.Handler {
+	policy := buildCSPPolicy(host, port, basePath, publicURL, publicOrigins)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Content-Security-Policy", policy)
@@ -415,11 +424,18 @@ func cspMiddleware(host string, port int, basePath string, next http.Handler) ht
 // if an XSS ever executed in the app, exfiltration would be easier;
 // the other directives stay pinned so script execution remains gated
 // to 'self'.
-func buildCSPPolicy(host string, port int, basePath string) string {
-	// serverOrigin is the pinned http origin for the configured
-	// host:port, used in the resource directives so resources load
-	// correctly regardless of how the webview resolves 'self'.
-	serverOrigin := "http://" + net.JoinHostPort(host, strconv.Itoa(port))
+func buildCSPPolicy(
+	host string,
+	port int,
+	basePath string,
+	publicURL string,
+	publicOrigins []string,
+) string {
+	// serverOrigin is the pinned origin used in the resource
+	// directives so resources load correctly regardless of how the
+	// webview resolves 'self'. In reverse-proxy deployments, prefer
+	// the browser-visible public origin over the bind socket.
+	serverOrigin := cspPinnedOrigin(host, port, publicURL, publicOrigins)
 	resourceSrc := "'self' " + serverOrigin
 
 	baseURI := "'none'"
@@ -439,6 +455,36 @@ func buildCSPPolicy(host string, port int, basePath string) string {
 			"frame-ancestors 'none'",
 		resourceSrc, baseURI,
 	)
+}
+
+func cspPinnedOrigin(
+	host string,
+	port int,
+	publicURL string,
+	publicOrigins []string,
+) string {
+	for _, raw := range append([]string{publicURL}, publicOrigins...) {
+		origin := normalizedOrigin(raw)
+		if origin != "" {
+			return origin
+		}
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func normalizedOrigin(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // buildAllowedHosts returns the set of Host header values that
