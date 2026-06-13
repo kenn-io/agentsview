@@ -111,6 +111,33 @@ func parseDiffClaudeContent(prompt, reply string) string {
 		String()
 }
 
+// parseDiffClaudeContentRich builds a Claude session that exercises the
+// thinking, tool_use/tool_result, and system-message paths, so the
+// clean-archive acid test covers the message-flag and tool-call
+// comparisons against real parsed data rather than empty fingerprints.
+func parseDiffClaudeContentRich() string {
+	return testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "run the build").
+		AddRaw(testjsonl.ClaudeAssistantJSON(
+			[]map[string]any{
+				{"type": "thinking", "thinking": "I should run make build"},
+				{"type": "text", "text": "Running the build now."},
+				{
+					"type":  "tool_use",
+					"id":    "tu-1",
+					"name":  "Bash",
+					"input": map[string]any{"command": "make build"},
+				},
+			},
+			tsEarlyS1,
+		)).
+		AddRaw(testjsonl.ClaudeToolResultUserJSON(
+			"tu-1", "build succeeded", tsEarlyS5,
+		)).
+		AddClaudeMetaUser(tsEarlyS5, "system notice", true, false).
+		String()
+}
+
 // parseDiffCodexContent builds a minimal Codex rollout session with
 // the given session ID.
 func parseDiffCodexContent(id string) string {
@@ -141,8 +168,11 @@ func parseDiffGeminiContent(sessionID, hash string) string {
 func TestParseDiffCleanArchiveIsIdentical(t *testing.T) {
 	env := setupTestEnv(t)
 
+	// pd-alpha carries thinking, a tool_use/tool_result pair, and a
+	// system message so the run exercises the message-flag and tool-call
+	// comparisons, not just the summary fields.
 	env.writeClaudeSession(t, "test-proj", "pd-alpha.jsonl",
-		parseDiffClaudeContent("alpha prompt", "alpha reply"))
+		parseDiffClaudeContentRich())
 	env.writeClaudeSession(t, "test-proj", "pd-beta.jsonl",
 		parseDiffClaudeContent("beta prompt", "beta reply"))
 	env.writeCodexSession(
@@ -303,6 +333,97 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 		assert.Empty(t, sessionDiffFieldNames(sd, false),
 			"control session non-informational fields")
 	}
+	assert.True(t, report.HasFailures(), "HasFailures with drift")
+}
+
+// TestParseDiffDetectsExtendedFieldDrift covers the comparator surface
+// added beyond the summary fields end-to-end: tool_call drift, a
+// per-message flag, a full-replace-agent session-metadata field, and the
+// informational-for-incremental rule on a Claude session.
+func TestParseDiffDetectsExtendedFieldDrift(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Two rich Claude sessions (thinking + tool_use/result + system),
+	// one minimal Claude session, and a full-replace Gemini session.
+	env.writeClaudeSession(t, "test-proj", "pd-ext-tool.jsonl",
+		parseDiffClaudeContentRich())
+	env.writeClaudeSession(t, "test-proj", "pd-ext-flag.jsonl",
+		parseDiffClaudeContentRich())
+	env.writeClaudeSession(t, "test-proj", "pd-ext-cwd.jsonl",
+		parseDiffClaudeContent("cwd prompt", "cwd reply"))
+	env.writeGeminiSession(t,
+		filepath.Join("tmp", "exthash", "chats", "session-001.json"),
+		parseDiffGeminiContent("pd-ext-branch", "exthash"))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 4, Synced: 4,
+	})
+
+	// Tool-call drift: rename a stored tool call. None of the message
+	// token/role/content/flag fingerprints move, so this is caught only
+	// via the tool-call fingerprint.
+	mutateDB(t, env,
+		"UPDATE tool_calls SET tool_name = ? WHERE session_id = ?",
+		"DRIFTED", "pd-ext-tool")
+	// Flag drift: flip has_thinking on the assistant message (the one
+	// carrying the tool use). Only the flags fingerprint moves.
+	mutateDB(t, env,
+		"UPDATE messages SET has_thinking = NOT has_thinking"+
+			" WHERE session_id = ? AND has_tool_use = 1", "pd-ext-flag")
+	// Incremental-append session field on a Claude session: a real
+	// difference, but classified informational, so the session stays
+	// identical rather than changed.
+	mutateDB(t, env,
+		"UPDATE sessions SET cwd = ? WHERE id = ?",
+		"/drifted/path", "pd-ext-cwd")
+	// Full-replace-agent session metadata: Gemini does not take the
+	// incremental path, so a git_branch difference is real drift.
+	mutateDB(t, env,
+		"UPDATE sessions SET git_branch = ? WHERE id = ?",
+		"feature-x", "gemini:pd-ext-branch")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 4, Identical: 1, Changed: 3, InformationalOnly: 1,
+	}, report.Totals, "totals")
+
+	cases := []struct {
+		name      string
+		sessionID string
+		field     string
+	}{
+		{"tool call drift", "pd-ext-tool", sync.FieldToolCalls},
+		{"flag drift", "pd-ext-flag", sync.FieldMessageMetadata},
+		{"git_branch drift", "gemini:pd-ext-branch", sync.FieldGitBranch},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sd := findSessionDiff(report, tc.sessionID)
+			require.NotNil(t, sd, "session %q not listed", tc.sessionID)
+			assert.Equal(t, sync.DiffChanged, sd.Class,
+				"class for %q", tc.sessionID)
+			assert.ElementsMatch(t, []string{tc.field},
+				sessionDiffFieldNames(sd, false),
+				"non-informational fields for %q", tc.sessionID)
+			assert.Equal(t, 1, report.FieldCounts[tc.field],
+				"FieldCounts[%s]", tc.field)
+		})
+	}
+
+	t.Run("incremental cwd drift is informational", func(t *testing.T) {
+		sd := findSessionDiff(report, "pd-ext-cwd")
+		require.NotNil(t, sd, "pd-ext-cwd not listed")
+		assert.Equal(t, sync.DiffIdentical, sd.Class,
+			"informational-only session stays identical")
+		assert.Empty(t, sessionDiffFieldNames(sd, false),
+			"no non-informational fields")
+		assert.Contains(t, sessionDiffFieldNames(sd, true), sync.FieldCwd,
+			"informational cwd diff must be attached")
+		assert.Zero(t, report.FieldCounts[sync.FieldCwd],
+			"informational diffs are excluded from FieldCounts")
+	})
+
 	assert.True(t, report.HasFailures(), "HasFailures with drift")
 }
 
