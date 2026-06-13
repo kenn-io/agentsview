@@ -41,6 +41,7 @@ const (
 	AgentAntigravity    AgentType = "antigravity"
 	AgentAntigravityCLI AgentType = "antigravity-cli"
 	AgentZed            AgentType = "zed"
+	AgentGptme          AgentType = "gptme"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -450,6 +451,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverAntigravityCLISessions,
 		FindSourceFunc: FindAntigravityCLISourceFile,
+	},
+	{
+		Type:        AgentGptme,
+		DisplayName: "gptme",
+		EnvVar:      "GPTME_DIR",
+		ConfigKey:   "gptme_dirs",
+		DefaultDirs: []string{".local/share/gptme/logs"},
+		IDPrefix:    "gptme:",
+		FileBased:   true,
+		DiscoverFunc: DiscoverGptmeSessions,
+		FindSourceFunc: FindGptmeSourceFile,
 	},
 }
 
