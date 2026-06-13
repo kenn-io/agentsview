@@ -1,7 +1,25 @@
 type StorageName = "localStorage";
 
+function isStorageLike(value: unknown): value is Storage {
+  if (value === null || typeof value !== "object") return false;
+  const storage = value as Partial<Storage>;
+  return (
+    typeof storage.clear === "function" &&
+    typeof storage.getItem === "function" &&
+    typeof storage.key === "function" &&
+    typeof storage.removeItem === "function" &&
+    typeof storage.setItem === "function"
+  );
+}
+
+function existingStorage(name: StorageName): Storage | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, name);
+  if (!descriptor || !("value" in descriptor)) return undefined;
+  return isStorageLike(descriptor.value) ? descriptor.value : undefined;
+}
+
 export function installFallbackStorage(name: StorageName): void {
-  if (globalThis[name] !== undefined) return;
+  if (existingStorage(name)) return;
 
   const store = new Map<string, string>();
   const storage: Storage = {
