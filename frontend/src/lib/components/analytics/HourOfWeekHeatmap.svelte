@@ -6,8 +6,14 @@
   const CELL_STEP = CELL_SIZE + CELL_GAP;
   const ROW_LABEL_WIDTH = 29;
   const COL_LABEL_HEIGHT = 18;
-  const DAY_LABELS = [
-    "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
+  const DAYS = [
+    { label: "Sun", dayIdx: 6 },
+    { label: "Mon", dayIdx: 0 },
+    { label: "Tue", dayIdx: 1 },
+    { label: "Wed", dayIdx: 2 },
+    { label: "Thu", dayIdx: 3 },
+    { label: "Fri", dayIdx: 4 },
+    { label: "Sat", dayIdx: 5 },
   ];
 
   const LEVEL_COLORS_LIGHT = [
@@ -71,21 +77,25 @@
         level: number;
       }[];
     }[] = [];
-    for (let d = 0; d < 7; d++) {
+    for (const day of DAYS) {
       const hours: {
         hour: number;
         value: number;
         level: number;
       }[] = [];
       for (let h = 0; h < 24; h++) {
-        const value = lookup.get(`${d}:${h}`) ?? 0;
+        const value = lookup.get(`${day.dayIdx}:${h}`) ?? 0;
         hours.push({
           hour: h,
           value,
           level: assignLevel(value, max),
         });
       }
-      rows.push({ day: DAY_LABELS[d]!, dayIdx: d, hours });
+      rows.push({
+        day: day.label,
+        dayIdx: day.dayIdx,
+        hours,
+      });
     }
     return rows;
   });
