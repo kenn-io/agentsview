@@ -11,6 +11,7 @@ import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import SessionList from "./SessionList.svelte";
 import sessionFilterControlSource from "../filters/SessionFilterControl.svelte?raw";
+import sessionItemSource from "./SessionItem.svelte?raw";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
@@ -268,6 +269,45 @@ describe("SessionList visible hydration", () => {
     const name = document.querySelector<HTMLElement>(".session-name");
     expect(name).not.toBeNull();
     expect(name?.textContent).toBe(title);
+  });
+
+  it("marks the active session row for assistive tech", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "active-session",
+        first_message: "Selected transcript",
+        is_index_only: false,
+      }),
+      makeSession({
+        id: "other-session",
+        first_message: "Other transcript",
+        is_index_only: false,
+      }),
+    ];
+    sessions.activeSessionId = "active-session";
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const active = document.querySelector<HTMLElement>(
+      '[data-session-id="active-session"]',
+    );
+    const other = document.querySelector<HTMLElement>(
+      '[data-session-id="other-session"]',
+    );
+    expect(active).not.toBeNull();
+    expect(active?.getAttribute("aria-current")).toBe("page");
+    expect(other).not.toBeNull();
+    expect(other?.hasAttribute("aria-current")).toBe(false);
+  });
+
+  it("gives active rows a persistent visual indicator distinct from hover", () => {
+    expect(sessionItemSource).toContain(".session-item.active::before");
+    expect(sessionItemSource).toContain("background: var(--accent-blue)");
+    expect(sessionItemSource).toContain(
+      "box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 28%, transparent)",
+    );
   });
 
   it("hydrates newly visible rows after scrolling", async () => {

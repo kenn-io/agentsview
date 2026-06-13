@@ -255,6 +255,7 @@
   class:orphaned-teammate={isOrphanedTeammate}
   data-session-id={session.id}
   role="button"
+  aria-current={isActive ? "page" : undefined}
   tabindex="0"
   style:padding-left="{8 + depth * 16}px"
   onclick={() => sessions.selectSession(session.id)}
@@ -392,7 +393,7 @@
     padding: 0 10px;
     padding-right: 10px;
     text-align: left;
-    transition: background 0.1s;
+    transition: background 0.1s, box-shadow 0.1s;
     user-select: none;
     -webkit-user-select: none;
     cursor: pointer;
@@ -414,7 +415,28 @@
   }
 
   .session-item.active {
-    background: var(--bg-surface-hover);
+    background: color-mix(in srgb, var(--accent-blue) 11%, var(--bg-surface-hover));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 28%, transparent);
+  }
+
+  .session-item.active::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 5px;
+    bottom: 5px;
+    width: 3px;
+    border-radius: 0 2px 2px 0;
+    background: var(--accent-blue);
+  }
+
+  .session-item.active .session-name {
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .session-item.active .session-meta {
+    color: var(--text-secondary);
   }
 
   /* Orphaned teammate at root level — dim it slightly */
