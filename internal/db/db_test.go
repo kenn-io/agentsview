@@ -5167,6 +5167,33 @@ func TestToolCallFingerprintIncludesStableFields(t *testing.T) {
 	assert.Contains(t, newFP, `{"patch":"@@\n-old\n+new"}`)
 }
 
+func TestToolCallFingerprintHandlesEmptyToolUseID(t *testing.T) {
+	d := testDB(t)
+	err := d.UpsertSession(Session{
+		ID: "tc-empty-id", Project: "p", Machine: "local", Agent: "cursor",
+	})
+	require.NoError(t, err, "upsert")
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "tc-empty-id", Ordinal: 0, Role: "assistant",
+			Content: "tool",
+			ToolCalls: []ToolCall{
+				{
+					ToolName:  "ApplyPatch",
+					Category:  "Edit",
+					InputJSON: `{"patch":"@@\n-old\n+new"}`,
+				},
+			},
+		},
+	}), "insert")
+
+	fp, err := d.ToolCallFingerprint("tc-empty-id")
+	require.NoError(t, err, "fingerprint")
+
+	assert.Contains(t, fp, "ApplyPatch")
+	assert.Contains(t, fp, "Edit")
+}
+
 func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

@@ -1101,7 +1101,7 @@ func (db *DB) ToolCallContentFingerprint(sessionID string) (int64, error) {
 func (db *DB) ToolCallFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT m.ordinal, tc.tool_name, tc.category,
-			tc.tool_use_id, COALESCE(tc.input_json, ''),
+			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
 			COALESCE(tc.skill_name, ''),
 			COALESCE(tc.subagent_session_id, ''),
 			COALESCE(tc.result_content_length, 0),
