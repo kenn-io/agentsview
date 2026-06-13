@@ -27,6 +27,22 @@ func writeKimiWireJSONL(
 	return path
 }
 
+func writeKimiCodeWireJSONL(
+	t *testing.T, workdirDir, sessionDir string,
+	lines []string,
+) string {
+	t.Helper()
+	dir := filepath.Join(
+		t.TempDir(), workdirDir, sessionDir, "agents", "main",
+	)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, "wire.jsonl")
+	content := strings.Join(lines, "\n") + "\n"
+	require.NoError(t,
+		os.WriteFile(path, []byte(content), 0o644))
+	return path
+}
+
 func TestParseKimiSession_Basic(t *testing.T) {
 	path := writeKimiWireJSONL(t,
 		"abc123", "sess-uuid-1234",
@@ -442,4 +458,97 @@ func TestFindKimiSourceFile(t *testing.T) {
 		FindKimiSourceFile(dir, "invalid"))
 	assert.Equal(t, "",
 		FindKimiSourceFile("", "abc123:uuid-1"))
+}
+
+func TestDiscoverKimiSessions_NewLayout(t *testing.T) {
+	dir := t.TempDir()
+
+	workdirDir := "wd_claude-code_5534d269834e"
+	sessionDir := "session_2728744d-1865-4af1-b3da-97d5bf22a979"
+	sessDir := filepath.Join(dir, workdirDir, sessionDir, "agents", "main")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+	wirePath := filepath.Join(sessDir, "wire.jsonl")
+	require.NoError(t, os.WriteFile(
+		wirePath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
+	))
+
+	files := DiscoverKimiSessions(dir)
+	require.Equal(t, 1, len(files))
+	assert.Equal(t, AgentKimi, files[0].Agent)
+	assert.Equal(t, wirePath, files[0].Path)
+	assert.Equal(t, workdirDir, files[0].Project)
+}
+
+func TestFindKimiSourceFile_NewLayout(t *testing.T) {
+	dir := t.TempDir()
+
+	workdirDir := "wd_pycharmprojects_a51d6966b209"
+	sessionDir := "session_07673173-caad-4ad9-b8b8-29cb8fdaf66b"
+	sessDir := filepath.Join(dir, workdirDir, sessionDir, "agents", "main")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+	wirePath := filepath.Join(sessDir, "wire.jsonl")
+	require.NoError(t, os.WriteFile(
+		wirePath, []byte("{}"), 0o644,
+	))
+
+	rawID := workdirDir + ":" + sessionDir
+	found := FindKimiSourceFile(dir, rawID)
+	assert.Equal(t, wirePath, found)
+
+	assert.Equal(t, "",
+		FindKimiSourceFile(dir, workdirDir+":nonexistent"))
+}
+
+func TestParseKimiSession_NewLayoutSessionID(t *testing.T) {
+	path := writeKimiCodeWireJSONL(t,
+		"wd_myproject_a1b2c3d4", "session_uuid-1234",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello Kimi Code"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Hi there!"}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	sess, msgs, err := ParseKimiSession(path, "myproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assertSessionMeta(t, sess,
+		"kimi:wd_myproject_a1b2c3d4:session_uuid-1234",
+		"myproject", AgentKimi,
+	)
+	assert.Equal(t, "Hello Kimi Code", sess.FirstMessage)
+	assertMessageCount(t, sess.MessageCount, 2)
+	require.Equal(t, 2, len(msgs))
+	assertMessage(t, msgs[0], RoleUser, "Hello Kimi Code")
+	assertMessage(t, msgs[1], RoleAssistant, "Hi there!")
+}
+
+func TestDiscoverKimiSessions_MixedLayouts(t *testing.T) {
+	dir := t.TempDir()
+
+	// Legacy layout.
+	legacyProjDir := filepath.Join(dir, "abc123")
+	legacySessDir := filepath.Join(legacyProjDir, "uuid-1")
+	require.NoError(t, os.MkdirAll(legacySessDir, 0o755))
+	legacyPath := filepath.Join(legacySessDir, "wire.jsonl")
+	require.NoError(t, os.WriteFile(
+		legacyPath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
+	))
+
+	// New layout.
+	workdirDir := "wd_foo_bar"
+	newSessDir := filepath.Join(dir, workdirDir, "session_xyz", "agents", "main")
+	require.NoError(t, os.MkdirAll(newSessDir, 0o755))
+	newPath := filepath.Join(newSessDir, "wire.jsonl")
+	require.NoError(t, os.WriteFile(
+		newPath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
+	))
+
+	files := DiscoverKimiSessions(dir)
+	require.Equal(t, 2, len(files))
+	paths := []string{files[0].Path, files[1].Path}
+	assert.Contains(t, paths, legacyPath)
+	assert.Contains(t, paths, newPath)
 }

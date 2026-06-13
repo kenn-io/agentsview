@@ -13,8 +13,15 @@ import (
 )
 
 // DiscoverKimiSessions finds all wire.jsonl files under the Kimi
-// sessions directory. The directory structure is:
-// <sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl
+// sessions directory. It supports two layouts:
+//
+// Legacy (".kimi/sessions"):
+//
+//	<sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl
+//
+// New (".kimi-code/sessions"):
+//
+//	<sessionsDir>/<workdir>_<hash>/session_<uuid>/agents/main/wire.jsonl
 func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 	if sessionsDir == "" {
 		return nil
@@ -41,17 +48,31 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 			if !isDirOrSymlink(sessEntry, projDir) {
 				continue
 			}
-			wirePath := filepath.Join(
-				projDir, sessEntry.Name(), "wire.jsonl",
-			)
-			if _, err := os.Stat(wirePath); err != nil {
+
+			sessDir := filepath.Join(projDir, sessEntry.Name())
+
+			// Legacy layout.
+			wirePath := filepath.Join(sessDir, "wire.jsonl")
+			if _, err := os.Stat(wirePath); err == nil {
+				files = append(files, DiscoveredFile{
+					Path:    wirePath,
+					Project: projEntry.Name(),
+					Agent:   AgentKimi,
+				})
 				continue
 			}
-			files = append(files, DiscoveredFile{
-				Path:    wirePath,
-				Project: projEntry.Name(),
-				Agent:   AgentKimi,
-			})
+
+			// New .kimi-code layout.
+			wirePath = filepath.Join(
+				sessDir, "agents", "main", "wire.jsonl",
+			)
+			if _, err := os.Stat(wirePath); err == nil {
+				files = append(files, DiscoveredFile{
+					Path:    wirePath,
+					Project: projEntry.Name(),
+					Agent:   AgentKimi,
+				})
+			}
 		}
 	}
 
@@ -63,8 +84,11 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 
 // FindKimiSourceFile locates a Kimi session file by its raw
 // session ID (without the "kimi:" prefix). The raw ID has the
-// format "<project-hash>:<session-uuid>", which maps to
-// <sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl.
+// format "<project-or-workdir-dir>:<session-uuid>", which maps to
+// either the legacy layout or the new .kimi-code layout:
+//
+//	<sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl
+//	<sessionsDir>/<workdir>_<hash>/session_<uuid>/agents/main/wire.jsonl
 func FindKimiSourceFile(sessionsDir, rawID string) string {
 	if sessionsDir == "" {
 		return ""
@@ -76,13 +100,42 @@ func FindKimiSourceFile(sessionsDir, rawID string) string {
 		return ""
 	}
 
+	// Legacy layout.
 	candidate := filepath.Join(
 		sessionsDir, projHash, sessionUUID, "wire.jsonl",
 	)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
 	}
+
+	// New .kimi-code layout.
+	candidate = filepath.Join(
+		sessionsDir, projHash, sessionUUID, "agents", "main", "wire.jsonl",
+	)
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
 	return ""
+}
+
+// kimiSessionIDFromPath extracts the "<project>:<session-uuid>" part
+// of a Kimi session ID from its wire.jsonl path. It handles both the
+// legacy layout and the .kimi-code layout.
+func kimiSessionIDFromPath(path string) string {
+	dir := filepath.Dir(path)
+	if filepath.Base(dir) == "main" {
+		// New layout: .../<workdir>_<hash>/session_<uuid>/agents/main/wire.jsonl
+		sessionDir := filepath.Dir(filepath.Dir(dir))
+		sessionUUID := filepath.Base(sessionDir)
+		workdirDir := filepath.Dir(sessionDir)
+		projHash := filepath.Base(workdirDir)
+		return projHash + ":" + sessionUUID
+	}
+
+	// Legacy layout: .../<project-hash>/<session-uuid>/wire.jsonl
+	sessionUUID := filepath.Base(dir)
+	projHash := filepath.Base(filepath.Dir(dir))
+	return projHash + ":" + sessionUUID
 }
 
 // ParseKimiSession parses a Kimi wire.jsonl file.
@@ -105,13 +158,9 @@ func ParseKimiSession(
 
 	lr := newLineReader(f, maxLineSize)
 
-	// Extract session ID from path:
-	// .../sessions/<project-hash>/<session-uuid>/wire.jsonl
-	dir := filepath.Dir(path) // .../sessions/<project-hash>/<session-uuid>
-	sessionUUID := filepath.Base(dir)
-	projHash := filepath.Base(filepath.Dir(dir))
-
-	sessionID := projHash + ":" + sessionUUID
+	// Extract session ID from path. Both legacy and .kimi-code
+	// layouts are supported.
+	sessionID := kimiSessionIDFromPath(path)
 
 	var (
 		messages     []ParsedMessage
