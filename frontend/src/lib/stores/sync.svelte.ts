@@ -141,7 +141,7 @@ class SyncStore {
       const status = await SyncService.getApiV1SyncStatus();
       this.markRemoteReachable(true);
       if (this.serverVersion === null) {
-        await this.loadVersion();
+        await this.loadVersion({ updateBackendHealth: false });
       }
       const newLastSync = status.last_sync || null;
       const isInitial = !this.statusHydrated;
@@ -210,7 +210,10 @@ class SyncStore {
     }
   }
 
-  async loadVersion() {
+  async loadVersion(
+    opts: { updateBackendHealth?: boolean } = {},
+  ) {
+    const updateBackendHealth = opts.updateBackendHealth ?? true;
     try {
       configureGeneratedClient();
       this.serverVersion =
@@ -222,7 +225,9 @@ class SyncStore {
         this.serverVersion.commit,
       );
     } catch (error) {
-      this.markBackendFailure(error);
+      if (updateBackendHealth) {
+        this.markBackendFailure(error);
+      }
       console.warn("Failed to load version info:", error);
     }
   }

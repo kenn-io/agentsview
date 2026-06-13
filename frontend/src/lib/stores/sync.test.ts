@@ -594,6 +594,28 @@ describe("SyncStore.remoteUnreachable", () => {
     expect(api.setEventsAvailable).toHaveBeenCalledWith(true);
   });
 
+  it("keeps status health when opportunistic version retry fails", async () => {
+    vi.mocked(api.isRemoteConnection).mockReturnValue(true);
+    const s = sync as unknown as Record<string, unknown>;
+    s.serverVersion = null;
+    s.remoteUnreachable = true;
+    s.backendDegraded = false;
+    s.backendDegradedMessage = null;
+    vi.mocked(api.getSyncStatus).mockResolvedValue({
+      last_sync: "",
+      stats: MOCK_STATS,
+    });
+    vi.mocked(api.getVersion).mockRejectedValue(
+      new Error("version still unavailable"),
+    );
+
+    await sync.loadStatus();
+
+    expect(sync.remoteUnreachable).toBe(false);
+    expect(sync.backendDegraded).toBe(false);
+    expect(sync.backendDegradedMessage).toBeNull();
+  });
+
   it("clears backend degraded when stats load succeeds", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     const s = sync as unknown as Record<string, unknown>;
