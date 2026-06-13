@@ -2270,6 +2270,49 @@ func TestSyncPathsClaudeSubagent(t *testing.T) {
 	)
 }
 
+func TestSyncPathsClaudeSubagentUsesCompanionDirectoryParent(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	parentContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "Hello").
+		AddClaudeAssistant(tsZeroS5, "Hi!").
+		String()
+
+	env.writeClaudeSession(
+		t, "test-proj", "parent-sess.jsonl", parentContent,
+	)
+
+	subagentContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "Do subtask").
+		AddClaudeAssistant(tsZeroS5, "Done.").
+		String()
+
+	subPath := env.writeSession(
+		t, env.claudeDir,
+		filepath.Join(
+			"test-proj", "parent-sess",
+			"subagents", "agent-sub1.jsonl",
+		),
+		subagentContent,
+	)
+
+	env.engine.SyncPaths([]string{subPath})
+
+	assertSessionState(
+		t, env.db, "agent-sub1",
+		func(sess *db.Session) {
+			require.NotNil(t, sess.ParentSessionID,
+				"subagent parent_session_id = %v, want %q", sess.ParentSessionID, "parent-sess")
+			assert.Equal(t, "parent-sess", *sess.ParentSessionID,
+				"subagent parent_session_id = %v, want %q", sess.ParentSessionID, "parent-sess")
+			assert.Equal(t, "subagent", sess.RelationshipType,
+				"relationship_type = %q, want subagent", sess.RelationshipType)
+		},
+	)
+}
+
 func TestSyncPathsClaudeNestedWorkflowSubagent(t *testing.T) {
 	env := setupTestEnv(t)
 

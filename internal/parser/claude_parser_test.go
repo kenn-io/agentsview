@@ -850,6 +850,38 @@ func TestParseClaudeSessionFrom_ToolUseResultAgentIDFallsBack(
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
+func TestParseClaudeSession_ResolvesPersistedToolResultOutput(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "project", "parent-session")
+	resultPath := filepath.Join(sessionDir, "tool-results", "b123.txt")
+	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
+
+	fullOutput := "full output line 1\nfull output line 2\n"
+	require.NoError(t, os.WriteFile(resultPath, []byte(fullOutput), 0o644))
+
+	content := strings.Join([]string{
+		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"},"cwd":"/tmp/project"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"<persisted-output>\nOutput too large (32B). Full output saved to: ` + resultPath + `\n\nPreview (first 2KB):\npreview only\n</persisted-output>","is_error":false}]},"toolUseResult":{"persistedOutputPath":"` + resultPath + `","persistedOutputSize":32}}`,
+	}, "\n")
+	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	results, err := ParseClaudeSession(sessionPath, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Messages, 3)
+	require.Len(t, results[0].Messages[2].ToolResults, 1)
+
+	got := results[0].Messages[2].ToolResults[0]
+	assert.Equal(t, len(fullOutput), got.ContentLength)
+	assert.Equal(t, fullOutput, DecodeContent(got.ContentRaw))
+}
+
 // Two appended assistant entries with the same message.id form a
 // run that the full parser merges into one message; the incremental
 // path would otherwise produce two separate stored messages, so it

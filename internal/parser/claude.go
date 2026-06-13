@@ -19,12 +19,13 @@ import (
 )
 
 var (
-	xmlTaskIDRe   = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
-	xmlToolUseRe  = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
-	xmlCmdNameRe  = regexp.MustCompile(`<command-name>([^<]+)</command-name>`)
-	xmlCmdMsgRe   = regexp.MustCompile(`<command-message>([^<]+)</command-message>`)
-	xmlCmdArgsRe  = regexp.MustCompile(`<command-args>([^<]*)</command-args>`)
-	xmlCmdStripRe = regexp.MustCompile(`<command-(?:name|message|args)>[^<]*</command-(?:name|message|args)>`)
+	xmlTaskIDRe               = regexp.MustCompile(`<task-id>([^<]+)</task-id>`)
+	xmlToolUseRe              = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+	xmlCmdNameRe              = regexp.MustCompile(`<command-name>([^<]+)</command-name>`)
+	xmlCmdMsgRe               = regexp.MustCompile(`<command-message>([^<]+)</command-message>`)
+	xmlCmdArgsRe              = regexp.MustCompile(`<command-args>([^<]*)</command-args>`)
+	xmlCmdStripRe             = regexp.MustCompile(`<command-(?:name|message|args)>[^<]*</command-(?:name|message|args)>`)
+	persistedToolResultPathRe = regexp.MustCompile(`(?m)Full output saved to:\s*(.+)$`)
 )
 
 const (
@@ -109,6 +110,7 @@ func ParseClaudeSessionWithExclusions(
 		globalEnd       time.Time
 	)
 	allHaveUUID = true
+	parentSessionID = claudeCompanionParentSessionID(path, sessionID)
 
 	lr := newLineReader(f, maxLineSize)
 	lastLineFailed := false
@@ -123,6 +125,7 @@ func ParseClaudeSessionWithExclusions(
 			lastLineFailed = true
 			continue
 		}
+		line = resolveClaudePersistedToolResults(path, line)
 		lastLineFailed = false
 
 		entryType := gjson.Get(line, "type").Str
@@ -403,6 +406,7 @@ func ParseClaudeSessionFrom(
 
 	consumed, err := readJSONLFrom(
 		path, offset, func(line string) {
+			line = resolveClaudePersistedToolResults(path, line)
 			if ts := extractTimestamp(line); !ts.IsZero() {
 				if ts.After(latestTS) {
 					latestTS = ts
@@ -1274,6 +1278,164 @@ func replaceClaudeMessageContent(line string, blocks []gjson.Result) string {
 		return line
 	}
 	return string(encoded)
+}
+
+func claudeCompanionParentSessionID(path, sessionID string) string {
+	if !strings.HasPrefix(sessionID, "agent-") {
+		return ""
+	}
+	parts := splitCleanPath(path)
+	for i, part := range parts {
+		if part != "subagents" || i == 0 {
+			continue
+		}
+		parent := parts[i-1]
+		if parent != "" {
+			return parent
+		}
+	}
+	return ""
+}
+
+func splitCleanPath(path string) []string {
+	clean := filepath.Clean(path)
+	var parts []string
+	for {
+		dir, file := filepath.Split(clean)
+		if file != "" {
+			parts = append(parts, file)
+		}
+		next := filepath.Clean(strings.TrimSuffix(dir, string(filepath.Separator)))
+		if next == clean || next == "." || next == string(filepath.Separator) || next == "" {
+			break
+		}
+		clean = next
+	}
+	slices.Reverse(parts)
+	return parts
+}
+
+func resolveClaudePersistedToolResults(sessionPath, line string) string {
+	if !strings.Contains(line, "persisted-output") &&
+		!strings.Contains(line, "persistedOutputPath") {
+		return line
+	}
+
+	dec := json.NewDecoder(strings.NewReader(line))
+	dec.UseNumber()
+	var top map[string]any
+	if err := dec.Decode(&top); err != nil {
+		return line
+	}
+
+	msg, ok := top["message"].(map[string]any)
+	if !ok {
+		return line
+	}
+	blocks, ok := msg["content"].([]any)
+	if !ok {
+		return line
+	}
+
+	persistedPath := ""
+	if tur, ok := top["toolUseResult"].(map[string]any); ok {
+		if p, ok := tur["persistedOutputPath"].(string); ok {
+			persistedPath = p
+		}
+	}
+
+	changed := false
+	for _, rawBlock := range blocks {
+		block, ok := rawBlock.(map[string]any)
+		if !ok || block["type"] != "tool_result" {
+			continue
+		}
+		content, ok := block["content"].(string)
+		if !ok {
+			continue
+		}
+		path := persistedOutputPathFromContent(content)
+		if path == "" {
+			path = persistedPath
+		}
+		if path == "" {
+			continue
+		}
+		output, ok := readClaudePersistedToolResult(sessionPath, path)
+		if !ok {
+			continue
+		}
+		block["content"] = output
+		changed = true
+	}
+	if !changed {
+		return line
+	}
+
+	encoded, err := json.Marshal(top)
+	if err != nil {
+		return line
+	}
+	return string(encoded)
+}
+
+func persistedOutputPathFromContent(content string) string {
+	match := persistedToolResultPathRe.FindStringSubmatch(content)
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
+}
+
+func readClaudePersistedToolResult(
+	sessionPath, resultPath string,
+) (string, bool) {
+	if resultPath == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(resultPath) {
+		return "", false
+	}
+	cleanResult := filepath.Clean(resultPath)
+	for _, dir := range claudeToolResultDirs(sessionPath) {
+		if !pathWithinDir(cleanResult, dir) {
+			continue
+		}
+		b, err := os.ReadFile(cleanResult)
+		if err != nil {
+			return "", false
+		}
+		return string(b), true
+	}
+	return "", false
+}
+
+func claudeToolResultDirs(sessionPath string) []string {
+	var dirs []string
+	sessionDir := filepath.Join(
+		filepath.Dir(sessionPath),
+		strings.TrimSuffix(filepath.Base(sessionPath), ".jsonl"),
+		"tool-results",
+	)
+	dirs = append(dirs, filepath.Clean(sessionDir))
+
+	clean := filepath.Clean(sessionPath)
+	needle := string(filepath.Separator) + "subagents" + string(filepath.Separator)
+	if idx := strings.Index(clean, needle); idx > 0 {
+		dirs = append(dirs, filepath.Join(clean[:idx], "tool-results"))
+	}
+	return dirs
+}
+
+func pathWithinDir(path, dir string) bool {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." &&
+		rel != "" &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) &&
+		rel != ".."
 }
 
 // countUserTurns counts all user entries reachable from a
