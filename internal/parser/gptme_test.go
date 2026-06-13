@@ -3,6 +3,7 @@ package parser
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,12 @@ func TestParseGptmeSession(t *testing.T) {
 	assert.Equal(t, RoleUser, tool0.Role)
 	assert.True(t, tool0.IsSystem)
 	assert.Contains(t, tool0.Content, "Saved file")
+
+	// Timestamps must parse from the fixture's microsecond format ("2006-01-02T15:04:05.000000").
+	// sess.StartedAt comes from the system message (processed before role-skip).
+	assert.Equal(t, time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC), sess.StartedAt)
+	assert.Equal(t, time.Date(2026, 6, 13, 10, 0, 13, 0, time.UTC), sess.EndedAt)
+	assert.Equal(t, time.Date(2026, 6, 13, 10, 0, 1, 0, time.UTC), msgs[0].Timestamp)
 
 	// Accumulated session totals.
 	assert.Equal(t, 42+15, sess.TotalOutputTokens)
