@@ -13,6 +13,12 @@
     mappings: DbWorktreeProjectMapping[];
   }
 
+  interface Props {
+    readOnly?: boolean;
+  }
+
+  let { readOnly = false }: Props = $props();
+
   let machine = $state("");
   let mappings: DbWorktreeProjectMapping[] = $state([]);
   let loading = $state(true);
@@ -26,6 +32,10 @@
   let enabled = $state(true);
 
   $effect(() => {
+    if (readOnly) {
+      loading = false;
+      return;
+    }
     loadMappings();
   });
 
@@ -140,7 +150,9 @@
   title="Worktree mappings"
   description="Map worktree path prefixes to canonical projects on this machine."
 >
-  {#if loading}
+  {#if readOnly}
+    <div class="muted">Worktree mappings are available in local mode only.</div>
+  {:else if loading}
     <div class="muted">Loading mappings...</div>
   {:else if error && mappings.length === 0}
     <div class="error-text">{error}</div>

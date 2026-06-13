@@ -72,6 +72,7 @@ func (s *Server) humaGetSettings(
 		Host:             s.cfg.Host,
 		Port:             s.cfg.Port,
 		RequireAuth:      s.cfg.RequireAuth,
+		ReadOnly:         s.db.ReadOnly(),
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken

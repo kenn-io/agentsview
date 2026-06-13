@@ -89,7 +89,7 @@
       <AppearanceSettings />
       <AgentDirSettings />
       <TerminalSettings />
-      <WorktreeMappingSettings />
+      <WorktreeMappingSettings readOnly={settings.readOnly} />
       <GithubSettings />
       <RemoteSettings />
 

@@ -13,6 +13,7 @@ import {
   configureGeneratedClient,
   isRemoteConnection,
 } from "../api/runtime.js";
+import { events } from "./events.svelte.js";
 import type {
   SyncProgress,
   SyncStats,
@@ -211,12 +212,14 @@ class SyncStore {
       configureGeneratedClient();
       this.serverVersion =
         await MetadataService.getApiV1Version() as VersionInfo;
+      events.setAvailable(this.serverVersion.read_only !== true);
       this.markRemoteReachable(true);
       this.versionMismatch = commitsDisagree(
         this.buildCommit,
         this.serverVersion.commit,
       );
     } catch (error) {
+      events.setAvailable(false);
       this.markBackendFailure(error);
       console.warn("Failed to load version info:", error);
     }

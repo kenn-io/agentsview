@@ -9,7 +9,7 @@ export type SettingsResponse = {
   github_configured: boolean;
   host: string;
   port: number;
+  read_only: boolean;
   require_auth: boolean;
   terminal: TerminalResponse;
 };
-

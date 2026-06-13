@@ -9,6 +9,7 @@ type settingsResponse struct {
 	Port             int                 `json:"port"`
 	AuthToken        string              `json:"auth_token,omitempty"`
 	RequireAuth      bool                `json:"require_auth"`
+	ReadOnly         bool                `json:"read_only"`
 }
 
 // terminalResponse mirrors config.TerminalConfig for JSON output.

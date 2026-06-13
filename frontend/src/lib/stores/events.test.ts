@@ -44,9 +44,11 @@ class FakeEventSource {
   }
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   FakeEventSource.reset();
   vi.stubGlobal("EventSource", FakeEventSource);
+  const { events } = await import("./events.svelte.js");
+  events.setAvailable(true);
 });
 
 afterEach(() => {
@@ -54,6 +56,20 @@ afterEach(() => {
 });
 
 describe("events store", () => {
+  it("does not open an EventSource while live events are unavailable", async () => {
+    const { events } = await import("./events.svelte.js");
+    events.setAvailable(false);
+
+    const unsub = events.subscribe(() => {});
+
+    expect(FakeEventSource.instances).toHaveLength(0);
+
+    events.setAvailable(true);
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    unsub();
+  });
+
   it("opens a single EventSource on first subscribe", async () => {
     const { events } = await import("./events.svelte.js");
     const unsub1 = events.subscribe(() => {});

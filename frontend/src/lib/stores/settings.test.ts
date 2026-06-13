@@ -68,10 +68,29 @@ beforeEach(() => {
   settings.port = 0;
   settings.authToken = "";
   settings.requireAuth = false;
+  settings.readOnly = false;
   settings.loading = false;
   settings.saving = false;
   settings.error = null;
   settings.needsAuth = false;
+});
+
+describe("SettingsStore.load mode handling", () => {
+  it("records read-only mode from the settings response", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: true,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+
+    await settings.load();
+
+    expect(settings.readOnly).toBe(true);
+  });
 });
 
 describe("SettingsStore.load auth handling", () => {
