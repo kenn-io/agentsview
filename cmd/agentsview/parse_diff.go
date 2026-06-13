@@ -156,7 +156,39 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 			cfg.stdout(), report, appCfg.DBPath, agentsLabel, cfg.Verbose,
 		)
 	}
-	return cfg.FailOnChange && report.HasFailures()
+	return parseDiffExitFailure(report, cfg.FailOnChange, cfg.stderr())
+}
+
+// parseDiffExitFailure decides whether --fail-on-change should turn the
+// run into a non-zero exit and writes the vacuous-run explanation to
+// stderr when that is the reason. It is split from doParseDiff's I/O so
+// the exit contract is unit-testable, mirroring ParseDiffReport's own
+// HasFailures/VacuousResync helpers.
+//
+// A vacuous run -- this binary's data version is ahead of every
+// examined session, so all of them are pending_resync -- detects no
+// drift by construction (a resync rewrites every row), so a clean
+// result is not evidence the parser is unchanged. Treat it as a gate
+// failure rather than a green light, and explain the non-zero exit on
+// stderr: the stdout warning is absent under --json and easy to miss in
+// CI logs.
+func parseDiffExitFailure(
+	report *sync.ParseDiffReport, failOnChange bool, stderr io.Writer,
+) bool {
+	if !failOnChange {
+		return false
+	}
+	vacuous := report.VacuousResync()
+	if vacuous {
+		fmt.Fprintln(stderr,
+			"parse-diff: --fail-on-change failed: the run was vacuous "+
+				"(every examined session is pending resync because this "+
+				"binary's data version is ahead of the whole archive), so "+
+				"no parser drift could be detected. Re-run against a freshly "+
+				"resynced archive, or with a binary built before the "+
+				"data-version bump, to vet the change.")
+	}
+	return report.HasFailures() || vacuous
 }
 
 // parseDiffProgress returns a simple stderr counter for

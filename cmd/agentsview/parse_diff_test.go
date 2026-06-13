@@ -198,6 +198,78 @@ func TestDoParseDiff_FailOnChangeFalseOnEmptyArchive(t *testing.T) {
 		"0 sessions changed, 0 identical.")
 }
 
+// TestParseDiffExitFailure pins the --fail-on-change exit contract,
+// including the rule that a vacuous run (data version ahead of the whole
+// archive) is a gate failure, not a passing vet, with an explanation on
+// stderr that also reaches --json callers.
+func TestParseDiffExitFailure(t *testing.T) {
+	tests := []struct {
+		name         string
+		totals       sync.ParseDiffTotals
+		failOnChange bool
+		wantFail     bool
+		wantStderr   bool
+	}{
+		{
+			name:         "flag off never fails",
+			totals:       sync.ParseDiffTotals{Examined: 5, PendingResync: 5},
+			failOnChange: false,
+		},
+		{
+			name:         "identical passes",
+			totals:       sync.ParseDiffTotals{Examined: 5, Identical: 5},
+			failOnChange: true,
+		},
+		{
+			name:         "real change fails without stderr note",
+			totals:       sync.ParseDiffTotals{Examined: 5, Identical: 4, Changed: 1},
+			failOnChange: true,
+			wantFail:     true,
+		},
+		{
+			name:         "parse error fails without stderr note",
+			totals:       sync.ParseDiffTotals{Examined: 1, Identical: 1, ParseErrors: 1},
+			failOnChange: true,
+			wantFail:     true,
+		},
+		{
+			name:         "vacuous run fails with stderr note",
+			totals:       sync.ParseDiffTotals{Examined: 5, PendingResync: 5},
+			failOnChange: true,
+			wantFail:     true,
+			wantStderr:   true,
+		},
+		{
+			name: "partial pending resync is not vacuous",
+			totals: sync.ParseDiffTotals{
+				Examined: 5, Identical: 1, PendingResync: 4,
+			},
+			failOnChange: true,
+		},
+		{
+			name:         "no examined sessions is not vacuous",
+			totals:       sync.ParseDiffTotals{},
+			failOnChange: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &sync.ParseDiffReport{Totals: tc.totals}
+			var stderr bytes.Buffer
+			got := parseDiffExitFailure(r, tc.failOnChange, &stderr)
+			assert.Equal(t, tc.wantFail, got, "exit failure")
+			if tc.wantStderr {
+				assert.Contains(t, stderr.String(),
+					"--fail-on-change failed: the run was vacuous",
+					"vacuous run must explain the non-zero exit on stderr")
+			} else {
+				assert.Empty(t, stderr.String(),
+					"only a vacuous run writes to stderr")
+			}
+		})
+	}
+}
+
 // changedSession builds a DiffChanged SessionDiff fixture.
 func changedSession(
 	agent, id string, fields ...sync.FieldDiff,
