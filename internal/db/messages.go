@@ -1094,6 +1094,72 @@ func (db *DB) ToolCallContentFingerprint(sessionID string) (int64, error) {
 	return sum, err
 }
 
+// ToolCallFingerprint returns an exact ordered fingerprint of persisted
+// tool-call fields that can change without changing the message body or the
+// tool-call count. Used by PG push fast-paths to avoid skipping parser
+// changes that only affect tool metadata or inputs.
+func (db *DB) ToolCallFingerprint(sessionID string) (string, error) {
+	rows, err := db.getReader().Query(
+		`SELECT m.ordinal, tc.tool_name, tc.category,
+			tc.tool_use_id, COALESCE(tc.input_json, ''),
+			COALESCE(tc.skill_name, ''),
+			COALESCE(tc.subagent_session_id, ''),
+			COALESCE(tc.result_content_length, 0),
+			COALESCE(tc.result_content, '')
+		 FROM tool_calls tc
+		 JOIN messages m ON m.id = tc.message_id
+		 WHERE tc.session_id = ?
+		 ORDER BY m.ordinal ASC, tc.id ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	lastMessageOrdinal := -1
+	callIndex := 0
+	for rows.Next() {
+		var messageOrdinal, resultContentLength int
+		var toolName, category, toolUseID, inputJSON string
+		var skillName, subagentSessionID, resultContent string
+		if err := rows.Scan(
+			&messageOrdinal, &toolName, &category,
+			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
+			&resultContentLength, &resultContent,
+		); err != nil {
+			return "", err
+		}
+		if messageOrdinal == lastMessageOrdinal {
+			callIndex++
+		} else {
+			lastMessageOrdinal = messageOrdinal
+			callIndex = 0
+		}
+		toolName = SanitizeUTF8(toolName)
+		category = SanitizeUTF8(category)
+		toolUseID = SanitizeUTF8(toolUseID)
+		inputJSON = SanitizeUTF8(inputJSON)
+		skillName = SanitizeUTF8(skillName)
+		subagentSessionID = SanitizeUTF8(subagentSessionID)
+		resultContent = SanitizeUTF8(resultContent)
+		fmt.Fprintf(&b,
+			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s;",
+			messageOrdinal, callIndex,
+			len(toolName), toolName,
+			len(category), category,
+			len(toolUseID), toolUseID,
+			len(inputJSON), inputJSON,
+			len(skillName), skillName,
+			len(subagentSessionID), subagentSessionID,
+			resultContentLength,
+			len(resultContent), resultContent,
+		)
+	}
+	return b.String(), rows.Err()
+}
+
 // GetMessageByOrdinal returns a single message by session ID and ordinal.
 func (db *DB) GetMessageByOrdinal(
 	sessionID string, ordinal int,

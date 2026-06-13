@@ -5123,6 +5123,50 @@ func TestToolCallCountAndFingerprint(t *testing.T) {
 	assert.Equal(t, int64(150), sum, "sum")
 }
 
+func TestToolCallFingerprintIncludesStableFields(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"tc-old", "tc-new"} {
+		err := d.UpsertSession(Session{
+			ID: id, Project: "p", Machine: "local", Agent: "cursor",
+		})
+		require.NoError(t, err, "upsert %s", id)
+	}
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "tc-old", Ordinal: 0, Role: "assistant", Content: "tool",
+			ToolCalls: []ToolCall{
+				{
+					ToolName:            "ApplyPatch",
+					Category:            "ApplyPatch",
+					ToolUseID:           "toolu_patch",
+					ResultContentLength: 12,
+				},
+			},
+		},
+		{
+			SessionID: "tc-new", Ordinal: 0, Role: "assistant", Content: "tool",
+			ToolCalls: []ToolCall{
+				{
+					ToolName:            "ApplyPatch",
+					Category:            "Edit",
+					ToolUseID:           "toolu_patch",
+					InputJSON:           `{"patch":"@@\n-old\n+new"}`,
+					ResultContentLength: 12,
+				},
+			},
+		},
+	}), "insert")
+
+	oldFP, err := d.ToolCallFingerprint("tc-old")
+	require.NoError(t, err, "old fingerprint")
+	newFP, err := d.ToolCallFingerprint("tc-new")
+	require.NoError(t, err, "new fingerprint")
+
+	assert.NotEqual(t, oldFP, newFP)
+	assert.Contains(t, newFP, "Edit")
+	assert.Contains(t, newFP, `{"patch":"@@\n-old\n+new"}`)
+}
+
 func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

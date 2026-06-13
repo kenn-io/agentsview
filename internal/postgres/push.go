@@ -1053,6 +1053,12 @@ func (s *Sync) pushMessages(
 					"fingerprint: %w", err,
 			)
 		}
+		localTCFP, err := s.local.ToolCallFingerprint(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"computing local tool_call fingerprint: %w", err,
+			)
+		}
 		localTokenFP, err := s.local.MessageTokenFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
@@ -1063,6 +1069,12 @@ func (s *Sync) pushMessages(
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing pg token fingerprint: %w", err,
+			)
+		}
+		pgTCFP, err := pgToolCallFingerprint(ctx, tx, sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"computing pg tool_call fingerprint: %w", err,
 			)
 		}
 		localUsageFP, err := s.local.UsageEventFingerprint(sessionID)
@@ -1083,6 +1095,7 @@ func (s *Sync) pushMessages(
 			localSysFP == pgSystemFP.String &&
 			localTCCount == pgToolCallCount &&
 			localTCSum == pgTCContentSum &&
+			localTCFP == pgTCFP &&
 			localTokenFP == pgTokenFP &&
 			localUsageFP == pgUsageFP {
 			return 0, nil
@@ -1417,6 +1430,53 @@ func pgMessageTokenFingerprint(
 			len(srcUUID), srcUUID,
 			len(srcParentUUID), srcParentUUID,
 			isSidechain, isCompactBoundary,
+		)
+	}
+	return b.String(), rows.Err()
+}
+
+func pgToolCallFingerprint(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) (string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT message_ordinal, call_index, tool_name, category,
+			tool_use_id, COALESCE(input_json, ''),
+			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
+			COALESCE(result_content_length, 0),
+			COALESCE(result_content, '')
+		 FROM tool_calls
+		 WHERE session_id = $1
+		 ORDER BY message_ordinal ASC, call_index ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var messageOrdinal, callIndex, resultContentLength int
+		var toolName, category, toolUseID, inputJSON string
+		var skillName, subagentSessionID, resultContent string
+		if err := rows.Scan(
+			&messageOrdinal, &callIndex, &toolName, &category,
+			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
+			&resultContentLength, &resultContent,
+		); err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b,
+			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s;",
+			messageOrdinal, callIndex,
+			len(toolName), toolName,
+			len(category), category,
+			len(toolUseID), toolUseID,
+			len(inputJSON), inputJSON,
+			len(skillName), skillName,
+			len(subagentSessionID), subagentSessionID,
+			resultContentLength,
+			len(resultContent), resultContent,
 		)
 	}
 	return b.String(), rows.Err()
