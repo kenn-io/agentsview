@@ -5,6 +5,7 @@
     ArrowUpNarrowWideIcon,
     CheckIcon,
     CloudUploadIcon,
+    CopyIcon,
     DownloadIcon,
     EllipsisIcon,
     FunnelIcon,
@@ -119,6 +120,15 @@
     showOverflow = false;
   }
 
+  async function handleCopySourceFilePath() {
+    const filePath = sessions.activeSession?.file_path;
+    if (!filePath) return;
+    const ok = await copyToClipboard(filePath);
+    if (!ok) return;
+    showExportMenu = false;
+    showOverflow = false;
+  }
+
   function openPublish(secret: boolean) {
     ui.publishSecret = secret;
     ui.activeModal = "publish";
@@ -128,6 +138,9 @@
 
   const hasActiveSession = $derived(
     sessions.activeSessionId !== null,
+  );
+  const activeSessionFilePath = $derived(
+    sessions.activeSession?.file_path ?? "",
   );
 
   // Close block filter dropdown on outside click
@@ -516,6 +529,15 @@
                 {/if}
               </span>
             </button>
+            {#if activeSessionFilePath}
+              <button
+                class="overflow-item"
+                onclick={handleCopySourceFilePath}
+              >
+                <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
+                <span>Copy source file path</span>
+              </button>
+            {/if}
           </div>
         {/if}
       </div>
@@ -602,6 +624,15 @@
                 {/if}
               </span>
             </button>
+            {#if activeSessionFilePath}
+              <button
+                class="overflow-item"
+                onclick={handleCopySourceFilePath}
+              >
+                <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
+                <span>Copy source file path</span>
+              </button>
+            {/if}
             <button
               class="overflow-item"
               onclick={() => openPublish(false)}

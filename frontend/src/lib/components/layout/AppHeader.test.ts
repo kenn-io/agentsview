@@ -27,9 +27,29 @@ vi.mock("../../utils/clipboard.js", () => ({
 
 import { sessions } from "../../stores/sessions.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import type { Session } from "../../api/types.js";
 
 // @ts-ignore
 import AppHeader from "./AppHeader.svelte";
+
+function testSession(overrides: Partial<Session> = {}): Session {
+  return {
+    id: "sess-123",
+    project: "agentsview",
+    machine: "test-machine",
+    agent: "codex",
+    first_message: "Synthetic test session",
+    started_at: "2026-06-13T12:00:00Z",
+    ended_at: "2026-06-13T12:05:00Z",
+    message_count: 2,
+    user_message_count: 1,
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
+    is_automated: false,
+    created_at: "2026-06-13T12:00:00Z",
+    ...overrides,
+  };
+}
 
 describe("AppHeader export actions", () => {
   let component: ReturnType<typeof mount> | undefined;
@@ -37,6 +57,7 @@ describe("AppHeader export actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessions.activeSessionId = "sess-123";
+    sessions.sessions = [testSession()];
     ui.isMobileViewport = false;
     ui.followLatest = false;
   });
@@ -74,6 +95,39 @@ describe("AppHeader export actions", () => {
     expect(mocks.getMarkdownExportUrl).toHaveBeenCalledWith("sess-123");
     expect(mocks.copyToClipboard).toHaveBeenCalledWith(
       "http://localhost:3000/api/v1/sessions/sess-123/md",
+    );
+  });
+
+  it("copies active session source path from export menu", async () => {
+    sessions.sessions = [
+      testSession({
+        file_path: "/tmp/agentsview/sessions/session-123.jsonl",
+      }),
+    ];
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const exportButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Export session"]',
+    );
+    expect(exportButton).not.toBeNull();
+
+    exportButton!.click();
+    await tick();
+
+    const copyPathButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) =>
+      button.textContent?.includes("Copy source file path"),
+    );
+    expect(copyPathButton).toBeDefined();
+
+    copyPathButton!.click();
+    await tick();
+
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith(
+      "/tmp/agentsview/sessions/session-123.jsonl",
     );
   });
 
