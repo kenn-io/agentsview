@@ -178,15 +178,15 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 	env := setupTestEnv(t)
 
 	ids := []string{
-		"pd-count", "pd-first", "pd-model", "pd-role",
-		"pd-time", "pd-term", "pd-usage", "pd-control",
+		"pd-count", "pd-first", "pd-model", "pd-role", "pd-time",
+		"pd-body", "pd-swap", "pd-term", "pd-usage", "pd-control",
 	}
 	for _, id := range ids {
 		env.writeClaudeSession(t, "test-proj", id+".jsonl",
 			parseDiffClaudeContent(id+" prompt", id+" reply"))
 	}
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 8, Synced: 8,
+		TotalSessions: 10, Synced: 10,
 	})
 
 	// Simulate drift between the stored rows and what the current
@@ -211,6 +211,28 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 		"UPDATE messages SET timestamp = ?"+
 			" WHERE session_id = ? AND ordinal = 1",
 		"2024-01-01T10:00:06Z", "pd-time")
+	// Equal-length body rewrite: upper() changes the bytes without
+	// moving content_length, so neither the length aggregates nor the
+	// token fingerprint see it. Only the content hash can.
+	mutateDB(t, env,
+		"UPDATE messages SET content = upper(content)"+
+			" WHERE session_id = ? AND ordinal = 0", "pd-body")
+	// Aggregate collision: swapping content and content_length between
+	// the two ordinals permutes the lengths, so sum/max/min are
+	// unchanged while every per-ordinal value differs.
+	swapMsgs := fetchMessages(t, env.db, "pd-swap")
+	require.Len(t, swapMsgs, 2, "pd-swap fixture")
+	require.NotEqual(t,
+		swapMsgs[0].ContentLength, swapMsgs[1].ContentLength,
+		"swap needs distinct lengths or the collision test is vacuous")
+	mutateDB(t, env,
+		"UPDATE messages SET content = ?, content_length = ?"+
+			" WHERE session_id = ? AND ordinal = 0",
+		swapMsgs[1].Content, swapMsgs[1].ContentLength, "pd-swap")
+	mutateDB(t, env,
+		"UPDATE messages SET content = ?, content_length = ?"+
+			" WHERE session_id = ? AND ordinal = 1",
+		swapMsgs[0].Content, swapMsgs[0].ContentLength, "pd-swap")
 	// The parser classifies this fixture's termination; store a
 	// different non-null value so the diff is real drift, not the
 	// informational cleared-to-NULL case.
@@ -229,9 +251,9 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 
 	report := runParseDiff(t, env, sync.ParseDiffOptions{})
 
-	assert.Equal(t, 8, report.FilesExamined, "files examined")
+	assert.Equal(t, 10, report.FilesExamined, "files examined")
 	assert.Equal(t, sync.ParseDiffTotals{
-		Examined: 8, Identical: 1, Changed: 7,
+		Examined: 10, Identical: 1, Changed: 9,
 	}, report.Totals, "totals")
 
 	cases := []struct {
@@ -251,6 +273,8 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 		{"model drift", "pd-model", sync.FieldModels, 1, true},
 		{"role-only drift", "pd-role", sync.FieldMessageMetadata, 2, true},
 		{"timestamp-only drift", "pd-time", sync.FieldMessageMetadata, 2, true},
+		{"equal-length body drift", "pd-body", sync.FieldMessageContent, 2, true},
+		{"aggregate-collision length swap", "pd-swap", sync.FieldMessageContent, 2, true},
 		{"termination status drift", "pd-term", sync.FieldTerminationStatus, 1, true},
 		{"usage event drift", "pd-usage", sync.FieldUsageEventCount, 1, false},
 	}

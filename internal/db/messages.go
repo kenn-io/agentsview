@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -1046,6 +1047,41 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 			len(srcParentUUID), srcParentUUID,
 			isSidechain, isCompactBoundary,
 		)
+	}
+	return b.String(), rows.Err()
+}
+
+// MessageContentHashFingerprint returns an exact ordered fingerprint
+// of per-message body content: ordinal, the stored content_length
+// column, and a SHA-256 over the sanitized content. The parse-diff
+// comparator uses it instead of the aggregate
+// MessageContentFingerprint (sum/max/min of content_length, kept for
+// the PG push fast-path), which cannot see equal-length body rewrites
+// or per-message length changes whose aggregates collide.
+func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
+	rows, err := db.getReader().Query(
+		`SELECT ordinal, content, content_length
+		 FROM messages
+		 WHERE session_id = ?
+		 ORDER BY ordinal ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var ordinal, contentLength int
+		var content string
+		if err := rows.Scan(
+			&ordinal, &content, &contentLength,
+		); err != nil {
+			return "", err
+		}
+		sum := sha256.Sum256([]byte(SanitizeUTF8(content)))
+		fmt.Fprintf(&b, "%d|%d|%x;", ordinal, contentLength, sum)
 	}
 	return b.String(), rows.Err()
 }

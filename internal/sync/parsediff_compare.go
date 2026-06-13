@@ -9,6 +9,7 @@ package sync
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"sort"
 	"strconv"
@@ -35,13 +36,15 @@ func (e *Engine) compareStoredSession(
 ) ([]FieldDiff, error) {
 	diffs := compareSessionFields(stored, prepared)
 
-	// Tier 1: three cheap fingerprints over the stored messages. The
-	// token fingerprint covers per-message model and token metadata;
-	// the role/time fingerprint covers per-message role and timestamp,
-	// which the token fingerprint deliberately excludes (its shape is
-	// shared with the PG push fast-path); the content fingerprint
-	// covers body length (sum/max/min). Equal fingerprints prove the
-	// messages match on the compared fields without loading any rows.
+	// Tier 1: three exact ordered fingerprints over the stored
+	// messages. The token fingerprint covers per-message model and
+	// token metadata; the role/time fingerprint covers per-message
+	// role and timestamp, which the token fingerprint deliberately
+	// excludes (its shape is shared with the PG push fast-path); the
+	// content fingerprint covers per-message content_length and a
+	// body hash. Equal fingerprints prove the messages match on the
+	// compared fields without materializing full rows; only a
+	// mismatch loads them for attribution.
 	storedTokenFP, err := e.db.MessageTokenFingerprint(stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -56,21 +59,19 @@ func (e *Engine) compareStoredSession(
 			stored.ID, err,
 		)
 	}
-	storedSum, storedMax, storedMin, err :=
-		e.db.MessageContentFingerprint(stored.ID)
+	storedContentFP, err := e.db.MessageContentHashFingerprint(stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: content fingerprint for %s: %w",
 			stored.ID, err,
 		)
 	}
-	parsedSum, parsedMax, parsedMin := contentLengthAggregate(msgs)
 
 	tokenFPDiffers := messageTokenFingerprintTwin(msgs) != storedTokenFP
 	roleTimeFPDiffers :=
 		messageRoleTimeFingerprintTwin(msgs) != storedRoleTimeFP
-	contentFPDiffers := storedSum != parsedSum ||
-		storedMax != parsedMax || storedMin != parsedMin
+	contentFPDiffers :=
+		messageContentHashFingerprintTwin(msgs) != storedContentFP
 	if tokenFPDiffers || roleTimeFPDiffers || contentFPDiffers {
 		// Tier 2: load stored rows and attribute the mismatch to the
 		// per-message contract fields. A mismatch that lands on none
@@ -96,23 +97,6 @@ func (e *Engine) compareStoredSession(
 	}
 	diffs = append(diffs, compareUsageEvents(storedEvents, events)...)
 	return diffs, nil
-}
-
-// contentLengthAggregate mirrors db.MessageContentFingerprint over the
-// in-memory prepared messages: sum, max, and min of content_length
-// (max/min are 0 for an empty slice, matching the SQL COALESCE).
-func contentLengthAggregate(msgs []db.Message) (sum, max, min int64) {
-	for i, m := range msgs {
-		l := int64(m.ContentLength)
-		sum += l
-		if i == 0 || l > max {
-			max = l
-		}
-		if i == 0 || l < min {
-			min = l
-		}
-	}
-	return sum, max, min
 }
 
 // compareSessionFields compares the session-row contract fields.
@@ -360,6 +344,27 @@ func messageRoleTimeFingerprintTwin(msgs []db.Message) string {
 	return b.String()
 }
 
+// messageContentHashFingerprintTwin is the in-memory twin of
+// db.MessageContentHashFingerprint (internal/db/messages.go):
+// identical field order, identical sanitization, identical format
+// string, over a slice ordered by ordinal ascending. Like the other
+// twins, parity with the DB query is pinned by a white-box test
+// through the real write pipeline.
+func messageContentHashFingerprintTwin(msgs []db.Message) string {
+	ordered := make([]db.Message, len(msgs))
+	copy(ordered, msgs)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return ordered[i].Ordinal < ordered[j].Ordinal
+	})
+
+	var b strings.Builder
+	for _, m := range ordered {
+		sum := sha256.Sum256([]byte(db.SanitizeUTF8(m.Content)))
+		fmt.Fprintf(&b, "%d|%d|%x;", m.Ordinal, m.ContentLength, sum)
+	}
+	return b.String()
+}
+
 // compareMessageMetadata is the tier-2 per-message comparison, run
 // when any tier-1 fingerprint (token, role/time, or content)
 // mismatched. tokenFPDiffers carries the token and role/time
@@ -416,12 +421,11 @@ func compareMessageMetadata(
 			}
 			tokenDiffs++
 		}
-		if p.stored.ContentLength != p.parsed.ContentLength {
+		if messageContentDiffers(p.stored, p.parsed) {
 			if contentDiffs == 0 {
 				firstContentOrd = p.stored.Ordinal
-				firstContentSize = fmt.Sprintf(
-					"%d -> %d bytes",
-					p.stored.ContentLength, p.parsed.ContentLength,
+				firstContentSize = renderContentChange(
+					p.stored, p.parsed,
 				)
 			}
 			contentDiffs++
@@ -502,6 +506,31 @@ func compareMessageMetadata(
 		})
 	}
 	return diffs
+}
+
+// messageContentDiffers compares the per-message content contract:
+// the content_length column and the body itself (sanitized like the
+// fingerprint), so equal-length rewrites still attribute to
+// message_content instead of falling through to the generic
+// fingerprint-mismatch diff.
+func messageContentDiffers(stored, parsed db.Message) bool {
+	return stored.ContentLength != parsed.ContentLength ||
+		db.SanitizeUTF8(stored.Content) != db.SanitizeUTF8(parsed.Content)
+}
+
+// renderContentChange describes the first content change. Bodies are
+// never echoed (they can be huge and are exactly what the terminal
+// renderer must not leak); only sizes are reported.
+func renderContentChange(stored, parsed db.Message) string {
+	if stored.ContentLength != parsed.ContentLength {
+		return fmt.Sprintf(
+			"%d -> %d bytes",
+			stored.ContentLength, parsed.ContentLength,
+		)
+	}
+	return fmt.Sprintf(
+		"body differs at equal length (%d bytes)", stored.ContentLength,
+	)
 }
 
 // messageMetadataDiff reports the first differing per-message field

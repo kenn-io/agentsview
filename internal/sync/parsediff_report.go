@@ -54,9 +54,10 @@ const (
 	FieldTotalOutputTokens = "total_output_tokens"
 	FieldPeakContextTokens = "peak_context_tokens"
 	FieldMessageTokens     = "message_tokens"
-	// FieldMessageContent aggregates per-message content-length drift
-	// (sum/max/min), catching body changes the token fingerprint does
-	// not cover.
+	// FieldMessageContent covers per-message body drift: the
+	// content_length column and a hash of the body itself, catching
+	// equal-length rewrites the token fingerprint does not cover.
+	// Bodies are never included in the diff; only sizes are reported.
 	FieldMessageContent = "message_content"
 	// FieldMessageMetadata catches per-message drift in fields that are
 	// in the fingerprint but not separately surfaced (role, timestamp,

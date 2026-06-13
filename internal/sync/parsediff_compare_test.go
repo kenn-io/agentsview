@@ -399,6 +399,22 @@ func TestCompareMessageMetadata(t *testing.T) {
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
 	})
 
+	t.Run("equal-length body rewrite is a content diff", func(t *testing.T) {
+		stored := []db.Message{{
+			Ordinal: 0, Role: "assistant",
+			Content: "aaa", ContentLength: 3,
+		}}
+		parsed := []db.Message{{
+			Ordinal: 0, Role: "assistant",
+			Content: "bbb", ContentLength: 3,
+		}}
+		diffs := compareMessageMetadata(stored, parsed, false, true)
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldMessageContent, diffs[0].Field)
+		assert.Contains(t, diffs[0].Detail,
+			"body differs at equal length (3 bytes)")
+	})
+
 	t.Run("length mismatch compares the overlap only", func(t *testing.T) {
 		stored := []db.Message{pdMsg(0, "m", 100, 5)}
 		parsed := []db.Message{
@@ -655,6 +671,15 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 	assert.Equal(
 		t, storedRoleTimeFP, messageRoleTimeFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageRoleTimeFingerprint exactly",
+	)
+
+	storedContentFP, err := d.MessageContentHashFingerprint(prepared.ID)
+	require.NoError(t, err)
+	require.NotEmpty(t, storedContentFP)
+
+	assert.Equal(
+		t, storedContentFP, messageContentHashFingerprintTwin(msgs),
+		"in-memory twin must match db.MessageContentHashFingerprint exactly",
 	)
 }
 
