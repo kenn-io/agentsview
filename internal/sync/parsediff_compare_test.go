@@ -1371,11 +1371,11 @@ func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
 	assert.Equal(t, storedFlagsFP, messageFlagsFingerprintTwin(msgs),
 		"flags twin must match db.MessageFlagsFingerprint exactly")
 
-	storedToolFP, err := d.ToolCallFingerprint(prepared.ID)
+	storedToolFP, err := d.ToolCallParseDiffFingerprint(prepared.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, storedToolFP)
-	assert.Equal(t, storedToolFP, toolCallFingerprintTwin(msgs),
-		"tool-call twin must match db.ToolCallFingerprint exactly")
+	assert.Equal(t, storedToolFP, toolCallParseDiffFingerprintTwin(msgs),
+		"tool-call twin must match db.ToolCallParseDiffFingerprint exactly")
 }
 
 // TestCompareStoredSessionRoundTripToolCalls is the false-diff acid test

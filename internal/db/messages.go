@@ -1164,7 +1164,7 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 	return b.String(), rows.Err()
 }
 
-// ToolCallFingerprint returns an exact ordered fingerprint of a
+// ToolCallParseDiffFingerprint returns an exact ordered fingerprint of a
 // session's parser-owned tool_call columns: tool_name, category,
 // tool_use_id, a SHA-256 over input_json, skill_name,
 // subagent_session_id, and result_content_length. The database-assigned
@@ -1180,7 +1180,7 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 // as a tier-1 fast path so tool-call drift that moves none of the
 // message fingerprints still triggers the tier-2 comparison. Not used by
 // the PG push fast-path.
-func (db *DB) ToolCallFingerprint(sessionID string) (string, error) {
+func (db *DB) ToolCallParseDiffFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT m.ordinal, tc.tool_name, tc.category, tc.tool_use_id,
 			tc.input_json, tc.skill_name, tc.subagent_session_id,

@@ -95,7 +95,7 @@ func (e *Engine) compareStoredSession(
 			stored.ID, err,
 		)
 	}
-	storedToolFP, err := e.db.ToolCallFingerprint(stored.ID)
+	storedToolFP, err := e.db.ToolCallParseDiffFingerprint(stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: tool-call fingerprint for %s: %w",
@@ -111,7 +111,7 @@ func (e *Engine) compareStoredSession(
 	flagsFPDiffers :=
 		messageFlagsFingerprintTwin(msgs) != storedFlagsFP
 	toolFPDiffers :=
-		toolCallFingerprintTwin(msgs) != storedToolFP
+		toolCallParseDiffFingerprintTwin(msgs) != storedToolFP
 	if tokenFPDiffers || roleTimeFPDiffers || contentFPDiffers ||
 		flagsFPDiffers || toolFPDiffers {
 		// Tier 2: load stored rows (with tool calls attached) and
@@ -544,14 +544,14 @@ func messageFlagsFingerprintTwin(msgs []db.Message) string {
 	return b.String()
 }
 
-// toolCallFingerprintTwin is the in-memory twin of
-// db.ToolCallFingerprint (internal/db/messages.go). It iterates messages
+// toolCallParseDiffFingerprintTwin is the in-memory twin of
+// db.ToolCallParseDiffFingerprint (internal/db/messages.go). It iterates messages
 // in ordinal order and, within each, its tool calls in array order --
 // the same (ordinal, insertion) order the DB query reproduces via
 // ORDER BY m.ordinal, tc.id. Field order, sanitization, and the format
 // string match the query exactly; parity is pinned by a white-box test
 // through the real write pipeline.
-func toolCallFingerprintTwin(msgs []db.Message) string {
+func toolCallParseDiffFingerprintTwin(msgs []db.Message) string {
 	ordered := make([]db.Message, len(msgs))
 	copy(ordered, msgs)
 	sort.SliceStable(ordered, func(i, j int) bool {
