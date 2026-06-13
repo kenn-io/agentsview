@@ -130,10 +130,10 @@ var (
 	mdCodeBlockRe      = regexp.MustCompile("(?s)```(\\w*)\\n(.*?)```")
 )
 
-const exportToolNames = "Tool|Read|Write|Edit|Bash|Glob|Grep|Other|TaskCreate|TaskUpdate|TaskGet|TaskList|Task|Agent|" +
+const exportToolNames = "Tool|Read|Write|Edit|Patch|Bash|Glob|Grep|Other|TaskCreate|TaskUpdate|TaskGet|TaskList|Task|Agent|" +
 	"SendMessage|Question|Todo List|Entering Plan Mode|" +
 	"Exiting Plan Mode|exec_command|shell_command|" +
-	"write_stdin|apply_patch|shell|parallel|view_image|" +
+	"write_stdin|apply_patch|ApplyPatch|shell|parallel|view_image|" +
 	"request_user_input|update_plan"
 
 const markdownToolNames = exportToolNames + "|Skill"
@@ -146,6 +146,8 @@ var (
 		"write_stdin":   "Bash",
 		"shell":         "Bash",
 		"apply_patch":   "Edit",
+		"ApplyPatch":    "Edit",
+		"Patch":         "Edit",
 		"str_replace":   "Edit",
 		"run_command":   "Bash",
 		"create_file":   "Write",
@@ -478,6 +480,9 @@ func markdownToolFallback(tc *db.ToolCall) string {
 	if isEdit {
 		if diff := stringValue(params["diff"]); diff != "" {
 			return capLines(diff, 200)
+		}
+		if patch := firstString(params, "patch", "patch_text", "patchText"); patch != "" {
+			return capLines(patch, 200)
 		}
 		oldText := firstString(params, "old_string", "old_str", "oldString", "oldStr")
 		newText := firstString(params, "new_string", "new_str", "newString", "newStr")
