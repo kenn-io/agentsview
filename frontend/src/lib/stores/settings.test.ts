@@ -69,6 +69,7 @@ beforeEach(() => {
   settings.authToken = "";
   settings.requireAuth = false;
   settings.readOnly = false;
+  settings.loaded = false;
   settings.loading = false;
   settings.saving = false;
   settings.error = null;

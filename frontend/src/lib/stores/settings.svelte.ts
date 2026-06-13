@@ -51,6 +51,7 @@ class SettingsStore {
   authToken: string = $state("");
   requireAuth: boolean = $state(false);
   readOnly: boolean = $state(false);
+  loaded: boolean = $state(false);
   loading: boolean = $state(false);
   saving: boolean = $state(false);
   error: string | null = $state(null);
@@ -60,6 +61,7 @@ class SettingsStore {
 
   async load() {
     this.loading = true;
+    this.loaded = false;
     this.error = null;
     this.needsAuth = false;
     try {
@@ -91,6 +93,7 @@ class SettingsStore {
       }
     } finally {
       this.loading = false;
+      this.loaded = true;
     }
   }
 
