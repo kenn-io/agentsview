@@ -431,12 +431,13 @@ func buildCSPPolicy(
 	publicURL string,
 	publicOrigins []string,
 ) string {
-	// serverOrigin is the pinned origin used in the resource
+	// serverOrigins are the pinned origins used in the resource
 	// directives so resources load correctly regardless of how the
-	// webview resolves 'self'. In reverse-proxy deployments, prefer
-	// the browser-visible public origin over the bind socket.
-	serverOrigin := cspPinnedOrigin(host, port, publicURL, publicOrigins)
-	resourceSrc := "'self' " + serverOrigin
+	// webview resolves 'self'. Public origins are included for
+	// reverse-proxy deployments; concrete local origins are preserved
+	// for desktop webviews that need the backend socket pinned.
+	serverOrigins := cspPinnedOrigins(host, port, publicURL, publicOrigins)
+	resourceSrc := "'self' " + strings.Join(serverOrigins, " ")
 
 	baseURI := "'none'"
 	if basePath != "" {
@@ -457,19 +458,36 @@ func buildCSPPolicy(
 	)
 }
 
-func cspPinnedOrigin(
+func cspPinnedOrigins(
 	host string,
 	port int,
 	publicURL string,
 	publicOrigins []string,
-) string {
-	for _, raw := range append([]string{publicURL}, publicOrigins...) {
-		origin := normalizedOrigin(raw)
-		if origin != "" {
-			return origin
+) []string {
+	origins := make([]string, 0, 1+len(publicOrigins)+1)
+	seen := make(map[string]bool)
+	add := func(origin string) {
+		if origin == "" || seen[origin] {
+			return
 		}
+		seen[origin] = true
+		origins = append(origins, origin)
 	}
-	return "http://" + net.JoinHostPort(host, strconv.Itoa(port))
+	for _, raw := range append([]string{publicURL}, publicOrigins...) {
+		add(normalizedOrigin(raw))
+	}
+	if !isUnspecifiedHost(host) {
+		add("http://" + net.JoinHostPort(host, strconv.Itoa(port)))
+	}
+	if len(origins) == 0 {
+		add("http://" + net.JoinHostPort(host, strconv.Itoa(port)))
+	}
+	return origins
+}
+
+func isUnspecifiedHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsUnspecified()
 }
 
 func normalizedOrigin(raw string) string {

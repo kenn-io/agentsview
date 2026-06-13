@@ -314,6 +314,25 @@ func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
 	assert.NotContains(t, directives["default-src"], "0.0.0.0")
 }
 
+func TestBuildCSPPolicyKeepsLocalOriginWithPublicURL(t *testing.T) {
+	t.Parallel()
+
+	directives := parseCSP(buildCSPPolicy(
+		"127.0.0.1", 8080, "",
+		"https://agentsview.example.com/app",
+		nil,
+	))
+
+	assert.Equal(t,
+		"'self' https://agentsview.example.com http://127.0.0.1:8080",
+		directives["default-src"],
+	)
+	assert.Equal(t,
+		"'self' https://agentsview.example.com http://127.0.0.1:8080",
+		directives["script-src"],
+	)
+}
+
 func TestBuildCSPPolicyPinsPublicOriginWhenPublicURLUnset(t *testing.T) {
 	t.Parallel()
 
