@@ -112,8 +112,24 @@ func TestCompareSessionFields(t *testing.T) {
 			},
 		},
 		{
-			name: "session name drift",
+			name: "session name drift is informational for incremental agents",
 			prepared: func(s *db.Session) {
+				s.SessionName = new("Renamed")
+			},
+			want: []want{{
+				field:         FieldSessionName,
+				stored:        "My Session",
+				parsed:        "Renamed",
+				informational: true,
+			}},
+		},
+		{
+			name: "session name drift is a real diff for full-replace agents",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
 				s.SessionName = new("Renamed")
 			},
 			want: []want{{
@@ -670,6 +686,52 @@ func TestCompareMessageMetadata(t *testing.T) {
 		assert.Contains(t, diffs[0].Detail, `tool_name "Read" -> "Bash"`)
 		assert.Contains(t, diffs[0].Detail, "first at ordinal 0")
 	})
+
+	t.Run("tool_call sub-field drift attributes to tool_calls",
+		func(t *testing.T) {
+			base := db.ToolCall{
+				ToolName: "Read", Category: "Read", ToolUseID: "tu1",
+				InputJSON: `{"file":"a"}`, SkillName: "s1",
+				SubagentSessionID: "agent-1",
+			}
+			subCases := []struct {
+				name   string
+				mutate func(*db.ToolCall)
+				detail string
+			}{
+				{"category", func(tc *db.ToolCall) { tc.Category = "Bash" },
+					`category "Read" -> "Bash"`},
+				{"tool_use_id", func(tc *db.ToolCall) { tc.ToolUseID = "tu2" },
+					"tool_use_id differs"},
+				{"input_json", func(tc *db.ToolCall) { tc.InputJSON = `{"file":"b"}` },
+					"input_json differs"},
+				{"skill_name", func(tc *db.ToolCall) { tc.SkillName = "s2" },
+					`skill_name "s1" -> "s2"`},
+				{"subagent_session_id",
+					func(tc *db.ToolCall) { tc.SubagentSessionID = "agent-2" },
+					"subagent_session_id differs"},
+			}
+			for _, sc := range subCases {
+				t.Run(sc.name, func(t *testing.T) {
+					parsedTC := base
+					sc.mutate(&parsedTC)
+					stored := []db.Message{{
+						Ordinal: 0, Role: "assistant",
+						ToolCalls: []db.ToolCall{base},
+					}}
+					parsed := []db.Message{{
+						Ordinal: 0, Role: "assistant",
+						ToolCalls: []db.ToolCall{parsedTC},
+					}}
+					diffs := compareMessageMetadata(
+						stored, parsed, false, false, true,
+					)
+					require.Len(t, diffs, 1)
+					assert.Equal(t, FieldToolCalls, diffs[0].Field)
+					assert.Contains(t, diffs[0].Detail, sc.detail)
+				})
+			}
+		})
 
 	t.Run("tool_call count drift is a tool_calls diff", func(t *testing.T) {
 		stored := []db.Message{{

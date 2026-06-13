@@ -8,14 +8,21 @@ package sync
 // "" equivalence, SanitizeUTF8, TokenPresence inference) so that an
 // unchanged parser produces zero diffs against rows it wrote itself.
 //
-// Two parser-owned-but-derived values are deliberately not compared:
-// the session "project" column (rewritten from the mutable
-// worktree_project_mappings table, so its parser-owned input cwd is
-// compared instead) and the tool_call result body (possibly redacted by
-// the blocked-category config and unbounded in size, so only its length
-// is compared). Session columns that the incremental-append path leaves
-// frozen are compared but marked informational for the incremental
-// agents, mirroring termination_status.
+// Three parser-owned-but-derived areas are deliberately not compared:
+//   - the session "project" column, rewritten from the mutable
+//     worktree_project_mappings table (its parser-owned input cwd is
+//     compared instead);
+//   - the tool_call result body, possibly redacted to "" by the
+//     blocked-category config and unbounded in size; and
+//   - the tool_result_events rows, which the same blocked-category
+//     config clears wholesale (the events slice is set to nil) and whose
+//     content is likewise unbounded.
+//
+// For the latter two, only the config-stable result_content_length --
+// set from the event summary before the redaction check, so it captures
+// the dominant content-size signal -- is compared. Session columns that
+// the incremental-append path leaves frozen are compared but marked
+// informational for the incremental agents, mirroring termination_status.
 
 import (
 	"context"
@@ -160,10 +167,22 @@ func compareSessionFields(
 		diffs, FieldFirstMessage,
 		stored.FirstMessage, prepared.FirstMessage,
 	)
+	// session_name is frozen by the incremental-append path
+	// (UpdateSessionIncremental never rewrites it) yet mutable
+	// mid-session via Claude's /rename, so for the incremental-append
+	// agents a difference is benign pipeline history rather than parser
+	// drift -- mark it informational, like termination_status. By
+	// contrast first_message and started_at, also appended via
+	// appendTextFieldDiff, derive from the session head and are
+	// byte-stable across appends, so they stay strict.
+	before := len(diffs)
 	diffs = appendTextFieldDiff(
 		diffs, FieldSessionName,
 		stored.SessionName, prepared.SessionName,
 	)
+	if len(diffs) > before {
+		markIncrementalHistory(&diffs[len(diffs)-1], prepared.Agent)
+	}
 	diffs = appendTextFieldDiff(
 		diffs, FieldStartedAt,
 		stored.StartedAt, prepared.StartedAt,
@@ -320,10 +339,16 @@ func appendScalarSessionDiff(
 // markIncrementalHistory tags a session-field diff as benign pipeline
 // history for the incremental-append agents (Claude, Codex). See
 // appendSessionMetadataDiffs for why those agents legitimately diverge.
+// Any existing Detail (e.g. a long-value rune count) is preserved.
 func markIncrementalHistory(d *FieldDiff, agent string) {
-	if usesIncrementalAppend(agent) {
-		d.Informational = true
+	if !usesIncrementalAppend(agent) {
+		return
+	}
+	d.Informational = true
+	if d.Detail == "" {
 		d.Detail = "incremental-append history"
+	} else {
+		d.Detail += " (incremental-append history)"
 	}
 }
 

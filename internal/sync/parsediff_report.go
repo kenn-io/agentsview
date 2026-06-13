@@ -69,6 +69,10 @@ const (
 	// skill_name, subagent_session_id, and result_content_length. The
 	// database-assigned ids and the (possibly blocked) result body are
 	// never compared; result content is represented only by its length.
+	// The sibling tool_result_events table is also not compared per-event:
+	// the blocked-category config clears those rows wholesale, so a strict
+	// comparison would be config-sensitive; their dominant signal, the
+	// summarized content length, is captured by result_content_length.
 	FieldToolCalls         = "tool_calls"
 	FieldUsageEventCount   = "usage_event_count"
 	FieldUsageEventTotals  = "usage_event_totals"

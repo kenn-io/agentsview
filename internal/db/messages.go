@@ -1165,7 +1165,11 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 // subagent_session_id, and result_content_length. The database-assigned
 // id/message_id/session_id columns are excluded, and result_content (the
 // possibly blocked body) is represented only by its length, mirroring
-// the sizes-not-bodies rule the message content fingerprint follows.
+// the sizes-not-bodies rule the message content fingerprint follows. The
+// sibling tool_result_events rows are not fingerprinted: the
+// blocked-category config clears them wholesale, so comparing them would
+// be config-sensitive; result_content_length already captures their
+// summarized size.
 // Rows are ordered by the owning message's ordinal then tool_calls.id
 // (insertion order within a message). The parse-diff comparator uses it
 // as a tier-1 fast path so tool-call drift that moves none of the
