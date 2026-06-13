@@ -1048,14 +1048,23 @@ func usageTotalsDetail(stored, parsed usageTokenTotals) string {
 }
 
 // usageEventKey identifies one event inside the order-insensitive
-// multiset. The DedupKey form still folds in source and model so that
-// attribution drift (e.g. the same event re-tagged to a different
-// model) under a stable dedup key surfaces as a composition diff
-// rather than passing silently.
+// multiset. The DedupKey form still folds in source, model, and
+// parser-owned token fields so that attribution drift (e.g. the same
+// event re-tagged to a different model) or per-event token
+// redistribution under stable dedup keys surfaces as a composition
+// diff rather than passing silently.
 func usageEventKey(ev db.UsageEvent) string {
 	if ev.DedupKey != "" {
 		return strings.Join([]string{
-			"dedup", ev.DedupKey, ev.Source, ev.Model,
+			"dedup",
+			ev.DedupKey,
+			ev.Source,
+			ev.Model,
+			strconv.Itoa(ev.InputTokens),
+			strconv.Itoa(ev.OutputTokens),
+			strconv.Itoa(ev.CacheCreationInputTokens),
+			strconv.Itoa(ev.CacheReadInputTokens),
+			strconv.Itoa(ev.ReasoningTokens),
 		}, "|")
 	}
 	ord := "-"

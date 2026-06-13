@@ -884,6 +884,41 @@ func TestCompareUsageEvents(t *testing.T) {
 		assert.Contains(t, diffs[0].Detail, "event composition differs")
 	})
 
+	t.Run("dedup keyed token redistribution surfaces", func(t *testing.T) {
+		// Equal event count, equal aggregate totals, and stable
+		// dedup keys, but the per-event token payload changed.
+		// --fail-on-change must not pass over that data drift.
+		stored := []db.UsageEvent{
+			pdEvent("api", "m1", 10, 2, "2026-01-01T00:00:00Z", "k1", nil),
+			pdEvent("api", "m1", 20, 4, "2026-01-01T00:01:00Z", "k2", nil),
+		}
+		stored[0].CacheCreationInputTokens = 1
+		stored[1].CacheCreationInputTokens = 3
+		stored[0].CacheReadInputTokens = 5
+		stored[1].CacheReadInputTokens = 7
+		stored[0].ReasoningTokens = 11
+		stored[1].ReasoningTokens = 13
+		parsed := []db.UsageEvent{
+			pdEvent("api", "m1", 20, 4, "2026-01-01T00:00:00Z", "k1", nil),
+			pdEvent("api", "m1", 10, 2, "2026-01-01T00:01:00Z", "k2", nil),
+		}
+		parsed[0].CacheCreationInputTokens = 3
+		parsed[1].CacheCreationInputTokens = 1
+		parsed[0].CacheReadInputTokens = 7
+		parsed[1].CacheReadInputTokens = 5
+		parsed[0].ReasoningTokens = 13
+		parsed[1].ReasoningTokens = 11
+
+		diffs := compareUsageEvents(stored, parsed)
+
+		require.Len(t, diffs, 1)
+		assert.Equal(t, FieldUsageEventTotals, diffs[0].Field)
+		assert.Equal(t, sumUsageTokenTotals(stored).render(), diffs[0].Stored)
+		assert.Equal(t, sumUsageTokenTotals(parsed).render(), diffs[0].Parsed)
+		assert.Contains(t, diffs[0].Detail, "event composition differs")
+		assert.Contains(t, diffs[0].Detail, "dedup|k1")
+	})
+
 	t.Run("tuple fallback detects occurred_at drift", func(t *testing.T) {
 		stored := []db.UsageEvent{
 			pdEvent("api", "m1", 10, 2, "2026-01-01T00:00:00Z", "", nil),
