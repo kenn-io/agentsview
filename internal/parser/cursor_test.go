@@ -134,6 +134,22 @@ func TestExtractAssistantContentCursorApplyPatch(t *testing.T) {
 		toolCalls[0].InputJSON)
 }
 
+func TestExtractAssistantContentCursorApplyPatchDedentsRawPatch(t *testing.T) {
+	lines := []string{
+		"[Tool call] ApplyPatch",
+		"  @@ -1,1 +1,1 @@",
+		"  -old",
+		"  +new",
+	}
+
+	_, _, toolCalls := extractAssistantContent(lines)
+
+	require.Len(t, toolCalls, 1)
+	assert.JSONEq(t,
+		`{"patch":"@@ -1,1 +1,1 @@\n-old\n+new"}`,
+		toolCalls[0].InputJSON)
+}
+
 func TestIsContainedIn_EdgeCases(t *testing.T) {
 	// isContainedIn is in sync/discovery.go; we test
 	// isBlockBodyEnd here since it's in cursor.go.

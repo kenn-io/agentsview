@@ -280,7 +280,7 @@ func extractAssistantContent(
 }
 
 func cursorToolInputJSON(toolName string, lines []string) string {
-	raw := strings.TrimSpace(strings.Join(lines, "\n"))
+	raw := strings.TrimSpace(strings.Join(dedentCursorBlock(lines), "\n"))
 	if raw == "" {
 		return ""
 	}
@@ -312,6 +312,41 @@ func cursorToolInputJSON(toolName string, lines []string) string {
 		return ""
 	}
 	return marshalCursorToolParams(params)
+}
+
+func dedentCursorBlock(lines []string) []string {
+	minIndent := -1
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		indent := cursorLineIndent(line)
+		if minIndent < 0 || indent < minIndent {
+			minIndent = indent
+		}
+	}
+	if minIndent <= 0 {
+		return lines
+	}
+
+	dedented := make([]string, len(lines))
+	for i, line := range lines {
+		if len(line) < minIndent {
+			dedented[i] = strings.TrimLeft(line, " \t")
+			continue
+		}
+		dedented[i] = line[minIndent:]
+	}
+	return dedented
+}
+
+func cursorLineIndent(line string) int {
+	for i, r := range line {
+		if r != ' ' && r != '\t' {
+			return i
+		}
+	}
+	return len(line)
 }
 
 func marshalCursorToolParams(params map[string]string) string {

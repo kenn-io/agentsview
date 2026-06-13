@@ -34,7 +34,7 @@ const SKILL_RE =
   /\[Skill: (.+?)\]\n?([\s\S]*?)\n?\[\/Skill\]/g;
 
 const TOOL_NAMES =
-  "Tool|Read|Write|Edit|Bash|Glob|Grep|Other|TaskCreate|TaskUpdate|TaskGet|TaskList|Task|Agent|Skill|" +
+  "Tool|Read|Write|Edit|Patch|Bash|Glob|Grep|Other|TaskCreate|TaskUpdate|TaskGet|TaskList|Task|Agent|Skill|" +
   "SendMessage|Question|Todo List|Entering Plan Mode|" +
   "Exiting Plan Mode|exec_command|shell_command|" +
   "write_stdin|apply_patch|ApplyPatch|shell|parallel|view_image|" +
@@ -48,6 +48,7 @@ const TOOL_ALIASES: Record<string, string> = {
   shell: "Bash",
   apply_patch: "Edit",
   ApplyPatch: "Edit",
+  Patch: "Edit",
   // Pi tool names
   str_replace: "Edit",
   run_command: "Bash",

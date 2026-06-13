@@ -138,6 +138,15 @@ describe("parseContent", () => {
     });
   });
 
+  it("parses patch markers emitted for apply-patch tools", () => {
+    const segments = parseContent("[Patch: src/app.ts]\n@@\n-old\n+new");
+    expect(segments[0]).toEqual({
+      type: "tool",
+      content: "@@\n-old\n+new",
+      label: "Edit : src/app.ts",
+    });
+  });
+
   it("drops overlapping matches", () => {
     const text = "[Thinking]\nI think\n[Bash]\necho ok";
     const segments = parseContent(text);
