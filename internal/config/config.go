@@ -928,6 +928,10 @@ func applyFlagValue(cfg *Config, name, value string) {
 		if d, err := time.ParseDuration(value); err == nil {
 			cfg.EventsCoalesceInterval = d
 		}
+	case "pg":
+		// Read-routing only. The CLI resolver combines this flag
+		// with cfg.PG from env/config and does not persist a new
+		// config field for it.
 	}
 }
 

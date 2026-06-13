@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -29,6 +30,22 @@ type transport struct {
 	URL            string
 	ReadOnly       bool // daemon runtime ReadOnly flag (true for pg serve)
 	DirectReadOnly bool // writable daemon owns DB but is not reachable
+}
+
+type customPricingStore interface {
+	SetCustomPricing(map[string]config.CustomModelRate)
+}
+
+var openPGReadStore = func(
+	pgCfg config.PGConfig,
+) (db.Store, func(), error) {
+	store, err := postgres.NewStore(
+		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, func() { _ = store.Close() }, nil
 }
 
 // detectTransport picks the transport mode:
@@ -113,4 +130,27 @@ func newService(
 		// is handled via the HTTP daemon when one is running.
 		return service.NewDirectBackend(d, nil), cleanup, nil
 	}
+}
+
+// newPGReadService builds a read-only SessionService over the
+// configured PostgreSQL sync store. It shares the same store
+// construction path as pg serve, but leaves schema repair/migration
+// to pg push/serve because CLI read commands never mutate PG.
+func newPGReadService(
+	cfg config.Config, pgCfg config.PGConfig,
+) (service.SessionService, func(), error) {
+	applyClassifierConfig(cfg)
+	store, cleanup, err := openPGReadStore(pgCfg)
+	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, nil, fmt.Errorf("opening pg store: %w", err)
+	}
+	if len(cfg.CustomModelPricing) > 0 {
+		if priced, ok := store.(customPricingStore); ok {
+			priced.SetCustomPricing(cfg.CustomModelPricing)
+		}
+	}
+	return service.NewReadOnlyBackend(store), cleanup, nil
 }

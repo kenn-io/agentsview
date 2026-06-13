@@ -61,6 +61,13 @@ func resolveService(
 			"loading config: %w", err,
 		)
 	}
+	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if usePG {
+		return newPGReadService(cfg, pgCfg)
+	}
 	tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
 	if err != nil {
 		return nil, nil, err
@@ -78,6 +85,11 @@ func resolveWritableService(
 ) (service.SessionService, func(), error) {
 	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
 		return nil, nil, errors.New("--server not yet implemented")
+	}
+	if pgReadRequested(cmd) {
+		return nil, nil, errors.New(
+			"--pg is read-only and cannot be used with write commands",
+		)
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
@@ -102,6 +114,34 @@ func resolveWritableService(
 		)
 	}
 	return syncService(cfg, tr)
+}
+
+func resolvePGReadConfig(
+	cmd *cobra.Command, cfg config.Config,
+) (config.PGConfig, bool, error) {
+	requested := pgReadRequested(cmd)
+	if !requested && cfg.PG.URL == "" {
+		return config.PGConfig{}, false, nil
+	}
+	pgCfg, err := cfg.ResolvePG()
+	if err != nil {
+		return config.PGConfig{}, false,
+			fmt.Errorf("resolving pg config: %w", err)
+	}
+	if pgCfg.URL == "" {
+		return config.PGConfig{}, false, errors.New(
+			"pg url not configured; set AGENTSVIEW_PG_URL or [pg].url",
+		)
+	}
+	return pgCfg, true, nil
+}
+
+func pgReadRequested(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	v, err := cmd.Flags().GetBool("pg")
+	return err == nil && v
 }
 
 // outputFormat returns the requested --format flag value
