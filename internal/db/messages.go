@@ -16,7 +16,8 @@ import (
 const (
 	selectMessageCols = `id, session_id, ordinal, role, content,
 		thinking_text,
-		timestamp, has_thinking, has_tool_use, content_length,
+		COALESCE(timestamp, '') AS timestamp,
+		has_thinking, has_tool_use, content_length,
 		is_system,
 		model, token_usage, context_tokens, output_tokens,
 		has_context_tokens, has_output_tokens,
@@ -1093,10 +1094,14 @@ func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
 // columns; without it, role-only or timestamp-only parser drift would
 // never trigger the tier-2 row comparison. Role is sanitized to mirror
 // the tier-2 compare in messageMetadataDiff; timestamp is compared raw
-// there, so it stays raw here.
+// there, so it stays raw here. timestamp is nullable, so a NULL is
+// coalesced to the empty string to match both the in-memory twin (which
+// emits "" for a zero-value Go timestamp) and the tier-2 read path
+// (selectMessageCols coalesces the same way); without it a single
+// imported NULL row would error here and abort the whole parse-diff run.
 func (db *DB) MessageRoleTimeFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
-		`SELECT ordinal, role, timestamp
+		`SELECT ordinal, role, COALESCE(timestamp, '')
 		 FROM messages
 		 WHERE session_id = ?
 		 ORDER BY ordinal ASC`,

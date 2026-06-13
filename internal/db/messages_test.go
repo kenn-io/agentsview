@@ -334,3 +334,64 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	assert.Zero(t, leaked,
 		"FTS still contains rows matching 'xxx' from deleted blob")
 }
+
+// TestMessageReadsTolerateNullTimestamp pins NULL-timestamp robustness
+// across the three message read paths. timestamp is the only nullable
+// text column in the messages table; fresh inserts always bind a Go
+// string (never NULL), so a NULL only reaches a row via an imported or
+// migrated archive. Before the COALESCE guard such a row made rows.Scan
+// fail with "converting NULL to string is unsupported", which aborted
+// the parse-diff run (MessageRoleTimeFingerprint) and broke ordinary
+// reads (GetAllMessages, GetMessageByOrdinal).
+func TestMessageReadsTolerateNullTimestamp(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	insertSession(t, d, "null-ts", "proj1")
+	insertMessages(t, d,
+		userMsgAt("null-ts", 0, "hello", "2024-01-01T10:00:00Z"),
+		asstMsgAt("null-ts", 1, "hi there", "2024-01-01T10:00:05Z"),
+	)
+
+	nullOrdinal1 := func() {
+		require.NoError(t, d.Update(func(tx *sql.Tx) error {
+			_, err := tx.Exec(
+				"UPDATE messages SET timestamp = NULL"+
+					" WHERE session_id = ? AND ordinal = ?", "null-ts", 1)
+			return err
+		}), "null the stored timestamp")
+	}
+
+	// Tier-1 fingerprint: must not error, and a NULL must fingerprint
+	// identically to an empty string so the report cannot distinguish
+	// the two. InsertMessages binds a Go string, so reach past it with
+	// raw SQL to plant the NULL.
+	nullOrdinal1()
+	fpNull, err := d.MessageRoleTimeFingerprint("null-ts")
+	require.NoError(t, err, "fingerprint over NULL timestamp")
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE messages SET timestamp = ''"+
+				" WHERE session_id = ? AND ordinal = ?", "null-ts", 1)
+		return err
+	}), "set the stored timestamp to empty string")
+	fpEmpty, err := d.MessageRoleTimeFingerprint("null-ts")
+	require.NoError(t, err, "fingerprint over empty timestamp")
+	assert.Equal(t, fpEmpty, fpNull,
+		"NULL timestamp must fingerprint identically to empty string")
+
+	// Tier-2 batch read path (scanMessages via selectMessageCols).
+	nullOrdinal1()
+	msgs, err := d.GetAllMessages(context.Background(), "null-ts")
+	require.NoError(t, err, "GetAllMessages over NULL timestamp")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "2024-01-01T10:00:00Z", msgs[0].Timestamp)
+	assert.Equal(t, "", msgs[1].Timestamp,
+		"NULL timestamp reads as empty string")
+
+	// Single-row read path (GetMessageByOrdinal via selectMessageCols).
+	m, err := d.GetMessageByOrdinal("null-ts", 1)
+	require.NoError(t, err, "GetMessageByOrdinal over NULL timestamp")
+	require.NotNil(t, m)
+	assert.Equal(t, "", m.Timestamp,
+		"NULL timestamp reads as empty string")
+}

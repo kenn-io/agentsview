@@ -336,6 +336,58 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 	assert.True(t, report.HasFailures(), "HasFailures with drift")
 }
 
+// TestParseDiffToleratesNullStoredTimestamp guards the NULL-timestamp
+// regression. timestamp is the only nullable text column in messages, and
+// a single imported row with a NULL timestamp once made the tier-1
+// role/time fingerprint scan fail, aborting the whole run instead of
+// producing a report. The run must complete and surface the now-empty
+// stored timestamp as ordinary message_metadata drift.
+func TestParseDiffToleratesNullStoredTimestamp(t *testing.T) {
+	env := setupTestEnv(t)
+
+	env.writeClaudeSession(t, "test-proj", "pd-nullts.jsonl",
+		parseDiffClaudeContent("nullts prompt", "nullts reply"))
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	// Null the assistant message's stored timestamp. The source file is
+	// unchanged, so the re-parse still yields a real timestamp there;
+	// the stored NULL (coalesced to "") then differs from it as drift.
+	mutateDB(t, env,
+		"UPDATE messages SET timestamp = NULL"+
+			" WHERE session_id = ? AND ordinal = 1", "pd-nullts")
+
+	// runParseDiff requires no error and a non-nil report: before the
+	// COALESCE guard the NULL row aborted the run inside the fingerprint.
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Changed: 1,
+	}, report.Totals, "totals")
+
+	sd := findSessionDiff(report, "pd-nullts")
+	require.NotNil(t, sd, "session not listed")
+	assert.Equal(t, sync.DiffChanged, sd.Class, "class")
+	assert.ElementsMatch(t,
+		[]string{sync.FieldMessageMetadata},
+		sessionDiffFieldNames(sd, false),
+		"non-informational fields")
+	assert.True(t, report.HasFailures(), "HasFailures")
+
+	// messageMetadataDiff compares role before timestamp, so the field
+	// family alone does not prove timestamp was the trigger. Pin the
+	// detail to the timestamp column to match this test's intent.
+	var metaDetail string
+	for _, f := range sd.Fields {
+		if f.Field == sync.FieldMessageMetadata {
+			metaDetail = f.Detail
+		}
+	}
+	assert.Contains(t, metaDetail, "timestamp",
+		"message_metadata drift should attribute to the timestamp column")
+}
+
 // TestParseDiffDetectsExtendedFieldDrift covers the comparator surface
 // added beyond the summary fields end-to-end: tool_call drift, a
 // per-message flag, a full-replace-agent session-metadata field, and the
