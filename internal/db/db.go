@@ -28,6 +28,13 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 42: the Claude parser now infers subagent parent
+// relationships from Claude Code companion directories
+// (<session>/subagents/agent-*.jsonl) and resolves externalized
+// tool-results content from <session>/tool-results. Existing Claude
+// rows need re-parsing so companion subagents are linked and
+// persisted tool outputs replace preview placeholders.
+//
 // Bumped to 41: the Cursor parser now stores structured tool-call
 // input JSON for text transcripts and normalizes ApplyPatch calls as
 // edits. Existing Cursor rows need re-parsing so archived ApplyPatch
@@ -43,7 +50,7 @@ import (
 // orphan copy also skips stale Codex rows whose file_path was
 // reparsed under a different session id, so the old parent-ID row
 // does not survive the rebuild when the parent's own file is gone
-// see CopyOrphanedDataFromExcluding.)
+// (see CopyOrphanedDataFromExcluding.)
 //
 // (39: the Antigravity wire-walk hardened its output
 // invariants (issue #648): model-name candidates must be printable,
@@ -188,7 +195,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 41
+const dataVersion = 42
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

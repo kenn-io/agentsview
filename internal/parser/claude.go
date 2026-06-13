@@ -1343,6 +1343,7 @@ func resolveClaudePersistedToolResults(sessionPath, line string) string {
 			persistedPath = p
 		}
 	}
+	toolResultCount := countClaudeToolResultBlocks(blocks)
 
 	changed := false
 	for _, rawBlock := range blocks {
@@ -1355,7 +1356,8 @@ func resolveClaudePersistedToolResults(sessionPath, line string) string {
 			continue
 		}
 		path := persistedOutputPathFromContent(content)
-		if path == "" {
+		if path == "" && (toolResultCount == 1 ||
+			isPersistedToolResultPlaceholder(content)) {
 			path = persistedPath
 		}
 		if path == "" {
@@ -1377,6 +1379,21 @@ func resolveClaudePersistedToolResults(sessionPath, line string) string {
 		return line
 	}
 	return string(encoded)
+}
+
+func countClaudeToolResultBlocks(blocks []any) int {
+	count := 0
+	for _, rawBlock := range blocks {
+		block, ok := rawBlock.(map[string]any)
+		if ok && block["type"] == "tool_result" {
+			count++
+		}
+	}
+	return count
+}
+
+func isPersistedToolResultPlaceholder(content string) bool {
+	return strings.Contains(content, "<persisted-output>")
 }
 
 func persistedOutputPathFromContent(content string) string {
