@@ -36,14 +36,19 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 ## Quick Start
 
 ```bash
-agentsview serve           # start server, open web UI
+agentsview serve               # start foreground server
 agentsview serve --background  # start server and return to the shell
-agentsview usage daily     # print daily cost summary
+agentsview usage daily         # print daily cost summary
 ```
 
 On first run, agentsview discovers sessions from every supported agent on your
-machine, syncs them into a local SQLite database, and opens a web UI at
+machine, syncs them into a local SQLite database, and serves a web UI at
 `http://127.0.0.1:8080`.
+
+Use `agentsview serve --background` when you want the dashboard to keep running
+after your terminal prompt returns. The command prints the server URL, process
+ID, and log path (`~/.agentsview/serve.log`). Stop the background server with
+`kill <pid>`.
 
 ## Remote / forwarded access
 
