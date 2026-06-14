@@ -500,10 +500,10 @@ func extractModelName(data []byte) string {
 // message whose low bytes (tags, varints, NULs) are valid UTF-8 --
 // agProtoString cannot tell those apart from text, and the raw bytes
 // previously leaked into messages.model (and broke `pg push`, which
-// rejects NUL bytes). Require every rune to be printable and at least
-// one letter to be present.
+// rejects NUL bytes). Require every rune to be printable, at least
+// one letter to be present, and a reasonable length (<= 64 chars).
 func isPlausibleModelName(s string) bool {
-	if s == "" {
+	if s == "" || len(s) > 64 {
 		return false
 	}
 	hasLetter := false
@@ -520,9 +520,9 @@ func isPlausibleModelName(s string) bool {
 
 // decodeAntigravityStep extracts a ParsedMessage from one step's
 // protobuf payload. Without an upstream .proto we use heuristics:
-//   - role: step_type 14 has been observed to carry user prompts.
-//     Every other type is rendered as assistant. (TODO: refine
-//     when more sample data is available.)
+//   - role: step_type 14 carries user prompts; step_type 17 is the
+//     main assistant response. (TODO: refine further if other
+//     types are identified.)
 //   - content: best-effort human-facing strings found in the
 //     payload tree. Internal ids, local Antigravity config paths,
 //     model placeholders, and duplicate payload echoes are filtered
@@ -659,17 +659,12 @@ func extractAntigravityToolCalls(
 	var calls []ParsedToolCall
 	seen := map[string]bool{}
 	for i, s := range all {
-		if !isLikelyToolName(s) {
-			continue
-		}
-		cat := NormalizeToolCategory(s)
-		if cat == "Other" {
-			continue
-		}
 		// Reject generic taxonomy matches that are not known Antigravity tools.
 		if !isAntigravityToolName(s) {
 			continue
 		}
+		cat := NormalizeToolCategory(s)
+
 		// Look for an adjacent UUID-like string to use as ToolUseID.
 		// We scan the neighbouring strings (within a small window on
 		// either side) since the proto walker returns siblings in
@@ -840,7 +835,9 @@ func isNoisyAntigravityStepString(s string) bool {
 	if strings.HasPrefix(s, "command(") ||
 		strings.HasPrefix(s, "execute_url(") ||
 		strings.HasPrefix(s, "read_url(") ||
-		strings.HasPrefix(s, "mcp(") {
+		strings.HasPrefix(s, "mcp(") ||
+		strings.HasPrefix(s, "http://") ||
+		strings.HasPrefix(s, "https://") {
 		return true
 	}
 	return false
