@@ -2943,6 +2943,40 @@ func TestPath(t *testing.T) {
 	assert.Equal(t, path, d.Path(), "Path()")
 }
 
+func TestOpenConfiguresWALJournalSizeLimit(t *testing.T) {
+	d := testDB(t)
+
+	var got int64
+	err := d.getWriter().QueryRow("PRAGMA journal_size_limit").Scan(&got)
+	requireNoError(t, err, "PRAGMA journal_size_limit")
+	assert.Equal(t, int64(walJournalSizeLimitBytes), got)
+}
+
+func TestCheckpointWALTruncate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d, err := Open(path)
+	requireNoError(t, err, "Open")
+	defer d.Close()
+
+	_, err = d.getWriter().Exec(`PRAGMA wal_autocheckpoint=0`)
+	requireNoError(t, err, "disable wal autocheckpoint")
+
+	for i := range 100 {
+		insertSession(t, d, fmt.Sprintf("wal-session-%03d", i), "proj")
+	}
+	require.FileExists(t, path+"-wal")
+
+	err = d.CheckpointWALTruncateWithRetry(context.Background())
+	requireNoError(t, err, "CheckpointWALTruncateWithRetry")
+
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		assert.LessOrEqual(t, info.Size(), int64(walJournalSizeLimitBytes))
+	} else {
+		require.True(t, os.IsNotExist(err), "stat wal: %v", err)
+	}
+}
+
 func TestReopen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")

@@ -1876,6 +1876,12 @@ func (e *Engine) ResyncAll(
 		stats.Warnings = append(stats.Warnings,
 			"reopen after resync failed: "+err.Error(),
 		)
+	} else if err := origDB.CheckpointWALTruncateWithRetry(ctx); err != nil {
+		if errors.Is(err, db.ErrWALCheckpointBusy) {
+			log.Printf("resync: wal checkpoint busy")
+		} else {
+			log.Printf("resync: wal checkpoint: %v", err)
+		}
 	}
 
 	// 6. Persist skip cache into the new DB.

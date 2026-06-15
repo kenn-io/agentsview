@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -203,6 +204,18 @@ const dataVersion = 43
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
+const (
+	walJournalSizeLimitBytes = 256 * 1024 * 1024
+	walCheckpointThreshold   = 512 * 1024 * 1024
+	walCheckpointInterval    = 5 * time.Minute
+	walCheckpointAttempts    = 3
+	walCheckpointRetryDelay  = 250 * time.Millisecond
+)
+
+// ErrWALCheckpointBusy reports that a truncate checkpoint could not reset
+// the WAL because another connection still had pages pinned.
+var ErrWALCheckpointBusy = errors.New("wal checkpoint busy")
+
 // ClassifierHashKey is the shared SQLite stats / PG sync_metadata key
 // under which the current is_automated classifier hash is stored.
 // Exported so the postgres package and the classifier rebuild CLI
@@ -261,6 +274,10 @@ type DB struct {
 	cursorSecret []byte
 
 	customPricing map[string]config.CustomModelRate
+
+	checkpointMu   sync.Mutex
+	checkpointStop chan struct{}
+	checkpointDone chan struct{}
 }
 
 // Reader exposes guarded read-only query operations. It intentionally does
@@ -1391,6 +1408,10 @@ func openAndInit(path string) (*DB, error) {
 		return nil, fmt.Errorf("opening writer: %w", err)
 	}
 	writer.SetMaxOpenConns(1)
+	if err := configureWAL(writer); err != nil {
+		writer.Close()
+		return nil, fmt.Errorf("configuring wal: %w", err)
+	}
 
 	reader, err := sql.Open("sqlite3", makeDSN(path, true))
 	if err != nil {
@@ -1416,7 +1437,130 @@ func openAndInit(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
+	db.startWALCheckpointLoop()
 	return db, nil
+}
+
+func configureWAL(conn *sql.DB) error {
+	var limit int64
+	if err := conn.QueryRow(
+		fmt.Sprintf(
+			"PRAGMA journal_size_limit = %d",
+			walJournalSizeLimitBytes,
+		),
+	).Scan(&limit); err != nil {
+		return fmt.Errorf("setting journal_size_limit: %w", err)
+	}
+	return nil
+}
+
+// CheckpointWALTruncate runs a best-effort truncate checkpoint on the writer
+// connection. It is safe to call while the app is running; SQLite reports
+// ErrWALCheckpointBusy instead of blocking indefinitely when readers pin pages.
+func (db *DB) CheckpointWALTruncate(ctx context.Context) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var busy, logPages, checkpointedPages int
+	err := db.getWriter().QueryRowContext(
+		ctx, "PRAGMA wal_checkpoint(TRUNCATE)",
+	).Scan(&busy, &logPages, &checkpointedPages)
+	if err != nil {
+		return fmt.Errorf("wal checkpoint truncate: %w", err)
+	}
+	if busy != 0 {
+		return ErrWALCheckpointBusy
+	}
+	return nil
+}
+
+// CheckpointWALTruncateWithRetry gives short-lived readers a chance to release
+// pages after large rewrites such as a full resync. Persistent readers simply
+// leave the WAL for the next periodic attempt.
+func (db *DB) CheckpointWALTruncateWithRetry(ctx context.Context) error {
+	var lastErr error
+	for i := range walCheckpointAttempts {
+		err := db.CheckpointWALTruncate(ctx)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrWALCheckpointBusy) {
+			return err
+		}
+		if i == walCheckpointAttempts-1 {
+			break
+		}
+		timer := time.NewTimer(walCheckpointRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return lastErr
+}
+
+// MaybeCheckpointLargeWAL attempts a truncate checkpoint only when the WAL file
+// has grown past the configured threshold.
+func (db *DB) MaybeCheckpointLargeWAL(ctx context.Context) (bool, error) {
+	info, err := os.Stat(db.path + "-wal")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat wal: %w", err)
+	}
+	if info.Size() < walCheckpointThreshold {
+		return false, nil
+	}
+	return true, db.CheckpointWALTruncate(ctx)
+}
+
+func (db *DB) startWALCheckpointLoop() {
+	db.checkpointMu.Lock()
+	defer db.checkpointMu.Unlock()
+	if db.checkpointStop != nil {
+		return
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	db.checkpointStop = stop
+	db.checkpointDone = done
+
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(walCheckpointInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				attempted, err := db.MaybeCheckpointLargeWAL(context.Background())
+				if attempted && err != nil &&
+					!errors.Is(err, ErrWALCheckpointBusy) {
+					log.Printf("sqlite wal checkpoint: %v", err)
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+}
+
+func (db *DB) stopWALCheckpointLoop() {
+	db.checkpointMu.Lock()
+	stop := db.checkpointStop
+	done := db.checkpointDone
+	db.checkpointStop = nil
+	db.checkpointDone = nil
+	db.checkpointMu.Unlock()
+
+	if stop == nil {
+		return
+	}
+	close(stop)
+	<-done
 }
 
 // DropFTS drops the FTS table and its triggers. This makes
@@ -1558,6 +1702,7 @@ func (db *DB) init() error {
 // Close closes both writer and reader connections, plus any
 // retired pools left over from previous Reopen calls.
 func (db *DB) Close() error {
+	db.stopWALCheckpointLoop()
 	db.mu.Lock()
 	db.connMu.Lock()
 	w := db.getWriter()
@@ -1579,6 +1724,7 @@ func (db *DB) Close() error {
 // Also drains any retired pools from previous Reopen calls.
 // Callers must call Reopen afterwards to restore service.
 func (db *DB) CloseConnections() error {
+	db.stopWALCheckpointLoop()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.connMu.Lock()
@@ -1601,7 +1747,11 @@ func (db *DB) CloseConnections() error {
 func (db *DB) Reopen() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	return db.reopenLocked()
+	if err := db.reopenLocked(); err != nil {
+		return err
+	}
+	db.startWALCheckpointLoop()
+	return nil
 }
 
 // reopenLocked performs the reopen while db.mu is already
@@ -1615,6 +1765,10 @@ func (db *DB) reopenLocked() error {
 		return fmt.Errorf("reopening writer: %w", err)
 	}
 	writer.SetMaxOpenConns(1)
+	if err := configureWAL(writer); err != nil {
+		writer.Close()
+		return fmt.Errorf("configuring reopened wal: %w", err)
+	}
 
 	reader, err := sql.Open(
 		"sqlite3", makeDSN(db.path, true),
