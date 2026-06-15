@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -639,6 +640,9 @@ func TestDecodeKimiProjectDir(t *testing.T) {
 }
 
 func TestDiscoverKimiSessions_NewLayout_RejectsInvalidComponent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("':' is a reserved path character on Windows; the invalid component cannot exist on disk")
+	}
 	dir := t.TempDir()
 
 	// An agent name containing ':' would break the ':'-delimited
