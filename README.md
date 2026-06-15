@@ -262,35 +262,35 @@ agentsview auto-discovers sessions from all of these:
 
 | Agent              | Session Directory                                      |
 | ------------------ | ------------------------------------------------------ |
+| Amp                | `~/.local/share/amp/threads/`                          |
+| Antigravity        | `~/.gemini/antigravity/`                               |
+| Antigravity CLI    | `~/.gemini/antigravity-cli/` (see note below)          |
 | Claude Code        | `~/.claude/projects/`                                  |
 | Codex              | `~/.codex/sessions/`                                   |
 | Copilot CLI        | `~/.copilot/`                                          |
-| Gemini CLI         | `~/.gemini/`                                           |
-| OpenCode           | `~/.local/share/opencode/`                             |
-| OpenHands CLI      | `~/.openhands/conversations/`                          |
+| Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
 | Cursor             | `~/.cursor/projects/`                                  |
-| Amp                | `~/.local/share/amp/threads/`                          |
+| Forge              | `~/.forge/`                                            |
+| Gemini CLI         | `~/.gemini/`                                           |
+| gptme              | `~/.local/share/gptme/logs/`                           |
+| Hermes Agent       | `~/.hermes/sessions/`                                  |
 | iFlow              | `~/.iflow/projects/`                                   |
-| Zencoder           | `~/.zencoder/sessions/`                                |
-| Zed                | `~/Library/Application Support/Zed/` (macOS)           |
-| VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
-| Pi                 | `~/.pi/agent/sessions/`                                |
-| Qwen Code          | `~/.qwen/projects/`                                    |
-| OpenClaw           | `~/.openclaw/agents/`                                  |
-| QClaw              | `~/.qclaw/agents/`                                     |
 | Kimi               | `~/.kimi/sessions/`                                    |
 | Kiro CLI           | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`    |
 | Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |
-| Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
-| Hermes Agent       | `~/.hermes/sessions/`                                  |
-| WorkBuddy          | `~/.workbuddy/projects/`                               |
-| Forge              | `~/.forge/`                                            |
+| OpenClaw           | `~/.openclaw/agents/`                                  |
+| OpenCode           | `~/.local/share/opencode/`                             |
+| OpenHands CLI      | `~/.openhands/conversations/`                          |
+| Pi                 | `~/.pi/agent/sessions/`                                |
 | Piebald            | `~/.local/share/piebald/`                              |
-| Warp               | `~/.warp/` (platform-dependent)                        |
 | Positron Assistant | `~/Library/Application Support/Positron/User/` (macOS) |
-| Antigravity        | `~/.gemini/antigravity/`                               |
-| Antigravity CLI    | `~/.gemini/antigravity-cli/` (see note below)          |
-| gptme              | `~/.local/share/gptme/logs/`                           |
+| QClaw              | `~/.qclaw/agents/`                                     |
+| Qwen Code          | `~/.qwen/projects/`                                    |
+| VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
+| Warp               | `~/.warp/` (platform-dependent)                        |
+| WorkBuddy          | `~/.workbuddy/projects/`                               |
+| Zed                | `~/Library/Application Support/Zed/` (macOS)           |
+| Zencoder           | `~/.zencoder/sessions/`                                |
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details.
