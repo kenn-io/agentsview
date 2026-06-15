@@ -199,6 +199,7 @@ func ParsePiSession(
 		Machine:          machine,
 		Agent:            AgentPi,
 		ParentSessionID:  parentSessionID,
+		Cwd:              cwd,
 		FirstMessage:     firstMessage,
 		SessionName:      sessionName,
 		StartedAt:        startedAt,

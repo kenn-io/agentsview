@@ -35,6 +35,9 @@ func TestParsePiSession_SessionHeader(t *testing.T) {
 	assert.Equal(t, "pi:pi-test-session-uuid", sess.ID, "PRSR-01: session ID")
 	assert.Equal(t, AgentPi, sess.Agent, "PRSR-11: agent type")
 
+	assert.Equal(t, "/Users/alice/code/my-project", sess.Cwd,
+		"PRSR-01: cwd from session header")
+
 	// ExtractProjectFromCwd("/Users/alice/code/my-project") -> "my_project"
 	assert.Equal(t, "my_project", sess.Project, "PRSR-01: project from cwd")
 
