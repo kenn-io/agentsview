@@ -234,6 +234,64 @@ type antigravityStepLoadResult struct {
 	rawStepCount int
 }
 
+type antigravityStepKind int
+
+const (
+	antigravityStepKindUser      antigravityStepKind = 14
+	antigravityStepKindAssistant antigravityStepKind = 17
+)
+
+type antigravityStep struct {
+	idx       int
+	kind      antigravityStepKind
+	fields    []agProtoField
+	timestamp time.Time
+	role      RoleType
+}
+
+func newAntigravityStep(
+	idx, stepType int, payload []byte,
+) (antigravityStep, bool) {
+	if len(payload) == 0 {
+		return antigravityStep{}, false
+	}
+	fields, err := agProtoParse(payload)
+	if err != nil || len(fields) == 0 {
+		return antigravityStep{}, false
+	}
+
+	kind := antigravityStepKindFromProto(fields, stepType)
+	role := roleForAntigravityStepKind(kind)
+
+	return antigravityStep{
+		idx:       idx,
+		kind:      kind,
+		fields:    fields,
+		timestamp: earliestAntigravityTimestamp(fields),
+		role:      role,
+	}, true
+}
+
+func antigravityStepKindFromProto(
+	fields []agProtoField, fallbackStepType int,
+) antigravityStepKind {
+	if f, ok := agProtoFind(fields, 1); ok && f.Wire == pbWireVarint {
+		return antigravityStepKind(f.Varint)
+	}
+	return antigravityStepKind(fallbackStepType)
+}
+
+func roleForAntigravityStepKind(kind antigravityStepKind) RoleType {
+	switch kind {
+	case antigravityStepKindUser:
+		return RoleUser
+	case antigravityStepKindAssistant:
+		return RoleAssistant
+	default:
+		return RoleAssistant
+	}
+}
+
 func loadAntigravityStepsWithRawCount(
 	db *sql.DB,
 ) (antigravityStepLoadResult, error) {
@@ -534,31 +592,20 @@ func isPlausibleModelName(s string) bool {
 func decodeAntigravityStep(
 	idx, stepType int, payload []byte,
 ) (ParsedMessage, bool) {
-	if len(payload) == 0 {
+	step, ok := newAntigravityStep(idx, stepType, payload)
+	if !ok {
 		return ParsedMessage{}, false
-	}
-	fields, err := agProtoParse(payload)
-	if err != nil || len(fields) == 0 {
-		return ParsedMessage{}, false
-	}
-	ts := earliestAntigravityTimestamp(fields)
-
-	role := RoleAssistant
-	if stepType == 14 {
-		role = RoleUser
 	}
 
 	// Extract tool calls for assistant steps before the content guard
 	// so that tool-only steps (no displayable text) are not silently
 	// dropped.
 	var calls []ParsedToolCall
-	if role == RoleAssistant {
-		calls = extractAntigravityToolCalls(idx, fields)
+	if step.role == RoleAssistant {
+		calls = extractAntigravityToolCalls(step.idx, step.fields)
 	}
 
-	strs := cleanAntigravityStepStrings(
-		dedupeStrings(agProtoCollectStrings(fields, 20)), stepType,
-	)
+	strs := cleanAntigravityStepStrings(step)
 
 	// Emit the message if it has displayable content OR tool calls.
 	// Tool-only assistant steps (empty prose) are valid.
@@ -568,10 +615,10 @@ func decodeAntigravityStep(
 
 	content := strings.Join(strs, "\n\n")
 	msg := ParsedMessage{
-		Role:          role,
+		Role:          step.role,
 		Content:       content,
 		ContentLength: len(content),
-		Timestamp:     ts,
+		Timestamp:     step.timestamp,
 	}
 	if len(calls) > 0 {
 		msg.ToolCalls = calls
@@ -762,19 +809,20 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-func cleanAntigravityStepStrings(
-	strs []string, stepType int,
-) []string {
+func cleanAntigravityStepStrings(step antigravityStep) []string {
 	var cleaned []string
-	for _, s := range strs {
+	for _, s := range dedupeStrings(agProtoCollectStrings(step.fields, 20)) {
 		s = strings.TrimSpace(s)
 		if isNoisyAntigravityStepString(s) {
+			continue
+		}
+		if step.role != RoleUser && isNoisyAntigravityNonUserStepString(s) {
 			continue
 		}
 		cleaned = append(cleaned, s)
 	}
 	cleaned = dedupeStrings(cleaned)
-	if stepType == 14 {
+	if step.role == RoleUser {
 		if prompt := bestAntigravityUserPrompt(cleaned); prompt != "" {
 			return []string{prompt}
 		}
@@ -819,8 +867,14 @@ func isNoisyAntigravityStepString(s string) bool {
 	if strings.HasPrefix(s, "command(") ||
 		strings.HasPrefix(s, "execute_url(") ||
 		strings.HasPrefix(s, "read_url(") ||
-		strings.HasPrefix(s, "mcp(") ||
-		strings.HasPrefix(s, "http://") ||
+		strings.HasPrefix(s, "mcp(") {
+		return true
+	}
+	return false
+}
+
+func isNoisyAntigravityNonUserStepString(s string) bool {
+	if strings.HasPrefix(s, "http://") ||
 		strings.HasPrefix(s, "https://") {
 		return true
 	}
