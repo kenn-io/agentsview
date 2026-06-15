@@ -237,8 +237,8 @@ type antigravityStepLoadResult struct {
 type antigravityStepKind int
 
 const (
-	antigravityStepKindUser      antigravityStepKind = 14
-	antigravityStepKindAssistant antigravityStepKind = 17
+	antigravityStepKindUserInput       antigravityStepKind = 14
+	antigravityStepKindPlannerResponse antigravityStepKind = 15
 )
 
 type antigravityStep struct {
@@ -283,9 +283,9 @@ func antigravityStepKindFromProto(
 
 func roleForAntigravityStepKind(kind antigravityStepKind) RoleType {
 	switch kind {
-	case antigravityStepKindUser:
+	case antigravityStepKindUserInput:
 		return RoleUser
-	case antigravityStepKindAssistant:
+	case antigravityStepKindPlannerResponse:
 		return RoleAssistant
 	default:
 		return RoleAssistant
@@ -578,9 +578,9 @@ func isPlausibleModelName(s string) bool {
 
 // decodeAntigravityStep extracts a ParsedMessage from one step's
 // protobuf payload. Without an upstream .proto we use heuristics:
-//   - role: step_type 14 carries user prompts; step_type 17 is the
-//     main assistant response. (TODO: refine further if other
-//     types are identified.)
+//   - role: protobuf field 1 carries CortexStepType when present;
+//     USER_INPUT (14) is user, and PLANNER_RESPONSE (15) plus other
+//     non-user step kinds are assistant.
 //   - content: best-effort human-facing strings found in the
 //     payload tree. Internal ids, local Antigravity config paths,
 //     model placeholders, and duplicate payload echoes are filtered
