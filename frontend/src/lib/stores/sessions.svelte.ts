@@ -8,7 +8,6 @@ import type {
   Session,
   ProjectInfo,
   AgentInfo,
-  SidebarSessionIndexResponse,
   SidebarSessionIndexRow,
 } from "../api/types.js";
 import { sync } from "./sync.svelte.js";
@@ -252,6 +251,9 @@ class SessionsStore {
   private sidebarHydrationEpochByVersion = new Map<number, number>();
   private sidebarHydrationQueue: Array<() => void> = [];
   private sidebarHydrationActive = 0;
+  private sidebarConsumers = 0;
+  private sidebarLoadPromise: Promise<void> | null = null;
+  private sidebarLoadSignature: string | null = null;
 
   private liveRefreshStarted = false;
   private unsubEvents: (() => void) | null = null;
@@ -305,6 +307,20 @@ class SessionsStore {
     this.total = 0;
   }
 
+  attachSidebar(): () => void {
+    this.sidebarConsumers++;
+    this.startLiveRefresh();
+    let detached = false;
+    return () => {
+      if (detached) return;
+      detached = true;
+      this.sidebarConsumers = Math.max(0, this.sidebarConsumers - 1);
+      if (this.sidebarConsumers === 0) {
+        this.dispose();
+      }
+    };
+  }
+
   initFromParams(params: Record<string, string>) {
     const prevOneShot = this.filters.includeOneShot;
     const prevAutomated = this.filters.includeAutomated;
@@ -319,7 +335,39 @@ class SessionsStore {
 
   async load() {
     saveFilters(this.filters);
-    this.startLiveRefresh();
+
+    const params = {
+      ...this.apiParams,
+      includeChildren: true,
+      limit: SESSION_PAGE_SIZE,
+    };
+    const signature = JSON.stringify(params);
+    if (
+      this.sidebarLoadPromise !== null &&
+      this.sidebarLoadSignature === signature
+    ) {
+      return this.sidebarLoadPromise;
+    }
+
+    const promise = this.loadSidebarPage(params);
+    this.sidebarLoadPromise = promise;
+    this.sidebarLoadSignature = signature;
+    try {
+      await promise;
+    } finally {
+      if (this.sidebarLoadPromise === promise) {
+        this.sidebarLoadPromise = null;
+        this.sidebarLoadSignature = null;
+      }
+    }
+  }
+
+  refreshSidebarIfAttached() {
+    if (this.sidebarConsumers === 0) return;
+    void this.load();
+  }
+
+  private async loadSidebarPage(params: SessionListParams) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
     // Keep the existing list visible during reloads, but mark
@@ -336,21 +384,28 @@ class SessionsStore {
     };
     try {
       configureGeneratedClient();
-      const index = await SessionsService.getApiV1SessionsSidebarIndex(
-        this.apiParams,
-      ) as unknown as SidebarSessionIndexResponse;
+      const page = await SessionsService.getApiV1Sessions(
+        params,
+      ) as unknown as {
+        sessions: Session[];
+        next_cursor?: string | null;
+        total: number;
+      };
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
       this.hydratedSessionsByVersion.set(indexVersion, new Map());
       this.sidebarHydrationEpochByVersion.set(indexVersion, 0);
       this.pruneSidebarHydrationVersions(indexVersion);
-      const previousById = new Map(prev.sessions.map((s) => [s.id, s]));
-      this.sessions = index.sessions.map((row) =>
-        sidebarIndexRowToSession(row, previousById.get(row.id))
+      const existing = new Map(this.sessions.map((session) => [
+        session.id,
+        session,
+      ]));
+      this.sessions = page.sessions.map((session) =>
+        pageSessionToSidebarSession(session, existing.get(session.id))
       );
-      this.nextCursor = null;
-      this.total = index.total;
+      this.nextCursor = page.next_cursor ?? null;
+      this.total = page.total;
     } catch {
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
@@ -481,6 +536,7 @@ class SessionsStore {
       configureGeneratedClient();
       const page = await SessionsService.getApiV1Sessions({
         ...this.apiParams,
+        includeChildren: true,
         cursor: this.nextCursor,
         limit: SESSION_PAGE_SIZE,
       }) as unknown as {
@@ -489,7 +545,13 @@ class SessionsStore {
         total: number;
       };
       if (this.loadVersion !== version) return;
-      this.sessions.push(...page.sessions);
+      this.sessions.push(
+        ...page.sessions.map((session) =>
+          pageSessionToSidebarSession(session, this.sessions.find(
+            (existing) => existing.id === session.id,
+          ))
+        ),
+      );
       this.nextCursor = page.next_cursor ?? null;
       this.total = page.total;
     } finally {
@@ -1071,6 +1133,7 @@ class SessionsStore {
   }
 
   private scheduleIndexRefresh() {
+    if (this.sidebarConsumers === 0) return;
     if (this.liveRefreshTimer !== null) {
       clearTimeout(this.liveRefreshTimer);
     }
@@ -1148,6 +1211,32 @@ function sidebarIndexRowToSession(
     is_index_only: false,
     created_at: skinny.created_at,
   };
+}
+
+function pageSessionToSidebarSession(
+  session: Session,
+  existing?: Session,
+): Session {
+  return sidebarIndexRowToSession(
+    {
+      id: session.id,
+      project: session.project,
+      machine: session.machine,
+      agent: session.agent,
+      display_name: session.display_name ?? null,
+      started_at: session.started_at,
+      ended_at: session.ended_at,
+      created_at: session.created_at,
+      message_count: session.message_count,
+      user_message_count: session.user_message_count ?? 0,
+      parent_session_id: session.parent_session_id ?? null,
+      relationship_type: session.relationship_type ?? null,
+      termination_status: session.termination_status ?? null,
+      is_automated: session.is_automated ?? false,
+      is_teammate: session.is_teammate ?? false,
+    },
+    existing,
+  );
 }
 
 function maxString(a: string | null, b: string | null): string | null {
@@ -1548,5 +1637,5 @@ export const sessions = createSessionsStore();
 // (local trigger or detected via status polling).
 sync.onSyncComplete(() => {
   sessions.invalidateFilterCaches();
-  sessions.load();
+  sessions.refreshSidebarIfAttached();
 });

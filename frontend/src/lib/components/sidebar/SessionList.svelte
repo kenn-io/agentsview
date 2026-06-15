@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
   import SessionItem from "./SessionItem.svelte";
@@ -43,6 +43,11 @@
   let collapseAll = $state(getInitialGroupMode() !== "none");
   // Track which continuation chains are expanded.
   let expandedGroups: Set<string> = $state(new Set());
+  let detachSidebar: (() => void) | null = null;
+
+  onMount(() => {
+    detachSidebar = sessions.attachSidebar();
+  });
 
   $effect(() => {
     if (typeof localStorage !== "undefined") {
@@ -107,7 +112,7 @@
   let totalCount = $derived(
     starred.filterOnly
       ? groups.reduce((n, g) => n + g.sessions.length, 0)
-      : groups.length,
+      : sessions.total,
   );
   let totalSize = $derived(computeTotalSize(displayItems));
   let renderDisplayItems = $derived(
@@ -277,6 +282,18 @@
     requestHydration(hydrationIdsForItems(visibleItems), version);
   });
 
+  $effect(() => {
+    const items = visibleItems;
+    if (items.length === 0 || !sessions.nextCursor || sessions.loading) {
+      return;
+    }
+    const lastVisibleTop = items[items.length - 1]?.top ?? 0;
+    const remaining = renderTotalSize - lastVisibleTop;
+    if (remaining < ITEM_HEIGHT * 30) {
+      void sessions.loadMore();
+    }
+  });
+
   // Clamp stale scrollTop when count shrinks.
   $effect(() => {
     if (!containerRef) return;
@@ -382,6 +399,8 @@
   });
 
   onDestroy(() => {
+    detachSidebar?.();
+    detachSidebar = null;
     if (scrollRaf !== null) {
       cancelAnimationFrame(scrollRaf);
       scrollRaf = null;

@@ -48,7 +48,7 @@ describe("StatusBar", () => {
 
     await tick();
     const syncLabel = document.querySelector(
-      ".status-right span:last-of-type",
+      ".status-right span[title]",
     );
     const expectedTitle = new Date(sync.lastSync!).toLocaleString(
       undefined,

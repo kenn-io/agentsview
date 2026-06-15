@@ -57,7 +57,7 @@ install: build-release
 
 # Build frontend SPA and copy into embed directory
 frontend:
-	cd frontend && npm install && npm run build
+	cd frontend && npm ci && npm run build
 	rm -rf internal/web/dist
 	cp -r frontend/dist internal/web/dist
 	printf '%s\n' \
@@ -142,17 +142,17 @@ dev: ensure-embed-dir check-air
 
 # Run the Tauri desktop wrapper in development mode
 desktop-dev:
-	cd desktop && npm install && npm run tauri:dev
+	cd desktop && npm ci && npm run tauri:dev
 
 # Build desktop app bundles via Tauri
 desktop-build:
-	cd desktop && npm install && npm run tauri:build
+	cd desktop && npm ci && npm run tauri:build
 
 # Build only the macOS .app bundle (skip DMG packaging).
 # Skips updater artifact signing when TAURI_SIGNING_PRIVATE_KEY
 # is not set so local builds succeed without release keys.
 desktop-macos-app:
-	cd desktop && npm install && npm run tauri:build:macos-app \
+	cd desktop && npm ci && npm run tauri:build:macos-app \
 		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
 	mkdir -p $(DESKTOP_DIST_DIR)/macos
 	rm -rf $(DESKTOP_DIST_DIR)/macos/AgentsView.app
@@ -162,7 +162,7 @@ desktop-macos-app:
 
 # Build macOS DMG installer
 desktop-macos-dmg:
-	cd desktop && npm install && npm run tauri:build:macos-dmg
+	cd desktop && npm ci && npm run tauri:build:macos-dmg
 	mkdir -p $(DESKTOP_DIST_DIR)/macos
 	rm -f $(DESKTOP_DIST_DIR)/macos/*.dmg
 	@dmg_count=$$(find desktop/src-tauri/target/release/bundle/dmg \
@@ -179,7 +179,7 @@ desktop-macos-dmg:
 # Build Windows NSIS installer bundle (.exe)
 # Run on Windows runner/host.
 desktop-windows-installer:
-	cd desktop && npm install && npm run tauri:build:windows
+	cd desktop && npm ci && npm run tauri:build:windows
 	mkdir -p $(DESKTOP_DIST_DIR)/windows
 	rm -f $(DESKTOP_DIST_DIR)/windows/*.exe
 	@exe_count=$$(find desktop/src-tauri/target/release/bundle/nsis \
@@ -196,7 +196,7 @@ desktop-windows-installer:
 # Build Linux AppImage bundle
 # Run on a Linux host.
 desktop-linux-appimage:
-	cd desktop && npm install && npm run tauri:build:linux \
+	cd desktop && npm ci && npm run tauri:build:linux \
 		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
 	mkdir -p $(DESKTOP_DIST_DIR)/linux
 	rm -f $(DESKTOP_DIST_DIR)/linux/*.AppImage

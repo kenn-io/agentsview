@@ -17,6 +17,7 @@ import {
   isAbortError,
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
+import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 
 type AnalyticsParams = Parameters<
   typeof AnalyticsService.getApiV1AnalyticsSummary
@@ -441,6 +442,8 @@ class AnalyticsStore {
     // a definitive result. First-load clears up front so we start
     // fresh.
     if (isFirstLoad) this.errors[panel] = null;
+    const started = performance.now();
+    let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
     try {
       const data = await callGenerated(fetchRequest, signal);
       if (this.versions[panel] === v) {
@@ -448,7 +451,11 @@ class AnalyticsStore {
         this.errors[panel] = null;
       }
     } catch (e) {
-      if (isAbortError(e)) return;
+      if (isAbortError(e)) {
+        status = "aborted";
+        return;
+      }
+      status = "error";
       if (this.versions[panel] === v) {
         // On refetch failure with cached data, swallow the error so
         // existing values stay visible instead of flipping to an
@@ -461,6 +468,12 @@ class AnalyticsStore {
         }
       }
     } finally {
+      perf.recordPanel({
+        route: "analytics",
+        name: panel,
+        durationMs: performance.now() - started,
+        status,
+      });
       this.clearAbortSignal(panel, signal);
       if (this.versions[panel] === v) {
         this.querying[panel] = false;

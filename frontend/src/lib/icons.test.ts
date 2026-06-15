@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as icons from "./icons.ts";
 
 const approvedIconNames = [
+  "ActivityIcon",
   "ArrowDownIcon",
   "ArrowDownWideNarrowIcon",
   "ArrowUpNarrowWideIcon",

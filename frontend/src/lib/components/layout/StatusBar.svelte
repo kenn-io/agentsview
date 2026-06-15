@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { sync } from "../../stores/sync.svelte.js";
+  import { perf } from "../../stores/perf.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { ActivityIcon } from "../../icons.js";
   import {
     formatNumber,
     formatRelativeTime,
@@ -60,6 +62,17 @@
   </div>
 
   <div class="status-right">
+    <button
+      class="perf-toggle"
+      class:active={perf.panelOpen}
+      onclick={() => perf.togglePanel()}
+      title="Open performance debug"
+      aria-label="Open performance debug"
+    >
+      <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
+      <span>Perf</span>
+    </button>
+    <span class="sep">&middot;</span>
     {#if sync.remoteUnreachable}
       <button
         class="remote-warn"
@@ -182,6 +195,24 @@
 
   .sync-progress {
     color: var(--accent-green);
+  }
+
+  .perf-toggle {
+    height: 18px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0 5px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 10px;
+    cursor: pointer;
+  }
+
+  .perf-toggle:hover,
+  .perf-toggle.active {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
   }
 
   .update-available {

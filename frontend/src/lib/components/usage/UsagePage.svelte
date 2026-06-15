@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy, tick, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import {
     usage,
     buildUsageUrlParams,
@@ -13,7 +13,6 @@
     splitExcludeProjectParam,
   } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import { events } from "../../stores/events.svelte.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
   import AttributionPanel from "./AttributionPanel.svelte";
@@ -25,9 +24,6 @@
   import FilterDropdown from "./FilterDropdown.svelte";
   import { RefreshCwIcon } from "../../icons.js";
 
-  const REFRESH_MS = 5 * 60 * 1000;
-  let refreshTimer: ReturnType<typeof setInterval> | undefined;
-  let unsubEvents: (() => void) | undefined;
   let mounted = false;
 
   const projectItems = $derived(
@@ -241,20 +237,6 @@
     tick().then(() => {
       urlWritebackReady = true;
     });
-    refreshTimer = setInterval(
-      () => usage.fetchAll(),
-      REFRESH_MS,
-    );
-    unsubEvents = events.subscribeDebounced(
-      () => usage.fetchAll(),
-    );
-  });
-
-  onDestroy(() => {
-    if (refreshTimer !== undefined) {
-      clearInterval(refreshTimer);
-    }
-    unsubEvents?.();
   });
 </script>
 

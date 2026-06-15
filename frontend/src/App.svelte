@@ -16,6 +16,7 @@
   import ResyncModal from "./lib/components/modals/ResyncModal.svelte";
   import UpdateModal from "./lib/components/modals/UpdateModal.svelte";
   import ConfirmDeleteModal from "./lib/components/modals/ConfirmDeleteModal.svelte";
+  import PerfDebugPanel from "./lib/components/debug/PerfDebugPanel.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
   import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
@@ -243,7 +244,9 @@
       if (!sid && route === "sessions" && hasFilterParams(params)) {
         sessions.initFromParams(params);
       }
-      sessions.load();
+      if (route === "sessions") {
+        sessions.load();
+      }
       sessions.loadProjects();
       sessions.loadAgents();
     });
@@ -459,6 +462,7 @@
 {/if}
 
 <StatusBar />
+<PerfDebugPanel />
 
 {#if ui.activeModal === "about"}
   <AboutModal />

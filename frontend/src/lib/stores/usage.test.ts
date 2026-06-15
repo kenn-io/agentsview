@@ -282,7 +282,7 @@ describe("UsageStore session filter params", () => {
     );
   });
 
-  it("waits for summary before requesting follow-up usage data", async () => {
+  it("starts summary and top sessions together during full refresh", async () => {
     const calls: string[] = [];
     let resolveSummary:
       | ((value: unknown) => void)
@@ -318,7 +318,7 @@ describe("UsageStore session filter params", () => {
     const fetch = usage.fetchAll();
     await Promise.resolve();
 
-    expect(calls).toEqual(["summary"]);
+    expect(calls).toEqual(["summary", "topSessions"]);
     expect(usage.summary).toBeNull();
 
     resolveSummary?.({

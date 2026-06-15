@@ -4,6 +4,7 @@ import {
 import type { TrendsTermsResponse } from "../api/types.js";
 import { callGenerated } from "../api/runtime.js";
 import { daysAgo, today } from "../utils/dates.js";
+import { perf } from "./perf.svelte.js";
 
 type TrendsTermsParams = Parameters<
   typeof TrendsService.getApiV1TrendsTerms
@@ -52,6 +53,8 @@ class TrendsStore {
     const isFirstLoad = this.response === null;
     this.loading.terms = true;
     this.errors.terms = null;
+    const started = performance.now();
+    let status: "ok" | "error" = "ok";
     try {
       const data = await callGenerated(() =>
         TrendsService.getApiV1TrendsTerms(this.params()),
@@ -61,6 +64,7 @@ class TrendsStore {
         this.errors.terms = null;
       }
     } catch (e) {
+      status = "error";
       if (this.version === v) {
         this.errors.terms =
           e instanceof Error ? e.message : "Failed to load";
@@ -71,6 +75,12 @@ class TrendsStore {
         }
       }
     } finally {
+      perf.recordPanel({
+        route: "trends",
+        name: "terms",
+        durationMs: performance.now() - started,
+        status,
+      });
       if (this.version === v) {
         this.loading.terms = false;
       }
