@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/daemon"
 )
@@ -15,6 +16,11 @@ import (
 // serveStopGraceTimeout bounds how long serve stop waits for a graceful
 // shutdown after signalling before escalating to a forced kill.
 const serveStopGraceTimeout = 10 * time.Second
+
+// processIdentitySlack tolerates clock rounding between the OS-reported process
+// create time and the record's StartedAt when confirming a stop target by
+// process identity.
+const processIdentitySlack = 2 * time.Second
 
 // runServeStatus reports whether a server owns this data dir, and where to
 // reach it. It always exits zero; the output distinguishes the states.
@@ -59,10 +65,12 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 	return lines
 }
 
-// runServeStop terminates every agentsview server owning this data dir that
-// still answers as one. A record is signalled only after its PID confirms via
-// the ping probe that it is the recorded agentsview daemon, so a stale record
-// whose PID has been reused by an unrelated process is never signalled.
+// runServeStop terminates every agentsview server owning this data dir whose
+// identity it can confirm. A record is signalled only once its PID is confirmed
+// to be the recorded daemon -- either it answers the ping probe, or its process
+// start time predates the record (proving the PID was not reused by an
+// unrelated process). This keeps a hung-but-alive daemon stoppable while never
+// signalling a stale record whose PID belongs to something else.
 func runServeStop(cfg config.Config) {
 	records := liveDaemonRecords(cfg.DataDir)
 	if len(records) == 0 {
@@ -74,9 +82,9 @@ func runServeStop(cfg config.Config) {
 	}
 	stopped, skipped := 0, 0
 	for _, rec := range records {
-		if !daemonRecordIdentityConfirmed(rec, cfg.AuthToken) {
+		if !stopTargetConfirmed(rec, cfg.AuthToken) {
 			fmt.Printf(
-				"Skipping pid %d: not responding as the recorded "+
+				"Skipping pid %d: cannot confirm it is the recorded "+
 					"agentsview daemon (stale record or reused pid).\n",
 				rec.PID,
 			)
@@ -96,12 +104,19 @@ func runServeStop(cfg config.Config) {
 	}
 }
 
-// daemonRecordIdentityConfirmed reports whether rec's PID still answers the kit
-// ping probe as the agentsview daemon it claims to be. This guards serve stop
-// against signalling an unrelated process that reused a stale record's PID. A
-// genuinely hung daemon that no longer answers pings is treated as unconfirmed
-// and left alone rather than risk killing the wrong process.
-func daemonRecordIdentityConfirmed(
+// stopTargetConfirmed reports whether rec's live PID is safe to signal as the
+// recorded agentsview daemon. It accepts the target when the daemon answers the
+// ping probe, or, for a daemon that is alive but no longer answering, when the
+// process start time predates the record. Either check rules out a PID that an
+// unrelated process reused after the record was written.
+func stopTargetConfirmed(rec daemon.RuntimeRecord, authToken string) bool {
+	return daemonRecordPingConfirmed(rec, authToken) ||
+		processStartedBeforeRecord(rec)
+}
+
+// daemonRecordPingConfirmed reports whether rec's PID answers the kit ping
+// probe as the agentsview daemon it claims to be.
+func daemonRecordPingConfirmed(
 	rec daemon.RuntimeRecord, authToken string,
 ) bool {
 	info, err := probeRuntime(
@@ -111,6 +126,27 @@ func daemonRecordIdentityConfirmed(
 		},
 	)
 	return err == nil && info.PID == rec.PID
+}
+
+// processStartedBeforeRecord reports whether the process now holding rec.PID
+// started no later than the record was written. The recorded daemon was alive
+// when it wrote StartedAt, so its create time predates StartedAt; a process
+// that reused the PID after the daemon died started afterward. Records without
+// a StartedAt (legacy) cannot be checked this way and return false.
+func processStartedBeforeRecord(rec daemon.RuntimeRecord) bool {
+	if rec.StartedAt.IsZero() {
+		return false
+	}
+	proc, err := process.NewProcess(int32(rec.PID))
+	if err != nil {
+		return false
+	}
+	createdMillis, err := proc.CreateTime()
+	if err != nil {
+		return false
+	}
+	created := time.UnixMilli(createdMillis)
+	return !created.After(rec.StartedAt.Add(processIdentitySlack))
 }
 
 // stopDaemonProcess signals the daemon to shut down, waits up to grace for it

@@ -132,7 +132,7 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 		"runtime record must be removed after stop")
 }
 
-func TestDaemonRecordIdentityConfirmedRespondingDaemon(t *testing.T) {
+func TestDaemonRecordPingConfirmedRespondingDaemon(t *testing.T) {
 	host, port := testPingServer(t)
 	rec := daemon.RuntimeRecord{
 		PID:     os.Getpid(),
@@ -140,23 +140,22 @@ func TestDaemonRecordIdentityConfirmedRespondingDaemon(t *testing.T) {
 		Address: net.JoinHostPort(host, strconv.Itoa(port)),
 		Service: daemonService,
 	}
-	assert.True(t, daemonRecordIdentityConfirmed(rec, ""))
+	assert.True(t, daemonRecordPingConfirmed(rec, ""))
 }
 
-func TestDaemonRecordIdentityConfirmedUnresponsivePID(t *testing.T) {
+func TestDaemonRecordPingConfirmedUnresponsivePID(t *testing.T) {
 	// A live PID (this process) but a record pointing at a port with no
-	// agentsview daemon. The probe must fail so stop does not signal a
-	// process that merely reused a stale record's PID.
+	// agentsview daemon. The probe must fail.
 	rec := daemon.RuntimeRecord{
 		PID:     os.Getpid(),
 		Network: daemon.NetworkTCP,
 		Address: "127.0.0.1:1",
 		Service: daemonService,
 	}
-	assert.False(t, daemonRecordIdentityConfirmed(rec, ""))
+	assert.False(t, daemonRecordPingConfirmed(rec, ""))
 }
 
-func TestDaemonRecordIdentityConfirmedRequiresAuthToken(t *testing.T) {
+func TestDaemonRecordPingConfirmedRequiresAuthToken(t *testing.T) {
 	host, port := testAuthenticatedPingServer(t, "secret")
 	rec := daemon.RuntimeRecord{
 		PID:     os.Getpid(),
@@ -164,9 +163,61 @@ func TestDaemonRecordIdentityConfirmedRequiresAuthToken(t *testing.T) {
 		Address: net.JoinHostPort(host, strconv.Itoa(port)),
 		Service: daemonService,
 	}
-	assert.False(t, daemonRecordIdentityConfirmed(rec, ""),
+	assert.False(t, daemonRecordPingConfirmed(rec, ""),
 		"a require_auth daemon must not be confirmed without the token")
-	assert.True(t, daemonRecordIdentityConfirmed(rec, "secret"))
+	assert.True(t, daemonRecordPingConfirmed(rec, "secret"))
+}
+
+func TestProcessStartedBeforeRecord(t *testing.T) {
+	// This test process started before "now", so a record stamped now is a
+	// genuine match.
+	now := time.Now()
+	assert.True(t, processStartedBeforeRecord(daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		StartedAt: now,
+	}))
+
+	// A record stamped long before this process started models a PID reused
+	// by an unrelated process: the live process started after the record.
+	assert.False(t, processStartedBeforeRecord(daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		StartedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+	}))
+
+	// A legacy record without a StartedAt cannot be checked this way.
+	assert.False(t, processStartedBeforeRecord(daemon.RuntimeRecord{
+		PID: os.Getpid(),
+	}))
+}
+
+func TestStopTargetConfirmedHungDaemonByStartTime(t *testing.T) {
+	// A daemon that is alive but no longer answers the ping probe (dead
+	// address) must still be confirmed by its process start time, so a
+	// wedged server remains stoppable.
+	rec := daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   "127.0.0.1:1",
+		Service:   daemonService,
+		StartedAt: time.Now(),
+	}
+	assert.False(t, daemonRecordPingConfirmed(rec, ""),
+		"precondition: the dead address must not ping-confirm")
+	assert.True(t, stopTargetConfirmed(rec, ""),
+		"a hung-but-alive daemon must remain stoppable via start-time identity")
+}
+
+func TestStopTargetConfirmedRejectsReusedPID(t *testing.T) {
+	// No ping and a StartedAt predating this process: neither check confirms,
+	// so stop must not signal the unrelated process holding the PID.
+	rec := daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   "127.0.0.1:1",
+		Service:   daemonService,
+		StartedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	assert.False(t, stopTargetConfirmed(rec, ""))
 }
 
 // startReapedProcess starts and fully reaps a short-lived process, returning a
