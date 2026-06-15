@@ -95,12 +95,14 @@ func newServeCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			cfg := mustLoadConfig(cmd)
 			if background {
-				runServeBackground(cfg, os.Args[1:])
+				// Acquire the launch lock before loading config; config
+				// loading writes config.toml and must be single-writer
+				// across concurrent launches.
+				runServeBackgroundCommand(cmd)
 				return
 			}
-			runServe(cfg)
+			runServe(mustLoadConfig(cmd))
 		},
 	}
 	cmd.Flags().BoolVar(

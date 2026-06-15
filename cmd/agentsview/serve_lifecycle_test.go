@@ -1,8 +1,11 @@
 package main
 
 import (
+	"net"
+	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +130,43 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 	assert.False(t, daemon.ProcessAlive(pid))
 	assert.Empty(t, liveDaemonRecords(dir),
 		"runtime record must be removed after stop")
+}
+
+func TestDaemonRecordIdentityConfirmedRespondingDaemon(t *testing.T) {
+	host, port := testPingServer(t)
+	rec := daemon.RuntimeRecord{
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: net.JoinHostPort(host, strconv.Itoa(port)),
+		Service: daemonService,
+	}
+	assert.True(t, daemonRecordIdentityConfirmed(rec, ""))
+}
+
+func TestDaemonRecordIdentityConfirmedUnresponsivePID(t *testing.T) {
+	// A live PID (this process) but a record pointing at a port with no
+	// agentsview daemon. The probe must fail so stop does not signal a
+	// process that merely reused a stale record's PID.
+	rec := daemon.RuntimeRecord{
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: "127.0.0.1:1",
+		Service: daemonService,
+	}
+	assert.False(t, daemonRecordIdentityConfirmed(rec, ""))
+}
+
+func TestDaemonRecordIdentityConfirmedRequiresAuthToken(t *testing.T) {
+	host, port := testAuthenticatedPingServer(t, "secret")
+	rec := daemon.RuntimeRecord{
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: net.JoinHostPort(host, strconv.Itoa(port)),
+		Service: daemonService,
+	}
+	assert.False(t, daemonRecordIdentityConfirmed(rec, ""),
+		"a require_auth daemon must not be confirmed without the token")
+	assert.True(t, daemonRecordIdentityConfirmed(rec, "secret"))
 }
 
 // startReapedProcess starts and fully reaps a short-lived process, returning a

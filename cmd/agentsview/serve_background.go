@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -44,12 +45,12 @@ func acquireBackgroundLaunchLock(dataDir string) (*flock.Flock, bool) {
 
 // reportBackgroundLaunchInProgress waits for an in-flight startup to publish
 // its runtime record and reports the running server, or notes that a launch
-// is still in progress when no record appears in time.
-func reportBackgroundLaunchInProgress(cfg config.Config) {
-	WaitForDaemonStartup(
-		cfg.DataDir, backgroundServeReadyTimeout, cfg.AuthToken,
-	)
-	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+// is still in progress when no record appears in time. authToken may be empty
+// for a contender that has not loaded config; a require_auth daemon then
+// reports as in-progress rather than by URL.
+func reportBackgroundLaunchInProgress(dataDir, authToken string) {
+	WaitForDaemonStartup(dataDir, backgroundServeReadyTimeout, authToken)
+	if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
 		!rt.ReadOnly {
 		fmt.Printf(
 			"agentsview already running at %s (pid %d)\n",
@@ -61,29 +62,41 @@ func reportBackgroundLaunchInProgress(cfg config.Config) {
 	fmt.Println("agentsview serve --background is already in progress.")
 }
 
-func runServeBackground(cfg config.Config, args []string) {
-	// The launch lock lives under the data dir, which may not exist yet on
-	// first run.
-	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+// runServeBackgroundCommand serializes the launch before loading config.
+// Config loading writes config.toml (the cursor secret, and the auth token via
+// EnsureAuthToken), so two concurrent launches that loaded config outside the
+// lock could clobber each other's writes -- leaving the spawned server using a
+// token the parent never printed. Holding the launch lock across both config
+// load and token generation makes those writes single-writer.
+func runServeBackgroundCommand(cmd *cobra.Command) {
+	dataDir, err := config.ResolveDataDir()
+	if err != nil {
+		fatal("serve background: resolving data dir: %v", err)
+	}
+	// The launch lock lives under the data dir, which may not exist on first
+	// run.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		fatal("serve background: creating data dir: %v", err)
 	}
 
-	// Serialize concurrent `serve --background` launches before any config
-	// mutation. Without this, two invocations issued before either child
-	// publishes its runtime record would both pass the checks below and
-	// spawn a server, leaving a stray second daemon on its own
-	// auto-discovered port. Acquiring the lock before EnsureAuthToken also
-	// stops contenders from each generating and persisting a different
-	// require_auth token. The launch lock is distinct from the daemon start
-	// lock so the spawned child can still claim the start lock during its
-	// own (possibly long) startup.
-	launchLock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
+	launchLock, ok := acquireBackgroundLaunchLock(dataDir)
 	if !ok {
-		reportBackgroundLaunchInProgress(cfg)
+		// Another launch holds the lock and owns the config writes. Report
+		// without loading config so this process never touches config.toml.
+		reportBackgroundLaunchInProgress(dataDir, "")
 		return
 	}
 	defer func() { _ = launchLock.Unlock() }()
 
+	runServeBackground(mustLoadConfig(cmd), os.Args[1:])
+}
+
+// runServeBackground generates the auth token, checks for an existing daemon,
+// and spawns the detached child. The caller must already hold the background
+// launch lock (see runServeBackgroundCommand). The launch lock is distinct
+// from the daemon start lock so the spawned child can still claim the start
+// lock during its own (possibly long) startup.
+func runServeBackground(cfg config.Config, args []string) {
 	if cfg.RequireAuth {
 		if err := cfg.EnsureAuthToken(); err != nil {
 			fatal("serve background: generating auth token: %v", err)
@@ -107,7 +120,7 @@ func runServeBackground(cfg config.Config, args []string) {
 	// is mid-startup and holds the start lock but has not yet published a
 	// runtime record. Wait for it instead of racing a second server.
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-		reportBackgroundLaunchInProgress(cfg)
+		reportBackgroundLaunchInProgress(cfg.DataDir, cfg.AuthToken)
 		return
 	}
 

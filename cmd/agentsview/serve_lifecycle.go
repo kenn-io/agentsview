@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -58,7 +59,10 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 	return lines
 }
 
-// runServeStop terminates every live agentsview server owning this data dir.
+// runServeStop terminates every agentsview server owning this data dir that
+// still answers as one. A record is signalled only after its PID confirms via
+// the ping probe that it is the recorded agentsview daemon, so a stale record
+// whose PID has been reused by an unrelated process is never signalled.
 func runServeStop(cfg config.Config) {
 	records := liveDaemonRecords(cfg.DataDir)
 	if len(records) == 0 {
@@ -68,12 +72,45 @@ func runServeStop(cfg config.Config) {
 		fmt.Println("No agentsview server is running.")
 		return
 	}
+	stopped, skipped := 0, 0
 	for _, rec := range records {
+		if !daemonRecordIdentityConfirmed(rec, cfg.AuthToken) {
+			fmt.Printf(
+				"Skipping pid %d: not responding as the recorded "+
+					"agentsview daemon (stale record or reused pid).\n",
+				rec.PID,
+			)
+			skipped++
+			continue
+		}
 		if err := stopDaemonProcess(rec, serveStopGraceTimeout); err != nil {
 			fatal("serve stop: stopping pid %d: %v", rec.PID, err)
 		}
 		fmt.Printf("Stopped agentsview (pid %d).\n", rec.PID)
+		stopped++
 	}
+	if stopped == 0 && skipped > 0 {
+		fmt.Println(
+			"No agentsview server was stopped; runtime records may be stale.",
+		)
+	}
+}
+
+// daemonRecordIdentityConfirmed reports whether rec's PID still answers the kit
+// ping probe as the agentsview daemon it claims to be. This guards serve stop
+// against signalling an unrelated process that reused a stale record's PID. A
+// genuinely hung daemon that no longer answers pings is treated as unconfirmed
+// and left alone rather than risk killing the wrong process.
+func daemonRecordIdentityConfirmed(
+	rec daemon.RuntimeRecord, authToken string,
+) bool {
+	info, err := probeRuntime(
+		context.Background(), rec, authToken, daemon.ProbeOptions{
+			ExpectedService: daemonService,
+			Timeout:         500 * time.Millisecond,
+		},
+	)
+	return err == nil && info.PID == rec.PID
 }
 
 // stopDaemonProcess signals the daemon to shut down, waits up to grace for it
