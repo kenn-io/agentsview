@@ -697,27 +697,35 @@ func (e *Engine) classifyOnePath(
 
 	// Kimi: <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
 	//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
+	// Components that cannot round-trip through the ':'-delimited
+	// session ID (per IsValidSessionID) are left unclassified so they
+	// are never imported in a non-resyncable state.
 	for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
 		if kimiDir == "" {
 			continue
 		}
 		if rel, ok := isUnder(kimiDir, path); ok {
 			parts := strings.Split(rel, sep)
-			project := ""
 			switch {
-			case len(parts) == 3 && parts[2] == "wire.jsonl":
-				project = parts[0]
+			case len(parts) == 3 && parts[2] == "wire.jsonl" &&
+				parser.IsValidSessionID(parts[0]) &&
+				parser.IsValidSessionID(parts[1]):
+				return parser.DiscoveredFile{
+					Path:    path,
+					Project: parser.DecodeKimiProjectDir(parts[0]),
+					Agent:   parser.AgentKimi,
+				}, true
 			case len(parts) == 5 && parts[2] == "agents" &&
-				parts[4] == "wire.jsonl":
-				project = parts[0]
-			default:
-				continue
+				parts[4] == "wire.jsonl" &&
+				parser.IsValidSessionID(parts[0]) &&
+				parser.IsValidSessionID(parts[1]) &&
+				parser.IsValidSessionID(parts[3]):
+				return parser.DiscoveredFile{
+					Path:    path,
+					Project: parser.DecodeKimiProjectDir(parts[0]),
+					Agent:   parser.AgentKimi,
+				}, true
 			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parser.DecodeKimiProjectDir(project),
-				Agent:   parser.AgentKimi,
-			}, true
 		}
 	}
 

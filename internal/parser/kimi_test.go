@@ -637,3 +637,31 @@ func TestDecodeKimiProjectDir(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoverKimiSessions_NewLayout_RejectsInvalidComponent(t *testing.T) {
+	dir := t.TempDir()
+
+	// An agent name containing ':' would break the ':'-delimited
+	// session ID, so that agent must be skipped at discovery while a
+	// valid sibling agent in the same session is still imported.
+	workdirDir := "wd_foo_1234567890ab"
+	sessionDir := "session_uuid-1"
+
+	badDir := filepath.Join(dir, workdirDir, sessionDir, "agents", "sub:agent")
+	require.NoError(t, os.MkdirAll(badDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(badDir, "wire.jsonl"),
+		[]byte(`{"type":"metadata"}`+"\n"), 0o644,
+	))
+
+	goodDir := filepath.Join(dir, workdirDir, sessionDir, "agents", "main")
+	require.NoError(t, os.MkdirAll(goodDir, 0o755))
+	goodPath := filepath.Join(goodDir, "wire.jsonl")
+	require.NoError(t, os.WriteFile(
+		goodPath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
+	))
+
+	files := DiscoverKimiSessions(dir)
+	require.Len(t, files, 1)
+	assert.Equal(t, goodPath, files[0].Path)
+}

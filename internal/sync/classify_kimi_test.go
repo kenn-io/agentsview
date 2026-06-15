@@ -36,7 +36,14 @@ func TestClassifyOnePath_Kimi(t *testing.T) {
 		"session_49474979-70b1-49ac-b23b-b3bc224b3aca",
 		"agents", "agent-0", "wire.jsonl",
 	)
-	for _, p := range []string{legacyPath, newMainPath, newAgentPath} {
+	// An agent name containing ':' would break the ':'-delimited
+	// session ID; it must not be classified, so it is never imported
+	// in a state that cannot be resynced.
+	invalidAgentPath := filepath.Join(
+		dir, "wd_foo_1234567890ab",
+		"session_uuid-1", "agents", "sub:agent", "wire.jsonl",
+	)
+	for _, p := range []string{legacyPath, newMainPath, newAgentPath, invalidAgentPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
 		require.NoError(t, os.WriteFile(p, []byte("{}"), 0o644))
 	}
@@ -75,6 +82,11 @@ func TestClassifyOnePath_Kimi(t *testing.T) {
 		{
 			name: "unrelated file ignored",
 			path: filepath.Join(dir, "readme.txt"),
+			want: false,
+		},
+		{
+			name: "new-layout agent name with ':' not classified",
+			path: invalidAgentPath,
 			want: false,
 		},
 	}

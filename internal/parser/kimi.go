@@ -54,11 +54,18 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 			// Legacy layout.
 			wirePath := filepath.Join(sessDir, "wire.jsonl")
 			if _, err := os.Stat(wirePath); err == nil {
-				files = append(files, DiscoveredFile{
-					Path:    wirePath,
-					Project: DecodeKimiProjectDir(projEntry.Name()),
-					Agent:   AgentKimi,
-				})
+				// The project and session names become ':'-delimited
+				// session-ID components; skip sessions whose names
+				// cannot round-trip through FindKimiSourceFile.
+				if kimiIDComponentsValid(
+					projEntry.Name(), sessEntry.Name(),
+				) {
+					files = append(files, DiscoveredFile{
+						Path:    wirePath,
+						Project: DecodeKimiProjectDir(projEntry.Name()),
+						Agent:   AgentKimi,
+					})
+				}
 				continue
 			}
 
@@ -75,7 +82,12 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 				wirePath = filepath.Join(
 					agentsDir, agentEntry.Name(), "wire.jsonl",
 				)
-				if _, err := os.Stat(wirePath); err == nil {
+				if _, err := os.Stat(wirePath); err == nil &&
+					kimiIDComponentsValid(
+						projEntry.Name(),
+						sessEntry.Name(),
+						agentEntry.Name(),
+					) {
 					files = append(files, DiscoveredFile{
 						Path:    wirePath,
 						Project: DecodeKimiProjectDir(projEntry.Name()),
@@ -189,6 +201,22 @@ func isKimiHash(s string) bool {
 			(c >= 'a' && c <= 'f') ||
 			(c >= 'A' && c <= 'F')
 		if !isHex {
+			return false
+		}
+	}
+	return true
+}
+
+// kimiIDComponentsValid reports whether the given path-derived
+// components can form a session ID that FindKimiSourceFile can
+// round-trip back to the source file. Each component must itself be a
+// valid session ID (alphanumeric, '-', '_'); a ':' or any other
+// character outside that set would break the ':'-delimited ID split
+// and validation. Sessions with such names are skipped at discovery
+// time rather than imported in a state that cannot be resynced.
+func kimiIDComponentsValid(components ...string) bool {
+	for _, c := range components {
+		if !IsValidSessionID(c) {
 			return false
 		}
 	}
