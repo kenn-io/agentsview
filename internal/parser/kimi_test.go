@@ -3,7 +3,6 @@ package parser
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -640,18 +639,18 @@ func TestDecodeKimiProjectDir(t *testing.T) {
 }
 
 func TestDiscoverKimiSessions_NewLayout_RejectsInvalidComponent(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("':' is a reserved path character on Windows; the invalid component cannot exist on disk")
-	}
 	dir := t.TempDir()
 
-	// An agent name containing ':' would break the ':'-delimited
-	// session ID, so that agent must be skipped at discovery while a
-	// valid sibling agent in the same session is still imported.
+	// An agent name with a character outside [A-Za-z0-9_-] cannot
+	// round-trip through the ':'-delimited session ID, so that agent
+	// must be skipped at discovery while a valid sibling agent in the
+	// same session is still imported. A space stands in for any such
+	// character (':' itself is not a portable path component on
+	// Windows).
 	workdirDir := "wd_foo_1234567890ab"
 	sessionDir := "session_uuid-1"
 
-	badDir := filepath.Join(dir, workdirDir, sessionDir, "agents", "sub:agent")
+	badDir := filepath.Join(dir, workdirDir, sessionDir, "agents", "sub agent")
 	require.NoError(t, os.MkdirAll(badDir, 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(badDir, "wire.jsonl"),

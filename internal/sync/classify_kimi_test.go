@@ -36,12 +36,14 @@ func TestClassifyOnePath_Kimi(t *testing.T) {
 		"session_49474979-70b1-49ac-b23b-b3bc224b3aca",
 		"agents", "agent-0", "wire.jsonl",
 	)
-	// An agent name containing ':' would break the ':'-delimited
-	// session ID; it must not be classified, so it is never imported
-	// in a state that cannot be resynced.
+	// An agent name with a character outside [A-Za-z0-9_-] cannot
+	// round-trip through the ':'-delimited session ID; it must not be
+	// classified, so it is never imported in a state that cannot be
+	// resynced. A space stands in for any such character (':' itself is
+	// not a portable path component on Windows).
 	invalidAgentPath := filepath.Join(
 		dir, "wd_foo_1234567890ab",
-		"session_uuid-1", "agents", "sub:agent", "wire.jsonl",
+		"session_uuid-1", "agents", "sub agent", "wire.jsonl",
 	)
 	for _, p := range []string{legacyPath, newMainPath, newAgentPath, invalidAgentPath} {
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
@@ -85,7 +87,7 @@ func TestClassifyOnePath_Kimi(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "new-layout agent name with ':' not classified",
+			name: "new-layout agent name with invalid char not classified",
 			path: invalidAgentPath,
 			want: false,
 		},
