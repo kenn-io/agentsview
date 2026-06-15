@@ -103,6 +103,15 @@ func (c *usageProbeConn) QueryContext(
 			}},
 		}, nil
 	}
+	if strings.Contains(normalized, "select id from sessions") {
+		return &usageProbeRows{
+			columns: []string{"id"},
+			values: [][]driver.Value{
+				{"kimi:project-hash:session-uuid"},
+				{"openclaw:project-hash:session-uuid"},
+			},
+		}, nil
+	}
 	if strings.Contains(normalized, "from (") &&
 		strings.Contains(normalized, "from messages") {
 		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)

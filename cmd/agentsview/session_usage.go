@@ -13,9 +13,16 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
+
+type rawSessionIDResolver interface {
+	FindSessionIDsByRawSuffix(
+		ctx context.Context, raw string, limit int,
+	) ([]string, error)
+}
 
 func newSessionUsageCommand() *cobra.Command {
 	return &cobra.Command{
@@ -109,9 +116,7 @@ func pgSessionUsageData(
 	}
 
 	ctx := context.Background()
-	resolvedID, err := resolveServiceSessionID(
-		ctx, service.NewReadOnlyBackend(store), sessionID,
-	)
+	resolvedID, err := resolveStoreSessionID(ctx, store, sessionID)
 	if err != nil {
 		if !strings.HasPrefix(err.Error(), "session not found:") {
 			return nil, tokenUseExitErr,
@@ -139,6 +144,35 @@ func pgSessionUsageData(
 		SessionUsage:  *u,
 		ServerRunning: false,
 	}, usageExitCode(u), nil
+}
+
+func resolveStoreSessionID(
+	ctx context.Context, store db.Store, sessionID string,
+) (string, error) {
+	if resolver, ok := store.(rawSessionIDResolver); ok {
+		matches, err := resolver.FindSessionIDsByRawSuffix(
+			ctx, sessionID, tokenUseResolveMatchLimit,
+		)
+		if err != nil {
+			return "", err
+		}
+		if len(matches) > 0 {
+			if matches[0] == sessionID {
+				return sessionID, nil
+			}
+			if len(matches) > 1 {
+				fmt.Fprintf(os.Stderr,
+					"warning: ambiguous session id %q matches "+
+						"multiple sessions, using most recent (%s)\n",
+					sessionID, matches[0],
+				)
+			}
+			return matches[0], nil
+		}
+	}
+	return resolveServiceSessionID(
+		ctx, service.NewReadOnlyBackend(store), sessionID,
+	)
 }
 
 // renderSessionUsageHuman writes a compact key/value summary. The

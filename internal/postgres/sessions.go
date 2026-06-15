@@ -506,6 +506,54 @@ func (s *Store) GetSession(
 	return &sess, nil
 }
 
+// FindSessionIDsByRawSuffix returns up to limit session IDs whose
+// stored id is either the exact raw input or the raw input preceded
+// by an agent prefix. The suffix comparison is literal and results
+// match SQLite ordering: exact match first, then most recent session.
+func (s *Store) FindSessionIDsByRawSuffix(
+	ctx context.Context, raw string, limit int,
+) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.pg.QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE (id = $1
+		        OR RIGHT(id, LENGTH($1) + 1) = ':' || $1)
+		   AND deleted_at IS NULL
+		 ORDER BY (id = $1) DESC,
+		          COALESCE(ended_at, started_at, created_at) DESC
+		 LIMIT $2`,
+		raw, limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding pg sessions by raw suffix %q: %w",
+			raw, err,
+		)
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning pg session id: %w", err,
+			)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"iterating pg raw suffix session ids: %w", err,
+		)
+	}
+	return ids, nil
+}
+
 // GetSessionFull returns a single session by ID including
 // soft-deleted sessions.
 func (s *Store) GetSessionFull(

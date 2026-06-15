@@ -712,6 +712,50 @@ func TestSessionUsage_PGEnvResolvesBareSessionID(t *testing.T) {
 	assert.Equal(t, 42, out.TotalOutputTokens)
 }
 
+func TestSessionUsage_PGEnvResolvesColonBearingRawSessionID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+
+	rawID := "project-hash:session-uuid"
+	storedID := "kimi:" + rawID
+	pgDB, err := db.Open(filepath.Join(dataDir, "pg.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { pgDB.Close() })
+	require.NoError(t, pgDB.UpsertSession(db.Session{
+		ID:                   storedID,
+		Project:              "pg-project",
+		Machine:              "pg-host",
+		Agent:                "kimi",
+		MessageCount:         2,
+		UserMessageCount:     2,
+		TotalOutputTokens:    84,
+		HasTotalOutputTokens: true,
+	}))
+
+	orig := openPGReadStore
+	openPGReadStore = func(
+		_ config.Config, _ config.PGConfig,
+	) (db.Store, func(), error) {
+		return pgDB, func() {}, nil
+	}
+	t.Cleanup(func() { openPGReadStore = orig })
+
+	root := newRootCommand()
+	args := []string{"session", "usage", rawID}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(nil))
+
+	out, code, err := sessionUsageDataForCommand(cmd, rawID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, storedID, out.SessionID)
+	assert.Equal(t, "pg-project", out.Project)
+	assert.Equal(t, 84, out.TotalOutputTokens)
+}
+
 // TestSessionSync_UnknownID_ReportsNoFilePath verifies that the
 // sync engine is plumbed in direct mode. No daemon running, no
 // sessions in DB — Execute returns an error whose message contains
