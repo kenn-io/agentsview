@@ -30,6 +30,10 @@ func newSessionCommand() *cobra.Command {
 		"server", "",
 		"Remote daemon URL (not yet implemented)",
 	)
+	cmd.PersistentFlags().Bool(
+		"pg", false,
+		"Read session data from configured PostgreSQL",
+	)
 
 	cmd.AddCommand(newSessionGetCommand())
 	cmd.AddCommand(newSessionUsageCommand())

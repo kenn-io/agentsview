@@ -38,6 +38,8 @@ func TestSessionHelp_ShowsSubcommands(t *testing.T) {
 	}
 	assert.Contains(t, help, "--format",
 		"expected --format persistent flag in help")
+	assert.Contains(t, help, "--pg",
+		"expected --pg persistent flag in help")
 }
 
 // seedSession opens the SQLite DB at dataDir/sessions.db, inserts
@@ -198,7 +200,7 @@ func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
 	cleanupCalled := false
 	orig := openPGReadStore
 	openPGReadStore = func(
-		pgCfg config.PGConfig,
+		_ config.Config, pgCfg config.PGConfig,
 	) (db.Store, func(), error) {
 		gotPG = pgCfg
 		return remoteDB, func() {
@@ -242,7 +244,7 @@ func TestSessionList_PGEnvUsesPGReadStore(t *testing.T) {
 	var gotPG config.PGConfig
 	orig := openPGReadStore
 	openPGReadStore = func(
-		pgCfg config.PGConfig,
+		_ config.Config, pgCfg config.PGConfig,
 	) (db.Store, func(), error) {
 		gotPG = pgCfg
 		return remoteDB, func() { require.NoError(t, remoteDB.Close()) }, nil
@@ -288,7 +290,7 @@ func TestSessionList_DefaultDoesNotOpenPGStore(t *testing.T) {
 
 	orig := openPGReadStore
 	openPGReadStore = func(
-		config.PGConfig,
+		config.Config, config.PGConfig,
 	) (db.Store, func(), error) {
 		t.Fatal("openPGReadStore should not be called without --pg or PG URL")
 		return nil, nil, nil
@@ -316,7 +318,7 @@ func TestPGReadServiceClosesStoreWhenOpenFailsAfterCleanupProvided(t *testing.T)
 	closed := false
 	orig := openPGReadStore
 	openPGReadStore = func(
-		config.PGConfig,
+		config.Config, config.PGConfig,
 	) (db.Store, func(), error) {
 		return nil, func() { closed = true },
 			errors.New("schema check failed")
@@ -590,6 +592,18 @@ func TestSessionExport_RejectsFormatFlag(t *testing.T) {
 	assert.Contains(t, err.Error(), "--format not supported")
 }
 
+func TestSessionExport_RejectsPGFlag(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+
+	_, err := executeCommand(newRootCommand(),
+		"session", "export", "some-id", "--pg")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local-only command")
+	assert.Contains(t, err.Error(), "--pg not supported")
+}
+
 // TestSessionUsage_RejectsServerFlag verifies that `session usage`
 // rejects the inherited --server flag instead of silently querying
 // the local SQLite archive. usage uses the direct token-use path
@@ -605,6 +619,53 @@ func TestSessionUsage_RejectsServerFlag(t *testing.T) {
 		"--server", "http://localhost:9999")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--server not yet implemented")
+}
+
+func TestSessionUsage_PGEnvUsesPGStore(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+
+	pgDB, err := db.Open(filepath.Join(dataDir, "pg.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { pgDB.Close() })
+	require.NoError(t, pgDB.UpsertSession(db.Session{
+		ID:                   "pg-session",
+		Project:              "pg-project",
+		Machine:              "pg-host",
+		Agent:                "codex",
+		MessageCount:         2,
+		UserMessageCount:     2,
+		TotalOutputTokens:    42,
+		HasTotalOutputTokens: true,
+	}))
+
+	opened := false
+	orig := openPGReadStore
+	openPGReadStore = func(
+		_ config.Config, pgCfg config.PGConfig,
+	) (db.Store, func(), error) {
+		opened = true
+		assert.Equal(t, "postgres://example.test/agentsview", pgCfg.URL)
+		return pgDB, func() {}, nil
+	}
+	t.Cleanup(func() { openPGReadStore = orig })
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "pg-session"}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(nil))
+
+	out, code, err := sessionUsageDataForCommand(cmd, "pg-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.True(t, opened, "expected session usage to open PG store")
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, "pg-session", out.SessionID)
+	assert.Equal(t, "pg-project", out.Project)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.False(t, out.ServerRunning)
 }
 
 // TestSessionSync_UnknownID_ReportsNoFilePath verifies that the

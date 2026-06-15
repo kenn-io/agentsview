@@ -37,8 +37,10 @@ type customPricingStore interface {
 }
 
 var openPGReadStore = func(
+	cfg config.Config,
 	pgCfg config.PGConfig,
 ) (db.Store, func(), error) {
+	applyClassifierConfig(cfg)
 	store, err := postgres.NewStore(
 		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
 	)
@@ -139,8 +141,7 @@ func newService(
 func newPGReadService(
 	cfg config.Config, pgCfg config.PGConfig,
 ) (service.SessionService, func(), error) {
-	applyClassifierConfig(cfg)
-	store, cleanup, err := openPGReadStore(pgCfg)
+	store, cleanup, err := openPGReadStore(cfg, pgCfg)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()

@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func newSessionUsageCommand() *cobra.Command {
@@ -34,7 +37,7 @@ func newSessionUsageCommand() *cobra.Command {
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			runSessionUsage(args[0], outputFormat(cmd))
+			runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
 }
@@ -43,8 +46,8 @@ func newSessionUsageCommand() *cobra.Command {
 // exiting with the shared usage exit code (0 = token data or cost,
 // 2 = not found, 3 = neither). Uses Run + os.Exit (not RunE) so the
 // 2/3 codes survive — cobra RunE errors collapse to exit 1.
-func runSessionUsage(sessionID, format string) {
-	out, code, err := sessionUsageData(sessionID)
+func runSessionUsage(cmd *cobra.Command, sessionID, format string) {
+	out, code, err := sessionUsageDataForCommand(cmd, sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(tokenUseExitErr)
@@ -65,6 +68,63 @@ func runSessionUsage(sessionID, format string) {
 		}
 	}
 	os.Exit(code)
+}
+
+func sessionUsageDataForCommand(
+	cmd *cobra.Command, sessionID string,
+) (*sessionUsageOutput, int, error) {
+	cfg, err := config.LoadPFlags(cmd.Flags())
+	if err != nil {
+		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
+	}
+	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	if !usePG {
+		return sessionUsageData(sessionID)
+	}
+	return pgSessionUsageData(cfg, pgCfg, sessionID)
+}
+
+func pgSessionUsageData(
+	cfg config.Config, pgCfg config.PGConfig, sessionID string,
+) (*sessionUsageOutput, int, error) {
+	store, cleanup, err := openPGReadStore(cfg, pgCfg)
+	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, tokenUseExitErr, fmt.Errorf("opening pg store: %w", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	if len(cfg.CustomModelPricing) > 0 {
+		if priced, ok := store.(customPricingStore); ok {
+			priced.SetCustomPricing(cfg.CustomModelPricing)
+		}
+	}
+
+	u, err := store.GetSessionUsage(context.Background(), sessionID)
+	if err != nil {
+		return nil, tokenUseExitErr,
+			fmt.Errorf("querying pg session usage: %w", err)
+	}
+	if u == nil {
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		return nil, tokenUseExitNotFound, nil
+	}
+	if u.Agent == "" {
+		if def, ok := parser.AgentByPrefix(u.SessionID); ok {
+			u.Agent = string(def.Type)
+		}
+	}
+	return &sessionUsageOutput{
+		SessionUsage:  *u,
+		ServerRunning: false,
+	}, usageExitCode(u), nil
 }
 
 // renderSessionUsageHuman writes a compact key/value summary. The
