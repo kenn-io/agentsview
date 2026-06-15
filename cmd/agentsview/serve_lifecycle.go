@@ -6,9 +6,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
-	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/daemon"
 )
@@ -16,11 +16,6 @@ import (
 // serveStopGraceTimeout bounds how long serve stop waits for a graceful
 // shutdown after signalling before escalating to a forced kill.
 const serveStopGraceTimeout = 10 * time.Second
-
-// processIdentitySlack tolerates clock rounding between the OS-reported process
-// create time and the record's StartedAt when confirming a stop target by
-// process identity.
-const processIdentitySlack = 2 * time.Second
 
 // runServeStatus reports whether a server owns this data dir, and where to
 // reach it. It always exits zero; the output distinguishes the states.
@@ -107,11 +102,12 @@ func runServeStop(cfg config.Config) {
 // stopTargetConfirmed reports whether rec's live PID is safe to signal as the
 // recorded agentsview daemon. It accepts the target when the daemon answers the
 // ping probe, or, for a daemon that is alive but no longer answering, when the
-// process start time predates the record. Either check rules out a PID that an
-// unrelated process reused after the record was written.
+// process create time exactly matches the one recorded at startup. Either check
+// rules out a PID that an unrelated process reused after the record was
+// written.
 func stopTargetConfirmed(rec daemon.RuntimeRecord, authToken string) bool {
 	return daemonRecordPingConfirmed(rec, authToken) ||
-		processStartedBeforeRecord(rec)
+		processIdentityConfirmed(rec)
 }
 
 // daemonRecordPingConfirmed reports whether rec's PID answers the kit ping
@@ -128,25 +124,28 @@ func daemonRecordPingConfirmed(
 	return err == nil && info.PID == rec.PID
 }
 
-// processStartedBeforeRecord reports whether the process now holding rec.PID
-// started no later than the record was written. The recorded daemon was alive
-// when it wrote StartedAt, so its create time predates StartedAt; a process
-// that reused the PID after the daemon died started afterward. Records without
-// a StartedAt (legacy) cannot be checked this way and return false.
-func processStartedBeforeRecord(rec daemon.RuntimeRecord) bool {
-	if rec.StartedAt.IsZero() {
+// processIdentityConfirmed reports whether the process now holding rec.PID is
+// the same one that wrote the record, by matching the OS create time persisted
+// at startup against the live process's current create time. The match is
+// exact: the create time is fixed for a given process, so a PID reused by a
+// different process yields a different value and is rejected -- there is no
+// slack window an impostor could fall into. Records without a persisted create
+// time (legacy, or a daemon whose create time could not be read) cannot be
+// confirmed this way and return false.
+func processIdentityConfirmed(rec daemon.RuntimeRecord) bool {
+	raw := rec.Metadata[runtimeCreateTime]
+	if raw == "" {
 		return false
 	}
-	proc, err := process.NewProcess(int32(rec.PID))
+	recorded, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
 		return false
 	}
-	createdMillis, err := proc.CreateTime()
-	if err != nil {
+	live, ok := processCreateTimeMillis(rec.PID)
+	if !ok {
 		return false
 	}
-	created := time.UnixMilli(createdMillis)
-	return !created.After(rec.StartedAt.Add(processIdentitySlack))
+	return live == recorded
 }
 
 // stopDaemonProcess signals the daemon to shut down, waits up to grace for it

@@ -168,56 +168,98 @@ func TestDaemonRecordPingConfirmedRequiresAuthToken(t *testing.T) {
 	assert.True(t, daemonRecordPingConfirmed(rec, "secret"))
 }
 
-func TestProcessStartedBeforeRecord(t *testing.T) {
-	// This test process started before "now", so a record stamped now is a
-	// genuine match.
-	now := time.Now()
-	assert.True(t, processStartedBeforeRecord(daemon.RuntimeRecord{
-		PID:       os.Getpid(),
-		StartedAt: now,
-	}))
+func TestWriteDaemonRuntimePersistsCreateTimeForStop(t *testing.T) {
+	dir := runtimeTestDir(t)
+	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 65535, "test", false)
+	require.NoError(t, err)
 
-	// A record stamped long before this process started models a PID reused
-	// by an unrelated process: the live process started after the record.
-	assert.False(t, processStartedBeforeRecord(daemon.RuntimeRecord{
-		PID:       os.Getpid(),
-		StartedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
-	}))
+	recs := liveDaemonRecords(dir)
+	require.Len(t, recs, 1)
+	assert.NotEmpty(t, recs[0].Metadata[runtimeCreateTime],
+		"WriteDaemonRuntime must persist the process create time")
 
-	// A legacy record without a StartedAt cannot be checked this way.
-	assert.False(t, processStartedBeforeRecord(daemon.RuntimeRecord{
+	// No server answers at that port, so ping confirmation fails; the
+	// persisted create time must still confirm the record belongs to this
+	// live process so a wedged daemon is stoppable.
+	assert.False(t, daemonRecordPingConfirmed(recs[0], ""))
+	assert.True(t, stopTargetConfirmed(recs[0], ""))
+}
+
+func TestProcessIdentityConfirmed(t *testing.T) {
+	live, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok, "must be able to read this process's create time")
+
+	// Exact create-time match: the recorded daemon is still on this PID.
+	assert.True(t, processIdentityConfirmed(daemon.RuntimeRecord{
 		PID: os.Getpid(),
+		Metadata: map[string]string{
+			runtimeCreateTime: strconv.FormatInt(live, 10),
+		},
+	}))
+
+	// Different create time models a PID reused by another process: there is
+	// no slack window, so a mismatch is always rejected.
+	assert.False(t, processIdentityConfirmed(daemon.RuntimeRecord{
+		PID: os.Getpid(),
+		Metadata: map[string]string{
+			runtimeCreateTime: strconv.FormatInt(live+1, 10),
+		},
+	}))
+
+	// Missing or unparseable metadata cannot be confirmed this way.
+	assert.False(t, processIdentityConfirmed(daemon.RuntimeRecord{
+		PID: os.Getpid(),
+	}))
+	assert.False(t, processIdentityConfirmed(daemon.RuntimeRecord{
+		PID:      os.Getpid(),
+		Metadata: map[string]string{runtimeCreateTime: "not-a-number"},
 	}))
 }
 
-func TestStopTargetConfirmedHungDaemonByStartTime(t *testing.T) {
+func TestStopTargetConfirmedHungDaemonByCreateTime(t *testing.T) {
 	// A daemon that is alive but no longer answers the ping probe (dead
-	// address) must still be confirmed by its process start time, so a
+	// address) must still be confirmed by its persisted create time, so a
 	// wedged server remains stoppable.
+	live, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
 	rec := daemon.RuntimeRecord{
-		PID:       os.Getpid(),
-		Network:   daemon.NetworkTCP,
-		Address:   "127.0.0.1:1",
-		Service:   daemonService,
-		StartedAt: time.Now(),
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: "127.0.0.1:1",
+		Service: daemonService,
+		Metadata: map[string]string{
+			runtimeCreateTime: strconv.FormatInt(live, 10),
+		},
 	}
 	assert.False(t, daemonRecordPingConfirmed(rec, ""),
 		"precondition: the dead address must not ping-confirm")
 	assert.True(t, stopTargetConfirmed(rec, ""),
-		"a hung-but-alive daemon must remain stoppable via start-time identity")
+		"a hung-but-alive daemon must remain stoppable via create-time identity")
 }
 
 func TestStopTargetConfirmedRejectsReusedPID(t *testing.T) {
-	// No ping and a StartedAt predating this process: neither check confirms,
-	// so stop must not signal the unrelated process holding the PID.
+	// No ping and a create time that does not match this process: neither
+	// check confirms, so stop must not signal the process holding the PID.
+	live, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
 	rec := daemon.RuntimeRecord{
-		PID:       os.Getpid(),
-		Network:   daemon.NetworkTCP,
-		Address:   "127.0.0.1:1",
-		Service:   daemonService,
-		StartedAt: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: "127.0.0.1:1",
+		Service: daemonService,
+		Metadata: map[string]string{
+			runtimeCreateTime: strconv.FormatInt(live+5000, 10),
+		},
 	}
 	assert.False(t, stopTargetConfirmed(rec, ""))
+
+	// A legacy record with no create time also cannot be confirmed.
+	assert.False(t, stopTargetConfirmed(daemon.RuntimeRecord{
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: "127.0.0.1:1",
+		Service: daemonService,
+	}, ""))
 }
 
 // startReapedProcess starts and fully reaps a short-lived process, returning a

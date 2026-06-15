@@ -16,15 +16,17 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
+	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/kit/daemon"
 )
 
 const (
-	daemonService   = "agentsview"
-	runtimeReadOnly = "read_only"
-	runtimeHost     = "host"
-	runtimePort     = "port"
-	startProbeTick  = 250 * time.Millisecond
+	daemonService     = "agentsview"
+	runtimeReadOnly   = "read_only"
+	runtimeHost       = "host"
+	runtimePort       = "port"
+	runtimeCreateTime = "create_time"
+	startProbeTick    = 250 * time.Millisecond
 )
 
 // DaemonRuntime is the agentsview-specific view of a kit daemon runtime record.
@@ -55,7 +57,29 @@ func WriteDaemonRuntime(
 		runtimePort:     strconv.Itoa(port),
 		runtimeReadOnly: strconv.FormatBool(readOnly),
 	}
+	// Persist this process's OS create time so `serve stop` can confirm a
+	// PID still belongs to the recorded daemon (and was not reused) by
+	// matching create times exactly. Best-effort: if it cannot be read, stop
+	// falls back to ping confirmation only.
+	if ct, ok := processCreateTimeMillis(os.Getpid()); ok {
+		rec.Metadata[runtimeCreateTime] = strconv.FormatInt(ct, 10)
+	}
 	return runtimeStore(dataDir).Write(rec)
+}
+
+// processCreateTimeMillis returns the OS-reported create time of pid in
+// milliseconds since the Unix epoch. ok is false when the process is gone or
+// its create time cannot be read.
+func processCreateTimeMillis(pid int) (int64, bool) {
+	proc, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return 0, false
+	}
+	created, err := proc.CreateTime()
+	if err != nil {
+		return 0, false
+	}
+	return created, true
 }
 
 // RemoveDaemonRuntime removes the current process's kit daemon runtime record.
