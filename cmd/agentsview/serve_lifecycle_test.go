@@ -64,7 +64,7 @@ func TestServeStatusLinesReadOnly(t *testing.T) {
 	}
 
 	out := strings.Join(serveStatusLines(rt), "\n")
-	assert.Contains(t, out, "read-only (pg serve)")
+	assert.Contains(t, out, "mode:    read-only")
 	assert.NotContains(t, out, "uptime:", "zero StartedAt must omit uptime")
 }
 

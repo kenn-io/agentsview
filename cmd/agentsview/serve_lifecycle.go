@@ -53,7 +53,7 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 		lines = append(lines, fmt.Sprintf("  uptime:  %s", uptime))
 	}
 	if rt.ReadOnly {
-		lines = append(lines, "  mode:    read-only (pg serve)")
+		lines = append(lines, "  mode:    read-only")
 	}
 	return lines
 }

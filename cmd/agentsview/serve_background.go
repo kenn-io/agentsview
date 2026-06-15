@@ -62,6 +62,28 @@ func reportBackgroundLaunchInProgress(cfg config.Config) {
 }
 
 func runServeBackground(cfg config.Config, args []string) {
+	// The launch lock lives under the data dir, which may not exist yet on
+	// first run.
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		fatal("serve background: creating data dir: %v", err)
+	}
+
+	// Serialize concurrent `serve --background` launches before any config
+	// mutation. Without this, two invocations issued before either child
+	// publishes its runtime record would both pass the checks below and
+	// spawn a server, leaving a stray second daemon on its own
+	// auto-discovered port. Acquiring the lock before EnsureAuthToken also
+	// stops contenders from each generating and persisting a different
+	// require_auth token. The launch lock is distinct from the daemon start
+	// lock so the spawned child can still claim the start lock during its
+	// own (possibly long) startup.
+	launchLock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
+	if !ok {
+		reportBackgroundLaunchInProgress(cfg)
+		return
+	}
+	defer func() { _ = launchLock.Unlock() }()
+
 	if cfg.RequireAuth {
 		if err := cfg.EnsureAuthToken(); err != nil {
 			fatal("serve background: generating auth token: %v", err)
@@ -70,19 +92,6 @@ func runServeBackground(cfg config.Config, args []string) {
 			fmt.Printf("Auth enabled. Token: %s\n", cfg.AuthToken)
 		}
 	}
-
-	// Serialize concurrent `serve --background` launches. Without this,
-	// two invocations issued before either child publishes its runtime
-	// record would both pass the checks below and spawn a server, leaving
-	// a stray second daemon on its own auto-discovered port. The launch
-	// lock is distinct from the daemon start lock so the spawned child can
-	// still claim the start lock during its own (possibly long) startup.
-	launchLock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
-	if !ok {
-		reportBackgroundLaunchInProgress(cfg)
-		return
-	}
-	defer func() { _ = launchLock.Unlock() }()
 
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
