@@ -327,6 +327,11 @@ const staleWindow = 60 * time.Minute
 const activityExprSQLite = "CAST(strftime('%s', " +
 	"COALESCE(ended_at, started_at, created_at)) AS INTEGER)"
 
+const sidebarActivityExprSQLiteS = "COALESCE(" +
+	"NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)"
+
+const sidebarChildRelationshipsSQL = "'subagent', 'fork', 'continuation'"
+
 // buildTerminationPredSQLite returns a WHERE fragment and args for
 // the multi-state termination filter (active / stale / unclean).
 // The status value may be comma-separated to OR multiple states
@@ -557,6 +562,14 @@ func (db *DB) getSidebarSessionIndexPage(
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootWhere, rootArgs := buildSessionFilter(rootFilter)
+	canonicalRootWhere := `
+		NOT EXISTS (
+			SELECT 1
+			FROM sessions parent
+			WHERE parent.id = sessions.parent_session_id
+			  AND parent.deleted_at IS NULL
+			  AND sessions.relationship_type IN (` + sidebarChildRelationshipsSQL + `)
+		)`
 
 	var total int
 	var cur SessionCursor
@@ -569,7 +582,8 @@ func (db *DB) getSidebarSessionIndexPage(
 		total = cur.Total
 	}
 	if total <= 0 {
-		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + rootWhere
+		countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
+			rootWhere + " AND " + canonicalRootWhere
 		if err := db.getReader().QueryRowContext(
 			ctx, countQuery, rootArgs...,
 		).Scan(&total); err != nil {
@@ -579,16 +593,37 @@ func (db *DB) getSidebarSessionIndexPage(
 	}
 
 	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(rootArgs))
-	cursorWhere := rootWhere
+	cursorWhere := ""
 	if f.Cursor != "" {
-		cursorWhere += " AND " +
-			pageBuilder.CursorBeforePredicate(cur)
+		cursorWhere = "WHERE (activity, id) < (" +
+			pageBuilder.Add(cur.EndedAt) + ", " +
+			pageBuilder.Add(cur.ID) + ")"
 	}
-	rootQuery := "SELECT id, COALESCE(" +
-		"NULLIF(ended_at, ''), " +
-		"NULLIF(started_at, ''), " +
-		"created_at" +
-		") AS activity FROM sessions WHERE " + cursorWhere + `
+	rootQuery := `
+		WITH RECURSIVE root_candidates(id) AS (
+			SELECT id
+			FROM sessions
+			WHERE ` + rootWhere + `
+			  AND ` + canonicalRootWhere + `
+		),
+		tree(root_id, id) AS (
+			SELECT id, id FROM root_candidates
+			UNION
+			SELECT t.root_id, s.id
+			FROM sessions s
+			JOIN tree t ON s.parent_session_id = t.id
+			WHERE s.message_count > 0
+			  AND s.deleted_at IS NULL
+		),
+		root_activity(id, activity) AS (
+			SELECT t.root_id AS id, MAX(` + sidebarActivityExprSQLiteS + `) AS activity
+			FROM tree t
+			JOIN sessions s ON s.id = t.id
+			GROUP BY t.root_id
+		)
+		SELECT id, activity
+		FROM root_activity
+		` + cursorWhere + `
 		ORDER BY activity DESC, id DESC
 		` + pageBuilder.Limit(f.Limit+1)
 	rootQueryArgs := append([]any{}, rootArgs...)
@@ -656,6 +691,11 @@ func (db *DB) getSidebarSessionIndexPage(
 			JOIN tree t ON s.parent_session_id = t.id
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
+		),
+		ranked_tree(id, ord) AS (
+			SELECT id, MIN(ord) AS ord
+			FROM tree
+			GROUP BY id
 		)
 		SELECT
 			s.id,
@@ -674,14 +714,10 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.is_automated,
 			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
 		FROM sessions s
-		JOIN tree t ON s.id = t.id
+		JOIN ranked_tree t ON s.id = t.id
 		ORDER BY
 			t.ord ASC,
-			COALESCE(
-				NULLIF(s.ended_at, ''),
-				NULLIF(s.started_at, ''),
-				s.created_at
-			) DESC,
+			` + sidebarActivityExprSQLiteS + ` DESC,
 			s.id DESC`
 
 	rows, err = db.getReader().QueryContext(ctx, treeQuery, treeArgs...)

@@ -17,7 +17,6 @@
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
-  import { events } from "../../stores/events.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
   import { RefreshCwIcon } from "../../icons.js";
@@ -44,16 +43,12 @@
   }
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
-  let unsubEvents: (() => void) | undefined;
 
   onMount(() => {
     analytics.fetchAll();
     refreshTimer = setInterval(
       () => analytics.fetchAll(),
       REFRESH_INTERVAL_MS,
-    );
-    unsubEvents = events.subscribeDebounced(
-      () => analytics.fetchAll(),
     );
   });
 
@@ -140,7 +135,6 @@
     if (refreshTimer !== undefined) {
       clearInterval(refreshTimer);
     }
-    unsubEvents?.();
   });
 </script>
 

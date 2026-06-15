@@ -10,4 +10,17 @@ describe("build system package manager usage", () => {
     expect(makefile).toContain("npm ci && npm run build");
     expect(makefile).toContain("npm ci && npm run tauri:build");
   });
+
+  it("uses npm ci in desktop helper build scripts", () => {
+    const scripts = [
+      "../scripts/desktop-dev.ps1",
+      "../desktop/scripts/prepare-sidecar.sh",
+    ];
+
+    for (const script of scripts) {
+      const source = readFileSync(script, "utf8");
+      expect(source, script).not.toContain("npm install");
+      expect(source, script).toContain("npm ci");
+    }
+  });
 });

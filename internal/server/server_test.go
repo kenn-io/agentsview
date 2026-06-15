@@ -1101,7 +1101,7 @@ func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
 	te := setup(t)
 
 	rootNewEnd := "2024-01-04T00:00:00Z"
-	childNewEnd := "2024-01-06T00:00:00Z"
+	childNewEnd := "2024-01-08T00:00:00Z"
 	rootOldEnd := "2024-01-01T00:00:00Z"
 	childOldEnd := "2024-01-07T00:00:00Z"
 	te.seedSession(t, "root-new", "my-app", 5, func(s *db.Session) {
@@ -1147,6 +1147,83 @@ func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
 	assert.Equal(t, 2, second.Total)
 	assert.Empty(t, second.NextCursor)
 	assert.ElementsMatch(t, []string{"root-old", "child-old"}, secondIDs)
+}
+
+func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
+	te := setup(t)
+
+	rootEnd := "2024-01-01T00:00:00Z"
+	continuationEnd := "2024-01-10T00:00:00Z"
+	otherEnd := "2024-01-05T00:00:00Z"
+	te.seedSession(t, "root", "my-app", 5, func(s *db.Session) {
+		s.EndedAt = &rootEnd
+	})
+	te.seedSession(t, "continuation", "my-app", 3, func(s *db.Session) {
+		s.ParentSessionID = new("root")
+		s.RelationshipType = "continuation"
+		s.EndedAt = &continuationEnd
+	})
+	te.seedSession(t, "other", "my-app", 5, func(s *db.Session) {
+		s.EndedAt = &otherEnd
+	})
+
+	w := te.get(t, "/api/v1/sessions/sidebar-index?limit=1")
+	assertStatus(t, w, http.StatusOK)
+	first := decode[db.SidebarSessionIndex](t, w)
+	firstIDs := sidebarIndexRowIDs(first.Sessions)
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t, []string{"root", "continuation"}, firstIDs)
+
+	w = te.get(t,
+		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
+			url.QueryEscape(first.NextCursor),
+	)
+	assertStatus(t, w, http.StatusOK)
+	second := decode[db.SidebarSessionIndex](t, w)
+	secondIDs := sidebarIndexRowIDs(second.Sessions)
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.Equal(t, []string{"other"}, secondIDs)
+	assert.NotContains(t, secondIDs, "continuation")
+}
+
+func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
+	te := setup(t)
+
+	rootEnd := "2024-01-01T00:00:00Z"
+	childEnd := "2024-01-10T00:00:00Z"
+	otherEnd := "2024-01-05T00:00:00Z"
+	te.seedSession(t, "root", "my-app", 5, func(s *db.Session) {
+		s.EndedAt = &rootEnd
+	})
+	te.seedSession(t, "child", "my-app", 3, func(s *db.Session) {
+		s.ParentSessionID = new("root")
+		s.RelationshipType = "subagent"
+		s.EndedAt = &childEnd
+	})
+	te.seedSession(t, "other", "my-app", 5, func(s *db.Session) {
+		s.EndedAt = &otherEnd
+	})
+
+	w := te.get(t, "/api/v1/sessions/sidebar-index?limit=1")
+	assertStatus(t, w, http.StatusOK)
+	first := decode[db.SidebarSessionIndex](t, w)
+	firstIDs := sidebarIndexRowIDs(first.Sessions)
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t, []string{"root", "child"}, firstIDs)
+
+	w = te.get(t,
+		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
+			url.QueryEscape(first.NextCursor),
+	)
+	assertStatus(t, w, http.StatusOK)
+	second := decode[db.SidebarSessionIndex](t, w)
+	secondIDs := sidebarIndexRowIDs(second.Sessions)
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.Equal(t, []string{"other"}, secondIDs)
 }
 
 func TestSidebarIndexValidatesParams(t *testing.T) {

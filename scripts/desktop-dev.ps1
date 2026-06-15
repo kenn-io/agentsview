@@ -97,7 +97,7 @@ if (-not $SkipBuild) {
     Write-Host "Building frontend..." -ForegroundColor Cyan
     Push-Location $FrontendDir
     try {
-        npm install
+        npm ci
         npm run build
     } finally {
         Pop-Location

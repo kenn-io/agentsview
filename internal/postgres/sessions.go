@@ -79,6 +79,10 @@ const (
 // expression used to compute a session's effective recency.
 const pgActivityExpr = "COALESCE(ended_at, started_at, created_at)"
 
+const pgSidebarActivityExprS = "COALESCE(s.ended_at, s.started_at, s.created_at)"
+
+const pgSidebarChildRelationshipsSQL = "'subagent', 'fork', 'continuation'"
+
 // pgTerminationPred returns a WHERE fragment for the multi-state
 // termination filter (active / stale / unclean). The status value
 // may be comma-separated to OR multiple states. Returns "" when
@@ -392,13 +396,18 @@ func (s *Store) ListSessions(
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by
-// the sidebar grouper. It intentionally has no cursor or limit.
+// the sidebar grouper. Paginated calls page root sessions and include
+// each root's descendants so grouped sidebar trees stay complete.
 func (s *Store) GetSidebarSessionIndex(
 	ctx context.Context, f db.SessionFilter,
 ) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
+
+	if f.Limit > 0 || f.Cursor != "" {
+		return s.getSidebarSessionIndexPage(ctx, f)
+	}
+
 	f.Cursor = ""
-	f.Limit = 0
 
 	where, args := buildPGSessionFilter(f)
 	query := `
@@ -431,9 +440,214 @@ func (s *Store) GetSidebarSessionIndex(
 	}
 	defer rows.Close()
 
+	sessions, err := scanPGSidebarSessionIndexRows(rows)
+	if err != nil {
+		return db.SidebarSessionIndex{}, err
+	}
+	index := db.SidebarSessionIndex{
+		Sessions: sessions,
+		Total:    len(sessions),
+	}
+
+	return index, nil
+}
+
+func (s *Store) getSidebarSessionIndexPage(
+	ctx context.Context, f db.SessionFilter,
+) (db.SidebarSessionIndex, error) {
+	if f.Limit <= 0 || f.Limit > db.MaxSessionLimit {
+		f.Limit = db.DefaultSessionLimit
+	}
+
+	rootFilter := f
+	rootFilter.IncludeChildren = false
+	rootFilter.Cursor = ""
+	rootWhere, rootArgs := buildPGSessionFilter(rootFilter)
+	canonicalRootWhere := `
+		NOT EXISTS (
+			SELECT 1
+			FROM sessions parent
+			WHERE parent.id = sessions.parent_session_id
+			  AND parent.deleted_at IS NULL
+			  AND sessions.relationship_type IN (` + pgSidebarChildRelationshipsSQL + `)
+		)`
+
+	var total int
+	var cur db.SessionCursor
+	if f.Cursor != "" {
+		var err error
+		cur, err = s.DecodeCursor(f.Cursor)
+		if err != nil {
+			return db.SidebarSessionIndex{}, err
+		}
+		total = cur.Total
+	}
+	if total <= 0 {
+		countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
+			rootWhere + " AND " + canonicalRootWhere
+		if err := s.pg.QueryRowContext(
+			ctx, countQuery, rootArgs...,
+		).Scan(&total); err != nil {
+			return db.SidebarSessionIndex{},
+				fmt.Errorf("counting sidebar roots: %w", err)
+		}
+	}
+
+	pageBuilder := db.NewQueryBuilder(
+		db.PostgresQueryDialect(), len(rootArgs),
+	)
+	cursorWhere := ""
+	if f.Cursor != "" {
+		cursorWhere = "WHERE (activity, id) < (" +
+			pageBuilder.Add(cur.EndedAt) + "::timestamptz, " +
+			pageBuilder.Add(cur.ID) + ")"
+	}
+	rootQuery := `
+		WITH RECURSIVE root_candidates(id) AS (
+			SELECT id
+			FROM sessions
+			WHERE ` + rootWhere + `
+			  AND ` + canonicalRootWhere + `
+		),
+		tree(root_id, id) AS (
+			SELECT id, id FROM root_candidates
+			UNION
+			SELECT t.root_id, s.id
+			FROM sessions s
+			JOIN tree t ON s.parent_session_id = t.id
+			WHERE s.message_count > 0
+			  AND s.deleted_at IS NULL
+		),
+		root_activity(id, activity) AS (
+			SELECT t.root_id AS id, MAX(` + pgSidebarActivityExprS + `) AS activity
+			FROM tree t
+			JOIN sessions s ON s.id = t.id
+			GROUP BY t.root_id
+		)
+		SELECT id, activity
+		FROM root_activity
+		` + cursorWhere + `
+		ORDER BY activity DESC, id DESC
+		` + pageBuilder.Limit(f.Limit+1)
+	rootQueryArgs := append([]any{}, rootArgs...)
+	rootQueryArgs = append(rootQueryArgs, pageBuilder.Args()...)
+
+	rows, err := s.pg.QueryContext(ctx, rootQuery, rootQueryArgs...)
+	if err != nil {
+		return db.SidebarSessionIndex{},
+			fmt.Errorf("querying sidebar root page: %w", err)
+	}
+	defer rows.Close()
+
+	type rootRow struct {
+		id       string
+		activity time.Time
+	}
+	roots := []rootRow{}
+	for rows.Next() {
+		var row rootRow
+		if err := rows.Scan(&row.id, &row.activity); err != nil {
+			return db.SidebarSessionIndex{},
+				fmt.Errorf("scanning sidebar root page: %w", err)
+		}
+		roots = append(roots, row)
+	}
+	if err := rows.Err(); err != nil {
+		return db.SidebarSessionIndex{},
+			fmt.Errorf("iterating sidebar root page: %w", err)
+	}
+
 	index := db.SidebarSessionIndex{
 		Sessions: []db.SidebarSessionIndexRow{},
+		Total:    total,
 	}
+	if len(roots) == 0 {
+		return index, nil
+	}
+	selected := roots
+	if len(roots) > f.Limit {
+		selected = roots[:f.Limit]
+		last := selected[f.Limit-1]
+		index.NextCursor = s.EncodeCursor(
+			FormatISO8601(last.activity), last.id, total,
+		)
+	}
+
+	page := db.NewQueryBuilder(db.PostgresQueryDialect(), 0)
+	cteParts := make([]string, 0, len(selected))
+	treeArgs := make([]any, 0, len(selected)*2)
+	for i, root := range selected {
+		id := page.Add(root.id)
+		ord := page.Add(i)
+		if i == 0 {
+			cteParts = append(cteParts,
+				"SELECT "+id+" AS id, "+ord+" AS ord")
+		} else {
+			cteParts = append(cteParts,
+				"UNION ALL SELECT "+id+", "+ord)
+		}
+	}
+	treeArgs = append(treeArgs, page.Args()...)
+
+	treeQuery := `
+		WITH RECURSIVE root_page(id, ord) AS (
+			` + strings.Join(cteParts, "\n") + `
+		),
+		tree(id, ord) AS (
+			SELECT id, ord FROM root_page
+			UNION
+			SELECT s.id, t.ord
+			FROM sessions s
+			JOIN tree t ON s.parent_session_id = t.id
+			WHERE s.message_count > 0
+			  AND s.deleted_at IS NULL
+		),
+		ranked_tree(id, ord) AS (
+			SELECT id, MIN(ord) AS ord
+			FROM tree
+			GROUP BY id
+		)
+		SELECT
+			s.id,
+			s.parent_session_id,
+			s.relationship_type,
+			s.project,
+			s.machine,
+			s.agent,
+			COALESCE(s.display_name, s.session_name) AS display_name,
+			s.started_at,
+			s.ended_at,
+			s.created_at,
+			s.termination_status,
+			s.message_count,
+			s.user_message_count,
+			s.is_automated,
+			position('<teammate-message' in COALESCE(s.first_message, '')) > 0
+		FROM sessions s
+		JOIN ranked_tree t ON s.id = t.id
+		ORDER BY
+			t.ord ASC,
+			` + pgSidebarActivityExprS + ` DESC,
+			s.id DESC`
+
+	rows, err = s.pg.QueryContext(ctx, treeQuery, treeArgs...)
+	if err != nil {
+		return db.SidebarSessionIndex{},
+			fmt.Errorf("querying sidebar tree page: %w", err)
+	}
+	defer rows.Close()
+
+	index.Sessions, err = scanPGSidebarSessionIndexRows(rows)
+	if err != nil {
+		return db.SidebarSessionIndex{}, err
+	}
+	return index, nil
+}
+
+func scanPGSidebarSessionIndexRows(
+	rows *sql.Rows,
+) ([]db.SidebarSessionIndexRow, error) {
+	sessions := []db.SidebarSessionIndexRow{}
 	for rows.Next() {
 		var row db.SidebarSessionIndexRow
 		var startedAt, endedAt, createdAt *time.Time
@@ -454,11 +668,10 @@ func (s *Store) GetSidebarSessionIndex(
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {
-			return db.SidebarSessionIndex{},
-				fmt.Errorf(
-					"scanning sidebar session index: %w",
-					err,
-				)
+			return nil, fmt.Errorf(
+				"scanning sidebar session index: %w",
+				err,
+			)
 		}
 		if startedAt != nil {
 			str := FormatISO8601(*startedAt)
@@ -471,15 +684,12 @@ func (s *Store) GetSidebarSessionIndex(
 		if createdAt != nil {
 			row.CreatedAt = FormatISO8601(*createdAt)
 		}
-		index.Sessions = append(index.Sessions, row)
+		sessions = append(sessions, row)
 	}
 	if err := rows.Err(); err != nil {
-		return db.SidebarSessionIndex{},
-			fmt.Errorf("iterating sidebar session index: %w", err)
+		return nil, fmt.Errorf("iterating sidebar session index: %w", err)
 	}
-	index.Total = len(index.Sessions)
-
-	return index, nil
+	return sessions, nil
 }
 
 // GetSession returns a single session by ID, excluding

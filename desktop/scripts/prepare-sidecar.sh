@@ -121,11 +121,7 @@ patch_tauri_version() {
 }
 
 install_frontend_deps() {
-  if [ -f "$REPO_ROOT/frontend/package-lock.json" ]; then
-    npm ci
-  else
-    npm install
-  fi
+  npm ci
 }
 
 main() {

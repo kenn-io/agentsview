@@ -18,7 +18,7 @@ The wrapper does not reimplement the web app. Instead, it:
 ## Usage
 
 ```bash
-npm install
+npm ci
 npm run tauri:dev
 npm run tauri:build
 npm run tauri:build:macos-app

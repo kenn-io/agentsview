@@ -278,6 +278,16 @@ func requireSidebarIndexIDs(
 	}
 }
 
+func sidebarIndexIDs(
+	sessions []db.SidebarSessionIndexRow,
+) []string {
+	ids := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
 func TestStoreGetSidebarSessionIndexComputesIsTeammate(
 	t *testing.T,
 ) {
@@ -439,6 +449,106 @@ func TestStoreGetSidebarSessionIndexIncludesChildrenForMatchingRoot(
 	requireSidebarIndexIDs(
 		t, index.Sessions, []string{"root", "sub", "fork"},
 	)
+}
+
+func TestStoreGetSidebarSessionIndexPaginatesContinuationsAsDescendants(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	store := ensureSidebarIndexStoreSchema(t, pgURL)
+	defer store.Close()
+
+	rootEnd := "2024-01-01T00:00:00Z"
+	continuationEnd := "2024-01-10T00:00:00Z"
+	otherEnd := "2024-01-05T00:00:00Z"
+	rootID := "root"
+	insertSidebarIndexSession(t, store, rootID, func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = rootEnd
+	})
+	insertSidebarIndexSession(t, store, "continuation", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.parentSessionID = &rootID
+		s.relationshipType = "continuation"
+		s.endedAt = continuationEnd
+	})
+	insertSidebarIndexSession(t, store, "other", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = otherEnd
+	})
+
+	ctx := context.Background()
+	first, err := store.GetSidebarSessionIndex(
+		ctx, db.SessionFilter{Limit: 1},
+	)
+	require.NoError(t, err, "first page")
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t,
+		[]string{"root", "continuation"},
+		sidebarIndexIDs(first.Sessions),
+	)
+
+	second, err := store.GetSidebarSessionIndex(
+		ctx, db.SessionFilter{Limit: 1, Cursor: first.NextCursor},
+	)
+	require.NoError(t, err, "second page")
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.Equal(t, []string{"other"}, sidebarIndexIDs(second.Sessions))
+}
+
+func TestStoreGetSidebarSessionIndexPaginatesByDescendantFreshness(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	store := ensureSidebarIndexStoreSchema(t, pgURL)
+	defer store.Close()
+
+	rootEnd := "2024-01-01T00:00:00Z"
+	childEnd := "2024-01-10T00:00:00Z"
+	otherEnd := "2024-01-05T00:00:00Z"
+	rootID := "root"
+	insertSidebarIndexSession(t, store, rootID, func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = rootEnd
+	})
+	insertSidebarIndexSession(t, store, "child", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.parentSessionID = &rootID
+		s.relationshipType = "subagent"
+		s.endedAt = childEnd
+	})
+	insertSidebarIndexSession(t, store, "other", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = otherEnd
+	})
+
+	ctx := context.Background()
+	first, err := store.GetSidebarSessionIndex(
+		ctx, db.SessionFilter{Limit: 1},
+	)
+	require.NoError(t, err, "first page")
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t,
+		[]string{"root", "child"},
+		sidebarIndexIDs(first.Sessions),
+	)
+
+	second, err := store.GetSidebarSessionIndex(
+		ctx, db.SessionFilter{Limit: 1, Cursor: first.NextCursor},
+	)
+	require.NoError(t, err, "second page")
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.Equal(t, []string{"other"}, sidebarIndexIDs(second.Sessions))
 }
 
 func TestStoreGetSession(t *testing.T) {
