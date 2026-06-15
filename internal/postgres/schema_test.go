@@ -255,7 +255,9 @@ func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {
 	assert.Contains(t, sql,
 		"CREATE INDEX IF NOT EXISTS idx_messages_velocity")
 	assert.Contains(t, sql,
-		"CREATE INDEX IF NOT EXISTS idx_messages_usage_timestamp")
+		"CREATE INDEX IF NOT EXISTS idx_messages_usage_covering")
+	assert.Contains(t, sql,
+		"DROP INDEX IF EXISTS idx_messages_usage_timestamp")
 }
 
 func TestEnsureSchemaCreatesSessionTraversalIndex(t *testing.T) {

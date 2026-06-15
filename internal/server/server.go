@@ -353,7 +353,8 @@ func (s *Server) Handler() http.Handler {
 			hostCheckMiddleware(
 				allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
 				corsMiddleware(
-					allowedOrigins, bindAll, s.cfg.Port, bindAllIPs, logMiddleware(s.mux),
+					allowedOrigins, bindAll, s.cfg.Port, bindAllIPs,
+					gzipMiddleware(logMiddleware(s.mux)),
 				),
 			),
 		),

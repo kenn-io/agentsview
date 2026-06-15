@@ -853,8 +853,9 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 		 ON messages(session_id) WHERE is_sidechain = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_usage_timestamp
-		 ON messages(timestamp, session_id, ordinal)
+		`CREATE INDEX IF NOT EXISTS idx_messages_usage_covering
+		 ON messages(timestamp, session_id, ordinal, model,
+		             claude_message_id, claude_request_id, token_usage)
 		 WHERE token_usage != ''
 		   AND model != ''
 		   AND model != '<synthetic>'`,
@@ -865,6 +866,11 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 		if _, err := w.Exec(ddl); err != nil {
 			return fmt.Errorf("creating index: %w", err)
 		}
+	}
+	if _, err := w.Exec(
+		`DROP INDEX IF EXISTS idx_messages_usage_timestamp`,
+	); err != nil {
+		return fmt.Errorf("dropping legacy usage index: %w", err)
 	}
 	return nil
 }
