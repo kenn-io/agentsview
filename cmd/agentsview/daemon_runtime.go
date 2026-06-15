@@ -187,6 +187,30 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 	}
 }
 
+// liveDaemonRecords returns runtime records for agentsview daemons in dataDir
+// whose process is still alive. Unlike FindDaemonRuntime it does not require a
+// successful ping, so it can target a hung-but-alive server (e.g. for stop).
+func liveDaemonRecords(dataDir string) []daemon.RuntimeRecord {
+	migrateLegacyDaemonRuntimes(dataDir)
+
+	store := runtimeStore(dataDir)
+	_, _ = store.CleanupDead()
+	records, err := store.List()
+	if err != nil {
+		return nil
+	}
+	var alive []daemon.RuntimeRecord
+	for _, rec := range records {
+		if rec.Service != "" && rec.Service != daemonService {
+			continue
+		}
+		if daemon.ProcessAlive(rec.PID) {
+			alive = append(alive, rec)
+		}
+	}
+	return alive
+}
+
 func hasLiveDaemonRuntime(dataDir string, authToken ...string) bool {
 	migrateLegacyDaemonRuntimes(dataDir, authToken...)
 

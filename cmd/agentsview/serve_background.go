@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/config"
 )
 
@@ -24,6 +25,42 @@ func runningAsBackgroundChild() bool {
 	return os.Getenv(backgroundChildEnvVar) == "1"
 }
 
+// backgroundLaunchLockPath is the advisory lock that serializes concurrent
+// `serve --background` launches for a data dir.
+func backgroundLaunchLockPath(dataDir string) string {
+	return filepath.Join(dataDir, "serve.background.lock")
+}
+
+// acquireBackgroundLaunchLock takes the background launch lock without
+// blocking. ok is false when another launch already holds it.
+func acquireBackgroundLaunchLock(dataDir string) (*flock.Flock, bool) {
+	lock := flock.New(backgroundLaunchLockPath(dataDir))
+	locked, err := lock.TryLock()
+	if err != nil || !locked {
+		return nil, false
+	}
+	return lock, true
+}
+
+// reportBackgroundLaunchInProgress waits for an in-flight startup to publish
+// its runtime record and reports the running server, or notes that a launch
+// is still in progress when no record appears in time.
+func reportBackgroundLaunchInProgress(cfg config.Config) {
+	WaitForDaemonStartup(
+		cfg.DataDir, backgroundServeReadyTimeout, cfg.AuthToken,
+	)
+	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+		!rt.ReadOnly {
+		fmt.Printf(
+			"agentsview already running at %s (pid %d)\n",
+			urlFromDaemonRuntime(rt),
+			rt.Record.PID,
+		)
+		return
+	}
+	fmt.Println("agentsview serve --background is already in progress.")
+}
+
 func runServeBackground(cfg config.Config, args []string) {
 	if cfg.RequireAuth {
 		if err := cfg.EnsureAuthToken(); err != nil {
@@ -34,12 +71,34 @@ func runServeBackground(cfg config.Config, args []string) {
 		}
 	}
 
+	// Serialize concurrent `serve --background` launches. Without this,
+	// two invocations issued before either child publishes its runtime
+	// record would both pass the checks below and spawn a server, leaving
+	// a stray second daemon on its own auto-discovered port. The launch
+	// lock is distinct from the daemon start lock so the spawned child can
+	// still claim the start lock during its own (possibly long) startup.
+	launchLock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
+	if !ok {
+		reportBackgroundLaunchInProgress(cfg)
+		return
+	}
+	defer func() { _ = launchLock.Unlock() }()
+
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
 		fmt.Printf(
-			"agentsview already running at %s\n",
+			"agentsview already running at %s (pid %d)\n",
 			urlFromDaemonRuntime(rt),
+			rt.Record.PID,
 		)
+		return
+	}
+
+	// A writable daemon (a foreground `serve` or a prior background launch)
+	// is mid-startup and holds the start lock but has not yet published a
+	// runtime record. Wait for it instead of racing a second server.
+	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+		reportBackgroundLaunchInProgress(cfg)
 		return
 	}
 
@@ -53,7 +112,7 @@ func runServeBackground(cfg config.Config, args []string) {
 		waitCh <- child.Wait()
 	}()
 
-	rt, ready, err := waitForBackgroundServeReady(
+	rt, err := waitForBackgroundServeReady(
 		cfg.DataDir,
 		cfg.AuthToken,
 		waitCh,
@@ -67,7 +126,7 @@ func runServeBackground(cfg config.Config, args []string) {
 			logPath,
 		)
 	}
-	if ready {
+	if rt != nil {
 		fmt.Printf(
 			"agentsview running at %s (pid %d)\n",
 			urlFromDaemonRuntime(rt),
@@ -156,12 +215,15 @@ func isBackgroundFlagArg(arg string) bool {
 	return false
 }
 
+// waitForBackgroundServeReady polls for the spawned child to publish a
+// writable runtime record. It returns the runtime once ready, nil on timeout
+// (the child is still starting), or an error if the child exits first.
 func waitForBackgroundServeReady(
 	dataDir string,
 	authToken string,
 	waitCh <-chan error,
 	timeout time.Duration,
-) (*DaemonRuntime, bool, error) {
+) (*DaemonRuntime, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	ticker := time.NewTicker(startProbeTick)
@@ -170,7 +232,7 @@ func waitForBackgroundServeReady(
 	for {
 		if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
 			!rt.ReadOnly {
-			return rt, true, nil
+			return rt, nil
 		}
 
 		select {
@@ -178,10 +240,10 @@ func waitForBackgroundServeReady(
 			if err == nil {
 				err = fmt.Errorf("server process exited")
 			}
-			return nil, false, err
+			return nil, err
 		case <-ticker.C:
 		case <-timer.C:
-			return nil, false, nil
+			return nil, nil
 		}
 	}
 }

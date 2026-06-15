@@ -38,6 +38,8 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 ```bash
 agentsview serve               # start foreground server
 agentsview serve --background  # start server and return to the shell
+agentsview serve status        # show whether a server is running
+agentsview serve stop          # stop the running server
 agentsview usage daily         # print daily cost summary
 ```
 
@@ -47,8 +49,8 @@ machine, syncs them into a local SQLite database, and serves a web UI at
 
 Use `agentsview serve --background` when you want the dashboard to keep running
 after your terminal prompt returns. The command prints the server URL, process
-ID, and log path (`~/.agentsview/serve.log`). Stop the background server with
-`kill <pid>`.
+ID, and log path (`~/.agentsview/serve.log`). Check on it with
+`agentsview serve status` and shut it down with `agentsview serve stop`.
 
 ## Remote / forwarded access
 
