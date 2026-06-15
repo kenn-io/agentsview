@@ -8,13 +8,14 @@ import type {
   Session,
   ProjectInfo,
   AgentInfo,
+  SidebarSessionIndexResponse,
   SidebarSessionIndexRow,
 } from "../api/types.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 
-type SessionListParams = Parameters<
-  typeof SessionsService.getApiV1Sessions
+type SidebarIndexParams = Parameters<
+  typeof SessionsService.getApiV1SessionsSidebarIndex
 >[0];
 type MetadataParams = Parameters<
   typeof MetadataService.getApiV1Projects
@@ -269,7 +270,7 @@ class SessionsStore {
     return buildSessionGroups(this.sessions);
   }
 
-  private get apiParams(): SessionListParams {
+  private get apiParams(): SidebarIndexParams {
     const f = this.filters;
     // Don't exclude "unknown" when explicitly viewing it.
     const exclude =
@@ -338,7 +339,6 @@ class SessionsStore {
 
     const params = {
       ...this.apiParams,
-      includeChildren: true,
       limit: SESSION_PAGE_SIZE,
     };
     const signature = JSON.stringify(params);
@@ -367,7 +367,7 @@ class SessionsStore {
     void this.load();
   }
 
-  private async loadSidebarPage(params: SessionListParams) {
+  private async loadSidebarPage(params: SidebarIndexParams) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
     // Keep the existing list visible during reloads, but mark
@@ -384,13 +384,9 @@ class SessionsStore {
     };
     try {
       configureGeneratedClient();
-      const page = await SessionsService.getApiV1Sessions(
+      const index = await SessionsService.getApiV1SessionsSidebarIndex(
         params,
-      ) as unknown as {
-        sessions: Session[];
-        next_cursor?: string | null;
-        total: number;
-      };
+      ) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
 
       this.sidebarIndexVersion = indexVersion;
@@ -401,11 +397,11 @@ class SessionsStore {
         session.id,
         session,
       ]));
-      this.sessions = page.sessions.map((session) =>
-        pageSessionToSidebarSession(session, existing.get(session.id))
+      this.sessions = index.sessions.map((row) =>
+        sidebarIndexRowToSession(row, existing.get(row.id))
       );
-      this.nextCursor = page.next_cursor ?? null;
-      this.total = page.total;
+      this.nextCursor = index.next_cursor ?? null;
+      this.total = index.total;
     } catch {
       // Restore previous state so a transient failure
       // doesn't wipe the visible session list.
@@ -534,26 +530,21 @@ class SessionsStore {
     this.loading = true;
     try {
       configureGeneratedClient();
-      const page = await SessionsService.getApiV1Sessions({
+      const index = await SessionsService.getApiV1SessionsSidebarIndex({
         ...this.apiParams,
-        includeChildren: true,
         cursor: this.nextCursor,
         limit: SESSION_PAGE_SIZE,
-      }) as unknown as {
-        sessions: Session[];
-        next_cursor?: string | null;
-        total: number;
-      };
+      }) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
       this.sessions.push(
-        ...page.sessions.map((session) =>
-          pageSessionToSidebarSession(session, this.sessions.find(
-            (existing) => existing.id === session.id,
+        ...index.sessions.map((row) =>
+          sidebarIndexRowToSession(row, this.sessions.find(
+            (existing) => existing.id === row.id,
           ))
         ),
       );
-      this.nextCursor = page.next_cursor ?? null;
-      this.total = page.total;
+      this.nextCursor = index.next_cursor ?? null;
+      this.total = index.total;
     } finally {
       if (this.loadVersion === version) {
         this.loading = false;
@@ -1211,32 +1202,6 @@ function sidebarIndexRowToSession(
     is_index_only: false,
     created_at: skinny.created_at,
   };
-}
-
-function pageSessionToSidebarSession(
-  session: Session,
-  existing?: Session,
-): Session {
-  return sidebarIndexRowToSession(
-    {
-      id: session.id,
-      project: session.project,
-      machine: session.machine,
-      agent: session.agent,
-      display_name: session.display_name ?? null,
-      started_at: session.started_at,
-      ended_at: session.ended_at,
-      created_at: session.created_at,
-      message_count: session.message_count,
-      user_message_count: session.user_message_count ?? 0,
-      parent_session_id: session.parent_session_id ?? null,
-      relationship_type: session.relationship_type ?? null,
-      termination_status: session.termination_status ?? null,
-      is_automated: session.is_automated ?? false,
-      is_teammate: session.is_teammate ?? false,
-    },
-    existing,
-  );
 }
 
 function maxString(a: string | null, b: string | null): string | null {

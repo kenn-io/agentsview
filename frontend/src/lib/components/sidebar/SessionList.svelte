@@ -283,13 +283,18 @@
   });
 
   $effect(() => {
-    const items = visibleItems;
-    if (items.length === 0 || !sessions.nextCursor || sessions.loading) {
+    if (
+      !containerRef ||
+      !sessions.nextCursor ||
+      sessions.loading ||
+      scrollTop <= 0 ||
+      viewportHeight <= 0 ||
+      renderTotalSize <= viewportHeight
+    ) {
       return;
     }
-    const lastVisibleTop = items[items.length - 1]?.top ?? 0;
-    const remaining = renderTotalSize - lastVisibleTop;
-    if (remaining < ITEM_HEIGHT * 30) {
+    const distanceToBottom = renderTotalSize - (scrollTop + viewportHeight);
+    if (distanceToBottom < ITEM_HEIGHT * 30) {
       void sessions.loadMore();
     }
   });

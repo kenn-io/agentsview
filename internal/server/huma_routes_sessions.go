@@ -128,6 +128,10 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return db.SessionFilter{}, err
 	}
+	limit := 0
+	if in.Limit > 0 {
+		limit = clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)
+	}
 	return db.SessionFilter{
 		Project:          in.Project,
 		ExcludeProject:   in.ExcludeProject,
@@ -143,6 +147,8 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 		ExcludeOneShot:   !in.IncludeOneShot,
 		ExcludeAutomated: !in.IncludeAutomated,
 		IncludeChildren:  includeChildren,
+		Cursor:           in.Cursor,
+		Limit:            limit,
 		Termination:      in.Termination,
 	}, nil
 }
@@ -175,6 +181,9 @@ func (s *Server) humaSidebarSessionIndex(
 	}
 	index, err := s.db.GetSidebarSessionIndex(ctx, filter)
 	if err != nil {
+		if errors.Is(err, db.ErrInvalidCursor) {
+			return nil, apiError(http.StatusBadRequest, "invalid cursor")
+		}
 		return nil, serverError(err)
 	}
 	return &jsonOutput[db.SidebarSessionIndex]{Body: index}, nil

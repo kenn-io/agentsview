@@ -15,7 +15,11 @@ import sessionItemSource from "./SessionItem.svelte?raw";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
-import { ITEM_HEIGHT, OVERSCAN } from "./session-list-utils.js";
+import {
+  ITEM_HEIGHT,
+  OVERSCAN,
+  STORAGE_KEY_GROUP,
+} from "./session-list-utils.js";
 
 vi.mock("../../api/client.js", () => ({
   listSessions: vi.fn().mockResolvedValue({
@@ -74,6 +78,7 @@ describe("SessionList filter dropdown", () => {
     sessions.agents = [];
     sessions.machines = [];
     sessions.activeSessionId = null;
+    sessions.nextCursor = null;
     sessions.loading = false;
     sessions.sidebarIndexVersion++;
     sessions.hydratedSessionsByVersion = new Map([
@@ -81,6 +86,7 @@ describe("SessionList filter dropdown", () => {
     ]);
     starred.filterOnly = false;
     starred.ids = new Set();
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -160,6 +166,7 @@ describe("SessionList visible hydration", () => {
       });
     sessions.sessions = [];
     sessions.activeSessionId = null;
+    sessions.nextCursor = null;
     sessions.loading = false;
     sessions.sidebarIndexVersion++;
     sessions.hydratedSessionsByVersion = new Map([
@@ -167,6 +174,7 @@ describe("SessionList visible hydration", () => {
     ]);
     starred.filterOnly = false;
     starred.ids = new Set();
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -404,6 +412,29 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     expect(document.querySelectorAll(".group-hint-icon")).toHaveLength(1);
+  });
+
+  it("does not auto-page when saved grouping starts collapsed", async () => {
+    localStorage.setItem(STORAGE_KEY_GROUP, "agent");
+    sessions.sessions = Array.from({ length: 30 }, (_, i) =>
+      makeSession({
+        id: `s${i}`,
+        agent: i % 2 === 0 ? "claude" : "codex",
+        display_name: `Session ${i}`,
+        is_index_only: true,
+      }),
+    );
+    sessions.nextCursor = "next-page";
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+    const loadMore = vi
+      .spyOn(sessions, "loadMore")
+      .mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    await tick();
+
+    expect(loadMore).not.toHaveBeenCalled();
   });
 });
 

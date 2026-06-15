@@ -82,6 +82,7 @@ export interface SidebarSessionIndexRow {
 /** Matches Go SidebarSessionIndex struct. */
 export interface SidebarSessionIndexResponse {
   sessions: SidebarSessionIndexRow[];
+  next_cursor?: string | null;
   total: number;
 }
 

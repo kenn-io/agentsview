@@ -372,8 +372,9 @@ type SidebarSessionIndexRow struct {
 }
 
 type SidebarSessionIndex struct {
-	Sessions []SidebarSessionIndexRow `json:"sessions"`
-	Total    int                      `json:"total"`
+	Sessions   []SidebarSessionIndexRow `json:"sessions"`
+	NextCursor string                   `json:"next_cursor,omitempty"`
+	Total      int                      `json:"total"`
 }
 
 // buildSessionFilter returns a WHERE clause and args for the
@@ -464,14 +465,18 @@ func (db *DB) ListSessions(
 }
 
 // GetSidebarSessionIndex returns the skinny session rows needed by
-// the sidebar grouper. It intentionally has no cursor or limit.
+// the sidebar grouper. Paginated calls page root sessions and include
+// each root's descendants so grouped sidebar trees stay complete.
 func (db *DB) GetSidebarSessionIndex(
 	ctx context.Context, f SessionFilter,
 ) (SidebarSessionIndex, error) {
 	f.IncludeChildren = true
-	f.Cursor = ""
-	f.Limit = 0
 
+	if f.Limit > 0 || f.Cursor != "" {
+		return db.getSidebarSessionIndexPage(ctx, f)
+	}
+
+	f.Cursor = ""
 	where, args := buildSessionFilter(f)
 	query := `
 		SELECT
@@ -537,6 +542,183 @@ func (db *DB) GetSidebarSessionIndex(
 			fmt.Errorf("iterating sidebar session index: %w", err)
 	}
 	index.Total = len(index.Sessions)
+
+	return index, nil
+}
+
+func (db *DB) getSidebarSessionIndexPage(
+	ctx context.Context, f SessionFilter,
+) (SidebarSessionIndex, error) {
+	if f.Limit <= 0 || f.Limit > MaxSessionLimit {
+		f.Limit = DefaultSessionLimit
+	}
+
+	rootFilter := f
+	rootFilter.IncludeChildren = false
+	rootFilter.Cursor = ""
+	rootWhere, rootArgs := buildSessionFilter(rootFilter)
+
+	var total int
+	var cur SessionCursor
+	if f.Cursor != "" {
+		var err error
+		cur, err = db.DecodeCursor(f.Cursor)
+		if err != nil {
+			return SidebarSessionIndex{}, err
+		}
+		total = cur.Total
+	}
+	if total <= 0 {
+		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + rootWhere
+		if err := db.getReader().QueryRowContext(
+			ctx, countQuery, rootArgs...,
+		).Scan(&total); err != nil {
+			return SidebarSessionIndex{},
+				fmt.Errorf("counting sidebar roots: %w", err)
+		}
+	}
+
+	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(rootArgs))
+	cursorWhere := rootWhere
+	if f.Cursor != "" {
+		cursorWhere += " AND " +
+			pageBuilder.CursorBeforePredicate(cur)
+	}
+	rootQuery := "SELECT id, COALESCE(" +
+		"NULLIF(ended_at, ''), " +
+		"NULLIF(started_at, ''), " +
+		"created_at" +
+		") AS activity FROM sessions WHERE " + cursorWhere + `
+		ORDER BY activity DESC, id DESC
+		` + pageBuilder.Limit(f.Limit+1)
+	rootQueryArgs := append([]any{}, rootArgs...)
+	rootQueryArgs = append(rootQueryArgs, pageBuilder.Args()...)
+
+	rows, err := db.getReader().QueryContext(ctx, rootQuery, rootQueryArgs...)
+	if err != nil {
+		return SidebarSessionIndex{},
+			fmt.Errorf("querying sidebar root page: %w", err)
+	}
+	defer rows.Close()
+
+	type rootRow struct {
+		id       string
+		activity string
+	}
+	roots := []rootRow{}
+	for rows.Next() {
+		var row rootRow
+		if err := rows.Scan(&row.id, &row.activity); err != nil {
+			return SidebarSessionIndex{},
+				fmt.Errorf("scanning sidebar root page: %w", err)
+		}
+		roots = append(roots, row)
+	}
+	if err := rows.Err(); err != nil {
+		return SidebarSessionIndex{},
+			fmt.Errorf("iterating sidebar root page: %w", err)
+	}
+
+	index := SidebarSessionIndex{
+		Sessions: []SidebarSessionIndexRow{},
+		Total:    total,
+	}
+	if len(roots) == 0 {
+		return index, nil
+	}
+	selected := roots
+	if len(roots) > f.Limit {
+		selected = roots[:f.Limit]
+		last := selected[f.Limit-1]
+		index.NextCursor = db.EncodeCursor(last.activity, last.id, total)
+	}
+
+	cteParts := make([]string, 0, len(selected))
+	treeArgs := make([]any, 0, len(selected)*2)
+	for i, root := range selected {
+		if i == 0 {
+			cteParts = append(cteParts, "SELECT ? AS id, ? AS ord")
+		} else {
+			cteParts = append(cteParts, "UNION ALL SELECT ?, ?")
+		}
+		treeArgs = append(treeArgs, root.id, i)
+	}
+
+	treeQuery := `
+		WITH RECURSIVE root_page(id, ord) AS (
+			` + strings.Join(cteParts, "\n") + `
+		),
+		tree(id, ord) AS (
+			SELECT id, ord FROM root_page
+			UNION
+			SELECT s.id, t.ord
+			FROM sessions s
+			JOIN tree t ON s.parent_session_id = t.id
+			WHERE s.message_count > 0
+			  AND s.deleted_at IS NULL
+		)
+		SELECT
+			s.id,
+			s.parent_session_id,
+			s.relationship_type,
+			s.project,
+			s.machine,
+			s.agent,
+			COALESCE(s.display_name, s.session_name) AS display_name,
+			s.started_at,
+			s.ended_at,
+			s.created_at,
+			s.termination_status,
+			s.message_count,
+			s.user_message_count,
+			s.is_automated,
+			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
+		FROM sessions s
+		JOIN tree t ON s.id = t.id
+		ORDER BY
+			t.ord ASC,
+			COALESCE(
+				NULLIF(s.ended_at, ''),
+				NULLIF(s.started_at, ''),
+				s.created_at
+			) DESC,
+			s.id DESC`
+
+	rows, err = db.getReader().QueryContext(ctx, treeQuery, treeArgs...)
+	if err != nil {
+		return SidebarSessionIndex{},
+			fmt.Errorf("querying sidebar tree page: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var row SidebarSessionIndexRow
+		if err := rows.Scan(
+			&row.ID,
+			&row.ParentSessionID,
+			&row.RelationshipType,
+			&row.Project,
+			&row.Machine,
+			&row.Agent,
+			&row.DisplayName,
+			&row.StartedAt,
+			&row.EndedAt,
+			&row.CreatedAt,
+			&row.TerminationStatus,
+			&row.MessageCount,
+			&row.UserMessageCount,
+			&row.IsAutomated,
+			&row.IsTeammate,
+		); err != nil {
+			return SidebarSessionIndex{},
+				fmt.Errorf("scanning sidebar tree page: %w", err)
+		}
+		index.Sessions = append(index.Sessions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return SidebarSessionIndex{},
+			fmt.Errorf("iterating sidebar tree page: %w", err)
+	}
 
 	return index, nil
 }

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -739,6 +740,16 @@ func sidebarIndexRowsByID(
 	return rows
 }
 
+func sidebarIndexRowIDs(
+	sessions []db.SidebarSessionIndexRow,
+) []string {
+	ids := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
 func assertStatus(
 	t *testing.T, w *httptest.ResponseRecorder, code int,
 ) {
@@ -1084,6 +1095,58 @@ func TestSidebarIndexReturnsSkinnyRows(t *testing.T) {
 	if _, ok := rows["review"]; !ok {
 		t.Fatal("automated review row missing with include_automated=true")
 	}
+}
+
+func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
+	te := setup(t)
+
+	rootNewEnd := "2024-01-04T00:00:00Z"
+	childNewEnd := "2024-01-06T00:00:00Z"
+	rootOldEnd := "2024-01-01T00:00:00Z"
+	childOldEnd := "2024-01-07T00:00:00Z"
+	te.seedSession(t, "root-new", "my-app", 5, func(s *db.Session) {
+		s.EndedAt = &rootNewEnd
+	})
+	te.seedSession(t, "child-new", "my-app", 3, func(s *db.Session) {
+		s.ParentSessionID = new("root-new")
+		s.RelationshipType = "subagent"
+		s.EndedAt = &childNewEnd
+	})
+	te.seedSession(t, "root-old", "my-app", 5, func(s *db.Session) {
+		s.EndedAt = &rootOldEnd
+	})
+	te.seedSession(t, "child-old", "my-app", 3, func(s *db.Session) {
+		s.ParentSessionID = new("root-old")
+		s.RelationshipType = "subagent"
+		s.EndedAt = &childOldEnd
+	})
+
+	type sidebarPage struct {
+		Sessions   []db.SidebarSessionIndexRow `json:"sessions"`
+		NextCursor string                      `json:"next_cursor,omitempty"`
+		Total      int                         `json:"total"`
+	}
+
+	w := te.get(t, "/api/v1/sessions/sidebar-index?limit=1")
+	assertStatus(t, w, http.StatusOK)
+	first := decode[sidebarPage](t, w)
+	firstIDs := sidebarIndexRowIDs(first.Sessions)
+	assert.Equal(t, 2, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t, []string{"root-new", "child-new"}, firstIDs)
+	assert.NotContains(t, firstIDs, "root-old")
+	assert.NotContains(t, firstIDs, "child-old")
+
+	w = te.get(t,
+		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
+			url.QueryEscape(first.NextCursor),
+	)
+	assertStatus(t, w, http.StatusOK)
+	second := decode[sidebarPage](t, w)
+	secondIDs := sidebarIndexRowIDs(second.Sessions)
+	assert.Equal(t, 2, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.ElementsMatch(t, []string{"root-old", "child-old"}, secondIDs)
 }
 
 func TestSidebarIndexValidatesParams(t *testing.T) {
