@@ -3,7 +3,10 @@ import {
   MetadataService,
   SessionsService,
 } from "../api/generated/index";
-import { configureGeneratedClient } from "../api/runtime.js";
+import {
+  callGenerated,
+  configureGeneratedClient,
+} from "../api/runtime.js";
 import type {
   Session,
   ProjectInfo,
@@ -255,6 +258,7 @@ class SessionsStore {
   private sidebarConsumers = 0;
   private sidebarLoadPromise: Promise<void> | null = null;
   private sidebarLoadSignature: string | null = null;
+  private sidebarAbort: AbortController | null = null;
 
   private liveRefreshStarted = false;
   private unsubEvents: (() => void) | null = null;
@@ -349,7 +353,10 @@ class SessionsStore {
       return this.sidebarLoadPromise;
     }
 
-    const promise = this.loadSidebarPage(params);
+    this.sidebarAbort?.abort();
+    const controller = new AbortController();
+    this.sidebarAbort = controller;
+    const promise = this.loadSidebarPage(params, controller.signal);
     this.sidebarLoadPromise = promise;
     this.sidebarLoadSignature = signature;
     try {
@@ -358,6 +365,9 @@ class SessionsStore {
       if (this.sidebarLoadPromise === promise) {
         this.sidebarLoadPromise = null;
         this.sidebarLoadSignature = null;
+        if (this.sidebarAbort === controller) {
+          this.sidebarAbort = null;
+        }
       }
     }
   }
@@ -367,7 +377,10 @@ class SessionsStore {
     void this.load();
   }
 
-  private async loadSidebarPage(params: SidebarIndexParams) {
+  private async loadSidebarPage(
+    params: SidebarIndexParams,
+    signal: AbortSignal,
+  ) {
     const version = ++this.loadVersion;
     const indexVersion = this.sidebarIndexVersion + 1;
     // Keep the existing list visible during reloads, but mark
@@ -383,9 +396,9 @@ class SessionsStore {
       total: this.total,
     };
     try {
-      configureGeneratedClient();
-      const index = await SessionsService.getApiV1SessionsSidebarIndex(
-        params,
+      const index = await callGenerated(
+        () => SessionsService.getApiV1SessionsSidebarIndex(params),
+        signal,
       ) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
 
@@ -1147,6 +1160,11 @@ class SessionsStore {
       clearInterval(this.safetyNetTimer);
       this.safetyNetTimer = null;
     }
+    this.sidebarAbort?.abort();
+    this.sidebarAbort = null;
+    this.sidebarLoadPromise = null;
+    this.sidebarLoadSignature = null;
+    this.loadVersion++;
     this.liveRefreshStarted = false;
   }
 }

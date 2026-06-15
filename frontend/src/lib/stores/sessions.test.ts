@@ -15,6 +15,7 @@ import {
 } from "./sessions.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
+import { callGenerated } from "../api/runtime.js";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -357,6 +358,36 @@ describe("SessionsStore", () => {
 
       resolvePage({ sessions: [], total: 0, next_cursor: null });
       await Promise.all([first, second]);
+      detach();
+    });
+
+    it("aborts an in-flight sidebar load when the filter signature changes", async () => {
+      const signals: AbortSignal[] = [];
+      vi.mocked(callGenerated).mockImplementation(
+        (request: () => Promise<unknown>, signal?: AbortSignal) => {
+          if (signal) signals.push(signal);
+          return request();
+        },
+      );
+
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockReturnValueOnce(new Promise(() => {}))
+        .mockResolvedValueOnce({
+          sessions: [],
+          total: 0,
+          next_cursor: null,
+        });
+
+      const detach = sessions.attachSidebar();
+      void sessions.load();
+      await Promise.resolve();
+      expect(signals[0]?.aborted).toBe(false);
+
+      sessions.filters.project = "changed";
+      await sessions.load();
+
+      expect(signals[0]?.aborted).toBe(true);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       detach();
     });
 
