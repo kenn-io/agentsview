@@ -290,6 +290,7 @@ agentsview auto-discovers sessions from all of these:
 | Positron Assistant | `~/Library/Application Support/Positron/User/` (macOS) |
 | Antigravity        | `~/.gemini/antigravity/`                               |
 | Antigravity CLI    | `~/.gemini/antigravity-cli/` (see note below)          |
+| gptme              | `~/.local/share/gptme/logs/`                           |
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details.
