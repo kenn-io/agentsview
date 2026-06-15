@@ -27,7 +27,7 @@ func TestParseGptmeSession(t *testing.T) {
 	assert.Equal(t, AgentGptme, sess.Agent)
 	assert.Contains(t, sess.FirstMessage, "hello world")
 
-	// Expect: user, assistant, tool(→user/system), user, assistant, tool(→user/system)
+	// Expect: user, assistant, visible tool output, user, assistant, visible tool output
 	// System message is skipped.
 	require.Len(t, msgs, 6)
 
@@ -45,8 +45,8 @@ func TestParseGptmeSession(t *testing.T) {
 	assert.True(t, asst0.HasContextTokens)
 
 	tool0 := msgs[2]
-	assert.Equal(t, RoleUser, tool0.Role)
-	assert.True(t, tool0.IsSystem)
+	assert.Equal(t, RoleAssistant, tool0.Role)
+	assert.False(t, tool0.IsSystem)
 	assert.Contains(t, tool0.Content, "Saved file")
 
 	// Timestamps must parse from the fixture's microsecond format ("2006-01-02T15:04:05.000000").
@@ -57,6 +57,7 @@ func TestParseGptmeSession(t *testing.T) {
 
 	// Accumulated session totals.
 	assert.Equal(t, 42+15, sess.TotalOutputTokens)
+	assert.Equal(t, 2, sess.UserMessageCount)
 }
 
 func TestDiscoverGptmeSessions(t *testing.T) {
@@ -80,8 +81,8 @@ func TestFindGptmeSourceFile(t *testing.T) {
 
 func TestGptmeProjectFromSessionName(t *testing.T) {
 	cases := []struct {
-		name    string
-		want    string
+		name string
+		want string
 	}{
 		{"2026-06-13-write-hello-world", "write-hello-world"},
 		{"2026-06-13-162241-feat-tts-fix", "feat-tts-fix"},

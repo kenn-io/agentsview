@@ -153,15 +153,18 @@ func ParseGptmeSession(
 			ordinal++
 
 		case "tool":
-			// Tool outputs are emitted as separate messages in gptme.
+			// gptme emits tool output as standalone transcript lines, but
+			// the format does not expose a stable tool-call ID we can use
+			// for ToolResults pairing. Keep the output visible by storing
+			// it as assistant transcript content instead of hiding it as
+			// a synthetic system/user message.
 			content := strings.TrimSpace(gjson.Get(line, "content").Str)
 			if content == "" {
 				continue
 			}
 			messages = append(messages, ParsedMessage{
 				Ordinal:       ordinal,
-				Role:          RoleUser,
-				IsSystem:      true,
+				Role:          RoleAssistant,
 				Content:       content,
 				Timestamp:     ts,
 				ContentLength: len(content),
@@ -212,10 +215,10 @@ func ParseGptmeSession(
 // and populates the ParsedMessage token accounting fields.
 // gptme uses the field names:
 //
-//   metadata.usage.input_tokens
-//   metadata.usage.output_tokens
-//   metadata.usage.cache_read_tokens       (→ cache_read_input_tokens)
-//   metadata.usage.cache_creation_tokens   (→ cache_creation_input_tokens)
+//	metadata.usage.input_tokens
+//	metadata.usage.output_tokens
+//	metadata.usage.cache_read_tokens       (→ cache_read_input_tokens)
+//	metadata.usage.cache_creation_tokens   (→ cache_creation_input_tokens)
 func applyGptmeTokenUsage(pm *ParsedMessage, line string) {
 	usage := gjson.Get(line, "metadata.usage")
 	if !usage.Exists() {
