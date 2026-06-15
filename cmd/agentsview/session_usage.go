@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func newSessionUsageCommand() *cobra.Command {
@@ -107,7 +108,20 @@ func pgSessionUsageData(
 		}
 	}
 
-	u, err := store.GetSessionUsage(context.Background(), sessionID)
+	ctx := context.Background()
+	resolvedID, err := resolveServiceSessionID(
+		ctx, service.NewReadOnlyBackend(store), sessionID,
+	)
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "session not found:") {
+			return nil, tokenUseExitErr,
+				fmt.Errorf("resolving pg session id: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		return nil, tokenUseExitNotFound, nil
+	}
+
+	u, err := store.GetSessionUsage(ctx, resolvedID)
 	if err != nil {
 		return nil, tokenUseExitErr,
 			fmt.Errorf("querying pg session usage: %w", err)
