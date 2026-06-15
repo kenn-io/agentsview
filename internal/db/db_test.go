@@ -588,9 +588,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionClaudeCompanionLayout(t *testing.T) {
-	assert.Equal(t, 42, CurrentDataVersion(),
-		"Claude companion-session parser changes require a data version bump")
+func TestCurrentDataVersionPiCwd(t *testing.T) {
+	assert.Equal(t, 43, CurrentDataVersion(),
+		"Pi cwd parser changes require a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

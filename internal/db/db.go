@@ -28,6 +28,10 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 43: the Pi parser now persists cwd from the
+// session header. Existing Pi rows need re-parsing so their cwd column
+// is populated.
+//
 // Bumped to 42: the Claude parser now infers subagent parent
 // relationships from Claude Code companion directories
 // (<session>/subagents/agent-*.jsonl) and resolves externalized
@@ -195,7 +199,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 42
+const dataVersion = 43
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
