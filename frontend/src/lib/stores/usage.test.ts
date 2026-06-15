@@ -282,6 +282,33 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("records full refresh time and clears new-data hints", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-15T16:00:00Z"));
+      const { usage } = await loadStore();
+
+      await usage.fetchAll();
+
+      expect(usage.lastUpdatedAt).toBe(
+        new Date("2026-06-15T16:00:00Z").getTime(),
+      );
+
+      usage.markNewData();
+      expect(usage.hasNewData).toBe(true);
+
+      vi.setSystemTime(new Date("2026-06-15T16:03:00Z"));
+      await usage.fetchAll();
+
+      expect(usage.lastUpdatedAt).toBe(
+        new Date("2026-06-15T16:03:00Z").getTime(),
+      );
+      expect(usage.hasNewData).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts summary and top sessions together during full refresh", async () => {
     const calls: string[] = [];
     let resolveSummary:

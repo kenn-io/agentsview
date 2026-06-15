@@ -17,6 +17,7 @@
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { events } from "../../stores/events.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
   import { RefreshCwIcon } from "../../icons.js";
@@ -29,6 +30,13 @@
   }
 
   const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+
+  function formatUpdatedAt(value: number): string {
+    return new Date(value).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
 
   function handleExportCSV() {
     exportAnalyticsCSV({
@@ -43,6 +51,7 @@
   }
 
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let unsubEvents: (() => void) | undefined;
 
   onMount(() => {
     analytics.fetchAll();
@@ -50,6 +59,7 @@
       () => analytics.fetchAll(),
       REFRESH_INTERVAL_MS,
     );
+    unsubEvents = events.subscribe(() => analytics.markNewData());
   });
 
   // Sync sidebar filters to analytics dashboard. Runs whenever
@@ -135,6 +145,7 @@
     if (refreshTimer !== undefined) {
       clearInterval(refreshTimer);
     }
+    unsubEvents?.();
   });
 </script>
 
@@ -167,6 +178,18 @@
     >
       <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
     </button>
+    <div class="refresh-status" aria-live="polite">
+      {#if analytics.lastUpdatedAt !== null}
+        <span title={new Date(analytics.lastUpdatedAt).toLocaleString()}>
+          Updated {formatUpdatedAt(analytics.lastUpdatedAt)}
+        </span>
+      {:else}
+        <span>Not updated</span>
+      {/if}
+      {#if analytics.hasNewData}
+        <span class="new-data">New data</span>
+      {/if}
+    </div>
     <button class="export-btn" onclick={handleExportCSV}>
       Export CSV
     </button>
@@ -285,6 +308,27 @@
 
   .refresh-btn.querying :global(svg) {
     animation: spin 0.8s linear infinite;
+  }
+
+  .refresh-status {
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .new-data {
+    display: inline-flex;
+    align-items: center;
+    min-height: 18px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface-hover);
+    color: var(--accent-blue);
+    font-weight: 600;
   }
 
   .export-btn {

@@ -190,6 +190,8 @@ class UsageStore {
 
   summary = $state<UsageSummaryResponse | null>(null);
   topSessions = $state<TopUsageSessionsResponse | null>(null);
+  lastUpdatedAt: number | null = $state(null);
+  hasNewData: boolean = $state(false);
 
   loading = $state({ summary: false, topSessions: false });
   querying = $state<Record<UsagePanel, boolean>>({
@@ -213,6 +215,11 @@ class UsageStore {
 
   private get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+
+  markNewData(): void {
+    if (this.lastUpdatedAt === null) return;
+    this.hasNewData = true;
   }
 
   private baseParams(): UsageParams {
@@ -425,6 +432,13 @@ class UsageStore {
         loadedSummary.params,
       ),
     ]);
+    if (
+      fetchVersion === this.fetchAllVersion &&
+      this.errors.summary === null &&
+      this.errors.topSessions === null
+    ) {
+      this.markRefreshComplete();
+    }
   }
 
   async fetchSummary(
@@ -607,6 +621,11 @@ class UsageStore {
       return true;
     }
     return false;
+  }
+
+  private markRefreshComplete(): void {
+    this.lastUpdatedAt = Date.now();
+    this.hasNewData = false;
   }
 }
 

@@ -7,4 +7,10 @@ describe("UsagePage refresh behavior", () => {
     expect(source).not.toContain("setInterval");
     expect(source).not.toContain("REFRESH_MS");
   });
+
+  it("shows last-updated and new-data refresh hints", () => {
+    expect(source).toContain("usage.lastUpdatedAt");
+    expect(source).toContain("usage.hasNewData");
+    expect(source).toContain("New data");
+  });
 });

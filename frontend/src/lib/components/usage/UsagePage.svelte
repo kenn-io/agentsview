@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick, untrack } from "svelte";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
   import {
     usage,
     buildUsageUrlParams,
@@ -12,6 +12,7 @@
     parseFiltersFromParams,
     splitExcludeProjectParam,
   } from "../../stores/sessions.svelte.js";
+  import { events } from "../../stores/events.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
@@ -25,6 +26,14 @@
   import { RefreshCwIcon } from "../../icons.js";
 
   let mounted = false;
+  let unsubEvents: (() => void) | undefined;
+
+  function formatUpdatedAt(value: number): string {
+    return new Date(value).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
 
   const projectItems = $derived(
     sessions.projects.map((p) => ({
@@ -234,9 +243,14 @@
 
   onMount(() => {
     mounted = true;
+    unsubEvents = events.subscribe(() => usage.markNewData());
     tick().then(() => {
       urlWritebackReady = true;
     });
+  });
+
+  onDestroy(() => {
+    unsubEvents?.();
   });
 </script>
 
@@ -295,6 +309,18 @@
       >
         <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
       </button>
+      <div class="refresh-status" aria-live="polite">
+        {#if usage.lastUpdatedAt !== null}
+          <span title={new Date(usage.lastUpdatedAt).toLocaleString()}>
+            Updated {formatUpdatedAt(usage.lastUpdatedAt)}
+          </span>
+        {:else}
+          <span>Not updated</span>
+        {/if}
+        {#if usage.hasNewData}
+          <span class="new-data">New data</span>
+        {/if}
+      </div>
 
     </div>
   </div>
@@ -392,6 +418,27 @@
 
   .refresh-btn.querying :global(svg) {
     animation: spin 0.8s linear infinite;
+  }
+
+  .refresh-status {
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
+  .new-data {
+    display: inline-flex;
+    align-items: center;
+    min-height: 18px;
+    padding: 0 6px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface-hover);
+    color: var(--accent-blue);
+    font-weight: 600;
   }
 
   .usage-content {
