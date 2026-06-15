@@ -476,7 +476,8 @@ func TestDiscoverKimiSessions_NewLayout(t *testing.T) {
 	require.Equal(t, 1, len(files))
 	assert.Equal(t, AgentKimi, files[0].Agent)
 	assert.Equal(t, wirePath, files[0].Path)
-	assert.Equal(t, workdirDir, files[0].Project)
+	// Project is decoded from "wd_<workdir>_<hash>".
+	assert.Equal(t, "claude-code", files[0].Project)
 }
 
 func TestDiscoverKimiSessions_NewLayout_NonMainAgent(t *testing.T) {
@@ -608,4 +609,31 @@ func TestKimiSessionIDFromPath(t *testing.T) {
 		path := filepath.Join("/home", "user", ".kimi-code", "sessions", "wd_foo_a1b2", "session_uuid-1", "agents", "agent-0", "wire.jsonl")
 		assert.Equal(t, "wd_foo_a1b2:agent-0:session_uuid-1", kimiSessionIDFromPath(path))
 	})
+}
+
+func TestDecodeKimiProjectDir(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		// .kimi-code workdir names: "wd_<workdir>_<12-hex>".
+		{"wd_kimi-code_057f5c09ee3f", "kimi-code"},
+		{"wd_pi-mono_77f54d0fe81a", "pi-mono"},
+		// Underscores inside the workdir name are preserved.
+		{"wd_figma_mermaid_plugin_2_777a2abfe3e7", "figma_mermaid_plugin_2"},
+		// Uppercase/mixed-case hex is still recognized as the hash.
+		{"wd_foo_ABCDEF012345", "foo"},
+		// A trailing segment that is not a 12-hex hash is kept.
+		{"wd_foo_bar", "foo_bar"},
+		// Legacy opaque project hashes have no "wd_" prefix and
+		// are returned unchanged.
+		{"03cd233b1066bcc214245959059ca4c8", "03cd233b1066bcc214245959059ca4c8"},
+		{"abc123", "abc123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.want, DecodeKimiProjectDir(tt.input))
+		})
+	}
 }

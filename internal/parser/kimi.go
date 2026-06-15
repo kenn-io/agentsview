@@ -56,7 +56,7 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 			if _, err := os.Stat(wirePath); err == nil {
 				files = append(files, DiscoveredFile{
 					Path:    wirePath,
-					Project: projEntry.Name(),
+					Project: DecodeKimiProjectDir(projEntry.Name()),
 					Agent:   AgentKimi,
 				})
 				continue
@@ -78,7 +78,7 @@ func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
 				if _, err := os.Stat(wirePath); err == nil {
 					files = append(files, DiscoveredFile{
 						Path:    wirePath,
-						Project: projEntry.Name(),
+						Project: DecodeKimiProjectDir(projEntry.Name()),
 						Agent:   AgentKimi,
 					})
 				}
@@ -158,6 +158,41 @@ func kimiSessionIDFromPath(path string) string {
 	sessionUUID := base
 	projHash := filepath.Base(parent)
 	return projHash + ":" + sessionUUID
+}
+
+// DecodeKimiProjectDir extracts a human-readable project name from a
+// .kimi-code session directory. The directory is encoded as
+// "wd_<workdir>_<12-hex-hash>" (e.g. "wd_kimi-code_057f5c09ee3f"),
+// where the workdir name may itself contain underscores or hyphens.
+// Legacy .kimi sessions use opaque project hashes, which do not
+// carry the "wd_" prefix and are returned unchanged.
+func DecodeKimiProjectDir(dirName string) string {
+	if dirName == "" || !strings.HasPrefix(dirName, "wd_") {
+		return dirName
+	}
+	name := strings.TrimPrefix(dirName, "wd_")
+	if i := strings.LastIndex(name, "_"); i > 0 && isKimiHash(name[i+1:]) {
+		name = name[:i]
+	}
+	return name
+}
+
+// isKimiHash reports whether s is a 12-character hexadecimal hash of
+// the kind .kimi-code appends to its workdir directory names.
+func isKimiHash(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isHex := (c >= '0' && c <= '9') ||
+			(c >= 'a' && c <= 'f') ||
+			(c >= 'A' && c <= 'F')
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }
 
 // ParseKimiSession parses a Kimi wire.jsonl file.

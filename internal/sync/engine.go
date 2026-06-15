@@ -695,19 +695,27 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Kimi: <kimiDir>/<project-hash>/<session-uuid>/wire.jsonl
+	// Kimi: <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
+	//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
 	for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
 		if kimiDir == "" {
 			continue
 		}
 		if rel, ok := isUnder(kimiDir, path); ok {
 			parts := strings.Split(rel, sep)
-			if len(parts) != 3 || parts[2] != "wire.jsonl" {
+			project := ""
+			switch {
+			case len(parts) == 3 && parts[2] == "wire.jsonl":
+				project = parts[0]
+			case len(parts) == 5 && parts[2] == "agents" &&
+				parts[4] == "wire.jsonl":
+				project = parts[0]
+			default:
 				continue
 			}
 			return parser.DiscoveredFile{
 				Path:    path,
-				Project: parts[0],
+				Project: parser.DecodeKimiProjectDir(project),
 				Agent:   parser.AgentKimi,
 			}, true
 		}
@@ -5976,9 +5984,25 @@ func (e *Engine) SyncSingleSessionContext(
 			file.Project = filepath.Base(filepath.Dir(path))
 		}
 	case parser.AgentKimi:
-		// path is <kimiDir>/<project-hash>/<session-uuid>/wire.jsonl
-		// Derive project from two levels up.
-		file.Project = filepath.Base(filepath.Dir(filepath.Dir(path)))
+		// path is <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
+		//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
+		// In both layouts the project is the first path segment relative
+		// to the sessions dir. Deriving two levels up (the old approach)
+		// mis-resolves to "agents" under the .kimi-code layout.
+		for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
+			rel, ok := isUnder(kimiDir, path)
+			if !ok {
+				continue
+			}
+			parts := strings.Split(rel, string(filepath.Separator))
+			if len(parts) > 0 {
+				file.Project = parser.DecodeKimiProjectDir(parts[0])
+			}
+			break
+		}
+		if file.Project == "" {
+			file.Project = "kimi"
+		}
 	case parser.AgentQwen:
 		// path is <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
 		file.Project = parser.GetProjectName(
