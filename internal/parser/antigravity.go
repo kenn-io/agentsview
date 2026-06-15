@@ -580,22 +580,6 @@ func decodeAntigravityStep(
 	return msg, true
 }
 
-// isLikelyToolName returns true if s is a reasonable candidate for a tool name:
-// - length between 1 and 64 characters
-// - contains only ASCII letters, digits, underscores, hyphens, and colons.
-func isLikelyToolName(s string) bool {
-	if len(s) == 0 || len(s) > 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		r := s[i]
-		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' && r != ':' {
-			return false
-		}
-	}
-	return true
-}
-
 // knownAntigravityToolNames is the set of tool names that Antigravity
 // actually uses. Only strings present in this set are accepted as tool
 // calls; generic taxonomy matches without a known Antigravity name
