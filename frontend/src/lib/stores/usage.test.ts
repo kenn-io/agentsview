@@ -309,6 +309,31 @@ describe("UsageStore session filter params", () => {
     }
   });
 
+  it("does not mark cached partial refresh failures as current", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.setSystemTime(new Date("2026-06-15T16:00:00Z"));
+      const { usage } = await loadStore();
+
+      await usage.fetchAll();
+      const previousUpdatedAt = usage.lastUpdatedAt;
+
+      usage.markNewData();
+      usageServiceMocks.getApiV1UsageTopSessions
+        .mockRejectedValueOnce(new Error("top sessions failed"));
+
+      vi.setSystemTime(new Date("2026-06-15T16:05:00Z"));
+      await usage.fetchAll();
+
+      expect(usage.lastUpdatedAt).toBe(previousUpdatedAt);
+      expect(usage.hasNewData).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("starts summary and top sessions together during full refresh", async () => {
     const calls: string[] = [];
     let resolveSummary:

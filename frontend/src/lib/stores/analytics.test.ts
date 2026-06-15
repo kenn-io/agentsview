@@ -384,6 +384,29 @@ describe("AnalyticsStore freshness state", () => {
       vi.useRealTimers();
     }
   });
+
+  it("does not mark cached partial refresh failures as current", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      vi.setSystemTime(new Date("2026-06-15T15:00:00Z"));
+      await analytics.fetchAll();
+      const previousUpdatedAt = analytics.lastUpdatedAt;
+
+      analytics.markNewData();
+      vi.mocked(analyticsService.getApiV1AnalyticsVelocity)
+        .mockRejectedValueOnce(new Error("velocity failed"));
+
+      vi.setSystemTime(new Date("2026-06-15T15:05:00Z"));
+      await analytics.fetchAll();
+
+      expect(analytics.lastUpdatedAt).toBe(previousUpdatedAt);
+      expect(analytics.hasNewData).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("AnalyticsStore heatmap uses full range", () => {

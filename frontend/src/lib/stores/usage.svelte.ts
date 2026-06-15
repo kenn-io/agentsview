@@ -13,6 +13,7 @@ import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePanel = "summary" | "comparison" | "topSessions";
+type FetchResult = "ok" | "error" | "aborted";
 type LoadedUsageSummary = {
   version: number;
   summary: UsageSummaryResponse;
@@ -424,7 +425,7 @@ class UsageStore {
       await topSessionsPromise;
       return;
     }
-    await Promise.all([
+    const [topSessionsResult, comparisonResult] = await Promise.all([
       topSessionsPromise,
       this.fetchComparison(
         loadedSummary.version,
@@ -434,8 +435,8 @@ class UsageStore {
     ]);
     if (
       fetchVersion === this.fetchAllVersion &&
-      this.errors.summary === null &&
-      this.errors.topSessions === null
+      topSessionsResult === "ok" &&
+      comparisonResult === "ok"
     ) {
       this.markRefreshComplete();
     }
@@ -473,6 +474,7 @@ class UsageStore {
         }
         return loaded;
       }
+      return null;
     } catch (e) {
       if (isAbortError(e)) {
         status = "aborted";
@@ -509,8 +511,8 @@ class UsageStore {
     summaryVersion: number,
     summary: UsageSummaryResponse,
     params: UsageParams,
-  ) {
-    if (this.versions.summary !== summaryVersion) return;
+  ): Promise<FetchResult> {
+    if (this.versions.summary !== summaryVersion) return "aborted";
     const signal = this.nextAbortSignal("comparison");
     const started = performance.now();
     let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
@@ -524,16 +526,19 @@ class UsageStore {
       ) as unknown as UsageComparison;
       if (this.versions.summary === summaryVersion) {
         this.summary = { ...summary, comparison };
+        return "ok";
       }
+      return "aborted";
     } catch (e) {
       if (isAbortError(e)) {
         status = "aborted";
-        return;
+        return "aborted";
       }
       status = "error";
       if (this.versions.summary === summaryVersion) {
         console.warn("usage.fetchComparison failed:", e);
       }
+      return "error";
     } finally {
       perf.recordPanel({
         route: "usage",
@@ -545,7 +550,9 @@ class UsageStore {
     }
   }
 
-  async fetchTopSessions(params: UsageParams | null = null) {
+  async fetchTopSessions(
+    params: UsageParams | null = null,
+  ): Promise<FetchResult> {
     const v = ++this.versions.topSessions;
     const signal = this.nextAbortSignal("topSessions");
     const isFirstLoad = this.topSessions === null;
@@ -563,11 +570,13 @@ class UsageStore {
       if (this.versions.topSessions === v) {
         this.topSessions = data;
         this.errors.topSessions = null;
+        return "ok";
       }
+      return "aborted";
     } catch (e) {
       if (isAbortError(e)) {
         status = "aborted";
-        return;
+        return "aborted";
       }
       status = "error";
       if (this.versions.topSessions === v) {
@@ -578,6 +587,7 @@ class UsageStore {
           console.warn("usage.fetchTopSessions refetch failed:", e);
         }
       }
+      return "error";
     } finally {
       perf.recordPanel({
         route: "usage",

@@ -64,6 +64,7 @@ type Panel =
   | "skills"
   | "topSessions"
   | "signals";
+type FetchResult = "ok" | "error" | "aborted";
 
 class AnalyticsStore {
   from: string = $state(daysAgo(365));
@@ -437,7 +438,7 @@ class AnalyticsStore {
     fetchRequest: () => Promise<T>,
     onSuccess: (data: T) => void,
     hasExistingData: () => boolean = () => false,
-  ) {
+  ): Promise<FetchResult> {
     const v = ++this.versions[panel];
     const signal = this.nextAbortSignal(panel);
     // Only show the skeleton when we don't already have data to
@@ -457,11 +458,13 @@ class AnalyticsStore {
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;
+        return "ok";
       }
+      return "aborted";
     } catch (e) {
       if (isAbortError(e)) {
         status = "aborted";
-        return;
+        return "aborted";
       }
       status = "error";
       if (this.versions[panel] === v) {
@@ -475,6 +478,7 @@ class AnalyticsStore {
           console.warn(`analytics.${panel} refetch failed:`, e);
         }
       }
+      return "error";
     } finally {
       perf.recordPanel({
         route: "analytics",
@@ -520,7 +524,7 @@ class AnalyticsStore {
   async fetchAll() {
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
-    await Promise.all([
+    const results = await Promise.all([
       this.fetchSummary(),
       this.fetchActivity(),
       this.fetchHeatmap(),
@@ -535,14 +539,14 @@ class AnalyticsStore {
     ]);
     if (
       fetchVersion === this.fetchAllVersion &&
-      Object.values(this.errors).every((error) => error === null)
+      results.every((result) => result === "ok")
     ) {
       this.markRefreshComplete();
     }
   }
 
-  async fetchSummary() {
-    await this.executeFetch(
+  async fetchSummary(): Promise<FetchResult> {
+    return await this.executeFetch(
       "summary",
       () =>
         AnalyticsService.getApiV1AnalyticsSummary(
@@ -558,8 +562,8 @@ class AnalyticsStore {
   // Activity always uses the full date range so the timeline
   // stays visible as context when a date is selected (the
   // selected bar is highlighted instead of re-fetching).
-  async fetchActivity() {
-    await this.executeFetch(
+  async fetchActivity(): Promise<FetchResult> {
+    return await this.executeFetch(
       "activity",
       () =>
         AnalyticsService.getApiV1AnalyticsActivity({
@@ -573,8 +577,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchHeatmap() {
-    await this.executeFetch(
+  async fetchHeatmap(): Promise<FetchResult> {
+    return await this.executeFetch(
       "heatmap",
       () =>
         AnalyticsService.getApiV1AnalyticsHeatmap({
@@ -591,8 +595,8 @@ class AnalyticsStore {
   // Projects chart always shows all projects (no project
   // filter) so the selected project can be highlighted in
   // context rather than shown in isolation.
-  async fetchProjects() {
-    await this.executeFetch(
+  async fetchProjects(): Promise<FetchResult> {
+    return await this.executeFetch(
       "projects",
       () =>
         AnalyticsService.getApiV1AnalyticsProjects(
@@ -605,8 +609,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchHourOfWeek() {
-    await this.executeFetch(
+  async fetchHourOfWeek(): Promise<FetchResult> {
+    return await this.executeFetch(
       "hourOfWeek",
       () =>
         AnalyticsService.getApiV1AnalyticsHourOfWeek(
@@ -619,8 +623,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchSessionShape() {
-    await this.executeFetch(
+  async fetchSessionShape(): Promise<FetchResult> {
+    return await this.executeFetch(
       "sessionShape",
       () =>
         AnalyticsService.getApiV1AnalyticsSessions(
@@ -633,8 +637,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchVelocity() {
-    await this.executeFetch(
+  async fetchVelocity(): Promise<FetchResult> {
+    return await this.executeFetch(
       "velocity",
       () =>
         AnalyticsService.getApiV1AnalyticsVelocity(
@@ -647,8 +651,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchTools() {
-    await this.executeFetch(
+  async fetchTools(): Promise<FetchResult> {
+    return await this.executeFetch(
       "tools",
       () =>
         AnalyticsService.getApiV1AnalyticsTools(
@@ -661,8 +665,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchSkills() {
-    await this.executeFetch(
+  async fetchSkills(): Promise<FetchResult> {
+    return await this.executeFetch(
       "skills",
       () =>
         AnalyticsService.getApiV1AnalyticsSkills(
@@ -675,8 +679,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchTopSessions() {
-    await this.executeFetch(
+  async fetchTopSessions(): Promise<FetchResult> {
+    return await this.executeFetch(
       "topSessions",
       () =>
         AnalyticsService.getApiV1AnalyticsTopSessions({
@@ -690,8 +694,8 @@ class AnalyticsStore {
     );
   }
 
-  async fetchSignals() {
-    await this.executeFetch(
+  async fetchSignals(): Promise<FetchResult> {
+    return await this.executeFetch(
       "signals",
       () =>
         AnalyticsService.getApiV1AnalyticsSignals(

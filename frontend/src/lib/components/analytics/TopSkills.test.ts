@@ -134,7 +134,7 @@ describe("TopSkills", () => {
     };
     const retrySpy = vi
       .spyOn(analytics, "fetchSkills")
-      .mockResolvedValue();
+      .mockResolvedValue("ok");
     const component = mount(TopSkills, { target: document.body });
     await tick();
 

@@ -44,16 +44,16 @@ describe("HourOfWeekHeatmap", () => {
 
   function stubFetches(): MockInstance[] {
     return [
-      vi.spyOn(analytics, "fetchSummary").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchActivity").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchHeatmap").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchProjects").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchSessionShape").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchVelocity").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchTools").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchSkills").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchTopSessions").mockResolvedValue(),
-      vi.spyOn(analytics, "fetchSignals").mockResolvedValue(),
+      vi.spyOn(analytics, "fetchSummary").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchActivity").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchHeatmap").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchProjects").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchSessionShape").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchVelocity").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchTools").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchSkills").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchTopSessions").mockResolvedValue("ok"),
+      vi.spyOn(analytics, "fetchSignals").mockResolvedValue("ok"),
     ];
   }
 
