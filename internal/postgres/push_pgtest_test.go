@@ -636,3 +636,109 @@ func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 	assert.True(t, exists,
 		"reset must be detected and this host's session re-pushed")
 }
+
+// TestPushMarkerNotWrittenWhenResetRecoveryFails verifies the push marker is
+// written only after a push finalizes. When a reset is detected but the
+// recovery push fails before finalization, the marker must stay absent so the
+// next push re-detects the reset; otherwise the local watermark would remain at
+// the old value while PG holds a fresh marker, and reset-lost sessions would be
+// skipped indefinitely.
+func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_reset_recovery_fail_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "this-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "reset-recovery-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "this-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	markerCount := func() int {
+		var n int
+		require.NoError(t, pg.QueryRow(
+			`SELECT COUNT(*) FROM sync_metadata
+			 WHERE key LIKE 'push_marker:%'`,
+		).Scan(&n), "counting push markers")
+		return n
+	}
+	require.Equal(t, 1, markerCount(), "marker present after first push")
+
+	// Simulate a PG reset: drop this host's row and marker, keeping the local
+	// watermark and boundary state so the session would otherwise be skipped.
+	_, err = pg.Exec(`DELETE FROM sessions WHERE id = $1`, sessID)
+	require.NoError(t, err, "delete pushed session")
+	_, err = pg.Exec(
+		`DELETE FROM sync_metadata WHERE key LIKE 'push_marker:%'`,
+	)
+	require.NoError(t, err, "delete push marker")
+	require.Equal(t, 0, markerCount(), "marker cleared for reset simulation")
+
+	// Sabotage the recovery push so it fails after reset detection but before
+	// finalization: drop a model_pricing column syncModelPricing reads. The
+	// reset branch re-runs EnsureSchema, but CREATE TABLE IF NOT EXISTS does
+	// not re-add a column to an existing table, so the failure persists.
+	_, err = pg.Exec(
+		`ALTER TABLE model_pricing DROP COLUMN cache_read_per_mtok`,
+	)
+	require.NoError(t, err, "drop model_pricing column")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.Error(t, err, "recovery push should fail at model pricing sync")
+	assert.Equal(t, 0, markerCount(),
+		"marker must not be written when recovery push fails")
+
+	// Repair the column; the next push must re-detect the reset (marker still
+	// absent) and re-push the session.
+	_, err = pg.Exec(
+		`ALTER TABLE model_pricing
+		 ADD COLUMN cache_read_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0`,
+	)
+	require.NoError(t, err, "restore model_pricing column")
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "recovery push after repair")
+	assert.Zero(t, res.Errors, "repaired push should report no failures")
+
+	var exists bool
+	require.NoError(t, pg.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`, sessID,
+	).Scan(&exists), "checking re-pushed session")
+	assert.True(t, exists, "session must be re-pushed after reset recovery")
+	assert.Equal(t, 1, markerCount(), "marker restored after successful push")
+}

@@ -131,12 +131,6 @@ func (s *Sync) Push(
 			}
 		}
 	}
-	// Record (or refresh) this host's push marker so a later push can
-	// detect a PG reset. Written on every push, after the reset check
-	// above, so the first push establishes it and a reset re-creates it.
-	if err := s.writePushMarker(ctx); err != nil {
-		return result, err
-	}
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}
@@ -258,6 +252,9 @@ func (s *Sync) Push(
 				return result, err
 			}
 		}
+		if err := s.writePushMarker(ctx); err != nil {
+			return result, err
+		}
 		result.Duration = time.Since(start)
 		return result, nil
 	}
@@ -346,6 +343,13 @@ func (s *Sync) Push(
 		}
 	}
 
+	// Write the push marker only after the push and local finalization
+	// succeed. A reset-recovery push that fails before this point leaves
+	// the marker absent, so the next push re-detects the reset and retries
+	// rather than skipping the still-missing sessions.
+	if err := s.writePushMarker(ctx); err != nil {
+		return result, err
+	}
 	result.Duration = time.Since(start)
 	return result, nil
 }
