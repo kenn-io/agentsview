@@ -28,6 +28,11 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 44: the VSCode Copilot parser now extracts per-turn
+// token usage (promptTokens/outputTokens) and the resolved model from
+// result.metadata into usage events and session output totals, so
+// existing VSCode Copilot rows need re-parsing to gain usage and cost.
+//
 // Bumped to 43: the Pi parser now persists cwd from the
 // session header. Existing Pi rows need re-parsing so their cwd column
 // is populated.
@@ -199,7 +204,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 43
+const dataVersion = 44
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

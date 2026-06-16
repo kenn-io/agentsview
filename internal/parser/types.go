@@ -588,6 +588,12 @@ type ParsedSession struct {
 	HasTotalOutputTokens bool
 	HasPeakContextTokens bool
 
+	// UsageEvents carries parser-emitted aggregate usage rows for
+	// agents whose session-level accounting is computed inline
+	// (e.g. VSCode Copilot). The sync engine forwards these into
+	// the usage_events table for catalog-based cost pricing.
+	UsageEvents []ParsedUsageEvent
+
 	// aggregateTokenPresenceKnown marks session aggregate token
 	// coverage as parser-owned and authoritative.
 	aggregateTokenPresenceKnown bool

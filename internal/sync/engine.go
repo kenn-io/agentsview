@@ -4063,7 +4063,11 @@ func (e *Engine) processVSCodeCopilot(
 
 	return processResult{
 		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
+			{
+				Session:     *sess,
+				Messages:    msgs,
+				UsageEvents: sess.UsageEvents,
+			},
 		},
 	}
 }

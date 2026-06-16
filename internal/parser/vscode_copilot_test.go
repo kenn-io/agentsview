@@ -774,3 +774,130 @@ func TestFindVSCodeCopilotSourceFile(t *testing.T) {
 		})
 	}
 }
+
+func TestParseVSCodeCopilotSession_TokenUsage(t *testing.T) {
+	// Two turns carry result.metadata token accounting (the
+	// post-credits VSCode Copilot format); a third turn has no
+	// metadata and must not produce a usage event.
+	sessionJSON := `{
+		"version": 3,
+		"sessionId": "usage-1",
+		"creationDate": 1755340000000,
+		"lastMessageDate": 1755350000000,
+		"requests": [
+			{
+				"requestId": "r1",
+				"message": {"text": "First"},
+				"response": [{"value": "answer one"}],
+				"timestamp": 1755340000000,
+				"modelId": "copilot/claude-opus-4.8",
+				"result": {"metadata": {
+					"promptTokens": 35875,
+					"outputTokens": 221,
+					"resolvedModel": "claude-opus-4-8"
+				}}
+			},
+			{
+				"requestId": "r2",
+				"message": {"text": "Second"},
+				"response": [{"value": "answer two"}],
+				"timestamp": 1755345000000,
+				"modelId": "copilot/claude-opus-4.8",
+				"result": {"metadata": {
+					"promptTokens": 41055,
+					"outputTokens": 69,
+					"resolvedModel": "claude-opus-4-8"
+				}}
+			},
+			{
+				"requestId": "r3",
+				"message": {"text": "Third"},
+				"response": [{"value": "answer three"}],
+				"timestamp": 1755350000000,
+				"modelId": "copilot/claude-opus-4.8"
+			}
+		]
+	}`
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage.json")
+	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0644))
+
+	sess, _, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	// Only the two turns with metadata yield usage events.
+	require.Len(t, sess.UsageEvents, 2, "usage events")
+
+	for i, ev := range sess.UsageEvents {
+		assert.Equal(t, "vscode-copilot", ev.Source, "event[%d] source", i)
+		assert.Equal(t, "claude-opus-4-8", ev.Model, "event[%d] model", i)
+		assert.NotEmpty(t, ev.OccurredAt, "event[%d] occurredAt", i)
+	}
+
+	assert.Equal(t, 35875, sess.UsageEvents[0].InputTokens)
+	assert.Equal(t, 221, sess.UsageEvents[0].OutputTokens)
+	assert.Equal(t, 41055, sess.UsageEvents[1].InputTokens)
+	assert.Equal(t, 69, sess.UsageEvents[1].OutputTokens)
+
+	// Session output total sums the per-turn output tokens.
+	assert.True(t, sess.HasTotalOutputTokens, "has total output")
+	assert.Equal(t, 290, sess.TotalOutputTokens, "total output")
+}
+
+func TestParseVSCodeCopilotSession_TokenUsageModelFallback(t *testing.T) {
+	// No resolvedModel: fall back to the prefixed modelId and
+	// normalize the claude version dots to hyphens.
+	sessionJSON := `{
+		"version": 3,
+		"sessionId": "usage-2",
+		"creationDate": 1755340000000,
+		"requests": [{
+			"requestId": "r1",
+			"message": {"text": "Hi"},
+			"response": [{"value": "Hello"}],
+			"timestamp": 1755340000000,
+			"modelId": "copilot/claude-sonnet-4.6",
+			"result": {"metadata": {"promptTokens": 1000, "outputTokens": 50}}
+		}]
+	}`
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "usage2.json")
+	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0644))
+
+	sess, _, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	require.Len(t, sess.UsageEvents, 1)
+	assert.Equal(t, "claude-sonnet-4-6", sess.UsageEvents[0].Model)
+}
+
+func TestParseVSCodeCopilotSession_NoTokenUsage(t *testing.T) {
+	// A session whose requests carry no token metadata yields no
+	// usage events and leaves output totals unset (cost -> n/a).
+	sessionJSON := `{
+		"version": 3,
+		"sessionId": "no-usage",
+		"creationDate": 1755340000000,
+		"requests": [{
+			"requestId": "r1",
+			"message": {"text": "Hi"},
+			"response": [{"value": "Hello"}],
+			"timestamp": 1755340000000
+		}]
+	}`
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nousage.json")
+	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0644))
+
+	sess, _, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Empty(t, sess.UsageEvents, "no usage events expected")
+	assert.False(t, sess.HasTotalOutputTokens, "no total output expected")
+}
