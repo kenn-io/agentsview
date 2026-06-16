@@ -17,6 +17,22 @@ describe("UsagePage refresh behavior", () => {
     expect(source).not.toContain(".new-data");
   });
 
+  it("keeps the refresh timestamp visually attached to the icon", () => {
+    const refreshControl =
+      source.match(/\.refresh-control\s*{[^}]+}/)?.[0] ?? "";
+    const refreshButton =
+      source.match(/\.refresh-btn\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(source).toContain('class="refresh-control"');
+    expect(refreshControl).toContain("display: inline-flex");
+    expect(refreshControl).toContain("align-items: center");
+    expect(refreshControl).toContain("gap: 4px");
+    expect(refreshButton).toContain("width: 28px");
+    expect(refreshButton).toContain("justify-content: flex-end");
+    expect(refreshButton).toContain("padding-right: 2px");
+    expect(source).not.toContain(".refresh-btn::before");
+  });
+
   it("keeps refresh progress out of content layout flow", () => {
     const queryProgress =
       source.match(/\.query-progress\s*{[^}]+}/)?.[0] ?? "";

@@ -185,24 +185,26 @@
       onChange={(from, to) => analytics.setDateRange(from, to)}
       onPreset={(days) => analytics.setRollingWindow(days)}
     />
-    <button
-      class="refresh-btn"
-      class:querying={analytics.isQuerying}
-      onclick={() => refreshScheduler.refreshNow()}
-      disabled={analytics.isQuerying}
-      title="Refresh analytics"
-      aria-label="Refresh analytics"
-    >
-      <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
-    </button>
-    <div class="refresh-status" aria-live="polite">
-      <span
-        title={analytics.lastUpdatedAt === null
-          ? undefined
-          : new Date(analytics.lastUpdatedAt).toLocaleString()}
+    <div class="refresh-control">
+      <button
+        class="refresh-btn"
+        class:querying={analytics.isQuerying}
+        onclick={() => refreshScheduler.refreshNow()}
+        disabled={analytics.isQuerying}
+        title="Refresh analytics"
+        aria-label="Refresh analytics"
       >
-        {refreshLabel}
-      </span>
+        <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
+      </button>
+      <div class="refresh-status" aria-live="polite">
+        <span
+          title={analytics.lastUpdatedAt === null
+            ? undefined
+            : new Date(analytics.lastUpdatedAt).toLocaleString()}
+        >
+          {refreshLabel}
+        </span>
+      </div>
     </div>
     <button class="export-btn" onclick={handleExportCSV}>
       Export CSV
@@ -298,12 +300,20 @@
     align-items: center;
   }
 
+  .refresh-control {
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
   .refresh-btn {
     width: 28px;
     height: 28px;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-end;
+    padding-right: 2px;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;

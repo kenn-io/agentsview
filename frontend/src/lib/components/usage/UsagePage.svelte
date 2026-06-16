@@ -314,24 +314,26 @@
           usage.deselectAllModels(modelItems.map((m) => m.name))}
       />
 
-      <button
-        class="refresh-btn"
-        class:querying={usage.isQuerying}
-        onclick={() => usage.fetchAll()}
-        disabled={usage.isQuerying}
-        title="Refresh"
-        aria-label="Refresh usage data"
-      >
-        <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
-      </button>
-      <div class="refresh-status" aria-live="polite">
-        <span
-          title={usage.lastUpdatedAt === null
-            ? undefined
-            : new Date(usage.lastUpdatedAt).toLocaleString()}
+      <div class="refresh-control">
+        <button
+          class="refresh-btn"
+          class:querying={usage.isQuerying}
+          onclick={() => usage.fetchAll()}
+          disabled={usage.isQuerying}
+          title="Refresh"
+          aria-label="Refresh usage data"
         >
-          {refreshLabel}
-        </span>
+          <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
+        </button>
+        <div class="refresh-status" aria-live="polite">
+          <span
+            title={usage.lastUpdatedAt === null
+              ? undefined
+              : new Date(usage.lastUpdatedAt).toLocaleString()}
+          >
+            {refreshLabel}
+          </span>
+        </div>
       </div>
 
     </div>
@@ -406,12 +408,20 @@
     align-items: center;
   }
 
+  .refresh-control {
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
   .refresh-btn {
     width: 28px;
     height: 28px;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-end;
+    padding-right: 2px;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
