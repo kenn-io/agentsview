@@ -1430,10 +1430,11 @@ func (db *DB) GetSessionForIncremental(
 // aggregates. All values are absolute (not deltas) so the
 // update is idempotent on retry.
 //
-// is_automated is recomputed from the current first_message and
-// the new user_message_count so that classifier additions reach
-// rows that only ever take the incremental path. Without this,
-// a row whose first parse predates a new pattern would stay
+// is_automated is recomputed from the stored transcript's first
+// user message (falling back to first_message for legacy rows)
+// and the new user_message_count so that classifier additions
+// reach rows that only ever take the incremental path. Without
+// this, a row whose first parse predates a new pattern would stay
 // is_automated=0 indefinitely (UpsertSession sets the flag once
 // at insert; the incremental path never re-evaluates it).
 //
@@ -1458,29 +1459,17 @@ func (db *DB) UpdateSessionIncremental(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	isAutomated := false
-	if userMsgCount <= 1 {
-		var fm sql.NullString
-		err := db.getReader().QueryRow(
-			"SELECT first_message FROM sessions WHERE id = ?", id,
-		).Scan(&fm)
-		if err != nil && err != sql.ErrNoRows {
-			return fmt.Errorf(
-				"reading first_message for incremental update %s: %w",
-				id, err,
-			)
-		}
-		if fm.Valid {
-			isAutomated = IsAutomatedSession(fm.String)
-		}
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning incremental update tx: %w", err)
 	}
+	defer func() { _ = tx.Rollback() }()
 
-	_, err := db.getWriter().Exec(`
+	_, err = tx.Exec(`
 		UPDATE sessions SET
 			ended_at = COALESCE(?, ended_at),
 			message_count = ?,
 			user_message_count = ?,
-			is_automated = ?,
 			file_size = ?,
 			file_mtime = ?,
 			total_output_tokens = ?,
@@ -1489,7 +1478,7 @@ func (db *DB) UpdateSessionIncremental(
 			has_peak_context_tokens = ?,
 			termination_status = NULL
 		WHERE id = ?`,
-		endedAt, msgCount, userMsgCount, isAutomated,
+		endedAt, msgCount, userMsgCount,
 		fileSize, fileMtime,
 		totalOutputTokens, peakContextTokens,
 		hasTotalOutputTokens, hasPeakContextTokens, id,
@@ -1498,6 +1487,12 @@ func (db *DB) UpdateSessionIncremental(
 		return fmt.Errorf(
 			"incremental update session %s: %w", id, err,
 		)
+	}
+	if err := updateSessionAutomationFromMessagesTx(tx, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing incremental update tx: %w", err)
 	}
 	return nil
 }

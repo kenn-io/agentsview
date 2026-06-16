@@ -5438,17 +5438,6 @@ func (e *Engine) recomputeSignalsFromDB(
 	return nil
 }
 
-// isAutomatedFromSession recomputes the is_automated flag using
-// the same rule UpsertSession applies. Hoisted out of UpsertSession
-// so callers can set the field on their in-memory Session before
-// running signal computation, ensuring the same value is used by
-// outcome classification and persisted to the row.
-func isAutomatedFromSession(s db.Session) bool {
-	return s.UserMessageCount <= 1 &&
-		s.FirstMessage != nil &&
-		db.IsAutomatedSession(*s.FirstMessage)
-}
-
 type pendingWrite struct {
 	sess         parser.ParsedSession
 	msgs         []parser.ParsedMessage
@@ -5637,7 +5626,9 @@ func (e *Engine) prepareSessionWrite(
 			s.Project = mapped
 		}
 	}
-	s.IsAutomated = isAutomatedFromSession(s)
+	s.IsAutomated = db.IsAutomatedTranscript(
+		s.UserMessageCount, msgs, s.FirstMessage,
+	)
 
 	if e.shouldPreserveOpenCodeFormatArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,

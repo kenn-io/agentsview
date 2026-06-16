@@ -256,6 +256,11 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
+	if err := updateSessionAutomationFromMessagesTx(
+		tx, write.Session.ID,
+	); err != nil {
+		return 0, err
+	}
 
 	if write.DataVersion > 0 {
 		if _, err := tx.Exec(

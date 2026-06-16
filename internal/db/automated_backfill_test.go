@@ -144,6 +144,40 @@ func TestBackfillIsAutomatedRepairsFalseNegativeWithMatchingHash(t *testing.T) {
 		"matching classifier hash must not hide stale is_automated=0")
 }
 
+func TestBackfillIsAutomatedUsesFirstUserMessageWhenFirstMessageIsTitle(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	title := "Generated review title"
+	insertSession(t, d, "title-review", "proj", func(s *Session) {
+		s.FirstMessage = &title
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.ReplaceSessionMessages("title-review", []Message{
+		userMsg("title-review", 0,
+			"You are a code reviewer. Review the code changes shown below."),
+		asstMsg("title-review", 1, "Review complete."),
+	}), "ReplaceSessionMessages")
+	_, err := d.getWriter().Exec(
+		"UPDATE sessions SET is_automated = 0 WHERE id = 'title-review'",
+	)
+	require.NoError(t, err, "force stale is_automated=0")
+
+	d.mu.Lock()
+	err = d.backfillIsAutomatedLocked(d.getWriter())
+	d.mu.Unlock()
+	require.NoError(t, err, "backfill")
+
+	got, err := d.GetSession(ctx, "title-review")
+	require.NoError(t, err, "get title-review")
+	require.NotNil(t, got, "title-review")
+	assert.True(t, got.IsAutomated,
+		"backfill should classify automation from the first stored user message")
+}
+
 func TestOpenRepairsAutomatedFalseNegativeWithMatchingHash(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := Open(path)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -504,6 +505,9 @@ func (db *DB) ReplaceSessionMessages(
 	if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
+	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
+		return err
+	}
 	// The new messages invalidate any findings scanned from the old content, so
 	// clear them and reset the scan state (empty version => secrets scan
 	// --backfill re-scans). ReplaceSessionContent does not call this method; it
@@ -626,6 +630,9 @@ func (db *DB) ReplaceSessionContent(
 	if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
+	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
+		return err
+	}
 	if err := updateSessionSignalsTx(tx, sessionID, signals); err != nil {
 		return err
 	}
@@ -637,6 +644,68 @@ func (db *DB) ReplaceSessionContent(
 		return err
 	}
 	return tx.Commit()
+}
+
+func updateSessionAutomationFromMessagesTx(
+	tx *sql.Tx, sessionID string,
+) error {
+	var (
+		firstMessage     sql.NullString
+		firstUserMessage sql.NullString
+		userMsgCount     int
+		rowAutomated     bool
+	)
+	err := tx.QueryRow(`
+		SELECT
+			s.first_message,
+			s.user_message_count,
+			s.is_automated,
+			(
+				SELECT m.content
+				FROM messages m
+				WHERE m.session_id = s.id
+				  AND m.role = 'user'
+				  AND m.is_system = 0
+				  AND TRIM(m.content) <> ''
+				ORDER BY m.ordinal
+				LIMIT 1
+			) AS first_user_message
+		FROM sessions s
+		WHERE s.id = ?`,
+		sessionID,
+	).Scan(
+		&firstMessage, &userMsgCount,
+		&rowAutomated, &firstUserMessage,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf(
+			"reading automation candidate for %s: %w",
+			sessionID, err,
+		)
+	}
+
+	want := isAutomatedFromTextCandidates(
+		userMsgCount, firstUserMessage, firstMessage,
+	)
+	if want == rowAutomated {
+		return nil
+	}
+	if _, err := tx.Exec(`
+		UPDATE sessions
+		   SET is_automated = ?,
+		       local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		 WHERE id = ?`,
+		want, sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"updating is_automated from messages for %s: %w",
+			sessionID, err,
+		)
+	}
+	return nil
 }
 
 func savePinsTx(tx *sql.Tx, sessionID string) ([]savedPin, error) {

@@ -766,9 +766,22 @@ func backfillIsAutomatedPG(
 	}
 
 	rows, err := pg.QueryContext(ctx,
-		`SELECT id, first_message, user_message_count,
-			is_automated
-		 FROM sessions`)
+		`SELECT
+			s.id,
+			s.first_message,
+			s.user_message_count,
+			s.is_automated,
+			(
+				SELECT m.content
+				FROM messages m
+				WHERE m.session_id = s.id
+				  AND m.role = 'user'
+				  AND COALESCE(m.is_system, false) = false
+				  AND btrim(m.content) <> ''
+				ORDER BY m.ordinal
+				LIMIT 1
+			) AS first_user_message
+		 FROM sessions s`)
 	if err != nil {
 		return fmt.Errorf(
 			"querying PG automated backfill candidates: %w",
@@ -781,18 +794,25 @@ func backfillIsAutomatedPG(
 	for rows.Next() {
 		var id string
 		var fm sql.NullString
+		var firstUser sql.NullString
 		var umc int
 		var rowAutomated bool
 		if err := rows.Scan(
-			&id, &fm, &umc, &rowAutomated,
+			&id, &fm, &umc, &rowAutomated, &firstUser,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning PG backfill candidate: %w", err,
 			)
 		}
 		want := false
-		if fm.Valid {
-			want = umc <= 1 && db.IsAutomatedSession(fm.String)
+		if umc <= 1 {
+			if firstUser.Valid &&
+				strings.TrimSpace(firstUser.String) != "" {
+				want = db.IsAutomatedSession(firstUser.String)
+			}
+			if !want && fm.Valid {
+				want = db.IsAutomatedSession(fm.String)
+			}
 		}
 		if want && !rowAutomated {
 			setIDs = append(setIDs, id)

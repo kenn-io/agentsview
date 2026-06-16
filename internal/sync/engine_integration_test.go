@@ -2850,6 +2850,55 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 	)
 }
 
+func TestSyncEngineOpenCodeReviewWithGeneratedTitleIsAutomated(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj-1", "/home/user/code/myapp")
+
+	sessionID := "oc-review-title"
+	timeCreated := int64(1704067200000)
+	timeUpdated := int64(1704067205000)
+	oc.mustExec(t, "insert titled session",
+		`INSERT INTO session
+			(id, project_id, title, time_created, time_updated)
+		 VALUES (?, ?, ?, ?, ?)`,
+		sessionID, "proj-1", "Review generated title",
+		timeCreated, timeUpdated,
+	)
+	oc.addMessage(t, "msg-u1", sessionID, "user", timeCreated)
+	oc.addMessage(t, "msg-a1", sessionID, "assistant", timeCreated+1)
+	oc.addTextPart(
+		t, "part-u1", sessionID, "msg-u1",
+		"You are a code reviewer. Review the code changes shown below.",
+		timeCreated,
+	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"Review complete.", timeCreated+1,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+
+	agentviewID := "opencode:" + sessionID
+	assertSessionState(t, env.db, agentviewID,
+		func(sess *db.Session) {
+			assert.True(t, sess.IsAutomated,
+				"OpenCode review sessions with generated titles must still be classified as automated")
+		},
+	)
+
+	page, err := env.db.ListSessions(
+		context.Background(),
+		db.SessionFilter{ExcludeAutomated: true, Limit: 10},
+	)
+	require.NoError(t, err, "ListSessions exclude automated")
+	assert.Empty(t, page.Sessions,
+		"automated OpenCode review should be excluded")
+}
+
 func TestSyncEngineOpenCodeStorageBulkSync(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)

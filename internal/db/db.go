@@ -923,9 +923,22 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 	}
 
 	rows, err := w.Query(
-		`SELECT id, first_message, user_message_count,
-			is_automated
-		 FROM sessions`,
+		`SELECT
+			s.id,
+			s.first_message,
+			s.user_message_count,
+			s.is_automated,
+			(
+				SELECT m.content
+				FROM messages m
+				WHERE m.session_id = s.id
+				  AND m.role = 'user'
+				  AND m.is_system = 0
+				  AND TRIM(m.content) <> ''
+				ORDER BY m.ordinal
+				LIMIT 1
+			) AS first_user_message
+		 FROM sessions s`,
 	)
 	if err != nil {
 		return fmt.Errorf(
@@ -938,19 +951,19 @@ func (db *DB) backfillIsAutomatedLocked(w *sql.DB) error {
 	for rows.Next() {
 		var id string
 		var fm sql.NullString
+		var firstUser sql.NullString
 		var umc int
 		var rowAutomated bool
 		if err := rows.Scan(
-			&id, &fm, &umc, &rowAutomated,
+			&id, &fm, &umc, &rowAutomated, &firstUser,
 		); err != nil {
 			return fmt.Errorf(
 				"scanning backfill candidate: %w", err,
 			)
 		}
-		want := false
-		if fm.Valid {
-			want = umc <= 1 && IsAutomatedSession(fm.String)
-		}
+		want := isAutomatedFromTextCandidates(
+			umc, firstUser, fm,
+		)
 		if want && !rowAutomated {
 			setIDs = append(setIDs, id)
 		} else if !want && rowAutomated {
