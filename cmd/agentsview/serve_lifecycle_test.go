@@ -132,6 +132,38 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 		"runtime record must be removed after stop")
 }
 
+func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("relies on POSIX zombie semantics for ProcessAlive")
+	}
+	dir := runtimeTestDir(t)
+
+	target := exec.Command("sleep", "60")
+	require.NoError(t, target.Start())
+	pid := target.Process.Pid
+	// Deliberately do NOT reap until cleanup: once signalled, the child
+	// becomes a zombie, which daemon.ProcessAlive reports as still alive.
+	// That drives stopDaemonProcess down its "survived the kill" path.
+	t.Cleanup(func() {
+		_ = target.Process.Kill()
+		_ = target.Wait()
+	})
+
+	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:     pid,
+		Network: daemon.NetworkTCP,
+		Address: "127.0.0.1:1",
+	})
+	require.NoError(t, err)
+	records := liveDaemonRecords(dir)
+	require.Len(t, records, 1)
+
+	err = stopDaemonProcess(records[0], 100*time.Millisecond)
+	require.Error(t, err, "must report failure when the process does not exit")
+	assert.NotEmpty(t, liveDaemonRecords(dir),
+		"runtime record must be kept when the daemon is still alive")
+}
+
 func TestWriteDaemonRuntimePersistsCaddyMetadata(t *testing.T) {
 	dir := runtimeTestDir(t)
 	// Use this process as a stand-in caddy child: it is alive with a readable

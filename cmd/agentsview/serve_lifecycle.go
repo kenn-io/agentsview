@@ -206,7 +206,11 @@ func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 	if err := proc.Kill(); err != nil {
 		return fmt.Errorf("force killing: %w", err)
 	}
-	waitForProcessExit(rec.PID, grace)
+	if !waitForProcessExit(rec.PID, grace) {
+		// The process outlived even SIGKILL. Keep the runtime record so other
+		// commands still see the daemon owns the DB rather than racing it.
+		return fmt.Errorf("process %d still running after force kill", rec.PID)
+	}
 	removeRuntimeRecordFile(rec)
 	return nil
 }
