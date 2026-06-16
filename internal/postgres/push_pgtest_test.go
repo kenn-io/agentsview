@@ -742,3 +742,77 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	assert.True(t, exists, "session must be re-pushed after reset recovery")
 	assert.Equal(t, 1, markerCount(), "marker restored after successful push")
 }
+
+// TestPushUpdatesSentinelMachineWhenSyncMachineChanges verifies that a session
+// stored with the "local" sentinel machine is re-pushed under the new fallback
+// when Sync.machine changes, rather than being skipped by a fingerprint that
+// ignored the resolved machine. The second push clears the local watermark so
+// the session is re-evaluated; without the resolved machine in the fingerprint
+// it would match and be skipped, leaving PG with the stale machine name.
+func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_sentinel_machine_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "host-a",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "sentinel-machine-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "local",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	machine := func() string {
+		var m string
+		require.NoError(t, pg.QueryRow(
+			`SELECT machine FROM sessions WHERE id = $1`, sessID,
+		).Scan(&m), "reading machine")
+		return m
+	}
+	require.Equal(t, "host-a", machine(), "sentinel pushed under host-a")
+
+	// Rename: change the fallback machine and re-evaluate the session by
+	// clearing the watermark, mirroring any path that re-lists it.
+	sync.machine = "host-b"
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+	assert.Equal(t, "host-b", machine(),
+		"sentinel machine must follow the new fallback")
+}

@@ -206,7 +206,8 @@ func (s *Sync) Push(
 	}
 	for id, sess := range sessionByID {
 		sessionFingerprints[id] = sessionPushFingerprint(
-			sess, usageFingerprints[id],
+			sess, pushedSessionMachine(sess, s.machine),
+			usageFingerprints[id],
 		)
 	}
 
@@ -704,13 +705,18 @@ func localSessionSyncMarker(sess db.Session) string {
 	return marker
 }
 
+// sessionPushFingerprint builds the change-detection fingerprint for a
+// session. pushedMachine is the value pushSession actually writes to PG
+// (pushedSessionMachine), not the raw sess.Machine: a "local"/empty sentinel
+// row is written under the fallback machine, so the fingerprint must track the
+// fallback to force a re-push when s.machine changes.
 func sessionPushFingerprint(
-	sess db.Session, usageEventFingerprint string,
+	sess db.Session, pushedMachine, usageEventFingerprint string,
 ) string {
 	fields := []string{
 		sess.ID,
 		sess.Project,
-		sess.Machine,
+		pushedMachine,
 		sess.Agent,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
