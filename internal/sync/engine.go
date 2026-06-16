@@ -1329,10 +1329,13 @@ func (e *Engine) classifyAntigravityCLIBrainPath(
 }
 
 // classifyOpenCodeFormatPath classifies a path under an OpenCode-format
-// root (OpenCode or its Kilo fork), which share an identical on-disk
-// layout and differ only in the SQLite filename and agent label.
+// root (OpenCode, its Kilo fork, or MiMoCode), which share an on-disk
+// layout and differ only in the SQLite filename, the storage/<subdir>
+// holding session JSON, and the agent label. MiMoCode stores sessions
+// under storage/session_diff; the session subdir is taken from the
+// resolved source rather than assumed.
 //
-//	<dir>/storage/session/<project>/<session>.json
+//	<dir>/storage/<sessionSubdir>/<project>/<session>.json
 //	<dir>/storage/message/<session>/<message>.json
 //	<dir>/storage/part/<message>/<part>.json
 func (e *Engine) classifyOpenCodeFormatPath(
@@ -1361,16 +1364,17 @@ func (e *Engine) classifyOpenCodeFormatPath(
 			}
 			continue
 		}
-		if resolveOpenCodeFormatSource(agent, dir).Mode !=
-			parser.OpenCodeSourceStorage {
+		src := resolveOpenCodeFormatSource(agent, dir)
+		if src.Mode != parser.OpenCodeSourceStorage {
 			continue
 		}
+		sessionSubdir := filepath.Base(src.SessionRoot)
 		parts := strings.Split(rel, sep)
 		switch {
 		case pathExists &&
 			len(parts) == 4 &&
 			parts[0] == "storage" &&
-			parts[1] == "session" &&
+			parts[1] == sessionSubdir &&
 			strings.HasSuffix(parts[3], ".json"):
 			return parser.DiscoveredFile{
 				Path:  path,
@@ -3395,15 +3399,15 @@ func (e *Engine) shouldCacheSkip(
 		if dir == "" {
 			continue
 		}
-		if resolveOpenCodeFormatSource(file.Agent, dir).Mode !=
-			parser.OpenCodeSourceStorage {
+		src := resolveOpenCodeFormatSource(file.Agent, dir)
+		if src.Mode != parser.OpenCodeSourceStorage {
 			continue
 		}
 		if rel, ok := isUnder(dir, file.Path); ok {
 			rel = filepath.ToSlash(rel)
-			return !strings.HasPrefix(
-				rel, "storage/session/",
-			)
+			sessionPrefix := "storage/" +
+				filepath.Base(src.SessionRoot) + "/"
+			return !strings.HasPrefix(rel, sessionPrefix)
 		}
 	}
 	return true

@@ -469,14 +469,25 @@ func (oc *openCodeTestDB) replaceTextContent(
 }
 
 type openCodeStorageFixture struct {
-	root string
+	root          string
+	sessionSubdir string
 }
 
 func createOpenCodeStorageFixture(
 	t *testing.T, root string,
 ) *openCodeStorageFixture {
 	t.Helper()
-	return &openCodeStorageFixture{root: root}
+	return &openCodeStorageFixture{root: root, sessionSubdir: "session"}
+}
+
+// createMiMoCodeStorageFixture builds a fixture for MiMoCode, which
+// stores session JSON under storage/session_diff instead of
+// storage/session while sharing the message/part layout.
+func createMiMoCodeStorageFixture(
+	t *testing.T, root string,
+) *openCodeStorageFixture {
+	t.Helper()
+	return &openCodeStorageFixture{root: root, sessionSubdir: "session_diff"}
 }
 
 func (oc *openCodeStorageFixture) writeJSON(
@@ -497,7 +508,7 @@ func (oc *openCodeStorageFixture) addSession(
 ) string {
 	t.Helper()
 	return oc.writeJSON(t, filepath.Join(
-		oc.root, "storage", "session", projectID,
+		oc.root, "storage", oc.sessionSubdir, projectID,
 		sessionID+".json",
 	), map[string]any{
 		"id":        sessionID,
