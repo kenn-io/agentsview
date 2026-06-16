@@ -69,11 +69,25 @@ func TestResolveScriptIncludesCodexIndex(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "resolve script failed: output: %s", out)
 
+	// The script runs in a POSIX shell (MSYS on Windows), so it emits
+	// forward-slash paths that differ from native filepath.Join output.
+	// Match by POSIX suffix, which also guards against the parent
+	// expansion collapsing the index path to /session_index.jsonl.
 	dirs, extraFiles := parseResolvedDirs(string(out))
-	assert.Contains(t, dirs[parser.AgentCodex], sessionsDir,
-		"codex sessions dir should be resolved")
-	assert.Contains(t, extraFiles, indexPath,
-		"codex session_index.jsonl should be included as an extra file")
+	assert.Truef(t, hasSuffix(dirs[parser.AgentCodex], ".codex/sessions"),
+		"codex sessions dir should be resolved, got %v", dirs[parser.AgentCodex])
+	assert.Truef(t, hasSuffix(extraFiles, ".codex/session_index.jsonl"),
+		"codex session_index.jsonl should be an extra file, got %v", extraFiles)
+}
+
+// hasSuffix reports whether any element of paths ends with suffix.
+func hasSuffix(paths []string, suffix string) bool {
+	for _, p := range paths {
+		if strings.HasSuffix(p, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestResolveScriptSkipsMissingCodexIndex verifies that a missing index
