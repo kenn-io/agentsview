@@ -219,6 +219,37 @@ func TestSessionPushFingerprintIncludesUsageEventFingerprint(
 		"usage event fingerprint should affect session fingerprint")
 }
 
+func TestPushedSessionMachine(t *testing.T) {
+	tests := []struct {
+		name     string
+		session  db.Session
+		fallback string
+		want     string
+	}{
+		{
+			name: "preserves source machine",
+			session: db.Session{
+				Machine: "remote-host",
+			},
+			fallback: "push-host",
+			want:     "remote-host",
+		},
+		{
+			name:     "falls back for empty machine",
+			session:  db.Session{},
+			fallback: "push-host",
+			want:     "push-host",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want,
+				pushedSessionMachine(tc.session, tc.fallback))
+		})
+	}
+}
+
 func TestSessionPushFingerprintNoFieldCollisions(
 	t *testing.T,
 ) {

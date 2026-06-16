@@ -190,6 +190,53 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 	assert.Nil(t, got)
 }
 
+func TestPushSessionPreservesSourceMachine(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_source_machine_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "push-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	remoteSession := db.Session{
+		ID:           "remote-source-machine-1",
+		Project:      "proj",
+		Machine:      "remote-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	require.NoError(t, sync.pushSession(ctx, tx, remoteSession), "pushSession")
+	require.NoError(t, tx.Commit(), "Commit")
+
+	var got string
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine FROM sessions WHERE id = $1`,
+		remoteSession.ID,
+	).Scan(&got), "read back machine")
+	assert.Equal(t, "remote-host", got)
+}
+
 // TestPushSyncsUsageEventsForZeroMessageSession verifies that a session
 // carrying token/cost accounting as a usage_event but no transcript
 // messages still has its usage_event pushed to PG. This is the shape of a

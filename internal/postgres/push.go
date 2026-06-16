@@ -698,6 +698,13 @@ func sessionPushFingerprint(
 	return b.String()
 }
 
+func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
+	if sess.Machine != "" {
+		return sess.Machine
+	}
+	return fallbackMachine
+}
+
 func stringValue(value *string) string {
 	if value == nil {
 		return ""
@@ -895,7 +902,7 @@ func (s *Sync) pushSession(
 			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
 			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
 			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version`,
-		sess.ID, s.machine,
+		sess.ID, pushedSessionMachine(sess, s.machine),
 		sanitizePG(sess.Project),
 		sess.Agent,
 		nilStr(sess.FirstMessage),
