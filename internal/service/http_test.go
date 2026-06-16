@@ -125,6 +125,31 @@ func TestHTTPBackend_List_FilterRoundtrip(t *testing.T) {
 	assert.Equal(t, "proj-a", list.Sessions[0].Project)
 }
 
+func TestHTTPBackend_List_StarredFilterRoundtrip(t *testing.T) {
+	t.Parallel()
+	baseURL, d := newHTTPTestServer(t)
+	dbtest.SeedSession(t, d, "starred-1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+	})
+	dbtest.SeedSession(t, d, "plain-1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+	})
+	ok, err := d.StarSession("starred-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	svc := service.NewHTTPBackend(baseURL, "", false)
+	list, err := svc.List(context.Background(), service.ListFilter{
+		IncludeOneShot: true,
+		Starred:        true,
+		Limit:          10,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Len(t, list.Sessions, 1)
+	assert.Equal(t, "starred-1", list.Sessions[0].ID)
+}
+
 func TestHTTPBackend_List_InvalidDate(t *testing.T) {
 	t.Parallel()
 	baseURL, _ := newHTTPTestServer(t)

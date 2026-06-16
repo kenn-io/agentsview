@@ -39,6 +39,32 @@ func TestGzipMiddlewareCompressesAPIResponse(t *testing.T) {
 	require.Equal(t, body, string(got))
 }
 
+func TestGzipMiddlewareCompressesMultiWriteAPIResponse(t *testing.T) {
+	first := strings.Repeat(`{"sessions":[{"id":"s"}]}`, 80)
+	second := strings.Repeat(`{"sessions":[{"id":"t"}]}`, 80)
+	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(first))
+		_, _ = w.Write([]byte(second))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+
+	gr, err := gzip.NewReader(resp.Body)
+	require.NoError(t, err)
+	defer gr.Close()
+	got, err := io.ReadAll(gr)
+	require.NoError(t, err)
+	require.Equal(t, first+second, string(got))
+}
+
 func TestGzipMiddlewareSkipsEventStreams(t *testing.T) {
 	body := strings.Repeat("event: message\ndata: {}\n\n", 80)
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

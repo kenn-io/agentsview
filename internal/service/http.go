@@ -121,6 +121,9 @@ func filterToQuery(f ListFilter) url.Values {
 	if f.HasSecret {
 		q.Set("has_secret", "true")
 	}
+	if f.Starred {
+		q.Set("starred", "true")
+	}
 	setIfNotEmpty("cursor", f.Cursor)
 	if f.Limit > 0 {
 		q.Set("limit", strconv.Itoa(f.Limit))

@@ -79,15 +79,15 @@ func (w *gzipResponseWriter) Write(p []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
+	if w.compressing {
+		_, err := w.writer.Write(p)
+		return len(p), err
+	}
 	if w.plain || !canGzipStatus(w.status) ||
 		w.Header().Get("Content-Encoding") != "" ||
 		isEventStreamContentType(w.Header().Get("Content-Type")) {
 		w.writePlainHeader()
 		_, err := w.ResponseWriter.Write(p)
-		return len(p), err
-	}
-	if w.compressing {
-		_, err := w.writer.Write(p)
 		return len(p), err
 	}
 
