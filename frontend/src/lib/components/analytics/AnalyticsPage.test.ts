@@ -8,11 +8,16 @@ describe("AnalyticsPage refresh behavior", () => {
 
   it("keeps automatic refresh bounded to five minutes", () => {
     expect(source).toContain("REFRESH_INTERVAL_MS = 5 * 60 * 1000");
-    expect(source).toContain("setInterval");
+    expect(source).toContain("createRefreshScheduler");
+    expect(source).toContain("refreshScheduler.refreshNow()");
+    expect(source).not.toContain("setInterval");
   });
 
-  it("shows last-updated and new-data refresh hints", () => {
+  it("shows relative last-updated and new-data refresh hints", () => {
     expect(source).toContain("analytics.lastUpdatedAt");
+    expect(source).toContain("REFRESH_LABEL_INTERVAL_MS = 60 * 1000");
+    expect(source).toContain("formatRefreshAge");
+    expect(source).not.toContain("formatUpdatedAt");
     expect(source).toContain("analytics.hasNewData");
     expect(source).toContain("New data");
   });

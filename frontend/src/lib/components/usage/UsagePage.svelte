@@ -23,16 +23,27 @@
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
+  import { formatRefreshAge } from "../../utils/refresh.js";
   import { RefreshCwIcon } from "../../icons.js";
 
+  const REFRESH_LABEL_INTERVAL_MS = 60 * 1000;
+
   let mounted = false;
+  let refreshLabelTick = $state(Date.now());
+  let refreshLabelTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
   let unsubEvents: (() => void) | undefined;
 
-  function formatUpdatedAt(value: number): string {
-    return new Date(value).toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-    });
+  let refreshLabel = $derived.by(() => {
+    return formatRefreshAge(usage.lastUpdatedAt, refreshLabelTick);
+  });
+
+  function scheduleRefreshLabelTick() {
+    refreshLabelTimer = setTimeout(() => {
+      refreshLabelTick = Date.now();
+      scheduleRefreshLabelTick();
+    }, REFRESH_LABEL_INTERVAL_MS);
   }
 
   const projectItems = $derived(
@@ -244,12 +255,16 @@
   onMount(() => {
     mounted = true;
     unsubEvents = events.subscribe(() => usage.markNewData());
+    scheduleRefreshLabelTick();
     tick().then(() => {
       urlWritebackReady = true;
     });
   });
 
   onDestroy(() => {
+    if (refreshLabelTimer !== undefined) {
+      clearTimeout(refreshLabelTimer);
+    }
     unsubEvents?.();
   });
 </script>
@@ -310,13 +325,13 @@
         <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
       </button>
       <div class="refresh-status" aria-live="polite">
-        {#if usage.lastUpdatedAt !== null}
-          <span title={new Date(usage.lastUpdatedAt).toLocaleString()}>
-            Updated {formatUpdatedAt(usage.lastUpdatedAt)}
-          </span>
-        {:else}
-          <span>Not updated</span>
-        {/if}
+        <span
+          title={usage.lastUpdatedAt === null
+            ? undefined
+            : new Date(usage.lastUpdatedAt).toLocaleString()}
+        >
+          {refreshLabel}
+        </span>
         {#if usage.hasNewData}
           <span class="new-data">New data</span>
         {/if}

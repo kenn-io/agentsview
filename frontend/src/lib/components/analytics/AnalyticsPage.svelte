@@ -20,6 +20,10 @@
   import { events } from "../../stores/events.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
+  import {
+    createRefreshScheduler,
+    formatRefreshAge,
+  } from "../../utils/refresh.js";
   import { RefreshCwIcon } from "../../icons.js";
 
   function shortTz(tz: string): string {
@@ -30,13 +34,7 @@
   }
 
   const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-
-  function formatUpdatedAt(value: number): string {
-    return new Date(value).toLocaleTimeString([], {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
+  const REFRESH_LABEL_INTERVAL_MS = 60 * 1000;
 
   function handleExportCSV() {
     exportAnalyticsCSV({
@@ -50,15 +48,33 @@
     });
   }
 
-  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  const refreshScheduler = createRefreshScheduler(
+    () => analytics.fetchAll(),
+    REFRESH_INTERVAL_MS,
+  );
+  let refreshLabelTick = $state(Date.now());
+  let refreshLabelTimer:
+    | ReturnType<typeof setTimeout>
+    | undefined;
   let unsubEvents: (() => void) | undefined;
 
-  onMount(() => {
-    analytics.fetchAll();
-    refreshTimer = setInterval(
-      () => analytics.fetchAll(),
-      REFRESH_INTERVAL_MS,
+  let refreshLabel = $derived.by(() => {
+    return formatRefreshAge(
+      analytics.lastUpdatedAt,
+      refreshLabelTick,
     );
+  });
+
+  function scheduleRefreshLabelTick() {
+    refreshLabelTimer = setTimeout(() => {
+      refreshLabelTick = Date.now();
+      scheduleRefreshLabelTick();
+    }, REFRESH_LABEL_INTERVAL_MS);
+  }
+
+  onMount(() => {
+    refreshScheduler.start();
+    scheduleRefreshLabelTick();
     unsubEvents = events.subscribe(() => analytics.markNewData());
   });
 
@@ -142,8 +158,9 @@
   });
 
   onDestroy(() => {
-    if (refreshTimer !== undefined) {
-      clearInterval(refreshTimer);
+    refreshScheduler.stop();
+    if (refreshLabelTimer !== undefined) {
+      clearTimeout(refreshLabelTimer);
     }
     unsubEvents?.();
   });
@@ -171,7 +188,7 @@
     <button
       class="refresh-btn"
       class:querying={analytics.isQuerying}
-      onclick={() => analytics.fetchAll()}
+      onclick={() => refreshScheduler.refreshNow()}
       disabled={analytics.isQuerying}
       title="Refresh analytics"
       aria-label="Refresh analytics"
@@ -179,13 +196,13 @@
       <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
     </button>
     <div class="refresh-status" aria-live="polite">
-      {#if analytics.lastUpdatedAt !== null}
-        <span title={new Date(analytics.lastUpdatedAt).toLocaleString()}>
-          Updated {formatUpdatedAt(analytics.lastUpdatedAt)}
-        </span>
-      {:else}
-        <span>Not updated</span>
-      {/if}
+      <span
+        title={analytics.lastUpdatedAt === null
+          ? undefined
+          : new Date(analytics.lastUpdatedAt).toLocaleString()}
+      >
+        {refreshLabel}
+      </span>
       {#if analytics.hasNewData}
         <span class="new-data">New data</span>
       {/if}
