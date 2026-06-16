@@ -1,0 +1,48 @@
+name: New agent support
+description: Request support for a coding agent agentsview does not parse yet
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first; support for many agents is already
+        requested or in progress.
+
+        A real (redacted) session file is by far the most useful thing you can
+        provide. It lets a parser be written against actual data instead of a
+        guessed file format.
+  - type: input
+    id: agent-name
+    attributes:
+      label: Agent name and link
+      placeholder: "Kimi Code - https://github.com/MoonshotAI/kimi-code"
+    validations:
+      required: true
+  - type: textarea
+    id: storage
+    attributes:
+      label: Where does it store sessions?
+      description: Directory path(s), per OS if they differ
+      placeholder: "~/.kimi-code/sessions/"
+    validations:
+      required: true
+  - type: textarea
+    id: format
+    attributes:
+      label: File format
+      description: One file per session or many? JSON / JSONL / nested directories? Anything notable about the layout.
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample session file
+      description: >
+        Attach a real session file with secrets and private data removed. This
+        is the most valuable part of the request.
+      render: text
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - label: I can share a sample session file
+        - label: I use this agent and can test a PR or build a parser

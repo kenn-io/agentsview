@@ -1,0 +1,81 @@
+name: Bug report
+description: Something is parsed, rendered, counted, installed, or updated incorrectly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please search existing issues first.
+
+        For a wrong-render, wrong-count, or wrong-parse bug, the single most
+        useful thing you can give us is a small session file that reproduces it.
+        Session files can contain secrets and proprietary code, so redact before
+        sharing.
+  - type: input
+    id: version
+    attributes:
+      label: agentsview version
+      description: "Output of `agentsview version`"
+      placeholder: "agentsview v0.32.1 (commit 1964e4f8, built 2026-06-05T19:05:47Z)"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - Homebrew cask
+        - install.sh / install.ps1
+        - GitHub release binary
+        - Docker image
+        - go install
+        - Built from source
+        - Other / not sure
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / platform
+      placeholder: "macOS 26.5 (arm64) / Windows 11 / Fedora 44"
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Which agent(s) and version
+      description: The coding agent whose sessions are affected, plus its version, if relevant
+      placeholder: "OpenClaw 0.x.y"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect
+      placeholder: "Tool-call messages do not render; only user/assistant turns show. Expected the tool call and its result to appear."
+    validations:
+      required: true
+  - type: textarea
+    id: session-file
+    attributes:
+      label: Sample session file or snippet
+      description: >
+        For parse/render/usage bugs: attach a small session file that reproduces
+        the problem, or paste the relevant entry (for example the raw tool-call
+        object). Remove secrets and private data first.
+      render: text
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        Include exact CLI commands where relevant.
+  - type: checkboxes
+    id: hygiene
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues
+          required: true
+        - label: I removed secrets and private data from any attached session files
+          required: true

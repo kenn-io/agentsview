@@ -1,0 +1,4 @@
+# Route every new issue through one of the templates above. If GitHub
+# Discussions is enabled for this repo, add a contact_links entry pointing
+# usage/"how do I" questions there instead of the issue tracker.
+blank_issues_enabled: false
