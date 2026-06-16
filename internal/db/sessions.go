@@ -1477,29 +1477,6 @@ func (db *DB) GetMachines(
 	return machines, rows.Err()
 }
 
-// DistinctSessionMachines returns the distinct machine values stored on local
-// sessions, including deleted rows. Push reset detection uses this to count PG
-// rows across every machine identity this host pushes under, since a renamed or
-// orphan-copied session keeps its original machine value.
-func (db *DB) DistinctSessionMachines(ctx context.Context) ([]string, error) {
-	rows, err := db.getReader().QueryContext(ctx,
-		"SELECT DISTINCT machine FROM sessions")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	machines := []string{}
-	for rows.Next() {
-		var m string
-		if err := rows.Scan(&m); err != nil {
-			return nil, err
-		}
-		machines = append(machines, m)
-	}
-	return machines, rows.Err()
-}
-
 // scanSessionRows iterates rows and scans each using
 // scanSessionRow.
 func scanSessionRows(rows *sql.Rows) ([]Session, error) {

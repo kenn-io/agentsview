@@ -475,9 +475,8 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 // TestPushIncrementalWithOnlyForeignMachineSessions verifies reset detection
 // does not misfire when every local session carries a machine value other than
 // s.machine (e.g. orphan-copied sessions kept from a previous machine name).
-// pushSession writes such a session under its own machine, so pgSessionCount
-// must still find it and treat the second incremental push as a no-op rather
-// than forcing a full re-push.
+// The push marker, not a per-machine row count, drives reset detection, so the
+// second incremental push is a no-op rather than a forced full re-push.
 func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 
@@ -554,4 +553,86 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 	).Scan(&ctidAfter), "reading ctid after second push")
 	assert.Equal(t, ctidBefore, ctidAfter,
 		"second incremental push must not rewrite the session")
+}
+
+// TestPushDetectsResetWhenCompetingMachineRowsExist verifies that a PG reset is
+// detected even when another pusher has repopulated rows under a machine value
+// this host also writes. The local session carries Machine "remote-host" (as a
+// remote host's sessions synced in over SSH would); after the first push the PG
+// rows and this host's push marker are removed and a competing "remote-host"
+// row is inserted, simulating the remote host re-pushing first after a shared
+// PG reset. A machine-count check would see the competing row and skip the full
+// push, leaving this host's session missing; the push marker is per-pusher, so
+// the reset is detected and the session is re-pushed.
+func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_reset_competing_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "this-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "remote-host~sess-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "remote-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	// Simulate a PG reset where the real remote host re-pushed first: drop this
+	// host's rows and its push marker, then insert a competing "remote-host"
+	// row under a different id.
+	_, err = pg.Exec(`DELETE FROM sessions WHERE id = $1`, sessID)
+	require.NoError(t, err, "delete pushed session")
+	_, err = pg.Exec(
+		`DELETE FROM sync_metadata WHERE key LIKE 'push_marker:%'`,
+	)
+	require.NoError(t, err, "delete push marker")
+	_, err = pg.Exec(
+		`INSERT INTO sessions (id, machine, project, agent, created_at)
+		 VALUES ('remote-host-native-1', 'remote-host', 'proj', 'claude', NOW())`,
+	)
+	require.NoError(t, err, "insert competing remote-host row")
+
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+
+	var exists bool
+	require.NoError(t, pg.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM sessions WHERE id = $1)`, sessID,
+	).Scan(&exists), "checking re-pushed session")
+	assert.True(t, exists,
+		"reset must be detected and this host's session re-pushed")
 }

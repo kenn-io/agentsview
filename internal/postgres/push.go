@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,6 +17,14 @@ import (
 )
 
 const lastPushBoundaryStateKey = "last_push_boundary_state"
+
+// pushMarkerIDStateKey names the local sync-state entry holding this DB's
+// stable push-marker identifier. pushMarkerKeyPrefix prefixes that identifier
+// to form the PG sync_metadata key under which the marker row is stored.
+const (
+	pushMarkerIDStateKey = "pg_push_marker_id"
+	pushMarkerKeyPrefix  = "push_marker:"
+)
 
 // syncStateStore abstracts sync state read/write operations on the
 // local database. Used by push boundary state helpers.
@@ -87,22 +97,19 @@ func (s *Sync) Push(
 		}
 	}
 
-	// Coherence check: if the local watermark says we've
-	// pushed before but PG has zero sessions for this
-	// machine, the PG side was reset (schema dropped, DB
-	// recreated, etc.). Force a full push so all sessions
-	// are re-synced.
+	// Coherence check: if the local watermark says we've pushed
+	// before but this host's push marker is gone from PG, the PG side
+	// was reset (schema dropped, DB recreated, etc.). Force a full
+	// push so all sessions are re-synced.
 	if lastPush != "" {
-		pgCount, cErr := s.pgSessionCount(ctx)
+		markerExists, cErr := s.pgPushMarkerExists(ctx)
 		if cErr != nil {
 			return result, cErr
 		}
-		if pgCount == 0 {
+		if !markerExists {
 			log.Printf(
-				"pgsync: local watermark set but PG has "+
-					"0 sessions for machine %q; "+
-					"forcing full push",
-				s.machine,
+				"pgsync: local watermark set but PG push marker " +
+					"missing; PG was reset, forcing full push",
 			)
 			lastPush = ""
 			full = true
@@ -123,6 +130,12 @@ func (s *Sync) Push(
 				}
 			}
 		}
+	}
+	// Record (or refresh) this host's push marker so a later push can
+	// detect a PG reset. Written on every push, after the reset check
+	// above, so the first push establishes it and a reset re-creates it.
+	if err := s.writePushMarker(ctx); err != nil {
+		return result, err
 	}
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
@@ -337,64 +350,76 @@ func (s *Sync) Push(
 	return result, nil
 }
 
-// pgSessionCount returns the number of PG sessions written by this host. Reset
-// detection counts rows across every machine identity this host pushes under,
-// not just s.machine: pushSession preserves a session's own machine value (see
-// pushedSessionMachine), so a host whose local sessions all carry a renamed or
-// orphan-copied machine value still owns PG rows under that value. Counting only
-// s.machine would read zero for such a host and force a needless full re-push on
-// every incremental run.
-func (s *Sync) pgSessionCount(
-	ctx context.Context,
-) (int, error) {
-	machines, err := s.pushMachineSet(ctx)
+// pgPushMarkerExists reports whether this host's push marker is present in PG.
+// A missing marker while the local watermark is set means PG was reset (schema
+// dropped or recreated) since this host last pushed, so a full re-push is
+// needed. Counting rows by machine cannot detect this reliably: another host
+// pushing to the same PG can repopulate rows under a machine value this host
+// also writes -- a remote host's sessions synced in over SSH, or this host's
+// own renamed identity -- masking the loss of this host's own rows. The marker
+// is per-local-DB, so no other pusher can satisfy this check.
+func (s *Sync) pgPushMarkerExists(ctx context.Context) (bool, error) {
+	id, err := s.pushMarkerID()
 	if err != nil {
-		return 0, err
+		return false, err
 	}
-	placeholders := make([]string, len(machines))
-	args := make([]any, len(machines))
-	for i, m := range machines {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = m
-	}
-	var count int
+	var exists bool
 	err = s.pg.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sessions WHERE machine IN ("+
-			strings.Join(placeholders, ",")+")",
-		args...,
-	).Scan(&count)
+		`SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = $1)`,
+		pushMarkerKeyPrefix+id,
+	).Scan(&exists)
 	if err != nil {
 		if isUndefinedTable(err) {
-			return 0, nil
+			return false, nil
 		}
-		return 0, fmt.Errorf(
-			"counting pg sessions: %w", err,
+		return false, fmt.Errorf(
+			"checking pg push marker: %w", err,
 		)
 	}
-	return count, nil
+	return exists, nil
 }
 
-// pushMachineSet returns the distinct machine values this host writes to PG:
-// every machine identity present in the local DB, normalized through the same
-// "local"/empty -> s.machine fallback that pushSession applies, plus s.machine
-// itself. Always non-empty, so the IN clause in pgSessionCount is valid.
-func (s *Sync) pushMachineSet(ctx context.Context) ([]string, error) {
-	locals, err := s.local.DistinctSessionMachines(ctx)
+// writePushMarker records this host's push marker in PG so a later push can
+// tell whether PG still holds the rows this host pushed. The stored value
+// carries the machine name for debugging only; presence of the row is what
+// reset detection consults.
+func (s *Sync) writePushMarker(ctx context.Context) error {
+	id, err := s.pushMarkerID()
 	if err != nil {
-		return nil, fmt.Errorf(
-			"reading local session machines: %w", err,
-		)
+		return err
 	}
-	set := map[string]struct{}{s.machine: {}}
-	for _, m := range locals {
-		set[pushedSessionMachine(db.Session{Machine: m}, s.machine)] = struct{}{}
+	if _, err := s.pg.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value)
+		 VALUES ($1, $2)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		pushMarkerKeyPrefix+id, s.machine,
+	); err != nil {
+		return fmt.Errorf("writing pg push marker: %w", err)
 	}
-	out := make([]string, 0, len(set))
-	for m := range set {
-		out = append(out, m)
+	return nil
+}
+
+// pushMarkerID returns this local DB's stable push-marker identifier, creating
+// and persisting a random one on first use. It is independent of the machine
+// name, so a machine rename keeps the same marker, and unique per local DB, so
+// a different host pushing to the same PG cannot mask this host's reset.
+func (s *Sync) pushMarkerID() (string, error) {
+	id, err := s.local.GetSyncState(pushMarkerIDStateKey)
+	if err != nil {
+		return "", fmt.Errorf("reading push marker id: %w", err)
 	}
-	sort.Strings(out)
-	return out, nil
+	if id != "" {
+		return id, nil
+	}
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generating push marker id: %w", err)
+	}
+	id = hex.EncodeToString(buf)
+	if err := s.local.SetSyncState(pushMarkerIDStateKey, id); err != nil {
+		return "", fmt.Errorf("persisting push marker id: %w", err)
+	}
+	return id, nil
 }
 
 type batchResult struct {
