@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +100,22 @@ func TestSessionGet_JSON(t *testing.T) {
 	assert.Equal(t, "proj", got["project"])
 }
 
+func TestSessionGet_JSONAlias(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	seedSession(t, dataDir, "s-json", "proj")
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "get", "s-json", "--json")
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got),
+		"stdout should be valid JSON: %q", out)
+	assert.Equal(t, "s-json", got["id"])
+	assert.Equal(t, "proj", got["project"])
+}
+
 func TestSessionGet_NotFound(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
@@ -182,6 +200,45 @@ func TestSessionList_FilterByProject(t *testing.T) {
 		"stdout should be valid JSON: %q", out)
 	require.Len(t, got.Sessions, 1)
 	assert.Equal(t, "s-a", got.Sessions[0]["id"])
+}
+
+func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	seedSession(t, dataDir, "local-session", "local")
+
+	var gotPath, gotProject string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			gotProject = r.URL.Query().Get("project")
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"sessions": [
+					{"id":"remote-session","project":"remote","agent":"claude"}
+				],
+				"total": 1
+			}`))
+		}))
+	defer ts.Close()
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "list", "--server", ts.URL, "--project", "remote",
+		"--json")
+	require.NoError(t, err)
+
+	var got struct {
+		Sessions []map[string]any `json:"sessions"`
+		Total    int              `json:"total"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &got),
+		"stdout should be valid JSON: %q", out)
+	assert.Equal(t, "/api/v1/sessions", gotPath)
+	assert.Equal(t, "remote", gotProject)
+	assert.Equal(t, 1, got.Total)
+	require.Len(t, got.Sessions, 1)
+	assert.Equal(t, "remote-session", got.Sessions[0]["id"])
 }
 
 func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
@@ -604,21 +661,47 @@ func TestSessionExport_RejectsPGFlag(t *testing.T) {
 	assert.Contains(t, err.Error(), "--pg not supported")
 }
 
-// TestSessionUsage_RejectsServerFlag verifies that `session usage`
-// rejects the inherited --server flag instead of silently querying
-// the local SQLite archive. usage uses the direct token-use path
-// (not the SessionService layer), so a user explicitly targeting a
-// daemon must get the same "not yet implemented" error the other
-// session commands return — not stale or local-only data.
-func TestSessionUsage_RejectsServerFlag(t *testing.T) {
+func TestSessionUsage_ServerFlagUsesHTTP(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 
-	_, err := executeCommand(newRootCommand(),
-		"session", "usage", "some-id",
-		"--server", "http://localhost:9999")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--server not yet implemented")
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotPath = r.URL.Path
+			assert.Equal(t, http.MethodGet, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"session_id": "remote-session",
+				"agent": "codex",
+				"project": "remote-project",
+				"total_output_tokens": 42,
+				"peak_context_tokens": 2048,
+				"has_token_data": true,
+				"cost_usd": 0.5,
+				"has_cost": true,
+				"models": ["gpt-5.1"],
+				"unpriced_models": [],
+				"server_running": true
+			}`))
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "remote-session", "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, "/api/v1/sessions/remote-session/usage", gotPath)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, "remote-session", out.SessionID)
+	assert.Equal(t, "remote-project", out.Project)
+	assert.Equal(t, 42, out.TotalOutputTokens)
+	assert.True(t, out.ServerRunning)
 }
 
 func TestSessionUsage_PGEnvUsesPGStore(t *testing.T) {

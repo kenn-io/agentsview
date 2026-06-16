@@ -26,9 +26,13 @@ func newSessionCommand() *cobra.Command {
 		"format", "human",
 		"Output format: human or json",
 	)
+	cmd.PersistentFlags().Bool(
+		"json", false,
+		"Emit JSON output (alias for --format json)",
+	)
 	cmd.PersistentFlags().String(
 		"server", "",
-		"Remote daemon URL (not yet implemented)",
+		"Remote daemon URL",
 	)
 	cmd.PersistentFlags().Bool(
 		"pg", false,
@@ -53,17 +57,21 @@ func newSessionCommand() *cobra.Command {
 func resolveService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	remote, _ := cmd.Flags().GetString("server")
-	if remote != "" {
-		return nil, nil, errors.New(
-			"--server not yet implemented",
-		)
-	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"loading config: %w", err,
 		)
+	}
+	remote, _ := cmd.Flags().GetString("server")
+	if remote != "" {
+		if pgReadRequested(cmd) {
+			return nil, nil, errors.New(
+				"--server and --pg are mutually exclusive",
+			)
+		}
+		return service.NewHTTPBackend(remote, cfg.AuthToken, false),
+			func() {}, nil
 	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
 	if err != nil {
@@ -87,17 +95,23 @@ func resolveService(
 func resolveWritableService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
+	cfg, err := config.LoadPFlags(cmd.Flags())
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading config: %w", err)
+	}
 	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
-		return nil, nil, errors.New("--server not yet implemented")
+		if pgReadRequested(cmd) {
+			return nil, nil, errors.New(
+				"--server and --pg are mutually exclusive",
+			)
+		}
+		return service.NewHTTPBackend(remote, cfg.AuthToken, false),
+			func() {}, nil
 	}
 	if pgReadRequested(cmd) {
 		return nil, nil, errors.New(
 			"--pg is read-only and cannot be used with write commands",
 		)
-	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 	tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
 	if err != nil {
@@ -151,6 +165,10 @@ func pgReadRequested(cmd *cobra.Command) bool {
 // outputFormat returns the requested --format flag value
 // ("human" or "json"). Defaults to "human".
 func outputFormat(cmd *cobra.Command) string {
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+	if jsonOutput {
+		return "json"
+	}
 	v, _ := cmd.Flags().GetString("format")
 	if v == "" {
 		return "human"

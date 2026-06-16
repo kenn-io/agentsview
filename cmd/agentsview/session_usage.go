@@ -5,9 +5,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -30,20 +31,6 @@ func newSessionUsageCommand() *cobra.Command {
 		Short:        "Show token usage and cost estimate for a session",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
-		// usage uses the direct token-use path (local SQLite +
-		// on-demand sync), not the SessionService layer, so it cannot
-		// honor --server. Reject it here with the same "--server not
-		// yet implemented" error the service-backed session commands
-		// return via resolveService, rather than silently querying
-		// local data for a daemon-targeted request. PreRunE surfaces
-		// the error through Execute (exit 1); Run keeps os.Exit for
-		// the 0/2/3 usage codes.
-		PreRunE: func(cmd *cobra.Command, args []string) error {
-			if remote, _ := cmd.Flags().GetString("server"); remote != "" {
-				return errors.New("--server not yet implemented")
-			}
-			return nil
-		},
 		Run: func(cmd *cobra.Command, args []string) {
 			runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
@@ -85,6 +72,17 @@ func sessionUsageDataForCommand(
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
 	}
+	remote, _ := cmd.Flags().GetString("server")
+	if remote != "" {
+		if pgReadRequested(cmd) {
+			return nil, tokenUseExitErr, fmt.Errorf(
+				"--server and --pg are mutually exclusive",
+			)
+		}
+		return httpSessionUsageData(
+			cmd.Context(), remote, cfg.AuthToken, sessionID,
+		)
+	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
 	if err != nil {
 		return nil, tokenUseExitErr, err
@@ -93,6 +91,49 @@ func sessionUsageDataForCommand(
 		return sessionUsageData(sessionID)
 	}
 	return pgSessionUsageData(cfg, pgCfg, sessionID)
+}
+
+func httpSessionUsageData(
+	ctx context.Context,
+	baseURL string,
+	token string,
+	sessionID string,
+) (*sessionUsageOutput, int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	endpoint := strings.TrimSuffix(baseURL, "/") +
+		"/api/v1/sessions/" + url.PathEscape(sessionID) + "/usage"
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, endpoint, nil,
+	)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+		return nil, tokenUseExitNotFound, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, tokenUseExitErr, fmt.Errorf(
+			"usage: HTTP %d: %s", resp.StatusCode, body,
+		)
+	}
+	var out sessionUsageOutput
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, tokenUseExitErr, err
+	}
+	out.ServerRunning = true
+	return &out, usageExitCode(&out.SessionUsage), nil
 }
 
 func pgSessionUsageData(
