@@ -18,7 +18,7 @@
   "dependencies": {
     "@lucide/svelte": "1.17.0",
     "@tanstack/virtual-core": "3.17.0",
-    "dompurify": "3.4.8",
+    "dompurify": "3.4.9",
     "marked": "18.0.5",
     "shiki": "4.2.0"
   },
