@@ -176,20 +176,27 @@ func stopOrphanedCaddyChild(rec daemon.RuntimeRecord) {
 	if !processCreateTimeMatches(pid, caddyCreateTime) {
 		return
 	}
-	// SourcePath is empty, so stopDaemonProcess only signals and waits; it
-	// removes no record file for the Caddy child. Carry the Caddy create time
-	// as runtimeCreateTime so the pre-force-kill identity check guards a Caddy
-	// PID reused during the grace wait.
-	if err := stopDaemonProcess(daemon.RuntimeRecord{
-		PID:      pid,
-		Metadata: map[string]string{runtimeCreateTime: caddyCreateTime},
-	}, serveStopGraceTimeout); err != nil {
+	if err := stopDaemonProcess(
+		caddyStopRecord(pid, caddyCreateTime), serveStopGraceTimeout,
+	); err != nil {
 		fmt.Printf(
 			"warning: could not stop managed caddy (pid %d): %v\n", pid, err,
 		)
 		return
 	}
 	fmt.Printf("Stopped managed caddy (pid %d).\n", pid)
+}
+
+// caddyStopRecord builds the record used to stop a managed Caddy child. It has
+// no SourcePath, so stopDaemonProcess only signals and waits and removes no
+// record file. The Caddy create time is carried as runtimeCreateTime so
+// stopDaemonProcess's pre-force-kill identity check guards a Caddy PID that was
+// reused during the grace wait.
+func caddyStopRecord(pid int, createTime string) daemon.RuntimeRecord {
+	return daemon.RuntimeRecord{
+		PID:      pid,
+		Metadata: map[string]string{runtimeCreateTime: createTime},
+	}
 }
 
 // stopDaemonProcess signals the daemon to shut down, waits up to grace for it

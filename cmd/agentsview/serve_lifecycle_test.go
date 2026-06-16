@@ -347,6 +347,16 @@ func TestStopOrphanedCaddyChildSkipsMismatchedCreateTime(t *testing.T) {
 		"a reused caddy PID must not be signalled")
 }
 
+func TestCaddyStopRecordCarriesCreateTime(t *testing.T) {
+	rec := caddyStopRecord(4321, "1700000000000")
+	assert.Equal(t, 4321, rec.PID)
+	assert.Equal(t, "1700000000000", rec.Metadata[runtimeCreateTime],
+		"the caddy create time must be carried as runtimeCreateTime so the "+
+			"pre-force-kill identity check guards a reused caddy PID")
+	assert.Empty(t, rec.SourcePath,
+		"a caddy stop record has no source file to remove")
+}
+
 func TestStopOrphanedCaddyChildNoMetadataIsNoop(t *testing.T) {
 	assert.NotPanics(t, func() {
 		stopOrphanedCaddyChild(daemon.RuntimeRecord{PID: os.Getpid()})
