@@ -23,6 +23,12 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(source).not.toContain(".new-data");
   });
 
+  it("does not announce passive refresh-age ticks as live updates", () => {
+    expect(source).not.toContain(
+      'class="refresh-status" aria-live="polite"',
+    );
+  });
+
   it("keeps the refresh timestamp beside the centered icon button", () => {
     const refreshControl =
       source.match(/\.refresh-control\s*{[^}]+}/)?.[0] ?? "";

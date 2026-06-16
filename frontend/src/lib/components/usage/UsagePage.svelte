@@ -325,7 +325,7 @@
         >
           <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
         </button>
-        <div class="refresh-status" aria-live="polite">
+        <div class="refresh-status">
           <span
             title={usage.lastUpdatedAt === null
               ? undefined
