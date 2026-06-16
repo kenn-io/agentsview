@@ -13,6 +13,7 @@ import {
   filtersToParams,
   splitExcludeProjectParam,
 } from "./sessions.svelte.js";
+import { starred } from "./starred.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import { callGenerated } from "../api/runtime.js";
@@ -194,6 +195,8 @@ describe("SessionsStore", () => {
     storageData.clear();
     mockSidebarPage();
     mockSidebarIndex();
+    starred.filterOnly = false;
+    starred.ids = new Set();
     sessions = createSessionsStore();
   });
 
@@ -433,6 +436,20 @@ describe("SessionsStore", () => {
       expect(params.outcome).toBeUndefined();
       expect(params.min_tool_failures).toBeUndefined();
       expect(params.starred).toBeUndefined();
+    });
+
+    it("requests a server-side starred sidebar page when starred-only is active", async () => {
+      starred.filterOnly = true;
+
+      const detach = sessions.attachSidebar();
+      await sessions.load();
+      detach();
+
+      const params = vi.mocked(api.getSidebarSessionIndex)
+        .mock.calls[0]![0];
+      expect(params.starred).toBe(true);
+      expect(params.cursor).toBeUndefined();
+      expect(params.limit).toBe(500);
     });
 
     it("keeps display_name available without hydration", async () => {

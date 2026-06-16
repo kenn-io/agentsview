@@ -133,6 +133,7 @@ type ListFilter struct {
 	Termination      string `json:"termination,omitempty"`  // comma-separated
 	MinToolFailures  *int   `json:"min_tool_failures,omitempty"`
 	HasSecret        bool   `json:"has_secret,omitempty"`
+	Starred          bool   `json:"starred,omitempty"`
 	Cursor           string `json:"cursor,omitempty"`
 	Limit            int    `json:"limit,omitempty"`
 }

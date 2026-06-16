@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export type DbSidebarSessionIndex = {
+  next_cursor?: string;
   sessions: any[] | null;
   total: number;
 };

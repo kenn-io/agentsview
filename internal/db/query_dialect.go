@@ -383,6 +383,11 @@ func sessionFilterPredicates(
 		}
 		preds = append(preds, pred)
 	}
+	if f.Starred {
+		preds = append(preds,
+			"EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = "+
+				q("id")+")")
+	}
 	return preds, oneShotPred
 }
 

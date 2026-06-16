@@ -118,7 +118,13 @@
       sessions.clearSessionFilters();
     } else if (showStarred && starred.filterOnly) {
       starred.filterOnly = false;
+      sessions.load();
     }
+  }
+
+  function toggleStarredOnly() {
+    starred.filterOnly = !starred.filterOnly;
+    sessions.load();
   }
 </script>
 
@@ -175,7 +181,7 @@
         <button
           class="filter-toggle"
           class:active={starred.filterOnly}
-          onclick={() => (starred.filterOnly = !starred.filterOnly)}
+          onclick={toggleStarredOnly}
         >
           <span
             class="toggle-check"

@@ -40,7 +40,7 @@ func shouldGzip(r *http.Request) bool {
 	if headerContainsToken(r.Header.Get("Accept"), "text/event-stream") {
 		return false
 	}
-	if r.URL.Path == "/api/v1/events" || strings.HasSuffix(r.URL.Path, "/watch") {
+	if isStreamingPath(r.URL.Path) {
 		return false
 	}
 	return true
@@ -55,6 +55,7 @@ type gzipResponseWriter struct {
 	wroteHeader bool
 	sentHeader  bool
 	compressing bool
+	plain       bool
 }
 
 func (w *gzipResponseWriter) Header() http.Header {
@@ -78,7 +79,9 @@ func (w *gzipResponseWriter) Write(p []byte) (int, error) {
 	if !w.wroteHeader {
 		w.WriteHeader(http.StatusOK)
 	}
-	if !canGzipStatus(w.status) || w.Header().Get("Content-Encoding") != "" {
+	if w.plain || !canGzipStatus(w.status) ||
+		w.Header().Get("Content-Encoding") != "" ||
+		isEventStreamContentType(w.Header().Get("Content-Type")) {
 		w.writePlainHeader()
 		_, err := w.ResponseWriter.Write(p)
 		return len(p), err
@@ -141,6 +144,10 @@ func (w *gzipResponseWriter) close() {
 }
 
 func (w *gzipResponseWriter) startGzip() error {
+	if w.plain || w.sentHeader ||
+		isEventStreamContentType(w.Header().Get("Content-Type")) {
+		return nil
+	}
 	if w.Header().Get("Content-Type") == "" && len(w.buffer) > 0 {
 		w.Header().Set("Content-Type", http.DetectContentType(w.buffer))
 	}
@@ -156,10 +163,12 @@ func (w *gzipResponseWriter) startGzip() error {
 
 func (w *gzipResponseWriter) writePlainHeader() {
 	if w.sentHeader {
+		w.plain = true
 		return
 	}
 	w.ResponseWriter.WriteHeader(w.status)
 	w.sentHeader = true
+	w.plain = true
 }
 
 func canGzipStatus(status int) bool {
@@ -185,4 +194,26 @@ func addVaryHeader(h http.Header, value string) {
 		}
 	}
 	h.Add("Vary", value)
+}
+
+func isEventStreamContentType(value string) bool {
+	mediaType, _, _ := strings.Cut(value, ";")
+	return strings.EqualFold(strings.TrimSpace(mediaType), "text/event-stream")
+}
+
+func isStreamingPath(path string) bool {
+	switch {
+	case path == "/api/v1/events",
+		path == "/api/v1/sync",
+		path == "/api/v1/resync",
+		path == "/api/v1/secrets/scan",
+		path == "/api/v1/insights/generate":
+		return true
+	case strings.HasSuffix(path, "/watch"):
+		return true
+	case strings.HasPrefix(path, "/api/v1/import/"):
+		return true
+	default:
+		return false
+	}
 }

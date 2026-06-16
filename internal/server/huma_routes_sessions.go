@@ -77,6 +77,7 @@ type sessionFilterInput struct {
 	Termination      string           `query:"termination" doc:"Filter by termination reason"`
 	MinToolFailures  optionalIntParam `query:"min_tool_failures" minimum:"0" doc:"Minimum tool failure count"`
 	HasSecret        bool             `query:"has_secret" doc:"Filter sessions with secret findings"`
+	Starred          bool             `query:"starred" doc:"Filter sessions by starred status"`
 }
 
 type messageListInput struct {
@@ -117,6 +118,7 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		Limit:            limit,
 		Termination:      in.Termination,
 		HasSecret:        in.HasSecret,
+		Starred:          in.Starred,
 	}
 	if in.MinToolFailures.IsSet {
 		filter.MinToolFailures = &in.MinToolFailures.Value
@@ -150,6 +152,7 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 		Cursor:           in.Cursor,
 		Limit:            limit,
 		Termination:      in.Termination,
+		Starred:          in.Starred,
 	}, nil
 }
 

@@ -16,6 +16,7 @@ import type {
 } from "../api/types.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
+import { starred } from "./starred.svelte.js";
 
 type SidebarIndexParams = Parameters<
   typeof SessionsService.getApiV1SessionsSidebarIndex
@@ -303,6 +304,7 @@ class SessionsStore {
         f.minUserMessages > 0 ? f.minUserMessages : undefined,
       includeOneShot: f.includeOneShot || undefined,
       includeAutomated: f.includeAutomated || undefined,
+      starred: starred.filterOnly || undefined,
     };
   }
 

@@ -299,6 +299,7 @@ type SessionFilter struct {
 	HealthGrade      []string // filter by health grade values
 	MinToolFailures  *int     // minimum tool_failure_signal_count
 	HasSecret        bool     // only sessions with current secret_leak_count > 0
+	Starred          bool     // only sessions starred by the user
 	// SecretsRulesVersions limits HasSecret to sessions scanned by one of these
 	// current scanner versions. Empty preserves raw DB semantics for tests and
 	// direct store callers that explicitly want unversioned counts.
@@ -331,6 +332,25 @@ const sidebarActivityExprSQLiteS = "COALESCE(" +
 	"NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)"
 
 const sidebarChildRelationshipsSQL = "'subagent', 'fork', 'continuation'"
+
+func sidebarStarredRootCTE(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return `,
+		eligible_roots(id) AS (
+			SELECT DISTINCT t.root_id
+			FROM tree t
+			JOIN starred_sessions ss ON ss.session_id = t.id
+		)`
+}
+
+func sidebarStarredRootJoin(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return "JOIN eligible_roots e ON e.id = t.root_id"
+}
 
 // buildTerminationPredSQLite returns a WHERE fragment and args for
 // the multi-state termination filter (active / stale / unclean).
@@ -477,7 +497,7 @@ func (db *DB) GetSidebarSessionIndex(
 ) (SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 
-	if f.Limit > 0 || f.Cursor != "" {
+	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return db.getSidebarSessionIndexPage(ctx, f)
 	}
 
@@ -561,6 +581,7 @@ func (db *DB) getSidebarSessionIndexPage(
 	rootFilter := f
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
+	rootFilter.Starred = false
 	rootWhere, rootArgs := buildSessionFilter(rootFilter)
 	canonicalRootWhere := `
 		NOT EXISTS (
@@ -582,13 +603,44 @@ func (db *DB) getSidebarSessionIndexPage(
 		total = cur.Total
 	}
 	if total <= 0 {
-		countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
-			rootWhere + " AND " + canonicalRootWhere
-		if err := db.getReader().QueryRowContext(
-			ctx, countQuery, rootArgs...,
-		).Scan(&total); err != nil {
-			return SidebarSessionIndex{},
-				fmt.Errorf("counting sidebar roots: %w", err)
+		if f.Starred {
+			countQuery := `
+				WITH RECURSIVE root_candidates(id) AS (
+					SELECT id
+					FROM sessions
+					WHERE ` + rootWhere + `
+					  AND ` + canonicalRootWhere + `
+				),
+				tree(root_id, id) AS (
+					SELECT id, id FROM root_candidates
+					UNION
+					SELECT t.root_id, s.id
+					FROM sessions s
+					JOIN tree t ON s.parent_session_id = t.id
+					WHERE s.message_count > 0
+					  AND s.deleted_at IS NULL
+				),
+				eligible_roots(id) AS (
+					SELECT DISTINCT t.root_id
+					FROM tree t
+					JOIN starred_sessions ss ON ss.session_id = t.id
+				)
+				SELECT COUNT(*) FROM eligible_roots`
+			if err := db.getReader().QueryRowContext(
+				ctx, countQuery, rootArgs...,
+			).Scan(&total); err != nil {
+				return SidebarSessionIndex{},
+					fmt.Errorf("counting sidebar roots: %w", err)
+			}
+		} else {
+			countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
+				rootWhere + " AND " + canonicalRootWhere
+			if err := db.getReader().QueryRowContext(
+				ctx, countQuery, rootArgs...,
+			).Scan(&total); err != nil {
+				return SidebarSessionIndex{},
+					fmt.Errorf("counting sidebar roots: %w", err)
+			}
 		}
 	}
 
@@ -614,10 +666,12 @@ func (db *DB) getSidebarSessionIndexPage(
 			JOIN tree t ON s.parent_session_id = t.id
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
-		),
+		)
+		` + sidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
 			SELECT t.root_id AS id, MAX(` + sidebarActivityExprSQLiteS + `) AS activity
 			FROM tree t
+			` + sidebarStarredRootJoin(f.Starred) + `
 			JOIN sessions s ON s.id = t.id
 			GROUP BY t.root_id
 		)

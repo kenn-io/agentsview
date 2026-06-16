@@ -59,6 +59,27 @@ func TestGzipMiddlewareSkipsEventStreams(t *testing.T) {
 	require.Equal(t, body, string(got))
 }
 
+func TestGzipMiddlewareKeepsFlushedEventStreamPlain(t *testing.T) {
+	body := strings.Repeat("event: progress\ndata: {}\n\n", 80)
+	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		_, _ = w.Write([]byte(body))
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	got, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, body, string(got))
+}
+
 func TestGzipMiddlewareLeavesSmallAPIResponsePlain(t *testing.T) {
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)

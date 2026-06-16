@@ -150,6 +150,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		Limit:                f.Limit,
 		MinToolFailures:      f.MinToolFailures,
 		HasSecret:            f.HasSecret,
+		Starred:              f.Starred,
 		SecretsRulesVersions: secrets.ActiveRulesVersions(),
 	}
 	if f.Outcome != "" {

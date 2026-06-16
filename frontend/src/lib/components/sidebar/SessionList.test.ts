@@ -395,6 +395,32 @@ describe("SessionList visible hydration", () => {
     expect(document.body.textContent).not.toContain("Unstarred");
   });
 
+  it("reloads the sidebar when starred-only is toggled", async () => {
+    const load = vi.spyOn(sessions, "load").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    load.mockClear();
+
+    const filterButton = document.querySelector<HTMLButtonElement>(
+      ".filter-btn",
+    );
+    expect(filterButton).not.toBeNull();
+    filterButton!.click();
+    await tick();
+
+    const starredButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".filter-toggle"),
+    ).find((button) => button.textContent?.includes("Starred only"));
+    expect(starredButton).not.toBeNull();
+
+    starredButton!.click();
+    await tick();
+
+    expect(starred.filterOnly).toBe(true);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
   it("uses is_teammate for the collapsed group teammate hint", async () => {
     sessions.sessions = [
       makeSession({ id: "root", display_name: "Root", is_index_only: true }),

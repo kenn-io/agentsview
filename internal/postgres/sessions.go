@@ -83,6 +83,25 @@ const pgSidebarActivityExprS = "COALESCE(s.ended_at, s.started_at, s.created_at)
 
 const pgSidebarChildRelationshipsSQL = "'subagent', 'fork', 'continuation'"
 
+func pgSidebarStarredRootCTE(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return `,
+		eligible_roots(id) AS (
+			SELECT DISTINCT t.root_id
+			FROM tree t
+			JOIN starred_sessions ss ON ss.session_id = t.id
+		)`
+}
+
+func pgSidebarStarredRootJoin(enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	return "JOIN eligible_roots e ON e.id = t.root_id"
+}
+
 // pgTerminationPred returns a WHERE fragment for the multi-state
 // termination filter (active / stale / unclean). The status value
 // may be comma-separated to OR multiple states. Returns "" when
@@ -403,7 +422,7 @@ func (s *Store) GetSidebarSessionIndex(
 ) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
 
-	if f.Limit > 0 || f.Cursor != "" {
+	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return s.getSidebarSessionIndexPage(ctx, f)
 	}
 
@@ -462,6 +481,7 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter := f
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
+	rootFilter.Starred = false
 	rootWhere, rootArgs := buildPGSessionFilter(rootFilter)
 	canonicalRootWhere := `
 		NOT EXISTS (
@@ -483,13 +503,44 @@ func (s *Store) getSidebarSessionIndexPage(
 		total = cur.Total
 	}
 	if total <= 0 {
-		countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
-			rootWhere + " AND " + canonicalRootWhere
-		if err := s.pg.QueryRowContext(
-			ctx, countQuery, rootArgs...,
-		).Scan(&total); err != nil {
-			return db.SidebarSessionIndex{},
-				fmt.Errorf("counting sidebar roots: %w", err)
+		if f.Starred {
+			countQuery := `
+				WITH RECURSIVE root_candidates(id) AS (
+					SELECT id
+					FROM sessions
+					WHERE ` + rootWhere + `
+					  AND ` + canonicalRootWhere + `
+				),
+				tree(root_id, id) AS (
+					SELECT id, id FROM root_candidates
+					UNION
+					SELECT t.root_id, s.id
+					FROM sessions s
+					JOIN tree t ON s.parent_session_id = t.id
+					WHERE s.message_count > 0
+					  AND s.deleted_at IS NULL
+				),
+				eligible_roots(id) AS (
+					SELECT DISTINCT t.root_id
+					FROM tree t
+					JOIN starred_sessions ss ON ss.session_id = t.id
+				)
+				SELECT COUNT(*) FROM eligible_roots`
+			if err := s.pg.QueryRowContext(
+				ctx, countQuery, rootArgs...,
+			).Scan(&total); err != nil {
+				return db.SidebarSessionIndex{},
+					fmt.Errorf("counting sidebar roots: %w", err)
+			}
+		} else {
+			countQuery := "SELECT COUNT(*) FROM sessions WHERE " +
+				rootWhere + " AND " + canonicalRootWhere
+			if err := s.pg.QueryRowContext(
+				ctx, countQuery, rootArgs...,
+			).Scan(&total); err != nil {
+				return db.SidebarSessionIndex{},
+					fmt.Errorf("counting sidebar roots: %w", err)
+			}
 		}
 	}
 
@@ -517,10 +568,12 @@ func (s *Store) getSidebarSessionIndexPage(
 			JOIN tree t ON s.parent_session_id = t.id
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
-		),
+		)
+		` + pgSidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
 			SELECT t.root_id AS id, MAX(` + pgSidebarActivityExprS + `) AS activity
 			FROM tree t
+			` + pgSidebarStarredRootJoin(f.Starred) + `
 			JOIN sessions s ON s.id = t.id
 			GROUP BY t.root_id
 		)

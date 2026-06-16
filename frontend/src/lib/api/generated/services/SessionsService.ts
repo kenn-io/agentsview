@@ -76,6 +76,7 @@ export class SessionsService {
     termination,
     minToolFailures,
     hasSecret,
+    starred,
   }: {
     /**
      * Filter by project
@@ -161,6 +162,10 @@ export class SessionsService {
      * Filter sessions with secret findings
      */
     hasSecret?: boolean,
+    /**
+     * Filter sessions by starred status
+     */
+    starred?: boolean,
   }): CancelablePromise<ServiceSessionList> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -187,6 +192,7 @@ export class SessionsService {
         'termination': termination,
         'min_tool_failures': minToolFailures,
         'has_secret': hasSecret,
+        'starred': starred,
       },
       errors: {
         400: `Bad Request`,
@@ -230,6 +236,7 @@ export class SessionsService {
     termination,
     minToolFailures,
     hasSecret,
+    starred,
   }: {
     /**
      * Filter by project
@@ -315,6 +322,10 @@ export class SessionsService {
      * Filter sessions with secret findings
      */
     hasSecret?: boolean,
+    /**
+     * Filter sessions by starred status
+     */
+    starred?: boolean,
   }): CancelablePromise<DbSidebarSessionIndex> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -341,6 +352,7 @@ export class SessionsService {
         'termination': termination,
         'min_tool_failures': minToolFailures,
         'has_secret': hasSecret,
+        'starred': starred,
       },
       errors: {
         400: `Bad Request`,

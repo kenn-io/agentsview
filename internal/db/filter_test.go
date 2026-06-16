@@ -1097,6 +1097,41 @@ func TestSidebarSessionIndexIncludesChildrenForMatchingRoot(t *testing.T) {
 	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "sub", "fork"})
 }
 
+func TestSidebarSessionIndexStarredIncludesStarredDescendantRoot(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "unstarred-newer", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-20T00:00:00Z")
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	rootID := "root"
+	insertSession(t, d, rootID, "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-01T00:00:00Z")
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "starred-child", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-10T00:00:00Z")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = &rootID
+		s.RelationshipType = "subagent"
+	})
+	ok, err := d.StarSession("starred-child")
+	require.NoError(t, err, "StarSession")
+	require.True(t, ok, "starred-child should exist")
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		Starred: true,
+		Limit:   1,
+	})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	require.Empty(t, index.NextCursor)
+	require.Equal(t, 1, index.Total, "total starred root groups")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "starred-child"})
+}
+
 func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
 	d := testDB(t)
 

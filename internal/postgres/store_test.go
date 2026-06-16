@@ -551,6 +551,50 @@ func TestStoreGetSidebarSessionIndexPaginatesByDescendantFreshness(
 	assert.Equal(t, []string{"other"}, sidebarIndexIDs(second.Sessions))
 }
 
+func TestStoreGetSidebarSessionIndexStarredIncludesStarredDescendantRoot(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	store := ensureSidebarIndexStoreSchema(t, pgURL)
+	defer store.Close()
+
+	insertSidebarIndexSession(t, store, "unstarred-newer", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = "2024-01-20T00:00:00Z"
+	})
+	rootID := "root"
+	insertSidebarIndexSession(t, store, rootID, func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = "2024-01-01T00:00:00Z"
+	})
+	insertSidebarIndexSession(t, store, "starred-child", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.parentSessionID = &rootID
+		s.relationshipType = "subagent"
+		s.endedAt = "2024-01-10T00:00:00Z"
+	})
+	ok, err := store.StarSession("starred-child")
+	require.NoError(t, err, "StarSession")
+	require.True(t, ok, "starred-child should exist")
+
+	index, err := store.GetSidebarSessionIndex(
+		context.Background(), db.SessionFilter{
+			Starred: true,
+			Limit:   1,
+		},
+	)
+	require.NoError(t, err, "GetSidebarSessionIndex")
+	assert.Empty(t, index.NextCursor)
+	assert.Equal(t, 1, index.Total)
+	assert.ElementsMatch(t,
+		[]string{"root", "starred-child"},
+		sidebarIndexIDs(index.Sessions),
+	)
+}
+
 func TestStoreGetSession(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
