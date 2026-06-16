@@ -25,6 +25,10 @@ Instructions for autonomous coding agents working in this repository.
 ## Validation
 
 - Run relevant tests before committing when practical.
+- Run tests through the `make` targets (`make test`, `make test-short`,
+  `make vet`, `make lint`) rather than invoking `go test` directly. The targets
+  already set `CGO_ENABLED=1` and the required build tags, so you never need to
+  pass `-tags "fts5,kit_posthog_disabled"` by hand.
 - If tests cannot be run, state that clearly in the handoff.
 - After Go code changes, run `go fmt ./...` and `go vet ./...` before
   committing.
@@ -159,7 +163,7 @@ All new features and bug fixes must include unit tests. Run tests before
 committing:
 
 ```bash
-make test       # Go tests with CGO_ENABLED=1 and -tags "fts5,kit_posthog_disabled"
+make test       # Go tests (the target sets CGO_ENABLED=1 and the required build tags)
 make test-short # Fast tests only with -short
 make e2e        # Playwright E2E tests
 make lint       # golangci-lint plus NilAway
@@ -221,6 +225,9 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 
 ## Pull Requests
 
-- PR descriptions should be summaries only, with no test plans or checklists.
+- PR descriptions should be summaries only, with no test plans or checklists. Do
+  not add a "Tests", "Testing", "Verification", or "Test plan" section. CI runs
+  the tests, so the description must not restate the suite, list test commands,
+  or describe how the change was verified.
 - Describe what the code does now, why it changed, tradeoffs, limitations, and
   where reviewers should look.
