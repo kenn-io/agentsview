@@ -281,6 +281,7 @@ agentsview auto-discovers sessions from all of these:
 | Kimi               | `~/.kimi/sessions/`                                    |
 | Kiro CLI           | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`    |
 | Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |
+| MiMoCode           | `~/.local/share/mimocode/`                             |
 | OpenClaw           | `~/.openclaw/agents/`                                  |
 | OpenCode           | `~/.local/share/opencode/`                             |
 | OpenHands CLI      | `~/.openhands/conversations/`                          |

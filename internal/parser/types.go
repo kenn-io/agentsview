@@ -15,6 +15,7 @@ const (
 	AgentCodex          AgentType = "codex"
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
+	AgentMiMoCode       AgentType = "mimocode"
 	AgentOpenCode       AgentType = "opencode"
 	AgentKilo           AgentType = "kilo"
 	AgentOpenHands      AgentType = "openhands"
@@ -140,6 +141,23 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverGeminiSessions,
 		FindSourceFunc: FindGeminiSourceFile,
+	},
+	{
+		Type:        AgentMiMoCode,
+		DisplayName: "MiMoCode",
+		EnvVar:      "MIMOCODE_DIR",
+		ConfigKey:   "mimocode_dirs",
+		DefaultDirs: []string{".local/share/mimocode"},
+		IDPrefix:    "mimocode:",
+		WatchSubdirs: []string{
+			"storage/session_diff",
+			"storage/message",
+			"storage/part",
+		},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverMiMoCodeSessions,
+		FindSourceFunc: FindMiMoCodeSourceFile,
+		WatchRootsFunc: ResolveMiMoCodeWatchRoots,
 	},
 	{
 		Type:        AgentOpenCode,

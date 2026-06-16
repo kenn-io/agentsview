@@ -138,6 +138,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentCodex, true},
 		{AgentCopilot, true},
 		{AgentGemini, true},
+		{AgentMiMoCode, true},
 		{AgentOpenCode, true},
 		{AgentOpenHands, true},
 		{AgentCursor, true},
@@ -185,6 +186,12 @@ func TestAgentByPrefix(t *testing.T) {
 			"gemini prefix",
 			"gemini:sess-id",
 			AgentGemini,
+			true,
+		},
+		{
+			"mimocode prefix",
+			"mimocode:sess-id",
+			AgentMiMoCode,
 			true,
 		},
 		{
@@ -278,7 +285,9 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCodex,
 		AgentCopilot,
 		AgentGemini,
+		AgentMiMoCode,
 		AgentOpenCode,
+		AgentKilo,
 		AgentOpenHands,
 		AgentCursor,
 		AgentAmp,
@@ -491,6 +500,25 @@ func TestAgentByPrefixCowork(t *testing.T) {
 	assert.Equal(t, AgentCowork, def.Type)
 }
 
+func TestMiMoCodeRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentMiMoCode)
+	require.True(t, ok, "AgentMiMoCode missing from Registry")
+	require.True(t, def.FileBased, "MiMoCode FileBased")
+	require.NotNil(t, def.DiscoverFunc, "MiMoCode DiscoverFunc")
+	require.NotNil(t, def.FindSourceFunc, "MiMoCode FindSourceFunc")
+	assert.Equal(t, "MIMOCODE_DIR", def.EnvVar)
+	assert.Equal(t, "mimocode_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".local/share/mimocode"}, def.DefaultDirs)
+	assert.Equal(t, "mimocode:", def.IDPrefix)
+	want := []string{
+		"storage/session_diff",
+		"storage/message",
+		"storage/part",
+	}
+	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
+		"MiMoCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
 func TestCommandCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentCommandCode)
 	require.True(t, ok, "AgentCommandCode missing from Registry")
@@ -524,6 +552,29 @@ func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
 	got := ResolveOpenCodeSource(root)
 	require.Equal(t, OpenCodeSourceStorage, got.Mode, "Mode")
 	require.Equal(t, filepath.Join(root, "storage", "session"), got.SessionRoot, "SessionRoot")
+}
+
+func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "storage", "session_diff", "global")
+	require.NoError(t, os.MkdirAll(dir, 0o755), "mkdir")
+	dbPath := filepath.Join(root, "mimocode.db")
+	require.NoError(t, os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
+
+	src := ResolveMiMoCodeSource(root)
+	require.Equal(t, OpenCodeSourceStorage, src.Mode, "Mode")
+	require.Equal(t, filepath.Join(root, "storage", "session_diff"), src.SessionRoot)
+
+	path := filepath.Join(dir, "ses_test.json")
+	require.NoError(t, os.WriteFile(path,
+		[]byte(`{"id":"ses_test","directory":"/home/user/code/my-app"}`),
+		0o644))
+
+	discovered := DiscoverMiMoCodeSessions(root)
+	require.Len(t, discovered, 1)
+	require.Equal(t, AgentMiMoCode, discovered[0].Agent)
+
+	require.Equal(t, path, FindMiMoCodeSourceFile(root, "ses_test"))
 }
 
 func TestResolveOpenCodeSourceFallsBackToSQLiteOnBrokenStoragePath(

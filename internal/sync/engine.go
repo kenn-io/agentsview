@@ -470,6 +470,11 @@ func (e *Engine) classifyOnePath(
 	); ok {
 		return df, true
 	}
+	if df, ok := e.classifyOpenCodeFormatPath(
+		parser.AgentMiMoCode, path, pathExists,
+	); ok {
+		return df, true
+	}
 	if df, ok := e.classifyKiroSQLitePath(path); ok {
 		return df, true
 	}
@@ -1586,6 +1591,9 @@ func (e *Engine) ResyncAll(
 		oldFileSessions -= e.countRootOpenCodeFormatSessions(
 			origDB, parser.AgentKilo,
 		)
+		oldFileSessions -= e.countRootOpenCodeFormatSessions(
+			origDB, parser.AgentMiMoCode,
+		)
 		if oldFileSessions < 0 {
 			oldFileSessions = 0
 		}
@@ -2216,6 +2224,13 @@ func (e *Engine) syncAllLocked(
 		stats.Aborted = true
 		return stats
 	}
+	if e.syncOpenCodeFormatAgent(
+		ctx, parser.AgentMiMoCode, "mimocode",
+		writeMode, verbose, &stats, advanceDBProgress,
+	) {
+		stats.Aborted = true
+		return stats
+	}
 
 	// Sync Warp sessions (DB-backed, not file-based).
 	tWarp := time.Now()
@@ -2619,7 +2634,7 @@ func (e *Engine) countDBBackedProgressTotal(agent parser.AgentType) int {
 		switch agent {
 		case parser.AgentKiro:
 			total += e.countOneKiroSQLiteSessions(dir)
-		case parser.AgentOpenCode, parser.AgentKilo:
+		case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode:
 			total += e.countOneOpenCodeFormatSessions(agent, dir)
 		case parser.AgentWarp:
 			total += e.countOneWarpSessions(dir)
@@ -2654,6 +2669,12 @@ func (e *Engine) countDBBackedSessions(ctx context.Context) int {
 			continue
 		}
 		total += e.countOneOpenCodeFormatSessions(parser.AgentKilo, dir)
+	}
+	for _, dir := range e.agentDirs[parser.AgentMiMoCode] {
+		if dir == "" {
+			continue
+		}
+		total += e.countOneOpenCodeFormatSessions(parser.AgentMiMoCode, dir)
 	}
 	for _, dir := range e.agentDirs[parser.AgentWarp] {
 		if dir == "" {
@@ -3222,6 +3243,8 @@ func (e *Engine) processFile(
 			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseKiloSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
+		} else if dbPath, _, ok := parser.ParseMiMoCodeSQLiteVirtualPath(file.Path); ok {
+			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
 		}
@@ -3280,7 +3303,7 @@ func (e *Engine) processFile(
 		res = e.processCopilot(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
-	case parser.AgentOpenCode, parser.AgentKilo:
+	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode:
 		res = e.processOpenCodeFormat(file.Agent, file, info)
 	case parser.AgentOpenHands:
 		res = e.processOpenHands(file, info)
@@ -5662,7 +5685,9 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 }
 
 func isOpenCodeFormatStorageAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentOpenCode || agent == parser.AgentKilo
+	return agent == parser.AgentOpenCode ||
+		agent == parser.AgentKilo ||
+		agent == parser.AgentMiMoCode
 }
 
 func openCodeFormatDBName(agent parser.AgentType) string {
@@ -5671,6 +5696,8 @@ func openCodeFormatDBName(agent parser.AgentType) string {
 		return "opencode.db"
 	case parser.AgentKilo:
 		return "kilo.db"
+	case parser.AgentMiMoCode:
+		return "mimocode.db"
 	default:
 		return ""
 	}
@@ -5684,6 +5711,8 @@ func resolveOpenCodeFormatSource(
 		return parser.ResolveOpenCodeSource(dir)
 	case parser.AgentKilo:
 		return parser.ResolveKiloSource(dir)
+	case parser.AgentMiMoCode:
+		return parser.ResolveMiMoCodeSource(dir)
 	default:
 		return parser.OpenCodeSource{}
 	}
@@ -5697,6 +5726,8 @@ func openCodeFormatSourceMtime(
 		return parser.OpenCodeSourceMtime(path)
 	case parser.AgentKilo:
 		return parser.KiloSourceMtime(path)
+	case parser.AgentMiMoCode:
+		return parser.MiMoCodeSourceMtime(path)
 	default:
 		return 0, fmt.Errorf("unknown OpenCode-format agent: %s", agent)
 	}
@@ -5735,6 +5766,8 @@ func parseOpenCodeFormatSQLiteVirtualPath(
 	switch agent {
 	case parser.AgentKilo:
 		return parser.ParseKiloSQLiteVirtualPath(path)
+	case parser.AgentMiMoCode:
+		return parser.ParseMiMoCodeSQLiteVirtualPath(path)
 	default:
 		return parser.ParseOpenCodeSQLiteVirtualPath(path)
 	}
@@ -5746,6 +5779,8 @@ func listOpenCodeFormatSessionMeta(
 	switch agent {
 	case parser.AgentKilo:
 		return parser.ListKiloSessionMeta(dbPath)
+	case parser.AgentMiMoCode:
+		return parser.ListMiMoCodeSessionMeta(dbPath)
 	default:
 		return parser.ListOpenCodeSessionMeta(dbPath)
 	}
@@ -5757,6 +5792,8 @@ func openCodeFormatStorageSessionIDs(
 	switch agent {
 	case parser.AgentKilo:
 		return parser.KiloStorageSessionIDs(dir)
+	case parser.AgentMiMoCode:
+		return parser.MiMoCodeStorageSessionIDs(dir)
 	default:
 		return parser.OpenCodeStorageSessionIDs(dir)
 	}
@@ -5768,6 +5805,8 @@ func findOpenCodeFormatSourceFile(
 	switch agent {
 	case parser.AgentKilo:
 		return parser.FindKiloSourceFile(dir, sessionID)
+	case parser.AgentMiMoCode:
+		return parser.FindMiMoCodeSourceFile(dir, sessionID)
 	default:
 		return parser.FindOpenCodeSourceFile(dir, sessionID)
 	}
@@ -5779,6 +5818,8 @@ func parseOpenCodeFormatSession(
 	switch agent {
 	case parser.AgentKilo:
 		return parser.ParseKiloSession(dbPath, sessionID, machine)
+	case parser.AgentMiMoCode:
+		return parser.ParseMiMoCodeSession(dbPath, sessionID, machine)
 	default:
 		return parser.ParseOpenCodeSession(dbPath, sessionID, machine)
 	}
@@ -5790,6 +5831,8 @@ func parseOpenCodeFormatFile(
 	switch agent {
 	case parser.AgentKilo:
 		return parser.ParseKiloFile(path, machine)
+	case parser.AgentMiMoCode:
+		return parser.ParseMiMoCodeFile(path, machine)
 	default:
 		return parser.ParseOpenCodeFile(path, machine)
 	}

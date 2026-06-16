@@ -71,18 +71,29 @@ type OpenCodeSource struct {
 }
 
 // openCodeFormat parameterizes the shared OpenCode storage format by
-// the per-agent SQLite filename and the agent label stamped on
-// discovered sessions. Kilo is a fork of OpenCode with an identical
-// on-disk layout, so both agents share one implementation and differ
-// only in these two values.
+// the per-agent SQLite filename, the storage/<sessionSubdir> that holds
+// session JSON, and the agent label stamped on discovered sessions.
+// Kilo is a fork of OpenCode with an identical on-disk layout; MiMoCode
+// is a fork that stores sessions under storage/session_diff and a
+// mimocode.db SQLite fallback. All share one implementation and differ
+// only in these values.
 type openCodeFormat struct {
-	agent  AgentType
-	dbName string
+	agent         AgentType
+	dbName        string
+	sessionSubdir string
 }
 
 var (
-	openCodeFmt = openCodeFormat{agent: AgentOpenCode, dbName: "opencode.db"}
-	kiloFmt     = openCodeFormat{agent: AgentKilo, dbName: "kilo.db"}
+	openCodeFmt = openCodeFormat{
+		agent: AgentOpenCode, dbName: "opencode.db", sessionSubdir: "session",
+	}
+	kiloFmt = openCodeFormat{
+		agent: AgentKilo, dbName: "kilo.db", sessionSubdir: "session",
+	}
+	mimoFmt = openCodeFormat{
+		agent: AgentMiMoCode, dbName: "mimocode.db",
+		sessionSubdir: "session_diff",
+	}
 )
 
 func resolveOpenCodeFormatSource(
@@ -92,7 +103,7 @@ func resolveOpenCodeFormatSource(
 		return OpenCodeSource{}
 	}
 
-	sessionRoot := filepath.Join(root, "storage", "session")
+	sessionRoot := filepath.Join(root, "storage", f.sessionSubdir)
 	if info, err := os.Stat(sessionRoot); err == nil && info.IsDir() {
 		return OpenCodeSource{
 			Mode:        OpenCodeSourceStorage,
@@ -382,6 +393,38 @@ func ParseKiloSQLiteVirtualPath(
 	sourcePath string,
 ) (dbPath, sessionID string, ok bool) {
 	return parseOpenCodeFormatVirtualPath(kiloFmt.dbName, sourcePath)
+}
+
+// ResolveMiMoCodeSource detects whether a MiMoCode root is using
+// file-backed storage (storage/session_diff) or SQLite storage.
+func ResolveMiMoCodeSource(root string) OpenCodeSource {
+	return resolveOpenCodeFormatSource(mimoFmt, root)
+}
+
+func DiscoverMiMoCodeSessions(root string) []DiscoveredFile {
+	return discoverOpenCodeFormatSessions(mimoFmt, root)
+}
+
+func FindMiMoCodeSourceFile(root, sessionID string) string {
+	return findOpenCodeFormatSourceFile(mimoFmt, root, sessionID)
+}
+
+func MiMoCodeStorageSessionIDs(root string) map[string]struct{} {
+	return openCodeFormatStorageSessionIDs(mimoFmt, root)
+}
+
+func ResolveMiMoCodeWatchRoots(root string) []string {
+	return resolveOpenCodeFormatWatchRoots(mimoFmt, root)
+}
+
+func MiMoCodeSQLiteVirtualPath(dbPath, sessionID string) string {
+	return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
+}
+
+func ParseMiMoCodeSQLiteVirtualPath(
+	sourcePath string,
+) (dbPath, sessionID string, ok bool) {
+	return parseOpenCodeFormatVirtualPath(mimoFmt.dbName, sourcePath)
 }
 
 // DiscoverClaudeProjects finds all project directories under the
