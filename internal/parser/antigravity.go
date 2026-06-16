@@ -829,19 +829,36 @@ func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []strin
 			continue
 		}
 		if step.role != RoleUser && isNoisyAntigravityNonUserStepString(s) {
-			urlOnly = append(urlOnly, s)
 			continue
 		}
 		cleaned = append(cleaned, s)
 	}
 	cleaned = dedupeStrings(cleaned)
-	urlOnly = dedupeStrings(urlOnly)
+	if step.role != RoleUser {
+		urlOnly = collectAntigravityBareURLs(step.fields)
+	}
 	if step.role == RoleUser {
 		if prompt := bestAntigravityUserPrompt(cleaned); prompt != "" {
 			return []string{prompt}, nil
 		}
 	}
 	return cleaned, urlOnly
+}
+
+// collectAntigravityBareURLs returns bare-URL strings from the step
+// tree regardless of the 20-rune prose threshold used for general
+// content. Short links such as "https://go.dev" fall below that
+// threshold yet are real assistant content, so a URL-only step needs a
+// dedicated low-threshold pass to survive the content guard.
+func collectAntigravityBareURLs(fields []agProtoField) []string {
+	var out []string
+	for _, s := range agProtoCollectStrings(fields, 1) {
+		s = strings.TrimSpace(s)
+		if isNoisyAntigravityNonUserStepString(s) {
+			out = append(out, s)
+		}
+	}
+	return dedupeStrings(out)
 }
 
 func isNoisyAntigravityStepString(s string) bool {

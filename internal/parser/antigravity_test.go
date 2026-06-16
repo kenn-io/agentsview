@@ -728,6 +728,22 @@ func TestDecodeAntigravityStepKeepsBareURLAssistantContent(t *testing.T) {
 	assert.Equal(t, url, msg.Content)
 }
 
+// TestDecodeAntigravityStepKeepsShortBareURLAssistantContent verifies
+// that a URL-only assistant message shorter than the 20-rune prose
+// collection threshold still survives via the dedicated bare-URL pass.
+func TestDecodeAntigravityStepKeepsShortBareURLAssistantContent(t *testing.T) {
+	const url = "https://go.dev"
+	require.Less(t, len(url), 20, "test must exercise the sub-threshold path")
+	payload := encodePB([]pbField{
+		{num: 17, wire: pbWireBytes, bytes: []byte(url)},
+	})
+
+	msg, ok := decodeAntigravityStep(0, 15, payload)
+	require.True(t, ok, "short URL-only assistant step must survive")
+	assert.Equal(t, RoleAssistant, msg.Role)
+	assert.Equal(t, url, msg.Content)
+}
+
 // TestDecodeAntigravityStepKeepsProseStartingWithURL verifies that
 // assistant prose that merely begins with a link is preserved; only a
 // bare URL token is treated as metadata noise.
