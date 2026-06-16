@@ -460,7 +460,7 @@ make install        # install to ~/.local/bin
 ```
 
 ```bash
-make test           # Go tests (CGO_ENABLED=1 -tags "fts5,kit_posthog_disabled")
+make test           # Go tests (CGO_ENABLED=1 -tags "fts5")
 make bench-backends # compare SQLite, DuckDB, and PostgreSQL store reads
 make lint           # golangci-lint + NilAway
 make nilaway        # NilAway through custom golangci-lint
