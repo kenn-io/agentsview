@@ -324,9 +324,21 @@ func extractToolResultText(content gjson.Result) string {
 
 	var parts []string
 	content.ForEach(func(_, block gjson.Result) bool {
-		if block.Get("type").Str == "text" {
+		switch block.Get("type").Str {
+		case "text":
 			if t := block.Get("text").Str; t != "" {
 				parts = append(parts, t)
+			}
+		case "toolResult":
+			// OpenClaw tool-result content blocks carry the rendered
+			// text inline under "text", with the structured payload
+			// under "content".
+			if t := block.Get("text").Str; t != "" {
+				parts = append(parts, t)
+			} else if nested := block.Get("content"); nested.Exists() {
+				if nt := extractToolResultText(nested); nt != "" {
+					parts = append(parts, nt)
+				}
 			}
 		}
 		return true

@@ -96,6 +96,56 @@ func TestParseOpenClawSession_ToolResult(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount, "expected UserMessageCount 1 (tool results excluded), got %d")
 }
 
+func TestParseOpenClawSession_RealToolCallFormat(t *testing.T) {
+	// Real OpenClaw output uses camelCase "toolCall" blocks for
+	// assistant tool calls and "toolResult" content blocks inside
+	// role:"toolResult" messages -- not the Anthropic snake_case
+	// "tool_use"/"tool_result" the shared extractor originally knew.
+	// Some tools (read/exec) populate only "arguments"; others (bash)
+	// duplicate it under "input".
+	path, _ := writeOpenClawTestFile(t, "main",
+		`{"type":"session","version":3,"id":"real-tc","timestamp":"2026-02-25T10:00:00Z","cwd":"/home/user/project"}`,
+		`{"type":"message","id":"m1","timestamp":"2026-02-25T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"list files"}],"timestamp":"2026-02-25T10:00:01Z"}}`,
+		// Assistant turn that is ONLY a toolCall (input + arguments duplicated).
+		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"bash","input":{"command":"ls"},"arguments":{"command":"ls"}}],"timestamp":"2026-02-25T10:00:02Z"}}`,
+		// Tool result as a standalone toolResult-role message carrying a toolResult content block.
+		`{"type":"message","id":"m3","timestamp":"2026-02-25T10:00:03Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","isError":false,"content":[{"type":"toolResult","toolCallId":"call_1","tool_use_id":"call_1","name":"bash","text":"file1\nfile2"}],"timestamp":"2026-02-25T10:00:03Z"}}`,
+		// Second toolCall where args live ONLY under "arguments".
+		`{"type":"message","id":"m4","timestamp":"2026-02-25T10:00:04Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_2","name":"read","arguments":{"path":"/etc/hosts"}}],"timestamp":"2026-02-25T10:00:04Z"}}`,
+	)
+
+	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Equal(t, 4, len(msgs),
+		"expected user, assistant(toolCall), toolResult, assistant(toolCall)")
+
+	// The assistant turn that is only a toolCall must survive and
+	// carry its parsed call rather than being dropped as empty.
+	assistant := msgs[1]
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.True(t, assistant.HasToolUse, "toolCall block must set HasToolUse")
+	require.Equal(t, 1, len(assistant.ToolCalls), "expected 1 parsed tool call")
+	assert.Equal(t, "bash", assistant.ToolCalls[0].ToolName)
+	assert.Equal(t, "call_1", assistant.ToolCalls[0].ToolUseID)
+	assert.Contains(t, assistant.ToolCalls[0].InputJSON, "ls")
+
+	// The standalone toolResult message pairs by toolCallId and
+	// extracts the text from the toolResult content block.
+	result := msgs[2]
+	assert.Equal(t, RoleUser, result.Role)
+	require.Equal(t, 1, len(result.ToolResults), "expected 1 tool result")
+	assert.Equal(t, "call_1", result.ToolResults[0].ToolUseID)
+	assert.Equal(t, len("file1\nfile2"), result.ToolResults[0].ContentLength,
+		"toolResult content block text must be extracted")
+
+	// An arguments-only toolCall still yields InputJSON from "arguments".
+	argsOnly := msgs[3]
+	require.Equal(t, 1, len(argsOnly.ToolCalls), "expected 1 parsed tool call")
+	assert.Equal(t, "read", argsOnly.ToolCalls[0].ToolName)
+	assert.Contains(t, argsOnly.ToolCalls[0].InputJSON, "/etc/hosts")
+}
+
 func TestParseOpenClawSession_OrphanToolResult(t *testing.T) {
 	path, _ := writeOpenClawTestFile(t, "main",
 		`{"type":"session","version":3,"id":"orphan-tr","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,

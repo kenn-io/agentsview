@@ -48,23 +48,34 @@ func ExtractTextContent(
 				parts = append(parts,
 					"[Thinking]\n"+thinking+"\n[/Thinking]")
 			}
-		case "tool_use":
+		case "tool_use", "toolCall":
+			// "tool_use" is the Anthropic block type; "toolCall" is
+			// the camelCase variant emitted by OpenClaw. OpenClaw
+			// usually carries the call arguments under "input", but
+			// some tools populate only "arguments", so fall back to
+			// it when "input" is missing or empty.
 			hasToolUse = true
 			name := block.Get("name").Str
 			if name != "" {
+				input := block.Get("input")
+				if input.Raw == "" || input.Raw == "{}" {
+					if args := block.Get("arguments"); args.Exists() {
+						input = args
+					}
+				}
 				tc := ParsedToolCall{
 					ToolUseID: block.Get("id").Str,
 					ToolName:  name,
 					Category:  NormalizeToolCategory(name),
-					InputJSON: block.Get("input").Raw,
+					InputJSON: input.Raw,
 				}
 				switch name {
 				case "Skill":
-					tc.SkillName = block.Get("input.skill").Str
+					tc.SkillName = input.Get("skill").Str
 				case "skill":
-					tc.SkillName = block.Get("input.skill").Str
+					tc.SkillName = input.Get("skill").Str
 					if tc.SkillName == "" {
-						tc.SkillName = block.Get("input.name").Str
+						tc.SkillName = input.Get("name").Str
 					}
 				}
 				toolCalls = append(toolCalls, tc)
@@ -151,6 +162,13 @@ var todoIcons = map[string]string{
 func formatToolUse(block gjson.Result) string {
 	name := block.Get("name").Str
 	input := block.Get("input")
+	if input.Raw == "" || input.Raw == "{}" {
+		// OpenClaw emits some tool calls with args only under
+		// "arguments" rather than "input".
+		if args := block.Get("arguments"); args.Exists() {
+			input = args
+		}
+	}
 
 	switch name {
 	case "AskUserQuestion":
