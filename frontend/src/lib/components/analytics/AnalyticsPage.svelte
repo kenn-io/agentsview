@@ -381,11 +381,12 @@
   }
 
   .query-progress {
-    position: sticky;
+    position: absolute;
     top: 0;
+    left: 0;
+    right: 0;
     z-index: 4;
     height: 2px;
-    margin: -16px -16px 14px;
     overflow: hidden;
     background: color-mix(
       in srgb,

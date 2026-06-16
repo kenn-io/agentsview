@@ -15,4 +15,15 @@ describe("UsagePage refresh behavior", () => {
     expect(source).toContain("usage.hasNewData");
     expect(source).toContain("New data");
   });
+
+  it("keeps refresh progress out of content layout flow", () => {
+    const queryProgress =
+      source.match(/\.query-progress\s*{[^}]+}/)?.[0] ?? "";
+
+    expect(queryProgress).toContain("position: absolute");
+    expect(queryProgress).toContain("left: 0;");
+    expect(queryProgress).toContain("right: 0;");
+    expect(queryProgress).not.toContain("position: sticky");
+    expect(queryProgress).not.toContain("margin:");
+  });
 });
