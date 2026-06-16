@@ -291,6 +291,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentIflow,
 		AgentWorkBuddy,
 		AgentZencoder,
+		AgentGptme,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
