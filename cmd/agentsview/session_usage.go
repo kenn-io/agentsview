@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
@@ -18,6 +19,8 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/service"
 )
+
+var sessionUsageHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type rawSessionIDResolver interface {
 	FindSessionIDsByRawSuffix(
@@ -80,7 +83,7 @@ func sessionUsageDataForCommand(
 			)
 		}
 		return httpSessionUsageData(
-			cmd.Context(), remote, cfg.AuthToken, sessionID,
+			cmd.Context(), remote, explicitServerToken(cmd), sessionID,
 		)
 	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
@@ -123,7 +126,7 @@ func httpSessionUsageData(
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := sessionUsageHTTPClient.Do(req)
 	if err != nil {
 		return nil, tokenUseExitErr, err
 	}

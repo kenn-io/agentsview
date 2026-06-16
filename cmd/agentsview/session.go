@@ -34,6 +34,10 @@ func newSessionCommand() *cobra.Command {
 		"server", "",
 		"Remote daemon URL",
 	)
+	cmd.PersistentFlags().String(
+		"server-token", "",
+		"Bearer token for explicit --server requests",
+	)
 	cmd.PersistentFlags().Bool(
 		"pg", false,
 		"Read session data from configured PostgreSQL",
@@ -70,7 +74,7 @@ func resolveService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		return service.NewHTTPBackend(remote, cfg.AuthToken, false),
+		return service.NewHTTPBackend(remote, explicitServerToken(cmd), false),
 			func() {}, nil
 	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
@@ -105,7 +109,7 @@ func resolveWritableService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		return service.NewHTTPBackend(remote, cfg.AuthToken, false),
+		return service.NewHTTPBackend(remote, explicitServerToken(cmd), false),
 			func() {}, nil
 	}
 	if pgReadRequested(cmd) {
@@ -160,6 +164,17 @@ func pgReadRequested(cmd *cobra.Command) bool {
 	}
 	v, err := cmd.Flags().GetBool("pg")
 	return err == nil && v
+}
+
+func explicitServerToken(cmd *cobra.Command) string {
+	if cmd == nil {
+		return ""
+	}
+	v, err := cmd.Flags().GetString("server-token")
+	if err != nil {
+		return ""
+	}
+	return v
 }
 
 // outputFormat returns the requested --format flag value

@@ -241,6 +241,47 @@ func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
 	assert.Equal(t, "remote-session", got.Sessions[0]["id"])
 }
 
+func TestSessionList_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`auth_token = "local-secret"`),
+		0o600,
+	))
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Empty(t, r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+		}))
+	defer ts.Close()
+
+	_, err := executeCommand(newRootCommand(),
+		"session", "list", "--server", ts.URL, "--json")
+	require.NoError(t, err)
+}
+
+func TestSessionList_ServerTokenSendsBearer(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "Bearer remote-secret",
+				r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[],"total":0}`))
+		}))
+	defer ts.Close()
+
+	_, err := executeCommand(newRootCommand(),
+		"session", "list", "--server", ts.URL,
+		"--server-token", "remote-secret", "--json")
+	require.NoError(t, err)
+}
+
 func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
 	localDir := t.TempDir()
 	remoteDir := t.TempDir()
@@ -768,6 +809,139 @@ func TestSessionUsage_ServerFlagResolvesBareID(t *testing.T) {
 	assert.Equal(t, tokenUseExitOK, code)
 	assert.Equal(t, canonicalID, out.SessionID)
 	assert.Equal(t, "/api/v1/sessions/"+canonicalID+"/usage", gotUsagePath)
+}
+
+func TestSessionUsage_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`auth_token = "local-secret"`),
+		0o600,
+	))
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Empty(t, r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{"id":"remote-session"}`))
+			case "/api/v1/sessions/remote-session/usage":
+				_, _ = w.Write([]byte(`{
+					"session_id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "remote-session", "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+}
+
+func TestSessionUsage_ServerTokenSendsBearer(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "Bearer remote-secret",
+				r.Header.Get("Authorization"))
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{"id":"remote-session"}`))
+			case "/api/v1/sessions/remote-session/usage":
+				_, _ = w.Write([]byte(`{
+					"session_id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{
+		"session", "usage", "remote-session",
+		"--server", ts.URL,
+		"--server-token", "remote-secret",
+	}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, _, err := sessionUsageDataForCommand(cmd, "remote-session")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+}
+
+func TestSessionUsage_ServerHTTPClientHasTimeout(t *testing.T) {
+	oldClient := sessionUsageHTTPClient
+	sessionUsageHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}
+	t.Cleanup(func() { sessionUsageHTTPClient = oldClient })
+
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{"id":"remote-session"}`))
+			case "/api/v1/sessions/remote-session/usage":
+				time.Sleep(200 * time.Millisecond)
+				_, _ = w.Write([]byte(`{"session_id":"remote-session"}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", "remote-session", "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	start := time.Now()
+	out, code, err := sessionUsageDataForCommand(cmd, "remote-session")
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Nil(t, out)
+	assert.Equal(t, tokenUseExitErr, code)
+	assert.Less(t, elapsed, 150*time.Millisecond)
 }
 
 func TestSessionUsage_PGEnvUsesPGStore(t *testing.T) {
