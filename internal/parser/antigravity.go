@@ -834,15 +834,18 @@ func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []strin
 		cleaned = append(cleaned, s)
 	}
 	cleaned = dedupeStrings(cleaned)
-	if step.role != RoleUser {
-		urlOnly = collectAntigravityBareURLs(step.fields)
-	}
+	bareURLs := collectAntigravityBareURLs(step.fields)
 	if step.role == RoleUser {
-		if prompt := bestAntigravityUserPrompt(cleaned); prompt != "" {
+		// A short URL-only prompt (e.g. "https://go.dev") falls below the
+		// 20-rune prose threshold, so include bare URLs as prompt
+		// candidates; prose, when present, still outscores a bare link.
+		candidates := append(append([]string{}, cleaned...), bareURLs...)
+		if prompt := bestAntigravityUserPrompt(candidates); prompt != "" {
 			return []string{prompt}, nil
 		}
+		return cleaned, nil
 	}
-	return cleaned, urlOnly
+	return cleaned, bareURLs
 }
 
 // collectAntigravityBareURLs returns bare-URL strings from the step
