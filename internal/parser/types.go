@@ -11,6 +11,7 @@ type AgentType string
 
 const (
 	AgentClaude         AgentType = "claude"
+	AgentCowork         AgentType = "cowork"
 	AgentCodex          AgentType = "codex"
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
@@ -89,6 +90,18 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverClaudeProjects,
 		FindSourceFunc: FindClaudeSourceFile,
+	},
+	{
+		Type:           AgentCowork,
+		DisplayName:    "Claude Cowork",
+		EnvVar:         "COWORK_DIR",
+		ConfigKey:      "cowork_dirs",
+		DefaultDirs:    coworkDefaultDirs(),
+		IDPrefix:       "cowork:",
+		FileBased:      true,
+		ShallowWatch:   true,
+		DiscoverFunc:   DiscoverCoworkSessions,
+		FindSourceFunc: FindCoworkSourceFile,
 	},
 	{
 		Type:        AgentCodex,

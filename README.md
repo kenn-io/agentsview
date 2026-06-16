@@ -266,6 +266,7 @@ agentsview auto-discovers sessions from all of these:
 | Antigravity        | `~/.gemini/antigravity/`                               |
 | Antigravity CLI    | `~/.gemini/antigravity-cli/` (see note below)          |
 | Claude Code        | `~/.claude/projects/`                                  |
+| Claude Cowork      | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS) |
 | Codex              | `~/.codex/sessions/`                                   |
 | Copilot CLI        | `~/.copilot/`                                          |
 | Cortex Code        | `~/.snowflake/cortex/conversations/`                   |

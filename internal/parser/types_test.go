@@ -269,6 +269,7 @@ func TestAgentByPrefix(t *testing.T) {
 func TestRegistryCompleteness(t *testing.T) {
 	allTypes := []AgentType{
 		AgentClaude,
+		AgentCowork,
 		AgentCodex,
 		AgentCopilot,
 		AgentGemini,
@@ -443,6 +444,26 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	}
 	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
 		"OpenCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
+func TestCoworkRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentCowork)
+	require.True(t, ok, "AgentCowork missing from Registry")
+	require.True(t, def.FileBased, "Cowork FileBased")
+	require.NotNil(t, def.DiscoverFunc, "Cowork DiscoverFunc")
+	require.NotNil(t, def.FindSourceFunc, "Cowork FindSourceFunc")
+	assert.Equal(t, "COWORK_DIR", def.EnvVar)
+	assert.Equal(t, "cowork_dirs", def.ConfigKey)
+	assert.Equal(t, "cowork:", def.IDPrefix)
+	assert.Equal(t, coworkDefaultDirs(), def.DefaultDirs)
+	assert.True(t, def.ShallowWatch,
+		"Cowork root contains large local_* working trees that discovery skips")
+}
+
+func TestAgentByPrefixCowork(t *testing.T) {
+	def, ok := AgentByPrefix("cowork:c0000000-0000-4000-8000-000000000001")
+	require.True(t, ok, "cowork-prefixed ID should resolve")
+	assert.Equal(t, AgentCowork, def.Type)
 }
 
 func TestCommandCodeRegistryEntry(t *testing.T) {

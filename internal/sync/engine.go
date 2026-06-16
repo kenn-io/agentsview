@@ -524,6 +524,23 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Cowork: <coworkDir>/<orgId>/<workspaceId>/local_<uuid>/.claude/
+	//   projects/<enc>/<cliSessionId>.jsonl (transcript), or the sibling
+	//   local_<uuid>.json metadata file (resolves to its transcript).
+	for _, coworkDir := range e.agentDirs[parser.AgentCowork] {
+		if coworkDir == "" {
+			continue
+		}
+		if transcript, ok := parser.ClassifyCoworkPath(
+			coworkDir, path,
+		); ok {
+			return parser.DiscoveredFile{
+				Path:  transcript,
+				Agent: parser.AgentCowork,
+			}, true
+		}
+	}
+
 	// Codex: either <codexDir>/<year>/<month>/<day>/<file>.jsonl
 	// or <codexDir>/<file>.jsonl for archived sessions.
 	for _, codexDir := range e.agentDirs[parser.AgentCodex] {
@@ -2488,6 +2505,15 @@ func discoveredFileMtime(
 		}
 		return info.ModTime().UnixNano(), nil
 	}
+	if file.Agent == parser.AgentCowork {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return parser.CoworkSessionMtime(
+			file.Path, info.ModTime().UnixNano(),
+		), nil
+	}
 	if file.Agent == parser.AgentCommandCode {
 		info, err := os.Stat(file.Path)
 		if err != nil {
@@ -3217,6 +3243,9 @@ func (e *Engine) processFile(
 		}
 		mtime = snapshot.Mtime
 	}
+	if file.Agent == parser.AgentCowork {
+		mtime = parser.CoworkSessionMtime(file.Path, mtime)
+	}
 	cacheSkip := e.shouldCacheSkip(file)
 
 	// Skip files cached from a previous sync (parse errors
@@ -3243,6 +3272,8 @@ func (e *Engine) processFile(
 	switch file.Agent {
 	case parser.AgentClaude:
 		res = e.processClaude(ctx, file, info)
+	case parser.AgentCowork:
+		res = e.processCowork(file, info)
 	case parser.AgentCodex:
 		res = e.processCodex(file, info)
 	case parser.AgentCopilot:
@@ -3557,6 +3588,50 @@ func (e *Engine) processClaude(
 		results:            results,
 		excludedSessionIDs: excludedIDs,
 		forceReplace:       forceReplace,
+	}
+}
+
+// processCowork parses a Claude Desktop "cowork" (local agent mode)
+// session. The transcript is a standard Claude Code JSONL file nested
+// inside the cowork session directory, so the work is delegated to the
+// Claude parser and rewritten into the cowork namespace by
+// parser.ParseCoworkSession. Cowork session IDs are "cowork:"-prefixed, so
+// the skip check keys off file_path rather than the bare filename stem.
+func (e *Engine) processCowork(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+
+	// The session title lives in the sibling metadata file, so a rename
+	// changes only that file. Skip on the composite (transcript+metadata)
+	// mtime so renames are re-parsed instead of skipped as unchanged.
+	compositeMtime := parser.CoworkSessionMtime(
+		file.Path, info.ModTime().UnixNano(),
+	)
+	fi := fakeSnapshotInfo{fSize: info.Size(), fMtime: compositeMtime}
+	if e.shouldSkipByPath(file.Path, fi) {
+		return processResult{skip: true}
+	}
+
+	results, excludedIDs, err := parser.ParseCoworkSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+
+	inode, device := getFileIdentity(info)
+	hash, hashErr := ComputeFileHash(file.Path)
+	for i := range results {
+		results[i].Session.File.Inode = inode
+		results[i].Session.File.Device = device
+		if hashErr == nil {
+			results[i].Session.File.Hash = hash
+		}
+	}
+
+	return processResult{
+		results:            results,
+		excludedSessionIDs: excludedIDs,
 	}
 }
 
@@ -5163,10 +5238,9 @@ func (e *Engine) writeBatch(
 			continue
 		}
 
-		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
-			stale || isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
-			pw.sess.Agent == parser.AgentAntigravity ||
-			pw.sess.Agent == parser.AgentAntigravityCLI
+		replaceMessages := shouldReplaceFullParseMessages(
+			pw, forceReplace, stale,
+		)
 
 		update, findings := computeSignalsAndSecrets(s, msgs)
 
@@ -5272,10 +5346,9 @@ func (e *Engine) writeBatchBulk(
 		if !ok {
 			continue
 		}
-		replaceMessages := forceReplace || pw.forceReplace || pw.needsRetry ||
-			isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
-			pw.sess.Agent == parser.AgentAntigravity ||
-			pw.sess.Agent == parser.AgentAntigravityCLI
+		replaceMessages := shouldReplaceFullParseMessages(
+			pw, forceReplace, false,
+		)
 		tScan := time.Now()
 		update, findings := computeSignalsAndSecrets(s, msgs)
 		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
@@ -5320,6 +5393,16 @@ func (e *Engine) writeBatchBulk(
 	return result.WrittenSessions,
 		result.WrittenMessages,
 		result.FailedSessions
+}
+
+func shouldReplaceFullParseMessages(
+	pw pendingWrite, forceReplace, stale bool,
+) bool {
+	return forceReplace || pw.forceReplace || pw.needsRetry || stale ||
+		pw.sess.Agent == parser.AgentCowork ||
+		isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
+		pw.sess.Agent == parser.AgentAntigravity ||
+		pw.sess.Agent == parser.AgentAntigravityCLI
 }
 
 // writeIncremental appends new messages and partially updates
@@ -6188,6 +6271,13 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 			return 0
 		}
 		return info.ModTime().UnixNano()
+	}
+	if def.Type == parser.AgentCowork {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		return parser.CoworkSessionMtime(path, info.ModTime().UnixNano())
 	}
 	if def.Type == parser.AgentCommandCode {
 		info, err := os.Stat(path)
