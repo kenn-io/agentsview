@@ -64,10 +64,13 @@ func resolveServiceSessionID(
 	if detail != nil {
 		return id, nil
 	}
-	// If the user already supplied a prefixed ID (contains ":")
-	// or a host-prefixed remote ID ("host~..."), don't second-
-	// guess them — the exact lookup is authoritative.
-	if strings.ContainsAny(id, ":~") {
+	// If the user already supplied a known agent-prefixed ID or
+	// a host-prefixed remote ID ("host~..."), don't second-guess
+	// them — the exact lookup is authoritative. Some raw IDs
+	// (Kimi/Kimi Code, OpenClaw) contain colons before the agent
+	// prefix is added, so an arbitrary colon is not enough to
+	// classify the input as canonical.
+	if isCanonicalServiceSessionID(id) {
 		return "", fmt.Errorf("session not found: %s", id)
 	}
 	for _, def := range parser.Registry {
@@ -84,6 +87,19 @@ func resolveServiceSessionID(
 		}
 	}
 	return "", fmt.Errorf("session not found: %s", id)
+}
+
+func isCanonicalServiceSessionID(id string) bool {
+	if strings.Contains(id, "~") {
+		return true
+	}
+	_, rawID := parser.StripHostPrefix(id)
+	for _, def := range parser.Registry {
+		if def.IDPrefix != "" && strings.HasPrefix(rawID, def.IDPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // lookupSessionWithPrefixes fetches a session detail, trying agent

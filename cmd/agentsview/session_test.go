@@ -833,6 +833,60 @@ func TestSessionUsage_ServerFlagResolvesBareID(t *testing.T) {
 	assert.Equal(t, "/api/v1/sessions/"+canonicalID+"/usage", gotUsagePath)
 }
 
+func TestSessionUsage_ServerFlagResolvesKimiRawID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	const rawID = "project-hash:session-uuid"
+	const canonicalID = "kimi:" + rawID
+
+	var gotUsagePath string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/" + rawID:
+				http.NotFound(w, r)
+			case "/api/v1/sessions/" + canonicalID:
+				_, _ = w.Write([]byte(`{
+					"id": "` + canonicalID + `",
+					"agent": "kimi",
+					"project": "remote-project"
+				}`))
+			case "/api/v1/sessions/" + canonicalID + "/usage":
+				gotUsagePath = r.URL.Path
+				_, _ = w.Write([]byte(`{
+					"session_id": "` + canonicalID + `",
+					"agent": "kimi",
+					"project": "remote-project",
+					"total_output_tokens": 84,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["kimi-k2"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", rawID, "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, code, err := sessionUsageDataForCommand(cmd, rawID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, canonicalID, out.SessionID)
+	assert.Equal(t, "/api/v1/sessions/"+canonicalID+"/usage", gotUsagePath)
+}
+
 func TestSessionUsage_ServerFlagDoesNotSendConfigAuthToken(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
