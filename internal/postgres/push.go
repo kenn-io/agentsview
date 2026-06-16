@@ -337,8 +337,9 @@ func (s *Sync) Push(
 	return result, nil
 }
 
-// pgSessionCount returns the number of sessions in PG for
-// this machine. Used to detect schema resets.
+// pgSessionCount returns the number of sessions in PG for this machine.
+// Counting only this machine's rows is correct: sessions sourced from other
+// machines were pushed by those machines and are never pushed by this host.
 func (s *Sync) pgSessionCount(
 	ctx context.Context,
 ) (int, error) {
@@ -698,6 +699,9 @@ func sessionPushFingerprint(
 	return b.String()
 }
 
+// pushedSessionMachine resolves the machine field for a PG row. Old rows
+// pushed before this fix with machine="local" will be repaired gradually as
+// each session is modified (message count change, etc.) and re-fingerprinted.
 func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
 	if sess.Machine != "" && sess.Machine != "local" {
 		return sess.Machine
