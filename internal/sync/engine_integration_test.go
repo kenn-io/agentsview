@@ -3550,6 +3550,66 @@ func TestMiMoCodeSessionDiffStorageWatcherEvents(t *testing.T) {
 	)
 }
 
+// TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache covers the
+// shouldCacheSkip change: a MiMoCode session JSON under
+// storage/session_diff must never be skip-cached by its own mtime,
+// because its content depends on message/part files that change
+// independently. With the session subdir hard-coded to storage/session,
+// shouldCacheSkip would treat the session_diff file as cacheable, and a
+// stale skip-cache entry at an unchanged session mtime would suppress a
+// child-driven update.
+func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
+	env := setupTestEnv(t)
+	storage := createMiMoCodeStorageFixture(t, env.mimocodeDir)
+	const sessionID = "mimo-storage-skip-cache"
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/mimo-app", "MiMoCode Skip Cache",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"initial mimo reply", 1704067201000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertMessageContent(
+		t, env.db, "mimocode:"+sessionID, "initial mimo reply",
+	)
+
+	// Seed the skip cache for the session file at its current mtime.
+	info, err := os.Stat(sessionPath)
+	require.NoError(t, err, "stat session path")
+	sessionMtime := info.ModTime()
+	env.engine.InjectSkipCache(map[string]int64{
+		sessionPath: sessionMtime.UnixNano(),
+	})
+
+	// Rewrite the part while holding the session JSON mtime constant,
+	// so a stale skip-cache entry keyed on the session path would
+	// suppress the update if session files were treated as cacheable.
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"rewritten mimo reply", 1704067201000,
+	)
+	require.NoError(t,
+		os.Chtimes(sessionPath, sessionMtime, sessionMtime),
+		"restore session mtime")
+
+	env.engine.SyncPaths([]string{partPath})
+
+	assertMessageContent(
+		t, env.db, "mimocode:"+sessionID, "rewritten mimo reply",
+	)
+}
+
 func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
 	env := setupTestEnv(t)
 	storage := createOpenCodeStorageFixture(t, env.kiloDir)
