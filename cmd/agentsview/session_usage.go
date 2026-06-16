@@ -102,8 +102,18 @@ func httpSessionUsageData(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	resolvedID, err := resolveServiceSessionID(
+		ctx, service.NewHTTPBackend(baseURL, token, false), sessionID,
+	)
+	if err != nil {
+		if strings.HasPrefix(err.Error(), "session not found:") {
+			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
+			return nil, tokenUseExitNotFound, nil
+		}
+		return nil, tokenUseExitErr, err
+	}
 	endpoint := strings.TrimSuffix(baseURL, "/") +
-		"/api/v1/sessions/" + url.PathEscape(sessionID) + "/usage"
+		"/api/v1/sessions/" + url.PathEscape(resolvedID) + "/usage"
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, endpoint, nil,
 	)

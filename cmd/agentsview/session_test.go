@@ -668,22 +668,34 @@ func TestSessionUsage_ServerFlagUsesHTTP(t *testing.T) {
 	var gotPath string
 	ts := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			gotPath = r.URL.Path
 			assert.Equal(t, http.MethodGet, r.Method)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{
-				"session_id": "remote-session",
-				"agent": "codex",
-				"project": "remote-project",
-				"total_output_tokens": 42,
-				"peak_context_tokens": 2048,
-				"has_token_data": true,
-				"cost_usd": 0.5,
-				"has_cost": true,
-				"models": ["gpt-5.1"],
-				"unpriced_models": [],
-				"server_running": true
-			}`))
+			switch r.URL.Path {
+			case "/api/v1/sessions/remote-session":
+				_, _ = w.Write([]byte(`{
+					"id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project"
+				}`))
+			case "/api/v1/sessions/remote-session/usage":
+				gotPath = r.URL.Path
+				_, _ = w.Write([]byte(`{
+					"session_id": "remote-session",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				t.Errorf("unexpected path: %s", r.URL.Path)
+				http.NotFound(w, r)
+			}
 		}))
 	defer ts.Close()
 
@@ -702,6 +714,60 @@ func TestSessionUsage_ServerFlagUsesHTTP(t *testing.T) {
 	assert.Equal(t, "remote-project", out.Project)
 	assert.Equal(t, 42, out.TotalOutputTokens)
 	assert.True(t, out.ServerRunning)
+}
+
+func TestSessionUsage_ServerFlagResolvesBareID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	const bareID = "019da6a6-8c67-7c23-b102-ef48502852d0"
+	const canonicalID = "codex:" + bareID
+
+	var gotUsagePath string
+	ts := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/api/v1/sessions/" + bareID:
+				http.NotFound(w, r)
+			case "/api/v1/sessions/" + canonicalID:
+				_, _ = w.Write([]byte(`{
+					"id": "` + canonicalID + `",
+					"agent": "codex",
+					"project": "remote-project"
+				}`))
+			case "/api/v1/sessions/" + canonicalID + "/usage":
+				gotUsagePath = r.URL.Path
+				_, _ = w.Write([]byte(`{
+					"session_id": "` + canonicalID + `",
+					"agent": "codex",
+					"project": "remote-project",
+					"total_output_tokens": 42,
+					"peak_context_tokens": 2048,
+					"has_token_data": true,
+					"cost_usd": 0.5,
+					"has_cost": true,
+					"models": ["gpt-5.1"],
+					"unpriced_models": [],
+					"server_running": true
+				}`))
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+	defer ts.Close()
+
+	root := newRootCommand()
+	args := []string{"session", "usage", bareID, "--server", ts.URL}
+	cmd, _, err := root.Find(args)
+	require.NoError(t, err)
+	require.NoError(t, cmd.ParseFlags(args[3:]))
+
+	out, code, err := sessionUsageDataForCommand(cmd, bareID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, tokenUseExitOK, code)
+	assert.Equal(t, canonicalID, out.SessionID)
+	assert.Equal(t, "/api/v1/sessions/"+canonicalID+"/usage", gotUsagePath)
 }
 
 func TestSessionUsage_PGEnvUsesPGStore(t *testing.T) {
