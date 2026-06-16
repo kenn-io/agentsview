@@ -311,16 +311,28 @@ func deepSeekTUIToolResult(block gjson.Result) (ParsedToolResult, bool) {
 	}, true
 }
 
+// deepSeekTUIObjectText extracts the string content from an object-shaped
+// tool result such as {"output":"..."}. It reports whether a known field
+// holds a string value, treating an empty string as present so a valid
+// no-output result is not mistaken for a missing field.
+func deepSeekTUIObjectText(content gjson.Result) (string, bool) {
+	for _, key := range []string{"output", "text", "content"} {
+		if field := content.Get(key); field.Exists() &&
+			field.Type == gjson.String {
+			return field.Str, true
+		}
+	}
+	return "", false
+}
+
 func deepSeekTUIResultRaw(content gjson.Result) string {
 	// Object results such as {"output":"..."} are not recognized by
 	// DecodeContent's object branch (which handles only the iFlow shape),
 	// so extract the known string field and store it as a plain string.
 	if content.IsObject() {
-		for _, key := range []string{"output", "text", "content"} {
-			if text := content.Get(key).Str; text != "" {
-				quoted, _ := json.Marshal(text)
-				return string(quoted)
-			}
+		if text, ok := deepSeekTUIObjectText(content); ok {
+			quoted, _ := json.Marshal(text)
+			return string(quoted)
 		}
 	}
 	if content.Raw == "" {
@@ -342,10 +354,8 @@ func deepSeekTUIContentLength(content gjson.Result) int {
 		return total
 	}
 	if content.IsObject() {
-		for _, key := range []string{"output", "text", "content"} {
-			if text := content.Get(key).Str; text != "" {
-				return len(text)
-			}
+		if text, ok := deepSeekTUIObjectText(content); ok {
+			return len(text)
 		}
 	}
 	if content.Raw == "" {
