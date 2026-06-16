@@ -559,11 +559,14 @@ func TestFindQwenPawSourceFile_AcceptsWeirdFilenames(t *testing.T) {
 }
 
 func TestFindQwenPawSourceFile_RejectsTraversal(t *testing.T) {
-	root := t.TempDir()
-	outside := filepath.Join(root, "..", "escape.json")
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, "root")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	// A real file sits one level above root (still inside the
+	// test-owned tree) so traversal would have something to reach.
+	outside := filepath.Join(tmp, "escape.json")
 	require.NoError(t, os.WriteFile(outside,
 		[]byte(`{"agent":{"memory":{"content":[]}}}`), 0o644))
-	t.Cleanup(func() { _ = os.Remove(outside) })
 
 	for _, rawID := range []string{
 		"..:default_1",
@@ -601,4 +604,52 @@ func TestFindQwenPawSourceFile_RejectsColonInStem(t *testing.T) {
 	// root-level foo:bar.json.
 	assert.Equal(t, subFile,
 		FindQwenPawSourceFile(root, "default:foo:bar"))
+}
+
+// TestQwenPawFixtures exercises the checked-in testdata/qwenpaw tree
+// end to end: every fixture must discover, parse without error, and
+// produce its expected canonical ID. This guards against malformed or
+// drifting fixtures that would otherwise pass CI unnoticed.
+func TestQwenPawFixtures(t *testing.T) {
+	files := DiscoverQwenPawSessions(filepath.Join("testdata", "qwenpaw"))
+	require.Len(t, files, 5)
+
+	sessByID := make(map[string]*ParsedSession, len(files))
+	msgsByID := make(map[string][]ParsedMessage, len(files))
+	for _, f := range files {
+		assert.Equal(t, AgentQwenPaw, f.Agent)
+		sess, msgs, err := ParseQwenPawSession(f.Path, f.Project, "local")
+		require.NoErrorf(t, err, "parse %s", f.Path)
+		require.NotNil(t, sess)
+		sessByID[sess.ID] = sess
+		msgsByID[sess.ID] = msgs
+	}
+
+	for _, id := range []string{
+		"qwenpaw:default:default_1700000000000",
+		"qwenpaw:default:main_main",
+		"qwenpaw:default:console:default_1700000000001",
+		"qwenpaw:note_keeper:user@example.com_1700000000002",
+		"qwenpaw:researcher:empty",
+	} {
+		assert.Containsf(t, sessByID, id,
+			"fixture with ID %q must be discovered and parsed", id)
+	}
+
+	// The empty fixture yields a session with no messages.
+	assert.Empty(t, msgsByID["qwenpaw:researcher:empty"])
+
+	// main_main exercises the tool_use -> tool_result round-trip: the
+	// system-role carrier maps to RoleUser + IsSystem.
+	toolMsgs := msgsByID["qwenpaw:default:main_main"]
+	require.Len(t, toolMsgs, 4)
+	assert.True(t, toolMsgs[1].HasToolUse, "assistant message has tool_use")
+	require.Len(t, toolMsgs[1].ToolCalls, 1)
+	assert.Equal(t, "call_aaaaaaaaaaaa", toolMsgs[1].ToolCalls[0].ToolUseID)
+	resultMsg := toolMsgs[2]
+	assert.Equal(t, RoleUser, resultMsg.Role)
+	assert.True(t, resultMsg.IsSystem, "tool_result carrier is a system message")
+	require.Len(t, resultMsg.ToolResults, 1)
+	assert.Equal(t, "call_aaaaaaaaaaaa", resultMsg.ToolResults[0].ToolUseID)
+	assert.Positive(t, resultMsg.ToolResults[0].ContentLength)
 }
