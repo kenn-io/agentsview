@@ -1001,9 +1001,10 @@ const upsertSessionSQL = `
 			file_hash = excluded.file_hash`
 
 func sessionIsAutomated(s Session) bool {
-	return s.UserMessageCount <= 1 &&
-		s.FirstMessage != nil &&
-		IsAutomatedSession(*s.FirstMessage)
+	return s.IsAutomated ||
+		(s.UserMessageCount <= 1 &&
+			s.FirstMessage != nil &&
+			IsAutomatedSession(*s.FirstMessage))
 }
 
 func upsertSessionArgs(s Session) []any {

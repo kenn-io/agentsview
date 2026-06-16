@@ -1191,6 +1191,41 @@ func TestInsertMessagesClassifiesAutomationFromUserTranscript(
 		"automation should be classified from the first inserted user message")
 }
 
+func TestUpsertSessionPreservesTranscriptAutomation(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	title := "Generated review title"
+	insertSession(t, d, "upsert-review-title", "p", func(s *Session) {
+		s.FirstMessage = &title
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	require.NoError(t, d.InsertMessages([]Message{
+		userMsg("upsert-review-title", 0,
+			"You are a code reviewer. Review the code changes shown below."),
+		asstMsg("upsert-review-title", 1, "Review complete."),
+	}), "InsertMessages")
+
+	require.NoError(t, d.UpsertSession(Session{
+		ID:               "upsert-review-title",
+		Project:          "p",
+		Machine:          defaultMachine,
+		Agent:            defaultAgent,
+		FirstMessage:     &title,
+		MessageCount:     2,
+		UserMessageCount: 1,
+		IsAutomated:      true,
+	}), "UpsertSession")
+
+	got, err := d.GetSession(ctx, "upsert-review-title")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, got, "upsert-review-title session")
+	assert.True(t, got.IsAutomated,
+		"upsert should persist the transcript-derived automation flag")
+}
+
 func TestReplaceSessionMessagesClassifiesAutomationFromUserTranscript(
 	t *testing.T,
 ) {
