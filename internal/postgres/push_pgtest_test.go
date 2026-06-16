@@ -471,3 +471,87 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 	assert.Equal(t, ctidBefore, ctidAfter,
 		"fast path should skip rewriting a NUL-field session")
 }
+
+// TestPushIncrementalWithOnlyForeignMachineSessions verifies reset detection
+// does not misfire when every local session carries a machine value other than
+// s.machine (e.g. orphan-copied sessions kept from a previous machine name).
+// pushSession writes such a session under its own machine, so pgSessionCount
+// must still find it and treat the second incremental push as a no-op rather
+// than forcing a full re-push.
+func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_foreign_machine_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "new-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "foreign-machine-001"
+	sess := db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "old-host",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	assert.Zero(t, res.Errors, "first push should report no failures")
+
+	var machine string
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine FROM sessions WHERE id = $1`, sessID,
+	).Scan(&machine), "reading pushed machine")
+	require.Equal(t, "old-host", machine, "source machine preserved")
+
+	var ctidBefore string
+	require.NoError(t, pg.QueryRow(
+		`SELECT ctid::text FROM messages
+		 WHERE session_id = $1 AND ordinal = 0`, sessID,
+	).Scan(&ctidBefore), "reading ctid before second push")
+
+	// Second incremental push with sync state intact. Reset detection counts
+	// machine = "new-host" plus "old-host", finds the row, and the fingerprint
+	// fast path skips the session entirely; the unchanged ctid proves the
+	// message row was left alone instead of being rewritten by a forced full.
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failures")
+	assert.Zero(t, res.SessionsPushed,
+		"unchanged foreign-machine session should not be re-pushed")
+
+	var ctidAfter string
+	require.NoError(t, pg.QueryRow(
+		`SELECT ctid::text FROM messages
+		 WHERE session_id = $1 AND ordinal = 0`, sessID,
+	).Scan(&ctidAfter), "reading ctid after second push")
+	assert.Equal(t, ctidBefore, ctidAfter,
+		"second incremental push must not rewrite the session")
+}

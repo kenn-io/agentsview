@@ -4984,6 +4984,26 @@ func TestSyncState_GetSetRoundtrip(t *testing.T) {
 	require.Equal(t, "2026-03-11T13:00:00.000Z", val, "value")
 }
 
+func TestDistinctSessionMachines(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	sessions := []Session{
+		{ID: "s1", Project: "p", Machine: "host-a", Agent: "claude", CreatedAt: "2026-03-10T12:00:00.000Z"},
+		{ID: "s2", Project: "p", Machine: "host-a", Agent: "claude", CreatedAt: "2026-03-11T12:00:00.000Z"},
+		{ID: "s3", Project: "p", Machine: "host-b", Agent: "claude", CreatedAt: "2026-03-12T12:00:00.000Z"},
+		{ID: "s4", Project: "p", Machine: "local", Agent: "claude", CreatedAt: "2026-03-13T12:00:00.000Z"},
+	}
+	for _, s := range sessions {
+		require.NoError(t, d.UpsertSession(s), "upsert %s", s.ID)
+	}
+
+	machines, err := d.DistinctSessionMachines(ctx)
+	require.NoError(t, err, "DistinctSessionMachines")
+	assert.ElementsMatch(t, []string{"host-a", "host-b", "local"}, machines,
+		"distinct machines")
+}
+
 func TestListSessionsModifiedBetween(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

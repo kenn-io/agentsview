@@ -337,16 +337,31 @@ func (s *Sync) Push(
 	return result, nil
 }
 
-// pgSessionCount returns the number of sessions in PG for this machine.
-// Counting only this machine's rows is correct: sessions sourced from other
-// machines were pushed by those machines and are never pushed by this host.
+// pgSessionCount returns the number of PG sessions written by this host. Reset
+// detection counts rows across every machine identity this host pushes under,
+// not just s.machine: pushSession preserves a session's own machine value (see
+// pushedSessionMachine), so a host whose local sessions all carry a renamed or
+// orphan-copied machine value still owns PG rows under that value. Counting only
+// s.machine would read zero for such a host and force a needless full re-push on
+// every incremental run.
 func (s *Sync) pgSessionCount(
 	ctx context.Context,
 ) (int, error) {
+	machines, err := s.pushMachineSet(ctx)
+	if err != nil {
+		return 0, err
+	}
+	placeholders := make([]string, len(machines))
+	args := make([]any, len(machines))
+	for i, m := range machines {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = m
+	}
 	var count int
-	err := s.pg.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM sessions WHERE machine = $1",
-		s.machine,
+	err = s.pg.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE machine IN ("+
+			strings.Join(placeholders, ",")+")",
+		args...,
 	).Scan(&count)
 	if err != nil {
 		if isUndefinedTable(err) {
@@ -357,6 +372,29 @@ func (s *Sync) pgSessionCount(
 		)
 	}
 	return count, nil
+}
+
+// pushMachineSet returns the distinct machine values this host writes to PG:
+// every machine identity present in the local DB, normalized through the same
+// "local"/empty -> s.machine fallback that pushSession applies, plus s.machine
+// itself. Always non-empty, so the IN clause in pgSessionCount is valid.
+func (s *Sync) pushMachineSet(ctx context.Context) ([]string, error) {
+	locals, err := s.local.DistinctSessionMachines(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"reading local session machines: %w", err,
+		)
+	}
+	set := map[string]struct{}{s.machine: {}}
+	for _, m := range locals {
+		set[pushedSessionMachine(db.Session{Machine: m}, s.machine)] = struct{}{}
+	}
+	out := make([]string, 0, len(set))
+	for m := range set {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 type batchResult struct {
