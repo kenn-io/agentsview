@@ -134,6 +134,7 @@ export interface TopSession {
   id: string;
   project: string;
   first_message: string | null;
+  display_name?: string | null;
   message_count: number;
   output_tokens: number;
   duration_min: number;

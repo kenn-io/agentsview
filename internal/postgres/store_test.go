@@ -1019,6 +1019,64 @@ func TestStoreAnalyticsTopSessionsOutputTokens(
 	}
 }
 
+func TestStoreAnalyticsTopSessionsDisplayName(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions (
+			id, machine, project, agent, first_message,
+			display_name, session_name,
+			started_at, ended_at, message_count,
+			user_message_count
+		) VALUES
+			('pg-session-name', 'test-machine', 'test-project',
+			 'claude', 'raw first user message', NULL,
+			 'Agent generated title',
+			 '2026-03-12T11:00:00Z'::timestamptz,
+			 '2026-03-12T11:30:00Z'::timestamptz,
+			 10, 2),
+			('pg-custom-name', 'test-machine', 'test-project',
+			 'claude', 'raw first user message',
+			 'User renamed title', 'Generated title hidden by rename',
+			 '2026-03-12T12:00:00Z'::timestamptz,
+			 '2026-03-12T12:30:00Z'::timestamptz,
+			 9, 2)
+	`)
+	require.NoError(t, err, "inserting top session names")
+
+	top, err := store.GetAnalyticsTopSessions(
+		context.Background(),
+		db.AnalyticsFilter{
+			From: "2026-03-12",
+			To:   "2026-03-12",
+		},
+		"messages",
+	)
+	require.NoError(t, err, "GetAnalyticsTopSessions")
+
+	byID := map[string]db.TopSession{}
+	for _, session := range top.Sessions {
+		byID[session.ID] = session
+	}
+
+	named, ok := byID["pg-session-name"]
+	require.True(t, ok, "pg-session-name missing from top sessions")
+	require.NotNil(t, named.DisplayName,
+		"session_name should be exposed as display_name")
+	assert.Equal(t, "Agent generated title", *named.DisplayName)
+
+	custom, ok := byID["pg-custom-name"]
+	require.True(t, ok, "pg-custom-name missing from top sessions")
+	require.NotNil(t, custom.DisplayName,
+		"custom display_name should be exposed")
+	assert.Equal(t, "User renamed title", *custom.DisplayName)
+}
+
 func TestStoreWriteMethodsReturnReadOnly(t *testing.T) {
 	pgURL := testPGURL(t)
 

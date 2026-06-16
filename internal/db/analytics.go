@@ -3272,6 +3272,7 @@ type TopSession struct {
 	ID           string  `json:"id"`
 	Project      string  `json:"project"`
 	FirstMessage *string `json:"first_message"`
+	DisplayName  *string `json:"display_name,omitempty"`
 	MessageCount int     `json:"message_count"`
 	OutputTokens int     `json:"output_tokens"`
 	DurationMin  float64 `json:"duration_min"`
@@ -3323,8 +3324,9 @@ func (db *DB) GetAnalyticsTopSessions(
 		orderExpr = "message_count DESC, id ASC"
 	}
 
-	query := `SELECT id, project, first_message, message_count,
-		total_output_tokens, ` + durationSelectExpr + `,
+	query := `SELECT id, project, first_message,
+		COALESCE(display_name, session_name) AS display_name,
+		message_count, total_output_tokens, ` + durationSelectExpr + `,
 		started_at, ended_at, termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + ` LIMIT 10`
@@ -3341,8 +3343,9 @@ func (db *DB) GetAnalyticsTopSessions(
 		var row TopSession
 		if err := rows.Scan(
 			&row.ID, &row.Project, &row.FirstMessage,
-			&row.MessageCount, &row.OutputTokens,
-			&row.DurationMin, &row.StartedAt, &row.EndedAt,
+			&row.DisplayName, &row.MessageCount,
+			&row.OutputTokens, &row.DurationMin,
+			&row.StartedAt, &row.EndedAt,
 			&row.TerminationStatus,
 		); err != nil {
 			return TopSessionsResponse{},
@@ -3389,9 +3392,10 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	}
 
 	query := `SELECT id, ` + dateCol + `, project,
-		first_message, message_count,
-		total_output_tokens, started_at, ended_at,
-		termination_status
+		first_message,
+		COALESCE(display_name, session_name) AS display_name,
+		message_count, total_output_tokens,
+		started_at, ended_at, termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + ` LIMIT 200`
 
@@ -3405,12 +3409,13 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	var sessions []TopSession
 	for rows.Next() {
 		var id, ts, project string
-		var firstMsg, startedAt, endedAt, termStatus *string
+		var firstMsg, displayName, startedAt, endedAt *string
+		var termStatus *string
 		var mc, outputTokens int
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
-			&mc, &outputTokens, &startedAt, &endedAt,
-			&termStatus,
+			&displayName, &mc, &outputTokens,
+			&startedAt, &endedAt, &termStatus,
 		); err != nil {
 			return TopSessionsResponse{},
 				fmt.Errorf("scanning top session: %w", err)
@@ -3435,6 +3440,7 @@ func (db *DB) getAnalyticsTopSessionsGo(
 			ID:                id,
 			Project:           project,
 			FirstMessage:      firstMsg,
+			DisplayName:       displayName,
 			MessageCount:      mc,
 			OutputTokens:      outputTokens,
 			DurationMin:       durMin,

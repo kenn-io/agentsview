@@ -135,6 +135,42 @@ describe("TopSessions", () => {
     unmount(component);
   });
 
+  it("renders display names before first-message previews", async () => {
+    analytics.topSessions = {
+      metric: "messages",
+      sessions: [
+        {
+          id: "sess-1",
+          project: "proj",
+          first_message: "raw first message",
+          display_name: "Renamed sidebar title",
+          message_count: 10,
+          output_tokens: 0,
+          duration_min: 5,
+        },
+      ],
+    };
+    // @ts-ignore — loading is reactive state
+    analytics.loading = {
+      ...analytics.loading,
+      topSessions: false,
+    };
+    // @ts-ignore
+    analytics.errors = {
+      ...analytics.errors,
+      topSessions: null,
+    };
+
+    const component = mount(TopSessions, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector(".session-label")?.textContent?.trim(),
+    ).toBe("Renamed sidebar title");
+
+    unmount(component);
+  });
+
   describe("status column", () => {
     function mountWithFourStates() {
       analytics.topSessions = {

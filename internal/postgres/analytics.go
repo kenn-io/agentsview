@@ -2195,8 +2195,9 @@ func (s *Store) GetAnalyticsTopSessions(
 		limitClause = ""
 	}
 	query := `SELECT id, ` + pgDateCol + `, project,
-		first_message, message_count,
-		total_output_tokens,
+		first_message,
+		COALESCE(display_name, session_name) AS display_name,
+		message_count, total_output_tokens,
 		EXTRACT(EPOCH FROM ended_at - started_at)
 			AS duration_sec,
 		started_at, ended_at,
@@ -2220,13 +2221,13 @@ func (s *Store) GetAnalyticsTopSessions(
 		var id, project string
 		var ts *time.Time
 		var startedAt, endedAt *time.Time
-		var firstMsg, termStatus *string
+		var firstMsg, displayName, termStatus *string
 		var mc, outputTokens int
 		var durationSec *float64
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
-			&mc, &outputTokens, &durationSec,
-			&startedAt, &endedAt,
+			&displayName, &mc, &outputTokens,
+			&durationSec, &startedAt, &endedAt,
 			&termStatus,
 		); err != nil {
 			return db.TopSessionsResponse{},
@@ -2260,6 +2261,7 @@ func (s *Store) GetAnalyticsTopSessions(
 			ID:                id,
 			Project:           project,
 			FirstMessage:      firstMsg,
+			DisplayName:       displayName,
 			MessageCount:      mc,
 			OutputTokens:      outputTokens,
 			DurationMin:       durMin,

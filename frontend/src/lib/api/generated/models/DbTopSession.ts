@@ -4,6 +4,7 @@
 /* eslint-disable */
 export type DbTopSession = {
   duration_min: number;
+  display_name?: string;
   ended_at?: string;
   first_message: string | null;
   id: string;

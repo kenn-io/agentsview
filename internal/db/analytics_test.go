@@ -1624,6 +1624,57 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 	})
 }
 
+func TestGetAnalyticsTopSessionsDisplayName(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	rawFirst := "raw first user message"
+	sessionName := "Agent generated title"
+	insertSession(t, d, "session-name", "project-alpha", func(s *Session) {
+		s.FirstMessage = &rawFirst
+		s.SessionName = &sessionName
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.EndedAt = new("2024-06-01T10:00:00Z")
+		s.MessageCount = 10
+		s.UserMessageCount = 2
+	})
+
+	customName := "User renamed title"
+	customSessionName := "Generated title hidden by rename"
+	insertSession(t, d, "custom-name", "project-alpha", func(s *Session) {
+		s.FirstMessage = &rawFirst
+		s.SessionName = &customSessionName
+		s.StartedAt = new("2024-06-01T11:00:00Z")
+		s.EndedAt = new("2024-06-01T12:00:00Z")
+		s.MessageCount = 9
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.RenameSession("custom-name", &customName),
+		"RenameSession")
+
+	resp, err := d.GetAnalyticsTopSessions(
+		ctx, baseFilter(), "messages",
+	)
+	require.NoError(t, err, "GetAnalyticsTopSessions")
+
+	byID := map[string]TopSession{}
+	for _, session := range resp.Sessions {
+		byID[session.ID] = session
+	}
+
+	named, ok := byID["session-name"]
+	require.True(t, ok, "session-name missing from top sessions")
+	require.NotNil(t, named.DisplayName,
+		"session_name should be exposed as display_name")
+	assert.Equal(t, sessionName, *named.DisplayName)
+
+	custom, ok := byID["custom-name"]
+	require.True(t, ok, "custom-name missing from top sessions")
+	require.NotNil(t, custom.DisplayName,
+		"custom display_name should be exposed")
+	assert.Equal(t, customName, *custom.DisplayName)
+}
+
 func TestBuildWhereProjectFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
