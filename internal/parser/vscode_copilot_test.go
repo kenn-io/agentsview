@@ -844,6 +844,10 @@ func TestParseVSCodeCopilotSession_TokenUsage(t *testing.T) {
 	// Session output total sums the per-turn output tokens.
 	assert.True(t, sess.HasTotalOutputTokens, "has total output")
 	assert.Equal(t, 290, sess.TotalOutputTokens, "total output")
+
+	// Peak context is the largest per-turn promptTokens.
+	assert.True(t, sess.HasPeakContextTokens, "has peak context")
+	assert.Equal(t, 41055, sess.PeakContextTokens, "peak context")
 }
 
 func TestParseVSCodeCopilotSession_TokenUsageModelFallback(t *testing.T) {
@@ -900,4 +904,5 @@ func TestParseVSCodeCopilotSession_NoTokenUsage(t *testing.T) {
 
 	assert.Empty(t, sess.UsageEvents, "no usage events expected")
 	assert.False(t, sess.HasTotalOutputTokens, "no total output expected")
+	assert.False(t, sess.HasPeakContextTokens, "no peak context expected")
 }

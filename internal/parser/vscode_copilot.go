@@ -188,6 +188,7 @@ func parseVSCodeCopilotData(
 
 	var usageEvents []ParsedUsageEvent
 	totalOutput := 0
+	peakContext := 0
 	sawTokens := false
 	startedAt := session.CreationDate.Time()
 
@@ -216,6 +217,9 @@ func parseVSCodeCopilotData(
 		if ev, ok := vscodeCopilotUsageEvent(req, startedAt); ok {
 			usageEvents = append(usageEvents, ev)
 			totalOutput += ev.OutputTokens
+			// promptTokens is the full context billed for the turn,
+			// so the largest one is the session's peak context.
+			peakContext = max(peakContext, ev.InputTokens)
 			sawTokens = true
 		}
 
@@ -297,6 +301,8 @@ func parseVSCodeCopilotData(
 	if sawTokens {
 		sess.TotalOutputTokens = totalOutput
 		sess.HasTotalOutputTokens = true
+		sess.PeakContextTokens = peakContext
+		sess.HasPeakContextTokens = true
 	}
 
 	return sess, messages, nil
