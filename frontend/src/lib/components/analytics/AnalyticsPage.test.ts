@@ -13,13 +13,14 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(source).not.toContain("setInterval");
   });
 
-  it("shows relative last-updated and new-data refresh hints", () => {
+  it("shows relative last-updated refresh status without ambiguous badges", () => {
     expect(source).toContain("analytics.lastUpdatedAt");
     expect(source).toContain("REFRESH_LABEL_INTERVAL_MS = 60 * 1000");
     expect(source).toContain("formatRefreshAge");
     expect(source).not.toContain("formatUpdatedAt");
-    expect(source).toContain("analytics.hasNewData");
-    expect(source).toContain("New data");
+    expect(source).not.toContain("analytics.hasNewData");
+    expect(source).not.toContain("New data");
+    expect(source).not.toContain(".new-data");
   });
 
   it("keeps refresh progress out of content layout flow", () => {

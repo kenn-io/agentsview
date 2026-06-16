@@ -332,9 +332,6 @@
         >
           {refreshLabel}
         </span>
-        {#if usage.hasNewData}
-          <span class="new-data">New data</span>
-        {/if}
       </div>
 
     </div>
@@ -443,17 +440,6 @@
     color: var(--text-muted);
     font-size: 11px;
     white-space: nowrap;
-  }
-
-  .new-data {
-    display: inline-flex;
-    align-items: center;
-    min-height: 18px;
-    padding: 0 6px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface-hover);
-    color: var(--accent-blue);
-    font-weight: 600;
   }
 
   .usage-content {
