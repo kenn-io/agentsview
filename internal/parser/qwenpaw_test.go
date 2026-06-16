@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// skipColonFilenamesOnWindows skips tests that must create files or
+// directories whose names contain ":". That character is illegal in
+// Windows filenames (reserved for NTFS alternate data streams), so the
+// colon-collision scenario these tests guard against cannot occur
+// there. TestIsValidQwenPawIDPart covers the rejection logic on every
+// platform without touching the filesystem.
+func skipColonFilenamesOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("':' is invalid in Windows filenames")
+	}
+}
 
 // writeQwenPawSession creates a sessions/<name>.json file with the
 // QwenPaw on-disk shape:
@@ -250,7 +264,10 @@ func TestParseQwenPawSession_MalformedJsonReturnsError(t *testing.T) {
 func TestParseQwenPawSession_RejectsColonInIDParts(t *testing.T) {
 	content := `{"agent":{"memory":{"content":[]}}}`
 	t.Run("workspace", func(t *testing.T) {
-		dir := filepath.Join(t.TempDir(), "ws:bad", "sessions")
+		// The workspace is passed as an argument, not derived from the
+		// path, so this stays cross-platform: the file lives in a
+		// normal directory and only the project string carries ":".
+		dir := filepath.Join(t.TempDir(), "default", "sessions")
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		path := filepath.Join(dir, "ok.json")
 		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
@@ -260,6 +277,9 @@ func TestParseQwenPawSession_RejectsColonInIDParts(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid workspace")
 	})
 	t.Run("subdir", func(t *testing.T) {
+		// The subdir is derived from the path, so it must exist on disk
+		// with a ":" in its name — impossible on Windows.
+		skipColonFilenamesOnWindows(t)
 		dir := filepath.Join(t.TempDir(), "default", "sessions", "sub:bad")
 		require.NoError(t, os.MkdirAll(dir, 0o755))
 		path := filepath.Join(dir, "ok.json")
@@ -408,6 +428,7 @@ func TestDiscoverQwenPawSessions_SkipsFilesAtRoot(t *testing.T) {
 // would otherwise collapse to qwenpaw:default:foo:bar. Discovery must
 // emit only the unambiguous subdir file.
 func TestDiscoverQwenPawSessions_RejectsColliding(t *testing.T) {
+	skipColonFilenamesOnWindows(t)
 	content := []byte(`{"agent":{"memory":{"content":[]}}}`)
 	root := t.TempDir()
 	sessDir := filepath.Join(root, "default", "sessions")

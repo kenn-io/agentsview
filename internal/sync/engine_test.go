@@ -1875,6 +1875,11 @@ func TestEngine_ClassifyPathsOpenCodeRemovedPartFile(
 // pointed the watcher at the wrong path, leaving live sync broken
 // even after the classifier branch is reachable.
 func TestEngine_ClassifyPathsQwenPawRejectsColon(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// ":" is invalid in Windows filenames, so colon-bearing
+		// workspace/subdir/stem paths cannot be created there.
+		t.Skip("':' is invalid in Windows filenames")
+	}
 	db := openTestDB(t)
 	qwenpawDir := t.TempDir()
 	engine := NewEngine(db, EngineConfig{
