@@ -2284,8 +2284,14 @@ func (db *DB) queryVelocityMsgs(
 	sessionMsgs map[string][]velocityMsg,
 ) error {
 	ph, args := inPlaceholders(chunk)
+	// COALESCE the nullable timestamp column to '' so a NULL (only present
+	// on imported/migrated archives) does not fail rows.Scan with
+	// "converting NULL to string is unsupported". localTime treats "" as
+	// invalid, so the row is excluded from velocity stats rather than
+	// crashing the analytics endpoint. This matches the NULL-safe
+	// PostgreSQL and DuckDB velocity twins.
 	q := `SELECT session_id, ordinal, role,
-		timestamp, content_length
+		COALESCE(timestamp, ''), content_length
 		FROM messages
 		WHERE session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"testing"
@@ -1159,6 +1160,43 @@ func TestVelocityChunkedQuery(t *testing.T) {
 	require.NoError(t, err,
 		"GetAnalyticsSessionShape with %d sessions", n)
 	assert.Equal(t, n, shape.Count, "Count")
+}
+
+// TestGetAnalyticsVelocity_NullTimestamp guards against the velocity scan
+// crashing on a NULL messages.timestamp. NULLs only occur on imported or
+// migrated archives (fresh inserts always bind a Go string), so reach past
+// InsertMessages with raw SQL to plant one. Before the COALESCE fix this
+// failed with "converting NULL to string is unsupported"; now the NULL row
+// is treated as an invalid timestamp and excluded while the rest of the
+// session's messages still drive velocity metrics.
+func TestGetAnalyticsVelocity_NullTimestamp(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertConversation(t, d, "v-null", "proj", "claude", "2024-06-01T09:00:00Z",
+		[]time.Duration{
+			0, 10 * time.Second, 10 * time.Second,
+			10 * time.Second, 10 * time.Second, 10 * time.Second,
+		})
+
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE messages SET timestamp = NULL"+
+				" WHERE session_id = ? AND ordinal = ?", "v-null", 5)
+		return err
+	}), "null the stored timestamp")
+
+	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())
+	require.NoError(t, err, "GetAnalyticsVelocity over NULL timestamp")
+
+	// The session is still processed and its remaining timestamped
+	// messages still produce velocity metrics; the NULL row is simply
+	// excluded.
+	require.Len(t, resp.ByAgent, 1)
+	assert.Equal(t, "claude", resp.ByAgent[0].Label)
+	assert.Equal(t, 1, resp.ByAgent[0].Sessions, "session counted")
+	assert.Equal(t, 10.0, resp.Overall.TurnCycleSec.P50,
+		"valid-timestamped turns still drive velocity")
 }
 
 func TestPercentileFloat(t *testing.T) {
