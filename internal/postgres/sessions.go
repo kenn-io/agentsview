@@ -581,10 +581,10 @@ func (s *Store) getSidebarSessionIndexPage(
 		ord := page.Add(i)
 		if i == 0 {
 			cteParts = append(cteParts,
-				"SELECT "+id+" AS id, "+ord+" AS ord")
+				"SELECT "+id+"::text AS id, "+ord+"::integer AS ord")
 		} else {
 			cteParts = append(cteParts,
-				"UNION ALL SELECT "+id+", "+ord)
+				"UNION ALL SELECT "+id+"::text, "+ord+"::integer")
 		}
 	}
 	treeArgs = append(treeArgs, page.Args()...)
