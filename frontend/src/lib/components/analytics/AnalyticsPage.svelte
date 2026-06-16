@@ -304,7 +304,7 @@
     min-height: 28px;
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
   }
 
   .refresh-btn {
@@ -312,8 +312,7 @@
     height: 28px;
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    padding-right: 2px;
+    justify-content: center;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
