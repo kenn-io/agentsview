@@ -23,6 +23,11 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
   { name: "pi", color: "var(--accent-indigo)", label: "Pi" },
   { name: "qwen", color: "var(--accent-cyan)", label: "Qwen Code" },
   {
+    name: "deepseek-tui",
+    color: "var(--accent-cyan)",
+    label: "DeepSeek TUI",
+  },
+  {
     name: "openclaw",
     color: "var(--accent-orange)",
     label: "OpenClaw",

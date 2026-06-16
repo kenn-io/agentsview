@@ -611,6 +611,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  AMP_DIR                 Amp threads directory")
 	fmt.Fprintln(w, "  ZED_DIR                 Zed data directory")
 	fmt.Fprintln(w, "  QWEN_PROJECTS_DIR       Qwen Code projects directory")
+	fmt.Fprintln(w, "  DEEPSEEK_TUI_SESSIONS_DIR")
+	fmt.Fprintln(w, "                          DeepSeek TUI sessions directory")
 	fmt.Fprintln(w, "  QCLAW_DIR               QClaw agents directory")
 	fmt.Fprintln(w, "  WORKBUDDY_PROJECTS_DIR  WorkBuddy projects directory")
 	fmt.Fprintln(w, "  PIEBALD_DIR             Piebald data directory")

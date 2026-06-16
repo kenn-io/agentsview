@@ -783,6 +783,30 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// DeepSeek TUI / CodeWhale: <sessionsDir>/<session>.json
+	for _, dsDir := range e.agentDirs[parser.AgentDeepSeekTUI] {
+		if dsDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(dsDir, path); ok {
+			if strings.Count(rel, sep) != 0 {
+				continue
+			}
+			name := filepath.Base(rel)
+			if name == "latest.json" || name == "offline_queue.json" {
+				continue
+			}
+			sessionID, ok := strings.CutSuffix(name, ".json")
+			if !ok || !parser.IsValidSessionID(sessionID) {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:  path,
+				Agent: parser.AgentDeepSeekTUI,
+			}, true
+		}
+	}
+
 	// Zencoder: <zencoderDir>/<uuid>.jsonl
 	for _, zenDir := range e.agentDirs[parser.AgentZencoder] {
 		if zenDir == "" {
@@ -3182,6 +3206,8 @@ func (e *Engine) processFile(
 		res = e.processIflow(ctx, file, info)
 	case parser.AgentAmp:
 		res = e.processAmp(file, info)
+	case parser.AgentDeepSeekTUI:
+		res = e.processDeepSeekTUI(file, info)
 	case parser.AgentZencoder:
 		res = e.processZencoder(file, info)
 	case parser.AgentVSCodeCopilot:
@@ -4002,6 +4028,38 @@ func (e *Engine) processAmp(
 	if err == nil {
 		sess.File.Hash = hash
 	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func (e *Engine) processDeepSeekTUI(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseDeepSeekTUISession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+	inode, device := getFileIdentity(info)
+	sess.File.Inode = inode
+	sess.File.Device = device
 
 	return processResult{
 		results: []parser.ParseResult{

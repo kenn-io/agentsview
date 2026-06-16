@@ -1795,6 +1795,40 @@ func TestEngine_ClassifyPathsQwenSession(t *testing.T) {
 	assert.Empty(t, got, "expected no Qwen classifications for %v, got %v", bogus, got)
 }
 
+func TestEngine_ClassifyPathsDeepSeekTUISession(t *testing.T) {
+	db := openTestDB(t)
+	deepSeekDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentDeepSeekTUI: {deepSeekDir},
+		},
+		Machine: "local",
+	})
+
+	sessionID := "adc026b4-c620-43e4-8cc4-295593889d18"
+	sessionPath := filepath.Join(deepSeekDir, sessionID+".json")
+	dbtest.WriteTestFile(t, sessionPath, []byte("{}"))
+
+	files := engine.classifyPaths([]string{sessionPath})
+	require.Len(t, files, 1, "len(files) = %d, want 1 (%v)", len(files), files)
+	assert.Equal(t, sessionPath, files[0].Path)
+	assert.Equal(t, parser.AgentDeepSeekTUI, files[0].Agent)
+
+	bogus := []string{
+		filepath.Join(deepSeekDir, "stray.jsonl"),
+		filepath.Join(deepSeekDir, "latest.json"),
+		filepath.Join(deepSeekDir, "offline_queue.json"),
+		filepath.Join(deepSeekDir, "nested", sessionID+".json"),
+		filepath.Join(deepSeekDir, "..bad.json"),
+	}
+	for _, p := range bogus {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755), "MkdirAll(%q)", p)
+		dbtest.WriteTestFile(t, p, []byte("{}"))
+	}
+	got := engine.classifyPaths(bogus)
+	assert.Empty(t, got, "expected no DeepSeek TUI classifications for %v, got %v", bogus, got)
+}
+
 func TestEngine_ClassifyPathsCommandCodeSession(t *testing.T) {
 	db := openTestDB(t)
 	commandCodeDir := t.TempDir()

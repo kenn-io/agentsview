@@ -144,6 +144,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentAmp, true},
 		{AgentVSCodeCopilot, true},
 		{AgentPi, true},
+		{AgentDeepSeekTUI, true},
 		{"unknown", false},
 	}
 	for _, tt := range tests {
@@ -229,6 +230,18 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"deepseek tui prefix",
+			"deepseek-tui:sess-id",
+			AgentDeepSeekTUI,
+			true,
+		},
+		{
+			"remote deepseek tui prefix",
+			"devbox~deepseek-tui:sess-id",
+			AgentDeepSeekTUI,
+			true,
+		},
+		{
 			"unknown prefix",
 			"future:sess-id",
 			"",
@@ -267,6 +280,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentPi,
 		AgentQwen,
 		AgentCommandCode,
+		AgentDeepSeekTUI,
 		AgentOpenClaw,
 		AgentQClaw,
 		AgentKimi,
@@ -439,6 +453,19 @@ func TestCommandCodeRegistryEntry(t *testing.T) {
 	require.NotNil(t, def.FindSourceFunc, "Command Code FindSourceFunc")
 	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
 	assert.Equal(t, "commandcode:", def.IDPrefix)
+}
+
+func TestDeepSeekTUIRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentDeepSeekTUI)
+	require.True(t, ok, "AgentDeepSeekTUI missing from Registry")
+	require.True(t, def.FileBased, "DeepSeek TUI FileBased")
+	require.NotNil(t, def.DiscoverFunc, "DeepSeek TUI DiscoverFunc")
+	require.NotNil(t, def.FindSourceFunc, "DeepSeek TUI FindSourceFunc")
+	assert.Equal(t, "DeepSeek TUI", def.DisplayName)
+	assert.Equal(t, "DEEPSEEK_TUI_SESSIONS_DIR", def.EnvVar)
+	assert.Equal(t, "deepseek_tui_sessions_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".codewhale/sessions", ".deepseek/sessions"}, def.DefaultDirs)
+	assert.Equal(t, "deepseek-tui:", def.IDPrefix)
 }
 
 func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {

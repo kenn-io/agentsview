@@ -270,6 +270,7 @@ agentsview auto-discovers sessions from all of these:
 | Copilot CLI        | `~/.copilot/`                                          |
 | Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
 | Cursor             | `~/.cursor/projects/`                                  |
+| DeepSeek TUI       | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`      |
 | Forge              | `~/.forge/`                                            |
 | Gemini CLI         | `~/.gemini/`                                           |
 | gptme              | `~/.local/share/gptme/logs/`                           |

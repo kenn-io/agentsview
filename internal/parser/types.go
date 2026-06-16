@@ -24,6 +24,7 @@ const (
 	AgentPi             AgentType = "pi"
 	AgentQwen           AgentType = "qwen"
 	AgentCommandCode    AgentType = "commandcode"
+	AgentDeepSeekTUI    AgentType = "deepseek-tui"
 	AgentOpenClaw       AgentType = "openclaw"
 	AgentQClaw          AgentType = "qclaw"
 	AgentKimi           AgentType = "kimi"
@@ -256,6 +257,20 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindCommandCodeSourceFile,
 	},
 	{
+		Type:        AgentDeepSeekTUI,
+		DisplayName: "DeepSeek TUI",
+		EnvVar:      "DEEPSEEK_TUI_SESSIONS_DIR",
+		ConfigKey:   "deepseek_tui_sessions_dirs",
+		DefaultDirs: []string{
+			".codewhale/sessions",
+			".deepseek/sessions",
+		},
+		IDPrefix:       "deepseek-tui:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverDeepSeekTUISessions,
+		FindSourceFunc: FindDeepSeekTUISourceFile,
+	},
+	{
 		Type:        AgentOpenClaw,
 		DisplayName: "OpenClaw",
 		EnvVar:      "OPENCLAW_DIR",
@@ -459,14 +474,14 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindAntigravityCLISourceFile,
 	},
 	{
-		Type:        AgentGptme,
-		DisplayName: "gptme",
-		EnvVar:      "GPTME_DIR",
-		ConfigKey:   "gptme_dirs",
-		DefaultDirs: []string{".local/share/gptme/logs"},
-		IDPrefix:    "gptme:",
-		FileBased:   true,
-		DiscoverFunc: DiscoverGptmeSessions,
+		Type:           AgentGptme,
+		DisplayName:    "gptme",
+		EnvVar:         "GPTME_DIR",
+		ConfigKey:      "gptme_dirs",
+		DefaultDirs:    []string{".local/share/gptme/logs"},
+		IDPrefix:       "gptme:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverGptmeSessions,
 		FindSourceFunc: FindGptmeSourceFile,
 	},
 }
