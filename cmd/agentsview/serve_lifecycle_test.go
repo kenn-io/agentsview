@@ -164,6 +164,62 @@ func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
 		"runtime record must be kept when the daemon is still alive")
 }
 
+func TestRecordedDaemonStillPresent(t *testing.T) {
+	live, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+
+	assert.True(t, recordedDaemonStillPresent(daemon.RuntimeRecord{
+		PID: os.Getpid(),
+		Metadata: map[string]string{
+			runtimeCreateTime: strconv.FormatInt(live, 10),
+		},
+	}), "exact create-time match means the daemon is still present")
+
+	assert.False(t, recordedDaemonStillPresent(daemon.RuntimeRecord{
+		PID:      os.Getpid(),
+		Metadata: map[string]string{runtimeCreateTime: "1"},
+	}), "mismatched create time means the PID was reused, daemon is gone")
+
+	assert.True(t, recordedDaemonStillPresent(daemon.RuntimeRecord{
+		PID: os.Getpid(),
+	}), "legacy record without a create time conservatively assumes presence")
+}
+
+func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("relies on POSIX zombie semantics for ProcessAlive")
+	}
+	dir := runtimeTestDir(t)
+
+	target := exec.Command("sleep", "60")
+	require.NoError(t, target.Start())
+	pid := target.Process.Pid
+	t.Cleanup(func() {
+		_ = target.Process.Kill()
+		_ = target.Wait()
+	})
+
+	// A create time that cannot match the live process models the daemon
+	// having exited with the PID reused by something unrelated. The record
+	// must be removed (not kept) so later commands do not think the DB is
+	// still owned.
+	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:      pid,
+		Network:  daemon.NetworkTCP,
+		Address:  "127.0.0.1:1",
+		Metadata: map[string]string{runtimeCreateTime: "1"},
+	})
+	require.NoError(t, err)
+	records := liveDaemonRecords(dir)
+	require.Len(t, records, 1)
+
+	err = stopDaemonProcess(records[0], 100*time.Millisecond)
+	require.NoError(t, err,
+		"a reused PID means the daemon exited; stop should succeed")
+	assert.Empty(t, liveDaemonRecords(dir),
+		"the stale record for a reused PID must be removed")
+}
+
 func TestWriteDaemonRuntimePersistsCaddyMetadata(t *testing.T) {
 	dir := runtimeTestDir(t)
 	// Use this process as a stand-in caddy child: it is alive with a readable

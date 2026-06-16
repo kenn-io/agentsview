@@ -206,13 +206,29 @@ func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 	if err := proc.Kill(); err != nil {
 		return fmt.Errorf("force killing: %w", err)
 	}
-	if !waitForProcessExit(rec.PID, grace) {
-		// The process outlived even SIGKILL. Keep the runtime record so other
-		// commands still see the daemon owns the DB rather than racing it.
+	if !waitForProcessExit(rec.PID, grace) && recordedDaemonStillPresent(rec) {
+		// The recorded daemon genuinely outlived even SIGKILL. Keep the
+		// runtime record so other commands still see it owns the DB rather
+		// than racing it. (A live PID whose identity no longer matches the
+		// record was reused after the daemon exited, so fall through and
+		// remove the stale record.)
 		return fmt.Errorf("process %d still running after force kill", rec.PID)
 	}
 	removeRuntimeRecordFile(rec)
 	return nil
+}
+
+// recordedDaemonStillPresent reports whether rec.PID still belongs to the
+// recorded daemon. With a persisted create time it is an exact identity match,
+// so a PID reused by an unrelated process is reported as not present. Without a
+// create time (legacy record) it conservatively assumes the live PID is still
+// the daemon.
+func recordedDaemonStillPresent(rec daemon.RuntimeRecord) bool {
+	raw := rec.Metadata[runtimeCreateTime]
+	if raw == "" {
+		return true
+	}
+	return processCreateTimeMatches(rec.PID, raw)
 }
 
 // waitForProcessExit polls until pid is gone or timeout elapses. It reports
