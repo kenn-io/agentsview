@@ -699,7 +699,7 @@ func sessionPushFingerprint(
 }
 
 func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
-	if sess.Machine != "" {
+	if sess.Machine != "" && sess.Machine != "local" {
 		return sess.Machine
 	}
 	return fallbackMachine

@@ -240,6 +240,14 @@ func TestPushedSessionMachine(t *testing.T) {
 			fallback: "push-host",
 			want:     "push-host",
 		},
+		{
+			name: "falls back for local sentinel",
+			session: db.Session{
+				Machine: "local",
+			},
+			fallback: "push-host",
+			want:     "push-host",
+		},
 	}
 
 	for _, tc := range tests {
