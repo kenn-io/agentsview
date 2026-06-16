@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -20,7 +21,19 @@ const managedCaddyStartGrace = 300 * time.Millisecond
 type managedCaddy struct {
 	cancel context.CancelFunc
 	errCh  chan error
+	guard  caddyGuard
 }
+
+// caddyGuard ties the managed Caddy child to the server's lifetime. On Windows
+// it holds a job-object handle whose closure -- when the server exits for any
+// reason, including the uncatchable kill `serve stop` issues there -- tears
+// down Caddy with it. On other platforms it is a no-op: `serve stop` shuts the
+// server down with SIGTERM, so the server's own cleanup stops Caddy.
+type caddyGuard interface{ Close() error }
+
+type noopCaddyGuard struct{}
+
+func (noopCaddyGuard) Close() error { return nil }
 
 func browserURL(cfg config.Config) string {
 	return browserURLWithPlatform(cfg, runningInWSL, interfaceIPv4)
@@ -309,6 +322,17 @@ func startManagedCaddy(
 		return nil, fmt.Errorf("starting managed caddy: %w", err)
 	}
 
+	// Bind Caddy's lifetime to this server process so it cannot outlive a
+	// `serve stop` that kills the server without a graceful shutdown (Windows).
+	// Best-effort: a failure leaves the prior behavior, so log and continue.
+	guard, gErr := newCaddyGuard(cmd)
+	if gErr != nil {
+		log.Printf("warning: could not confine managed caddy: %v", gErr)
+	}
+	if guard == nil {
+		guard = noopCaddyGuard{}
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- cmd.Wait()
@@ -317,6 +341,7 @@ func startManagedCaddy(
 	select {
 	case err := <-errCh:
 		cancel()
+		_ = guard.Close()
 		if err == nil {
 			return nil, fmt.Errorf("managed caddy exited immediately")
 		}
@@ -324,20 +349,27 @@ func startManagedCaddy(
 	case <-time.After(managedCaddyStartGrace):
 	case <-parent.Done():
 		cancel()
+		_ = guard.Close()
 		return nil, parent.Err()
 	}
 
 	return &managedCaddy{
 		cancel: cancel,
 		errCh:  errCh,
+		guard:  guard,
 	}, nil
 }
 
 func (m *managedCaddy) Stop() {
-	if m == nil || m.cancel == nil {
+	if m == nil {
 		return
 	}
-	m.cancel()
+	if m.cancel != nil {
+		m.cancel()
+	}
+	if m.guard != nil {
+		_ = m.guard.Close()
+	}
 }
 
 func (m *managedCaddy) Err() <-chan error {

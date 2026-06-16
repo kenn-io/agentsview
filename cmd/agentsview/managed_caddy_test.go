@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -294,4 +295,39 @@ func TestWaitForLocalPortPrefersContextCancellationOverError(t *testing.T) {
 		errCh,
 	)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+type countingCaddyGuard struct{ closed int }
+
+func (g *countingCaddyGuard) Close() error {
+	g.closed++
+	return nil
+}
+
+func TestManagedCaddyStopClosesGuard(t *testing.T) {
+	guard := &countingCaddyGuard{}
+	called := 0
+	m := &managedCaddy{
+		cancel: func() { called++ },
+		guard:  guard,
+	}
+	m.Stop()
+	assert.Equal(t, 1, called, "Stop must cancel the run context")
+	assert.Equal(t, 1, guard.closed, "Stop must close the lifetime guard")
+}
+
+func TestManagedCaddyStopNilSafe(t *testing.T) {
+	var m *managedCaddy
+	assert.NotPanics(t, func() { m.Stop() })
+	assert.NotPanics(t, func() { (&managedCaddy{}).Stop() })
+}
+
+func TestNewCaddyGuardNoopOnPosix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX no-op guard; Windows builds a job-object guard")
+	}
+	guard, err := newCaddyGuard(nil)
+	require.NoError(t, err)
+	require.NotNil(t, guard)
+	require.NoError(t, guard.Close())
 }
