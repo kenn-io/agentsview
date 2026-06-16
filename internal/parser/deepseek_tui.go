@@ -304,15 +304,29 @@ func deepSeekTUIToolResult(block gjson.Result) (ParsedToolResult, bool) {
 	if !content.Exists() {
 		content = block.Get("output")
 	}
-	raw := content.Raw
-	if raw == "" {
-		raw = `""`
-	}
 	return ParsedToolResult{
 		ToolUseID:     toolUseID,
 		ContentLength: deepSeekTUIContentLength(content),
-		ContentRaw:    raw,
+		ContentRaw:    deepSeekTUIResultRaw(content),
 	}, true
+}
+
+func deepSeekTUIResultRaw(content gjson.Result) string {
+	// Object results such as {"output":"..."} are not recognized by
+	// DecodeContent's object branch (which handles only the iFlow shape),
+	// so extract the known string field and store it as a plain string.
+	if content.IsObject() {
+		for _, key := range []string{"output", "text", "content"} {
+			if text := content.Get(key).Str; text != "" {
+				quoted, _ := json.Marshal(text)
+				return string(quoted)
+			}
+		}
+	}
+	if content.Raw == "" {
+		return `""`
+	}
+	return content.Raw
 }
 
 func deepSeekTUIContentLength(content gjson.Result) int {

@@ -129,6 +129,33 @@ func TestParseDeepSeekTUISessionToolUseAndThinking(t *testing.T) {
 	assert.Equal(t, "package main", DecodeContent(msgs[2].ToolResults[0].ContentRaw))
 }
 
+func TestParseDeepSeekTUISessionObjectToolResult(t *testing.T) {
+	t.Parallel()
+
+	content := `{
+  "metadata": {"id": "session_obj", "workspace": "/repo"},
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "Run it"}]},
+    {"role": "assistant", "content": [
+      {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}
+    ]},
+    {"role": "user", "content": [
+      {"type": "tool_result", "tool_use_id": "toolu_1", "content": {"output": "file1.go\nfile2.go"}}
+    ]}
+  ]
+}`
+	path := createTestFile(t, "deepseek_tui_obj.json", content)
+
+	_, msgs, err := ParseDeepSeekTUISession(path, "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+
+	require.Len(t, msgs[2].ToolResults, 1)
+	result := msgs[2].ToolResults[0]
+	assert.Equal(t, len("file1.go\nfile2.go"), result.ContentLength)
+	assert.Equal(t, "file1.go\nfile2.go", DecodeContent(result.ContentRaw))
+}
+
 func TestParseDeepSeekTUISessionSkipsEmpty(t *testing.T) {
 	t.Parallel()
 
