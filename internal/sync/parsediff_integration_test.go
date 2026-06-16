@@ -41,6 +41,7 @@ func newParseDiffEngine(env *testEnv) *sync.Engine {
 			parser.AgentAmp:            {env.ampDir},
 			parser.AgentPi:             {env.piDir},
 			parser.AgentKiro:           {env.kiroDir},
+			parser.AgentKilo:           {env.kiloDir},
 			parser.AgentAntigravityCLI: {env.antigravityCLIDir},
 		},
 		Machine: "local",
@@ -891,6 +892,66 @@ func TestParseDiffCoversMixedOpenCodeRoot(t *testing.T) {
 	assert.False(t, report.HasFailures(), "clean mixed opencode run")
 }
 
+// TestParseDiffCoversMixedKiloRoot is the Kilo mirror of the OpenCode
+// case above. Kilo reuses OpenCode's hybrid storage, so a storage-mode
+// root that still carries DB-only sessions in kilo.db must have BOTH
+// sources re-parsed.
+func TestParseDiffCoversMixedKiloRoot(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// File-backed storage session: this makes ResolveKiloSource pick storage
+	// mode for the root.
+	storage := createOpenCodeStorageFixture(t, env.kiloDir)
+	const storageID = "kilo-mixed-storage"
+	storage.addSession(
+		t, "global", storageID,
+		"/home/user/code/storage-app", "Mixed Storage",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, storageID, "msg-a1", "assistant", 1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, storageID, "msg-a1", "part-a1",
+		"storage reply", 1704067201000,
+	)
+
+	// DB-only legacy session in the same root, plus a SQLite duplicate
+	// of the storage session that the storage-ID filter must drop.
+	sqlite := createKiloDB(t, env.kiloDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/legacy-app")
+	const legacyID = "kilo-mixed-legacy"
+	timeCreated := int64(1704067200000)
+	sqlite.addSession(t, legacyID, "proj-1", timeCreated, timeCreated+5000)
+	sqlite.addMessage(t, "lg-msg-u1", legacyID, "user", timeCreated)
+	sqlite.addMessage(t, "lg-msg-a1", legacyID, "assistant", timeCreated+1)
+	sqlite.addTextPart(
+		t, "lg-part-u1", legacyID, "lg-msg-u1",
+		"legacy question", timeCreated,
+	)
+	sqlite.addTextPart(
+		t, "lg-part-a1", legacyID, "lg-msg-a1",
+		"legacy answer", timeCreated+1,
+	)
+	sqlite.addSession(t, storageID, "proj-1", timeCreated, timeCreated+5000)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
+	})
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentKilo},
+	})
+	// Examined:2/Identical:2 proves the DB-only legacy session was
+	// re-parsed and compared alongside the storage session.
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 2, Identical: 2,
+	}, report.Totals, "both kilo sources must be examined")
+	assert.Equal(t, 2, report.FilesExamined,
+		"storage session file and kilo.db examined")
+	assert.False(t, report.HasFailures(), "clean mixed kilo run")
+}
+
 // TestParseDiffKiroSQLitePerSessionError proves a malformed session
 // inside the shared Kiro store surfaces as DiffParseError instead of
 // being silently dropped (unstored) or misclassified as presence
@@ -965,6 +1026,55 @@ func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 			"error attributed to the per-session virtual path")
 		assert.True(t, report.HasFailures(), "HasFailures")
 	})
+}
+
+// TestParseDiffKiloSQLitePerSessionError proves a malformed session
+// inside the shared Kilo store surfaces as DiffParseError instead of
+// being silently dropped, so --fail-on-change stays trustworthy even
+// for a session that was never stored.
+func TestParseDiffKiloSQLitePerSessionError(t *testing.T) {
+	env := setupTestEnv(t)
+	ks := createKiloDB(t, env.kiloDir)
+	ks.addProject(t, "proj-1", "/home/user/code/kilo-app")
+	const goodID = "good-session"
+	good := int64(1779012000000)
+	ks.addSession(t, goodID, "proj-1", good, good+30000)
+	ks.addMessage(t, "g-msg-u1", goodID, "user", good)
+	ks.addMessage(t, "g-msg-a1", goodID, "assistant", good+1)
+	ks.addTextPart(t, "g-part-u1", goodID, "g-msg-u1", "good question", good)
+	ks.addTextPart(t, "g-part-a1", goodID, "g-msg-a1", "good answer", good+1)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	// Never synced: a session row whose non-integer time_created is
+	// listed for fan-out but fails the per-session parse afterward.
+	const badID = "bad-session"
+	ks.mustExec(t, "insert malformed session",
+		`INSERT INTO session
+			(id, project_id, time_created, time_updated)
+		 VALUES (?, ?, ?, ?)`,
+		badID, "proj-1", "not-a-number", good+40000,
+	)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentKilo},
+	})
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1, ParseErrors: 1,
+	}, report.Totals,
+		"good session compared; malformed session is a parse error")
+
+	var errEntry *sync.SessionDiff
+	for i := range report.Sessions {
+		if report.Sessions[i].Class == sync.DiffParseError {
+			errEntry = &report.Sessions[i]
+		}
+	}
+	require.NotNil(t, errEntry, "parse error entry listed")
+	assert.Contains(t, errEntry.FilePath, "kilo.db#bad-session",
+		"error attributed to the per-session virtual path")
+	assert.True(t, report.HasFailures(), "HasFailures")
 }
 
 func TestParseDiffPresenceSweep(t *testing.T) {

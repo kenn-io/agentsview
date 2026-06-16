@@ -589,7 +589,7 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionPiCwd(t *testing.T) {
-	assert.Equal(t, 43, CurrentDataVersion(),
+	assert.Equal(t, 44, CurrentDataVersion(),
 		"Pi cwd parser changes require a data version bump")
 }
 

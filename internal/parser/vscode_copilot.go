@@ -65,6 +65,17 @@ type vscodeCopilotResult struct {
 	Metadata json.RawMessage       `json:"metadata,omitempty"`
 }
 
+// vscodeCopilotMetadata holds the per-request token accounting
+// found in result.metadata. VSCode Copilot records the full
+// prompt size (promptTokens, cumulative context for that turn)
+// and the generated output (outputTokens), plus the resolved
+// model id already in pricing-catalog form (e.g. "claude-opus-4-8").
+type vscodeCopilotMetadata struct {
+	PromptTokens  int    `json:"promptTokens"`
+	OutputTokens  int    `json:"outputTokens"`
+	ResolvedModel string `json:"resolvedModel"`
+}
+
 type vscodeCopilotTimings struct {
 	FirstProgress int64 `json:"firstProgress"`
 	TotalElapsed  int64 `json:"totalElapsed"`
@@ -175,6 +186,12 @@ func parseVSCodeCopilotData(
 	var firstMessage string
 	ordinal := 0
 
+	var usageEvents []ParsedUsageEvent
+	totalOutput := 0
+	peakContext := 0
+	sawTokens := false
+	startedAt := session.CreationDate.Time()
+
 	for _, req := range session.Requests {
 		// User message
 		text := strings.TrimSpace(req.Message.Text)
@@ -192,6 +209,18 @@ func parseVSCodeCopilotData(
 				ContentLength: len(text),
 			})
 			ordinal++
+		}
+
+		// Token accounting: VSCode records prompt/output tokens and
+		// the resolved model in result.metadata. Emit one usage event
+		// per turn so the cost gets catalog-priced downstream.
+		if ev, ok := vscodeCopilotUsageEvent(req, startedAt); ok {
+			usageEvents = append(usageEvents, ev)
+			totalOutput += ev.OutputTokens
+			// promptTokens is the full context billed for the turn,
+			// so the largest one is the session's peak context.
+			peakContext = max(peakContext, ev.InputTokens)
+			sawTokens = true
 		}
 
 		// Assistant response: parse response items
@@ -251,7 +280,6 @@ func parseVSCodeCopilotData(
 		}
 	}
 
-	startedAt := session.CreationDate.Time()
 	endedAt := session.LastMessageDate.Time()
 	if endedAt.IsZero() && len(session.Requests) > 0 {
 		last := session.Requests[len(session.Requests)-1]
@@ -267,9 +295,55 @@ func parseVSCodeCopilotData(
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
+		UsageEvents:      usageEvents,
+	}
+
+	if sawTokens {
+		sess.TotalOutputTokens = totalOutput
+		sess.HasTotalOutputTokens = true
+		sess.PeakContextTokens = peakContext
+		sess.HasPeakContextTokens = true
 	}
 
 	return sess, messages, nil
+}
+
+// vscodeCopilotUsageEvent builds a per-turn usage event from a
+// request's result.metadata token accounting. Returns ok=false
+// when the request carries no usable token data. The prompt size
+// (promptTokens) is the full context billed for that turn; without
+// a cache breakdown it is treated as input tokens, so the derived
+// cost is an upper-bound estimate that ignores prompt-cache discounts.
+func vscodeCopilotUsageEvent(
+	req vscodeCopilotRequest, sessionStart time.Time,
+) (ParsedUsageEvent, bool) {
+	if req.Result == nil || len(req.Result.Metadata) == 0 {
+		return ParsedUsageEvent{}, false
+	}
+	var md vscodeCopilotMetadata
+	if err := json.Unmarshal(req.Result.Metadata, &md); err != nil {
+		return ParsedUsageEvent{}, false
+	}
+	if md.PromptTokens <= 0 && md.OutputTokens <= 0 {
+		return ParsedUsageEvent{}, false
+	}
+
+	// resolvedModel is already in pricing-catalog form
+	// (e.g. "claude-opus-4-8"). Fall back to the prefixed modelId
+	// (e.g. "copilot/claude-opus-4.8") and normalize it.
+	model := md.ResolvedModel
+	if model == "" {
+		model = strings.TrimPrefix(req.ModelID, "copilot/")
+	}
+	model = normalizeCopilotModel(model)
+
+	return ParsedUsageEvent{
+		Source:       "vscode-copilot",
+		Model:        model,
+		InputTokens:  md.PromptTokens,
+		OutputTokens: md.OutputTokens,
+		OccurredAt:   timeString(req.Timestamp.Time(), sessionStart),
+	}, true
 }
 
 // parseVSCodeCopilotResponse extracts text and tool calls

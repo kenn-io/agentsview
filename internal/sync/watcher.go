@@ -34,6 +34,7 @@ type Watcher struct {
 	debounce time.Duration
 	excludes []string
 	roots    []string
+	shallow  []string
 	rootsMu  sync.RWMutex
 	pending  map[string]time.Time
 	mu       sync.Mutex
@@ -133,6 +134,7 @@ func isWatchResourceExhaustion(err error) bool {
 func (w *Watcher) WatchShallow(root string) bool {
 	root = filepath.Clean(root)
 	w.addRoot(root)
+	w.addShallowRoot(root)
 	return w.watcher.Add(root) == nil
 }
 
@@ -207,6 +209,9 @@ func (w *Watcher) watchIfDir(path string) (isDir bool, excluded bool) {
 	if err != nil || !info.IsDir() {
 		return false, false
 	}
+	if w.isUnderShallowRoot(path) {
+		return true, false
+	}
 	if w.shouldExclude(path) {
 		return true, true
 	}
@@ -237,6 +242,32 @@ func (w *Watcher) addRoot(root string) {
 	if !slices.Contains(w.roots, root) {
 		w.roots = append(w.roots, root)
 	}
+}
+
+func (w *Watcher) addShallowRoot(root string) {
+	w.rootsMu.Lock()
+	defer w.rootsMu.Unlock()
+	if !slices.Contains(w.shallow, root) {
+		w.shallow = append(w.shallow, root)
+	}
+}
+
+func (w *Watcher) isUnderShallowRoot(path string) bool {
+	w.rootsMu.RLock()
+	defer w.rootsMu.RUnlock()
+
+	clean := filepath.Clean(path)
+	for _, root := range w.shallow {
+		rel, err := filepath.Rel(root, clean)
+		if err != nil || rel == "." {
+			continue
+		}
+		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func (w *Watcher) shouldExclude(path string) bool {

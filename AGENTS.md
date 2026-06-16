@@ -159,7 +159,7 @@ All new features and bug fixes must include unit tests. Run tests before
 committing:
 
 ```bash
-make test       # Go tests with CGO_ENABLED=1 and -tags "fts5,kit_posthog_disabled"
+make test       # Go tests with CGO_ENABLED=1 and -tags "fts5"
 make test-short # Fast tests only with -short
 make e2e        # Playwright E2E tests
 make lint       # golangci-lint plus NilAway
@@ -195,7 +195,7 @@ Or manually with an existing PostgreSQL instance:
 
 ```bash
 TEST_PG_URL="postgres://user:pass@host:5432/dbname?sslmode=disable" \
-  CGO_ENABLED=1 go test -tags "fts5,kit_posthog_disabled,pgtest" ./internal/postgres/... -v
+  CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres/... -v
 ```
 
 Tests create and drop the `agentsview` schema, so use a dedicated database or
@@ -206,8 +206,11 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 
 - `CGO_ENABLED=1` is required for the sqlite3 driver.
 - The `fts5` build tag is required for full-text search.
-- Go test binaries also use kit's `kit_posthog_disabled` build tag so tests
-  cannot send PostHog telemetry.
+- `go test` does not need kit's `kit_posthog_disabled` build tag. The telemetry
+  reporter already short-circuits to a disabled no-op under `testing.Testing()`,
+  so tests never send PostHog events. Binaries built for e2e tests (`make e2e`,
+  the CI pre-build of `agentsview`/`testfixture`) do use the tag, because they
+  run as real processes where the test guard does not apply.
 - Node.js and npm are required to build the Svelte frontend embedded under
   `internal/web/dist/`.
 
@@ -221,6 +224,9 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 
 ## Pull Requests
 
-- PR descriptions should be summaries only, with no test plans or checklists.
+- PR descriptions should be summaries only, with no test plans or checklists. Do
+  not add a "Tests", "Testing", "Verification", or "Test plan" section. CI runs
+  the tests, so the description must not restate the suite, list test commands,
+  or describe how the change was verified.
 - Describe what the code does now, why it changed, tradeoffs, limitations, and
   where reviewers should look.

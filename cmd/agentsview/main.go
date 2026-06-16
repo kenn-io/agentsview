@@ -520,8 +520,8 @@ func startFileWatcher(
 			continue
 		}
 		for _, d := range cfg.ResolveDirs(def.Type) {
-			if def.Type == parser.AgentOpenCode {
-				watchDirs := parser.ResolveOpenCodeWatchRoots(d)
+			if def.WatchRootsFunc != nil {
+				watchDirs := def.WatchRootsFunc(d)
 				if len(watchDirs) == 0 {
 					unwatchedDirs = append(unwatchedDirs, d)
 					continue

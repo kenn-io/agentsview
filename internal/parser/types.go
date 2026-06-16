@@ -11,10 +11,12 @@ type AgentType string
 
 const (
 	AgentClaude         AgentType = "claude"
+	AgentCowork         AgentType = "cowork"
 	AgentCodex          AgentType = "codex"
 	AgentCopilot        AgentType = "copilot"
 	AgentGemini         AgentType = "gemini"
 	AgentOpenCode       AgentType = "opencode"
+	AgentKilo           AgentType = "kilo"
 	AgentOpenHands      AgentType = "openhands"
 	AgentCursor         AgentType = "cursor"
 	AgentIflow          AgentType = "iflow"
@@ -66,6 +68,13 @@ type AgentDef struct {
 	// given a root directory and the raw session ID (prefix
 	// already stripped). Nil for non-file-based agents.
 	FindSourceFunc func(string, string) string
+
+	// WatchRootsFunc resolves the directories to watch for live
+	// updates under a configured root, for agents whose watch
+	// targets depend on the on-disk layout rather than a static
+	// WatchSubdirs list. When set, it takes precedence over
+	// WatchSubdirs. Nil for agents that use WatchSubdirs.
+	WatchRootsFunc func(string) []string
 }
 
 // Registry lists all supported agents. Order is stable and
@@ -81,6 +90,18 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverClaudeProjects,
 		FindSourceFunc: FindClaudeSourceFile,
+	},
+	{
+		Type:           AgentCowork,
+		DisplayName:    "Claude Cowork",
+		EnvVar:         "COWORK_DIR",
+		ConfigKey:      "cowork_dirs",
+		DefaultDirs:    coworkDefaultDirs(),
+		IDPrefix:       "cowork:",
+		FileBased:      true,
+		ShallowWatch:   true,
+		DiscoverFunc:   DiscoverCoworkSessions,
+		FindSourceFunc: FindCoworkSourceFile,
 	},
 	{
 		Type:        AgentCodex,
@@ -135,6 +156,24 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverOpenCodeSessions,
 		FindSourceFunc: FindOpenCodeSourceFile,
+		WatchRootsFunc: ResolveOpenCodeWatchRoots,
+	},
+	{
+		Type:        AgentKilo,
+		DisplayName: "Kilo",
+		EnvVar:      "KILO_DIR",
+		ConfigKey:   "kilo_dirs",
+		DefaultDirs: []string{".local/share/kilo"},
+		IDPrefix:    "kilo:",
+		WatchSubdirs: []string{
+			"storage/session",
+			"storage/message",
+			"storage/part",
+		},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverKiloSessions,
+		FindSourceFunc: FindKiloSourceFile,
+		WatchRootsFunc: ResolveKiloWatchRoots,
 	},
 	{
 		Type:           AgentOpenHands,
@@ -602,6 +641,12 @@ type ParsedSession struct {
 	PeakContextTokens    int
 	HasTotalOutputTokens bool
 	HasPeakContextTokens bool
+
+	// UsageEvents carries parser-emitted aggregate usage rows for
+	// agents whose session-level accounting is computed inline
+	// (e.g. VSCode Copilot). The sync engine forwards these into
+	// the usage_events table for catalog-based cost pricing.
+	UsageEvents []ParsedUsageEvent
 
 	// aggregateTokenPresenceKnown marks session aggregate token
 	// coverage as parser-owned and authoritative.

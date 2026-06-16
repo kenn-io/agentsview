@@ -267,12 +267,19 @@ func TestAgentByPrefix(t *testing.T) {
 }
 
 func TestRegistryCompleteness(t *testing.T) {
+	// allTypes is the canonical list of every supported agent. It must match
+	// Registry exactly in both directions: the assertions below fail if an
+	// agent is registered without being listed here (or vice versa), so a new
+	// AgentDef cannot silently bypass this check the way several agents
+	// previously did.
 	allTypes := []AgentType{
 		AgentClaude,
+		AgentCowork,
 		AgentCodex,
 		AgentCopilot,
 		AgentGemini,
 		AgentOpenCode,
+		AgentKilo,
 		AgentOpenHands,
 		AgentCursor,
 		AgentAmp,
@@ -295,16 +302,36 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentWarp,
 		AgentPositron,
 		AgentZed,
+		AgentAntigravity,
+		AgentAntigravityCLI,
+		AgentIflow,
+		AgentWorkBuddy,
+		AgentZencoder,
+		AgentGptme,
 	}
 
-	registered := make(map[AgentType]bool)
+	expected := make(map[AgentType]bool, len(allTypes))
+	for _, at := range allTypes {
+		assert.Falsef(t, expected[at], "AgentType %q listed more than once in allTypes", at)
+		expected[at] = true
+	}
+
+	registered := make(map[AgentType]bool, len(Registry))
 	for _, def := range Registry {
+		assert.Falsef(t, registered[def.Type],
+			"AgentType %q registered more than once in Registry", def.Type)
 		registered[def.Type] = true
 	}
 
-	for _, at := range allTypes {
-		assert.Truef(t, registered[at],
-			"AgentType %q missing from Registry", at)
+	// Every listed agent must be registered.
+	for at := range expected {
+		assert.Truef(t, registered[at], "AgentType %q missing from Registry", at)
+	}
+	// Every registered agent must be listed, so additions to Registry cannot
+	// silently skip this completeness check.
+	for at := range registered {
+		assert.Truef(t, expected[at],
+			"AgentType %q registered but not listed in allTypes (add it to TestRegistryCompleteness)", at)
 	}
 }
 
@@ -443,6 +470,26 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	}
 	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
 		"OpenCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
+func TestCoworkRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentCowork)
+	require.True(t, ok, "AgentCowork missing from Registry")
+	require.True(t, def.FileBased, "Cowork FileBased")
+	require.NotNil(t, def.DiscoverFunc, "Cowork DiscoverFunc")
+	require.NotNil(t, def.FindSourceFunc, "Cowork FindSourceFunc")
+	assert.Equal(t, "COWORK_DIR", def.EnvVar)
+	assert.Equal(t, "cowork_dirs", def.ConfigKey)
+	assert.Equal(t, "cowork:", def.IDPrefix)
+	assert.Equal(t, coworkDefaultDirs(), def.DefaultDirs)
+	assert.True(t, def.ShallowWatch,
+		"Cowork root contains large local_* working trees that discovery skips")
+}
+
+func TestAgentByPrefixCowork(t *testing.T) {
+	def, ok := AgentByPrefix("cowork:c0000000-0000-4000-8000-000000000001")
+	require.True(t, ok, "cowork-prefixed ID should resolve")
+	assert.Equal(t, AgentCowork, def.Type)
 }
 
 func TestCommandCodeRegistryEntry(t *testing.T) {

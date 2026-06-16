@@ -4,6 +4,7 @@
 
   const AGENT_LABELS: Record<string, string> = {
     claude: "Claude Code",
+    cowork: "Claude Cowork",
     codex: "Codex",
     copilot: "Copilot",
     gemini: "Gemini",

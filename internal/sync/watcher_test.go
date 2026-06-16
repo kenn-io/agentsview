@@ -370,6 +370,32 @@ func TestWatcherAutoWatchesNewDirs_RespectsExcludes(t *testing.T) {
 	}
 }
 
+func TestWatcherShallowRootDoesNotAutoWatchNewDirs(t *testing.T) {
+	pathsCh := make(chan []string, 10)
+	w, err := NewWatcher(20*time.Millisecond, func(paths []string) {
+		pathsCh <- paths
+	}, nil)
+	require.NoError(t, err, "NewWatcher")
+	t.Cleanup(func() { w.Stop() })
+
+	root := t.TempDir()
+	require.True(t, w.WatchShallow(root), "WatchShallow")
+	w.Start()
+
+	localDir := filepath.Join(root, "local_session")
+	require.NoError(t, os.Mkdir(localDir, 0o755), "Mkdir(local)")
+
+	select {
+	case paths := <-pathsCh:
+		assert.Contains(t, paths, localDir,
+			"root-level create should still trigger onChange")
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("timed out waiting for shallow root create event")
+	}
+	assert.NotContains(t, w.watcher.WatchList(), localDir,
+		"shallow root descendant should not be auto-watched")
+}
+
 func TestWatchRecursive_RootUnderExcludedAncestorStillWatchesDescendants(t *testing.T) {
 	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{"venv"})
 	require.NoError(t, err, "NewWatcher")

@@ -248,10 +248,11 @@ func resolveParseDiffAgents(
 
 // parseDiffDatabaseSources synthesizes DiscoveredFile entries for the
 // shared-SQLite agent stores that DiscoverFunc does not emit: Kiro's
-// data.sqlite3 and OpenCode's opencode.db. processKiro and
-// processOpenCode recognize those base filenames and fan one db path
-// out to every contained session, so routing them through the normal
-// worker loop re-parses every CLI Kiro / DB-backed OpenCode session.
+// data.sqlite3, OpenCode's opencode.db, and Kilo's kilo.db. The
+// corresponding process functions recognize those base filenames and fan
+// one db path out to every contained session, so routing them through the
+// normal worker loop re-parses every CLI Kiro / DB-backed OpenCode /
+// DB-backed Kilo session.
 // Without this, those sessions fall to the "not discovered" sweep and
 // an --agent kiro / --agent opencode run would pass while comparing
 // nothing.
@@ -259,9 +260,9 @@ func resolveParseDiffAgents(
 // The OpenCode db is added whenever it exists, regardless of which
 // source mode ResolveOpenCodeSource picks: normal sync reads
 // opencode.db in storage-mode roots too (openCodePendingSessionIDs),
-// because a migrated root can still hold DB-only legacy sessions.
-// processOpenCode's storage-ID filtering keeps file-backed sessions
-// from being compared twice.
+// because a migrated root can still hold DB-only legacy sessions. Kilo
+// uses the same hybrid storage model. The storage-ID filtering in each
+// process function keeps file-backed sessions from being compared twice.
 func (e *Engine) parseDiffDatabaseSources(
 	resolved []parser.AgentDef,
 ) []parser.DiscoveredFile {
@@ -279,16 +280,18 @@ func (e *Engine) parseDiffDatabaseSources(
 					})
 				}
 			}
-		case parser.AgentOpenCode:
+		case parser.AgentOpenCode, parser.AgentKilo:
 			for _, dir := range e.agentDirs[def.Type] {
 				if dir == "" {
 					continue
 				}
-				dbPath := filepath.Join(dir, "opencode.db")
+				dbPath := filepath.Join(
+					dir, openCodeFormatDBName(def.Type),
+				)
 				if info, err := os.Stat(dbPath); err == nil &&
 					!info.IsDir() {
 					extra = append(extra, parser.DiscoveredFile{
-						Path: dbPath, Agent: parser.AgentOpenCode,
+						Path: dbPath, Agent: def.Type,
 					})
 				}
 			}
@@ -333,8 +336,8 @@ func sortAndLimitParseDiffFiles(
 }
 
 // stripVirtualSourceSuffix maps a stored file_path to its on-disk
-// base file by removing the "#rawID" suffix Kiro, Zed, and OpenCode
-// SQLite-backed sessions append to their shared database path.
+// base file by removing the "#rawID" suffix Kiro, Zed, OpenCode, and
+// Kilo SQLite-backed sessions append to their shared database path.
 func stripVirtualSourceSuffix(path string) string {
 	if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
 		return dbPath
@@ -343,6 +346,9 @@ func stripVirtualSourceSuffix(path string) string {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+		return dbPath
+	}
+	if dbPath, _, ok := parser.ParseKiloSQLiteVirtualPath(path); ok {
 		return dbPath
 	}
 	return path

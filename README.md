@@ -266,6 +266,7 @@ agentsview auto-discovers sessions from all of these:
 | Antigravity        | `~/.gemini/antigravity/`                               |
 | Antigravity CLI    | `~/.gemini/antigravity-cli/` (see note below)          |
 | Claude Code        | `~/.claude/projects/`                                  |
+| Claude Cowork      | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS) |
 | Codex              | `~/.codex/sessions/`                                   |
 | Copilot CLI        | `~/.copilot/`                                          |
 | Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
@@ -276,6 +277,7 @@ agentsview auto-discovers sessions from all of these:
 | gptme              | `~/.local/share/gptme/logs/`                           |
 | Hermes Agent       | `~/.hermes/sessions/`                                  |
 | iFlow              | `~/.iflow/projects/`                                   |
+| Kilo               | `~/.local/share/kilo/`                                 |
 | Kimi               | `~/.kimi/sessions/`                                    |
 | Kiro CLI           | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`    |
 | Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |
@@ -461,7 +463,7 @@ make install        # install to ~/.local/bin
 ```
 
 ```bash
-make test           # Go tests (CGO_ENABLED=1 -tags "fts5,kit_posthog_disabled")
+make test           # Go tests (CGO_ENABLED=1 -tags "fts5")
 make bench-backends # compare SQLite, DuckDB, and PostgreSQL store reads
 make lint           # golangci-lint + NilAway
 make nilaway        # NilAway through custom golangci-lint

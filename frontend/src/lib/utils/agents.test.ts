@@ -10,6 +10,7 @@ describe("KNOWN_AGENTS", () => {
     const names = KNOWN_AGENTS.map((a) => a.name);
     expect(names).toEqual([
       "claude",
+      "cowork",
       "codex",
       "copilot",
       "gemini",

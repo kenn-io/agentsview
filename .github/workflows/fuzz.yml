@@ -43,7 +43,7 @@ jobs:
       # into the run script, so it cannot inject shell commands.
       - name: Fuzz ${{ matrix.target }}
         run: >
-          go test -tags "fts5,kit_posthog_disabled"
+          go test -tags "fts5"
           -fuzz "^${TARGET}$"
           -fuzztime "$FUZZTIME"
           ./internal/parser/
