@@ -712,6 +712,53 @@ func TestDecodeAntigravityStepKeepsCleanAssistantText(t *testing.T) {
 	assert.NotContains(t, msg.Content, "MODEL_PLACEHOLDER")
 }
 
+// TestDecodeAntigravityStepKeepsBareURLAssistantContent verifies that an
+// assistant step whose only displayable content is a bare URL is not
+// dropped: the URL noise filter suppresses such links only when other
+// content (prose or a tool call) carries the step.
+func TestDecodeAntigravityStepKeepsBareURLAssistantContent(t *testing.T) {
+	const url = "https://example.com/release-notes"
+	payload := encodePB([]pbField{
+		{num: 17, wire: pbWireBytes, bytes: []byte(url)},
+	})
+
+	msg, ok := decodeAntigravityStep(0, 15, payload)
+	require.True(t, ok, "URL-only assistant step must survive")
+	assert.Equal(t, RoleAssistant, msg.Role)
+	assert.Equal(t, url, msg.Content)
+}
+
+// TestDecodeAntigravityStepKeepsProseStartingWithURL verifies that
+// assistant prose that merely begins with a link is preserved; only a
+// bare URL token is treated as metadata noise.
+func TestDecodeAntigravityStepKeepsProseStartingWithURL(t *testing.T) {
+	const prose = "https://example.com is the canonical docs site."
+	payload := encodePB([]pbField{
+		{num: 17, wire: pbWireBytes, bytes: []byte(prose)},
+	})
+
+	msg, ok := decodeAntigravityStep(0, 15, payload)
+	require.True(t, ok)
+	assert.Equal(t, RoleAssistant, msg.Role)
+	assert.Equal(t, prose, msg.Content)
+}
+
+// TestDecodeAntigravityStepDropsBareURLAlongsideProse verifies that the
+// URL noise filter still suppresses a bare-URL echo when the step has
+// other displayable prose to carry it.
+func TestDecodeAntigravityStepDropsBareURLAlongsideProse(t *testing.T) {
+	payload := encodePB([]pbField{
+		{num: 17, wire: pbWireBytes, bytes: []byte("https://example.com/fetched")},
+		{num: 18, wire: pbWireBytes, bytes: []byte("Fetched the release notes.")},
+	})
+
+	msg, ok := decodeAntigravityStep(0, 15, payload)
+	require.True(t, ok)
+	assert.Equal(t, RoleAssistant, msg.Role)
+	assert.Equal(t, "Fetched the release notes.", msg.Content)
+	assert.NotContains(t, msg.Content, "https://example.com/fetched")
+}
+
 // TestDecodeAntigravityStepSanitizesNUL verifies that NUL bytes in
 // otherwise-valid content are replaced rather than the string (or
 // the whole message) being dropped: NUL-delimited tool output such

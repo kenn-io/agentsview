@@ -605,7 +605,16 @@ func decodeAntigravityStep(
 		calls = extractAntigravityToolCalls(step.idx, step.fields)
 	}
 
-	strs := cleanAntigravityStepStrings(step)
+	strs, urlOnly := cleanAntigravityStepStrings(step)
+
+	// A non-user step whose only displayable content is a URL would
+	// otherwise vanish: the URL noise filter drops it and there are no
+	// tool calls to carry the step. Keep the URL rather than losing the
+	// message. Steps with other prose or a tool call keep the URL
+	// suppressed, since the noise filter still applies there.
+	if len(strs) == 0 && len(calls) == 0 {
+		strs = urlOnly
+	}
 
 	// Emit the message if it has displayable content OR tool calls.
 	// Tool-only assistant steps (empty prose) are valid.
@@ -809,25 +818,30 @@ func dedupeStrings(in []string) []string {
 	return out
 }
 
-func cleanAntigravityStepStrings(step antigravityStep) []string {
-	var cleaned []string
+// cleanAntigravityStepStrings returns the displayable strings for a step
+// and, separately, any bare-URL strings that the non-user noise filter
+// removed. Callers fall back to urlOnly when a step would otherwise have
+// no content, so URL-only assistant messages are not silently dropped.
+func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []string) {
 	for _, s := range dedupeStrings(agProtoCollectStrings(step.fields, 20)) {
 		s = strings.TrimSpace(s)
 		if isNoisyAntigravityStepString(s) {
 			continue
 		}
 		if step.role != RoleUser && isNoisyAntigravityNonUserStepString(s) {
+			urlOnly = append(urlOnly, s)
 			continue
 		}
 		cleaned = append(cleaned, s)
 	}
 	cleaned = dedupeStrings(cleaned)
+	urlOnly = dedupeStrings(urlOnly)
 	if step.role == RoleUser {
 		if prompt := bestAntigravityUserPrompt(cleaned); prompt != "" {
-			return []string{prompt}
+			return []string{prompt}, nil
 		}
 	}
-	return cleaned
+	return cleaned, urlOnly
 }
 
 func isNoisyAntigravityStepString(s string) bool {
@@ -874,11 +888,14 @@ func isNoisyAntigravityStepString(s string) bool {
 }
 
 func isNoisyAntigravityNonUserStepString(s string) bool {
-	if strings.HasPrefix(s, "http://") ||
-		strings.HasPrefix(s, "https://") {
-		return true
+	if !strings.HasPrefix(s, "http://") &&
+		!strings.HasPrefix(s, "https://") {
+		return false
 	}
-	return false
+	// Only a bare URL is metadata noise (the target echoed by tool
+	// actions). Assistant prose that merely begins with a link, which
+	// always contains whitespace, is real content and must be kept.
+	return !strings.ContainsAny(s, " \t\n")
 }
 
 func looksLikeAntigravityOpaqueID(s string) bool {
