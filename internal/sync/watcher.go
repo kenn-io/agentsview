@@ -252,22 +252,20 @@ func (w *Watcher) addShallowRoot(root string) {
 	}
 }
 
+// isUnderShallowRoot reports whether path's most specific containing watch
+// root is a shallow root. A path that also sits under a more specific
+// recursive root (for example a new sessions/YYYY/MM/DD directory beneath a
+// recursive sessions root that itself lives inside a shallow parent root) is
+// NOT shadowed, so auto-watching still adds new subdirectories of recursive
+// roots.
 func (w *Watcher) isUnderShallowRoot(path string) bool {
+	root, ok := w.mostSpecificContainingRoot(path)
+	if !ok {
+		return false
+	}
 	w.rootsMu.RLock()
 	defer w.rootsMu.RUnlock()
-
-	clean := filepath.Clean(path)
-	for _, root := range w.shallow {
-		rel, err := filepath.Rel(root, clean)
-		if err != nil || rel == "." {
-			continue
-		}
-		if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		return true
-	}
-	return false
+	return slices.Contains(w.shallow, root)
 }
 
 func (w *Watcher) shouldExclude(path string) bool {

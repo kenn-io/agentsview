@@ -29,6 +29,10 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 45: the Codex parser now imports renamed session
+// titles from session_index.jsonl. Existing Codex rows need
+// re-parsing so their titles reflect later renames.
+//
 // Bumped to 44: the VSCode Copilot parser now extracts per-turn
 // token usage (promptTokens/outputTokens) and the resolved model from
 // result.metadata into usage events, session output totals, and peak
@@ -206,7 +210,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 44
+const dataVersion = 45
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

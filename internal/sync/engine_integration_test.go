@@ -1919,6 +1919,369 @@ func TestSyncAllSinceCodexKeepsChangedArchivedDuplicate(t *testing.T) {
 	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid))
 }
 
+func TestSyncAllSinceCodexRefreshesSessionNameFromIndex(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			tsEarly, uuid,
+			"/home/user/code/api", "user",
+		).
+		AddCodexMessage(tsEarlyS1, "user", "Rename me").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+		uuid,
+	), 0o644))
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(path, initialTime, initialTime), "chtimes initial session")
+	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes initial index")
+
+	env.engine.SyncAll(context.Background(), nil)
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess, "expected Codex session to sync")
+	if assert.NotNil(t, sess.SessionName, "expected session_name to be imported") {
+		assert.Equal(t, "Original title", *sess.SessionName)
+	}
+
+	cutoff := time.Now().Add(-1 * time.Hour)
+	newIndexTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-06-11T18:00:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index")
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
+
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull after rename")
+	require.NotNil(t, sess, "expected renamed Codex session to remain")
+	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
+		assert.Equal(t, "Renamed title", *sess.SessionName)
+	}
+}
+
+func TestSyncAllSinceCodexIndexRefreshOnlySyncsRenamedSession(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	renamedUUID := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	unchangedUUID := "019eb791-cf7d-75c1-8439-9ed74c1229e2"
+	renamedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			tsEarly, renamedUUID,
+			"/home/user/code/api", "user",
+		).
+		AddCodexMessage(tsEarlyS1, "user", "Rename me").
+		String()
+	unchangedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			tsEarly, unchangedUUID,
+			"/home/user/code/api", "user",
+		).
+		AddCodexMessage(tsEarlyS1, "user", "Leave me").
+		String()
+	renamedPath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+renamedUUID+".jsonl",
+		renamedContent,
+	)
+	unchangedPath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-45-06-"+unchangedUUID+".jsonl",
+		unchangedContent,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original renamed title","updated_at":"2026-06-11T17:34:20Z"}`+"\n"+
+			`{"id":"%s","thread_name":"Unchanged title","updated_at":"2026-06-11T17:35:20Z"}`+"\n",
+		renamedUUID, unchangedUUID,
+	), 0o644))
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(renamedPath, initialTime, initialTime), "chtimes initial renamed")
+	require.NoError(t, os.Chtimes(unchangedPath, initialTime, initialTime), "chtimes initial unchanged")
+	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes initial index")
+
+	env.engine.SyncAll(context.Background(), nil)
+	unchangedBefore, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	require.NoError(t, err, "GetSessionFull unchanged before rename")
+	require.NotNil(t, unchangedBefore, "expected unchanged Codex session to sync")
+	require.NotNil(t, unchangedBefore.SessionName, "expected unchanged session_name")
+	assert.Equal(t, "Unchanged title", *unchangedBefore.SessionName)
+	require.NotNil(t, unchangedBefore.FileMtime, "expected unchanged file_mtime")
+
+	cutoff := time.Now().Add(-1 * time.Hour)
+	newIndexTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-06-11T18:00:00Z"}`+"\n"+
+			`{"id":"%s","thread_name":"Unchanged title","updated_at":"2026-06-11T17:35:20Z"}`+"\n",
+		renamedUUID, unchangedUUID,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index")
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
+
+	renamed, err := env.db.GetSessionFull(context.Background(), "codex:"+renamedUUID)
+	require.NoError(t, err, "GetSessionFull renamed after index update")
+	require.NotNil(t, renamed, "expected renamed Codex session to remain")
+	if assert.NotNil(t, renamed.SessionName, "expected renamed session_name") {
+		assert.Equal(t, "Renamed title", *renamed.SessionName)
+	}
+
+	unchangedAfter, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	require.NoError(t, err, "GetSessionFull unchanged after index update")
+	require.NotNil(t, unchangedAfter, "expected unchanged Codex session to remain")
+	if assert.NotNil(t, unchangedAfter.SessionName, "expected unchanged session_name") {
+		assert.Equal(t, "Unchanged title", *unchangedAfter.SessionName)
+	}
+	assert.Equal(t, *unchangedBefore.FileMtime, *unchangedAfter.FileMtime,
+		"unchanged session should not be reparsed just because the global index mtime advanced")
+
+	unchangedIndexTime := time.Now().Add(-15 * time.Minute)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-06-11T18:00:00Z"}`+"\n"+
+			`{"id":"%s","thread_name":"Unchanged title","updated_at":"2026-06-11T17:35:20Z"}`+"\n",
+		renamedUUID, unchangedUUID,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, unchangedIndexTime, unchangedIndexTime), "chtimes unchanged index")
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 0, stats.Synced,
+		"SyncAll synced = %d, want 0 when only the global index mtime changed", stats.Synced)
+}
+
+func TestSyncPathsCodexIndexEventRefreshesRenamedSession(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	renamedUUID := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	unchangedUUID := "019eb791-cf7d-75c1-8439-9ed74c1229e2"
+	renamedPath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+renamedUUID+".jsonl",
+		testjsonl.NewSessionBuilder().
+			AddCodexMeta(tsEarly, renamedUUID, "/home/user/code/api", "user").
+			AddCodexMessage(tsEarlyS1, "user", "Rename me").
+			String(),
+	)
+	unchangedPath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-45-06-"+unchangedUUID+".jsonl",
+		testjsonl.NewSessionBuilder().
+			AddCodexMeta(tsEarly, unchangedUUID, "/home/user/code/api", "user").
+			AddCodexMessage(tsEarlyS1, "user", "Leave me").
+			String(),
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2026-06-11T17:34:20Z"}`+"\n"+
+			`{"id":"%s","thread_name":"Unchanged title","updated_at":"2026-06-11T17:35:20Z"}`+"\n",
+		renamedUUID, unchangedUUID,
+	), 0o644))
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(renamedPath, initialTime, initialTime), "chtimes renamed")
+	require.NoError(t, os.Chtimes(unchangedPath, initialTime, initialTime), "chtimes unchanged")
+	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes index")
+
+	env.engine.SyncAll(context.Background(), nil)
+	unchangedBefore, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	require.NoError(t, err, "GetSessionFull unchanged before rename")
+	require.NotNil(t, unchangedBefore, "expected unchanged Codex session to sync")
+	require.NotNil(t, unchangedBefore.FileMtime, "expected unchanged file_mtime")
+
+	newIndexTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-06-11T18:00:00Z"}`+"\n"+
+			`{"id":"%s","thread_name":"Unchanged title","updated_at":"2026-06-11T17:35:20Z"}`+"\n",
+		renamedUUID, unchangedUUID,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index")
+
+	// The live watcher only delivers the index path; SyncPaths must translate
+	// it into a refresh of the renamed session.
+	env.engine.SyncPaths([]string{indexPath})
+
+	renamed, err := env.db.GetSessionFull(context.Background(), "codex:"+renamedUUID)
+	require.NoError(t, err, "GetSessionFull renamed after index event")
+	require.NotNil(t, renamed, "expected renamed Codex session to remain")
+	if assert.NotNil(t, renamed.SessionName, "expected renamed session_name") {
+		assert.Equal(t, "Renamed title", *renamed.SessionName)
+	}
+
+	unchangedAfter, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	require.NoError(t, err, "GetSessionFull unchanged after index event")
+	require.NotNil(t, unchangedAfter, "expected unchanged Codex session to remain")
+	require.NotNil(t, unchangedAfter.FileMtime, "expected unchanged file_mtime after event")
+	assert.Equal(t, *unchangedBefore.FileMtime, *unchangedAfter.FileMtime,
+		"unchanged session must not be reparsed from an index-only event")
+}
+
+func TestSyncAllSinceCodexIndexRefreshDoesNotShadowChangedArchivedDuplicate(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+
+	uuid := "f7a8b9ca-7890-1234-ef01-456789012345"
+	liveContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			tsEarly, uuid,
+			"/home/user/code/api", "user",
+		).
+		AddCodexMessage(tsEarlyS1, "user", "Live copy").
+		String()
+	archivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(
+			tsEarly, uuid,
+			"/home/user/code/api", "user",
+		).
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		AddCodexMessage(tsEarlyS5, "assistant", "Updated archive").
+		String()
+
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		liveContent,
+	)
+	archivedPath := env.writeSession(
+		t,
+		archivedDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		liveContent,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2026-05-04T15:00:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes initial live")
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes initial archived")
+	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes initial index")
+
+	env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("codex:"+uuid))
+
+	newTime := time.Now().Add(-30 * time.Minute)
+	cutoff := time.Now().Add(-1 * time.Hour)
+	require.NoError(t, os.WriteFile(archivedPath, []byte(archivedContent), 0o644))
+	require.NoError(t, os.Chtimes(archivedPath, newTime, newTime), "chtimes archived")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-05-04T16:00:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, newTime, newTime), "chtimes index")
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
+
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess, "expected Codex session to sync")
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid))
+	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
+		assert.Equal(t, "Renamed title", *sess.SessionName)
+	}
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+}
+
+func TestSyncPathsCodexIndexEventRefreshesStoredDuplicate(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+
+	uuid := "f7a8b9ca-7890-1234-ef01-456789012345"
+	archivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		AddCodexMessage(tsEarlyS5, "assistant", "Archived reply").
+		String()
+	staleLiveContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
+		String()
+
+	// Only the archived copy exists at first sync, so the DB tracks it.
+	archivedPath := env.writeSession(
+		t, archivedDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		archivedContent,
+	)
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2026-05-04T15:00:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
+	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes index")
+
+	env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"DB must track the archived copy before the rename")
+
+	// A stale live duplicate now exists, and the index records a rename.
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		staleLiveContent,
+	)
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
+	newIndexTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-05-04T16:00:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index rename")
+
+	env.engine.SyncPaths([]string{indexPath})
+
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull after index event")
+	require.NotNil(t, sess, "expected Codex session to remain")
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"index rename must refresh the stored archived copy, not the stale live duplicate")
+	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
+		assert.Equal(t, "Renamed title", *sess.SessionName)
+	}
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+}
+
 func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {
 	env := setupTestEnv(t)
 

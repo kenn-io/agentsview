@@ -588,9 +588,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionPiCwd(t *testing.T) {
-	assert.Equal(t, 44, CurrentDataVersion(),
-		"Pi cwd parser changes require a data version bump")
+func TestCurrentDataVersionCodexTitle(t *testing.T) {
+	assert.Equal(t, 45, CurrentDataVersion(),
+		"Codex session_index.jsonl title import requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

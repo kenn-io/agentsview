@@ -15,17 +15,22 @@ import (
 )
 
 // buildTarCommand generates the remote tar command for the given
-// agent directories. Uses -C / so paths are relative to root.
-// Strips leading / from each dir and shell-quotes each path.
+// agent directories and extra files. Uses -C / so paths are relative
+// to root. Strips leading / from each path and shell-quotes it. The
+// extra files are resolved to exist on the remote (see
+// buildResolveScript), so tar does not fail on a missing path.
 func buildTarCommand(
 	dirs map[parser.AgentType][]string,
+	extraFiles []string,
 ) string {
 	var paths []string
 	for _, agentDirs := range dirs {
 		for _, d := range agentDirs {
-			p := strings.TrimPrefix(d, "/")
-			paths = append(paths, shellQuote(p))
+			paths = append(paths, shellQuote(strings.TrimPrefix(d, "/")))
 		}
+	}
+	for _, f := range extraFiles {
+		paths = append(paths, shellQuote(strings.TrimPrefix(f, "/")))
 	}
 	return "tar cf - -C / -- " + strings.Join(paths, " ")
 }
@@ -42,8 +47,9 @@ func downloadAndExtract(
 	ctx context.Context,
 	host, user string, port int, sshOpts []string,
 	dirs map[parser.AgentType][]string,
+	extraFiles []string,
 ) (string, error) {
-	tarCmd := buildTarCommand(dirs)
+	tarCmd := buildTarCommand(dirs, extraFiles)
 	stdout, cleanup, err := runSSHStream(
 		ctx, host, user, port, sshOpts, tarCmd,
 	)

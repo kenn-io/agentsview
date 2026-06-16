@@ -44,7 +44,7 @@ func (rs *RemoteSync) Run(
 	fmt.Printf(
 		"Resolving agent directories on %s...\n", rs.Host,
 	)
-	dirs, err := resolveDirs(
+	dirs, extraFiles, err := resolveDirs(
 		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts,
 	)
 	if err != nil {
@@ -62,7 +62,7 @@ func (rs *RemoteSync) Run(
 		rs.Host, len(dirs),
 	)
 	tmpDir, err := downloadAndExtract(
-		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts, dirs,
+		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts, dirs, extraFiles,
 	)
 	if err != nil {
 		return stats, fmt.Errorf(

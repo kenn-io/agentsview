@@ -1,7 +1,9 @@
 package ssh
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,21 +52,71 @@ func TestResolveScriptExitsZero(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(string(out)))
 }
 
+// TestResolveScriptIncludesCodexIndex verifies the resolve script emits the
+// Codex session_index.jsonl as an extra file when it exists, so renamed
+// titles get transferred and imported during remote SSH sync. Runs the real
+// script through sh against a temp HOME rather than mocking it.
+func TestResolveScriptIncludesCodexIndex(t *testing.T) {
+	home := t.TempDir()
+	sessionsDir := filepath.Join(home, ".codex", "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755), "mkdir sessions")
+	indexPath := filepath.Join(home, ".codex", "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, []byte("{}\n"), 0o644), "write index")
+
+	script := buildResolveScript()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"HOME=" + home}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	dirs, extraFiles := parseResolvedDirs(string(out))
+	assert.Contains(t, dirs[parser.AgentCodex], sessionsDir,
+		"codex sessions dir should be resolved")
+	assert.Contains(t, extraFiles, indexPath,
+		"codex session_index.jsonl should be included as an extra file")
+}
+
+// TestResolveScriptSkipsMissingCodexIndex verifies that a missing index
+// produces no extra-file entry, so the transfer's tar command never names a
+// nonexistent path (which would be a fatal, non-benign error).
+func TestResolveScriptSkipsMissingCodexIndex(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t,
+		os.MkdirAll(filepath.Join(home, ".codex", "sessions"), 0o755),
+		"mkdir sessions")
+
+	script := buildResolveScript()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"HOME=" + home}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	_, extraFiles := parseResolvedDirs(string(out))
+	assert.Empty(t, extraFiles,
+		"no extra files when session_index.jsonl is absent")
+}
+
 func TestParseResolvedDirs(t *testing.T) {
 	input := "claude:/home/wes/.claude/projects\n" +
+		"codex:/home/wes/.codex/sessions\n" +
 		"codex:\n" +
 		"copilot:/home/wes/.copilot\n" +
+		"@file:/home/wes/.codex/session_index.jsonl\n" +
+		"@file:/home/wes/.codex/session_index.jsonl\n" +
 		"\n"
 
-	dirs := parseResolvedDirs(input)
+	dirs, extraFiles := parseResolvedDirs(input)
 
-	// codex has empty dir — excluded.
-	_, ok := dirs[parser.AgentCodex]
-	assert.False(t, ok, "codex should be excluded (empty dir)")
+	// codex has one valid dir and one empty (excluded) entry.
+	assert.Equal(t, []string{"/home/wes/.codex/sessions"}, dirs[parser.AgentCodex])
 
 	// claude and copilot present.
 	assert.Equal(t, []string{"/home/wes/.claude/projects"}, dirs[parser.AgentClaude])
 	assert.Equal(t, []string{"/home/wes/.copilot"}, dirs[parser.AgentCopilot])
 
-	assert.Len(t, dirs, 2)
+	assert.Len(t, dirs, 3)
+
+	// The duplicate index file line is deduplicated.
+	assert.Equal(t,
+		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
 }

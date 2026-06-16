@@ -14,14 +14,16 @@ func TestBuildTarCommand(t *testing.T) {
 		parser.AgentClaude: {"/home/wes/.claude/projects"},
 		parser.AgentCodex:  {"/home/wes/.codex/sessions"},
 	}
-	cmd := buildTarCommand(dirs)
+	cmd := buildTarCommand(dirs, []string{"/home/wes/.codex/session_index.jsonl"})
 
 	assert.True(t, strings.HasPrefix(cmd, "tar cf - -C / -- "), "bad prefix: %s", cmd)
 	// Paths are shell-quoted.
 	assert.Contains(t, cmd, "'home/wes/.claude/projects'")
 	assert.Contains(t, cmd, "'home/wes/.codex/sessions'")
-	// No leading slash in dir args.
-	assert.NotContains(t, cmd, "'/home/", "dir has leading slash: %s", cmd)
+	// Extra files are included, shell-quoted, with no leading slash.
+	assert.Contains(t, cmd, "'home/wes/.codex/session_index.jsonl'")
+	// No leading slash in path args.
+	assert.NotContains(t, cmd, "'/home/", "path has leading slash: %s", cmd)
 }
 
 func TestRemapPath(t *testing.T) {

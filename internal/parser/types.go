@@ -76,6 +76,13 @@ type AgentDef struct {
 	// WatchSubdirs list. When set, it takes precedence over
 	// WatchSubdirs. Nil for agents that use WatchSubdirs.
 	WatchRootsFunc func(string) []string
+
+	// ShallowWatchRootsFunc resolves directories to watch shallowly
+	// (root only) for a configured root, in addition to the agent's
+	// normal recursive watch. Used for sibling metadata files that
+	// live outside the session tree, such as Codex's
+	// session_index.jsonl. Nil for agents with no such files.
+	ShallowWatchRootsFunc func(string) []string
 }
 
 // Registry lists all supported agents. Order is stable and
@@ -113,10 +120,11 @@ var Registry = []AgentDef{
 			".codex/sessions",
 			".codex/archived_sessions",
 		},
-		IDPrefix:       "codex:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverCodexSessions,
-		FindSourceFunc: FindCodexSourceFile,
+		IDPrefix:              "codex:",
+		FileBased:             true,
+		DiscoverFunc:          DiscoverCodexSessions,
+		FindSourceFunc:        FindCodexSourceFile,
+		ShallowWatchRootsFunc: ResolveCodexShallowWatchRoots,
 	},
 	{
 		Type:           AgentCopilot,

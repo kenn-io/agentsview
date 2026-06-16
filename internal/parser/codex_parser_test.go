@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -48,6 +49,95 @@ func TestParseCodexSession_Basic(t *testing.T) {
 	assert.Equal(t, "codex:abc-123", sess.ID)
 	assert.Equal(t, 2, len(msgs))
 	assertSessionMeta(t, sess, "codex:abc-123", "my_api", AgentCodex)
+}
+
+func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions", "2026", "06", "11")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	sessionPath := filepath.Join(sessionDir, "rollout-2026-06-11T12-44-06-019eb791-cf7d-75c1-8439-9ed74c1229e1.jsonl")
+	content := loadFixture(t, "codex/standard_session.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	index := `{"id":"abc-123","thread_name":"Renamed from Codex","updated_at":"2026-06-11T17:34:20.3755243Z"}` + "\n"
+	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
+
+	sess, msgs, err := ParseCodexSession(sessionPath, "local", false)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "Renamed from Codex", sess.SessionName)
+	assert.Equal(t, "Add rate limiting", sess.FirstMessage)
+	assert.Len(t, msgs, 2)
+}
+
+func TestParseCodexSession_LeavesSessionNameEmptyWithoutThreadName(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions", "2026", "06", "11")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	sessionPath := filepath.Join(sessionDir, "rollout-2026-06-11T12-44-06-019eb791-cf7d-75c1-8439-9ed74c1229e1.jsonl")
+	content := loadFixture(t, "codex/standard_session.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	index := `{"id":"abc-123","updated_at":"2026-06-11T17:34:20.3755243Z"}` + "\n"
+	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
+
+	sess, _, err := ParseCodexSession(sessionPath, "local", false)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.SessionName)
+	assert.Equal(t, "Add rate limiting", sess.FirstMessage)
+}
+
+func TestParseCodexSession_UsesThreadNameFromArchivedSessions(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	sessionPath := filepath.Join(sessionDir, "rollout-2026-06-11T12-44-06-019eb791-cf7d-75c1-8439-9ed74c1229e1.jsonl")
+	content := loadFixture(t, "codex/standard_session.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	index := `{"id":"abc-123","thread_name":"Archived title","updated_at":"2026-06-11T17:34:20.3755243Z"}` + "\n"
+	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
+
+	sess, _, err := ParseCodexSession(sessionPath, "local", false)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "Archived title", sess.SessionName)
+}
+
+func TestParseCodexSession_MtimeIncludesSessionIndex(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "sessions", "2026", "06", "11")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	sessionPath := filepath.Join(sessionDir, "rollout-2026-06-11T12-44-06-019eb791-cf7d-75c1-8439-9ed74c1229e1.jsonl")
+	content := loadFixture(t, "codex/standard_session.jsonl")
+	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	index := `{"id":"abc-123","thread_name":"Original","updated_at":"2026-06-11T17:34:20Z"}` + "\n"
+	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
+
+	sess1, _, err := ParseCodexSession(sessionPath, "local", false)
+	require.NoError(t, err)
+	mtime1 := sess1.File.Mtime
+
+	// Simulate a rename by rewriting the index after a delay.
+	future := time.Now().Add(2 * time.Second)
+	renamed := `{"id":"abc-123","thread_name":"Renamed","updated_at":"2026-06-11T18:00:00Z"}` + "\n"
+	require.NoError(t, os.WriteFile(indexPath, []byte(renamed), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, future, future))
+
+	sess2, _, err := ParseCodexSession(sessionPath, "local", false)
+	require.NoError(t, err)
+	assert.Greater(t, sess2.File.Mtime, mtime1, "mtime must advance when session_index.jsonl is updated")
+	assert.Equal(t, "Renamed", sess2.SessionName)
 }
 
 func TestParseCodexSession_PreservesAssistantBlockquotes(t *testing.T) {

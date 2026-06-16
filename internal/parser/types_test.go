@@ -737,6 +737,59 @@ func TestOpenCodeStorageSessionIDsNilForNonStorageRoot(t *testing.T) {
 	assert.Nil(t, got, "want nil for SQLite-only root")
 }
 
+func TestResolveCodexShallowWatchRoots(t *testing.T) {
+	tests := []struct {
+		name string
+		root string
+		want []string
+	}{
+		{
+			name: "sessions dir",
+			root: filepath.Join("home", ".codex", "sessions"),
+			want: []string{filepath.Join("home", ".codex")},
+		},
+		{
+			name: "archived sessions dir",
+			root: filepath.Join("home", ".codex", "archived_sessions"),
+			want: []string{filepath.Join("home", ".codex")},
+		},
+		{
+			name: "empty root",
+			root: "",
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveCodexShallowWatchRoots(tt.root)
+			assert.Truef(t, slices.Equal(got, tt.want),
+				"ResolveCodexShallowWatchRoots(%q) = %v, want %v",
+				tt.root, got, tt.want)
+		})
+	}
+}
+
+func TestCodexDefShallowWatchesIndexParent(t *testing.T) {
+	var def AgentDef
+	found := false
+	for _, d := range Registry {
+		if d.Type == AgentCodex {
+			def = d
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "Codex agent def must exist")
+	require.NotNil(t, def.ShallowWatchRootsFunc,
+		"Codex must watch its index parent shallowly")
+	got := def.ShallowWatchRootsFunc(
+		filepath.Join("home", ".codex", "sessions"),
+	)
+	want := []string{filepath.Join("home", ".codex")}
+	assert.Truef(t, slices.Equal(got, want),
+		"Codex ShallowWatchRootsFunc = %v, want %v", got, want)
+}
+
 func TestResolveOpenCodeWatchRootsStorage(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(

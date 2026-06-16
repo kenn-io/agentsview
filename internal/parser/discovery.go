@@ -427,6 +427,21 @@ func ParseMiMoCodeSQLiteVirtualPath(
 	return parseOpenCodeFormatVirtualPath(mimoFmt.dbName, sourcePath)
 }
 
+// ResolveCodexShallowWatchRoots returns directories that should be watched
+// shallowly (root only) for live Codex updates, in addition to the recursive
+// watch on the configured sessions root. Codex writes title renames to
+// session_index.jsonl in the parent of sessions/ and archived_sessions/, so
+// that parent must be watched for renames to surface without waiting for the
+// periodic sync. A shallow watch avoids recursing over unrelated Codex state
+// such as logs.
+func ResolveCodexShallowWatchRoots(root string) []string {
+	parent := filepath.Dir(root)
+	if parent == "" || parent == "." || parent == root {
+		return nil
+	}
+	return []string{parent}
+}
+
 // DiscoverClaudeProjects finds all project directories under the
 // Claude projects dir and returns their JSONL session files.
 func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {

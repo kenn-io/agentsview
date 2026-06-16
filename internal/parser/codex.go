@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -29,6 +30,19 @@ const (
 var errCodexIncrementalNeedsFullParse = errors.New(
 	"codex subagent event requires full parse",
 )
+
+var codexSessionIndexCache = struct {
+	mu      sync.Mutex
+	entries map[string]codexSessionIndexEntry
+}{
+	entries: make(map[string]codexSessionIndexEntry),
+}
+
+type codexSessionIndexEntry struct {
+	mtime  int64
+	size   int64
+	titles map[string]string
+}
 
 // codexSessionBuilder accumulates state while scanning a Codex
 // JSONL session file line by line.
@@ -1325,12 +1339,23 @@ func ParseCodexSession(
 		}
 	}
 
+	mtime := info.ModTime().UnixNano()
+	// Include session_index.jsonl mtime so renames trigger a re-parse.
+	if idxPath := codexSessionIndexPath(path); idxPath != "" {
+		if idxInfo, err := os.Stat(idxPath); err == nil {
+			if idxMtime := idxInfo.ModTime().UnixNano(); idxMtime > mtime {
+				mtime = idxMtime
+			}
+		}
+	}
+
 	sess := &ParsedSession{
 		ID:                sessionID,
 		Project:           b.project,
 		Machine:           machine,
 		Agent:             AgentCodex,
 		FirstMessage:      b.firstMessage,
+		SessionName:       LookupCodexThreadName(path, b.sessionID),
 		StartedAt:         b.startedAt,
 		EndedAt:           b.endedAt,
 		MessageCount:      len(b.messages),
@@ -1339,13 +1364,130 @@ func ParseCodexSession(
 		File: FileInfo{
 			Path:  path,
 			Size:  info.Size(),
-			Mtime: info.ModTime().UnixNano(),
+			Mtime: mtime,
 		},
 	}
 
 	accumulateMessageTokenUsage(sess, b.messages)
 
 	return sess, b.messages, nil
+}
+
+// CodexSessionIndexFilename is the name of the Codex index file that maps
+// session UUIDs to their (renameable) thread titles. It sits next to the
+// sessions/ and archived_sessions/ directories.
+const CodexSessionIndexFilename = "session_index.jsonl"
+
+// CodexSessionIndexTitles returns the session UUID to thread-title map from
+// a Codex session_index.jsonl file, or nil when it cannot be read. The
+// underlying read is cached by path, mtime, and size.
+func CodexSessionIndexTitles(indexPath string) map[string]string {
+	titles, err := loadCodexSessionIndex(indexPath)
+	if err != nil {
+		return nil
+	}
+	return titles
+}
+
+// LookupCodexThreadName returns the current Codex thread name for a session
+// from the session_index.jsonl file next to the session root.
+func LookupCodexThreadName(sessionPath, sessionID string) string {
+	if strings.TrimSpace(sessionID) == "" {
+		return ""
+	}
+	indexPath := codexSessionIndexPath(sessionPath)
+	if indexPath == "" {
+		return ""
+	}
+	titles, err := loadCodexSessionIndex(indexPath)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(titles[sessionID])
+}
+
+// CodexEffectiveMtime returns the effective mtime for a Codex session file,
+// incorporating session_index.jsonl so renames invalidate the cache.
+func CodexEffectiveMtime(sessionPath string, fileMtime int64) int64 {
+	if idxPath := codexSessionIndexPath(sessionPath); idxPath != "" {
+		if si, err := os.Stat(idxPath); err == nil {
+			if idxMtime := si.ModTime().UnixNano(); idxMtime > fileMtime {
+				return idxMtime
+			}
+		}
+	}
+	return fileMtime
+}
+
+func codexSessionIndexPath(sessionPath string) string {
+	dir := filepath.Dir(sessionPath)
+	for dir != "" {
+		base := filepath.Base(dir)
+		if base == "sessions" || base == "archived_sessions" {
+			return filepath.Join(
+				filepath.Dir(dir), CodexSessionIndexFilename,
+			)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+func loadCodexSessionIndex(indexPath string) (map[string]string, error) {
+	info, err := os.Stat(indexPath)
+	if err != nil {
+		return nil, err
+	}
+
+	mtime := info.ModTime().UnixNano()
+	size := info.Size()
+
+	codexSessionIndexCache.mu.Lock()
+	if entry, ok := codexSessionIndexCache.entries[indexPath]; ok &&
+		entry.mtime == mtime && entry.size == size {
+		codexSessionIndexCache.mu.Unlock()
+		return entry.titles, nil
+	}
+	codexSessionIndexCache.mu.Unlock()
+
+	f, err := os.Open(indexPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	titles := make(map[string]string)
+	s := bufio.NewScanner(f)
+	s.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+	for s.Scan() {
+		line := s.Text()
+		if !gjson.Valid(line) {
+			continue
+		}
+		id := gjson.Get(line, "id").Str
+		title := strings.TrimSpace(gjson.Get(line, "thread_name").Str)
+		if id == "" || title == "" {
+			continue
+		}
+		titles[id] = title
+	}
+	if err := s.Err(); err != nil {
+		return nil, err
+	}
+
+	codexSessionIndexCache.mu.Lock()
+	codexSessionIndexCache.entries[indexPath] = codexSessionIndexEntry{
+		mtime:  mtime,
+		size:   size,
+		titles: titles,
+	}
+	codexSessionIndexCache.mu.Unlock()
+
+	return titles, nil
 }
 
 // classifyCodexTermination maps the most recent task lifecycle

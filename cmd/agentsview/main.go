@@ -515,11 +515,26 @@ func startFileWatcher(
 	}
 
 	var roots []watchRoot
+	seenRoots := make(map[string]struct{})
+	addRoot := func(r watchRoot) {
+		if _, ok := seenRoots[r.root]; ok {
+			return
+		}
+		seenRoots[r.root] = struct{}{}
+		roots = append(roots, r)
+	}
 	for _, def := range parser.Registry {
 		if !def.FileBased {
 			continue
 		}
 		for _, d := range cfg.ResolveDirs(def.Type) {
+			if def.ShallowWatchRootsFunc != nil {
+				for _, watchDir := range def.ShallowWatchRootsFunc(d) {
+					if _, err := os.Stat(watchDir); err == nil {
+						addRoot(watchRoot{d, watchDir, true})
+					}
+				}
+			}
 			if def.WatchRootsFunc != nil {
 				watchDirs := def.WatchRootsFunc(d)
 				if len(watchDirs) == 0 {
@@ -528,9 +543,7 @@ func startFileWatcher(
 				}
 				for _, watchDir := range watchDirs {
 					if _, err := os.Stat(watchDir); err == nil {
-						roots = append(
-							roots, watchRoot{d, watchDir, def.ShallowWatch},
-						)
+						addRoot(watchRoot{d, watchDir, def.ShallowWatch})
 						continue
 					}
 					unwatchedDirs = append(unwatchedDirs, d)
@@ -539,18 +552,14 @@ func startFileWatcher(
 			}
 			if len(def.WatchSubdirs) == 0 {
 				if _, err := os.Stat(d); err == nil {
-					roots = append(
-						roots, watchRoot{d, d, def.ShallowWatch},
-					)
+					addRoot(watchRoot{d, d, def.ShallowWatch})
 				}
 				continue
 			}
 			for _, sub := range def.WatchSubdirs {
 				watchDir := filepath.Join(d, sub)
 				if _, err := os.Stat(watchDir); err == nil {
-					roots = append(
-						roots, watchRoot{d, watchDir, def.ShallowWatch},
-					)
+					addRoot(watchRoot{d, watchDir, def.ShallowWatch})
 				}
 			}
 		}

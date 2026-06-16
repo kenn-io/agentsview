@@ -330,6 +330,9 @@ func (e *Engine) classifyPaths(
 		// path was deleted, so they bypass classifyOnePath.
 		dfs := e.classifyAntigravitySidecarPath(p)
 		if len(dfs) == 0 {
+			dfs = e.classifyCodexIndexPath(p)
+		}
+		if len(dfs) == 0 {
 			if df, ok := e.classifyOnePath(
 				p, geminiProjectsByDir,
 			); ok {
@@ -2081,7 +2084,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	if !since.IsZero() {
-		all = filterFilesByMtime(all, since)
+		all = e.filterFilesByMtime(all, since)
 	}
 
 	all = dedupeDiscoveredFiles(all)
@@ -2476,11 +2479,12 @@ func (e *Engine) recordSyncFinished() {
 // (so errors surface in the worker rather than being silently
 // dropped). The cost is one stat per file — acceptable for
 // polling use cases where most files will be skipped.
-func filterFilesByMtime(
+func (e *Engine) filterFilesByMtime(
 	files []parser.DiscoveredFile, cutoff time.Time,
 ) []parser.DiscoveredFile {
 	cutoffNs := cutoff.UnixNano()
 	out := files[:0]
+	codexIndexRefresh := make(map[string][]parser.DiscoveredFile)
 	for _, f := range files {
 		mtime, err := discoveredFileMtime(f)
 		if err != nil {
@@ -2489,7 +2493,27 @@ func filterFilesByMtime(
 		}
 		if mtime >= cutoffNs {
 			out = append(out, f)
+			continue
 		}
+		if f.Agent != parser.AgentCodex || !e.codexIndexNeedsRefreshSince(f.Path, cutoffNs) {
+			continue
+		}
+		key := discoveredFileKey(f)
+		codexIndexRefresh[key] = append(codexIndexRefresh[key], f)
+	}
+	if len(codexIndexRefresh) == 0 {
+		return out
+	}
+
+	included := make(map[string]struct{}, len(out))
+	for _, f := range out {
+		included[discoveredFileKey(f)] = struct{}{}
+	}
+	for key, candidates := range codexIndexRefresh {
+		if _, ok := included[key]; ok {
+			continue
+		}
+		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
 	}
 	return out
 }
@@ -3878,26 +3902,211 @@ func (e *Engine) tryIncrementalJSONL(
 	}, true
 }
 
+func (e *Engine) shouldSkipCodex(
+	path string, info os.FileInfo,
+) bool {
+	if e.forceParse { // parse-diff: always re-parse
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok || storedSize != info.Size() {
+		return false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	fileMtime := info.ModTime().UnixNano()
+	effectiveMtime := parser.CodexEffectiveMtime(path, fileMtime)
+	if storedMtime == effectiveMtime {
+		return true
+	}
+	return effectiveMtime > storedMtime &&
+		fileMtime <= storedMtime &&
+		!e.codexIndexSessionNameChanged(path)
+}
+
+// codexIndexMtimeChanged returns true when session_index.jsonl is newer
+// than the stored DB mtime, meaning a title rename happened since the
+// last parse, regardless of whether the session file itself also changed.
+func (e *Engine) codexIndexMtimeChanged(path string) bool {
+	indexMtime := parser.CodexEffectiveMtime(path, 0)
+	if indexMtime == 0 {
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	return indexMtime > storedMtime && e.codexIndexSessionNameChanged(path)
+}
+
+func (e *Engine) codexIndexNeedsRefreshSince(
+	path string, cutoffNs int64,
+) bool {
+	indexMtime := parser.CodexEffectiveMtime(path, 0)
+	if indexMtime == 0 || indexMtime < cutoffNs {
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	return indexMtime > storedMtime && e.codexIndexSessionNameChanged(path)
+}
+
+func (e *Engine) codexIndexSessionNameChanged(path string) bool {
+	uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(path))
+	if uuid == "" {
+		return false
+	}
+	currentName := parser.LookupCodexThreadName(path, uuid)
+	stored, err := e.db.GetSessionFull(
+		context.Background(), e.idPrefix+"codex:"+uuid,
+	)
+	if err != nil || stored == nil {
+		return true
+	}
+	storedName := ""
+	if stored.SessionName != nil {
+		storedName = strings.TrimSpace(*stored.SessionName)
+	}
+	return currentName != storedName
+}
+
+// classifyCodexIndexPath maps a Codex session_index.jsonl change to the
+// session files whose stored title no longer matches the index. The live
+// watcher sees this file only because its parent directory is watched
+// shallowly (see ResolveCodexShallowWatchRoots); without this translation a
+// title-only rename would not refresh until the next periodic sync, since the
+// session transcript itself is untouched.
+func (e *Engine) classifyCodexIndexPath(
+	path string,
+) []parser.DiscoveredFile {
+	if filepath.Base(path) != parser.CodexSessionIndexFilename {
+		return nil
+	}
+	indexDir := filepath.Dir(path)
+	var sessionRoots []string
+	for _, agDir := range e.agentDirs[parser.AgentCodex] {
+		if agDir != "" && filepath.Dir(agDir) == indexDir {
+			sessionRoots = append(sessionRoots, agDir)
+		}
+	}
+	if len(sessionRoots) == 0 {
+		return nil
+	}
+	titles := parser.CodexSessionIndexTitles(path)
+	if len(titles) == 0 {
+		return nil
+	}
+
+	var out []parser.DiscoveredFile
+	for uuid, title := range titles {
+		if !e.codexStoredNameDiffers(uuid, title) {
+			continue
+		}
+		var candidates []parser.DiscoveredFile
+		for _, root := range sessionRoots {
+			if src := parser.FindCodexSourceFile(root, uuid); src != "" {
+				candidates = append(candidates, parser.DiscoveredFile{
+					Path:  src,
+					Agent: parser.AgentCodex,
+				})
+			}
+		}
+		if len(candidates) == 0 {
+			continue
+		}
+		// A UUID can exist in both sessions/ and archived_sessions/.
+		// Prefer the path the DB already tracks so a title rename does
+		// not reparse a stale duplicate over the stored copy.
+		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
+	}
+	return out
+}
+
+// codexStoredNameDiffers reports whether the stored session_name for a Codex
+// session differs from the given index title. Unknown sessions return false:
+// a brand-new session is synced through its own transcript event, not the
+// index, so the index path only refreshes renames of already-synced sessions.
+func (e *Engine) codexStoredNameDiffers(uuid, indexTitle string) bool {
+	stored, err := e.db.GetSessionFull(
+		context.Background(), e.idPrefix+"codex:"+uuid,
+	)
+	if err != nil || stored == nil {
+		return false
+	}
+	storedName := ""
+	if stored.SessionName != nil {
+		storedName = strings.TrimSpace(*stored.SessionName)
+	}
+	return strings.TrimSpace(indexTitle) != storedName
+}
+
+func pickPreferredCodexDiscoveredFile(
+	database *db.DB, candidates []parser.DiscoveredFile,
+) parser.DiscoveredFile {
+	if len(candidates) == 0 {
+		return parser.DiscoveredFile{}
+	}
+	if id := parser.CodexSessionUUIDFromFilename(
+		filepath.Base(candidates[0].Path),
+	); id != "" {
+		storedPath := filepath.Clean(database.GetSessionFilePath("codex:" + id))
+		if storedPath != "" {
+			for _, candidate := range candidates {
+				if filepath.Clean(candidate.Path) == storedPath {
+					return candidate
+				}
+			}
+		}
+	}
+	chosen := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if preferDiscoveredFile(candidate, chosen) {
+			chosen = candidate
+		}
+	}
+	return chosen
+}
+
 func (e *Engine) processCodex(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
 
-	// Fast path: skip by file_path + mtime before parsing.
-	if e.shouldSkipByPath(file.Path, info) {
+	// Fast path: skip by file_path + effective mtime (includes session_index.jsonl).
+	if e.shouldSkipCodex(file.Path, info) {
 		return processResult{skip: true}
 	}
 
-	codexParseFn := func(
-		path string, offset int64, startOrd int,
-	) ([]parser.ParsedMessage, time.Time, int64, error) {
-		return parser.ParseCodexSessionFrom(
-			path, offset, startOrd, false,
-		)
-	}
-	if res, ok := e.tryIncrementalJSONL(
-		file, info, parser.AgentCodex, codexParseFn,
-	); ok {
-		return res
+	indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
+
+	if !indexMtimeChanged {
+		codexParseFn := func(
+			path string, offset int64, startOrd int,
+		) ([]parser.ParsedMessage, time.Time, int64, error) {
+			return parser.ParseCodexSessionFrom(
+				path, offset, startOrd, false,
+			)
+		}
+		if res, ok := e.tryIncrementalJSONL(
+			file, info, parser.AgentCodex, codexParseFn,
+		); ok {
+			return res
+		}
 	}
 
 	sess, msgs, err := parser.ParseCodexSession(
