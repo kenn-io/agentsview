@@ -130,6 +130,7 @@ func TestInferCodexSkillNameIgnoresWriteCommands(t *testing.T) {
 		"mkdir -p " + filepath.Dir(path),
 		"git add " + path,
 		"sed -i '' 's/a/b/' " + path,
+		"echo hi && sed -i '' 's/a/b/' " + path,
 		"cat > " + path,
 	} {
 		t.Run(cmd, func(t *testing.T) {
@@ -138,6 +139,27 @@ func TestInferCodexSkillNameIgnoresWriteCommands(t *testing.T) {
 				`{"cmd":`+quoteJSON(t, cmd)+`}`,
 			)
 			assert.Empty(t, got)
+		})
+	}
+}
+
+func TestInferCodexSkillNameMixedWriteThenRead(t *testing.T) {
+	// A write segment earlier in the command must not suppress a real
+	// skill read in a later segment; each segment is classified on its
+	// own leading verb rather than rejecting the whole command.
+	path := writeTestSkill(t, "foo", "data-analytics:foo")
+
+	for _, cmd := range []string{
+		"mkdir -p out && cat " + path,
+		"git add -A && sed -n '1,40p' " + path,
+		"touch marker; grep name " + path,
+	} {
+		t.Run(cmd, func(t *testing.T) {
+			got := inferCodexSkillName(
+				"exec_command",
+				`{"cmd":`+quoteJSON(t, cmd)+`}`,
+			)
+			assert.Equal(t, "data-analytics:foo", got)
 		})
 	}
 }

@@ -21,8 +21,6 @@ const maxSkillFrontmatterSize = 64 << 10
 var (
 	skillNameByPath  sync.Map
 	skillPathRE      = regexp.MustCompile(`(?:"([^"]*[/\\]SKILL\.md)"|'([^']*[/\\]SKILL\.md)'|(\S*[/\\]SKILL\.md)|(?:^|[\s"'])(SKILL\.md))`)
-	readCommandRE    = regexp.MustCompile(`(?:^|(?:&&|\|\||[;&|])\s*)(?:[A-Za-z0-9_.-]+/)?(?:cat|sed|head|tail|less|more|rg|grep)\b`)
-	writeCommandRE   = regexp.MustCompile(`(?:^|(?:&&|\|\||[;&|])\s*)(?:[A-Za-z0-9_.-]+/)?(?:cp|mv|mkdir|touch|rm|chmod|chown|install|tee)\b|\bgit\s+(?:add|mv|rm)\b|\bsed\s+-i\b|>\s*["']?[^"'\s]*[/\\]SKILL\.md\b`)
 	shellSegmentRE   = regexp.MustCompile(`\s*(?:&&|\|\||;|&|\|)\s*`)
 	outputRedirectRE = regexp.MustCompile(`^[0-9&]*>>?$`)
 )
@@ -69,7 +67,7 @@ func inferCodexSkillNameWithBase(toolName, inputJSON, fallbackBaseDir string) st
 		return ""
 	}
 	cmd := skillCommandFromInput(inputJSON)
-	if !looksLikeSkillReadCommand(cmd) {
+	if !strings.Contains(cmd, "SKILL.md") {
 		return ""
 	}
 	baseDir := skillBaseDirFromInput(inputJSON)
@@ -106,11 +104,30 @@ func skillPathsFromSegment(seg string) []string {
 	switch commandVerb(tokens[0]) {
 	case "grep", "rg":
 		return skillPathsFromSearchArgs(args)
-	case "cat", "sed", "head", "tail", "less", "more":
+	case "sed":
+		// sed is a read verb, but -i / --in-place edits its operands in
+		// place, so a SKILL.md argument is written, not read.
+		if sedWritesInPlace(args) {
+			return nil
+		}
+		return skillFilePaths(args)
+	case "cat", "head", "tail", "less", "more":
 		return skillFilePaths(args)
 	default:
 		return nil
 	}
+}
+
+// sedWritesInPlace reports whether a sed invocation edits its file
+// operands in place via -i (optionally with a backup suffix, e.g.
+// -i.bak) or --in-place, which makes a SKILL.md operand a write target.
+func sedWritesInPlace(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-i") || strings.HasPrefix(arg, "--in-place") {
+			return true
+		}
+	}
+	return false
 }
 
 // stripRedirects drops output-redirection operators (>, >>, 2>, &>,
@@ -312,17 +329,6 @@ func skillCommandFromInput(inputJSON string) string {
 		}
 	}
 	return trimmed
-}
-
-func looksLikeSkillReadCommand(cmd string) bool {
-	cmd = strings.TrimSpace(cmd)
-	if cmd == "" || !strings.Contains(cmd, "SKILL.md") {
-		return false
-	}
-	if writeCommandRE.MatchString(cmd) {
-		return false
-	}
-	return readCommandRE.MatchString(cmd)
 }
 
 func skillPathsFromText(text string) []string {
