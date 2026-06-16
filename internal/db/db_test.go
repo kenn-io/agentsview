@@ -1165,6 +1165,32 @@ func TestReplaceSessionMessages(t *testing.T) {
 	assert.Equal(t, "new1", got[0].Content, "content")
 }
 
+func TestInsertMessagesClassifiesAutomationFromUserTranscript(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	title := "Generated review title"
+	insertSession(t, d, "insert-review-title", "p", func(s *Session) {
+		s.FirstMessage = &title
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+
+	require.NoError(t, d.InsertMessages([]Message{
+		userMsg("insert-review-title", 0,
+			"You are a code reviewer. Review the code changes shown below."),
+		asstMsg("insert-review-title", 1, "Review complete."),
+	}), "InsertMessages")
+
+	got, err := d.GetSession(ctx, "insert-review-title")
+	require.NoError(t, err, "GetSession")
+	require.NotNil(t, got, "insert-review-title session")
+	assert.True(t, got.IsAutomated,
+		"automation should be classified from the first inserted user message")
+}
+
 func TestReplaceSessionMessagesClassifiesAutomationFromUserTranscript(
 	t *testing.T,
 ) {

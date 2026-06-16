@@ -421,7 +421,30 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	if err := insertToolResultEventsTx(tx, events); err != nil {
 		return err
 	}
+	for _, sessionID := range messageSessionIDs(msgs) {
+		if err := setSessionAutomationFromMessagesTx(
+			tx, sessionID,
+		); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+func messageSessionIDs(msgs []Message) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, 1)
+	for _, m := range msgs {
+		if m.SessionID == "" {
+			continue
+		}
+		if _, ok := seen[m.SessionID]; ok {
+			continue
+		}
+		seen[m.SessionID] = struct{}{}
+		ids = append(ids, m.SessionID)
+	}
+	return ids
 }
 
 // MaxOrdinal returns the highest ordinal for a session,
@@ -649,13 +672,39 @@ func (db *DB) ReplaceSessionContent(
 func updateSessionAutomationFromMessagesTx(
 	tx *sql.Tx, sessionID string,
 ) error {
+	want, rowAutomated, ok, err := sessionAutomationStateTx(
+		tx, sessionID,
+	)
+	if err != nil || !ok {
+		return err
+	}
+	if want == rowAutomated {
+		return nil
+	}
+	return setSessionAutomationTx(tx, sessionID, want)
+}
+
+func setSessionAutomationFromMessagesTx(
+	tx *sql.Tx, sessionID string,
+) error {
+	want, rowAutomated, ok, err := sessionAutomationStateTx(
+		tx, sessionID,
+	)
+	if err != nil || !ok || !want || rowAutomated {
+		return err
+	}
+	return setSessionAutomationTx(tx, sessionID, true)
+}
+
+func sessionAutomationStateTx(
+	tx *sql.Tx, sessionID string,
+) (want, rowAutomated, ok bool, err error) {
 	var (
 		firstMessage     sql.NullString
 		firstUserMessage sql.NullString
 		userMsgCount     int
-		rowAutomated     bool
 	)
-	err := tx.QueryRow(`
+	err = tx.QueryRow(`
 		SELECT
 			s.first_message,
 			s.user_message_count,
@@ -678,27 +727,30 @@ func updateSessionAutomationFromMessagesTx(
 		&rowAutomated, &firstUserMessage,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return false, false, false, nil
 	}
 	if err != nil {
-		return fmt.Errorf(
+		return false, false, false, fmt.Errorf(
 			"reading automation candidate for %s: %w",
 			sessionID, err,
 		)
 	}
 
-	want := isAutomatedFromTextCandidates(
+	want = isAutomatedFromTextCandidates(
 		userMsgCount, firstUserMessage, firstMessage,
 	)
-	if want == rowAutomated {
-		return nil
-	}
+	return want, rowAutomated, true, nil
+}
+
+func setSessionAutomationTx(
+	tx *sql.Tx, sessionID string, isAutomated bool,
+) error {
 	if _, err := tx.Exec(`
 		UPDATE sessions
 		   SET is_automated = ?,
 		       local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = ?`,
-		want, sessionID,
+		isAutomated, sessionID,
 	); err != nil {
 		return fmt.Errorf(
 			"updating is_automated from messages for %s: %w",
