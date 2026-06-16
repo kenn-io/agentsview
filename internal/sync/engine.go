@@ -757,6 +757,44 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// QwenPaw: <qwenpawDir>/<workspace>/sessions/<name>.json
+	//       or <qwenpawDir>/<workspace>/sessions/<subdir>/<name>.json
+	for _, qwenpawDir := range e.agentDirs[parser.AgentQwenPaw] {
+		if qwenpawDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(qwenpawDir, path); ok {
+			parts := strings.Split(rel, sep)
+			if len(parts) < 3 || parts[1] != "sessions" {
+				continue
+			}
+			if !parser.IsValidQwenPawIDPart(parts[0]) {
+				continue
+			}
+			var stem string
+			switch {
+			case len(parts) == 3:
+				stem = parts[2]
+			case len(parts) == 4 && !strings.HasPrefix(parts[2], "."):
+				if !parser.IsValidQwenPawIDPart(parts[2]) {
+					continue
+				}
+				stem = parts[3]
+			default:
+				continue
+			}
+			sessionID, ok := strings.CutSuffix(stem, ".json")
+			if !ok || !parser.IsValidQwenPawIDPart(sessionID) {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parts[0],
+				Agent:   parser.AgentQwenPaw,
+			}, true
+		}
+	}
+
 	// WorkBuddy: <workbuddyDir>/<project>/<session>.jsonl
 	//     or: <workbuddyDir>/<project>/<session>/subagents/*.jsonl
 	for _, workBuddyDir := range e.agentDirs[parser.AgentWorkBuddy] {
@@ -3326,6 +3364,8 @@ func (e *Engine) processFile(
 		res = e.processAntigravity(file, info)
 	case parser.AgentAntigravityCLI:
 		res = e.processAntigravityCLI(file, info)
+	case parser.AgentQwenPaw:
+		res = e.processQwenPaw(file, info)
 	case parser.AgentGptme:
 		res = e.processGptme(file, info)
 	default:
@@ -4347,6 +4387,43 @@ func (e *Engine) processKimi(
 		results: []parser.ParseResult{
 			{Session: *sess, Messages: msgs},
 		},
+	}
+}
+
+func (e *Engine) processQwenPaw(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, err := parser.ParseQwenPawSession(
+		file.Path, file.Project, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	// forceReplace: QwenPaw's _atomic_write_json rewrites the entire
+	// sessions/<name>.json on every save, and ParseQwenPawSession
+	// assigns Ordinal by position in agent.memory.content. If that
+	// array is compacted, summarized, or reordered — common in
+	// agent-memory frameworks — ordinals shift, and the append-only
+	// writeMessages path would silently keep stale rows. Treat every
+	// re-parse as a full rewrite, matching OpenCode / Antigravity.
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+		forceReplace: true,
 	}
 }
 
@@ -5406,7 +5483,8 @@ func shouldReplaceFullParseMessages(
 		pw.sess.Agent == parser.AgentCowork ||
 		isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
 		pw.sess.Agent == parser.AgentAntigravity ||
-		pw.sess.Agent == parser.AgentAntigravityCLI
+		pw.sess.Agent == parser.AgentAntigravityCLI ||
+		pw.sess.Agent == parser.AgentQwenPaw
 }
 
 // writeIncremental appends new messages and partially updates
@@ -6472,6 +6550,45 @@ func (e *Engine) SyncSingleSessionContext(
 		}
 		if file.Project == "" {
 			file.Project = "kimi"
+		}
+	case parser.AgentQwenPaw:
+		// path is <qwenpawDir>/<workspace>/sessions/<name>.json or
+		//               <qwenpawDir>/<workspace>/sessions/<subdir>/<name>.json
+		// Workspace name is the first path segment relative to the
+		// QwenPaw root.
+		for _, qwenpawDir := range e.agentDirs[parser.AgentQwenPaw] {
+			rel, ok := isUnder(qwenpawDir, path)
+			if !ok {
+				continue
+			}
+			parts := strings.Split(rel, string(filepath.Separator))
+			if len(parts) > 0 {
+				file.Project = parts[0]
+			}
+			break
+		}
+		// Fallback when the stored file_path points outside any
+		// currently configured QWENPAW_DIR (e.g. the root was
+		// removed, or the session was synced from a custom path).
+		// Without this, ParseQwenPawSession would build
+		// "qwenpaw::<stem>" and orphan the requested
+		// "qwenpaw:<workspace>:<stem>" row. Prefer the DB-stored
+		// Project as the authoritative record; parse the workspace
+		// from the sessionID prefix as a final fallback that works
+		// even when the DB row is missing or stale.
+		if file.Project == "" {
+			if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+				sess.Project != "" &&
+				!parser.NeedsProjectReparse(sess.Project) {
+				file.Project = sess.Project
+			}
+		}
+		if file.Project == "" {
+			bareID := strings.TrimPrefix(sessionID, def.IDPrefix)
+			if workspace, _, ok := strings.Cut(bareID, ":"); ok &&
+				workspace != "" {
+				file.Project = workspace
+			}
 		}
 	case parser.AgentQwen:
 		// path is <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl

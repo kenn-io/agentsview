@@ -230,6 +230,21 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"qwenpaw prefix",
+			"qwenpaw:default:sess-id",
+			AgentQwenPaw,
+			true,
+		},
+		{
+			// Lock in the disjoint prefix: "qwenpaw:" must NOT be
+			// swallowed by the "qwen:" rule (no shared stem), so
+			// QwenPaw IDs never route to the Qwen agent.
+			"qwen prefix does not capture qwenpaw",
+			"qwen:sess-id",
+			AgentQwen,
+			true,
+		},
+		{
 			"deepseek tui prefix",
 			"deepseek-tui:sess-id",
 			AgentDeepSeekTUI,
@@ -307,6 +322,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentWorkBuddy,
 		AgentZencoder,
 		AgentGptme,
+		AgentQwenPaw,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))

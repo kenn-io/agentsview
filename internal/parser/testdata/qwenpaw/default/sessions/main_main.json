@@ -1,0 +1,76 @@
+{
+  "agent": {
+    "memory": {
+      "content": [
+        [
+          {
+            "id": "msg_0010",
+            "name": "user",
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "读一下 NOTES.md 的内容"}
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-16 09:00:00.000"
+          },
+          []
+        ],
+        [
+          {
+            "id": "aID0BBBBB",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "call_aaaaaaaaaaaa",
+                "name": "read_file",
+                "input": {"file_path": "NOTES.md"},
+                "raw_input": "{\"file_path\":\"NOTES.md\"}"
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-16 09:00:01.250"
+          },
+          []
+        ],
+        [
+          {
+            "id": "sID0CCCCC",
+            "name": "system",
+            "role": "system",
+            "content": [
+              {
+                "type": "tool_result",
+                "id": "call_aaaaaaaaaaaa",
+                "name": "read_file",
+                "output": [
+                  {"type": "text", "text": "# NOTES\n\n- synthetic fixture for agentsview tests\n- no real user data"}
+                ]
+              }
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-16 09:00:01.500"
+          },
+          []
+        ],
+        [
+          {
+            "id": "aID1DDDDD",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {"type": "text", "text": "NOTES.md 是一个合成 fixture，无真实用户数据。"}
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-16 09:00:02.000"
+          },
+          []
+        ]
+      ]
+    },
+    "toolkit": {"active_groups": []},
+    "name": "Friday",
+    "_sys_prompt": "redacted"
+  }
+}

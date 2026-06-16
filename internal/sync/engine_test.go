@@ -968,6 +968,126 @@ func TestWriteBatchAntigravityReplacesMessages(t *testing.T) {
 		"re-parsed model metadata must reach existing message rows")
 }
 
+// TestWriteBatchQwenPawReplacesMessages covers a QwenPaw session file
+// being rewritten wholesale on every save. QwenPaw's
+// _atomic_write_json rewrites the entire sessions/<name>.json on each
+// save, and the parser assigns Ordinal by position in
+// agent.memory.content. If that array is ever compacted, summarized,
+// or reordered — common in agent-memory frameworks — ordinals shift,
+// and the append-only writeMessages path would silently keep stale
+// rows. The session must go through the replace path so a rewrite is
+// applied as a delete+insert, not an ordinal-greater-than append.
+func TestWriteBatchQwenPawReplacesMessages(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+
+	ts := time.Unix(1700000000, 0).UTC()
+	mkWrite := func(content string) pendingWrite {
+		msg := parser.ParsedMessage{
+			Ordinal:   0,
+			Role:      parser.RoleAssistant,
+			Content:   content,
+			Timestamp: ts,
+		}
+		return pendingWrite{
+			sess: parser.ParsedSession{
+				ID:           "qwenpaw:default:rewrite",
+				Project:      "default",
+				Machine:      "m",
+				Agent:        parser.AgentQwenPaw,
+				StartedAt:    ts,
+				EndedAt:      ts,
+				MessageCount: 1,
+			},
+			msgs: []parser.ParsedMessage{msg},
+		}
+	}
+
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{mkWrite("old content")}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	written, _, failed = e.writeBatch(
+		[]pendingWrite{mkWrite("new content")}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	msgs, err := database.GetMessages(
+		context.Background(), "qwenpaw:default:rewrite", 0, 10, true,
+	)
+	require.NoError(t, err, "GetMessages")
+	require.Len(t, msgs, 1, "rewrite must replace, not append")
+	assert.Equal(t, "new content", msgs[0].Content,
+		"rewritten content must reach existing message rows")
+}
+
+// TestSyncSingleSession_QwenPawPreservesWorkspaceFromDB covers the
+// case where a QwenPaw session's stored DB file_path points outside
+// any currently configured QWENPAW_DIR (e.g. the root was removed or
+// the session was synced from a custom path). FindSourceFile still
+// returns the stored path, but the workspace derivation loop in
+// SyncSingleSessionContext finds no matching configured root, leaves
+// file.Project empty, and ParseQwenPawSession then emits a brand-new
+// qwenpaw::<stem> session — orphaning the requested
+// qwenpaw:<workspace>:<stem> row.
+//
+// The fix falls back to the DB-stored Project (consistent with the
+// Claude / Iflow / Hermes resync paths).
+func TestSyncSingleSession_QwenPawPreservesWorkspaceFromDB(t *testing.T) {
+	database := openTestDB(t)
+
+	// File at an arbitrary path NOT under any configured QWENPAW_DIR.
+	root := t.TempDir()
+	sessDir := filepath.Join(root, "my_ws", "sessions")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+	path := filepath.Join(sessDir, "default_1.json")
+	require.NoError(t, os.WriteFile(path, []byte(
+		`{"agent":{"memory":{"content":[[`+
+			`{"id":"u1","name":"user","role":"user","content":[{"type":"text","text":"hi"}],"metadata":{},"timestamp":"2026-04-19 22:37:34.000"},[]`+
+			`]]}}}`), 0o644))
+
+	// Engine configured with QWENPAW_DIR pointing somewhere else
+	// entirely, so the configured-root loop cannot match.
+	otherDir := t.TempDir()
+	e := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQwenPaw: {otherDir},
+		},
+		Machine: "local",
+	})
+
+	// Seed the DB with the canonical session row. file_path is the
+	// stored source of truth that FindSourceFile prefers.
+	const sessionID = "qwenpaw:my_ws:default_1"
+	fp := path
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:       sessionID,
+		Project:  "my_ws",
+		Machine:  "local",
+		Agent:    "qwenpaw",
+		FilePath: &fp,
+	}))
+
+	require.NoError(t, e.SyncSingleSession(sessionID))
+
+	got, err := database.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "original session must still exist")
+	assert.Equal(t, "my_ws", got.Project,
+		"workspace must be preserved when the file is outside configured roots")
+
+	// No empty-workspace orphan should have been written.
+	orphan, err := database.GetSession(
+		context.Background(), "qwenpaw::default_1",
+	)
+	require.NoError(t, err)
+	assert.Nil(t, orphan,
+		"no empty-workspace orphan session should be created")
+}
+
 // TestProcessAntigravityWALOnlyUpdateNotSkipped covers a live IDE
 // session whose gen_metadata commits land in the SQLite WAL: the main
 // .db file's size/mtime are unchanged, so the skip check must consult
@@ -1754,6 +1874,45 @@ func TestEngine_ClassifyPathsOpenCodeRemovedPartFile(
 // classified as AgentQwen — the original WatchSubdirs="chats" wiring
 // pointed the watcher at the wrong path, leaving live sync broken
 // even after the classifier branch is reachable.
+func TestEngine_ClassifyPathsQwenPawRejectsColon(t *testing.T) {
+	db := openTestDB(t)
+	qwenpawDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQwenPaw: {qwenpawDir},
+		},
+		Machine: "local",
+	})
+
+	write := func(parts ...string) string {
+		p := filepath.Join(append([]string{qwenpawDir}, parts...)...)
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+		require.NoError(t, os.WriteFile(p, []byte("{}"), 0o644))
+		return p
+	}
+
+	rootPath := write("default", "sessions", "ok.json")
+	subPath := write("default", "sessions", "console", "ok.json")
+	// ":" in the workspace, subdir, or stem makes the joined ID
+	// ambiguous, so these must not classify.
+	colonWorkspace := write("ws:bad", "sessions", "ok.json")
+	colonSubdir := write("default", "sessions", "sub:bad", "ok.json")
+	colonStem := write("default", "sessions", "foo:bar.json")
+
+	files := engine.classifyPaths([]string{rootPath, subPath})
+	require.Len(t, files, 2)
+	for _, f := range files {
+		assert.Equal(t, parser.AgentQwenPaw, f.Agent)
+		assert.Equal(t, "default", f.Project)
+	}
+
+	got := engine.classifyPaths([]string{
+		colonWorkspace, colonSubdir, colonStem,
+	})
+	assert.Empty(t, got,
+		"colon-containing ID parts must not classify: %v", got)
+}
+
 func TestEngine_ClassifyPathsQwenSession(t *testing.T) {
 	db := openTestDB(t)
 	qwenDir := t.TempDir()

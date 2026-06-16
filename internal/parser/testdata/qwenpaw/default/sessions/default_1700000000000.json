@@ -1,0 +1,38 @@
+{
+  "agent": {
+    "memory": {
+      "content": [
+        [
+          {
+            "id": "msg_0001",
+            "name": "user",
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "QwenPaw 的默认会话布局长什么样？"}
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-15 10:00:00.000"
+          },
+          []
+        ],
+        [
+          {
+            "id": "tID1AAAAA",
+            "name": "Friday",
+            "role": "assistant",
+            "content": [
+              {"type": "thinking", "thinking": "User is asking about the session file format. Let me show them the on-disk shape."},
+              {"type": "text", "text": "默认会话写在 <workspace>/sessions/<stem>.json，顶层是 {\"agent\":{\"memory\":{\"content\":[[msg, []], ...]}}}。"}
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-15 10:00:02.500"
+          },
+          []
+        ]
+      ]
+    },
+    "toolkit": {"active_groups": []},
+    "name": "Friday",
+    "_sys_prompt": "redacted"
+  }
+}

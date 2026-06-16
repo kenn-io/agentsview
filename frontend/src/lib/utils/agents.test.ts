@@ -23,6 +23,7 @@ describe("KNOWN_AGENTS", () => {
       "vscode-copilot",
       "pi",
       "qwen",
+      "qwenpaw",
       "deepseek-tui",
       "openclaw",
       "qclaw",
@@ -85,6 +86,9 @@ describe("agentColor", () => {
     expect(agentColor("qwen")).toBe(
       "var(--accent-cyan)",
     );
+    expect(agentColor("qwenpaw")).toBe(
+      "var(--accent-cyan)",
+    );
     expect(agentColor("deepseek-tui")).toBe(
       "var(--accent-cyan)",
     );
@@ -123,6 +127,7 @@ describe("agentLabel", () => {
     expect(agentLabel("piebald")).toBe("Piebald");
     expect(agentLabel("zed")).toBe("Zed");
     expect(agentLabel("qwen")).toBe("Qwen Code");
+    expect(agentLabel("qwenpaw")).toBe("QwenPaw");
     expect(agentLabel("deepseek-tui")).toBe("DeepSeek TUI");
   });
 

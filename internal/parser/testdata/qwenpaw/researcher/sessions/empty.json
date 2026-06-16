@@ -1,0 +1,10 @@
+{
+  "agent": {
+    "memory": {
+      "content": []
+    },
+    "toolkit": {"active_groups": []},
+    "name": "Researcher",
+    "_sys_prompt": "redacted"
+  }
+}

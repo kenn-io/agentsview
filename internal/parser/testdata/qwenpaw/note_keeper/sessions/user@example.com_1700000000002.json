@@ -1,0 +1,37 @@
+{
+  "agent": {
+    "memory": {
+      "content": [
+        [
+          {
+            "id": "msg_chan_0001",
+            "name": "user",
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "Channel-scoped 会话：文件名形如 <user_id>_<session_id>.json，可包含 @ 与点号。"}
+            ],
+            "metadata": {"source": "im_wechat"},
+            "timestamp": "2026-03-18 08:15:30.123"
+          },
+          []
+        ],
+        [
+          {
+            "id": "aID0ChanAAA",
+            "name": "Keeper",
+            "role": "assistant",
+            "content": [
+              {"type": "text", "text": "记下来了。这种文件名 challenge agentsview 的 ID 校验，需要放宽到 IsValidQwenPawIDPart。"}
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-18 08:15:31.456"
+          },
+          []
+        ]
+      ]
+    },
+    "toolkit": {"active_groups": []},
+    "name": "Keeper",
+    "_sys_prompt": "redacted"
+  }
+}

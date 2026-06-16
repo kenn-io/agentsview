@@ -1,0 +1,37 @@
+{
+  "agent": {
+    "memory": {
+      "content": [
+        [
+          {
+            "id": "msg_console_0001",
+            "name": "user",
+            "role": "user",
+            "content": [
+              {"type": "text", "text": "这是从 console 启动的会话"}
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-17 14:30:00.000"
+          },
+          []
+        ],
+        [
+          {
+            "id": "aID0ConAAAA",
+            "name": "Default",
+            "role": "assistant",
+            "content": [
+              {"type": "text", "text": "Console 会话写入 sessions/console/<stem>.json，与根布局同名文件互不冲突。"}
+            ],
+            "metadata": {},
+            "timestamp": "2026-03-17 14:30:01.000"
+          },
+          []
+        ]
+      ]
+    },
+    "toolkit": {"active_groups": []},
+    "name": "Default",
+    "_sys_prompt": "redacted"
+  }
+}
