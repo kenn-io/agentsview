@@ -220,6 +220,43 @@ func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
 		"the stale record for a reused PID must be removed")
 }
 
+func TestStopDaemonProcessSparesReusedPIDBeforeForceKill(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("relies on POSIX signal semantics")
+	}
+	dir := runtimeTestDir(t)
+
+	// A process that ignores SIGTERM stays alive through the grace wait,
+	// reaching the force-kill escalation. With a mismatched create time it
+	// stands in for a live process that reused the daemon's PID. The pre-kill
+	// identity check must spare it instead of escalating to SIGKILL.
+	target := exec.Command("sh", "-c", "trap '' TERM; sleep 60")
+	require.NoError(t, target.Start())
+	pid := target.Process.Pid
+	t.Cleanup(func() {
+		_ = target.Process.Kill()
+		_ = target.Wait()
+	})
+
+	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:      pid,
+		Network:  daemon.NetworkTCP,
+		Address:  "127.0.0.1:1",
+		Metadata: map[string]string{runtimeCreateTime: "1"},
+	})
+	require.NoError(t, err)
+	records := liveDaemonRecords(dir)
+	require.Len(t, records, 1)
+
+	err = stopDaemonProcess(records[0], 100*time.Millisecond)
+	require.NoError(t, err,
+		"a reused PID means the daemon exited; stop should succeed")
+	assert.Empty(t, liveDaemonRecords(dir),
+		"the stale record for a reused PID must be removed")
+	assert.True(t, daemon.ProcessAlive(pid),
+		"the reused PID must not be force-killed")
+}
+
 func TestWriteDaemonRuntimePersistsCaddyMetadata(t *testing.T) {
 	dir := runtimeTestDir(t)
 	// Use this process as a stand-in caddy child: it is alive with a readable

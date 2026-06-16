@@ -189,8 +189,10 @@ func stopOrphanedCaddyChild(rec daemon.RuntimeRecord) {
 }
 
 // stopDaemonProcess signals the daemon to shut down, waits up to grace for it
-// to exit, then escalates to a forced kill. It cleans up the runtime record if
-// the process leaves one behind.
+// to exit, then escalates to a forced kill. Before escalating it re-checks that
+// the live PID is still the recorded daemon, so a PID reused during the grace
+// wait is never killed. It cleans up the runtime record if the process leaves
+// one behind.
 func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 	proc, err := os.FindProcess(rec.PID)
 	if err != nil {
@@ -200,6 +202,14 @@ func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 		return fmt.Errorf("signalling shutdown: %w", err)
 	}
 	if waitForProcessExit(rec.PID, grace) {
+		removeRuntimeRecordFile(rec)
+		return nil
+	}
+	if !recordedDaemonStillPresent(rec) {
+		// The PID is alive but its identity no longer matches the record: the
+		// daemon exited during the grace wait and the PID was reused by an
+		// unrelated process. Do not force-kill the impostor; just drop the
+		// stale record.
 		removeRuntimeRecordFile(rec)
 		return nil
 	}
