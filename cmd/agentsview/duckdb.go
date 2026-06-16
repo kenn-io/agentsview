@@ -266,6 +266,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 	}
 	if _, sfErr := WriteDaemonRuntime(
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
+		rt.Caddy.Pid(),
 	); sfErr != nil {
 		log.Printf(
 			"warning: could not write daemon runtime record: %v"+

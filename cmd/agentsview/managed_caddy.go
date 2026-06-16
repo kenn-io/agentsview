@@ -22,6 +22,17 @@ type managedCaddy struct {
 	cancel context.CancelFunc
 	errCh  chan error
 	guard  caddyGuard
+	pid    int
+}
+
+// Pid returns the managed Caddy process id, or 0 when no Caddy is running.
+// `serve stop` records it so it can terminate an orphaned Caddy if the server
+// is force-killed before it can stop Caddy itself.
+func (m *managedCaddy) Pid() int {
+	if m == nil {
+		return 0
+	}
+	return m.pid
 }
 
 // caddyGuard ties the managed Caddy child to the server's lifetime. On Windows
@@ -357,6 +368,7 @@ func startManagedCaddy(
 		cancel: cancel,
 		errCh:  errCh,
 		guard:  guard,
+		pid:    cmd.Process.Pid,
 	}, nil
 }
 

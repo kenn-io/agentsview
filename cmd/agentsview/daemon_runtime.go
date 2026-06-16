@@ -21,12 +21,14 @@ import (
 )
 
 const (
-	daemonService     = "agentsview"
-	runtimeReadOnly   = "read_only"
-	runtimeHost       = "host"
-	runtimePort       = "port"
-	runtimeCreateTime = "create_time"
-	startProbeTick    = 250 * time.Millisecond
+	daemonService          = "agentsview"
+	runtimeReadOnly        = "read_only"
+	runtimeHost            = "host"
+	runtimePort            = "port"
+	runtimeCreateTime      = "create_time"
+	runtimeCaddyPID        = "caddy_pid"
+	runtimeCaddyCreateTime = "caddy_create_time"
+	startProbeTick         = 250 * time.Millisecond
 )
 
 // DaemonRuntime is the agentsview-specific view of a kit daemon runtime record.
@@ -42,10 +44,12 @@ func runtimeStore(dataDir string) daemon.RuntimeStore {
 }
 
 // WriteDaemonRuntime writes a shared kit daemon runtime record for the running
-// server. It returns the path written.
+// server. It returns the path written. The optional caddyPID records a managed
+// Caddy child so `serve stop` can terminate it if the server is force-killed
+// before it can stop Caddy itself.
 func WriteDaemonRuntime(
 	dataDir string, host string, port int, version string,
-	readOnly bool,
+	readOnly bool, caddyPID ...int,
 ) (string, error) {
 	ep := daemon.Endpoint{
 		Network: daemon.NetworkTCP,
@@ -63,6 +67,12 @@ func WriteDaemonRuntime(
 	// falls back to ping confirmation only.
 	if ct, ok := processCreateTimeMillis(os.Getpid()); ok {
 		rec.Metadata[runtimeCreateTime] = strconv.FormatInt(ct, 10)
+	}
+	if len(caddyPID) > 0 && caddyPID[0] > 0 {
+		rec.Metadata[runtimeCaddyPID] = strconv.Itoa(caddyPID[0])
+		if ct, ok := processCreateTimeMillis(caddyPID[0]); ok {
+			rec.Metadata[runtimeCaddyCreateTime] = strconv.FormatInt(ct, 10)
+		}
 	}
 	return runtimeStore(dataDir).Write(rec)
 }

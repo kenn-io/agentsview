@@ -89,6 +89,7 @@ func runServeStop(cfg config.Config) {
 		if err := stopDaemonProcess(rec, serveStopGraceTimeout); err != nil {
 			fatal("serve stop: stopping pid %d: %v", rec.PID, err)
 		}
+		stopOrphanedCaddyChild(rec)
 		fmt.Printf("Stopped agentsview (pid %d).\n", rec.PID)
 		stopped++
 	}
@@ -126,26 +127,65 @@ func daemonRecordPingConfirmed(
 
 // processIdentityConfirmed reports whether the process now holding rec.PID is
 // the same one that wrote the record, by matching the OS create time persisted
-// at startup against the live process's current create time. The match is
-// exact: the create time is fixed for a given process, so a PID reused by a
-// different process yields a different value and is rejected -- there is no
-// slack window an impostor could fall into. Records without a persisted create
-// time (legacy, or a daemon whose create time could not be read) cannot be
-// confirmed this way and return false.
+// at startup against the live process's current create time.
 func processIdentityConfirmed(rec daemon.RuntimeRecord) bool {
-	raw := rec.Metadata[runtimeCreateTime]
-	if raw == "" {
+	return processCreateTimeMatches(rec.PID, rec.Metadata[runtimeCreateTime])
+}
+
+// processCreateTimeMatches reports whether pid's current OS create time equals
+// recordedMillis. The match is exact: the create time is fixed for a given
+// process, so a PID reused by a different process yields a different value and
+// is rejected -- there is no slack window an impostor could fall into. An empty
+// or unparseable recordedMillis (legacy, or unreadable at write time) returns
+// false.
+func processCreateTimeMatches(pid int, recordedMillis string) bool {
+	if recordedMillis == "" {
 		return false
 	}
-	recorded, err := strconv.ParseInt(raw, 10, 64)
+	recorded, err := strconv.ParseInt(recordedMillis, 10, 64)
 	if err != nil {
 		return false
 	}
-	live, ok := processCreateTimeMillis(rec.PID)
+	live, ok := processCreateTimeMillis(pid)
 	if !ok {
 		return false
 	}
 	return live == recorded
+}
+
+// stopOrphanedCaddyChild terminates a managed Caddy child recorded in rec if it
+// is still alive after the server stopped. When the server shuts down
+// gracefully it stops Caddy itself, so by here Caddy is already gone and this
+// is a no-op. When the server had to be force-killed (it ignored SIGTERM until
+// the grace timeout, then took SIGKILL), its cleanup never ran and Caddy would
+// otherwise keep holding the public port. The create time is matched exactly
+// before signalling, so a reused Caddy PID is never touched.
+func stopOrphanedCaddyChild(rec daemon.RuntimeRecord) {
+	raw := rec.Metadata[runtimeCaddyPID]
+	if raw == "" {
+		return
+	}
+	pid, err := strconv.Atoi(raw)
+	if err != nil || pid <= 0 {
+		return
+	}
+	if !daemon.ProcessAlive(pid) {
+		return
+	}
+	if !processCreateTimeMatches(pid, rec.Metadata[runtimeCaddyCreateTime]) {
+		return
+	}
+	// SourcePath is empty, so stopDaemonProcess only signals and waits; it
+	// removes no record file for the Caddy child.
+	if err := stopDaemonProcess(
+		daemon.RuntimeRecord{PID: pid}, serveStopGraceTimeout,
+	); err != nil {
+		fmt.Printf(
+			"warning: could not stop managed caddy (pid %d): %v\n", pid, err,
+		)
+		return
+	}
+	fmt.Printf("Stopped managed caddy (pid %d).\n", pid)
 }
 
 // stopDaemonProcess signals the daemon to shut down, waits up to grace for it

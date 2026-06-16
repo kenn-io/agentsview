@@ -245,6 +245,7 @@ func runServe(cfg config.Config) {
 	// on-demand sync against our live DB.
 	if _, sfErr := WriteDaemonRuntime(
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, false,
+		rt.Caddy.Pid(),
 	); sfErr != nil {
 		log.Printf(
 			"warning: could not write daemon runtime record: %v"+

@@ -132,6 +132,102 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 		"runtime record must be removed after stop")
 }
 
+func TestWriteDaemonRuntimePersistsCaddyMetadata(t *testing.T) {
+	dir := runtimeTestDir(t)
+	// Use this process as a stand-in caddy child: it is alive with a readable
+	// create time. We never signal it here.
+	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 65535, "test", false, os.Getpid())
+	require.NoError(t, err)
+
+	recs := liveDaemonRecords(dir)
+	require.Len(t, recs, 1)
+	assert.Equal(t, strconv.Itoa(os.Getpid()), recs[0].Metadata[runtimeCaddyPID])
+	ct, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	assert.Equal(t,
+		strconv.FormatInt(ct, 10), recs[0].Metadata[runtimeCaddyCreateTime])
+}
+
+func TestWriteDaemonRuntimeOmitsCaddyMetadataWhenAbsent(t *testing.T) {
+	dir := runtimeTestDir(t)
+	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 65535, "test", false)
+	require.NoError(t, err)
+	recs := liveDaemonRecords(dir)
+	require.Len(t, recs, 1)
+	_, has := recs[0].Metadata[runtimeCaddyPID]
+	assert.False(t, has, "no caddy pid means no caddy metadata")
+
+	// A zero caddy pid must also be omitted.
+	dir2 := runtimeTestDir(t)
+	_, err = WriteDaemonRuntime(dir2, "127.0.0.1", 65535, "test", false, 0)
+	require.NoError(t, err)
+	recs2 := liveDaemonRecords(dir2)
+	require.Len(t, recs2, 1)
+	_, has = recs2[0].Metadata[runtimeCaddyPID]
+	assert.False(t, has)
+}
+
+func TestStopOrphanedCaddyChildTerminatesConfirmed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("graceful SIGTERM termination is POSIX-specific")
+	}
+	caddy := exec.Command("sleep", "60")
+	require.NoError(t, caddy.Start())
+	pid := caddy.Process.Pid
+	reaped := make(chan struct{})
+	go func() {
+		_ = caddy.Wait()
+		close(reaped)
+	}()
+	t.Cleanup(func() { _ = caddy.Process.Kill() })
+
+	ct, ok := processCreateTimeMillis(pid)
+	require.True(t, ok)
+	rec := daemon.RuntimeRecord{
+		PID: os.Getpid(),
+		Metadata: map[string]string{
+			runtimeCaddyPID:        strconv.Itoa(pid),
+			runtimeCaddyCreateTime: strconv.FormatInt(ct, 10),
+		},
+	}
+
+	stopOrphanedCaddyChild(rec)
+	<-reaped
+	assert.False(t, daemon.ProcessAlive(pid),
+		"a confirmed orphaned caddy child must be terminated")
+}
+
+func TestStopOrphanedCaddyChildSkipsMismatchedCreateTime(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("graceful SIGTERM termination is POSIX-specific")
+	}
+	caddy := exec.Command("sleep", "60")
+	require.NoError(t, caddy.Start())
+	pid := caddy.Process.Pid
+	t.Cleanup(func() {
+		_ = caddy.Process.Kill()
+		_ = caddy.Wait()
+	})
+
+	rec := daemon.RuntimeRecord{
+		PID: os.Getpid(),
+		Metadata: map[string]string{
+			runtimeCaddyPID:        strconv.Itoa(pid),
+			runtimeCaddyCreateTime: "1", // deliberately wrong: models a reused PID
+		},
+	}
+
+	stopOrphanedCaddyChild(rec)
+	assert.True(t, daemon.ProcessAlive(pid),
+		"a reused caddy PID must not be signalled")
+}
+
+func TestStopOrphanedCaddyChildNoMetadataIsNoop(t *testing.T) {
+	assert.NotPanics(t, func() {
+		stopOrphanedCaddyChild(daemon.RuntimeRecord{PID: os.Getpid()})
+	})
+}
+
 func TestDaemonRecordPingConfirmedRespondingDaemon(t *testing.T) {
 	host, port := testPingServer(t)
 	rec := daemon.RuntimeRecord{
