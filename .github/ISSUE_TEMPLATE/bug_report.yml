@@ -43,9 +43,19 @@ body:
   - type: input
     id: agent
     attributes:
-      label: Which agent(s) and version
-      description: The coding agent whose sessions are affected, plus its version, if relevant
+      label: Which agent and version
+      description: The coding agent whose sessions are affected, plus its version. Write "n/a" for bugs unrelated to a specific agent (install, updater, UI).
       placeholder: "OpenClaw 0.x.y"
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Which model(s)
+      description: The model(s) behind the affected session, with provider if relevant. Write "n/a" if not applicable.
+      placeholder: "claude-opus-4-8 / gpt-5 / gemini-3-pro"
+    validations:
+      required: true
   - type: textarea
     id: what-happened
     attributes:
