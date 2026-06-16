@@ -71,10 +71,6 @@ func runSessionUsage(cmd *cobra.Command, sessionID, format string) {
 func sessionUsageDataForCommand(
 	cmd *cobra.Command, sessionID string,
 ) (*sessionUsageOutput, int, error) {
-	cfg, err := config.LoadPFlags(cmd.Flags())
-	if err != nil {
-		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
-	}
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
@@ -82,9 +78,17 @@ func sessionUsageDataForCommand(
 				"--server and --pg are mutually exclusive",
 			)
 		}
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return nil, tokenUseExitErr, err
+		}
 		return httpSessionUsageData(
-			cmd.Context(), remote, explicitServerToken(cmd), sessionID,
+			cmd.Context(), remote, token, sessionID,
 		)
+	}
+	cfg, err := config.LoadPFlags(cmd.Flags())
+	if err != nil {
+		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
 	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
 	if err != nil {

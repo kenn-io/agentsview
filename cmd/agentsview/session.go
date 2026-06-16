@@ -5,6 +5,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
@@ -35,8 +37,8 @@ func newSessionCommand() *cobra.Command {
 		"Remote daemon URL",
 	)
 	cmd.PersistentFlags().String(
-		"server-token", "",
-		"Bearer token for explicit --server requests",
+		"server-token-file", "",
+		"File containing bearer token for explicit --server requests",
 	)
 	cmd.PersistentFlags().Bool(
 		"pg", false,
@@ -61,12 +63,6 @@ func newSessionCommand() *cobra.Command {
 func resolveService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	cfg, err := config.LoadPFlags(cmd.Flags())
-	if err != nil {
-		return nil, nil, fmt.Errorf(
-			"loading config: %w", err,
-		)
-	}
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
@@ -74,8 +70,18 @@ func resolveService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		return service.NewHTTPBackend(remote, explicitServerToken(cmd), false),
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
+		return service.NewHTTPBackend(remote, token, false),
 			func() {}, nil
+	}
+	cfg, err := config.LoadPFlags(cmd.Flags())
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"loading config: %w", err,
+		)
 	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
 	if err != nil {
@@ -99,23 +105,27 @@ func resolveService(
 func resolveWritableService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	cfg, err := config.LoadPFlags(cmd.Flags())
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
-	}
 	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
 		if pgReadRequested(cmd) {
 			return nil, nil, errors.New(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		return service.NewHTTPBackend(remote, explicitServerToken(cmd), false),
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
+		return service.NewHTTPBackend(remote, token, false),
 			func() {}, nil
 	}
 	if pgReadRequested(cmd) {
 		return nil, nil, errors.New(
 			"--pg is read-only and cannot be used with write commands",
 		)
+	}
+	cfg, err := config.LoadPFlags(cmd.Flags())
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
 	tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
 	if err != nil {
@@ -166,15 +176,19 @@ func pgReadRequested(cmd *cobra.Command) bool {
 	return err == nil && v
 }
 
-func explicitServerToken(cmd *cobra.Command) string {
+func explicitServerToken(cmd *cobra.Command) (string, error) {
 	if cmd == nil {
-		return ""
+		return "", nil
 	}
-	v, err := cmd.Flags().GetString("server-token")
-	if err != nil {
-		return ""
+	path, err := cmd.Flags().GetString("server-token-file")
+	if err == nil && strings.TrimSpace(path) != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("reading --server-token-file: %w", err)
+		}
+		return strings.TrimSpace(string(b)), nil
 	}
-	return v
+	return strings.TrimSpace(os.Getenv("AGENTSVIEW_SERVER_TOKEN")), nil
 }
 
 // outputFormat returns the requested --format flag value

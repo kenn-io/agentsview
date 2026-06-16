@@ -30,7 +30,9 @@ func newSessionSyncCommand() *cobra.Command {
 			}
 			defer cleanup()
 
-			detail, err := svc.Sync(cmd.Context(), classifySyncArg(args[0]))
+			detail, err := svc.Sync(
+				cmd.Context(), classifySyncArgForCommand(cmd, args[0]),
+			)
 			if err != nil {
 				return err
 			}
@@ -42,6 +44,16 @@ func newSessionSyncCommand() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func classifySyncArgForCommand(
+	cmd *cobra.Command, arg string,
+) service.SyncInput {
+	remote, _ := cmd.Flags().GetString("server")
+	if remote != "" && looksLikePath(arg) {
+		return service.SyncInput{Path: arg}
+	}
+	return classifySyncArg(arg)
 }
 
 // syncService resembles newService but constructs a real
