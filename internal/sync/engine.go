@@ -4135,21 +4135,26 @@ func (e *Engine) processCodex(
 	indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
 	forceReplace := false
 
-	if !indexMtimeChanged {
-		codexParseFn := func(
-			path string, offset int64, startOrd int,
-		) ([]parser.ParsedMessage, time.Time, int64, error) {
-			return parser.ParseCodexSessionFrom(
-				path, offset, startOrd, false,
-			)
-		}
-		if res, ok := e.tryIncrementalJSONL(
-			file, info, parser.AgentCodex, codexParseFn,
-		); ok {
+	codexParseFn := func(
+		path string, offset int64, startOrd int,
+	) ([]parser.ParsedMessage, time.Time, int64, error) {
+		return parser.ParseCodexSessionFrom(
+			path, offset, startOrd, false,
+		)
+	}
+	if res, ok := e.tryIncrementalJSONL(
+		file, info, parser.AgentCodex, codexParseFn,
+	); ok {
+		if !indexMtimeChanged {
 			return res
-		} else {
-			forceReplace = res.forceReplace
 		}
+		// The index title changed, so a full parse still needs to refresh
+		// session metadata. Keep any fallback signal discovered while probing
+		// appended bytes so existing rows rewritten by the full parse are not
+		// dropped by the append-only write path.
+		forceReplace = res.forceReplace
+	} else {
+		forceReplace = res.forceReplace
 	}
 
 	sess, msgs, err := parser.ParseCodexSession(
