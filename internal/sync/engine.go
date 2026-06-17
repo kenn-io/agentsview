@@ -6024,8 +6024,7 @@ func (e *Engine) prepareSessionWrite(
 ) (db.Session, []db.Message, bool) {
 	msgs := toDBMessages(pw, e.blockedResultCategories)
 	s := toDBSession(pw)
-	s.MessageCount, s.UserMessageCount =
-		postFilterCounts(msgs)
+	applySessionMessageDerivedFields(&s, msgs)
 	e.applyRemoteRewrites(&s, msgs)
 	if s.Cwd != "" && resolveWorktreeProject != nil {
 		if mapped, ok := resolveWorktreeProject(
@@ -6034,9 +6033,6 @@ func (e *Engine) prepareSessionWrite(
 			s.Project = mapped
 		}
 	}
-	s.IsAutomated = db.IsAutomatedTranscript(
-		s.UserMessageCount, msgs, s.FirstMessage,
-	)
 
 	if e.shouldPreserveOpenCodeFormatArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
@@ -6044,107 +6040,181 @@ func (e *Engine) prepareSessionWrite(
 	) {
 		return db.Session{}, nil, false
 	}
-	if e.shouldPreserveVisualStudioCopilotArchive(
+	if mergedMsgs, preserve, storedSize := e.reconcileVisualStudioCopilotArchive(
 		pw.sess.Agent, s.ID, pw.sess.File.Size, msgs,
-	) {
+	); preserve {
 		return db.Session{}, nil, false
+	} else if mergedMsgs != nil {
+		msgs = mergedMsgs
+		if storedSize > 0 {
+			s.FileSize = int64Ptr(storedSize)
+		}
+		applySessionMessageDerivedFields(&s, msgs)
+		applySessionTokenTotalsFromMessages(&s, msgs)
 	}
 	return s, msgs, true
 }
 
-// shouldPreserveVisualStudioCopilotArchive reports whether an archived Visual
-// Studio Copilot conversation should be kept instead of being overwritten by a
-// reparse that looks incomplete. A conversation's transcript is rebuilt from
-// every sibling trace file and written with full message replacement, so when a
-// sibling is rotated away or deleted the reparse can see fewer spans or weaker
-// span metadata and would otherwise drop messages and tool results already
-// stored in SQLite. Preserve only when the composite trace size shrank and the
-// newly parsed transcript contains no messages absent from the archive.
-func (e *Engine) shouldPreserveVisualStudioCopilotArchive(
+func applySessionMessageDerivedFields(s *db.Session, msgs []db.Message) {
+	s.MessageCount, s.UserMessageCount = postFilterCounts(msgs)
+	s.IsAutomated = db.IsAutomatedTranscript(
+		s.UserMessageCount, msgs, s.FirstMessage,
+	)
+}
+
+func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
+	totalOut := 0
+	hasOut := false
+	peakCtx := 0
+	hasCtx := false
+	for _, msg := range msgs {
+		if msg.HasOutputTokens {
+			hasOut = true
+			totalOut += msg.OutputTokens
+		}
+		if msg.HasContextTokens {
+			hasCtx = true
+			if msg.ContextTokens > peakCtx {
+				peakCtx = msg.ContextTokens
+			}
+		}
+	}
+	if hasOut {
+		s.TotalOutputTokens = totalOut
+		s.HasTotalOutputTokens = true
+	}
+	if hasCtx {
+		s.PeakContextTokens = peakCtx
+		s.HasPeakContextTokens = true
+	}
+}
+
+// reconcileVisualStudioCopilotArchive returns either a preserved-archive skip
+// or a merged transcript for a shrunken Visual Studio Copilot reparse. A
+// conversation's transcript is rebuilt from every sibling trace file and
+// written with full message replacement, so when a sibling is rotated away or
+// deleted the reparse can see fewer spans or weaker span metadata and would
+// otherwise drop messages and tool results already stored in SQLite. If a
+// remaining trace gained richer data for a message that is already archived,
+// merge that update into the archived transcript while retaining archived-only
+// messages.
+func (e *Engine) reconcileVisualStudioCopilotArchive(
 	agent parser.AgentType, sessionID string,
 	currentSize int64, currentMsgs []db.Message,
-) bool {
+) (merged []db.Message, preserve bool, storedSize int64) {
 	if agent != parser.AgentVSCopilot {
-		return false
+		return nil, false, 0
 	}
 	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
 	if err != nil || stored == nil {
-		return false
+		return nil, false, 0
 	}
-	storedSize := derefInt64(stored.FileSize)
+	storedSize = derefInt64(stored.FileSize)
 	if storedSize == 0 || currentSize >= storedSize {
-		return false
+		return nil, false, 0
 	}
 	storedMsgs, err := e.db.GetAllMessages(context.Background(), sessionID)
-	if err != nil || len(storedMsgs) == 0 ||
-		!visualStudioCopilotArchiveLooksIncomplete(
-			currentMsgs, storedMsgs,
-		) {
-		return false
+	if err != nil || len(storedMsgs) == 0 {
+		return nil, false, 0
 	}
-	log.Printf(
-		"preserve %s %s: reparse looks incomplete relative to archived "+
-			"transcript (%d stored messages, %d parsed messages, "+
-			"composite trace %d->%d bytes)",
-		agent, sessionID, len(storedMsgs), len(currentMsgs),
-		storedSize, currentSize,
+	decision := visualStudioCopilotArchiveDecision(
+		currentMsgs, storedMsgs,
 	)
-	return true
+	if decision.preserve {
+		log.Printf(
+			"preserve %s %s: reparse looks incomplete relative to archived "+
+				"transcript (%d stored messages, %d parsed messages, "+
+				"composite trace %d->%d bytes)",
+			agent, sessionID, len(storedMsgs), len(currentMsgs),
+			storedSize, currentSize,
+		)
+		return nil, true, 0
+	}
+	if decision.merged != nil {
+		log.Printf(
+			"merge %s %s: reparse updated archived messages while "+
+				"composite trace shrank (%d stored messages, %d parsed "+
+				"messages, composite trace %d->%d bytes)",
+			agent, sessionID, len(storedMsgs), len(currentMsgs),
+			storedSize, currentSize,
+		)
+		return decision.merged, false, storedSize
+	}
+	return nil, false, 0
 }
 
-func visualStudioCopilotArchiveLooksIncomplete(
+type visualStudioCopilotArchiveReconcile struct {
+	preserve bool
+	merged   []db.Message
+}
+
+func visualStudioCopilotArchiveDecision(
 	parsed, stored []db.Message,
-) bool {
+) visualStudioCopilotArchiveReconcile {
 	if len(stored) == 0 {
-		return false
+		return visualStudioCopilotArchiveReconcile{}
 	}
 	if parsed == nil {
-		return true
-	}
-	if visualStudioCopilotHasMessagesAbsentFromStored(parsed, stored) {
-		return false
-	}
-	if len(parsed) < len(stored) {
-		return true
+		return visualStudioCopilotArchiveReconcile{preserve: true}
 	}
 
-	storedByKey := make(map[string][]db.Message, len(stored))
-	for _, msg := range stored {
+	storedByKey := make(map[string][]int, len(stored))
+	for i, msg := range stored {
 		key := visualStudioCopilotMessagePresenceKey(msg)
-		storedByKey[key] = append(storedByKey[key], msg)
+		storedByKey[key] = append(storedByKey[key], i)
 	}
+	updates := make(map[int]db.Message)
+	hasIncomplete := false
 	for _, parsedMsg := range parsed {
 		key := visualStudioCopilotMessagePresenceKey(parsedMsg)
 		candidates := storedByKey[key]
 		if len(candidates) == 0 {
-			continue
+			return visualStudioCopilotArchiveReconcile{}
 		}
-		storedMsg := candidates[0]
+		storedIndex := candidates[0]
 		storedByKey[key] = candidates[1:]
-		if visualStudioCopilotMessageLooksIncomplete(
+		storedMsg := stored[storedIndex]
+		incomplete := visualStudioCopilotMessageLooksIncomplete(
 			parsedMsg, storedMsg,
-		) {
-			return true
+		)
+		if incomplete {
+			hasIncomplete = true
+		}
+		if !incomplete &&
+			visualStudioCopilotMessageHasArchiveUpdate(
+				parsedMsg, storedMsg,
+			) {
+			updates[storedIndex] = parsedMsg
 		}
 	}
-	return false
+	if len(updates) > 0 {
+		if len(parsed) < len(stored) {
+			return visualStudioCopilotArchiveReconcile{
+				merged: visualStudioCopilotMergeArchiveMessages(
+					stored, updates,
+				),
+			}
+		}
+		return visualStudioCopilotArchiveReconcile{}
+	}
+	if hasIncomplete || len(parsed) < len(stored) {
+		return visualStudioCopilotArchiveReconcile{preserve: true}
+	}
+	return visualStudioCopilotArchiveReconcile{}
 }
 
-func visualStudioCopilotHasMessagesAbsentFromStored(
-	parsed, stored []db.Message,
-) bool {
-	storedCounts := make(map[string]int, len(stored))
-	for _, msg := range stored {
-		storedCounts[visualStudioCopilotMessagePresenceKey(msg)]++
+func visualStudioCopilotMergeArchiveMessages(
+	stored []db.Message, updates map[int]db.Message,
+) []db.Message {
+	merged := make([]db.Message, len(stored))
+	copy(merged, stored)
+	for index, msg := range updates {
+		merged[index] = msg
 	}
-	for _, msg := range parsed {
-		key := visualStudioCopilotMessagePresenceKey(msg)
-		if storedCounts[key] == 0 {
-			return true
-		}
-		storedCounts[key]--
+	for i := range merged {
+		merged[i].Ordinal = i
 	}
-	return false
+	return merged
 }
 
 func visualStudioCopilotMessagePresenceKey(msg db.Message) string {
@@ -6188,6 +6258,92 @@ func visualStudioCopilotMessageLooksIncomplete(
 	}
 	return countToolResultContentLength(parsed.ToolCalls) <
 		countToolResultContentLength(stored.ToolCalls)
+}
+
+func visualStudioCopilotMessageHasArchiveUpdate(
+	parsed, stored db.Message,
+) bool {
+	if parsed.Role != stored.Role {
+		return false
+	}
+	if parsed.ContentLength > stored.ContentLength {
+		return true
+	}
+	if parsed.ContentLength == stored.ContentLength &&
+		parsed.Content != stored.Content {
+		return true
+	}
+	if parsed.HasThinking && (!stored.HasThinking ||
+		parsed.ThinkingText != stored.ThinkingText) {
+		return true
+	}
+	if parsed.HasOutputTokens &&
+		(!stored.HasOutputTokens ||
+			parsed.OutputTokens > stored.OutputTokens) {
+		return true
+	}
+	if parsed.HasContextTokens &&
+		(!stored.HasContextTokens ||
+			parsed.ContextTokens > stored.ContextTokens) {
+		return true
+	}
+	if string(parsed.TokenUsage) != "" &&
+		string(parsed.TokenUsage) != string(stored.TokenUsage) {
+		return true
+	}
+	return visualStudioCopilotToolCallsHaveArchiveUpdate(
+		parsed.ToolCalls, stored.ToolCalls,
+	)
+}
+
+func visualStudioCopilotToolCallsHaveArchiveUpdate(
+	parsed, stored []db.ToolCall,
+) bool {
+	if len(parsed) > len(stored) {
+		return true
+	}
+	for i := 0; i < len(parsed) && i < len(stored); i++ {
+		if visualStudioCopilotToolCallHasArchiveUpdate(
+			parsed[i], stored[i],
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func visualStudioCopilotToolCallHasArchiveUpdate(
+	parsed, stored db.ToolCall,
+) bool {
+	if parsed.ResultContentLength > stored.ResultContentLength {
+		return true
+	}
+	if parsed.ResultContentLength == stored.ResultContentLength &&
+		parsed.ResultContent != "" &&
+		parsed.ResultContent != stored.ResultContent {
+		return true
+	}
+	if len(parsed.ResultEvents) > len(stored.ResultEvents) {
+		return true
+	}
+	for i := 0; i < len(parsed.ResultEvents) &&
+		i < len(stored.ResultEvents); i++ {
+		parsedEvent := parsed.ResultEvents[i]
+		storedEvent := stored.ResultEvents[i]
+		if parsedEvent.ContentLength > storedEvent.ContentLength {
+			return true
+		}
+		if parsedEvent.ContentLength == storedEvent.ContentLength &&
+			parsedEvent.Content != "" &&
+			parsedEvent.Content != storedEvent.Content {
+			return true
+		}
+		if parsedEvent.Status != "" &&
+			parsedEvent.Status != storedEvent.Status {
+			return true
+		}
+	}
+	return false
 }
 
 func countToolResultContentLength(calls []db.ToolCall) int {
