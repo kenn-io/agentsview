@@ -335,9 +335,10 @@ func sortAndLimitParseDiffFiles(
 	return files, cutPaths, limited
 }
 
-// stripVirtualSourceSuffix maps a stored file_path to its on-disk
-// base file by removing the "#rawID" suffix Kiro, Zed, OpenCode, and
-// Kilo SQLite-backed sessions append to their shared database path.
+// stripVirtualSourceSuffix maps a stored file_path to its on-disk base
+// file by removing the "#rawID" suffix that Kiro, Zed, OpenCode, Kilo,
+// MiMoCode, and Shelley SQLite-backed sessions append to their shared
+// database path.
 func stripVirtualSourceSuffix(path string) string {
 	if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
 		return dbPath
@@ -352,6 +353,9 @@ func stripVirtualSourceSuffix(path string) string {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseMiMoCodeSQLiteVirtualPath(path); ok {
+		return dbPath
+	}
+	if dbPath, _, ok := parser.ParseShelleyVirtualPath(path); ok {
 		return dbPath
 	}
 	return path

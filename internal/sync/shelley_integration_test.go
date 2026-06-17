@@ -310,3 +310,45 @@ func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "second answer")
 }
+
+// TestSyncShelleySameSecondInPlaceRewrite covers the gap that
+// updated_at + MAX(sequence_id) alone cannot close: a message rewritten
+// in place where updated_at stays in the same wall-clock second and no
+// new row is appended (sequence_id unchanged). The content byte-length
+// component of the change signal detects it, so a re-sync replaces the
+// stored transcript instead of skipping it as unchanged.
+func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
+			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
+				"", "2026-06-15T10:00:00Z"},
+			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"partial"}]}`,
+				"", "2026-06-15T10:00:10Z"},
+		})
+
+	engine, database := newShelleyEngine(t, dir)
+	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	assertMessageContent(t, database, "shelley:cMAIN1", "q", "partial")
+
+	// Rewrite the agent message in place with a longer body. Crucially,
+	// updated_at is left untouched (same second) and sequence_id is
+	// unchanged, so only the content byte-length signal differs.
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE messages SET llm_data = ? WHERE conversation_id = 'cMAIN1' AND sequence_id = 2`,
+		`{"Role":1,"Content":[{"Type":2,"Text":"the full streamed answer"}]}`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	// Detected via the content byte-length signal: replaced, not skipped.
+	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
+	assertMessageContent(
+		t, database, "shelley:cMAIN1", "q", "the full streamed answer",
+	)
+}

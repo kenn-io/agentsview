@@ -455,10 +455,10 @@ func TestParseShelleyWebSearchToolResult(t *testing.T) {
 // the same wall-clock second (so updated_at is unchanged) still advances
 // the per-conversation File.Mtime change signal, so the sync engine's
 // skip cannot drop it. Shelley's updated_at is second-precision, so the
-// max(sequence_id) component is what distinguishes same-second writes.
-// The three signal sources (stored File.Mtime, the meta skip query, and
-// ShelleySourceMtime) must agree, or unchanged conversations would
-// re-parse forever.
+// max(sequence_id) and content-byte-length components are what
+// distinguish same-second writes. The three signal sources (stored
+// File.Mtime, the meta skip query, and ShelleySourceMtime) must agree, or
+// unchanged conversations would re-parse forever.
 func TestShelleySameSecondChangeSignal(t *testing.T) {
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyConversation(
@@ -493,10 +493,10 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	assert.Equal(t, mtime1, srcMtime1, "SourceMtime must match File.Mtime")
 
 	// Append a second message in the SAME second: updated_at is unchanged,
-	// only sequence_id advances (1 -> 2).
+	// sequence_id advances (1 -> 2) and the payload adds content bytes.
+	const secondLLM = `{"Role":1,"Content":[{"Type":2,"Text":"second"}]}`
 	seedShelleyMessage(t, db, "cSEC1", 2, 1, "agent",
-		`{"Role":1,"Content":[{"Type":2,"Text":"second"}]}`,
-		"", "", "2026-06-15T10:00:00Z")
+		secondLLM, "", "", "2026-06-15T10:00:00Z")
 
 	second, err := ParseShelleyConversationDirect(dbPath, "cSEC1", "m", info)
 	require.NoError(t, err)
@@ -505,8 +505,8 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 
 	assert.NotEqual(t, mtime1, mtime2,
 		"a same-second append must change the skip signal")
-	assert.Equal(t, mtime1+1, mtime2,
-		"signal advances by exactly the sequence_id delta")
+	assert.Equal(t, mtime1+1+int64(len(secondLLM)), mtime2,
+		"signal advances by the sequence_id delta plus the appended payload bytes")
 
 	metas2, err := ListShelleyConversationMetas(conn, dbPath)
 	require.NoError(t, err)

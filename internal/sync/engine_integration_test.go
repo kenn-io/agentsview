@@ -37,6 +37,7 @@ type testEnv struct {
 	ampDir            string
 	piDir             string
 	kiroDir           string
+	shelleyDir        string
 	antigravityCLIDir string
 	db                *db.DB
 	engine            *sync.Engine
@@ -115,6 +116,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		iflowDir:          t.TempDir(),
 		ampDir:            t.TempDir(),
 		piDir:             t.TempDir(),
+		shelleyDir:        t.TempDir(),
 		antigravityCLIDir: t.TempDir(),
 		db:                dbtest.OpenTestDB(t),
 	}
@@ -182,6 +184,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentAmp:            {env.ampDir},
 			parser.AgentPi:             {env.piDir},
 			parser.AgentKiro:           kiroDirs,
+			parser.AgentShelley:        {env.shelleyDir},
 			parser.AgentAntigravityCLI: {env.antigravityCLIDir},
 		},
 		Machine: "local",

@@ -42,6 +42,7 @@ func newParseDiffEngine(env *testEnv) *sync.Engine {
 			parser.AgentPi:             {env.piDir},
 			parser.AgentKiro:           {env.kiroDir},
 			parser.AgentKilo:           {env.kiloDir},
+			parser.AgentShelley:        {env.shelleyDir},
 			parser.AgentAntigravityCLI: {env.antigravityCLIDir},
 		},
 		Machine: "local",
@@ -950,6 +951,71 @@ func TestParseDiffCoversMixedKiloRoot(t *testing.T) {
 	assert.Equal(t, 2, report.FilesExamined,
 		"storage session file and kilo.db examined")
 	assert.False(t, report.HasFailures(), "clean mixed kilo run")
+}
+
+// TestParseDiffCoversShelley proves Shelley's shared shelley.db — which
+// DiscoverFunc emits as a single file and which normal sync fans out to
+// one session per conversation — is re-parsed and compared by parse-diff.
+// Examined:1/Identical:1 means the stored conversation was matched and
+// vetted, not bucketed as skipped/"not discovered".
+func TestParseDiffCoversShelley(t *testing.T) {
+	env := setupTestEnv(t)
+	dbPath := createShelleyDB(t, env.shelleyDir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentShelley},
+	})
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1,
+	}, report.Totals, "shelley conversation must be examined, not skipped")
+	assert.Equal(t, 1, report.FilesExamined, "shelley.db examined")
+	assert.False(t, report.HasFailures(), "clean shelley run")
+}
+
+// TestParseDiffShelleyDBErrorAttributed proves that when the whole
+// shelley.db can no longer be read, the stored conversations under it
+// are reported as DiffParseError attributed to their session IDs, not
+// misclassified as source-missing in the final sweep. This exercises
+// stripVirtualSourceSuffix mapping shelley.db#id back to shelley.db so
+// the parse error keyed by the real DB path matches the stored rows.
+func TestParseDiffShelleyDBErrorAttributed(t *testing.T) {
+	env := setupTestEnv(t)
+	dbPath := createShelleyDB(t, env.shelleyDir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	// Break the DB so the conversation meta query fails: the file is
+	// still a regular shelley.db (so it is discovered), but reading it
+	// errors, forcing the whole-file job error path.
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(`DROP TABLE messages`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentShelley},
+	})
+	assert.Equal(t, sync.ParseDiffTotals{ParseErrors: 1}, report.Totals,
+		"unreadable shelley.db is a parse error for the stored conversation")
+
+	sd := findSessionDiff(report, "shelley:cMAIN1")
+	require.NotNil(t, sd, "stored conversation attributed by session ID")
+	assert.Equal(t, sync.DiffParseError, sd.Class, "class")
+	assert.True(t, report.HasFailures(),
+		"a DB read failure must trip --fail-on-change")
 }
 
 // TestParseDiffKiroSQLitePerSessionError proves a malformed session
