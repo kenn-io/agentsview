@@ -451,14 +451,14 @@ func TestParseShelleyWebSearchToolResult(t *testing.T) {
 		"content length nonzero")
 }
 
-// TestShelleySameSecondChangeSignal verifies that a message appended in
-// the same wall-clock second (so updated_at is unchanged) still advances
-// the per-conversation File.Mtime change signal, so the sync engine's
-// skip cannot drop it. Shelley's updated_at is second-precision, so the
-// max(sequence_id) and content-byte-length components are what
-// distinguish same-second writes. The three signal sources (stored
-// File.Mtime, the meta skip query, and ShelleySourceMtime) must agree, or
-// unchanged conversations would re-parse forever.
+// TestShelleySameSecondChangeSignal verifies the split change signal: a
+// message appended in the same wall-clock second (so updated_at is
+// unchanged) leaves File.Mtime fixed at the conversation's real
+// timestamp but shifts the content fingerprint (stored in file_hash), so
+// the sync skip still re-parses. The watcher-only ShelleySourceMtime,
+// compared for inequality, must also change. The stored values and the
+// meta skip query must agree, or unchanged conversations would re-parse
+// forever.
 func TestShelleySameSecondChangeSignal(t *testing.T) {
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyConversation(
@@ -481,49 +481,51 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	mtime1 := first.Session.File.Mtime
+	hash1 := first.Session.File.Hash
+
+	// File.Mtime is the conversation's real timestamp, so it stays a valid
+	// value for modified-between range queries (never a synthetic future).
+	base := parseTimestamp("2026-06-15T10:00:00Z").UnixNano()
+	assert.Equal(t, base, mtime1, "File.Mtime is the real updated_at")
+	assert.NotEmpty(t, hash1, "content fingerprint set")
 
 	metas1, err := ListShelleyConversationMetas(conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas1, 1)
 	assert.Equal(t, mtime1, metas1[0].FileMtime,
-		"stored File.Mtime must match the meta skip signal")
+		"stored File.Mtime must match the meta skip timestamp")
+	assert.Equal(t, hash1, metas1[0].Fingerprint,
+		"stored file_hash must match the meta skip fingerprint")
 
 	srcMtime1, err := ShelleySourceMtime(dbPath + "#cSEC1")
 	require.NoError(t, err)
-	assert.Equal(t, mtime1, srcMtime1, "SourceMtime must match File.Mtime")
-
-	// The signal stays within the conversation's reported second so it
-	// remains a valid timestamp for modified-between range queries.
-	base := parseTimestamp("2026-06-15T10:00:00Z").UnixNano()
-	assert.GreaterOrEqual(t, mtime1, base, "signal at or after the second")
-	assert.Less(t, mtime1, base+1_000_000_000, "signal within the second")
+	assert.Positive(t, srcMtime1, "SourceMtime resolves the conversation")
 
 	// Append a second message in the SAME second: updated_at is unchanged,
 	// sequence_id advances (1 -> 2) and the payload adds content bytes.
-	const secondLLM = `{"Role":1,"Content":[{"Type":2,"Text":"second"}]}`
 	seedShelleyMessage(t, db, "cSEC1", 2, 1, "agent",
-		secondLLM, "", "", "2026-06-15T10:00:00Z")
+		`{"Role":1,"Content":[{"Type":2,"Text":"second"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
 
 	second, err := ParseShelleyConversationDirect(dbPath, "cSEC1", "m", info)
 	require.NoError(t, err)
 	require.NotNil(t, second)
-	mtime2 := second.Session.File.Mtime
 
-	assert.NotEqual(t, mtime1, mtime2,
-		"a same-second append must change the skip signal")
-	assert.GreaterOrEqual(t, mtime2, base, "appended signal at or after the second")
-	assert.Less(t, mtime2, base+1_000_000_000, "appended signal within the second")
+	assert.Equal(t, mtime1, second.Session.File.Mtime,
+		"same-second append leaves the real timestamp unchanged")
+	assert.NotEqual(t, hash1, second.Session.File.Hash,
+		"a same-second append must change the content fingerprint")
 
 	metas2, err := ListShelleyConversationMetas(conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas2, 1)
-	assert.Equal(t, mtime2, metas2[0].FileMtime,
-		"meta skip signal tracks the same-second append")
+	assert.Equal(t, second.Session.File.Hash, metas2[0].Fingerprint,
+		"meta fingerprint tracks the same-second append")
 
 	srcMtime2, err := ShelleySourceMtime(dbPath + "#cSEC1")
 	require.NoError(t, err)
-	assert.Equal(t, mtime2, srcMtime2,
-		"SourceMtime tracks the same-second append")
+	assert.NotEqual(t, srcMtime1, srcMtime2,
+		"watcher SourceMtime tracks the same-second append")
 }
 
 func TestApplyShelleyUsageTolerant(t *testing.T) {

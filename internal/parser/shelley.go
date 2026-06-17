@@ -5,9 +5,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -183,120 +185,127 @@ func ShelleyConversationExists(dbPath, conversationID string) bool {
 type ShelleyConversationMeta struct {
 	RawID       string
 	VirtualPath string
-	// FileMtime is the per-conversation change signal (see
-	// shelleyChangeMtime), not a raw timestamp.
+	// FileMtime is the conversation's updated_at as a nanosecond
+	// timestamp. It stays a real (whole-second) timestamp so the
+	// modified-between range queries that drive PG/DuckDB push never
+	// see a Shelley row as "future"; see shelleyChangeMtime.
 	FileMtime int64
+	// Fingerprint is a content digest over the conversation's messages.
+	// It is stored in file_hash and compared in the sync skip to catch
+	// same-second changes FileMtime's second precision cannot; see
+	// shelleyDigest.
+	Fingerprint string
 }
 
-// shelleyContentBytesExpr is a correlated subquery that sums the byte
-// length of every message payload in a conversation. CAST(... AS BLOB)
-// makes LENGTH count bytes rather than UTF-8 characters, so the result
-// matches Go's len() over the same COALESCE'd columns loadShelleyMessages
-// reads. It references the conversations alias "c" and is shared by the
-// meta and single-conversation queries; see shelleyChangeMtime.
-const shelleyContentBytesExpr = `COALESCE((SELECT SUM(
-	        LENGTH(CAST(COALESCE(m.llm_data, '') AS BLOB)) +
-	        LENGTH(CAST(COALESCE(m.user_data, '') AS BLOB)) +
-	        LENGTH(CAST(COALESCE(m.usage_data, '') AS BLOB)))
-	   FROM messages m
-	  WHERE m.conversation_id = c.conversation_id), 0)`
-
-// shelleyChangeMtime derives the per-conversation change signal stored as
-// File.Mtime from three quantities: updated_at (whole-second precision,
-// since Shelley writes it as SQLite CURRENT_TIMESTAMP), the conversation's
-// max message sequence_id, and the total byte length of its message
-// payloads. updated_at sets the whole-second base; maxSeq and contentBytes
-// are mixed into a sub-second offset by shelleyChangeOffset.
+// Shelley change detection uses two per-conversation signals, because
+// Shelley's updated_at is only whole-second precision (it writes it as
+// SQLite CURRENT_TIMESTAMP) and so cannot, on its own, distinguish two
+// writes in the same wall-clock second:
 //
-// Each input closes a gap the others cannot:
-//   - updated_at alone has second precision, so two writes in the same
-//     wall-clock second are indistinguishable.
-//   - maxSeq is Shelley's monotonic, append-only cursor (it powers the
-//     incremental-fetch protocol), so it detects same-second appends.
-//   - contentBytes detects a same-second in-place rewrite of an existing
-//     row -- where updated_at stays in the same second and no row is
-//     appended (maxSeq unchanged) -- because any edit that changes a
-//     payload's length changes the sum. The meta query computes it in
-//     SQLite (no payload transfer) and the parse loop sums the same bytes
-//     it already reads, so the two sides match exactly.
+//   - File.Mtime / ShelleyConversationMeta.FileMtime is the conversation's
+//     updated_at as a real nanosecond timestamp. The sync skip compares it
+//     for equality, but it must also stay a true timestamp because
+//     ListSessionsModifiedBetween filters file_mtime <= now for PG/DuckDB
+//     push; a synthetic future value would drop a just-synced Shelley row
+//     from a same-second push until a later run.
+//   - Fingerprint, a content digest stored in file_hash, distinguishes any
+//     same-second change the timestamp cannot: appends, in-place rewrites,
+//     and even length-preserving edits (shelleyDigest length-frames each
+//     field). The skip re-parses whenever it differs.
 //
-// The offset is a hash of the (maxSeq, contentBytes) pair, not their sum,
-// so the two cannot cancel: a plain additive fold would collide when one
-// rises by k while the other falls by k (e.g. +1 sequence_id, -1 byte).
-// Folding the hash into [0, 1s) keeps File.Mtime within the source's
-// reported second, so it stays a valid nanosecond timestamp for the
-// range queries in ListSessionsModifiedBetween. The residual gap is a
-// same-second change whose (maxSeq, contentBytes) pair hashes to the same
-// sub-second offset (~1e-9), plus a length-preserving in-place edit with
-// no append -- neither of which real conversation edits produce.
+// Computing the digest means reading message payloads, which the cheaper
+// siblings (Zed, Kiro) avoid because their sub-second / millisecond
+// updated_at already distinguishes same-second writes. Shelley's
+// second-precision timestamp does not, so the content read is the price of
+// not silently skipping a rewrite.
 //
-// This is a deliberate, documented divergence from the otherwise-mirrored
-// Zed parser: Zed's updated_at is sub-second RFC3339, so its skip signal
-// is already collision-free; Shelley's second-precision updated_at is not.
-func shelleyChangeMtime(updatedAtNanos, maxSeq, contentBytes int64) int64 {
-	return updatedAtNanos + shelleyChangeOffset(maxSeq, contentBytes)
+// shelleyDigest folds one message row into a running FNV-1a hash. The
+// sequence_id and per-field length prefixes make the digest sensitive to
+// row identity and field boundaries, so moving bytes between fields (a
+// length-preserving edit) still changes it. Callers must feed rows in a
+// fixed order (sequence_id ascending) so the parse and skip paths agree.
+func shelleyDigest(h hash.Hash64, seq int64, llm, user, usage string) {
+	var n [8]byte
+	binary.LittleEndian.PutUint64(n[:], uint64(seq))
+	_, _ = h.Write(n[:])
+	for _, s := range []string{llm, user, usage} {
+		binary.LittleEndian.PutUint64(n[:], uint64(len(s)))
+		_, _ = h.Write(n[:])
+		_, _ = h.Write([]byte(s))
+	}
 }
 
-// shelleyChangeOffset mixes a conversation's max sequence_id and total
-// payload byte length into a sub-second nanosecond offset in [0, 1e9).
-// FNV-1a over both values means a change in either shifts the offset
-// without the additive cancellation a plain sum allows; see
-// shelleyChangeMtime.
-func shelleyChangeOffset(maxSeq, contentBytes int64) int64 {
-	var buf [16]byte
-	binary.LittleEndian.PutUint64(buf[0:8], uint64(maxSeq))
-	binary.LittleEndian.PutUint64(buf[8:16], uint64(contentBytes))
-	h := fnv.New64a()
-	_, _ = h.Write(buf[:])
-	return int64(h.Sum64() % 1_000_000_000)
+// shelleyFingerprint renders a content-digest hash as the stable string
+// stored in file_hash and compared by the sync skip.
+func shelleyFingerprint(h hash.Hash64) string {
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
-// ListShelleyConversationMetas queries conversation IDs, updated_at
-// timestamps, and max message sequence_id using an already-open
-// connection, sharing it with the subsequent parse loop to avoid a second
-// DB open.
+// ListShelleyConversationMetas returns the skip state for every
+// conversation: its updated_at timestamp (FileMtime) and a content digest
+// (Fingerprint). It scans message payloads ordered by conversation and
+// sequence_id, hashing each conversation's rows the same way the parse
+// loop does, so the meta digest and the stored file_hash match for
+// unchanged conversations. It shares the caller's open connection.
 func ListShelleyConversationMetas(
 	conn *sql.DB, dbPath string,
 ) ([]ShelleyConversationMeta, error) {
 	rows, err := conn.Query(
-		`SELECT c.conversation_id, COALESCE(c.updated_at, ''),
-		        COALESCE((SELECT MAX(m.sequence_id) FROM messages m
-		                   WHERE m.conversation_id = c.conversation_id), 0),
-		        ` + shelleyContentBytesExpr + `
+		`SELECT m.conversation_id, COALESCE(c.updated_at, ''),
+		        COALESCE(m.sequence_id, 0), COALESCE(m.llm_data, ''),
+		        COALESCE(m.user_data, ''), COALESCE(m.usage_data, '')
 		   FROM conversations c
-		  ORDER BY c.updated_at, c.conversation_id`,
+		   JOIN messages m ON m.conversation_id = c.conversation_id
+		  ORDER BY m.conversation_id, m.sequence_id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing shelley conversations: %w", err)
 	}
 	defer rows.Close()
 
-	var metas []ShelleyConversationMeta
-	for rows.Next() {
-		var id, updatedAt string
-		var maxSeq, contentBytes int64
-		if err := rows.Scan(&id, &updatedAt, &maxSeq, &contentBytes); err != nil {
-			return nil, fmt.Errorf("scanning shelley conversation meta: %w", err)
-		}
-		if !IsValidSessionID(id) {
-			continue
+	var (
+		metas      []ShelleyConversationMeta
+		curID      string
+		curUpdated string
+	)
+	h := fnv.New64a()
+	flush := func() {
+		// curID is "" before the first row; IsValidSessionID rejects it.
+		if !IsValidSessionID(curID) {
+			return
 		}
 		metas = append(metas, ShelleyConversationMeta{
-			RawID:       id,
-			VirtualPath: ShelleyVirtualPath(dbPath, id),
-			FileMtime: shelleyChangeMtime(
-				parseTimestamp(updatedAt).UnixNano(), maxSeq, contentBytes,
-			),
+			RawID:       curID,
+			VirtualPath: ShelleyVirtualPath(dbPath, curID),
+			FileMtime:   parseTimestamp(curUpdated).UnixNano(),
+			Fingerprint: shelleyFingerprint(h),
 		})
 	}
+	for rows.Next() {
+		var id, updatedAt, llm, user, usage string
+		var seq int64
+		if err := rows.Scan(
+			&id, &updatedAt, &seq, &llm, &user, &usage,
+		); err != nil {
+			return nil, fmt.Errorf("scanning shelley conversation meta: %w", err)
+		}
+		if id != curID {
+			flush()
+			curID, curUpdated, h = id, updatedAt, fnv.New64a()
+		}
+		shelleyDigest(h, seq, llm, user, usage)
+	}
+	flush()
 	return metas, rows.Err()
 }
 
 // ShelleySourceMtime resolves the per-conversation change signal for a
-// virtual Shelley source path. Used by the per-session live watcher,
-// which treats a zero result as "source gone", so this returns the same
-// updated_at / max(sequence_id) / content-bytes signal as the stored
-// FileMtime (see shelleyChangeMtime).
+// virtual Shelley source path. Used by the live watcher, which compares it
+// for inequality and treats a zero/error result as "source gone". It
+// returns the conversation's updated_at plus a sub-second term derived
+// from the content digest, so the watcher reacts to same-second edits.
+// This value is watcher-only and never written to file_mtime or
+// range-filtered, so the sub-second term is harmless here.
 func ShelleySourceMtime(path string) (int64, error) {
 	dbPath, conversationID, ok := ParseShelleyVirtualPath(path)
 	if !ok {
@@ -309,25 +318,44 @@ func ShelleySourceMtime(path string) (int64, error) {
 	defer conn.Close()
 
 	var updatedAt string
-	var maxSeq, contentBytes int64
-	err = conn.QueryRow(
-		`SELECT COALESCE(c.updated_at, ''),
-		        COALESCE((SELECT MAX(m.sequence_id) FROM messages m
-		                   WHERE m.conversation_id = c.conversation_id), 0),
-		        `+shelleyContentBytesExpr+`
-		   FROM conversations c
-		  WHERE c.conversation_id = ?`,
+	if err := conn.QueryRow(
+		`SELECT COALESCE(updated_at, '') FROM conversations
+		  WHERE conversation_id = ?`,
 		conversationID,
-	).Scan(&updatedAt, &maxSeq, &contentBytes)
-	if err != nil {
+	).Scan(&updatedAt); err != nil {
 		return 0, fmt.Errorf(
 			"loading shelley conversation mtime %s: %w",
 			conversationID, err,
 		)
 	}
-	return shelleyChangeMtime(
-		parseTimestamp(updatedAt).UnixNano(), maxSeq, contentBytes,
-	), nil
+
+	rows, err := conn.Query(
+		`SELECT COALESCE(sequence_id, 0), COALESCE(llm_data, ''),
+		        COALESCE(user_data, ''), COALESCE(usage_data, '')
+		   FROM messages WHERE conversation_id = ?
+		  ORDER BY sequence_id`,
+		conversationID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"loading shelley messages %s: %w", conversationID, err,
+		)
+	}
+	defer rows.Close()
+	h := fnv.New64a()
+	for rows.Next() {
+		var seq int64
+		var llm, user, usage string
+		if err := rows.Scan(&seq, &llm, &user, &usage); err != nil {
+			return 0, fmt.Errorf("scanning shelley message: %w", err)
+		}
+		shelleyDigest(h, seq, llm, user, usage)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return parseTimestamp(updatedAt).UnixNano() +
+		int64(h.Sum64()%1_000_000_000), nil
 }
 
 // OpenShelleyDB opens the Shelley shelley.db file read-only. Callers are
@@ -375,14 +403,14 @@ func ParseShelleyConversationFromDB(
 	if err != nil {
 		return nil, err
 	}
-	messages, maxSeq, contentBytes, err := loadShelleyMessages(
+	messages, fingerprint, err := loadShelleyMessages(
 		conn, rawID, conv.model,
 	)
 	if err != nil {
 		return nil, err
 	}
 	result, ok := buildShelleyParseResult(
-		conv, messages, maxSeq, contentBytes, dbPath, dbInfo, machine,
+		conv, messages, fingerprint, dbPath, dbInfo, machine,
 	)
 	if !ok {
 		return nil, nil
@@ -434,7 +462,7 @@ type shelleyMessageRow struct {
 
 func loadShelleyMessages(
 	conn *sql.DB, conversationID, convModel string,
-) ([]ParsedMessage, int64, int64, error) {
+) ([]ParsedMessage, string, error) {
 	// All generations are included, ordered by sequence_id. A generation
 	// bump is a context-reset/compaction boundary within the conversation
 	// (e.g. distillation); older-generation rows remain as real history
@@ -450,36 +478,35 @@ func loadShelleyMessages(
 		conversationID,
 	)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"listing shelley messages for %s: %w", conversationID, err,
 		)
 	}
 	defer rows.Close()
 
 	var messages []ParsedMessage
-	var maxSeq, contentBytes int64
+	h := fnv.New64a()
 	for rows.Next() {
 		var r shelleyMessageRow
 		if err := rows.Scan(
 			&r.sequenceID, &r.msgType, &r.llmData,
 			&r.userData, &r.usageData, &r.createdAt,
 		); err != nil {
-			return nil, 0, 0, fmt.Errorf("scanning shelley message: %w", err)
+			return nil, "", fmt.Errorf("scanning shelley message: %w", err)
 		}
-		// Track max sequence_id and total payload bytes over ALL rows (even
-		// ones decodeShelleyMessage drops) so the change signal matches the
-		// MAX(sequence_id) and byte-sum the meta query computes; a mismatch
-		// would re-parse forever. len() counts bytes, matching the meta
-		// query's LENGTH(CAST(... AS BLOB)); see shelleyChangeMtime.
-		if r.sequenceID > maxSeq {
-			maxSeq = r.sequenceID
-		}
-		contentBytes += int64(len(r.llmData) + len(r.userData) + len(r.usageData))
+		// Digest every row (even ones decodeShelleyMessage drops) in
+		// sequence_id order, exactly as ListShelleyConversationMetas does,
+		// so the stored fingerprint matches the meta skip query; a mismatch
+		// would re-parse forever. See shelleyDigest.
+		shelleyDigest(h, r.sequenceID, r.llmData, r.userData, r.usageData)
 		if msg, ok := decodeShelleyMessage(r, convModel); ok {
 			messages = append(messages, msg)
 		}
 	}
-	return messages, maxSeq, contentBytes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	return messages, shelleyFingerprint(h), nil
 }
 
 func decodeShelleyMessage(
@@ -711,7 +738,7 @@ func shelleyTokenCount(n json.Number) int {
 func buildShelleyParseResult(
 	conv shelleyConversationRow,
 	messages []ParsedMessage,
-	maxSeq, contentBytes int64,
+	fingerprint string,
 	dbPath string,
 	info os.FileInfo,
 	machine string,
@@ -790,7 +817,8 @@ func buildShelleyParseResult(
 		File: FileInfo{
 			Path:  ShelleyVirtualPath(dbPath, conv.conversationID),
 			Size:  info.Size(),
-			Mtime: shelleyChangeMtime(endedAt.UnixNano(), maxSeq, contentBytes),
+			Mtime: endedAt.UnixNano(),
+			Hash:  fingerprint,
 		},
 	}
 	if parent := strings.TrimSpace(conv.parentConversationID); parent != "" {

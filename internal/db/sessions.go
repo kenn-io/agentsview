@@ -1517,6 +1517,25 @@ func (db *DB) GetFileInfoByPath(
 	return s.Int64, m.Int64, true
 }
 
+// GetFileHashByPath returns the stored file_hash for the session
+// matching file_path, preferring the most recently modified row.
+// The bool is false when no row exists or the column is NULL. Used
+// by the Shelley skip to compare a per-conversation content
+// fingerprint alongside file_mtime.
+func (db *DB) GetFileHashByPath(path string) (hash string, ok bool) {
+	var h sql.NullString
+	err := db.getReader().QueryRow(
+		"SELECT file_hash FROM sessions"+
+			" WHERE file_path = ?"+
+			" ORDER BY file_mtime DESC LIMIT 1",
+		path,
+	).Scan(&h)
+	if err != nil {
+		return "", false
+	}
+	return h.String, h.Valid
+}
+
 // GetDataVersionByPath returns the minimum data_version for
 // sessions matching a file_path. Returns 0 when no session
 // exists for the path.

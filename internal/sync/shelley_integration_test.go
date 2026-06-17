@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -311,12 +312,36 @@ func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "second answer")
 }
 
+// TestSyncShelleyStoresRealTimestamp guards against a synthetic future
+// file_mtime. ListSessionsModifiedBetween filters file_mtime <= now for
+// PG/DuckDB push, so a Shelley row whose stored mtime drifted past its
+// updated_at second could be dropped from a same-second push. The stored
+// file_mtime must equal the conversation's real updated_at instant.
+func TestSyncShelleyStoresRealTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	const updatedAt = "2026-06-15T10:00:05Z"
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", updatedAt, mainConvoMsgs())
+
+	engine, database := newShelleyEngine(t, dir)
+	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+
+	want, err := time.Parse(time.RFC3339, updatedAt)
+	require.NoError(t, err)
+	_, mtime, ok := database.GetSessionFileInfo("shelley:cMAIN1")
+	require.True(t, ok, "session file info present")
+	assert.Equal(t, want.UnixNano(), mtime,
+		"stored file_mtime is the real updated_at, not a synthetic offset")
+}
+
 // TestSyncShelleySameSecondInPlaceRewrite covers the gap that
 // updated_at + MAX(sequence_id) alone cannot close: a message rewritten
 // in place where updated_at stays in the same wall-clock second and no
-// new row is appended (sequence_id unchanged). The content byte-length
-// component of the change signal detects it, so a re-sync replaces the
-// stored transcript instead of skipping it as unchanged.
+// new row is appended (sequence_id unchanged). The content fingerprint
+// detects it, so a re-sync replaces the stored transcript instead of
+// skipping it as unchanged.
 func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
@@ -333,9 +358,9 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "partial")
 
-	// Rewrite the agent message in place with a longer body. Crucially,
-	// updated_at is left untouched (same second) and sequence_id is
-	// unchanged, so only the content byte-length signal differs.
+	// Rewrite the agent message in place. Crucially, updated_at is left
+	// untouched (same second) and sequence_id is unchanged, so only the
+	// content fingerprint differs.
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	_, err = conn.Exec(
@@ -346,9 +371,46 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 	require.NoError(t, conn.Close())
 
 	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
-	// Detected via the content byte-length signal: replaced, not skipped.
+	// Detected via the content fingerprint: replaced, not skipped.
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertMessageContent(
 		t, database, "shelley:cMAIN1", "q", "the full streamed answer",
 	)
+}
+
+// TestSyncShelleyLengthPreservingRewrite is the case a byte-length signal
+// cannot catch: a same-second in-place edit that changes content while
+// keeping the exact byte length (and sequence_id and updated_at). Only a
+// real content digest detects it, so the re-sync must replace the stored
+// transcript rather than skip it.
+func TestSyncShelleyLengthPreservingRewrite(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
+			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
+				"", "2026-06-15T10:00:00Z"},
+			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"answer aaaa"}]}`,
+				"", "2026-06-15T10:00:10Z"},
+		})
+
+	engine, database := newShelleyEngine(t, dir)
+	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	assertMessageContent(t, database, "shelley:cMAIN1", "q", "answer aaaa")
+
+	// Same byte length, different content. updated_at and sequence_id are
+	// untouched, so a byte-length signal would skip this as unchanged.
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE messages SET llm_data = ? WHERE conversation_id = 'cMAIN1' AND sequence_id = 2`,
+		`{"Role":1,"Content":[{"Type":2,"Text":"answer bbbb"}]}`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
+	assertMessageContent(t, database, "shelley:cMAIN1", "q", "answer bbbb")
 }

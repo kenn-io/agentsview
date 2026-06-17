@@ -4846,9 +4846,9 @@ func (e *Engine) processShelley(
 		if result == nil {
 			return processResult{}
 		}
-		if hash, err := ComputeFileHash(dbPath); err == nil {
-			result.Session.File.Hash = hash
-		}
+		// File.Hash is the parser's per-conversation content fingerprint;
+		// the whole-db hash would be identical across conversations and is
+		// not used for Shelley change detection.
 		return processResult{
 			results:      []parser.ParseResult{*result},
 			forceReplace: true,
@@ -4865,14 +4865,17 @@ func (e *Engine) processShelley(
 		return processResult{err: err}
 	}
 
-	hash, _ := ComputeFileHash(file.Path)
-
 	var results []parser.ParseResult
 	var sessionErrs []sessionParseError
 	for _, meta := range metas {
 		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
+		storedHash, _ := e.db.GetFileHashByPath(meta.VirtualPath)
 		// parse-diff: !e.forceParse disables the stored-state skip.
+		// FileMtime alone has second precision, so the content fingerprint
+		// (stored in file_hash) catches same-second appends and in-place
+		// rewrites; see shelleyChangeMtime in the parser.
 		if !e.forceParse && ok && storedMtime == meta.FileMtime &&
+			storedHash == meta.Fingerprint &&
 			e.db.GetDataVersionByPath(meta.VirtualPath) >=
 				db.CurrentDataVersion() {
 			continue
@@ -4894,9 +4897,6 @@ func (e *Engine) processShelley(
 		}
 		if result == nil {
 			continue
-		}
-		if hash != "" {
-			result.Session.File.Hash = hash
 		}
 		results = append(results, *result)
 	}
