@@ -492,6 +492,12 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, mtime1, srcMtime1, "SourceMtime must match File.Mtime")
 
+	// The signal stays within the conversation's reported second so it
+	// remains a valid timestamp for modified-between range queries.
+	base := parseTimestamp("2026-06-15T10:00:00Z").UnixNano()
+	assert.GreaterOrEqual(t, mtime1, base, "signal at or after the second")
+	assert.Less(t, mtime1, base+1_000_000_000, "signal within the second")
+
 	// Append a second message in the SAME second: updated_at is unchanged,
 	// sequence_id advances (1 -> 2) and the payload adds content bytes.
 	const secondLLM = `{"Role":1,"Content":[{"Type":2,"Text":"second"}]}`
@@ -505,14 +511,19 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 
 	assert.NotEqual(t, mtime1, mtime2,
 		"a same-second append must change the skip signal")
-	assert.Equal(t, mtime1+1+int64(len(secondLLM)), mtime2,
-		"signal advances by the sequence_id delta plus the appended payload bytes")
+	assert.GreaterOrEqual(t, mtime2, base, "appended signal at or after the second")
+	assert.Less(t, mtime2, base+1_000_000_000, "appended signal within the second")
 
 	metas2, err := ListShelleyConversationMetas(conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas2, 1)
 	assert.Equal(t, mtime2, metas2[0].FileMtime,
 		"meta skip signal tracks the same-second append")
+
+	srcMtime2, err := ShelleySourceMtime(dbPath + "#cSEC1")
+	require.NoError(t, err)
+	assert.Equal(t, mtime2, srcMtime2,
+		"SourceMtime tracks the same-second append")
 }
 
 func TestApplyShelleyUsageTolerant(t *testing.T) {

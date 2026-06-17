@@ -2,8 +2,10 @@ package parser
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,15 +201,14 @@ const shelleyContentBytesExpr = `COALESCE((SELECT SUM(
 	   FROM messages m
 	  WHERE m.conversation_id = c.conversation_id), 0)`
 
-// shelleyChangeMtime combines three per-conversation quantities into the
-// change signal stored as File.Mtime: updated_at (whole-second precision,
+// shelleyChangeMtime derives the per-conversation change signal stored as
+// File.Mtime from three quantities: updated_at (whole-second precision,
 // since Shelley writes it as SQLite CURRENT_TIMESTAMP), the conversation's
 // max message sequence_id, and the total byte length of its message
-// payloads. The signal is only ever compared for equality (the sync skip
-// check) or inequality (the live watcher), so it is a change detector, not
-// an exact timestamp.
+// payloads. updated_at sets the whole-second base; maxSeq and contentBytes
+// are mixed into a sub-second offset by shelleyChangeOffset.
 //
-// Each component closes a gap the others cannot:
+// Each input closes a gap the others cannot:
 //   - updated_at alone has second precision, so two writes in the same
 //     wall-clock second are indistinguishable.
 //   - maxSeq is Shelley's monotonic, append-only cursor (it powers the
@@ -217,20 +218,37 @@ const shelleyContentBytesExpr = `COALESCE((SELECT SUM(
 //     appended (maxSeq unchanged) -- because any edit that changes a
 //     payload's length changes the sum. The meta query computes it in
 //     SQLite (no payload transfer) and the parse loop sums the same bytes
-//     it already reads, so the two sides match exactly. The residual gap
-//     is a length-preserving same-second in-place edit with no append,
-//     which real content rewrites essentially never produce.
+//     it already reads, so the two sides match exactly.
 //
-// Drift from the true timestamp is at most maxSeq + contentBytes
-// nanoseconds (well under a second for any real conversation), and
-// File.Mtime is never surfaced as a user-facing time, so this stays a
-// valid change signal.
+// The offset is a hash of the (maxSeq, contentBytes) pair, not their sum,
+// so the two cannot cancel: a plain additive fold would collide when one
+// rises by k while the other falls by k (e.g. +1 sequence_id, -1 byte).
+// Folding the hash into [0, 1s) keeps File.Mtime within the source's
+// reported second, so it stays a valid nanosecond timestamp for the
+// range queries in ListSessionsModifiedBetween. The residual gap is a
+// same-second change whose (maxSeq, contentBytes) pair hashes to the same
+// sub-second offset (~1e-9), plus a length-preserving in-place edit with
+// no append -- neither of which real conversation edits produce.
 //
 // This is a deliberate, documented divergence from the otherwise-mirrored
 // Zed parser: Zed's updated_at is sub-second RFC3339, so its skip signal
 // is already collision-free; Shelley's second-precision updated_at is not.
 func shelleyChangeMtime(updatedAtNanos, maxSeq, contentBytes int64) int64 {
-	return updatedAtNanos + maxSeq + contentBytes
+	return updatedAtNanos + shelleyChangeOffset(maxSeq, contentBytes)
+}
+
+// shelleyChangeOffset mixes a conversation's max sequence_id and total
+// payload byte length into a sub-second nanosecond offset in [0, 1e9).
+// FNV-1a over both values means a change in either shifts the offset
+// without the additive cancellation a plain sum allows; see
+// shelleyChangeMtime.
+func shelleyChangeOffset(maxSeq, contentBytes int64) int64 {
+	var buf [16]byte
+	binary.LittleEndian.PutUint64(buf[0:8], uint64(maxSeq))
+	binary.LittleEndian.PutUint64(buf[8:16], uint64(contentBytes))
+	h := fnv.New64a()
+	_, _ = h.Write(buf[:])
+	return int64(h.Sum64() % 1_000_000_000)
 }
 
 // ListShelleyConversationMetas queries conversation IDs, updated_at
@@ -277,8 +295,8 @@ func ListShelleyConversationMetas(
 // ShelleySourceMtime resolves the per-conversation change signal for a
 // virtual Shelley source path. Used by the per-session live watcher,
 // which treats a zero result as "source gone", so this returns the same
-// updated_at + max(sequence_id) composite as the stored FileMtime (see
-// shelleyChangeMtime).
+// updated_at / max(sequence_id) / content-bytes signal as the stored
+// FileMtime (see shelleyChangeMtime).
 func ShelleySourceMtime(path string) (int64, error) {
 	dbPath, conversationID, ok := ParseShelleyVirtualPath(path)
 	if !ok {
