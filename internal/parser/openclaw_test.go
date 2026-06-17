@@ -138,6 +138,13 @@ func TestParseOpenClawSession_RealToolCallFormat(t *testing.T) {
 	assert.Equal(t, "call_1", result.ToolResults[0].ToolUseID)
 	assert.Equal(t, len("file1\nfile2"), result.ToolResults[0].ContentLength,
 		"toolResult content block text must be extracted")
+	// ContentRaw must be stored so pairToolResults can decode it into
+	// tool_calls.result_content for the UI, search, copy, and exports.
+	require.NotEmpty(t, result.ToolResults[0].ContentRaw,
+		"ContentRaw must be stored for downstream decoding")
+	assert.Equal(t, "file1\nfile2",
+		DecodeContent(result.ToolResults[0].ContentRaw),
+		"stored ContentRaw must decode to the tool result text")
 
 	// An arguments-only toolCall still yields InputJSON from "arguments".
 	argsOnly := msgs[3]

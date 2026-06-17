@@ -181,6 +181,7 @@ func ParseOpenClawSession(
 				ToolResults: []ParsedToolResult{{
 					ToolUseID:     toolCallID,
 					ContentLength: contentLen,
+					ContentRaw:    content.Raw,
 				}},
 			})
 			ordinal++
