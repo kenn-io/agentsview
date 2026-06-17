@@ -24,6 +24,7 @@
     piebald: "Piebald",
     antigravity: "Antigravity",
     "antigravity-cli": "Antigravity CLI",
+    shelley: "Shelley",
   };
 </script>
 

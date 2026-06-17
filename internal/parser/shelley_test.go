@@ -323,6 +323,82 @@ func TestShelleyTokenCount(t *testing.T) {
 	}
 }
 
+// TestParseShelleyTimestampFormats verifies the real on-disk DATETIME
+// format Shelley writes (space-separated, no T/Z) parses into non-zero
+// timestamps. Shelley relies on SQLite's DEFAULT CURRENT_TIMESTAMP, so
+// stored values look like "2026-06-15 10:00:00".
+func TestParseShelleyTimestampFormats(t *testing.T) {
+	_, dbPath, db := newShelleyTestDB(t)
+	seedShelleyConversation(
+		t, db, "cTIME1", "ts", "/home/user/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15 10:00:00", "2026-06-15 10:00:30",
+	)
+	seedShelleyMessage(t, db, "cTIME1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":0,"Text":"hi"}]}`,
+		"", "", "2026-06-15 10:00:00")
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat db")
+	result, err := ParseShelleyConversationDirect(dbPath, "cTIME1", "m", info)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.Session.StartedAt.IsZero(), "StartedAt parsed")
+	assert.False(t, result.Session.EndedAt.IsZero(), "EndedAt parsed")
+	assert.Positive(t, result.Session.File.Mtime, "File.Mtime positive")
+}
+
+// TestParseShelleyRobustContent verifies graceful handling of unknown
+// content types, redacted thinking, malformed llm_data, and token
+// capture on errored assistant turns (type="error").
+func TestParseShelleyRobustContent(t *testing.T) {
+	_, dbPath, db := newShelleyTestDB(t)
+	seedShelleyConversation(
+		t, db, "cROB1", "robust", "/home/user/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:40Z",
+	)
+	seedShelleyMessage(t, db, "cROB1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":0,"Text":"go"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+	// Unknown content type (99) is ignored; redacted thinking (2) is
+	// surfaced as a placeholder; the text block survives.
+	seedShelleyMessage(t, db, "cROB1", 2, 1, "agent",
+		`{"Role":1,"Content":[{"Type":2},{"Type":99,"Text":"ignored"},`+
+			`{"Type":0,"Text":"real text"}]}`,
+		"", "", "2026-06-15T10:00:05Z")
+	// Malformed llm_data with no user_data fallback is dropped.
+	seedShelleyMessage(t, db, "cROB1", 3, 1, "agent",
+		`{not json`, "", "", "2026-06-15T10:00:06Z")
+	// Errored assistant turn stored as type="error" still carries usage.
+	seedShelleyMessage(t, db, "cROB1", 4, 1, "error",
+		`{"Role":1,"Content":[{"Type":0,"Text":"request failed"}]}`,
+		"",
+		`{"input_tokens":700,"output_tokens":40,"model":"claude-sonnet-4-6"}`,
+		"2026-06-15T10:00:40Z")
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat db")
+	result, err := ParseShelleyConversationDirect(dbPath, "cROB1", "m", info)
+	require.NoError(t, err, "must not error on robust content")
+	require.NotNil(t, result)
+
+	// user + agent(real text) + error message; the malformed row dropped.
+	require.Len(t, result.Messages, 3, "messages len")
+	agentMsg := result.Messages[1]
+	assert.Equal(t, "real text", agentMsg.Content, "unknown type ignored, text kept")
+	assert.Contains(t, agentMsg.ThinkingText, "redacted", "redacted thinking placeholder")
+
+	errMsg := result.Messages[2]
+	assert.True(t, errMsg.IsSystem, "error message flagged system")
+	assert.Equal(t, "request failed", errMsg.Content, "error text preserved")
+	assert.Equal(t, 40, errMsg.OutputTokens, "errored-turn output tokens captured")
+	assert.Equal(t, 700, errMsg.ContextTokens, "errored-turn input tokens captured")
+
+	// Errored-turn tokens roll up into the session totals.
+	assert.Equal(t, 40, result.Session.TotalOutputTokens, "session output total")
+}
+
 func TestApplyShelleyUsageTolerant(t *testing.T) {
 	var msg ParsedMessage
 	applyShelleyUsage(&msg,

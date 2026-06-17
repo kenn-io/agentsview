@@ -45,12 +45,12 @@ const (
 	shelleyContentWebSearchResult     = 7
 )
 
-// Shelley message-table row types.
+// Shelley message-table row types. Other types (system, error,
+// gitinfo) are handled by the default branch in decodeShelleyMessage.
 const (
-	shelleyTypeUser   = "user"
-	shelleyTypeAgent  = "agent"
-	shelleyTypeTool   = "tool"
-	shelleyTypeSystem = "system"
+	shelleyTypeUser  = "user"
+	shelleyTypeAgent = "agent"
+	shelleyTypeTool  = "tool"
 )
 
 // shelleyLLMMessage mirrors the serialized llm.Message stored in the
@@ -215,6 +215,37 @@ func ListShelleyConversationMetas(
 	return metas, rows.Err()
 }
 
+// ShelleySourceMtime resolves the per-conversation updated_at timestamp
+// for a virtual Shelley source path. Used by the per-session live
+// watcher, which treats a zero result as "source gone", so this returns
+// the conversation's updated_at consistent with the stored FileMtime.
+func ShelleySourceMtime(path string) (int64, error) {
+	dbPath, conversationID, ok := ParseShelleyVirtualPath(path)
+	if !ok {
+		return 0, fmt.Errorf("not a shelley virtual path: %s", path)
+	}
+	conn, err := openShelleyDB(dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+
+	var updatedAt string
+	err = conn.QueryRow(
+		`SELECT COALESCE(updated_at, '')
+		   FROM conversations
+		  WHERE conversation_id = ?`,
+		conversationID,
+	).Scan(&updatedAt)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"loading shelley conversation mtime %s: %w",
+			conversationID, err,
+		)
+	}
+	return parseTimestamp(updatedAt).UnixNano(), nil
+}
+
 // OpenShelleyDB opens the Shelley shelley.db file read-only. Callers are
 // responsible for calling Close on the returned *sql.DB.
 func OpenShelleyDB(dbPath string) (*sql.DB, error) {
@@ -356,7 +387,7 @@ func loadShelleyMessages(
 func decodeShelleyMessage(
 	r shelleyMessageRow, convModel string,
 ) (ParsedMessage, bool) {
-	role := RoleUser
+	var role RoleType
 	isSystem := false
 	switch r.msgType {
 	case shelleyTypeAgent:
@@ -444,7 +475,11 @@ func decodeShelleyMessage(
 		Timestamp:     parseTimestamp(r.createdAt),
 	}
 
-	if role == RoleAssistant && r.usageData != "" {
+	// Apply usage for any row that carries it, not just agent rows:
+	// Shelley records token usage on errored assistant turns too (stored
+	// as type="error"), and applyShelleyUsage no-ops on the all-zero
+	// usage blobs Shelley writes for user/tool messages.
+	if r.usageData != "" {
 		applyShelleyUsage(&msg, r.usageData, convModel)
 	}
 	return msg, true
@@ -510,8 +545,21 @@ func applyShelleyUsage(msg *ParsedMessage, usageData, convModel string) {
 		shelleyTokenCount(u.CacheReadInputTokens)
 	output := shelleyTokenCount(u.OutputTokens)
 
+	// Shelley writes an all-zero usage blob on user/tool rows; skip those
+	// so they do not produce spurious token-presence flags or empty
+	// token_usage rows in the cost UNION.
+	if context == 0 && output == 0 {
+		return
+	}
+
 	// The usage_data keys are already the AgentsView canonical names, so
 	// the raw blob is stored verbatim for catalog cost pricing.
+	//
+	// usage_data also carries an exact gateway cost_usd. It is not yet
+	// surfaced: capturing it cleanly (without double-counting cost
+	// against the catalog-priced per-message tokens) needs a dedicated
+	// usage-event path and is left as a follow-up. Standard gateway
+	// models are priced correctly by the catalog today.
 	msg.TokenUsage = json.RawMessage(usageData)
 	msg.ContextTokens = context
 	msg.OutputTokens = output

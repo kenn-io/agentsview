@@ -156,6 +156,22 @@ func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
 		database.GetSessionFilePath("shelley:cMAIN1"), "stored file path")
 }
 
+// TestSourceMtimeShelleyResolvesVirtualPath guards the live per-session
+// watcher: SourceMtime must resolve a shelley.db#<id> virtual path to the
+// conversation's updated_at, not fall through to os.Stat (which fails on a
+// virtual path and returns 0, which the watcher reads as "source gone").
+func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+
+	engine, _ := newShelleyEngine(t, dir)
+	assert.Positive(t, engine.SourceMtime("shelley:cMAIN1"),
+		"SourceMtime must resolve the virtual path, not return 0")
+}
+
 func TestSyncAllShelleyIngestsConversations(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)

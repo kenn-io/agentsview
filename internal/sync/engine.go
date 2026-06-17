@@ -6757,6 +6757,15 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 			return mtime
 		}
 	}
+	if def.Type == parser.AgentShelley {
+		if _, _, ok := parser.ParseShelleyVirtualPath(path); ok {
+			mtime, err := parser.ShelleySourceMtime(path)
+			if err != nil {
+				return 0
+			}
+			return mtime
+		}
+	}
 	if def.Type == parser.AgentAntigravityCLI {
 		info, err := parser.AntigravityCLIFileInfo(path)
 		if err != nil {
