@@ -6315,6 +6315,9 @@ func visualStudioCopilotArchiveDecision(
 			updates[storedIndex] = parsedMsg
 		}
 	}
+	additions = visualStudioCopilotResolveArchiveAdditions(
+		stored, matchedStored, updates, additions, &hasIncomplete,
+	)
 	hasArchiveOnly := false
 	for _, matched := range matchedStored {
 		if !matched {
@@ -6333,6 +6336,133 @@ func visualStudioCopilotArchiveDecision(
 		return visualStudioCopilotArchiveReconcile{preserve: true}
 	}
 	return visualStudioCopilotArchiveReconcile{}
+}
+
+func visualStudioCopilotResolveArchiveAdditions(
+	stored []db.Message,
+	matchedStored []bool,
+	updates map[int]db.Message,
+	additions []db.Message,
+	hasIncomplete *bool,
+) []db.Message {
+	unresolved := additions[:0]
+	for _, parsedMsg := range additions {
+		storedIndex, ok := visualStudioCopilotArchiveFallbackMatch(
+			parsedMsg, stored, matchedStored,
+		)
+		if !ok {
+			unresolved = append(unresolved, parsedMsg)
+			continue
+		}
+		matchedStored[storedIndex] = true
+		storedMsg := stored[storedIndex]
+		incomplete := visualStudioCopilotMessageLooksIncomplete(
+			parsedMsg, storedMsg,
+		)
+		if incomplete {
+			*hasIncomplete = true
+			continue
+		}
+		update := visualStudioCopilotArchiveFallbackUpdate(
+			parsedMsg, storedMsg,
+		)
+		if visualStudioCopilotMessageHasArchiveUpdate(update, storedMsg) {
+			updates[storedIndex] = update
+		}
+	}
+	return unresolved
+}
+
+func visualStudioCopilotArchiveFallbackMatch(
+	parsed db.Message,
+	stored []db.Message,
+	matchedStored []bool,
+) (int, bool) {
+	match := -1
+	for i, storedMsg := range stored {
+		if matchedStored[i] {
+			continue
+		}
+		if !visualStudioCopilotMessagesFallbackMatch(parsed, storedMsg) {
+			continue
+		}
+		if match != -1 {
+			return 0, false
+		}
+		match = i
+	}
+	if match == -1 {
+		return 0, false
+	}
+	return match, true
+}
+
+func visualStudioCopilotMessagesFallbackMatch(
+	parsed, stored db.Message,
+) bool {
+	if parsed.Role != stored.Role {
+		return false
+	}
+	if visualStudioCopilotMessagesShareToolIdentity(parsed, stored) {
+		return true
+	}
+	return visualStudioCopilotMessagesShareContentIdentity(parsed, stored)
+}
+
+func visualStudioCopilotMessagesShareToolIdentity(
+	parsed, stored db.Message,
+) bool {
+	if len(parsed.ToolCalls) == 0 || len(stored.ToolCalls) == 0 {
+		return false
+	}
+	parsedIDs := make(map[string]string, len(parsed.ToolCalls))
+	for _, call := range parsed.ToolCalls {
+		id := strings.TrimSpace(call.ToolUseID)
+		if id == "" {
+			continue
+		}
+		parsedIDs[id] = strings.TrimSpace(call.ToolName)
+	}
+	for _, call := range stored.ToolCalls {
+		id := strings.TrimSpace(call.ToolUseID)
+		if id == "" {
+			continue
+		}
+		parsedName, ok := parsedIDs[id]
+		if !ok {
+			continue
+		}
+		storedName := strings.TrimSpace(call.ToolName)
+		if parsedName != "" && storedName != "" &&
+			parsedName != storedName {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func visualStudioCopilotMessagesShareContentIdentity(
+	parsed, stored db.Message,
+) bool {
+	if len(parsed.ToolCalls) > 0 || len(stored.ToolCalls) > 0 {
+		return false
+	}
+	if parsed.Role != string(parser.RoleAssistant) {
+		return false
+	}
+	return parsed.Content != "" && parsed.Content == stored.Content
+}
+
+func visualStudioCopilotArchiveFallbackUpdate(
+	parsed, stored db.Message,
+) db.Message {
+	update := parsed
+	// A duplicate span can be flushed later with a different timestamp; keep
+	// the archived timestamp as the transcript anchor while taking any richer
+	// parsed payload such as tool results or token usage.
+	update.Timestamp = stored.Timestamp
+	return update
 }
 
 func visualStudioCopilotMergeArchiveMessages(

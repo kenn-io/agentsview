@@ -1493,6 +1493,60 @@ func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *t
 	}
 }
 
+func TestVisualStudioCopilotArchiveDecisionMatchesTimestampShiftedToolCall(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       "Run command: dotnet build",
+			ContentLength: len("Run command: dotnet build"),
+			Timestamp:     "2026-06-12T19:46:40Z",
+			ToolCalls: []db.ToolCall{{
+				ToolName:  "run_command_in_terminal",
+				ToolUseID: "call_build",
+			}},
+		},
+		{
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "Archived prompt.",
+			ContentLength: len("Archived prompt."),
+			Timestamp:     "2026-06-12T19:47:00Z",
+		},
+	}
+	parsed := []db.Message{{
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "Run command: dotnet build",
+		ContentLength: len("Run command: dotnet build"),
+		Timestamp:     "2026-06-12T19:47:40Z",
+		ToolCalls: []db.ToolCall{{
+			ToolName:  "run_command_in_terminal",
+			ToolUseID: "call_build",
+			ResultEvents: []db.ToolResultEvent{{
+				ToolUseID:     "call_build",
+				Source:        "visualstudio-copilot",
+				Status:        "completed",
+				Content:       "Build succeeded.",
+				ContentLength: len("Build succeeded."),
+			}},
+		}},
+	}}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 2)
+	assert.Equal(t, "Run command: dotnet build", decision.merged[0].Content)
+	assert.Equal(t, "2026-06-12T19:46:40Z", decision.merged[0].Timestamp,
+		"fallback merge should preserve the archived transcript anchor")
+	require.Len(t, decision.merged[0].ToolCalls, 1)
+	require.Len(t, decision.merged[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(t, "Build succeeded.",
+		decision.merged[0].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal(t, "Archived prompt.", decision.merged[1].Content)
+}
+
 // fakeEmitter records scopes passed to Emit. Thread-safe so it
 // can be called from engine goroutines under test.
 type fakeEmitter struct {
