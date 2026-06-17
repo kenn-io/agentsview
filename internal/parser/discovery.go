@@ -2388,3 +2388,81 @@ func FindIflowSourceFile(
 
 	return ""
 }
+
+// DiscoverVibeSessions finds all Vibe session files under the given root directory.
+// Vibe stores sessions in: ~/.vibe/logs/session/session_YYYYMMDD_HHMMSS_uuid/
+// Each session directory contains messages.jsonl
+func DiscoverVibeSessions(root string) []DiscoveredFile {
+	var results []DiscoveredFile
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return results
+	}
+
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, root) {
+			continue
+		}
+
+		// Vibe session directories match pattern: session_YYYYMMDD_HHMMSS_uuid
+		// The uuid part can contain hyphens
+		if !strings.HasPrefix(entry.Name(), "session_") || !strings.Contains(entry.Name(), "_") {
+			continue
+		}
+
+		sessionDir := filepath.Join(root, entry.Name())
+		messagesPath := filepath.Join(sessionDir, "messages.jsonl")
+
+		if info, err := os.Stat(messagesPath); err == nil && !info.IsDir() {
+			results = append(results, DiscoveredFile{
+				Path:    messagesPath,
+				Agent:   AgentVibe,
+				Project: entry.Name(),
+			})
+		}
+	}
+
+	return results
+}
+
+// FindVibeSourceFile locates a specific Vibe session file by ID. The ID is the
+// session_id recorded in meta.json (a uuid), which usually differs from the
+// session directory name. Sessions without meta.json fall back to the directory
+// name, so a direct path is tried first before scanning meta.json files.
+func FindVibeSourceFile(root, sessionID string) string {
+	// Fast path: sessionID is the directory name (no-meta fallback).
+	if messagesPath := filepath.Join(root, sessionID, "messages.jsonl"); isVibeMessagesFile(messagesPath) {
+		return messagesPath
+	}
+
+	// Otherwise sessionID is a meta.json session_id; scan session
+	// directories and match on their recorded session_id.
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if !isDirOrSymlink(entry, root) || !strings.HasPrefix(entry.Name(), "session_") {
+			continue
+		}
+		messagesPath := filepath.Join(root, entry.Name(), "messages.jsonl")
+		if !isVibeMessagesFile(messagesPath) {
+			continue
+		}
+		metaPath := filepath.Join(root, entry.Name(), "meta.json")
+		if meta, err := parseVibeMetadata(metaPath); err == nil && meta.SessionID == sessionID {
+			return messagesPath
+		}
+	}
+	return ""
+}
+
+// isVibeMessagesFile reports whether path is an existing regular file.
+func isVibeMessagesFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info == nil {
+		return false
+	}
+	return !info.IsDir()
+}

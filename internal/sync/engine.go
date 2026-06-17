@@ -537,18 +537,13 @@ func findContainingDir(dirs []string, path string) string {
 	return ""
 }
 
-func (e *Engine) classifyOnePath(
-	path string,
-	geminiProjectsByDir map[string]map[string]string,
+// classifyContainerPath runs the container- and SQLite-style classifiers that
+// resolve a path whether or not it currently exists on disk (OpenCode-format
+// stores, Kiro, Zed, Shelley, and Vibe). Split out of classifyOnePath to keep
+// that function within NilAway's per-function CFG-block limit.
+func (e *Engine) classifyContainerPath(
+	path string, pathExists bool,
 ) (parser.DiscoveredFile, bool) {
-	sep := string(filepath.Separator)
-	pathExists := true
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			pathExists = false
-		}
-	}
-
 	if df, ok := e.classifyOpenCodeFormatPath(
 		parser.AgentOpenCode, path, pathExists,
 	); ok {
@@ -571,6 +566,27 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 	if df, ok := e.classifyShelleySQLitePath(path); ok {
+		return df, true
+	}
+	if df, ok := e.classifyVibePath(path); ok {
+		return df, true
+	}
+	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) classifyOnePath(
+	path string,
+	geminiProjectsByDir map[string]map[string]string,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+	pathExists := true
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			pathExists = false
+		}
+	}
+
+	if df, ok := e.classifyContainerPath(path, pathExists); ok {
 		return df, true
 	}
 	if !pathExists {
@@ -1385,6 +1401,55 @@ func (e *Engine) classifyVisualStudioCopilotPath(
 			Project: "visualstudio",
 			Agent:   parser.AgentVSCopilot,
 		}, true
+	}
+	return parser.DiscoveredFile{}, false
+}
+
+// classifyVibePath handles Vibe's session directory layout:
+//
+//	<vibeDir>/session_<timestamp>_<uuid>/messages.jsonl
+//	<vibeDir>/session_<timestamp>_<uuid>/meta.json
+//
+// meta.json changes route back to messages.jsonl because title, model,
+// timestamps, and usage stats are sourced from the sidecar metadata file.
+func (e *Engine) classifyVibePath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+	for _, vibeDir := range e.agentDirs[parser.AgentVibe] {
+		if vibeDir == "" {
+			continue
+		}
+		rel, ok := isUnder(vibeDir, path)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rel, sep)
+		if len(parts) != 2 || !strings.HasPrefix(parts[0], "session_") {
+			continue
+		}
+		switch parts[1] {
+		case "messages.jsonl":
+			if _, err := os.Stat(path); err != nil {
+				continue
+			}
+			return parser.DiscoveredFile{
+				Path:    path,
+				Project: parts[0],
+				Agent:   parser.AgentVibe,
+			}, true
+		case "meta.json":
+			messagesPath := filepath.Join(
+				vibeDir, parts[0], "messages.jsonl",
+			)
+			if _, err := os.Stat(messagesPath); err == nil {
+				return parser.DiscoveredFile{
+					Path:    messagesPath,
+					Project: parts[0],
+					Agent:   parser.AgentVibe,
+				}, true
+			}
+		}
 	}
 	return parser.DiscoveredFile{}, false
 }
@@ -2304,7 +2369,7 @@ func (e *Engine) syncAllLocked(
 
 	if verbose {
 		log.Printf(
-			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d kiro, %d zed) in %s",
+			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d kiro, %d zed, %d vibe) in %s",
 			len(all),
 			counts[parser.AgentClaude],
 			counts[parser.AgentCodex],
@@ -2319,6 +2384,7 @@ func (e *Engine) syncAllLocked(
 			counts[parser.AgentPi],
 			counts[parser.AgentKiro],
 			counts[parser.AgentZed],
+			counts[parser.AgentVibe],
 			time.Since(t0).Round(time.Millisecond),
 		)
 	}
@@ -2797,6 +2863,13 @@ func discoveredFileMtime(
 			return 0, err
 		}
 		return commandCodeEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
+	}
+	if file.Agent == parser.AgentVibe {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return vibeEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
 	}
 
 	info, err := os.Stat(file.Path)
@@ -3637,6 +3710,8 @@ func (e *Engine) processFile(
 		res = e.processHermes(file, info)
 	case parser.AgentWorkBuddy:
 		res = e.processWorkBuddy(file, info)
+	case parser.AgentVibe:
+		res = e.processVibe(file, info)
 	case parser.AgentPositron:
 		res = e.processPositron(file, info)
 	case parser.AgentZed:
@@ -5380,6 +5455,117 @@ func (e *Engine) processWorkBuddy(
 	}
 }
 
+func (e *Engine) processVibe(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	// Title/model/usage stats come from the sibling meta.json, so the
+	// skip check and stored file info must account for it too, or a
+	// meta.json-only update never refreshes those fields.
+	effectiveInfo := vibeEffectiveInfo(file.Path, info)
+	if e.shouldSkipByPath(file.Path, effectiveInfo) {
+		return processResult{skip: true}
+	}
+
+	// Pass an empty project so the parser-derived project (from the
+	// session's working directory) is kept. file.Project holds the
+	// cryptic session directory name, which must not become the project.
+	sess, msgs, usageEvents, err := parser.ParseVibeSessionWrapper(
+		file.Path, "", e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+	sess.File.Size = effectiveInfo.Size()
+	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	var excludedIDs []string
+	lookupPath := file.Path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(file.Path)
+	}
+	existingIDs, err := e.db.ListSessionIDsByFilePath(
+		lookupPath, string(parser.AgentVibe),
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	currentID := sess.ID
+	currentPrefixedID := e.idPrefix + sess.ID
+	fallbackID := "vibe:" + filepath.Base(filepath.Dir(file.Path))
+	for _, id := range existingIDs {
+		if id != currentID && id != currentPrefixedID {
+			excludedIDs = append(excludedIDs, id)
+		}
+	}
+
+	currentFallbackTrashed := sess.ID == fallbackID && e.isSessionTrashed(fallbackID)
+	if e.isSessionBlocked(fallbackID) ||
+		(sess.ID == fallbackID &&
+			e.db.HasTrashedSessionByFilePath(lookupPath, string(parser.AgentVibe))) {
+		if !currentFallbackTrashed && !slices.Contains(excludedIDs, sess.ID) {
+			excludedIDs = append(excludedIDs, sess.ID)
+		}
+		return processResult{excludedSessionIDs: excludedIDs}
+	}
+
+	// Sessions parsed before meta.json existed (or was parseable) are stored
+	// under the directory-name fallback ID. Keep excluding that legacy row even
+	// if it predates file_path metadata and did not appear in the path lookup.
+	if sess.ID != fallbackID && !slices.Contains(excludedIDs, fallbackID) {
+		excludedIDs = append(excludedIDs, fallbackID)
+	}
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
+		},
+		excludedSessionIDs: excludedIDs,
+	}
+}
+
+func (e *Engine) isSessionBlocked(id string) bool {
+	if e.idPrefix != "" && !strings.HasPrefix(id, e.idPrefix) {
+		prefixed := e.idPrefix + id
+		return e.db.IsSessionExcluded(prefixed) || e.db.IsSessionTrashed(prefixed)
+	}
+	if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
+		return true
+	}
+	return false
+}
+
+func (e *Engine) isSessionTrashed(id string) bool {
+	if e.idPrefix != "" && !strings.HasPrefix(id, e.idPrefix) {
+		return e.db.IsSessionTrashed(e.idPrefix + id)
+	}
+	return e.db.IsSessionTrashed(id)
+}
+
+// vibeEffectiveInfo returns size/mtime for a Vibe session that account
+// for the sibling meta.json file: size is the sum of both files, and
+// mtime is the larger of the two. Returns info unchanged when meta.json
+// is absent or unreadable.
+func vibeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
+	metaPath := filepath.Join(filepath.Dir(path), "meta.json")
+	if metaInfo, err := os.Stat(metaPath); err == nil {
+		size += metaInfo.Size()
+		if metaMtime := metaInfo.ModTime().UnixNano(); metaMtime > mtime {
+			mtime = metaMtime
+		}
+	}
+	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
+}
+
 func (e *Engine) processPositron(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -6740,7 +6926,12 @@ func shouldReplaceFullParseMessages(
 		pw.sess.Agent == parser.AgentVSCopilot ||
 		pw.sess.Agent == parser.AgentAntigravity ||
 		pw.sess.Agent == parser.AgentAntigravityCLI ||
-		pw.sess.Agent == parser.AgentQwenPaw
+		pw.sess.Agent == parser.AgentQwenPaw ||
+		// Vibe pairs later tool-result carrier records back to an
+		// earlier assistant tool call. An incremental append would
+		// only add the new ordinals and leave the existing tool call's
+		// result_content empty, so force a full replace.
+		pw.sess.Agent == parser.AgentVibe
 }
 
 // writeIncremental appends new messages and partially updates
@@ -7666,6 +7857,13 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		)
 		return mtime
 	}
+	if def.Type == parser.AgentVibe {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		return vibeEffectiveInfo(path, info).ModTime().UnixNano()
+	}
 
 	// FindSourceFile may return a virtual path (e.g. Visual Studio
 	// Copilot's <traceFile>#<conversationID>); resolve it to the
@@ -7931,6 +8129,24 @@ func (e *Engine) SyncSingleSessionContext(
 	}
 	if res.skip {
 		return nil
+	}
+
+	// Delete parser-excluded sessions before writing the parsed
+	// results, mirroring collectAndBatch. Vibe promotes a session
+	// from its directory-name fallback ID to the canonical
+	// meta.json ID and returns the stale fallback ID here; without
+	// this delete a single-session resync would leave both rows in
+	// the DB and double-count messages and usage.
+	if excluded := e.applyIDPrefixToSessionIDs(
+		res.excludedSessionIDs,
+	); len(excluded) > 0 {
+		if _, err := e.db.DeleteParserExcludedSessions(
+			excluded,
+		); err != nil {
+			return fmt.Errorf(
+				"delete parser-excluded sessions: %w", err,
+			)
+		}
 	}
 
 	// Handle incremental updates from processFile (e.g.

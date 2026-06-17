@@ -45,6 +45,7 @@ const (
 	AgentPositron       AgentType = "positron"
 	AgentAntigravity    AgentType = "antigravity"
 	AgentAntigravityCLI AgentType = "antigravity-cli"
+	AgentVibe           AgentType = "vibe"
 	AgentZed            AgentType = "zed"
 	AgentQwenPaw        AgentType = "qwenpaw"
 	AgentGptme          AgentType = "gptme"
@@ -594,6 +595,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverShelleySessions,
 		FindSourceFunc: FindShelleySourceFile,
+	},
+	{
+		Type:           AgentVibe,
+		DisplayName:    "Mistral Vibe",
+		EnvVar:         "VIBE_SESSIONS_DIR",
+		ConfigKey:      "vibe_session_dirs",
+		DefaultDirs:    []string{".vibe/logs/session"},
+		IDPrefix:       "vibe:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverVibeSessions,
+		FindSourceFunc: FindVibeSourceFile,
 	},
 }
 

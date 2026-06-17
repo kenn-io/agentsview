@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -898,6 +899,28 @@ func (db *DB) IsSessionExcluded(id string) bool {
 	return n == 1
 }
 
+// IsSessionTrashed returns true if the session ID exists in the trash.
+func (db *DB) IsSessionTrashed(id string) bool {
+	var n int
+	_ = db.getReader().QueryRow(
+		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL", id,
+	).Scan(&n)
+	return n == 1
+}
+
+// HasTrashedSessionByFilePath returns true when a source path already belongs
+// to a trashed row for this agent.
+func (db *DB) HasTrashedSessionByFilePath(path, agent string) bool {
+	var n int
+	_ = db.getReader().QueryRow(
+		"SELECT 1 FROM sessions"+
+			" WHERE file_path = ? AND agent = ? AND deleted_at IS NOT NULL"+
+			" LIMIT 1",
+		path, agent,
+	).Scan(&n)
+	return n == 1
+}
+
 // PurgeExcludedSessions removes any session rows whose IDs
 // appear in excluded_sessions. Used after a resync to clean
 // up sessions that were synced before their exclusion was
@@ -1565,6 +1588,35 @@ func (db *DB) GetFileHashByPath(path string) (hash string, ok bool) {
 	return h.String, h.Valid
 }
 
+// ListSessionIDsByFilePath returns non-deleted session IDs for a source path
+// and agent. Used by parsers whose canonical session ID can change while the
+// underlying source file remains the same.
+func (db *DB) ListSessionIDsByFilePath(path, agent string) ([]string, error) {
+	rows, err := db.getReader().Query(
+		"SELECT id FROM sessions"+
+			" WHERE file_path = ? AND agent = ? AND deleted_at IS NULL"+
+			" ORDER BY id",
+		path, agent,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing session IDs by file path: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning session ID by file path: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session IDs by file path: %w", err)
+	}
+	return ids, nil
+}
+
 // GetDataVersionByPath returns the minimum data_version for
 // sessions matching a file_path. Returns 0 when no session
 // exists for the path.
@@ -1612,6 +1664,11 @@ func (db *DB) DeleteSession(id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	aliasIDs, err := sessionAliasIDsTx(tx, "id = ?", id)
+	if err != nil {
+		return err
+	}
+
 	res, err := tx.Exec(
 		"DELETE FROM sessions WHERE id = ?", id,
 	)
@@ -1620,14 +1677,71 @@ func (db *DB) DeleteSession(id string) error {
 	}
 	n, _ := res.RowsAffected()
 	if n > 0 {
-		if _, err := tx.Exec(
-			"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)",
-			id,
-		); err != nil {
+		if err := excludeSessionIDTx(tx, id); err != nil {
 			return fmt.Errorf("excluding session %s: %w", id, err)
+		}
+		for _, aliasID := range aliasIDs {
+			if err := excludeSessionIDTx(tx, aliasID); err != nil {
+				return fmt.Errorf(
+					"excluding session alias %s: %w", aliasID, err,
+				)
+			}
 		}
 	}
 	return tx.Commit()
+}
+
+func excludeSessionIDTx(tx *sql.Tx, id string) error {
+	_, err := tx.Exec(
+		"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)",
+		id,
+	)
+	return err
+}
+
+func sessionAliasIDsTx(tx *sql.Tx, where string, args ...any) ([]string, error) {
+	rows, err := tx.Query(
+		"SELECT id, agent, file_path FROM sessions WHERE "+where,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("loading session alias state: %w", err)
+	}
+	defer rows.Close()
+
+	var aliases []string
+	for rows.Next() {
+		var id, agent string
+		var filePath sql.NullString
+		if err := rows.Scan(&id, &agent, &filePath); err != nil {
+			return nil, fmt.Errorf("scanning session alias state: %w", err)
+		}
+		if aliasID := vibeFallbackAliasID(id, agent, filePath); aliasID != "" {
+			aliases = append(aliases, aliasID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating session alias state: %w", err)
+	}
+	return aliases, nil
+}
+
+func vibeFallbackAliasID(id, agent string, filePath sql.NullString) string {
+	if agent != "vibe" || !filePath.Valid || filePath.String == "" {
+		return ""
+	}
+	dir := filepath.Base(filepath.Dir(filePath.String))
+	if !strings.HasPrefix(dir, "session_") {
+		return ""
+	}
+	fallbackID := "vibe:" + dir
+	if idx := strings.LastIndex(id, "vibe:"); idx > 0 {
+		fallbackID = id[:idx] + fallbackID
+	}
+	if fallbackID == id {
+		return ""
+	}
+	return fallbackID
 }
 
 // DeleteSessionIfTrashed atomically deletes a session only if it
@@ -1645,6 +1759,13 @@ func (db *DB) DeleteSessionIfTrashed(id string) (int64, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	aliasIDs, err := sessionAliasIDsTx(
+		tx, "id = ? AND deleted_at IS NOT NULL", id,
+	)
+	if err != nil {
+		return 0, err
+	}
+
 	// Only delete if the session is currently trashed.
 	res, err := tx.Exec(
 		"DELETE FROM sessions WHERE id = ? AND deleted_at IS NOT NULL",
@@ -1659,10 +1780,15 @@ func (db *DB) DeleteSessionIfTrashed(id string) (int64, error) {
 	}
 
 	// Record in exclusion list so sync doesn't re-import.
-	if _, err := tx.Exec(
-		"INSERT OR IGNORE INTO excluded_sessions (id) VALUES (?)", id,
-	); err != nil {
+	if err := excludeSessionIDTx(tx, id); err != nil {
 		return 0, fmt.Errorf("excluding session %s: %w", id, err)
+	}
+	for _, aliasID := range aliasIDs {
+		if err := excludeSessionIDTx(tx, aliasID); err != nil {
+			return 0, fmt.Errorf(
+				"excluding session alias %s: %w", aliasID, err,
+			)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1995,12 +2121,24 @@ func (db *DB) EmptyTrash() (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	aliasIDs, err := sessionAliasIDsTx(tx, "deleted_at IS NOT NULL")
+	if err != nil {
+		return 0, err
+	}
+
 	// Record all trashed session IDs before deleting.
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO excluded_sessions (id)
 		 SELECT id FROM sessions WHERE deleted_at IS NOT NULL`,
 	); err != nil {
 		return 0, fmt.Errorf("excluding trashed sessions: %w", err)
+	}
+	for _, aliasID := range aliasIDs {
+		if err := excludeSessionIDTx(tx, aliasID); err != nil {
+			return 0, fmt.Errorf(
+				"excluding trashed session alias %s: %w", aliasID, err,
+			)
+		}
 	}
 	res, err := tx.Exec(
 		"DELETE FROM sessions WHERE deleted_at IS NOT NULL",
@@ -2046,6 +2184,13 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 		}
 		placeholders := strings.Repeat(",?", len(batch))[1:]
 
+		aliasIDs, err := sessionAliasIDsTx(
+			tx, "id IN ("+placeholders+")", args...,
+		)
+		if err != nil {
+			return 0, err
+		}
+
 		// Exclude only IDs that exist before we delete them.
 		if _, err := tx.Exec(
 			"INSERT OR IGNORE INTO excluded_sessions (id) "+
@@ -2053,6 +2198,13 @@ func (db *DB) DeleteSessions(ids []string) (int, error) {
 			args...,
 		); err != nil {
 			return 0, fmt.Errorf("excluding batch: %w", err)
+		}
+		for _, aliasID := range aliasIDs {
+			if err := excludeSessionIDTx(tx, aliasID); err != nil {
+				return 0, fmt.Errorf(
+					"excluding batch session alias %s: %w", aliasID, err,
+				)
+			}
 		}
 
 		res, err := tx.Exec(

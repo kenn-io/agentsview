@@ -1360,3 +1360,29 @@ func TestIsPiSessionFile(t *testing.T) {
 			"expected false for empty file")
 	})
 }
+
+func TestDiscoverVibeSessionsIntegration(t *testing.T) {
+	// Test discovery with testdata
+	files := DiscoverVibeSessions("testdata/vibe")
+
+	// Should find all session directories with messages.jsonl
+	require.NotEmpty(t, files)
+
+	// Verify all files are Vibe sessions
+	for _, f := range files {
+		assert.Equal(t, AgentVibe, f.Agent)
+		assert.Contains(t, f.Path, "messages.jsonl")
+	}
+
+	// Should find at least 3 sessions (basic, with_tools, empty)
+	assert.GreaterOrEqual(t, len(files), 3)
+}
+
+func TestFindVibeSourceFileIntegration(t *testing.T) {
+	// Test with actual testdata
+	sessionID := "session_basic"
+	result := FindVibeSourceFile("testdata/vibe", sessionID)
+
+	expected := filepath.Join("testdata", "vibe", sessionID, "messages.jsonl")
+	assert.Equal(t, expected, result)
+}

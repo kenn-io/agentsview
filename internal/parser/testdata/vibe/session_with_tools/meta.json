@@ -1,0 +1,25 @@
+{
+  "session_id": "def456ghi-0000-0000-0000-000000000000",
+  "parent_session_id": null,
+  "start_time": "2026-06-13T11:00:00Z",
+  "end_time": "2026-06-13T11:01:00Z",
+  "git_commit": "def456ghi789",
+  "git_branch": "feature/tool-support",
+  "model": "mistral-medium-3.5",
+  "environment": {
+    "working_directory": "/home/user/projects/myapp"
+  },
+  "title": "Read the README file",
+  "title_source": "auto",
+  "stats": {
+    "steps": 4,
+    "session_prompt_tokens": 200,
+    "session_completion_tokens": 100,
+    "context_tokens": 300,
+    "last_turn_prompt_tokens": 100,
+    "last_turn_completion_tokens": 50,
+    "session_total_llm_tokens": 300,
+    "last_turn_total_tokens": 150
+  },
+  "total_messages": 4
+}

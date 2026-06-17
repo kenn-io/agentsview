@@ -4123,6 +4123,88 @@ func TestDeleteSessionExcludes(t *testing.T) {
 	requireSessionGone(t, d, "s1")
 }
 
+func TestVibeCanonicalDeleteExcludesFallbackAlias(t *testing.T) {
+	cases := []struct {
+		name       string
+		id         string
+		filePath   string
+		fallbackID string
+		delete     func(*testing.T, *DB, string) error
+	}{
+		{
+			name:       "single delete",
+			id:         "vibe:abc123def-0000-0000-0000-000000000000",
+			filePath:   "/tmp/vibe/session_20260616_083518_abc123/messages.jsonl",
+			fallbackID: "vibe:session_20260616_083518_abc123",
+			delete: func(t *testing.T, d *DB, id string) error {
+				return d.DeleteSession(id)
+			},
+		},
+		{
+			name:       "remote single delete",
+			id:         "host~vibe:abc123def-0000-0000-0000-000000000000",
+			filePath:   "host:/remote/vibe/session_20260616_083518_abc123/messages.jsonl",
+			fallbackID: "host~vibe:session_20260616_083518_abc123",
+			delete: func(t *testing.T, d *DB, id string) error {
+				return d.DeleteSession(id)
+			},
+		},
+		{
+			name:       "delete if trashed",
+			id:         "vibe:abc123def-0000-0000-0000-000000000001",
+			filePath:   "/tmp/vibe/session_20260616_083518_def456/messages.jsonl",
+			fallbackID: "vibe:session_20260616_083518_def456",
+			delete: func(t *testing.T, d *DB, id string) error {
+				requireNoError(t, d.SoftDeleteSession(id), "SoftDeleteSession")
+				n, err := d.DeleteSessionIfTrashed(id)
+				require.Equal(t, int64(1), n, "DeleteSessionIfTrashed rows")
+				return err
+			},
+		},
+		{
+			name:       "batch delete",
+			id:         "vibe:abc123def-0000-0000-0000-000000000002",
+			filePath:   "/tmp/vibe/session_20260616_083518_ghi789/messages.jsonl",
+			fallbackID: "vibe:session_20260616_083518_ghi789",
+			delete: func(t *testing.T, d *DB, id string) error {
+				n, err := d.DeleteSessions([]string{id})
+				require.Equal(t, 1, n, "DeleteSessions rows")
+				return err
+			},
+		},
+		{
+			name:       "empty trash",
+			id:         "vibe:abc123def-0000-0000-0000-000000000003",
+			filePath:   "/tmp/vibe/session_20260616_083518_jkl012/messages.jsonl",
+			fallbackID: "vibe:session_20260616_083518_jkl012",
+			delete: func(t *testing.T, d *DB, id string) error {
+				requireNoError(t, d.SoftDeleteSession(id), "SoftDeleteSession")
+				n, err := d.EmptyTrash()
+				require.Equal(t, 1, n, "EmptyTrash rows")
+				return err
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, tc.id, "p", func(s *Session) {
+				s.Agent = "vibe"
+				s.FilePath = &tc.filePath
+			})
+
+			requireNoError(t, tc.delete(t, d, tc.id), "delete")
+
+			assert.True(t, d.IsSessionExcluded(tc.id),
+				"canonical ID should be excluded")
+			assert.True(t, d.IsSessionExcluded(tc.fallbackID),
+				"fallback alias should be excluded")
+			requireSessionGone(t, d, tc.id)
+		})
+	}
+}
+
 func TestUpsertSessionTrashedReturnsErrSessionTrashed(t *testing.T) {
 	d := testDB(t)
 

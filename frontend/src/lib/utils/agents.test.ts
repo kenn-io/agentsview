@@ -39,6 +39,7 @@ describe("KNOWN_AGENTS", () => {
       "piebald",
       "antigravity",
       "antigravity-cli",
+      "vibe",
     ]);
   });
 

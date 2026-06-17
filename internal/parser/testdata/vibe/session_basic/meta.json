@@ -1,0 +1,25 @@
+{
+  "session_id": "abc123def-0000-0000-0000-000000000000",
+  "parent_session_id": null,
+  "start_time": "2026-06-13T10:00:00Z",
+  "end_time": "2026-06-13T10:05:00Z",
+  "git_commit": "abc123def456",
+  "git_branch": "main",
+  "model": "mistral-medium-3.5",
+  "environment": {
+    "working_directory": "/home/user/projects/myapp"
+  },
+  "title": "Create a Python function to sort a list",
+  "title_source": "auto",
+  "stats": {
+    "steps": 5,
+    "session_prompt_tokens": 100,
+    "session_completion_tokens": 50,
+    "context_tokens": 150,
+    "last_turn_prompt_tokens": 50,
+    "last_turn_completion_tokens": 25,
+    "session_total_llm_tokens": 150,
+    "last_turn_total_tokens": 75
+  },
+  "total_messages": 5
+}

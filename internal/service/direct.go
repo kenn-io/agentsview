@@ -298,8 +298,57 @@ func (b *directBackend) Sync(
 			return nil, err
 		}
 		id = resolved
+		return b.Get(ctx, id)
 	}
-	return b.Get(ctx, id)
+
+	detail, err := b.Get(ctx, id)
+	if err != nil || detail != nil {
+		return detail, err
+	}
+	// The requested session is gone after sync. Vibe is the only agent that
+	// reassigns a session's canonical ID for an unchanged source file: a
+	// fallback ID is promoted when meta.json appears, and a canonical ID is
+	// demoted to the directory-name fallback when meta.json is removed or
+	// becomes unparseable. For a Vibe ID, resolve the file's current session
+	// and confirm it is the replacement before returning it.
+	if !isVibeSessionID(id) {
+		return nil, syncSessionNotFoundError(id)
+	}
+	resolved, err := b.resolveSessionIDByPath(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	detail, err = b.Get(ctx, resolved)
+	if err != nil || detail == nil {
+		if err != nil {
+			return nil, err
+		}
+		return nil, syncSessionNotFoundError(id)
+	}
+	if !isVibeReplacement(id, detail) {
+		return nil, syncSessionNotFoundError(id)
+	}
+	return detail, nil
+}
+
+func syncSessionNotFoundError(id string) error {
+	return fmt.Errorf("sync: session %q was not found after sync", id)
+}
+
+func isVibeSessionID(id string) bool {
+	return strings.HasPrefix(id, "vibe:")
+}
+
+// isVibeReplacement reports whether detail is the Vibe session that now owns
+// the requested session's source file after a canonical-ID reassignment. The
+// caller resolves detail strictly by the requested session's file_path, so a
+// different-ID Vibe session is the replacement regardless of direction
+// (fallback->canonical when meta.json appears, canonical->fallback when it is
+// removed or unparseable).
+func isVibeReplacement(requestedID string, detail *SessionDetail) bool {
+	return detail != nil &&
+		detail.Agent == "vibe" &&
+		requestedID != detail.ID
 }
 
 // resolveSessionIDByPath returns the single session id whose

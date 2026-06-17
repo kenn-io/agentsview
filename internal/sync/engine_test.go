@@ -1149,6 +1149,71 @@ func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 	assert.False(t, res.skip, "WAL-only update must trigger a reparse")
 }
 
+func TestProcessVibeMetaOnlyUpdateNotSkipped(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+	ctx := context.Background()
+
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "session_20260616_083518_0107f266")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+
+	msgPath := filepath.Join(sessionDir, "messages.jsonl")
+	require.NoError(t, os.WriteFile(
+		msgPath,
+		[]byte(`{"role":"user","content":"hi"}`+"\n"),
+		0o644,
+	))
+
+	metaPath := filepath.Join(sessionDir, "meta.json")
+	require.NoError(t, os.WriteFile(
+		metaPath,
+		[]byte(`{"session_id":"abc","title":"Original title"}`+"\n"),
+		0o644,
+	))
+
+	file := parser.DiscoveredFile{
+		Agent: parser.AgentVibe,
+		Path:  msgPath,
+	}
+
+	res := e.processFile(ctx, file)
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+	require.Equal(t, "Original title", res.results[0].Session.SessionName)
+
+	pw := pendingWrite{
+		sess: res.results[0].Session,
+		msgs: res.results[0].Messages,
+	}
+	written, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
+
+	res = e.processFile(ctx, file)
+	require.True(t, res.skip, "unchanged session should skip")
+
+	// meta.json-only update: messages.jsonl is untouched, but the title
+	// (sourced from meta.json) changes.
+	info, err := os.Stat(msgPath)
+	require.NoError(t, err)
+	metaTime := info.ModTime().Add(5 * time.Second)
+	require.NoError(t, os.WriteFile(
+		metaPath,
+		[]byte(`{"session_id":"abc","title":"Renamed title"}`+"\n"),
+		0o644,
+	))
+	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
+
+	res = e.processFile(ctx, file)
+	require.False(t, res.skip, "meta.json-only update must trigger a reparse")
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "Renamed title", res.results[0].Session.SessionName)
+}
+
 func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 	database := openTestDB(t)
 	e := &Engine{db: database}

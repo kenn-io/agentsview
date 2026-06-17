@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // directTestEnv is a lightweight environment helper for testing
@@ -384,6 +385,162 @@ func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *tes
 	require.NotNil(t, untouched.FirstMessage)
 	assert.Equal(t, "Before untouched", *untouched.FirstMessage,
 		"syncing by id must not refresh sibling conversations in the same trace")
+}
+
+func TestDirectBackend_Sync_VibeFallbackIDReturnsPromotedSession(t *testing.T) {
+	vibeDir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVibe: {vibeDir},
+		},
+		Machine: "local",
+	})
+	svc := service.NewDirectBackend(d, engine)
+
+	dirName := "session_20260616_083518_abc123"
+	sessionDir := filepath.Join(vibeDir, dirName)
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
+	require.NoError(t, os.WriteFile(
+		messagesPath,
+		[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
+		0o644,
+	))
+
+	engine.SyncPaths([]string{messagesPath})
+	fallbackID := "vibe:" + dirName
+	fallback, err := d.GetSession(context.Background(), fallbackID)
+	require.NoError(t, err)
+	require.NotNil(t, fallback)
+
+	sessionID := "abc123def-0000-0000-0000-000000000000"
+	metaPath := filepath.Join(sessionDir, "meta.json")
+	require.NoError(t, os.WriteFile(
+		metaPath,
+		[]byte(`{"session_id":"`+sessionID+`","title":"Promoted"}`+"\n"),
+		0o644,
+	))
+	future := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(metaPath, future, future))
+
+	detail, err := svc.Sync(context.Background(), service.SyncInput{
+		ID: fallbackID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, "vibe:"+sessionID, detail.ID)
+	require.NotNil(t, detail.DisplayName)
+	assert.Equal(t, "Promoted", *detail.DisplayName)
+
+	stale, err := d.GetSession(context.Background(), fallbackID)
+	require.NoError(t, err)
+	assert.Nil(t, stale)
+}
+
+// TestDirectBackend_Sync_VibeCanonicalIDResolvesFallbackAfterMetaRemoved
+// verifies the reverse of the promotion case: when meta.json is removed, the
+// session is demoted to the directory-name fallback ID, and syncing the old
+// canonical ID resolves to that fallback session instead of reporting the
+// session as not found.
+func TestDirectBackend_Sync_VibeCanonicalIDResolvesFallbackAfterMetaRemoved(t *testing.T) {
+	vibeDir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVibe: {vibeDir},
+		},
+		Machine: "local",
+	})
+	svc := service.NewDirectBackend(d, engine)
+
+	dirName := "session_20260616_083518_abc123"
+	sessionDir := filepath.Join(vibeDir, dirName)
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
+	require.NoError(t, os.WriteFile(
+		messagesPath,
+		[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
+		0o644,
+	))
+	sessionID := "abc123def-0000-0000-0000-000000000000"
+	canonicalID := "vibe:" + sessionID
+	metaPath := filepath.Join(sessionDir, "meta.json")
+	require.NoError(t, os.WriteFile(
+		metaPath,
+		[]byte(`{"session_id":"`+sessionID+`","title":"Canonical"}`+"\n"),
+		0o644,
+	))
+
+	// First sync stores the session under the canonical meta-derived ID.
+	engine.SyncPaths([]string{messagesPath})
+	canonical, err := d.GetSession(context.Background(), canonicalID)
+	require.NoError(t, err)
+	require.NotNil(t, canonical)
+
+	// meta.json is removed, so the next sync demotes the session to the
+	// directory-name fallback ID. Bump the transcript mtime so the sync does
+	// not skip the otherwise-unchanged file.
+	require.NoError(t, os.Remove(metaPath))
+	future := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(messagesPath, future, future))
+
+	detail, err := svc.Sync(context.Background(), service.SyncInput{
+		ID: canonicalID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, "vibe:"+dirName, detail.ID)
+
+	stale, err := d.GetSession(context.Background(), canonicalID)
+	require.NoError(t, err)
+	assert.Nil(t, stale)
+}
+
+func TestDirectBackend_Sync_MissingNonVibeIDDoesNotReturnSamePathSession(t *testing.T) {
+	claudeDir := t.TempDir()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine: "local",
+	})
+	svc := service.NewDirectBackend(d, engine)
+
+	projectDir := filepath.Join(claudeDir, "ClaudeProbe")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	path := filepath.Join(projectDir, "requested.jsonl")
+	const usageCmd = "<command-name>/usage</command-name>\n" +
+		"            <command-message>usage</command-message>\n" +
+		"            <command-args></command-args>"
+	require.NoError(t, os.WriteFile(
+		path,
+		[]byte(testjsonl.ClaudeUserJSON(usageCmd, "2026-06-17T12:00:00Z")+"\n"),
+		0o644,
+	))
+
+	require.NoError(t, d.UpsertSession(db.Session{
+		ID:       "requested",
+		Project:  "proj",
+		Machine:  "local",
+		Agent:    "claude",
+		FilePath: &path,
+	}))
+	require.NoError(t, d.UpsertSession(db.Session{
+		ID:       "unrelated",
+		Project:  "proj",
+		Machine:  "local",
+		Agent:    "claude",
+		FilePath: &path,
+	}))
+
+	detail, err := svc.Sync(context.Background(), service.SyncInput{
+		ID: "requested",
+	})
+	assert.Nil(t, detail)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `sync: session "requested" was not found after sync`)
 }
 
 // TestDirectBackend_Watch_UnknownID_Errors verifies that Watch

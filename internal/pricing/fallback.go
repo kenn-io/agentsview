@@ -2,7 +2,7 @@ package pricing
 
 // FallbackVersion must be bumped whenever FallbackPricing
 // rates change so the startup seeder knows to re-upsert.
-const FallbackVersion = "2026-06-10"
+const FallbackVersion = "2026-06-16.1"
 
 // FallbackPricing returns hardcoded pricing for key Claude
 // models. Used when the LiteLLM fetch fails.
@@ -129,6 +129,36 @@ func FallbackPricing() []ModelPricing {
 			ModelPattern:  "openrouter/owl-alpha",
 			InputPerMTok:  0,
 			OutputPerMTok: 0,
+		},
+		// Mistral models (Mistral Vibe)
+		{
+			ModelPattern:  "mistral-medium",
+			InputPerMTok:  2.75,
+			OutputPerMTok: 2.75,
+		},
+		{
+			ModelPattern:  "mistral-medium-3",
+			InputPerMTok:  2.75,
+			OutputPerMTok: 2.75,
+		},
+		{
+			ModelPattern:         "mistral-medium-3.5",
+			InputPerMTok:         1.5,
+			OutputPerMTok:        7.5,
+			CacheCreationPerMTok: 1.5,
+			CacheReadPerMTok:     0.25,
+		},
+		{
+			ModelPattern:  "mistral-large",
+			InputPerMTok:  4.0,
+			OutputPerMTok: 4.0,
+		},
+		{
+			ModelPattern:         "mistral-large-3",
+			InputPerMTok:         4.0,
+			OutputPerMTok:        4.0,
+			CacheCreationPerMTok: 4.0,
+			CacheReadPerMTok:     0.30,
 		},
 	}
 }
