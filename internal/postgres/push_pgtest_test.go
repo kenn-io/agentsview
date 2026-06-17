@@ -262,6 +262,68 @@ func TestPushMessageFlagsRewriteRegression(t *testing.T) {
 		"private chain of thought")
 }
 
+func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_msgtime_nanos_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "message-nanotime-rewrite-001"
+	sess := db.Session{
+		ID:               sessID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "shelley",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       1,
+		Role:          "user",
+		Content:       "question",
+		ContentLength: len("question"),
+		Timestamp:     "2026-01-01T00:00:00.123456789Z",
+	}}), "InsertMessages")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push first timestamp")
+	assertPGMessageTimestamp(t, pg, sessID, 1,
+		"2026-01-01T00:00:00.123456Z")
+
+	ctidBefore := pgMessageCTID(t, pg, sessID, 1)
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		"clearing boundary state")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push same timestamp")
+	assert.Equal(t, ctidBefore, pgMessageCTID(t, pg, sessID, 1),
+		"microsecond-equivalent timestamps should hit the fast path")
+}
+
 // TestPushSessionTerminationStatus verifies that pushSession round-trips
 // the termination_status column to PG: a non-nil value writes the string,
 // and a subsequent push with nil clears the column back to NULL via the
@@ -545,6 +607,40 @@ func assertPGMessageThinking(
 	).Scan(&gotHasThinking, &gotThinkingText), "read pg message thinking")
 	assert.Equal(t, wantHasThinking, gotHasThinking)
 	assert.Equal(t, wantThinkingText, gotThinkingText)
+}
+
+func assertPGMessageTimestamp(
+	t *testing.T,
+	pg *sql.DB,
+	sessionID string,
+	ordinal int,
+	want string,
+) {
+	t.Helper()
+	var gotTime sql.NullTime
+	require.NoError(t, pg.QueryRow(
+		`SELECT timestamp FROM messages
+		  WHERE session_id = $1 AND ordinal = $2`,
+		sessionID, ordinal,
+	).Scan(&gotTime), "read pg message timestamp")
+	require.True(t, gotTime.Valid, "timestamp should be non-NULL")
+	assert.Equal(t, want, FormatISO8601(gotTime.Time))
+}
+
+func pgMessageCTID(
+	t *testing.T,
+	pg *sql.DB,
+	sessionID string,
+	ordinal int,
+) string {
+	t.Helper()
+	var ctid string
+	require.NoError(t, pg.QueryRow(
+		`SELECT ctid::text FROM messages
+		  WHERE session_id = $1 AND ordinal = $2`,
+		sessionID, ordinal,
+	).Scan(&ctid), "read pg message ctid")
+	return ctid
 }
 
 // TestPushMessagesSanitizesNULBytes verifies that a message whose

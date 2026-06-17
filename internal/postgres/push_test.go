@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -305,6 +306,42 @@ func TestSessionPushFingerprintNoFieldCollisions(
 		sessionPushFingerprint(s1, s1.Machine, ""),
 		sessionPushFingerprint(s2, s2.Machine, ""),
 		"length-prefixed fingerprints should not collide")
+}
+
+func TestLocalMessageRoleTimePGFingerprintNormalizesNanoseconds(
+	t *testing.T,
+) {
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	const sessID = "pg-role-time-nanos"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:        sessID,
+		Project:   "proj",
+		Machine:   "host",
+		Agent:     "shelley",
+		CreatedAt: "2026-03-11T12:34:56Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       1,
+		Role:          "assistant",
+		Content:       "answer",
+		ContentLength: len("answer"),
+		Timestamp:     "2026-03-11T12:34:56.123456789Z",
+	}}), "InsertMessages")
+
+	got, err := localMessageRoleTimePGFingerprint(localDB, sessID)
+	require.NoError(t, err)
+	assert.Equal(t,
+		"1|9:assistant|27:2026-03-11T12:34:56.123456Z;",
+		got)
+
+	raw, err := localDB.MessageRoleTimeFingerprint(sessID)
+	require.NoError(t, err)
+	assert.NotEqual(t, raw, got,
+		"PG push fingerprint must not use raw nanosecond text")
 }
 
 func TestFinalizePushStatePersistsEmptyBoundary(

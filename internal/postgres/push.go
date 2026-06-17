@@ -1135,8 +1135,8 @@ func (s *Sync) pushMessages(
 				err,
 			)
 		}
-		localRoleTimeFP, err := s.local.MessageRoleTimeFingerprint(
-			sessionID,
+		localRoleTimeFP, err := localMessageRoleTimePGFingerprint(
+			s.local, sessionID,
 		)
 		if err != nil {
 			return 0, fmt.Errorf(
@@ -1599,6 +1599,23 @@ func pgMessageContentHashFingerprint(
 		fmt.Fprintf(&b, "%d|%d|%x;", ordinal, contentLength, sum)
 	}
 	return b.String(), rows.Err()
+}
+
+func localMessageRoleTimePGFingerprint(
+	local *db.DB, sessionID string,
+) (string, error) {
+	return local.MessageRoleTimeFingerprintWithTimestampNormalizer(
+		sessionID,
+		pgPushTimestampFingerprintText,
+	)
+}
+
+func pgPushTimestampFingerprintText(value string) string {
+	t, ok := ParseSQLiteTimestamp(value)
+	if !ok {
+		return ""
+	}
+	return FormatISO8601(t.Truncate(time.Microsecond))
 }
 
 func pgMessageRoleTimeFingerprint(

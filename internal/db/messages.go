@@ -1220,6 +1220,20 @@ func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
 // (selectMessageCols coalesces the same way); without it a single
 // imported NULL row would error here and abort the whole parse-diff run.
 func (db *DB) MessageRoleTimeFingerprint(sessionID string) (string, error) {
+	return db.MessageRoleTimeFingerprintWithTimestampNormalizer(
+		sessionID, nil,
+	)
+}
+
+// MessageRoleTimeFingerprintWithTimestampNormalizer returns the same
+// fingerprint as MessageRoleTimeFingerprint after applying normalizeTimestamp
+// to each timestamp value. It lets callers compare against stores that preserve
+// a different timestamp representation while keeping the query and field
+// ordering identical to the raw parse-diff fingerprint.
+func (db *DB) MessageRoleTimeFingerprintWithTimestampNormalizer(
+	sessionID string,
+	normalizeTimestamp func(string) string,
+) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT ordinal, role, COALESCE(timestamp, '')
 		 FROM messages
@@ -1240,6 +1254,9 @@ func (db *DB) MessageRoleTimeFingerprint(sessionID string) (string, error) {
 			return "", err
 		}
 		role = SanitizeUTF8(role)
+		if normalizeTimestamp != nil {
+			timestamp = normalizeTimestamp(timestamp)
+		}
 		fmt.Fprintf(&b, "%d|%d:%s|%d:%s;",
 			ordinal, len(role), role, len(timestamp), timestamp)
 	}
