@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -26,6 +27,8 @@ const (
 	pushMarkerIDStateKey = "pg_push_marker_id"
 	pushMarkerKeyPrefix  = "push_marker:"
 )
+
+var errSessionOwnershipConflict = errors.New("session ownership conflict")
 
 // syncStateStore abstracts sync state read/write operations on the
 // local database. Used by push boundary state helpers.
@@ -459,6 +462,9 @@ func (s *Sync) pushBatch(
 		if err := s.pushSession(
 			ctx, tx, sess,
 		); err != nil {
+			if errors.Is(err, errSessionOwnershipConflict) {
+				continue
+			}
 			log.Printf(
 				"pgsync: session %s: %v",
 				sess.ID, err,
@@ -848,6 +854,29 @@ func (s *Sync) pushSession(
 ) error {
 	createdAt, _ := ParseSQLiteTimestamp(sess.CreatedAt)
 	isAutomated := sess.IsAutomated
+	// Guard against cross-machine PK collision: if this session already exists
+	// under a different machine name, skip the upsert and warn. Two machines
+	// pushing the same session ID would otherwise ping-pong the row and its
+	// messages on every push cycle.
+	var existingMachine sql.NullString
+	checkErr := tx.QueryRowContext(ctx,
+		`SELECT machine FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(&existingMachine)
+	if checkErr != nil && !errors.Is(checkErr, sql.ErrNoRows) {
+		return fmt.Errorf("checking session ownership %s: %w", sess.ID, checkErr)
+	}
+	pushedMachine := pushedSessionMachine(sess, s.machine)
+	if existingMachine.Valid &&
+		existingMachine.String != "" &&
+		existingMachine.String != pushedMachine &&
+		sess.Machine != "" && sess.Machine != "local" {
+		log.Printf(
+			"pgsync: session %s: skipping — already owned by machine %q, "+
+				"this pusher is %q; sync from the origin machine to update",
+			sess.ID, existingMachine.String, pushedMachine,
+		)
+		return errSessionOwnershipConflict
+	}
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent,
