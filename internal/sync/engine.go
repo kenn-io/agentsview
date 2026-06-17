@@ -6040,15 +6040,13 @@ func (e *Engine) prepareSessionWrite(
 	) {
 		return db.Session{}, nil, false
 	}
-	if mergedMsgs, preserve, storedSize := e.reconcileVisualStudioCopilotArchive(
+	if mergedMsgs, preserve, archived := e.reconcileVisualStudioCopilotArchive(
 		pw.sess.Agent, s.ID, pw.sess.File.Size, msgs,
 	); preserve {
 		return db.Session{}, nil, false
 	} else if mergedMsgs != nil {
 		msgs = mergedMsgs
-		if storedSize > 0 {
-			s.FileSize = int64Ptr(storedSize)
-		}
+		applyVisualStudioCopilotArchiveSessionFields(&s, archived)
 		applySessionMessageDerivedFields(&s, msgs)
 		applySessionTokenTotalsFromMessages(&s, msgs)
 	}
@@ -6082,10 +6080,111 @@ func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
 	if hasOut {
 		s.TotalOutputTokens = totalOut
 		s.HasTotalOutputTokens = true
+	} else {
+		s.TotalOutputTokens = 0
+		s.HasTotalOutputTokens = false
 	}
 	if hasCtx {
 		s.PeakContextTokens = peakCtx
 		s.HasPeakContextTokens = true
+	} else {
+		s.PeakContextTokens = 0
+		s.HasPeakContextTokens = false
+	}
+}
+
+func applyVisualStudioCopilotArchiveSessionFields(
+	s *db.Session, archived *db.Session,
+) {
+	if archived == nil {
+		return
+	}
+	archiveExtendsBounds := sessionTimeBefore(
+		archived.StartedAt, s.StartedAt,
+	) || sessionTimeAfter(archived.EndedAt, s.EndedAt)
+	if archiveExtendsBounds || stringPtrEmpty(s.FirstMessage) {
+		s.FirstMessage = cloneStringPtr(archived.FirstMessage)
+	}
+	if archiveExtendsBounds || stringPtrEmpty(s.SessionName) {
+		s.SessionName = cloneStringPtr(archived.SessionName)
+	}
+	s.StartedAt = earlierSessionTime(archived.StartedAt, s.StartedAt)
+	s.EndedAt = laterSessionTime(archived.EndedAt, s.EndedAt)
+	if storedSize := derefInt64(archived.FileSize); storedSize > 0 {
+		s.FileSize = int64Ptr(storedSize)
+	}
+}
+
+func stringPtrEmpty(v *string) bool {
+	return v == nil || strings.TrimSpace(*v) == ""
+}
+
+func cloneStringPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	clone := *v
+	return &clone
+}
+
+func sessionTimeBefore(a, b *string) bool {
+	return sessionTimeCompares(a, b, func(aTime, bTime time.Time) bool {
+		return aTime.Before(bTime)
+	})
+}
+
+func sessionTimeAfter(a, b *string) bool {
+	return sessionTimeCompares(a, b, func(aTime, bTime time.Time) bool {
+		return aTime.After(bTime)
+	})
+}
+
+func sessionTimeCompares(
+	a, b *string, compare func(time.Time, time.Time) bool,
+) bool {
+	if a == nil || b == nil {
+		return a != nil && b == nil
+	}
+	aTime, aErr := time.Parse(time.RFC3339Nano, *a)
+	bTime, bErr := time.Parse(time.RFC3339Nano, *b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+	return compare(aTime, bTime)
+}
+
+func earlierSessionTime(a, b *string) *string {
+	return chooseSessionTime(a, b, func(aTime, bTime time.Time) bool {
+		return aTime.Before(bTime)
+	})
+}
+
+func laterSessionTime(a, b *string) *string {
+	return chooseSessionTime(a, b, func(aTime, bTime time.Time) bool {
+		return aTime.After(bTime)
+	})
+}
+
+func chooseSessionTime(
+	a, b *string, chooseA func(time.Time, time.Time) bool,
+) *string {
+	switch {
+	case a == nil:
+		return cloneStringPtr(b)
+	case b == nil:
+		return cloneStringPtr(a)
+	}
+	aTime, aErr := time.Parse(time.RFC3339Nano, *a)
+	bTime, bErr := time.Parse(time.RFC3339Nano, *b)
+	switch {
+	case aErr != nil:
+		return cloneStringPtr(b)
+	case bErr != nil:
+		return cloneStringPtr(a)
+	case chooseA(aTime, bTime):
+		return cloneStringPtr(a)
+	default:
+		return cloneStringPtr(b)
 	}
 }
 
@@ -6101,21 +6200,21 @@ func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
 func (e *Engine) reconcileVisualStudioCopilotArchive(
 	agent parser.AgentType, sessionID string,
 	currentSize int64, currentMsgs []db.Message,
-) (merged []db.Message, preserve bool, storedSize int64) {
+) (merged []db.Message, preserve bool, archived *db.Session) {
 	if agent != parser.AgentVSCopilot {
-		return nil, false, 0
+		return nil, false, nil
 	}
 	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
 	if err != nil || stored == nil {
-		return nil, false, 0
+		return nil, false, nil
 	}
-	storedSize = derefInt64(stored.FileSize)
+	storedSize := derefInt64(stored.FileSize)
 	if storedSize == 0 || currentSize >= storedSize {
-		return nil, false, 0
+		return nil, false, nil
 	}
 	storedMsgs, err := e.db.GetAllMessages(context.Background(), sessionID)
 	if err != nil || len(storedMsgs) == 0 {
-		return nil, false, 0
+		return nil, false, nil
 	}
 	decision := visualStudioCopilotArchiveDecision(
 		currentMsgs, storedMsgs,
@@ -6128,7 +6227,7 @@ func (e *Engine) reconcileVisualStudioCopilotArchive(
 			agent, sessionID, len(storedMsgs), len(currentMsgs),
 			storedSize, currentSize,
 		)
-		return nil, true, 0
+		return nil, true, nil
 	}
 	if decision.merged != nil {
 		log.Printf(
@@ -6138,9 +6237,9 @@ func (e *Engine) reconcileVisualStudioCopilotArchive(
 			agent, sessionID, len(storedMsgs), len(currentMsgs),
 			storedSize, currentSize,
 		)
-		return decision.merged, false, storedSize
+		return decision.merged, false, stored
 	}
-	return nil, false, 0
+	return nil, false, nil
 }
 
 type visualStudioCopilotArchiveReconcile struct {
@@ -6188,7 +6287,7 @@ func visualStudioCopilotArchiveDecision(
 		}
 	}
 	if len(updates) > 0 {
-		if len(parsed) < len(stored) {
+		if hasIncomplete || len(parsed) < len(stored) {
 			return visualStudioCopilotArchiveReconcile{
 				merged: visualStudioCopilotMergeArchiveMessages(
 					stored, updates,

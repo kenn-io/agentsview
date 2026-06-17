@@ -503,14 +503,18 @@ func readVisualStudioCopilotTraceSpans(
 	var spans []vsCopilotSpan
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024*1024)
+	lineNo := 0
 	for scanner.Scan() {
+		lineNo++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		var trace vsCopilotTraceLine
 		if err := json.Unmarshal([]byte(line), &trace); err != nil {
-			continue
+			return nil, fmt.Errorf(
+				"decode %s line %d: %w", path, lineNo, err,
+			)
 		}
 		for _, resourceSpan := range trace.ResourceSpans {
 			for _, scopeSpan := range resourceSpan.ScopeSpans {

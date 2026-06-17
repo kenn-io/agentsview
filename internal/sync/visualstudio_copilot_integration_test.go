@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
@@ -646,19 +647,26 @@ func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks
 			"1781293600000000000", "1781293610000000000",
 			attrs) + "\n"
 	}
-	require.NoError(t, os.WriteFile(primary, []byte(toolSpan("")), 0o644))
-
 	rotatedSibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	oldPrompt := strings.Repeat("Retained archived prompt. ", 80)
-	require.NoError(t, os.WriteFile(rotatedSibling, []byte(
-		vsCopilotTraceLine(conversationID, "old_chat", "chat gpt-5.5",
+	firstPrompt := "Retained first archived prompt."
+	lastPrompt := strings.Repeat("Retained final archived prompt. ", 30)
+	require.NoError(t, os.WriteFile(primary, []byte(toolSpan("")), 0o644))
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(strings.Join([]string{
+		vsCopilotTraceLine(conversationID, "first_chat", "chat gpt-5.5",
+			"1781293580000000000", "1781293590000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"` + firstPrompt + `"}]}]`,
+			}),
+		vsCopilotTraceLine(conversationID, "last_chat", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
 				"gen_ai.operation.name": "chat",
-				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"` + oldPrompt + `"}]}]`,
-			})+"\n"), 0o644))
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"` + lastPrompt + `"}]}]`,
+			}),
+	}, "\n")+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(database, sync.EngineConfig{
@@ -669,9 +677,9 @@ func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks
 	})
 	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(t, msgs, 2)
-	require.Len(t, msgs[0].ToolCalls, 1)
-	require.Empty(t, msgs[0].ToolCalls[0].ResultEvents)
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Empty(t, msgs[1].ToolCalls[0].ResultEvents)
 
 	require.NoError(t, os.Remove(rotatedSibling))
 	require.NoError(t, os.WriteFile(primary, []byte(
@@ -684,14 +692,98 @@ func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks
 		context.Background(), sessionID,
 	))
 	msgs = fetchMessages(t, database, sessionID)
-	require.Len(t, msgs, 2,
+	require.Len(t, msgs, 3,
 		"archived-only sibling message must be retained")
-	require.Len(t, msgs[0].ToolCalls, 1)
-	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1,
+	assert.Equal(t, strings.TrimSpace(firstPrompt), msgs[0].Content)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1,
 		"richer same-key tool result must be merged into archive")
 	assert.Equal(t, "Build succeeded.",
+		msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal(t, strings.TrimSpace(lastPrompt), msgs[2].Content)
+
+	assertSessionState(t, database, sessionID, func(sess *db.Session) {
+		require.NotNil(t, sess.FirstMessage)
+		assert.Equal(t, strings.TrimSpace(firstPrompt), *sess.FirstMessage)
+		require.NotNil(t, sess.StartedAt)
+		require.NotNil(t, sess.EndedAt)
+		assert.Equal(t, time.Unix(0, 1781293580000000000).UTC().
+			Format(time.RFC3339Nano), *sess.StartedAt)
+		assert.Equal(t, time.Unix(0, 1781293630000000000).UTC().
+			Format(time.RFC3339Nano), *sess.EndedAt)
+	})
+}
+
+func TestSyncEngineVisualStudioCopilotMergesUpdateAndPreservesIncompleteSameCount(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	tracesDir := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	tracePath := filepath.Join(
+		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	toolSpan := func(spanID, callID, command, start, end, result string) string {
+		attrs := map[string]string{
+			"gen_ai.tool.name":           "run_command_in_terminal",
+			"gen_ai.tool.call.id":        callID,
+			"gen_ai.tool.call.arguments": `{"command":"` + command + `"}`,
+		}
+		if result != "" {
+			attrs["gen_ai.tool.call.result"] = result
+		}
+		return vsCopilotTraceLine(conversationID, spanID,
+			"execute_tool run_command_in_terminal",
+			start, end, attrs)
+	}
+	longResult := strings.Repeat("test output ", 120)
+	initial := strings.Join([]string{
+		toolSpan("tool_build", "call_build", "dotnet build",
+			"1781293600000000000", "1781293610000000000", ""),
+		toolSpan("tool_test", "call_test", "dotnet test",
+			"1781293620000000000", "1781293630000000000",
+			`{"Value":"`+longResult+`"}`),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(tracePath, []byte(initial), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {tracesDir},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	msgs := fetchMessages(t, database, sessionID)
+	require.Len(t, msgs, 2)
+	require.Empty(t, msgs[0].ToolCalls[0].ResultEvents)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
+
+	reparse := strings.Join([]string{
+		toolSpan("tool_build", "call_build", "dotnet build",
+			"1781293600000000000", "1781293610000000000",
+			`{"Value":"Build succeeded."}`),
+		toolSpan("tool_test", "call_test", "dotnet test",
+			"1781293620000000000", "1781293630000000000", ""),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(tracePath, []byte(reparse), 0o644))
+	later := time.Unix(1781293800, 0)
+	require.NoError(t, os.Chtimes(tracePath, later, later))
+
+	require.NoError(t, engine.SyncSingleSessionContext(
+		context.Background(), sessionID,
+	))
+	msgs = fetchMessages(t, database, sessionID)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1,
+		"same-count richer message must be merged")
+	assert.Equal(t, "Build succeeded.",
 		msgs[0].ToolCalls[0].ResultEvents[0].Content)
-	assert.Equal(t, strings.TrimSpace(oldPrompt), msgs[1].Content)
+	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1,
+		"same-count incomplete message must keep archived result")
+	assert.Equal(t, strings.TrimSpace(longResult),
+		msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
 // TestSyncEngineVisualStudioCopilotDoesNotPreserveWhenShrunkTraceHasNewMessage
