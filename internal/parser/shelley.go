@@ -622,11 +622,6 @@ func decodeShelleyMessage(
 		content = shelleyUserDataText(r.userData)
 	}
 
-	if content == "" && thinking == "" &&
-		len(toolCalls) == 0 && len(toolResults) == 0 {
-		return ParsedMessage{}, false
-	}
-
 	msg := ParsedMessage{
 		Ordinal:       int(r.sequenceID),
 		Role:          role,
@@ -647,6 +642,13 @@ func decodeShelleyMessage(
 	// usage blobs Shelley writes for user/tool messages.
 	if r.usageData != "" {
 		applyShelleyUsage(&msg, r.usageData, convModel)
+	}
+	if content == "" && thinking == "" &&
+		len(toolCalls) == 0 && len(toolResults) == 0 {
+		if !msg.HasContextTokens && !msg.HasOutputTokens {
+			return ParsedMessage{}, false
+		}
+		msg.IsSystem = true
 	}
 	return msg, true
 }

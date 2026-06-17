@@ -414,6 +414,40 @@ func TestParseShelleyRobustContent(t *testing.T) {
 	assert.Equal(t, 40, result.Session.TotalOutputTokens, "session output total")
 }
 
+func TestParseShelleyUsageOnlyRows(t *testing.T) {
+	_, dbPath, db := newShelleyTestDB(t)
+	seedShelleyConversation(
+		t, db, "cUSG1", "usage only", "/home/user/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:40Z",
+	)
+	seedShelleyMessage(t, db, "cUSG1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":2,"Text":"go"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+	seedShelleyMessage(t, db, "cUSG1", 2, 1, "error",
+		`{not json`, "",
+		`{"input_tokens":123,"output_tokens":33,"model":"claude-sonnet-4-6"}`,
+		"2026-06-15T10:00:40Z")
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat db")
+	result, err := ParseShelleyConversationDirect(dbPath, "cUSG1", "m", info)
+	require.NoError(t, err, "must not error on usage-only row")
+	require.NotNil(t, result)
+
+	require.Len(t, result.Messages, 2, "messages len")
+	usageOnly := result.Messages[1]
+	assert.True(t, usageOnly.IsSystem, "usage-only row is metadata")
+	assert.Empty(t, usageOnly.Content, "usage-only content")
+	assert.Equal(t, 123, usageOnly.ContextTokens, "context tokens")
+	assert.Equal(t, 33, usageOnly.OutputTokens, "output tokens")
+	assert.True(t, usageOnly.HasContextTokens, "has context tokens")
+	assert.True(t, usageOnly.HasOutputTokens, "has output tokens")
+	assert.NotEmpty(t, usageOnly.TokenUsage, "raw token usage")
+	assert.Equal(t, 123, result.Session.PeakContextTokens, "session peak context")
+	assert.Equal(t, 33, result.Session.TotalOutputTokens, "session output total")
+}
+
 // TestParseShelleyWebSearchToolResult verifies that a server-side web
 // search turn is preserved: the web_search call (Type 7) becomes a tool
 // call, and the web_search_tool_result (Type 8) whose nested
