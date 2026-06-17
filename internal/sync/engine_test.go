@@ -1447,6 +1447,52 @@ func TestOpenCodeLegacyArchiveLooksIncomplete(t *testing.T) {
 	})
 }
 
+func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       "Run command: dotnet build",
+			ContentLength: len("Run command: dotnet build"),
+			Timestamp:     "2026-06-12T19:46:40Z",
+		},
+		{
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "Archived prompt.",
+			ContentLength: len("Archived prompt."),
+			Timestamp:     "2026-06-12T19:47:00Z",
+		},
+	}
+	parsed := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "assistant",
+			Content:       "Run command: dotnet build",
+			ContentLength: len("Run command: dotnet build"),
+			Timestamp:     "2026-06-12T19:46:40Z",
+		},
+		{
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "New follow-up.",
+			ContentLength: len("New follow-up."),
+			Timestamp:     "2026-06-12T19:47:20Z",
+		},
+	}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 3)
+	assert.Equal(t, "Run command: dotnet build", decision.merged[0].Content)
+	assert.Equal(t, "Archived prompt.", decision.merged[1].Content)
+	assert.Equal(t, "New follow-up.", decision.merged[2].Content)
+	for i, msg := range decision.merged {
+		assert.Equal(t, i, msg.Ordinal)
+	}
+}
+
 // fakeEmitter records scopes passed to Emit. Thread-safe so it
 // can be called from engine goroutines under test.
 type fakeEmitter struct {

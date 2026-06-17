@@ -6116,7 +6116,8 @@ func applyVisualStudioCopilotArchiveSessionFields(
 	}
 	s.StartedAt = earlierSessionTime(archived.StartedAt, s.StartedAt)
 	s.EndedAt = laterSessionTime(archived.EndedAt, s.EndedAt)
-	if storedSize := derefInt64(archived.FileSize); storedSize > 0 {
+	if storedSize, currentSize := derefInt64(archived.FileSize),
+		derefInt64(s.FileSize); storedSize > currentSize {
 		s.FileSize = int64Ptr(storedSize)
 	}
 }
@@ -6216,14 +6217,13 @@ func chooseSessionTime(
 }
 
 // reconcileVisualStudioCopilotArchive returns either a preserved-archive skip
-// or a merged transcript for a shrunken Visual Studio Copilot reparse. A
+// or a merged transcript for an incomplete Visual Studio Copilot reparse. A
 // conversation's transcript is rebuilt from every sibling trace file and
 // written with full message replacement, so when a sibling is rotated away or
 // deleted the reparse can see fewer spans or weaker span metadata and would
 // otherwise drop messages and tool results already stored in SQLite. If a
-// remaining trace gained richer data for a message that is already archived,
-// merge that update into the archived transcript while retaining archived-only
-// messages.
+// remaining trace gained richer data or new messages, merge those updates into
+// the archived transcript while retaining archived-only messages.
 func (e *Engine) reconcileVisualStudioCopilotArchive(
 	agent parser.AgentType, sessionID string,
 	currentSize int64, currentMsgs []db.Message,
@@ -6236,9 +6236,6 @@ func (e *Engine) reconcileVisualStudioCopilotArchive(
 		return nil, false, nil
 	}
 	storedSize := derefInt64(stored.FileSize)
-	if storedSize == 0 || currentSize >= storedSize {
-		return nil, false, nil
-	}
 	storedMsgs, err := e.db.GetAllMessages(context.Background(), sessionID)
 	if err != nil || len(storedMsgs) == 0 {
 		return nil, false, nil
@@ -6259,8 +6256,9 @@ func (e *Engine) reconcileVisualStudioCopilotArchive(
 	if decision.merged != nil {
 		log.Printf(
 			"merge %s %s: reparse updated archived messages while "+
-				"composite trace shrank (%d stored messages, %d parsed "+
-				"messages, composite trace %d->%d bytes)",
+				"retaining archived transcript rows (%d stored "+
+				"messages, %d parsed messages, composite trace "+
+				"%d->%d bytes)",
 			agent, sessionID, len(storedMsgs), len(currentMsgs),
 			storedSize, currentSize,
 		)
@@ -6289,16 +6287,20 @@ func visualStudioCopilotArchiveDecision(
 		key := visualStudioCopilotMessagePresenceKey(msg)
 		storedByKey[key] = append(storedByKey[key], i)
 	}
+	matchedStored := make([]bool, len(stored))
 	updates := make(map[int]db.Message)
+	additions := make([]db.Message, 0)
 	hasIncomplete := false
 	for _, parsedMsg := range parsed {
 		key := visualStudioCopilotMessagePresenceKey(parsedMsg)
 		candidates := storedByKey[key]
 		if len(candidates) == 0 {
-			return visualStudioCopilotArchiveReconcile{}
+			additions = append(additions, parsedMsg)
+			continue
 		}
 		storedIndex := candidates[0]
 		storedByKey[key] = candidates[1:]
+		matchedStored[storedIndex] = true
 		storedMsg := stored[storedIndex]
 		incomplete := visualStudioCopilotMessageLooksIncomplete(
 			parsedMsg, storedMsg,
@@ -6313,17 +6315,21 @@ func visualStudioCopilotArchiveDecision(
 			updates[storedIndex] = parsedMsg
 		}
 	}
-	if len(updates) > 0 {
-		if hasIncomplete || len(parsed) < len(stored) {
+	hasArchiveOnly := false
+	for _, matched := range matchedStored {
+		if !matched {
+			hasArchiveOnly = true
+			break
+		}
+	}
+	if hasIncomplete || hasArchiveOnly {
+		if len(updates) > 0 || len(additions) > 0 {
 			return visualStudioCopilotArchiveReconcile{
 				merged: visualStudioCopilotMergeArchiveMessages(
-					stored, updates,
+					stored, updates, additions,
 				),
 			}
 		}
-		return visualStudioCopilotArchiveReconcile{}
-	}
-	if hasIncomplete || len(parsed) < len(stored) {
 		return visualStudioCopilotArchiveReconcile{preserve: true}
 	}
 	return visualStudioCopilotArchiveReconcile{}
@@ -6331,16 +6337,56 @@ func visualStudioCopilotArchiveDecision(
 
 func visualStudioCopilotMergeArchiveMessages(
 	stored []db.Message, updates map[int]db.Message,
+	additions []db.Message,
 ) []db.Message {
-	merged := make([]db.Message, len(stored))
-	copy(merged, stored)
+	merged := make([]db.Message, 0, len(stored)+len(additions))
+	merged = append(merged, stored...)
 	for index, msg := range updates {
 		merged[index] = msg
+	}
+	merged = append(merged, additions...)
+	if len(additions) > 0 {
+		slices.SortStableFunc(
+			merged, compareVisualStudioCopilotMessageOrder,
+		)
 	}
 	for i := range merged {
 		merged[i].Ordinal = i
 	}
 	return merged
+}
+
+func compareVisualStudioCopilotMessageOrder(a, b db.Message) int {
+	aTime, aOK := visualStudioCopilotMessageTime(a)
+	bTime, bOK := visualStudioCopilotMessageTime(b)
+	if aOK && bOK {
+		switch {
+		case aTime.Before(bTime):
+			return -1
+		case aTime.After(bTime):
+			return 1
+		default:
+			return 0
+		}
+	}
+	if aOK {
+		return -1
+	}
+	if bOK {
+		return 1
+	}
+	return 0
+}
+
+func visualStudioCopilotMessageTime(msg db.Message) (time.Time, bool) {
+	if msg.Timestamp == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, msg.Timestamp)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
 }
 
 func visualStudioCopilotMessagePresenceKey(msg db.Message) string {

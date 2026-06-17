@@ -859,10 +859,11 @@ func TestSyncEngineVisualStudioCopilotMergeDerivesFirstMessageFromMergedRows(t *
 	})
 }
 
-// TestSyncEngineVisualStudioCopilotDoesNotPreserveWhenShrunkTraceHasNewMessage
-// verifies that a shrink caused by a rotated sibling does not indefinitely hide
-// new spans that appear in a remaining or newly written trace file.
-func TestSyncEngineVisualStudioCopilotDoesNotPreserveWhenShrunkTraceHasNewMessage(t *testing.T) {
+// TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks verifies
+// that a shrink caused by a rotated sibling does not hide new spans that appear
+// in a remaining or newly written trace file while still retaining archived-only
+// messages.
+func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenTraceShrinks(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -928,10 +929,89 @@ func TestSyncEngineVisualStudioCopilotDoesNotPreserveWhenShrunkTraceHasNewMessag
 	require.NoError(t, engine.SyncSingleSessionContext(
 		context.Background(), sessionID,
 	))
-	assertSessionMessageCount(t, database, sessionID, 2)
 	msgs := fetchMessages(t, database, sessionID)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "New follow-up.", msgs[1].Content)
+	require.Len(t, msgs, 4)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
+		msgs[0].Content)
+	assert.Equal(t, strings.TrimSpace(oldPrompt), msgs[1].Content)
+	assert.Equal(t, "Another archived prompt.", msgs[2].Content)
+	assert.Equal(t, "New follow-up.", msgs[3].Content)
+}
+
+// TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows verifies
+// that archive reconciliation is driven by message presence, not just by a
+// shrinking composite trace size. If a rotated-away sibling is replaced by a
+// larger new trace, the composite size can grow even though archived-only
+// messages still need to be retained.
+func TestSyncEngineVisualStudioCopilotMergesNewMessageWhenCompositeGrows(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	tracesDir := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	primary := filepath.Join(
+		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(primary, []byte(
+		vsCopilotTraceLine(conversationID, "tool_build",
+			"execute_tool run_command_in_terminal",
+			"1781293600000000000", "1781293610000000000",
+			map[string]string{
+				"gen_ai.tool.name":           "run_command_in_terminal",
+				"gen_ai.tool.call.id":        "call_build",
+				"gen_ai.tool.call.arguments": `{"command":"dotnet build"}`,
+				"gen_ai.tool.call.result":    `{"Value":"Build succeeded."}`,
+			})+"\n"), 0o644))
+	rotatedSibling := filepath.Join(
+		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(
+		vsCopilotTraceLine(conversationID, "old_chat", "chat gpt-5.5",
+			"1781293620000000000", "1781293630000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Archived prompt."}]}]`,
+			})+"\n"), 0o644))
+	storedSize, _ := parser.VisualStudioCopilotTraceFingerprint(primary)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {tracesDir},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	assertSessionMessageCount(t, database, sessionID, 2)
+
+	require.NoError(t, os.Remove(rotatedSibling))
+	newSibling := filepath.Join(
+		tracesDir, "20260613T145205_cccc3333_VSGitHubCopilot_traces.jsonl",
+	)
+	newPrompt := strings.Repeat("New follow-up with enough detail. ", 120)
+	require.NoError(t, os.WriteFile(newSibling, []byte(
+		vsCopilotTraceLine(conversationID, "new_chat", "chat gpt-5.5",
+			"1781293640000000000", "1781293650000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"` + newPrompt + `"}]}]`,
+			})+"\n"), 0o644))
+	currentSize, _ := parser.VisualStudioCopilotTraceFingerprint(primary)
+	require.Greater(t, currentSize, storedSize,
+		"test setup must grow the composite trace size")
+	later := time.Unix(1781293800, 0)
+	require.NoError(t, os.Chtimes(newSibling, later, later))
+
+	require.NoError(t, engine.SyncSingleSessionContext(
+		context.Background(), sessionID,
+	))
+	msgs := fetchMessages(t, database, sessionID)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ dotnet build",
+		msgs[0].Content)
+	assert.Equal(t, "Archived prompt.", msgs[1].Content)
+	assert.Equal(t, strings.TrimSpace(newPrompt), msgs[2].Content)
 }
 
 // TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint verifies that
