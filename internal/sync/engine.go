@@ -6054,13 +6054,12 @@ func (e *Engine) prepareSessionWrite(
 
 // shouldPreserveVisualStudioCopilotArchive reports whether an archived Visual
 // Studio Copilot conversation should be kept instead of being overwritten by a
-// reparse that would shrink it. A conversation's transcript is rebuilt from
+// reparse that looks incomplete. A conversation's transcript is rebuilt from
 // every sibling trace file and written with full message replacement, so when a
-// sibling is rotated away or deleted the reparse sees fewer spans and would
-// otherwise drop messages and tool results already stored in SQLite. Preserve
-// only when the newly parsed transcript has fewer messages AND the composite
-// trace size shrank, so a parser change that legitimately reduces messages
-// (source size unchanged) still replaces the archive.
+// sibling is rotated away or deleted the reparse can see fewer spans or weaker
+// span metadata and would otherwise drop messages and tool results already
+// stored in SQLite. Preserve only when the composite trace size shrank and the
+// newly parsed transcript contains no messages absent from the archive.
 func (e *Engine) shouldPreserveVisualStudioCopilotArchive(
 	agent parser.AgentType, sessionID string,
 	currentSize int64, currentMsgs []db.Message,
@@ -6077,16 +6076,129 @@ func (e *Engine) shouldPreserveVisualStudioCopilotArchive(
 		return false
 	}
 	storedMsgs, err := e.db.GetAllMessages(context.Background(), sessionID)
-	if err != nil || len(currentMsgs) >= len(storedMsgs) {
+	if err != nil || len(storedMsgs) == 0 ||
+		!visualStudioCopilotArchiveLooksIncomplete(
+			currentMsgs, storedMsgs,
+		) {
 		return false
 	}
 	log.Printf(
-		"preserve %s %s: reparse shrank %d->%d messages, composite trace "+
-			"%d->%d bytes (a sibling trace was likely rotated away)",
+		"preserve %s %s: reparse looks incomplete relative to archived "+
+			"transcript (%d stored messages, %d parsed messages, "+
+			"composite trace %d->%d bytes)",
 		agent, sessionID, len(storedMsgs), len(currentMsgs),
 		storedSize, currentSize,
 	)
 	return true
+}
+
+func visualStudioCopilotArchiveLooksIncomplete(
+	parsed, stored []db.Message,
+) bool {
+	if len(stored) == 0 {
+		return false
+	}
+	if parsed == nil {
+		return true
+	}
+	if visualStudioCopilotHasMessagesAbsentFromStored(parsed, stored) {
+		return false
+	}
+	if len(parsed) < len(stored) {
+		return true
+	}
+
+	storedByKey := make(map[string][]db.Message, len(stored))
+	for _, msg := range stored {
+		key := visualStudioCopilotMessagePresenceKey(msg)
+		storedByKey[key] = append(storedByKey[key], msg)
+	}
+	for _, parsedMsg := range parsed {
+		key := visualStudioCopilotMessagePresenceKey(parsedMsg)
+		candidates := storedByKey[key]
+		if len(candidates) == 0 {
+			continue
+		}
+		storedMsg := candidates[0]
+		storedByKey[key] = candidates[1:]
+		if visualStudioCopilotMessageLooksIncomplete(
+			parsedMsg, storedMsg,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func visualStudioCopilotHasMessagesAbsentFromStored(
+	parsed, stored []db.Message,
+) bool {
+	storedCounts := make(map[string]int, len(stored))
+	for _, msg := range stored {
+		storedCounts[visualStudioCopilotMessagePresenceKey(msg)]++
+	}
+	for _, msg := range parsed {
+		key := visualStudioCopilotMessagePresenceKey(msg)
+		if storedCounts[key] == 0 {
+			return true
+		}
+		storedCounts[key]--
+	}
+	return false
+}
+
+func visualStudioCopilotMessagePresenceKey(msg db.Message) string {
+	if msg.Timestamp != "" {
+		return msg.Role + "\x00time\x00" + msg.Timestamp
+	}
+	if msg.SourceUUID != "" {
+		return msg.Role + "\x00source\x00" + msg.SourceUUID
+	}
+	return fmt.Sprintf("%s\x00ordinal\x00%d", msg.Role, msg.Ordinal)
+}
+
+func visualStudioCopilotMessageLooksIncomplete(
+	parsed, stored db.Message,
+) bool {
+	if parsed.Role != stored.Role {
+		return false
+	}
+	if parsed.ContentLength < stored.ContentLength {
+		return true
+	}
+	if stored.HasThinking && !parsed.HasThinking {
+		return true
+	}
+	if stored.HasOutputTokens &&
+		(!parsed.HasOutputTokens ||
+			parsed.OutputTokens < stored.OutputTokens) {
+		return true
+	}
+	if stored.HasContextTokens &&
+		(!parsed.HasContextTokens ||
+			parsed.ContextTokens < stored.ContextTokens) {
+		return true
+	}
+	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
+		return true
+	}
+	if countToolResultEvents(parsed.ToolCalls) <
+		countToolResultEvents(stored.ToolCalls) {
+		return true
+	}
+	return countToolResultContentLength(parsed.ToolCalls) <
+		countToolResultContentLength(stored.ToolCalls)
+}
+
+func countToolResultContentLength(calls []db.ToolCall) int {
+	total := 0
+	for _, call := range calls {
+		total += call.ResultContentLength
+		for _, event := range call.ResultEvents {
+			total += event.ContentLength
+		}
+	}
+	return total
 }
 
 type batchSourceFile struct {

@@ -559,6 +559,141 @@ func TestSyncEngineVisualStudioCopilotPreservesSessionWhenSiblingDeleted(t *test
 	assertSessionMessageCount(t, database, sessionID, 2)
 }
 
+// TestSyncEngineVisualStudioCopilotPreservesToolResultsWhenTraceShrinks verifies
+// that a same-message-count reparse which loses tool result events does not
+// overwrite the richer archived transcript.
+func TestSyncEngineVisualStudioCopilotPreservesToolResultsWhenTraceShrinks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	tracesDir := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	tracePath := filepath.Join(
+		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	toolSpan := func(result string) string {
+		attrs := map[string]string{
+			"gen_ai.tool.name":           "run_command_in_terminal",
+			"gen_ai.tool.call.id":        "call_build",
+			"gen_ai.tool.call.arguments": `{"command":"dotnet build"}`,
+		}
+		if result != "" {
+			attrs["gen_ai.tool.call.result"] = result
+		}
+		return vsCopilotTraceLine(conversationID, "tool_build",
+			"execute_tool run_command_in_terminal",
+			"1781293600000000000", "1781293610000000000",
+			attrs) + "\n"
+	}
+	require.NoError(t, os.WriteFile(tracePath, []byte(
+		toolSpan(`{"Value":"Build succeeded."}`),
+	), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {tracesDir},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	msgs := fetchMessages(t, database, sessionID)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
+
+	require.NoError(t, os.WriteFile(tracePath, []byte(toolSpan("")), 0o644))
+	later := time.Unix(1781293700, 0)
+	require.NoError(t, os.Chtimes(tracePath, later, later))
+
+	require.NoError(t, engine.SyncSingleSessionContext(
+		context.Background(), sessionID,
+	))
+	msgs = fetchMessages(t, database, sessionID)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 1)
+	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1,
+		"archived tool result event must be preserved")
+	assert.Equal(t, "Build succeeded.",
+		msgs[0].ToolCalls[0].ResultEvents[0].Content)
+}
+
+// TestSyncEngineVisualStudioCopilotDoesNotPreserveWhenShrunkTraceHasNewMessage
+// verifies that a shrink caused by a rotated sibling does not indefinitely hide
+// new spans that appear in a remaining or newly written trace file.
+func TestSyncEngineVisualStudioCopilotDoesNotPreserveWhenShrunkTraceHasNewMessage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	tracesDir := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	primary := filepath.Join(
+		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(primary, []byte(
+		vsCopilotTraceLine(conversationID, "tool_build",
+			"execute_tool run_command_in_terminal",
+			"1781293600000000000", "1781293610000000000",
+			map[string]string{
+				"gen_ai.tool.name":           "run_command_in_terminal",
+				"gen_ai.tool.call.id":        "call_build",
+				"gen_ai.tool.call.arguments": `{"command":"dotnet build"}`,
+				"gen_ai.tool.call.result":    `{"Value":"Build succeeded."}`,
+			})+"\n"), 0o644))
+	rotatedSibling := filepath.Join(
+		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
+	)
+	oldPrompt := strings.Repeat("Retained archived prompt. ", 80)
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(strings.Join([]string{
+		vsCopilotTraceLine(conversationID, "old_chat_1", "chat gpt-5.5",
+			"1781293620000000000", "1781293630000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"` + oldPrompt + `"}]}]`,
+			}),
+		vsCopilotTraceLine(conversationID, "old_chat_2", "chat gpt-5.5",
+			"1781293640000000000", "1781293650000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Another archived prompt."}]}]`,
+			}),
+	}, "\n")+"\n"), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {tracesDir},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	assertSessionMessageCount(t, database, sessionID, 3)
+
+	require.NoError(t, os.Remove(rotatedSibling))
+	newSibling := filepath.Join(
+		tracesDir, "20260613T145205_cccc3333_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(newSibling, []byte(
+		vsCopilotTraceLine(conversationID, "new_chat", "chat gpt-5.5",
+			"1781293660000000000", "1781293670000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"New follow-up."}]}]`,
+			})+"\n"), 0o644))
+	later := time.Unix(1781293800, 0)
+	require.NoError(t, os.Chtimes(newSibling, later, later))
+
+	require.NoError(t, engine.SyncSingleSessionContext(
+		context.Background(), sessionID,
+	))
+	assertSessionMessageCount(t, database, sessionID, 2)
+	msgs := fetchMessages(t, database, sessionID)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "New follow-up.", msgs[1].Content)
+}
+
 // TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint verifies that
 // a cached <traceFile>#<conversationID> skip entry does not short-circuit the
 // composite sibling fingerprint. The generic skip cache keys on the
