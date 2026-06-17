@@ -111,6 +111,20 @@ describe("parseContent", () => {
     ]);
   });
 
+  it("keeps nested shorter fences inside longer code blocks", () => {
+    const content =
+      "````markdown\nSome context paragraph.\n\n```qmd\nauthor: \"Jane Doe\"\n```\n\nMore context here.\n````";
+    const segments = parseContent(content);
+    expect(segments).toEqual([
+      {
+        type: "code",
+        content:
+          "Some context paragraph.\n\n```qmd\nauthor: \"Jane Doe\"\n```\n\nMore context here.\n",
+        label: "markdown",
+      },
+    ]);
+  });
+
   it("omits label for code blocks without language", () => {
     const segments = parseContent("```\nplain code\n```");
     expect(segments[0]).toEqual({
