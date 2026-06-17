@@ -364,7 +364,9 @@ func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *tes
 	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
 
 	writeDirectVSCopilotTrace(t, tracePath, requestedID, untouchedID,
-		"After requested", "After untouched", time.Now().Add(time.Second))
+		"After requested with more detail",
+		"After untouched with more detail",
+		time.Now().Add(time.Second))
 
 	detail, err := svc.Sync(context.Background(), service.SyncInput{
 		ID: "visualstudio-copilot:" + requestedID,
@@ -372,7 +374,7 @@ func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, detail)
 	require.NotNil(t, detail.FirstMessage)
-	assert.Equal(t, "After requested", *detail.FirstMessage)
+	assert.Equal(t, "After requested with more detail", *detail.FirstMessage)
 
 	untouched, err := svc.Get(
 		context.Background(), "visualstudio-copilot:"+untouchedID,
