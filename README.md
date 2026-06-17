@@ -298,6 +298,7 @@ agentsview auto-discovers sessions from all of these:
 | Positron Assistant | `~/Library/Application Support/Positron/User/` (macOS) |
 | QClaw              | `~/.qclaw/agents/`                                     |
 | Qwen Code          | `~/.qwen/projects/`                                    |
+| QwenPaw            | `~/.copaw/workspaces/`, `~/.qwenpaw/workspaces/`       |
 | VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
 | Warp               | `~/.warp/` (platform-dependent)                        |
 | WorkBuddy          | `~/.workbuddy/projects/`                               |
