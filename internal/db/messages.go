@@ -1252,7 +1252,8 @@ func (db *DB) MessageRoleTimeFingerprint(sessionID string) (string, error) {
 // has_tool_use, and a SHA-256 over the sanitized thinking_text. The
 // parse-diff comparator uses it as a tier-1 fast path so a parser change
 // confined to these columns still triggers the tier-2 row comparison.
-// Not used by the PG push fast-path.
+// PG push uses it with a PostgreSQL-side twin to avoid skipping
+// metadata-only rewrites.
 func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT ordinal, is_system, has_thinking, has_tool_use,

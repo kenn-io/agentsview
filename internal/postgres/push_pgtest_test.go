@@ -188,6 +188,80 @@ func TestPushMessageContentHashRewriteRegression(t *testing.T) {
 	assertPGMessageContent(t, pg, sessID, 2, "answer bbbb")
 }
 
+func TestPushMessageFlagsRewriteRegression(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_msgflags_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "message-flags-rewrite-001"
+	sess := db.Session{
+		ID:               sessID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "shelley",
+		MessageCount:     2,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	msgs := []db.Message{
+		{
+			SessionID:     sessID,
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "question",
+			ContentLength: len("question"),
+		},
+		{
+			SessionID:     sessID,
+			Ordinal:       2,
+			Role:          "assistant",
+			Content:       "answer",
+			ContentLength: len("answer"),
+		},
+	}
+	require.NoError(t, localDB.InsertMessages(msgs),
+		"InsertMessages first metadata")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push first metadata")
+	assertPGMessageThinking(t, pg, sessID, 2, false, "")
+
+	msgs[1].ThinkingText = "private chain of thought"
+	msgs[1].HasThinking = true
+	require.NoError(t, localDB.ReplaceSessionMessages(sessID, msgs),
+		"ReplaceSessionMessages rewritten metadata")
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		"clearing boundary state")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push rewritten metadata")
+	assertPGMessageThinking(t, pg, sessID, 2, true,
+		"private chain of thought")
+}
+
 // TestPushSessionTerminationStatus verifies that pushSession round-trips
 // the termination_status column to PG: a non-nil value writes the string,
 // and a subsequent push with nil clears the column back to NULL via the
@@ -451,6 +525,26 @@ func assertPGMessageContent(
 		sessionID, ordinal,
 	).Scan(&got), "read pg message content")
 	assert.Equal(t, want, got)
+}
+
+func assertPGMessageThinking(
+	t *testing.T,
+	pg *sql.DB,
+	sessionID string,
+	ordinal int,
+	wantHasThinking bool,
+	wantThinkingText string,
+) {
+	t.Helper()
+	var gotHasThinking bool
+	var gotThinkingText string
+	require.NoError(t, pg.QueryRow(
+		`SELECT has_thinking, thinking_text FROM messages
+		  WHERE session_id = $1 AND ordinal = $2`,
+		sessionID, ordinal,
+	).Scan(&gotHasThinking, &gotThinkingText), "read pg message thinking")
+	assert.Equal(t, wantHasThinking, gotHasThinking)
+	assert.Equal(t, wantThinkingText, gotThinkingText)
 }
 
 // TestPushMessagesSanitizesNULBytes verifies that a message whose
