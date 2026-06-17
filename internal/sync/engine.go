@@ -4133,6 +4133,7 @@ func (e *Engine) processCodex(
 	}
 
 	indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
+	forceReplace := false
 
 	if !indexMtimeChanged {
 		codexParseFn := func(
@@ -4146,6 +4147,8 @@ func (e *Engine) processCodex(
 			file, info, parser.AgentCodex, codexParseFn,
 		); ok {
 			return res
+		} else {
+			forceReplace = res.forceReplace
 		}
 	}
 
@@ -4170,6 +4173,7 @@ func (e *Engine) processCodex(
 		results: []parser.ParseResult{
 			{Session: *sess, Messages: msgs},
 		},
+		forceReplace: forceReplace,
 	}
 }
 

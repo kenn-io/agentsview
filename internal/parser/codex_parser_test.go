@@ -1668,6 +1668,45 @@ func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 	assert.False(t, endedAt.IsZero())
 }
 
+func TestParseCodexSessionFrom_LateTokenCountRequiresFullParse(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"inc-late-usage", "/projects/api",
+			"codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.5", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "run command", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_cmd",
+			map[string]any{"cmd": "sleep 1"}, tsEarlyS5,
+		),
+	)
+	path := createTestFile(t, "late-token-count.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_cmd", "done", tsLate,
+		),
+		testjsonl.CodexTokenCountJSON(
+			tsLate, 100_000, 250, 64_000,
+		),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	require.Error(t, err)
+	assert.True(t, IsIncrementalFullParseFallback(err))
+}
+
 // TestParseCodexSessionFrom_DedupsReemittedPrompt covers the
 // incremental-sync case of the re-emitted-prompt dedup: when Codex
 // appends a positive replay signal followed by a verbatim replay of

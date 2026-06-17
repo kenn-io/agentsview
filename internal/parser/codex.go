@@ -28,7 +28,7 @@ const (
 )
 
 var errCodexIncrementalNeedsFullParse = errors.New(
-	"codex subagent event requires full parse",
+	"codex incremental event requires full parse",
 )
 
 var codexSessionIndexCache = struct {
@@ -66,6 +66,7 @@ type codexSessionBuilder struct {
 	pendingAgentEvents       map[string][]codexPendingEvent
 	orphanNotificationIx     map[string]int
 	lastTokenUsageRaw        string // dedup streaming duplicates
+	unattachedTokenUsage     bool
 
 	// Most recent task lifecycle event seen on the file. Used to
 	// classify termination_status — task_complete maps to
@@ -373,6 +374,7 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 			return
 		}
 	}
+	b.unattachedTokenUsage = true
 }
 
 func (b *codexSessionBuilder) handleCollabAgentSpawnEnd(
@@ -1670,6 +1672,10 @@ func ParseCodexSessionFrom(
 				return
 			}
 			b.processLine(line)
+			if b.unattachedTokenUsage {
+				fallbackErr = errCodexIncrementalNeedsFullParse
+				return
+			}
 		},
 	)
 	if err != nil {

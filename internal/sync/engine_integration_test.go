@@ -6890,6 +6890,57 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	}
 }
 
+func TestIncrementalSync_CodexLateTokenCountRewritesStoredMessage(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"inc-cx-late-usage", "/tmp/proj",
+			"codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.5", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "run command", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_cmd",
+			map[string]any{"cmd": "sleep 1"}, tsEarlyS5,
+		),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-20240101-inc-cx-late-usage.jsonl",
+		initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	msgs := fetchMessages(t, env.db, "codex:inc-cx-late-usage")
+	require.Len(t, msgs, 2)
+	assert.Empty(t, msgs[1].TokenUsage)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_cmd", "done", "2024-01-01T10:01:00Z",
+		),
+		testjsonl.CodexTokenCountJSON(
+			"2024-01-01T10:01:00Z", 100_000, 250, 64_000,
+		),
+	)
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close())
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs = fetchMessages(t, env.db, "codex:inc-cx-late-usage")
+	require.Len(t, msgs, 2)
+	assert.NotEmpty(t, msgs[1].TokenUsage)
+	assert.Equal(t, 250, msgs[1].OutputTokens)
+	assert.Equal(t, 100_000, msgs[1].ContextTokens)
+}
+
 func TestIncrementalSync_CodexSubagentAppendFallsBackToFullParse(t *testing.T) {
 	env := setupTestEnv(t)
 
