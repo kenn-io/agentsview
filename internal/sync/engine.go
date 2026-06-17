@@ -125,6 +125,14 @@ func (e *Engine) PhaseStats() *PhaseStats { return &e.phaseStats }
 // skip cache entries has already run on this database.
 const codexExecMigrationKey = "codex_exec_legacy_migration_v1"
 
+// visualStudioCopilotSkipMigrationKey is the pg_sync_state flag
+// that records whether the one-time cleanup of Visual Studio
+// Copilot skip cache entries has already run on this database.
+// Older builds cached trace read/scan errors keyed by an
+// unchanged mtime, which would otherwise suppress retries after
+// upgrading to the non-cacheable read-error behavior.
+const visualStudioCopilotSkipMigrationKey = "visualstudio_copilot_skip_migration_v1"
+
 // NewEngine creates a sync engine. It pre-populates the
 // in-memory skip cache from the database so that files
 // skipped in a prior run are not re-parsed on startup, and
@@ -141,6 +149,7 @@ func NewEngine(
 			log.Printf("loading skip cache: %v", err)
 		}
 		migrateLegacyCodexExecSkips(database, skipCache)
+		migrateVisualStudioCopilotSkips(database, skipCache)
 	}
 
 	dirs := make(map[parser.AgentType][]string, len(cfg.AgentDirs))
@@ -225,6 +234,83 @@ func migrateLegacyCodexExecSkips(
 			"codex exec migration: set flag: %v", err,
 		)
 	}
+}
+
+// migrateVisualStudioCopilotSkips removes skip cache entries for
+// Visual Studio Copilot trace files. Older builds cached trace
+// read/scan errors keyed by mtime, so an unchanged unreadable
+// file would be skipped on later syncs instead of retried. The
+// scrub clears both physical trace paths and
+// <traceFile>#<conversationID> virtual paths; successfully synced
+// conversations are re-cached on the next sync, while read errors
+// surface again because they are no longer cacheable.
+//
+// The scrub runs once per database: a pg_sync_state flag is set
+// after the first successful pass. It mirrors
+// migrateLegacyCodexExecSkips: the cleaned snapshot is persisted
+// through the atomic ReplaceSkippedFiles before the in-memory map
+// and done flag are updated, so a partial failure is retried on
+// the next startup rather than being falsely marked complete.
+func migrateVisualStudioCopilotSkips(
+	database *db.DB, skipCache map[string]int64,
+) {
+	done, err := database.GetSyncState(visualStudioCopilotSkipMigrationKey)
+	if err != nil {
+		log.Printf("visual studio copilot skip migration: %v", err)
+		return
+	}
+	if done != "" {
+		return
+	}
+
+	cleaned := make(map[string]int64, len(skipCache))
+	var stale []string
+	for path, mtime := range skipCache {
+		if IsVisualStudioCopilotSkipPath(path) {
+			stale = append(stale, path)
+			continue
+		}
+		cleaned[path] = mtime
+	}
+
+	if len(stale) > 0 {
+		if err := database.ReplaceSkippedFiles(cleaned); err != nil {
+			log.Printf(
+				"visual studio copilot skip migration: "+
+					"persist cleaned skip cache: %v",
+				err,
+			)
+			return
+		}
+		for _, p := range stale {
+			delete(skipCache, p)
+		}
+		log.Printf(
+			"visual studio copilot skip migration: cleared %d skip entries",
+			len(stale),
+		)
+	}
+
+	if err := database.SetSyncState(
+		visualStudioCopilotSkipMigrationKey, "done",
+	); err != nil {
+		log.Printf(
+			"visual studio copilot skip migration: set flag: %v", err,
+		)
+	}
+}
+
+// IsVisualStudioCopilotSkipPath reports whether a skip cache key
+// belongs to a Visual Studio Copilot trace: either a physical
+// trace file or a <traceFile>#<conversationID> virtual path. It
+// is shared with remote sync so both the local and remote skip
+// migrations classify paths identically.
+func IsVisualStudioCopilotSkipPath(path string) bool {
+	if parser.IsVisualStudioCopilotTraceFile(path) {
+		return true
+	}
+	_, _, ok := parser.ParseVisualStudioCopilotVirtualPath(path)
+	return ok
 }
 
 // blockedCategorySet converts a slice of category names into a
@@ -943,6 +1029,11 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// Visual Studio Copilot: <traces>/*_VSGitHubCopilot_traces.jsonl
+	if df, ok := e.classifyVisualStudioCopilotPath(path, sep); ok {
+		return df, true
+	}
+
 	// Pi: <piDir>/<encoded-cwd>/<session>.jsonl
 	for _, piDir := range e.agentDirs[parser.AgentPi] {
 		if piDir == "" {
@@ -1264,6 +1355,37 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	return parser.DiscoveredFile{}, false
+}
+
+// classifyVisualStudioCopilotPath matches a top-level Visual Studio Copilot
+// trace file (<traces>/*_VSGitHubCopilot_traces.jsonl) under a configured
+// trace directory. Trace files live directly in the directory, so nested
+// paths are rejected. Split out of classifyOnePath to keep that function
+// within NilAway's per-function size limit.
+func (e *Engine) classifyVisualStudioCopilotPath(
+	path, sep string,
+) (parser.DiscoveredFile, bool) {
+	if !parser.IsVisualStudioCopilotTraceFile(path) {
+		return parser.DiscoveredFile{}, false
+	}
+	for _, vsDir := range e.agentDirs[parser.AgentVSCopilot] {
+		if vsDir == "" {
+			continue
+		}
+		rel, ok := isUnder(vsDir, path)
+		if !ok {
+			continue
+		}
+		if strings.Contains(rel, sep) {
+			continue
+		}
+		return parser.DiscoveredFile{
+			Path:    path,
+			Project: "visualstudio",
+			Agent:   parser.AgentVSCopilot,
+		}, true
+	}
 	return parser.DiscoveredFile{}, false
 }
 
@@ -2182,7 +2304,7 @@ func (e *Engine) syncAllLocked(
 
 	if verbose {
 		log.Printf(
-			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d pi, %d kiro, %d zed) in %s",
+			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d kiro, %d zed) in %s",
 			len(all),
 			counts[parser.AgentClaude],
 			counts[parser.AgentCodex],
@@ -2193,6 +2315,7 @@ func (e *Engine) syncAllLocked(
 			counts[parser.AgentZencoder],
 			counts[parser.AgentIflow],
 			counts[parser.AgentVSCodeCopilot],
+			counts[parser.AgentVSCopilot],
 			counts[parser.AgentPi],
 			counts[parser.AgentKiro],
 			counts[parser.AgentZed],
@@ -2634,6 +2757,16 @@ func discoveredFileMtime(
 			dbPath = p
 		}
 		return shelleyDBCompositeMtime(dbPath)
+	}
+	if file.Agent == parser.AgentVSCopilot {
+		// Sessions are stored under a <traceFile>#<conversationID> virtual
+		// path; stat the physical trace so the mtime filter can drop
+		// conversations whose trace file is unchanged.
+		info, err := os.Stat(parser.ResolveSourceFilePath(file.Path))
+		if err != nil {
+			return 0, err
+		}
+		return info.ModTime().UnixNano(), nil
 	}
 	if file.Agent == parser.AgentAntigravityCLI {
 		info, err := parser.AntigravityCLIFileInfo(file.Path)
@@ -3201,7 +3334,7 @@ func (e *Engine) collectAndBatch(
 				goto flush
 			}
 			stats.RecordFailed()
-			if r.cacheSkip && r.mtime != 0 {
+			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.path, r.mtime)
 			}
 			log.Printf("sync error: %v", r.err)
@@ -3363,6 +3496,13 @@ type processResult struct {
 	err         error
 	incremental *incrementalUpdate
 	cacheSkip   bool
+	// noCacheSkip suppresses skip-cache recording for an errored
+	// result even when cacheSkip is set for the agent. Read/scan
+	// failures are transient: a permission or readability fix may
+	// not change the file mtime, so caching the failure by mtime
+	// would silently skip the file on later syncs instead of
+	// retrying it.
+	noCacheSkip bool
 	needsRetry  bool
 	// forceReplace requests full message replacement on write,
 	// even when the existing rows would otherwise be left in
@@ -3399,6 +3539,8 @@ func (e *Engine) processFile(
 			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
 			statPath = dbPath
+		} else if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
+			statPath = tracePath
 		}
 		info, err = os.Stat(statPath)
 	}
@@ -3471,6 +3613,8 @@ func (e *Engine) processFile(
 		res = e.processZencoder(file, info)
 	case parser.AgentVSCodeCopilot:
 		res = e.processVSCodeCopilot(file, info)
+	case parser.AgentVSCopilot:
+		res = e.processVisualStudioCopilot(file, info)
 	case parser.AgentPi:
 		res = e.processPi(file, info)
 	case parser.AgentQwen:
@@ -3543,6 +3687,20 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentVSCopilot {
+		// Visual Studio Copilot conversations are skipped by a composite
+		// fingerprint spanning every sibling trace file (see
+		// processVisualStudioCopilot). The generic skip cache keys on the
+		// representative file's mtime alone, so a cached entry would bypass that
+		// composite check and miss a sibling-only change or removal.
+		if parser.IsVisualStudioCopilotTraceFile(file.Path) {
+			return false
+		}
+		if _, _, ok :=
+			parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
 			return false
 		}
 	}
@@ -4702,6 +4860,79 @@ func (e *Engine) processQClaw(
 	}
 }
 
+func (e *Engine) processVisualStudioCopilot(
+	file parser.DiscoveredFile, _ os.FileInfo,
+) processResult {
+	// Resolve the physical trace path first. Discovery emits one
+	// <traceFile>#<conversationID> work item per conversation; a watcher event
+	// or single-session resync may instead pass a real trace file, which can
+	// hold spans for several conversations.
+	tracePath := file.Path
+	var conversationIDs []string
+	if resolved, conversationID, ok :=
+		parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
+		tracePath = resolved
+		conversationIDs = []string{conversationID}
+	}
+
+	// Skip on a fingerprint spanning every sibling trace file: a
+	// conversation's transcript is rebuilt from all of them, so a change to any
+	// sibling must defeat the skip even when the representative trace file is
+	// unchanged. The primary-file stat alone would let a single-session resync
+	// or watch fallback leave a session stale.
+	size, mtime, err := parser.VisualStudioCopilotTraceFingerprintStrict(
+		tracePath,
+	)
+	if err != nil {
+		return processResult{err: err, noCacheSkip: true}
+	}
+	if e.shouldSkipByPath(
+		file.Path, fakeSnapshotInfo{fSize: size, fMtime: mtime},
+	) {
+		return processResult{skip: true}
+	}
+
+	// A real trace file can hold spans for several conversations, so enumerate
+	// them and emit each independently.
+	if conversationIDs == nil {
+		ids, err := parser.VisualStudioCopilotFileConversationIDs(file.Path)
+		if err != nil {
+			return processResult{err: err, noCacheSkip: true}
+		}
+		conversationIDs = ids
+	}
+
+	hash, hashErr := ComputeFileHash(tracePath)
+
+	var results []parser.ParseResult
+	for _, conversationID := range conversationIDs {
+		sess, msgs, err := parser.ParseVisualStudioCopilotConversation(
+			tracePath, conversationID, file.Project, e.machine,
+		)
+		if err != nil {
+			return processResult{err: err, noCacheSkip: true}
+		}
+		if sess == nil {
+			continue
+		}
+		if hashErr == nil {
+			sess.File.Hash = hash
+		}
+		results = append(results, parser.ParseResult{
+			Session: *sess, Messages: msgs,
+		})
+	}
+
+	// forceReplace mirrors the other multi-session-per-source agents
+	// (Zed, Kiro): each conversation's messages are fully re-derived from
+	// all of its spans on every parse, so existing rows must be replaced
+	// rather than appended.
+	return processResult{
+		results:      results,
+		forceReplace: true,
+	}
+}
+
 func (e *Engine) processKimi(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -5813,7 +6044,49 @@ func (e *Engine) prepareSessionWrite(
 	) {
 		return db.Session{}, nil, false
 	}
+	if e.shouldPreserveVisualStudioCopilotArchive(
+		pw.sess.Agent, s.ID, pw.sess.File.Size, msgs,
+	) {
+		return db.Session{}, nil, false
+	}
 	return s, msgs, true
+}
+
+// shouldPreserveVisualStudioCopilotArchive reports whether an archived Visual
+// Studio Copilot conversation should be kept instead of being overwritten by a
+// reparse that would shrink it. A conversation's transcript is rebuilt from
+// every sibling trace file and written with full message replacement, so when a
+// sibling is rotated away or deleted the reparse sees fewer spans and would
+// otherwise drop messages and tool results already stored in SQLite. Preserve
+// only when the newly parsed transcript has fewer messages AND the composite
+// trace size shrank, so a parser change that legitimately reduces messages
+// (source size unchanged) still replaces the archive.
+func (e *Engine) shouldPreserveVisualStudioCopilotArchive(
+	agent parser.AgentType, sessionID string,
+	currentSize int64, currentMsgs []db.Message,
+) bool {
+	if agent != parser.AgentVSCopilot {
+		return false
+	}
+	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
+	if err != nil || stored == nil {
+		return false
+	}
+	storedSize := derefInt64(stored.FileSize)
+	if storedSize == 0 || currentSize >= storedSize {
+		return false
+	}
+	storedMsgs, err := e.db.GetAllMessages(context.Background(), sessionID)
+	if err != nil || len(currentMsgs) >= len(storedMsgs) {
+		return false
+	}
+	log.Printf(
+		"preserve %s %s: reparse shrank %d->%d messages, composite trace "+
+			"%d->%d bytes (a sibling trace was likely rotated away)",
+		agent, sessionID, len(storedMsgs), len(currentMsgs),
+		storedSize, currentSize,
+	)
+	return true
 }
 
 type batchSourceFile struct {
@@ -5892,6 +6165,7 @@ func shouldReplaceFullParseMessages(
 	return forceReplace || pw.forceReplace || pw.needsRetry || stale ||
 		pw.sess.Agent == parser.AgentCowork ||
 		isOpenCodeFormatStorageAgent(pw.sess.Agent) ||
+		pw.sess.Agent == parser.AgentVSCopilot ||
 		pw.sess.Agent == parser.AgentAntigravity ||
 		pw.sess.Agent == parser.AgentAntigravityCLI ||
 		pw.sess.Agent == parser.AgentQwenPaw
@@ -6641,8 +6915,12 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 
 	// Prefer stored file_path — it's authoritative and handles
 	// cases where the session ID doesn't match the filename.
+	// Resolve virtual paths (e.g. Visual Studio Copilot's
+	// <traceFile>#<conversationID>) for the existence check, but
+	// return the stored path so downstream parsing stays scoped to
+	// the requested conversation rather than the whole trace file.
 	if fp := e.db.GetSessionFilePath(sessionID); fp != "" {
-		if _, err := os.Stat(fp); err == nil {
+		if _, err := os.Stat(parser.ResolveSourceFilePath(fp)); err == nil {
 			return fp
 		}
 	}
@@ -6807,8 +7085,20 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		}
 		return commandCodeEffectiveInfo(path, info).ModTime().UnixNano()
 	}
+	if def.Type == parser.AgentVSCopilot {
+		// A conversation's transcript is rebuilt from every sibling trace
+		// file, so the watcher fallback must compare a composite mtime
+		// spanning all of them, not just the representative trace file.
+		_, mtime := parser.VisualStudioCopilotTraceFingerprint(
+			parser.ResolveSourceFilePath(path),
+		)
+		return mtime
+	}
 
-	info, err := os.Stat(path)
+	// FindSourceFile may return a virtual path (e.g. Visual Studio
+	// Copilot's <traceFile>#<conversationID>); resolve it to the
+	// physical source for the stat.
+	info, err := os.Stat(parser.ResolveSourceFilePath(path))
 	if err != nil {
 		return 0
 	}
@@ -6943,6 +7233,18 @@ func (e *Engine) SyncSingleSessionContext(
 		} else {
 			file.Project = filepath.Base(filepath.Dir(path))
 		}
+	case parser.AgentVSCopilot:
+		// processVisualStudioCopilot persists file.Project into every
+		// parsed session, so an empty project here would overwrite the
+		// existing "visualstudio" value. Prefer the stored project; fall
+		// back to the canonical default discovery assigns.
+		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+			sess.Project != "" &&
+			!parser.NeedsProjectReparse(sess.Project) {
+			file.Project = sess.Project
+		} else {
+			file.Project = "visualstudio"
+		}
 	case parser.AgentCursor:
 		// Support both flat and nested transcript layouts.
 		for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
@@ -7050,7 +7352,7 @@ func (e *Engine) SyncSingleSessionContext(
 
 	res := e.processFile(ctx, file)
 	if res.err != nil {
-		if res.cacheSkip && res.mtime != 0 {
+		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
 			e.cacheSkip(path, res.mtime)
 		}
 		return res.err

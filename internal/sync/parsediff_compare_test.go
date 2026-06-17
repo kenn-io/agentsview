@@ -1557,3 +1557,16 @@ func TestParseDiffReportHasFailures(t *testing.T) {
 		})
 	}
 }
+
+// TestStripVirtualSourceSuffixVisualStudioCopilot verifies that a Visual Studio
+// Copilot <traceFile>#<conversationID> virtual path strips to its physical
+// trace, so parse-diff limit accounting and source classification key on the
+// on-disk file rather than the conversation-scoped virtual path.
+func TestStripVirtualSourceSuffixVisualStudioCopilot(t *testing.T) {
+	tracePath := "/logs/20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl"
+	virtual := parser.VisualStudioCopilotVirtualPath(
+		tracePath, "4a8f63f6-7626-4416-a874-fc7bd2c3f005",
+	)
+	assert.Equal(t, tracePath, stripVirtualSourceSuffix(virtual),
+		"the conversation suffix must strip to the physical trace path")
+}

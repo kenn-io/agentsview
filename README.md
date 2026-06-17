@@ -268,42 +268,43 @@ agentsview stats --include-git-outcomes
 
 agentsview auto-discovers sessions from all of these:
 
-| Agent              | Session Directory                                      |
-| ------------------ | ------------------------------------------------------ |
-| Amp                | `~/.local/share/amp/threads/`                          |
-| Antigravity        | `~/.gemini/antigravity/`                               |
-| Antigravity CLI    | `~/.gemini/antigravity-cli/` (see note below)          |
-| Claude Code        | `~/.claude/projects/`                                  |
-| Claude Cowork      | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS) |
-| Codex              | `~/.codex/sessions/`                                   |
-| Copilot CLI        | `~/.copilot/`                                          |
-| Cortex Code        | `~/.snowflake/cortex/conversations/`                   |
-| Cursor             | `~/.cursor/projects/`                                  |
-| DeepSeek TUI       | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`      |
-| Forge              | `~/.forge/`                                            |
-| Gemini CLI         | `~/.gemini/`                                           |
-| gptme              | `~/.local/share/gptme/logs/`                           |
-| Hermes Agent       | `~/.hermes/sessions/`                                  |
-| iFlow              | `~/.iflow/projects/`                                   |
-| Kilo               | `~/.local/share/kilo/`                                 |
-| Kimi               | `~/.kimi/sessions/`                                    |
-| Kiro CLI           | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`    |
-| Kiro IDE           | `~/Library/Application Support/Kiro/` (macOS)          |
-| MiMoCode           | `~/.local/share/mimocode/`                             |
-| OpenClaw           | `~/.openclaw/agents/`                                  |
-| OpenCode           | `~/.local/share/opencode/`                             |
-| OpenHands CLI      | `~/.openhands/conversations/`                          |
-| Pi                 | `~/.pi/agent/sessions/`                                |
-| Piebald            | `~/.local/share/piebald/`                              |
-| Positron Assistant | `~/Library/Application Support/Positron/User/` (macOS) |
-| QClaw              | `~/.qclaw/agents/`                                     |
-| Qwen Code          | `~/.qwen/projects/`                                    |
-| QwenPaw            | `~/.copaw/workspaces/`, `~/.qwenpaw/workspaces/`       |
-| VSCode Copilot     | `~/Library/Application Support/Code/User/` (macOS)     |
-| Warp               | `~/.warp/` (platform-dependent)                        |
-| WorkBuddy          | `~/.workbuddy/projects/`                               |
-| Zed                | `~/Library/Application Support/Zed/` (macOS)           |
-| Zencoder           | `~/.zencoder/sessions/`                                |
+| Agent                 | Session Directory                                                                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Amp                   | `~/.local/share/amp/threads/`                                                                                                                                           |
+| Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                |
+| Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                           |
+| Claude Code           | `~/.claude/projects/`                                                                                                                                                   |
+| Claude Cowork         | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS)                                                                                               |
+| Codex                 | `~/.codex/sessions/`                                                                                                                                                    |
+| Copilot CLI           | `~/.copilot/`                                                                                                                                                           |
+| Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                                    |
+| Cursor                | `~/.cursor/projects/`                                                                                                                                                   |
+| DeepSeek TUI          | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`                                                                                                                       |
+| Forge                 | `~/.forge/`                                                                                                                                                             |
+| Gemini CLI            | `~/.gemini/`                                                                                                                                                            |
+| gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                            |
+| Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                                   |
+| iFlow                 | `~/.iflow/projects/`                                                                                                                                                    |
+| Kilo                  | `~/.local/share/kilo/`                                                                                                                                                  |
+| Kimi                  | `~/.kimi/sessions/`                                                                                                                                                     |
+| Kiro CLI              | `~/.kiro/sessions/cli/`, `~/.local/share/kiro-cli/`                                                                                                                     |
+| Kiro IDE              | `~/Library/Application Support/Kiro/` (macOS)                                                                                                                           |
+| MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                              |
+| OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                   |
+| OpenCode              | `~/.local/share/opencode/`                                                                                                                                              |
+| OpenHands CLI         | `~/.openhands/conversations/`                                                                                                                                           |
+| Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                 |
+| Piebald               | `~/.local/share/piebald/`                                                                                                                                               |
+| Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                  |
+| QClaw                 | `~/.qclaw/agents/`                                                                                                                                                      |
+| Qwen Code             | `~/.qwen/projects/`                                                                                                                                                     |
+| QwenPaw               | `~/.copaw/workspaces/`, `~/.qwenpaw/workspaces/`                                                                                                                        |
+| VSCode Copilot        | `~/Library/Application Support/Code/User/` (macOS)                                                                                                                      |
+| Visual Studio Copilot | `%LOCALAPPDATA%\\Temp\\VSGitHubCopilotLogs\\traces\\` (Windows), `~/Library/Caches/VSGitHubCopilotLogs/traces/` (macOS), `~/.cache/VSGitHubCopilotLogs/traces/` (Linux) |
+| Warp                  | `~/.warp/` (platform-dependent)                                                                                                                                         |
+| WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                |
+| Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                            |
+| Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details.

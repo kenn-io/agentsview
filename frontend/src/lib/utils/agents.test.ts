@@ -21,6 +21,7 @@ describe("KNOWN_AGENTS", () => {
       "zencoder",
       "zed",
       "vscode-copilot",
+      "visualstudio-copilot",
       "pi",
       "qwen",
       "qwenpaw",
@@ -95,6 +96,9 @@ describe("agentColor", () => {
     expect(agentColor("vscode-copilot")).toBe(
       "var(--accent-teal)",
     );
+    expect(agentColor("visualstudio-copilot")).toBe(
+      "var(--accent-blue)",
+    );
     expect(agentColor("qclaw")).toBe(
       "var(--accent-orange)",
     );
@@ -118,6 +122,9 @@ describe("agentLabel", () => {
   it("returns explicit labels for hyphenated agents", () => {
     expect(agentLabel("vscode-copilot")).toBe(
       "VS Code Copilot",
+    );
+    expect(agentLabel("visualstudio-copilot")).toBe(
+      "Visual Studio Copilot",
     );
     expect(agentLabel("openhands")).toBe("OpenHands");
     expect(agentLabel("openclaw")).toBe("OpenClaw");

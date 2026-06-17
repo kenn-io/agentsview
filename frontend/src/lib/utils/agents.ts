@@ -21,6 +21,11 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
     color: "var(--accent-teal)",
     label: "VS Code Copilot",
   },
+  {
+    name: "visualstudio-copilot",
+    color: "var(--accent-blue)",
+    label: "Visual Studio Copilot",
+  },
   { name: "pi", color: "var(--accent-indigo)", label: "Pi" },
   { name: "qwen", color: "var(--accent-cyan)", label: "Qwen Code" },
   { name: "qwenpaw", color: "var(--accent-cyan)", label: "QwenPaw" },

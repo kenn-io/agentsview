@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,85 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
+
+// visualStudioCopilotRemoteSkipMigrationKey returns the per-host
+// pg_sync_state flag that records whether stale Visual Studio
+// Copilot entries have been scrubbed from this host's remote
+// skip cache. The flag is per host because each host's
+// remote_skipped_files are independent.
+func visualStudioCopilotRemoteSkipMigrationKey(host string) string {
+	return "visualstudio_copilot_remote_skip_migration_v1:" + host
+}
+
+// migrateVisualStudioCopilotRemoteSkips removes stale Visual
+// Studio Copilot skip entries from this host's remote skip cache
+// and returns the cleaned cache. Older builds cached trace
+// read/scan errors keyed by mtime, so an unchanged unreadable
+// trace would be skipped forever instead of retried under the
+// non-cacheable read-error behavior. The scrub clears both
+// physical trace paths and <traceFile>#<conversationID> virtual
+// paths once per host: a pg_sync_state flag is set after the
+// first pass so conversation skips legitimately re-cached later
+// are preserved instead of being filtered on every sync.
+//
+// It mirrors sync.migrateVisualStudioCopilotSkips and reuses the
+// same path classifier: the cleaned cache is persisted before
+// the flag is set, so a partial failure is retried on the next
+// sync rather than being falsely marked complete. On any error
+// it logs and returns the input unchanged so the sync proceeds.
+func (rs *RemoteSync) migrateVisualStudioCopilotRemoteSkips(
+	remoteCache map[string]int64,
+) map[string]int64 {
+	key := visualStudioCopilotRemoteSkipMigrationKey(rs.Host)
+	done, err := rs.DB.GetSyncState(key)
+	if err != nil {
+		log.Printf(
+			"visual studio copilot remote skip migration (%s): %v",
+			rs.Host, err,
+		)
+		return remoteCache
+	}
+	if done != "" {
+		return remoteCache
+	}
+
+	cleaned := make(map[string]int64, len(remoteCache))
+	stale := 0
+	for path, mtime := range remoteCache {
+		if sync.IsVisualStudioCopilotSkipPath(path) {
+			stale++
+			continue
+		}
+		cleaned[path] = mtime
+	}
+
+	if stale > 0 {
+		if err := rs.DB.ReplaceRemoteSkippedFiles(
+			rs.Host, cleaned,
+		); err != nil {
+			log.Printf(
+				"visual studio copilot remote skip migration (%s): "+
+					"persist cleaned skip cache: %v",
+				rs.Host, err,
+			)
+			return remoteCache
+		}
+		log.Printf(
+			"visual studio copilot remote skip migration (%s): "+
+				"cleared %d skip entries",
+			rs.Host, stale,
+		)
+	}
+
+	if err := rs.DB.SetSyncState(key, "done"); err != nil {
+		log.Printf(
+			"visual studio copilot remote skip migration (%s): "+
+				"set flag: %v",
+			rs.Host, err,
+		)
+	}
+	return cleaned
+}
 
 // SyncStats summarizes the outcome of a remote sync run.
 type SyncStats struct {
@@ -118,6 +198,9 @@ func (rs *RemoteSync) Run(
 				"load skip cache: %w", loadErr,
 			)
 		}
+		remoteCache = rs.migrateVisualStudioCopilotRemoteSkips(
+			remoteCache,
+		)
 		translated := make(
 			map[string]int64, len(remoteCache),
 		)

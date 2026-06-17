@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/signals"
@@ -263,12 +264,29 @@ func (b *directBackend) Sync(
 
 	path := in.Path
 	if path == "" {
-		path = b.local.GetSessionFilePath(in.ID)
-		if path == "" {
+		storedPath := b.local.GetSessionFilePath(in.ID)
+		if storedPath == "" {
 			return nil, fmt.Errorf(
 				"sync: no file_path recorded for session %q", in.ID,
 			)
 		}
+		// Visual Studio Copilot stores file_path as a
+		// <traceFile>#<conversationID> virtual key. Stripping it to the
+		// physical trace and syncing the path would reparse every conversation
+		// in that trace, lose the requested conversation's scope, and do
+		// nothing if the representative trace was deleted while the
+		// conversation lives on in a sibling. The single-session path keeps the
+		// conversation scope and follows it across sibling trace files.
+		if _, _, ok :=
+			parser.ParseVisualStudioCopilotVirtualPath(storedPath); ok {
+			if err := b.engine.SyncSingleSessionContext(
+				ctx, in.ID,
+			); err != nil {
+				return nil, err
+			}
+			return b.Get(ctx, in.ID)
+		}
+		path = parser.ResolveSourceFilePath(storedPath)
 	}
 
 	b.engine.SyncPaths([]string{path})
@@ -293,10 +311,22 @@ func (b *directBackend) Sync(
 func (b *directBackend) resolveSessionIDByPath(
 	ctx context.Context, path string,
 ) (string, error) {
-	const q = `SELECT id FROM sessions
+	q := `SELECT id FROM sessions
 		WHERE file_path = ?
 		ORDER BY created_at DESC`
-	rows, err := b.local.Reader().QueryContext(ctx, q, path)
+	queryArgs := []any{path}
+	// Visual Studio Copilot stores file_path as a virtual sync key
+	// <traceFile>#<conversationID>, so an exact match on the physical
+	// trace path never resolves. Also match every conversation synced
+	// from that trace; multiple matches fall through to the ambiguity
+	// error below, exactly like a multi-session JSONL file.
+	if parser.IsVisualStudioCopilotTraceFile(path) {
+		q = `SELECT id FROM sessions
+			WHERE file_path = ? OR file_path LIKE ? ESCAPE '\'
+			ORDER BY created_at DESC`
+		queryArgs = append(queryArgs, db.EscapeLikePattern(path)+"#%")
+	}
+	rows, err := b.local.Reader().QueryContext(ctx, q, queryArgs...)
 	if err != nil {
 		return "", fmt.Errorf(
 			"sync: resolving session for path %q: %w", path, err,

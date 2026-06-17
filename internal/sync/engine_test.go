@@ -2185,3 +2185,29 @@ func TestToDBSessionCarriesSessionName(t *testing.T) {
 	assert.Nil(t, s2.SessionName)
 	assert.Nil(t, s2.DisplayName)
 }
+
+// TestDiscoveredFileMtimeVisualStudioCopilotResolvesVirtualPath verifies that
+// the mtime helper resolves a <traceFile>#<conversationID> virtual path to its
+// physical trace before stat. Without resolution os.Stat fails on the virtual
+// path, so SyncAllSince's mtime filter cannot drop unchanged Visual Studio
+// conversations and re-syncs every one of them on each poll.
+func TestDiscoveredFileMtimeVisualStudioCopilotResolvesVirtualPath(t *testing.T) {
+	dir := t.TempDir()
+	tracePath := filepath.Join(
+		dir, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(tracePath, []byte("{}\n"), 0o644))
+	info, err := os.Stat(tracePath)
+	require.NoError(t, err)
+
+	virtual := parser.VisualStudioCopilotVirtualPath(
+		tracePath, "4a8f63f6-7626-4416-a874-fc7bd2c3f005",
+	)
+	mtime, err := discoveredFileMtime(parser.DiscoveredFile{
+		Path:  virtual,
+		Agent: parser.AgentVSCopilot,
+	})
+	require.NoError(t, err,
+		"virtual path must resolve to the physical trace for stat")
+	assert.Equal(t, info.ModTime().UnixNano(), mtime)
+}

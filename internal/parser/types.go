@@ -24,6 +24,7 @@ const (
 	AgentAmp            AgentType = "amp"
 	AgentZencoder       AgentType = "zencoder"
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
+	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
 	AgentQwen           AgentType = "qwen"
 	AgentCommandCode    AgentType = "commandcode"
@@ -286,6 +287,24 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverVSCodeCopilotSessions,
 		FindSourceFunc: FindVSCodeCopilotSourceFile,
+	},
+	{
+		Type:        AgentVSCopilot,
+		DisplayName: "Visual Studio Copilot",
+		EnvVar:      "VISUALSTUDIO_COPILOT_DIR",
+		ConfigKey:   "visualstudio_copilot_dirs",
+		DefaultDirs: []string{
+			// Windows
+			"AppData/Local/Temp/VSGitHubCopilotLogs/traces",
+			// macOS
+			"Library/Caches/VSGitHubCopilotLogs/traces",
+			// Linux
+			".cache/VSGitHubCopilotLogs/traces",
+		},
+		IDPrefix:       "visualstudio-copilot:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverVisualStudioCopilotSessions,
+		FindSourceFunc: FindVisualStudioCopilotSourceFile,
 	},
 	{
 		Type:           AgentPi,

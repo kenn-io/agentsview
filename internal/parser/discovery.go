@@ -1742,6 +1742,142 @@ func FindVSCodeCopilotSourceFile(
 	return ""
 }
 
+// DiscoverVisualStudioCopilotSessions finds Visual Studio Copilot
+// trace files under the configured traces directory.
+func DiscoverVisualStudioCopilotSessions(vsRoot string) []DiscoveredFile {
+	if vsRoot == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(vsRoot)
+	if err != nil {
+		return nil
+	}
+	files := discoverVisualStudioCopilotSessionFiles(vsRoot, entries)
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files
+}
+
+// discoverVisualStudioCopilotSessionFiles emits one work item per conversation
+// found across the trace files in a directory. A single physical trace file
+// can hold spans for several conversations, and one conversation can be split
+// across rotating trace files, so each conversation is keyed independently and
+// represented by the latest trace file that contains it. The work item path is
+// a <traceFile>#<conversationID> virtual path so the parser can re-gather that
+// conversation's spans from all sibling files.
+func discoverVisualStudioCopilotSessionFiles(
+	dir string, entries []os.DirEntry,
+) []DiscoveredFile {
+	type candidate struct {
+		path  string
+		mtime time.Time
+	}
+	bestByConversation := map[string]candidate{}
+	var unreadable []DiscoveredFile
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") ||
+			!strings.Contains(name, "_VSGitHubCopilot_traces") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		mtime := time.Time{}
+		if info, err := entry.Info(); err == nil {
+			mtime = info.ModTime()
+		}
+		ids, err := VisualStudioCopilotFileConversationIDs(path)
+		if err != nil {
+			// Enqueue the physical file so the sync worker surfaces the
+			// read failure instead of silently dropping every
+			// conversation it might contain.
+			unreadable = append(unreadable, DiscoveredFile{
+				Path:    path,
+				Project: "visualstudio",
+				Agent:   AgentVSCopilot,
+			})
+			continue
+		}
+		for _, id := range ids {
+			current, ok := bestByConversation[id]
+			if !ok || mtime.After(current.mtime) ||
+				(mtime.Equal(current.mtime) && path > current.path) {
+				bestByConversation[id] = candidate{path: path, mtime: mtime}
+			}
+		}
+	}
+	files := make([]DiscoveredFile, 0, len(bestByConversation)+len(unreadable))
+	for id, c := range bestByConversation {
+		files = append(files, DiscoveredFile{
+			Path:    VisualStudioCopilotVirtualPath(c.path, id),
+			Project: "visualstudio",
+			Agent:   AgentVSCopilot,
+		})
+	}
+	files = append(files, unreadable...)
+	return files
+}
+
+// FindVisualStudioCopilotSourceFile locates a Visual Studio Copilot
+// trace file by conversation UUID.
+func FindVisualStudioCopilotSourceFile(vsRoot, rawID string) string {
+	if vsRoot == "" || !IsValidSessionID(rawID) {
+		return ""
+	}
+	return findVisualStudioCopilotTraceSourceFile(vsRoot, rawID)
+}
+
+func findVisualStudioCopilotTraceSourceFile(
+	dir, rawID string,
+) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	needle := `"gen_ai.conversation.id"`
+	valueNeedle := `"stringValue":"` + rawID + `"`
+	var matches []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") ||
+			!strings.Contains(name, "_VSGitHubCopilot_traces") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if visualStudioCopilotTraceContains(path, needle, valueNeedle) {
+			matches = append(matches, path)
+		}
+	}
+	if len(matches) == 0 {
+		return ""
+	}
+	sort.Strings(matches)
+	// Return a conversation-scoped virtual path. The stored file_path is a
+	// <traceFile>#<conversationID> key, and returning the bare trace file would
+	// let a single-session resync enumerate and rewrite every conversation in
+	// that trace rather than only the requested one.
+	return VisualStudioCopilotVirtualPath(matches[len(matches)-1], rawID)
+}
+
+func visualStudioCopilotTraceContains(
+	path, keyNeedle, valueNeedle string,
+) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, keyNeedle) &&
+			strings.Contains(line, valueNeedle) {
+			return true
+		}
+	}
+	return false
+}
+
 // DiscoverOpenClawSessions finds all JSONL session files under the
 // OpenClaw agents directory. The directory structure is:
 // <agentsDir>/<agentId>/sessions/<sessionId>.jsonl

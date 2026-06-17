@@ -2,8 +2,11 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
@@ -272,6 +276,69 @@ func TestDirectBackend_Sync_AmbiguousPath_ReturnsListedIDs(t *testing.T) {
 		"error should tell the caller how to disambiguate")
 }
 
+// TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession verifies
+// that syncing a Visual Studio Copilot session by its physical trace
+// file resolves the single session whose stored file_path is the
+// <traceFile>#<conversationID> virtual key for that trace.
+func TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
+	svc := service.NewDirectBackend(d, engine)
+
+	tracePath := "/logs/20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl"
+	convID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	virtual := tracePath + "#" + convID
+	sessionID := "visualstudio-copilot:" + convID
+	require.NoError(t, d.UpsertSession(db.Session{
+		ID:       sessionID,
+		Project:  "visualstudio",
+		Machine:  "local",
+		Agent:    "visualstudio-copilot",
+		FilePath: &virtual,
+	}))
+
+	detail, err := svc.Sync(context.Background(), service.SyncInput{
+		Path: tracePath,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, sessionID, detail.ID)
+}
+
+// TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous verifies that a
+// physical trace file backing several conversations still yields the
+// disambiguation error rather than picking one arbitrarily.
+func TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
+	svc := service.NewDirectBackend(d, engine)
+
+	tracePath := "/logs/20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl"
+	for _, convID := range []string{
+		"4a8f63f6-7626-4416-a874-fc7bd2c3f005",
+		"c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28",
+	} {
+		virtual := tracePath + "#" + convID
+		require.NoError(t, d.UpsertSession(db.Session{
+			ID:       "visualstudio-copilot:" + convID,
+			Project:  "visualstudio",
+			Machine:  "local",
+			Agent:    "visualstudio-copilot",
+			FilePath: &virtual,
+		}))
+	}
+
+	_, err := svc.Sync(context.Background(), service.SyncInput{
+		Path: tracePath,
+	})
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "2 sessions found")
+	assert.Contains(t, msg, "session sync <id>")
+}
+
 // TestDirectBackend_Watch_UnknownID_Errors verifies that Watch
 // on a missing session returns a clear "session not found" error
 // instead of producing an indefinite heartbeat channel.
@@ -377,4 +444,86 @@ func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
 		"explicit From=0 in desc should start at ordinal 0 and "+
 			"return only that message")
 	assert.Equal(t, 0, list.Messages[0].Ordinal)
+}
+
+// vsCopilotChatTraceLine builds one Visual Studio Copilot trace JSONL line
+// carrying a single user-prompt chat span for the given conversation.
+func vsCopilotChatTraceLine(conversationID, spanID, prompt string) string {
+	encoded, _ := json.Marshal(
+		`[{"role":"user","parts":[{"type":"text","content":"` + prompt +
+			`"}]}]`,
+	)
+	return `{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"trace",` +
+		`"spanId":"` + spanID + `","name":"chat gpt-5.5",` +
+		`"startTimeUnixNano":"1781293600000000000",` +
+		`"endTimeUnixNano":"1781293610000000000","attributes":[` +
+		`{"key":"gen_ai.conversation.id","value":{"stringValue":"` +
+		conversationID + `"}},` +
+		`{"key":"gen_ai.operation.name","value":{"stringValue":"chat"}},` +
+		`{"key":"gen_ai.input.messages","value":{"stringValue":` +
+		string(encoded) + `}}]}]}]}]}`
+}
+
+// TestDirectBackendSyncVisualStudioCopilotByIDFollowsConversationToSibling
+// verifies that syncing a Visual Studio Copilot session by ID preserves the
+// conversation scope: when the stored representative trace is deleted and the
+// conversation reappears (with a new turn) in a sibling trace, the sync must
+// follow the conversation to the sibling rather than stripping the virtual path
+// to the now-deleted representative and doing nothing.
+func TestDirectBackendSyncVisualStudioCopilotByIDFollowsConversationToSibling(
+	t *testing.T,
+) {
+	tracesDir := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	primary := filepath.Join(
+		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(primary, []byte(
+		vsCopilotChatTraceLine(conversationID, "a1", "First.")+"\n"), 0o644))
+
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {tracesDir},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	svc := service.NewDirectBackend(d, engine)
+
+	// The representative trace is deleted and the conversation reappears in a
+	// sibling with a second turn (log rotation). The sibling also holds an
+	// unrelated conversation that must not be created by a scoped single-session
+	// sync.
+	otherID := "c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28"
+	require.NoError(t, os.Remove(primary))
+	sibling := filepath.Join(
+		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
+	)
+	require.NoError(t, os.WriteFile(sibling, []byte(strings.Join([]string{
+		vsCopilotChatTraceLine(conversationID, "a1", "First."),
+		vsCopilotChatTraceLine(conversationID, "b1", "Second."),
+		vsCopilotChatTraceLine(otherID, "o1", "Unrelated conversation."),
+	}, "\n")+"\n"), 0o644))
+
+	_, err := svc.Sync(
+		context.Background(), service.SyncInput{ID: sessionID},
+	)
+	require.NoError(t, err)
+
+	sess, err := d.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, 2, sess.MessageCount,
+		"sync by ID must follow the conversation to the sibling trace, not "+
+			"strip the virtual path to the deleted representative")
+
+	other, err := d.GetSession(
+		context.Background(), "visualstudio-copilot:"+otherID,
+	)
+	require.NoError(t, err)
+	assert.Nil(t, other,
+		"a scoped single-session sync must not insert unrelated conversations "+
+			"from the same trace file")
 }

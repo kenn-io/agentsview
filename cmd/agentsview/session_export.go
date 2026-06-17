@@ -4,6 +4,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func newSessionExportCommand() *cobra.Command {
@@ -55,12 +57,28 @@ func newSessionExportCommand() *cobra.Command {
 					"session not in local archive: %s", args[0],
 				)
 			}
-			path := d.GetSessionFilePath(id)
-			if path == "" {
+			storedPath := d.GetSessionFilePath(id)
+			if storedPath == "" {
 				return fmt.Errorf(
 					"source file not found for session %s", id,
 				)
 			}
+			// A Visual Studio Copilot trace file holds spans for several
+			// conversations, so streaming the whole file would disclose
+			// unrelated conversations. Filter to the requested conversation.
+			if tracePath, conversationID, ok :=
+				parser.ParseVisualStudioCopilotVirtualPath(storedPath); ok {
+				err := parser.WriteVisualStudioCopilotConversationJSONL(
+					cmd.OutOrStdout(), tracePath, conversationID,
+				)
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"source file not found: %s", tracePath,
+					)
+				}
+				return err
+			}
+			path := parser.ResolveSourceFilePath(storedPath)
 			f, err := os.Open(path)
 			if err != nil {
 				if os.IsNotExist(err) {

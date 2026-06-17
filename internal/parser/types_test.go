@@ -225,6 +225,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"visualstudio-copilot prefix",
+			"visualstudio-copilot:sess-id",
+			AgentVSCopilot,
+			true,
+		},
+		{
 			"pi prefix",
 			"pi:pi-session-uuid",
 			AgentPi,
@@ -307,6 +313,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCursor,
 		AgentAmp,
 		AgentVSCodeCopilot,
+		AgentVSCopilot,
 		AgentPi,
 		AgentQwen,
 		AgentCommandCode,

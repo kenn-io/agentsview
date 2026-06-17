@@ -29,6 +29,11 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 47: the Visual Studio Copilot trace parser now
+// persists per-chat model and token usage from gen_ai.usage
+// attributes. Existing Visual Studio Copilot rows need re-parsing
+// so Usage reports include those sessions.
+//
 // Bumped to 45: the Codex parser now imports renamed session
 // titles from session_index.jsonl. Existing Codex rows need
 // re-parsing so their titles reflect later renames.
@@ -219,7 +224,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 46
+const dataVersion = 47
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
