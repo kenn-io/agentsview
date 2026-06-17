@@ -695,6 +695,30 @@ func TestParseVisualStudioCopilotTraceSession_PropagatesSiblingReadError(t *test
 			"partial transcript")
 }
 
+func TestParseVisualStudioCopilotTraceSession_MalformedTraceLineErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(
+		dir,
+		"20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	data := vsCopilotTraceLineJSON(conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Update the XAML."}]}]`,
+		}) + "\n" + `{"resourceSpans":` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+
+	_, _, err := ParseVisualStudioCopilotSession(
+		path, "visualstudio", "local",
+	)
+	require.Error(t, err,
+		"a malformed non-empty trace line must fail the parse instead of "+
+			"silently indexing a partial transcript")
+	assert.Contains(t, err.Error(), "decode")
+}
+
 func TestParseVisualStudioCopilotTraceSession_DeduplicatesChatOutputAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(

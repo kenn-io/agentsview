@@ -2,6 +2,8 @@ package service_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -339,6 +342,48 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous(t *testing.T) {
 	assert.Contains(t, msg, "session sync <id>")
 }
 
+func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
+	t.Parallel()
+	tracesDir := t.TempDir()
+	tracePath := filepath.Join(
+		tracesDir, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
+	)
+	requestedID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	untouchedID := "c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28"
+	writeDirectVSCopilotTrace(t, tracePath, requestedID, untouchedID,
+		"Before requested", "Before untouched", time.Now())
+
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {tracesDir},
+		},
+		Machine: "local",
+	})
+	svc := service.NewDirectBackend(d, engine)
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+
+	writeDirectVSCopilotTrace(t, tracePath, requestedID, untouchedID,
+		"After requested", "After untouched", time.Now().Add(time.Second))
+
+	detail, err := svc.Sync(context.Background(), service.SyncInput{
+		ID: "visualstudio-copilot:" + requestedID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	require.NotNil(t, detail.FirstMessage)
+	assert.Equal(t, "After requested", *detail.FirstMessage)
+
+	untouched, err := svc.Get(
+		context.Background(), "visualstudio-copilot:"+untouchedID,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, untouched)
+	require.NotNil(t, untouched.FirstMessage)
+	assert.Equal(t, "Before untouched", *untouched.FirstMessage,
+		"syncing by id must not refresh sibling conversations in the same trace")
+}
+
 // TestDirectBackend_Watch_UnknownID_Errors verifies that Watch
 // on a missing session returns a clear "session not found" error
 // instead of producing an indefinite heartbeat channel.
@@ -350,6 +395,49 @@ func TestDirectBackend_Watch_UnknownID_Errors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session not found")
 	assert.Contains(t, err.Error(), "does-not-exist")
+}
+
+func writeDirectVSCopilotTrace(
+	t *testing.T,
+	tracePath, requestedID, untouchedID, requestedText, untouchedText string,
+	modTime time.Time,
+) {
+	t.Helper()
+	data := strings.Join([]string{
+		directVSCopilotTraceLine(requestedID, "requested",
+			"1781293600000000000", "1781293610000000000", requestedText),
+		directVSCopilotTraceLine(untouchedID, "untouched",
+			"1781294552800436000", "1781294586729109400", untouchedText),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(tracePath, []byte(data), 0o644))
+	require.NoError(t, os.Chtimes(tracePath, modTime, modTime))
+}
+
+func directVSCopilotTraceLine(
+	conversationID, spanID, start, end, prompt string,
+) string {
+	inputMessages, _ := json.Marshal(
+		`[{"role":"user","parts":[{"type":"text","content":"` +
+			prompt + `"}]}]`,
+	)
+	traceID := directVSCopilotTraceHexID("trace:"+conversationID, 32)
+	otelSpanID := directVSCopilotTraceHexID("span:"+spanID, 16)
+	return `{"resourceSpans":[{"scopeSpans":[{"spans":[{"traceId":"` +
+		traceID + `","spanId":"` + otelSpanID +
+		`","name":"chat gpt-5.5","startTimeUnixNano":"` + start +
+		`","endTimeUnixNano":"` + end +
+		`","attributes":[` +
+		`{"key":"gen_ai.conversation.id","value":{"stringValue":"` +
+		conversationID + `"}},` +
+		`{"key":"gen_ai.operation.name","value":{"stringValue":"chat"}},` +
+		`{"key":"gen_ai.input.messages","value":{"stringValue":` +
+		string(inputMessages) + `}}` +
+		`]}]}]}]}`
+}
+
+func directVSCopilotTraceHexID(seed string, hexChars int) string {
+	sum := sha256.Sum256([]byte(seed))
+	return hex.EncodeToString(sum[:])[:hexChars]
 }
 
 // TestDirectBackend_Messages_InvalidDirection verifies that the
