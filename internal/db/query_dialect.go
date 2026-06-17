@@ -278,11 +278,33 @@ func buildSessionFilterWithBuilder(
 		"root_session.relationship_type NOT IN ('subagent', 'fork')")
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
-	cte := "WITH RECURSIVE tree(id) AS (" +
-		"SELECT root_session.id FROM sessions root_session" +
+	// Build the CTE base case. When IncludeOrphans is true, also seed with
+	// orphan child rows (those whose parent doesn't exist in the DB).
+	cteBase := "SELECT root_session.id FROM sessions root_session" +
 		" WHERE root_session.message_count > 0" +
 		" AND root_session.deleted_at IS NULL AND " +
-		rootMatch +
+		rootMatch
+	if f.IncludeOrphans {
+		orphanFilter, orphanOneShotPred := sessionFilterPredicates(f, b, func(col string) string {
+			return "orphan_child." + col
+		})
+		orphanMatchParts := append([]string{}, orphanFilter...)
+		if orphanOneShotPred != "" {
+			orphanMatchParts = append(orphanMatchParts, orphanOneShotPred)
+		}
+		orphanMatchParts = append(orphanMatchParts,
+			"orphan_child.relationship_type IN ('subagent', 'fork', 'continuation')",
+			"NOT EXISTS (SELECT 1 FROM sessions p WHERE p.id = orphan_child.parent_session_id)")
+		orphanMatch := strings.Join(orphanMatchParts, " AND ")
+		cteBase += " UNION " +
+			"SELECT orphan_child.id FROM sessions orphan_child" +
+			" WHERE orphan_child.message_count > 0" +
+			" AND orphan_child.deleted_at IS NULL AND " +
+			orphanMatch
+	}
+
+	cte := "WITH RECURSIVE tree(id) AS (" +
+		cteBase +
 		" UNION " +
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON s.parent_session_id = t.id" +
@@ -389,6 +411,25 @@ func sessionFilterPredicates(
 				q("id")+")")
 	}
 	return preds, oneShotPred
+}
+
+// buildSessionBaseFilter returns a WHERE clause and args containing the base
+// predicates (message_count > 0, deleted_at IS NULL) plus user-facing filter
+// predicates (project, machine, agent, date, etc.) WITHOUT the relationship_type
+// exclusion. Callers that handle root-vs-child discrimination externally (e.g.
+// via buildCanonicalRootWhere) should use this instead of buildSessionFilter.
+func buildSessionBaseFilter(f SessionFilter) (string, []any) {
+	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	preds := []string{
+		"message_count > 0",
+		"deleted_at IS NULL",
+	}
+	filterPreds, oneShotPred := sessionFilterPredicates(f, b, func(col string) string { return col })
+	preds = append(preds, filterPreds...)
+	if oneShotPred != "" {
+		preds = append(preds, oneShotPred)
+	}
+	return strings.Join(preds, " AND "), b.Args()
 }
 
 func inPredicate(col string, values []string, b *QueryBuilder) string {

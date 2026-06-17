@@ -560,6 +560,109 @@ func TestIncludeChildrenExcludesOrphanSubagents(t *testing.T) {
 	requireSessions(t, d, f, []string{"root", "root-sub"})
 }
 
+// TestIncludeOrphansPromotesToRoot verifies that orphan subagent and fork
+// sessions surface as synthetic roots when IncludeOrphans is enabled, and
+// remain hidden when IncludeOrphans is false (default).
+func TestIncludeOrphansPromotesToRoot(t *testing.T) {
+	d := testDB(t)
+
+	// Control: legitimate root with a subagent child.
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "root-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("root")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan subagent: parent doesn't exist in DB.
+	insertSession(t, d, "orphan-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("missing-parent")
+		s.RelationshipType = "subagent"
+	})
+
+	// Orphan fork: parent doesn't exist in DB.
+	insertSession(t, d, "orphan-fork", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("also-missing")
+		s.RelationshipType = "fork"
+	})
+
+	tests := []struct {
+		name           string
+		includeOrphans bool
+		want           []string
+	}{
+		{
+			name:           "WithIncludeOrphans",
+			includeOrphans: true,
+			want: []string{
+				"root", "root-sub", "orphan-sub", "orphan-fork",
+			},
+		},
+		{
+			name:           "WithoutIncludeOrphans",
+			includeOrphans: false,
+			want:           []string{"root", "root-sub"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := SessionFilter{
+				IncludeChildren: true,
+				IncludeOrphans:  tt.includeOrphans,
+			}
+			requireSessions(t, d, f, tt.want)
+		})
+	}
+}
+
+// TestIncludeOrphansWithExcludeAutomated verifies that when both
+// IncludeOrphans and ExcludeAutomated are set, automated orphans
+// are still excluded while non-automated orphans are promoted to roots.
+func TestIncludeOrphansWithExcludeAutomated(t *testing.T) {
+	d := testDB(t)
+
+	// Non-automated root.
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+
+	// Non-automated orphan subagent — should be included.
+	insertSession(t, d, "orphan-sub", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("missing-parent")
+		s.RelationshipType = "subagent"
+	})
+
+	// Automated orphan fork — should be excluded.
+	fm := "You are a code reviewer. Review the code."
+	insertSession(t, d, "orphan-auto-fork", "proj", func(s *Session) {
+		s.FirstMessage = &fm
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("also-missing")
+		s.RelationshipType = "fork"
+	})
+
+	f := SessionFilter{
+		IncludeChildren:  true,
+		IncludeOrphans:   true,
+		ExcludeAutomated: true,
+	}
+	// Expected: root + non-automated orphan-sub, automated orphan-auto-fork excluded.
+	requireSessions(t, d, f, []string{"root", "orphan-sub"})
+}
+
 // TestIncludeChildrenKeepsNestedDescendants guards against a
 // regression where a fork spawned inside a subagent thread
 // (root → subagent → fork) was dropped. The direct-match side

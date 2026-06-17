@@ -296,6 +296,7 @@ type SessionFilter struct {
 	ExcludeOneShot   bool     // exclude sessions with user_message_count <= 1
 	ExcludeAutomated bool     // exclude sessions where is_automated = 1
 	IncludeChildren  bool     // include subagent sessions (for sidebar grouping)
+	IncludeOrphans   bool     // promote orphan child rows to sidebar roots
 	Outcome          []string // filter by outcome values
 	HealthGrade      []string // filter by health grade values
 	MinToolFailures  *int     // minimum tool_failure_signal_count
@@ -351,6 +352,31 @@ func sidebarStarredRootJoin(enabled bool) string {
 		return ""
 	}
 	return "JOIN eligible_roots e ON e.id = t.root_id"
+}
+
+// buildCanonicalRootWhere returns a WHERE fragment that identifies canonical root
+// sessions (non-child sessions that appear in the sidebar). When includeOrphans is
+// false, it restricts to sessions whose parent either doesn't exist or is deleted.
+// When includeOrphans is true, it also promotes orphan child rows (missing parent)
+// to synthetic roots.
+func buildCanonicalRootWhere(includeOrphans bool) string {
+	base := `
+		NOT EXISTS (
+			SELECT 1
+			FROM sessions parent
+			WHERE parent.id = sessions.parent_session_id
+			  AND parent.deleted_at IS NULL
+			  AND sessions.relationship_type IN (` + sidebarChildRelationshipsSQL + `)
+		)`
+	if !includeOrphans {
+		return base
+	}
+	return `(` + base + `
+		OR NOT EXISTS (
+			SELECT 1
+			FROM sessions parent
+			WHERE parent.id = sessions.parent_session_id
+		))`
 }
 
 // buildTerminationPredSQLite returns a WHERE fragment and args for
@@ -497,6 +523,7 @@ func (db *DB) GetSidebarSessionIndex(
 	ctx context.Context, f SessionFilter,
 ) (SidebarSessionIndex, error) {
 	f.IncludeChildren = true
+	f.IncludeOrphans = true
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return db.getSidebarSessionIndexPage(ctx, f)
@@ -580,18 +607,10 @@ func (db *DB) getSidebarSessionIndexPage(
 	}
 
 	rootFilter := f
-	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	rootWhere, rootArgs := buildSessionFilter(rootFilter)
-	canonicalRootWhere := `
-		NOT EXISTS (
-			SELECT 1
-			FROM sessions parent
-			WHERE parent.id = sessions.parent_session_id
-			  AND parent.deleted_at IS NULL
-			  AND sessions.relationship_type IN (` + sidebarChildRelationshipsSQL + `)
-		)`
+	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
+	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
 
 	var total int
 	var cur SessionCursor
