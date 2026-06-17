@@ -122,6 +122,69 @@ func TestSourceMtimeVibeIncludesMetaMtime(t *testing.T) {
 	assert.Equal(t, metaTime.UnixNano(), engine.SourceMtime("vibe:"+sessionID))
 }
 
+// TestSyncVibeCorruptMetaRetriesAfterMetaFixed verifies that a parse error
+// caused by a corrupt meta.json is not permanently skip-cached against the
+// transcript mtime. The skip-cache key uses the Vibe effective mtime (max of
+// messages.jsonl and meta.json), so fixing meta.json (which advances only its
+// mtime) invalidates the cached skip and the next sync reparses the session.
+func TestSyncVibeCorruptMetaRetriesAfterMetaFixed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	vibeDir := t.TempDir()
+	testDB := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(testDB, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVibe: {vibeDir},
+		},
+		Machine: "local",
+	})
+
+	sessionDir := filepath.Join(vibeDir, "session_20260616_083518_abc123")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
+	require.NoError(t, os.WriteFile(
+		messagesPath,
+		[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
+		0o644,
+	))
+	// A truncated/partial write: not even minimally valid JSON, so the parse
+	// fails and the file is skip-cached.
+	metaPath := filepath.Join(sessionDir, "meta.json")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"session_id":"abc`), 0o644))
+
+	baseTime := time.Unix(1_781_475_210, 0)
+	require.NoError(t, os.Chtimes(messagesPath, baseTime, baseTime))
+	require.NoError(t, os.Chtimes(metaPath, baseTime, baseTime))
+
+	sessionID := "abc123def-0000-0000-0000-000000000000"
+	canonicalID := "vibe:" + sessionID
+
+	// First sync fails to parse and caches a skip at the effective mtime.
+	engine.SyncPaths([]string{messagesPath})
+	got, err := testDB.GetSession(context.Background(), canonicalID)
+	require.NoError(t, err)
+	assert.Nil(t, got, "corrupt meta.json must not produce a session")
+
+	// Fix meta.json and advance only its mtime; the transcript mtime is
+	// unchanged, so a skip cache keyed on the transcript alone would wrongly
+	// skip this file forever.
+	require.NoError(t, os.WriteFile(
+		metaPath,
+		[]byte(`{"session_id":"`+sessionID+`","title":"Recovered"}`+"\n"),
+		0o644,
+	))
+	metaTime := baseTime.Add(time.Hour)
+	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
+
+	engine.SyncPaths([]string{messagesPath})
+	got, err = testDB.GetSession(context.Background(), canonicalID)
+	require.NoError(t, err)
+	require.NotNil(t, got, "fixed meta.json must reparse instead of staying skipped")
+	assert.Equal(t, canonicalID, got.ID)
+}
+
 // TestSyncVibeMetaPromotionRemovesFallbackID verifies that when a session is
 // first synced without meta.json (stored under the directory-name fallback ID)
 // and meta.json later appears, the session is re-stored under the meta

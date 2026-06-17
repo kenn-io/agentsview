@@ -3636,6 +3636,14 @@ func (e *Engine) processFile(
 	if file.Agent == parser.AgentCowork {
 		mtime = parser.CoworkSessionMtime(file.Path, mtime)
 	}
+	if file.Agent == parser.AgentVibe {
+		// Vibe metadata (title, model, usage, canonical ID) lives in the
+		// sibling meta.json, so the skip-cache key must move when either file
+		// changes. Match vibeEffectiveInfo (max of messages.jsonl and
+		// meta.json) so a fixed meta.json retries a cached parse error instead
+		// of staying skipped on the unchanged transcript mtime.
+		mtime = vibeEffectiveInfo(file.Path, info).ModTime().UnixNano()
+	}
 	cacheSkip := e.shouldCacheSkip(file)
 
 	// Skip files cached from a previous sync (parse errors
