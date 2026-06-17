@@ -315,9 +315,10 @@ func ListShelleyConversationMetas(
 	for rows.Next() {
 		var rowConv shelleyConversationRow
 		var msg shelleyMessageRow
+		var userInitiated int64
 		if err := rows.Scan(
 			&rowConv.conversationID, &rowConv.slug,
-			&rowConv.userInitiated, &rowConv.createdAt,
+			&userInitiated, &rowConv.createdAt,
 			&rowConv.updatedAt, &rowConv.cwd,
 			&rowConv.parentConversationID, &rowConv.model,
 			&msg.sequenceID, &msg.msgType, &msg.llmData,
@@ -325,6 +326,7 @@ func ListShelleyConversationMetas(
 		); err != nil {
 			return nil, fmt.Errorf("scanning shelley conversation meta: %w", err)
 		}
+		rowConv.userInitiated = userInitiated != 0
 		if rowConv.conversationID != curID {
 			flush()
 			curID, conv, h = rowConv.conversationID, rowConv, fnv.New64a()
@@ -469,6 +471,7 @@ func loadShelleyConversation(
 	conn *sql.DB, conversationID string,
 ) (shelleyConversationRow, error) {
 	row := shelleyConversationRow{conversationID: conversationID}
+	var userInitiated int64
 	err := conn.QueryRow(
 		`SELECT COALESCE(slug, ''), COALESCE(user_initiated, 1),
 		        COALESCE(created_at, ''), COALESCE(updated_at, ''),
@@ -478,12 +481,13 @@ func loadShelleyConversation(
 		  WHERE conversation_id = ?`,
 		conversationID,
 	).Scan(
-		&row.slug, &row.userInitiated, &row.createdAt, &row.updatedAt,
+		&row.slug, &userInitiated, &row.createdAt, &row.updatedAt,
 		&row.cwd, &row.parentConversationID, &row.model,
 	)
 	if err != nil {
 		return shelleyConversationRow{}, err
 	}
+	row.userInitiated = userInitiated != 0
 	return row, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -49,6 +50,20 @@ func newShelleyTestDB(t *testing.T) (string, string, *sql.DB) {
 	require.NoError(t, err, "open shelley test db")
 	t.Cleanup(func() { db.Close() })
 	_, err = db.Exec(shelleySchema)
+	require.NoError(t, err, "create shelley schema")
+	return dir, path, db
+}
+
+func newShelleyTestDBWithSchema(
+	t *testing.T, schema string,
+) (string, string, *sql.DB) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, shelleyDBName)
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open shelley test db")
+	t.Cleanup(func() { db.Close() })
+	_, err = db.Exec(schema)
 	require.NoError(t, err, "create shelley schema")
 	return dir, path, db
 }
@@ -526,6 +541,44 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, srcMtime1, srcMtime2,
 		"watcher SourceMtime tracks the same-second append")
+}
+
+func TestShelleyNumericUserInitiatedScans(t *testing.T) {
+	schema := strings.Replace(
+		shelleySchema,
+		"user_initiated BOOLEAN NOT NULL DEFAULT TRUE",
+		"user_initiated INTEGER NOT NULL DEFAULT 1",
+		1,
+	)
+	_, dbPath, db := newShelleyTestDBWithSchema(t, schema)
+	seedShelleyConversation(
+		t, db, "cNUM1", "numeric user_initiated",
+		"/home/user/dev/app", "claude-sonnet-4-6", "cPARENT",
+		false, "2026-06-15T10:00:00Z",
+		"2026-06-15T10:00:10Z",
+	)
+	seedShelleyMessage(t, db, "cNUM1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":2,"Text":"hello"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat db")
+	result, err := ParseShelleyConversationDirect(
+		dbPath, "cNUM1", "m", info,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, RelSubagent, result.Session.RelationshipType,
+		"numeric false user_initiated should map to subagent")
+
+	conn, err := OpenShelleyDB(dbPath)
+	require.NoError(t, err, "open shelley db")
+	defer conn.Close()
+	metas, err := ListShelleyConversationMetas(conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	assert.Equal(t, result.Session.File.Hash, metas[0].Fingerprint,
+		"parse and meta paths should convert user_initiated the same way")
 }
 
 func TestApplyShelleyUsageTolerant(t *testing.T) {
