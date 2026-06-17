@@ -399,6 +399,58 @@ func TestParseShelleyRobustContent(t *testing.T) {
 	assert.Equal(t, 40, result.Session.TotalOutputTokens, "session output total")
 }
 
+// TestParseShelleyWebSearchToolResult verifies that a server-side web
+// search turn is preserved: the web_search call (Type 7) becomes a tool
+// call, and the web_search_tool_result (Type 8) whose nested
+// web_search_result blocks (Type 9) carry Title/URL instead of Text is
+// stored with readable content rather than dropped empty.
+func TestParseShelleyWebSearchToolResult(t *testing.T) {
+	_, dbPath, db := newShelleyTestDB(t)
+	seedShelleyConversation(
+		t, db, "cWEB1", "search the web", "/home/user/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:30Z",
+	)
+	seedShelleyMessage(t, db, "cWEB1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":2,"Text":"what is iota"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+	seedShelleyMessage(t, db, "cWEB1", 2, 1, "agent",
+		`{"Role":1,"Content":[`+
+			`{"ID":"srvtoolu_1","Type":7,"ToolName":"web_search",`+
+			`"ToolInput":{"query":"golang iota"}},`+
+			`{"Type":8,"ToolUseID":"srvtoolu_1","ToolResult":[`+
+			`{"Type":9,"Title":"Go iota explained","URL":"https://go.dev/iota"},`+
+			`{"Type":9,"Title":"Effective Go",`+
+			`"URL":"https://go.dev/doc/effective_go"}]}]}`,
+		"", "", "2026-06-15T10:00:05Z")
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat db")
+	result, err := ParseShelleyConversationDirect(dbPath, "cWEB1", "m", info)
+	require.NoError(t, err, "parse web search conversation")
+	require.NotNil(t, result, "expected result")
+
+	require.Len(t, result.Messages, 2, "messages len")
+	agent := result.Messages[1]
+
+	// The server-side web_search call is captured as a tool call.
+	require.Len(t, agent.ToolCalls, 1, "web_search tool call captured")
+	assert.Equal(t, "web_search", agent.ToolCalls[0].ToolName, "tool name")
+
+	// The web_search_tool_result is paired to the server tool call and its
+	// nested Title/URL result blocks are preserved, not stored empty.
+	require.Len(t, agent.ToolResults, 1, "web_search tool result captured")
+	assert.Equal(t, "srvtoolu_1",
+		agent.ToolResults[0].ToolUseID, "result tool use id")
+	decoded := DecodeContent(agent.ToolResults[0].ContentRaw)
+	assert.Equal(t,
+		"Go iota explained https://go.dev/iota\n"+
+			"Effective Go https://go.dev/doc/effective_go",
+		decoded, "web search result title/url preserved")
+	assert.Positive(t, agent.ToolResults[0].ContentLength,
+		"content length nonzero")
+}
+
 func TestApplyShelleyUsageTolerant(t *testing.T) {
 	var msg ParsedMessage
 	applyShelleyUsage(&msg,

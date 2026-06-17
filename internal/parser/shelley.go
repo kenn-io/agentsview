@@ -500,7 +500,9 @@ func shelleyToolInput(raw json.RawMessage) string {
 
 // shelleyToolResultText flattens the nested tool_result content blocks
 // into a single string that DecodeContent can later decode via its
-// string branch.
+// string branch. Blocks are joined with newlines so multiple results
+// (notably web_search_result lists) stay readable instead of running
+// together.
 func shelleyToolResultText(blocks []shelleyContent) string {
 	var parts []string
 	for _, b := range blocks {
@@ -508,10 +510,20 @@ func shelleyToolResultText(blocks []shelleyContent) string {
 		case b.Text != "":
 			parts = append(parts, b.Text)
 		case len(b.ToolResult) > 0:
-			parts = append(parts, shelleyToolResultText(b.ToolResult))
+			if nested := shelleyToolResultText(b.ToolResult); nested != "" {
+				parts = append(parts, nested)
+			}
+		case b.Title != "" || b.URL != "":
+			// web_search_result blocks (inside a web_search_tool_result)
+			// carry their payload in Title/URL rather than Text. Without
+			// this branch the whole result would be stored empty and the
+			// carrier message could be dropped.
+			if label := strings.TrimSpace(b.Title + " " + b.URL); label != "" {
+				parts = append(parts, label)
+			}
 		}
 	}
-	return strings.Join(parts, "")
+	return strings.Join(parts, "\n")
 }
 
 // shelleyUserDataText best-effort extracts displayable text from a
