@@ -548,16 +548,30 @@ func TestSyncEngineVisualStudioCopilotPreservesSessionWhenSiblingDeleted(t *test
 	})
 	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
 	assertSessionMessageCount(t, database, sessionID, 2)
+	require.NoError(t, database.SetSessionDataVersion(
+		sessionID, db.CurrentDataVersion()-1,
+	))
 
 	// The sibling that contributed the second turn is rotated away. A reparse now
 	// sees only the first turn; the archived two-turn transcript must be
 	// preserved rather than force-replaced with the partial one.
 	require.NoError(t, os.Remove(sibling))
+	currentSize, currentMtime := parser.VisualStudioCopilotTraceFingerprint(
+		primary,
+	)
 
 	require.NoError(t, engine.SyncSingleSessionContext(
 		context.Background(), sessionID,
 	))
 	assertSessionMessageCount(t, database, sessionID, 2)
+	sess, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.FileSize)
+	assert.Equal(t, currentSize, *sess.FileSize)
+	require.NotNil(t, sess.FileMtime)
+	assert.Equal(t, currentMtime, *sess.FileMtime)
+	assert.Equal(t, db.CurrentDataVersion(), sess.DataVersion)
 }
 
 // TestSyncEngineVisualStudioCopilotPreservesToolResultsWhenTraceShrinks verifies
@@ -687,6 +701,9 @@ func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks
 	), 0o644))
 	later := time.Unix(1781293800, 0)
 	require.NoError(t, os.Chtimes(primary, later, later))
+	currentSize, currentMtime := parser.VisualStudioCopilotTraceFingerprint(
+		primary,
+	)
 
 	require.NoError(t, engine.SyncSingleSessionContext(
 		context.Background(), sessionID,
@@ -712,6 +729,13 @@ func TestSyncEngineVisualStudioCopilotMergesRicherMatchedMessageWhenTraceShrinks
 		assert.Equal(t, time.Unix(0, 1781293630000000000).UTC().
 			Format(time.RFC3339Nano), *sess.EndedAt)
 	})
+	sess, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.FileSize)
+	assert.Equal(t, currentSize, *sess.FileSize)
+	require.NotNil(t, sess.FileMtime)
+	assert.Equal(t, currentMtime, *sess.FileMtime)
 }
 
 func TestSyncEngineVisualStudioCopilotMergesUpdateAndPreservesIncompleteSameCount(t *testing.T) {

@@ -6116,10 +6116,6 @@ func applyVisualStudioCopilotArchiveSessionFields(
 	}
 	s.StartedAt = earlierSessionTime(archived.StartedAt, s.StartedAt)
 	s.EndedAt = laterSessionTime(archived.EndedAt, s.EndedAt)
-	if storedSize, currentSize := derefInt64(archived.FileSize),
-		derefInt64(s.FileSize); storedSize > currentSize {
-		s.FileSize = int64Ptr(storedSize)
-	}
 }
 
 func visualStudioCopilotMergedFirstMessageFromParsed(
@@ -6251,7 +6247,7 @@ func (e *Engine) reconcileVisualStudioCopilotArchive(
 			agent, sessionID, len(storedMsgs), len(currentMsgs),
 			storedSize, currentSize,
 		)
-		return nil, true, nil
+		return storedMsgs, false, stored
 	}
 	if decision.merged != nil {
 		log.Printf(
@@ -6315,7 +6311,8 @@ func visualStudioCopilotArchiveDecision(
 			updates[storedIndex] = parsedMsg
 		}
 	}
-	additions = visualStudioCopilotResolveArchiveAdditions(
+	fallbackMatched := false
+	additions, fallbackMatched = visualStudioCopilotResolveArchiveAdditions(
 		stored, matchedStored, updates, additions, &hasIncomplete,
 	)
 	hasArchiveOnly := false
@@ -6325,8 +6322,9 @@ func visualStudioCopilotArchiveDecision(
 			break
 		}
 	}
-	if hasIncomplete || hasArchiveOnly {
-		if len(updates) > 0 || len(additions) > 0 {
+	if hasIncomplete || hasArchiveOnly || fallbackMatched {
+		if len(updates) > 0 || len(additions) > 0 ||
+			(fallbackMatched && !hasIncomplete) {
 			return visualStudioCopilotArchiveReconcile{
 				merged: visualStudioCopilotMergeArchiveMessages(
 					stored, updates, additions,
@@ -6344,7 +6342,8 @@ func visualStudioCopilotResolveArchiveAdditions(
 	updates map[int]db.Message,
 	additions []db.Message,
 	hasIncomplete *bool,
-) []db.Message {
+) ([]db.Message, bool) {
+	matched := false
 	unresolved := additions[:0]
 	for _, parsedMsg := range additions {
 		storedIndex, ok := visualStudioCopilotArchiveFallbackMatch(
@@ -6354,6 +6353,7 @@ func visualStudioCopilotResolveArchiveAdditions(
 			unresolved = append(unresolved, parsedMsg)
 			continue
 		}
+		matched = true
 		matchedStored[storedIndex] = true
 		storedMsg := stored[storedIndex]
 		incomplete := visualStudioCopilotMessageLooksIncomplete(
@@ -6370,7 +6370,7 @@ func visualStudioCopilotResolveArchiveAdditions(
 			updates[storedIndex] = update
 		}
 	}
-	return unresolved
+	return unresolved, matched
 }
 
 func visualStudioCopilotArchiveFallbackMatch(
@@ -6448,7 +6448,9 @@ func visualStudioCopilotMessagesShareContentIdentity(
 	if len(parsed.ToolCalls) > 0 || len(stored.ToolCalls) > 0 {
 		return false
 	}
-	if parsed.Role != string(parser.RoleAssistant) {
+	switch parsed.Role {
+	case string(parser.RoleAssistant), string(parser.RoleUser):
+	default:
 		return false
 	}
 	return parsed.Content != "" && parsed.Content == stored.Content

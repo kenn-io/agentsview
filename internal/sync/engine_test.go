@@ -1547,6 +1547,71 @@ func TestVisualStudioCopilotArchiveDecisionMatchesTimestampShiftedToolCall(t *te
 	assert.Equal(t, "Archived prompt.", decision.merged[1].Content)
 }
 
+func TestVisualStudioCopilotArchiveDecisionMergesOnlyTimestampShiftedToolCall(t *testing.T) {
+	stored := []db.Message{{
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "Run command: dotnet build",
+		ContentLength: len("Run command: dotnet build"),
+		Timestamp:     "2026-06-12T19:46:40Z",
+		ToolCalls: []db.ToolCall{{
+			ToolName:  "run_command_in_terminal",
+			ToolUseID: "call_build",
+		}},
+	}}
+	parsed := []db.Message{{
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "Run command: dotnet build",
+		ContentLength: len("Run command: dotnet build"),
+		Timestamp:     "2026-06-12T19:47:40Z",
+		ToolCalls: []db.ToolCall{{
+			ToolName:  "run_command_in_terminal",
+			ToolUseID: "call_build",
+		}},
+	}}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 1)
+	assert.Equal(t, "2026-06-12T19:46:40Z", decision.merged[0].Timestamp)
+}
+
+func TestVisualStudioCopilotArchiveDecisionMatchesTimestampShiftedUserPrompt(t *testing.T) {
+	stored := []db.Message{
+		{
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "Archived prompt.",
+			ContentLength: len("Archived prompt."),
+			Timestamp:     "2026-06-12T19:46:40Z",
+		},
+		{
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "Archived answer.",
+			ContentLength: len("Archived answer."),
+			Timestamp:     "2026-06-12T19:47:00Z",
+		},
+	}
+	parsed := []db.Message{{
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "Archived prompt.",
+		ContentLength: len("Archived prompt."),
+		Timestamp:     "2026-06-12T19:47:40Z",
+	}}
+
+	decision := visualStudioCopilotArchiveDecision(parsed, stored)
+
+	require.False(t, decision.preserve)
+	require.Len(t, decision.merged, 2)
+	assert.Equal(t, "Archived prompt.", decision.merged[0].Content)
+	assert.Equal(t, "2026-06-12T19:46:40Z", decision.merged[0].Timestamp)
+	assert.Equal(t, "Archived answer.", decision.merged[1].Content)
+}
+
 // fakeEmitter records scopes passed to Emit. Thread-safe so it
 // can be called from engine goroutines under test.
 type fakeEmitter struct {
