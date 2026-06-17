@@ -484,6 +484,9 @@ func (e *Engine) classifyOnePath(
 	if df, ok := e.classifyZedSQLitePath(path); ok {
 		return df, true
 	}
+	if df, ok := e.classifyShelleySQLitePath(path); ok {
+		return df, true
+	}
 	if !pathExists {
 		return parser.DiscoveredFile{}, false
 	}
@@ -1579,6 +1582,53 @@ func (e *Engine) classifyZedSQLitePath(
 	return parser.DiscoveredFile{}, false
 }
 
+const shelleyDBFile = "shelley.db"
+
+// classifyShelleySQLitePath classifies a Shelley source path. Shelley
+// stores every conversation in a single shelley.db under its config
+// directory, so paths are either a virtual conversation path
+// (shelley.db#<id>) or the real DB file and its WAL/SHM siblings.
+func (e *Engine) classifyShelleySQLitePath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	// Virtual path: shelley.db#<conversationID>
+	if dbPath, _, ok := parser.ParseShelleyVirtualPath(path); ok {
+		for _, dir := range e.agentDirs[parser.AgentShelley] {
+			if _, under := isUnder(dir, dbPath); under {
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: parser.AgentShelley,
+				}, true
+			}
+		}
+	}
+	// Real path: shelley.db or its WAL/SHM siblings. Handled here
+	// (before the !pathExists guard) so that delete and rename events
+	// on shelley.db-wal / shelley.db-shm are not dropped when the
+	// sibling no longer exists on disk.
+	for _, dir := range e.agentDirs[parser.AgentShelley] {
+		if dir == "" {
+			continue
+		}
+		rel, ok := isUnder(dir, path)
+		if !ok {
+			continue
+		}
+		base := filepath.Base(rel)
+		if rel != shelleyDBFile && !strings.HasPrefix(base, shelleyDBFile+"-") {
+			continue
+		}
+		dbPath := filepath.Join(dir, shelleyDBFile)
+		if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
+			return parser.DiscoveredFile{
+				Path:  dbPath,
+				Agent: parser.AgentShelley,
+			}, true
+		}
+	}
+	return parser.DiscoveredFile{}, false
+}
+
 // vscodeJSONLSiblingExists returns true when path is a .json
 // file and a .jsonl sibling exists for the same UUID. This
 // mirrors the dedup logic in DiscoverVSCodeCopilotSessions.
@@ -2578,6 +2628,13 @@ func discoveredFileMtime(
 		}
 		return zedDBCompositeMtime(dbPath)
 	}
+	if file.Agent == parser.AgentShelley {
+		dbPath := file.Path
+		if p, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
+			dbPath = p
+		}
+		return shelleyDBCompositeMtime(dbPath)
+	}
 	if file.Agent == parser.AgentAntigravityCLI {
 		info, err := parser.AntigravityCLIFileInfo(file.Path)
 		if err != nil {
@@ -2626,6 +2683,27 @@ func discoveredFileMtime(
 // do not touch threads.db itself, so the composite is needed to
 // detect all changes.
 func zedDBCompositeMtime(dbPath string) (int64, error) {
+	var maxMtime int64
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		info, err := os.Stat(dbPath + suffix)
+		if err != nil {
+			continue
+		}
+		if t := info.ModTime().UnixNano(); t > maxMtime {
+			maxMtime = t
+		}
+	}
+	if maxMtime == 0 {
+		return 0, &os.PathError{Op: "stat", Path: dbPath, Err: os.ErrNotExist}
+	}
+	return maxMtime, nil
+}
+
+// shelleyDBCompositeMtime returns the maximum mtime across the Shelley
+// shelley.db main file and its WAL/SHM siblings. The DB is WAL-mode and
+// churns constantly, so WAL-only updates that do not touch shelley.db
+// itself still need to be detected.
+func shelleyDBCompositeMtime(dbPath string) (int64, error) {
 	var maxMtime int64
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		info, err := os.Stat(dbPath + suffix)
@@ -3319,6 +3397,8 @@ func (e *Engine) processFile(
 			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
+		} else if dbPath, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
+			statPath = dbPath
 		}
 		info, err = os.Stat(statPath)
 	}
@@ -3417,6 +3497,8 @@ func (e *Engine) processFile(
 		res = e.processPositron(file, info)
 	case parser.AgentZed:
 		res = e.processZed(file, info)
+	case parser.AgentShelley:
+		res = e.processShelley(file, info)
 	case parser.AgentAntigravity:
 		res = e.processAntigravity(file, info)
 	case parser.AgentAntigravityCLI:
@@ -3453,6 +3535,14 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentShelley {
+		if filepath.Base(file.Path) == shelleyDBFile {
+			return false
+		}
+		if _, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
 			return false
 		}
 	}
@@ -4725,6 +4815,80 @@ func (e *Engine) processZed(
 				})
 			} else {
 				log.Printf("zed thread %s: %v", meta.RawID, err)
+			}
+			continue
+		}
+		if result == nil {
+			continue
+		}
+		if hash != "" {
+			result.Session.File.Hash = hash
+		}
+		results = append(results, *result)
+	}
+	return processResult{
+		results:      results,
+		sessionErrs:  sessionErrs,
+		forceReplace: true,
+	}
+}
+
+func (e *Engine) processShelley(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	if dbPath, sessionID, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
+		result, err := parser.ParseShelleyConversationDirect(
+			dbPath, sessionID, e.machine, info,
+		)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if result == nil {
+			return processResult{}
+		}
+		if hash, err := ComputeFileHash(dbPath); err == nil {
+			result.Session.File.Hash = hash
+		}
+		return processResult{
+			results:      []parser.ParseResult{*result},
+			forceReplace: true,
+		}
+	}
+	conn, err := parser.OpenShelleyDB(file.Path)
+	if err != nil {
+		return processResult{err: err}
+	}
+	defer conn.Close()
+
+	metas, err := parser.ListShelleyConversationMetas(conn, file.Path)
+	if err != nil {
+		return processResult{err: err}
+	}
+
+	hash, _ := ComputeFileHash(file.Path)
+
+	var results []parser.ParseResult
+	var sessionErrs []sessionParseError
+	for _, meta := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
+		// parse-diff: !e.forceParse disables the stored-state skip.
+		if !e.forceParse && ok && storedMtime == meta.FileMtime &&
+			e.db.GetDataVersionByPath(meta.VirtualPath) >=
+				db.CurrentDataVersion() {
+			continue
+		}
+		result, err := parser.ParseShelleyConversationFromDB(
+			conn, file.Path, meta.RawID, e.machine, info,
+		)
+		if err != nil {
+			if e.forceParse {
+				sessionErrs = append(sessionErrs, sessionParseError{
+					sessionID:   meta.RawID,
+					virtualPath: meta.VirtualPath,
+					err:         err,
+				})
+			} else {
+				log.Printf("shelley conversation %s: %v", meta.RawID, err)
 			}
 			continue
 		}

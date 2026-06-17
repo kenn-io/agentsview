@@ -47,6 +47,7 @@ const (
 	AgentZed            AgentType = "zed"
 	AgentQwenPaw        AgentType = "qwenpaw"
 	AgentGptme          AgentType = "gptme"
+	AgentShelley        AgentType = "shelley"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -560,6 +561,20 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverGptmeSessions,
 		FindSourceFunc: FindGptmeSourceFile,
+	},
+	{
+		// Shelley (exe.dev) stores all conversations in a single
+		// SQLite DB at ~/.config/shelley/shelley.db. Like Zed, each
+		// conversation is addressed by a virtual path (dbPath#id).
+		Type:           AgentShelley,
+		DisplayName:    "Shelley",
+		EnvVar:         "SHELLEY_DIR",
+		ConfigKey:      "shelley_dirs",
+		DefaultDirs:    []string{".config/shelley"},
+		IDPrefix:       "shelley:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverShelleySessions,
+		FindSourceFunc: FindShelleySourceFile,
 	},
 }
 

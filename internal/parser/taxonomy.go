@@ -192,6 +192,18 @@ func NormalizeToolCategory(rawName string) string {
 	case "code_interpreter":
 		return "Bash"
 
+	// Shelley (exe.dev) tools (excluding names already handled above:
+	// bash/shell→Bash, patch→Edit, browser/web_search/web_fetch→Tool,
+	// subagent→Task via the default).
+	case "keyword_search":
+		return "Grep"
+	case "read_context_file", "read_image":
+		return "Read"
+	case "change_dir", "output_iframe", "llm_one_shot",
+		"browser_emulate", "browser_network",
+		"browser_accessibility", "browser_profile":
+		return "Tool"
+
 	// Warp tools
 	case "read_files":
 		return "Read"
