@@ -451,6 +451,70 @@ func TestParseShelleyWebSearchToolResult(t *testing.T) {
 		"content length nonzero")
 }
 
+// TestShelleySameSecondChangeSignal verifies that a message appended in
+// the same wall-clock second (so updated_at is unchanged) still advances
+// the per-conversation File.Mtime change signal, so the sync engine's
+// skip cannot drop it. Shelley's updated_at is second-precision, so the
+// max(sequence_id) component is what distinguishes same-second writes.
+// The three signal sources (stored File.Mtime, the meta skip query, and
+// ShelleySourceMtime) must agree, or unchanged conversations would
+// re-parse forever.
+func TestShelleySameSecondChangeSignal(t *testing.T) {
+	_, dbPath, db := newShelleyTestDB(t)
+	seedShelleyConversation(
+		t, db, "cSEC1", "same second", "/home/user/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:00Z",
+	)
+	seedShelleyMessage(t, db, "cSEC1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":2,"Text":"first"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err, "stat db")
+
+	conn, err := OpenShelleyDB(dbPath)
+	require.NoError(t, err, "open shelley db")
+	defer conn.Close()
+
+	first, err := ParseShelleyConversationDirect(dbPath, "cSEC1", "m", info)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	mtime1 := first.Session.File.Mtime
+
+	metas1, err := ListShelleyConversationMetas(conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas1, 1)
+	assert.Equal(t, mtime1, metas1[0].FileMtime,
+		"stored File.Mtime must match the meta skip signal")
+
+	srcMtime1, err := ShelleySourceMtime(dbPath + "#cSEC1")
+	require.NoError(t, err)
+	assert.Equal(t, mtime1, srcMtime1, "SourceMtime must match File.Mtime")
+
+	// Append a second message in the SAME second: updated_at is unchanged,
+	// only sequence_id advances (1 -> 2).
+	seedShelleyMessage(t, db, "cSEC1", 2, 1, "agent",
+		`{"Role":1,"Content":[{"Type":2,"Text":"second"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+
+	second, err := ParseShelleyConversationDirect(dbPath, "cSEC1", "m", info)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	mtime2 := second.Session.File.Mtime
+
+	assert.NotEqual(t, mtime1, mtime2,
+		"a same-second append must change the skip signal")
+	assert.Equal(t, mtime1+1, mtime2,
+		"signal advances by exactly the sequence_id delta")
+
+	metas2, err := ListShelleyConversationMetas(conn, dbPath)
+	require.NoError(t, err)
+	require.Len(t, metas2, 1)
+	assert.Equal(t, mtime2, metas2[0].FileMtime,
+		"meta skip signal tracks the same-second append")
+}
+
 func TestApplyShelleyUsageTolerant(t *testing.T) {
 	var msg ParsedMessage
 	applyShelleyUsage(&msg,
