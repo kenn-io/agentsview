@@ -216,6 +216,57 @@ func TestSyncAllShelleyIngestsConversations(t *testing.T) {
 	assert.Contains(t, resultContent, "file1", "tool result preserved on tool call")
 }
 
+func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentShelley: {dir},
+		},
+		Machine:  "host",
+		IDPrefix: "host~",
+		PathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	})
+
+	stats := engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync should write the session")
+
+	const sessionID = "host~shelley:cMAIN1"
+	storedPath := "host:" + dbPath + "#cMAIN1"
+	assert.Equal(t, storedPath,
+		database.GetSessionFilePath(sessionID), "stored remote path")
+	before, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err, "GetSessionFull before second sync")
+	require.NotNil(t, before, "session before second sync")
+	require.NotNil(t, before.LocalModifiedAt,
+		"local_modified_at before second sync")
+	_, storedMtime, ok := database.GetFileInfoByPath(storedPath)
+	require.True(t, ok, "remote virtual path should be indexed")
+	assert.NotZero(t, storedMtime, "stored mtime")
+
+	time.Sleep(20 * time.Millisecond)
+	stats = engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 0, stats.Synced,
+		"unchanged remote Shelley conversation should be skipped")
+
+	after, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err, "GetSessionFull after second sync")
+	require.NotNil(t, after, "session after second sync")
+	require.NotNil(t, after.LocalModifiedAt,
+		"local_modified_at after second sync")
+	assert.Equal(t, *before.LocalModifiedAt, *after.LocalModifiedAt,
+		"skip lookup must use the rewritten virtual path")
+}
+
 // TestResyncAllShelleyRebuildsFromDB verifies that a full resync
 // re-parses the present Shelley DB without aborting and preserves
 // content. Shelley is a Zed-style single-DB agent, so it re-syncs fresh

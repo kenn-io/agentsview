@@ -4868,15 +4868,19 @@ func (e *Engine) processShelley(
 	var results []parser.ParseResult
 	var sessionErrs []sessionParseError
 	for _, meta := range metas {
-		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
-		storedHash, _ := e.db.GetFileHashByPath(meta.VirtualPath)
+		lookupPath := meta.VirtualPath
+		if e.pathRewriter != nil {
+			lookupPath = e.pathRewriter(lookupPath)
+		}
+		_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+		storedHash, _ := e.db.GetFileHashByPath(lookupPath)
 		// parse-diff: !e.forceParse disables the stored-state skip.
 		// FileMtime alone has second precision, so the content fingerprint
 		// (stored in file_hash) catches same-second appends and in-place
 		// rewrites; see shelleyChangeMtime in the parser.
 		if !e.forceParse && ok && storedMtime == meta.FileMtime &&
 			storedHash == meta.Fingerprint &&
-			e.db.GetDataVersionByPath(meta.VirtualPath) >=
+			e.db.GetDataVersionByPath(lookupPath) >=
 				db.CurrentDataVersion() {
 			continue
 		}
