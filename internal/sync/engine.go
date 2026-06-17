@@ -6045,8 +6045,11 @@ func (e *Engine) prepareSessionWrite(
 	); preserve {
 		return db.Session{}, nil, false
 	} else if mergedMsgs != nil {
+		parsedMsgs := msgs
 		msgs = mergedMsgs
-		applyVisualStudioCopilotArchiveSessionFields(&s, archived)
+		applyVisualStudioCopilotArchiveSessionFields(
+			&s, archived, parsedMsgs, msgs,
+		)
 		applySessionMessageDerivedFields(&s, msgs)
 		applySessionTokenTotalsFromMessages(&s, msgs)
 	}
@@ -6095,6 +6098,7 @@ func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
 
 func applyVisualStudioCopilotArchiveSessionFields(
 	s *db.Session, archived *db.Session,
+	parsedMsgs, mergedMsgs []db.Message,
 ) {
 	if archived == nil {
 		return
@@ -6102,7 +6106,9 @@ func applyVisualStudioCopilotArchiveSessionFields(
 	archiveExtendsBounds := sessionTimeBefore(
 		archived.StartedAt, s.StartedAt,
 	) || sessionTimeAfter(archived.EndedAt, s.EndedAt)
-	if archiveExtendsBounds || stringPtrEmpty(s.FirstMessage) {
+	if !visualStudioCopilotMergedFirstMessageFromParsed(
+		parsedMsgs, mergedMsgs,
+	) {
 		s.FirstMessage = cloneStringPtr(archived.FirstMessage)
 	}
 	if archiveExtendsBounds || stringPtrEmpty(s.SessionName) {
@@ -6113,6 +6119,27 @@ func applyVisualStudioCopilotArchiveSessionFields(
 	if storedSize := derefInt64(archived.FileSize); storedSize > 0 {
 		s.FileSize = int64Ptr(storedSize)
 	}
+}
+
+func visualStudioCopilotMergedFirstMessageFromParsed(
+	parsed, merged []db.Message,
+) bool {
+	if len(parsed) == 0 || len(merged) == 0 {
+		return false
+	}
+	mergedFirst := merged[0]
+	for _, parsedMsg := range parsed {
+		if visualStudioCopilotMessagePresenceKey(parsedMsg) !=
+			visualStudioCopilotMessagePresenceKey(mergedFirst) {
+			continue
+		}
+		return !visualStudioCopilotMessageLooksIncomplete(
+			parsedMsg, mergedFirst,
+		) && !visualStudioCopilotMessageHasArchiveUpdate(
+			mergedFirst, parsedMsg,
+		)
+	}
+	return false
 }
 
 func stringPtrEmpty(v *string) bool {

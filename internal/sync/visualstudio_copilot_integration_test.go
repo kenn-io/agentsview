@@ -786,6 +786,79 @@ func TestSyncEngineVisualStudioCopilotMergesUpdateAndPreservesIncompleteSameCoun
 		msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
+func TestSyncEngineVisualStudioCopilotMergeDerivesFirstMessageFromMergedRows(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	tracesDir := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	primary := filepath.Join(
+		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	toolSpan := func(command string) string {
+		return vsCopilotTraceLine(conversationID, "tool_build",
+			"execute_tool run_command_in_terminal",
+			"1781293600000000000", "1781293610000000000",
+			map[string]string{
+				"gen_ai.tool.name":           "run_command_in_terminal",
+				"gen_ai.tool.call.id":        "call_build",
+				"gen_ai.tool.call.arguments": `{"command":"` + command + `"}`,
+			})
+	}
+	rotatedSibling := filepath.Join(
+		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
+	)
+	laterPrompt := strings.Repeat("Retained later archived prompt. ", 30)
+	require.NoError(t, os.WriteFile(primary, []byte(
+		toolSpan("dotnet bui")+"\n",
+	), 0o644))
+	require.NoError(t, os.WriteFile(rotatedSibling, []byte(
+		vsCopilotTraceLine(conversationID, "later_chat", "chat gpt-5.5",
+			"1781293620000000000", "1781293630000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"` + laterPrompt + `"}]}]`,
+			})+"\n"), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {tracesDir},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	assertSessionState(t, database, sessionID, func(sess *db.Session) {
+		require.NotNil(t, sess.FirstMessage)
+		assert.Equal(t, "Run command: dotnet bui", *sess.FirstMessage)
+	})
+
+	require.NoError(t, os.Remove(rotatedSibling))
+	require.NoError(t, os.WriteFile(primary, []byte(
+		toolSpan("dotnet build --configuration Release")+"\n",
+	), 0o644))
+	later := time.Unix(1781293800, 0)
+	require.NoError(t, os.Chtimes(primary, later, later))
+
+	require.NoError(t, engine.SyncSingleSessionContext(
+		context.Background(), sessionID,
+	))
+	msgs := fetchMessages(t, database, sessionID)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ "+
+		"dotnet build --configuration Release",
+		msgs[0].Content)
+	assert.Equal(t, strings.TrimSpace(laterPrompt), msgs[1].Content)
+	assertSessionState(t, database, sessionID, func(sess *db.Session) {
+		require.NotNil(t, sess.FirstMessage)
+		assert.Equal(t,
+			"Run command: dotnet build --configuration Release",
+			*sess.FirstMessage,
+		)
+	})
+}
+
 // TestSyncEngineVisualStudioCopilotDoesNotPreserveWhenShrunkTraceHasNewMessage
 // verifies that a shrink caused by a rotated sibling does not indefinitely hide
 // new spans that appear in a remaining or newly written trace file.
