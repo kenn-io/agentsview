@@ -201,15 +201,24 @@ function closingFence(
   text: string,
   contentStart: number,
   fenceLen: number,
-): { start: number; end: number } | undefined {
+): { contentEnd: number; end: number } | undefined {
   let pos = contentStart;
   while (pos < text.length) {
     const tickStart = text.indexOf("`", pos);
     if (tickStart < 0) return undefined;
+    const lineStart = text.lastIndexOf("\n", tickStart - 1) + 1;
+    const nextLineStart = text.indexOf("\n", tickStart);
+    const lineEnd =
+      nextLineStart >= 0 ? nextLineStart : text.length;
 
     const tickCount = countBackticks(text, tickStart);
-    if (tickCount >= fenceLen) {
-      return { start: tickStart, end: tickStart + tickCount };
+    const rest = text.slice(tickStart + tickCount, lineEnd);
+    if (
+      tickCount >= fenceLen &&
+      atFenceLineStart(text, tickStart) &&
+      /^[ \t]*$/.test(rest)
+    ) {
+      return { contentEnd: lineStart, end: lineEnd };
     }
 
     pos = tickStart + tickCount;
@@ -253,7 +262,7 @@ function codeBlockMatches(text: string): Match[] {
       end: close.end,
       segment: {
         type: "code",
-        content: text.slice(contentStart, close.start),
+        content: text.slice(contentStart, close.contentEnd),
         label: info.trim() || undefined,
       },
     });

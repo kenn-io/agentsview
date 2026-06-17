@@ -81,7 +81,7 @@ describe("parseContent", () => {
 
   it("preserves leading whitespace in tail text", () => {
     const segments =
-      parseContent("```code\ncontent```\n  Trailing text");
+      parseContent("```code\ncontent\n```\n  Trailing text");
     expect(segments).toHaveLength(2);
     expect(segments[0]).toMatchObject({ type: "code" });
     expect(segments[1]).toEqual({
@@ -121,6 +121,24 @@ describe("parseContent", () => {
         content:
           "Some context paragraph.\n\n```qmd\nauthor: \"Jane Doe\"\n```\n\nMore context here.\n",
         label: "markdown",
+      },
+    ]);
+  });
+
+  it("keeps inline same-length backtick runs inside code blocks", () => {
+    const content =
+      "```javascript\nconst fence = \"```\";\n[Thinking]\nnot parsed\n```\nAfter";
+    const segments = parseContent(content);
+    expect(segments).toEqual([
+      {
+        type: "code",
+        content:
+          "const fence = \"```\";\n[Thinking]\nnot parsed\n",
+        label: "javascript",
+      },
+      {
+        type: "text",
+        content: "\nAfter",
       },
     ]);
   });
