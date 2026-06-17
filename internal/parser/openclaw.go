@@ -325,21 +325,14 @@ func extractToolResultText(content gjson.Result) string {
 
 	var parts []string
 	content.ForEach(func(_, block gjson.Result) bool {
+		// OpenClaw tool-result content blocks (type "toolResult") carry
+		// the rendered text inline under "text", the same field plain
+		// "text" blocks use. This matches what DecodeContent reads, so
+		// the measured length and the stored/decoded content agree.
 		switch block.Get("type").Str {
-		case "text":
+		case "text", "toolResult":
 			if t := block.Get("text").Str; t != "" {
 				parts = append(parts, t)
-			}
-		case "toolResult":
-			// OpenClaw tool-result content blocks carry the rendered
-			// text inline under "text", with the structured payload
-			// under "content".
-			if t := block.Get("text").Str; t != "" {
-				parts = append(parts, t)
-			} else if nested := block.Get("content"); nested.Exists() {
-				if nt := extractToolResultText(nested); nt != "" {
-					parts = append(parts, nt)
-				}
 			}
 		}
 		return true
