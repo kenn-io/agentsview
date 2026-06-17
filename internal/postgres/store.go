@@ -54,8 +54,8 @@ func (s *Store) SetCursorSecret(secret []byte) {
 // and pins) is writable through dedicated methods.
 func (s *Store) ReadOnly() bool { return true }
 
-// GetSessionVersion returns the message count and a hash of
-// updated_at for SSE change detection.
+// GetSessionVersion returns the message count and a compact version
+// marker for SSE change detection.
 func (s *Store) GetSessionVersion(
 	id string,
 ) (int, int64, bool) {
@@ -69,12 +69,7 @@ func (s *Store) GetSessionVersion(
 	if err != nil {
 		return 0, 0, false
 	}
-	formatted := FormatISO8601(updatedAt)
-	var h int64
-	for _, c := range formatted {
-		h = h*31 + int64(c)
-	}
-	return count, h, true
+	return count, db.SessionVersionMarker(FormatISO8601(updatedAt)), true
 }
 
 // ------------------------------------------------------------

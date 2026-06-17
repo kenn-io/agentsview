@@ -399,21 +399,31 @@ func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Ses
 
 func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
 	var count int
+	var fileMtime sql.NullInt64
+	var fileHash sql.NullString
 	var updated any
 	err := s.duck.QueryRow(
-		`SELECT message_count, COALESCE(local_modified_at, ended_at, started_at, created_at)
+		`SELECT message_count, file_mtime, file_hash,
+		        COALESCE(local_modified_at, ended_at, started_at, created_at)
 		 FROM sessions WHERE id = ?`,
 		id,
-	).Scan(&count, &updated)
+	).Scan(&count, &fileMtime, &fileHash, &updated)
 	if err != nil {
 		return 0, 0, false
 	}
-	formatted := formatDBTime(updated)
-	var h int64
-	for _, c := range formatted {
-		h = h*31 + int64(c)
+	fileMtimePart := ""
+	if fileMtime.Valid {
+		fileMtimePart = fmt.Sprintf("%d", fileMtime.Int64)
 	}
-	return count, h, true
+	fileHashPart := ""
+	if fileHash.Valid {
+		fileHashPart = fileHash.String
+	}
+	return count, db.SessionVersionMarker(
+		fileMtimePart,
+		fileHashPart,
+		formatDBTime(updated),
+	), true
 }
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {

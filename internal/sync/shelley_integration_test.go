@@ -114,6 +114,14 @@ func newShelleyEngine(t *testing.T, dir string) (*sync.Engine, *db.DB) {
 	return engine, database
 }
 
+func sessionIDs(sessions []db.Session) []string {
+	ids := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
 func mainConvoMsgs() []shelleyMsg {
 	return []shelleyMsg{
 		{1, "user",
@@ -357,10 +365,20 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 	engine, database := newShelleyEngine(t, dir)
 	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "partial")
+	before, err := database.GetSessionFull(
+		context.Background(), "shelley:cMAIN1",
+	)
+	require.NoError(t, err, "GetSessionFull before rewrite")
+	require.NotNil(t, before, "session before rewrite")
+	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
+	require.NotNil(t, before.FileHash, "file_hash before rewrite")
+	require.NotNil(t, before.LocalModifiedAt,
+		"local_modified_at before rewrite")
 
 	// Rewrite the agent message in place. Crucially, updated_at is left
 	// untouched (same second) and sequence_id is unchanged, so only the
 	// content fingerprint differs.
+	time.Sleep(20 * time.Millisecond)
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	_, err = conn.Exec(
@@ -376,6 +394,32 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 	assertMessageContent(
 		t, database, "shelley:cMAIN1", "q", "the full streamed answer",
 	)
+	after, err := database.GetSessionFull(
+		context.Background(), "shelley:cMAIN1",
+	)
+	require.NoError(t, err, "GetSessionFull after rewrite")
+	require.NotNil(t, after, "session after rewrite")
+	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
+	require.NotNil(t, after.FileHash, "file_hash after rewrite")
+	require.NotNil(t, after.LocalModifiedAt,
+		"local_modified_at after rewrite")
+	assert.Equal(t, *before.FileMtime, *after.FileMtime,
+		"same-second rewrite keeps the real Shelley updated_at timestamp")
+	assert.NotEqual(t, *before.FileHash, *after.FileHash,
+		"same-count same-second rewrite changes the content fingerprint")
+	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
+		"successful rewrite must bump local_modified_at for push windows")
+
+	candidates, err := database.ListSessionsModifiedBetween(
+		context.Background(),
+		*before.LocalModifiedAt,
+		time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
+		nil,
+		nil,
+	)
+	require.NoError(t, err, "ListSessionsModifiedBetween after rewrite")
+	assert.Contains(t, sessionIDs(candidates), "shelley:cMAIN1",
+		"local_modified_at must select the rewritten session for pushes")
 }
 
 // TestSyncShelleyLengthPreservingRewrite is the case a byte-length signal

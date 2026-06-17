@@ -1323,20 +1323,49 @@ func (db *DB) GetSessionMessageCount(
 	return count, true
 }
 
-// GetSessionVersion returns the message count and file mtime
-// for change detection in SSE watchers.
+// SessionVersionMarker returns a compact marker for one or more
+// version fields. Inputs are length-framed so adjacent fields cannot
+// collide by concatenation.
+func SessionVersionMarker(parts ...string) int64 {
+	const (
+		offset64 = uint64(14695981039346656037)
+		prime64  = uint64(1099511628211)
+	)
+	h := offset64
+	write := func(s string) {
+		for _, b := range []byte(s) {
+			h ^= uint64(b)
+			h *= prime64
+		}
+	}
+	for _, part := range parts {
+		write(fmt.Sprintf("%d:", len(part)))
+		write(part)
+	}
+	return int64(h)
+}
+
+// GetSessionVersion returns the message count and a compact version
+// marker for change detection in SSE watchers.
 func (db *DB) GetSessionVersion(
 	id string,
-) (count int, fileMtime int64, ok bool) {
+) (count int, version int64, ok bool) {
+	var fileMtime int64
+	var fileHash, localModifiedAt string
 	err := db.getReader().QueryRow(
-		"SELECT message_count, COALESCE(file_mtime, 0)"+
+		"SELECT message_count, COALESCE(file_mtime, 0),"+
+			" COALESCE(file_hash, ''), COALESCE(local_modified_at, '')"+
 			" FROM sessions WHERE id = ?",
 		id,
-	).Scan(&count, &fileMtime)
+	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt)
 	if err != nil {
 		return 0, 0, false
 	}
-	return count, fileMtime, true
+	return count, SessionVersionMarker(
+		fmt.Sprintf("%d", fileMtime),
+		fileHash,
+		localModifiedAt,
+	), true
 }
 
 // IncrementalInfo holds the data needed for incremental

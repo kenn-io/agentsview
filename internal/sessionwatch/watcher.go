@@ -43,7 +43,7 @@ func New(d db.Store, engine *sync.Engine) *Watcher {
 }
 
 // Events polls the database for session changes and signals the
-// returned channel when the message count changes. This is
+// returned channel when the session version changes. This is
 // decoupled from file I/O — the file watcher handles syncing
 // files to the database, and this monitor detects the resulting
 // DB changes.
@@ -60,7 +60,7 @@ func (w *Watcher) Events(
 		defer close(ch)
 
 		// Seed initial state from the database.
-		lastCount, lastDBMtime, _ := w.db.GetSessionVersion(
+		lastCount, lastDBVersion, _ := w.db.GetSessionVersion(
 			sessionID,
 		)
 
@@ -68,7 +68,7 @@ func (w *Watcher) Events(
 			// PG read mode: poll GetSessionVersion only,
 			// no file watching or fallback sync.
 			w.pollDBOnly(ctx, ch, sessionID,
-				lastCount, lastDBMtime)
+				lastCount, lastDBVersion)
 			return
 		}
 
@@ -91,7 +91,7 @@ func (w *Watcher) Events(
 				changed := w.checkDBForChanges(
 					sessionID,
 					&lastCount,
-					&lastDBMtime,
+					&lastDBVersion,
 					&sourcePath,
 					&lastFileMtime,
 					&fileMtimeChangedAt,
@@ -114,7 +114,7 @@ func (w *Watcher) Events(
 // no sync engine or file watcher.
 func (w *Watcher) pollDBOnly(
 	ctx context.Context, ch chan<- struct{},
-	sessionID string, lastCount int, lastDBMtime int64,
+	sessionID string, lastCount int, lastDBVersion int64,
 ) {
 	ticker := time.NewTicker(PollInterval)
 	defer ticker.Stop()
@@ -124,10 +124,10 @@ func (w *Watcher) pollDBOnly(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			count, dbMtime, ok := w.db.GetSessionVersion(sessionID)
-			if ok && (count != lastCount || dbMtime != lastDBMtime) {
+			count, dbVersion, ok := w.db.GetSessionVersion(sessionID)
+			if ok && (count != lastCount || dbVersion != lastDBVersion) {
 				lastCount = count
-				lastDBMtime = dbMtime
+				lastDBVersion = dbVersion
 				select {
 				case ch <- struct{}{}:
 				case <-ctx.Done():
@@ -138,28 +138,25 @@ func (w *Watcher) pollDBOnly(
 	}
 }
 
-// checkDBForChanges polls the database for a session's
-// message_count and file_mtime. If either changed, it
-// returns true. As a fallback, it monitors source file
-// mtime and triggers a direct sync when the watcher
-// hasn't updated the DB.
+// checkDBForChanges polls the database for a session version change.
+// As a fallback, it monitors source file mtime and triggers a direct
+// sync when the watcher hasn't updated the DB.
 func (w *Watcher) checkDBForChanges(
 	sessionID string,
 	lastCount *int,
-	lastDBMtime *int64,
+	lastDBVersion *int64,
 	sourcePath *string,
 	lastFileMtime *int64,
 	fileMtimeChangedAt *time.Time,
 ) bool {
-	// Primary: check if the DB has new data (message count
-	// or file_mtime changed, covering both message appends
-	// and metadata-only updates like progress events).
-	if count, dbMtime, ok := w.db.GetSessionVersion(
+	// Primary: check if the DB has new data. The version marker covers
+	// message appends and metadata/content-only updates.
+	if count, dbVersion, ok := w.db.GetSessionVersion(
 		sessionID,
 	); ok && (count != *lastCount ||
-		dbMtime != *lastDBMtime) {
+		dbVersion != *lastDBVersion) {
 		*lastCount = count
-		*lastDBMtime = dbMtime
+		*lastDBVersion = dbVersion
 		// DB was updated; clear any pending fallback.
 		*fileMtimeChangedAt = time.Time{}
 		return true
@@ -208,12 +205,12 @@ func (w *Watcher) checkDBForChanges(
 			return false
 		}
 		// Re-check the DB after syncing.
-		if count, dbMtime, ok := w.db.GetSessionVersion(
+		if count, dbVersion, ok := w.db.GetSessionVersion(
 			sessionID,
 		); ok && (count != *lastCount ||
-			dbMtime != *lastDBMtime) {
+			dbVersion != *lastDBVersion) {
 			*lastCount = count
-			*lastDBMtime = dbMtime
+			*lastDBVersion = dbVersion
 			return true
 		}
 	}

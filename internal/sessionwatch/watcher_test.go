@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -70,4 +71,45 @@ func TestCheckDBForChanges_FileDisappears(t *testing.T) {
 	assert.False(t, changed, "expected no change signal")
 	assert.Empty(t, path)
 	assert.Equal(t, int64(0), lastMtime)
+}
+
+func TestCheckDBForChanges_FileHashChange(t *testing.T) {
+	t.Parallel()
+	w := testWatcher(t)
+	database, ok := w.db.(*db.DB)
+	require.True(t, ok, "test watcher should use SQLite DB")
+
+	const sessionID = "hash-change"
+	var mtime int64 = 12345
+	hash1 := "shelley-fingerprint-1"
+	dbtest.SeedSession(t, database, sessionID, "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.FileMtime = &mtime
+		s.FileHash = &hash1
+	})
+
+	lastCount, lastDBMtime, ok := w.db.GetSessionVersion(sessionID)
+	require.True(t, ok, "initial session version")
+
+	hash2 := "shelley-fingerprint-2"
+	dbtest.SeedSession(t, database, sessionID, "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.FileMtime = &mtime
+		s.FileHash = &hash2
+	})
+
+	sourcePath := ""
+	var lastFileMtime int64
+	var mchanged time.Time
+	changed := w.checkDBForChanges(
+		sessionID,
+		&lastCount,
+		&lastDBMtime,
+		&sourcePath,
+		&lastFileMtime,
+		&mchanged,
+	)
+
+	assert.True(t, changed,
+		"file_hash-only rewrites must refresh session watchers")
 }
