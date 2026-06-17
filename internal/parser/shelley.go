@@ -33,16 +33,19 @@ const (
 
 // Shelley llm_data content block type tags. Upstream these are the
 // llm.ContentType iota constants; the enum has no JSON marshaler, so
-// they serialize as bare integers.
+// they serialize as bare integers. Note the values start at 2, not 0:
+// ContentType shares its const block with MessageRole (User=0,
+// Assistant=1) and iota does not reset between the two type groups.
+// These values are verified against real shelley.db data.
 const (
-	shelleyContentText                = 0
-	shelleyContentThinking            = 1
-	shelleyContentRedactedThinking    = 2
-	shelleyContentToolUse             = 3
-	shelleyContentToolResult          = 4
-	shelleyContentServerToolUse       = 5
-	shelleyContentWebSearchToolResult = 6
-	shelleyContentWebSearchResult     = 7
+	shelleyContentText                = 2
+	shelleyContentThinking            = 3
+	shelleyContentRedactedThinking    = 4
+	shelleyContentToolUse             = 5
+	shelleyContentToolResult          = 6
+	shelleyContentServerToolUse       = 7
+	shelleyContentWebSearchToolResult = 8
+	shelleyContentWebSearchResult     = 9
 )
 
 // Shelley message-table row types. Other types (system, error,

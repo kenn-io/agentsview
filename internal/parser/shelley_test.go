@@ -110,24 +110,24 @@ func seedShelleyMainConversation(t *testing.T, db *sql.DB) {
 		"2026-06-15T10:00:00Z", "2026-06-15T10:05:00Z",
 	)
 	seedShelleyMessage(t, db, "cMAIN1", 1, 1, "user",
-		`{"Role":0,"Content":[{"Type":0,"Text":"Add a Shelley parser"}]}`,
+		`{"Role":0,"Content":[{"Type":2,"Text":"Add a Shelley parser"}]}`,
 		"", "", "2026-06-15T10:00:00Z")
 	seedShelleyMessage(t, db, "cMAIN1", 2, 1, "agent",
 		`{"Role":1,"Content":[`+
-			`{"Type":1,"Thinking":"Plan it."},`+
-			`{"Type":0,"Text":"On it."},`+
-			`{"ID":"toolu_1","Type":3,"ToolName":"bash","ToolInput":{"cmd":"ls"}}]}`,
+			`{"Type":3,"Thinking":"Plan it."},`+
+			`{"Type":2,"Text":"On it."},`+
+			`{"ID":"toolu_1","Type":5,"ToolName":"bash","ToolInput":{"cmd":"ls"}}]}`,
 		"",
 		`{"input_tokens":1000,"cache_creation_input_tokens":200,`+
 			`"cache_read_input_tokens":50,"output_tokens":300,`+
 			`"cost_usd":0.012,"model":"claude-sonnet-4-6"}`,
 		"2026-06-15T10:00:05Z")
 	seedShelleyMessage(t, db, "cMAIN1", 3, 1, "tool",
-		`{"Role":0,"Content":[{"Type":4,"ToolUseID":"toolu_1",`+
-			`"ToolResult":[{"Type":0,"Text":"file1\nfile2"}],"ToolError":false}]}`,
+		`{"Role":0,"Content":[{"Type":6,"ToolUseID":"toolu_1",`+
+			`"ToolResult":[{"Type":2,"Text":"file1\nfile2"}],"ToolError":false}]}`,
 		"", "", "2026-06-15T10:00:06Z")
 	seedShelleyMessage(t, db, "cMAIN1", 4, 1, "agent",
-		`{"Role":1,"Content":[{"Type":0,"Text":"Done."}]}`,
+		`{"Role":1,"Content":[{"Type":2,"Text":"Done."}]}`,
 		"",
 		`{"input_tokens":1500,"cache_creation_input_tokens":0,`+
 			`"cache_read_input_tokens":0,"output_tokens":120,`+
@@ -136,7 +136,7 @@ func seedShelleyMainConversation(t *testing.T, db *sql.DB) {
 	// Second generation: a post-compaction continuation that must still
 	// be included in the full history view.
 	seedShelleyMessage(t, db, "cMAIN1", 5, 2, "agent",
-		`{"Role":1,"Content":[{"Type":0,"Text":"Continued after compaction."}]}`,
+		`{"Role":1,"Content":[{"Type":2,"Text":"Continued after compaction."}]}`,
 		"",
 		`{"input_tokens":800,"cache_creation_input_tokens":0,`+
 			`"cache_read_input_tokens":0,"output_tokens":90,`+
@@ -233,10 +233,10 @@ func TestParseShelleySubagentRelationship(t *testing.T) {
 		"2026-06-15T10:01:00Z", "2026-06-15T10:01:30Z",
 	)
 	seedShelleyMessage(t, db, "cSUB01", 1, 1, "user",
-		`{"Role":0,"Content":[{"Type":0,"Text":"do the subtask"}]}`,
+		`{"Role":0,"Content":[{"Type":2,"Text":"do the subtask"}]}`,
 		"", "", "2026-06-15T10:01:00Z")
 	seedShelleyMessage(t, db, "cSUB01", 2, 1, "agent",
-		`{"Role":1,"Content":[{"Type":0,"Text":"subtask done"}]}`,
+		`{"Role":1,"Content":[{"Type":2,"Text":"subtask done"}]}`,
 		"", "", "2026-06-15T10:01:30Z")
 
 	info, err := os.Stat(dbPath)
@@ -335,7 +335,7 @@ func TestParseShelleyTimestampFormats(t *testing.T) {
 		"2026-06-15 10:00:00", "2026-06-15 10:00:30",
 	)
 	seedShelleyMessage(t, db, "cTIME1", 1, 1, "user",
-		`{"Role":0,"Content":[{"Type":0,"Text":"hi"}]}`,
+		`{"Role":0,"Content":[{"Type":2,"Text":"hi"}]}`,
 		"", "", "2026-06-15 10:00:00")
 
 	info, err := os.Stat(dbPath)
@@ -359,20 +359,20 @@ func TestParseShelleyRobustContent(t *testing.T) {
 		"2026-06-15T10:00:00Z", "2026-06-15T10:00:40Z",
 	)
 	seedShelleyMessage(t, db, "cROB1", 1, 1, "user",
-		`{"Role":0,"Content":[{"Type":0,"Text":"go"}]}`,
+		`{"Role":0,"Content":[{"Type":2,"Text":"go"}]}`,
 		"", "", "2026-06-15T10:00:00Z")
 	// Unknown content type (99) is ignored; redacted thinking (2) is
 	// surfaced as a placeholder; the text block survives.
 	seedShelleyMessage(t, db, "cROB1", 2, 1, "agent",
-		`{"Role":1,"Content":[{"Type":2},{"Type":99,"Text":"ignored"},`+
-			`{"Type":0,"Text":"real text"}]}`,
+		`{"Role":1,"Content":[{"Type":4},{"Type":99,"Text":"ignored"},`+
+			`{"Type":2,"Text":"real text"}]}`,
 		"", "", "2026-06-15T10:00:05Z")
 	// Malformed llm_data with no user_data fallback is dropped.
 	seedShelleyMessage(t, db, "cROB1", 3, 1, "agent",
 		`{not json`, "", "", "2026-06-15T10:00:06Z")
 	// Errored assistant turn stored as type="error" still carries usage.
 	seedShelleyMessage(t, db, "cROB1", 4, 1, "error",
-		`{"Role":1,"Content":[{"Type":0,"Text":"request failed"}]}`,
+		`{"Role":1,"Content":[{"Type":2,"Text":"request failed"}]}`,
 		"",
 		`{"input_tokens":700,"output_tokens":40,"model":"claude-sonnet-4-6"}`,
 		"2026-06-15T10:00:40Z")

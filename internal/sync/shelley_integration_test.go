@@ -116,18 +116,18 @@ func newShelleyEngine(t *testing.T, dir string) (*sync.Engine, *db.DB) {
 func mainConvoMsgs() []shelleyMsg {
 	return []shelleyMsg{
 		{1, "user",
-			`{"Role":0,"Content":[{"Type":0,"Text":"hello shelley"}]}`,
+			`{"Role":0,"Content":[{"Type":2,"Text":"hello shelley"}]}`,
 			"", "2026-06-15T10:00:00Z"},
 		{2, "agent",
-			`{"Role":1,"Content":[{"Type":0,"Text":"hi"},` +
-				`{"ID":"toolu_x","Type":3,"ToolName":"bash","ToolInput":{"cmd":"ls"}}]}`,
+			`{"Role":1,"Content":[{"Type":2,"Text":"hi"},` +
+				`{"ID":"toolu_x","Type":5,"ToolName":"bash","ToolInput":{"cmd":"ls"}}]}`,
 			`{"input_tokens":500,"cache_read_input_tokens":0,` +
 				`"cache_creation_input_tokens":0,"output_tokens":50,` +
 				`"model":"claude-sonnet-4-6"}`,
 			"2026-06-15T10:00:05Z"},
 		{3, "tool",
-			`{"Role":0,"Content":[{"Type":4,"ToolUseID":"toolu_x",` +
-				`"ToolResult":[{"Type":0,"Text":"file1"}]}]}`,
+			`{"Role":0,"Content":[{"Type":6,"ToolUseID":"toolu_x",` +
+				`"ToolResult":[{"Type":2,"Text":"file1"}]}]}`,
 			"", "2026-06-15T10:00:06Z"},
 	}
 }
@@ -181,9 +181,9 @@ func TestSyncAllShelleyIngestsConversations(t *testing.T) {
 	seedShelleyConvo(t, dbPath, "cAUX1", "aux", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:01:00Z", "2026-06-15T10:01:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":0,"Text":"second"}]}`,
+			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"second"}]}`,
 				"", "2026-06-15T10:01:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":0,"Text":"ok"}]}`,
+			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"ok"}]}`,
 				"", "2026-06-15T10:01:10Z"},
 		})
 
@@ -240,9 +240,9 @@ func TestResyncAllShelleyPreservesRemovedConversation(t *testing.T) {
 	seedShelleyConvo(t, dbPath, "cGONE1", "gone", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T09:00:00Z", "2026-06-15T09:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":0,"Text":"old work"}]}`,
+			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"old work"}]}`,
 				"", "2026-06-15T09:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":0,"Text":"old reply"}]}`,
+			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"old reply"}]}`,
 				"", "2026-06-15T09:00:10Z"},
 		})
 
@@ -280,9 +280,9 @@ func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":0,"Text":"q"}]}`,
+			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
 				"", "2026-06-15T10:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":0,"Text":"first answer"}]}`,
+			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"first answer"}]}`,
 				"", "2026-06-15T10:00:10Z"},
 		})
 
@@ -296,7 +296,7 @@ func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.Exec(
 		`UPDATE messages SET llm_data = ? WHERE conversation_id = 'cMAIN1' AND sequence_id = 2`,
-		`{"Role":1,"Content":[{"Type":0,"Text":"second answer"}]}`,
+		`{"Role":1,"Content":[{"Type":2,"Text":"second answer"}]}`,
 	)
 	require.NoError(t, err)
 	_, err = conn.Exec(
