@@ -48,8 +48,20 @@ type duckAnalyticsSession struct {
 func (s *Store) analyticsSessions(
 	ctx context.Context, f db.AnalyticsFilter,
 ) ([]duckAnalyticsSession, error) {
+	return s.analyticsSessionsFiltered(ctx, f, true, true)
+}
+
+// analyticsSessionsFiltered loads candidate sessions, optionally applying
+// the date and hour/day-of-week predicates at the session level. Skill
+// analytics passes false for both so those filters can be applied to each
+// call's own message timestamp instead.
+func (s *Store) analyticsSessionsFiltered(
+	ctx context.Context, f db.AnalyticsFilter,
+	includeDate, includeTime bool,
+) ([]duckAnalyticsSession, error) {
 	where, args := duckBuildAnalyticsWhere(
-		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+		f, "COALESCE(s.started_at, s.created_at)", "s.",
+		includeDate, includeTime)
 	rows, err := s.duck.QueryContext(ctx, `
 		SELECT id, project, machine, agent, first_message,
 			COALESCE(display_name, session_name) AS display_name,
@@ -1092,6 +1104,30 @@ func (s *Store) analyticsAutonomyBuckets(
 	return counts, rows.Err()
 }
 
+// duckMaxSQLVars bounds the IN-list size per query to stay well under
+// driver bind-variable limits; larger ID sets are split into chunks.
+const duckMaxSQLVars = 900
+
+func duckInPlaceholders(ids []string) (string, []any) {
+	ph := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		ph[i] = "?"
+		args[i] = id
+	}
+	return "(" + strings.Join(ph, ",") + ")", args
+}
+
+func duckQueryChunked(ids []string, fn func(chunk []string) error) error {
+	for i := 0; i < len(ids); i += duckMaxSQLVars {
+		end := min(i+duckMaxSQLVars, len(ids))
+		if err := fn(ids[i:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) GetAnalyticsTools(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ToolsAnalyticsResponse, error) {
@@ -1108,38 +1144,46 @@ func (s *Store) GetAnalyticsTools(
 	if len(ids) == 0 {
 		return db.ToolsAnalyticsResponse{}, nil
 	}
-	rows, err := s.duck.QueryContext(ctx, `
-		SELECT session_id, category FROM tool_calls`)
-	if err != nil {
-		return db.ToolsAnalyticsResponse{}, err
-	}
-	defer rows.Close()
 	cats := map[string]int{}
 	agents := map[string]map[string]int{}
 	trends := map[string]map[string]int{}
 	total := 0
-	for rows.Next() {
-		var sid, cat string
-		if err := rows.Scan(&sid, &cat); err != nil {
-			return db.ToolsAnalyticsResponse{}, err
+	err = duckQueryChunked(ids, func(chunk []string) error {
+		ph, args := duckInPlaceholders(chunk)
+		rows, qErr := s.duck.QueryContext(ctx,
+			`SELECT session_id, category, COUNT(*)
+				FROM tool_calls
+				WHERE session_id IN `+ph+`
+				GROUP BY session_id, category`, args...)
+		if qErr != nil {
+			return qErr
 		}
-		r, ok := meta[sid]
-		if !ok {
-			continue
+		defer rows.Close()
+		for rows.Next() {
+			var sid, cat string
+			var count int
+			if err := rows.Scan(&sid, &cat, &count); err != nil {
+				return err
+			}
+			r, ok := meta[sid]
+			if !ok {
+				continue
+			}
+			total += count
+			cats[cat] += count
+			if agents[r.agent] == nil {
+				agents[r.agent] = map[string]int{}
+			}
+			agents[r.agent][cat] += count
+			week := bucketAnalyticsDate(analyticsLocalDate(analyticsDateTime(r), f.Timezone), "week")
+			if trends[week] == nil {
+				trends[week] = map[string]int{}
+			}
+			trends[week][cat] += count
 		}
-		total++
-		cats[cat]++
-		if agents[r.agent] == nil {
-			agents[r.agent] = map[string]int{}
-		}
-		agents[r.agent][cat]++
-		week := bucketAnalyticsDate(analyticsLocalDate(analyticsDateTime(r), f.Timezone), "week")
-		if trends[week] == nil {
-			trends[week] = map[string]int{}
-		}
-		trends[week][cat]++
-	}
-	if err := rows.Err(); err != nil {
+		return rows.Err()
+	})
+	if err != nil {
 		return db.ToolsAnalyticsResponse{}, err
 	}
 	resp := db.ToolsAnalyticsResponse{TotalCalls: total}
@@ -1174,49 +1218,68 @@ func (s *Store) GetAnalyticsTools(
 func (s *Store) GetAnalyticsSkills(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SkillsAnalyticsResponse, error) {
-	sessions, err := s.analyticsSessions(ctx, f)
+	sessions, err := s.analyticsSessionsFiltered(ctx, f, false, false)
 	if err != nil {
 		return db.SkillsAnalyticsResponse{}, err
 	}
 	meta := map[string]duckAnalyticsSession{}
+	var ids []string
 	for _, r := range sessions {
 		meta[r.id] = r
+		ids = append(ids, r.id)
 	}
-	if len(meta) == 0 {
+	if len(ids) == 0 {
 		return db.BuildSkillsAnalytics(nil), nil
 	}
 
-	rows, err := s.duck.QueryContext(ctx, `
-		SELECT session_id, TRIM(COALESCE(skill_name, ''))
-		FROM tool_calls
-		WHERE TRIM(COALESCE(skill_name, '')) != ''`)
-	if err != nil {
-		return db.SkillsAnalyticsResponse{}, err
-	}
-	defer rows.Close()
-
 	var skillRows []db.SkillAnalyticsRow
-	for rows.Next() {
-		var sid, skill string
-		if err := rows.Scan(&sid, &skill); err != nil {
-			return db.SkillsAnalyticsResponse{}, err
+	err = duckQueryChunked(ids, func(chunk []string) error {
+		ph, args := duckInPlaceholders(chunk)
+		rows, qErr := s.duck.QueryContext(ctx,
+			`SELECT tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
+				COUNT(*), m.timestamp
+				FROM tool_calls tc
+				LEFT JOIN messages m
+					ON m.session_id = tc.session_id
+					AND m.id = tc.message_id
+				WHERE tc.session_id IN `+ph+`
+					AND TRIM(COALESCE(tc.skill_name, '')) != ''
+				GROUP BY tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
+					m.timestamp`, args...)
+		if qErr != nil {
+			return qErr
 		}
-		r, ok := meta[sid]
-		if !ok {
-			continue
+		defer rows.Close()
+		for rows.Next() {
+			var sid, skill string
+			var count int
+			var msgTS any
+			if err := rows.Scan(&sid, &skill, &count, &msgTS); err != nil {
+				return err
+			}
+			r, ok := meta[sid]
+			if !ok {
+				continue
+			}
+			usedTS, date, keep := f.ResolveSkillRowTime(
+				formatDBTime(msgTS), analyticsDateTime(r),
+			)
+			if !keep {
+				continue
+			}
+			skillRows = append(skillRows, db.SkillAnalyticsRow{
+				SessionID:  sid,
+				SkillName:  skill,
+				Agent:      r.agent,
+				Project:    r.project,
+				Date:       date,
+				LastUsedAt: usedTS,
+				Count:      count,
+			})
 		}
-		ts := analyticsDateTime(r)
-		skillRows = append(skillRows, db.SkillAnalyticsRow{
-			SessionID:  sid,
-			SkillName:  skill,
-			Agent:      r.agent,
-			Project:    r.project,
-			Date:       analyticsLocalDate(ts, f.Timezone),
-			LastUsedAt: ts,
-			Count:      1,
-		})
-	}
-	if err := rows.Err(); err != nil {
+		return rows.Err()
+	})
+	if err != nil {
 		return db.SkillsAnalyticsResponse{}, err
 	}
 	return db.BuildSkillsAnalytics(skillRows), nil

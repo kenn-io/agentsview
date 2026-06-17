@@ -1800,6 +1800,25 @@ type skillUsageAccumulator struct {
 	lastUsedAt    string
 }
 
+// timestampAfter reports whether timestamp a is chronologically later
+// than b. Both are parsed as UTC timestamps so callers stay correct when
+// stores feed differing precisions (for example fractional seconds). It
+// falls back to lexical comparison only when a value cannot be parsed.
+func timestampAfter(a, b string) bool {
+	if b == "" {
+		return a != ""
+	}
+	if a == "" {
+		return false
+	}
+	ta, aok := localTime(a, time.UTC)
+	tb, bok := localTime(b, time.UTC)
+	if aok && bok {
+		return ta.After(tb)
+	}
+	return a > b
+}
+
 // BuildSkillsAnalytics folds backend-neutral skill rows into the public
 // response shape. Skill names are trimmed and empty names are ignored.
 func BuildSkillsAnalytics(rows []SkillAnalyticsRow) SkillsAnalyticsResponse {
@@ -1839,7 +1858,7 @@ func BuildSkillsAnalytics(rows []SkillAnalyticsRow) SkillsAnalyticsResponse {
 		if row.Project != "" {
 			acc.projectCounts[row.Project] += row.Count
 		}
-		if row.LastUsedAt > acc.lastUsedAt {
+		if timestampAfter(row.LastUsedAt, acc.lastUsedAt) {
 			acc.lastUsedAt = row.LastUsedAt
 		}
 		if row.Date != "" {
@@ -1930,11 +1949,15 @@ func analyticsToolsQuery(placeholders string) string {
 }
 
 func analyticsSkillsQuery(placeholders string) string {
-	return `SELECT session_id, TRIM(skill_name), COUNT(*)
-		FROM tool_calls
-		WHERE session_id IN ` + placeholders + `
-			AND TRIM(COALESCE(skill_name, '')) != ''
-		GROUP BY session_id, TRIM(skill_name)`
+	return `SELECT tc.session_id, TRIM(tc.skill_name), COUNT(*),
+			COALESCE(m.timestamp, '')
+		FROM tool_calls tc
+		LEFT JOIN messages m
+			ON m.session_id = tc.session_id AND m.id = tc.message_id
+		WHERE tc.session_id IN ` + placeholders + `
+			AND TRIM(COALESCE(tc.skill_name, '')) != ''
+		GROUP BY tc.session_id, TRIM(tc.skill_name),
+			COALESCE(m.timestamp, '')`
 }
 
 // GetAnalyticsTools returns tool usage analytics aggregated
@@ -2152,23 +2175,44 @@ func (db *DB) GetAnalyticsTools(
 	return resp, nil
 }
 
+// ResolveSkillRowTime resolves the timestamp for a single skill call and
+// applies the date and hour/day-of-week filters to it. The message
+// timestamp is authoritative; the session timestamp is used only when the
+// message has none. Because skill rows are bucketed by the call's own
+// timestamp, the date/time filters must be applied here rather than to the
+// owning session, so a session that started outside the range still
+// contributes its in-range calls and drops its out-of-range ones.
+//
+// It returns the resolved timestamp, its local date, and whether the call
+// passes the filters.
+func (f AnalyticsFilter) ResolveSkillRowTime(
+	messageTS, sessionTS string,
+) (usedTS, date string, keep bool) {
+	loc := f.location()
+	usedTS = messageTS
+	if strings.TrimSpace(usedTS) == "" {
+		usedTS = sessionTS
+	}
+	date = localDate(usedTS, loc)
+	if !inDateRange(date, f.From, f.To) {
+		return usedTS, date, false
+	}
+	if f.HasTimeFilter() {
+		t, ok := localTime(usedTS, loc)
+		if !ok || !f.matchesTimeFilter(t) {
+			return usedTS, date, false
+		}
+	}
+	return usedTS, date, true
+}
+
 // GetAnalyticsSkills returns skill usage analytics aggregated
 // from non-empty tool_calls.skill_name values.
 func (db *DB) GetAnalyticsSkills(
 	ctx context.Context, f AnalyticsFilter,
 ) (SkillsAnalyticsResponse, error) {
-	loc := f.location()
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
-	where, args := f.buildWhere(dateCol)
-
-	var timeIDs map[string]bool
-	if f.HasTimeFilter() {
-		var err error
-		timeIDs, err = db.filteredSessionIDs(ctx, f)
-		if err != nil {
-			return SkillsAnalyticsResponse{}, err
-		}
-	}
+	where, args := f.buildWhereWithoutDate()
 
 	sessQ := `SELECT id, ` + dateCol + `, agent, project
 		FROM sessions WHERE ` + where
@@ -2181,7 +2225,6 @@ func (db *DB) GetAnalyticsSkills(
 	defer sessRows.Close()
 
 	type sessInfo struct {
-		date    string
 		ts      string
 		agent   string
 		project string
@@ -2197,15 +2240,7 @@ func (db *DB) GetAnalyticsSkills(
 			return SkillsAnalyticsResponse{},
 				fmt.Errorf("scanning skill session: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
-			continue
-		}
-		if timeIDs != nil && !timeIDs[id] {
-			continue
-		}
 		sessionMap[id] = sessInfo{
-			date:    date,
 			ts:      ts,
 			agent:   agent,
 			project: project,
@@ -2235,23 +2270,29 @@ func (db *DB) GetAnalyticsSkills(
 			}
 			defer rows.Close()
 			for rows.Next() {
-				var sid, skill string
+				var sid, skill, lastTS string
 				var count int
 				if err := rows.Scan(
-					&sid, &skill, &count,
+					&sid, &skill, &count, &lastTS,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning skill tool_call: %w", err,
 					)
 				}
 				info := sessionMap[sid]
+				usedTS, date, keep := f.ResolveSkillRowTime(
+					lastTS, info.ts,
+				)
+				if !keep {
+					continue
+				}
 				skillRows = append(skillRows, SkillAnalyticsRow{
 					SessionID:  sid,
 					SkillName:  skill,
 					Agent:      info.agent,
 					Project:    info.project,
-					Date:       info.date,
-					LastUsedAt: info.ts,
+					Date:       date,
+					LastUsedAt: usedTS,
 					Count:      count,
 				})
 			}

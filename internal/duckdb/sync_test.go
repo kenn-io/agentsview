@@ -703,6 +703,81 @@ func newTestSync(
 	return syncer
 }
 
+// TestDuckGetAnalyticsSkillsIgnoresCrossSessionDuplicateIDs guards the
+// skill join: DuckDB mirrors SQLite row IDs from many machines, so
+// messages.id is not globally unique. A tool call must join only to a
+// message in its own session, not another session's row with the same id.
+func TestDuckGetAnalyticsSkillsIgnoresCrossSessionDuplicateIDs(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "mirror.duckdb"), local, SyncOptions{})
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	duck := syncer.DB()
+	store := NewStoreFromDB(duck)
+
+	// Both sessions mirror a message with id 100; only sess-a has the
+	// skill call. The join must not also match sess-b's message.
+	insertDuckSkillCollision(t, duck, "sess-a", 100,
+		"2026-02-03 10:00:00", "deploy")
+	insertDuckSkillCollision(t, duck, "sess-b", 100,
+		"2026-02-25 10:00:00", "")
+
+	resp, err := store.GetAnalyticsSkills(ctx, db.AnalyticsFilter{
+		From: "2026-02-01", To: "2026-02-28", Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetAnalyticsSkills")
+	require.Len(t, resp.BySkill, 1, "BySkill")
+	assert.Equal(t, "deploy", resp.BySkill[0].SkillName)
+	assert.Equal(t, 1, resp.BySkill[0].CallCount,
+		"cross-session id collision must not double-count")
+	assert.Equal(t, "2026-02-03T10:00:00Z", resp.BySkill[0].LastUsedAt,
+		"timestamp comes from the call's own session")
+
+	trend := map[string]int{}
+	for _, e := range resp.Trend {
+		if c := e.BySkill["deploy"]; c > 0 {
+			trend[e.Date] += c
+		}
+	}
+	assert.Equal(t, map[string]int{"2026-02-02": 1}, trend,
+		"no bucket from the colliding session's message")
+}
+
+// insertDuckSkillCollision raw-inserts a session and a message with an
+// explicit (non-unique) id. A skill tool call is added only when skill
+// is non-empty.
+func insertDuckSkillCollision(
+	t *testing.T, duck *sql.DB, sessionID string, msgID int, ts, skill string,
+) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := duck.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, project, machine, agent, message_count,
+			user_message_count, relationship_type, started_at, created_at
+		) VALUES (?, 'alpha', 'local', 'claude', 1, 1, 'root',
+			CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP))`,
+		sessionID, ts, ts)
+	require.NoError(t, err)
+	_, err = duck.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, ordinal, role, content, timestamp)
+		VALUES (?, ?, 0, 'assistant', 'msg', CAST(? AS TIMESTAMP))`,
+		msgID, sessionID, ts)
+	require.NoError(t, err)
+	if skill == "" {
+		return
+	}
+	_, err = duck.ExecContext(ctx, `
+		INSERT INTO tool_calls (
+			id, message_id, session_id, tool_name, category,
+			call_index, tool_use_id, skill_name
+		) VALUES (?, ?, ?, 'Skill', 'Skill', 0, ?, ?)`,
+		msgID, msgID, sessionID, sessionID+"-tu", skill)
+	require.NoError(t, err)
+}
+
 func insertOtherMachineDuckSession(t *testing.T, duck *sql.DB) {
 	t.Helper()
 	ctx := context.Background()

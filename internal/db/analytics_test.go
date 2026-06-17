@@ -1371,7 +1371,7 @@ func TestGetAnalyticsSkills(t *testing.T) {
 		s.Agent = "claude"
 		s.Machine = "mac"
 	})
-	sk1m1 := asstMsg("sk1", 0, "skill calls")
+	sk1m1 := asstMsgAt("sk1", 0, "skill calls", "2024-06-01T09:00:00Z")
 	sk1m1.HasToolUse = true
 	sk1m1.ToolCalls = []ToolCall{
 		{SessionID: "sk1", ToolName: "Skill", Category: "Skill", SkillName: "review-code"},
@@ -1388,7 +1388,7 @@ func TestGetAnalyticsSkills(t *testing.T) {
 		s.Agent = "codex"
 		s.Machine = "linux"
 	})
-	sk2m1 := asstMsg("sk2", 0, "skill call")
+	sk2m1 := asstMsgAt("sk2", 0, "skill call", "2024-06-02T10:00:00Z")
 	sk2m1.HasToolUse = true
 	sk2m1.ToolCalls = []ToolCall{
 		{SessionID: "sk2", ToolName: "Skill", Category: "Skill", SkillName: "review-code"},
@@ -1405,7 +1405,7 @@ func TestGetAnalyticsSkills(t *testing.T) {
 		`UPDATE sessions SET is_automated = 1 WHERE id = 'sk3'`,
 	)
 	require.NoError(t, err, "mark sk3 automated")
-	sk3m1 := asstMsg("sk3", 0, "automated skill call")
+	sk3m1 := asstMsgAt("sk3", 0, "automated skill call", "2024-06-03T11:00:00Z")
 	sk3m1.HasToolUse = true
 	sk3m1.ToolCalls = []ToolCall{
 		{SessionID: "sk3", ToolName: "Skill", Category: "Skill", SkillName: "write-tests"},
@@ -1494,16 +1494,249 @@ func TestGetAnalyticsSkills(t *testing.T) {
 	})
 }
 
+func TestGetAnalyticsSkillsUsesMessageTimestamp(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	filter := AnalyticsFilter{
+		From:     "2024-06-01",
+		To:       "2024-06-30",
+		Timezone: "UTC",
+	}
+
+	// Long-running session: starts early, uses the skill weeks later.
+	insertSession(t, d, "lr1", "alpha", func(s *Session) {
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+		s.MessageCount = 1
+		s.Agent = "claude"
+	})
+	lrMsg := asstMsgAt("lr1", 0, "late skill call", "2024-06-20T15:00:00Z")
+	lrMsg.HasToolUse = true
+	lrMsg.ToolCalls = []ToolCall{
+		{SessionID: "lr1", ToolName: "Skill", Category: "Skill", SkillName: "deploy"},
+	}
+	insertMessages(t, d, lrMsg)
+
+	// Fallback session: skill-call message has no timestamp.
+	insertSession(t, d, "fb1", "beta", func(s *Session) {
+		s.StartedAt = new("2024-06-05T08:00:00Z")
+		s.MessageCount = 1
+		s.Agent = "codex"
+	})
+	fbMsg := asstMsg("fb1", 0, "skill call")
+	fbMsg.Timestamp = ""
+	fbMsg.HasToolUse = true
+	fbMsg.ToolCalls = []ToolCall{
+		{SessionID: "fb1", ToolName: "Skill", Category: "Skill", SkillName: "build"},
+	}
+	insertMessages(t, d, fbMsg)
+
+	resp, err := d.GetAnalyticsSkills(ctx, filter)
+	require.NoError(t, err, "GetAnalyticsSkills")
+	require.Len(t, resp.BySkill, 2, "BySkill")
+
+	bySkill := map[string]SkillUsage{}
+	for _, s := range resp.BySkill {
+		bySkill[s.SkillName] = s
+	}
+
+	deploy, ok := bySkill["deploy"]
+	require.True(t, ok, "deploy present")
+	assert.Equal(t, "2024-06-20T15:00:00Z", deploy.LastUsedAt,
+		"deploy LastUsedAt uses message timestamp, not session start")
+
+	build, ok := bySkill["build"]
+	require.True(t, ok, "build present")
+	assert.Equal(t, "2024-06-05T08:00:00Z", build.LastUsedAt,
+		"build LastUsedAt falls back to session timestamp")
+
+	trend := map[string]int{}
+	for _, e := range resp.Trend {
+		if e.BySkill["deploy"] > 0 {
+			trend[e.Date] += e.BySkill["deploy"]
+		}
+	}
+	assert.Equal(t, map[string]int{"2024-06-17": 1}, trend,
+		"deploy trend bucket follows message timestamp week")
+}
+
+func TestGetAnalyticsSkillsSpreadsTrendAcrossWeeks(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	filter := AnalyticsFilter{
+		From:     "2024-06-01",
+		To:       "2024-06-30",
+		Timezone: "UTC",
+	}
+
+	// One long-running session invokes the same skill in two messages
+	// that fall in different weeks. Each call must bucket into its own
+	// week, not roll up onto the latest message's week.
+	insertSession(t, d, "sp1", "alpha", func(s *Session) {
+		s.StartedAt = new("2024-06-03T09:00:00Z")
+		s.MessageCount = 2
+		s.Agent = "claude"
+	})
+	early := asstMsgAt("sp1", 0, "early skill call", "2024-06-03T09:00:00Z")
+	early.HasToolUse = true
+	early.ToolCalls = []ToolCall{
+		{SessionID: "sp1", ToolName: "Skill", Category: "Skill", SkillName: "deploy"},
+	}
+	late := asstMsgAt("sp1", 1, "late skill call", "2024-06-17T15:00:00Z")
+	late.HasToolUse = true
+	late.ToolCalls = []ToolCall{
+		{SessionID: "sp1", ToolName: "Skill", Category: "Skill", SkillName: "deploy"},
+		{SessionID: "sp1", ToolName: "Skill", Category: "Skill", SkillName: "deploy"},
+	}
+	insertMessages(t, d, early, late)
+
+	resp, err := d.GetAnalyticsSkills(ctx, filter)
+	require.NoError(t, err, "GetAnalyticsSkills")
+	require.Len(t, resp.BySkill, 1, "BySkill")
+	assert.Equal(t, 3, resp.BySkill[0].CallCount, "rolled-up CallCount")
+	assert.Equal(t, 1, resp.BySkill[0].SessionCount, "SessionCount")
+
+	trend := map[string]int{}
+	for _, e := range resp.Trend {
+		if c := e.BySkill["deploy"]; c > 0 {
+			trend[e.Date] += c
+		}
+	}
+	assert.Equal(t, map[string]int{
+		"2024-06-03": 1,
+		"2024-06-17": 2,
+	}, trend, "each call buckets into its own message-timestamp week")
+}
+
+func TestBuildSkillsAnalyticsLastUsedChronological(t *testing.T) {
+	// The fractional-second timestamp is chronologically later but
+	// lexically smaller ('.' sorts before 'Z'), so a string compare
+	// would pick the wrong value.
+	rows := []SkillAnalyticsRow{
+		{
+			SessionID: "a", SkillName: "deploy", Date: "2024-06-10",
+			LastUsedAt: "2024-06-10T09:00:00Z", Count: 1,
+		},
+		{
+			SessionID: "b", SkillName: "deploy", Date: "2024-06-10",
+			LastUsedAt: "2024-06-10T09:00:00.500Z", Count: 1,
+		},
+	}
+
+	resp := BuildSkillsAnalytics(rows)
+	require.Len(t, resp.BySkill, 1, "BySkill")
+	assert.Equal(t, "2024-06-10T09:00:00.500Z",
+		resp.BySkill[0].LastUsedAt,
+		"LastUsedAt picks the chronologically latest timestamp")
+}
+
+func TestResolveSkillRowTime(t *testing.T) {
+	hour := 10
+	monday := 0 // ISO Mon=0
+	base := func() AnalyticsFilter {
+		return AnalyticsFilter{From: "2024-06-01", To: "2024-06-30", Timezone: "UTC"}
+	}
+	tests := []struct {
+		name          string
+		f             AnalyticsFilter
+		msgTS, sessTS string
+		wantUsed      string
+		wantDate      string
+		wantKeep      bool
+	}{
+		{"in range", base(), "2024-06-10T10:00:00Z", "2024-05-01T00:00:00Z",
+			"2024-06-10T10:00:00Z", "2024-06-10", true},
+		{"before range", base(), "2024-05-31T10:00:00Z", "ignored",
+			"2024-05-31T10:00:00Z", "2024-05-31", false},
+		{"after range", base(), "2024-07-01T10:00:00Z", "ignored",
+			"2024-07-01T10:00:00Z", "2024-07-01", false},
+		{"fallback to session ts", base(), "", "2024-06-15T08:00:00Z",
+			"2024-06-15T08:00:00Z", "2024-06-15", true},
+		{"hour excludes", func() AnalyticsFilter {
+			f := base()
+			f.Hour = &hour
+			return f
+		}(), "2024-06-10T09:00:00Z", "", "2024-06-10T09:00:00Z", "2024-06-10", false},
+		{"hour includes", func() AnalyticsFilter {
+			f := base()
+			f.Hour = &hour
+			return f
+		}(), "2024-06-10T10:00:00Z", "", "2024-06-10T10:00:00Z", "2024-06-10", true},
+		{"day-of-week excludes", func() AnalyticsFilter {
+			f := base()
+			f.DayOfWeek = &monday
+			return f
+		}(), "2024-06-11T10:00:00Z", "", "2024-06-11T10:00:00Z", "2024-06-11", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			used, date, keep := tc.f.ResolveSkillRowTime(tc.msgTS, tc.sessTS)
+			assert.Equal(t, tc.wantUsed, used, "usedTS")
+			assert.Equal(t, tc.wantDate, date, "date")
+			assert.Equal(t, tc.wantKeep, keep, "keep")
+		})
+	}
+}
+
+func TestGetAnalyticsSkillsDateBoundaries(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	filter := AnalyticsFilter{From: "2024-06-01", To: "2024-06-30", Timezone: "UTC"}
+
+	// The session starts before the range and uses the skill before,
+	// inside, and after it. Only the in-range call should count.
+	insertSession(t, d, "span", "alpha", func(s *Session) {
+		s.StartedAt = new("2024-05-20T09:00:00Z")
+		s.MessageCount = 3
+		s.Agent = "claude"
+	})
+	mkCall := func(ord int, ts string) Message {
+		m := asstMsgAt("span", ord, "call", ts)
+		m.HasToolUse = true
+		m.ToolCalls = []ToolCall{
+			{SessionID: "span", ToolName: "Skill", Category: "Skill", SkillName: "deploy"},
+		}
+		return m
+	}
+	insertMessages(t, d,
+		mkCall(0, "2024-05-25T10:00:00Z"), // before From
+		mkCall(1, "2024-06-10T10:00:00Z"), // in range
+		mkCall(2, "2024-07-05T10:00:00Z"), // after To
+	)
+
+	resp, err := d.GetAnalyticsSkills(ctx, filter)
+	require.NoError(t, err, "GetAnalyticsSkills")
+	require.Len(t, resp.BySkill, 1, "BySkill")
+	assert.Equal(t, "deploy", resp.BySkill[0].SkillName)
+	assert.Equal(t, 1, resp.BySkill[0].CallCount,
+		"only the in-range call counts, even though the session started "+
+			"before the range")
+	assert.Equal(t, "2024-06-10T10:00:00Z", resp.BySkill[0].LastUsedAt)
+
+	trend := map[string]int{}
+	for _, e := range resp.Trend {
+		if c := e.BySkill["deploy"]; c > 0 {
+			trend[e.Date] += c
+		}
+	}
+	assert.Equal(t, map[string]int{"2024-06-10": 1}, trend,
+		"only the in-range week is bucketed")
+}
+
 func TestAnalyticsSkillsToolCallsQueryAggregatesInSQL(t *testing.T) {
 	q := analyticsSkillsQuery("(?,?)")
 	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
 
 	assert.Contains(t, normalized,
-		"select session_id, trim(skill_name), count(*)")
+		"select tc.session_id, trim(tc.skill_name), count(*), "+
+			"coalesce(m.timestamp, '')")
 	assert.Contains(t, normalized,
-		"trim(coalesce(skill_name, '')) != ''")
+		"left join messages m on m.session_id = tc.session_id "+
+			"and m.id = tc.message_id")
 	assert.Contains(t, normalized,
-		"group by session_id, trim(skill_name)")
+		"trim(coalesce(tc.skill_name, '')) != ''")
+	assert.Contains(t, normalized,
+		"group by tc.session_id, trim(tc.skill_name), "+
+			"coalesce(m.timestamp, '')")
 }
 
 func TestGetAnalyticsToolsCanceled(t *testing.T) {

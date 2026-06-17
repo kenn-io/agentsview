@@ -107,16 +107,29 @@ func (c *analyticsProbeConn) QueryContext(
 			},
 		}, nil
 	case strings.Contains(normalized, "from tool_calls"):
-		if strings.Contains(normalized, "trim(coalesce(skill_name") {
-			if !strings.Contains(normalized, "group by session_id") ||
-				!strings.Contains(normalized, "trim(coalesce(skill_name") {
-				return nil, errors.New("skill query must group by session_id and skill_name")
+		if strings.Contains(normalized, "trim(coalesce(tc.skill_name") {
+			if !strings.Contains(normalized, "group by tc.session_id") ||
+				!strings.Contains(normalized, "m.timestamp") {
+				return nil, errors.New(
+					"skill query must group by session, skill, and message timestamp")
+			}
+			if !strings.Contains(normalized, "left join messages") {
+				return nil, errors.New("skill query must join messages")
+			}
+			if strings.Contains(normalized, "to_char(m.timestamp") {
+				return nil, errors.New(
+					"skill query must scan native message timestamps")
 			}
 			return &analyticsProbeRows{
-				columns: []string{"session_id", "skill_name", "count"},
+				columns: []string{
+					"session_id", "skill_name", "count", "last_used_at",
+				},
 				values: [][]driver.Value{
-					{"s1", "review-code", int64(2)},
-					{"s2", "review-code", int64(1)},
+					{
+						"s1", "review-code", int64(2),
+						time.Date(2024, 6, 3, 12, 30, 0, 0, time.UTC),
+					},
+					{"s2", "review-code", int64(1), nil},
 				},
 			}, nil
 		}
@@ -219,6 +232,9 @@ func TestGetAnalyticsSkillsAggregatesToolCallsInSQL(t *testing.T) {
 		{Project: "alpha", Count: 2},
 		{Project: "beta", Count: 1},
 	}, resp.BySkill[0].ProjectBreakdown)
+	assert.Equal(t, "2024-06-04T09:00:00Z", resp.BySkill[0].LastUsedAt,
+		"LastUsedAt is the latest message timestamp, "+
+			"with session fallback for null timestamps")
 }
 
 func TestQueryVelocityMsgsScansNativeTimestamps(t *testing.T) {

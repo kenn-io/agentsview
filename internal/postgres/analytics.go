@@ -1621,18 +1621,8 @@ func (s *Store) GetAnalyticsTools(
 func (s *Store) GetAnalyticsSkills(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SkillsAnalyticsResponse, error) {
-	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
-
-	var timeIDs map[string]bool
-	if f.HasTimeFilter() {
-		var err error
-		timeIDs, err = s.filteredSessionIDs(ctx, f)
-		if err != nil {
-			return db.SkillsAnalyticsResponse{}, err
-		}
-	}
+	where := buildAnalyticsWhereWithoutDate(f, pb)
 
 	sessQ := `SELECT id, ` + pgDateCol + `, agent, project
 		FROM sessions WHERE ` + where
@@ -1645,7 +1635,6 @@ func (s *Store) GetAnalyticsSkills(
 	defer sessRows.Close()
 
 	type sessInfo struct {
-		date    string
 		ts      string
 		agent   string
 		project string
@@ -1662,17 +1651,8 @@ func (s *Store) GetAnalyticsSkills(
 			return db.SkillsAnalyticsResponse{},
 				fmt.Errorf("scanning skill session: %w", err)
 		}
-		tsText := scanDateCol(ts)
-		date := localDate(tsText, loc)
-		if !inDateRange(date, f.From, f.To) {
-			continue
-		}
-		if timeIDs != nil && !timeIDs[id] {
-			continue
-		}
 		sessionMap[id] = sessInfo{
-			date:    date,
-			ts:      tsText,
+			ts:      scanDateCol(ts),
 			agent:   agent,
 			project: project,
 		}
@@ -1691,14 +1671,19 @@ func (s *Store) GetAnalyticsSkills(
 		func(chunk []string) error {
 			chunkPB := &paramBuilder{}
 			ph := pgInPlaceholders(chunk, chunkPB)
-			q := `SELECT session_id,
-					TRIM(COALESCE(skill_name, '')),
-					COUNT(*)
-				FROM tool_calls
-				WHERE session_id IN ` + ph + `
-					AND TRIM(COALESCE(skill_name, '')) != ''
-				GROUP BY session_id,
-					TRIM(COALESCE(skill_name, ''))`
+			q := `SELECT tc.session_id,
+					TRIM(COALESCE(tc.skill_name, '')),
+					COUNT(*),
+					m.timestamp
+				FROM tool_calls tc
+				LEFT JOIN messages m
+					ON m.session_id = tc.session_id
+					AND m.ordinal = tc.message_ordinal
+				WHERE tc.session_id IN ` + ph + `
+					AND TRIM(COALESCE(tc.skill_name, '')) != ''
+				GROUP BY tc.session_id,
+					TRIM(COALESCE(tc.skill_name, '')),
+					m.timestamp`
 			rows, qErr := s.pg.QueryContext(
 				ctx, q, chunkPB.args...,
 			)
@@ -1711,21 +1696,28 @@ func (s *Store) GetAnalyticsSkills(
 			for rows.Next() {
 				var sid, skill string
 				var count int
+				var lastTS *time.Time
 				if err := rows.Scan(
-					&sid, &skill, &count,
+					&sid, &skill, &count, &lastTS,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning skill tool_call: %w", err,
 					)
 				}
 				info := sessionMap[sid]
+				usedTS, date, keep := f.ResolveSkillRowTime(
+					scanDateCol(lastTS), info.ts,
+				)
+				if !keep {
+					continue
+				}
 				skillRows = append(skillRows, db.SkillAnalyticsRow{
 					SessionID:  sid,
 					SkillName:  skill,
 					Agent:      info.agent,
 					Project:    info.project,
-					Date:       info.date,
-					LastUsedAt: info.ts,
+					Date:       date,
+					LastUsedAt: usedTS,
 					Count:      count,
 				})
 			}

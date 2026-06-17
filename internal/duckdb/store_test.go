@@ -1747,6 +1747,123 @@ func TestGetChildSessionsOrderedByStartedAt(t *testing.T) {
 		duckSessionIDs(children))
 }
 
+// TestDuckGetAnalyticsSkillsAggregatesAcrossWeeks exercises the SQL
+// pushdown path: COUNT(*) aggregation per message timestamp and trend
+// buckets spread across the weeks a skill was actually used.
+func TestDuckGetAnalyticsSkillsAggregatesAcrossWeeks(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+
+	const sid = "dk-multi"
+	skill := func(use string) db.ToolCall {
+		return db.ToolCall{
+			ToolName: "Skill", Category: "Skill",
+			SkillName: "deploy", ToolUseID: use,
+		}
+	}
+	writes := []db.SessionBatchWrite{{
+		Session: syncSession(sid, "alpha", "first",
+			"2026-01-06T09:00:00.000Z", 3),
+		Messages: []db.Message{
+			syncMessage(sid, 0, "user", "go", "2026-01-06T09:00:00.000Z"),
+			syncMessage(sid, 1, "assistant", "two calls",
+				"2026-01-06T10:00:00.000Z",
+				skill("tu-1"), skill("tu-2")),
+			syncMessage(sid, 2, "assistant", "one call",
+				"2026-01-20T10:00:00.000Z",
+				skill("tu-3")),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "mirror.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	resp, err := store.GetAnalyticsSkills(ctx, db.AnalyticsFilter{
+		From: "2026-01-01", To: "2026-01-31", Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetAnalyticsSkills")
+	require.Len(t, resp.BySkill, 1, "BySkill")
+	assert.Equal(t, "deploy", resp.BySkill[0].SkillName)
+	assert.Equal(t, 3, resp.BySkill[0].CallCount, "CallCount")
+	assert.Equal(t, 1, resp.BySkill[0].SessionCount, "SessionCount")
+	assert.Equal(t, "2026-01-20T10:00:00Z", resp.BySkill[0].LastUsedAt,
+		"LastUsedAt is the latest message timestamp")
+
+	trend := map[string]int{}
+	for _, e := range resp.Trend {
+		if c := e.BySkill["deploy"]; c > 0 {
+			trend[e.Date] += c
+		}
+	}
+	assert.Equal(t, map[string]int{"2026-01-05": 2, "2026-01-19": 1}, trend,
+		"calls bucket into their own message-timestamp weeks")
+}
+
+// TestDuckGetAnalyticsSkillsFiltersByMessageDate checks that the date
+// filter applies to each call's message timestamp, not the session start:
+// a session that started before the range still contributes its in-range
+// call, and its out-of-range calls are dropped.
+func TestDuckGetAnalyticsSkillsFiltersByMessageDate(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+
+	const sid = "dk-span"
+	skill := func() db.ToolCall {
+		return db.ToolCall{
+			ToolName: "Skill", Category: "Skill", SkillName: "deploy",
+		}
+	}
+	writes := []db.SessionBatchWrite{{
+		Session: syncSession(sid, "alpha", "first",
+			"2026-01-20T09:00:00.000Z", 4),
+		Messages: []db.Message{
+			syncMessage(sid, 0, "user", "go", "2026-01-20T09:00:00.000Z"),
+			syncMessage(sid, 1, "assistant", "before",
+				"2026-01-25T10:00:00.000Z", skill()),
+			syncMessage(sid, 2, "assistant", "inrange",
+				"2026-02-10T10:00:00.000Z", skill()),
+			syncMessage(sid, 3, "assistant", "after",
+				"2026-03-05T10:00:00.000Z", skill()),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "mirror.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	resp, err := store.GetAnalyticsSkills(ctx, db.AnalyticsFilter{
+		From: "2026-02-01", To: "2026-02-28", Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetAnalyticsSkills")
+	require.Len(t, resp.BySkill, 1, "BySkill")
+	assert.Equal(t, "deploy", resp.BySkill[0].SkillName)
+	assert.Equal(t, 1, resp.BySkill[0].CallCount,
+		"only the in-range call counts")
+	assert.Equal(t, "2026-02-10T10:00:00Z", resp.BySkill[0].LastUsedAt)
+
+	trend := map[string]int{}
+	for _, e := range resp.Trend {
+		if c := e.BySkill["deploy"]; c > 0 {
+			trend[e.Date] += c
+		}
+	}
+	assert.Equal(t, map[string]int{"2026-02-09": 1}, trend,
+		"only the in-range week is bucketed")
+}
+
 func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	t.Helper()
 	ctx := context.Background()
