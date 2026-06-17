@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -1118,6 +1119,22 @@ func (s *Sync) pushMessages(
 				err,
 			)
 		}
+		localContentHashFP, err := s.local.MessageContentHashFingerprint(sessionID)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"computing local content hash fingerprint: %w",
+				err,
+			)
+		}
+		pgContentHashFP, err := pgMessageContentHashFingerprint(
+			ctx, tx, sessionID,
+		)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"computing pg content hash fingerprint: %w",
+				err,
+			)
+		}
 		localSysFP, err := s.local.SystemMessageFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
@@ -1176,6 +1193,7 @@ func (s *Sync) pushMessages(
 		if localSum == pgContentSum &&
 			localMax == pgContentMax &&
 			localMin == pgContentMin &&
+			localContentHashFP == pgContentHashFP &&
 			localSysFP == pgSystemFP.String &&
 			localTCCount == pgToolCallCount &&
 			localTCSum == pgTCContentSum &&
@@ -1515,6 +1533,36 @@ func pgMessageTokenFingerprint(
 			len(srcParentUUID), srcParentUUID,
 			isSidechain, isCompactBoundary,
 		)
+	}
+	return b.String(), rows.Err()
+}
+
+func pgMessageContentHashFingerprint(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) (string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT ordinal, COALESCE(content, ''), content_length
+		 FROM messages
+		 WHERE session_id = $1
+		 ORDER BY ordinal ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var ordinal, contentLength int
+		var content string
+		if err := rows.Scan(
+			&ordinal, &content, &contentLength,
+		); err != nil {
+			return "", err
+		}
+		sum := sha256.Sum256([]byte(db.SanitizeUTF8(content)))
+		fmt.Fprintf(&b, "%d|%d|%x;", ordinal, contentLength, sum)
 	}
 	return b.String(), rows.Err()
 }

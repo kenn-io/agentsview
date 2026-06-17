@@ -179,9 +179,8 @@ func ShelleyConversationExists(dbPath, conversationID string) bool {
 	return err == nil
 }
 
-// ShelleyConversationMeta holds lightweight per-conversation metadata
-// used by the sync engine for per-session skip detection without loading
-// message payloads.
+// ShelleyConversationMeta holds per-conversation state used by the sync
+// engine for per-session skip detection.
 type ShelleyConversationMeta struct {
 	RawID       string
 	VirtualPath string
@@ -190,10 +189,10 @@ type ShelleyConversationMeta struct {
 	// modified-between range queries that drive PG/DuckDB push never
 	// see a Shelley row as "future"; see shelleyChangeMtime.
 	FileMtime int64
-	// Fingerprint is a content digest over the conversation's messages.
-	// It is stored in file_hash and compared in the sync skip to catch
-	// same-second changes FileMtime's second precision cannot; see
-	// shelleyDigest.
+	// Fingerprint is a digest over every parser-observed conversation and
+	// message field. It is stored in file_hash and compared in the sync
+	// skip to catch same-second changes FileMtime's second precision
+	// cannot; see shelleyDigestConversation and shelleyDigestMessage.
 	Fingerprint string
 }
 
@@ -208,10 +207,11 @@ type ShelleyConversationMeta struct {
 //     ListSessionsModifiedBetween filters file_mtime <= now for PG/DuckDB
 //     push; a synthetic future value would drop a just-synced Shelley row
 //     from a same-second push until a later run.
-//   - Fingerprint, a content digest stored in file_hash, distinguishes any
-//     same-second change the timestamp cannot: appends, in-place rewrites,
-//     and even length-preserving edits (shelleyDigest length-frames each
-//     field). The skip re-parses whenever it differs.
+//   - Fingerprint, a digest stored in file_hash, distinguishes any
+//     same-second parser-visible change the timestamp cannot: metadata
+//     edits, appends, in-place rewrites, and even length-preserving edits
+//     (the digest length-frames each field). The skip re-parses whenever
+//     it differs.
 //
 // Computing the digest means reading message payloads, which the cheaper
 // siblings (Zed, Kiro) avoid because their sub-second / millisecond
@@ -219,16 +219,42 @@ type ShelleyConversationMeta struct {
 // second-precision timestamp does not, so the content read is the price of
 // not silently skipping a rewrite.
 //
-// shelleyDigest folds one message row into a running FNV-1a hash. The
-// sequence_id and per-field length prefixes make the digest sensitive to
-// row identity and field boundaries, so moving bytes between fields (a
-// length-preserving edit) still changes it. Callers must feed rows in a
-// fixed order (sequence_id ascending) so the parse and skip paths agree.
-func shelleyDigest(h hash.Hash64, seq int64, llm, user, usage string) {
+// shelleyDigestConversation and shelleyDigestMessage fold every
+// parser-observed Shelley field into a running FNV-1a hash. Each field is
+// length-framed so equal total byte counts cannot collide by moving bytes
+// between fields. Callers must feed messages in sequence_id order so the
+// parse, skip, and source-mtime paths agree.
+func shelleyDigestConversation(h hash.Hash64, conv shelleyConversationRow) {
+	shelleyDigestFields(
+		h,
+		"conversation",
+		conv.conversationID,
+		conv.slug,
+		strconv.FormatBool(conv.userInitiated),
+		conv.createdAt,
+		conv.updatedAt,
+		conv.cwd,
+		conv.parentConversationID,
+		conv.model,
+	)
+}
+
+func shelleyDigestMessage(h hash.Hash64, r shelleyMessageRow) {
+	shelleyDigestFields(
+		h,
+		"message",
+		strconv.FormatInt(r.sequenceID, 10),
+		r.msgType,
+		r.llmData,
+		r.userData,
+		r.usageData,
+		r.createdAt,
+	)
+}
+
+func shelleyDigestFields(h hash.Hash64, fields ...string) {
 	var n [8]byte
-	binary.LittleEndian.PutUint64(n[:], uint64(seq))
-	_, _ = h.Write(n[:])
-	for _, s := range []string{llm, user, usage} {
+	for _, s := range fields {
 		binary.LittleEndian.PutUint64(n[:], uint64(len(s)))
 		_, _ = h.Write(n[:])
 		_, _ = h.Write([]byte(s))
@@ -242,21 +268,26 @@ func shelleyFingerprint(h hash.Hash64) string {
 }
 
 // ListShelleyConversationMetas returns the skip state for every
-// conversation: its updated_at timestamp (FileMtime) and a content digest
-// (Fingerprint). It scans message payloads ordered by conversation and
-// sequence_id, hashing each conversation's rows the same way the parse
+// conversation: its updated_at timestamp (FileMtime) and parser-visible
+// digest (Fingerprint). It scans message payloads ordered by conversation
+// and sequence_id, hashing each conversation's rows the same way the parse
 // loop does, so the meta digest and the stored file_hash match for
 // unchanged conversations. It shares the caller's open connection.
 func ListShelleyConversationMetas(
 	conn *sql.DB, dbPath string,
 ) ([]ShelleyConversationMeta, error) {
 	rows, err := conn.Query(
-		`SELECT m.conversation_id, COALESCE(c.updated_at, ''),
-		        COALESCE(m.sequence_id, 0), COALESCE(m.llm_data, ''),
-		        COALESCE(m.user_data, ''), COALESCE(m.usage_data, '')
+		`SELECT c.conversation_id, COALESCE(c.slug, ''),
+		        COALESCE(c.user_initiated, 1),
+		        COALESCE(c.created_at, ''), COALESCE(c.updated_at, ''),
+		        COALESCE(c.cwd, ''), COALESCE(c.parent_conversation_id, ''),
+		        COALESCE(c.model, ''),
+		        COALESCE(m.sequence_id, 0), COALESCE(m.type, ''),
+		        COALESCE(m.llm_data, ''), COALESCE(m.user_data, ''),
+		        COALESCE(m.usage_data, ''), COALESCE(m.created_at, '')
 		   FROM conversations c
 		   JOIN messages m ON m.conversation_id = c.conversation_id
-		  ORDER BY m.conversation_id, m.sequence_id`,
+		  ORDER BY c.conversation_id, m.sequence_id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("listing shelley conversations: %w", err)
@@ -264,9 +295,9 @@ func ListShelleyConversationMetas(
 	defer rows.Close()
 
 	var (
-		metas      []ShelleyConversationMeta
-		curID      string
-		curUpdated string
+		metas []ShelleyConversationMeta
+		curID string
+		conv  shelleyConversationRow
 	)
 	h := fnv.New64a()
 	flush := func() {
@@ -277,23 +308,29 @@ func ListShelleyConversationMetas(
 		metas = append(metas, ShelleyConversationMeta{
 			RawID:       curID,
 			VirtualPath: ShelleyVirtualPath(dbPath, curID),
-			FileMtime:   parseTimestamp(curUpdated).UnixNano(),
+			FileMtime:   parseTimestamp(conv.updatedAt).UnixNano(),
 			Fingerprint: shelleyFingerprint(h),
 		})
 	}
 	for rows.Next() {
-		var id, updatedAt, llm, user, usage string
-		var seq int64
+		var rowConv shelleyConversationRow
+		var msg shelleyMessageRow
 		if err := rows.Scan(
-			&id, &updatedAt, &seq, &llm, &user, &usage,
+			&rowConv.conversationID, &rowConv.slug,
+			&rowConv.userInitiated, &rowConv.createdAt,
+			&rowConv.updatedAt, &rowConv.cwd,
+			&rowConv.parentConversationID, &rowConv.model,
+			&msg.sequenceID, &msg.msgType, &msg.llmData,
+			&msg.userData, &msg.usageData, &msg.createdAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning shelley conversation meta: %w", err)
 		}
-		if id != curID {
+		if rowConv.conversationID != curID {
 			flush()
-			curID, curUpdated, h = id, updatedAt, fnv.New64a()
+			curID, conv, h = rowConv.conversationID, rowConv, fnv.New64a()
+			shelleyDigestConversation(h, conv)
 		}
-		shelleyDigest(h, seq, llm, user, usage)
+		shelleyDigestMessage(h, msg)
 	}
 	flush()
 	return metas, rows.Err()
@@ -303,7 +340,8 @@ func ListShelleyConversationMetas(
 // virtual Shelley source path. Used by the live watcher, which compares it
 // for inequality and treats a zero/error result as "source gone". It
 // returns the conversation's updated_at plus a sub-second term derived
-// from the content digest, so the watcher reacts to same-second edits.
+// from the parser-visible digest, so the watcher reacts to same-second
+// edits.
 // This value is watcher-only and never written to file_mtime or
 // range-filtered, so the sub-second term is harmless here.
 func ShelleySourceMtime(path string) (int64, error) {
@@ -317,12 +355,8 @@ func ShelleySourceMtime(path string) (int64, error) {
 	}
 	defer conn.Close()
 
-	var updatedAt string
-	if err := conn.QueryRow(
-		`SELECT COALESCE(updated_at, '') FROM conversations
-		  WHERE conversation_id = ?`,
-		conversationID,
-	).Scan(&updatedAt); err != nil {
+	conv, err := loadShelleyConversation(conn, conversationID)
+	if err != nil {
 		return 0, fmt.Errorf(
 			"loading shelley conversation mtime %s: %w",
 			conversationID, err,
@@ -330,8 +364,9 @@ func ShelleySourceMtime(path string) (int64, error) {
 	}
 
 	rows, err := conn.Query(
-		`SELECT COALESCE(sequence_id, 0), COALESCE(llm_data, ''),
-		        COALESCE(user_data, ''), COALESCE(usage_data, '')
+		`SELECT COALESCE(sequence_id, 0), COALESCE(type, ''),
+		        COALESCE(llm_data, ''), COALESCE(user_data, ''),
+		        COALESCE(usage_data, ''), COALESCE(created_at, '')
 		   FROM messages WHERE conversation_id = ?
 		  ORDER BY sequence_id`,
 		conversationID,
@@ -343,18 +378,21 @@ func ShelleySourceMtime(path string) (int64, error) {
 	}
 	defer rows.Close()
 	h := fnv.New64a()
+	shelleyDigestConversation(h, conv)
 	for rows.Next() {
-		var seq int64
-		var llm, user, usage string
-		if err := rows.Scan(&seq, &llm, &user, &usage); err != nil {
+		var r shelleyMessageRow
+		if err := rows.Scan(
+			&r.sequenceID, &r.msgType, &r.llmData,
+			&r.userData, &r.usageData, &r.createdAt,
+		); err != nil {
 			return 0, fmt.Errorf("scanning shelley message: %w", err)
 		}
-		shelleyDigest(h, seq, llm, user, usage)
+		shelleyDigestMessage(h, r)
 	}
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	return parseTimestamp(updatedAt).UnixNano() +
+	return parseTimestamp(conv.updatedAt).UnixNano() +
 		int64(h.Sum64()%1_000_000_000), nil
 }
 
@@ -403,9 +441,7 @@ func ParseShelleyConversationFromDB(
 	if err != nil {
 		return nil, err
 	}
-	messages, fingerprint, err := loadShelleyMessages(
-		conn, rawID, conv.model,
-	)
+	messages, fingerprint, err := loadShelleyMessages(conn, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -461,7 +497,7 @@ type shelleyMessageRow struct {
 }
 
 func loadShelleyMessages(
-	conn *sql.DB, conversationID, convModel string,
+	conn *sql.DB, conv shelleyConversationRow,
 ) ([]ParsedMessage, string, error) {
 	// All generations are included, ordered by sequence_id. A generation
 	// bump is a context-reset/compaction boundary within the conversation
@@ -475,17 +511,18 @@ func loadShelleyMessages(
 		   FROM messages
 		  WHERE conversation_id = ?
 		  ORDER BY sequence_id ASC`,
-		conversationID,
+		conv.conversationID,
 	)
 	if err != nil {
 		return nil, "", fmt.Errorf(
-			"listing shelley messages for %s: %w", conversationID, err,
+			"listing shelley messages for %s: %w", conv.conversationID, err,
 		)
 	}
 	defer rows.Close()
 
 	var messages []ParsedMessage
 	h := fnv.New64a()
+	shelleyDigestConversation(h, conv)
 	for rows.Next() {
 		var r shelleyMessageRow
 		if err := rows.Scan(
@@ -494,12 +531,12 @@ func loadShelleyMessages(
 		); err != nil {
 			return nil, "", fmt.Errorf("scanning shelley message: %w", err)
 		}
-		// Digest every row (even ones decodeShelleyMessage drops) in
-		// sequence_id order, exactly as ListShelleyConversationMetas does,
-		// so the stored fingerprint matches the meta skip query; a mismatch
-		// would re-parse forever. See shelleyDigest.
-		shelleyDigest(h, r.sequenceID, r.llmData, r.userData, r.usageData)
-		if msg, ok := decodeShelleyMessage(r, convModel); ok {
+		// Digest every parser-observed row field (even for rows
+		// decodeShelleyMessage drops) in sequence_id order, exactly as
+		// ListShelleyConversationMetas does, so the stored fingerprint
+		// matches the meta skip query; a mismatch would re-parse forever.
+		shelleyDigestMessage(h, r)
+		if msg, ok := decodeShelleyMessage(r, conv.model); ok {
 			messages = append(messages, msg)
 		}
 	}

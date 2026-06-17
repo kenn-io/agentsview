@@ -115,6 +115,79 @@ func TestPushSystemFingerprintCollisionRegression(t *testing.T) {
 	checkIsSystem(t, pg, sessID, secondSet, 7)
 }
 
+func TestPushMessageContentHashRewriteRegression(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_contenthash_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "content-hash-rewrite-001"
+	sess := db.Session{
+		ID:               sessID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "shelley",
+		MessageCount:     2,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	msgs := []db.Message{
+		{
+			SessionID:     sessID,
+			Ordinal:       1,
+			Role:          "user",
+			Content:       "question",
+			ContentLength: len("question"),
+		},
+		{
+			SessionID:     sessID,
+			Ordinal:       2,
+			Role:          "assistant",
+			Content:       "answer aaaa",
+			ContentLength: len("answer aaaa"),
+		},
+	}
+	require.NoError(t, localDB.InsertMessages(msgs),
+		"InsertMessages first content")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push first content")
+	assertPGMessageContent(t, pg, sessID, 2, "answer aaaa")
+
+	msgs[1].Content = "answer bbbb"
+	msgs[1].ContentLength = len("answer bbbb")
+	require.NoError(t, localDB.ReplaceSessionMessages(sessID, msgs),
+		"ReplaceSessionMessages rewritten content")
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		"clearing boundary state")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push rewritten content")
+	assertPGMessageContent(t, pg, sessID, 2, "answer bbbb")
+}
+
 // TestPushSessionTerminationStatus verifies that pushSession round-trips
 // the termination_status column to PG: a non-nil value writes the string,
 // and a subsequent push with nil clears the column back to NULL via the
@@ -361,6 +434,23 @@ func checkIsSystem(
 	for i := range wantTotal {
 		assert.True(t, seen[i], "ordinal %d missing from PG messages", i)
 	}
+}
+
+func assertPGMessageContent(
+	t *testing.T,
+	pg *sql.DB,
+	sessionID string,
+	ordinal int,
+	want string,
+) {
+	t.Helper()
+	var got string
+	require.NoError(t, pg.QueryRow(
+		`SELECT content FROM messages
+		  WHERE session_id = $1 AND ordinal = $2`,
+		sessionID, ordinal,
+	).Scan(&got), "read pg message content")
+	assert.Equal(t, want, got)
 }
 
 // TestPushMessagesSanitizesNULBytes verifies that a message whose

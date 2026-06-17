@@ -422,6 +422,63 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 		"local_modified_at must select the rewritten session for pushes")
 }
 
+// TestSyncShelleySameSecondMetadataRewrite covers conversation fields the
+// parser reads outside the message payloads. A same-second slug/cwd edit
+// must change the stored fingerprint so the bulk skip re-parses the
+// conversation and refreshes session metadata.
+func TestSyncShelleySameSecondMetadataRewrite(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
+			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
+				"", "2026-06-15T10:00:00Z"},
+			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"answer"}]}`,
+				"", "2026-06-15T10:00:10Z"},
+		})
+
+	engine, database := newShelleyEngine(t, dir)
+	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	before, err := database.GetSessionFull(
+		context.Background(), "shelley:cMAIN1",
+	)
+	require.NoError(t, err, "GetSessionFull before metadata rewrite")
+	require.NotNil(t, before, "session before metadata rewrite")
+	require.NotNil(t, before.SessionName, "session_name before rewrite")
+	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
+	require.NotNil(t, before.FileHash, "file_hash before rewrite")
+	assert.Equal(t, "main", *before.SessionName)
+	assert.Equal(t, "app", before.Project)
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE conversations
+		    SET slug = 'renamed',
+		        cwd = '/home/u/dev/renamed-app'
+		  WHERE conversation_id = 'cMAIN1'`,
+	)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	after, err := database.GetSessionFull(
+		context.Background(), "shelley:cMAIN1",
+	)
+	require.NoError(t, err, "GetSessionFull after metadata rewrite")
+	require.NotNil(t, after, "session after metadata rewrite")
+	require.NotNil(t, after.SessionName, "session_name after rewrite")
+	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
+	require.NotNil(t, after.FileHash, "file_hash after rewrite")
+	assert.Equal(t, *before.FileMtime, *after.FileMtime,
+		"same-second metadata rewrite keeps the real updated_at timestamp")
+	assert.NotEqual(t, *before.FileHash, *after.FileHash,
+		"metadata rewrite must change the Shelley fingerprint")
+	assert.Equal(t, "renamed", *after.SessionName)
+	assert.Equal(t, "renamed_app", after.Project)
+}
+
 // TestSyncShelleyLengthPreservingRewrite is the case a byte-length signal
 // cannot catch: a same-second in-place edit that changes content while
 // keeping the exact byte length (and sequence_id and updated_at). Only a

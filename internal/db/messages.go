@@ -1175,11 +1175,10 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 
 // MessageContentHashFingerprint returns an exact ordered fingerprint
 // of per-message body content: ordinal, the stored content_length
-// column, and a SHA-256 over the sanitized content. The parse-diff
-// comparator uses it instead of the aggregate
-// MessageContentFingerprint (sum/max/min of content_length, kept for
-// the PG push fast-path), which cannot see equal-length body rewrites
-// or per-message length changes whose aggregates collide.
+// column, and a SHA-256 over the sanitized content. Parse-diff and PG
+// push use it alongside the aggregate MessageContentFingerprint
+// (sum/max/min of content_length), which cannot see equal-length body
+// rewrites or per-message length changes whose aggregates collide.
 func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
 	rows, err := db.getReader().Query(
 		`SELECT ordinal, content, content_length
