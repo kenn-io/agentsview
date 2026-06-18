@@ -429,3 +429,86 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 	assert.Equal(t, "dup-b", shared[1].SessionID)
 	assert.Equal(t, 900, shared[1].OutputTokens)
 }
+
+// TestPGGetActivityReportAutomationFilterAndSessionSplit confirms the shared
+// AnalyticsFilter automation class is honored through the PG analytics WHERE
+// builder and that the Totals carry the automated/interactive session-count
+// split. Mirrors the SQLite
+// TestGetActivityReport_AutomationFilterAndSessionSplit.
+func TestPGGetActivityReportAutomationFilterAndSessionSplit(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_daily_report_automation_test")
+	ctx := context.Background()
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count, is_automated
+		) VALUES
+			('auto1', 'test-machine', 'proj1', 'claude',
+			 '2026-06-16T10:00:00Z'::timestamptz,
+			 '2026-06-16T10:02:00Z'::timestamptz, 2, 1, TRUE),
+			('auto2', 'test-machine', 'proj1', 'claude',
+			 '2026-06-16T11:00:00Z'::timestamptz,
+			 '2026-06-16T11:02:00Z'::timestamptz, 2, 1, TRUE),
+			('human', 'test-machine', 'proj2', 'codex',
+			 '2026-06-16T12:00:00Z'::timestamptz,
+			 '2026-06-16T12:02:00Z'::timestamptz, 2, 1, FALSE)`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model
+		) VALUES
+			('auto1', 1, 'user', 'x', '2026-06-16T10:00:00Z'::timestamptz, 1, ''),
+			('auto1', 2, 'assistant', 'x', '2026-06-16T10:02:00Z'::timestamptz, 1, 'opus'),
+			('auto2', 1, 'user', 'x', '2026-06-16T11:00:00Z'::timestamptz, 1, ''),
+			('auto2', 2, 'assistant', 'x', '2026-06-16T11:02:00Z'::timestamptz, 1, 'opus'),
+			('human', 1, 'user', 'x', '2026-06-16T12:00:00Z'::timestamptz, 1, ''),
+			('human', 2, 'assistant', 'x', '2026-06-16T12:02:00Z'::timestamptz, 1, 'gpt5')`)
+	require.NoError(t, err, "insert messages")
+
+	tests := []struct {
+		name            string
+		filter          db.AnalyticsFilter
+		wantAutomated   int
+		wantInteractive int
+		wantIDs         []string
+	}{
+		{
+			name:            "all keeps both classes",
+			filter:          db.AnalyticsFilter{Timezone: "UTC"},
+			wantAutomated:   2,
+			wantInteractive: 1,
+			wantIDs:         []string{"auto1", "auto2", "human"},
+		},
+		{
+			name:            "exclude automated keeps interactive only",
+			filter:          db.AnalyticsFilter{Timezone: "UTC", ExcludeAutomated: true},
+			wantAutomated:   0,
+			wantInteractive: 1,
+			wantIDs:         []string{"human"},
+		},
+		{
+			name:            "exclude interactive keeps automated only",
+			filter:          db.AnalyticsFilter{Timezone: "UTC", ExcludeInteractive: true},
+			wantAutomated:   2,
+			wantInteractive: 0,
+			wantIDs:         []string{"auto1", "auto2"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := store.GetActivityReport(ctx, tc.filter,
+				pgDayQuery(t, "2026-06-16", "UTC"))
+			require.NoError(t, err)
+			assert.Equal(t, len(tc.wantIDs), r.Totals.Sessions)
+			assert.Equal(t, tc.wantAutomated, r.Totals.AutomatedSessions)
+			assert.Equal(t, tc.wantInteractive, r.Totals.InteractiveSessions)
+			ids := reportSessionIDsPG(r.BySession)
+			require.Len(t, ids, len(tc.wantIDs))
+			for _, id := range tc.wantIDs {
+				assert.Contains(t, ids, id)
+			}
+		})
+	}
+}

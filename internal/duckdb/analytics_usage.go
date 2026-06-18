@@ -164,6 +164,9 @@ func duckBuildAnalyticsWhere(
 	if f.ExcludeAutomated {
 		preds = append(preds, q("is_automated")+" = FALSE")
 	}
+	if f.ExcludeInteractive {
+		preds = append(preds, q("is_automated")+" = TRUE")
+	}
 	if f.ActiveSince != "" {
 		activeSince := f.ActiveSince
 		if parsed, ok := parseAnalyticsTime(f.ActiveSince); ok {

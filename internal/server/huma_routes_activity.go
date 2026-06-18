@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -24,6 +25,10 @@ type activityReportInput struct {
 	Project  string `query:"project" doc:"Filter by project"`
 	Agent    string `query:"agent" doc:"Filter by agent"`
 	Machine  string `query:"machine" doc:"Filter by machine"`
+	// Automation classes the report: "all" (default) keeps both, "interactive"
+	// drops automated sessions, "automated" drops interactive ones. Empty is
+	// treated as "all"; any other value is rejected.
+	Automation string `query:"automation" default:"all" doc:"Automation class: all, interactive, or automated"`
 }
 
 func (s *Server) humaActivityReport(
@@ -50,11 +55,18 @@ func (s *Server) humaActivityReport(
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
-	// The activity report intentionally includes one-shot and automated
-	// sessions, unlike analytics which excludes them by default.
+	excludeAutomated, excludeInteractive, err := activityAutomationFilter(in.Automation)
+	if err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	// The activity report intentionally includes one-shot sessions, unlike
+	// analytics which excludes them by default. The automation class is the
+	// caller's choice (default "all" keeps both automated and interactive).
 	f := db.AnalyticsFilter{
 		Timezone: tz, Project: in.Project, Agent: in.Agent, Machine: in.Machine,
-		ExcludeOneShot: false, ExcludeAutomated: false,
+		ExcludeOneShot:     false,
+		ExcludeAutomated:   excludeAutomated,
+		ExcludeInteractive: excludeInteractive,
 	}
 	r, err := s.db.GetActivityReport(ctx, f, q)
 	if err != nil {
@@ -67,4 +79,26 @@ func (s *Server) humaActivityReport(
 		return nil, internalError("activity report error", err)
 	}
 	return &jsonOutput[activity.Report]{Body: r}, nil
+}
+
+// activityAutomationFilter maps the activity report's automation query value to
+// the AnalyticsFilter class exclusions. Empty and "all" keep both classes;
+// "interactive" drops automated sessions; "automated" drops interactive ones.
+// Any other value is an error so a typo surfaces as 400 rather than silently
+// returning the unfiltered report.
+func activityAutomationFilter(
+	automation string,
+) (excludeAutomated, excludeInteractive bool, err error) {
+	switch automation {
+	case "", "all":
+		return false, false, nil
+	case "interactive":
+		return true, false, nil
+	case "automated":
+		return false, true, nil
+	default:
+		return false, false, fmt.Errorf(
+			"invalid automation %q (want all, interactive, or automated)",
+			automation)
+	}
 }

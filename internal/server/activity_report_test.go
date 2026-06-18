@@ -241,3 +241,90 @@ func TestActivityReportEndpoint_BucketCountCap(t *testing.T) {
 	}))
 	assertStatus(t, w, http.StatusBadRequest)
 }
+
+// TestActivityReportEndpoint_AutomationFilter confirms the activity endpoint's
+// automation query param selects the requested class end to end: the default
+// and "all" keep both classes, "interactive" drops automated sessions, and
+// "automated" drops interactive ones. It also confirms the response Totals
+// carry the automated/interactive session-count split.
+func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
+	te := setup(t)
+
+	// Automated: a single-turn session whose first message matches a known
+	// automated (roborev) prompt prefix, which the classifier turns into
+	// is_automated = 1. UserMessageCount = 1 satisfies the single-turn gate.
+	autoStart, autoEnd := activityDate+"T12:00:00Z", activityDate+"T12:04:00Z"
+	te.seedSession(t, "automated", "beta", 2, func(s *db.Session) {
+		s.Agent = "codex"
+		s.StartedAt = &autoStart
+		s.EndedAt = &autoEnd
+		s.FirstMessage = new("You are a code reviewer.")
+		s.UserMessageCount = 1
+	})
+	te.seedMessages(t, "automated", 2, func(i int, m *db.Message) {
+		if i == 0 {
+			m.Content = "You are a code reviewer."
+		}
+		m.Timestamp = []string{
+			activityDate + "T12:00:00Z", activityDate + "T12:02:00Z",
+		}[i]
+	})
+
+	humanStart, humanEnd := activityDate+"T13:00:00Z", activityDate+"T13:04:00Z"
+	te.seedSession(t, "human", "alpha", 2, func(s *db.Session) {
+		s.Agent = "claude"
+		s.StartedAt = &humanStart
+		s.EndedAt = &humanEnd
+	})
+	te.seedMessages(t, "human", 2, func(i int, m *db.Message) {
+		m.Timestamp = []string{
+			activityDate + "T13:00:00Z", activityDate + "T13:02:00Z",
+		}[i]
+	})
+
+	tests := []struct {
+		name            string
+		automation      string
+		wantAutomated   int
+		wantInteractive int
+		wantIDs         []string
+	}{
+		{"default keeps both", "", 1, 1, []string{"automated", "human"}},
+		{"all keeps both", "all", 1, 1, []string{"automated", "human"}},
+		{"interactive drops automated", "interactive", 0, 1, []string{"human"}},
+		{"automated drops interactive", "automated", 1, 0, []string{"automated"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			params := map[string]string{
+				"preset": "day", "date": activityDate, "timezone": "UTC",
+			}
+			if tc.automation != "" {
+				params["automation"] = tc.automation
+			}
+			w := te.get(t, buildPathURL("/api/v1/activity/report", params))
+			assertStatus(t, w, http.StatusOK)
+			resp := decode[activity.Report](t, w)
+			assert.Equal(t, len(tc.wantIDs), resp.Totals.Sessions)
+			assert.Equal(t, tc.wantAutomated, resp.Totals.AutomatedSessions)
+			assert.Equal(t, tc.wantInteractive, resp.Totals.InteractiveSessions)
+			ids := make(map[string]struct{}, len(resp.BySession))
+			for _, s := range resp.BySession {
+				ids[s.SessionID] = struct{}{}
+			}
+			assert.Len(t, ids, len(tc.wantIDs))
+			for _, id := range tc.wantIDs {
+				assert.Contains(t, ids, id)
+			}
+		})
+	}
+}
+
+func TestActivityReportEndpoint_BadAutomation(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
+		"preset": "day", "date": activityDate, "timezone": "UTC",
+		"automation": "bogus",
+	}))
+	assertStatus(t, w, http.StatusBadRequest)
+}

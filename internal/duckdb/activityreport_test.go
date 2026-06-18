@@ -333,3 +333,101 @@ func TestDuckGetActivityReportZeroCostKeepsPrimaryModel(t *testing.T) {
 	assert.Equal(t, "model-x", r.BySession[0].PrimaryModel,
 		"zero-cost usage must still report its known model as primary")
 }
+
+// TestDuckGetActivityReportAutomationFilterAndSessionSplit confirms the shared
+// AnalyticsFilter automation class is honored through the DuckDB analytics
+// WHERE builder and that the Totals session-count split survives the sync into
+// DuckDB. Mirrors the SQLite
+// TestGetActivityReport_AutomationFilterAndSessionSplit.
+func TestDuckGetActivityReportAutomationFilterAndSessionSplit(t *testing.T) {
+	ctx := context.Background()
+
+	// The sync path (WriteSessionBatchAtomic) classifies is_automated from the
+	// transcript: a single-turn session whose first user message matches a
+	// known automated (roborev) prompt prefix. Setting the struct flag alone
+	// would be overridden by updateSessionAutomationFromMessagesTx, so the
+	// automated sessions carry an automated first user message and a single
+	// user turn, exactly as a real roborev review session does.
+	auto1 := syncSession("auto1", "proj1", "You are a code reviewer.", "2026-06-14T10:00:00.000Z", 2)
+	auto1.Agent = "claude"
+	auto2 := syncSession("auto2", "proj1", "You are a code reviewer.", "2026-06-14T11:00:00.000Z", 2)
+	auto2.Agent = "claude"
+	human := syncSession("human", "proj2", "human first", "2026-06-14T12:00:00.000Z", 2)
+	human.Agent = "codex"
+
+	writes := []db.SessionBatchWrite{
+		{
+			Session: auto1,
+			Messages: []db.Message{
+				syncMessage("auto1", 0, "user", "You are a code reviewer.", "2026-06-14T10:00:00.000Z"),
+				syncMessage("auto1", 1, "assistant", "x", "2026-06-14T10:02:00.000Z"),
+			},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+		{
+			Session: auto2,
+			Messages: []db.Message{
+				syncMessage("auto2", 0, "user", "You are a code reviewer.", "2026-06-14T11:00:00.000Z"),
+				syncMessage("auto2", 1, "assistant", "x", "2026-06-14T11:02:00.000Z"),
+			},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+		{
+			Session: human,
+			Messages: []db.Message{
+				syncMessage("human", 0, "user", "u", "2026-06-14T12:00:00.000Z"),
+				syncMessage("human", 1, "assistant", "x", "2026-06-14T12:02:00.000Z"),
+			},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+	}
+	store := activityReportStore(t, writes, nil)
+
+	tests := []struct {
+		name            string
+		filter          db.AnalyticsFilter
+		wantAutomated   int
+		wantInteractive int
+		wantIDs         []string
+	}{
+		{
+			name:            "all keeps both classes",
+			filter:          db.AnalyticsFilter{Timezone: "UTC"},
+			wantAutomated:   2,
+			wantInteractive: 1,
+			wantIDs:         []string{"auto1", "auto2", "human"},
+		},
+		{
+			name:            "exclude automated keeps interactive only",
+			filter:          db.AnalyticsFilter{Timezone: "UTC", ExcludeAutomated: true},
+			wantAutomated:   0,
+			wantInteractive: 1,
+			wantIDs:         []string{"human"},
+		},
+		{
+			name:            "exclude interactive keeps automated only",
+			filter:          db.AnalyticsFilter{Timezone: "UTC", ExcludeInteractive: true},
+			wantAutomated:   2,
+			wantInteractive: 0,
+			wantIDs:         []string{"auto1", "auto2"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := store.GetActivityReport(ctx, tc.filter,
+				duckDayQuery(t, "2026-06-14", "UTC"))
+			require.NoError(t, err)
+			assert.Equal(t, len(tc.wantIDs), r.Totals.Sessions)
+			assert.Equal(t, tc.wantAutomated, r.Totals.AutomatedSessions)
+			assert.Equal(t, tc.wantInteractive, r.Totals.InteractiveSessions)
+			ids := make(map[string]struct{}, len(r.BySession))
+			for _, s := range r.BySession {
+				ids[s.SessionID] = struct{}{}
+			}
+			require.Len(t, ids, len(tc.wantIDs))
+			for _, id := range tc.wantIDs {
+				assert.Contains(t, ids, id)
+			}
+		})
+	}
+}

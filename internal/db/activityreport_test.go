@@ -437,3 +437,83 @@ func TestGetActivityReport_OpenSessionWithInRangeMessageIncluded(t *testing.T) {
 		"open session active in-range must not be dropped by the started_at fallback")
 	assert.Equal(t, 1, r.Totals.Sessions)
 }
+
+// TestGetActivityReport_AutomationFilterAndSessionSplit confirms the
+// AnalyticsFilter automation class selects the right sessions and that the
+// Totals carry the automated/interactive session-count split. "all" keeps
+// both classes; ExcludeAutomated keeps only interactive sessions;
+// ExcludeInteractive (the mirror predicate) keeps only automated ones.
+func TestGetActivityReport_AutomationFilterAndSessionSplit(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Two automated (roborev-style) sessions and one interactive, all timed
+	// on 2026-06-16 so each is a candidate for that day's report. Automated
+	// sessions are classified the way the sync path does it: a single-turn
+	// session whose first message matches a known automated prompt prefix.
+	for _, id := range []string{"auto1", "auto2"} {
+		start := "2026-06-16T10:00:00Z"
+		end := "2026-06-16T10:02:00Z"
+		insertSession(t, d, id, "proj1", func(s *Session) {
+			s.Agent = "claude"
+			s.FirstMessage = Ptr("You are a code reviewer.")
+			s.UserMessageCount = 1
+			s.StartedAt = Ptr(start)
+			s.EndedAt = Ptr(end)
+		})
+		seedMessage(t, d, id, 1, "user", start, "")
+		seedMessage(t, d, id, 2, "assistant", end, "opus")
+	}
+	insertSession(t, d, "human", "proj2", func(s *Session) {
+		s.Agent = "codex"
+		s.StartedAt = Ptr("2026-06-16T12:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T12:02:00Z")
+	})
+	seedMessage(t, d, "human", 1, "user", "2026-06-16T12:00:00Z", "")
+	seedMessage(t, d, "human", 2, "assistant", "2026-06-16T12:02:00Z", "gpt5")
+
+	tests := []struct {
+		name            string
+		filter          AnalyticsFilter
+		wantAutomated   int
+		wantInteractive int
+		wantIDs         []string
+	}{
+		{
+			name:            "all keeps both classes",
+			filter:          AnalyticsFilter{Timezone: "UTC"},
+			wantAutomated:   2,
+			wantInteractive: 1,
+			wantIDs:         []string{"auto1", "auto2", "human"},
+		},
+		{
+			name:            "exclude automated keeps interactive only",
+			filter:          AnalyticsFilter{Timezone: "UTC", ExcludeAutomated: true},
+			wantAutomated:   0,
+			wantInteractive: 1,
+			wantIDs:         []string{"human"},
+		},
+		{
+			name:            "exclude interactive keeps automated only",
+			filter:          AnalyticsFilter{Timezone: "UTC", ExcludeInteractive: true},
+			wantAutomated:   2,
+			wantInteractive: 0,
+			wantIDs:         []string{"auto1", "auto2"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := d.GetActivityReport(ctx, tc.filter,
+				dayQuery(t, "2026-06-16", "UTC"))
+			require.NoError(t, err)
+			assert.Equal(t, len(tc.wantIDs), r.Totals.Sessions)
+			assert.Equal(t, tc.wantAutomated, r.Totals.AutomatedSessions)
+			assert.Equal(t, tc.wantInteractive, r.Totals.InteractiveSessions)
+			ids := reportSessionIDs(r.BySession)
+			require.Len(t, ids, len(tc.wantIDs))
+			for _, id := range tc.wantIDs {
+				assert.Contains(t, ids, id)
+			}
+		})
+	}
+}

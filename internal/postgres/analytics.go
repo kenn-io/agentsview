@@ -169,6 +169,9 @@ func buildAnalyticsWhereWithDate(
 	if f.ExcludeAutomated {
 		preds = append(preds, "is_automated = FALSE")
 	}
+	if f.ExcludeInteractive {
+		preds = append(preds, "is_automated = TRUE")
+	}
 	if f.ActiveSince != "" {
 		preds = append(preds,
 			"COALESCE(ended_at, started_at, created_at)"+

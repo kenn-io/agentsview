@@ -128,6 +128,10 @@ type Totals struct {
 	InteractiveAgentMinutes float64 `json:"interactive_agent_minutes"`
 	AutomatedCost           float64 `json:"automated_cost"`
 	InteractiveCost         float64 `json:"interactive_cost"`
+	// Session counts split by class (AutomatedSessions + InteractiveSessions
+	// == Sessions), so the summary card can show "total (auto / int)".
+	AutomatedSessions   int `json:"automated_sessions"`
+	InteractiveSessions int `json:"interactive_sessions"`
 }
 
 // KeyMinutes is one breakdown row (by project/model/agent). It carries both the
@@ -656,6 +660,11 @@ func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 	r.BySession = make([]SessionRow, 0, len(sessions))
 	for _, s := range sessions {
 		au := s.IsAutomated
+		if au {
+			r.Totals.AutomatedSessions++
+		} else {
+			r.Totals.InteractiveSessions++
+		}
 		projSet[s.Project] = struct{}{}
 		row := SessionRow{
 			SessionID: s.SessionID, Title: s.Title, Project: s.Project,
