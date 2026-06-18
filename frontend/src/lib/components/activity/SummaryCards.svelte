@@ -61,7 +61,9 @@
       },
       {
         label: "Agent-minutes",
-        value: fmtInt(t.agent_minutes),
+        // Round to a whole minute so the card shows "134", not "134.226";
+        // matches the Breakdowns rounding of the same metric.
+        value: fmtInt(Math.round(t.agent_minutes)),
       },
       {
         label: "Sessions",

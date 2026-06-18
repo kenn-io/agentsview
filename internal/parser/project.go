@@ -170,10 +170,13 @@ func init() {
 		{marker: sep + ".config" + sep + "middleman" + sep + "worktrees" + sep + "github.com" + sep, projectPart: 1, minParts: 3},
 		// ~/.codex/worktrees/$WORKTREE_ID/$REPO[/...]
 		{marker: sep + ".codex" + sep + "worktrees" + sep, projectPart: 1, minParts: 2},
-		// roborev CI: <dataDir>/ci-worktrees/$REPO/roborev-ci-<jobID>-<id>[/...].
+		// roborev CI: ~/.roborev/ci-worktrees/$REPO/roborev-ci-<jobID>-<id>[/...].
 		// roborev nests the ephemeral worktree under a repo-named parent so the
-		// owning project survives the generated leaf name.
-		{marker: sep + "ci-worktrees" + sep, projectPart: 0, minParts: 2},
+		// owning project survives the generated leaf name. Anchored to the
+		// .roborev data dir (like the tool-anchored siblings above) so an
+		// unrelated path that merely contains a "ci-worktrees" directory is not
+		// matched.
+		{marker: sep + ".roborev" + sep + "ci-worktrees" + sep, projectPart: 0, minParts: 2},
 	}
 }
 

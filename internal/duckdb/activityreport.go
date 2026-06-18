@@ -71,11 +71,12 @@ func (s *Store) GetActivityReport(
 // overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
 // IDs. The ID set defines the scope for the activity and usage fetches.
 // DuckDB stores native timestamps, so the timestamp fallbacks need no
-// NULLIF guard. The Title COALESCE guards s.project with NULLIF on the
-// empty string because the project column is NOT NULL with a default of
-// the empty string here: without the guard an empty project would win the
-// fallback and yield an empty Title instead of the session id, diverging
-// from the SQLite and PostgreSQL Title expressions.
+// NULLIF guard. The Title expression mirrors the shared NULLIF/COALESCE
+// shape used by SQLite and PostgreSQL so an empty-string
+// display_name/session_name/first_message/project never wins the COALESCE
+// fallback (those columns can be empty here, and project is NOT NULL with an
+// empty-string default), yielding the same Title as the other two backends
+// instead of a possibly-empty one.
 func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -85,7 +86,7 @@ func (s *Store) activityReportSessions(
 
 	query := `SELECT
 		s.id,
-		COALESCE(s.display_name, s.session_name, s.first_message, NULLIF(s.project, ''), s.id) AS display_name,
+		COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
 		s.project,
 		s.agent,
 		s.machine,

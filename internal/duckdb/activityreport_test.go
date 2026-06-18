@@ -219,3 +219,81 @@ func TestDuckGetActivityReportPriorDayWithinPadExcluded(t *testing.T) {
 	assert.Equal(t, 1, r.Totals.Sessions)
 	assert.Equal(t, 0, r.Totals.UntimedSessions)
 }
+
+// TestDuckGetActivityReportUsageDedupSubSecondOrder confirms DuckDB orders the
+// usage stream by the parsed instant so first-seen-wins dedup keeps the
+// chronologically earlier row when two rows share a dedup key in the same
+// second -- one whole-second ("...00Z"), one fractional ("...00.123Z"). DuckDB
+// already sorts on the parsed time (not the formatted text), so this locks in
+// that cross-backend behavior, matching the SQLite
+// TestGetActivityReport_UsageDedupSubSecondOrder.
+func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
+	ctx := context.Background()
+	pricing := []db.ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-20250514",
+		InputPerMTok:  3.0,
+		OutputPerMTok: 15.0,
+	}}
+
+	// A resumed/forked pair shares one (claude_message_id, claude_request_id)
+	// across two sessions: the earlier whole-second instant carries 500 output
+	// tokens, the later fractional instant 9000. Dedup must keep the 500 row.
+	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
+	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
+	earlierMsg.Model = "claude-sonnet-4-20250514"
+	earlierMsg.ClaudeMessageID = "dup-m"
+	earlierMsg.ClaudeRequestID = "dup-r"
+	earlierMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	earlierMsg.OutputTokens = 500
+
+	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:00.123Z", 1)
+	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:30:00.123Z")
+	laterMsg.Model = "claude-sonnet-4-20250514"
+	laterMsg.ClaudeMessageID = "dup-m"
+	laterMsg.ClaudeRequestID = "dup-r"
+	laterMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":9000}`)
+	laterMsg.OutputTokens = 9000
+
+	writes := []db.SessionBatchWrite{
+		{Session: earlier, Messages: []db.Message{earlierMsg},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: later, Messages: []db.Message{laterMsg},
+			DataVersion: 1, ReplaceMessages: true},
+	}
+	store := activityReportStore(t, writes, pricing)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens,
+		"first-seen dedup keeps the chronologically earlier whole-second row")
+}
+
+// TestDuckGetActivityReportZeroCostKeepsPrimaryModel confirms a usage-only
+// (untimed) session whose known-model usage carries zero cost still reports
+// that model as primary through the DuckDB path, guarding the shared zero-cost
+// fallback end-to-end. Mirrors the aggregator unit test
+// TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel.
+func TestDuckGetActivityReportZeroCostKeepsPrimaryModel(t *testing.T) {
+	ctx := context.Background()
+	sess := syncSession("u", "proj1", "first", "2026-06-14T10:30:00Z", 1)
+	msg := syncMessage("u", 0, "assistant", "x", "2026-06-14T10:30:00Z")
+	// Known model, unpriced and zero tokens -> a usage row with zero cost.
+	msg.Model = "model-x"
+	msg.TokenUsage = json.RawMessage(`{"input_tokens":0,"output_tokens":0}`)
+	msg.OutputTokens = 0
+	writes := []db.SessionBatchWrite{{
+		Session: sess, Messages: []db.Message{msg},
+		DataVersion: 1, ReplaceMessages: true,
+	}}
+	store := activityReportStore(t, writes, nil)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	require.Len(t, r.BySession, 1)
+	assert.Equal(t, "model-x", r.BySession[0].PrimaryModel,
+		"zero-cost usage must still report its known model as primary")
+}

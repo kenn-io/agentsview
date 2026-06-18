@@ -543,3 +543,56 @@ func TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel(t *testing.T) {
 		"zero-cost usage must still report its known model as primary")
 	assert.Equal(t, []string{"m1"}, row.Models)
 }
+
+// TestAggregate_BreakdownCostDeterministicAcrossSessionOrder pins that the
+// per-key cost rollup does not depend on the order sessions arrive in. The
+// activityReportSessions queries impose no ORDER BY, so SQLite, PostgreSQL, and
+// DuckDB can return the same sessions in different orders. addKey sums float64
+// costs across sessions and float addition is not associative -- (0.1+0.2)+0.3
+// rounds to a different last bit than (0.3+0.2)+0.1 -- so without a
+// deterministic session order the three backends produced 1-ULP-different
+// breakdown costs for identical data. Aggregate sorts sessions by ID, so any
+// input order yields byte-identical breakdowns.
+func TestAggregate_BreakdownCostDeterministicAcrossSessionOrder(t *testing.T) {
+	loc := mustLoad(t, "UTC")
+	start := mustStart(t, "2026-06-16T00:00:00Z")
+	end := start.AddDate(0, 0, 1)
+	p := Params{
+		RangeStart: start, RangeEnd: end, Loc: loc,
+		EffectiveEnd: end, Partial: false,
+		GapCapSeconds: 300, Bucket: BucketSpec{BucketMinute, 300},
+	}
+	// Three usage-only sessions sharing one project, agent, and model so all
+	// their costs roll into a single by-project/agent/model key. Costs
+	// 0.1/0.2/0.3 are chosen because (0.1+0.2)+0.3 != (0.3+0.2)+0.1 in float64,
+	// so reversing the session order shifts the rolled-up cost by one ULP unless
+	// the order is normalized.
+	usage := []UsageRow{
+		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			OutputTokens: 10, Cost: 0.1, ClaudeMessageID: "s1", ClaudeRequestID: "r"},
+		{SessionID: "s2", Model: "m1", Timestamp: "2026-06-16T11:00:00Z",
+			OutputTokens: 20, Cost: 0.2, ClaudeMessageID: "s2", ClaudeRequestID: "r"},
+		{SessionID: "s3", Model: "m1", Timestamp: "2026-06-16T12:00:00Z",
+			OutputTokens: 30, Cost: 0.3, ClaudeMessageID: "s3", ClaudeRequestID: "r"},
+	}
+	meta := func(id string) SessionMeta {
+		return SessionMeta{SessionID: id, Project: "P", Agent: "claude"}
+	}
+	ascending := []SessionMeta{meta("s1"), meta("s2"), meta("s3")}
+	descending := []SessionMeta{meta("s3"), meta("s2"), meta("s1")}
+
+	rAsc := Aggregate(p, ascending, nil, usage)
+	rDesc := Aggregate(p, descending, nil, usage)
+
+	require.Len(t, rAsc.ByModel, 1)
+	require.Len(t, rDesc.ByModel, 1)
+	require.Len(t, rAsc.ByAgent, 1)
+	require.Len(t, rAsc.ByProject, 1)
+	// Exact float equality (not InDelta): byte-for-byte parity is the point.
+	require.Equal(t, rAsc.ByModel[0].Cost, rDesc.ByModel[0].Cost,
+		"by-model cost must not depend on session arrival order")
+	require.Equal(t, rAsc.ByAgent[0].Cost, rDesc.ByAgent[0].Cost,
+		"by-agent cost must not depend on session arrival order")
+	require.Equal(t, rAsc.ByProject[0].Cost, rDesc.ByProject[0].Cost,
+		"by-project cost must not depend on session arrival order")
+}

@@ -217,7 +217,7 @@ func (db *DB) activityReportUsage(
 			usageMessageEligibility+" AND m.session_id IN "+ph,
 			usageEventEligibility+" AND ue.session_id IN "+ph)
 		query := dailyUsageRowSelectFromRows(rowsSQL) + `
-			AND u.ts >= ? AND u.ts < ?`
+			AND u.ts >= ? AND u.ts <= ?`
 
 		args := make([]any, 0, len(chunkArgs)*2+2)
 		args = append(args, chunkArgs...) // message-where chunk

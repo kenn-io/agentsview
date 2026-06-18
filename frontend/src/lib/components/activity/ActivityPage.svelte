@@ -11,16 +11,18 @@
   import ActivityInsight from "./ActivityInsight.svelte";
 
   // Date-only (local) bounds for the inline insight panel, derived from the
-  // loaded report's range. `range_end` is exclusive, so subtract 1ms before
-  // formatting to get the inclusive last local day, matching the date-only
-  // insight convention. Fall back to the anchor date before a report loads.
+  // loaded report's resolved range, the authoritative source for the current
+  // selection (day/week/month/custom are all resolved server-side). `range_end`
+  // is exclusive, so subtract 1ms before formatting to get the inclusive last
+  // local day. The panel is gated on a loaded report (below), so these are read
+  // only when a report exists; the empty-string fallback never reaches the API.
   const insightFrom = $derived(
-    activity.report ? localDateStr(new Date(activity.report.range_start)) : activity.date,
+    activity.report ? localDateStr(new Date(activity.report.range_start)) : "",
   );
   const insightTo = $derived(
     activity.report
       ? localDateStr(new Date(new Date(activity.report.range_end).getTime() - 1))
-      : activity.date,
+      : "",
   );
 
   // Page-local drill-down: clicking a Concurrency bucket filters the sessions
@@ -136,12 +138,17 @@
       <div class="status">No data for this period.</div>
     {/if}
 
-    <!-- Range-scoped, not report-filter-scoped: kept outside the
-         loading/error/report chain so it stays visible and only
-         refetches when the range changes, not on filter/report reloads. -->
-    <div class="chart-panel">
-      <ActivityInsight dateFrom={insightFrom} dateTo={insightTo} />
-    </div>
+    <!-- Range-scoped, not report-filter-scoped: kept outside the loading/error
+         chain so it stays visible across filter reloads and only refetches when
+         the resolved range changes. Gated on a loaded report so its bounds come
+         from the authoritative resolved range, never a stale or pre-load
+         single-day fallback (a deep link to a week/month/custom range would
+         otherwise fetch an insight for the wrong span while the report loads). -->
+    {#if activity.report}
+      <div class="chart-panel">
+        <ActivityInsight dateFrom={insightFrom} dateTo={insightTo} />
+      </div>
+    {/if}
   </div>
 </div>
 

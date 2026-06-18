@@ -69,14 +69,23 @@ type parityEvent struct {
 	// exclude identically. Zero values mean "use the session defaults".
 	model        string
 	outputTokens int
+	// claudeMessageID/claudeRequestID set the message's Claude dedup keys.
+	// When the same pair recurs across sessions the usage union dedups to a
+	// single first-seen-wins row, exercising the cross-backend ordering of
+	// duplicate usage rows.
+	claudeMessageID string
+	claudeRequestID string
 }
 
 // parityFixture returns the sessions seeded into every backend. Two sessions
 // overlap on parityDate across two projects and two models (driving peak
 // concurrency 2 and multi-key breakdowns); a third, non-overlapping session
 // adds a second interval to the alpha/model-x rollups so the breakdowns are
-// non-trivial. All timestamps are well inside the day so the report is a full,
-// non-partial day.
+// non-trivial. Three more untimed sessions exercise the usage edge cases the
+// dedup/primary-model fixes touched: a resumed/forked pair (parity-d/parity-e)
+// sharing one Claude dedup key in the same second (whole-second vs fractional),
+// and a zero-cost known-model session (parity-f). All timestamps are well
+// inside the day so the report is a full, non-partial day.
 func parityFixture() []parityFixtureSession {
 	return []parityFixtureSession{
 		{
@@ -113,6 +122,39 @@ func parityFixture() []parityFixtureSession {
 				// diverge and the deep-compare below would fail.
 				{role: "assistant", ts: parityDate + "T14:06:00Z",
 					model: "<synthetic>", outputTokens: 9999},
+			},
+		},
+		{
+			// Resumed/forked dedup pair: parity-d and parity-e share one
+			// (claude_message_id, claude_request_id) in the same second, one
+			// whole-second instant and one fractional. First-seen-wins dedup
+			// keeps the earlier whole-second row (500 tokens) on every backend;
+			// the later fractional duplicate (9000) is dropped. A text sort of
+			// the timestamp would invert them ('.' < 'Z'), so this guards the
+			// parsed-instant ordering across backends.
+			id: "parity-d", project: "gamma", model: "model-x",
+			outputTokens: 500,
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T11:00:00Z",
+					claudeMessageID: "dup-m", claudeRequestID: "dup-r"},
+			},
+		},
+		{
+			id: "parity-e", project: "gamma", model: "model-x",
+			outputTokens: 9000,
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T11:00:00.123Z",
+					claudeMessageID: "dup-m", claudeRequestID: "dup-r"},
+			},
+		},
+		{
+			// Zero-cost usage-only session: a single known-model assistant
+			// message with zero tokens (zero cost). Every backend must still
+			// report model-x as the primary model rather than a blank one.
+			id: "parity-f", project: "delta", model: "model-x",
+			outputTokens: 0,
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T12:00:00Z"},
 			},
 		},
 	}
@@ -177,6 +219,12 @@ func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 			Content:       ev.role + " " + fs.id,
 			Timestamp:     ev.ts,
 			ContentLength: len(ev.role + " " + fs.id),
+		}
+		if ev.claudeMessageID != "" {
+			m.ClaudeMessageID = ev.claudeMessageID
+		}
+		if ev.claudeRequestID != "" {
+			m.ClaudeRequestID = ev.claudeRequestID
 		}
 		if ev.role == "assistant" {
 			model := fs.model
@@ -388,17 +436,35 @@ func assertParityForCase(
 }
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
-// the fixture: a full day with peak concurrency 2, three sessions, non-zero
-// cost, and exactly 4300 output tokens. The token total proves the synthetic
-// model usage row (9999 tokens) is excluded by the eligibility filter -- not
-// merely that the backends agree on a wrong number -- so the deep-compare above
-// extends that exclusion guarantee to PG and DuckDB.
+// the fixture: a full day with peak concurrency 2, six sessions, non-zero cost,
+// and exactly 4800 output tokens. The token total proves the synthetic-model
+// usage row (9999 tokens) is excluded and the dedup pair collapses to its
+// earlier 500-token row -- not merely that the backends agree on a wrong number
+// -- so the deep-compare above extends those guarantees, plus the zero-cost
+// primary-model fallback, to PG and DuckDB.
 func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 3, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 6, r.Totals.Sessions, "fixture session count")
 	require.Greater(t, r.Totals.Cost, 0.0, "fixture must exercise cost")
-	require.Equal(t, 4300, r.Totals.OutputTokens,
-		"synthetic-model usage row must be excluded from the totals")
+	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
+	// excluded) + 500 (parity-d wins the dedup) + 0 (parity-e deduped away;
+	// parity-f zero-cost) = 4800.
+	require.Equal(t, 4800, r.Totals.OutputTokens,
+		"synthetic row excluded and the dedup pair collapses to its earlier row")
+
+	bySession := map[string]activity.SessionRow{}
+	for _, s := range r.BySession {
+		bySession[s.SessionID] = s
+	}
+	require.Contains(t, bySession, "parity-d")
+	require.Contains(t, bySession, "parity-e")
+	require.Contains(t, bySession, "parity-f")
+	require.Equal(t, 500, bySession["parity-d"].OutputTokens,
+		"dedup keeps the earlier whole-second duplicate's tokens")
+	require.Equal(t, 0, bySession["parity-e"].OutputTokens,
+		"the later fractional duplicate is dropped")
+	require.Equal(t, "model-x", bySession["parity-f"].PrimaryModel,
+		"zero-cost usage still reports its known model as primary")
 }

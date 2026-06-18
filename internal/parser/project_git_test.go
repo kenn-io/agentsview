@@ -634,7 +634,7 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 		{
 			name: "RoborevCIWorktree",
 			cwd: filepath.FromSlash(
-				"/data/ci-worktrees/widget/roborev-ci-101-1001",
+				"/data/.roborev/ci-worktrees/widget/roborev-ci-101-1001",
 			),
 			branch: "",
 			want:   "widget",
@@ -642,7 +642,7 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 		{
 			name: "RoborevCIWorktreeDashRepoNormalized",
 			cwd: filepath.FromSlash(
-				"/data/ci-worktrees/data-pipeline/roborev-ci-102-1002",
+				"/data/.roborev/ci-worktrees/data-pipeline/roborev-ci-102-1002",
 			),
 			branch: "",
 			want:   "data_pipeline",
@@ -650,10 +650,21 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 		{
 			name: "RoborevCIWorktreeSubdir",
 			cwd: filepath.FromSlash(
-				"/data/ci-worktrees/service/roborev-ci-103-1003/internal/foo",
+				"/data/.roborev/ci-worktrees/service/roborev-ci-103-1003/internal/foo",
 			),
 			branch: "",
 			want:   "service",
+		},
+		{
+			// A bare "ci-worktrees" directory NOT under .roborev is not a
+			// roborev CI worktree: the anchored marker must not fire, so the
+			// name falls back to the path basename instead of the repo part.
+			name: "CIWorktreesDirNotUnderRoborevNotMatched",
+			cwd: filepath.FromSlash(
+				"/data/work/ci-worktrees/widget/build-123",
+			),
+			branch: "",
+			want:   "build_123",
 		},
 	}
 

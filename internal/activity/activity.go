@@ -132,7 +132,8 @@ type Totals struct {
 
 // KeyMinutes is one breakdown row (by project/model/agent). It carries both the
 // combined agent-minutes and cost (so the UI can sort by either metric) plus the
-// additive automated/interactive segments of each, rendered as a stacked bar.
+// additive automated/interactive segments of each, exposed for a stacked-bar
+// rendering the current UI does not yet draw (it shows the combined metric).
 type KeyMinutes struct {
 	Key                     string  `json:"key"`
 	AgentMinutes            float64 `json:"agent_minutes"`
@@ -599,6 +600,15 @@ func windowIndex(windows []BucketWindow, t time.Time) int {
 // model, all sorted by minutes descending with empty/zero keys dropped.
 func buildSessionsTable(r *Report, start, end, effEnd time.Time,
 	sessions []SessionMeta, ivs []interval, usage []UsageRow) {
+	// Sort sessions by ID so the cost and minute rollups below accumulate in
+	// one deterministic order. addKey sums float64 values across sessions and
+	// float addition is not associative, so the unspecified per-backend row
+	// order (no activityReportSessions query imposes ORDER BY) would otherwise
+	// yield 1-ULP-different breakdown costs across SQLite, PostgreSQL, and
+	// DuckDB for identical data.
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].SessionID < sessions[j].SessionID
+	})
 	// Per-session interval minutes + model minutes + active window.
 	type sAgg struct {
 		minutes     float64

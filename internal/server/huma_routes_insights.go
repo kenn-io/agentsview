@@ -156,7 +156,11 @@ func (s *Server) humaGenerateInsight(
 			Project:  req.Project,
 			Prompt:   req.Prompt,
 		}
-		if req.DateTo > req.DateFrom {
+		// Attach the activity summary for any valid range, single day
+		// included: daily_activity insights are commonly one day and the
+		// summary (concurrency, peak, breakdowns) is exactly that day's
+		// overview. The validator above guarantees DateTo >= DateFrom.
+		if req.DateTo >= req.DateFrom {
 			summary, err := s.activityRangeSummary(hctx.Context(), req)
 			if err != nil {
 				log.Printf("insight activity summary error: %v", err)
@@ -330,10 +334,15 @@ func (s *Server) humaGenerateInsight(
 	}}, nil
 }
 
-// activityRangeSummary resolves the requested multi-day range into an activity
-// report and condenses it into a RangeSummary for the insight prompt. The
-// range is the half-open span [DateFrom 00:00 UTC, DateTo+1day 00:00 UTC), and
-// the report excludes automated sessions to match BuildPrompt's session set.
+// activityRangeSummary resolves the requested range into an activity report and
+// condenses it into a RangeSummary for the insight prompt. The range is the
+// half-open span [DateFrom 00:00 UTC, DateTo+1day 00:00 UTC). It excludes
+// automated sessions so the summary reflects the same interactive-only work
+// BuildPrompt's prompt focuses on; the two otherwise select sessions
+// differently (this uses the activity report's half-open UTC window with an
+// ended_at fallback, BuildPrompt uses ListSessions' calendar-date match on the
+// start date), so the summary is a range-level overview, not a row-for-row
+// mirror of BuildPrompt's session list.
 func (s *Server) activityRangeSummary(
 	ctx context.Context, req generateInsightRequest,
 ) (*insight.RangeSummary, error) {
