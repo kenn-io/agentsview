@@ -11,14 +11,16 @@ class ResizeObserverMock {
 }
 
 function makeReport(overrides: Partial<Report> = {}): Report {
+  // idx 2 (peak 3) carries a mixed split (2 interactive / 1 automated) for the
+  // stacking and split-tooltip tests; idx 3 (peak 1) is all-interactive.
   const buckets = [
-    { start: "2026-06-16T00:00:00Z", end: "2026-06-16T03:00:00Z", max_agents: 0, agent_minutes: 0, output_tokens: 0, cost: 0 },
-    { start: "2026-06-16T03:00:00Z", end: "2026-06-16T06:00:00Z", max_agents: 2, agent_minutes: 12, output_tokens: 4000, cost: 0.4 },
-    { start: "2026-06-16T06:00:00Z", end: "2026-06-16T09:00:00Z", max_agents: 3, agent_minutes: 30, output_tokens: 9000, cost: 0.9 },
-    { start: "2026-06-16T09:00:00Z", end: "2026-06-16T12:00:00Z", max_agents: 1, agent_minutes: 8, output_tokens: 2000, cost: 0.2 },
-    { start: "2026-06-16T12:00:00Z", end: "2026-06-16T15:00:00Z", max_agents: 0, agent_minutes: 0, output_tokens: 0, cost: 0 },
+    { start: "2026-06-16T00:00:00Z", end: "2026-06-16T03:00:00Z", max_agents: 0, agent_minutes: 0, output_tokens: 0, cost: 0, interactive_at_peak: 0, automated_at_peak: 0 },
+    { start: "2026-06-16T03:00:00Z", end: "2026-06-16T06:00:00Z", max_agents: 2, agent_minutes: 12, output_tokens: 4000, cost: 0.4, interactive_at_peak: 1, automated_at_peak: 1 },
+    { start: "2026-06-16T06:00:00Z", end: "2026-06-16T09:00:00Z", max_agents: 3, agent_minutes: 30, output_tokens: 9000, cost: 0.9, interactive_at_peak: 2, automated_at_peak: 1 },
+    { start: "2026-06-16T09:00:00Z", end: "2026-06-16T12:00:00Z", max_agents: 1, agent_minutes: 8, output_tokens: 2000, cost: 0.2, interactive_at_peak: 1, automated_at_peak: 0 },
+    { start: "2026-06-16T12:00:00Z", end: "2026-06-16T15:00:00Z", max_agents: 0, agent_minutes: 0, output_tokens: 0, cost: 0, interactive_at_peak: 0, automated_at_peak: 0 },
   ];
-  return {
+  const report = {
     peak: { agents: 3, at: "2026-06-16T06:00:00Z" },
     totals: {
       active_minutes: 50,
@@ -51,6 +53,15 @@ function makeReport(overrides: Partial<Report> = {}): Report {
     intervals: [],
     ...overrides,
   } as Report;
+  // Backfill the peak-automation split onto any bucket literal that omits it
+  // (most fixtures only set max_agents), so the stacked bars get real geometry
+  // instead of NaN. Unspecified buckets default to all-interactive.
+  report.buckets = (report.buckets ?? []).map((b) => ({
+    interactive_at_peak: b.max_agents,
+    automated_at_peak: 0,
+    ...b,
+  }));
+  return report;
 }
 
 function popoverReport(): Report {
@@ -119,7 +130,7 @@ describe("ConcurrencyTimeline", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders exactly buckets.length solid bars", async () => {
+  it("renders one interactive and one automated segment per bucket", async () => {
     const report = makeReport();
     const c = mount(ConcurrencyTimeline, {
       target: document.body,
@@ -127,8 +138,35 @@ describe("ConcurrencyTimeline", () => {
     });
     await tick();
 
-    const bars = document.querySelectorAll(".concurrency-bar");
-    expect(bars.length).toBe(report.buckets!.length);
+    const interactive = document.querySelectorAll(".concurrency-seg.interactive");
+    const automated = document.querySelectorAll(".concurrency-seg.automated");
+    expect(interactive.length).toBe(report.buckets!.length);
+    expect(automated.length).toBe(report.buckets!.length);
+
+    unmount(c);
+  });
+
+  it("stacks a taller interactive base under a shorter automated cap", async () => {
+    const report = makeReport();
+    const c = mount(ConcurrencyTimeline, {
+      target: document.body,
+      props: { report },
+    });
+    await tick();
+    // Bucket idx 2 peaks at 3 (2 interactive + 1 automated).
+    const interactive = document.querySelectorAll(
+      ".concurrency-seg.interactive",
+    )[2] as SVGRectElement;
+    const automated = document.querySelectorAll(
+      ".concurrency-seg.automated",
+    )[2] as SVGRectElement;
+    const h = (el: SVGRectElement) => Number(el.getAttribute("height"));
+    const y = (el: SVGRectElement) => Number(el.getAttribute("y"));
+    // The automated cap has real height and sits above (smaller y) the taller
+    // interactive base.
+    expect(h(automated)).toBeGreaterThan(0);
+    expect(h(interactive)).toBeGreaterThan(h(automated));
+    expect(y(automated)).toBeLessThan(y(interactive));
 
     unmount(c);
   });
@@ -215,6 +253,37 @@ describe("ConcurrencyTimeline", () => {
     expect(tip!.textContent).toContain("output tokens");
     expect(tip!.textContent).toContain("9,000");
     expect(tip!.textContent).toContain("$0.90");
+    unmount(c);
+    target.remove();
+  });
+
+  it("splits only the peak count in the tooltip, leaving agent-min combined", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    await tick();
+    const hit = target.querySelectorAll(".slot-hit")[2] as SVGRectElement; // peak 3 = 2 int / 1 auto
+    hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const tip = target.querySelector(".tooltip");
+    expect(tip!.textContent).toContain("peak 3 (2 int / 1 auto)");
+    // agent-minutes stays a single combined figure, not split by automation.
+    expect(tip!.textContent).toContain("30.0 agent-min");
+    unmount(c);
+    target.remove();
+  });
+
+  it("omits the peak split when the bucket has no automated agent", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    await tick();
+    const hit = target.querySelectorAll(".slot-hit")[3] as SVGRectElement; // peak 1, all interactive
+    hit.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const tip = target.querySelector(".tooltip");
+    expect(tip!.textContent).toContain("peak 1");
+    expect(tip!.textContent).not.toContain("int /");
     unmount(c);
     target.remove();
   });
@@ -308,7 +377,7 @@ describe("ConcurrencyTimeline", () => {
     target.remove();
   });
 
-  it("marks the selected bucket's bar", async () => {
+  it("marks the selected bucket with an outline and brightened segments", async () => {
     const target = document.createElement("div");
     document.body.appendChild(target);
     const c = mount(ConcurrencyTimeline, {
@@ -316,7 +385,8 @@ describe("ConcurrencyTimeline", () => {
       props: { report: popoverReport(), selectedBucket: 0 },
     });
     await tick();
-    expect(target.querySelector(".concurrency-bar.selected")).toBeTruthy();
+    expect(target.querySelector(".concurrency-outline")).toBeTruthy();
+    expect(target.querySelector(".concurrency-seg.selected")).toBeTruthy();
     unmount(c);
     target.remove();
   });

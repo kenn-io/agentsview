@@ -93,13 +93,21 @@
     return fmtMinuteRange(startMs, endMs);
   }
 
+  // Only the peak count splits by automation; the bucket's agent-minutes and
+  // cost stay combined (the API does not break those down per bucket), so the
+  // split annotation sits on "peak" alone and shows only when an automated
+  // agent was running at the peak.
   function showSlotTip(e: MouseEvent, b: ActivityBucket) {
     const rect = (e.currentTarget as Element).getBoundingClientRect();
+    const peakSplit =
+      b.automated_at_peak > 0
+        ? ` (${b.interactive_at_peak} int / ${b.automated_at_peak} auto)`
+        : "";
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
       text:
-        `${fmtBucketRange(b)} · peak ${b.max_agents} · ` +
+        `${fmtBucketRange(b)} · peak ${b.max_agents}${peakSplit} · ` +
         `${b.agent_minutes.toFixed(1)} agent-min · ` +
         `${b.output_tokens.toLocaleString()} output tokens · ` +
         `$${b.cost.toFixed(2)}`,
@@ -240,6 +248,10 @@
       y: number;
       w: number;
       h: number;
+      interactiveY: number;
+      interactiveH: number;
+      automatedY: number;
+      automatedH: number;
       cellX: number;
       cellW: number;
       idx: number;
@@ -252,11 +264,19 @@
       const cellW = Math.max(((bEnd - bStart) / rangeSpanMs) * plotWidth, 1);
       const barGap = Math.min(cellW * 0.2, 2);
       const top = scaleY(b.max_agents, scale.max, CHART_H);
+      // Split the peak bar into a blue interactive base and a purple automated
+      // cap. interactive_at_peak + automated_at_peak == max_agents, so the two
+      // segments stack to the full bar; interactiveTop is the seam between them.
+      const interactiveTop = scaleY(b.interactive_at_peak, scale.max, CHART_H);
       out.push({
         x: cellX + barGap / 2,
         y: top,
         w: Math.max(cellW - barGap, 1),
         h: Math.max(CHART_H - top, 0),
+        interactiveY: interactiveTop,
+        interactiveH: Math.max(CHART_H - interactiveTop, 0),
+        automatedY: top,
+        automatedH: Math.max(interactiveTop - top, 0),
         cellX,
         cellW,
         idx: i,
@@ -385,14 +405,24 @@
 <div class="timeline">
   <div class="timeline-header">
     <h3 class="timeline-title">Concurrency</h3>
-    <label class="overlay-toggle">
-      <span>Overlay</span>
-      <select bind:value={overlayMetric} aria-label="Concurrency overlay metric">
-        <option value="none">None</option>
-        <option value="tokens">Tokens</option>
-        <option value="cost">Cost</option>
-      </select>
-    </label>
+    <div class="header-right">
+      <div class="legend" aria-hidden="true">
+        <span class="legend-item">
+          <span class="swatch interactive"></span>Interactive
+        </span>
+        <span class="legend-item">
+          <span class="swatch automated"></span>Automated
+        </span>
+      </div>
+      <label class="overlay-toggle">
+        <span>Overlay</span>
+        <select bind:value={overlayMetric} aria-label="Concurrency overlay metric">
+          <option value="none">None</option>
+          <option value="tokens">Tokens</option>
+          <option value="cost">Cost</option>
+        </select>
+      </label>
+    </div>
   </div>
 
   <div class="timeline-body" bind:this={containerEl}>
@@ -434,13 +464,30 @@
 
       {#each bars as bar (bar.idx)}
         <rect
-          class="concurrency-bar"
+          class="concurrency-seg interactive"
           class:selected={selectedBucket === bar.idx}
           x={bar.x}
-          y={bar.y}
+          y={bar.interactiveY}
           width={bar.w}
-          height={bar.h}
+          height={bar.interactiveH}
         />
+        <rect
+          class="concurrency-seg automated"
+          class:selected={selectedBucket === bar.idx}
+          x={bar.x}
+          y={bar.automatedY}
+          width={bar.w}
+          height={bar.automatedH}
+        />
+        {#if selectedBucket === bar.idx}
+          <rect
+            class="concurrency-outline"
+            x={bar.x}
+            y={bar.y}
+            width={bar.w}
+            height={bar.h}
+          />
+        {/if}
       {/each}
 
       {#if overlayMetric !== "none" && overlayPath}
@@ -531,6 +578,40 @@
     color: var(--text-primary);
   }
 
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .swatch.interactive {
+    background: var(--accent-blue);
+  }
+
+  .swatch.automated {
+    background: var(--accent-purple);
+  }
+
   .overlay-toggle {
     display: flex;
     align-items: center;
@@ -577,13 +658,24 @@
     font-family: var(--font-mono);
   }
 
-  .concurrency-bar {
-    fill: var(--accent-blue);
+  .concurrency-seg {
     opacity: 0.75;
   }
 
-  .concurrency-bar.selected {
+  .concurrency-seg.interactive {
+    fill: var(--accent-blue);
+  }
+
+  .concurrency-seg.automated {
+    fill: var(--accent-purple);
+  }
+
+  .concurrency-seg.selected {
     opacity: 1;
+  }
+
+  .concurrency-outline {
+    fill: none;
     stroke: var(--text-primary);
     stroke-width: 1;
   }
