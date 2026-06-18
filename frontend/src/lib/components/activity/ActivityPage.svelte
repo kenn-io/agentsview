@@ -142,7 +142,7 @@
       <RefreshControl
         lastUpdatedAt={activity.lastUpdatedAt}
         busy={activity.loading}
-        onRefresh={() => activity.load()}
+        onRefresh={() => activity.load({ background: true })}
         label="Refresh activity"
       />
     </div>

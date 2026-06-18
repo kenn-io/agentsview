@@ -95,7 +95,7 @@ class ActivityStore {
     this.hasNewData = true;
   }
 
-  async load() {
+  async load({ background = false }: { background?: boolean } = {}) {
     const v = ++this.loadVersion;
     // A custom range needs both bounds. With only one present (a cleared date
     // input or a partial deep link) the backend rejects the request, so hold
@@ -151,10 +151,15 @@ class ActivityStore {
       this.loading = false;
     } catch (e) {
       if (v !== this.loadVersion) return;
+      this.loading = false;
+      // A failed background refresh keeps the last good report on screen so a
+      // transient blip never blanks the report-first dashboard; the growing
+      // "Updated Xm ago" label signals the staleness. A failed first load or
+      // range/filter change has nothing valid to show, so clear and surface it.
+      if (background) return;
       this.report = null;
       this.error =
         e instanceof Error ? e.message : "Failed to load activity report";
-      this.loading = false;
     }
   }
 

@@ -180,6 +180,26 @@ describe("load", () => {
     expect(activity.report).toBeNull();
     expect(activity.loading).toBe(false);
   });
+
+  it("keeps the existing report when a background refresh fails", async () => {
+    api.getActivityReport.mockResolvedValueOnce(makeReport());
+    await activity.load();
+    const loadedReport = activity.report;
+    const stampedAt = activity.lastUpdatedAt;
+    expect(loadedReport).not.toBeNull();
+
+    api.getActivityReport.mockRejectedValueOnce(new Error("network down"));
+    await activity.load({ background: true });
+
+    // Report-first rendering depends on the report staying mounted: a transient
+    // background refresh failure must not blank the dashboard or surface an
+    // error, and must not bump the freshness stamp (the age label keeps growing
+    // to signal staleness). A non-background load still clears on error (above).
+    expect(activity.report).toBe(loadedReport);
+    expect(activity.error).toBeNull();
+    expect(activity.loading).toBe(false);
+    expect(activity.lastUpdatedAt).toBe(stampedAt);
+  });
 });
 
 describe("loadFilterOptions", () => {
