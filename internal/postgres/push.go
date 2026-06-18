@@ -85,6 +85,10 @@ func (s *Sync) Push(
 	if err != nil {
 		return result, err
 	}
+	previousMarkerMachine, markerExists, err := s.pgPushMarkerMachine(ctx, markerID)
+	if err != nil {
+		return result, err
+	}
 	if full {
 		lastPush = ""
 		// Caller requested a full push — the PG schema
@@ -113,10 +117,6 @@ func (s *Sync) Push(
 	// was reset (schema dropped, DB recreated, etc.). Force a full
 	// push so all sessions are re-synced.
 	if lastPush != "" {
-		markerExists, cErr := s.pgPushMarkerExists(ctx, markerID)
-		if cErr != nil {
-			return result, cErr
-		}
 		if !markerExists {
 			log.Printf(
 				"pgsync: local watermark set but PG push marker " +
@@ -124,6 +124,7 @@ func (s *Sync) Push(
 			)
 			lastPush = ""
 			full = true
+			previousMarkerMachine = ""
 			s.schemaMu.Lock()
 			s.schemaDone = false
 			s.schemaMu.Unlock()
@@ -278,7 +279,7 @@ func (s *Sync) Push(
 		batch := sessions[i:end]
 
 		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, &pushed,
+			ctx, batch, full, markerID, previousMarkerMachine, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -293,7 +294,7 @@ func (s *Sync) Push(
 			for _, sess := range batch {
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
-					full, markerID, &pushed,
+					full, markerID, previousMarkerMachine, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -369,7 +370,8 @@ func (s *Sync) Push(
 	return result, nil
 }
 
-// pgPushMarkerExists reports whether this host's push marker is present in PG.
+// pgPushMarkerMachine reports whether this host's push marker is present in PG
+// and returns the machine value stored with the marker.
 // A missing marker while the local watermark is set means PG was reset (schema
 // dropped or recreated) since this host last pushed, so a full re-push is
 // needed. Counting rows by machine cannot detect this reliably: another host
@@ -377,21 +379,24 @@ func (s *Sync) Push(
 // also writes -- a remote host's sessions synced in over SSH, or this host's
 // own renamed identity -- masking the loss of this host's own rows. The marker
 // is per-local-DB, so no other pusher can satisfy this check.
-func (s *Sync) pgPushMarkerExists(ctx context.Context, markerID string) (bool, error) {
-	var exists bool
+func (s *Sync) pgPushMarkerMachine(ctx context.Context, markerID string) (string, bool, error) {
+	var machine string
 	err := s.pg.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key = $1)`,
+		`SELECT value FROM sync_metadata WHERE key = $1`,
 		pushMarkerKeyPrefix+markerID,
-	).Scan(&exists)
+	).Scan(&machine)
 	if err != nil {
-		if isUndefinedTable(err) {
-			return false, nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
 		}
-		return false, fmt.Errorf(
+		if isUndefinedTable(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf(
 			"checking pg push marker: %w", err,
 		)
 	}
-	return exists, nil
+	return machine, true, nil
 }
 
 // writePushMarker records this host's push marker in PG so a later push can
@@ -452,6 +457,7 @@ func (s *Sync) pushBatch(
 	batch []db.Session,
 	full bool,
 	markerID string,
+	previousMarkerMachine string,
 	pushed *[]db.Session,
 ) (batchResult, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
@@ -466,7 +472,7 @@ func (s *Sync) pushBatch(
 	skippedConflicts := 0
 	for _, sess := range batch {
 		if err := s.pushSession(
-			ctx, tx, sess, markerID,
+			ctx, tx, sess, markerID, previousMarkerMachine,
 		); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
 				skippedConflicts++
@@ -798,7 +804,10 @@ func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
 	return fallbackMachine
 }
 
-func sameSessionOwner(existingOwnerMarker, existingMachine, markerID, pushedMachine string) bool {
+func sameSessionOwner(
+	existingOwnerMarker, existingMachine, markerID, pushedMachine,
+	previousMarkerMachine string,
+) bool {
 	if existingOwnerMarker != "" {
 		return existingOwnerMarker == markerID
 	}
@@ -806,6 +815,9 @@ func sameSessionOwner(existingOwnerMarker, existingMachine, markerID, pushedMach
 		return true
 	}
 	if existingMachine == "local" {
+		return true
+	}
+	if previousMarkerMachine != "" && existingMachine == previousMarkerMachine {
 		return true
 	}
 	return existingMachine == pushedMachine
@@ -872,7 +884,7 @@ func nilStrTS(s *string) any {
 // local-only and used solely by the sync engine to detect
 // re-parsed sessions.
 func (s *Sync) pushSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, markerID string,
+	ctx context.Context, tx *sql.Tx, sess db.Session, markerID, previousMarkerMachine string,
 ) error {
 	createdAt, _ := ParseSQLiteTimestamp(sess.CreatedAt)
 	isAutomated := sess.IsAutomated
@@ -890,6 +902,7 @@ func (s *Sync) pushSession(
 		existingMachine.String,
 		markerID,
 		pushedMachine,
+		previousMarkerMachine,
 	) {
 		log.Printf(
 			"pgsync: session %s: skipping — already owned by machine %q, "+
@@ -989,7 +1002,9 @@ func (s *Sync) pushSession(
 		WHERE ((
 				sessions.owner_marker = ''
 				AND (sessions.machine = EXCLUDED.machine
-					OR sessions.machine = 'local')
+					OR sessions.machine = 'local'
+					OR sessions.machine = ''
+					OR sessions.machine = $48)
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
 			AND (
@@ -1070,6 +1085,7 @@ func (s *Sync) pushSession(
 		sess.HealthScore, nilStr(sess.HealthGrade),
 		sess.HasToolCalls, sess.HasContextData,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
+		previousMarkerMachine,
 	)
 	if err != nil {
 		return err
@@ -1084,7 +1100,10 @@ func (s *Sync) pushSession(
 			currentOwnerMarker = existingOwnerMarker.String
 			currentMachine = existingMachine.String
 		}
-		if refreshErr == nil && !sameSessionOwner(currentOwnerMarker, currentMachine, markerID, pushedMachine) {
+		if refreshErr == nil && !sameSessionOwner(
+			currentOwnerMarker, currentMachine, markerID, pushedMachine,
+			previousMarkerMachine,
+		) {
 			log.Printf(
 				"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
 				sess.ID, currentMachine, pushedMachine,
