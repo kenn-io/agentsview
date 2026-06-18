@@ -22,6 +22,7 @@ export class ActivityService {
     project,
     agent,
     machine,
+    automation = 'all',
   }: {
     /**
      * Range preset
@@ -59,6 +60,10 @@ export class ActivityService {
      * Filter by machine
      */
     machine?: string,
+    /**
+     * Automation class: all, interactive, or automated
+     */
+    automation?: string,
   }): CancelablePromise<ActivityReport> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -73,6 +78,7 @@ export class ActivityService {
         'project': project,
         'agent': agent,
         'machine': machine,
+        'automation': automation,
       },
       errors: {
         400: `Bad Request`,

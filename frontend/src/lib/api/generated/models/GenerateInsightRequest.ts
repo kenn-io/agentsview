@@ -8,6 +8,7 @@ export type GenerateInsightRequest = {
   date_to: string;
   project?: string;
   prompt?: string;
+  timezone?: string;
   type: string;
 };
 

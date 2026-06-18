@@ -13,6 +13,7 @@ function makeReport(): Report {
       output_tokens: 0, cost: 0,
       automated_agent_minutes: 0, interactive_agent_minutes: 0,
       automated_cost: 0, interactive_cost: 0,
+      automated_sessions: 0, interactive_sessions: 0,
     },
     partial: false,
     as_of: null,
