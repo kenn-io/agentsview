@@ -88,6 +88,7 @@ beforeEach(() => {
   activity.setProject("");
   activity.setAgent("");
   activity.setMachine("");
+  activity.setAutomation("all");
   // Reset the filter-option cache so each test exercises the fetch.
   activity.invalidateFilterOptions();
   // Restore a fresh router.replaceParams spy. The writeUrl test reassigns it,
@@ -126,6 +127,21 @@ describe("load", () => {
     expect(arg.project).toBe("p1");
     expect(arg.agent).toBe("claude");
     expect(arg.machine).toBe("m1");
+  });
+
+  it("defaults the automation class to all", async () => {
+    api.getActivityReport.mockResolvedValue(makeReport());
+    await activity.load();
+    expect(api.getActivityReport.mock.calls.at(-1)![0].automation).toBe("all");
+  });
+
+  it("passes the selected automation class", async () => {
+    api.getActivityReport.mockResolvedValue(makeReport());
+    activity.setAutomation("automated");
+    await activity.load();
+    expect(api.getActivityReport.mock.calls.at(-1)![0].automation).toBe(
+      "automated",
+    );
   });
 
   it("ignores a stale response when params change mid-flight", async () => {
@@ -344,6 +360,33 @@ describe("url state", () => {
     expect(last.preset).toBe("week");
     expect(last.date).toBe("2026-06-16");
     expect("project" in last).toBe(false);
+  });
+
+  it("hydrates the automation class from params", () => {
+    activity.hydrateFromUrl({ automation: "interactive" });
+    expect(activity.automation).toBe("interactive");
+  });
+
+  it("defaults automation to all for an absent or unknown value", () => {
+    activity.hydrateFromUrl({});
+    expect(activity.automation).toBe("all");
+    activity.hydrateFromUrl({ automation: "bogus" });
+    expect(activity.automation).toBe("all");
+  });
+
+  it("writeUrl omits automation when all and includes it otherwise", () => {
+    const spy = routerMod.router.replaceParams as ReturnType<typeof vi.fn>;
+    activity.setAutomation("all");
+    spy.mockClear();
+    activity.writeUrl();
+    const cleared = spy.mock.calls.at(-1)![0] as Record<string, string>;
+    expect("automation" in cleared).toBe(false);
+
+    activity.setAutomation("automated");
+    spy.mockClear();
+    activity.writeUrl();
+    const set = spy.mock.calls.at(-1)![0] as Record<string, string>;
+    expect(set.automation).toBe("automated");
   });
 });
 

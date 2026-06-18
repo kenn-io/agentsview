@@ -14,6 +14,14 @@ const PRESETS: ReadonlySet<string> = new Set<Preset>([
   "custom",
 ]);
 
+export type Automation = "all" | "interactive" | "automated";
+
+const AUTOMATIONS: ReadonlySet<string> = new Set<Automation>([
+  "all",
+  "interactive",
+  "automated",
+]);
+
 export function localDateStr(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -41,6 +49,7 @@ class ActivityStore {
   project: string = $state("");
   agent: string = $state("");
   machine: string = $state("");
+  automation: Automation = $state("all");
   report: Report | null = $state(null);
   loading = $state(false);
   error: string | null = $state(null);
@@ -112,6 +121,7 @@ class ActivityStore {
         project: this.project || undefined,
         agent: this.agent || undefined,
         machine: this.machine || undefined,
+        automation: this.automation,
       });
       if (v !== this.loadVersion) return;
       this.report = res as unknown as Report;
@@ -221,8 +231,9 @@ class ActivityStore {
   /**
    * Replace range/preset/filter state from URL query params. `preset` defaults
    * to "day" (and falls back to "day" for any unknown value); `date` defaults
-   * to today's local YYYY-MM-DD. The remaining filters default to empty. This
-   * is the single hydration path, run on mount and on popstate.
+   * to today's local YYYY-MM-DD; `automation` defaults to "all" (and falls back
+   * to "all" for any unknown value). The remaining filters default to empty.
+   * This is the single hydration path, run on mount and on popstate.
    */
   hydrateFromUrl(params: Record<string, string>) {
     this.preset = PRESETS.has(params.preset ?? "")
@@ -235,14 +246,18 @@ class ActivityStore {
     this.project = params.project ?? "";
     this.agent = params.agent ?? "";
     this.machine = params.machine ?? "";
+    this.automation = AUTOMATIONS.has(params.automation ?? "")
+      ? (params.automation as Automation)
+      : "all";
   }
 
   /**
    * Write the current range/preset/filter state to the URL through the router's
    * single replaceState path. `preset` is always included; `date` is included
    * for day/week/month when non-empty; `from`/`to` only for the custom preset;
-   * bucket/project/agent/machine only when non-empty. Empty filters and
-   * preset-irrelevant fields are omitted so URLs stay minimal and deep-linkable.
+   * bucket/project/agent/machine only when non-empty; `automation` only when not
+   * the "all" default. Empty filters and preset-irrelevant fields are omitted so
+   * URLs stay minimal and deep-linkable.
    */
   writeUrl() {
     const p: Record<string, string> = { preset: this.preset };
@@ -256,6 +271,7 @@ class ActivityStore {
     if (this.project) p.project = this.project;
     if (this.agent) p.agent = this.agent;
     if (this.machine) p.machine = this.machine;
+    if (this.automation !== "all") p.automation = this.automation;
     router.replaceParams(p);
   }
 
@@ -325,6 +341,11 @@ class ActivityStore {
 
   setMachine(machine: string) {
     this.machine = machine;
+    this.writeUrl();
+  }
+
+  setAutomation(automation: Automation) {
+    this.automation = automation;
     this.writeUrl();
   }
 }
