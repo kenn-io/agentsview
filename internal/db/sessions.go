@@ -589,6 +589,7 @@ func (db *DB) getSidebarSessionIndexPage(
 	rootFilter := f
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
+	rootFilter.IncludeChildren = false
 	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
 	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
 

@@ -131,8 +131,9 @@ func DuckDBQueryDialect() QueryDialect {
 		regexPredicate: func(col, ph string) string {
 			return "regexp_matches(" + col + ", " + ph + ")"
 		},
-		sidebarChildRelationships: []string{"subagent", "fork"},
-		nullsLast:                 true,
+		sidebarChildRelationships:   []string{"subagent", "fork"},
+		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
+		nullsLast:                   true,
 	}
 }
 
@@ -297,13 +298,12 @@ func SidebarOrphanPredicate(sessionAlias, parentAlias string) string {
 }
 
 func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeOrphans bool) string {
-	base := `NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + ` AND NOT ` +
-		SidebarOrphanPredicate(sessionAlias, "parent") + `)`
+	base := `NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + `)`
 	if !includeOrphans {
 		return base
 	}
 	return `(` + base + ` OR (` +
-		SidebarChildRelationshipPredicate(dialect, sessionAlias) + ` AND ` +
+		CanonicalChildRelationshipPredicate(dialect, sessionAlias) + ` AND ` +
 		SidebarOrphanPredicate(sessionAlias, "parent") + `))`
 }
 
@@ -344,36 +344,14 @@ func buildSessionFilterWithBuilder(
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
 	rootMatchParts = append(rootMatchParts,
-		"NOT "+SidebarChildRelationshipPredicate(b.dialect, "root_session"))
+		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
-	// Build the CTE base case. When IncludeOrphans is true, also seed with
-	// orphan child rows (those whose parent doesn't exist in the DB).
-	cteBase := "SELECT root_session.id FROM sessions root_session" +
+	cte := "WITH RECURSIVE tree(id) AS (" +
+		"SELECT root_session.id FROM sessions root_session" +
 		" WHERE root_session.message_count > 0" +
 		" AND root_session.deleted_at IS NULL AND " +
-		rootMatch
-	if f.IncludeOrphans {
-		orphanFilter, orphanOneShotPred := sessionFilterPredicates(f, b, func(col string) string {
-			return "orphan_child." + col
-		})
-		orphanMatchParts := append([]string{}, orphanFilter...)
-		if orphanOneShotPred != "" {
-			orphanMatchParts = append(orphanMatchParts, orphanOneShotPred)
-		}
-		orphanMatchParts = append(orphanMatchParts,
-			SidebarChildRelationshipPredicate(b.dialect, "orphan_child"),
-			SidebarOrphanPredicate("orphan_child", "p"))
-		orphanMatch := strings.Join(orphanMatchParts, " AND ")
-		cteBase += " UNION " +
-			"SELECT orphan_child.id FROM sessions orphan_child" +
-			" WHERE orphan_child.message_count > 0" +
-			" AND orphan_child.deleted_at IS NULL AND " +
-			orphanMatch
-	}
-
-	cte := "WITH RECURSIVE tree(id) AS (" +
-		cteBase +
+		rootMatch +
 		" UNION " +
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON s.parent_session_id = t.id" +

@@ -560,9 +560,9 @@ func TestIncludeChildrenExcludesOrphanSubagents(t *testing.T) {
 	requireSessions(t, d, f, []string{"root", "root-sub"})
 }
 
-// TestIncludeOrphansPromotesToRoot verifies that orphan subagent and fork
-// sessions surface as synthetic roots when IncludeOrphans is enabled, and
-// remain hidden when IncludeOrphans is false (default).
+// TestIncludeOrphansPromotesToRoot verifies that canonical orphan rows
+// surface as synthetic roots when IncludeOrphans is enabled, and remain
+// hidden when IncludeOrphans is false.
 func TestIncludeOrphansPromotesToRoot(t *testing.T) {
 	d := testDB(t)
 
@@ -623,7 +623,7 @@ func TestIncludeOrphansPromotesToRoot(t *testing.T) {
 		{
 			name:           "WithoutIncludeOrphans",
 			includeOrphans: false,
-			want:           []string{"root", "root-sub", "continuation-orphan"},
+			want:           []string{"root", "root-sub"},
 		},
 	}
 
@@ -1285,6 +1285,59 @@ func TestSidebarSessionIndexPagedPromotesNestedOrphans(t *testing.T) {
 	require.Equal(t, 3, index.Total, "total paged root groups")
 	require.NotEmpty(t, index.NextCursor, "paged sidebar should expose a next cursor when more root groups remain")
 	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "orphan-sub", "orphan-fork"})
+}
+
+func TestSidebarSessionIndexPagedExcludesContinuationWithSoftDeletedParent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-20T00:00:00Z")
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "deleted-parent", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-19T00:00:00Z")
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.SoftDeleteSession("deleted-parent"), "SoftDeleteSession")
+	insertSession(t, d, "continuation-child", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-18T00:00:00Z")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("deleted-parent")
+		s.RelationshipType = "continuation"
+	})
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{Limit: 10})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	require.Equal(t, 1, index.Total, "soft-deleted parent should not promote continuation root")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root"})
+}
+
+func TestSidebarSessionIndexPagedKeepsContinuationUnderLiveParent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-20T00:00:00Z")
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "continuation-child", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-19T00:00:00Z")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("root")
+		s.RelationshipType = "continuation"
+	})
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{Limit: 1})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	require.Equal(t, 1, index.Total, "live continuation should stay nested")
+	require.Empty(t, index.NextCursor, "only one root group exists")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "continuation-child"})
 }
 
 func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {

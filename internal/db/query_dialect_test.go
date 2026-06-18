@@ -171,7 +171,7 @@ func TestBuildSessionFilterSQLRendersIncludeChildrenCTE(t *testing.T) {
 			assert.Contains(t, normalized, "JOIN tree t ON s.parent_session_id = t.id")
 			assert.Contains(t, normalized, "id IN (WITH RECURSIVE tree(id) AS")
 			assert.Contains(t, normalized,
-				"NOT root_session.relationship_type IN ('subagent', 'fork')")
+				"NOT (root_session.relationship_type IN ('subagent', 'fork', 'continuation'))")
 			assert.NotContains(t, normalized,
 				"relationship_type NOT IN ('subagent', 'fork') AND id IN")
 			assert.Equal(t, tt.wantArgs, args)
