@@ -17,6 +17,18 @@
     return metric === "cost" ? row.cost : row.agent_minutes;
   }
 
+  // Per-row automation split for the active metric. Interactive + automated
+  // sum to rowValue, so the two bar segments stack to the full bar width.
+  function interactiveValue(row: ActivityKeyMinutes): number {
+    return metric === "cost"
+      ? row.interactive_cost
+      : row.interactive_agent_minutes;
+  }
+
+  function automatedValue(row: ActivityKeyMinutes): number {
+    return metric === "cost" ? row.automated_cost : row.automated_agent_minutes;
+  }
+
   // Rank by the selected metric and drop rows that are zero for it: an untimed
   // cost-only row contributes nothing to the minutes view (and would otherwise
   // render as an empty "0" bar), and a zero-cost row drops from the cost view.
@@ -66,6 +78,10 @@
     return metric === "cost" ? fmtCost(row.cost) : fmtMinutes(row.agent_minutes);
   }
 
+  function fmtSeg(v: number): string {
+    return metric === "cost" ? fmtCost(v) : fmtMinutes(v);
+  }
+
   function truncate(name: string, max: number): string {
     if (name.length <= max) return name;
     return name.slice(0, max - 1) + "…";
@@ -83,10 +99,13 @@
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const pct = total > 0 ? Math.round((rowValue(row) / total) * 100) : 0;
     const unit = metric === "cost" ? "" : " min";
+    const split = `int ${fmtSeg(interactiveValue(row))} / auto ${fmtSeg(
+      automatedValue(row),
+    )}`;
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${row.key} · ${fmtValue(row)}${unit} · ${pct}%`,
+      text: `${row.key} · ${fmtValue(row)}${unit} · ${pct}% · ${split}`,
     };
   }
 
@@ -98,7 +117,16 @@
 <div class="breakdowns">
   <div class="breakdowns-header">
     <h3 class="breakdowns-title">Breakdown</h3>
-    <div class="metric-toggle" role="group" aria-label="Breakdown metric">
+    <div class="header-right">
+      <div class="legend" aria-hidden="true">
+        <span class="legend-item">
+          <span class="swatch interactive"></span>Interactive
+        </span>
+        <span class="legend-item">
+          <span class="swatch automated"></span>Automated
+        </span>
+      </div>
+      <div class="metric-toggle" role="group" aria-label="Breakdown metric">
       <button
         type="button"
         class="metric-btn"
@@ -117,6 +145,7 @@
       >
         Cost
       </button>
+      </div>
     </div>
   </div>
 
@@ -140,8 +169,12 @@
                 </span>
                 <div class="bar-track">
                   <div
-                    class="bar-fill"
-                    style="width: {barWidth(rowValue(row), max)}%"
+                    class="bar-seg interactive"
+                    style="width: {barWidth(interactiveValue(row), max)}%"
+                  ></div>
+                  <div
+                    class="bar-seg automated"
+                    style="width: {barWidth(automatedValue(row), max)}%"
                   ></div>
                 </div>
                 <span class="bar-value">
@@ -181,6 +214,40 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--text-primary);
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+  }
+
+  .swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .swatch.interactive {
+    background: var(--accent-blue);
+  }
+
+  .swatch.automated {
+    background: var(--accent-purple);
   }
 
   .metric-toggle {
@@ -257,17 +324,23 @@
 
   .bar-track {
     flex: 1;
+    display: flex;
     height: 14px;
     background: var(--bg-inset);
     border-radius: 2px;
     overflow: hidden;
   }
 
-  .bar-fill {
+  .bar-seg {
     height: 100%;
+  }
+
+  .bar-seg.interactive {
     background: var(--accent-blue);
-    border-radius: 2px;
-    min-width: 2px;
+  }
+
+  .bar-seg.automated {
+    background: var(--accent-purple);
   }
 
   .bar-value {

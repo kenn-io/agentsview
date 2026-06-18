@@ -27,8 +27,16 @@ function makeReport(): Report {
     elapsed_bucket_count: 0,
     buckets: [],
     by_project: [
-      { key: "alpha", agent_minutes: 30 },
-      { key: "beta", agent_minutes: 10 },
+      {
+        key: "alpha", agent_minutes: 30, cost: 0,
+        interactive_agent_minutes: 20, automated_agent_minutes: 10,
+        interactive_cost: 0, automated_cost: 0,
+      },
+      {
+        key: "beta", agent_minutes: 10, cost: 0,
+        interactive_agent_minutes: 10, automated_agent_minutes: 0,
+        interactive_cost: 0, automated_cost: 0,
+      },
     ],
     by_model: [],
     by_agent: [],
@@ -62,13 +70,45 @@ describe("Breakdowns", () => {
     target.remove();
   });
 
+  it("stacks interactive and automated segments and shows the split in the tooltip", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(Breakdowns, { target, props: { report: makeReport() } });
+    await tick();
+    // First project row = alpha (20 interactive + 10 automated agent-minutes).
+    const row = target.querySelector(".bar-row") as HTMLElement;
+    const interactive = row.querySelector(".bar-seg.interactive") as HTMLElement;
+    const automated = row.querySelector(".bar-seg.automated") as HTMLElement;
+    expect(interactive).toBeTruthy();
+    expect(automated).toBeTruthy();
+    // The interactive share (20) is wider than the automated share (10).
+    const width = (el: HTMLElement) => Number.parseFloat(el.style.width);
+    expect(width(interactive)).toBeGreaterThan(width(automated));
+
+    row.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    const tip = target.querySelector(".tooltip");
+    expect(tip!.textContent).toContain("int 20");
+    expect(tip!.textContent).toContain("auto 10");
+    unmount(c);
+    target.remove();
+  });
+
   it("filters cost-only rows from the default agent-minutes view", async () => {
     const report = makeReport();
     // The backend emits rows with cost but zero agent-minutes for untimed
     // usage; they must not render as empty "0" bars in the minutes view.
     report.by_project = [
-      { key: "timed", agent_minutes: 30, cost: 1 },
-      { key: "costonly", agent_minutes: 0, cost: 5 },
+      {
+        key: "timed", agent_minutes: 30, cost: 1,
+        interactive_agent_minutes: 30, automated_agent_minutes: 0,
+        interactive_cost: 1, automated_cost: 0,
+      },
+      {
+        key: "costonly", agent_minutes: 0, cost: 5,
+        interactive_agent_minutes: 0, automated_agent_minutes: 0,
+        interactive_cost: 5, automated_cost: 0,
+      },
     ] as Report["by_project"];
     const target = document.createElement("div");
     document.body.appendChild(target);
@@ -86,8 +126,16 @@ describe("Breakdowns", () => {
   it("switches to cost, revealing cost-only rows ranked by cost", async () => {
     const report = makeReport();
     report.by_project = [
-      { key: "timed", agent_minutes: 30, cost: 1 },
-      { key: "costonly", agent_minutes: 0, cost: 5 },
+      {
+        key: "timed", agent_minutes: 30, cost: 1,
+        interactive_agent_minutes: 30, automated_agent_minutes: 0,
+        interactive_cost: 1, automated_cost: 0,
+      },
+      {
+        key: "costonly", agent_minutes: 0, cost: 5,
+        interactive_agent_minutes: 0, automated_agent_minutes: 0,
+        interactive_cost: 5, automated_cost: 0,
+      },
     ] as Report["by_project"];
     const target = document.createElement("div");
     document.body.appendChild(target);
