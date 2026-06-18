@@ -1096,3 +1096,59 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 	assert.Equal(t, "host-b", machine(),
 		"sentinel machine must follow the new fallback")
 }
+
+func TestPushReportsSkippedConflicts(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_skipped_conflicts_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "machine-b",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "conflict-001"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "machine-b",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, sessID, "machine-a", "other-owner", "proj", "claude")
+	require.NoError(t, err, "insert conflicting owner")
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+	assert.Zero(t, res.Errors, "push should not report failed sessions")
+	assert.Zero(t, res.SessionsPushed, "conflicting session should not be counted as pushed")
+	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in PushResult")
+}

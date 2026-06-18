@@ -53,11 +53,14 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 	const clashID = "clash-001"
 
 	// Step 1: Insert a session owned by machine-a directly into PG.
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+
 	_, err = pg.ExecContext(ctx, `
 		INSERT INTO sessions (
-			id, machine, project, agent, created_at
-		) VALUES ($1, $2, $3, $4, NOW())
-	`, clashID, "machine-a", "test-proj", "claude")
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, clashID, "machine-a", "different-owner", "test-proj", "claude")
 	require.NoError(t, err, "insert existing session")
 
 	// Step 2: Attempt to push the same session from machine-b.
@@ -102,4 +105,65 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 	require.NoError(t, err, "count messages")
 	assert.Equal(t, 0, messageCount,
 		"no messages should be written when session is skipped due to collision")
+
+	assert.NotEqual(t, markerID, "different-owner", "precondition: foreign owner marker differs from local marker")
+}
+
+func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_collision_owner_marker_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "renamed-host",
+		schema:     schema,
+		schemaDone: true,
+	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+
+	const sessID = "rename-001"
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, sessID, "old-host", markerID, "test-proj", "claude")
+	require.NoError(t, err, "insert existing session")
+
+	sess := db.Session{
+		ID:           sessID,
+		Project:      "test-proj",
+		Machine:      "local",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	require.NoError(t, sync.pushSession(ctx, tx, sess), "pushSession")
+	require.NoError(t, tx.Commit(), "Commit")
+
+	var machine, ownerMarker string
+	err = pg.QueryRowContext(ctx,
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sessID,
+	).Scan(&machine, &ownerMarker)
+	require.NoError(t, err, "read back session")
+	assert.Equal(t, "renamed-host", machine)
+	assert.Equal(t, markerID, ownerMarker)
 }

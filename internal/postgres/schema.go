@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sync_metadata (
 CREATE TABLE IF NOT EXISTS sessions (
     id                 TEXT PRIMARY KEY,
     machine            TEXT NOT NULL,
+    owner_marker       TEXT NOT NULL DEFAULT '',
     project            TEXT NOT NULL,
     agent              TEXT NOT NULL,
     first_message      TEXT,
@@ -292,6 +293,11 @@ func EnsureSchema(
 
 	// Idempotent column additions for forward compatibility.
 	alters := []columnMigration{
+		{
+			"sessions", "owner_marker",
+			`owner_marker TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.owner_marker",
+		},
 		{
 			"sessions", "deleted_at",
 			`deleted_at TIMESTAMPTZ`,

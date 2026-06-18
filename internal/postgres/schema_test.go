@@ -195,6 +195,7 @@ func (s *schemaProbeState) executedSQL() string {
 func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 	existing := map[string][]string{
 		"sessions": {
+			"owner_marker",
 			"created_at", "deleted_at",
 			"total_output_tokens", "peak_context_tokens",
 			"has_total_output_tokens",
@@ -236,6 +237,7 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {
 	db, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
+			"owner_marker",
 			"total_output_tokens", "peak_context_tokens",
 			"has_total_output_tokens",
 			"has_peak_context_tokens",
@@ -263,6 +265,7 @@ func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {
 func TestEnsureSchemaCreatesSessionTraversalIndex(t *testing.T) {
 	db, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
+			"owner_marker",
 			"total_output_tokens", "peak_context_tokens",
 			"has_total_output_tokens",
 			"has_peak_context_tokens",
@@ -283,6 +286,7 @@ func TestEnsureSchemaCreatesSessionTraversalIndex(t *testing.T) {
 func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 	db, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
+			"owner_marker",
 			"created_at", "deleted_at",
 			"total_output_tokens", "peak_context_tokens",
 			"has_total_output_tokens",

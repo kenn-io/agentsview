@@ -44,18 +44,20 @@ type pushBoundaryState struct {
 
 // PushResult summarizes a push sync operation.
 type PushResult struct {
-	SessionsPushed int
-	MessagesPushed int
-	Errors         int
-	Duration       time.Duration
+	SessionsPushed   int
+	MessagesPushed   int
+	SkippedConflicts int
+	Errors           int
+	Duration         time.Duration
 }
 
 // PushProgress is reported after each batch during Push.
 type PushProgress struct {
-	SessionsDone  int
-	SessionsTotal int
-	MessagesDone  int
-	Errors        int
+	SessionsDone     int
+	SessionsTotal    int
+	MessagesDone     int
+	SkippedConflicts int
+	Errors           int
 }
 
 // Push syncs local sessions and messages to PostgreSQL.
@@ -279,6 +281,7 @@ func (s *Sync) Push(
 		if batchResult.ok {
 			result.SessionsPushed += batchResult.sessions
 			result.MessagesPushed += batchResult.messages
+			result.SkippedConflicts += batchResult.skippedConflicts
 		} else {
 			// Batch failed — retry each session individually
 			// so one bad session doesn't block the rest.
@@ -293,6 +296,7 @@ func (s *Sync) Push(
 				if sr.ok {
 					result.SessionsPushed += sr.sessions
 					result.MessagesPushed += sr.messages
+					result.SkippedConflicts += sr.skippedConflicts
 				} else {
 					result.Errors++
 				}
@@ -300,10 +304,11 @@ func (s *Sync) Push(
 		}
 		if onProgress != nil {
 			onProgress(PushProgress{
-				SessionsDone:  end,
-				SessionsTotal: len(sessions),
-				MessagesDone:  result.MessagesPushed,
-				Errors:        result.Errors,
+				SessionsDone:     end,
+				SessionsTotal:    len(sessions),
+				MessagesDone:     result.MessagesPushed,
+				SkippedConflicts: result.SkippedConflicts,
+				Errors:           result.Errors,
 			})
 		}
 	}
@@ -432,9 +437,10 @@ func (s *Sync) pushMarkerID() (string, error) {
 }
 
 type batchResult struct {
-	ok       bool
-	sessions int
-	messages int
+	ok               bool
+	sessions         int
+	messages         int
+	skippedConflicts int
 }
 
 // pushBatch pushes a slice of sessions within a single
@@ -458,11 +464,13 @@ func (s *Sync) pushBatch(
 
 	n := 0
 	msgs := 0
+	skippedConflicts := 0
 	for _, sess := range batch {
 		if err := s.pushSession(
 			ctx, tx, sess,
 		); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
+				skippedConflicts++
 				continue
 			}
 			log.Printf(
@@ -531,7 +539,7 @@ func (s *Sync) pushBatch(
 		*pushed = (*pushed)[:len(*pushed)-n]
 		return batchResult{}, nil
 	}
-	return batchResult{ok: true, sessions: n, messages: msgs}, nil
+	return batchResult{ok: true, sessions: n, messages: msgs, skippedConflicts: skippedConflicts}, nil
 }
 
 func finalizePushState(
@@ -789,6 +797,16 @@ func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
 	return fallbackMachine
 }
 
+func sameSessionOwner(existingOwnerMarker, existingMachine, markerID, pushedMachine string) bool {
+	if existingOwnerMarker != "" {
+		return existingOwnerMarker == markerID
+	}
+	if existingMachine == "" {
+		return true
+	}
+	return existingMachine == pushedMachine
+}
+
 func stringValue(value *string) string {
 	if value == nil {
 		return ""
@@ -854,22 +872,25 @@ func (s *Sync) pushSession(
 ) error {
 	createdAt, _ := ParseSQLiteTimestamp(sess.CreatedAt)
 	isAutomated := sess.IsAutomated
-	// Guard against cross-machine PK collision: if this session already exists
-	// under a different machine name, skip the upsert and warn. Two machines
-	// pushing the same session ID would otherwise ping-pong the row and its
-	// messages on every push cycle.
+	markerID, err := s.pushMarkerID()
+	if err != nil {
+		return err
+	}
+	pushedMachine := pushedSessionMachine(sess, s.machine)
 	var existingMachine sql.NullString
+	var existingOwnerMarker sql.NullString
 	checkErr := tx.QueryRowContext(ctx,
-		`SELECT machine FROM sessions WHERE id = $1`, sess.ID,
-	).Scan(&existingMachine)
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
+	).Scan(&existingMachine, &existingOwnerMarker)
 	if checkErr != nil && !errors.Is(checkErr, sql.ErrNoRows) {
 		return fmt.Errorf("checking session ownership %s: %w", sess.ID, checkErr)
 	}
-	pushedMachine := pushedSessionMachine(sess, s.machine)
-	if existingMachine.Valid &&
-		existingMachine.String != "" &&
-		existingMachine.String != pushedMachine &&
-		sess.Machine != "" && sess.Machine != "local" {
+	if checkErr == nil && !sameSessionOwner(
+		existingOwnerMarker.String,
+		existingMachine.String,
+		markerID,
+		pushedMachine,
+	) {
 		log.Printf(
 			"pgsync: session %s: skipping — already owned by machine %q, "+
 				"this pusher is %q; sync from the origin machine to update",
@@ -877,9 +898,9 @@ func (s *Sync) pushSession(
 		)
 		return errSessionOwnershipConflict
 	}
-	_, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
-			id, machine, project, agent,
+			id, machine, owner_marker, project, agent,
 			first_message, display_name, session_name,
 			created_at, started_at, ended_at, deleted_at,
 			message_count, user_message_count,
@@ -902,23 +923,24 @@ func (s *Sync) pushSession(
 			secret_leak_count, secrets_rules_version,
 			updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, $9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17, $18, $19,
-			$20, $21, $22, $23, $24, $25, $26,
-			$27, $28,
-			$29, $30, $31, $32,
-			$33, $34, $35, $36,
-			$37,
-			$38, $39,
-			$40,
-			$41, $42, $43, $44,
-			$45, $46,
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, $10, $11, $12,
+			$13, $14, $15, $16,
+			$17, $18, $19, $20,
+			$21, $22, $23, $24, $25, $26, $27,
+			$28, $29,
+			$30, $31, $32, $33,
+			$34, $35, $36, $37,
+			$38,
+			$39, $40,
+			$41,
+			$42, $43, $44, $45,
+			$46, $47,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			machine = EXCLUDED.machine,
+			owner_marker = EXCLUDED.owner_marker,
 			project = EXCLUDED.project,
 			agent = EXCLUDED.agent,
 			first_message = EXCLUDED.first_message,
@@ -964,7 +986,14 @@ func (s *Sync) pushSession(
 			secret_leak_count = EXCLUDED.secret_leak_count,
 			secrets_rules_version = EXCLUDED.secrets_rules_version,
 			updated_at = NOW()
-		WHERE sessions.machine IS DISTINCT FROM EXCLUDED.machine
+		WHERE ((
+				sessions.owner_marker = ''
+				AND sessions.machine = EXCLUDED.machine
+			)
+			OR sessions.owner_marker = EXCLUDED.owner_marker)
+			AND (
+			sessions.machine IS DISTINCT FROM EXCLUDED.machine
+			OR sessions.owner_marker IS DISTINCT FROM EXCLUDED.owner_marker
 			OR sessions.project IS DISTINCT FROM EXCLUDED.project
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
@@ -1008,8 +1037,8 @@ func (s *Sync) pushSession(
 			OR sessions.has_tool_calls IS DISTINCT FROM EXCLUDED.has_tool_calls
 			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
 			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
-			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version`,
-		sess.ID, pushedSessionMachine(sess, s.machine),
+			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version)`,
+		sess.ID, pushedMachine, markerID,
 		sanitizePG(sess.Project),
 		sess.Agent,
 		nilStr(sess.FirstMessage),
@@ -1041,7 +1070,30 @@ func (s *Sync) pushSession(
 		sess.HasToolCalls, sess.HasContextData,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
+		if checkErr == nil {
+			currentOwnerMarker := existingOwnerMarker.String
+			currentMachine := existingMachine.String
+			refreshErr := tx.QueryRowContext(ctx,
+				`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
+			).Scan(&existingMachine, &existingOwnerMarker)
+			if refreshErr == nil {
+				currentOwnerMarker = existingOwnerMarker.String
+				currentMachine = existingMachine.String
+			}
+			if !sameSessionOwner(currentOwnerMarker, currentMachine, markerID, pushedMachine) {
+				log.Printf(
+					"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
+					sess.ID, currentMachine, pushedMachine,
+				)
+				return errSessionOwnershipConflict
+			}
+		}
+	}
+	return nil
 }
 
 // pushMessages replaces a session's messages and tool calls
