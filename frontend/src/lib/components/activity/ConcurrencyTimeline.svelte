@@ -264,7 +264,7 @@
       const cellW = Math.max(((bEnd - bStart) / rangeSpanMs) * plotWidth, 1);
       const barGap = Math.min(cellW * 0.2, 2);
       const top = scaleY(b.max_agents, scale.max, CHART_H);
-      // Split the peak bar into a blue interactive base and a purple automated
+      // Split the peak bar into a blue interactive base and an orange automated
       // cap. interactive_at_peak + automated_at_peak == max_agents, so the two
       // segments stack to the full bar; interactiveTop is the seam between them.
       const interactiveTop = scaleY(b.interactive_at_peak, scale.max, CHART_H);
@@ -609,7 +609,7 @@
   }
 
   .swatch.automated {
-    background: var(--accent-purple);
+    background: var(--accent-orange);
   }
 
   .overlay-toggle {
@@ -667,7 +667,7 @@
   }
 
   .concurrency-seg.automated {
-    fill: var(--accent-purple);
+    fill: var(--accent-orange);
   }
 
   .concurrency-seg.selected {

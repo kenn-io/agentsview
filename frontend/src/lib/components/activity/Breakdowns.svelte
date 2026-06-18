@@ -247,7 +247,7 @@
   }
 
   .swatch.automated {
-    background: var(--accent-purple);
+    background: var(--accent-orange);
   }
 
   .metric-toggle {
@@ -340,7 +340,7 @@
   }
 
   .bar-seg.automated {
-    background: var(--accent-purple);
+    background: var(--accent-orange);
   }
 
   .bar-value {

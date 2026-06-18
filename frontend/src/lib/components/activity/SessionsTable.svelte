@@ -442,9 +442,9 @@
     border-radius: 999px;
     font-size: 9px;
     font-weight: 600;
-    color: var(--accent-purple);
-    background: color-mix(in srgb, var(--accent-purple) 14%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent-purple) 35%, transparent);
+    color: var(--accent-orange);
+    background: color-mix(in srgb, var(--accent-orange) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-orange) 35%, transparent);
   }
 
   .session-link:hover {
