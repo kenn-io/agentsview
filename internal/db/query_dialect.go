@@ -28,23 +28,24 @@ const (
 // ORM: callers still own SELECTs, JOINs, backend-specific search paths, and
 // table schemas.
 type QueryDialect struct {
-	name                      string
-	placeholderStyle          placeholderStyle
-	trueLiteral               string
-	falseLiteral              string
-	dateExpr                  string
-	dateParam                 func(string) string
-	activityExpr              string
-	activityParam             func(string) string
-	cursorActivityExpr        string
-	cursorParam               func(string) string
-	terminationExpr           string
-	terminationKind           timestampKind
-	caseInsensitiveLike       string
-	caseInsensitiveLikeEsc    string
-	regexPredicate            func(string, string) string
-	sidebarChildRelationships []string
-	nullsLast                 bool
+	name                        string
+	placeholderStyle            placeholderStyle
+	trueLiteral                 string
+	falseLiteral                string
+	dateExpr                    string
+	dateParam                   func(string) string
+	activityExpr                string
+	activityParam               func(string) string
+	cursorActivityExpr          string
+	cursorParam                 func(string) string
+	terminationExpr             string
+	terminationKind             timestampKind
+	caseInsensitiveLike         string
+	caseInsensitiveLikeEsc      string
+	regexPredicate              func(string, string) string
+	sidebarChildRelationships   []string
+	canonicalChildRelationships []string
+	nullsLast                   bool
 }
 
 // SQLiteQueryDialect returns the SQLite SQL fragments used by the local store.
@@ -68,7 +69,8 @@ func SQLiteQueryDialect() QueryDialect {
 		regexPredicate: func(col, ph string) string {
 			return col + " REGEXP " + ph
 		},
-		sidebarChildRelationships: []string{"subagent", "fork"},
+		sidebarChildRelationships:   []string{"subagent", "fork"},
+		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 	}
 }
 
@@ -98,8 +100,9 @@ func PostgresQueryDialect() QueryDialect {
 		regexPredicate: func(col, ph string) string {
 			return col + " ~* " + ph
 		},
-		sidebarChildRelationships: []string{"subagent", "fork"},
-		nullsLast:                 true,
+		sidebarChildRelationships:   []string{"subagent", "fork"},
+		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
+		nullsLast:                   true,
 	}
 }
 
@@ -269,8 +272,20 @@ func (d QueryDialect) SidebarChildRelationshipsSQL() string {
 	return strings.Join(quoted, ", ")
 }
 
+func (d QueryDialect) CanonicalChildRelationshipsSQL() string {
+	quoted := make([]string, 0, len(d.canonicalChildRelationships))
+	for _, rel := range d.canonicalChildRelationships {
+		quoted = append(quoted, "'"+rel+"'")
+	}
+	return strings.Join(quoted, ", ")
+}
+
 func SidebarChildRelationshipPredicate(dialect QueryDialect, sessionAlias string) string {
 	return sessionAlias + ".relationship_type IN (" + dialect.SidebarChildRelationshipsSQL() + ")"
+}
+
+func CanonicalChildRelationshipPredicate(dialect QueryDialect, sessionAlias string) string {
+	return sessionAlias + ".relationship_type IN (" + dialect.CanonicalChildRelationshipsSQL() + ")"
 }
 
 func SidebarOrphanPredicate(sessionAlias, parentAlias string) string {
@@ -282,7 +297,7 @@ func SidebarOrphanPredicate(sessionAlias, parentAlias string) string {
 }
 
 func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeOrphans bool) string {
-	base := `NOT (` + SidebarChildRelationshipPredicate(dialect, sessionAlias) + ` AND NOT ` +
+	base := `NOT (` + CanonicalChildRelationshipPredicate(dialect, sessionAlias) + ` AND NOT ` +
 		SidebarOrphanPredicate(sessionAlias, "parent") + `)`
 	if !includeOrphans {
 		return base
