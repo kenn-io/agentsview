@@ -1889,3 +1889,29 @@ func (db *DB) SetSyncState(key, value string) error {
 	)
 	return err
 }
+
+// GetOrCreateSyncState returns a sync-state value, atomically creating it
+// with defaultValue when absent.
+func (db *DB) GetOrCreateSyncState(key, defaultValue string) (string, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	w := db.getWriter()
+	var value string
+	err := w.QueryRow(
+		`INSERT INTO pg_sync_state (key, value)
+		 VALUES (?, ?)
+		 ON CONFLICT(key) DO NOTHING
+		 RETURNING value`,
+		key, defaultValue,
+	).Scan(&value)
+	if err == nil {
+		return value, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", err
+	}
+	err = w.QueryRow(
+		"SELECT value FROM pg_sync_state WHERE key = ?", key,
+	).Scan(&value)
+	return value, err
+}

@@ -28,8 +28,18 @@ func (s syncStateReaderStub) SetSyncState(
 	return nil
 }
 
+func (s syncStateReaderStub) GetOrCreateSyncState(
+	key, defaultValue string,
+) (string, error) {
+	if s.value != "" || s.err != nil {
+		return s.value, s.err
+	}
+	return defaultValue, nil
+}
+
 type syncStateStoreStub struct {
-	values map[string]string
+	values      map[string]string
+	createValue string
 }
 
 func (s *syncStateStoreStub) GetSyncState(
@@ -46,6 +56,38 @@ func (s *syncStateStoreStub) SetSyncState(
 	}
 	s.values[key] = value
 	return nil
+}
+
+func (s *syncStateStoreStub) GetOrCreateSyncState(
+	key, defaultValue string,
+) (string, error) {
+	if s.values == nil {
+		s.values = make(map[string]string)
+	}
+	if value := s.values[key]; value != "" {
+		return value, nil
+	}
+	if s.createValue != "" {
+		s.values[key] = s.createValue
+		return s.createValue, nil
+	}
+	s.values[key] = defaultValue
+	return defaultValue, nil
+}
+
+func TestPushMarkerIDReturnsInsertWinner(t *testing.T) {
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+	require.NoError(t, local.SetSyncState(pushMarkerIDStateKey, "winner-marker"))
+	sync := &Sync{local: local}
+
+	got, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	assert.Equal(t, "winner-marker", got)
+	stored, err := local.GetSyncState(pushMarkerIDStateKey)
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, "winner-marker", stored)
 }
 
 func TestReadPushBoundaryStateValidity(t *testing.T) {

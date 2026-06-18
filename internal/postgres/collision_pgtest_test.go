@@ -84,7 +84,7 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 	// Execute pushSession.
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	err = sync.pushSession(ctx, tx, sess)
+	err = sync.pushSession(ctx, tx, sess, markerID)
 	require.ErrorIs(t, err, errSessionOwnershipConflict, "pushSession should return ownership conflict sentinel")
 	require.NoError(t, tx.Commit(), "Commit")
 
@@ -156,7 +156,7 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	require.NoError(t, sync.pushSession(ctx, tx, sess), "pushSession")
+	require.NoError(t, sync.pushSession(ctx, tx, sess, markerID), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")
 
 	var machine, ownerMarker string
@@ -213,11 +213,10 @@ func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	require.NoError(t, sync.pushSession(ctx, tx, sess), "pushSession")
-	require.NoError(t, tx.Commit(), "Commit")
-
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")
+	require.NoError(t, sync.pushSession(ctx, tx, sess, markerID), "pushSession")
+	require.NoError(t, tx.Commit(), "Commit")
 
 	var machine, ownerMarker string
 	err = pg.QueryRowContext(ctx,

@@ -352,6 +352,8 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 		schema:     schema,
 		schemaDone: true,
 	}
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
 
 	pending := "tool_call_pending"
 	sess := db.Session{
@@ -371,7 +373,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 		t.Helper()
 		tx, err := pg.BeginTx(ctx, nil)
 		require.NoError(t, err, "BeginTx")
-		if err := sync.pushSession(ctx, tx, s); err != nil {
+		if err := sync.pushSession(ctx, tx, s, markerID); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSession: %v", err)
 		}
@@ -435,7 +437,9 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	require.NoError(t, sync.pushSession(ctx, tx, remoteSession), "pushSession")
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	require.NoError(t, sync.pushSession(ctx, tx, remoteSession, markerID), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")
 
 	var got string
