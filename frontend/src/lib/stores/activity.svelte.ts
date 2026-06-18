@@ -352,14 +352,20 @@ class ActivityStore {
 
 export const activity = new ActivityStore();
 
-// Refresh the activity filter options after any sync/import, mirroring the
-// sessions store, so newly imported projects/agents/machines appear in the
-// activity controls without a full page reload. Only refetch when an
-// ActivityPage is mounted; otherwise the invalidated cache is picked up lazily
-// by the next mount's loadFilterOptions(). The eager refetch also recovers the
-// controls when a sync lands mid-initial-load and the version bump discards
-// that in-flight response.
+// Refresh the activity view after any sync/import so freshly imported sessions
+// appear without a manual reload. Always drop the filter-option cache (mirroring
+// the sessions store) so new projects/agents/machines can surface. When an
+// ActivityPage is mounted, eagerly refetch those options AND reload the report
+// itself: the report is otherwise only refreshed on a range/filter change or
+// navigation, so without this the charts and table stay stale after a background
+// sync. When nothing is mounted, the invalidated cache is picked up lazily by
+// the next mount's loadFilterOptions(); that mount also calls load(). The eager
+// refetch additionally recovers a sync that lands mid-initial-load, where the
+// version bump discards the in-flight response.
 sync.onSyncComplete(() => {
   activity.invalidateFilterOptions();
-  if (activity.attached) void activity.loadFilterOptions();
+  if (activity.attached) {
+    void activity.loadFilterOptions();
+    void activity.load();
+  }
 });

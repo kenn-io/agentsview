@@ -261,6 +261,7 @@ describe("loadFilterOptions", () => {
 describe("sync refresh hook", () => {
   it("refetches options on sync while an ActivityPage is attached", async () => {
     expect(typeof syncCallback).toBe("function");
+    api.getActivityReport.mockResolvedValue(makeReport());
     api.getProjects.mockResolvedValue({ projects: [] });
     api.getAgents.mockResolvedValue({ agents: [] });
     api.getMachines.mockResolvedValue({ machines: [] });
@@ -276,11 +277,33 @@ describe("sync refresh hook", () => {
     syncCallback?.();
     expect(api.getProjects).toHaveBeenCalledTimes(2);
 
-    // Settle the in-flight refetch the hook started.
+    // Settle the in-flight refetch + report reload the hook started.
+    await activity.loadFilterOptions();
+  });
+
+  it("reloads the report on sync while an ActivityPage is attached", async () => {
+    api.getActivityReport.mockResolvedValue(makeReport());
+    api.getProjects.mockResolvedValue({ projects: [] });
+    api.getAgents.mockResolvedValue({ agents: [] });
+    api.getMachines.mockResolvedValue({ machines: [] });
+
+    detach = activity.attach();
+    await activity.load();
+    expect(api.getActivityReport).toHaveBeenCalledTimes(1);
+
+    // The hook reloads the report so freshly imported sessions appear without a
+    // manual range/filter change. load() calls getActivityReport synchronously
+    // (before its first await), so the count bumps immediately. Without the
+    // load() in the hook this stays at 1 and the charts/table go stale.
+    syncCallback?.();
+    expect(api.getActivityReport).toHaveBeenCalledTimes(2);
+
+    // Settle the in-flight reload the hook started.
     await activity.loadFilterOptions();
   });
 
   it("invalidates without refetching on sync when no page is attached", async () => {
+    api.getActivityReport.mockResolvedValue(makeReport());
     api.getProjects.mockResolvedValue({ projects: [] });
     api.getAgents.mockResolvedValue({ agents: [] });
     api.getMachines.mockResolvedValue({ machines: [] });
@@ -288,11 +311,12 @@ describe("sync refresh hook", () => {
     await activity.loadFilterOptions();
     expect(api.getProjects).toHaveBeenCalledTimes(1);
 
-    // No ActivityPage attached: the hook invalidates but must not fetch on its
-    // own. loadFilterOptions calls getProjects synchronously, so an errant
-    // refetch would already show here.
+    // No ActivityPage attached: the hook invalidates but must not fetch options
+    // or reload the report on its own. Both calls run synchronously before their
+    // first await, so an errant refetch/reload would already show here.
     syncCallback?.();
     expect(api.getProjects).toHaveBeenCalledTimes(1);
+    expect(api.getActivityReport).not.toHaveBeenCalled();
 
     // The invalidation took effect: the next explicit load refetches.
     await activity.loadFilterOptions();
