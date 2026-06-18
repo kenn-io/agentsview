@@ -173,7 +173,8 @@ func printKeyMinutes(label string, rows []activity.KeyMinutes) {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	for _, row := range topKeyMinutes(rows, 5) {
-		fmt.Fprintf(w, "  %s\t%.1f min\n", row.Key, row.AgentMinutes)
+		fmt.Fprintf(w, "  %s\t%.1f min\n",
+			sanitizeTerminal(row.Key), row.AgentMinutes)
 	}
 	w.Flush()
 	fmt.Println()
@@ -191,7 +192,8 @@ func printActivitySessions(rows []activity.SessionRow) {
 	limit := min(len(rows), 5)
 	for _, s := range rows[:limit] {
 		fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%s\n",
-			s.Title, s.Project, s.Agent,
+			sanitizeTerminal(s.Title), sanitizeTerminal(s.Project),
+			sanitizeTerminal(s.Agent),
 			fmtMinutes(s.AgentMinutes), fmtCost(s.Cost),
 		)
 	}

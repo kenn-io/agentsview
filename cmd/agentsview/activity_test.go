@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/pricing"
 )
@@ -78,6 +79,39 @@ func TestFmtInstant_NilAndTimezone(t *testing.T) {
 	require.NoError(t, err)
 	ts := "2026-06-16T05:30:00Z" // 00:30 CDT
 	assert.Equal(t, "2026-06-16 00:30", fmtInstant(&ts, chicago))
+}
+
+// TestPrintActivityReport_SanitizesSessionDerivedStrings confirms the
+// human-readable activity output strips control/escape bytes from
+// session-derived fields (breakdown keys and session title/project/agent), so
+// crafted imported or synced metadata cannot drive terminal escape sequences.
+// JSON output is left untouched and is covered separately.
+func TestPrintActivityReport_SanitizesSessionDerivedStrings(t *testing.T) {
+	mins := 1.0
+	// OSC title-set + BEL, then a bare CR overwrite: all control bytes stripped.
+	evil := "\x1b]0;pwned\x07safe\rEVIL"
+	r := activity.Report{
+		Timezone:   "UTC",
+		RangeStart: "2026-06-16T00:00:00Z",
+		RangeEnd:   "2026-06-17T00:00:00Z",
+		BucketUnit: "minute",
+		ByProject:  []activity.KeyMinutes{{Key: evil, AgentMinutes: 1}},
+		BySession: []activity.SessionRow{{
+			SessionID:    "s1",
+			Title:        evil,
+			Project:      evil,
+			Agent:        evil,
+			AgentMinutes: &mins,
+		}},
+	}
+
+	out := captureStdout(t, func() { printActivityReport(r) })
+
+	assert.NotContains(t, out, "\x1b", "ESC must be stripped from output")
+	assert.NotContains(t, out, "\x07", "BEL must be stripped from output")
+	assert.NotContains(t, out, "\r", "bare CR must be stripped from output")
+	assert.Contains(t, out, "safeEVIL",
+		"printable text survives once control bytes are removed")
 }
 
 // fallbackPricedModel returns a model pattern from the offline fallback table
