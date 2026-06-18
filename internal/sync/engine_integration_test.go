@@ -7238,6 +7238,27 @@ func TestSyncAll_PersistsStartedAndFinishedAt(t *testing.T) {
 	require.NotEmpty(t, finishedRaw, "last_sync_finished_at not persisted")
 }
 
+func TestResyncAllPreservesPGPushMarkerID(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "hello").
+		AddClaudeAssistant(tsZeroS5, "hi").
+		String()
+	env.writeClaudeSession(t, "proj", "sess.jsonl", content)
+	env.engine.SyncAll(context.Background(), nil)
+
+	require.NoError(t, env.db.SetSyncState("pg_push_marker_id", "marker-123"),
+		"SetSyncState pg_push_marker_id")
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
+
+	got, err := env.db.GetSyncState("pg_push_marker_id")
+	require.NoError(t, err, "GetSyncState pg_push_marker_id after resync")
+	assert.Equal(t, "marker-123", got)
+}
+
 func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 	t *testing.T,
 ) {

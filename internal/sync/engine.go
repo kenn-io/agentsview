@@ -2057,6 +2057,9 @@ func (e *Engine) ResyncAll(
 	if err := newDB.PurgeExcludedSessions(); err != nil {
 		log.Printf("resync: purge excluded sessions: %v", err)
 	}
+	if err := newDB.CopySyncStateFrom(origPath); err != nil {
+		log.Printf("resync: copy sync state: %v", err)
+	}
 
 	// Copy insights into newDB from the quiesced old DB file.
 	tInsights := time.Now()

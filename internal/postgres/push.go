@@ -804,6 +804,9 @@ func sameSessionOwner(existingOwnerMarker, existingMachine, markerID, pushedMach
 	if existingMachine == "" {
 		return true
 	}
+	if existingMachine == "local" {
+		return true
+	}
 	return existingMachine == pushedMachine
 }
 
@@ -1074,23 +1077,21 @@ func (s *Sync) pushSession(
 		return err
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
-		if checkErr == nil {
-			currentOwnerMarker := existingOwnerMarker.String
-			currentMachine := existingMachine.String
-			refreshErr := tx.QueryRowContext(ctx,
-				`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
-			).Scan(&existingMachine, &existingOwnerMarker)
-			if refreshErr == nil {
-				currentOwnerMarker = existingOwnerMarker.String
-				currentMachine = existingMachine.String
-			}
-			if !sameSessionOwner(currentOwnerMarker, currentMachine, markerID, pushedMachine) {
-				log.Printf(
-					"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
-					sess.ID, currentMachine, pushedMachine,
-				)
-				return errSessionOwnershipConflict
-			}
+		currentOwnerMarker := existingOwnerMarker.String
+		currentMachine := existingMachine.String
+		refreshErr := tx.QueryRowContext(ctx,
+			`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
+		).Scan(&existingMachine, &existingOwnerMarker)
+		if refreshErr == nil {
+			currentOwnerMarker = existingOwnerMarker.String
+			currentMachine = existingMachine.String
+		}
+		if refreshErr == nil && !sameSessionOwner(currentOwnerMarker, currentMachine, markerID, pushedMachine) {
+			log.Printf(
+				"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
+				sess.ID, currentMachine, pushedMachine,
+			)
+			return errSessionOwnershipConflict
 		}
 	}
 	return nil

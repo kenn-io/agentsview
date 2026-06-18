@@ -167,3 +167,63 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 	assert.Equal(t, "renamed-host", machine)
 	assert.Equal(t, markerID, ownerMarker)
 }
+
+func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_collision_legacy_local_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "host-a",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "legacy-local-001"
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, sessID, "local", "", "test-proj", "claude")
+	require.NoError(t, err, "insert legacy local sentinel row")
+
+	sess := db.Session{
+		ID:           sessID,
+		Project:      "test-proj",
+		Machine:      "local",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	require.NoError(t, sync.pushSession(ctx, tx, sess), "pushSession")
+	require.NoError(t, tx.Commit(), "Commit")
+
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+
+	var machine, ownerMarker string
+	err = pg.QueryRowContext(ctx,
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sessID,
+	).Scan(&machine, &ownerMarker)
+	require.NoError(t, err, "read back session")
+	assert.Equal(t, "host-a", machine)
+	assert.Equal(t, markerID, ownerMarker)
+}

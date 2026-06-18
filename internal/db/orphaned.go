@@ -299,6 +299,38 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	return count, nil
 }
 
+// CopySyncStateFrom copies pg_sync_state rows from the source database into the
+// current database. ResyncAll uses this to preserve durable local sync metadata
+// such as the PG push owner marker across the temp-DB swap.
+func (d *DB) CopySyncStateFrom(sourcePath string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	ctx := context.Background()
+	conn, err := d.getWriter().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(
+		ctx, "ATTACH DATABASE ? AS old_db", sourcePath,
+	); err != nil {
+		return fmt.Errorf("attaching source db: %w", err)
+	}
+	defer func() {
+		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
+	}()
+
+	_, err = conn.ExecContext(ctx, `
+		INSERT OR REPLACE INTO main.pg_sync_state (key, value)
+		SELECT key, value FROM old_db.pg_sync_state`)
+	if err != nil {
+		return fmt.Errorf("copying sync state: %w", err)
+	}
+	return nil
+}
+
 // CopyExcludedSessionsFrom copies the excluded_sessions table
 // from the source DB so permanently deleted sessions survive
 // full DB rebuilds. The source must not have active connections.
