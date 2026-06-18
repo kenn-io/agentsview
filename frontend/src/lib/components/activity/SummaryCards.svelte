@@ -11,6 +11,23 @@
     return v.toLocaleString();
   }
 
+  // Sessions card detail line: surface the automation split only when there
+  // are automated sessions, so the common all-interactive view stays clean,
+  // and keep the untimed count. interactive + automated == sessions.
+  function sessionsSub(t: Report["totals"]): string {
+    const parts: string[] = [];
+    if (t.automated_sessions > 0) {
+      parts.push(
+        `${fmtInt(t.interactive_sessions)} interactive / ` +
+          `${fmtInt(t.automated_sessions)} automated`,
+      );
+    }
+    if (t.untimed_sessions > 0) {
+      parts.push(`${fmtInt(t.untimed_sessions)} untimed`);
+    }
+    return parts.join(", ");
+  }
+
   // minutes -> "Hh Mm" (e.g. 75 -> "1h 15m"). Sub-hour durations
   // drop the hour segment; whole minutes only.
   function fmtDuration(mins: number): string {
@@ -68,10 +85,7 @@
       {
         label: "Sessions",
         value: fmtInt(t.sessions),
-        sub:
-          t.untimed_sessions > 0
-            ? `${fmtInt(t.untimed_sessions)} untimed`
-            : "",
+        sub: sessionsSub(t),
       },
       {
         label: "Projects",
