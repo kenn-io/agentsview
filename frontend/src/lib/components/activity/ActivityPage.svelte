@@ -1,6 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { activity, localDateStr } from "../../stores/activity.svelte.js";
+  import {
+    activity,
+    localDateStr,
+    type Automation,
+  } from "../../stores/activity.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangeControl from "./RangeControl.svelte";
   import RangeNavigator from "./RangeNavigator.svelte";
@@ -56,6 +60,13 @@
     activity.load();
   }
 
+  function onAutomationChange(e: Event) {
+    activity.setAutomation(
+      (e.currentTarget as HTMLSelectElement).value as Automation,
+    );
+    activity.load();
+  }
+
   onMount(() => {
     // Register as a consumer so a completed sync refreshes the filter
     // dropdowns while this page is on screen; detach on unmount.
@@ -101,6 +112,17 @@
       {#each activity.machines as m}
         <option value={m}>{m}</option>
       {/each}
+    </select>
+
+    <select
+      class="filter-select"
+      value={activity.automation}
+      onchange={onAutomationChange}
+      aria-label="Filter by automation"
+    >
+      <option value="all">All Sessions</option>
+      <option value="interactive">Interactive</option>
+      <option value="automated">Automated</option>
     </select>
   </div>
 
