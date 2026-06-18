@@ -242,6 +242,24 @@ describe("selectedItem", () => {
 });
 
 describe("generate (multi-task)", () => {
+  it("includes the browser timezone so summaries align with the dashboard", () => {
+    const mockHandle = {
+      abort: vi.fn(),
+      done: Promise.resolve(makeInsight({ id: 1 })),
+    };
+    vi.mocked(api.generateInsight).mockReturnValueOnce(mockHandle);
+
+    insights.generate();
+
+    expect(api.generateInsight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
   it("adds task to tasks[] and prepends result on completion", async () => {
     const newInsight = makeInsight({ id: 10 });
     const mockHandle = {

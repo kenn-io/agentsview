@@ -164,6 +164,7 @@ class InsightsStore {
         date_to: snap.dateTo,
         project: snap.project || undefined,
         prompt: this.promptText || undefined,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         agent: snap.agent,
       },
       (phase) => {
