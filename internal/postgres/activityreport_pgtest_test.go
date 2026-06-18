@@ -76,6 +76,50 @@ func TestPGGetActivityReport(t *testing.T) {
 	assert.GreaterOrEqual(t, len(r.ByModel), 2)
 }
 
+// TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded confirms a
+// still-open session (no ended_at) that started before the range but has a
+// message inside it is not dropped. The effective-end fallback uses the
+// session's latest message timestamp, not started_at, matching SQLite and
+// DuckDB. Mirrors the SQLite
+// TestGetActivityReport_OpenSessionWithInRangeMessageIncluded.
+func TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_daily_report_open_test")
+	ctx := context.Background()
+
+	// Started the day before, never closed (ended_at NULL), active in-range.
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES (
+			'open', 'test-machine', 'proj1', 'claude',
+			'2026-06-15T23:00:00Z'::timestamptz, NULL, 2, 1
+		)`)
+	require.NoError(t, err, "insert session")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model
+		) VALUES
+			('open', 1, 'user', 'x',
+			 '2026-06-16T10:00:00Z'::timestamptz, 1, ''),
+			('open', 2, 'assistant', 'x',
+			 '2026-06-16T10:02:00Z'::timestamptz, 1, 'opus')`)
+	require.NoError(t, err, "insert messages")
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	ids := make(map[string]struct{}, len(r.BySession))
+	for _, s := range r.BySession {
+		ids[s.SessionID] = struct{}{}
+	}
+	assert.Contains(t, ids, "open",
+		"open session active in-range must not be dropped by the started_at fallback")
+	assert.Equal(t, 1, r.Totals.Sessions)
+}
+
 // TestPGGetActivityReportUsageCostAndTokens exercises the PG usage
 // union + cost path: a single priced assistant message must surface
 // its output tokens and computed cost in the day totals, matching

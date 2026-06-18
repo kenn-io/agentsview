@@ -78,6 +78,12 @@ func (db *DB) GetActivityReport(
 // NULLIF guards the empty-string timestamp fallbacks SQLite stores so a
 // session with an empty ended_at but a valid started_at still falls back
 // correctly, matching the activity-expression convention elsewhere.
+//
+// The effective-end fallback for a session with no ended_at uses its
+// latest message timestamp before started_at, so a still-open or
+// partially-parsed session that began before the range but has messages
+// inside it is not dropped. COALESCE short-circuits, so the correlated
+// MAX subquery runs only for the rare sessions missing an ended_at.
 func (db *DB) activityReportSessions(
 	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -99,8 +105,10 @@ func (db *DB) activityReportSessions(
 		COALESCE(s.is_automated, 0)
 	FROM sessions s
 	WHERE ` + where + `
-		AND COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''),
-			s.created_at) >= ?
+		AND COALESCE(NULLIF(s.ended_at, ''),
+			(SELECT MAX(m.timestamp) FROM messages m
+				WHERE m.session_id = s.id AND m.timestamp != ''),
+			NULLIF(s.started_at, ''), s.created_at) >= ?
 		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)

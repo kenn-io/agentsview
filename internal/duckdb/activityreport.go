@@ -77,6 +77,13 @@ func (s *Store) GetActivityReport(
 // fallback (those columns can be empty here, and project is NOT NULL with an
 // empty-string default), yielding the same Title as the other two backends
 // instead of a possibly-empty one.
+//
+// The effective-end fallback for a session with no ended_at uses its
+// latest message timestamp before started_at, so a still-open session
+// that began before the range but has messages inside it is not dropped,
+// matching SQLite and PostgreSQL. COALESCE short-circuits, so the
+// correlated MAX subquery runs only for the rare sessions missing an
+// ended_at.
 func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -95,7 +102,10 @@ func (s *Store) activityReportSessions(
 		COALESCE(s.is_automated, false) AS is_automated
 	FROM sessions s
 	WHERE ` + where + `
-		AND COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)
+		AND COALESCE(s.ended_at,
+			(SELECT MAX(m.timestamp) FROM messages m
+				WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
+			s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)
 		AND COALESCE(s.started_at, s.created_at) < CAST(? AS TIMESTAMP)`
 
 	rows, err := s.duck.QueryContext(ctx, query, args...)

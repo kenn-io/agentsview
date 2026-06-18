@@ -410,3 +410,30 @@ func TestGetActivityReport_TitleSkipsEmptyDisplayName(t *testing.T) {
 	assert.Equal(t, "real-session-name", r.BySession[0].Title,
 		"empty display_name must not mask the real session_name")
 }
+
+// TestGetActivityReport_OpenSessionWithInRangeMessageIncluded confirms a
+// still-open session (no ended_at) that started before the range but has a
+// message inside it is not dropped. The effective-end fallback uses the
+// session's latest message timestamp, not started_at, so the overlap
+// predicate sees the in-range activity. Without the fix, ended_at falls back
+// to the pre-range started_at and the session vanishes from the report.
+func TestGetActivityReport_OpenSessionWithInRangeMessageIncluded(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Started the day before and never closed (no ended_at), active in-range.
+	insertSession(t, d, "open", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-15T23:00:00Z")
+	})
+	seedMessage(t, d, "open", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "open", 2, "assistant", "2026-06-16T10:02:00Z", "opus")
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	ids := reportSessionIDs(r.BySession)
+	assert.Contains(t, ids, "open",
+		"open session active in-range must not be dropped by the started_at fallback")
+	assert.Equal(t, 1, r.Totals.Sessions)
+}

@@ -71,6 +71,12 @@ func (s *Store) GetActivityReport(
 // overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
 // IDs. The ID set defines the scope for the activity and usage fetches.
 // The display-name expression matches the one PG's usage query uses.
+//
+// The effective-end fallback for a session with no ended_at uses its
+// latest message timestamp before started_at, so a still-open session
+// that began before the range but has messages inside it is not dropped,
+// matching SQLite and DuckDB. COALESCE short-circuits, so the correlated
+// MAX subquery runs only for the rare sessions missing an ended_at.
 func (s *Store) activityReportSessions(
 	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
@@ -93,7 +99,10 @@ func (s *Store) activityReportSessions(
 		COALESCE(s.is_automated, false) AS is_automated
 	FROM sessions s
 	WHERE ` + where + `
-		AND COALESCE(s.ended_at, s.started_at, s.created_at) >= ` +
+		AND COALESCE(s.ended_at,
+			(SELECT MAX(m.timestamp) FROM messages m
+				WHERE m.session_id = s.id AND m.timestamp IS NOT NULL),
+			s.started_at, s.created_at) >= ` +
 		lower + `::timestamptz
 		AND COALESCE(s.started_at, s.created_at) < ` +
 		upper + `::timestamptz`

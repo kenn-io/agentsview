@@ -220,6 +220,42 @@ func TestDuckGetActivityReportPriorDayWithinPadExcluded(t *testing.T) {
 	assert.Equal(t, 0, r.Totals.UntimedSessions)
 }
 
+// TestDuckGetActivityReportOpenSessionWithInRangeMessageIncluded confirms a
+// still-open session (no ended_at) that started before the range but has a
+// message inside it is not dropped. The effective-end fallback uses the
+// session's latest message timestamp, not started_at, matching SQLite and
+// PostgreSQL. Mirrors the SQLite
+// TestGetActivityReport_OpenSessionWithInRangeMessageIncluded.
+func TestDuckGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T) {
+	ctx := context.Background()
+	// Started the day before and never closed (ended_at nil), active in-range.
+	open := syncSession("open", "proj1", "open first", "2026-06-13T23:00:00.000Z", 2)
+	open.Agent = "claude"
+	open.EndedAt = nil
+	writes := []db.SessionBatchWrite{{
+		Session: open,
+		Messages: []db.Message{
+			syncMessage("open", 0, "user", "u", "2026-06-14T10:00:00.000Z"),
+			syncMessage("open", 1, "assistant", "x", "2026-06-14T10:02:00.000Z"),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}}
+	store := activityReportStore(t, writes, nil)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	ids := make(map[string]struct{}, len(r.BySession))
+	for _, s := range r.BySession {
+		ids[s.SessionID] = struct{}{}
+	}
+	assert.Contains(t, ids, "open",
+		"open session active in-range must not be dropped by the started_at fallback")
+	assert.Equal(t, 1, r.Totals.Sessions)
+}
+
 // TestDuckGetActivityReportUsageDedupSubSecondOrder confirms DuckDB orders the
 // usage stream by the parsed instant so first-seen-wins dedup keeps the
 // chronologically earlier row when two rows share a dedup key in the same
