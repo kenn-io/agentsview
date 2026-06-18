@@ -200,6 +200,24 @@ describe("load", () => {
     expect(activity.loading).toBe(false);
     expect(activity.lastUpdatedAt).toBe(stampedAt);
   });
+
+  it("surfaces the error when a background refresh fails before any report", async () => {
+    // No successful load yet, so report is null and there is nothing to keep.
+    api.getActivityReport.mockRejectedValueOnce(new Error("first load down"));
+    await activity.load();
+    expect(activity.report).toBeNull();
+    expect(activity.error).toBe("first load down");
+
+    // A refresh (toolbar button or scheduler) firing before any report exists
+    // must still surface the failure: background mode degrades to foreground
+    // when report is null, instead of clearing then suppressing the error and
+    // leaving a misleading "No data" state.
+    api.getActivityReport.mockRejectedValueOnce(new Error("refresh down"));
+    await activity.load({ background: true });
+    expect(activity.report).toBeNull();
+    expect(activity.error).toBe("refresh down");
+    expect(activity.loading).toBe(false);
+  });
 });
 
 describe("loadFilterOptions", () => {

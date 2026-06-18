@@ -154,9 +154,12 @@ class ActivityStore {
       this.loading = false;
       // A failed background refresh keeps the last good report on screen so a
       // transient blip never blanks the report-first dashboard; the growing
-      // "Updated Xm ago" label signals the staleness. A failed first load or
-      // range/filter change has nothing valid to show, so clear and surface it.
-      if (background) return;
+      // "Updated Xm ago" label signals the staleness. With no report yet (a
+      // first load still failing, or a refresh firing before one lands) there
+      // is nothing to preserve, so fall through and surface the error rather
+      // than leave a misleading empty state. First loads and range/filter
+      // changes are always foreground and clear on error.
+      if (background && this.report !== null) return;
       this.report = null;
       this.error =
         e instanceof Error ? e.message : "Failed to load activity report";
