@@ -55,7 +55,6 @@ export function createRefreshScheduler(
   }
 
   return {
-    start: runAndReschedule,
     refreshNow: runAndReschedule,
     scheduleNext,
     stop,

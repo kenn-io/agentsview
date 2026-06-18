@@ -43,7 +43,7 @@ describe("createRefreshScheduler", () => {
     const refresh = vi.fn();
     const scheduler = createRefreshScheduler(refresh, 300_000);
 
-    scheduler.start();
+    scheduler.refreshNow();
     expect(refresh).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(299_999);
@@ -60,7 +60,7 @@ describe("createRefreshScheduler", () => {
     const refresh = vi.fn();
     const scheduler = createRefreshScheduler(refresh, 300_000);
 
-    scheduler.start();
+    scheduler.refreshNow();
     await vi.advanceTimersByTimeAsync(290_000);
     scheduler.refreshNow();
     expect(refresh).toHaveBeenCalledTimes(2);
