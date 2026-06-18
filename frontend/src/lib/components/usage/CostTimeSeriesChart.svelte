@@ -5,6 +5,7 @@
   const CHART_H = 180;
   const X_LABEL_H = 20;
   const Y_LABEL_W = 40;
+  const X_LABEL_RIGHT_PAD = 24;
   // Reserved headroom at the top of the plot area so the
   // maximum bar, its grid line, and the top y-axis label's
   // ascenders do not clip against the SVG viewBox edge.
@@ -137,7 +138,7 @@
   });
 
   const chartWidth = $derived(
-    Math.max(containerWidth - Y_LABEL_W - 8, 100),
+    Math.max(containerWidth - Y_LABEL_W - X_LABEL_RIGHT_PAD, 100),
   );
 
   const BAR_WIDTH = 40;
@@ -367,7 +368,7 @@
       <svg
         width="100%"
         height={CHART_H + X_LABEL_H}
-        viewBox="0 0 {chartWidth + Y_LABEL_W + 8} {CHART_H + X_LABEL_H}"
+        viewBox="0 0 {chartWidth + Y_LABEL_W + X_LABEL_RIGHT_PAD} {CHART_H + X_LABEL_H}"
         preserveAspectRatio="xMidYMid meet"
         class="chart-svg"
       >
