@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -24,8 +25,9 @@ const lastPushBoundaryStateKey = "last_push_boundary_state"
 // stable push-marker identifier. pushMarkerKeyPrefix prefixes that identifier
 // to form the PG sync_metadata key under which the marker row is stored.
 const (
-	pushMarkerIDStateKey = "pg_push_marker_id"
-	pushMarkerKeyPrefix  = "push_marker:"
+	pushMarkerIDStateKey              = "pg_push_marker_id"
+	pushMarkerKeyPrefix               = "push_marker:"
+	pushMarkerMachineAliasesKeyPrefix = "push_marker_machine_aliases:"
 )
 
 var errSessionOwnershipConflict = errors.New("session ownership conflict")
@@ -85,10 +87,13 @@ func (s *Sync) Push(
 	if err != nil {
 		return result, err
 	}
-	previousMarkerMachine, markerExists, err := s.pgPushMarkerMachine(ctx, markerID)
+	markerMachine, markerMachineAliases, markerExists, err := s.pgPushMarkerMachineState(ctx, markerID)
 	if err != nil {
 		return result, err
 	}
+	legacyMarkerMachines := pushMarkerLegacyMachines(
+		markerMachine, markerMachineAliases,
+	)
 	if full {
 		lastPush = ""
 		// Caller requested a full push — the PG schema
@@ -124,7 +129,7 @@ func (s *Sync) Push(
 			)
 			lastPush = ""
 			full = true
-			previousMarkerMachine = ""
+			legacyMarkerMachines = nil
 			s.schemaMu.Lock()
 			s.schemaDone = false
 			s.schemaMu.Unlock()
@@ -265,7 +270,9 @@ func (s *Sync) Push(
 				return result, err
 			}
 		}
-		if err := s.writePushMarker(ctx, markerID); err != nil {
+		if err := s.writePushMarker(
+			ctx, markerID, markerMachine, markerMachineAliases,
+		); err != nil {
 			return result, err
 		}
 		result.Duration = time.Since(start)
@@ -279,7 +286,7 @@ func (s *Sync) Push(
 		batch := sessions[i:end]
 
 		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, previousMarkerMachine, &pushed,
+			ctx, batch, full, markerID, legacyMarkerMachines, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -294,7 +301,7 @@ func (s *Sync) Push(
 			for _, sess := range batch {
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
-					full, markerID, previousMarkerMachine, &pushed,
+					full, markerID, legacyMarkerMachines, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -363,15 +370,18 @@ func (s *Sync) Push(
 	// succeed. A reset-recovery push that fails before this point leaves
 	// the marker absent, so the next push re-detects the reset and retries
 	// rather than skipping the still-missing sessions.
-	if err := s.writePushMarker(ctx, markerID); err != nil {
+	if err := s.writePushMarker(
+		ctx, markerID, markerMachine, markerMachineAliases,
+	); err != nil {
 		return result, err
 	}
 	result.Duration = time.Since(start)
 	return result, nil
 }
 
-// pgPushMarkerMachine reports whether this host's push marker is present in PG
-// and returns the machine value stored with the marker.
+// pgPushMarkerMachineState reports whether this host's push marker is present
+// in PG and returns the current machine plus legacy machine aliases stored with
+// the marker.
 // A missing marker while the local watermark is set means PG was reset (schema
 // dropped or recreated) since this host last pushed, so a full re-push is
 // needed. Counting rows by machine cannot detect this reliably: another host
@@ -379,7 +389,9 @@ func (s *Sync) Push(
 // also writes -- a remote host's sessions synced in over SSH, or this host's
 // own renamed identity -- masking the loss of this host's own rows. The marker
 // is per-local-DB, so no other pusher can satisfy this check.
-func (s *Sync) pgPushMarkerMachine(ctx context.Context, markerID string) (string, bool, error) {
+func (s *Sync) pgPushMarkerMachineState(
+	ctx context.Context, markerID string,
+) (string, []string, bool, error) {
 	var machine string
 	err := s.pg.QueryRowContext(ctx,
 		`SELECT value FROM sync_metadata WHERE key = $1`,
@@ -387,32 +399,128 @@ func (s *Sync) pgPushMarkerMachine(ctx context.Context, markerID string) (string
 	).Scan(&machine)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", false, nil
+			return "", nil, false, nil
 		}
 		if isUndefinedTable(err) {
-			return "", false, nil
+			return "", nil, false, nil
 		}
-		return "", false, fmt.Errorf(
+		return "", nil, false, fmt.Errorf(
 			"checking pg push marker: %w", err,
 		)
 	}
-	return machine, true, nil
+	aliases, err := s.pgPushMarkerMachineAliases(ctx, markerID)
+	if err != nil {
+		return "", nil, false, err
+	}
+	return machine, aliases, true, nil
+}
+
+func (s *Sync) pgPushMarkerMachineAliases(
+	ctx context.Context, markerID string,
+) ([]string, error) {
+	var raw string
+	err := s.pg.QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		pushMarkerMachineAliasesKeyPrefix+markerID,
+	).Scan(&raw)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf(
+			"reading pg push marker machine aliases: %w", err,
+		)
+	}
+	var aliases []string
+	if err := json.Unmarshal([]byte(raw), &aliases); err != nil {
+		return nil, fmt.Errorf(
+			"decoding pg push marker machine aliases: %w", err,
+		)
+	}
+	return normalizePushMarkerMachineAliases("", aliases), nil
 }
 
 // writePushMarker records this host's push marker in PG so a later push can
-// tell whether PG still holds the rows this host pushed. The stored value
-// carries the machine name for debugging only; presence of the row is what
-// reset detection consults.
-func (s *Sync) writePushMarker(ctx context.Context, markerID string) error {
-	if _, err := s.pg.ExecContext(ctx,
+// tell whether PG still holds the rows this host pushed. The primary marker
+// value carries the current machine name for debugging and reset detection;
+// the alias key preserves previous marker machines so ownerless legacy rows can
+// be adopted after renames across multiple incremental pushes.
+func (s *Sync) writePushMarker(
+	ctx context.Context,
+	markerID, previousMarkerMachine string,
+	previousAliases []string,
+) error {
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin push marker tx: %w", err)
+	}
+	aliases := pushMarkerMachineAliases(
+		s.machine, previousMarkerMachine, previousAliases,
+	)
+	aliasesJSON, err := json.Marshal(aliases)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("encoding pg push marker machine aliases: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO sync_metadata (key, value)
 		 VALUES ($1, $2)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
 		pushMarkerKeyPrefix+markerID, s.machine,
 	); err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("writing pg push marker: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value)
+		 VALUES ($1, $2)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+		pushMarkerMachineAliasesKeyPrefix+markerID, string(aliasesJSON),
+	); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("writing pg push marker machine aliases: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing pg push marker: %w", err)
+	}
 	return nil
+}
+
+func pushMarkerLegacyMachines(machine string, aliases []string) []string {
+	machines := append([]string{}, aliases...)
+	if machine != "" {
+		machines = append(machines, machine)
+	}
+	return normalizePushMarkerMachineAliases("", machines)
+}
+
+func pushMarkerMachineAliases(
+	currentMachine, previousMachine string,
+	previousAliases []string,
+) []string {
+	aliases := append([]string{}, previousAliases...)
+	if previousMachine != "" && previousMachine != currentMachine {
+		aliases = append(aliases, previousMachine)
+	}
+	return normalizePushMarkerMachineAliases(currentMachine, aliases)
+}
+
+func normalizePushMarkerMachineAliases(
+	currentMachine string, aliases []string,
+) []string {
+	seen := make(map[string]struct{}, len(aliases))
+	out := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias == "" || alias == currentMachine {
+			continue
+		}
+		if _, ok := seen[alias]; ok {
+			continue
+		}
+		seen[alias] = struct{}{}
+		out = append(out, alias)
+	}
+	return out
 }
 
 // pushMarkerID returns this local DB's stable push-marker identifier, creating
@@ -457,7 +565,7 @@ func (s *Sync) pushBatch(
 	batch []db.Session,
 	full bool,
 	markerID string,
-	previousMarkerMachine string,
+	legacyMarkerMachines []string,
 	pushed *[]db.Session,
 ) (batchResult, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
@@ -472,7 +580,7 @@ func (s *Sync) pushBatch(
 	skippedConflicts := 0
 	for _, sess := range batch {
 		if err := s.pushSession(
-			ctx, tx, sess, markerID, previousMarkerMachine,
+			ctx, tx, sess, markerID, legacyMarkerMachines,
 		); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
 				skippedConflicts++
@@ -805,8 +913,8 @@ func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
 }
 
 func sameSessionOwner(
-	existingOwnerMarker, existingMachine, markerID, pushedMachine,
-	previousMarkerMachine string,
+	existingOwnerMarker, existingMachine, markerID, pushedMachine string,
+	legacyMarkerMachines []string,
 ) bool {
 	if existingOwnerMarker != "" {
 		return existingOwnerMarker == markerID
@@ -817,7 +925,7 @@ func sameSessionOwner(
 	if existingMachine == "local" {
 		return true
 	}
-	if previousMarkerMachine != "" && existingMachine == previousMarkerMachine {
+	if slices.Contains(legacyMarkerMachines, existingMachine) {
 		return true
 	}
 	return existingMachine == pushedMachine
@@ -884,7 +992,8 @@ func nilStrTS(s *string) any {
 // local-only and used solely by the sync engine to detect
 // re-parsed sessions.
 func (s *Sync) pushSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, markerID, previousMarkerMachine string,
+	ctx context.Context, tx *sql.Tx, sess db.Session, markerID string,
+	legacyMarkerMachines []string,
 ) error {
 	createdAt, _ := ParseSQLiteTimestamp(sess.CreatedAt)
 	isAutomated := sess.IsAutomated
@@ -902,7 +1011,7 @@ func (s *Sync) pushSession(
 		existingMachine.String,
 		markerID,
 		pushedMachine,
-		previousMarkerMachine,
+		legacyMarkerMachines,
 	) {
 		log.Printf(
 			"pgsync: session %s: skipping — already owned by machine %q, "+
@@ -910,6 +1019,13 @@ func (s *Sync) pushSession(
 			sess.ID, existingMachine.String, pushedMachine,
 		)
 		return errSessionOwnershipConflict
+	}
+	if legacyMarkerMachines == nil {
+		legacyMarkerMachines = []string{}
+	}
+	legacyMarkerMachinesJSON, err := json.Marshal(legacyMarkerMachines)
+	if err != nil {
+		return fmt.Errorf("encoding legacy marker machines: %w", err)
 	}
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1004,7 +1120,9 @@ func (s *Sync) pushSession(
 				AND (sessions.machine = EXCLUDED.machine
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
-					OR sessions.machine = $48)
+					OR sessions.machine IN (
+						SELECT jsonb_array_elements_text($48::jsonb)
+					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
 			AND (
@@ -1085,7 +1203,7 @@ func (s *Sync) pushSession(
 		sess.HealthScore, nilStr(sess.HealthGrade),
 		sess.HasToolCalls, sess.HasContextData,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
-		previousMarkerMachine,
+		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {
 		return err
@@ -1102,7 +1220,7 @@ func (s *Sync) pushSession(
 		}
 		if refreshErr == nil && !sameSessionOwner(
 			currentOwnerMarker, currentMachine, markerID, pushedMachine,
-			previousMarkerMachine,
+			legacyMarkerMachines,
 		) {
 			log.Printf(
 				"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",

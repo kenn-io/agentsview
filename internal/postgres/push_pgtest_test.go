@@ -373,7 +373,7 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 		t.Helper()
 		tx, err := pg.BeginTx(ctx, nil)
 		require.NoError(t, err, "BeginTx")
-		if err := sync.pushSession(ctx, tx, s, markerID, ""); err != nil {
+		if err := sync.pushSession(ctx, tx, s, markerID, nil); err != nil {
 			_ = tx.Rollback()
 			t.Fatalf("pushSession: %v", err)
 		}
@@ -439,7 +439,7 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 	require.NoError(t, err, "BeginTx")
 	markerID, err := sync.pushMarkerID()
 	require.NoError(t, err, "pushMarkerID")
-	require.NoError(t, sync.pushSession(ctx, tx, remoteSession, markerID, ""), "pushSession")
+	require.NoError(t, sync.pushSession(ctx, tx, remoteSession, markerID, nil), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")
 
 	var got string
@@ -1180,6 +1180,49 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 		pushMarkerKeyPrefix+markerID,
 	).Scan(&markerMachine), "reading marker machine")
 	assert.Equal(t, "host-b", markerMachine)
+
+	var aliases string
+	require.NoError(t, pg.QueryRow(
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		pushMarkerMachineAliasesKeyPrefix+markerID,
+	).Scan(&aliases), "reading marker aliases")
+	assert.JSONEq(t, `["host-a"]`, aliases)
+
+	const laterSessID = "legacy-previous-machine-2"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           laterSessID,
+		Project:      "proj",
+		Machine:      "host-b",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession later legacy row")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     laterSessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "later",
+		ContentLength: 5,
+	}}), "InsertMessages later legacy row")
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, laterSessID, "host-a", "", "proj", "claude")
+	require.NoError(t, err, "seed later ownerless legacy session")
+
+	res, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "second Push")
+	assert.Zero(t, res.Errors, "second push should report no failed sessions")
+	assert.Zero(t, res.SkippedConflicts,
+		"preserved marker alias should adopt later legacy row")
+
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`,
+		laterSessID,
+	).Scan(&machine, &ownerMarker), "reading later adopted row")
+	assert.Equal(t, "host-b", machine)
+	assert.Equal(t, markerID, ownerMarker)
 }
 
 func TestPushReportsSkippedConflicts(t *testing.T) {
