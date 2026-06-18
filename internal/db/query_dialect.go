@@ -275,7 +275,7 @@ func buildSessionFilterWithBuilder(
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
 	rootMatchParts = append(rootMatchParts,
-		"root_session.relationship_type NOT IN ('subagent', 'fork')")
+		"NOT "+sidebarChildRelationshipPredicate("root_session"))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
 	// Build the CTE base case. When IncludeOrphans is true, also seed with
@@ -293,8 +293,8 @@ func buildSessionFilterWithBuilder(
 			orphanMatchParts = append(orphanMatchParts, orphanOneShotPred)
 		}
 		orphanMatchParts = append(orphanMatchParts,
-			"orphan_child.relationship_type IN ('subagent', 'fork', 'continuation')",
-			"NOT EXISTS (SELECT 1 FROM sessions p WHERE p.id = orphan_child.parent_session_id)")
+			sidebarChildRelationshipPredicate("orphan_child"),
+			sidebarOrphanPredicate("orphan_child", "p"))
 		orphanMatch := strings.Join(orphanMatchParts, " AND ")
 		cteBase += " UNION " +
 			"SELECT orphan_child.id FROM sessions orphan_child" +

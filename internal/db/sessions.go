@@ -333,7 +333,7 @@ const activityExprSQLite = "CAST(strftime('%s', " +
 const sidebarActivityExprSQLiteS = "COALESCE(" +
 	"NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)"
 
-const sidebarChildRelationshipsSQL = "'subagent', 'fork', 'continuation'"
+const sidebarChildRelationshipsSQL = "'subagent', 'fork'"
 
 func sidebarStarredRootCTE(enabled bool) string {
 	if !enabled {
@@ -354,29 +354,30 @@ func sidebarStarredRootJoin(enabled bool) string {
 	return "JOIN eligible_roots e ON e.id = t.root_id"
 }
 
-// buildCanonicalRootWhere returns a WHERE fragment that identifies canonical root
-// sessions (non-child sessions that appear in the sidebar). When includeOrphans is
-// false, it restricts to sessions whose parent either doesn't exist or is deleted.
-// When includeOrphans is true, it also promotes orphan child rows (missing parent)
-// to synthetic roots.
-func buildCanonicalRootWhere(includeOrphans bool) string {
-	base := `
-		NOT EXISTS (
+func sidebarChildRelationshipPredicate(sessionAlias string) string {
+	return sessionAlias + ".relationship_type IN (" + sidebarChildRelationshipsSQL + ")"
+}
+
+func sidebarOrphanPredicate(sessionAlias, parentAlias string) string {
+	return `NOT EXISTS (
 			SELECT 1
-			FROM sessions parent
-			WHERE parent.id = sessions.parent_session_id
-			  AND parent.deleted_at IS NULL
-			  AND sessions.relationship_type IN (` + sidebarChildRelationshipsSQL + `)
+			FROM sessions ` + parentAlias + `
+			WHERE ` + parentAlias + `.id = ` + sessionAlias + `.parent_session_id
 		)`
+}
+
+// buildCanonicalRootWhere returns a WHERE fragment that identifies canonical root
+// sessions for sidebar pagination. Child rows remain nested under their parent
+// unless IncludeOrphans explicitly promotes missing-parent child rows to roots.
+func buildCanonicalRootWhere(includeOrphans bool) string {
+	base := `NOT (` + sidebarChildRelationshipPredicate("sessions") + ` AND NOT ` +
+		sidebarOrphanPredicate("sessions", "parent") + `)`
 	if !includeOrphans {
 		return base
 	}
-	return `(` + base + `
-		OR NOT EXISTS (
-			SELECT 1
-			FROM sessions parent
-			WHERE parent.id = sessions.parent_session_id
-		))`
+	return `(` + base + ` OR (` +
+		sidebarChildRelationshipPredicate("sessions") + ` AND ` +
+		sidebarOrphanPredicate("sessions", "parent") + `))`
 }
 
 // buildTerminationPredSQLite returns a WHERE fragment and args for

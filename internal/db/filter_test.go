@@ -594,6 +594,20 @@ func TestIncludeOrphansPromotesToRoot(t *testing.T) {
 		s.RelationshipType = "fork"
 	})
 
+	insertSession(t, d, "orphan-grandchild", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("orphan-sub")
+		s.RelationshipType = "fork"
+	})
+
+	insertSession(t, d, "continuation-orphan", "proj", func(s *Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("missing-continuation-parent")
+		s.RelationshipType = "continuation"
+	})
+
 	tests := []struct {
 		name           string
 		includeOrphans bool
@@ -603,13 +617,13 @@ func TestIncludeOrphansPromotesToRoot(t *testing.T) {
 			name:           "WithIncludeOrphans",
 			includeOrphans: true,
 			want: []string{
-				"root", "root-sub", "orphan-sub", "orphan-fork",
+				"root", "root-sub", "orphan-sub", "orphan-fork", "orphan-grandchild", "continuation-orphan",
 			},
 		},
 		{
 			name:           "WithoutIncludeOrphans",
 			includeOrphans: false,
-			want:           []string{"root", "root-sub"},
+			want:           []string{"root", "root-sub", "continuation-orphan"},
 		},
 	}
 
@@ -1233,6 +1247,44 @@ func TestSidebarSessionIndexStarredIncludesStarredDescendantRoot(t *testing.T) {
 	require.Empty(t, index.NextCursor)
 	require.Equal(t, 1, index.Total, "total starred root groups")
 	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "starred-child"})
+}
+
+func TestSidebarSessionIndexPagedPromotesNestedOrphans(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "root", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-20T00:00:00Z")
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "orphan-sub", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-19T00:00:00Z")
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("missing-parent")
+		s.RelationshipType = "subagent"
+	})
+	insertSession(t, d, "orphan-fork", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-18T00:00:00Z")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("orphan-sub")
+		s.RelationshipType = "fork"
+	})
+	insertSession(t, d, "continuation-orphan", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-17T00:00:00Z")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = new("missing-continuation-parent")
+		s.RelationshipType = "continuation"
+	})
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{Limit: 2})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	require.Equal(t, 3, index.Total, "total paged root groups")
+	require.NotEmpty(t, index.NextCursor, "paged sidebar should expose a next cursor when more root groups remain")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "orphan-sub", "orphan-fork"})
 }
 
 func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
