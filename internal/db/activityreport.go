@@ -84,9 +84,12 @@ func (db *DB) activityReportSessions(
 	where, args := f.buildWhereWithDate("", false)
 	args = append(args, rangeStartUTC, rangeEndUTC)
 
+	// Each Title candidate is NULLIF'd independently (not a nested
+	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
+	// session_name.
 	query := `SELECT
 		s.id,
-		COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''),
+		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''),
 			NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id),
 		s.project,
 		s.agent,

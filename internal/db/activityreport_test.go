@@ -382,3 +382,31 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 	assert.Equal(t, 500, r.Totals.OutputTokens,
 		"first-seen dedup keeps the chronologically earlier whole-second row")
 }
+
+// TestGetActivityReport_TitleSkipsEmptyDisplayName confirms the Title fallback
+// null-checks each candidate independently: an empty (non-NULL) display_name
+// must not mask a real session_name. A nested COALESCE(display_name,
+// session_name) would return '' and be NULLIF'd away, wrongly skipping to
+// first_message. RenameSession stores a literal '' (only nil clears to NULL),
+// so this reproduces a session renamed to "" that still has a session_name.
+func TestGetActivityReport_TitleSkipsEmptyDisplayName(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.SessionName = Ptr("real-session-name")
+		s.FirstMessage = Ptr("first message text")
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:02:00Z")
+	})
+	require.NoError(t, d.RenameSession("s", Ptr("")))
+	seedMessage(t, d, "s", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "s", 2, "assistant", "2026-06-16T10:02:00Z", "opus")
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	require.Len(t, r.BySession, 1)
+	assert.Equal(t, "real-session-name", r.BySession[0].Title,
+		"empty display_name must not mask the real session_name")
+}

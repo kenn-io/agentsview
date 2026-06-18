@@ -79,9 +79,12 @@ func (s *Store) activityReportSessions(
 	lower := pb.add(rangeStartUTC)
 	upper := pb.add(rangeEndUTC)
 
+	// Each Title candidate is NULLIF'd independently (not a nested
+	// COALESCE-then-NULLIF) so an empty display_name cannot mask a real
+	// session_name.
 	query := `SELECT
 		s.id,
-		COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
+		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
 		s.project,
 		s.agent,
 		s.machine,

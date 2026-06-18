@@ -86,7 +86,7 @@ func (s *Store) activityReportSessions(
 
 	query := `SELECT
 		s.id,
-		COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
+		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
 		s.project,
 		s.agent,
 		s.machine,
