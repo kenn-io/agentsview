@@ -10,7 +10,9 @@ const mocks = vi.hoisted(() => ({
   setDateFrom: vi.fn(),
   setDateTo: vi.fn(),
   setProject: vi.fn(),
+  setAgent: vi.fn(),
   navigate: vi.fn(),
+  agent: "claude" as string,
   serverVersion: { read_only: false } as { read_only: boolean } | null,
 }));
 vi.mock("../../api/generated/index", () => ({
@@ -29,6 +31,10 @@ vi.mock("../../stores/insights.svelte.js", () => ({
   insights: {
     setType: mocks.setType, setDateFrom: mocks.setDateFrom,
     setDateTo: mocks.setDateTo, setProject: mocks.setProject,
+    setAgent: mocks.setAgent,
+    get agent() {
+      return mocks.agent;
+    },
   },
 }));
 vi.mock("../../stores/router.svelte.js", () => ({
@@ -43,6 +49,7 @@ beforeEach(() => {
     if (typeof m === "function") m.mockReset();
   }
   mocks.serverVersion = { read_only: false };
+  mocks.agent = "claude";
   mocks.getInsights.mockResolvedValue({ insights: [] });
 });
 
@@ -79,6 +86,30 @@ describe("ActivityInsight", () => {
       expect.objectContaining({
         type: "daily_activity", date_from: "2026-06-15", date_to: "2026-06-21", agent: "claude",
       }),
+      expect.any(Function),
+    );
+  });
+
+  it("lets the user choose the insight agent", async () => {
+    render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
+    await settle();
+    const select = screen.getByLabelText(/insight agent/i) as HTMLSelectElement;
+    expect(select.value).toBe("claude");
+    await fireEvent.change(select, { target: { value: "codex" } });
+    expect(mocks.setAgent).toHaveBeenCalledWith("codex");
+  });
+
+  it("generates with the selected agent, not a hardcoded one", async () => {
+    mocks.agent = "codex";
+    mocks.generateInsight.mockReturnValue({
+      abort: vi.fn(),
+      done: new Promise(() => {}),
+    });
+    render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
+    await settle();
+    await fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+    expect(mocks.generateInsight).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "codex" }),
       expect.any(Function),
     );
   });

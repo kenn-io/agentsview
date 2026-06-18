@@ -10,7 +10,7 @@
   import { router, getBasePath } from "../../stores/router.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
-  import type { Insight, InsightsResponse } from "../../api/types.js";
+  import type { Insight, InsightsResponse, AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
 
   let {
@@ -109,6 +109,12 @@
     return abortGeneration;
   });
 
+  // The agent choice is shared with the standalone Insights page via the
+  // insights store, so picking one here and there stays in sync.
+  function onAgentChange(e: Event) {
+    insights.setAgent((e.currentTarget as HTMLSelectElement).value as AgentName);
+  }
+
   function handleGenerate() {
     if (generationUnavailable || generating) return;
     generating = true;
@@ -122,7 +128,7 @@
         date_from: dateFrom,
         date_to: dateTo,
         timezone,
-        agent: "claude",
+        agent: insights.agent,
       },
       (p) => {
         if (v !== genVersion) return;
@@ -168,6 +174,23 @@
     </a>
   </header>
 
+  {#snippet agentPicker()}
+    <select
+      class="agent-select"
+      value={insights.agent}
+      onchange={onAgentChange}
+      disabled={generationUnavailable}
+      title="Agent CLI used to generate the insight"
+      aria-label="Insight agent"
+    >
+      <option value="claude">Claude</option>
+      <option value="codex">Codex</option>
+      <option value="copilot">Copilot</option>
+      <option value="gemini">Gemini</option>
+      <option value="kiro">Kiro</option>
+    </select>
+  {/snippet}
+
   {#if loading}
     <div class="state muted">Loading insight…</div>
   {:else if generating}
@@ -178,14 +201,17 @@
   {:else if error}
     <div class="state error">
       <span>{error}</span>
-      <button
-        class="generate-btn"
-        onclick={handleGenerate}
-        disabled={generationUnavailable}
-        title={unavailableTitle}
-      >
-        Retry
-      </button>
+      <div class="gen-row">
+        {@render agentPicker()}
+        <button
+          class="generate-btn"
+          onclick={handleGenerate}
+          disabled={generationUnavailable}
+          title={unavailableTitle}
+        >
+          Retry
+        </button>
+      </div>
     </div>
   {:else if insight}
     <article
@@ -200,15 +226,18 @@
         No insight yet for this range. Generate one to summarize this
         period's activity.
       </span>
-      <button
-        class="generate-btn"
-        onclick={handleGenerate}
-        disabled={generationUnavailable}
-        title={unavailableTitle}
-      >
-        <PlusIcon size="12" strokeWidth="2.2" aria-hidden="true" />
-        Generate
-      </button>
+      <div class="gen-row">
+        {@render agentPicker()}
+        <button
+          class="generate-btn"
+          onclick={handleGenerate}
+          disabled={generationUnavailable}
+          title={unavailableTitle}
+        >
+          <PlusIcon size="12" strokeWidth="2.2" aria-hidden="true" />
+          Generate
+        </button>
+      </div>
     </div>
   {/if}
 </section>
@@ -294,6 +323,34 @@
     color: var(--text-muted);
     line-height: 1.5;
     max-width: 420px;
+  }
+
+  .gen-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .agent-select {
+    height: 28px;
+    padding: 0 6px;
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .agent-select:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+  }
+
+  .agent-select:disabled {
+    opacity: 0.45;
+    cursor: default;
   }
 
   .generate-btn {
