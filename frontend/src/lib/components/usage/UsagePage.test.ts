@@ -5,38 +5,28 @@ describe("UsagePage refresh behavior", () => {
   it("does not auto-refresh usage scans from SSE updates", () => {
     expect(source).not.toContain("subscribeDebounced");
     expect(source).not.toContain("REFRESH_MS");
+    // SSE only flags new data; the periodic refetch lives in RefreshControl.
+    expect(source).toContain("usage.markNewData");
+    expect(source).toContain("events.subscribe");
   });
 
-  it("shows relative last-updated refresh status without ambiguous badges", () => {
+  it("delegates the refresh affordance and scheduler to RefreshControl", () => {
+    expect(source).toContain("<RefreshControl");
     expect(source).toContain("usage.lastUpdatedAt");
-    expect(source).toContain("REFRESH_LABEL_INTERVAL_MS = 60 * 1000");
-    expect(source).toContain("formatRefreshAge");
+    expect(source).toContain('label="Refresh usage data"');
+    expect(source).toContain('title="Refresh"');
+    // The scheduler, label tick, and icon now live in the shared component.
+    expect(source).not.toContain("REFRESH_LABEL_INTERVAL_MS");
+    expect(source).not.toContain("formatRefreshAge");
+    expect(source).not.toContain("RefreshCwIcon");
+    expect(source).not.toContain("setInterval");
+  });
+
+  it("shows relative last-updated status without ambiguous badges", () => {
     expect(source).not.toContain("formatUpdatedAt");
     expect(source).not.toContain("usage.hasNewData");
     expect(source).not.toContain("New data");
     expect(source).not.toContain(".new-data");
-  });
-
-  it("does not announce passive refresh-age ticks as live updates", () => {
-    expect(source).not.toContain(
-      'class="refresh-status" aria-live="polite"',
-    );
-  });
-
-  it("keeps the refresh timestamp beside the centered icon button", () => {
-    const refreshControl =
-      source.match(/\.refresh-control\s*{[^}]+}/)?.[0] ?? "";
-    const refreshButton =
-      source.match(/\.refresh-btn\s*{[^}]+}/)?.[0] ?? "";
-
-    expect(source).toContain('class="refresh-control"');
-    expect(refreshControl).toContain("display: inline-flex");
-    expect(refreshControl).toContain("align-items: center");
-    expect(refreshControl).toContain("gap: 8px");
-    expect(refreshButton).toContain("width: 28px");
-    expect(refreshButton).toContain("justify-content: center");
-    expect(refreshButton).not.toContain("padding-right");
-    expect(source).not.toContain(".refresh-btn::before");
   });
 
   it("keeps refresh progress out of content layout flow", () => {

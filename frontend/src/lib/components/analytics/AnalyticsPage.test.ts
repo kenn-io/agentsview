@@ -4,45 +4,28 @@ import source from "./AnalyticsPage.svelte?raw";
 describe("AnalyticsPage refresh behavior", () => {
   it("does not refresh analytical scans from SSE updates", () => {
     expect(source).not.toContain("subscribeDebounced");
+    // SSE only flags new data; the periodic refetch lives in RefreshControl.
+    expect(source).toContain("analytics.markNewData");
+    expect(source).toContain("events.subscribe");
   });
 
-  it("keeps automatic refresh bounded to five minutes", () => {
-    expect(source).toContain("REFRESH_INTERVAL_MS = 5 * 60 * 1000");
-    expect(source).toContain("createRefreshScheduler");
-    expect(source).toContain("refreshScheduler.refreshNow()");
+  it("delegates the refresh affordance to the shared RefreshControl", () => {
+    expect(source).toContain("<RefreshControl");
+    expect(source).toContain("analytics.lastUpdatedAt");
+    // The scheduler, label tick, and icon now live in the shared component.
+    expect(source).not.toContain("createRefreshScheduler");
+    expect(source).not.toContain("REFRESH_INTERVAL_MS");
+    expect(source).not.toContain("REFRESH_LABEL_INTERVAL_MS");
+    expect(source).not.toContain("formatRefreshAge");
+    expect(source).not.toContain("RefreshCwIcon");
     expect(source).not.toContain("setInterval");
   });
 
-  it("shows relative last-updated refresh status without ambiguous badges", () => {
-    expect(source).toContain("analytics.lastUpdatedAt");
-    expect(source).toContain("REFRESH_LABEL_INTERVAL_MS = 60 * 1000");
-    expect(source).toContain("formatRefreshAge");
+  it("shows relative last-updated status without ambiguous badges", () => {
     expect(source).not.toContain("formatUpdatedAt");
     expect(source).not.toContain("analytics.hasNewData");
     expect(source).not.toContain("New data");
     expect(source).not.toContain(".new-data");
-  });
-
-  it("does not announce passive refresh-age ticks as live updates", () => {
-    expect(source).not.toContain(
-      'class="refresh-status" aria-live="polite"',
-    );
-  });
-
-  it("keeps the refresh timestamp beside the centered icon button", () => {
-    const refreshControl =
-      source.match(/\.refresh-control\s*{[^}]+}/)?.[0] ?? "";
-    const refreshButton =
-      source.match(/\.refresh-btn\s*{[^}]+}/)?.[0] ?? "";
-
-    expect(source).toContain('class="refresh-control"');
-    expect(refreshControl).toContain("display: inline-flex");
-    expect(refreshControl).toContain("align-items: center");
-    expect(refreshControl).toContain("gap: 8px");
-    expect(refreshButton).toContain("width: 28px");
-    expect(refreshButton).toContain("justify-content: center");
-    expect(refreshButton).not.toContain("padding-right");
-    expect(source).not.toContain(".refresh-btn::before");
   });
 
   it("keeps refresh progress out of content layout flow", () => {

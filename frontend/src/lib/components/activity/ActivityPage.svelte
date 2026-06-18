@@ -5,6 +5,8 @@
     localDateStr,
     type Automation,
   } from "../../stores/activity.svelte.js";
+  import { events } from "../../stores/events.svelte.js";
+  import RefreshControl from "../shared/RefreshControl.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangeControl from "./RangeControl.svelte";
   import RangeNavigator from "./RangeNavigator.svelte";
@@ -74,8 +76,19 @@
     // Idempotent; loads the activity filter option lists with one-shot
     // and automated sessions included, matching the activity report.
     activity.loadFilterOptions();
+    // The page owns the initial load. attach() above ran hydrateFromUrl, so the
+    // range/filters are set before this first load. RefreshControl handles the
+    // periodic refresh after that.
     activity.load();
-    return detach;
+    // SSE events only flag that newer data exists; they never refetch the
+    // report directly. Refetching on every event flips `loading` and blanks the
+    // dashboard, so it is bounded to the RefreshControl scheduler and the
+    // manual button.
+    const unsubEvents = events.subscribe(() => activity.markNewData());
+    return () => {
+      detach();
+      unsubEvents();
+    };
   });
 </script>
 
@@ -124,19 +137,24 @@
       <option value="interactive">Interactive</option>
       <option value="automated">Automated</option>
     </select>
+
+    <div class="refresh-slot">
+      <RefreshControl
+        lastUpdatedAt={activity.lastUpdatedAt}
+        busy={activity.loading}
+        onRefresh={() => activity.load()}
+        label="Refresh activity"
+      />
+    </div>
   </div>
 
   <div class="activity-content">
-    {#if activity.loading}
-      <div class="status">Loading activity report...</div>
-    {:else if activity.error}
-      <div class="status error">
-        <span>{activity.error}</span>
-        <button class="retry-btn" onclick={() => activity.load()}>
-          Retry
-        </button>
-      </div>
-    {:else if activity.report}
+    <!-- Report-first ordering: once a report is loaded it stays mounted through
+         every background refresh, so a periodic/SSE-driven reload updates props
+         in place instead of swapping in the full-screen "Loading" state and
+         remounting the charts (which read as a blank flash). The loading and
+         error states only show before the first report exists. -->
+    {#if activity.report}
       <SummaryCards report={activity.report} />
       <div class="chart-panel">
         <ConcurrencyTimeline
@@ -155,6 +173,15 @@
       </div>
       <div class="chart-panel">
         <Breakdowns report={activity.report} />
+      </div>
+    {:else if activity.loading}
+      <div class="status">Loading activity report...</div>
+    {:else if activity.error}
+      <div class="status error">
+        <span>{activity.error}</span>
+        <button class="retry-btn" onclick={() => activity.load()}>
+          Retry
+        </button>
       </div>
     {:else}
       <div class="status">No data for this period.</div>
@@ -211,6 +238,14 @@
   .filter-select:focus {
     outline: none;
     border-color: var(--accent-blue);
+  }
+
+  /* Push the shared refresh control to the right edge of the toolbar, matching
+     the Analytics/Usage refresh affordance. */
+  .refresh-slot {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
   }
 
   .activity-content {

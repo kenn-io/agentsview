@@ -53,6 +53,15 @@ class ActivityStore {
   report: Report | null = $state(null);
   loading = $state(false);
   error: string | null = $state(null);
+  // Epoch ms of the last successful report fetch, powering the "Updated Xm ago"
+  // refresh label. null until the first load completes.
+  lastUpdatedAt: number | null = $state(null);
+  // Set when an SSE event arrives after the first load, signalling that newer
+  // data exists. Mirrors the analytics/usage stores: marking is cheap, and the
+  // actual refetch is left to the manual refresh button and the periodic
+  // scheduler so a session actively writing files does not thrash the report
+  // aggregation on every event.
+  hasNewData: boolean = $state(false);
 
   // Filter-option lists for the activity controls. Loaded with full
   // inclusion (one-shot + automated) so every project/agent/machine
@@ -72,6 +81,18 @@ class ActivityStore {
   /** Browser-resolved IANA timezone; not a user control. */
   get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  }
+
+  /**
+   * Flag that newer data exists (an SSE event arrived) without refetching, so a
+   * session actively writing files does not thrash the report aggregation on
+   * every event. No-op before the first successful load, matching the
+   * analytics/usage stores. The report refreshes on the manual refresh button,
+   * the periodic scheduler, or a range/filter change.
+   */
+  markNewData(): void {
+    if (this.lastUpdatedAt === null) return;
+    this.hasNewData = true;
   }
 
   async load() {
@@ -125,6 +146,8 @@ class ActivityStore {
       });
       if (v !== this.loadVersion) return;
       this.report = res as unknown as Report;
+      this.lastUpdatedAt = Date.now();
+      this.hasNewData = false;
       this.loading = false;
     } catch (e) {
       if (v !== this.loadVersion) return;
@@ -352,20 +375,17 @@ class ActivityStore {
 
 export const activity = new ActivityStore();
 
-// Refresh the activity view after any sync/import so freshly imported sessions
-// appear without a manual reload. Always drop the filter-option cache (mirroring
-// the sessions store) so new projects/agents/machines can surface. When an
-// ActivityPage is mounted, eagerly refetch those options AND reload the report
-// itself: the report is otherwise only refreshed on a range/filter change or
-// navigation, so without this the charts and table stay stale after a background
-// sync. When nothing is mounted, the invalidated cache is picked up lazily by
-// the next mount's loadFilterOptions(); that mount also calls load(). The eager
-// refetch additionally recovers a sync that lands mid-initial-load, where the
-// version bump discards the in-flight response.
+// Refresh the activity filter options after any sync/import, mirroring the
+// sessions store, so newly imported projects/agents/machines appear in the
+// activity controls without a full page reload. Only refetch when an
+// ActivityPage is mounted; otherwise the invalidated cache is picked up lazily
+// by the next mount's loadFilterOptions(). The report itself is deliberately
+// not refetched here: that is driven by the manual refresh button and the
+// periodic scheduler in ActivityPage, so a session actively writing files does
+// not thrash the report aggregation on every sync. The eager option refetch
+// also recovers the controls when a sync lands mid-initial-load and the version
+// bump discards that in-flight response.
 sync.onSyncComplete(() => {
   activity.invalidateFilterOptions();
-  if (activity.attached) {
-    void activity.loadFilterOptions();
-    void activity.load();
-  }
+  if (activity.attached) void activity.loadFilterOptions();
 });

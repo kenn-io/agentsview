@@ -7,6 +7,7 @@ import {
 } from "vite-plus/test";
 import {
   createRefreshScheduler,
+  DEFAULT_REFRESH_INTERVAL_MS,
   formatRefreshAge,
 } from "./refresh.js";
 
@@ -71,5 +72,29 @@ describe("createRefreshScheduler", () => {
     expect(refresh).toHaveBeenCalledTimes(3);
 
     scheduler.stop();
+  });
+
+  it("waits one interval before the first deferred refresh", async () => {
+    vi.useFakeTimers();
+    const refresh = vi.fn();
+    const scheduler = createRefreshScheduler(refresh, 300_000);
+
+    scheduler.scheduleNext();
+    expect(refresh).toHaveBeenCalledTimes(0);
+
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(refresh).toHaveBeenCalledTimes(0);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    scheduler.stop();
+  });
+
+  it("shares a five-minute default cadence", () => {
+    expect(DEFAULT_REFRESH_INTERVAL_MS).toBe(5 * 60 * 1000);
   });
 });

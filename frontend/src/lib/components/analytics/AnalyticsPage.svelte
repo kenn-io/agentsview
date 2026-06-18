@@ -20,11 +20,7 @@
   import { events } from "../../stores/events.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
-  import {
-    createRefreshScheduler,
-    formatRefreshAge,
-  } from "../../utils/refresh.js";
-  import { RefreshCwIcon } from "../../icons.js";
+  import RefreshControl from "../shared/RefreshControl.svelte";
 
   function shortTz(tz: string): string {
     const slash = tz.lastIndexOf("/");
@@ -32,9 +28,6 @@
       ? tz.slice(slash + 1).replace(/_/g, " ")
       : tz;
   }
-
-  const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
-  const REFRESH_LABEL_INTERVAL_MS = 60 * 1000;
 
   function handleExportCSV() {
     exportAnalyticsCSV({
@@ -48,33 +41,14 @@
     });
   }
 
-  const refreshScheduler = createRefreshScheduler(
-    () => analytics.fetchAll(),
-    REFRESH_INTERVAL_MS,
-  );
-  let refreshLabelTick = $state(Date.now());
-  let refreshLabelTimer:
-    | ReturnType<typeof setTimeout>
-    | undefined;
   let unsubEvents: (() => void) | undefined;
 
-  let refreshLabel = $derived.by(() => {
-    return formatRefreshAge(
-      analytics.lastUpdatedAt,
-      refreshLabelTick,
-    );
-  });
-
-  function scheduleRefreshLabelTick() {
-    refreshLabelTimer = setTimeout(() => {
-      refreshLabelTick = Date.now();
-      scheduleRefreshLabelTick();
-    }, REFRESH_LABEL_INTERVAL_MS);
-  }
-
   onMount(() => {
-    refreshScheduler.start();
-    scheduleRefreshLabelTick();
+    // The page owns the initial load; RefreshControl handles the periodic
+    // refresh after that. SSE events only flag new data -- refetching on every
+    // event would thrash the aggregation -- so refetching stays bounded to the
+    // RefreshControl scheduler and its manual button.
+    analytics.fetchAll();
     unsubEvents = events.subscribe(() => analytics.markNewData());
   });
 
@@ -158,10 +132,6 @@
   });
 
   onDestroy(() => {
-    refreshScheduler.stop();
-    if (refreshLabelTimer !== undefined) {
-      clearTimeout(refreshLabelTimer);
-    }
     unsubEvents?.();
   });
 </script>
@@ -185,27 +155,12 @@
       onChange={(from, to) => analytics.setDateRange(from, to)}
       onPreset={(days) => analytics.setRollingWindow(days)}
     />
-    <div class="refresh-control">
-      <button
-        class="refresh-btn"
-        class:querying={analytics.isQuerying}
-        onclick={() => refreshScheduler.refreshNow()}
-        disabled={analytics.isQuerying}
-        title="Refresh analytics"
-        aria-label="Refresh analytics"
-      >
-        <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
-      </button>
-      <div class="refresh-status">
-        <span
-          title={analytics.lastUpdatedAt === null
-            ? undefined
-            : new Date(analytics.lastUpdatedAt).toLocaleString()}
-        >
-          {refreshLabel}
-        </span>
-      </div>
-    </div>
+    <RefreshControl
+      lastUpdatedAt={analytics.lastUpdatedAt}
+      busy={analytics.isQuerying}
+      onRefresh={() => analytics.fetchAll()}
+      label="Refresh analytics"
+    />
     <button class="export-btn" onclick={handleExportCSV}>
       Export CSV
     </button>
@@ -298,49 +253,6 @@
     position: relative;
     display: flex;
     align-items: center;
-  }
-
-  .refresh-control {
-    min-height: 28px;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .refresh-btn {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s, opacity 0.1s;
-  }
-
-  .refresh-btn:hover:not(:disabled) {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
-  .refresh-btn:disabled {
-    cursor: default;
-    opacity: 0.75;
-  }
-
-  .refresh-btn.querying :global(svg) {
-    animation: spin 0.8s linear infinite;
-  }
-
-  .refresh-status {
-    min-height: 24px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-muted);
-    font-size: 11px;
-    white-space: nowrap;
   }
 
   .export-btn {
@@ -451,12 +363,6 @@
   @media (max-width: 800px) {
     .chart-grid {
       grid-template-columns: 1fr;
-    }
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
     }
   }
 

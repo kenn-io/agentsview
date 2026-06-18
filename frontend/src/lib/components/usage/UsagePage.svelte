@@ -23,28 +23,10 @@
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
-  import { formatRefreshAge } from "../../utils/refresh.js";
-  import { RefreshCwIcon } from "../../icons.js";
-
-  const REFRESH_LABEL_INTERVAL_MS = 60 * 1000;
+  import RefreshControl from "../shared/RefreshControl.svelte";
 
   let mounted = false;
-  let refreshLabelTick = $state(Date.now());
-  let refreshLabelTimer:
-    | ReturnType<typeof setTimeout>
-    | undefined;
   let unsubEvents: (() => void) | undefined;
-
-  let refreshLabel = $derived.by(() => {
-    return formatRefreshAge(usage.lastUpdatedAt, refreshLabelTick);
-  });
-
-  function scheduleRefreshLabelTick() {
-    refreshLabelTimer = setTimeout(() => {
-      refreshLabelTick = Date.now();
-      scheduleRefreshLabelTick();
-    }, REFRESH_LABEL_INTERVAL_MS);
-  }
 
   const projectItems = $derived(
     sessions.projects.map((p) => ({
@@ -254,17 +236,16 @@
 
   onMount(() => {
     mounted = true;
+    // SSE events only flag new data; RefreshControl owns the periodic refresh
+    // and the manual button. The initial and filter-change fetches run from the
+    // effects above once URL/filter state is hydrated.
     unsubEvents = events.subscribe(() => usage.markNewData());
-    scheduleRefreshLabelTick();
     tick().then(() => {
       urlWritebackReady = true;
     });
   });
 
   onDestroy(() => {
-    if (refreshLabelTimer !== undefined) {
-      clearTimeout(refreshLabelTimer);
-    }
     unsubEvents?.();
   });
 </script>
@@ -314,27 +295,13 @@
           usage.deselectAllModels(modelItems.map((m) => m.name))}
       />
 
-      <div class="refresh-control">
-        <button
-          class="refresh-btn"
-          class:querying={usage.isQuerying}
-          onclick={() => usage.fetchAll()}
-          disabled={usage.isQuerying}
-          title="Refresh"
-          aria-label="Refresh usage data"
-        >
-          <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
-        </button>
-        <div class="refresh-status">
-          <span
-            title={usage.lastUpdatedAt === null
-              ? undefined
-              : new Date(usage.lastUpdatedAt).toLocaleString()}
-          >
-            {refreshLabel}
-          </span>
-        </div>
-      </div>
+      <RefreshControl
+        lastUpdatedAt={usage.lastUpdatedAt}
+        busy={usage.isQuerying}
+        onRefresh={() => usage.fetchAll()}
+        label="Refresh usage data"
+        title="Refresh"
+      />
 
     </div>
   </div>
@@ -408,49 +375,6 @@
     align-items: center;
   }
 
-  .refresh-control {
-    min-height: 28px;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .refresh-btn {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: background 0.1s, color 0.1s, opacity 0.1s;
-  }
-
-  .refresh-btn:hover:not(:disabled) {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
-  .refresh-btn:disabled {
-    cursor: default;
-    opacity: 0.75;
-  }
-
-  .refresh-btn.querying :global(svg) {
-    animation: spin 0.8s linear infinite;
-  }
-
-  .refresh-status {
-    min-height: 24px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-muted);
-    font-size: 11px;
-    white-space: nowrap;
-  }
-
   .usage-content {
     flex: 1;
     overflow-y: auto;
@@ -512,12 +436,6 @@
   @media (max-width: 800px) {
     .bottom-grid {
       grid-template-columns: 1fr;
-    }
-  }
-
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
     }
   }
 

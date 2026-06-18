@@ -80,6 +80,8 @@ beforeEach(() => {
   activity.report = null;
   activity.loading = false;
   activity.error = null;
+  activity.lastUpdatedAt = null;
+  activity.hasNewData = false;
   activity.projects = [];
   activity.agents = [];
   activity.machines = [];
@@ -277,11 +279,11 @@ describe("sync refresh hook", () => {
     syncCallback?.();
     expect(api.getProjects).toHaveBeenCalledTimes(2);
 
-    // Settle the in-flight refetch + report reload the hook started.
+    // Settle the in-flight refetch the hook started.
     await activity.loadFilterOptions();
   });
 
-  it("reloads the report on sync while an ActivityPage is attached", async () => {
+  it("does not reload the report on sync, only flags new data via SSE", async () => {
     api.getActivityReport.mockResolvedValue(makeReport());
     api.getProjects.mockResolvedValue({ projects: [] });
     api.getAgents.mockResolvedValue({ agents: [] });
@@ -291,14 +293,15 @@ describe("sync refresh hook", () => {
     await activity.load();
     expect(api.getActivityReport).toHaveBeenCalledTimes(1);
 
-    // The hook reloads the report so freshly imported sessions appear without a
-    // manual range/filter change. load() calls getActivityReport synchronously
-    // (before its first await), so the count bumps immediately. Without the
-    // load() in the hook this stays at 1 and the charts/table go stale.
+    // The sync hook refreshes filter options but must NOT reload the report:
+    // re-aggregating on every sync thrashes the CPU while a session is active.
+    // Refetching is bounded to the RefreshControl scheduler and manual button;
+    // SSE only flags new data. load() calls getActivityReport synchronously, so
+    // an errant reload would already show here.
     syncCallback?.();
-    expect(api.getActivityReport).toHaveBeenCalledTimes(2);
+    expect(api.getActivityReport).toHaveBeenCalledTimes(1);
 
-    // Settle the in-flight reload the hook started.
+    // Settle the in-flight options refetch the hook started.
     await activity.loadFilterOptions();
   });
 
@@ -321,6 +324,55 @@ describe("sync refresh hook", () => {
     // The invalidation took effect: the next explicit load refetches.
     await activity.loadFilterOptions();
     expect(api.getProjects).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("freshness state", () => {
+  it("stamps lastUpdatedAt and clears new-data hints on a load", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      api.getActivityReport.mockResolvedValue(makeReport());
+      vi.setSystemTime(new Date("2026-06-16T12:00:00Z"));
+
+      expect(activity.lastUpdatedAt).toBeNull();
+      await activity.load();
+      expect(activity.lastUpdatedAt).toBe(
+        new Date("2026-06-16T12:00:00Z").getTime(),
+      );
+      expect(activity.hasNewData).toBe(false);
+
+      activity.markNewData();
+      expect(activity.hasNewData).toBe(true);
+
+      vi.setSystemTime(new Date("2026-06-16T12:05:00Z"));
+      await activity.load();
+      expect(activity.lastUpdatedAt).toBe(
+        new Date("2026-06-16T12:05:00Z").getTime(),
+      );
+      expect(activity.hasNewData).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("markNewData is a no-op before the first report loads", () => {
+    expect(activity.lastUpdatedAt).toBeNull();
+    activity.markNewData();
+    expect(activity.hasNewData).toBe(false);
+  });
+
+  it("does not stamp lastUpdatedAt when a load fails", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-16T12:00:00Z"));
+      api.getActivityReport.mockRejectedValueOnce(new Error("network down"));
+      await activity.load();
+      expect(activity.lastUpdatedAt).toBeNull();
+      activity.markNewData();
+      expect(activity.hasNewData).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

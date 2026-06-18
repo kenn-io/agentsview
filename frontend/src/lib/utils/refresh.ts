@@ -2,6 +2,14 @@ const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
 
+/**
+ * Default auto-refresh cadence shared by every dashboard. Long enough that a
+ * session actively writing files never thrashes the aggregation, short enough
+ * that an idle dashboard stays current. Override per call site when a view
+ * needs a different cadence.
+ */
+export const DEFAULT_REFRESH_INTERVAL_MS = 5 * MINUTE_MS;
+
 export function formatRefreshAge(
   updatedAt: number | null | undefined,
   now = Date.now(),
@@ -38,9 +46,18 @@ export function createRefreshScheduler(
     timer = setTimeout(runAndReschedule, intervalMs);
   }
 
+  // Arm the interval without an immediate refresh. Callers that load their
+  // initial data separately (e.g. after URL/filter hydration) use this so the
+  // first automatic refresh lands one interval out instead of racing mount.
+  function scheduleNext() {
+    stop();
+    timer = setTimeout(runAndReschedule, intervalMs);
+  }
+
   return {
     start: runAndReschedule,
     refreshNow: runAndReschedule,
+    scheduleNext,
     stop,
   };
 }
