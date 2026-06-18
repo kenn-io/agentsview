@@ -210,10 +210,14 @@ func (s *Sync) Push(
 			"computing local usage event fingerprints: %w", err,
 		)
 	}
+	markerID, err := s.pushMarkerID()
+	if err != nil {
+		return result, err
+	}
 	for id, sess := range sessionByID {
 		sessionFingerprints[id] = sessionPushFingerprint(
 			sess, pushedSessionMachine(sess, s.machine),
-			usageFingerprints[id],
+			usageFingerprints[id], markerID,
 		)
 	}
 
@@ -726,12 +730,14 @@ func localSessionSyncMarker(sess db.Session) string {
 // row is written under the fallback machine, so the fingerprint must track the
 // fallback to force a re-push when s.machine changes.
 func sessionPushFingerprint(
-	sess db.Session, pushedMachine, usageEventFingerprint string,
+	sess db.Session, pushedMachine,
+	usageEventFingerprint, ownerMarker string,
 ) string {
 	fields := []string{
 		sess.ID,
 		sess.Project,
 		pushedMachine,
+		ownerMarker,
 		sess.Agent,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
@@ -991,7 +997,8 @@ func (s *Sync) pushSession(
 			updated_at = NOW()
 		WHERE ((
 				sessions.owner_marker = ''
-				AND sessions.machine = EXCLUDED.machine
+				AND (sessions.machine = EXCLUDED.machine
+					OR sessions.machine = 'local')
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
 			AND (
