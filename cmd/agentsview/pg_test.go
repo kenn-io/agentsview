@@ -1,15 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/postgres"
 )
 
 func loadPGServeConfigForTest(t *testing.T, args ...string) (config.Config, string, error) {
@@ -165,4 +168,21 @@ func TestRunPGServeHelperProcess(t *testing.T) {
 	cfg, basePath, err := loadPGServeConfig(cmd)
 	require.NoError(t, err)
 	runPGServe(cfg, basePath)
+}
+
+func TestWritePGPushSummaryIncludesSkippedConflicts(t *testing.T) {
+	var out bytes.Buffer
+
+	writePGPushSummary(&out, postgres.PushResult{
+		SessionsPushed:   3,
+		MessagesPushed:   9,
+		SkippedConflicts: 2,
+		Duration:         1500 * time.Millisecond,
+	})
+
+	got := out.String()
+	assert.Contains(t, got,
+		"Pushed 3 sessions, 9 messages, skipped 2 ownership conflict(s) in 1.5s")
+	assert.Contains(t, got,
+		"Warning: skipped 2 session(s) owned by another PostgreSQL push marker")
 }

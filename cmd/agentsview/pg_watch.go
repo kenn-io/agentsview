@@ -64,21 +64,42 @@ func (p *pgPusher) push(
 		return fmt.Errorf("push: %w", err)
 	}
 	if res.Errors > 0 {
-		log.Printf(
-			"pg watch: pushed %d sessions, %d messages, %d errors (%s)",
-			res.SessionsPushed, res.MessagesPushed, res.Errors, reason,
-		)
+		logPGWatchPushResult(res, reason)
 		log.Printf(
 			"pg watch: %d session(s) failed to push; will retry",
 			res.Errors,
 		)
 		return nil
 	}
+	logPGWatchPushResult(res, reason)
+	return nil
+}
+
+func logPGWatchPushResult(res postgres.PushResult, reason pushReason) {
+	if res.SkippedConflicts > 0 {
+		log.Printf(
+			"pg watch: pushed %d sessions, %d messages, skipped %d ownership conflict(s), %d errors (%s)",
+			res.SessionsPushed, res.MessagesPushed,
+			res.SkippedConflicts, res.Errors, reason,
+		)
+		log.Printf(
+			"pg watch: %d session(s) skipped due to PostgreSQL ownership conflicts",
+			res.SkippedConflicts,
+		)
+		return
+	}
+	if res.Errors > 0 {
+		log.Printf(
+			"pg watch: pushed %d sessions, %d messages, %d errors (%s)",
+			res.SessionsPushed, res.MessagesPushed,
+			res.Errors, reason,
+		)
+		return
+	}
 	log.Printf(
 		"pg watch: pushed %d sessions, %d messages (%s)",
 		res.SessionsPushed, res.MessagesPushed, reason,
 	)
-	return nil
 }
 
 func (p *pgPusher) reset() {

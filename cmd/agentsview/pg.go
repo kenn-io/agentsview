@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -112,27 +113,60 @@ func runPGPush(cfg PGPushConfig) {
 	fmt.Println("Starting PostgreSQL push...")
 	result, err := ps.Push(ctx, forceFull,
 		func(p postgres.PushProgress) {
-			fmt.Printf(
-				"\rPushing... %d/%d sessions, %d messages",
-				p.SessionsDone, p.SessionsTotal,
-				p.MessagesDone,
-			)
+			printPGPushProgress(p)
 		},
 	)
 	fmt.Print("\r\033[K") // clear progress line
 	if err != nil {
 		fatal("pg push: %v", err)
 	}
+	writePGPushSummary(os.Stdout, result)
+	if result.Errors > 0 {
+		fatal("pg push: %d session(s) failed",
+			result.Errors)
+	}
+}
+
+func printPGPushProgress(p postgres.PushProgress) {
+	if p.SkippedConflicts > 0 {
+		fmt.Printf(
+			"\rPushing... %d/%d sessions, %d messages, %d ownership conflicts skipped",
+			p.SessionsDone, p.SessionsTotal,
+			p.MessagesDone, p.SkippedConflicts,
+		)
+		return
+	}
 	fmt.Printf(
+		"\rPushing... %d/%d sessions, %d messages",
+		p.SessionsDone, p.SessionsTotal,
+		p.MessagesDone,
+	)
+}
+
+func writePGPushSummary(w io.Writer, result postgres.PushResult) {
+	if result.SkippedConflicts > 0 {
+		fmt.Fprintf(
+			w,
+			"Pushed %d sessions, %d messages, skipped %d ownership conflict(s) in %s\n",
+			result.SessionsPushed,
+			result.MessagesPushed,
+			result.SkippedConflicts,
+			result.Duration.Round(time.Millisecond),
+		)
+		fmt.Fprintf(
+			w,
+			"Warning: skipped %d session(s) owned by another PostgreSQL push marker\n",
+			result.SkippedConflicts,
+		)
+		return
+	}
+	fmt.Fprintf(
+		w,
 		"Pushed %d sessions, %d messages in %s\n",
 		result.SessionsPushed,
 		result.MessagesPushed,
 		result.Duration.Round(time.Millisecond),
 	)
-	if result.Errors > 0 {
-		fatal("pg push: %d session(s) failed",
-			result.Errors)
-	}
 }
 
 func runPGStatus() {

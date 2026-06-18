@@ -248,6 +248,35 @@ func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
 	assert.Contains(t, got, "change")
 }
 
+func TestPgPusher_LogsSkippedConflicts(t *testing.T) {
+	target := &fakeTarget{
+		pushResult: postgres.PushResult{
+			SessionsPushed:   3,
+			MessagesPushed:   9,
+			SkippedConflicts: 2,
+		},
+	}
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	p := &pgPusher{
+		localSync: func(context.Context) error { return nil },
+		connect: func() (pgTarget, error) {
+			return target, nil
+		},
+	}
+	require.NoError(t, p.push(context.Background(), reasonChange, false))
+
+	got := logs.String()
+	assert.Contains(t, got,
+		"pushed 3 sessions, 9 messages, skipped 2 ownership conflict(s), 0 errors")
+	assert.Contains(t, got,
+		"2 session(s) skipped due to PostgreSQL ownership conflicts")
+	assert.Contains(t, got, "change")
+}
+
 func TestResolveWatchTargets_ErrorsOnEmptyURL(t *testing.T) {
 	appCfg := config.Config{} // no PG URL
 	_, _, _, err := resolveWatchTargets(appCfg, PGPushConfig{})
