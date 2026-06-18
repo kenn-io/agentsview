@@ -17,6 +17,10 @@ type generateInsightRequest struct {
 	Project  string `json:"project,omitempty"`
 	Prompt   string `json:"prompt,omitempty"`
 	Agent    string `json:"agent,omitempty"`
+	// Timezone is the IANA zone the caller's date range is expressed in, so
+	// the attached activity summary covers the same local-day window as the
+	// activity dashboard the dates were derived from. Empty means UTC.
+	Timezone string `json:"timezone,omitempty"`
 }
 
 func insightGenerateClientMessage(

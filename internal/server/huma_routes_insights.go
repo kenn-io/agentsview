@@ -335,33 +335,50 @@ func (s *Server) humaGenerateInsight(
 }
 
 // activityRangeSummary resolves the requested range into an activity report and
-// condenses it into a RangeSummary for the insight prompt. The range is the
-// half-open span [DateFrom 00:00 UTC, DateTo+1day 00:00 UTC). It excludes
-// automated sessions so the summary reflects the same interactive-only work
-// BuildPrompt's prompt focuses on; the two otherwise select sessions
-// differently (this uses the activity report's half-open UTC window with an
-// ended_at fallback, BuildPrompt uses ListSessions' calendar-date match on the
-// start date), so the summary is a range-level overview, not a row-for-row
-// mirror of BuildPrompt's session list.
+// condenses it into a RangeSummary for the insight prompt. The range spans the
+// local days [DateFrom, DateTo] in req.Timezone (empty means UTC): the bounds
+// are that zone's midnights, matching the activity dashboard the dates were
+// derived from, so a non-UTC viewer's summary covers the window the dashboard
+// shows rather than a UTC-shifted one. It excludes automated sessions so the
+// summary reflects the same interactive-only work BuildPrompt's prompt focuses
+// on; the two otherwise select sessions differently (this uses the activity
+// report's half-open window with an ended_at fallback, BuildPrompt uses
+// ListSessions' calendar-date match on the start date), so the summary is a
+// range-level overview, not a row-for-row mirror of BuildPrompt's session list.
 func (s *Server) activityRangeSummary(
 	ctx context.Context, req generateInsightRequest,
 ) (*insight.RangeSummary, error) {
-	dateTo, err := time.Parse("2006-01-02", req.DateTo)
+	tz := req.Timezone
+	if tz == "" {
+		tz = "UTC"
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return nil, fmt.Errorf("loading timezone %q: %w", tz, err)
+	}
+	// Local midnights of DateFrom and the day after DateTo bound the half-open
+	// window, expressed as absolute instants so ResolveQuery's custom-range
+	// parse keeps them exact; Timezone drives only the bucket calendar.
+	from, err := time.ParseInLocation("2006-01-02", req.DateFrom, loc)
+	if err != nil {
+		return nil, fmt.Errorf("parsing date_from %q: %w", req.DateFrom, err)
+	}
+	toDay, err := time.ParseInLocation("2006-01-02", req.DateTo, loc)
 	if err != nil {
 		return nil, fmt.Errorf("parsing date_to %q: %w", req.DateTo, err)
 	}
-	to := dateTo.AddDate(0, 0, 1).Format("2006-01-02")
+	to := toDay.AddDate(0, 0, 1)
 	q, err := activity.ResolveQuery(activity.QueryInput{
 		Preset:   "custom",
-		From:     req.DateFrom + "T00:00:00Z",
-		To:       to + "T00:00:00Z",
-		Timezone: "UTC",
+		From:     from.UTC().Format(time.RFC3339),
+		To:       to.UTC().Format(time.RFC3339),
+		Timezone: tz,
 	}, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("resolving activity range: %w", err)
 	}
 	r, err := s.db.GetActivityReport(ctx, db.AnalyticsFilter{
-		Timezone:         "UTC",
+		Timezone:         tz,
 		Project:          req.Project,
 		ExcludeAutomated: true,
 	}, q)

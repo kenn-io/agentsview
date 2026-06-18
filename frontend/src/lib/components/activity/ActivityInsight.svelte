@@ -13,7 +13,11 @@
   import type { Insight, InsightsResponse } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
 
-  let { dateFrom, dateTo }: { dateFrom: string; dateTo: string } = $props();
+  let {
+    dateFrom,
+    dateTo,
+    timezone = "",
+  }: { dateFrom: string; dateTo: string; timezone?: string } = $props();
 
   let insight: Insight | null = $state(null);
   let loading = $state(false);
@@ -110,6 +114,7 @@
         type: "daily_activity",
         date_from: dateFrom,
         date_to: dateTo,
+        timezone,
         agent: "claude",
       },
       (p) => {

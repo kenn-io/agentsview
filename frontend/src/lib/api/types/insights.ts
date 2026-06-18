@@ -33,4 +33,7 @@ export interface GenerateInsightRequest {
   project?: string;
   prompt?: string;
   agent?: AgentName;
+  // IANA timezone the date range is expressed in, so the server's activity
+  // summary covers the same local-day window as the dashboard. Omit for UTC.
+  timezone?: string;
 }

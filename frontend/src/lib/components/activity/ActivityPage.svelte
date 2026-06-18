@@ -146,7 +146,11 @@
          otherwise fetch an insight for the wrong span while the report loads). -->
     {#if activity.report}
       <div class="chart-panel">
-        <ActivityInsight dateFrom={insightFrom} dateTo={insightTo} />
+        <ActivityInsight
+          dateFrom={insightFrom}
+          dateTo={insightTo}
+          timezone={activity.timezone}
+        />
       </div>
     {/if}
   </div>
