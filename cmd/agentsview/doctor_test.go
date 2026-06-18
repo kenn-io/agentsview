@@ -1,0 +1,85 @@
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+)
+
+func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.Close(), "close db")
+
+	out, err := executeCommand(newRootCommand(), "doctor", "sync")
+	require.NoError(t, err, "doctor sync")
+	_, statErr := os.Stat(filepath.Join(dataDir, "config.toml"))
+	require.ErrorIs(t, statErr, os.ErrNotExist,
+		"doctor sync must not create config.toml")
+
+	assert.Contains(t, out, "Sync Diagnostics")
+	assert.Contains(t, out, "Data directory: "+dataDir)
+	assert.Contains(t, out, "Database: "+filepath.Join(dataDir, "sessions.db"))
+	assert.Contains(t, out,
+		fmt.Sprintf("SQLite user_version: %d", db.CurrentDataVersion()))
+	assert.Contains(t, out,
+		fmt.Sprintf("Binary data version: %d", db.CurrentDataVersion()))
+	assert.Contains(t, out,
+		"Startup sync decision: normal initial sync (no data-version resync)")
+	assert.Contains(t, out,
+		"Likely cause: data-version resync is not expected")
+}
+
+func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+
+	database, err := db.Open(dbPath)
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:           "stale-session",
+		Project:      "proj",
+		Machine:      "local",
+		Agent:        "codex",
+		MessageCount: 1,
+		DataVersion:  0,
+	}), "insert session")
+	require.NoError(t, database.Close(), "close db")
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "raw sqlite open")
+	_, err = conn.Exec("PRAGMA user_version = 0")
+	require.NoError(t, err, "downgrade user_version")
+	require.NoError(t, conn.Close(), "close raw sqlite")
+
+	logPath := filepath.Join(dataDir, "debug.log")
+	require.NoError(t, os.WriteFile(logPath, []byte(
+		"2026/06/18 data version outdated; full resync required\n"+
+			"2026/06/18 resync aborted: 0 synced, 3 failed\n",
+	), 0o644), "write debug log")
+
+	out, err := executeCommand(newRootCommand(), "doctor", "sync")
+	require.NoError(t, err, "doctor sync")
+
+	assert.Contains(t, out, "SQLite user_version: 0")
+	assert.Contains(t, out,
+		fmt.Sprintf("Binary data version: %d", db.CurrentDataVersion()))
+	assert.Contains(t, out,
+		"Startup sync decision: full data-version resync required")
+	assert.Contains(t, out, "Session data versions:")
+	assert.Contains(t, out, "version 0: 1")
+	assert.Contains(t, out, "Recent debug.log evidence:")
+	assert.Contains(t, out, "resync aborted: 0 synced, 3 failed")
+	assert.Contains(t, out,
+		"Likely cause: previous data-version resync likely aborted before completion")
+}
