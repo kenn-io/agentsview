@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    ActivityIcon,
     ArrowDownIcon,
     ArrowDownWideNarrowIcon,
     ArrowUpNarrowWideIcon,
@@ -323,6 +324,17 @@
     >
       <Grid2x2Icon size="12" strokeWidth="2" aria-hidden="true" />
       <span class="nav-label">Usage</span>
+    </button>
+
+    <button
+      class="nav-btn"
+      class:active={router.route === "activity"}
+      onclick={() => router.navigate("activity")}
+      title="Activity"
+      aria-label="Activity"
+    >
+      <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
+      <span class="nav-label">Activity</span>
     </button>
 
     <div class="more-wrap">

@@ -17,6 +17,7 @@ type GenerateRequest struct {
 	DateTo   string
 	Project  string
 	Prompt   string
+	Summary  *RangeSummary // non-nil only for multi-day ranges
 }
 
 // BuildPrompt queries sessions for the given date and assembles
@@ -58,6 +59,10 @@ func BuildPrompt(
 		b.WriteString("## Project: ")
 		b.WriteString(req.Project)
 		b.WriteString("\n\n")
+	}
+
+	if req.Summary != nil {
+		req.Summary.WriteTo(&b)
 	}
 
 	sessions := page.Sessions

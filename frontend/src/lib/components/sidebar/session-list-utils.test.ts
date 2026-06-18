@@ -3,7 +3,6 @@ import type { Session } from "../../api/types.js";
 import type { SessionGroup } from "../../stores/sessions.svelte.js";
 import {
   ITEM_HEIGHT,
-  CHILD_ITEM_HEIGHT,
   HEADER_HEIGHT,
   STORAGE_KEY,
   buildGroupSections,
@@ -13,7 +12,7 @@ import {
   isSubagentDescendant,
   selectPrimaryId,
 } from "./session-list-utils.js";
-import type { GroupSection, DisplayItem } from "./session-list-utils.js";
+import type { DisplayItem } from "./session-list-utils.js";
 
 // ---------------------------------------------------------------------------
 // Helpers

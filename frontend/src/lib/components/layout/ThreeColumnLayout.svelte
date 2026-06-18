@@ -13,6 +13,7 @@
   import type { Route } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import {
+    ActivityIcon,
     ChartColumnIcon,
     Grid2x2Icon,
     LayoutGridIcon,
@@ -231,6 +232,7 @@
 
   $effect(() => {
     if (!layoutElement) return;
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- reactive dependency: re-measure layout when viewport width changes
     viewportWidth;
     measureLayoutWidth();
   });
@@ -315,6 +317,14 @@
       >
         <Grid2x2Icon size="12" strokeWidth="2" aria-hidden="true" />
         Usage
+      </button>
+      <button
+        class="mobile-nav-btn"
+        class:active={router.route === "activity"}
+        onclick={() => mobileNav("activity")}
+      >
+        <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
+        Activity
       </button>
       <button
         class="mobile-nav-btn"

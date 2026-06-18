@@ -1,0 +1,447 @@
+<script lang="ts">
+  import { InsightsService } from "../../api/generated/index";
+  import { configureGeneratedClient } from "../../api/runtime.js";
+  import {
+    generateInsight,
+    type GenerateInsightHandle,
+  } from "../../api/client.js";
+  import { sync } from "../../stores/sync.svelte.js";
+  import { insights } from "../../stores/insights.svelte.js";
+  import { router, getBasePath } from "../../stores/router.svelte.js";
+  import { renderMarkdown } from "../../utils/markdown.js";
+  import { highlightCodeFences } from "../../utils/highlight-fences.js";
+  import type { Insight, InsightsResponse } from "../../api/types.js";
+  import { LightbulbIcon, PlusIcon } from "../../icons.js";
+
+  let { dateFrom, dateTo }: { dateFrom: string; dateTo: string } = $props();
+
+  let insight: Insight | null = $state(null);
+  let loading = $state(false);
+  let generating = $state(false);
+  let phase = $state("");
+  let error: string | null = $state(null);
+
+  // Guards stale fetch responses when the range changes mid-flight.
+  let fetchVersion = 0;
+  // The in-flight generation, so we can abort it on range change/unmount.
+  let handle: GenerateInsightHandle | null = null;
+
+  /**
+   * Open the standalone Insights page prefilled for this panel's range.
+   * Modified or middle clicks fall through to the browser so the href opens in
+   * a new tab/window; a plain left click is intercepted for SPA navigation.
+   */
+  function openInsightsPage(e: MouseEvent) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) {
+      return;
+    }
+    e.preventDefault();
+    insights.setType("daily_activity");
+    insights.setDateFrom(dateFrom);
+    insights.setDateTo(dateTo);
+    insights.setProject("");
+    router.navigate("insights");
+  }
+
+  const readOnly = $derived(sync.serverVersion?.read_only === true);
+  const generationUnavailable = $derived(
+    sync.serverVersion === null || readOnly,
+  );
+  const unavailableTitle = $derived(
+    readOnly
+      ? "Unavailable in read-only remote mode"
+      : sync.serverVersion === null
+        ? "Waiting for server version"
+        : "Generate insight",
+  );
+
+  function abortGeneration() {
+    handle?.abort();
+    handle = null;
+  }
+
+  $effect(() => {
+    // Read both bounds synchronously so the effect re-runs when either
+    // changes, and capture them so the closures below stay stable.
+    const from = dateFrom;
+    const to = dateTo;
+    const v = ++fetchVersion;
+    abortGeneration();
+    error = null;
+    generating = false;
+    loading = true;
+
+    configureGeneratedClient();
+    InsightsService.getApiV1Insights({
+      type: "daily_activity",
+      dateFrom: from,
+      dateTo: to,
+    })
+      .then((res) => {
+        if (v !== fetchVersion) return;
+        // The list endpoint treats date_from/date_to as range BOUNDS, so a
+        // multi-day range also returns narrower insights nested inside it
+        // (e.g. a single day) and project-scoped ones. This panel shows the
+        // global insight for the exact range, so match both bounds and drop
+        // project-scoped rows before taking the newest.
+        const list = (res as unknown as InsightsResponse).insights.filter(
+          (i) => !i.project && i.date_from === from && i.date_to === to,
+        );
+        insight = list[0] ?? null;
+        loading = false;
+      })
+      .catch(() => {
+        if (v !== fetchVersion) return;
+        insight = null;
+        loading = false;
+      });
+
+    return abortGeneration;
+  });
+
+  function handleGenerate() {
+    if (generationUnavailable || generating) return;
+    generating = true;
+    phase = "starting";
+    error = null;
+
+    handle = generateInsight(
+      {
+        type: "daily_activity",
+        date_from: dateFrom,
+        date_to: dateTo,
+        agent: "claude",
+      },
+      (p) => {
+        phase = p;
+      },
+    );
+
+    handle.done
+      .then((result) => {
+        handle = null;
+        insight = result;
+        generating = false;
+      })
+      .catch((e) => {
+        handle = null;
+        if (e instanceof DOMException && e.name === "AbortError") {
+          return;
+        }
+        error = e instanceof Error ? e.message : "Generation failed";
+        generating = false;
+      });
+  }
+</script>
+
+<section class="activity-insight">
+  <header class="panel-header">
+    <span class="panel-title">
+      <LightbulbIcon size="13" strokeWidth="1.8" aria-hidden="true" />
+      <span>Activity Insight</span>
+      {#if !loading && insight?.model}
+        <span class="insight-model">{insight.model}</span>
+      {/if}
+    </span>
+    <a
+      class="insights-link"
+      href={getBasePath() + "/insights"}
+      onclick={openInsightsPage}
+    >
+      Open in Insights page
+    </a>
+  </header>
+
+  {#if loading}
+    <div class="state muted">Loading insight…</div>
+  {:else if generating}
+    <div class="state generating">
+      <span class="spinner"></span>
+      <span>Generating… {phase}</span>
+    </div>
+  {:else if error}
+    <div class="state error">
+      <span>{error}</span>
+      <button
+        class="generate-btn"
+        onclick={handleGenerate}
+        disabled={generationUnavailable}
+        title={unavailableTitle}
+      >
+        Retry
+      </button>
+    </div>
+  {:else if insight}
+    <article
+      class="markdown-body"
+      use:highlightCodeFences={{ content: insight.content }}
+    >
+      {@html renderMarkdown(insight.content)}
+    </article>
+  {:else}
+    <div class="empty-state">
+      <span class="empty-text">
+        No insight yet for this range. Generate one to summarize this
+        period's activity.
+      </span>
+      <button
+        class="generate-btn"
+        onclick={handleGenerate}
+        disabled={generationUnavailable}
+        title={unavailableTitle}
+      >
+        <PlusIcon size="12" strokeWidth="2.2" aria-hidden="true" />
+        Generate
+      </button>
+    </div>
+  {/if}
+</section>
+
+<style>
+  .activity-insight {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .panel-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .insight-model {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 400;
+    opacity: 0.7;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .insights-link {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-blue);
+    text-decoration: none;
+    letter-spacing: 0.01em;
+  }
+
+  .insights-link:hover {
+    text-decoration: underline;
+  }
+
+  .state {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .state.error {
+    color: var(--accent-red);
+  }
+
+  .spinner {
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid var(--accent-blue);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 8px 0;
+  }
+
+  .empty-text {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    max-width: 420px;
+  }
+
+  .generate-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    padding: 0 12px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--accent-blue);
+    color: white;
+    letter-spacing: 0.01em;
+    transition: opacity 0.12s, transform 0.1s, box-shadow 0.12s;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+  }
+
+  .generate-btn:hover:not(:disabled) {
+    opacity: 0.92;
+    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
+  }
+
+  .generate-btn:active:not(:disabled) {
+    transform: scale(0.98);
+    box-shadow: none;
+  }
+
+  .generate-btn:disabled {
+    opacity: 0.45;
+    box-shadow: none;
+    cursor: default;
+  }
+
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* ── Markdown Content ── */
+  .markdown-body {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text-primary);
+    max-width: 720px;
+  }
+
+  .markdown-body :global(h1) {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 0 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-muted);
+    letter-spacing: -0.02em;
+  }
+
+  .markdown-body :global(h2) {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 28px 0 10px;
+    letter-spacing: -0.015em;
+  }
+
+  .markdown-body :global(h3) {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 20px 0 6px;
+    letter-spacing: -0.01em;
+  }
+
+  .markdown-body :global(p) {
+    margin: 0 0 10px;
+  }
+
+  .markdown-body :global(ul),
+  .markdown-body :global(ol) {
+    margin: 0 0 10px;
+    padding-left: 20px;
+  }
+
+  .markdown-body :global(li) {
+    margin: 3px 0;
+  }
+
+  .markdown-body :global(li + li) {
+    margin-top: 4px;
+  }
+
+  .markdown-body :global(code) {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 2px 5px;
+    background: var(--bg-inset);
+    border-radius: var(--radius-sm);
+  }
+
+  .markdown-body :global(pre) {
+    background: var(--bg-inset);
+    padding: 10px 14px;
+    border-radius: var(--radius-md);
+    overflow-x: auto;
+    margin: 0 0 10px;
+    border: 1px solid var(--border-muted);
+  }
+
+  .markdown-body :global(pre code) {
+    padding: 0;
+    background: transparent;
+    border: none;
+  }
+
+  .markdown-body :global(blockquote) {
+    margin: 0 0 10px;
+    padding: 6px 14px;
+    border-left: 3px solid var(--accent-blue);
+    color: var(--text-secondary);
+    background: color-mix(
+      in srgb,
+      var(--accent-blue) 4%,
+      transparent
+    );
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+
+  .markdown-body :global(strong) {
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .markdown-body :global(a) {
+    color: var(--accent-blue);
+    text-decoration: none;
+  }
+
+  .markdown-body :global(a:hover) {
+    text-decoration: underline;
+  }
+
+  .markdown-body :global(hr) {
+    border: none;
+    border-top: 1px solid var(--border-muted);
+    margin: 20px 0;
+  }
+
+  .markdown-body :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 10px;
+    font-size: 12px;
+  }
+
+  .markdown-body :global(th),
+  .markdown-body :global(td) {
+    padding: 6px 10px;
+    border: 1px solid var(--border-muted);
+    text-align: left;
+  }
+
+  .markdown-body :global(th) {
+    background: var(--bg-inset);
+    font-weight: 600;
+  }
+</style>

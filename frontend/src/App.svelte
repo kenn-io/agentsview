@@ -19,6 +19,7 @@
   import PerfDebugPanel from "./lib/components/debug/PerfDebugPanel.svelte";
   import AnalyticsPage from "./lib/components/analytics/AnalyticsPage.svelte";
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
+  import ActivityPage from "./lib/components/activity/ActivityPage.svelte";
   import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
@@ -413,6 +414,10 @@
 {#if router.route === "usage"}
   <div class="page-scroll">
     <UsagePage />
+  </div>
+{:else if router.route === "activity"}
+  <div class="page-scroll">
+    <ActivityPage />
   </div>
 {:else if router.route === "trends"}
   <div class="page-scroll">

@@ -46,6 +46,7 @@ function normalizeHref(raw: string): string {
     txt.innerHTML = prev;
     let cur = txt.value;
     // Strip control characters
+    // oxlint-disable-next-line no-control-regex -- intentional: strips control chars used to obfuscate dangerous href schemes
     cur = cur.replace(/[\x00-\x1f\x7f]/g, "");
     // Tolerant percent decode (valid %xx chunks only)
     cur = tolerantDecodeURI(cur);

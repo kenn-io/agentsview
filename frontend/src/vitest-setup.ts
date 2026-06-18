@@ -1,3 +1,10 @@
+// Register @testing-library/svelte's per-test setup/cleanup against the
+// explicitly imported vitest hooks. The library's own auto-registration only
+// fires when afterEach is a global, which it is not here (globals are off), so
+// component tests using render() would otherwise leak mounted DOM between
+// cases. cleanup() is idempotent, so tests that unmount manually are unharmed.
+import "@testing-library/svelte/vitest";
+
 type StorageName = "localStorage";
 
 function isStorageLike(value: unknown): value is Storage {

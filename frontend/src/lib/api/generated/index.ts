@@ -7,6 +7,13 @@ export { CancelablePromise, CancelError } from './core/CancelablePromise';
 export { OpenAPI } from './core/OpenAPI';
 export type { OpenAPIConfig } from './core/OpenAPI';
 
+export type { ActivityBucket } from './models/ActivityBucket';
+export type { ActivityKeyMinutes } from './models/ActivityKeyMinutes';
+export type { ActivityPeak } from './models/ActivityPeak';
+export type { ActivityReport } from './models/ActivityReport';
+export type { ActivityReportInterval } from './models/ActivityReportInterval';
+export type { ActivitySessionRow } from './models/ActivitySessionRow';
+export type { ActivityTotals } from './models/ActivityTotals';
 export type { AgentsResponse } from './models/AgentsResponse';
 export type { AgentTotal } from './models/AgentTotal';
 export type { ApiErrorResponse } from './models/ApiErrorResponse';
@@ -130,6 +137,7 @@ export type { VersionInfo } from './models/VersionInfo';
 export type { WorktreeMappingRequest } from './models/WorktreeMappingRequest';
 export type { WorktreeMappingsResponse } from './models/WorktreeMappingsResponse';
 
+export { ActivityService } from './services/ActivityService';
 export { AnalyticsService } from './services/AnalyticsService';
 export { AssetsService } from './services/AssetsService';
 export { ConfigService } from './services/ConfigService';

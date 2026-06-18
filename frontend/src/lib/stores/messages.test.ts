@@ -310,7 +310,7 @@ describe('MessagesStore', () => {
       createDeferred<Session>();
     vi.mocked(api.getSession).mockReturnValue(p1Promise);
 
-    const p1 = messages.reload();
+    messages.reload();
 
     // 3. Switch to Session B
     vi.mocked(api.getSession).mockResolvedValue(

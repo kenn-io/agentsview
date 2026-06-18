@@ -13,3 +13,4 @@ export type SettingsResponse = {
   require_auth: boolean;
   terminal: TerminalResponse;
 };
+

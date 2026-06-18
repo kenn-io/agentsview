@@ -45,26 +45,26 @@ else
       -o "$SERVER" "$ROOT/cmd/agentsview"
 fi
 
-# Run server with test DB, no sync dirs, fixed port.
-# Every agent dir must point to EMPTY_DIR to prevent
-# the server from discovering real sessions on the host.
-agent_env=(
-  "AGENTSVIEW_DATA_DIR=$TMPDIR"
-  "CLAUDE_PROJECTS_DIR=$EMPTY_DIR"
-  "CODEX_SESSIONS_DIR=$EMPTY_DIR"
-  "COPILOT_DIR=$EMPTY_DIR"
-  "GEMINI_DIR=$EMPTY_DIR"
-  "OPENCODE_DIR=$EMPTY_DIR"
-  "CURSOR_PROJECTS_DIR=$EMPTY_DIR"
-  "AMP_DIR=$EMPTY_DIR"
-  "IFLOW_DIR=$EMPTY_DIR"
-  "ZED_DIR=$EMPTY_DIR"
-  "VSCODE_COPILOT_DIR=$EMPTY_DIR"
-  "PI_DIR=$EMPTY_DIR"
-  "OPENCLAW_DIR=$EMPTY_DIR"
-  "QCLAW_DIR=$EMPTY_DIR"
-  "WORKBUDDY_PROJECTS_DIR=$EMPTY_DIR"
-)
+# Run server with test DB, no sync dirs, fixed port. Every agent dir override
+# must point at EMPTY_DIR so the server never discovers real sessions on the
+# host. The list is derived from the parser registry (the EnvVar fields in
+# internal/parser/types.go), so registering a new agent cannot silently
+# reintroduce a discovery leak by leaving its dir env var pointed at the host.
+agent_env=("AGENTSVIEW_DATA_DIR=$TMPDIR")
+while IFS= read -r agent_var; do
+  agent_env+=("$agent_var=$EMPTY_DIR")
+done < <(grep -oE 'EnvVar:[[:space:]]*"[A-Z0-9_]+"' "$ROOT/internal/parser/types.go" \
+  | grep -oE '"[A-Z0-9_]+"' | tr -d '"' | sort -u)
+
+# Sanity floor: a stale grep (e.g. types.go reformatted) would yield an empty
+# list and silently re-leak host sessions. The registry has dozens of agents;
+# far fewer than this means the parse broke, so fail loudly instead.
+min_agent_dirs=10
+if [ "${#agent_env[@]}" -le "$min_agent_dirs" ]; then
+  echo "e2e isolation: derived only $(( ${#agent_env[@]} - 1 )) agent dir" \
+    "overrides from internal/parser/types.go; registry parsing is stale" >&2
+  exit 1
+fi
 
 case "$BACKEND" in
   sqlite)

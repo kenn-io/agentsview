@@ -12,6 +12,7 @@ const approvedIconNames = [
   "CheckIcon",
   "ChartColumnIcon",
   "ChevronDownIcon",
+  "ChevronLeftIcon",
   "ChevronRightIcon",
   "ChevronUpIcon",
   "CirclePlayIcon",

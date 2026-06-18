@@ -115,6 +115,22 @@ func TestListInsights(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 			wantBody:   "invalid type",
 		},
+		{
+			name:       "ReversedDateRange",
+			seed:       func(t *testing.T, te *testEnv) {},
+			path:       "/api/v1/insights?date_from=2026-06-17&date_to=2026-06-16",
+			wantStatus: http.StatusBadRequest,
+			wantBody:   "date_from must not be after date_to",
+		},
+		{
+			// A non-date value is rejected with 400 before the handler runs
+			// (huma's format:"date" query validation), so only the status is
+			// asserted; the body message is owned by the framework.
+			name:       "InvalidDateFrom",
+			seed:       func(t *testing.T, te *testEnv) {},
+			path:       "/api/v1/insights?date_from=not-a-date",
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {

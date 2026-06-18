@@ -32,6 +32,7 @@
   });
 
   let lastSyncText = $derived.by(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- reactive dependency: recompute relative time when the tick advances
     relativeTimeTick;
     return sync.lastSync
       ? formatRelativeTime(sync.lastSync)

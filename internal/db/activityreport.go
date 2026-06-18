@@ -1,0 +1,274 @@
+package db
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+
+	"go.kenn.io/agentsview/internal/activity"
+)
+
+// activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
+// of the resolved range `q` as zone-less strings. It generalizes the old
+// per-day window helper so the candidate-session predicate selects exactly
+// the sessions whose window intersects the range, with no padding slop.
+//
+// The layout omits the zone suffix deliberately. SQLite compares timestamp
+// TEXT lexicographically; a Z-suffixed bound sorts a sub-second value
+// (".123Z") before a whole-second bound ("Z") because '.' < 'Z', dropping
+// sessions in the first sub-second of the range. A zone-less bound is a
+// strict prefix of every stored RFC3339Nano-UTC value at that second, so
+// whole-second and fractional values both compare correctly.
+// PostgreSQL/DuckDB compare parsed instants and keep the zone in their own
+// copies of this helper; this divergence makes SQLite match their
+// already-correct boundary behavior.
+func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
+	const boundLayout = "2006-01-02T15:04:05"
+	return q.RangeStart.UTC().Format(boundLayout),
+		q.RangeEnd.UTC().Format(boundLayout)
+}
+
+// GetActivityReport assembles a concurrency- and usage-oriented report
+// for the resolved range `q`. It runs three fetches scoped to the SAME
+// candidate session-ID set so the concurrency timeline, sessions table,
+// and usage totals stay mutually consistent (no orphan usage rows), then
+// hands the in-memory streams to activity.Aggregate.
+//
+// The filter `f` is honored as-is: callers that want one-shot or
+// automated sessions included must pass them through with the
+// corresponding exclusions disabled.
+func (db *DB) GetActivityReport(
+	ctx context.Context, f AnalyticsFilter, q activity.Query,
+) (activity.Report, error) {
+	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
+	lowerBound := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+	upperBound := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+
+	sessions, ids, err := db.activityReportSessions(
+		ctx, f, rangeStartUTC, rangeEndUTC)
+	if err != nil {
+		return activity.Report{}, err
+	}
+
+	acts, err := db.activityReportActivity(ctx, ids)
+	if err != nil {
+		return activity.Report{}, err
+	}
+
+	usage, err := db.activityReportUsage(ctx, ids, lowerBound, upperBound)
+	if err != nil {
+		return activity.Report{}, err
+	}
+
+	return activity.Aggregate(activity.Params{
+		RangeStart:    q.RangeStart,
+		RangeEnd:      q.RangeEnd,
+		Loc:           q.Loc,
+		EffectiveEnd:  q.EffectiveEnd,
+		Partial:       q.Partial,
+		GapCapSeconds: q.GapCapSeconds,
+		Bucket:        q.Bucket,
+	}, sessions, acts, usage), nil
+}
+
+// activityReportSessions returns the candidate sessions whose window
+// overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
+// IDs. The ID set defines the scope for the activity and usage fetches.
+// NULLIF guards the empty-string timestamp fallbacks SQLite stores so a
+// session with an empty ended_at but a valid started_at still falls back
+// correctly, matching the activity-expression convention elsewhere.
+func (db *DB) activityReportSessions(
+	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
+) ([]activity.SessionMeta, []string, error) {
+	where, args := f.buildWhereWithDate("", false)
+	args = append(args, rangeStartUTC, rangeEndUTC)
+
+	query := `SELECT
+		s.id,
+		COALESCE(NULLIF(COALESCE(s.display_name, s.session_name), ''),
+			NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id),
+		s.project,
+		s.agent,
+		s.machine,
+		COALESCE(s.started_at, ''),
+		COALESCE(s.ended_at, ''),
+		COALESCE(s.is_automated, 0)
+	FROM sessions s
+	WHERE ` + where + `
+		AND COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''),
+			s.created_at) >= ?
+		AND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?`
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"querying activity report sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []activity.SessionMeta
+	var ids []string
+	for rows.Next() {
+		var s activity.SessionMeta
+		if err := rows.Scan(
+			&s.SessionID, &s.Title, &s.Project, &s.Agent,
+			&s.Machine, &s.StartedAt, &s.EndedAt, &s.IsAutomated,
+		); err != nil {
+			return nil, nil, fmt.Errorf(
+				"scanning activity report session: %w", err)
+		}
+		sessions = append(sessions, s)
+		ids = append(ids, s.SessionID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf(
+			"iterating activity report sessions: %w", err)
+	}
+	return sessions, ids, nil
+}
+
+// activityReportActivity returns every timestamped message for the
+// candidate sessions, ordered for the aggregator's per-session
+// interval walk.
+func (db *DB) activityReportActivity(
+	ctx context.Context, ids []string,
+) ([]activity.ActivityEvent, error) {
+	var out []activity.ActivityEvent
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := queryChunked(ids, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		query := `SELECT session_id, ordinal, role,
+			COALESCE(timestamp, ''), model
+		FROM messages
+		WHERE session_id IN ` + ph + `
+			AND timestamp IS NOT NULL
+			AND timestamp != ''
+		ORDER BY session_id, ordinal`
+
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf(
+				"querying activity report activity: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var e activity.ActivityEvent
+			if err := rows.Scan(
+				&e.SessionID, &e.Ordinal, &e.Role,
+				&e.Timestamp, &e.Model,
+			); err != nil {
+				return fmt.Errorf(
+					"scanning activity report activity: %w", err)
+			}
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// activityReportUsage returns the usage rows for the candidate sessions
+// within the padded range bounds, with per-row cost computed up front
+// (mirroring GetDailyUsage) so cost logic stays in the backend. Rows
+// are ordered by (ts, session_id, message_ordinal) as the aggregator
+// requires for its first-seen-wins dedup.
+func (db *DB) activityReportUsage(
+	ctx context.Context, ids []string, lowerBound, upperBound string,
+) ([]activity.UsageRow, error) {
+	var out []activity.UsageRow
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	pricing, err := db.loadPricingMap(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("loading pricing: %w", err)
+	}
+
+	// Accumulate the per-row dedup ordinal alongside the mapped row so we
+	// can impose one global (ts, session_id, ordinal) order across all
+	// chunks. The same (claude_message_id, claude_request_id) can recur in
+	// different sessions (resumed/forked) and thus different chunks, so
+	// per-chunk ordering is not enough for the aggregator's first-seen dedup.
+	type ordered struct {
+		row     activity.UsageRow
+		ordinal int64
+	}
+	var rowsAcc []ordered
+
+	err = queryChunked(ids, func(chunk []string) error {
+		ph, chunkArgs := inPlaceholders(chunk)
+		// Apply the same eligibility filters as GetDailyUsage so empty
+		// token_usage, empty, and synthetic models are excluded from the
+		// daily totals and dedup, keeping parity with the Usage dashboard.
+		rowsSQL := dailyUsageRowsSQLWithWhere(
+			usageMessageEligibility+" AND m.session_id IN "+ph,
+			usageEventEligibility+" AND ue.session_id IN "+ph)
+		query := dailyUsageRowSelectFromRows(rowsSQL) + `
+			AND u.ts >= ? AND u.ts < ?`
+
+		args := make([]any, 0, len(chunkArgs)*2+2)
+		args = append(args, chunkArgs...) // message-where chunk
+		args = append(args, chunkArgs...) // usage-event-where chunk
+		args = append(args, lowerBound, upperBound)
+
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("querying activity report usage: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			r, scanErr := scanDailyUsageRow(rows)
+			if scanErr != nil {
+				return fmt.Errorf(
+					"scanning activity report usage: %w", scanErr)
+			}
+			_, outputTok, _, _, cost, _ := dailyUsageAmounts(r, pricing)
+			ord := int64(-1)
+			if r.messageOrdinal.Valid {
+				ord = r.messageOrdinal.Int64
+			}
+			rowsAcc = append(rowsAcc, ordered{
+				ordinal: ord,
+				row: activity.UsageRow{
+					SessionID:       r.sessionID,
+					Model:           r.model,
+					Timestamp:       r.ts,
+					OutputTokens:    outputTok,
+					Cost:            cost,
+					ClaudeMessageID: r.claudeMessageID,
+					ClaudeRequestID: r.claudeRequestID,
+					UsageDedupKey:   r.usageDedupKey,
+				},
+			})
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.SliceStable(rowsAcc, func(i, j int) bool {
+		a, b := rowsAcc[i], rowsAcc[j]
+		if a.row.Timestamp != b.row.Timestamp {
+			return a.row.Timestamp < b.row.Timestamp
+		}
+		if a.row.SessionID != b.row.SessionID {
+			return a.row.SessionID < b.row.SessionID
+		}
+		return a.ordinal < b.ordinal
+	})
+	out = make([]activity.UsageRow, len(rowsAcc))
+	for i, o := range rowsAcc {
+		out[i] = o.row
+	}
+	return out, nil
+}

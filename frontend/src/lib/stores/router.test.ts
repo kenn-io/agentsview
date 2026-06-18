@@ -77,6 +77,25 @@ describe("parsePath", () => {
     }
   });
 
+  it("parses /activity as a valid route", () => {
+    window.history.replaceState({}, "", "/activity?preset=week&date=2026-06-16");
+    const parsed = parsePath();
+    expect(parsed.route).toBe("activity");
+    expect(parsed.params.preset).toBe("week");
+    expect(parsed.params.date).toBe("2026-06-16");
+  });
+
+  it("replaceParams writes query without a new history entry, keeping the path", () => {
+    window.history.replaceState({}, "", "/activity");
+    const store = new RouterStore();
+    const before = window.history.length;
+    store.replaceParams({ preset: "month", date: "2026-06-01" });
+    expect(window.location.pathname).toBe("/activity");
+    expect(window.location.search).toContain("preset=month");
+    expect(window.location.search).toContain("date=2026-06-01");
+    expect(window.history.length).toBe(before);
+  });
+
   it("falls back to default for unknown routes", () => {
     setURL("/unknown");
     const result = parsePath();

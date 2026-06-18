@@ -117,6 +117,7 @@ function createBaseVirtualizer<
 
   return {
     get instance() {
+      // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- reactive dependency: re-read instance when the virtualizer version bumps
       _version;
       return instance;
     },

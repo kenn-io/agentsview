@@ -1,0 +1,646 @@
+<script lang="ts">
+  import type { Report } from "../../api/types.js";
+  import { activeSessionsInSlot } from "./activeSessions.js";
+  import type {
+    ActivityBucket,
+    ActivityReportInterval,
+    ActivitySessionRow,
+  } from "../../api/generated/index";
+
+  let {
+    report,
+    selectedBucket = null,
+    onSelectBucket,
+  }: {
+    report: Report;
+    selectedBucket?: number | null;
+    onSelectBucket?: (
+      sel: { idx: number; label: string; sessionIds: string[] } | null,
+    ) => void;
+  } = $props();
+
+  const CHART_H = 160;
+  const X_LABEL_H = 18;
+  const STRIP_H = 14;
+  const STRIP_GAP = 6;
+  const Y_LABEL_W = 32;
+  const RIGHT_PAD = 8;
+  // Reserved headroom so the tallest bar, its grid line, and
+  // the top y-axis label do not clip against the viewBox edge.
+  const TOP_PAD = 10;
+  const TICK_TARGET = 4;
+
+  // buckets/by_* are typed `any[] | null` by the codegen, so cast
+  // to the generated element model for field-level type safety.
+  const buckets = $derived(
+    (report.buckets ?? []) as ActivityBucket[],
+  );
+
+  let tooltip = $state<{ x: number; y: number; text: string } | null>(null);
+
+  // Format bucket boundaries in the report's own timezone. Bucket start/end are
+  // UTC instants of local calendar boundaries, so rendering them in the report
+  // timezone keeps a "day" bucket on its intended calendar date.
+  function timeLabel(ms: number): string {
+    return new Date(ms).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone: report.timezone,
+    });
+  }
+
+  function weekdayLabel(ms: number): string {
+    return new Date(ms).toLocaleDateString([], {
+      weekday: "short",
+      timeZone: report.timezone,
+    });
+  }
+
+  function dateLabel(ms: number): string {
+    return new Date(ms).toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      timeZone: report.timezone,
+    });
+  }
+
+  function fmtMinuteRange(startMs: number, endMs: number): string {
+    return `${timeLabel(startMs)}–${timeLabel(endMs)}`;
+  }
+
+  function fmtHourRange(startMs: number, endMs: number): string {
+    return `${weekdayLabel(startMs)} ${timeLabel(startMs)}–${timeLabel(endMs)}`;
+  }
+
+  function fmtDayRange(startMs: number): string {
+    return dateLabel(startMs);
+  }
+
+  // The bucket end is exclusive; the last included instant is 1ms before it,
+  // which formats to the inclusive last day (DST-safe, unlike subtracting 24h).
+  function fmtWeekRange(startMs: number, endMs: number): string {
+    return `${dateLabel(startMs)}–${dateLabel(endMs - 1)}`;
+  }
+
+  function fmtBucketRange(b: ActivityBucket): string {
+    const startMs = Date.parse(b.start);
+    const endMs = Date.parse(b.end);
+    if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "";
+    if (report.bucket_unit === "hour") return fmtHourRange(startMs, endMs);
+    if (report.bucket_unit === "day") return fmtDayRange(startMs);
+    if (report.bucket_unit === "week") return fmtWeekRange(startMs, endMs);
+    return fmtMinuteRange(startMs, endMs);
+  }
+
+  function showSlotTip(e: MouseEvent, b: ActivityBucket) {
+    const rect = (e.currentTarget as Element).getBoundingClientRect();
+    tooltip = {
+      x: rect.left + rect.width / 2,
+      y: rect.top - 4,
+      text:
+        `${fmtBucketRange(b)} · peak ${b.max_agents} · ` +
+        `${b.agent_minutes.toFixed(1)} agent-min · ` +
+        `${b.output_tokens.toLocaleString()} output tokens · ` +
+        `$${b.cost.toFixed(2)}`,
+    };
+  }
+
+  function hideTip() {
+    tooltip = null;
+  }
+
+  const intervals = $derived(
+    (report.intervals ?? []) as ActivityReportInterval[],
+  );
+  const bySession = $derived(
+    new Map(
+      ((report.by_session ?? []) as ActivitySessionRow[]).map(
+        (r) => [r.session_id, r],
+      ),
+    ),
+  );
+
+  // Half-open [startMs, endMs) for a slot, taken straight from the bucket's own
+  // bounds (variable-width across presets). A missing bucket yields NaN bounds;
+  // NaN comparisons are all false in activeSessionsInSlot, so the slot resolves
+  // to an empty membership rather than throwing. In practice idx always maps to
+  // a rendered bucket.
+  function slotBounds(idx: number): { startMs: number; endMs: number } {
+    const b = buckets[idx];
+    if (!b) return { startMs: NaN, endMs: NaN };
+    return { startMs: Date.parse(b.start), endMs: Date.parse(b.end) };
+  }
+
+  // Clicking a bucket hands its active-session membership to the parent, which
+  // owns the page-local sessions-table filter. Clicking the already selected
+  // bucket clears the filter. The parent resets `selectedBucket` to null
+  // whenever the report reloads, so a stale slot never points at a wrong bucket.
+  function selectSlot(idx: number) {
+    if (!onSelectBucket) return;
+    if (selectedBucket === idx) {
+      onSelectBucket(null);
+      return;
+    }
+    const b = buckets[idx];
+    const { startMs, endMs } = slotBounds(idx);
+    const sessionIds = activeSessionsInSlot(
+      intervals,
+      startMs,
+      endMs,
+      bySession,
+    ).map((r) => r.session_id);
+    onSelectBucket({ idx, label: b ? fmtBucketRange(b) : "", sessionIds });
+  }
+
+  function onSlotKey(e: KeyboardEvent, idx: number) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      selectSlot(idx);
+    }
+  }
+
+  // Optional secondary series overlaid on the bars: none, output tokens, or
+  // cost. Each metric scales to its own max so the line reads as a shape over
+  // the concurrency bars, not an absolute count on the agent axis.
+  let overlayMetric = $state<"none" | "tokens" | "cost">("none");
+
+  function bucketOverlayValue(b: ActivityBucket): number {
+    return overlayMetric === "cost" ? b.cost : b.output_tokens;
+  }
+
+  let containerEl: HTMLDivElement | undefined = $state();
+  let containerWidth = $state(600);
+
+  $effect(() => {
+    if (!containerEl) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        containerWidth = Math.floor(entry.contentRect.width);
+      }
+    });
+    ro.observe(containerEl);
+    return () => ro.disconnect();
+  });
+
+  const plotWidth = $derived(
+    Math.max(containerWidth - Y_LABEL_W - RIGHT_PAD, 100),
+  );
+
+  // The plot maps the full [range_start, range_end) window onto plotWidth; every
+  // bucket positions itself by its real bounds within that span.
+  const rangeStartMs = $derived(Date.parse(report.range_start));
+  const rangeEndMs = $derived(Date.parse(report.range_end));
+  const rangeSpanMs = $derived(Math.max(rangeEndMs - rangeStartMs, 1));
+
+  // x pixel for a given instant within the range.
+  function xForMs(ms: number): number {
+    return Y_LABEL_W + ((ms - rangeStartMs) / rangeSpanMs) * plotWidth;
+  }
+
+  function niceScale(maxY: number): { step: number; max: number } {
+    if (!Number.isFinite(maxY) || maxY <= 0) {
+      return { step: 1, max: 1 };
+    }
+    const rough = maxY / TICK_TARGET;
+    const exp = Math.floor(Math.log10(rough));
+    const base = Math.pow(10, exp);
+    const normalized = rough / base;
+    let mult: number;
+    if (normalized <= 1) mult = 1;
+    else if (normalized <= 2) mult = 2;
+    else if (normalized <= 5) mult = 5;
+    else mult = 10;
+    const step = Math.max(mult * base, 1);
+    const max = Math.ceil(maxY / step) * step;
+    return { step, max };
+  }
+
+  const maxAgents = $derived.by(() => {
+    let m = 0;
+    for (const b of buckets) {
+      if (b.max_agents > m) m = b.max_agents;
+    }
+    return m;
+  });
+
+  const scale = $derived(niceScale(maxAgents));
+
+  function scaleY(val: number, max: number, h: number): number {
+    const plotH = h - TOP_PAD;
+    return h - (val / max) * plotH;
+  }
+
+  // Each bucket owns a full contiguous cell [cellX, cellX+cellW); the visible
+  // bar is inset by a small gap. Strip cells and hit targets reuse the cell.
+  const bars = $derived.by(() => {
+    const out: Array<{
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      cellX: number;
+      cellW: number;
+      idx: number;
+    }> = [];
+    for (let i = 0; i < buckets.length; i++) {
+      const b = buckets[i]!;
+      const bStart = Date.parse(b.start);
+      const bEnd = Date.parse(b.end);
+      const cellX = xForMs(bStart);
+      const cellW = Math.max(((bEnd - bStart) / rangeSpanMs) * plotWidth, 1);
+      const barGap = Math.min(cellW * 0.2, 2);
+      const top = scaleY(b.max_agents, scale.max, CHART_H);
+      out.push({
+        x: cellX + barGap / 2,
+        y: top,
+        w: Math.max(cellW - barGap, 1),
+        h: Math.max(CHART_H - top, 0),
+        cellX,
+        cellW,
+        idx: i,
+      });
+    }
+    return out;
+  });
+
+  const overlayMax = $derived.by(() => {
+    let m = 0;
+    for (const b of buckets) {
+      const v = bucketOverlayValue(b);
+      if (v > m) m = v;
+    }
+    return m || 1;
+  });
+
+  const overlayPath = $derived.by(() => {
+    if (overlayMetric === "none" || buckets.length === 0) return "";
+    let d = "";
+    for (let i = 0; i < buckets.length; i++) {
+      const b = buckets[i]!;
+      const center = (Date.parse(b.start) + Date.parse(b.end)) / 2;
+      const x = xForMs(center);
+      const y = scaleY(bucketOverlayValue(b), overlayMax, CHART_H);
+      d += i === 0 ? `M${x},${y}` : `L${x},${y}`;
+    }
+    return d;
+  });
+
+  const yTicks = $derived.by(() => {
+    const { step, max } = scale;
+    if (max <= 0 || step <= 0) return [];
+    const ticks: Array<{ y: number; label: string }> = [];
+    const count = Math.round(max / step);
+    for (let i = 0; i <= count; i++) {
+      const val = step * i;
+      ticks.push({
+        y: scaleY(val, max, CHART_H),
+        label: String(val),
+      });
+    }
+    return ticks;
+  });
+
+  // Local clock fields in the report timezone, used to pick tick boundaries.
+  function localHour(ms: number): number {
+    return Number(
+      new Date(ms).toLocaleString("en-US", {
+        hour: "2-digit",
+        hourCycle: "h23",
+        timeZone: report.timezone,
+      }),
+    );
+  }
+
+  function localWeekday(ms: number): string {
+    return new Date(ms).toLocaleDateString("en-US", {
+      weekday: "short",
+      timeZone: report.timezone,
+    });
+  }
+
+  function localDayOfMonth(ms: number): number {
+    return Number(
+      new Date(ms).toLocaleDateString("en-US", {
+        day: "numeric",
+        timeZone: report.timezone,
+      }),
+    );
+  }
+
+  // Five ticks at even fractions of the range, each labelled with the actual
+  // local time (report timezone) at that position. A full day reads as
+  // 00:00/06:00/12:00/18:00/00:00; custom sub-day ranges track their real
+  // bounds instead of fixed 0/6/12/18/24 hour marks.
+  function minuteUnitTicks(): Array<{ x: number; label: string }> {
+    const out: Array<{ x: number; label: string }> = [];
+    for (const frac of [0, 0.25, 0.5, 0.75, 1]) {
+      const ms = rangeStartMs + frac * rangeSpanMs;
+      out.push({ x: xForMs(ms), label: timeLabel(ms) });
+    }
+    return out;
+  }
+
+  // One tick per bucket whose start satisfies the boundary predicate, labelled
+  // with its short date (used for hour/day/week presets).
+  function bucketBoundaryTicks(
+    isBoundary: (ms: number) => boolean,
+  ): Array<{ x: number; label: string }> {
+    const out: Array<{ x: number; label: string }> = [];
+    for (const b of buckets) {
+      const ms = Date.parse(b.start);
+      if (Number.isNaN(ms) || !isBoundary(ms)) continue;
+      out.push({ x: xForMs(ms), label: dateLabel(ms) });
+    }
+    return out;
+  }
+
+  const xTicks = $derived.by(() => {
+    if (report.bucket_unit === "hour") {
+      return bucketBoundaryTicks((ms) => localHour(ms) === 0);
+    }
+    if (report.bucket_unit === "day") {
+      return bucketBoundaryTicks((ms) => localWeekday(ms) === "Mon");
+    }
+    if (report.bucket_unit === "week") {
+      return bucketBoundaryTicks((ms) => localDayOfMonth(ms) === 1);
+    }
+    return minuteUnitTicks();
+  });
+
+  // Partial future region: shade from effective_end to range_end.
+  const effEndMs = $derived(Date.parse(report.effective_end));
+  const futureStartMs = $derived(Math.min(effEndMs, rangeEndMs));
+  const futureX = $derived(xForMs(futureStartMs));
+  const futureW = $derived(
+    Math.max(((rangeEndMs - futureStartMs) / rangeSpanMs) * plotWidth, 0),
+  );
+
+  const svgW = $derived(plotWidth + Y_LABEL_W + RIGHT_PAD);
+  const svgH = $derived(CHART_H + STRIP_GAP + STRIP_H + X_LABEL_H);
+  const stripY = $derived(CHART_H + STRIP_GAP);
+</script>
+
+<div class="timeline">
+  <div class="timeline-header">
+    <h3 class="timeline-title">Concurrency</h3>
+    <label class="overlay-toggle">
+      <span>Overlay</span>
+      <select bind:value={overlayMetric} aria-label="Concurrency overlay metric">
+        <option value="none">None</option>
+        <option value="tokens">Tokens</option>
+        <option value="cost">Cost</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="timeline-body" bind:this={containerEl}>
+    <svg
+      width="100%"
+      height={svgH}
+      viewBox="0 0 {svgW} {svgH}"
+      preserveAspectRatio="xMidYMid meet"
+      class="timeline-svg"
+    >
+      {#if futureW > 0}
+        <rect
+          class="concurrency-future"
+          data-future
+          x={futureX}
+          y={TOP_PAD}
+          width={futureW}
+          height={CHART_H - TOP_PAD}
+        />
+      {/if}
+
+      {#each yTicks as tick}
+        <line
+          x1={Y_LABEL_W}
+          y1={tick.y}
+          x2={Y_LABEL_W + plotWidth}
+          y2={tick.y}
+          class="grid-line"
+        />
+        <text
+          x={Y_LABEL_W - 4}
+          y={tick.y + 3}
+          class="y-label"
+          text-anchor="end"
+        >
+          {tick.label}
+        </text>
+      {/each}
+
+      {#each bars as bar (bar.idx)}
+        <rect
+          class="concurrency-bar"
+          class:selected={selectedBucket === bar.idx}
+          x={bar.x}
+          y={bar.y}
+          width={bar.w}
+          height={bar.h}
+        />
+      {/each}
+
+      {#if overlayMetric !== "none" && overlayPath}
+        <path class="overlay-line" d={overlayPath} />
+      {/if}
+
+      {#each xTicks as tick}
+        <text
+          x={tick.x}
+          y={svgH - 4}
+          class="x-label"
+          text-anchor="middle"
+        >
+          {tick.label}
+        </text>
+      {/each}
+
+      <!-- Active/idle strip: one full-width cell per elapsed bucket. -->
+      {#each bars as bar (bar.idx)}
+        {@const b = buckets[bar.idx]}
+        <rect
+          class="strip-cell"
+          class:active={b !== undefined && b.max_agents > 0}
+          x={bar.cellX}
+          y={stripY}
+          width={bar.cellW}
+          height={STRIP_H}
+        />
+      {/each}
+      {#if futureW > 0}
+        <rect
+          class="strip-future"
+          x={futureX}
+          y={stripY}
+          width={futureW}
+          height={STRIP_H}
+        />
+      {/if}
+
+      <!-- Transparent full-cell per-bucket hover/click target (one per bucket).
+           data-bucket-bar lives here, not on the visible bar, because the hover
+           handler that drives the tooltip is on this interactive rect. -->
+      {#each bars as bar (bar.idx)}
+        {@const b = buckets[bar.idx]}
+        <rect
+          class="slot-hit"
+          data-bucket-bar
+          x={bar.cellX}
+          y={TOP_PAD}
+          width={bar.cellW}
+          height={stripY + STRIP_H - TOP_PAD}
+          role="button"
+          tabindex="0"
+          aria-pressed={selectedBucket === bar.idx}
+          aria-label="Filter sessions active in this time slot"
+          onmouseenter={(e) => b && showSlotTip(e, b)}
+          onmouseleave={hideTip}
+          onclick={() => selectSlot(bar.idx)}
+          onkeydown={(e) => onSlotKey(e, bar.idx)}
+        />
+      {/each}
+    </svg>
+
+    {#if tooltip}
+      <div class="tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
+        {tooltip.text}
+      </div>
+    {/if}
+  </div>
+</div>
+
+<style>
+  .timeline {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .timeline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+
+  .timeline-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  .overlay-toggle {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .overlay-toggle select {
+    height: 20px;
+    padding: 0 4px;
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+
+  .timeline-body {
+    width: 100%;
+  }
+
+  .timeline-svg {
+    display: block;
+  }
+
+  .grid-line {
+    stroke: var(--border-muted);
+    stroke-width: 1;
+    stroke-dasharray: 2 2;
+  }
+
+  .y-label {
+    font-size: 9px;
+    fill: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .x-label {
+    font-size: 9px;
+    fill: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+
+  .concurrency-bar {
+    fill: var(--accent-blue);
+    opacity: 0.75;
+  }
+
+  .concurrency-bar.selected {
+    opacity: 1;
+    stroke: var(--text-primary);
+    stroke-width: 1;
+  }
+
+  .concurrency-future {
+    fill: var(--bg-inset);
+    opacity: 0.5;
+  }
+
+  .overlay-line {
+    fill: none;
+    stroke: var(--accent-amber);
+    stroke-width: 1.5;
+    opacity: 0.85;
+  }
+
+  .strip-cell {
+    fill: var(--bg-inset);
+    stroke: var(--bg-surface);
+    stroke-width: 0.5;
+  }
+
+  .strip-cell.active {
+    fill: var(--accent-blue);
+    opacity: 0.55;
+  }
+
+  .strip-future {
+    fill: var(--bg-inset);
+    opacity: 0.5;
+  }
+
+  .slot-hit {
+    fill: transparent;
+    cursor: pointer;
+  }
+
+  .slot-hit:hover {
+    fill: var(--accent-blue);
+    opacity: 0.08;
+  }
+
+  .slot-hit:focus-visible {
+    outline: 1px solid var(--accent-blue);
+    outline-offset: -1px;
+  }
+
+  .tooltip {
+    position: fixed;
+    transform: translateX(-50%) translateY(-100%);
+    padding: 4px 8px;
+    background: var(--text-primary);
+    color: var(--bg-primary);
+    font-size: 10px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 100;
+  }
+</style>

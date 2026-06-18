@@ -1,0 +1,136 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/pricing"
+)
+
+func TestNewActivityCommand_RegistersReport(t *testing.T) {
+	cmd := newActivityCommand()
+	assert.Equal(t, "activity", cmd.Name())
+	sub, _, err := cmd.Find([]string{"report"})
+	require.NoError(t, err)
+	assert.Equal(t, "report", sub.Name())
+}
+
+func TestActivityReportCommand_Flags(t *testing.T) {
+	cmd := newActivityReportCommand()
+	for _, name := range []string{
+		"preset", "date", "from", "to", "timezone",
+		"bucket", "project", "agent", "machine", "json", "no-sync",
+		"offline",
+	} {
+		assert.NotNilf(t, cmd.Flags().Lookup(name), "flag --%s must exist", name)
+	}
+}
+
+func TestActivityReportCommand_HelpText(t *testing.T) {
+	cmd := newActivityReportCommand()
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetArgs([]string{"--help"})
+	require.NoError(t, cmd.Execute())
+	out := buf.String()
+	assert.Contains(t, out, "--preset")
+	assert.Contains(t, out, "--json")
+}
+
+func TestResolveActivityReport_BadBucket(t *testing.T) {
+	d := newTestDB(t)
+	_, err := resolveActivityReport(ActivityReportConfig{
+		Preset: "day", Date: "2026-06-16", Timezone: "UTC", Bucket: "2h",
+	}, d)
+	require.Error(t, err, "off-allow-list bucket is rejected before query")
+}
+
+func TestResolveActivityReport_JSONShape(t *testing.T) {
+	d := newTestDB(t)
+	r, err := resolveActivityReport(ActivityReportConfig{
+		Preset: "day", Date: "2026-06-16", Timezone: "UTC",
+	}, d)
+	require.NoError(t, err)
+	assert.Equal(t, "minute", r.BucketUnit)
+	assert.Equal(t, "2026-06-16T00:00:00Z", r.RangeStart)
+}
+
+func TestFmtRangeBound_RendersInTimezone(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+	// 05:00Z is local midnight in Chicago (CDT, UTC-5) in June.
+	assert.Equal(t, "2026-06-16", fmtRangeBound("2026-06-16T05:00:00Z", chicago))
+	// UTC midnight renders date-only in UTC.
+	assert.Equal(t, "2026-06-16", fmtRangeBound("2026-06-16T00:00:00Z", time.UTC))
+	// A non-midnight bound keeps the local time component.
+	assert.Equal(t, "2026-06-16 12:30", fmtRangeBound("2026-06-16T12:30:00Z", time.UTC))
+}
+
+func TestFmtInstant_NilAndTimezone(t *testing.T) {
+	assert.Equal(t, "—", fmtInstant(nil, time.UTC))
+	chicago, err := time.LoadLocation("America/Chicago")
+	require.NoError(t, err)
+	ts := "2026-06-16T05:30:00Z" // 00:30 CDT
+	assert.Equal(t, "2026-06-16 00:30", fmtInstant(&ts, chicago))
+}
+
+// fallbackPricedModel returns a model pattern from the offline fallback table
+// that carries a non-zero output rate, so seeding it prices output tokens.
+func fallbackPricedModel(t *testing.T) string {
+	t.Helper()
+	for _, p := range pricing.FallbackPricing() {
+		if p.OutputPerMTok > 0 {
+			return p.ModelPattern
+		}
+	}
+	require.FailNow(t, "no fallback model with a non-zero output rate")
+	return ""
+}
+
+// TestResolveActivityReport_PricesFreshDBUsage proves the pricing fix: a fresh
+// DB holding unpriced token usage is priced because resolveActivityReportPriced
+// seeds the fallback rates before resolving, exactly as runActivityReport does,
+// so the report's cost is non-zero.
+func TestResolveActivityReport_PricesFreshDBUsage(t *testing.T) {
+	d := newTestDB(t)
+	model := fallbackPricedModel(t)
+
+	started := "2026-06-15T10:00:00Z"
+	ended := "2026-06-15T10:05:00Z"
+	usage, err := json.Marshal(map[string]int{"input_tokens": 100, "output_tokens": 500})
+	require.NoError(t, err)
+	first := "first message"
+	_, err = d.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID: "cost-1", Project: "alpha", Machine: "local", Agent: "claude",
+			StartedAt: &started, EndedAt: &ended, CreatedAt: started,
+			FirstMessage: &first, MessageCount: 2, UserMessageCount: 1,
+			RelationshipType: "root", DataVersion: 1,
+		},
+		Messages: []db.Message{
+			{SessionID: "cost-1", Ordinal: 0, Role: "user", Content: "u",
+				Timestamp: started, ContentLength: 1},
+			{SessionID: "cost-1", Ordinal: 1, Role: "assistant", Content: "a",
+				Timestamp: ended, ContentLength: 1, Model: model,
+				TokenUsage: usage, OutputTokens: 500, HasOutputTokens: true},
+		},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	// resolveActivityReportPriced seeds fallback pricing (Offline => no network)
+	// exactly as runActivityReport does, so removing that seeding fails here.
+	r, err := resolveActivityReportPriced(ActivityReportConfig{
+		Preset: "day", Date: "2026-06-15", Timezone: "UTC", Offline: true,
+	}, d)
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens)
+	assert.Greater(t, r.Totals.Cost, 0.0,
+		"resolveActivityReportPriced must seed fallback pricing for fresh-DB usage")
+}

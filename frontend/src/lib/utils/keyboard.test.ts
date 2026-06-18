@@ -34,7 +34,7 @@ describe("registerShortcuts", () => {
     sessions.activeSessionId = null;
     sessions.sessions = [];
     starred.filterOnly = false;
-    for (const id of [...starred.ids]) {
+    for (const id of starred.ids) {
       starred.unstar(id);
     }
     navigateMessage = vi.fn();

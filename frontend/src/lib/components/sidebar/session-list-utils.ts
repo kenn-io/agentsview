@@ -193,18 +193,6 @@ export function isSubagentDescendant(
 }
 
 /**
- * Check if a session is a continuation or fork (not a subagent
- * descendant, not a teammate).  These render without a sub-group
- * header or under a "Continuations" label.
- */
-function isContinuation(
-  s: SessionGroupInput,
-  allSessions: SessionGroupInput[],
-): boolean {
-  return !isSubagentDescendant(s, allSessions) && !isTeammate(s, allSessions);
-}
-
-/**
  * Emit display items for a single SessionGroup, expanding
  * child sessions when the group key is in expandedGroups.
  *

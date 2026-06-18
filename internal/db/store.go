@@ -1,6 +1,10 @@
 package db
 
-import "context"
+import (
+	"context"
+
+	"go.kenn.io/agentsview/internal/activity"
+)
 
 // ErrReadOnly is returned by write methods on read-only store
 // implementations (e.g. the PostgreSQL reader).
@@ -66,6 +70,7 @@ type Store interface {
 	GetAnalyticsTopSessions(ctx context.Context, f AnalyticsFilter, metric string) (TopSessionsResponse, error)
 	GetAnalyticsSignals(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error)
 	GetTrendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendTermInput, granularity string) (TrendsTermsResponse, error)
+	GetActivityReport(ctx context.Context, f AnalyticsFilter, q activity.Query) (activity.Report, error)
 
 	// Usage (token cost).
 	GetDailyUsage(ctx context.Context, f UsageFilter) (DailyUsageResult, error)

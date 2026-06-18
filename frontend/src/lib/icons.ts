@@ -6,6 +6,7 @@ export { default as CalendarIcon } from "@lucide/svelte/icons/calendar";
 export { default as CheckIcon } from "@lucide/svelte/icons/check";
 export { default as ChartColumnIcon } from "@lucide/svelte/icons/chart-column";
 export { default as ChevronDownIcon } from "@lucide/svelte/icons/chevron-down";
+export { default as ChevronLeftIcon } from "@lucide/svelte/icons/chevron-left";
 export { default as ChevronRightIcon } from "@lucide/svelte/icons/chevron-right";
 export { default as ChevronUpIcon } from "@lucide/svelte/icons/chevron-up";
 export { default as CirclePlayIcon } from "@lucide/svelte/icons/circle-play";

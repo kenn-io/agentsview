@@ -10,7 +10,9 @@ Instructions for autonomous coding agents working in this repository.
 
 ## Required Git Rules
 
-1. Commit every turn.
+1. Commit every turn that changes tracked files.
+1. Do not make empty commits. If a turn is read-only or only changes ignored
+   files, state that no commit was made.
 1. Do not amend commits.
 1. Do not change branches without explicit user permission.
 

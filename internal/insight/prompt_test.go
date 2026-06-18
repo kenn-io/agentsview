@@ -146,6 +146,37 @@ func TestBuildPrompt(t *testing.T) {
 			wantNot:      []string{"Date: 2025"},
 		},
 		{
+			name: "multi-day summary before sessions",
+			req: GenerateRequest{
+				Type:     "daily_activity",
+				DateFrom: "2025-01-13",
+				DateTo:   "2025-01-17",
+				Summary: &RangeSummary{
+					Sessions:    4,
+					PeakAgents:  2,
+					TopProjects: []KeyMinutes{{Key: "my-app", AgentMinutes: 90}},
+				},
+			},
+			wantContains: []string{"## Range Summary", "Peak concurrency: 2"},
+			checkPrompt: func(t *testing.T, prompt string) {
+				header := strings.Index(prompt, "## Date Range")
+				summary := strings.Index(prompt, "## Range Summary")
+				sessions := strings.Index(prompt, "## Sessions")
+				require.Positive(t, summary, "summary block present")
+				assert.Less(t, header, summary, "summary after date-range header")
+				assert.Less(t, summary, sessions, "summary before sessions block")
+			},
+		},
+		{
+			name: "single day omits summary block",
+			req: GenerateRequest{
+				Type:     "daily_activity",
+				DateFrom: "2025-01-15",
+				DateTo:   "2025-01-15",
+			},
+			wantNot: []string{"## Range Summary"},
+		},
+		{
 			name: "date range no sessions",
 			req: GenerateRequest{
 				Type:     "daily_activity",

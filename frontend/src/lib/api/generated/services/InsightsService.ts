@@ -17,6 +17,8 @@ export class InsightsService {
   public static getApiV1Insights({
     type,
     project,
+    dateFrom,
+    dateTo,
   }: {
     /**
      * Insight type
@@ -26,6 +28,14 @@ export class InsightsService {
      * Filter by project
      */
     project?: string,
+    /**
+     * Filter date_from >= (YYYY-MM-DD)
+     */
+    dateFrom?: string,
+    /**
+     * Filter date_to <= (YYYY-MM-DD)
+     */
+    dateTo?: string,
   }): CancelablePromise<InsightsResponse> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -33,6 +43,8 @@ export class InsightsService {
       query: {
         'type': type,
         'project': project,
+        'date_from': dateFrom,
+        'date_to': dateTo,
       },
       errors: {
         400: `Bad Request`,

@@ -219,6 +219,58 @@ func TestListInsights(t *testing.T) {
 	}
 }
 
+func TestListInsights_DateFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	_, err := d.InsertInsight(Insight{Type: "daily_activity",
+		DateFrom: "2026-06-16", DateTo: "2026-06-16", Agent: "claude", Content: "x"})
+	require.NoError(t, err)
+	_, err = d.InsertInsight(Insight{Type: "daily_activity",
+		DateFrom: "2026-06-17", DateTo: "2026-06-17", Agent: "claude", Content: "y"})
+	require.NoError(t, err)
+
+	got, err := d.ListInsights(ctx, InsightFilter{
+		Type: "daily_activity", DateFrom: "2026-06-16", DateTo: "2026-06-16"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "2026-06-16", got[0].DateFrom)
+}
+
+func TestListInsights_DistinguishesByDateTo(t *testing.T) {
+	d := testDB(t)
+	// A single-day insight and a week insight sharing the same date_from.
+	_, err := d.InsertInsight(Insight{
+		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-15",
+		Agent: "claude", Content: "day",
+	})
+	require.NoError(t, err)
+	_, err = d.InsertInsight(Insight{
+		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-21",
+		Agent: "claude", Content: "week",
+	})
+	require.NoError(t, err)
+
+	got, err := d.ListInsights(context.Background(), InsightFilter{
+		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-15",
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "filtering both bounds isolates the single-day insight")
+	assert.Equal(t, "day", got[0].Content)
+}
+
+func TestInsightsLookupIndexHasDateTo(t *testing.T) {
+	d := testDB(t)
+	rows, err := d.Reader().Query("PRAGMA index_info(idx_insights_lookup)")
+	require.NoError(t, err)
+	defer rows.Close()
+	var n int
+	for rows.Next() {
+		n++
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, 4, n, "lookup index covers type, date_from, date_to, project")
+}
+
 func TestInsights_Delete(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

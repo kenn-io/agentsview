@@ -64,6 +64,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newProjectsCommand())
 	root.AddCommand(newHealthCommand())
 	root.AddCommand(newUsageCommand())
+	root.AddCommand(newActivityCommand())
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newDuckDBCommand())
 	root.AddCommand(newSessionCommand())
@@ -409,6 +410,47 @@ func newUsageStatuslineCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
+	return cmd
+}
+
+func newActivityCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:          "activity",
+		Short:        "Activity and concurrency reporting",
+		GroupID:      groupUsage,
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return cmd.Help()
+		},
+	}
+	cmd.AddCommand(newActivityReportCommand())
+	return cmd
+}
+
+func newActivityReportCommand() *cobra.Command {
+	var cfg ActivityReportConfig
+	cmd := &cobra.Command{
+		Use:          "report",
+		Short:        "Activity report over a date range",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			runActivityReport(cfg)
+		},
+	}
+	cmd.Flags().StringVar(&cfg.Preset, "preset", "", "Range preset: day, week, month, custom")
+	cmd.Flags().StringVar(&cfg.Date, "date", "", "Anchor date for presets (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&cfg.From, "from", "", "Start instant for custom range (RFC3339)")
+	cmd.Flags().StringVar(&cfg.To, "to", "", "End instant for custom range (RFC3339)")
+	cmd.Flags().StringVar(&cfg.Timezone, "timezone", "", "IANA timezone for range bucketing")
+	cmd.Flags().StringVar(&cfg.Bucket, "bucket", "", "Bucket size: 5m, 15m, 1h, 1d, 1w")
+	cmd.Flags().StringVar(&cfg.Project, "project", "", "Filter by project")
+	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
+	cmd.Flags().StringVar(&cfg.Machine, "machine", "", "Filter by machine name")
+	cmd.Flags().BoolVar(&cfg.JSON, "json", false, "Output as JSON")
+	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
+	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
 	return cmd
 }
 

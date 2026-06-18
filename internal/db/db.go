@@ -913,6 +913,20 @@ func (db *DB) createPartialIndexesLocked(w *sql.DB) error {
 	); err != nil {
 		return fmt.Errorf("dropping legacy usage index: %w", err)
 	}
+	// Rebuild the insight lookup index so it covers date_to (added for
+	// range-aware lookups). DROP/CREATE only touches the index, never the
+	// insights rows, so this is non-destructive.
+	if _, err := w.Exec(
+		`DROP INDEX IF EXISTS idx_insights_lookup`,
+	); err != nil {
+		return fmt.Errorf("recreating idx_insights_lookup: %w", err)
+	}
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_insights_lookup
+		 ON insights(type, date_from, date_to, project)`,
+	); err != nil {
+		return fmt.Errorf("recreating idx_insights_lookup: %w", err)
+	}
 	return nil
 }
 

@@ -26,6 +26,8 @@ type InsightFilter struct {
 	Type       string // "daily_activity" or "agent_analysis"
 	Project    string // "" = no filter
 	GlobalOnly bool   // true = project IS NULL only
+	DateFrom   string // YYYY-MM-DD, "" = no filter
+	DateTo     string // YYYY-MM-DD, "" = no filter
 }
 
 const insightBaseCols = `id, type, date_from, date_to,
@@ -56,6 +58,14 @@ func buildInsightFilter(
 	} else if f.Project != "" {
 		preds = append(preds, "project = ?")
 		args = append(args, f.Project)
+	}
+	if f.DateFrom != "" {
+		preds = append(preds, "date_from >= ?")
+		args = append(args, f.DateFrom)
+	}
+	if f.DateTo != "" {
+		preds = append(preds, "date_to <= ?")
+		args = append(args, f.DateTo)
 	}
 
 	if len(preds) == 0 {
