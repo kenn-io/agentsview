@@ -4317,6 +4317,45 @@ func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
 	assert.Equal(t, "marker-123", got)
 }
 
+func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
+	dir := t.TempDir()
+
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err, "Open src")
+	require.NoError(t, srcDB.SetSyncState("pg_push_marker_id", "marker-123"),
+		"seed source marker")
+	require.NoError(t, srcDB.SetSyncState("last_sync_started_at", "old-start"),
+		"seed source started")
+	require.NoError(t, srcDB.SetSyncState("last_sync_finished_at", "old-finish"),
+		"seed source finished")
+	require.NoError(t, srcDB.Close(), "Close src")
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "Open dst")
+	defer dstDB.Close()
+	require.NoError(t, dstDB.SetSyncState("last_sync_started_at", "new-start"),
+		"seed destination started")
+	require.NoError(t, dstDB.SetSyncState("last_sync_finished_at", "new-finish"),
+		"seed destination finished")
+
+	err = dstDB.CopySyncStateFrom(srcPath)
+	require.NoError(t, err, "CopySyncStateFrom")
+
+	gotMarker, err := dstDB.GetSyncState("pg_push_marker_id")
+	require.NoError(t, err, "GetSyncState pg_push_marker_id")
+	assert.Equal(t, "marker-123", gotMarker)
+
+	gotStarted, err := dstDB.GetSyncState("last_sync_started_at")
+	require.NoError(t, err, "GetSyncState last_sync_started_at")
+	assert.Equal(t, "new-start", gotStarted)
+
+	gotFinished, err := dstDB.GetSyncState("last_sync_finished_at")
+	require.NoError(t, err, "GetSyncState last_sync_finished_at")
+	assert.Equal(t, "new-finish", gotFinished)
+}
+
 func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
 	dir := t.TempDir()
 

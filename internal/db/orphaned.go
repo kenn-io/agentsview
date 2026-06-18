@@ -339,7 +339,8 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 
 	_, err = conn.ExecContext(ctx, `
 		INSERT OR REPLACE INTO main.pg_sync_state (key, value)
-		SELECT key, value FROM old_db.pg_sync_state`)
+		SELECT key, value FROM old_db.pg_sync_state
+		WHERE key = 'pg_push_marker_id'`)
 	if err != nil {
 		return fmt.Errorf("copying sync state: %w", err)
 	}
