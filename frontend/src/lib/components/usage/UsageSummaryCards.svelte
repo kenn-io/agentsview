@@ -74,6 +74,10 @@
     return `${sign}${(c.deltaPct * 100).toFixed(0)}% vs prior`;
   });
 
+  function fmtCredits(v: number): string {
+    return String(v.toFixed(0));
+  }
+
   interface Card {
     label: string;
     value: () => string;
@@ -88,6 +92,14 @@
       sub: () => vsPrior ?? "",
       featured: true,
     },
+    ...(usage.summary?.totals.copilotAICredits
+      ? [
+          {
+            label: "Copilot AI Credits",
+            value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
+          },
+        ]
+      : []),
     {
       label: "Input Tokens",
       value: () => fmtTokens(inputTokens),

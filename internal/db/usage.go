@@ -872,6 +872,7 @@ type UsageTotals struct {
 	CacheCreationTokens int     `json:"cacheCreationTokens"`
 	CacheReadTokens     int     `json:"cacheReadTokens"`
 	TotalCost           float64 `json:"totalCost"`
+	CopilotAICredits    float64 `json:"copilotAICredits,omitempty"`
 	// CacheSavings is the net dollar delta vs an uncached run:
 	// cache reads save (input_rate - cache_read_rate) per token,
 	// cache creations cost (input_rate - cache_creation_rate)
@@ -1202,6 +1203,16 @@ func (db *DB) GetDailyUsage(
 			daily = []DailyUsageEntry{}
 		}
 		totals.CacheSavings = totalSavings
+
+		var copilotCost float64
+		for key, b := range accum {
+			if key.agent == "copilot" {
+				copilotCost += b.cost
+			}
+		}
+		if copilotCost > 0 {
+			totals.CopilotAICredits = copilotCost / 0.01
+		}
 		sessionCounts := NewUsageSessionCounts(seenSessions)
 		return DailyUsageResult{
 			Daily:         daily,
@@ -1364,6 +1375,19 @@ func (db *DB) GetDailyUsage(
 	}
 
 	totals.CacheSavings = totalSavings
+
+	var copilotCost float64
+	for _, d := range daily {
+		for _, ab := range d.AgentBreakdowns {
+			if ab.Agent == "copilot" {
+				copilotCost += ab.Cost
+			}
+		}
+	}
+	if copilotCost > 0 {
+		totals.CopilotAICredits = copilotCost / 0.01
+	}
+
 	sessionCounts := NewUsageSessionCounts(seenSessions)
 	return DailyUsageResult{
 		Daily:         daily,
@@ -1548,6 +1572,7 @@ type SessionUsage struct {
 	HasTokenData      bool     `json:"has_token_data"`
 	CostUSD           float64  `json:"cost_usd"`
 	HasCost           bool     `json:"has_cost"`
+	AICredits         float64  `json:"ai_credits,omitempty"`
 	Models            []string `json:"models"`
 	UnpricedModels    []string `json:"unpriced_models,omitempty"`
 }
@@ -1681,6 +1706,9 @@ func (db *DB) GetSessionUsage(
 	}
 	if out.HasCost {
 		out.CostUSD = cost
+	}
+	if sess.Agent == "copilot" && out.HasCost {
+		out.AICredits = cost / 0.01
 	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedSetKeys(unpricedSet)

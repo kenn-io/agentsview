@@ -443,3 +443,62 @@ func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 	assert.Contains(t, joined, "claude-sonnet-4-20250514",
 		"fallback pricing not synced")
 }
+
+func TestStoreGetSessionUsage_CopilotAICreditsComputed(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_copilot_credits_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'copilot:s1', 'test-machine', 'proj', 'copilot',
+			'2026-03-12T10:00:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err, "insert session")
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, model, input_tokens, output_tokens, cost_usd, ts
+		) VALUES (
+			'copilot:s1', 'gpt-4', 1000, 500, 0.10, '2026-03-12T10:00:00Z'::timestamptz
+		)`)
+	require.NoError(t, err, "insert usage event")
+
+	u, err := store.GetSessionUsage(ctx, "copilot:s1")
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, u, "usage is nil")
+	assert.True(t, u.HasCost, "HasCost")
+	assert.Equal(t, 0.10, u.CostUSD, "CostUSD")
+	assert.Equal(t, 10.0, u.AICredits, "AICredits")
+}
+
+func TestStoreGetSessionUsage_CopilotNoAICreditsUnpriced(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_copilot_unpriced_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'copilot:s2', 'test-machine', 'proj', 'copilot',
+			'2026-03-12T10:00:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err, "insert session")
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, model, input_tokens, output_tokens, ts
+		) VALUES (
+			'copilot:s2', 'local-model', 1000, 500, '2026-03-12T10:00:00Z'::timestamptz
+		)`)
+	require.NoError(t, err, "insert usage event")
+
+	u, err := store.GetSessionUsage(ctx, "copilot:s2")
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, u, "usage is nil")
+	assert.False(t, u.HasCost, "HasCost should be false")
+	assert.Equal(t, 0.0, u.AICredits, "AICredits should be 0 when unpriced")
+}

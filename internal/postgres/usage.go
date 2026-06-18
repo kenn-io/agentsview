@@ -889,6 +889,9 @@ func (s *Store) GetSessionUsage(
 	if out.HasCost {
 		out.CostUSD = cost
 	}
+	if sess.Agent == "copilot" && out.HasCost {
+		out.AICredits = cost / 0.01
+	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedStringSetKeys(unpricedSet)
 	}
@@ -1114,6 +1117,17 @@ func (s *Store) GetDailyUsage(
 			daily = []db.DailyUsageEntry{}
 		}
 		totals.CacheSavings = totalSavings
+
+		var copilotCost float64
+		for key, b := range accum {
+			if key.agent == "copilot" {
+				copilotCost += b.cost
+			}
+		}
+		if copilotCost > 0 {
+			totals.CopilotAICredits = copilotCost / 0.01
+		}
+
 		sessionCounts := db.NewUsageSessionCounts(seenSessions)
 		return db.DailyUsageResult{
 			Daily:         daily,
@@ -1261,6 +1275,19 @@ func (s *Store) GetDailyUsage(
 		daily = []db.DailyUsageEntry{}
 	}
 	totals.CacheSavings = totalSavings
+
+	var copilotCost float64
+	for _, d := range daily {
+		for _, ab := range d.AgentBreakdowns {
+			if ab.Agent == "copilot" {
+				copilotCost += ab.Cost
+			}
+		}
+	}
+	if copilotCost > 0 {
+		totals.CopilotAICredits = copilotCost / 0.01
+	}
+
 	sessionCounts := db.NewUsageSessionCounts(seenSessions)
 	return db.DailyUsageResult{
 		Daily:         daily,
