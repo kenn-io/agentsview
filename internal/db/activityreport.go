@@ -219,7 +219,12 @@ func (db *DB) activityReportUsage(
 	}
 	var rowsAcc []ordered
 
-	err = queryChunked(ids, func(chunk []string) error {
+	// This query binds each id chunk twice (message-where and usage-event-where)
+	// plus two time bounds, so the generic maxSQLVars chunk (bound once) would
+	// emit 2*maxSQLVars+2 > 999 variables and overflow SQLite at ~500 candidate
+	// sessions. Cap the chunk so 2*chunk+2 stays within maxSQLVars.
+	const usageVarChunk = (maxSQLVars - 2) / 2
+	err = queryChunkedSize(ids, usageVarChunk, func(chunk []string) error {
 		ph, chunkArgs := inPlaceholders(chunk)
 		// Apply the same eligibility filters as GetDailyUsage so empty
 		// token_usage, empty, and synthetic models are excluded from the
