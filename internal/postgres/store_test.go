@@ -224,17 +224,17 @@ func insertSidebarIndexSession(
 			id, machine, project, agent, first_message,
 			display_name, started_at, ended_at, message_count,
 			user_message_count, parent_session_id,
-			relationship_type, is_automated
+			relationship_type, is_automated, deleted_at
 		) VALUES (
 			$1, $2, $3, $4, $5,
 			$6, $7::timestamptz, $8::timestamptz, $9,
-			$10, $11, $12, $13
+			$10, $11, $12, $13, $14::timestamptz
 		)
 	`, row.id, row.machine, row.project, row.agent,
 		row.firstMessage, row.displayName, row.startedAt,
 		row.endedAt, row.messageCount, row.userMessageCount,
 		row.parentSessionID, row.relationshipType,
-		row.isAutomated)
+		row.isAutomated, row.deletedAt)
 	require.NoError(t, err, "inserting sidebar index session %s", id)
 }
 
@@ -252,6 +252,7 @@ type sidebarIndexSessionSeed struct {
 	parentSessionID  *string
 	relationshipType string
 	isAutomated      bool
+	deletedAt        *string
 }
 
 func sidebarIndexRowsByID(
@@ -591,6 +592,80 @@ func TestStoreGetSidebarSessionIndexStarredIncludesStarredDescendantRoot(
 	assert.Equal(t, 1, index.Total)
 	assert.ElementsMatch(t,
 		[]string{"root", "starred-child"},
+		sidebarIndexIDs(index.Sessions),
+	)
+}
+
+func TestStoreGetSidebarSessionIndexPaginatesOrphanRoots(t *testing.T) {
+	pgURL := testPGURL(t)
+	store := ensureSidebarIndexStoreSchema(t, pgURL)
+	defer store.Close()
+
+	insertSidebarIndexSession(t, store, "root", func(s *sidebarIndexSessionSeed) {
+		s.endedAt = "2024-01-20T00:00:00Z"
+		s.userMessageCount = 2
+	})
+	insertSidebarIndexSession(t, store, "orphan-sub", func(s *sidebarIndexSessionSeed) {
+		s.endedAt = "2024-01-19T00:00:00Z"
+		s.parentSessionID = strPtr("missing-parent")
+		s.relationshipType = "subagent"
+	})
+	insertSidebarIndexSession(t, store, "orphan-fork", func(s *sidebarIndexSessionSeed) {
+		s.endedAt = "2024-01-18T00:00:00Z"
+		s.parentSessionID = strPtr("orphan-sub")
+		s.relationshipType = "fork"
+	})
+	insertSidebarIndexSession(t, store, "continuation-orphan", func(s *sidebarIndexSessionSeed) {
+		s.endedAt = "2024-01-17T00:00:00Z"
+		s.parentSessionID = strPtr("missing-continuation-parent")
+		s.relationshipType = "continuation"
+	})
+
+	first, err := store.GetSidebarSessionIndex(
+		context.Background(), db.SessionFilter{Limit: 2},
+	)
+	require.NoError(t, err, "first page")
+	assert.Equal(t, 3, first.Total)
+	assert.NotEmpty(t, first.NextCursor)
+	assert.ElementsMatch(t,
+		[]string{"root", "orphan-sub", "orphan-fork"},
+		sidebarIndexIDs(first.Sessions),
+	)
+
+	second, err := store.GetSidebarSessionIndex(
+		context.Background(), db.SessionFilter{Limit: 2, Cursor: first.NextCursor},
+	)
+	require.NoError(t, err, "second page")
+	assert.Equal(t, 3, second.Total)
+	assert.Empty(t, second.NextCursor)
+	assert.Equal(t, []string{"continuation-orphan"}, sidebarIndexIDs(second.Sessions))
+}
+
+func TestStoreGetSidebarSessionIndexDoesNotPromoteSoftDeletedParentChildren(t *testing.T) {
+	pgURL := testPGURL(t)
+	store := ensureSidebarIndexStoreSchema(t, pgURL)
+	defer store.Close()
+
+	rootID := "soft-deleted-root"
+	insertSidebarIndexSession(t, store, rootID, func(s *sidebarIndexSessionSeed) {
+		s.endedAt = "2024-01-20T00:00:00Z"
+		s.deletedAt = strPtr("2024-01-21T00:00:00Z")
+	})
+	insertSidebarIndexSession(t, store, "child-of-deleted-parent", func(s *sidebarIndexSessionSeed) {
+		s.endedAt = "2024-01-19T00:00:00Z"
+		s.parentSessionID = &rootID
+		s.relationshipType = "subagent"
+	})
+	insertSidebarIndexSession(t, store, "other", func(s *sidebarIndexSessionSeed) {
+		s.endedAt = "2024-01-18T00:00:00Z"
+	})
+
+	index, err := store.GetSidebarSessionIndex(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err, "GetSidebarSessionIndex")
+	assert.ElementsMatch(t,
+		[]string{"other"},
 		sidebarIndexIDs(index.Sessions),
 	)
 }

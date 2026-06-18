@@ -333,8 +333,6 @@ const activityExprSQLite = "CAST(strftime('%s', " +
 const sidebarActivityExprSQLiteS = "COALESCE(" +
 	"NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)"
 
-const sidebarChildRelationshipsSQL = "'subagent', 'fork'"
-
 func sidebarStarredRootCTE(enabled bool) string {
 	if !enabled {
 		return ""
@@ -354,30 +352,11 @@ func sidebarStarredRootJoin(enabled bool) string {
 	return "JOIN eligible_roots e ON e.id = t.root_id"
 }
 
-func sidebarChildRelationshipPredicate(sessionAlias string) string {
-	return sessionAlias + ".relationship_type IN (" + sidebarChildRelationshipsSQL + ")"
-}
-
-func sidebarOrphanPredicate(sessionAlias, parentAlias string) string {
-	return `NOT EXISTS (
-			SELECT 1
-			FROM sessions ` + parentAlias + `
-			WHERE ` + parentAlias + `.id = ` + sessionAlias + `.parent_session_id
-		)`
-}
-
 // buildCanonicalRootWhere returns a WHERE fragment that identifies canonical root
 // sessions for sidebar pagination. Child rows remain nested under their parent
 // unless IncludeOrphans explicitly promotes missing-parent child rows to roots.
 func buildCanonicalRootWhere(includeOrphans bool) string {
-	base := `NOT (` + sidebarChildRelationshipPredicate("sessions") + ` AND NOT ` +
-		sidebarOrphanPredicate("sessions", "parent") + `)`
-	if !includeOrphans {
-		return base
-	}
-	return `(` + base + ` OR (` +
-		sidebarChildRelationshipPredicate("sessions") + ` AND ` +
-		sidebarOrphanPredicate("sessions", "parent") + `))`
+	return BuildCanonicalRootWhere(SQLiteQueryDialect(), "sessions", includeOrphans)
 }
 
 // buildTerminationPredSQLite returns a WHERE fragment and args for

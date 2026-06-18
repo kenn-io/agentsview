@@ -81,8 +81,6 @@ const pgActivityExpr = "COALESCE(ended_at, started_at, created_at)"
 
 const pgSidebarActivityExprS = "COALESCE(s.ended_at, s.started_at, s.created_at)"
 
-const pgSidebarChildRelationshipsSQL = "'subagent', 'fork', 'continuation'"
-
 func pgSidebarStarredRootCTE(enabled bool) string {
 	if !enabled {
 		return ""
@@ -235,6 +233,12 @@ func buildPGSessionFilter(
 	f db.SessionFilter,
 ) (string, []any) {
 	return db.BuildSessionFilterSQL(f, db.PostgresQueryDialect())
+}
+
+func buildPGSessionBaseFilter(
+	f db.SessionFilter,
+) (string, []any) {
+	return db.BuildSessionBaseFilterSQL(f, db.PostgresQueryDialect())
 }
 
 // EncodeCursor returns a base64-encoded, HMAC-signed cursor.
@@ -421,6 +425,7 @@ func (s *Store) GetSidebarSessionIndex(
 	ctx context.Context, f db.SessionFilter,
 ) (db.SidebarSessionIndex, error) {
 	f.IncludeChildren = true
+	f.IncludeOrphans = true
 
 	if f.Limit > 0 || f.Cursor != "" || f.Starred {
 		return s.getSidebarSessionIndexPage(ctx, f)
@@ -482,15 +487,8 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.IncludeChildren = false
 	rootFilter.Cursor = ""
 	rootFilter.Starred = false
-	rootWhere, rootArgs := buildPGSessionFilter(rootFilter)
-	canonicalRootWhere := `
-		NOT EXISTS (
-			SELECT 1
-			FROM sessions parent
-			WHERE parent.id = sessions.parent_session_id
-			  AND parent.deleted_at IS NULL
-			  AND sessions.relationship_type IN (` + pgSidebarChildRelationshipsSQL + `)
-		)`
+	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
+	canonicalRootWhere := db.BuildCanonicalRootWhere(db.PostgresQueryDialect(), "sessions", f.IncludeOrphans)
 
 	var total int
 	var cur db.SessionCursor

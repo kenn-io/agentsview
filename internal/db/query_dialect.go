@@ -28,22 +28,23 @@ const (
 // ORM: callers still own SELECTs, JOINs, backend-specific search paths, and
 // table schemas.
 type QueryDialect struct {
-	name                   string
-	placeholderStyle       placeholderStyle
-	trueLiteral            string
-	falseLiteral           string
-	dateExpr               string
-	dateParam              func(string) string
-	activityExpr           string
-	activityParam          func(string) string
-	cursorActivityExpr     string
-	cursorParam            func(string) string
-	terminationExpr        string
-	terminationKind        timestampKind
-	caseInsensitiveLike    string
-	caseInsensitiveLikeEsc string
-	regexPredicate         func(string, string) string
-	nullsLast              bool
+	name                      string
+	placeholderStyle          placeholderStyle
+	trueLiteral               string
+	falseLiteral              string
+	dateExpr                  string
+	dateParam                 func(string) string
+	activityExpr              string
+	activityParam             func(string) string
+	cursorActivityExpr        string
+	cursorParam               func(string) string
+	terminationExpr           string
+	terminationKind           timestampKind
+	caseInsensitiveLike       string
+	caseInsensitiveLikeEsc    string
+	regexPredicate            func(string, string) string
+	sidebarChildRelationships []string
+	nullsLast                 bool
 }
 
 // SQLiteQueryDialect returns the SQLite SQL fragments used by the local store.
@@ -67,6 +68,7 @@ func SQLiteQueryDialect() QueryDialect {
 		regexPredicate: func(col, ph string) string {
 			return col + " REGEXP " + ph
 		},
+		sidebarChildRelationships: []string{"subagent", "fork"},
 	}
 }
 
@@ -96,7 +98,8 @@ func PostgresQueryDialect() QueryDialect {
 		regexPredicate: func(col, ph string) string {
 			return col + " ~* " + ph
 		},
-		nullsLast: true,
+		sidebarChildRelationships: []string{"subagent", "fork"},
+		nullsLast:                 true,
 	}
 }
 
@@ -125,7 +128,8 @@ func DuckDBQueryDialect() QueryDialect {
 		regexPredicate: func(col, ph string) string {
 			return "regexp_matches(" + col + ", " + ph + ")"
 		},
-		nullsLast: true,
+		sidebarChildRelationships: []string{"subagent", "fork"},
+		nullsLast:                 true,
 	}
 }
 
@@ -238,6 +242,56 @@ func BuildSessionFilterSQL(
 	return where, b.Args()
 }
 
+// BuildSessionBaseFilterSQL returns the base sidebar/list predicates without the
+// child-relationship exclusion. Callers that handle root-vs-child selection
+// separately should use this to avoid diverging filter logic across backends.
+func BuildSessionBaseFilterSQL(
+	f SessionFilter, dialect QueryDialect,
+) (string, []any) {
+	b := NewQueryBuilder(dialect, 0)
+	preds := []string{
+		"message_count > 0",
+		"deleted_at IS NULL",
+	}
+	filterPreds, oneShotPred := sessionFilterPredicates(f, b, func(col string) string { return col })
+	preds = append(preds, filterPreds...)
+	if oneShotPred != "" {
+		preds = append(preds, oneShotPred)
+	}
+	return strings.Join(preds, " AND "), b.Args()
+}
+
+func (d QueryDialect) SidebarChildRelationshipsSQL() string {
+	quoted := make([]string, 0, len(d.sidebarChildRelationships))
+	for _, rel := range d.sidebarChildRelationships {
+		quoted = append(quoted, "'"+rel+"'")
+	}
+	return strings.Join(quoted, ", ")
+}
+
+func SidebarChildRelationshipPredicate(dialect QueryDialect, sessionAlias string) string {
+	return sessionAlias + ".relationship_type IN (" + dialect.SidebarChildRelationshipsSQL() + ")"
+}
+
+func SidebarOrphanPredicate(sessionAlias, parentAlias string) string {
+	return `NOT EXISTS (
+			SELECT 1
+			FROM sessions ` + parentAlias + `
+			WHERE ` + parentAlias + `.id = ` + sessionAlias + `.parent_session_id
+		)`
+}
+
+func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeOrphans bool) string {
+	base := `NOT (` + SidebarChildRelationshipPredicate(dialect, sessionAlias) + ` AND NOT ` +
+		SidebarOrphanPredicate(sessionAlias, "parent") + `)`
+	if !includeOrphans {
+		return base
+	}
+	return `(` + base + ` OR (` +
+		SidebarChildRelationshipPredicate(dialect, sessionAlias) + ` AND ` +
+		SidebarOrphanPredicate(sessionAlias, "parent") + `))`
+}
+
 func buildSessionFilterWithBuilder(
 	f SessionFilter, b *QueryBuilder, qualifier string,
 ) string {
@@ -254,7 +308,7 @@ func buildSessionFilterWithBuilder(
 	}
 	if !f.IncludeChildren {
 		basePreds = append(basePreds,
-			q("relationship_type")+" NOT IN ('subagent', 'fork')")
+			q("relationship_type")+" NOT IN ("+b.dialect.SidebarChildRelationshipsSQL()+")")
 	}
 
 	if !f.IncludeChildren {
@@ -275,7 +329,7 @@ func buildSessionFilterWithBuilder(
 		rootMatchParts = append(rootMatchParts, oneShotPred)
 	}
 	rootMatchParts = append(rootMatchParts,
-		"NOT "+sidebarChildRelationshipPredicate("root_session"))
+		"NOT "+SidebarChildRelationshipPredicate(b.dialect, "root_session"))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
 
 	// Build the CTE base case. When IncludeOrphans is true, also seed with
@@ -293,8 +347,8 @@ func buildSessionFilterWithBuilder(
 			orphanMatchParts = append(orphanMatchParts, orphanOneShotPred)
 		}
 		orphanMatchParts = append(orphanMatchParts,
-			sidebarChildRelationshipPredicate("orphan_child"),
-			sidebarOrphanPredicate("orphan_child", "p"))
+			SidebarChildRelationshipPredicate(b.dialect, "orphan_child"),
+			SidebarOrphanPredicate("orphan_child", "p"))
 		orphanMatch := strings.Join(orphanMatchParts, " AND ")
 		cteBase += " UNION " +
 			"SELECT orphan_child.id FROM sessions orphan_child" +
@@ -419,17 +473,7 @@ func sessionFilterPredicates(
 // exclusion. Callers that handle root-vs-child discrimination externally (e.g.
 // via buildCanonicalRootWhere) should use this instead of buildSessionFilter.
 func buildSessionBaseFilter(f SessionFilter) (string, []any) {
-	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
-	preds := []string{
-		"message_count > 0",
-		"deleted_at IS NULL",
-	}
-	filterPreds, oneShotPred := sessionFilterPredicates(f, b, func(col string) string { return col })
-	preds = append(preds, filterPreds...)
-	if oneShotPred != "" {
-		preds = append(preds, oneShotPred)
-	}
-	return strings.Join(preds, " AND "), b.Args()
+	return BuildSessionBaseFilterSQL(f, SQLiteQueryDialect())
 }
 
 func inPredicate(col string, values []string, b *QueryBuilder) string {
