@@ -511,3 +511,35 @@ func TestAggregate_BreakdownCostAndAutomatedSegments(t *testing.T) {
 	assert.InDelta(t, 5.0, r.ByModel[0].AutomatedCost, 1e-9)
 	assert.InDelta(t, 2.0, r.ByModel[0].InteractiveCost, 1e-9)
 }
+
+// TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel confirms a session
+// whose only signal is zero-cost or unpriced usage still reports its known
+// model as the primary. Model weight for usage-only sessions comes from cost,
+// so a zero cost left primary_model blank while models listed the model,
+// showing a known-model session with no model in the table.
+func TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel(t *testing.T) {
+	loc := mustLoad(t, "UTC")
+	start := mustStart(t, "2026-06-16T00:00:00Z")
+	end := start.AddDate(0, 0, 1)
+	p := Params{
+		RangeStart: start, RangeEnd: end, Loc: loc,
+		EffectiveEnd: end, Partial: false,
+		GapCapSeconds: 300, Bucket: BucketSpec{BucketMinute, 300},
+	}
+	// One untimed session (no activity events) whose single usage row has a
+	// known model but ZERO cost.
+	usage := []UsageRow{
+		{SessionID: "u", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			OutputTokens: 0, Cost: 0, ClaudeMessageID: "u", ClaudeRequestID: "r"},
+	}
+	sessions := []SessionMeta{
+		{SessionID: "u", Project: "P", Agent: "claude"},
+	}
+	r := Aggregate(p, sessions, nil, usage)
+
+	require.Len(t, r.BySession, 1)
+	row := r.BySession[0]
+	assert.Equal(t, "m1", row.PrimaryModel,
+		"zero-cost usage must still report its known model as primary")
+	assert.Equal(t, []string{"m1"}, row.Models)
+}

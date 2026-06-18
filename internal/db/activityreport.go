@@ -178,7 +178,11 @@ func (db *DB) activityReportActivity(
 // within the padded range bounds, with per-row cost computed up front
 // (mirroring GetDailyUsage) so cost logic stays in the backend. Rows
 // are ordered by (ts, session_id, message_ordinal) as the aggregator
-// requires for its first-seen-wins dedup.
+// requires for its first-seen-wins dedup. The order is computed on the
+// parsed instant, not the RFC3339 text, so a whole-second value ("...00Z")
+// and a fractional one ("...00.123Z") in the same second sort
+// chronologically (matching PostgreSQL/DuckDB); lexically '.' < 'Z' would
+// otherwise invert them and let SQLite keep a different duplicate row.
 func (db *DB) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string,
 ) ([]activity.UsageRow, error) {
@@ -192,13 +196,14 @@ func (db *DB) activityReportUsage(
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
 
-	// Accumulate the per-row dedup ordinal alongside the mapped row so we
-	// can impose one global (ts, session_id, ordinal) order across all
+	// Accumulate the parsed ts and dedup ordinal alongside each mapped row so
+	// we can impose one global (ts, session_id, ordinal) order across all
 	// chunks. The same (claude_message_id, claude_request_id) can recur in
 	// different sessions (resumed/forked) and thus different chunks, so
 	// per-chunk ordering is not enough for the aggregator's first-seen dedup.
 	type ordered struct {
 		row     activity.UsageRow
+		ts      time.Time
 		ordinal int64
 	}
 	var rowsAcc []ordered
@@ -236,7 +241,9 @@ func (db *DB) activityReportUsage(
 			if r.messageOrdinal.Valid {
 				ord = r.messageOrdinal.Int64
 			}
+			parsedTS, _ := parseTimestamp(r.ts)
 			rowsAcc = append(rowsAcc, ordered{
+				ts:      parsedTS,
 				ordinal: ord,
 				row: activity.UsageRow{
 					SessionID:       r.sessionID,
@@ -258,8 +265,8 @@ func (db *DB) activityReportUsage(
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
 		a, b := rowsAcc[i], rowsAcc[j]
-		if a.row.Timestamp != b.row.Timestamp {
-			return a.row.Timestamp < b.row.Timestamp
+		if !a.ts.Equal(b.ts) {
+			return a.ts.Before(b.ts)
 		}
 		if a.row.SessionID != b.row.SessionID {
 			return a.row.SessionID < b.row.SessionID

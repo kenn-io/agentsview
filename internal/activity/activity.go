@@ -767,8 +767,11 @@ func minutesOf(s SessionRow) float64 {
 	return *s.AgentMinutes
 }
 
-// primaryAndModels returns the highest-weight model and the sorted set; the
-// primary is "" when no model has weight. Caller renders "mixed" when len>1.
+// primaryAndModels returns the highest-weight model and the sorted set. When
+// no model carries positive weight (e.g. zero-cost or unpriced usage) it falls
+// back to the first model in sorted order, so a known-model session still
+// reports a primary; the primary is "" only when the set is empty. Caller
+// renders "mixed" when len>1.
 func primaryAndModels(w map[string]float64) (string, []string) {
 	var keys []string
 	primary := ""
@@ -783,5 +786,8 @@ func primaryAndModels(w map[string]float64) (string, []string) {
 		}
 	}
 	sort.Strings(keys)
+	if primary == "" && len(keys) > 0 {
+		primary = keys[0]
+	}
 	return primary, keys
 }
