@@ -83,6 +83,40 @@ describe("ActivityInsight", () => {
     );
   });
 
+  it("ignores a generation that settles after the range changed", async () => {
+    let resolveStale!: (insight: unknown) => void;
+    const abortStale = vi.fn();
+    mocks.generateInsight.mockReturnValueOnce({
+      abort: abortStale,
+      done: new Promise((r) => {
+        resolveStale = r;
+      }),
+    });
+    const { rerender } = render(ActivityInsight, {
+      dateFrom: "2026-06-15", dateTo: "2026-06-21",
+    });
+    await settle();
+
+    // Start a generation for the first range.
+    await fireEvent.click(screen.getByRole("button", { name: /generate/i }));
+    expect(mocks.generateInsight).toHaveBeenCalledTimes(1);
+
+    // Range change aborts and invalidates the in-flight generation.
+    await rerender({ dateFrom: "2026-06-08", dateTo: "2026-06-14" });
+    await settle();
+    expect(abortStale).toHaveBeenCalled();
+
+    // The aborted generation settles late; its result must not reach the panel.
+    resolveStale({
+      id: 99, project: null, content: "STALE RESULT", type: "daily_activity",
+      date_from: "2026-06-15", date_to: "2026-06-21", agent: "claude",
+      model: null, prompt: null, created_at: "2026-06-21T00:00:00Z",
+    });
+    await settle();
+
+    expect(document.body.textContent).not.toContain("STALE RESULT");
+  });
+
   it("prefills the Insights page range and navigates", async () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();

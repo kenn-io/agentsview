@@ -27,6 +27,10 @@
 
   // Guards stale fetch responses when the range changes mid-flight.
   let fetchVersion = 0;
+  // Bumped on every generation start and on abort, so a generation that
+  // settles after the range changed (or after a newer one started) is
+  // ignored instead of clobbering the current handle or panel state.
+  let genVersion = 0;
   // The in-flight generation, so we can abort it on range change/unmount.
   let handle: GenerateInsightHandle | null = null;
 
@@ -62,6 +66,8 @@
   function abortGeneration() {
     handle?.abort();
     handle = null;
+    // Invalidate the aborted generation so its late settle is a no-op.
+    genVersion++;
   }
 
   $effect(() => {
@@ -109,7 +115,8 @@
     phase = "starting";
     error = null;
 
-    handle = generateInsight(
+    const v = ++genVersion;
+    const current = generateInsight(
       {
         type: "daily_activity",
         date_from: dateFrom,
@@ -118,17 +125,21 @@
         agent: "claude",
       },
       (p) => {
+        if (v !== genVersion) return;
         phase = p;
       },
     );
+    handle = current;
 
-    handle.done
+    current.done
       .then((result) => {
+        if (v !== genVersion) return;
         handle = null;
         insight = result;
         generating = false;
       })
       .catch((e) => {
+        if (v !== genVersion) return;
         handle = null;
         if (e instanceof DOMException && e.name === "AbortError") {
           return;
