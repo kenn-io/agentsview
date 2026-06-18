@@ -232,25 +232,30 @@
           {#each sortedRows as row (row.session_id)}
             <tr class="session-row" data-session-id={row.session_id}>
               <td class="col-session">
-                <a
-                  class="session-link"
-                  href={router.buildSessionHref(row.session_id)}
-                  title={row.title || row.session_id}
-                  onclick={(e) => {
-                    if (
-                      e.metaKey ||
-                      e.ctrlKey ||
-                      e.shiftKey ||
-                      e.altKey ||
-                      e.button !== 0
-                    )
-                      return;
-                    e.preventDefault();
-                    router.navigateToSession(row.session_id);
-                  }}
-                >
-                  {row.title || row.session_id}
-                </a>
+                <div class="session-cell">
+                  <a
+                    class="session-link"
+                    href={router.buildSessionHref(row.session_id)}
+                    title={row.title || row.session_id}
+                    onclick={(e) => {
+                      if (
+                        e.metaKey ||
+                        e.ctrlKey ||
+                        e.shiftKey ||
+                        e.altKey ||
+                        e.button !== 0
+                      )
+                        return;
+                      e.preventDefault();
+                      router.navigateToSession(row.session_id);
+                    }}
+                  >
+                    {row.title || row.session_id}
+                  </a>
+                  {#if row.is_automated}
+                    <span class="auto-badge" title="Automated session">Auto</span>
+                  {/if}
+                </div>
               </td>
               <td class="col-model">{rowModel(row)}</td>
               <td class="col-project" title={row.project}>
@@ -414,13 +419,32 @@
     max-width: 240px;
   }
 
-  .session-link {
-    display: block;
+  .session-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     max-width: 240px;
+  }
+
+  .session-link {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
     color: var(--accent-blue);
     text-decoration: none;
+  }
+
+  .auto-badge {
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 999px;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--accent-purple);
+    background: color-mix(in srgb, var(--accent-purple) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-purple) 35%, transparent);
   }
 
   .session-link:hover {

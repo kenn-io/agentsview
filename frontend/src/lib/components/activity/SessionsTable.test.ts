@@ -250,6 +250,30 @@ describe("SessionsTable", () => {
     unmount(c);
   });
 
+  it("flags only automated sessions with an Auto badge", async () => {
+    const report = makeReport([
+      makeRow({ session_id: "human", title: "Human", is_automated: false }),
+      makeRow({ session_id: "robot", title: "Robot", is_automated: true }),
+    ]);
+    const c = mount(SessionsTable, {
+      target: document.body,
+      props: { report },
+    });
+    await tick();
+
+    expect(document.querySelectorAll(".auto-badge").length).toBe(1);
+    const robotRow = document.querySelector(
+      '.session-row[data-session-id="robot"]',
+    );
+    const humanRow = document.querySelector(
+      '.session-row[data-session-id="human"]',
+    );
+    expect(robotRow?.querySelector(".auto-badge")).toBeTruthy();
+    expect(humanRow?.querySelector(".auto-badge")).toBeNull();
+
+    unmount(c);
+  });
+
   it("renders no filter badge when no slot filter is active", async () => {
     const report = makeReport(fixtureRows());
     const c = mount(SessionsTable, {
