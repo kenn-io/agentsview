@@ -322,6 +322,21 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
 	}()
 
+	// Older databases may have no pg_sync_state table.
+	var tableExists int
+	err = conn.QueryRowContext(
+		ctx, "SELECT 1 FROM old_db.sqlite_master WHERE type='table' AND name='pg_sync_state'",
+	).Scan(&tableExists)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("probing pg_sync_state table: %w", err)
+	}
+	if tableExists != 1 {
+		return nil
+	}
+
 	_, err = conn.ExecContext(ctx, `
 		INSERT OR REPLACE INTO main.pg_sync_state (key, value)
 		SELECT key, value FROM old_db.pg_sync_state`)

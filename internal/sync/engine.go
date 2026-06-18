@@ -2059,6 +2059,20 @@ func (e *Engine) ResyncAll(
 	}
 	if err := newDB.CopySyncStateFrom(origPath); err != nil {
 		log.Printf("resync: copy sync state: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"sync state copy failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats
 	}
 
 	// Copy insights into newDB from the quiesced old DB file.
