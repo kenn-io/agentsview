@@ -2329,6 +2329,20 @@ func (s *Store) GetDailyUsage(
 	}
 	result.Totals.CacheSavings = roundCost(totalSavings)
 	result.Totals.TotalCost = roundCost(result.Totals.TotalCost)
+
+	var copilotCost float64
+	for _, day := range days {
+		if day == nil {
+			continue
+		}
+		if b, ok := day.agents["copilot"]; ok {
+			copilotCost += b.cost
+		}
+	}
+	if copilotCost > 0 {
+		result.Totals.CopilotAICredits = copilotCost / 0.01
+	}
+
 	if result.Daily == nil {
 		result.Daily = []db.DailyUsageEntry{}
 	}
@@ -2556,6 +2570,9 @@ func (s *Store) GetSessionUsage(
 	if len(unpriced) == 0 && hasRows {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)
+	}
+	if sess.Agent == "copilot" && out.HasCost && out.CostUSD > 0 {
+		out.AICredits = out.CostUSD / 0.01
 	}
 	return out, nil
 }
