@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -173,17 +174,21 @@ func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
 	require.NoError(t, err, "resolve script failed: output: %s", out)
 
 	dirs, _ := parseResolvedDirs(string(out))
-	assert.ElementsMatch(t, []string{historyA, historyB}, dirs[parser.AgentAider],
+	aiderTargets := slashPaths(dirs[parser.AgentAider])
+	assert.ElementsMatch(t, []string{filepath.ToSlash(historyA), filepath.ToSlash(historyB)}, aiderTargets,
 		"explicit AIDER_DIR must resolve only aider history files")
-	assert.NotContains(t, dirs[parser.AgentAider], codeRoot,
+	assert.NotContains(t, aiderTargets, filepath.ToSlash(codeRoot),
 		"AIDER_DIR itself must not become a tar target")
-	assert.NotContains(t, dirs[parser.AgentAider], skippedHistory,
+	assert.NotContains(t, aiderTargets, filepath.ToSlash(skippedHistory),
 		"remote aider discovery must prune local-discovery skip dirs")
-	assert.NotContains(t, dirs[parser.AgentAider], deepHistory,
+	assert.NotContains(t, aiderTargets, filepath.ToSlash(deepHistory),
 		"remote aider discovery must enforce the local depth cap")
 }
 
 func TestResolveScriptAiderNewlinePathCannotInjectTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows path APIs reject embedded newlines; this regression covers POSIX remote shell output")
+	}
 	home := t.TempDir()
 	codeRoot := filepath.Join(home, "code")
 	injected := "/home/victim/" + parser.AiderHistoryFileName()
@@ -205,6 +210,14 @@ func TestResolveScriptAiderNewlinePathCannotInjectTarget(t *testing.T) {
 		assert.NotContains(t, target, "\n",
 			"aider transfer target must not contain record separators")
 	}
+}
+
+func slashPaths(paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = filepath.ToSlash(p)
+	}
+	return out
 }
 
 // TestResolveScriptAiderRejectsHomeOverride verifies that setting AIDER_DIR
