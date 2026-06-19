@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func TestSessionHelp_ShowsSubcommands(t *testing.T) {
@@ -671,6 +672,38 @@ func TestSessionExport_StreamsFromDisk(t *testing.T) {
 		"session", "export", "s-1")
 	require.NoError(t, err)
 	assert.Equal(t, body, out)
+}
+
+func TestSessionExport_AiderVirtualPathStreamsOnlySelectedRun(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	history := filepath.Join(repo, parser.AiderHistoryFileName())
+	run0 := "# aider chat started at 2026-06-09 14:01:00\n" +
+		"#### first prompt\nanswer one\n"
+	run1 := "# aider chat started at 2026-06-09 15:30:00\n" +
+		"#### second prompt\nanswer two\n"
+	run2 := "# aider chat started at 2026-06-09 16:45:00\n" +
+		"#### third prompt\nanswer three\n"
+	require.NoError(t, os.WriteFile(
+		history, []byte("ignored preamble\n"+run0+run1+run2), 0o600,
+	))
+
+	seedSessionWithOpts(t, dataDir, "s-aider", "repo",
+		func(s *db.Session) {
+			s.Agent = string(parser.AgentAider)
+			vp := parser.AiderVirtualPath(history, 1)
+			s.FilePath = &vp
+		})
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "export", "s-aider")
+	require.NoError(t, err)
+	assert.Equal(t, run1, out)
+	assert.NotContains(t, out, "first prompt")
+	assert.NotContains(t, out, "third prompt")
 }
 
 func TestSessionExport_FailsWhenSourceMissing(t *testing.T) {

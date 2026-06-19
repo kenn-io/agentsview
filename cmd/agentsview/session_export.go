@@ -63,6 +63,22 @@ func newSessionExportCommand() *cobra.Command {
 					"source file not found for session %s", id,
 				)
 			}
+			// Aider stores many repo runs in one Markdown history file,
+			// with sessions keyed by a <history>#<idx> virtual path.
+			// Export only the selected run, not sibling runs from the
+			// same repository.
+			if historyPath, idx, ok :=
+				parser.ParseAiderVirtualPath(storedPath); ok {
+				err := parser.WriteAiderRunMarkdown(
+					cmd.OutOrStdout(), historyPath, idx,
+				)
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"source file not found: %s", historyPath,
+					)
+				}
+				return err
+			}
 			// A Visual Studio Copilot trace file holds spans for several
 			// conversations, so streaming the whole file would disclose
 			// unrelated conversations. Filter to the requested conversation.

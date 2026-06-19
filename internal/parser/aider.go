@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -161,6 +162,57 @@ func splitAiderRuns(content string) []aiderRun {
 	}
 	flush()
 	return runs
+}
+
+func aiderRunSourceRange(content string, idx int) (int, int, bool) {
+	if idx < 0 {
+		return 0, 0, false
+	}
+	runIdx := -1
+	start := -1
+	lineStart := 0
+	for lineStart <= len(content) {
+		lineEnd := len(content)
+		if rel := strings.IndexByte(content[lineStart:], '\n'); rel >= 0 {
+			lineEnd = lineStart + rel
+		}
+		if strings.HasPrefix(content[lineStart:lineEnd], aiderHeaderPrefix) {
+			runIdx++
+			if runIdx == idx {
+				start = lineStart
+			} else if runIdx == idx+1 && start >= 0 {
+				return start, lineStart, true
+			}
+		}
+		if lineEnd == len(content) {
+			break
+		}
+		lineStart = lineEnd + 1
+	}
+	if start >= 0 {
+		return start, len(content), true
+	}
+	return 0, 0, false
+}
+
+// WriteAiderRunMarkdown streams the raw Markdown source for one run in a shared
+// aider history file. It preserves the selected run's header and body, drops any
+// preamble before the first run, and never emits sibling runs from the same
+// repository history.
+func WriteAiderRunMarkdown(w io.Writer, historyPath string, idx int) error {
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", historyPath, err)
+	}
+	start, end, ok := aiderRunSourceRange(string(data), idx)
+	if !ok {
+		return fmt.Errorf(
+			"aider run %d not found in %s: %w",
+			idx, historyPath, os.ErrNotExist,
+		)
+	}
+	_, err = w.Write(data[start:end])
+	return err
 }
 
 // pushUniqueAider appends the trimmed path to v if it is non-empty and

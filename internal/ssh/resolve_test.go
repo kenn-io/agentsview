@@ -139,13 +139,24 @@ func TestResolveScriptSkipsAiderHomeDefault(t *testing.T) {
 		"aider must not resolve to the whole home dir")
 }
 
-// TestResolveScriptAiderScopedByEnv verifies that an explicit AIDER_DIR
-// scopes aider's remote transfer to that directory (the intended use), so
-// remote sync still works when the user points AIDER_DIR at a code root.
-func TestResolveScriptAiderScopedByEnv(t *testing.T) {
+// TestResolveScriptAiderScopedByEnvFindsHistoryFiles verifies that an explicit
+// AIDER_DIR discovers only aider history files for transfer. The remote sync
+// treats resolved entries as tar targets, so emitting the code root would
+// archive the entire repository instead of just .aider.chat.history.md files.
+func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
 	home := t.TempDir()
 	codeRoot := filepath.Join(home, "code")
-	require.NoError(t, os.MkdirAll(codeRoot, 0o755), "mkdir code root")
+	repoA := filepath.Join(codeRoot, "repo-a")
+	repoB := filepath.Join(codeRoot, "nested", "repo-b")
+	require.NoError(t, os.MkdirAll(repoA, 0o755), "mkdir repo A")
+	require.NoError(t, os.MkdirAll(repoB, 0o755), "mkdir repo B")
+	historyA := filepath.Join(repoA, parser.AiderHistoryFileName())
+	historyB := filepath.Join(repoB, parser.AiderHistoryFileName())
+	require.NoError(t, os.WriteFile(historyA, []byte("# aider\n"), 0o644))
+	require.NoError(t, os.WriteFile(historyB, []byte("# aider\n"), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoA, "source.go"), []byte("package main\n"), 0o644,
+	))
 
 	script := buildResolveScript()
 	cmd := exec.Command("sh", "-c", script)
@@ -154,8 +165,10 @@ func TestResolveScriptAiderScopedByEnv(t *testing.T) {
 	require.NoError(t, err, "resolve script failed: output: %s", out)
 
 	dirs, _ := parseResolvedDirs(string(out))
-	assert.Equal(t, []string{codeRoot}, dirs[parser.AgentAider],
-		"explicit AIDER_DIR must scope aider's remote transfer")
+	assert.ElementsMatch(t, []string{historyA, historyB}, dirs[parser.AgentAider],
+		"explicit AIDER_DIR must resolve only aider history files")
+	assert.NotContains(t, dirs[parser.AgentAider], codeRoot,
+		"AIDER_DIR itself must not become a tar target")
 }
 
 // TestResolveScriptAiderRejectsHomeOverride verifies that setting AIDER_DIR
