@@ -501,6 +501,27 @@ describe("SessionList visible hydration", () => {
     expect(selectSession).toHaveBeenCalledWith("row-session");
   });
 
+  it("keeps session rows discoverable as buttons for virtual-list targeting", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "button-session",
+        display_name: "Button target",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(
+      undefined,
+    );
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const row = document.querySelector<HTMLElement>(".session-item");
+    expect(row).not.toBeNull();
+    expect(row?.getAttribute("role")).toBe("button");
+    expect(row?.getAttribute("tabindex")).toBe("0");
+  });
+
   it("opens the same canonical href from the context menu in a new tab", async () => {
     const openSpy = vi
       .spyOn(window, "open")

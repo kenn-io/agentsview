@@ -294,9 +294,20 @@
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
   data-session-id={session.id}
+  role="button"
   aria-current={isActive ? "page" : undefined}
+  tabindex="0"
   style:padding-left="{8 + depth * 16}px"
   onclick={handleRowClick}
+  onkeydown={(e) => {
+    if (e.target !== e.currentTarget) {
+      return;
+    }
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      sessions.selectSession(session.id);
+    }
+  }}
   oncontextmenu={handleContextMenu}
 >
   <!-- Tree expand/collapse or connector -->
