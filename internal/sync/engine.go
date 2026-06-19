@@ -1164,20 +1164,8 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// aider: <aiderRoot>/.../.aider.chat.history.md (rootless; any depth
-	// under the configured root).
-	if filepath.Base(path) == parser.AiderHistoryFileName() {
-		for _, aiderDir := range e.agentDirs[parser.AgentAider] {
-			if aiderDir == "" {
-				continue
-			}
-			if _, ok := isUnder(aiderDir, path); ok {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentAider,
-				}, true
-			}
-		}
+	if df, ok := e.classifyAiderPath(path); ok {
+		return df, true
 	}
 
 	// Command Code: <projectsDir>/<slugified-cwd>/<session>.jsonl
@@ -1468,6 +1456,31 @@ func (e *Engine) classifyVisualStudioCopilotPath(
 			Project: "visualstudio",
 			Agent:   parser.AgentVSCopilot,
 		}, true
+	}
+	return parser.DiscoveredFile{}, false
+}
+
+// classifyAiderPath handles Aider's rootless chat-history layout:
+//
+//	<aiderRoot>/.../.aider.chat.history.md
+//
+// extracted from classifyOnePath to stay within nilaway CFG limits.
+func (e *Engine) classifyAiderPath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	if filepath.Base(path) != parser.AiderHistoryFileName() {
+		return parser.DiscoveredFile{}, false
+	}
+	for _, aiderDir := range e.agentDirs[parser.AgentAider] {
+		if aiderDir == "" {
+			continue
+		}
+		if _, ok := isUnder(aiderDir, path); ok {
+			return parser.DiscoveredFile{
+				Path:  path,
+				Agent: parser.AgentAider,
+			}, true
+		}
 	}
 	return parser.DiscoveredFile{}, false
 }
