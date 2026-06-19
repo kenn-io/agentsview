@@ -45,7 +45,7 @@
   import ImportModal from "../import/ImportModal.svelte";
 
   const isMac = navigator.platform.toUpperCase().includes("MAC");
-  const modKey = isMac ? "Cmd" : "Ctrl";
+  const modKey = isMac ? "⌘" : "Ctrl";
 
   let showImportModal = $state(false);
   let showBlockFilter = $state(false);
@@ -380,11 +380,11 @@
   <button
     class="search-hint"
     onclick={() => (ui.activeModal = "commandPalette")}
-    title="Search sessions ({modKey}+K)"
+    title="Search sessions ({modKey} K)"
   >
     <SearchIcon size="12" strokeWidth="2" aria-hidden="true" />
     <span class="search-hint-text">Search sessions...</span>
-    <kbd class="search-hint-kbd">{modKey}+K</kbd>
+    <kbd class="search-hint-kbd">{modKey} K</kbd>
   </button>
 
   <div class="header-right">

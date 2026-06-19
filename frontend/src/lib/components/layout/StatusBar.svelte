@@ -13,7 +13,7 @@
 
   const RELATIVE_TIME_REFRESH_MS = 10_000;
   const isMac = navigator.platform.toUpperCase().includes("MAC");
-  const mod = isMac ? "Cmd" : "Ctrl";
+  const mod = isMac ? "⌘" : "Ctrl";
   let relativeTimeTick = $state(0);
 
   let progressText = $derived.by(() => {
@@ -100,14 +100,14 @@
           class="zoom-btn"
           onclick={() => ui.zoomOut()}
           disabled={ui.zoomLevel <= 67}
-          title="Zoom out ({mod}+-)"
+          title="Zoom out ({mod} -)"
         >
           &minus;
         </button>
         <button
           class="zoom-level"
           onclick={() => ui.resetZoom()}
-          title="Reset zoom ({mod}+0)"
+          title="Reset zoom ({mod} 0)"
         >
           {ui.zoomLevel}%
         </button>
@@ -115,7 +115,7 @@
           class="zoom-btn"
           onclick={() => ui.zoomIn()}
           disabled={ui.zoomLevel >= 200}
-          title="Zoom in ({mod}++)"
+          title="Zoom in ({mod} +)"
         >
           +
         </button>

@@ -4,12 +4,14 @@
   import { XIcon } from "../../icons.js";
 
   const isMac = navigator.platform.toUpperCase().includes("MAC");
-  const mod = isMac ? "Cmd" : "Ctrl";
+  const mod = isMac ? "⌘" : "Ctrl";
+  const escapeKey = isMac ? "⎋" : "Esc";
+  const deleteKey = isMac ? "⌫" : "Del";
 
   const baseShortcuts = [
-    { key: `${mod}+K`, action: "Open command palette" },
-    { key: `${mod}+F / /`, action: "Find in session" },
-    { key: "Esc", action: "Close palette / modal / find" },
+    { key: `${mod} K`, action: "Open command palette" },
+    { key: `${mod} F / /`, action: "Find in session" },
+    { key: escapeKey, action: "Close palette / modal / find" },
     { key: "j / \u2193", action: "Next message" },
     { key: "k / \u2191", action: "Previous message" },
     { key: "]", action: "Next session" },
@@ -21,14 +23,14 @@
     { key: "e", action: "Export session" },
     { key: "p", action: "Publish to Gist" },
     { key: "c", action: "Copy resume command" },
-    { key: "Del", action: "Delete session" },
+    { key: deleteKey, action: "Delete session" },
     { key: "?", action: "Show this modal" },
   ];
 
   const zoomShortcuts = [
-    { key: `${mod}++`, action: "Zoom in" },
-    { key: `${mod}+-`, action: "Zoom out" },
-    { key: `${mod}+0`, action: "Reset zoom" },
+    { key: `${mod} +`, action: "Zoom in" },
+    { key: `${mod} -`, action: "Zoom out" },
+    { key: `${mod} 0`, action: "Reset zoom" },
   ];
 
   const shortcuts = sync.isDesktop

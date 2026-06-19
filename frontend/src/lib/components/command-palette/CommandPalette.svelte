@@ -22,7 +22,7 @@
   let inputValue: string = $state(searchStore.query ?? "");
 
   // Clear state and reset sort whenever the palette is unmounted, regardless
-  // of close path (Escape key, overlay click, Cmd+K toggle, or any other
+  // of close path (Escape key, overlay click, command-palette toggle, or any other
   // mechanism). This ensures stale results and in-flight requests are always
   // cancelled even when the caller bypasses close().
   onDestroy(() => {
@@ -167,7 +167,7 @@
         value={inputValue}
         oninput={handleInput}
       />
-      <kbd class="esc-hint">Esc</kbd>
+      <kbd class="esc-hint">⎋</kbd>
     </div>
 
     <div class="palette-results">

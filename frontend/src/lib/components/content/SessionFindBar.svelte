@@ -74,7 +74,7 @@
     <div class="nav-buttons">
       <button
         class="nav-btn"
-        title="Previous match (Shift+Enter)"
+        title="Previous match (⇧ ↩)"
         disabled={!hasMatches}
         onclick={() => inSessionSearch.prev()}
         tabindex="0"
@@ -84,7 +84,7 @@
       </button>
       <button
         class="nav-btn"
-        title="Next match (Enter)"
+        title="Next match (↩)"
         disabled={!hasMatches}
         onclick={() => inSessionSearch.next()}
         tabindex="0"
@@ -98,7 +98,7 @@
 
     <button
       class="close-btn"
-      title="Close (Esc)"
+      title="Close (⎋)"
       onclick={() => inSessionSearch.close()}
       tabindex="0"
       aria-label="Close find bar"
