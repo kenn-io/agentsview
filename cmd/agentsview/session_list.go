@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
@@ -25,6 +26,8 @@ func newSessionListCommand() *cobra.Command {
 		hasSecret                               bool
 		cursor                                  string
 		limit                                   int
+		sort                                    string
+		reverse                                 bool
 	)
 	cmd := &cobra.Command{
 		Use:          "list",
@@ -58,9 +61,16 @@ func newSessionListCommand() *cobra.Command {
 				HasSecret:        hasSecret,
 				Cursor:           cursor,
 				Limit:            limit,
+				OrderBy:          sort,
 			}
 			if cmd.Flags().Changed("min-tool-failures") {
 				f.MinToolFailures = &minToolFailures
+			}
+			// --reverse flips the sort key's canonical direction; leave
+			// Descending nil otherwise so the default applies.
+			if cmd.Flags().Changed("reverse") {
+				d := db.SortDefaultDescending(sort) != reverse
+				f.Descending = &d
 			}
 
 			list, err := svc.List(cmd.Context(), f)
@@ -118,6 +128,10 @@ func newSessionListCommand() *cobra.Command {
 			"Maximum sessions to return (default %d, max %d)",
 			db.DefaultSessionLimit, db.MaxSessionLimit,
 		))
+	flags.StringVar(&sort, "sort", "recent",
+		"Sort by: "+strings.Join(db.SortKeys(), ", "))
+	flags.BoolVarP(&reverse, "reverse", "r", false,
+		"Reverse the sort direction")
 
 	return cmd
 }

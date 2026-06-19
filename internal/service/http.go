@@ -128,6 +128,10 @@ func filterToQuery(f ListFilter) url.Values {
 	if f.Limit > 0 {
 		q.Set("limit", strconv.Itoa(f.Limit))
 	}
+	setIfNotEmpty("order_by", f.OrderBy)
+	if f.Descending != nil {
+		q.Set("descending", strconv.FormatBool(*f.Descending))
+	}
 	return q
 }
 

@@ -106,6 +106,12 @@ func (b *directBackend) List(
 			"list: invalid active_since %q: use RFC3339", f.ActiveSince,
 		)
 	}
+	if !db.ValidSortKey(f.OrderBy) {
+		return nil, fmt.Errorf(
+			"list: invalid sort %q: must be one of %s",
+			f.OrderBy, strings.Join(db.SortKeys(), ", "),
+		)
+	}
 	// Match the HTTP handler's clampLimit semantics: values over
 	// MaxSessionLimit clamp to the max, not reset to the default.
 	if f.Limit > db.MaxSessionLimit {
@@ -153,6 +159,8 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		HasSecret:            f.HasSecret,
 		Starred:              f.Starred,
 		SecretsRulesVersions: secrets.ActiveRulesVersions(),
+		OrderBy:              f.OrderBy,
+		Descending:           f.Descending,
 	}
 	if f.Outcome != "" {
 		filter.Outcome = strings.Split(f.Outcome, ",")

@@ -136,6 +136,10 @@ type ListFilter struct {
 	Starred          bool   `json:"starred,omitempty"`
 	Cursor           string `json:"cursor,omitempty"`
 	Limit            int    `json:"limit,omitempty"`
+	// OrderBy selects the sort column ("" = recent activity). Descending
+	// overrides the sort key's canonical direction when non-nil.
+	OrderBy    string `json:"order_by,omitempty"`
+	Descending *bool  `json:"descending,omitempty"`
 }
 
 // MessageFilter mirrors GET /api/v1/sessions/{id}/messages query params.
