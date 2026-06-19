@@ -338,11 +338,15 @@ func sortAndLimitParseDiffFiles(
 // stripVirtualSourceSuffix maps a stored file_path to its on-disk base
 // file by removing the "#rawID" suffix that Kiro, Zed, OpenCode, Kilo,
 // MiMoCode, and Shelley SQLite-backed sessions append to their shared database
-// path, and the "#conversationID" suffix Visual Studio Copilot appends to its
-// shared trace file.
+// path, the "#conversationID" suffix Visual Studio Copilot appends to its
+// shared trace file, and the "#runIdx" suffix aider appends to its shared
+// history file.
 func stripVirtualSourceSuffix(path string) string {
 	if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(path); ok {
 		return tracePath
+	}
+	if historyPath, _, ok := parser.ParseAiderVirtualPath(path); ok {
+		return historyPath
 	}
 	if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
 		return dbPath

@@ -5689,9 +5689,10 @@ func (e *Engine) processGptme(
 // skip the other multi-session agents use (cf. kiroSQLitePendingSessionIDs).
 //
 // The whole file is skipped only when EVERY expected run row is known
-// current: each run meta's virtual path must have a stored row whose mtime
-// matches this file's and whose data version is current. If any run row is
-// missing (e.g. a previous batch wrote only some runs, or a new run was
+// current: each run meta's virtual path must have a stored row whose size and
+// mtime match this file's and whose data version is current. Size is checked
+// alongside mtime so a same-mtime append/truncate is not wrongly skipped. If
+// any run row is missing (e.g. a previous batch wrote only some runs, or a new run was
 // appended whose row does not exist yet) or stale (an older data version, or
 // resynced after a data-version bump while siblings were not), the file is
 // re-parsed so the remaining sessions are repaired. Skipping on the first
@@ -5703,6 +5704,7 @@ func (e *Engine) aiderFileUnchanged(path string, info os.FileInfo) bool {
 		return false
 	}
 	mtime := info.ModTime().UnixNano()
+	size := info.Size()
 	current := db.CurrentDataVersion()
 	expected := 0
 	for _, m := range metas {
@@ -5712,11 +5714,13 @@ func (e *Engine) aiderFileUnchanged(path string, info os.FileInfo) bool {
 			continue
 		}
 		expected++
-		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
-		if !ok || storedMtime != mtime ||
+		storedSize, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if !ok || storedSize != size || storedMtime != mtime ||
 			e.db.GetDataVersionByPath(m.VirtualPath) < current {
 			// This run is missing or stale: do not skip the file, so the
-			// fan-out re-parses and repairs every run.
+			// fan-out re-parses and repairs every run. The size is compared
+			// alongside mtime so a same-mtime append/truncate (which leaves
+			// new or removed runs unsynced) is never wrongly skipped.
 			return false
 		}
 	}
@@ -5763,7 +5767,9 @@ func (e *Engine) processAider(
 		}
 	}
 
-	if e.aiderFileUnchanged(file.Path, info) {
+	// parse-diff: !e.forceParse disables the stored-state skip so a forced
+	// reparse re-reads already-synced aider files instead of skipping them.
+	if !e.forceParse && e.aiderFileUnchanged(file.Path, info) {
 		return processResult{skip: true}
 	}
 

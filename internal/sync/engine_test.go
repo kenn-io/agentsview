@@ -1428,12 +1428,13 @@ func writeAiderHistory(t *testing.T) string {
 }
 
 // insertAiderRunRow stores a session row for one aider virtual run path at
-// the given mtime and data version, mirroring what a real fan-out write
+// the given size, mtime, and data version, mirroring what a real fan-out write
 // produces. data_version is stamped separately because UpsertSession does
-// not persist it.
+// not persist it. The stored size must match the history file's reported size
+// for aiderFileUnchanged to treat the run as current.
 func insertAiderRunRow(
 	t *testing.T, database *db.DB,
-	virtualPath string, mtime int64, dataVersion int,
+	virtualPath string, size, mtime int64, dataVersion int,
 ) {
 	t.Helper()
 	id := "aider:" + virtualPath
@@ -1443,7 +1444,7 @@ func insertAiderRunRow(
 		Machine:   "local",
 		Agent:     string(parser.AgentAider),
 		FilePath:  strPtr(virtualPath),
-		FileSize:  int64Ptr(1),
+		FileSize:  int64Ptr(size),
 		FileMtime: int64Ptr(mtime),
 	}))
 	require.NoError(t, database.SetSessionDataVersion(id, dataVersion))
@@ -1456,6 +1457,7 @@ func insertAiderRunRow(
 // after a data-version bump, so they would never be repaired.
 func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
 	const mtime = int64(1_700_000_000_000_000_000)
+	const size = int64(4096)
 	cur := db.CurrentDataVersion()
 
 	metasFor := func(t *testing.T, path string) []parser.AiderRunMeta {
@@ -1476,11 +1478,11 @@ func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
 		metas := metasFor(t, path)
 		// Both content runs have a current row. The header-only run has none,
 		// and must not block the skip.
-		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
-		insertAiderRunRow(t, database, metas[1].VirtualPath, mtime, cur)
+		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
+		insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime, cur)
 
 		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
 		assert.True(t, got, "file with all run rows current must be skipped")
 	})
 
@@ -1490,10 +1492,10 @@ func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
 		metas := metasFor(t, path)
 		// Only the FIRST content run was written (a partial batch). Under the
 		// old any-match logic this stranded the second run forever.
-		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
+		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
 
 		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
 		assert.False(t, got,
 			"a missing run row must force a re-parse to repair it")
 	})
@@ -1502,13 +1504,13 @@ func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
 		database := openTestDB(t)
 		path := writeAiderHistory(t)
 		metas := metasFor(t, path)
-		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
+		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
 		// The second run was resynced under an OLDER data version while the
 		// first is current. The file must still re-parse.
-		insertAiderRunRow(t, database, metas[1].VirtualPath, mtime, cur-1)
+		insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime, cur-1)
 
 		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
 		assert.False(t, got,
 			"a stale data-version run row must force a re-parse")
 	})
@@ -1517,14 +1519,82 @@ func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
 		database := openTestDB(t)
 		path := writeAiderHistory(t)
 		metas := metasFor(t, path)
-		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
-		insertAiderRunRow(t, database, metas[1].VirtualPath, mtime-1, cur)
+		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
+		insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime-1, cur)
 
 		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
 		assert.False(t, got,
 			"a run row with a different mtime must force a re-parse")
 	})
+
+	t.Run("one run row stale size -> do not skip", func(t *testing.T) {
+		database := openTestDB(t)
+		path := writeAiderHistory(t)
+		metas := metasFor(t, path)
+		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
+		// The second run row has the SAME mtime but a different stored size,
+		// modeling a same-mtime append/truncate. Ignoring size would wrongly
+		// skip the file and strand the appended/removed runs.
+		insertAiderRunRow(t, database, metas[1].VirtualPath, size-1, mtime, cur)
+
+		e := &Engine{db: database}
+		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
+		assert.False(t, got,
+			"a run row with a different size must force a re-parse")
+	})
+}
+
+// TestProcessAiderForceParseReparsesUnchangedFile is the forced-reparse
+// regression test: under forceParse (parse-diff), processAider must NOT take
+// the aiderFileUnchanged skip even when every run row is current, so a forced
+// run re-reads already-synced aider files instead of stranding them.
+func TestProcessAiderForceParseReparsesUnchangedFile(t *testing.T) {
+	database := openTestDB(t)
+	path := writeAiderHistory(t)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	// processAider stats the real file, so the stored rows must carry the
+	// file's actual size and mtime for the unchanged-skip to fire.
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
+	cur := db.CurrentDataVersion()
+
+	metas, err := parser.ListAiderRunMetas(path)
+	require.NoError(t, err)
+	require.Len(t, metas, 3)
+	// Mark every content-bearing run as current so the non-forced path skips.
+	insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
+	insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime, cur)
+
+	file := parser.DiscoveredFile{Path: path, Agent: parser.AgentAider}
+
+	// Sanity: without forceParse the unchanged file is skipped.
+	normal := &Engine{db: database, machine: "local"}
+	skipRes := normal.processAider(file, info)
+	require.True(t, skipRes.skip,
+		"without forceParse an unchanged aider file must be skipped")
+	require.Empty(t, skipRes.results)
+
+	// With forceParse the file must be reparsed, not skipped.
+	forced := &Engine{db: database, machine: "local", forceParse: true}
+	forcedRes := forced.processAider(file, info)
+	require.NoError(t, forcedRes.err)
+	assert.False(t, forcedRes.skip,
+		"forceParse must reparse an unchanged aider file, not skip it")
+	assert.Len(t, forcedRes.results, 2,
+		"forced reparse must fan out one result per content-bearing run")
+}
+
+// TestStripVirtualSourceSuffixAider verifies that an aider
+// <history>#<runIdx> virtual path strips back to its physical history file,
+// so parse-diff missing-run and parse-error reporting keys on the on-disk
+// file rather than the run-scoped virtual path.
+func TestStripVirtualSourceSuffixAider(t *testing.T) {
+	historyPath := "/home/user/myrepo/" + parser.AiderHistoryFileName()
+	virtual := parser.AiderVirtualPath(historyPath, 3)
+	assert.Equal(t, historyPath, stripVirtualSourceSuffix(virtual),
+		"the run-index suffix must strip to the physical history path")
 }
 
 func TestToDBSessionStoresSessionName(t *testing.T) {
