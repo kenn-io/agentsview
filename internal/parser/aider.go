@@ -380,11 +380,16 @@ func AiderRawIDAt(historyPath string, idx int) (string, bool) {
 
 // AiderRunMeta describes one run within a history file: its virtual
 // source path, positional index, and parsed start time. The sync engine
-// fans a physical file out into one session per meta.
+// fans a physical file out into one session per meta. HasMessages reports
+// whether the run has parseable turns and so produces a session row;
+// header-only runs keep a meta slot (to hold their positional index) but
+// HasMessages is false, so the engine's unchanged-check does not expect a
+// stored row for them.
 type AiderRunMeta struct {
 	VirtualPath string
 	Idx         int
 	Started     time.Time
+	HasMessages bool
 }
 
 // ListAiderRunMetas reads a history file once and returns one meta per
@@ -392,8 +397,8 @@ type AiderRunMeta struct {
 // listers (e.g. ListShelleyConversationMetas) so the engine can fan a
 // single physical file out into per-run sessions. Runs with no parseable
 // header still get a meta slot so their positional index stays stable;
-// the per-run parse drops runs with no messages. Returns nil for an
-// unreadable or run-less file.
+// the per-run parse drops runs with no messages (flagged via HasMessages).
+// Returns nil for an unreadable or run-less file.
 func ListAiderRunMetas(path string) ([]AiderRunMeta, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -405,20 +410,38 @@ func ListAiderRunMetas(path string) ([]AiderRunMeta, error) {
 	}
 	metas := make([]AiderRunMeta, 0, len(runs))
 	for idx, run := range runs {
+		msgs, _ := parseAiderTurns(run.body)
 		metas = append(metas, AiderRunMeta{
 			VirtualPath: AiderVirtualPath(path, idx),
 			Idx:         idx,
 			Started:     run.started,
+			HasMessages: len(msgs) > 0,
 		})
 	}
 	return metas, nil
 }
 
+// aiderIdentityPath returns the path whose absolute form seeds the run's
+// session ID hash. When idPath is non-empty it is used verbatim (it is
+// already a canonical identity, e.g. the remote physical history path), so
+// the ID stays stable across syncs that read the file from a different
+// location. When idPath is empty the on-disk path's absolute form is used,
+// preserving the original local behavior exactly.
+func aiderIdentityPath(path, idPath string) string {
+	if idPath != "" {
+		return idPath
+	}
+	return aiderAbsPath(path)
+}
+
 // buildAiderRunSession builds a single per-run session from one run's
 // body and metadata. Returns (nil, nil) when the run has no parseable
-// turns so the caller skips it cleanly.
+// turns so the caller skips it cleanly. idPath, when non-empty, is the
+// canonical identity path used to derive the stable session ID (see
+// aiderIdentityPath); the on-disk path is still used for the stored virtual
+// File.Path and for reading the file.
 func buildAiderRunSession(
-	path, machine string,
+	path, idPath, machine string,
 	info os.FileInfo,
 	run aiderRun,
 	idx, equalHeaderOrdinal int,
@@ -453,12 +476,12 @@ func buildAiderRunSession(
 		project = "unknown"
 	}
 
-	absPath := aiderAbsPath(path)
+	identity := aiderIdentityPath(path, idPath)
 	// A run has no reliable end time (aider writes no per-message
 	// timestamps and no run-end marker), so EndedAt mirrors StartedAt.
 	sess := &ParsedSession{
 		ID: aiderIDPrefix +
-			aiderRawID(absPath, run.rawHeader, equalHeaderOrdinal),
+			aiderRawID(identity, run.rawHeader, equalHeaderOrdinal),
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentAider,
@@ -485,6 +508,17 @@ func buildAiderRunSession(
 func ParseAiderRun(
 	path string, idx int, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	return ParseAiderRunWithID(path, "", idx, machine)
+}
+
+// ParseAiderRunWithID is ParseAiderRun with an explicit canonical identity
+// path used to derive the stable session ID. idPath should be the run's
+// canonical physical history path (e.g. the remote path during SSH sync);
+// pass "" to fall back to the on-disk path, which is the local behavior.
+// The file is always read from path; only the ID hash uses idPath.
+func ParseAiderRunWithID(
+	path, idPath string, idx int, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -499,7 +533,7 @@ func ParseAiderRun(
 	}
 	ordinals := aiderEqualHeaderOrdinals(runs)
 	sess, msgs := buildAiderRunSession(
-		path, machine, info, runs[idx], idx, ordinals[idx],
+		path, idPath, machine, info, runs[idx], idx, ordinals[idx],
 	)
 	if sess == nil {
 		return nil, nil, nil
@@ -513,6 +547,18 @@ func ParseAiderRun(
 // fan-out entry point used by the sync engine; ParseAiderRun is the
 // single-run lookup used when resolving one virtual path.
 func ParseAiderRuns(path, machine string) ([]ParseResult, error) {
+	return ParseAiderRunsWithID(path, "", machine)
+}
+
+// ParseAiderRunsWithID is ParseAiderRuns with an explicit canonical
+// identity path used to derive stable session IDs for every run. idPath
+// should be the file's canonical physical history path (e.g. the remote
+// path during SSH sync, where path is a random temp extraction dir); pass
+// "" to fall back to the on-disk path, which is the local behavior. The
+// file is always read from path; only the per-run ID hash uses idPath, so
+// the IDs stay stable across syncs that extract the file to a different
+// temp location.
+func ParseAiderRunsWithID(path, idPath, machine string) ([]ParseResult, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", path, err)
@@ -529,7 +575,7 @@ func ParseAiderRuns(path, machine string) ([]ParseResult, error) {
 	var results []ParseResult
 	for idx, run := range runs {
 		sess, msgs := buildAiderRunSession(
-			path, machine, info, run, idx, ordinals[idx],
+			path, idPath, machine, info, run, idx, ordinals[idx],
 		)
 		if sess == nil {
 			continue

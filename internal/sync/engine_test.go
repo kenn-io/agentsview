@@ -1409,6 +1409,124 @@ func TestShouldSkipByPathWithRewriter(t *testing.T) {
 	assert.False(t, got2, "shouldSkipByPath without rewriter should return false")
 }
 
+// writeAiderHistory writes a two-content-run plus one header-only-run
+// history file under a fresh repo dir and returns its path. The header-only
+// trailing run produces no session, exercising the HasMessages path of
+// aiderFileUnchanged.
+func writeAiderHistory(t *testing.T) string {
+	t.Helper()
+	repo := filepath.Join(t.TempDir(), "myrepo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	path := filepath.Join(repo, parser.AiderHistoryFileName())
+	content := "# aider chat started at 2026-06-09 14:01:00\n" +
+		"#### first prompt\nanswer one\n" +
+		"# aider chat started at 2026-06-09 15:30:00\n" +
+		"#### second prompt\nanswer two\n" +
+		"# aider chat started at 2026-06-09 16:45:00\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
+}
+
+// insertAiderRunRow stores a session row for one aider virtual run path at
+// the given mtime and data version, mirroring what a real fan-out write
+// produces. data_version is stamped separately because UpsertSession does
+// not persist it.
+func insertAiderRunRow(
+	t *testing.T, database *db.DB,
+	virtualPath string, mtime int64, dataVersion int,
+) {
+	t.Helper()
+	id := "aider:" + virtualPath
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        id,
+		Project:   "myrepo",
+		Machine:   "local",
+		Agent:     string(parser.AgentAider),
+		FilePath:  strPtr(virtualPath),
+		FileSize:  int64Ptr(1),
+		FileMtime: int64Ptr(mtime),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(id, dataVersion))
+}
+
+// TestAiderFileUnchangedRequiresAllRuns is the MEDIUM-2 regression test:
+// aiderFileUnchanged must skip a file only when EVERY content-bearing run
+// row is current. Skipping on the first matching row (the old behavior)
+// would strand runs that a partial batch never wrote or that went stale
+// after a data-version bump, so they would never be repaired.
+func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
+	const mtime = int64(1_700_000_000_000_000_000)
+	cur := db.CurrentDataVersion()
+
+	metasFor := func(t *testing.T, path string) []parser.AiderRunMeta {
+		t.Helper()
+		metas, err := parser.ListAiderRunMetas(path)
+		require.NoError(t, err)
+		// Two content-bearing runs plus one header-only run.
+		require.Len(t, metas, 3)
+		require.True(t, metas[0].HasMessages)
+		require.True(t, metas[1].HasMessages)
+		require.False(t, metas[2].HasMessages)
+		return metas
+	}
+
+	t.Run("all runs current -> skip", func(t *testing.T) {
+		database := openTestDB(t)
+		path := writeAiderHistory(t)
+		metas := metasFor(t, path)
+		// Both content runs have a current row. The header-only run has none,
+		// and must not block the skip.
+		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
+		insertAiderRunRow(t, database, metas[1].VirtualPath, mtime, cur)
+
+		e := &Engine{db: database}
+		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		assert.True(t, got, "file with all run rows current must be skipped")
+	})
+
+	t.Run("one run row missing -> do not skip", func(t *testing.T) {
+		database := openTestDB(t)
+		path := writeAiderHistory(t)
+		metas := metasFor(t, path)
+		// Only the FIRST content run was written (a partial batch). Under the
+		// old any-match logic this stranded the second run forever.
+		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
+
+		e := &Engine{db: database}
+		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		assert.False(t, got,
+			"a missing run row must force a re-parse to repair it")
+	})
+
+	t.Run("one run row stale data version -> do not skip", func(t *testing.T) {
+		database := openTestDB(t)
+		path := writeAiderHistory(t)
+		metas := metasFor(t, path)
+		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
+		// The second run was resynced under an OLDER data version while the
+		// first is current. The file must still re-parse.
+		insertAiderRunRow(t, database, metas[1].VirtualPath, mtime, cur-1)
+
+		e := &Engine{db: database}
+		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		assert.False(t, got,
+			"a stale data-version run row must force a re-parse")
+	})
+
+	t.Run("one run row stale mtime -> do not skip", func(t *testing.T) {
+		database := openTestDB(t)
+		path := writeAiderHistory(t)
+		metas := metasFor(t, path)
+		insertAiderRunRow(t, database, metas[0].VirtualPath, mtime, cur)
+		insertAiderRunRow(t, database, metas[1].VirtualPath, mtime-1, cur)
+
+		e := &Engine{db: database}
+		got := e.aiderFileUnchanged(path, fakeFileInfo{mtime: mtime})
+		assert.False(t, got,
+			"a run row with a different mtime must force a re-parse")
+	})
+}
+
 func TestToDBSessionStoresSessionName(t *testing.T) {
 	pw := pendingWrite{sess: parser.ParsedSession{
 		ID:           "commandcode:test",

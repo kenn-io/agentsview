@@ -213,6 +213,72 @@ func TestAiderEqualHeaderRunsGetStableDistinctIDs(t *testing.T) {
 	assert.Equal(t, r1[1].Session.ID, r2[1].Session.ID)
 }
 
+// TestAiderSessionIDStableAcrossExtractionDirs is the MEDIUM-1 regression
+// test for SSH sync. During remote sync the history file is extracted to a
+// RANDOM local temp dir, so hashing the on-disk path would re-key the run on
+// every sync. Passing a canonical identity path (the remote physical path)
+// to ParseAiderRunsWithID must produce the SAME ID regardless of where the
+// file physically lives, while the plain on-disk parse (local behavior)
+// produces DIFFERENT IDs for the two locations.
+func TestAiderSessionIDStableAcrossExtractionDirs(t *testing.T) {
+	content := "# aider chat started at 2026-06-09 14:01:00\n" +
+		"#### first prompt\nanswer one\n" +
+		"# aider chat started at 2026-06-09 15:30:00\n" +
+		"#### second prompt\nanswer two\n"
+
+	// Two distinct on-disk locations standing in for two sync runs that
+	// extract the same remote file under different random temp dirs.
+	writeAt := func(t *testing.T) string {
+		t.Helper()
+		repo := filepath.Join(t.TempDir(), "myrepo")
+		require.NoError(t, os.MkdirAll(repo, 0o755))
+		p := filepath.Join(repo, ".aider.chat.history.md")
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+		return p
+	}
+	pathA := writeAt(t)
+	pathB := writeAt(t)
+	require.NotEqual(t, pathA, pathB, "the two extraction paths must differ")
+
+	// The canonical identity is the remote physical path, the same for both
+	// syncs regardless of the temp extraction dir.
+	const identity = "host:/home/wes/myrepo/.aider.chat.history.md"
+
+	withIDa, err := ParseAiderRunsWithID(pathA, identity, "m")
+	require.NoError(t, err)
+	require.Len(t, withIDa, 2)
+	withIDb, err := ParseAiderRunsWithID(pathB, identity, "m")
+	require.NoError(t, err)
+	require.Len(t, withIDb, 2)
+
+	assert.Equal(t, withIDa[0].Session.ID, withIDb[0].Session.ID,
+		"identical identity path must yield a stable ID across temp dirs")
+	assert.Equal(t, withIDa[1].Session.ID, withIDb[1].Session.ID,
+		"identical identity path must yield a stable ID across temp dirs")
+
+	// Sanity: the ID is derived from the identity path, not the temp path.
+	// Without an identity path (local behavior), the two extraction paths
+	// produce DIFFERENT IDs -- exactly the instability the identity path
+	// fixes. ParseAiderRuns is the empty-identity passthrough.
+	localA, err := ParseAiderRuns(pathA, "m")
+	require.NoError(t, err)
+	require.Len(t, localA, 2)
+	localB, err := ParseAiderRuns(pathB, "m")
+	require.NoError(t, err)
+	require.Len(t, localB, 2)
+	assert.NotEqual(t, localA[0].Session.ID, localB[0].Session.ID,
+		"without an identity path the temp path leaks into the ID")
+	assert.NotEqual(t, withIDa[0].Session.ID, localA[0].Session.ID,
+		"identity-path ID differs from on-disk-path ID")
+
+	// ParseAiderRunWithID (single-run) must agree with the fan-out variant.
+	single, _, err := ParseAiderRunWithID(pathB, identity, 0, "m")
+	require.NoError(t, err)
+	require.NotNil(t, single)
+	assert.Equal(t, withIDa[0].Session.ID, single.ID,
+		"single-run identity ID must match the fan-out identity ID")
+}
+
 // TestAiderSameHeaderEarlyRemovalRekeysSiblings pins the documented residual
 // limitation of the ordinal disambiguator: when multiple runs share a
 // byte-identical header timestamp, removing an earlier same-header run shifts
@@ -486,6 +552,12 @@ func TestListAiderRunMetas(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, i, idx)
 	}
+	// HasMessages flags content-bearing runs: the first two runs have turns,
+	// the trailing header-only run does not. The engine's unchanged-check
+	// uses this to avoid expecting a stored row for header-only runs.
+	assert.True(t, metas[0].HasMessages, "run 0 has turns")
+	assert.True(t, metas[1].HasMessages, "run 1 has turns")
+	assert.False(t, metas[2].HasMessages, "header-only run produces no session")
 }
 
 // TestAiderRegistryUsesShallowWatch pins the watcher fix: aider's

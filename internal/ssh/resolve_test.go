@@ -110,6 +110,74 @@ func TestResolveScriptSkipsMissingCodexIndex(t *testing.T) {
 		"no extra files when session_index.jsonl is absent")
 }
 
+// TestResolveScriptSkipsAiderHomeDefault verifies the resolve script does
+// NOT emit aider's bare-$HOME default. Aider's only default dir is "" (the
+// home directory); the remote resolver tars every emitted dir wholesale, so
+// emitting it would archive the entire remote $HOME. With AIDER_DIR unset,
+// the script must produce no aider dir even when a history file exists at
+// home root. Runs the real script through sh against a temp HOME.
+func TestResolveScriptSkipsAiderHomeDefault(t *testing.T) {
+	home := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(home, ".aider.chat.history.md"),
+		[]byte("# aider chat started at 2024-01-01 00:00:00\n"),
+		0o644,
+	), "write history")
+
+	script := buildResolveScript()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"HOME=" + home}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	dirs, _ := parseResolvedDirs(string(out))
+	assert.Empty(t, dirs[parser.AgentAider],
+		"aider bare-$HOME default must not be resolved for remote tar, got %v",
+		dirs[parser.AgentAider])
+	// Guard against $HOME ever appearing as a tar target via aider.
+	assert.NotContains(t, string(out), "aider:"+home,
+		"aider must not resolve to the whole home dir")
+}
+
+// TestResolveScriptAiderScopedByEnv verifies that an explicit AIDER_DIR
+// scopes aider's remote transfer to that directory (the intended use), so
+// remote sync still works when the user points AIDER_DIR at a code root.
+func TestResolveScriptAiderScopedByEnv(t *testing.T) {
+	home := t.TempDir()
+	codeRoot := filepath.Join(home, "code")
+	require.NoError(t, os.MkdirAll(codeRoot, 0o755), "mkdir code root")
+
+	script := buildResolveScript()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + codeRoot}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	dirs, _ := parseResolvedDirs(string(out))
+	assert.Equal(t, []string{codeRoot}, dirs[parser.AgentAider],
+		"explicit AIDER_DIR must scope aider's remote transfer")
+}
+
+// TestResolveScriptAiderRejectsHomeOverride verifies that setting AIDER_DIR
+// to literal $HOME (the very thing the home-default skip prevents) is also
+// dropped, so an unscoped override cannot reintroduce a whole-home tar.
+func TestResolveScriptAiderRejectsHomeOverride(t *testing.T) {
+	home := t.TempDir()
+
+	script := buildResolveScript()
+	for _, override := range []string{home, home + "/"} {
+		cmd := exec.Command("sh", "-c", script)
+		cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + override}
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "resolve script failed: output: %s", out)
+
+		dirs, _ := parseResolvedDirs(string(out))
+		assert.Empty(t, dirs[parser.AgentAider],
+			"AIDER_DIR=%q (== $HOME) must not resolve to a whole-home tar, got %v",
+			override, dirs[parser.AgentAider])
+	}
+}
+
 func TestParseResolvedDirs(t *testing.T) {
 	input := "claude:/home/wes/.claude/projects\n" +
 		"codex:/home/wes/.codex/sessions\n" +

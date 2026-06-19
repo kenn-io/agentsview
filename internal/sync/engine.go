@@ -5686,23 +5686,57 @@ func (e *Engine) processGptme(
 // "<history>#<idx>" paths, so the generic shouldSkipByPath (which looks the
 // physical path up in the DB) never matches and would re-parse, re-hash, and
 // re-write every run on every full/periodic sync. Mirror the per-virtual-path
-// skip the other multi-session agents use (cf. kiroSQLitePendingSessionIDs):
-// if any run's stored row matches this file's mtime at the current data
-// version, the file has not changed and the whole fan-out can be skipped.
+// skip the other multi-session agents use (cf. kiroSQLitePendingSessionIDs).
+//
+// The whole file is skipped only when EVERY expected run row is known
+// current: each run meta's virtual path must have a stored row whose mtime
+// matches this file's and whose data version is current. If any run row is
+// missing (e.g. a previous batch wrote only some runs, or a new run was
+// appended whose row does not exist yet) or stale (an older data version, or
+// resynced after a data-version bump while siblings were not), the file is
+// re-parsed so the remaining sessions are repaired. Skipping on the first
+// matching row would strand those runs forever. A run-less or unreadable
+// file is treated as changed (never skipped) so it is retried.
 func (e *Engine) aiderFileUnchanged(path string, info os.FileInfo) bool {
 	metas, err := parser.ListAiderRunMetas(path)
-	if err != nil {
+	if err != nil || len(metas) == 0 {
 		return false
 	}
 	mtime := info.ModTime().UnixNano()
+	current := db.CurrentDataVersion()
+	expected := 0
 	for _, m := range metas {
+		// Header-only runs produce no session row, so the fan-out never
+		// writes one for them; do not expect a stored row.
+		if !m.HasMessages {
+			continue
+		}
+		expected++
 		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == mtime &&
-			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
-			return true
+		if !ok || storedMtime != mtime ||
+			e.db.GetDataVersionByPath(m.VirtualPath) < current {
+			// This run is missing or stale: do not skip the file, so the
+			// fan-out re-parses and repairs every run.
+			return false
 		}
 	}
-	return false
+	// Skip only when at least one run was expected and all expected run rows
+	// are current. A file whose runs all lack turns produces no sessions, so
+	// there is nothing to skip-and-strand; re-parse it (cheap, capped read).
+	return expected > 0
+}
+
+// aiderIdentityPath returns the canonical history-file path used to derive
+// stable aider session IDs. During remote SSH sync the file is read from a
+// random temp extraction dir, so hashing the on-disk path would re-key the
+// run on every sync; rewriting it to its canonical remote path keeps the ID
+// stable. Returns "" for local sync (no pathRewriter), which makes the
+// parser fall back to the on-disk path -- the original local behavior.
+func (e *Engine) aiderIdentityPath(historyPath string) string {
+	if e.pathRewriter == nil {
+		return ""
+	}
+	return e.pathRewriter(historyPath)
 }
 
 func (e *Engine) processAider(
@@ -5711,7 +5745,9 @@ func (e *Engine) processAider(
 	// Virtual path "<historyFile>#<runIdx>": parse that one run only. Used
 	// when re-syncing a single session by its source path.
 	if historyPath, idx, ok := parser.ParseAiderVirtualPath(file.Path); ok {
-		sess, msgs, err := parser.ParseAiderRun(historyPath, idx, e.machine)
+		sess, msgs, err := parser.ParseAiderRunWithID(
+			historyPath, e.aiderIdentityPath(historyPath), idx, e.machine,
+		)
 		if err != nil {
 			return processResult{err: err}
 		}
@@ -5735,7 +5771,9 @@ func (e *Engine) processAider(
 	// is read and split once. The whole file shares one content hash, so
 	// any write re-parses every run (acceptable: aider history is
 	// append-mostly and a single capped read).
-	results, err := parser.ParseAiderRuns(file.Path, e.machine)
+	results, err := parser.ParseAiderRunsWithID(
+		file.Path, e.aiderIdentityPath(file.Path), e.machine,
+	)
 	if err != nil {
 		return processResult{err: err}
 	}

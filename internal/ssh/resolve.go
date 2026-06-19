@@ -29,6 +29,28 @@ func buildResolveScript() string {
 			continue
 		}
 		for _, rel := range def.DefaultDirs {
+			// Aider's only default dir is "" (the bare home directory):
+			// it has no central store and discovers history files by a
+			// bounded, depth-capped walk of $HOME. The remote resolver has
+			// no such bound -- it tars every resolved dir wholesale -- so
+			// emitting the "" default would archive the entire remote
+			// $HOME. Skip aider's bare-home default and only transfer when
+			// AIDER_DIR explicitly scopes it to a narrower code root. Local
+			// sync is unaffected: it walks DefaultDirs via DiscoverFunc, not
+			// this script. The shell guard below also drops AIDER_DIR if it
+			// is set to literal "$HOME" (or "$HOME/"), so an unscoped
+			// override cannot reintroduce the whole-home tar.
+			if def.Type == parser.AgentAider && rel == "" {
+				if def.EnvVar != "" {
+					fmt.Fprintf(&b,
+						"dir=\"${%s:-}\"; "+
+							"case \"$dir\" in \"\"|\"$HOME\"|\"$HOME/\") ;; "+
+							"*) [ -d \"$dir\" ] && echo \"%s:$dir\";; esac\n",
+						def.EnvVar, string(def.Type),
+					)
+				}
+				continue
+			}
 			defaultDir := "$HOME/" + rel
 			dirExpr := defaultDir
 			if def.EnvVar != "" {
