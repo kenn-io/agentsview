@@ -7,7 +7,7 @@ import (
 	"log"
 )
 
-const signalsBackfillMarker = "session_signals_v1"
+const signalsBackfillMarker = "session_quality_signals_v1"
 
 // SessionSignalUpdate holds computed signal values to persist
 // on the sessions table.
@@ -30,6 +30,7 @@ type SessionSignalUpdate struct {
 	HasContextData         bool
 	SecretLeakCount        int
 	SecretsRulesVersion    string
+	QualitySignals         QualitySignals
 }
 
 // UpdateSessionSignals persists computed signal values on the
@@ -83,6 +84,14 @@ func updateSessionSignalsTx(
 			health_grade = ?,
 			has_tool_calls = ?,
 			has_context_data = ?,
+			quality_signal_version = ?,
+			short_prompt_count = ?,
+			unstructured_start = ?,
+			missing_success_criteria_count = ?,
+			missing_verification_count = ?,
+			duplicate_prompt_count = ?,
+			no_code_context_count = ?,
+			runaway_tool_loop_count = ?,
 			local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id = ?`,
 		u.ToolFailureSignalCount,
@@ -101,6 +110,14 @@ func updateSessionSignalsTx(
 		u.HealthGrade,
 		u.HasToolCalls,
 		u.HasContextData,
+		u.QualitySignals.Version,
+		u.QualitySignals.ShortPromptCount,
+		u.QualitySignals.UnstructuredStart,
+		u.QualitySignals.MissingSuccessCriteriaCount,
+		u.QualitySignals.MissingVerificationCount,
+		u.QualitySignals.DuplicatePromptCount,
+		u.QualitySignals.NoCodeContextCount,
+		u.QualitySignals.RunawayToolLoopCount,
 		sessionID,
 	)
 	if err != nil {
@@ -166,16 +183,15 @@ func (db *DB) BackfillSignals(
 			"probing signals backfill marker: %w", err,
 		)
 	}
-	if done > 0 {
-		db.mu.Unlock()
-		return nil
-	}
 	db.mu.Unlock()
 
-	log.Println("backfill: computing session signals...")
-
-	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id FROM sessions WHERE message_count > 0`)
+	query := `SELECT id FROM sessions WHERE message_count > 0`
+	args := []any{}
+	if done > 0 {
+		query += ` AND quality_signal_version < ?`
+		args = append(args, CurrentQualitySignalVersion)
+	}
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf(
 			"querying backfill candidates: %w", err,
@@ -195,6 +211,21 @@ func (db *DB) BackfillSignals(
 	}
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	if len(ids) == 0 {
+		if done == 0 {
+			return db.MarkSignalsBackfillDone()
+		}
+		return nil
+	}
+
+	if done > 0 {
+		log.Printf(
+			"backfill: recomputing %d stale session signals...",
+			len(ids),
+		)
+	} else {
+		log.Println("backfill: computing session signals...")
 	}
 
 	var failed int

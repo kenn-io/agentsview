@@ -286,6 +286,15 @@ func TestAnalyticsErrorRedaction(t *testing.T) {
 	}
 }
 
+func TestAnalyticsSignalSessionsRejectsUnsupportedSignal(t *testing.T) {
+	te := setup(t)
+	seedAnalyticsEnv(t, te)
+
+	w := te.get(t, buildURLWithRange("signal-sessions",
+		map[string]string{"signal": "not_a_signal"}))
+	assertStatus(t, w, http.StatusBadRequest)
+}
+
 func TestAnalyticsEndpoints_DefaultParams(t *testing.T) {
 	te := setup(t)
 	seedAnalyticsEnv(t, te)

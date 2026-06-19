@@ -10,6 +10,7 @@ import type {
   SkillsAnalyticsResponse,
   TopSessionsResponse,
   SignalsAnalyticsResponse,
+  AutomatedScope,
 } from "../api/types.js";
 import { AnalyticsService } from "../api/generated/index";
 import {
@@ -81,6 +82,7 @@ class AnalyticsStore {
   minUserMessages: number = $state(0);
   includeOneShot: boolean = $state(true);
   includeAutomated: boolean = $state(false);
+  automatedScope: AutomatedScope = $state("human");
   recentlyActive: boolean = $state(false);
   selectedDow: number | null = $state(null);
   selectedHour: number | null = $state(null);
@@ -171,7 +173,7 @@ class AnalyticsStore {
       this.termination !== "" ||
       this.minUserMessages > 0 ||
       !this.includeOneShot ||
-      this.includeAutomated ||
+      this.automatedScope !== "human" ||
       this.recentlyActive ||
       this.selectedDow !== null ||
       this.selectedHour !== null
@@ -187,6 +189,12 @@ class AnalyticsStore {
     this.hasNewData = true;
   }
 
+  private get effectiveAutomatedScope(): AutomatedScope {
+    if (!this.includeAutomated) return "human";
+    if (this.automatedScope === "human") return "all";
+    return this.automatedScope;
+  }
+
   clearAllFilters() {
     this.selectedDate = null;
     this.project = "";
@@ -196,6 +204,7 @@ class AnalyticsStore {
     this.minUserMessages = 0;
     this.includeOneShot = true;
     this.includeAutomated = false;
+    this.automatedScope = "human";
     this.recentlyActive = false;
     this.selectedDow = null;
     this.selectedHour = null;
@@ -255,11 +264,18 @@ class AnalyticsStore {
 
   clearIncludeAutomated() {
     this.includeAutomated = false;
+    this.automatedScope = "human";
     sessions.filters.includeAutomated = false;
     sessions.activeSessionId = null;
     sessions.invalidateFilterCaches();
     sessions.load();
     this.fetchAll();
+  }
+
+  setAutomatedScope(scope: AutomatedScope) {
+    this.automatedScope = scope;
+    this.includeAutomated = scope !== "human";
+    this.fetchSignalsForInsights();
   }
 
   clearRecentlyActive() {
@@ -369,9 +385,7 @@ class AnalyticsStore {
     if (this.includeOneShot) {
       p.includeOneShot = true;
     }
-    if (this.includeAutomated) {
-      p.includeAutomated = true;
-    }
+    p.automatedScope = this.effectiveAutomatedScope;
     if (this.recentlyActive) {
       p.activeSince = new Date(
         Date.now() - 24 * 60 * 60 * 1000,
@@ -412,9 +426,7 @@ class AnalyticsStore {
       if (this.includeOneShot) {
         p.includeOneShot = true;
       }
-      if (this.includeAutomated) {
-        p.includeAutomated = true;
-      }
+      p.automatedScope = this.effectiveAutomatedScope;
       if (this.recentlyActive) {
         p.activeSince = new Date(
           Date.now() - 24 * 60 * 60 * 1000,
@@ -431,6 +443,10 @@ class AnalyticsStore {
       return p;
     }
     return this.baseParams({ includeProject, includeTime });
+  }
+
+  signalEvidenceParams(): AnalyticsParams {
+    return this.filterParams();
   }
 
   private async executeFetch<T>(
@@ -706,6 +722,13 @@ class AnalyticsStore {
       },
       () => this.signals !== null,
     );
+  }
+
+  async fetchSignalsForInsights() {
+    this.selectedDate = null;
+    this.selectedDow = null;
+    this.selectedHour = null;
+    await this.fetchSignals();
   }
 
   setTopMetric(m: TopSessionsMetric) {

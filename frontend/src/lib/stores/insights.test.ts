@@ -70,6 +70,14 @@ beforeEach(() => {
   insights.selectedTaskId = null;
   insights.loading = false;
   insights.tasks = [];
+  insights.setDateFrom("2025-01-15");
+  insights.setDateTo("2025-01-15");
+  insights.setType("daily_activity");
+  insights.setCannedKind("prompt_maturity_review");
+  insights.setProject("");
+  insights.setAgent("claude");
+  insights.setAutomatedScope("human");
+  insights.setSessionFilters(undefined);
   insights.promptText = "";
 });
 
@@ -283,6 +291,94 @@ describe("generate (multi-task)", () => {
     expect(insights.selectedId).toBe(10);
   });
 
+  it("moves cached result to top without duplicating the id", async () => {
+    const existing = makeInsight({ id: 10, content: "old" });
+    const cached = makeInsight({
+      id: 10,
+      content: "cached",
+      cache_status: "hit",
+    });
+    insights.items = [
+      makeInsight({ id: 1 }),
+      existing,
+      makeInsight({ id: 2 }),
+    ];
+    vi.mocked(api.generateInsight).mockReturnValueOnce({
+      abort: vi.fn(),
+      done: Promise.resolve(cached),
+    });
+
+    insights.generate();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(insights.items.map((s) => s.id)).toEqual([10, 1, 2]);
+    expect(insights.items[0]).toEqual(cached);
+    expect(insights.selectedId).toBe(10);
+  });
+
+  it("sends canned insight fields when generating recommendations", async () => {
+    insights.setType("llm_canned");
+    insights.setCannedKind("tool_reliability_review");
+    insights.promptText = "Focus on retries";
+    vi.mocked(api.generateInsight).mockReturnValueOnce({
+      abort: vi.fn(),
+      done: Promise.resolve(makeInsight({ id: 30 })),
+    });
+
+    insights.generate();
+
+    expect(api.generateInsight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "llm_canned",
+        kind: "tool_reliability_review",
+        llm_opt_in: true,
+        prompt: "Focus on retries",
+        automated_scope: "human",
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it("sends dashboard session filters for canned recommendations", async () => {
+    insights.setType("llm_canned");
+    insights.setCannedKind("prompt_maturity_review");
+    insights.setSessionFilters({
+      timezone: "America/New_York",
+      machine: "workstation",
+      agent: "codex",
+      termination: "clean",
+      min_user_messages: 2,
+      include_one_shot: false,
+      automated_scope: "human",
+      active_since: "2025-01-15T12:00:00.000Z",
+    });
+    vi.mocked(api.generateInsight).mockReturnValueOnce({
+      abort: vi.fn(),
+      done: Promise.resolve(makeInsight({ id: 31 })),
+    });
+
+    insights.generate();
+
+    expect(api.generateInsight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "llm_canned",
+        filters: {
+          timezone: "America/New_York",
+          machine: "workstation",
+          agent: "codex",
+          termination: "clean",
+          min_user_messages: 2,
+          include_one_shot: false,
+          automated_scope: "human",
+          active_since: "2025-01-15T12:00:00.000Z",
+        },
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
   it("supports multiple concurrent tasks", async () => {
     const s1 = makeInsight({ id: 10 });
     const s2 = makeInsight({ id: 11 });
@@ -340,6 +436,82 @@ describe("generate (multi-task)", () => {
       insights.tasks[0]!.clientId,
     );
     expect(insights.selectedId).toBeNull();
+  });
+
+  it("retries a failed task with its original request", async () => {
+    const retriedInsight = makeInsight({ id: 77 });
+    vi.mocked(api.generateInsight)
+      .mockReturnValueOnce({
+        abort: vi.fn(),
+        done: Promise.reject(new Error("validation failed")),
+      })
+      .mockReturnValueOnce({
+        abort: vi.fn(),
+        done: Promise.resolve(retriedInsight),
+      });
+
+    insights.setType("llm_canned");
+    insights.setCannedKind("model_cost_review");
+    insights.setDateFrom("2025-01-01");
+    insights.setDateTo("2025-01-31");
+    insights.setProject("middleman");
+    insights.setAgent("codex");
+    insights.setAutomatedScope("automated");
+    insights.setSessionFilters({
+      timezone: "America/Chicago",
+      machine: "laptop",
+      agent: "codex",
+      include_one_shot: true,
+      automated_scope: "automated",
+    });
+    insights.promptText = "Focus on cache misses";
+
+    insights.generate();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const failedTask = insights.tasks[0]!;
+    expect(failedTask.status).toBe("error");
+
+    insights.promptText = "A different current focus";
+    insights.setSessionFilters({
+      timezone: "UTC",
+      machine: "other",
+      include_one_shot: false,
+      automated_scope: "human",
+    });
+    insights.retryTask(failedTask.clientId);
+
+    expect(insights.tasks).toHaveLength(1);
+    expect(insights.tasks[0]!.clientId).toBe(failedTask.clientId);
+    expect(insights.tasks[0]!.status).toBe("generating");
+    expect(api.generateInsight).toHaveBeenLastCalledWith(
+      {
+        type: "llm_canned",
+        date_from: "2025-01-01",
+        date_to: "2025-01-31",
+        project: "middleman",
+        prompt: "Focus on cache misses",
+        agent: "codex",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        kind: "model_cost_review",
+        llm_opt_in: true,
+        automated_scope: "automated",
+        filters: {
+          timezone: "America/Chicago",
+          machine: "laptop",
+          agent: "codex",
+          include_one_shot: true,
+          automated_scope: "automated",
+        },
+      },
+      expect.any(Function),
+      expect.any(Function),
+    );
+
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(insights.tasks).toHaveLength(0);
+    expect(insights.items[0]).toEqual(retriedInsight);
   });
 
   it("captures streaming logs per task", async () => {

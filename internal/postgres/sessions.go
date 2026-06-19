@@ -48,6 +48,11 @@ const pgSessionCols = `id, project, machine, agent,
 	context_pressure_max,
 	health_score, health_grade,
 	has_tool_calls, has_context_data,
+	quality_signal_version,
+	short_prompt_count, unstructured_start,
+	missing_success_criteria_count,
+	missing_verification_count, duplicate_prompt_count,
+	no_code_context_count, runaway_tool_loop_count,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
@@ -64,6 +69,31 @@ func (pb *paramBuilder) add(v any) string {
 	pb.n++
 	pb.args = append(pb.args, v)
 	return fmt.Sprintf("$%d", pb.n)
+}
+
+func normalizePGAutomatedScope(
+	scope string,
+	excludeAutomated bool,
+) string {
+	switch strings.TrimSpace(scope) {
+	case "human", "all", "automated":
+		return strings.TrimSpace(scope)
+	}
+	if excludeAutomated {
+		return "human"
+	}
+	return "all"
+}
+
+func pgAutomatedScopePredicate(scope, col string) string {
+	switch scope {
+	case "human":
+		return col + " = FALSE"
+	case "automated":
+		return col + " = TRUE"
+	default:
+		return ""
+	}
 }
 
 // pgActivityWindows holds the cutoff durations used by
@@ -176,6 +206,11 @@ func scanPGSession(
 		&s.ContextPressureMax,
 		&s.HealthScore, &s.HealthGrade,
 		&s.HasToolCalls, &s.HasContextData,
+		&s.QualitySignalVersion,
+		&s.ShortPromptCount, &s.UnstructuredStart,
+		&s.MissingSuccessCriteriaCount,
+		&s.MissingVerificationCount, &s.DuplicatePromptCount,
+		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
 		&s.DataVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,

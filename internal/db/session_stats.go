@@ -402,11 +402,11 @@ func (db *DB) loadSessionsInWindow(
 	}
 
 	if f.Agent != "" {
-		agents := strings.Split(f.Agent, ",")
+		agents := csvFilterValues(f.Agent)
 		if len(agents) == 1 {
 			preds = append(preds, "agent = ?")
 			args = append(args, agents[0])
-		} else {
+		} else if len(agents) > 1 {
 			ph := make([]string, len(agents))
 			for i, a := range agents {
 				ph[i] = "?"

@@ -197,9 +197,33 @@ function mockAllAPIs() {
       avg_context_pressure: null,
       high_pressure_sessions: 0,
     },
+    quality_health: {
+      computed_sessions: 0,
+      totals: {
+        short_prompt_count: 0,
+        unstructured_start: 0,
+        missing_success_criteria_count: 0,
+        missing_verification_count: 0,
+        duplicate_prompt_count: 0,
+        no_code_context_count: 0,
+        runaway_tool_loop_count: 0,
+        frustration_marker_count: 0,
+      },
+      sessions_with_signal: {
+        short_prompt_count: 0,
+        unstructured_start: 0,
+        missing_success_criteria_count: 0,
+        missing_verification_count: 0,
+        duplicate_prompt_count: 0,
+        no_code_context_count: 0,
+        runaway_tool_loop_count: 0,
+        frustration_marker_count: 0,
+      },
+    },
     trend: [],
     by_agent: [],
     by_project: [],
+    calibration: {},
   });
 }
 
@@ -212,8 +236,13 @@ async function loadAnalyticsStore() {
 
 function resetStore() {
   analytics.selectedDate = null;
+  analytics.selectedDow = null;
+  analytics.selectedHour = null;
   analytics.project = "";
   analytics.machine = "";
+  analytics.agent = "";
+  analytics.includeAutomated = false;
+  analytics.automatedScope = "human";
   analytics.from = "2024-01-01";
   analytics.to = "2024-01-31";
   analytics.isPinned = false;
@@ -604,6 +633,28 @@ describe("AnalyticsStore machine filter", () => {
   });
 });
 
+describe("AnalyticsStore automated scope params", () => {
+  it("derives all scope from legacy includeAutomated updates", () => {
+    analytics.includeAutomated = true;
+
+    analytics.fetchSummary();
+
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ automatedScope: "all" }),
+    );
+  });
+
+  it("keeps automated-only scope when selected explicitly", () => {
+    analytics.setAutomatedScope("automated");
+
+    analytics.fetchSummary();
+
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ automatedScope: "automated" }),
+    );
+  });
+});
+
 describe("executeFetch concurrency and error handling", () => {
   it("should set loading true during fetch", async () => {
     let resolve!: (v: AnalyticsSummary) => void;
@@ -854,5 +905,32 @@ describe("AnalyticsStore rolling default date range", () => {
     expect(analytics.selectedDate).toBeNull();
     expect(analytics.selectedDow).toBeNull();
     expect(analytics.selectedHour).toBeNull();
+  });
+
+  it("fetchSignalsForInsights clears hidden drill-down filters", async () => {
+    const { analytics } = await loadAnalyticsStore();
+    analytics.from = "2026-04-01";
+    analytics.to = "2026-04-30";
+    analytics.selectedDate = "2026-04-12";
+    analytics.selectedDow = 2;
+    analytics.selectedHour = 16;
+
+    await analytics.fetchSignalsForInsights();
+
+    expect(analytics.selectedDate).toBeNull();
+    expect(analytics.selectedDow).toBeNull();
+    expect(analytics.selectedHour).toBeNull();
+    expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "2026-04-01",
+        to: "2026-04-30",
+      }),
+    );
+    expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        dow: expect.anything(),
+        hour: expect.anything(),
+      }),
+    );
   });
 });

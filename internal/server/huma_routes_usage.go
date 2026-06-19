@@ -30,6 +30,7 @@ type UsageFilterInput struct {
 	Model            string `query:"model" doc:"Filter by model"`
 	MinUserMessages  int    `query:"min_user_messages" minimum:"0" doc:"Minimum user message count"`
 	ActiveSince      string `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
+	Termination      string `query:"termination" doc:"Filter by termination status"`
 	IncludeOneShot   bool   `query:"include_one_shot" default:"true" doc:"Include one-shot sessions"`
 	IncludeAutomated bool   `query:"include_automated" doc:"Include automated sessions"`
 }
@@ -77,6 +78,7 @@ func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
 		ExcludeOneShot:   !in.IncludeOneShot,
 		ExcludeAutomated: !in.IncludeAutomated,
 		ActiveSince:      in.ActiveSince,
+		Termination:      in.Termination,
 		Breakdowns:       true,
 	}, nil
 }
@@ -165,6 +167,7 @@ func (s *Server) computeUsageComparison(
 		ExcludeOneShot:   f.ExcludeOneShot,
 		ExcludeAutomated: f.ExcludeAutomated,
 		ActiveSince:      f.ActiveSince,
+		Termination:      f.Termination,
 		Breakdowns:       false,
 	}
 	priorResult, err := s.db.GetDailyUsage(ctx, priorFilter)

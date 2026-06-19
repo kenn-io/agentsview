@@ -232,6 +232,7 @@ class UsageStore {
       project: sessionFilters.project || undefined,
       machine: sessionFilters.machine || undefined,
       agent: sessionFilters.agent || undefined,
+      termination: sessionFilters.termination || undefined,
       minUserMessages:
         sessionFilters.minUserMessages > 0
           ? sessionFilters.minUserMessages

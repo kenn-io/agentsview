@@ -79,11 +79,28 @@ func buildSessionDetail(s *db.Session) *SessionDetail {
 			CompactionCount:        s.CompactionCount,
 			MidTaskCompactionCount: s.MidTaskCompactionCount,
 			PressureMax:            s.ContextPressureMax,
+			Heuristics:             persistedHeuristics(s),
 		})
 		detail.HealthScoreBasis = result.Basis
 		detail.HealthPenalties = result.Penalties
 	}
 	return detail
+}
+
+func persistedHeuristics(s *db.Session) signals.HeuristicSignals {
+	qs := s.StoredQualitySignals()
+	if qs == nil {
+		return signals.HeuristicSignals{}
+	}
+	return signals.HeuristicSignals{
+		ShortPromptCount:            qs.ShortPromptCount,
+		UnstructuredStart:           qs.UnstructuredStart,
+		MissingSuccessCriteriaCount: qs.MissingSuccessCriteriaCount,
+		MissingVerificationCount:    qs.MissingVerificationCount,
+		DuplicatePromptCount:        qs.DuplicatePromptCount,
+		NoCodeContextCount:          qs.NoCodeContextCount,
+		RunawayToolLoopCount:        qs.RunawayToolLoopCount,
+	}
 }
 
 func (b *directBackend) List(

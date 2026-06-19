@@ -733,6 +733,38 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE sessions ADD COLUMN has_context_data INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			"sessions", "quality_signal_version",
+			"ALTER TABLE sessions ADD COLUMN quality_signal_version INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "short_prompt_count",
+			"ALTER TABLE sessions ADD COLUMN short_prompt_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "unstructured_start",
+			"ALTER TABLE sessions ADD COLUMN unstructured_start INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "missing_success_criteria_count",
+			"ALTER TABLE sessions ADD COLUMN missing_success_criteria_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "missing_verification_count",
+			"ALTER TABLE sessions ADD COLUMN missing_verification_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "duplicate_prompt_count",
+			"ALTER TABLE sessions ADD COLUMN duplicate_prompt_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "no_code_context_count",
+			"ALTER TABLE sessions ADD COLUMN no_code_context_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "runaway_tool_loop_count",
+			"ALTER TABLE sessions ADD COLUMN runaway_tool_loop_count INTEGER NOT NULL DEFAULT 0",
+		},
+		{
 			"sessions", "data_version",
 			"ALTER TABLE sessions ADD COLUMN data_version INTEGER NOT NULL DEFAULT 0",
 		},
@@ -788,6 +820,42 @@ func (db *DB) migrateColumns() error {
 			"sessions", "secrets_rules_version",
 			"ALTER TABLE sessions ADD COLUMN secrets_rules_version TEXT NOT NULL DEFAULT ''",
 		},
+		{
+			"insights", "kind",
+			"ALTER TABLE insights ADD COLUMN kind TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "schema_version",
+			"ALTER TABLE insights ADD COLUMN schema_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "template_id",
+			"ALTER TABLE insights ADD COLUMN template_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "template_version",
+			"ALTER TABLE insights ADD COLUMN template_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "aggregate_hash",
+			"ALTER TABLE insights ADD COLUMN aggregate_hash TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "cache_key",
+			"ALTER TABLE insights ADD COLUMN cache_key TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "cache_status",
+			"ALTER TABLE insights ADD COLUMN cache_status TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "provenance_json",
+			"ALTER TABLE insights ADD COLUMN provenance_json TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"insights", "structured_json",
+			"ALTER TABLE insights ADD COLUMN structured_json TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {
@@ -829,6 +897,15 @@ func (db *DB) migrateColumns() error {
 	); err != nil {
 		return fmt.Errorf(
 			"creating idx_sessions_termination_status: %w", err,
+		)
+	}
+	if _, err := w.Exec(
+		`CREATE INDEX IF NOT EXISTS idx_insights_cache
+		 ON insights(cache_key, created_at DESC)
+		 WHERE cache_key != ''`,
+	); err != nil {
+		return fmt.Errorf(
+			"creating idx_insights_cache: %w", err,
 		)
 	}
 

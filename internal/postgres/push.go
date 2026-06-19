@@ -883,6 +883,14 @@ func sessionPushFingerprint(
 		stringValue(sess.HealthGrade),
 		fmt.Sprintf("%t", sess.HasToolCalls),
 		fmt.Sprintf("%t", sess.HasContextData),
+		fmt.Sprintf("%d", sess.QualitySignalVersion),
+		fmt.Sprintf("%d", sess.ShortPromptCount),
+		fmt.Sprintf("%t", sess.UnstructuredStart),
+		fmt.Sprintf("%d", sess.MissingSuccessCriteriaCount),
+		fmt.Sprintf("%d", sess.MissingVerificationCount),
+		fmt.Sprintf("%d", sess.DuplicatePromptCount),
+		fmt.Sprintf("%d", sess.NoCodeContextCount),
+		fmt.Sprintf("%d", sess.RunawayToolLoopCount),
 		fmt.Sprintf("%d", sess.DataVersion),
 		sess.Cwd,
 		sess.GitBranch,
@@ -1050,6 +1058,11 @@ func (s *Sync) pushSession(
 			health_score, health_grade,
 			has_tool_calls, has_context_data,
 			secret_leak_count, secrets_rules_version,
+			quality_signal_version,
+			short_prompt_count, unstructured_start,
+			missing_success_criteria_count,
+			missing_verification_count, duplicate_prompt_count,
+			no_code_context_count, runaway_tool_loop_count,
 			updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
@@ -1065,6 +1078,7 @@ func (s *Sync) pushSession(
 			$41,
 			$42, $43, $44, $45,
 			$46, $47,
+			$48, $49, $50, $51, $52, $53, $54, $55,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
@@ -1114,6 +1128,14 @@ func (s *Sync) pushSession(
 			has_context_data = EXCLUDED.has_context_data,
 			secret_leak_count = EXCLUDED.secret_leak_count,
 			secrets_rules_version = EXCLUDED.secrets_rules_version,
+			quality_signal_version = EXCLUDED.quality_signal_version,
+			short_prompt_count = EXCLUDED.short_prompt_count,
+			unstructured_start = EXCLUDED.unstructured_start,
+			missing_success_criteria_count = EXCLUDED.missing_success_criteria_count,
+			missing_verification_count = EXCLUDED.missing_verification_count,
+			duplicate_prompt_count = EXCLUDED.duplicate_prompt_count,
+			no_code_context_count = EXCLUDED.no_code_context_count,
+			runaway_tool_loop_count = EXCLUDED.runaway_tool_loop_count,
 			updated_at = NOW()
 		WHERE ((
 				sessions.owner_marker = ''
@@ -1121,7 +1143,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($48::jsonb)
+						SELECT jsonb_array_elements_text($56::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1171,7 +1193,15 @@ func (s *Sync) pushSession(
 			OR sessions.has_tool_calls IS DISTINCT FROM EXCLUDED.has_tool_calls
 			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
 			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
-			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version)`,
+			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version
+			OR sessions.quality_signal_version IS DISTINCT FROM EXCLUDED.quality_signal_version
+			OR sessions.short_prompt_count IS DISTINCT FROM EXCLUDED.short_prompt_count
+			OR sessions.unstructured_start IS DISTINCT FROM EXCLUDED.unstructured_start
+			OR sessions.missing_success_criteria_count IS DISTINCT FROM EXCLUDED.missing_success_criteria_count
+			OR sessions.missing_verification_count IS DISTINCT FROM EXCLUDED.missing_verification_count
+			OR sessions.duplicate_prompt_count IS DISTINCT FROM EXCLUDED.duplicate_prompt_count
+			OR sessions.no_code_context_count IS DISTINCT FROM EXCLUDED.no_code_context_count
+			OR sessions.runaway_tool_loop_count IS DISTINCT FROM EXCLUDED.runaway_tool_loop_count)`,
 		sess.ID, pushedMachine, markerID,
 		sanitizePG(sess.Project),
 		sess.Agent,
@@ -1203,6 +1233,11 @@ func (s *Sync) pushSession(
 		sess.HealthScore, nilStr(sess.HealthGrade),
 		sess.HasToolCalls, sess.HasContextData,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
+		sess.QualitySignalVersion,
+		sess.ShortPromptCount, sess.UnstructuredStart,
+		sess.MissingSuccessCriteriaCount,
+		sess.MissingVerificationCount, sess.DuplicatePromptCount,
+		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {

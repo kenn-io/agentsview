@@ -3,6 +3,9 @@ import type {
   InsightsResponse,
   InsightType,
   AgentName,
+  CannedInsightKind,
+  AutomatedScope,
+  InsightGenerationFilters,
 } from "../api/types.js";
 import {
   ApiError as GeneratedApiError,
@@ -29,6 +32,10 @@ export interface InsightTask {
   dateTo: string;
   project: string;
   agent: AgentName;
+  kind?: CannedInsightKind;
+  promptText: string;
+  automatedScope: AutomatedScope;
+  sessionFilters?: InsightGenerationFilters;
   status: "generating" | "done" | "error";
   phase: string;
   error: string | null;
@@ -38,12 +45,27 @@ export interface InsightTask {
 
 const MAX_TASK_LOG_LINES = 200;
 
+interface GenerationSnapshot {
+  type: InsightType;
+  dateFrom: string;
+  dateTo: string;
+  project: string;
+  agent: AgentName;
+  kind?: CannedInsightKind;
+  promptText: string;
+  automatedScope: AutomatedScope;
+  sessionFilters?: InsightGenerationFilters;
+}
+
 class InsightsStore {
   dateFrom: string = $state(localDateStr(new Date()));
   dateTo: string = $state(localDateStr(new Date()));
   type: InsightType = $state("daily_activity");
+  cannedKind: CannedInsightKind = $state("prompt_maturity_review");
   project: string = $state("");
   agent: AgentName = $state("claude");
+  automatedScope: AutomatedScope = $state("human");
+  sessionFilters: InsightGenerationFilters | undefined = $state();
   items: Insight[] = $state([]);
   selectedId: number | null = $state(null);
   selectedTaskId: string | null = $state(null);
@@ -114,12 +136,26 @@ class InsightsStore {
     this.type = type;
   }
 
+  setCannedKind(kind: CannedInsightKind) {
+    this.cannedKind = kind;
+  }
+
   setProject(project: string) {
     this.project = project;
   }
 
   setAgent(agent: AgentName) {
     this.agent = agent;
+  }
+
+  setAutomatedScope(scope: AutomatedScope) {
+    this.automatedScope = scope;
+  }
+
+  setSessionFilters(filters?: InsightGenerationFilters) {
+    this.sessionFilters = filters
+      ? { ...filters }
+      : undefined;
   }
 
   select(id: number) {
@@ -133,15 +169,50 @@ class InsightsStore {
   }
 
   generate() {
-    const clientId = crypto.randomUUID();
-    const snap = {
+    this.#startGeneration({
       type: this.type,
       dateFrom: this.dateFrom,
       dateTo: this.dateTo,
       project: this.project,
       agent: this.agent,
-    };
+      kind: this.type === "llm_canned"
+        ? this.cannedKind
+        : undefined,
+      promptText: this.promptText,
+      automatedScope: this.automatedScope,
+      sessionFilters: this.sessionFilters
+        ? { ...this.sessionFilters }
+        : undefined,
+    });
+  }
 
+  retryTask(clientId: string) {
+    const task = this.tasks.find((t) => t.clientId === clientId);
+    if (!task || task.status === "generating") return;
+    this.#startGeneration(
+      {
+        type: task.type,
+        dateFrom: task.dateFrom,
+        dateTo: task.dateTo,
+        project: task.project,
+        agent: task.agent,
+        kind: task.kind,
+        promptText: task.promptText,
+        automatedScope: task.automatedScope,
+        sessionFilters: task.sessionFilters
+          ? { ...task.sessionFilters }
+          : undefined,
+      },
+      clientId,
+      true,
+    );
+  }
+
+  #startGeneration(
+    snap: GenerationSnapshot,
+    clientId: string = crypto.randomUUID(),
+    selectTask = false,
+  ) {
     const task: InsightTask = {
       clientId,
       type: snap.type,
@@ -149,13 +220,29 @@ class InsightsStore {
       dateTo: snap.dateTo,
       project: snap.project,
       agent: snap.agent,
+      kind: snap.kind,
+      promptText: snap.promptText,
+      automatedScope: snap.automatedScope,
+      sessionFilters: snap.sessionFilters
+        ? { ...snap.sessionFilters }
+        : undefined,
       status: "generating",
       phase: "generating",
       error: null,
       insightId: null,
       logs: [],
     };
-    this.tasks = [...this.tasks, task];
+    if (this.tasks.some((t) => t.clientId === clientId)) {
+      this.tasks = this.tasks.map((t) =>
+        t.clientId === clientId ? task : t,
+      );
+    } else {
+      this.tasks = [...this.tasks, task];
+    }
+    if (selectTask) {
+      this.selectedTaskId = clientId;
+      this.selectedId = null;
+    }
 
     const handle = generateInsight(
       {
@@ -163,9 +250,17 @@ class InsightsStore {
         date_from: snap.dateFrom,
         date_to: snap.dateTo,
         project: snap.project || undefined,
-        prompt: this.promptText || undefined,
+        prompt: snap.promptText || undefined,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         agent: snap.agent,
+        kind: snap.kind,
+        llm_opt_in: snap.type === "llm_canned"
+          ? true
+          : undefined,
+        automated_scope: snap.automatedScope,
+        ...(snap.type === "llm_canned" && snap.sessionFilters
+          ? { filters: snap.sessionFilters }
+          : {}),
       },
       (phase) => {
         this.tasks = this.tasks.map((t) =>
@@ -199,7 +294,10 @@ class InsightsStore {
         const filtersMatch =
           this.project === snap.project;
         if (filtersMatch) {
-          this.items = [insight, ...this.items];
+          this.items = [
+            insight,
+            ...this.items.filter((s) => s.id !== insight.id),
+          ];
           this.selectedId = insight.id;
         } else {
           this.load();

@@ -27,6 +27,7 @@ export class UsageService {
     model,
     minUserMessages,
     activeSince,
+    termination,
     includeOneShot = true,
     includeAutomated,
   }: {
@@ -83,6 +84,10 @@ export class UsageService {
      */
     activeSince?: string,
     /**
+     * Filter by termination status
+     */
+    termination?: string,
+    /**
      * Include one-shot sessions
      */
     includeOneShot?: boolean,
@@ -107,6 +112,7 @@ export class UsageService {
         'model': model,
         'min_user_messages': minUserMessages,
         'active_since': activeSince,
+        'termination': termination,
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
         'current_cost': currentCost,
@@ -144,6 +150,7 @@ export class UsageService {
     model,
     minUserMessages,
     activeSince,
+    termination,
     includeOneShot = true,
     includeAutomated,
   }: {
@@ -196,6 +203,10 @@ export class UsageService {
      */
     activeSince?: string,
     /**
+     * Filter by termination status
+     */
+    termination?: string,
+    /**
      * Include one-shot sessions
      */
     includeOneShot?: boolean,
@@ -220,6 +231,7 @@ export class UsageService {
         'model': model,
         'min_user_messages': minUserMessages,
         'active_since': activeSince,
+        'termination': termination,
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
       },
@@ -256,6 +268,7 @@ export class UsageService {
     model,
     minUserMessages,
     activeSince,
+    termination,
     includeOneShot = true,
     includeAutomated,
     limit = 20,
@@ -309,6 +322,10 @@ export class UsageService {
      */
     activeSince?: string,
     /**
+     * Filter by termination status
+     */
+    termination?: string,
+    /**
      * Include one-shot sessions
      */
     includeOneShot?: boolean,
@@ -337,6 +354,7 @@ export class UsageService {
         'model': model,
         'min_user_messages': minUserMessages,
         'active_since': activeSince,
+        'termination': termination,
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
         'limit': limit,

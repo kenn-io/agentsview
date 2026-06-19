@@ -252,3 +252,283 @@ func TestBuildPrompt(t *testing.T) {
 		})
 	}
 }
+
+func TestCannedInsightValidation(t *testing.T) {
+	payload := CannedAggregatePayload{
+		Kind:     CannedPromptMaturityReview,
+		DateFrom: "2025-01-15",
+		DateTo:   "2025-01-15",
+		EvidenceRefs: []CannedEvidenceRef{
+			{ID: "signals:score_distribution", Description: "scores"},
+		},
+	}
+	valid := `{
+		"schema_version":"llm_insight.v1",
+		"kind":"prompt_maturity_review",
+		"summary":"Tighten prompt starts.",
+		"confidence":"medium",
+		"recommendations":[{
+			"title":"Add acceptance criteria",
+			"rationale":"The score distribution supports reviewing prompt starts.",
+			"actions":["Add a done definition"],
+			"evidence_refs":["signals:score_distribution"],
+			"impact":"medium",
+			"effort":"low"
+		}],
+		"risks":[],
+		"evidence_refs":["signals:score_distribution"]
+	}`
+
+	env, err := ParseCannedEnvelope(valid)
+	if err != nil {
+		t.Fatalf("ParseCannedEnvelope: %v", err)
+	}
+	if err := ValidateCannedEnvelope(env, payload); err != nil {
+		t.Fatalf("ValidateCannedEnvelope: %v", err)
+	}
+
+	bad := strings.Replace(
+		valid,
+		`"signals:score_distribution"`,
+		`"signals:not_real"`,
+		1,
+	)
+	env, err = ParseCannedEnvelope(bad)
+	if err != nil {
+		t.Fatalf("Parse bad envelope: %v", err)
+	}
+	if err := ValidateCannedEnvelope(env, payload); err == nil {
+		t.Fatalf("expected validation error for unknown evidence ref")
+	}
+}
+
+func TestBuildCannedPromptIncludesBoundaries(t *testing.T) {
+	payload := CannedAggregatePayload{
+		Kind:     CannedToolReliabilityReview,
+		DateFrom: "2025-01-15",
+		DateTo:   "2025-01-16",
+		Focus:    "Emphasize repeated shell failures.",
+		EvidenceRefs: []CannedEvidenceRef{
+			{ID: "signals:tool_health", Description: "tool health"},
+		},
+	}
+	hash, err := CannedAggregateHash(payload)
+	if err != nil {
+		t.Fatalf("CannedAggregateHash: %v", err)
+	}
+	prompt, err := BuildCannedPrompt(payload, hash)
+	if err != nil {
+		t.Fatalf("BuildCannedPrompt: %v", err)
+	}
+	for _, want := range []string{
+		"Output JSON only",
+		"Do not recalculate, override",
+		"tool_reliability_review",
+		"User focus",
+		"Emphasize repeated shell failures.",
+		"Copy evidence_ref IDs exactly",
+		"- signals:tool_health",
+		hash,
+		"Aggregate payload JSON",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildCannedPromptContextSetupPressureUnavailable(t *testing.T) {
+	payload := CannedAggregatePayload{
+		Kind:     CannedContextSetupReview,
+		DateFrom: "2025-01-15",
+		DateTo:   "2025-01-16",
+		Signals: db.SignalsAnalyticsResponse{
+			ContextHealth: db.SignalsContextHealth{
+				SessionsWithContextData:   0,
+				AvgContextPressure:        nil,
+				SessionsWithCompaction:    5,
+				MidTaskCompactionCount:    2,
+				SessionsWithMidTaskCompac: 2,
+			},
+			QualityHealth: db.SignalsQualityHealth{
+				ComputedSessions: 10,
+				Totals: db.QualitySignalTotals{
+					NoCodeContextCount: 3,
+				},
+				SessionsWithSignal: db.QualitySignalTotals{
+					NoCodeContextCount: 3,
+				},
+			},
+		},
+		EvidenceRefs: []CannedEvidenceRef{
+			{ID: "signals:context_health", Description: "context health"},
+			{ID: "signals:quality_health", Description: "quality health"},
+		},
+	}
+	hash, err := CannedAggregateHash(payload)
+	if err != nil {
+		t.Fatalf("CannedAggregateHash: %v", err)
+	}
+	prompt, err := BuildCannedPrompt(payload, hash)
+	if err != nil {
+		t.Fatalf("BuildCannedPrompt: %v", err)
+	}
+	for _, want := range []string{
+		"Context setup template rules",
+		"Context pressure coverage is zero or unavailable",
+		"do not make pressure-related recommendations or risks",
+		"Do not use missing context pressure telemetry as the main recommendation",
+		"Prefer compactions, mid-task compactions, missing code context",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q: %s", want, prompt)
+		}
+	}
+}
+
+func TestBuildCannedCoachSummaryUsesCoachInsightFamilies(t *testing.T) {
+	releasePrompt := "Generate release notes for the current build and verify changelog links"
+	sessions := []db.Session{
+		{
+			ID:               "s1",
+			Project:          "app",
+			FirstMessage:     &releasePrompt,
+			UserMessageCount: 3,
+			HasToolCalls:     true,
+		},
+		{
+			ID:               "s2",
+			Project:          "app",
+			FirstMessage:     &releasePrompt,
+			UserMessageCount: 3,
+			HasToolCalls:     true,
+		},
+		{
+			ID:               "s3",
+			Project:          "app",
+			FirstMessage:     &releasePrompt,
+			UserMessageCount: 3,
+			HasToolCalls:     true,
+		},
+		{
+			ID:               "s4",
+			Project:          "api",
+			FirstMessage:     new("Plan the auth migration with acceptance criteria and tests"),
+			UserMessageCount: 4,
+			HasContextData:   true,
+		},
+	}
+
+	summary := BuildCannedCoachSummary(sessions)
+
+	if summary.Source == "" || summary.SessionCount != len(sessions) {
+		t.Fatalf("unexpected summary header: %+v", summary)
+	}
+	if summary.IntentDistribution["Planning"] == 0 ||
+		summary.IntentDistribution["Implementation"] == 0 {
+		t.Fatalf("missing Coach intent buckets: %+v", summary.IntentDistribution)
+	}
+	if summary.SpecDriven.Count == 0 || summary.SpecDriven.Rate <= 0 {
+		t.Fatalf("missing spec-driven summary: %+v", summary.SpecDriven)
+	}
+	if summary.PromptMaturity.Score == 0 ||
+		summary.PromptMaturity.Dimensions["verification_steps"] == 0 {
+		t.Fatalf("missing prompt maturity summary: %+v", summary.PromptMaturity)
+	}
+	if len(summary.WorkflowClusters) != 1 {
+		t.Fatalf("WorkflowClusters len = %d, want 1: %+v",
+			len(summary.WorkflowClusters), summary.WorkflowClusters)
+	}
+	cluster := summary.WorkflowClusters[0]
+	if cluster.Occurrences != 3 || cluster.Sessions != 3 ||
+		!strings.Contains(cluster.Label, "Generate release notes") {
+		t.Fatalf("unexpected workflow cluster: %+v", cluster)
+	}
+}
+
+func TestBuildCannedCoachSummaryStableWorkflowClusterIDs(t *testing.T) {
+	alpha := "Generate release notes for the current build and verify changelog links"
+	beta := "Review migration plan against acceptance criteria and verify rollback"
+	sessions := []db.Session{
+		{ID: "a1", Project: "app", FirstMessage: &alpha, UserMessageCount: 3},
+		{ID: "b1", Project: "api", FirstMessage: &beta, UserMessageCount: 3},
+		{ID: "a2", Project: "app", FirstMessage: &alpha, UserMessageCount: 3},
+		{ID: "b2", Project: "api", FirstMessage: &beta, UserMessageCount: 3},
+		{ID: "a3", Project: "app", FirstMessage: &alpha, UserMessageCount: 3},
+		{ID: "b3", Project: "api", FirstMessage: &beta, UserMessageCount: 3},
+	}
+	reversed := append([]db.Session(nil), sessions...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+
+	first := BuildCannedCoachSummary(sessions).WorkflowClusters
+	second := BuildCannedCoachSummary(reversed).WorkflowClusters
+
+	if len(first) != len(second) || len(first) != 2 {
+		t.Fatalf("cluster counts differ: first=%+v second=%+v", first, second)
+	}
+	for i := range first {
+		if first[i].ID == "" || first[i].ID != second[i].ID ||
+			first[i].Label != second[i].Label {
+			t.Fatalf("cluster %d not stable: first=%+v second=%+v",
+				i, first[i], second[i])
+		}
+	}
+}
+
+func TestCannedEvidenceRefsIncludesCoachSummary(t *testing.T) {
+	coach := &CannedCoachSummary{
+		SessionCount: 3,
+		WorkflowClusters: []CannedCoachWorkflowCluster{
+			{ID: "coach-workflow-0", Label: "Generate release notes"},
+		},
+	}
+
+	refs := CannedEvidenceRefs(db.SignalsAnalyticsResponse{}, nil, coach)
+	var ids []string
+	for _, ref := range refs {
+		ids = append(ids, ref.ID)
+	}
+	joined := strings.Join(ids, ",")
+	for _, want := range []string{
+		"coach:intent_distribution",
+		"coach:prompt_maturity",
+		"coach:spec_driven",
+		"coach:workflow_clusters",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("refs missing %s: %v", want, ids)
+		}
+	}
+}
+
+func TestCannedEvidenceRefsIncludesUsageModelBreakdown(t *testing.T) {
+	usage := &CannedUsageSummary{
+		InputTokens:  150,
+		OutputTokens: 30,
+		TotalCost:    0.04,
+		ModelBreakdowns: []CannedModelBreakdown{{
+			ModelName:   "claude-opus-4-7",
+			InputTokens: 100,
+			Cost:        0.03,
+		}},
+	}
+
+	refs := CannedEvidenceRefs(
+		db.SignalsAnalyticsResponse{}, usage, nil,
+	)
+	var ids []string
+	for _, ref := range refs {
+		ids = append(ids, ref.ID)
+	}
+	joined := strings.Join(ids, ",")
+	for _, want := range []string{
+		"usage:totals",
+		"usage:model_breakdown",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("refs missing %s: %v", want, ids)
+		}
+	}
+}

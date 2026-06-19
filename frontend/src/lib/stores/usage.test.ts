@@ -250,6 +250,7 @@ describe("UsageStore session filter params", () => {
     sessions.filters.project = "proj-a";
     sessions.filters.machine = "host-a,host-b";
     sessions.filters.agent = "claude,codex";
+    sessions.filters.termination = "abandoned";
     sessions.filters.minUserMessages = 5;
     sessions.filters.includeOneShot = false;
     sessions.filters.includeAutomated = true;
@@ -262,6 +263,7 @@ describe("UsageStore session filter params", () => {
         project: "proj-a",
         machine: "host-a,host-b",
         agent: "claude,codex",
+        termination: "abandoned",
         minUserMessages: 5,
         includeOneShot: false,
         includeAutomated: true,
@@ -275,6 +277,7 @@ describe("UsageStore session filter params", () => {
         project: "proj-a",
         machine: "host-a,host-b",
         agent: "claude,codex",
+        termination: "abandoned",
         minUserMessages: 5,
         includeOneShot: false,
         includeAutomated: true,

@@ -126,18 +126,72 @@ func appendPGUsageSessionFilterClauses(
 		where += "\n\tAND s.user_message_count >= " +
 			pb.add(f.MinUserMessages)
 	}
+	scope := normalizePGAutomatedScope(
+		f.AutomatedScope, f.ExcludeAutomated)
 	if f.ExcludeOneShot {
-		where += "\n\tAND s.user_message_count > 1"
+		if scope == "human" {
+			where += "\n\tAND s.user_message_count > 1"
+		} else {
+			where += "\n\tAND (s.user_message_count > 1 OR COALESCE(s.is_automated, false) = TRUE)"
+		}
 	}
-	if f.ExcludeAutomated {
-		where += "\n\tAND COALESCE(s.is_automated, false) = false"
+	if pred := pgAutomatedScopePredicate(
+		scope,
+		"COALESCE(s.is_automated, false)",
+	); pred != "" {
+		where += "\n\tAND " + pred
 	}
 	if f.ActiveSince != "" {
 		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= " +
 			pb.add(f.ActiveSince) + "::timestamptz"
 	}
+	if pred := pgUsageTerminationPred(f.Termination, pb); pred != "" {
+		where += "\n\tAND " + pred
+	}
 
 	return where
+}
+
+func pgUsageTerminationPred(status string, pb *paramBuilder) string {
+	if status == "" || status == "all" {
+		return ""
+	}
+	now := time.Now().UTC()
+	activeCutoff := now.Add(-pgActiveWindow)
+	staleCutoff := now.Add(-pgStaleWindow)
+	const activityExpr = "COALESCE(s.ended_at, s.started_at, s.created_at)"
+	const flagged = "s.termination_status IN ('tool_call_pending', 'truncated')"
+
+	parts := strings.Split(status, ",")
+	preds := make([]string, 0, len(parts))
+	for _, p := range parts {
+		switch strings.TrimSpace(p) {
+		case "active":
+			preds = append(preds,
+				activityExpr+" > "+pb.add(activeCutoff))
+		case "stale":
+			preds = append(preds, "("+
+				activityExpr+" > "+pb.add(staleCutoff)+
+				" AND "+activityExpr+" <= "+pb.add(activeCutoff)+
+				" AND "+flagged+")")
+		case "unclean":
+			preds = append(preds, "("+
+				activityExpr+" <= "+pb.add(staleCutoff)+
+				" AND "+flagged+")")
+		case "clean":
+			preds = append(preds, "s.termination_status = 'clean'")
+		case "awaiting_user":
+			preds = append(preds,
+				"s.termination_status = 'awaiting_user'")
+		}
+	}
+	if len(preds) == 0 {
+		return ""
+	}
+	if len(preds) == 1 {
+		return preds[0]
+	}
+	return "(" + strings.Join(preds, " OR ") + ")"
 }
 
 const pgUsageRowsSQLTemplate = `

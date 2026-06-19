@@ -23,7 +23,7 @@ export class InsightsService {
     /**
      * Insight type
      */
-    type?: 'daily_activity' | 'agent_analysis',
+    type?: 'daily_activity' | 'agent_analysis' | 'llm_canned',
     /**
      * Filter by project
      */

@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     context_pressure_max      DOUBLE PRECISION,
     health_score              INT,
     health_grade              TEXT,
+    quality_signal_version    INT NOT NULL DEFAULT 0,
+    short_prompt_count        INT NOT NULL DEFAULT 0,
+    unstructured_start        BOOLEAN NOT NULL DEFAULT FALSE,
+    missing_success_criteria_count INT NOT NULL DEFAULT 0,
+    missing_verification_count INT NOT NULL DEFAULT 0,
+    duplicate_prompt_count    INT NOT NULL DEFAULT 0,
+    no_code_context_count     INT NOT NULL DEFAULT 0,
+    runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -457,6 +465,46 @@ func EnsureSchema(
 			"sessions", "has_context_data",
 			`has_context_data BOOLEAN NOT NULL DEFAULT FALSE`,
 			"adding sessions.has_context_data",
+		},
+		{
+			"sessions", "quality_signal_version",
+			`quality_signal_version INT NOT NULL DEFAULT 0`,
+			"adding sessions.quality_signal_version",
+		},
+		{
+			"sessions", "short_prompt_count",
+			`short_prompt_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.short_prompt_count",
+		},
+		{
+			"sessions", "unstructured_start",
+			`unstructured_start BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.unstructured_start",
+		},
+		{
+			"sessions", "missing_success_criteria_count",
+			`missing_success_criteria_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.missing_success_criteria_count",
+		},
+		{
+			"sessions", "missing_verification_count",
+			`missing_verification_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.missing_verification_count",
+		},
+		{
+			"sessions", "duplicate_prompt_count",
+			`duplicate_prompt_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.duplicate_prompt_count",
+		},
+		{
+			"sessions", "no_code_context_count",
+			`no_code_context_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.no_code_context_count",
+		},
+		{
+			"sessions", "runaway_tool_loop_count",
+			`runaway_tool_loop_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.runaway_tool_loop_count",
 		},
 		{
 			"sessions", "data_version",
@@ -1411,6 +1459,20 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf(
 			"sessions table missing token columns: %w",
+			err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT quality_signal_version, short_prompt_count,
+			unstructured_start, missing_success_criteria_count,
+			missing_verification_count, duplicate_prompt_count,
+			no_code_context_count, runaway_tool_loop_count
+		 FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing quality signal columns: %w",
 			err,
 		)
 	}

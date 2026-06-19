@@ -125,6 +125,7 @@
   ]);
   const SESSION_FILTER_KEYS = new Set([
     "project", "machine", "agent",
+    "termination",
     "date", "date_from", "date_to",
     "active_since", "exclude_project",
     "min_messages", "max_messages", "min_user_messages",

@@ -88,16 +88,26 @@ func (s *Store) DeleteInsight(_ int64) error {
 	return db.ErrReadOnly
 }
 
-// ListInsights returns an empty slice.
+// ListInsights returns an empty slice. Saved insights, including
+// llm_canned structured metadata, are local SQLite artifacts; remote
+// PG serve mode does not expose partial insight rows.
 func (s *Store) ListInsights(
 	_ context.Context, _ db.InsightFilter,
 ) ([]db.Insight, error) {
 	return []db.Insight{}, nil
 }
 
-// GetInsight returns nil.
+// GetInsight returns nil because insights are local-only in PG serve mode.
 func (s *Store) GetInsight(
 	_ context.Context, _ int64,
+) (*db.Insight, error) {
+	return nil, nil
+}
+
+// GetCachedInsight returns nil in read-only remote mode; this avoids
+// returning incomplete cache/provenance metadata from PG-backed stores.
+func (s *Store) GetCachedInsight(
+	_ context.Context, _ string,
 ) (*db.Insight, error) {
 	return nil, nil
 }

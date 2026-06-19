@@ -494,10 +494,11 @@ func sessionFilterPredicates(
 		preds = append(preds, pred)
 	}
 
+	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	oneShotPred := ""
 	if f.ExcludeOneShot {
 		pred := q("user_message_count") + " > 1"
-		if !f.ExcludeAutomated {
+		if scope != "human" {
 			pred = "(" + q("user_message_count") + " > 1 OR " +
 				q("is_automated") + " = " +
 				b.dialect.trueLiteral + ")"
@@ -508,9 +509,13 @@ func sessionFilterPredicates(
 			preds = append(preds, pred)
 		}
 	}
-	if f.ExcludeAutomated {
+	switch scope {
+	case "human":
 		preds = append(preds, q("is_automated")+" = "+
 			b.dialect.falseLiteral)
+	case "automated":
+		preds = append(preds, q("is_automated")+" = "+
+			b.dialect.trueLiteral)
 	}
 	if len(f.Outcome) > 0 {
 		preds = append(preds,

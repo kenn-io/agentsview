@@ -69,6 +69,26 @@ func TestHTTPBackend_Get_Roundtrip(t *testing.T) {
 	dbtest.SeedSession(t, d, "s-1", "my-app", func(s *db.Session) {
 		s.MessageCount = 2
 	})
+	score := 92
+	grade := "A"
+	err := d.UpdateSessionSignals("s-1", db.SessionSignalUpdate{
+		Outcome:           "completed",
+		OutcomeConfidence: "high",
+		EndedWithRole:     "assistant",
+		HealthScore:       &score,
+		HealthGrade:       &grade,
+		QualitySignals: db.QualitySignals{
+			Version:                     db.CurrentQualitySignalVersion,
+			ShortPromptCount:            1,
+			UnstructuredStart:           true,
+			MissingSuccessCriteriaCount: 1,
+			MissingVerificationCount:    1,
+			DuplicatePromptCount:        2,
+			NoCodeContextCount:          1,
+			RunawayToolLoopCount:        1,
+		},
+	})
+	require.NoError(t, err)
 
 	svc := service.NewHTTPBackend(baseURL, "", false)
 	detail, err := svc.Get(context.Background(), "s-1")
@@ -77,6 +97,14 @@ func TestHTTPBackend_Get_Roundtrip(t *testing.T) {
 	assert.Equal(t, "s-1", detail.ID)
 	assert.Equal(t, "my-app", detail.Project)
 	assert.Equal(t, 2, detail.MessageCount)
+	assert.Equal(t, db.CurrentQualitySignalVersion,
+		detail.QualitySignalVersion)
+	assert.Equal(t, 2, detail.DuplicatePromptCount)
+	assert.True(t, detail.UnstructuredStart)
+	assert.Contains(t, detail.HealthScoreBasis, "prompt_quality")
+	assert.NotContains(t, detail.HealthPenalties, "repeated_prompts")
+	assert.Equal(t, 4,
+		detail.HealthPenalties["stuck_repeated_prompts"])
 }
 
 func TestHTTPBackend_Get_NotFound(t *testing.T) {

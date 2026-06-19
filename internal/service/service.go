@@ -5,6 +5,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -102,6 +103,43 @@ type SessionDetail struct {
 	db.Session
 	HealthScoreBasis []string       `json:"health_score_basis,omitempty"`
 	HealthPenalties  map[string]int `json:"health_penalties,omitempty"`
+}
+
+// MarshalJSON preserves the grouped db.Session quality_signals field
+// while also exposing detail-only health explanation fields.
+func (d SessionDetail) MarshalJSON() ([]byte, error) {
+	type sessionAlias db.Session
+	return json.Marshal(struct {
+		sessionAlias
+		QualitySignals   *db.QualitySignals `json:"quality_signals,omitempty"`
+		HealthScoreBasis []string           `json:"health_score_basis,omitempty"`
+		HealthPenalties  map[string]int     `json:"health_penalties,omitempty"`
+	}{
+		sessionAlias:     sessionAlias(d.Session),
+		QualitySignals:   d.StoredQualitySignals(),
+		HealthScoreBasis: d.HealthScoreBasis,
+		HealthPenalties:  d.HealthPenalties,
+	})
+}
+
+// UnmarshalJSON preserves the grouped quality_signals object when
+// SessionDetail is decoded by the HTTP-backed service.
+func (d *SessionDetail) UnmarshalJSON(data []byte) error {
+	type sessionAlias db.Session
+	var v struct {
+		sessionAlias
+		QualitySignals   *db.QualitySignals `json:"quality_signals"`
+		HealthScoreBasis []string           `json:"health_score_basis"`
+		HealthPenalties  map[string]int     `json:"health_penalties"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	d.Session = db.Session(v.sessionAlias)
+	d.ApplyQualitySignals(v.QualitySignals)
+	d.HealthScoreBasis = v.HealthScoreBasis
+	d.HealthPenalties = v.HealthPenalties
+	return nil
 }
 
 // SessionList mirrors GET /api/v1/sessions.

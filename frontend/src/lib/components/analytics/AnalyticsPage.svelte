@@ -111,6 +111,9 @@
     const curIncludeAutomated = untrack(
       () => analytics.includeAutomated,
     );
+    const curAutomatedScope = untrack(
+      () => analytics.automatedScope,
+    );
 
     let changed = false;
     if (curProject !== headerProject) {
@@ -150,6 +153,13 @@
 
     if (curIncludeAutomated !== headerIncludeAutomated) {
       analytics.includeAutomated = headerIncludeAutomated;
+      changed = true;
+    }
+    const headerAutomatedScope = headerIncludeAutomated
+      ? "all"
+      : "human";
+    if (curAutomatedScope !== headerAutomatedScope) {
+      analytics.automatedScope = headerAutomatedScope;
       changed = true;
     }
 

@@ -228,6 +228,29 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 				return s
 			},
 		},
+		{
+			name: "quality signal version change",
+			modify: func(s db.Session) db.Session {
+				s.QualitySignalVersion = db.CurrentQualitySignalVersion
+				return s
+			},
+		},
+		{
+			name: "quality signal count change",
+			modify: func(s db.Session) db.Session {
+				s.QualitySignalVersion = db.CurrentQualitySignalVersion
+				s.DuplicatePromptCount = 1
+				return s
+			},
+		},
+		{
+			name: "quality signal boolean change",
+			modify: func(s db.Session) db.Session {
+				s.QualitySignalVersion = db.CurrentQualitySignalVersion
+				s.UnstructuredStart = true
+				return s
+			},
+		},
 	}
 
 	for _, tc := range tests {

@@ -73,7 +73,7 @@
     selectedStatuses.length +
     (analytics.minUserMessages > 0 ? 1 : 0) +
     (!analytics.includeOneShot ? 1 : 0) +
-    (analytics.includeAutomated ? 1 : 0) +
+    (analytics.automatedScope !== "human" ? 1 : 0) +
     (analytics.recentlyActive ? 1 : 0) +
     (hasTime ? 1 : 0)
   );
@@ -206,13 +206,15 @@
       </button>
     {/if}
 
-    {#if analytics.includeAutomated}
+    {#if analytics.automatedScope !== "human"}
       <button
         class="filter-chip"
         onclick={() => analytics.clearIncludeAutomated()}
         title="Clear automated filter"
       >
-        Automated included
+        {analytics.automatedScope === "automated"
+          ? "Only automated"
+          : "Automated included"}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>

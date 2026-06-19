@@ -23,6 +23,7 @@ export class TrendsService {
     hour,
     minUserMessages,
     activeSince,
+    automatedScope,
     includeOneShot,
     includeAutomated,
     termination,
@@ -70,6 +71,10 @@ export class TrendsService {
      */
     activeSince?: string,
     /**
+     * Automation scope
+     */
+    automatedScope?: 'human' | 'all' | 'automated',
+    /**
      * Include one-shot sessions
      */
     includeOneShot?: boolean,
@@ -104,6 +109,7 @@ export class TrendsService {
         'hour': hour,
         'min_user_messages': minUserMessages,
         'active_since': activeSince,
+        'automated_scope': automatedScope,
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
         'termination': termination,

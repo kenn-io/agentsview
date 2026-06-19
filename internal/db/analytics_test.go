@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -226,6 +227,37 @@ func TestAnalyticsFilterMachineMultiSelect(t *testing.T) {
 
 	f := baseFilter()
 	f.Machine = "laptop,server"
+	s := mustSummary(t, d, ctx, f)
+	require.Equal(t, 2, s.TotalSessions, "TotalSessions")
+}
+
+// TestAnalyticsFilterAgentMultiSelectTrimsWhitespace guards backend
+// parity: a comma-separated agent filter with surrounding spaces must
+// match every listed agent, the same way the PostgreSQL and DuckDB
+// analytics paths trim CSV values. Before the fix the SQLite path split
+// on "," without trimming, so "claude, codex" matched only claude.
+func TestAnalyticsFilterAgentMultiSelectTrimsWhitespace(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	for _, sess := range []struct {
+		id    string
+		agent string
+	}{
+		{"agent-a", "claude"},
+		{"agent-b", "codex"},
+		{"agent-c", "gemini"},
+	} {
+		insertSession(t, d, sess.id, "project", func(s *Session) {
+			s.Agent = sess.agent
+			s.StartedAt = new("2024-06-01T09:00:00Z")
+			s.EndedAt = new("2024-06-01T10:00:00Z")
+			s.MessageCount = 4
+		})
+	}
+
+	f := baseFilter()
+	f.Agent = "claude, codex"
 	s := mustSummary(t, d, ctx, f)
 	require.Equal(t, 2, s.TotalSessions, "TotalSessions")
 }
@@ -2063,6 +2095,62 @@ func TestAnalyticsTerminationFilter(t *testing.T) {
 	})
 }
 
+// TestTerminationFilterEmptyEndedAt guards the shared SQLite termination
+// activity expression. A flagged session whose ended_at was persisted as the
+// empty string must still classify by its started_at fallback. Before the fix
+// strftime('%s', ”) returned NULL, silently dropping such sessions from the
+// active, stale, and unclean scopes that analytics and session selection share
+// (usage already used the NULLIF form, so the two diverged).
+func TestTerminationFilterEmptyEndedAt(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	pending := "tool_call_pending"
+	const oldStart = "2024-06-02T09:00:00Z"
+
+	// Two flagged sessions old enough to be "unclean": one with a normal
+	// ended_at (control) and one whose ended_at is the empty string.
+	seed := func(id, ended string) {
+		insertSession(t, d, id, "p", func(s *Session) {
+			s.StartedAt = new(oldStart)
+			s.EndedAt = new(ended)
+			s.MessageCount = 4
+			s.UserMessageCount = 2
+			s.TerminationStatus = &pending
+		})
+		insertMessages(t, d, Message{
+			SessionID: id, Ordinal: 0, Role: "assistant",
+			Content: "m", ContentLength: 1, Timestamp: oldStart,
+		})
+	}
+	seed("ended", "2024-06-02T10:00:00Z")
+	seed("untimed", "")
+
+	// Analytics termination filter.
+	f := baseFilter()
+	f.Termination = "unclean"
+	resp, err := d.GetAnalyticsTopSessions(ctx, f, "messages")
+	require.NoError(t, err, "GetAnalyticsTopSessions unclean")
+	analyticsIDs := make([]string, len(resp.Sessions))
+	for i, s := range resp.Sessions {
+		analyticsIDs[i] = s.ID
+	}
+	assert.ElementsMatch(t, []string{"ended", "untimed"}, analyticsIDs,
+		"analytics unclean must include the empty-ended_at session")
+
+	// Session-selection termination filter shares the same expression.
+	page, err := d.ListSessions(ctx, SessionFilter{
+		Termination: "unclean", Limit: 50,
+	})
+	require.NoError(t, err, "ListSessions unclean")
+	sessionIDs := make([]string, len(page.Sessions))
+	for i, s := range page.Sessions {
+		sessionIDs[i] = s.ID
+	}
+	assert.ElementsMatch(t, []string{"ended", "untimed"}, sessionIDs,
+		"session list unclean must include the empty-ended_at session")
+}
+
 func TestTimeFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -2339,6 +2427,13 @@ func TestGetAnalyticsSignals(t *testing.T) {
 		ToolRetryCount:         1,
 		CompactionCount:        1,
 		ContextPressureMax:     &cp1,
+		QualitySignals: QualitySignals{
+			Version:                     CurrentQualitySignalVersion,
+			ShortPromptCount:            2,
+			UnstructuredStart:           true,
+			MissingSuccessCriteriaCount: 1,
+			DuplicatePromptCount:        1,
+		},
 	})
 	insertSession(t, d, "sig2", "alpha", func(s *Session) {
 		s.StartedAt = new("2024-06-01T14:00:00Z")
@@ -2355,6 +2450,12 @@ func TestGetAnalyticsSignals(t *testing.T) {
 		ToolRetryCount:         3,
 		EditChurnCount:         2,
 		ContextPressureMax:     &cp2,
+		QualitySignals: QualitySignals{
+			Version:                  CurrentQualitySignalVersion,
+			MissingVerificationCount: 1,
+			NoCodeContextCount:       1,
+			RunawayToolLoopCount:     1,
+		},
 	})
 	insertSession(t, d, "sig3", "beta", func(s *Session) {
 		s.StartedAt = new("2024-06-02T10:00:00Z")
@@ -2390,6 +2491,31 @@ func TestGetAnalyticsSignals(t *testing.T) {
 		// (85 + 45) / 2 = 65.0
 		assertEq(t, "AvgHealthScore",
 			*resp.AvgHealthScore, 65.0)
+	})
+
+	t.Run("QualityHealth", func(t *testing.T) {
+		resp, err := d.GetAnalyticsSignals(ctx, baseFilter())
+		if err != nil {
+			t.Fatalf("GetAnalyticsSignals: %v", err)
+		}
+		assertEq(t, "ComputedSessions",
+			resp.QualityHealth.ComputedSessions, 2)
+		assertEq(t, "ShortPromptCount total",
+			resp.QualityHealth.Totals.ShortPromptCount, 2)
+		assertEq(t, "ShortPromptCount sessions",
+			resp.QualityHealth.SessionsWithSignal.ShortPromptCount, 1)
+		assertEq(t, "UnstructuredStart total",
+			resp.QualityHealth.Totals.UnstructuredStart, 1)
+		assertEq(t, "MissingSuccessCriteriaCount total",
+			resp.QualityHealth.Totals.MissingSuccessCriteriaCount, 1)
+		assertEq(t, "MissingVerificationCount total",
+			resp.QualityHealth.Totals.MissingVerificationCount, 1)
+		assertEq(t, "DuplicatePromptCount total",
+			resp.QualityHealth.Totals.DuplicatePromptCount, 1)
+		assertEq(t, "NoCodeContextCount total",
+			resp.QualityHealth.Totals.NoCodeContextCount, 1)
+		assertEq(t, "RunawayToolLoopCount total",
+			resp.QualityHealth.Totals.RunawayToolLoopCount, 1)
 	})
 
 	t.Run("OutcomeDistribution", func(t *testing.T) {
@@ -2498,6 +2624,116 @@ func TestGetAnalyticsSignals(t *testing.T) {
 		require.NoError(t, err, "GetAnalyticsSignals")
 		assertEq(t, "ScoredSessions", resp.ScoredSessions, 0)
 	})
+}
+
+func TestBuildSignalExamplesUsesObservedOrdinal(t *testing.T) {
+	tests := []struct {
+		name   string
+		signal string
+		row    SignalRow
+		msgs   []SignalMessage
+		want   int
+	}{
+		{
+			name:   "short prompts skip controls",
+			signal: "short_prompt_count",
+			row: SignalRow{
+				ID:               "short",
+				ShortPromptCount: 1,
+			},
+			msgs: []SignalMessage{
+				{SessionID: "short", Ordinal: 0, Role: "user", Content: "yes"},
+				{SessionID: "short", Ordinal: 3, Role: "user", Content: "fix bug"},
+			},
+			want: 3,
+		},
+		{
+			name:   "repeated prompts point at repeat",
+			signal: "duplicate_prompt_count",
+			row: SignalRow{
+				ID:                   "repeat",
+				DuplicatePromptCount: 1,
+			},
+			msgs: []SignalMessage{
+				{SessionID: "repeat", Ordinal: 0, Role: "user", Content: "Fix the backend test."},
+				{SessionID: "repeat", Ordinal: 2, Role: "user", Content: "Fix the backend test."},
+			},
+			want: 2,
+		},
+		{
+			name:   "tool signals point at tool turn",
+			signal: "tool_failure_signals",
+			row: SignalRow{
+				ID:                     "tool",
+				ToolFailureSignalCount: 1,
+			},
+			msgs: []SignalMessage{
+				{SessionID: "tool", Ordinal: 0, Role: "user", Content: "run tests"},
+				{SessionID: "tool", Ordinal: 4, Role: "assistant", HasToolUse: true},
+			},
+			want: 4,
+		},
+		{
+			name:   "outcomes point at last observed turn",
+			signal: "outcome_errored",
+			row: SignalRow{
+				ID:      "outcome",
+				Outcome: "errored",
+			},
+			msgs: []SignalMessage{
+				{SessionID: "outcome", Ordinal: 0, Role: "user", Content: "start"},
+				{SessionID: "outcome", Ordinal: 6, Role: "assistant", Content: "failed"},
+			},
+			want: 6,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			examples := BuildSignalExamples(
+				[]SignalRow{tt.row},
+				map[string][]SignalMessage{tt.row.ID: tt.msgs},
+				tt.signal,
+			)
+			if len(examples) != 1 {
+				t.Fatalf("len(examples) = %d, want 1",
+					len(examples))
+			}
+			if examples[0].MessageOrdinal == nil {
+				t.Fatal("MessageOrdinal is nil")
+			}
+			if *examples[0].MessageOrdinal != tt.want {
+				t.Fatalf("MessageOrdinal = %d, want %d",
+					*examples[0].MessageOrdinal, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetAnalyticsSignalSessionsRejectsUnsupportedSignal(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	_, err := d.GetAnalyticsSignalSessions(
+		ctx,
+		baseFilter(),
+		"not_a_signal",
+		10,
+	)
+	if !errors.Is(err, ErrUnsupportedAnalyticsSignal) {
+		t.Fatalf("err = %v, want ErrUnsupportedAnalyticsSignal", err)
+	}
+}
+
+func TestParseEvidenceTimeAcceptsPostgresUTCFormat(t *testing.T) {
+	got, ok := parseEvidenceTime("2024-06-01T12:34:56.123456Z")
+	if !ok {
+		t.Fatal("parseEvidenceTime did not accept PG UTC format")
+	}
+	if got.UTC().Format(time.RFC3339Nano) !=
+		"2024-06-01T12:34:56.123456Z" {
+		t.Fatalf("got %s", got.UTC().Format(time.RFC3339Nano))
+	}
 }
 
 func TestLocalTime(t *testing.T) {

@@ -50,6 +50,19 @@ function requestOriginMatchesLoopbackDevServer(
   }
 }
 
+function isViteDevOrigin(
+  origin: string | undefined,
+  host: string | undefined,
+): boolean {
+  if (!origin || !host) return false;
+  try {
+    const u = new URL(origin);
+    return u.protocol === "http:" && u.host === host;
+  } catch {
+    return false;
+  }
+}
+
 export default defineConfig({
   fmt: {},
   lint: {

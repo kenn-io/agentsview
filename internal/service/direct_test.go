@@ -62,6 +62,50 @@ func TestDirectBackend_Get_Roundtrip(t *testing.T) {
 	assert.Equal(t, sessionID, detail.ID)
 }
 
+func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(
+	t *testing.T,
+) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sessionID := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db,
+		dbtest.UserMsg(sessionID, 0,
+			"Fix the backend test failure in the codebase."),
+		dbtest.AsstMsg(sessionID, 1, "I'll inspect it."),
+		dbtest.UserMsg(sessionID, 2,
+			"Fix the backend test failure in the codebase."),
+	)
+	score := 90
+	grade := "A"
+	err := env.db.UpdateSessionSignals(
+		sessionID,
+		db.SessionSignalUpdate{
+			Outcome:           "completed",
+			OutcomeConfidence: "high",
+			EndedWithRole:     "assistant",
+			HealthScore:       &score,
+			HealthGrade:       &grade,
+			QualitySignals: db.QualitySignals{
+				Version:              db.CurrentQualitySignalVersion,
+				DuplicatePromptCount: 1,
+				NoCodeContextCount:   1,
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	detail, err := svc.Get(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+
+	assert.Contains(t, detail.HealthScoreBasis, "prompt_quality")
+	assert.Contains(t, detail.HealthScoreBasis, "context_quality")
+	assert.NotContains(t, detail.HealthPenalties, "repeated_prompts")
+	assert.NotContains(t, detail.HealthPenalties, "stuck_repeated_prompts")
+	assert.Equal(t, 4,
+		detail.HealthPenalties["code_task_without_context"])
+}
+
 func TestDirectBackend_List_Empty(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)

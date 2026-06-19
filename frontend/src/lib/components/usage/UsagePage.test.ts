@@ -29,6 +29,11 @@ describe("UsagePage refresh behavior", () => {
     expect(source).not.toContain(".new-data");
   });
 
+  it("treats termination as a usage URL session filter", () => {
+    expect(source).toContain('"termination",');
+    expect(source).toContain("filtersToParams(sessions.filters)");
+  });
+
   it("keeps refresh progress out of content layout flow", () => {
     const queryProgress =
       source.match(/\.query-progress\s*{[^}]+}/)?.[0] ?? "";

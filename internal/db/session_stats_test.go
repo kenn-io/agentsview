@@ -464,6 +464,15 @@ func TestGetSessionStats_FilterByAgent(t *testing.T) {
 	assert.Equal(t, 1, onlyClaude.Totals.SessionsAll, "agent=claude")
 	assert.Equal(t, "claude", onlyClaude.Filters.Agent,
 		"agent filter echoed")
+
+	// Comma-separated agents with surrounding whitespace must match
+	// every listed agent; the CSV values are trimmed before filtering.
+	multi, err := d.GetSessionStats(
+		ctx, StatsFilter{Since: "28d", Agent: "claude, codex"},
+	)
+	require.NoError(t, err, "GetSessionStats multi-agent")
+	assert.Equal(t, 2, multi.Totals.SessionsAll,
+		"comma-separated agents with whitespace match both")
 }
 
 func TestGetSessionStats_FilterByProject(t *testing.T) {

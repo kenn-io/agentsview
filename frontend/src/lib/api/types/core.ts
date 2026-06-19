@@ -7,6 +7,17 @@ export interface VersionInfo {
 }
 
 /** Matches Go Session struct in internal/db/sessions.go */
+export interface QualitySignals {
+  version: number;
+  short_prompt_count: number;
+  unstructured_start: boolean;
+  missing_success_criteria_count: number;
+  missing_verification_count: number;
+  duplicate_prompt_count: number;
+  no_code_context_count: number;
+  runaway_tool_loop_count: number;
+}
+
 export interface Session {
   id: string;
   project: string;
@@ -47,6 +58,7 @@ export interface Session {
   compaction_count?: number;
   mid_task_compaction_count?: number;
   context_pressure_max?: number | null;
+  quality_signals?: QualitySignals | null;
   // Detail-only fields (from enriched detail response)
   health_score_basis?: string[] | null;
   health_penalties?: Record<string, number> | null;
