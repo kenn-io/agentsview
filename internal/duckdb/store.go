@@ -211,8 +211,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		f.Limit = db.DefaultSessionLimit
 	}
 	where, args := db.BuildSessionFilterSQL(f, db.DuckDBQueryDialect())
-	sp, _ := db.SessionSortFor(f.OrderBy)
-	desc := sp.ResolveDescending(f.Descending)
+	rs := db.ResolveSort(f)
 	total := 0
 	var cur db.SessionCursor
 	if f.Cursor != "" {
@@ -235,15 +234,15 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 	pageBuilder := db.NewQueryBuilder(db.DuckDBQueryDialect(), len(args))
 	cursorWhere := where
 	if f.Cursor != "" {
-		val, err := sp.CursorPredicateValue(cur, desc)
+		vals, err := db.CursorPredicateValues(cur, rs)
 		if err != nil {
 			return db.SessionPage{}, err
 		}
-		cursorWhere += " AND " + pageBuilder.CursorPredicate(sp, desc, f, val, cur.ID)
+		cursorWhere += " AND " + pageBuilder.CursorPredicate(rs, f, vals, cur.ID)
 	}
 	query := "SELECT " + duckSessionCols +
 		" FROM sessions WHERE " + cursorWhere + " " +
-		pageBuilder.OrderByClause(sp, desc, f) + " " +
+		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
 	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 	rows, err := s.duck.QueryContext(ctx, query, cursorArgs...)
@@ -259,7 +258,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
-		page.NextCursor = s.EncodeCursor(sp.NextCursor(&last, desc, total, f))
+		page.NextCursor = s.EncodeCursor(db.NextSessionCursor(&last, rs, total, f))
 	}
 	return page, nil
 }

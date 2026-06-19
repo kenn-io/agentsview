@@ -218,6 +218,33 @@ type SessionCursor struct {
 	// Value is the sort column's value for the page's last row, encoded as a
 	// string and re-typed per the sort's kind when comparing.
 	Value string `json:"v,omitempty"`
+	// Keys carries one keyset term per column for multi-key sorts. When present
+	// it is authoritative; the single-key Sort/Desc/Value (and EndedAt) fields
+	// are only populated for single-key sorts so older readers still decode.
+	Keys []SessionCursorKey `json:"ks,omitempty"`
+}
+
+// SessionCursorKey is one column's keyset term inside a multi-key cursor: the
+// sort key it was minted under, its direction, and the page's last-row value
+// (re-typed per the sort's kind when comparing).
+type SessionCursorKey struct {
+	Sort  string `json:"k"`
+	Desc  bool   `json:"d,omitempty"`
+	Value string `json:"v,omitempty"`
+}
+
+// resolvedKeys returns the cursor's keyset terms, synthesizing the single-key
+// list from the legacy fields when the multi-key Keys slice is absent. A cursor
+// with neither Keys nor Sort is a pre-sort legacy token, valid only for the
+// default recent-descending order it was always minted under.
+func (cur SessionCursor) resolvedKeys() []SessionCursorKey {
+	if len(cur.Keys) > 0 {
+		return cur.Keys
+	}
+	if cur.Sort != "" {
+		return []SessionCursorKey{{Sort: cur.Sort, Desc: cur.Desc, Value: cur.Value}}
+	}
+	return []SessionCursorKey{{Sort: defaultSortKey, Desc: true, Value: cur.EndedAt}}
 }
 
 // EncodeCursor returns a base64-encoded, HMAC-signed cursor string.
@@ -319,10 +346,17 @@ type SessionFilter struct {
 	//   "unclean"    → only sessions with status IN
 	//                  ('tool_call_pending', 'truncated')
 	Termination string
-	// OrderBy selects the sort column ("" = recent activity, the default).
-	// Valid keys are enumerated by SortKeys / ValidSortKey.
+	// Sort is the ordered, structured sort specification: each term is a sort
+	// key with an optional per-key direction. When non-empty it is the canonical
+	// source of ordering and takes precedence over OrderBy/Descending. This is
+	// the field new callers should set to express per-key sort direction.
+	Sort []SortKey
+	// OrderBy is the legacy single-key shorthand, kept for existing callers. It
+	// accepts the same comma-separated "key:dir" spec ParseSortSpec parses and is
+	// used only when Sort is empty. "" means recent activity, the default.
 	OrderBy string
-	// Descending overrides the sort key's canonical direction when non-nil.
+	// Descending is the legacy fallback direction applied to OrderBy terms that
+	// carry no explicit direction. Used only when Sort is empty.
 	Descending *bool
 }
 
@@ -436,8 +470,7 @@ func (db *DB) ListSessions(
 	where, args := buildSessionFilter(f)
 
 	dialect := SQLiteQueryDialect()
-	sp, _ := SessionSortFor(f.OrderBy)
-	desc := sp.ResolveDescending(f.Descending)
+	rs := ResolveSort(f)
 
 	var total int
 	var cur SessionCursor
@@ -467,18 +500,18 @@ func (db *DB) ListSessions(
 	pageBuilder := NewQueryBuilder(dialect, len(args))
 	cursorWhere := where
 	if f.Cursor != "" {
-		val, err := sp.CursorPredicateValue(cur, desc)
+		vals, err := CursorPredicateValues(cur, rs)
 		if err != nil {
 			return SessionPage{}, err
 		}
 		cursorWhere += " AND " + pageBuilder.CursorPredicate(
-			sp, desc, f, val, cur.ID,
+			rs, f, vals, cur.ID,
 		)
 	}
 
 	query := "SELECT " + sessionBaseCols +
 		" FROM sessions WHERE " + cursorWhere + " " +
-		pageBuilder.OrderByClause(sp, desc, f) + " " +
+		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
 	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 
@@ -499,7 +532,7 @@ func (db *DB) ListSessions(
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
 		page.NextCursor = db.EncodeCursor(
-			sp.NextCursor(&last, desc, total, f),
+			NextSessionCursor(&last, rs, total, f),
 		)
 	}
 
