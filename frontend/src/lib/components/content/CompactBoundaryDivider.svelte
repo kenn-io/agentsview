@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Message } from "../../api/types.js";
   import { formatTimestamp } from "../../utils/format.js";
+  import { RefreshCwIcon } from "../../icons.js";
 
   interface Props {
     message: Message;
@@ -22,7 +23,9 @@
 <div class="boundary" title="Context window compacted at this point">
   <span class="boundary-line"></span>
   <span class="boundary-label">
-    <span class="boundary-icon" aria-hidden="true">↻</span>
+    <span class="boundary-icon">
+      <RefreshCwIcon size="12" strokeWidth="2.2" aria-hidden="true" />
+    </span>
     Context compacted
     {#if message.timestamp}
       <span class="boundary-time">
@@ -72,8 +75,8 @@
     white-space: nowrap;
   }
   .boundary-icon {
-    font-size: 13px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
   }
   .boundary-time {
     color: var(--text-muted);
