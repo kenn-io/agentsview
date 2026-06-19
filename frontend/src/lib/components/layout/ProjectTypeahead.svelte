@@ -140,7 +140,7 @@
   {:else}
     <button class="typeahead-trigger" onclick={openDropdown} title="Select project">
       <span class="typeahead-value">{displayValue}</span>
-      <ChevronDownIcon class="typeahead-chevron" size="10" strokeWidth="2" aria-hidden="true" />
+      <ChevronDownIcon class="typeahead-chevron" size="12" strokeWidth="2.2" aria-hidden="true" />
     </button>
   {/if}
 </div>
@@ -187,7 +187,10 @@
 
   :global(.typeahead-chevron) {
     flex-shrink: 0;
-    opacity: 0.5;
+    width: 12px;
+    height: 12px;
+    color: currentColor;
+    opacity: 0.72;
   }
 
   .typeahead-input {

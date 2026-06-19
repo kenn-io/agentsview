@@ -8,6 +8,7 @@
   import { events } from "../../stores/events.svelte.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import { ChevronDownIcon } from "../../icons.js";
   import RangeControl from "./RangeControl.svelte";
   import RangeNavigator from "./RangeNavigator.svelte";
   import SummaryCards from "./SummaryCards.svelte";
@@ -103,40 +104,64 @@
       onselect={onProjectSelect}
     />
 
-    <select
-      class="filter-select"
-      value={activity.agent}
-      onchange={onAgentChange}
-      aria-label="Filter by agent"
-    >
-      <option value="">All Agents</option>
-      {#each activity.agents as a}
-        <option value={a.name}>{a.name}</option>
-      {/each}
-    </select>
+    <div class="filter-select-wrap">
+      <select
+        class="filter-select"
+        value={activity.agent}
+        onchange={onAgentChange}
+        aria-label="Filter by agent"
+      >
+        <option value="">All Agents</option>
+        {#each activity.agents as a}
+          <option value={a.name}>{a.name}</option>
+        {/each}
+      </select>
+      <ChevronDownIcon
+        class="filter-select-chevron"
+        size="12"
+        strokeWidth="2.2"
+        aria-hidden="true"
+      />
+    </div>
 
-    <select
-      class="filter-select"
-      value={activity.machine}
-      onchange={onMachineChange}
-      aria-label="Filter by machine"
-    >
-      <option value="">All Machines</option>
-      {#each activity.machines as m}
-        <option value={m}>{m}</option>
-      {/each}
-    </select>
+    <div class="filter-select-wrap">
+      <select
+        class="filter-select"
+        value={activity.machine}
+        onchange={onMachineChange}
+        aria-label="Filter by machine"
+      >
+        <option value="">All Machines</option>
+        {#each activity.machines as m}
+          <option value={m}>{m}</option>
+        {/each}
+      </select>
+      <ChevronDownIcon
+        class="filter-select-chevron"
+        size="12"
+        strokeWidth="2.2"
+        aria-hidden="true"
+      />
+    </div>
 
-    <select
-      class="filter-select"
-      value={activity.automation}
-      onchange={onAutomationChange}
-      aria-label="Filter by automation"
-    >
-      <option value="all">All Sessions</option>
-      <option value="interactive">Interactive</option>
-      <option value="automated">Automated</option>
-    </select>
+    <div class="filter-select-wrap">
+      <select
+        class="filter-select"
+        value={activity.automation}
+        onchange={onAutomationChange}
+        aria-label="Filter by automation"
+      >
+        <option value="all">All Sessions</option>
+        <option value="interactive">Interactive</option>
+        <option value="automated">Automated</option>
+      </select>
+      <ChevronDownIcon
+        class="filter-select-chevron"
+        size="12"
+        strokeWidth="2.2"
+        aria-hidden="true"
+      />
+    </div>
 
     <div class="refresh-slot">
       <RefreshControl
@@ -224,20 +249,45 @@
     flex-shrink: 0;
   }
 
+  .filter-select-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-secondary);
+  }
+
   .filter-select {
+    appearance: none;
+    -webkit-appearance: none;
     height: 26px;
-    padding: 0 8px;
+    padding: 0 28px 0 8px;
     background: var(--bg-inset);
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-sm);
     font-size: 11px;
-    color: var(--text-secondary);
+    color: inherit;
     cursor: pointer;
+  }
+
+  .filter-select:hover {
+    border-color: var(--border-default);
   }
 
   .filter-select:focus {
     outline: none;
     border-color: var(--accent-blue);
+  }
+
+  :global(.filter-select-chevron) {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    width: 12px;
+    height: 12px;
+    color: currentColor;
+    opacity: 0.72;
+    pointer-events: none;
+    transform: translateY(-50%);
   }
 
   /* Push the shared refresh control to the right edge of the toolbar, matching
