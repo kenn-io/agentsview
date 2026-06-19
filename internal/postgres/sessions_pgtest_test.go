@@ -153,6 +153,73 @@ func TestListSessions_Sort(t *testing.T) {
 	require.Equal(t, []string{"sort-a", "sort-c", "sort-b"}, walked)
 }
 
+// TestListSessions_SortMultiKey verifies a mixed-direction multi-key sort on
+// PostgreSQL, where the lexicographic OR-expansion places ::bigint and
+// ::timestamptz casts on the equality and comparison clauses. The paginated walk
+// must match the full listing.
+func TestListSessions_SortMultiKey(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('mk-a', 'm', 'mk', 'claude', 'a', '2024-03-01T00:00:00Z'::timestamptz, 1, 2),
+			('mk-b', 'm', 'mk', 'claude', 'b', '2024-01-01T00:00:00Z'::timestamptz, 1, 2),
+			('mk-c', 'm', 'mk', 'claude', 'c', '2024-02-01T00:00:00Z'::timestamptz, 2, 2),
+			('mk-d', 'm', 'mk', 'claude', 'd', '2024-05-01T00:00:00Z'::timestamptz, 2, 2),
+			('mk-e', 'm', 'mk', 'claude', 'e', '2024-03-01T00:00:00Z'::timestamptz, 1, 2)
+	`)
+	require.NoError(t, err, "seeding multi-key sessions")
+
+	ctx := context.Background()
+	ids := func(sessions []db.Session) []string {
+		out := make([]string, len(sessions))
+		for i, s := range sessions {
+			out[i] = s.ID
+		}
+		return out
+	}
+	asc, desc := false, true
+	sortKeys := []db.SortKey{
+		{Key: "messages", Descending: &asc},
+		{Key: "started", Descending: &desc},
+	}
+
+	full, err := store.ListSessions(ctx, db.SessionFilter{
+		Project: "mk", Sort: sortKeys, Limit: 100,
+	})
+	require.NoError(t, err, "ListSessions multi-key")
+	want := ids(full.Sessions)
+	require.Equal(t, []string{"mk-e", "mk-a", "mk-b", "mk-d", "mk-c"}, want)
+
+	var walked []string
+	seen := map[string]bool{}
+	cursor := ""
+	for {
+		page, err := store.ListSessions(ctx, db.SessionFilter{
+			Project: "mk", Sort: sortKeys, Limit: 1, Cursor: cursor,
+		})
+		require.NoError(t, err, "ListSessions multi-key page")
+		for _, s := range page.Sessions {
+			require.False(t, seen[s.ID], "duplicate %s", s.ID)
+			seen[s.ID] = true
+			walked = append(walked, s.ID)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	require.Equal(t, want, walked, "paginated walk matches full listing")
+}
+
 // TestListSessions_SortSecretsVersioned verifies the version-gated secrets sort
 // renders on PostgreSQL, where the gating CASE places numbered placeholders
 // inside both ORDER BY and the keyset cursor predicate.
