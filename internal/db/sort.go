@@ -123,9 +123,9 @@ func ParseSortSpec(spec string) ([]SortKey, error) {
 		}
 		key := part
 		var dir *bool
-		if i := strings.IndexByte(part, ':'); i >= 0 {
-			key = strings.TrimSpace(part[:i])
-			switch strings.TrimSpace(part[i+1:]) {
+		if before, after, ok := strings.Cut(part, ":"); ok {
+			key = strings.TrimSpace(before)
+			switch strings.TrimSpace(after) {
 			case "asc":
 				d := false
 				dir = &d

@@ -290,7 +290,7 @@ func (b *QueryBuilder) CursorPredicate(
 	clauses := make([]string, 0, len(cols))
 	for j := range cols {
 		parts := make([]string, 0, j+1)
-		for i := 0; i < j; i++ {
+		for i := range j {
 			e := cols[i].Sort.orderExpr(b, cols[i].Desc, f)
 			vp := b.dialect.castCursor(b.Add(vals[i]), cols[i].Sort.kind)
 			parts = append(parts, e+" = "+vp)
