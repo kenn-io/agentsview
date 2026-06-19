@@ -373,9 +373,10 @@ func TestListSessions_CursorSortMismatch(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidCursor, "flipped-direction cursor")
 }
 
-// TestListSessions_LegacyCursorRecent confirms a default-sort cursor still
-// paginates the recent order (backward compatibility for cursors minted before
-// the sort fields existed).
+// TestListSessions_LegacyCursorRecent confirms a cursor minted in the old shape
+// (only EndedAt/ID/Total, no Sort/Desc/Value) still paginates the recent order.
+// This exercises the cur.Sort == "" backward-compatibility path directly, rather
+// than a cursor produced by the current implementation.
 func TestListSessions_LegacyCursorRecent(t *testing.T) {
 	d := testDB(t)
 	for i := 1; i <= 4; i++ {
@@ -386,10 +387,20 @@ func TestListSessions_LegacyCursorRecent(t *testing.T) {
 	page1, err := d.ListSessions(context.Background(), SessionFilter{Limit: 2})
 	require.NoError(t, err)
 	require.Equal(t, []string{"rc4", "rc3"}, idsOf(page1.Sessions))
-	require.NotEmpty(t, page1.NextCursor)
+
+	// Mint a legacy-shaped cursor by hand: no Sort/Desc/Value fields, just the
+	// activity timestamp + id + total a pre-sort build would have produced.
+	legacy := d.EncodeCursor(SessionCursor{
+		EndedAt: "2024-03-01T00:00:00Z",
+		ID:      "rc3",
+		Total:   page1.Total,
+	})
+	cur, err := d.DecodeCursor(legacy)
+	require.NoError(t, err)
+	require.Empty(t, cur.Sort, "legacy cursor must carry no sort key")
 
 	page2, err := d.ListSessions(context.Background(), SessionFilter{
-		Limit: 2, Cursor: page1.NextCursor,
+		Limit: 2, Cursor: legacy,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"rc2", "rc1"}, idsOf(page2.Sessions))
