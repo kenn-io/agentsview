@@ -129,12 +129,21 @@ func parseAiderTimestamp(s string) (time.Time, bool) {
 func splitAiderRuns(content string) []aiderRun {
 	var runs []aiderRun
 	var cur *aiderRun
+	// Accumulate the current run's body in a Builder rather than repeatedly
+	// reallocating cur.body, so a large history file stays linear, not
+	// quadratic, in copy cost.
+	var body strings.Builder
+	flush := func() {
+		if cur != nil {
+			cur.body = body.String()
+			runs = append(runs, *cur)
+		}
+	}
 	for _, raw := range strings.Split(content, "\n") {
 		line := strings.TrimSuffix(raw, "\r")
 		if ts, ok := strings.CutPrefix(line, aiderHeaderPrefix); ok {
-			if cur != nil {
-				runs = append(runs, *cur)
-			}
+			flush()
+			body.Reset()
 			started, hasTime := parseAiderTimestamp(ts)
 			cur = &aiderRun{
 				started:   started,
@@ -144,13 +153,12 @@ func splitAiderRuns(content string) []aiderRun {
 			continue
 		}
 		if cur != nil {
-			cur.body += line + "\n"
+			body.WriteString(line)
+			body.WriteByte('\n')
 		}
 		// lines before the first header (cur == nil) are dropped.
 	}
-	if cur != nil {
-		runs = append(runs, *cur)
-	}
+	flush()
 	return runs
 }
 

@@ -5681,6 +5681,30 @@ func (e *Engine) processGptme(
 	}
 }
 
+// aiderFileUnchanged reports whether a physical aider history file is
+// unchanged since the last sync. Aider sessions are stored under virtual
+// "<history>#<idx>" paths, so the generic shouldSkipByPath (which looks the
+// physical path up in the DB) never matches and would re-parse, re-hash, and
+// re-write every run on every full/periodic sync. Mirror the per-virtual-path
+// skip the other multi-session agents use (cf. kiroSQLitePendingSessionIDs):
+// if any run's stored row matches this file's mtime at the current data
+// version, the file has not changed and the whole fan-out can be skipped.
+func (e *Engine) aiderFileUnchanged(path string, info os.FileInfo) bool {
+	metas, err := parser.ListAiderRunMetas(path)
+	if err != nil {
+		return false
+	}
+	mtime := info.ModTime().UnixNano()
+	for _, m := range metas {
+		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		if ok && storedMtime == mtime &&
+			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *Engine) processAider(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -5703,7 +5727,7 @@ func (e *Engine) processAider(
 		}
 	}
 
-	if e.shouldSkipByPath(file.Path, info) {
+	if e.aiderFileUnchanged(file.Path, info) {
 		return processResult{skip: true}
 	}
 
