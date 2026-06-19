@@ -2402,24 +2402,16 @@ func (s *rootSyncScope) includes(dir string) bool {
 		return false
 	}
 	cleaned := cleanRootPath(dir)
-	for _, root := range s.roots {
-		if samePathOrDescendant(cleaned, root) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.roots, func(root string) bool {
+		return samePathOrDescendant(cleaned, root)
+	})
 }
 
 func (s *rootSyncScope) includesAny(dirs []string) bool {
 	if s == nil {
 		return true
 	}
-	for _, dir := range dirs {
-		if s.includes(dir) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(dirs, s.includes)
 }
 
 func cleanRootPath(path string) string {
@@ -2477,7 +2469,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	all = dedupeDiscoveredFiles(all)
-	all = e.filterShadowedLegacyKiroFiles(all)
+	all = e.filterShadowedLegacyKiroFiles(all, scope)
 
 	verbose := onProgress == nil
 
@@ -2559,7 +2551,7 @@ func (e *Engine) syncAllLocked(
 	tKiro := time.Now()
 	var kiroPending []pendingWrite
 	if scope.includesAny(e.agentDirs[parser.AgentKiro]) {
-		kiroPending = e.syncKiroSQLite(ctx)
+		kiroPending = e.syncKiroSQLite(ctx, scope)
 	}
 	if len(kiroPending) > 0 {
 		stats.TotalSessions += len(kiroPending)
@@ -2652,7 +2644,7 @@ func (e *Engine) syncAllLocked(
 	tWarp := time.Now()
 	var warpPending []pendingWrite
 	if scope.includesAny(e.agentDirs[parser.AgentWarp]) {
-		warpPending = e.syncWarp(ctx)
+		warpPending = e.syncWarp(ctx, scope)
 	}
 	if len(warpPending) > 0 {
 		stats.TotalSessions += len(warpPending)
@@ -2714,7 +2706,7 @@ func (e *Engine) syncAllLocked(
 	tForge := time.Now()
 	var forgePending []pendingWrite
 	if scope.includesAny(e.agentDirs[parser.AgentForge]) {
-		forgePending = e.syncForge(ctx)
+		forgePending = e.syncForge(ctx, scope)
 	}
 	if len(forgePending) > 0 {
 		stats.TotalSessions += len(forgePending)
@@ -2776,7 +2768,7 @@ func (e *Engine) syncAllLocked(
 	tPiebald := time.Now()
 	var piebaldPending []pendingWrite
 	if scope.includesAny(e.agentDirs[parser.AgentPiebald]) {
-		piebaldPending = e.syncPiebald(ctx)
+		piebaldPending = e.syncPiebald(ctx, scope)
 	}
 	if len(piebaldPending) > 0 {
 		stats.TotalSessions += len(piebaldPending)
@@ -3171,10 +3163,13 @@ func (e *Engine) countDBBackedSessions(
 }
 
 func (e *Engine) filterShadowedLegacyKiroFiles(
-	files []parser.DiscoveredFile,
+	files []parser.DiscoveredFile, scope *rootSyncScope,
 ) []parser.DiscoveredFile {
 	currentIDs := make(map[string]struct{})
 	for _, dir := range e.agentDirs[parser.AgentKiro] {
+		if !scope.includes(dir) {
+			continue
+		}
 		for id := range parser.KiroSQLiteSessionIDs(dir) {
 			currentIDs[id] = struct{}{}
 		}
@@ -3253,14 +3248,14 @@ func (e *Engine) countOneKiroSQLiteSessions(dir string) int {
 }
 
 func (e *Engine) syncKiroSQLite(
-	ctx context.Context,
+	ctx context.Context, scope *rootSyncScope,
 ) []pendingWrite {
 	var allPending []pendingWrite
 	for _, dir := range e.agentDirs[parser.AgentKiro] {
 		if ctx.Err() != nil {
 			break
 		}
-		if dir == "" {
+		if dir == "" || !scope.includes(dir) {
 			continue
 		}
 		allPending = append(
@@ -3321,14 +3316,14 @@ func (e *Engine) syncOneKiroSQLite(
 // time_updated to detect changes, so only modified sessions are fully
 // parsed. Returns pending writes.
 func (e *Engine) syncOpenCodeFormat(
-	ctx context.Context, agent parser.AgentType,
+	ctx context.Context, agent parser.AgentType, scope *rootSyncScope,
 ) []pendingWrite {
 	var allPending []pendingWrite
 	for _, dir := range e.agentDirs[agent] {
 		if ctx.Err() != nil {
 			break
 		}
-		if dir == "" {
+		if dir == "" || !scope.includes(dir) {
 			continue
 		}
 		allPending = append(
@@ -3384,7 +3379,7 @@ func (e *Engine) syncOpenCodeFormatAgent(
 	advanceDBProgress func(total int, pending []pendingWrite),
 ) bool {
 	start := time.Now()
-	pending := e.syncOpenCodeFormat(ctx, agent)
+	pending := e.syncOpenCodeFormat(ctx, agent, scope)
 	if len(pending) > 0 {
 		stats.TotalSessions += len(pending)
 		tWrite := time.Now()
@@ -8628,14 +8623,14 @@ func (e *Engine) countOneWarpSessions(dir string) int {
 // Uses per-conversation last_modified_at to detect changes,
 // so only modified conversations are fully parsed.
 func (e *Engine) syncWarp(
-	ctx context.Context,
+	ctx context.Context, scope *rootSyncScope,
 ) []pendingWrite {
 	var allPending []pendingWrite
 	for _, dir := range e.agentDirs[parser.AgentWarp] {
 		if ctx.Err() != nil {
 			break
 		}
-		if dir == "" {
+		if dir == "" || !scope.includes(dir) {
 			continue
 		}
 		allPending = append(
@@ -8763,14 +8758,14 @@ func (e *Engine) countOneForgeSessions(dir string) int {
 
 // syncForge syncs sessions from Forge SQLite databases.
 func (e *Engine) syncForge(
-	ctx context.Context,
+	ctx context.Context, scope *rootSyncScope,
 ) []pendingWrite {
 	var allPending []pendingWrite
 	for _, dir := range e.agentDirs[parser.AgentForge] {
 		if ctx.Err() != nil {
 			break
 		}
-		if dir == "" {
+		if dir == "" || !scope.includes(dir) {
 			continue
 		}
 		allPending = append(allPending, e.syncOneForge(ctx, dir)...)
@@ -8886,14 +8881,14 @@ func (e *Engine) countOnePiebaldSessions(dir string) int {
 
 // syncPiebald syncs sessions from Piebald SQLite databases.
 func (e *Engine) syncPiebald(
-	ctx context.Context,
+	ctx context.Context, scope *rootSyncScope,
 ) []pendingWrite {
 	var allPending []pendingWrite
 	for _, dir := range e.agentDirs[parser.AgentPiebald] {
 		if ctx.Err() != nil {
 			break
 		}
-		if dir == "" {
+		if dir == "" || !scope.includes(dir) {
 			continue
 		}
 		allPending = append(allPending, e.syncOnePiebald(ctx, dir)...)

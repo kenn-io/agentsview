@@ -7253,6 +7253,44 @@ func TestSyncRootsSinceScopesDiscoveredFiles(t *testing.T) {
 	assert.Equal(t, "root b", *page.Sessions[0].FirstMessage)
 }
 
+func TestSyncRootsSinceScopesOpenCodeSQLiteRoots(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	env := setupTestEnv(t, WithOpenCodeDirs([]string{rootA, rootB}))
+
+	ocA := createOpenCodeDB(t, rootA)
+	ocA.addProject(t, "proj-a", "/home/user/code/root-a")
+	ocA.addSession(t, "oc-root-a", "proj-a", 1704067200000, 1704067205000)
+	ocA.addMessage(t, "msg-a-user", "oc-root-a", "user", 1704067200000)
+	ocA.addTextPart(
+		t, "part-a-user", "oc-root-a", "msg-a-user", "root a",
+		1704067200000,
+	)
+
+	ocB := createOpenCodeDB(t, rootB)
+	ocB.addProject(t, "proj-b", "/home/user/code/root-b")
+	ocB.addSession(t, "oc-root-b", "proj-b", 1704067200000, 1704067205000)
+	ocB.addMessage(t, "msg-b-user", "oc-root-b", "user", 1704067200000)
+	ocB.addTextPart(
+		t, "part-b-user", "oc-root-b", "msg-b-user", "root b",
+		1704067200000,
+	)
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{rootB}, time.Time{}, nil,
+	)
+	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
+	assert.Equal(t, 1, stats.Synced, "synced sessions")
+
+	page, err := env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err, "list sessions")
+	require.Len(t, page.Sessions, 1, "sessions")
+	require.NotNil(t, page.Sessions[0].FirstMessage, "first message")
+	assert.Equal(t, "root b", *page.Sessions[0].FirstMessage)
+}
+
 func TestSyncAll_PersistsStartedAndFinishedAt(t *testing.T) {
 	env := setupTestEnv(t)
 

@@ -83,7 +83,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	// fan one db path out to every contained session under forceParse.
 	files = append(files, e.parseDiffDatabaseSources(resolved)...)
 	files = dedupeDiscoveredFiles(files)
-	files = e.filterShadowedLegacyKiroFiles(files)
+	files = e.filterShadowedLegacyKiroFiles(files, nil)
 
 	// Newest first by source mtime (composite stats for virtual
 	// paths), tie-broken by path so the --limit sample is stable.
