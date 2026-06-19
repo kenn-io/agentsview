@@ -465,9 +465,43 @@ func (c *Config) loadFileWithMigration(migrate bool) error {
 
 	path := c.configPath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
+		if migrate {
+			return nil
+		}
+		return c.loadLegacyJSONReadOnly()
+	} else if err != nil {
+		return fmt.Errorf("checking config: %w", err)
 	}
 
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+	return c.applyConfigTOML(string(data))
+}
+
+func (c *Config) loadLegacyJSONReadOnly() error {
+	data, err := os.ReadFile(c.jsonConfigPath())
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("reading config.json: %w", err)
+	}
+
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return fmt.Errorf("parsing config.json: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
+		return fmt.Errorf("encoding config.json: %w", err)
+	}
+	return c.applyConfigTOML(buf.String())
+}
+
+func (c *Config) applyConfigTOML(data string) error {
 	var file struct {
 		GithubToken                    string                     `toml:"github_token"`
 		CursorSecret                   string                     `toml:"cursor_secret"`
@@ -489,7 +523,7 @@ func (c *Config) loadFileWithMigration(migrate bool) error {
 		CustomModelPricing             map[string]CustomModelRate `toml:"custom_model_pricing"`
 		RemoteHosts                    []RemoteHost               `toml:"remote_hosts"`
 	}
-	meta, err := toml.DecodeFile(path, &file)
+	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
@@ -608,7 +642,7 @@ func (c *Config) loadFileWithMigration(migrate bool) error {
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
 	var raw map[string]any
-	if _, err := toml.DecodeFile(path, &raw); err != nil {
+	if _, err := toml.Decode(data, &raw); err != nil {
 		return fmt.Errorf("parsing config raw: %w", err)
 	}
 	for _, def := range parser.Registry {

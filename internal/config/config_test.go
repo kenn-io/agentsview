@@ -93,6 +93,26 @@ binary = "/usr/local/bin/gemini"
 	assert.Equal(t, "/usr/local/bin/gemini", cfg.Agent["gemini"].Binary)
 }
 
+func TestLoadReadOnlyReadsLegacyJSONWithoutMigrating(t *testing.T) {
+	dir := setupTestEnv(t)
+	jsonPath := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(jsonPath, []byte(`{
+		"codex_sessions_dirs": ["/legacy/codex"],
+		"result_content_blocked_categories": ["Read", "Search"]
+	}`), 0o600), "write legacy config")
+
+	cfg, err := LoadReadOnly()
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"/legacy/codex"},
+		cfg.ResolveDirs(parser.AgentCodex))
+	assert.Equal(t, []string{"Read", "Search"},
+		cfg.ResultContentBlockedCategories)
+	assert.FileExists(t, jsonPath)
+	assert.NoFileExists(t, filepath.Join(dir, configFileName))
+	assert.NoFileExists(t, jsonPath+".bak")
+}
+
 func TestDefault_IncludesCodexArchivedSessionsDir(t *testing.T) {
 	cfg, err := Default()
 	require.NoError(t, err)
