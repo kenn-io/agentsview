@@ -192,7 +192,7 @@ func TestListSessions_SortSecretsVersioned(t *testing.T) {
 	gated, err := store.ListSessions(ctx, db.SessionFilter{
 		Project:              "sec-test",
 		OrderBy:              "secrets",
-		Descending:           boolPtr(true),
+		Descending:           new(true),
 		SecretsRulesVersions: []string{"v1"},
 		Limit:                10,
 	})
@@ -208,7 +208,7 @@ func TestListSessions_SortSecretsVersioned(t *testing.T) {
 		page, err := store.ListSessions(ctx, db.SessionFilter{
 			Project:              "sec-test",
 			OrderBy:              "secrets",
-			Descending:           boolPtr(true),
+			Descending:           new(true),
 			SecretsRulesVersions: []string{"v1"},
 			Limit:                1,
 			Cursor:               cursor,
@@ -271,5 +271,3 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 	// Ascending with NULLs last, paginated across the sentinel boundary.
 	require.Equal(t, []string{"h20", "h80", "hnull"}, walked)
 }
-
-func boolPtr(b bool) *bool { return &b }

@@ -12,9 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func sortStrPtr(s string) *string { return &s }
-func sortIntPtr(i int) *int       { return &i }
-
 // syncedStoreFromWrites seeds a local SQLite DB with the given batch writes and
 // returns a DuckDB store mirroring it, so sort/keyset SQL can be exercised
 // against the DuckDB dialect (CAST placeholders, COALESCE sentinel).
@@ -38,8 +35,8 @@ func sortSeedSession(id, project, ts string, signals db.SessionSignalUpdate) db.
 			Project:          project,
 			Machine:          "test-machine",
 			Agent:            "claude",
-			StartedAt:        sortStrPtr(ts),
-			EndedAt:          sortStrPtr(ts),
+			StartedAt:        new(ts),
+			EndedAt:          new(ts),
 			MessageCount:     2,
 			UserMessageCount: 2,
 			RelationshipType: "root",
@@ -104,10 +101,10 @@ func TestDuckDBSort_SecretsVersioned(t *testing.T) {
 func TestDuckDBSort_NullsLast(t *testing.T) {
 	store := syncedStoreFromWrites(t, []db.SessionBatchWrite{
 		sortSeedSession("h20", "health", "2026-03-01T00:00:00Z", db.SessionSignalUpdate{
-			HealthScore: sortIntPtr(20),
+			HealthScore: new(20),
 		}),
 		sortSeedSession("h80", "health", "2026-03-02T00:00:00Z", db.SessionSignalUpdate{
-			HealthScore: sortIntPtr(80),
+			HealthScore: new(80),
 		}),
 		sortSeedSession("hnull", "health", "2026-03-03T00:00:00Z", db.SessionSignalUpdate{}),
 	})
