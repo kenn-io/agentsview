@@ -351,6 +351,25 @@ func aiderEqualHeaderOrdinals(runs []aiderRun) []int {
 	return ordinals
 }
 
+// AiderRawIDAt recomputes the raw session ID (the per-run hash, without the
+// "aider:" prefix) of the run at positional index idx in a history file. It
+// returns ("", false) when the file is unreadable or idx is out of range.
+// Callers use it to validate that a stored "<historyPath>#<idx>" virtual
+// path still points at the run they expect: the index is positional, so an
+// inserted or removed earlier run can shift it onto a different session.
+func AiderRawIDAt(historyPath string, idx int) (string, bool) {
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		return "", false
+	}
+	runs := splitAiderRuns(string(data))
+	if idx < 0 || idx >= len(runs) {
+		return "", false
+	}
+	ordinals := aiderEqualHeaderOrdinals(runs)
+	return aiderRawID(aiderAbsPath(historyPath), runs[idx].rawHeader, ordinals[idx]), true
+}
+
 // AiderRunMeta describes one run within a history file: its virtual
 // source path, positional index, and parsed start time. The sync engine
 // fans a physical file out into one session per meta.
@@ -562,7 +581,12 @@ func DiscoverAiderSessions(root string) []DiscoveredFile {
 			depth := strings.Count(
 				filepath.Clean(path), string(os.PathSeparator),
 			) - rootDepth
-			if depth >= aiderMaxWalkDepth {
+			// Skip descent BELOW the cap, but still visit files in a
+			// directory AT the cap, so a history file exactly
+			// aiderMaxWalkDepth levels under the root is discovered (the
+			// documented N-level scan). A `>=` test would skip the
+			// max-depth directory before its files were seen.
+			if depth > aiderMaxWalkDepth {
 				return filepath.SkipDir
 			}
 			dirCount++

@@ -7781,6 +7781,8 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		}
 	}
 
+	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
+
 	// Prefer stored file_path — it's authoritative and handles
 	// cases where the session ID doesn't match the filename.
 	// Resolve virtual paths (e.g. Visual Studio Copilot's
@@ -7788,12 +7790,20 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	// return the stored path so downstream parsing stays scoped to
 	// the requested conversation rather than the whole trace file.
 	if fp := e.db.GetSessionFilePath(sessionID); fp != "" {
-		if _, err := os.Stat(parser.ResolveSourceFilePath(fp)); err == nil {
+		if historyPath, idx, ok := parser.ParseAiderVirtualPath(fp); ok {
+			// aider's stored "<historyPath>#<idx>" is positional: an
+			// inserted or removed earlier run shifts the index onto a
+			// different session. Only trust the stored path when run idx
+			// still recomputes to the requested raw ID; otherwise fall
+			// through to FindSourceFunc, which re-resolves by raw ID.
+			if got, ok := parser.AiderRawIDAt(historyPath, idx); ok && got == bareID {
+				return fp
+			}
+		} else if _, err := os.Stat(parser.ResolveSourceFilePath(fp)); err == nil {
 			return fp
 		}
 	}
 
-	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
 	for _, d := range e.agentDirs[def.Type] {
 		if f := def.FindSourceFunc(d, bareID); f != "" {
 			return f

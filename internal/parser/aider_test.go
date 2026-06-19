@@ -250,6 +250,65 @@ func TestAiderSameHeaderEarlyRemovalRekeysSiblings(t *testing.T) {
 		"same-header early removal re-keys later siblings (accepted residual)")
 }
 
+// TestDiscoverAiderFindsFilesAtMaxDepth pins the depth-cap fix: a history
+// file whose parent directory is exactly aiderMaxWalkDepth (4) levels under
+// the root must be discovered, while one a level deeper must not. A `>=`
+// test skipped the max-depth directory before its files were seen.
+func TestDiscoverAiderFindsFilesAtMaxDepth(t *testing.T) {
+	root := t.TempDir()
+	atCap := filepath.Join(root, "a", "b", "c", "d")        // parent depth 4
+	tooDeep := filepath.Join(root, "a", "b", "c", "d", "e") // parent depth 5
+	require.NoError(t, os.MkdirAll(atCap, 0o755))
+	require.NoError(t, os.MkdirAll(tooDeep, 0o755))
+	hist := "# aider chat started at 2026-06-09 14:01:00\n#### p\nans\n"
+	atCapFile := filepath.Join(atCap, ".aider.chat.history.md")
+	tooDeepFile := filepath.Join(tooDeep, ".aider.chat.history.md")
+	require.NoError(t, os.WriteFile(atCapFile, []byte(hist), 0o644))
+	require.NoError(t, os.WriteFile(tooDeepFile, []byte(hist), 0o644))
+
+	var paths []string
+	for _, f := range DiscoverAiderSessions(root) {
+		paths = append(paths, f.Path)
+	}
+	assert.Contains(t, paths, atCapFile,
+		"a history file at the max walk depth must be discovered")
+	assert.NotContains(t, paths, tooDeepFile,
+		"a history file below the max walk depth must not be discovered")
+}
+
+// TestAiderRawIDAtDetectsShiftedIndex pins that a stored positional
+// "<history>#<idx>" path is validated by recomputed ID: after an earlier run
+// is removed, the stale index no longer recomputes to a run, and the session
+// re-resolves to the run's new index by raw ID (the engine fast-path
+// correctness fix).
+func TestAiderRawIDAtDetectsShiftedIndex(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "myrepo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	path := filepath.Join(repo, ".aider.chat.history.md")
+
+	run0 := "# aider chat started at 2026-06-09 14:01:00\n#### first\nans1\n"
+	run1 := "# aider chat started at 2026-06-09 15:30:00\n#### second\nans2\n"
+	require.NoError(t, os.WriteFile(path, []byte(run0+run1), 0o644))
+
+	// run1's raw ID, as stored under the virtual path "<path>#1".
+	id1, ok := AiderRawIDAt(path, 1)
+	require.True(t, ok)
+	_, ok = AiderRawIDAt(path, 5)
+	assert.False(t, ok, "out-of-range index returns false")
+
+	// Remove the first run; index 1 is now out of range, so the stored
+	// positional path can no longer be trusted by recomputed ID.
+	require.NoError(t, os.WriteFile(path, []byte(run1), 0o644))
+	_, ok = AiderRawIDAt(path, 1)
+	assert.False(t, ok, "stale index 1 no longer recomputes to a run")
+
+	// Re-resolution by raw ID finds run1 at its new index 0.
+	resolved := FindAiderSourceFile(dir, id1)
+	assert.Equal(t, AiderVirtualPath(path, 0), resolved,
+		"re-resolving by raw ID locates the run at its shifted index")
+}
+
 func TestParseAiderTimestamp(t *testing.T) {
 	cases := []struct {
 		name string
