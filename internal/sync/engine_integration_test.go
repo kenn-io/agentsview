@@ -7212,6 +7212,47 @@ func TestSyncAllSince_FiltersByMtime(t *testing.T) {
 	_ = newPath
 }
 
+func TestSyncRootsSinceScopesDiscoveredFiles(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{rootA, rootB}))
+
+	contentA := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "root a").
+		String()
+	pathA := env.writeSession(
+		t, rootA, filepath.Join("proj-a", "root-a.jsonl"), contentA,
+	)
+
+	contentB := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "root b").
+		String()
+	pathB := env.writeSession(
+		t, rootB, filepath.Join("proj-b", "root-b.jsonl"), contentB,
+	)
+
+	longAgo := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(pathA, longAgo, longAgo), "chtimes root a")
+	require.NoError(t, os.Chtimes(pathB, longAgo, longAgo), "chtimes root b")
+
+	cutoff := time.Now().Add(-1 * time.Hour)
+	require.NoError(t, os.Chtimes(pathB, time.Now(), time.Now()), "touch root b")
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{rootB}, cutoff, nil,
+	)
+	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
+	assert.Equal(t, 1, stats.Synced, "synced sessions")
+
+	page, err := env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err, "list sessions")
+	require.Len(t, page.Sessions, 1, "sessions")
+	require.NotNil(t, page.Sessions[0].FirstMessage, "first message")
+	assert.Equal(t, "root b", *page.Sessions[0].FirstMessage)
+}
+
 func TestSyncAll_PersistsStartedAndFinishedAt(t *testing.T) {
 	env := setupTestEnv(t)
 

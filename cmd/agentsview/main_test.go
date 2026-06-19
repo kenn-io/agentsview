@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -223,6 +225,41 @@ func TestTruncateLogFileSymlink(t *testing.T) {
 	data, err := os.ReadFile(target)
 	require.NoError(t, err, "read target")
 	assert.Len(t, data, 1024, "symlink target was truncated")
+}
+
+type fakeUnwatchedPollSyncer struct {
+	lastSyncStartedAt time.Time
+	roots             []string
+	since             time.Time
+	calls             int
+}
+
+func (f *fakeUnwatchedPollSyncer) LastSyncStartedAt() time.Time {
+	return f.lastSyncStartedAt
+}
+
+func (f *fakeUnwatchedPollSyncer) SyncRootsSince(
+	ctx context.Context, roots []string, since time.Time,
+	onProgress sync.ProgressFunc,
+) sync.SyncStats {
+	f.calls++
+	f.roots = append([]string(nil), roots...)
+	f.since = since
+	return sync.SyncStats{}
+}
+
+func TestPollUnwatchedRootsOnceUsesScopedIncrementalSync(t *testing.T) {
+	lastSyncStartedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
+	fake := &fakeUnwatchedPollSyncer{
+		lastSyncStartedAt: lastSyncStartedAt,
+	}
+	roots := []string{"/tmp/claude", "/tmp/codex"}
+
+	pollUnwatchedRootsOnce(fake, roots)
+
+	assert.Equal(t, 1, fake.calls)
+	assert.Equal(t, roots, fake.roots)
+	assert.Equal(t, lastSyncStartedAt.Add(-unwatchedPollSafetyMargin), fake.since)
 }
 
 func TestResyncCoversSignals(t *testing.T) {

@@ -31,11 +31,12 @@ var (
 )
 
 const (
-	periodicSyncInterval  = 15 * time.Minute
-	telemetryPingInterval = 24 * time.Hour
-	unwatchedPollInterval = 2 * time.Minute
-	watcherDebounce       = 500 * time.Millisecond
-	recursiveWatchBudget  = 8192
+	periodicSyncInterval      = 15 * time.Minute
+	telemetryPingInterval     = 24 * time.Hour
+	unwatchedPollInterval     = 2 * time.Minute
+	unwatchedPollSafetyMargin = 5 * time.Second
+	watcherDebounce           = 500 * time.Millisecond
+	recursiveWatchBudget      = 8192
 )
 
 func main() {
@@ -282,7 +283,7 @@ func runServe(cfg config.Config) {
 		)
 		defer stopWatcher()
 		if len(unwatchedDirs) > 0 {
-			go startUnwatchedPoll(engine)
+			go startUnwatchedPoll(engine, unwatchedDirs)
 		}
 	}
 
@@ -659,11 +660,26 @@ func recomputePendingSessions(
 	}
 }
 
-func startUnwatchedPoll(engine *sync.Engine) {
+type unwatchedPollSyncer interface {
+	LastSyncStartedAt() time.Time
+	SyncRootsSince(
+		context.Context, []string, time.Time, sync.ProgressFunc,
+	) sync.SyncStats
+}
+
+func startUnwatchedPoll(engine unwatchedPollSyncer, roots []string) {
 	ticker := time.NewTicker(unwatchedPollInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Polling unwatched directories...")
-		engine.SyncAll(context.Background(), nil)
+		pollUnwatchedRootsOnce(engine, roots)
 	}
+}
+
+func pollUnwatchedRootsOnce(engine unwatchedPollSyncer, roots []string) {
+	since := engine.LastSyncStartedAt()
+	if !since.IsZero() {
+		since = since.Add(-unwatchedPollSafetyMargin)
+	}
+	engine.SyncRootsSince(context.Background(), roots, since, nil)
 }
