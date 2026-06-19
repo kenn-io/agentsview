@@ -213,7 +213,14 @@ func ResolveSort(f SessionFilter) []ResolvedSort {
 	}
 	if len(rs) == 0 {
 		sp := sessionSortByKey[defaultSortKey]
-		rs = append(rs, ResolvedSort{Sort: sp, Desc: sp.defaultDescending})
+		desc := sp.defaultDescending
+		// Preserve the single-key behavior where a legacy Descending override
+		// applies to the implicit default recent key (e.g. descending=false with
+		// no order_by means recent ascending).
+		if len(f.Sort) == 0 && f.Descending != nil {
+			desc = *f.Descending
+		}
+		rs = append(rs, ResolvedSort{Sort: sp, Desc: desc})
 	}
 	return rs
 }

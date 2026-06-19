@@ -106,10 +106,10 @@ func (b *directBackend) List(
 			"list: invalid active_since %q: use RFC3339", f.ActiveSince,
 		)
 	}
-	if !db.ValidSortKey(f.OrderBy) {
+	if _, err := db.ParseSortSpec(f.OrderBy); err != nil {
 		return nil, fmt.Errorf(
-			"list: invalid sort %q: must be one of %s",
-			f.OrderBy, strings.Join(db.SortKeys(), ", "),
+			"list: invalid sort %q: %v (valid keys: %s)",
+			f.OrderBy, err, strings.Join(db.SortKeys(), ", "),
 		)
 	}
 	// Match the HTTP handler's clampLimit semantics: values over
@@ -159,9 +159,17 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		HasSecret:            f.HasSecret,
 		Starred:              f.Starred,
 		SecretsRulesVersions: secrets.ActiveRulesVersions(),
-		OrderBy:              f.OrderBy,
-		Descending:           f.Descending,
 	}
+	// Parse the public sort spec into the structured, per-key form. The spec is
+	// validated in List before this runs, so a parse error here is treated
+	// defensively as the default sort. The legacy Descending param fills the
+	// direction of any term that carries no explicit :asc/:desc suffix; it is
+	// also carried through so an empty order_by + descending still flips the
+	// implicit default recent key.
+	if keys, err := db.ParseSortSpec(f.OrderBy); err == nil {
+		filter.Sort = db.ApplyFallbackDirection(keys, f.Descending)
+	}
+	filter.Descending = f.Descending
 	if f.Outcome != "" {
 		filter.Outcome = strings.Split(f.Outcome, ",")
 	}

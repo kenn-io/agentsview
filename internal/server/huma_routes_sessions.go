@@ -55,10 +55,6 @@ type messageDirection string
 
 type markdownDepth string
 
-// sessionOrderBy is the allow-listed session-list sort field. The enum tag is
-// kept in sync with db.SortKeys() by TestSortKeysMatchHumaEnum.
-type sessionOrderBy string
-
 type sessionFilterInput struct {
 	Project          string            `query:"project" doc:"Filter by project"`
 	ExcludeProject   string            `query:"exclude_project" doc:"Exclude a project"`
@@ -82,8 +78,8 @@ type sessionFilterInput struct {
 	MinToolFailures  optionalIntParam  `query:"min_tool_failures" minimum:"0" doc:"Minimum tool failure count"`
 	HasSecret        bool              `query:"has_secret" doc:"Filter sessions with secret findings"`
 	Starred          bool              `query:"starred" doc:"Filter sessions by starred status"`
-	OrderBy          sessionOrderBy    `query:"order_by" enum:"recent,started,messages,user-messages,output-tokens,peak-context,failures,retries,edit-churn,compactions,context-pressure,health,secrets,id" default:"recent" doc:"Sort field"`
-	Descending       optionalBoolParam `query:"descending" doc:"Sort descending; overrides the sort field's default direction"`
+	OrderBy          string            `query:"order_by" default:"recent" doc:"Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."`
+	Descending       optionalBoolParam `query:"descending" doc:"Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix"`
 }
 
 type messageListInput struct {
@@ -101,6 +97,9 @@ type searchSessionInput struct {
 func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return service.ListFilter{}, err
+	}
+	if _, err := db.ParseSortSpec(in.OrderBy); err != nil {
+		return service.ListFilter{}, apiError(http.StatusBadRequest, "invalid order_by: "+err.Error())
 	}
 	limit := clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)
 	filter := service.ListFilter{
@@ -125,7 +124,7 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		Termination:      in.Termination,
 		HasSecret:        in.HasSecret,
 		Starred:          in.Starred,
-		OrderBy:          string(in.OrderBy),
+		OrderBy:          in.OrderBy,
 		Descending:       optionalBoolValue(in.Descending),
 	}
 	if in.MinToolFailures.IsSet {

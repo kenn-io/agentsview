@@ -167,6 +167,15 @@ func TestResolveSort(t *testing.T) {
 		rs := ResolveSort(SessionFilter{Sort: []SortKey{{Key: "bogus"}}})
 		assert.Equal(t, []string{"recent:desc"}, keys(rs))
 	})
+
+	t.Run("legacy descending applies to implicit default recent", func(t *testing.T) {
+		// descending=false with no order_by means recent ascending (the
+		// single-key behavior before multi-key sorting).
+		rs := ResolveSort(SessionFilter{Descending: &asc})
+		assert.Equal(t, []string{"recent:asc"}, keys(rs))
+		rs = ResolveSort(SessionFilter{Descending: &desc})
+		assert.Equal(t, []string{"recent:desc"}, keys(rs))
+	})
 }
 
 // TestListSessions_MultiKeySort verifies a mixed-direction multi-key sort
