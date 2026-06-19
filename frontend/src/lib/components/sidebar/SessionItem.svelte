@@ -444,7 +444,7 @@
     opacity: 0.6;
   }
 
-  /* Tree toggle (▶/▼) */
+  /* Tree toggle */
   .tree-toggle {
     all: unset;
     display: flex;

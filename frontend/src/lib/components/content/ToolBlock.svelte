@@ -8,6 +8,7 @@
     generateFallbackContent,
   } from "../../utils/tool-params.js";
   import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
+  import { ChevronRightIcon } from "../../icons.js";
 
   interface Props {
     content: string;
@@ -318,7 +319,7 @@
     }}
   >
     <span class="tool-chevron" class:open={!collapsed}>
-      &#9656;
+      <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
     </span>
     {#if label}
       <span class="tool-label">{label}</span>
@@ -381,7 +382,7 @@
         }}
       >
         <span class="tool-chevron" class:open={!outputCollapsed}>
-          &#9656;
+          <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
         </span>
         <span class="output-label">output</span>
         {#if outputCollapsed && outputPreviewLine}
@@ -404,7 +405,7 @@
         }}
       >
         <span class="tool-chevron" class:open={!historyCollapsed}>
-          &#9656;
+          <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
         </span>
         <span class="output-label">history</span>
         {#if historyCollapsed && historyPreviewLine}
@@ -478,8 +479,8 @@
   }
 
   .tool-chevron {
-    display: inline-block;
-    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
     transition: transform 0.15s;
     flex-shrink: 0;
     color: var(--text-muted);

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
+  import { ChevronRightIcon } from "../../icons.js";
 
   interface Props {
     content: string;
@@ -41,7 +42,7 @@
     onclick={() => { userCollapsed = !userCollapsed; userOverride = true; }}
   >
     <span class="thinking-chevron" class:open={!collapsed}>
-      &#9656;
+      <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
     </span>
     <span class="thinking-label">Thinking</span>
   </button>
@@ -81,8 +82,8 @@
   }
 
   .thinking-chevron {
-    display: inline-block;
-    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
     transition: transform 0.15s;
     color: var(--text-muted);
   }

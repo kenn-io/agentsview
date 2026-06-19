@@ -1,6 +1,7 @@
 <script lang="ts">
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
+  import { ChevronRightIcon } from "../../icons.js";
 
   interface Props {
     content: string;
@@ -25,7 +26,7 @@
     }}
   >
     <span class="skill-chevron" class:open={!collapsed}>
-      &#9656;
+      <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
     </span>
     <span class="skill-label">Skill: {name ?? "unknown"}</span>
     {#if collapsed && previewLine}
@@ -71,8 +72,8 @@
   }
 
   .skill-chevron {
-    display: inline-block;
-    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
     transition: transform 0.15s;
     flex-shrink: 0;
     color: var(--text-muted);
