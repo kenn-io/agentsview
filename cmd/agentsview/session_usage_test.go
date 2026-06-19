@@ -63,7 +63,7 @@ func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 			SessionID:         "copilot:s1",
 			Agent:             "copilot",
 			Project:           "proj",
-			TotalOutputTokens: 1000,
+			TotalOutputTokens: 2000,
 			PeakContextTokens: 5000,
 			HasTokenData:      true,
 			CostUSD:           10.00,

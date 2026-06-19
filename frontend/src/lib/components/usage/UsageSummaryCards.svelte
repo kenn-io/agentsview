@@ -85,65 +85,68 @@
     featured?: boolean;
   }
 
-  const cards: Card[] = [
-    {
-      label: "Total Cost",
-      value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
-      sub: () => vsPrior ?? "",
-      featured: true,
-    },
-    ...(usage.summary?.totals.copilotAICredits
-      ? [
-          {
-            label: "Copilot AI Credits",
-            value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
-          },
-        ]
-      : []),
-    {
-      label: "Input Tokens",
-      value: () => fmtTokens(inputTokens),
-      sub: () =>
-        cachedTokens > 0 ? `+${fmtTokens(cachedTokens)} cached` : "",
-    },
-    {
-      label: "Output Tokens",
-      value: () => fmtTokens(outputTokens),
-    },
-    {
-      label: "Daily Burn",
-      value: () => fmtCost(dailyBurn),
-      sub: () => "avg/day",
-    },
-    {
-      label: "Peak Day",
-      value: () => fmtCost(peak.cost),
-      sub: () => peak.date,
-    },
-    {
-      label: "Cache Hit",
-      value: () =>
-        fmtPct(usage.summary?.cacheStats.hitRate ?? 0),
-    },
-    {
-      label: "Projects",
-      value: () =>
-        String(
-          Object.keys(
-            usage.summary?.sessionCounts.byProject ?? {},
-          ).length,
-        ),
-    },
-    {
-      label: "Models",
-      value: () =>
-        String(usage.summary?.modelTotals.length ?? 0),
-    },
-    {
-      label: "Active Days",
-      value: () => String(activeDays),
-    },
-  ];
+  const cards = $derived.by(() => {
+    const baseCards: Card[] = [
+      {
+        label: "Total Cost",
+        value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
+        sub: () => vsPrior ?? "",
+        featured: true,
+      },
+      ...(usage.summary?.totals.copilotAICredits
+        ? [
+            {
+              label: "Copilot AI Credits",
+              value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
+            },
+          ]
+        : []),
+      {
+        label: "Input Tokens",
+        value: () => fmtTokens(inputTokens),
+        sub: () =>
+          cachedTokens > 0 ? `+${fmtTokens(cachedTokens)} cached` : "",
+      },
+      {
+        label: "Output Tokens",
+        value: () => fmtTokens(outputTokens),
+      },
+      {
+        label: "Daily Burn",
+        value: () => fmtCost(dailyBurn),
+        sub: () => "avg/day",
+      },
+      {
+        label: "Peak Day",
+        value: () => fmtCost(peak.cost),
+        sub: () => peak.date,
+      },
+      {
+        label: "Cache Hit",
+        value: () =>
+          fmtPct(usage.summary?.cacheStats.hitRate ?? 0),
+      },
+      {
+        label: "Projects",
+        value: () =>
+          String(
+            Object.keys(
+              usage.summary?.sessionCounts.byProject ?? {},
+            ).length,
+          ),
+      },
+      {
+        label: "Models",
+        value: () =>
+          String(usage.summary?.modelTotals.length ?? 0),
+      },
+      {
+        label: "Active Days",
+        value: () => String(activeDays),
+      },
+    ];
+    return baseCards;
+  });
 </script>
 
 <div class="summary-cards">

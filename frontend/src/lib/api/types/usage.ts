@@ -7,6 +7,7 @@ export interface UsageTotals {
   cacheCreationTokens: number;
   cacheReadTokens: number;
   totalCost: number;
+  copilotAICredits?: number;
 }
 
 export interface ModelBreakdown {

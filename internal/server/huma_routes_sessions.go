@@ -284,6 +284,7 @@ type sessionUsageResponse struct {
 	HasTokenData      bool     `json:"has_token_data"`
 	CostUSD           float64  `json:"cost_usd"`
 	HasCost           bool     `json:"has_cost"`
+	AICredits         float64  `json:"ai_credits,omitempty"`
 	Models            []string `json:"models"`
 	UnpricedModels    []string `json:"unpriced_models"`
 	ServerRunning     bool     `json:"server_running"`
@@ -321,6 +322,7 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		HasTokenData:      usage.HasTokenData,
 		CostUSD:           usage.CostUSD,
 		HasCost:           usage.HasCost,
+		AICredits:         usage.AICredits,
 		Models:            usage.Models,
 		UnpricedModels:    unpricedModels,
 		ServerRunning:     true,
