@@ -2331,11 +2331,8 @@ func (s *Store) GetDailyUsage(
 	result.Totals.TotalCost = roundCost(result.Totals.TotalCost)
 
 	var copilotCost float64
-	for _, day := range days {
-		if day == nil {
-			continue
-		}
-		if b, ok := day.agents["copilot"]; ok {
+	for key, b := range accum {
+		if key.agent == "copilot" {
 			copilotCost += b.cost
 		}
 	}
