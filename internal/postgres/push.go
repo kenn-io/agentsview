@@ -556,6 +556,10 @@ type batchResult struct {
 	skippedConflicts int
 }
 
+var errPushComparisonPreload = errors.New(
+	"push comparison preload failed",
+)
+
 // pushBatch pushes a slice of sessions within a single
 // transaction. On success it appends to pushed and returns
 // ok=true with session/message counts. On a session-level
@@ -570,6 +574,35 @@ func (s *Sync) pushBatch(
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
 	pushed *[]db.Session,
+) (batchResult, error) {
+	preloadComparisons := len(batch) > 0 && !full
+	result, err := s.pushBatchAttempt(
+		ctx, batch, full, markerID, legacyMarkerMachines,
+		sessionUsageFingerprints, pushed, preloadComparisons,
+	)
+	if err == nil || !errors.Is(err, errPushComparisonPreload) {
+		return result, err
+	}
+	log.Printf(
+		"pgsync: preloading pg comparison fingerprints failed, "+
+			"retrying batch without preload: %v",
+		err,
+	)
+	return s.pushBatchAttempt(
+		ctx, batch, full, markerID, legacyMarkerMachines,
+		sessionUsageFingerprints, pushed, false,
+	)
+}
+
+func (s *Sync) pushBatchAttempt(
+	ctx context.Context,
+	batch []db.Session,
+	full bool,
+	markerID string,
+	legacyMarkerMachines []string,
+	sessionUsageFingerprints map[string]string,
+	pushed *[]db.Session,
+	preloadComparisons bool,
 ) (batchResult, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
@@ -586,19 +619,17 @@ func (s *Sync) pushBatch(
 		sessionIDs = append(sessionIDs, sess.ID)
 	}
 	comparisons := (*pushMessageComparison)(nil)
-	if len(sessionIDs) > 0 && !full {
+	if preloadComparisons && len(sessionIDs) > 0 {
 		comparisonsBatch, err := readPushSessionMessageComparisons(
 			ctx, tx, sessionIDs,
 		)
 		if err != nil {
-			log.Printf(
-				"pgsync: preloading pg comparison fingerprints: %v",
-				err,
+			_ = tx.Rollback()
+			return batchResult{}, fmt.Errorf(
+				"%w: %w", errPushComparisonPreload, err,
 			)
-			comparisons = nil
-		} else {
-			comparisons = comparisonsBatch
 		}
+		comparisons = comparisonsBatch
 	}
 
 	for _, sess := range batch {
@@ -1315,46 +1346,46 @@ func (s *Sync) pushMessages(
 		return 0, nil
 	}
 
-	var pgCount int
-	var pgContentSum, pgContentMax, pgContentMin int64
-	// Exact string fingerprint for the system-message ordinal set:
-	// STRING_AGG produces e.g. "0,2,5" — impossible to collide for
-	// distinct ordinal sets (unlike SUM or SUM+SUM-of-squares).
-	var pgSystemFP sql.NullString
-	var pgToolCallCount int
-	var pgTCContentSum int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*),
-			COALESCE(SUM(content_length), 0),
-			COALESCE(MAX(content_length), 0),
-			COALESCE(MIN(content_length), 0),
-			STRING_AGG(ordinal::text, ',' ORDER BY ordinal)
-				FILTER (WHERE is_system)
-		 FROM messages
-		 WHERE session_id = $1`,
-		sessionID,
-	).Scan(
-		&pgCount, &pgContentSum,
-		&pgContentMax, &pgContentMin,
-		&pgSystemFP,
-	); err != nil {
-		return 0, fmt.Errorf(
-			"counting pg messages: %w", err,
-		)
-	}
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*),
-			COALESCE(SUM(result_content_length), 0)
-		 FROM tool_calls
-		 WHERE session_id = $1`,
-		sessionID,
-	).Scan(&pgToolCallCount, &pgTCContentSum); err != nil {
-		return 0, fmt.Errorf(
-			"counting pg tool_calls: %w", err,
-		)
+	pgAgg, pgToolAgg, hasPreloadedComparisons := comparisonAggregates(
+		sessionID, comparisons,
+	)
+	if !hasPreloadedComparisons {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*),
+				COALESCE(SUM(content_length), 0),
+				COALESCE(MAX(content_length), 0),
+				COALESCE(MIN(content_length), 0),
+				COALESCE(
+					STRING_AGG(ordinal::text, ',' ORDER BY ordinal)
+						FILTER (WHERE is_system),
+					''
+				)
+			 FROM messages
+			 WHERE session_id = $1`,
+			sessionID,
+		).Scan(
+			&pgAgg.Count, &pgAgg.Sum,
+			&pgAgg.Max, &pgAgg.Min,
+			&pgAgg.SysFP,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"counting pg messages: %w", err,
+			)
+		}
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*),
+				COALESCE(SUM(result_content_length), 0)
+			 FROM tool_calls
+			 WHERE session_id = $1`,
+			sessionID,
+		).Scan(&pgToolAgg.Count, &pgToolAgg.Sum); err != nil {
+			return 0, fmt.Errorf(
+				"counting pg tool_calls: %w", err,
+			)
+		}
 	}
 
-	if !full && pgCount == localCount && pgCount > 0 {
+	if !full && pgAgg.Count == localCount && pgAgg.Count > 0 {
 		localFP := pushLocalMessageFingerprint{}
 
 		localFP.Sum, localFP.Max, localFP.Min, err = s.local.MessageContentFingerprint(
@@ -1490,15 +1521,15 @@ func (s *Sync) pushMessages(
 				)
 			}
 
-			if localFP.Sum == pgContentSum &&
-				localFP.Max == pgContentMax &&
-				localFP.Min == pgContentMin &&
+			if localFP.Sum == pgAgg.Sum &&
+				localFP.Max == pgAgg.Max &&
+				localFP.Min == pgAgg.Min &&
 				localFP.ContentHashFP == pgContentHashFP &&
 				localFP.RoleTimeFP == pgRoleTimeFP &&
 				localFP.FlagsFP == pgFlagsFP &&
-				localFP.SystemFP == pgSystemFP.String &&
-				localFP.ToolCallCount == pgToolCallCount &&
-				localFP.ToolCallSum == pgTCContentSum &&
+				localFP.SystemFP == pgAgg.SysFP &&
+				localFP.ToolCallCount == pgToolAgg.Count &&
+				localFP.ToolCallSum == pgToolAgg.Sum &&
 				localFP.ToolCallFP == pgTCFP &&
 				localFP.TokenFP == pgTokenFP &&
 				localFP.UsageEventFP == pgUsageFP {

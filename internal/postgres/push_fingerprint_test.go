@@ -50,3 +50,29 @@ func TestShouldSkipSessionMessagesGuardsCountAndNilMaps(t *testing.T) {
 		"sess", 2, localFP, false, comparisons,
 	))
 }
+
+func TestComparisonAggregates(t *testing.T) {
+	msgAgg, toolAgg, ok := comparisonAggregates("missing", nil)
+	assert.False(t, ok)
+	assert.Equal(t, pushMessageAggregate{}, msgAgg)
+	assert.Equal(t, pushToolCallAggregate{}, toolAgg)
+
+	comparisons := &pushMessageComparison{
+		MessageAggregates: map[string]pushMessageAggregate{
+			"sess": {Count: 3, Sum: 9, Max: 5, Min: 1, SysFP: "0,2"},
+		},
+		ToolCallAggregates: map[string]pushToolCallAggregate{
+			"sess": {Count: 2, Sum: 11},
+		},
+	}
+
+	msgAgg, toolAgg, ok = comparisonAggregates("sess", comparisons)
+	require.True(t, ok)
+	assert.Equal(t,
+		pushMessageAggregate{
+			Count: 3, Sum: 9, Max: 5, Min: 1, SysFP: "0,2",
+		},
+		msgAgg,
+	)
+	assert.Equal(t, pushToolCallAggregate{Count: 2, Sum: 11}, toolAgg)
+}

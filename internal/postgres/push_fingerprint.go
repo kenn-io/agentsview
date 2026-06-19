@@ -52,6 +52,18 @@ type pushLocalMessageFingerprint struct {
 	UsageEventFP  string
 }
 
+func comparisonAggregates(
+	sessionID string,
+	comparisons *pushMessageComparison,
+) (pushMessageAggregate, pushToolCallAggregate, bool) {
+	if comparisons == nil {
+		return pushMessageAggregate{}, pushToolCallAggregate{}, false
+	}
+	return comparisons.MessageAggregates[sessionID],
+		comparisons.ToolCallAggregates[sessionID],
+		true
+}
+
 func readPushSessionMessageComparisons(
 	ctx context.Context,
 	tx *sql.Tx,
