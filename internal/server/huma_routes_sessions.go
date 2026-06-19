@@ -137,6 +137,12 @@ func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, 
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return db.SessionFilter{}, err
 	}
+	// The order_by param is shared with the list route via this struct; reject
+	// malformed specs here too (the dropped enum used to guard every route),
+	// even though the sidebar index applies its own ordering and ignores it.
+	if _, err := db.ParseSortSpec(in.OrderBy); err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, "invalid order_by: "+err.Error())
+	}
 	limit := 0
 	if in.Limit > 0 {
 		limit = clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)

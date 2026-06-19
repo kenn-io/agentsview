@@ -103,3 +103,18 @@ func TestListSessions_OrderBy_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// TestSidebarIndex_OrderByInvalid confirms the sidebar-index route, which shares
+// the session-filter input struct, also rejects a malformed order_by rather than
+// silently accepting and ignoring it (the dropped enum used to guard both routes).
+func TestSidebarIndex_OrderByInvalid(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "p", 3)
+
+	w := te.get(t, "/api/v1/sessions/sidebar-index?order_by=bogus")
+	assertStatus(t, w, http.StatusBadRequest)
+
+	// A valid spec is still accepted even though the sidebar applies its own order.
+	w = te.get(t, "/api/v1/sessions/sidebar-index?order_by=messages:desc")
+	assertStatus(t, w, http.StatusOK)
+}
