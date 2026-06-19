@@ -80,25 +80,6 @@
 </script>
 
 <div class="trash-page">
-  <div class="trash-header">
-    <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
-    <h2>Trash</h2>
-    {#if trashedSessions.length > 0}
-      <span class="trash-count">{trashedSessions.length}</span>
-      <button
-        class="empty-all-btn"
-        onclick={emptyAll}
-        disabled={emptying}
-      >
-        {emptying ? "Emptying..." : "Empty Trash"}
-      </button>
-    {/if}
-  </div>
-
-  <p class="trash-desc">
-    Deleted sessions are kept until you permanently delete them or empty the trash.
-  </p>
-
   {#if loading}
     <div class="loading-state">Loading trash...</div>
   {:else if trashedSessions.length === 0}
@@ -108,6 +89,19 @@
       <p class="empty-desc-text">Deleted sessions will appear here.</p>
     </div>
   {:else}
+    <div class="trash-header">
+      <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
+      <h2>Trash</h2>
+      <span class="trash-count">{trashedSessions.length}</span>
+      <button
+        class="empty-all-btn"
+        onclick={emptyAll}
+        disabled={emptying}
+      >
+        {emptying ? "Emptying..." : "Empty Trash"}
+      </button>
+    </div>
+
     <div class="trash-list">
       {#each trashedSessions as session (session.id)}
         <div class="trash-card">
@@ -176,12 +170,6 @@
     font-weight: 600;
     padding: 1px 7px;
     border-radius: 10px;
-  }
-
-  .trash-desc {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-bottom: 24px;
   }
 
   .empty-all-btn {
