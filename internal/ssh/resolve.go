@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -12,6 +13,8 @@ import (
 // an extra file (not an agent directory) to include in the transfer. It
 // is not a valid agent type, so parseResolvedDirs routes it separately.
 const resolveFilePrefix = "@file"
+
+const resolveRecordSep = "\x00"
 
 func aiderSkipDirCasePattern() string {
 	return strings.Join(parser.AiderDiscoverySkipDirNames(), "|")
@@ -34,7 +37,7 @@ func buildAiderResolveSnippet(envVar string) string {
 			"[ \"$av_aider_files\" -ge %d ] && return; "+
 			"[ \"$av_aider_dirs\" -ge %d ] && return; "+
 			"elif [ -f \"$av_entry\" ] && [ \"$av_base\" = '%s' ]; then "+
-			"echo \"%s:$av_entry\"; "+
+			"printf '%%s\\000' \"%s:$av_entry\"; "+
 			"av_aider_files=$((av_aider_files + 1)); "+
 			"[ \"$av_aider_files\" -ge %d ] && return; "+
 			"fi; "+
@@ -100,7 +103,8 @@ func buildResolveScript() string {
 				dirExpr = fmt.Sprintf("${%s:-%s}", def.EnvVar, defaultDir)
 			}
 			fmt.Fprintf(&b,
-				"dir=\"%s\"; [ -d \"$dir\" ] && echo \"%s:$dir\"\n",
+				"dir=\"%s\"; [ -d \"$dir\" ] && "+
+					"printf '%%s\\000' \"%s:$dir\"\n",
 				dirExpr, string(def.Type),
 			)
 			// Codex stores renameable session titles in
@@ -110,7 +114,8 @@ func buildResolveScript() string {
 			if def.Type == parser.AgentCodex {
 				fmt.Fprintf(&b,
 					"idx=\"${dir%%/*}/%s\"; "+
-						"[ -f \"$idx\" ] && echo \"%s:$idx\"\n",
+						"[ -f \"$idx\" ] && "+
+						"printf '%%s\\000' \"%s:$idx\"\n",
 					parser.CodexSessionIndexFilename,
 					resolveFilePrefix,
 				)
@@ -124,23 +129,26 @@ func buildResolveScript() string {
 }
 
 // parseResolvedDirs parses script output into a map of agent type to transfer
-// target paths plus a deduplicated list of extra files (lines tagged with
-// resolveFilePrefix). Most agent targets are directories; Aider targets are
-// individual .aider.chat.history.md files. Skips empty lines and entries with
-// empty values.
+// target paths plus a deduplicated list of extra files (records tagged with
+// resolveFilePrefix). Generated resolver output is NUL-delimited so remote
+// paths containing newlines cannot inject extra records; newline-delimited input
+// is accepted only for older tests and defensive compatibility. Most agent
+// targets are directories; Aider targets are individual .aider.chat.history.md
+// files. Skips empty records, empty values, and values containing record
+// separators.
 func parseResolvedDirs(
 	output string,
 ) (map[parser.AgentType][]string, []string) {
 	dirs := make(map[parser.AgentType][]string)
 	var extraFiles []string
 	seenFile := make(map[string]struct{})
-	for line := range strings.SplitSeq(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+	for _, record := range resolveOutputRecords(output) {
+		record = strings.TrimSpace(record)
+		if record == "" {
 			continue
 		}
-		key, value, ok := strings.Cut(line, ":")
-		if !ok || value == "" {
+		key, value, ok := strings.Cut(record, ":")
+		if !ok || invalidResolvedPath(value) {
 			continue
 		}
 		if key == resolveFilePrefix {
@@ -152,9 +160,24 @@ func parseResolvedDirs(
 			continue
 		}
 		at := parser.AgentType(key)
+		if at == parser.AgentAider &&
+			path.Base(value) != parser.AiderHistoryFileName() {
+			continue
+		}
 		dirs[at] = append(dirs[at], value)
 	}
 	return dirs, extraFiles
+}
+
+func resolveOutputRecords(output string) []string {
+	if strings.Contains(output, resolveRecordSep) {
+		return strings.Split(output, resolveRecordSep)
+	}
+	return strings.Split(output, "\n")
+}
+
+func invalidResolvedPath(value string) bool {
+	return value == "" || strings.ContainsAny(value, "\x00\r\n")
 }
 
 // resolveDirs runs the resolve script on the remote host via SSH and

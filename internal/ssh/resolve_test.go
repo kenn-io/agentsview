@@ -23,7 +23,7 @@ func TestBuildResolveScript(t *testing.T) {
 		if def.FileBased || def.DiscoverFunc != nil {
 			continue
 		}
-		marker := "echo \"" + string(def.Type) + ":"
+		marker := "\"" + string(def.Type) + ":"
 		assert.NotContains(t, script, marker,
 			"non-file-based agent %s in script", def.Type)
 	}
@@ -33,7 +33,7 @@ func TestBuildResolveScript(t *testing.T) {
 		if !def.FileBased || def.DiscoverFunc == nil {
 			continue
 		}
-		marker := "echo \"" + string(def.Type) + ":"
+		marker := "\"" + string(def.Type) + ":"
 		assert.Contains(t, script, marker,
 			"file-based agent %s missing from script", def.Type)
 	}
@@ -183,6 +183,30 @@ func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
 		"remote aider discovery must enforce the local depth cap")
 }
 
+func TestResolveScriptAiderNewlinePathCannotInjectTarget(t *testing.T) {
+	home := t.TempDir()
+	codeRoot := filepath.Join(home, "code")
+	injected := "/home/victim/" + parser.AiderHistoryFileName()
+	maliciousDir := filepath.Join(codeRoot, "repo\naider:", "home", "victim")
+	require.NoError(t, os.MkdirAll(maliciousDir, 0o755), "mkdir malicious dir")
+	maliciousHistory := filepath.Join(maliciousDir, parser.AiderHistoryFileName())
+	require.NoError(t, os.WriteFile(maliciousHistory, []byte("# aider\n"), 0o644))
+
+	script := buildResolveScript()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + codeRoot}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	dirs, _ := parseResolvedDirs(string(out))
+	assert.NotContains(t, dirs[parser.AgentAider], injected,
+		"newline-bearing repository paths must not inject a second transfer target")
+	for _, target := range dirs[parser.AgentAider] {
+		assert.NotContains(t, target, "\n",
+			"aider transfer target must not contain record separators")
+	}
+}
+
 // TestResolveScriptAiderRejectsHomeOverride verifies that setting AIDER_DIR
 // to literal $HOME (the very thing the home-default skip prevents) is also
 // dropped, so an unscoped override cannot reintroduce a whole-home tar.
@@ -224,6 +248,21 @@ func TestParseResolvedDirs(t *testing.T) {
 	assert.Len(t, dirs, 3)
 
 	// The duplicate index file line is deduplicated.
+	assert.Equal(t,
+		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
+}
+
+func TestParseResolvedDirsNULRecords(t *testing.T) {
+	input := "claude:/home/wes/.claude/projects\x00" +
+		"aider:/home/wes/code/repo/.aider.chat.history.md\x00" +
+		"@file:/home/wes/.codex/session_index.jsonl\x00"
+
+	dirs, extraFiles := parseResolvedDirs(input)
+
+	assert.Equal(t, []string{"/home/wes/.claude/projects"}, dirs[parser.AgentClaude])
+	assert.Equal(t,
+		[]string{"/home/wes/code/repo/.aider.chat.history.md"},
+		dirs[parser.AgentAider])
 	assert.Equal(t,
 		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
 }
