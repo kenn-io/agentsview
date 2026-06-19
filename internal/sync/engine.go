@@ -1965,7 +1965,7 @@ func (e *Engine) ResyncAll(
 	e.openCodeArchiveStore = origDB
 	e.db = newDB
 	stats = e.syncAllLocked(
-		ctx, onProgress, time.Time{}, nil, syncWriteBulk,
+		ctx, onProgress, time.Time{}, nil, syncWriteBulk, true,
 	)
 	e.db = origDB // restore immediately
 	e.openCodeArchiveStore = nil
@@ -2321,7 +2321,7 @@ func (e *Engine) SyncAll(
 	}()
 	defer e.syncMu.Unlock()
 	stats = e.syncAllLocked(
-		ctx, onProgress, time.Time{}, nil, syncWriteDefault,
+		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
 	)
 	return
 }
@@ -2344,7 +2344,7 @@ func (e *Engine) SyncAllSince(
 	}()
 	defer e.syncMu.Unlock()
 	stats = e.syncAllLocked(
-		ctx, onProgress, since, nil, syncWriteDefault,
+		ctx, onProgress, since, nil, syncWriteDefault, true,
 	)
 	return
 }
@@ -2363,9 +2363,9 @@ func (e *Engine) SyncRootsSince(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	scope := newRootSyncScope(roots)
 	stats = e.syncAllLocked(
-		ctx, onProgress, since, newRootSyncScope(roots),
-		syncWriteDefault,
+		ctx, onProgress, since, scope, syncWriteDefault, scope == nil,
 	)
 	return
 }
@@ -2437,13 +2437,15 @@ func samePathOrDescendant(path, root string) bool {
 
 func (e *Engine) syncAllLocked(
 	ctx context.Context, onProgress ProgressFunc, since time.Time,
-	scope *rootSyncScope, writeMode syncWriteMode,
+	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
 ) SyncStats {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
 
-	e.recordSyncStarted()
+	if recordSyncState {
+		e.recordSyncStarted()
+	}
 	e.phaseStats.Reset()
 
 	t0 := time.Now()
@@ -2855,7 +2857,9 @@ func (e *Engine) syncAllLocked(
 	e.lastSyncStats = stats
 	e.mu.Unlock()
 
-	e.recordSyncFinished()
+	if recordSyncState {
+		e.recordSyncFinished()
+	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats

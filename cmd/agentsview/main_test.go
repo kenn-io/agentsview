@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -260,6 +261,26 @@ func TestPollUnwatchedRootsOnceUsesScopedIncrementalSync(t *testing.T) {
 	assert.Equal(t, 1, fake.calls)
 	assert.Equal(t, roots, fake.roots)
 	assert.Equal(t, lastSyncStartedAt.Add(-unwatchedPollSafetyMargin), fake.since)
+}
+
+func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "codex-state")
+	require.NoError(t, os.Mkdir(parent, 0o755), "mkdir parent")
+
+	sessionsDir := filepath.Join(parent, "sessions")
+	archivedDir := filepath.Join(parent, "archived_sessions")
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {sessionsDir, archivedDir},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs, "unwatched dirs before watcher setup")
+	require.Len(t, roots, 1, "shared watch root should be represented once")
+	assert.Equal(t, parent, roots[0].root)
+	assert.ElementsMatch(t, []string{sessionsDir, archivedDir}, roots[0].dirs)
 }
 
 func TestResyncCoversSignals(t *testing.T) {

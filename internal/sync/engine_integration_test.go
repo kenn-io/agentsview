@@ -7291,6 +7291,45 @@ func TestSyncRootsSinceScopesOpenCodeSQLiteRoots(t *testing.T) {
 	assert.Equal(t, "root b", *page.Sessions[0].FirstMessage)
 }
 
+func TestSyncRootsSinceDoesNotAdvanceGlobalWatermark(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{rootA, rootB}))
+
+	watermark := time.Now().Add(-24 * time.Hour).UTC()
+	require.NoError(t, env.db.SetSyncState(
+		"last_sync_started_at",
+		watermark.Format(time.RFC3339Nano),
+	), "seed last_sync_started_at")
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "root a").
+		String()
+	pathA := env.writeSession(
+		t, rootA, filepath.Join("proj-a", "root-a.jsonl"), content,
+	)
+	fileTime := watermark.Add(time.Hour)
+	require.NoError(t, os.Chtimes(pathA, fileTime, fileTime), "chtimes root a")
+
+	env.engine.SyncRootsSince(
+		context.Background(), []string{rootB}, watermark, nil,
+	)
+
+	stats := env.engine.SyncAllSince(
+		context.Background(), env.engine.LastSyncStartedAt(), nil,
+	)
+	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
+	assert.Equal(t, 1, stats.Synced, "synced sessions")
+
+	page, err := env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err, "list sessions")
+	require.Len(t, page.Sessions, 1, "sessions")
+	require.NotNil(t, page.Sessions[0].FirstMessage, "first message")
+	assert.Equal(t, "root a", *page.Sessions[0].FirstMessage)
+}
+
 func TestSyncAll_PersistsStartedAndFinishedAt(t *testing.T) {
 	env := setupTestEnv(t)
 
