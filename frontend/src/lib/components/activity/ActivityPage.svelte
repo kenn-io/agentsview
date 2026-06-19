@@ -163,14 +163,12 @@
       />
     </div>
 
-    <div class="refresh-slot">
-      <RefreshControl
-        lastUpdatedAt={activity.lastUpdatedAt}
-        busy={activity.loading}
-        onRefresh={() => activity.load({ background: true })}
-        label="Refresh activity"
-      />
-    </div>
+    <RefreshControl
+      lastUpdatedAt={activity.lastUpdatedAt}
+      busy={activity.loading}
+      onRefresh={() => activity.load({ background: true })}
+      label="Refresh activity"
+    />
   </div>
 
   <div class="activity-content">
@@ -288,14 +286,6 @@
     opacity: 0.72;
     pointer-events: none;
     transform: translateY(-50%);
-  }
-
-  /* Push the shared refresh control to the right edge of the toolbar, matching
-     the Analytics/Usage refresh affordance. */
-  .refresh-slot {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
   }
 
   .activity-content {

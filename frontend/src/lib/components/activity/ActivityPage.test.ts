@@ -12,3 +12,12 @@ describe("ActivityPage filter controls", () => {
     expect(filterSelectStyles).toContain("appearance: none");
   });
 });
+
+describe("ActivityPage refresh control layout", () => {
+  it("keeps the shared refresh control inline with the toolbar filters", () => {
+    expect(source).toContain("<RefreshControl");
+    expect(source).toContain("activity.lastUpdatedAt");
+    expect(source).not.toContain("refresh-slot");
+    expect(source).not.toContain("margin-left: auto");
+  });
+});
