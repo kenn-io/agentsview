@@ -36,8 +36,11 @@
 
   function handleSessionClick(id: string) {
     let needInvalidate = false;
+    const params: Record<string, string> = {};
+    const clearParams: string[] = [];
     if (analytics.includeOneShot && !sessions.filters.includeOneShot) {
       sessions.filters.includeOneShot = true;
+      clearParams.push("include_one_shot");
       needInvalidate = true;
     }
     if (
@@ -45,10 +48,20 @@
       !sessions.filters.includeAutomated
     ) {
       sessions.filters.includeAutomated = true;
+      params.include_automated = "true";
+      clearParams.push("include_automated");
       needInvalidate = true;
     }
     if (needInvalidate) {
       sessions.invalidateFilterCaches();
+    }
+    if (clearParams.length > 0 || Object.keys(params).length > 0) {
+      router.navigateToSession(
+        id,
+        Object.keys(params).length > 0 ? params : undefined,
+        clearParams,
+      );
+      return;
     }
     router.navigateToSession(id);
   }

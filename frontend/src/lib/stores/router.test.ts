@@ -212,6 +212,78 @@ describe("RouterStore", () => {
     expect(window.location.search).toBe("?msg=last");
   });
 
+  it("navigateToSession preserves session route params from the sessions view", () => {
+    setURL(
+      "/sessions?window_days=14&project=myproj&termination=unclean&msg=stale",
+    );
+    store = new RouterStore();
+    store.navigateToSession("abc-123");
+
+    expect(window.location.pathname).toBe(
+      "/sessions/abc-123",
+    );
+    expect(window.location.search).toContain("window_days=14");
+    expect(window.location.search).toContain("project=myproj");
+    expect(window.location.search).toContain("termination=unclean");
+    expect(window.location.search).not.toContain("msg=stale");
+  });
+
+  it("navigateToSession can clear stale preserved route params", () => {
+    setURL(
+      "/sessions?window_days=14&project=myproj&include_one_shot=false",
+    );
+    store = new RouterStore();
+    store.navigateToSession("abc-123", undefined, ["include_one_shot"]);
+
+    expect(window.location.pathname).toBe(
+      "/sessions/abc-123",
+    );
+    expect(window.location.search).toContain("window_days=14");
+    expect(window.location.search).toContain("project=myproj");
+    expect(window.location.search).not.toContain("include_one_shot=false");
+  });
+
+  it("navigateToSessions preserves session route params for drilldowns", () => {
+    setURL(
+      "/sessions?date_from=2026-01-01&date_to=2026-01-31&project=myproj",
+    );
+    store = new RouterStore();
+    store.navigateToSessions({ agent: "codex" });
+
+    expect(window.location.pathname).toBe("/sessions");
+    expect(window.location.search).toContain("date_from=2026-01-01");
+    expect(window.location.search).toContain("date_to=2026-01-31");
+    expect(window.location.search).toContain("project=myproj");
+    expect(window.location.search).toContain("agent=codex");
+  });
+
+  it("navigateToSessions can clear preserved route params for drilldowns", () => {
+    setURL(
+      "/sessions?date_from=2026-01-01&date_to=2026-01-31&min_messages=10&max_messages=50",
+    );
+    store = new RouterStore();
+    store.navigateToSessions(
+      { min_messages: "100" },
+      ["min_messages", "max_messages"],
+    );
+
+    expect(window.location.search).toContain("date_from=2026-01-01");
+    expect(window.location.search).toContain("date_to=2026-01-31");
+    expect(window.location.search).toContain("min_messages=100");
+    expect(window.location.search).not.toContain("max_messages=50");
+  });
+
+  it("navigateToSession does not preserve params from non-session routes", () => {
+    setURL("/usage?from=2026-01-01&to=2026-01-07");
+    store = new RouterStore();
+    store.navigateToSession("abc-123");
+
+    expect(window.location.pathname).toBe(
+      "/sessions/abc-123",
+    );
+    expect(window.location.search).toBe("");
+  });
+
   it("navigateFromSession returns to /sessions", () => {
     setURL("/sessions/abc-123");
     store = new RouterStore();
@@ -368,5 +440,19 @@ describe("RouterStore", () => {
     store = new RouterStore();
     const href = store.buildSessionHref("abc-123");
     expect(href).toBe("/sessions/abc-123");
+  });
+
+  it("buildSessionHref preserves session route params from the sessions view", () => {
+    setURL(
+      "/sessions?window_days=14&project=myproj&termination=unclean&msg=stale",
+    );
+    store = new RouterStore();
+    const href = store.buildSessionHref("abc-123");
+
+    expect(href).toContain("/sessions/abc-123?");
+    expect(href).toContain("window_days=14");
+    expect(href).toContain("project=myproj");
+    expect(href).toContain("termination=unclean");
+    expect(href).not.toContain("msg=stale");
   });
 });

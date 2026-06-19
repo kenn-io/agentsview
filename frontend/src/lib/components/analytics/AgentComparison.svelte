@@ -122,7 +122,7 @@
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
           class="table-row"
-          onclick={() => router.navigate("sessions", { agent: agent.name })}
+          onclick={() => router.navigateToSessions({ agent: agent.name })}
         >
           <span class="col-agent">{agent.name}</span>
           <span class="col-num">

@@ -887,6 +887,51 @@ describe("mergeUsageAndSessionUrlParams", () => {
       machine: "host-a",
     });
   });
+
+  it("omits hidden session date params from usage URLs", async () => {
+    const { mergeUsageAndSessionUrlParams } = await loadStore();
+
+    expect(
+      mergeUsageAndSessionUrlParams(
+        {
+          from: "2026-02-01",
+          to: "2026-02-07",
+        },
+        {
+          date: "2026-01-15",
+          date_from: "2026-01-01",
+          date_to: "2026-01-31",
+          project: "agentsview",
+        },
+      ),
+    ).toEqual({
+      from: "2026-02-01",
+      to: "2026-02-07",
+      project: "agentsview",
+    });
+  });
+
+  it("preserves supported termination params in usage URLs", async () => {
+    const { mergeUsageAndSessionUrlParams } = await loadStore();
+
+    expect(
+      mergeUsageAndSessionUrlParams(
+        {
+          from: "2026-02-01",
+          to: "2026-02-07",
+        },
+        {
+          termination: "unclean",
+          project: "agentsview",
+        },
+      ),
+    ).toEqual({
+      from: "2026-02-01",
+      to: "2026-02-07",
+      termination: "unclean",
+      project: "agentsview",
+    });
+  });
 });
 
 describe("parseWindowDays", () => {

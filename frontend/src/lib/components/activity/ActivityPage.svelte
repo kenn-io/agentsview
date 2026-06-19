@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import {
     activity,
     localDateStr,
@@ -7,9 +7,22 @@
   } from "../../stores/activity.svelte.js";
   import { events } from "../../stores/events.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import {
+    yokedDates,
+    panelDateState,
+    rangeToActivityParams,
+    type PanelDateState,
+  } from "../../stores/yokedDates.svelte.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import { ChevronDownIcon } from "../../icons.js";
+  import {
+    addDays,
+    endOfMonth,
+    startOfIsoWeek,
+    startOfMonth,
+  } from "../../utils/dates.js";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -35,6 +48,10 @@
       ? localDateStr(new Date(new Date(activity.report.range_end).getTime() - 1))
       : "",
   );
+  const activityPanelDate = $derived(currentActivityPanelDate());
+  const activityDateSignature = $derived(dateSignature(activityPanelDate));
+  let activityYokeReady = $state(false);
+  let lastActivityDateSignature = "";
 
   // Page-local drill-down: clicking a Concurrency bucket filters the sessions
   // table to the sessions active in that slot. Deliberately not URL-synced — it
@@ -57,25 +74,125 @@
 
   // The activity store is the source of truth: day/week/month map to a calendar
   // period anchored on `date`; custom maps to from/to. Relative windows have no
-  // native equivalent here, so applyRange resolves them to a pinned custom range.
+  // native API equivalent here, so applyRange sends concrete dates while the
+  // URL keeps `window_days` to preserve rolling intent across reloads.
   const rangeSelection = $derived.by((): RangeSelection => {
     if (activity.preset === "custom") {
+      if (activity.rollingWindowDays !== null) {
+        return { mode: "relative", days: activity.rollingWindowDays };
+      }
       return { mode: "custom", from: activity.from, to: activity.to };
     }
     return { mode: "calendar", unit: activity.preset, anchor: activity.date };
   });
 
   function applyRange(sel: RangeSelection) {
+    let yokeState: PanelDateState | null = null;
     if (sel.mode === "calendar") {
       activity.setPreset(sel.unit);
       activity.setDate(sel.anchor);
     } else {
       const range = resolveRange(sel, earliestSession);
-      activity.setPreset("custom");
-      activity.setFrom(range.from);
-      activity.setTo(range.to);
+      yokeState = yokeStateForSelection(sel, range);
+      activity.setCustomRange(
+        range.from,
+        range.to,
+        yokeState?.mode === "rolling"
+          ? yokeState.windowDays ?? null
+          : null,
+      );
+    }
+    if (yokeState) {
+      yokedDates.updateFromPanel(yokeState);
+      lastActivityDateSignature = dateSignature(
+        currentActivityPanelDate(),
+      );
     }
     activity.load();
+  }
+
+  function yokeStateForSelection(
+    sel: RangeSelection,
+    range: { from: string; to: string },
+  ): PanelDateState | null {
+    if (sel.mode === "relative" && sel.days > 0) {
+      return panelDateState(range.from, range.to, {
+        mode: "rolling",
+        windowDays: sel.days,
+      });
+    }
+    return panelDateState(range.from, range.to, { mode: "fixed" });
+  }
+
+  function currentActivityPanelDate(): PanelDateState | null {
+    if (activity.preset === "custom") {
+      if (activity.rollingWindowDays !== null) {
+        return panelDateState(activity.from, activity.to, {
+          mode: "rolling",
+          windowDays: activity.rollingWindowDays,
+        });
+      }
+      return panelDateState(activity.from, activity.to, { mode: "fixed" });
+    }
+    if (activity.preset === "week") {
+      const from = startOfIsoWeek(activity.date);
+      return panelDateState(from, addDays(from, 6), {
+        mode: "fixed",
+      });
+    }
+    if (activity.preset === "month") {
+      const from = startOfMonth(activity.date);
+      return panelDateState(from, endOfMonth(from), {
+        mode: "fixed",
+      });
+    }
+    return panelDateState(activity.date, activity.date, { mode: "fixed" });
+  }
+
+  function dateSignature(state: PanelDateState | null): string {
+    if (!state) return "";
+    return [
+      state.mode ?? "fixed",
+      state.windowDays ?? "",
+      state.from,
+      state.to,
+    ].join(":");
+  }
+
+  function hasActivityDateParams(params: Record<string, string>): boolean {
+    return (
+      !!params.preset ||
+      !!params.date ||
+      !!params.from ||
+      !!params.to ||
+      !!params.window_days
+    );
+  }
+
+  function applyActivityPanelDate(state: PanelDateState): void {
+    activity.setCustomRange(
+      state.from,
+      state.to,
+      state.mode === "rolling" ? state.windowDays ?? null : null,
+    );
+  }
+
+  function seedActivityYoke(): void {
+    if (hasActivityDateParams(router.params)) {
+      const state = currentActivityPanelDate();
+      if (state) yokedDates.updateFromPanel(state);
+      return;
+    }
+
+    const seed = yokedDates.seedForPanel();
+    const params = seed ? rangeToActivityParams(seed) : {};
+    const state = panelDateState(params.from ?? "", params.to ?? "", {
+      mode: params.window_days ? "rolling" : "fixed",
+      windowDays: params.window_days
+        ? Number.parseInt(params.window_days, 10)
+        : undefined,
+    });
+    if (state) applyActivityPanelDate(state);
   }
 
   function onProjectSelect(value: string) {
@@ -107,6 +224,9 @@
     // Idempotent; loads the activity filter option lists with one-shot
     // and automated sessions included, matching the activity report.
     activity.loadFilterOptions();
+    seedActivityYoke();
+    lastActivityDateSignature = dateSignature(currentActivityPanelDate());
+    activityYokeReady = true;
     // The page owns the initial load. attach() above ran hydrateFromUrl, so the
     // range/filters are set before this first load. RefreshControl handles the
     // periodic refresh after that.
@@ -120,6 +240,17 @@
       detach();
       unsubEvents();
     };
+  });
+
+  $effect(() => {
+    const state = activityPanelDate;
+    const signature = activityDateSignature;
+    untrack(() => {
+      if (!activityYokeReady || !state) return;
+      if (signature === lastActivityDateSignature) return;
+      lastActivityDateSignature = signature;
+      yokedDates.updateFromPanel(state);
+    });
   });
 </script>
 

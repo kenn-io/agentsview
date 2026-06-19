@@ -30,6 +30,11 @@
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import {
+    yokedDates,
+    panelDateState,
+    type PanelDateState,
+  } from "../../stores/yokedDates.svelte.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
@@ -56,9 +61,16 @@
   function applyRange(sel: RangeSelection) {
     if (sel.mode === "relative" && sel.days > 0) {
       usage.setRollingWindow(sel.days);
+      updateYokeFromUsage(panelDateState(usage.from, usage.to, {
+        mode: "rolling",
+        windowDays: sel.days,
+      }));
     } else {
       const range = resolveRange(sel, earliestSession);
       usage.setDateRange(range.from, range.to);
+      updateYokeFromUsage(panelDateState(range.from, range.to, {
+        mode: "fixed",
+      }));
     }
   }
 
@@ -114,6 +126,30 @@
   const sessionFilterSignature = $derived(
     JSON.stringify(sessionUrlParams),
   );
+  function applyUsagePanelDate(state: PanelDateState): boolean {
+    const before = JSON.stringify({
+      from: usage.from,
+      to: usage.to,
+      isPinned: usage.isPinned,
+      windowDays: usage.windowDays,
+    });
+    if (state.mode === "rolling" && state.windowDays) {
+      usage.applyRollingWindow(state.windowDays);
+    } else {
+      usage.applyDateRange(state.from, state.to);
+    }
+    const after = JSON.stringify({
+      from: usage.from,
+      to: usage.to,
+      isPinned: usage.isPinned,
+      windowDays: usage.windowDays,
+    });
+    return before !== after;
+  }
+
+  function updateYokeFromUsage(state: PanelDateState | null): void {
+    if (state) yokedDates.updateFromPanel(state);
+  }
 
   // URL-init: seed store filters from URL params when landing
   // on /usage with a deep-link. A bare /usage preserves the
@@ -126,11 +162,22 @@
   const SESSION_FILTER_KEYS = new Set([
     "project", "machine", "agent",
     "termination",
-    "date", "date_from", "date_to",
     "active_since", "exclude_project",
     "min_messages", "max_messages", "min_user_messages",
     "include_one_shot", "include_automated",
   ]);
+  function usageSupportedSessionParams(
+    params: Record<string, string>,
+  ): Record<string, string> {
+    const supported: Record<string, string> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (SESSION_FILTER_KEYS.has(key)) {
+        supported[key] = value;
+      }
+    }
+    return supported;
+  }
+
   let urlInitRan = $state(false);
   let urlWritebackReady = $state(false);
   let initialFetchDone = $state(false);
@@ -141,14 +188,15 @@
       if (route !== "usage") return;
       const hasDateParam = !!params["from"] || !!params["to"];
       const parsedWindowDays = parseWindowDays(params["window_days"]);
-      const hasFilterKeys = Object.keys(params).some(
-        (k) =>
-          USAGE_FILTER_KEYS.has(k) ||
-          SESSION_FILTER_KEYS.has(k),
+      const supportedSessionParams =
+        usageSupportedSessionParams(params);
+      const hasSessionFilterKeys =
+        Object.keys(supportedSessionParams).length > 0;
+      const hasUsageFilterKeys = Object.keys(params).some(
+        (k) => USAGE_FILTER_KEYS.has(k),
       );
-      const hasSessionFilterKeys = Object.keys(params).some(
-        (k) => SESSION_FILTER_KEYS.has(k),
-      );
+      const hasFilterKeys =
+        hasUsageFilterKeys || hasSessionFilterKeys;
 
       let changed = false;
       let sessionChanged = false;
@@ -161,13 +209,40 @@
         changed = true;
       }
 
+      if (!hasDateParam && parsedWindowDays === null) {
+        const seed = yokedDates.seedForPanel();
+        const state = seed
+          ? panelDateState(seed.from, seed.to, {
+              mode: seed.mode,
+              windowDays: seed.windowDays,
+            })
+          : null;
+        if (state) {
+          changed = applyUsagePanelDate(state) || changed;
+        }
+      }
+
       // Apply rolling window from URL when present and the URL is
       // not pinning a specific date range.
       if (!hasDateParam && parsedWindowDays !== null) {
-        if (usage.windowDays !== parsedWindowDays) {
-          usage.windowDays = parsedWindowDays;
-          changed = true;
-        }
+        const stateBefore = JSON.stringify({
+          from: usage.from,
+          to: usage.to,
+          isPinned: usage.isPinned,
+          windowDays: usage.windowDays,
+        });
+        usage.applyRollingWindow(parsedWindowDays);
+        const stateAfter = JSON.stringify({
+          from: usage.from,
+          to: usage.to,
+          isPinned: usage.isPinned,
+          windowDays: usage.windowDays,
+        });
+        changed = stateBefore !== stateAfter || changed;
+        updateYokeFromUsage(panelDateState(usage.from, usage.to, {
+          mode: "rolling",
+          windowDays: parsedWindowDays,
+        }));
       }
 
       if (!hasFilterKeys) {
@@ -179,7 +254,7 @@
       }
       if (hasSessionFilterKeys) {
         const nextSessionParams = filtersToParams(
-          parseFiltersFromParams(params),
+          parseFiltersFromParams(supportedSessionParams),
         );
         const currentSessionParams = filtersToParams(
           sessions.filters,
@@ -188,17 +263,20 @@
           JSON.stringify(nextSessionParams) !==
           JSON.stringify(currentSessionParams)
         ) {
-          sessions.initFromParams(params);
+          sessions.initFromParams(supportedSessionParams);
           sessionChanged = true;
         }
       }
-      if (params["from"] && params["from"] !== usage.from) {
-        usage.from = params["from"];
-        changed = true;
-      }
-      if (params["to"] && params["to"] !== usage.to) {
-        usage.to = params["to"];
-        changed = true;
+      if (hasDateParam) {
+        const state = panelDateState(
+          params["from"] ?? usage.from,
+          params["to"] ?? usage.to,
+          { mode: "fixed" },
+        );
+        if (state) {
+          changed = applyUsagePanelDate(state) || changed;
+          updateYokeFromUsage(state);
+        }
       }
       const newExProject = splitExcludeProjectParam(
         params["exclude_project"],

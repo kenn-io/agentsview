@@ -47,6 +47,9 @@ describe("TopSessions", () => {
     analytics.errors = savedErrors;
     sessions.filters.includeOneShot = false;
     sessions.filters.termination = "";
+    router.route = "sessions";
+    router.params = {};
+    router.sessionId = null;
     window.history.replaceState(null, "", "/");
     // Clear any orphaned DOM left behind by tests that fail
     // before their unmount call.
@@ -100,7 +103,41 @@ describe("TopSessions", () => {
 
     expect(sessions.filters.includeOneShot).toBe(true);
     expect(cacheSpy).toHaveBeenCalledOnce();
-    expect(navSpy).toHaveBeenCalledWith("sess-1");
+    expect(navSpy).toHaveBeenCalledWith(
+      "sess-1",
+      undefined,
+      ["include_one_shot"],
+    );
+
+    unmount(component);
+  });
+
+  it("drops stale one-shot URL state when opening a one-shot result", async () => {
+    navSpy.mockRestore();
+    window.history.replaceState(
+      null,
+      "",
+      "/sessions?include_one_shot=false&window_days=14",
+    );
+    router.route = "sessions";
+    router.sessionId = null;
+    router.params = {
+      include_one_shot: "false",
+      window_days: "14",
+    };
+    analytics.includeOneShot = true;
+    sessions.filters.includeOneShot = false;
+    const component = mountWithData();
+    await tick();
+
+    clickRow();
+    await tick();
+
+    expect(window.location.pathname).toBe(
+      "/sessions/sess-1",
+    );
+    expect(window.location.search).toContain("window_days=14");
+    expect(window.location.search).not.toContain("include_one_shot=false");
 
     unmount(component);
   });

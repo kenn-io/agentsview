@@ -21,12 +21,27 @@
   import ActiveFilters from "./ActiveFilters.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
-  import { sessions } from "../../stores/sessions.svelte.js";
+  import {
+    sessions,
+    filtersToParams,
+  } from "../../stores/sessions.svelte.js";
   import { events } from "../../stores/events.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import {
+    yokedDates,
+    panelDateState,
+    panelStateToRange,
+    rangeToSessionParams,
+    sessionParamsToPanelDate,
+    type PanelDateState,
+  } from "../../stores/yokedDates.svelte.js";
+  import { rollingRange } from "../../utils/dates.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
+
+  const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
@@ -43,10 +58,143 @@
   function applyRange(sel: RangeSelection) {
     if (sel.mode === "relative" && sel.days > 0) {
       analytics.setRollingWindow(sel.days);
+      const state = panelDateState(analytics.from, analytics.to, {
+        mode: "rolling",
+        windowDays: sel.days,
+      });
+      if (state) {
+        yokedDates.updateFromPanel(state);
+        writeSessionDateParams(state);
+      }
     } else {
       const range = resolveRange(sel, earliestSession);
       analytics.setDateRange(range.from, range.to);
+      const state = panelDateState(range.from, range.to, {
+        mode: "fixed",
+      });
+      if (state) {
+        yokedDates.updateFromPanel(state);
+        writeSessionDateParams(state);
+      }
     }
+  }
+
+  function parseSessionAnalyticsWindowDays(
+    raw: string | undefined,
+  ): number | null {
+    if (!raw) return null;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n <= 0 || String(n) !== raw) {
+      return null;
+    }
+    return n;
+  }
+
+  function hasSessionDateParams(params: Record<string, string>): boolean {
+    return !!params["date"] || !!params["date_from"] || !!params["date_to"];
+  }
+
+  function rollingPanelDate(days: number): PanelDateState | null {
+    const range = rollingRange(days);
+    return panelDateState(range.from, range.to, {
+      mode: "rolling",
+      windowDays: days,
+    });
+  }
+
+  function sessionAnalyticsDateUrlSignature(
+    params: Record<string, string>,
+    state: PanelDateState | null,
+  ): string {
+    if (state?.mode === "rolling") {
+      return JSON.stringify({
+        mode: state.mode,
+        windowDays: state.windowDays ?? null,
+      });
+    }
+    if (state) {
+      return JSON.stringify({
+        mode: state.mode,
+        date: params["date"] ?? "",
+        dateFrom: params["date_from"] ?? "",
+        dateTo: params["date_to"] ?? "",
+      });
+    }
+    if (hasSessionDateParams(params)) {
+      return JSON.stringify({
+        mode: "invalid",
+        date: params["date"] ?? "",
+        dateFrom: params["date_from"] ?? "",
+        dateTo: params["date_to"] ?? "",
+      });
+    }
+    return JSON.stringify({ mode: "none" });
+  }
+
+  function clearSessionDateFilters(): void {
+    sessions.filters.date = "";
+    sessions.filters.dateFrom = "";
+    sessions.filters.dateTo = "";
+  }
+
+  function syncSessionFiltersForDateState(
+    state: PanelDateState,
+  ): boolean {
+    const before = JSON.stringify(filtersToParams(sessions.filters));
+    clearSessionDateFilters();
+    if (state.mode !== "rolling") {
+      const range = panelStateToRange(state, Date.now());
+      if (range) {
+        const params = rangeToSessionParams(range);
+        sessions.filters.date = params["date"] ?? "";
+        sessions.filters.dateFrom = params["date_from"] ?? "";
+        sessions.filters.dateTo = params["date_to"] ?? "";
+      }
+    }
+    const after = JSON.stringify(filtersToParams(sessions.filters));
+    return before !== after;
+  }
+
+  function writeSessionDateParams(state: PanelDateState): void {
+    const sessionChanged = syncSessionFiltersForDateState(state);
+    const params = filtersToParams(sessions.filters);
+    delete params[SESSION_ANALYTICS_WINDOW_PARAM];
+    if (state.mode === "rolling" && state.windowDays) {
+      params[SESSION_ANALYTICS_WINDOW_PARAM] = String(state.windowDays);
+    }
+    router.replaceParams(params);
+    if (sessionChanged) sessions.load();
+  }
+
+  function analyticsPanelDateSignature(): string {
+    return JSON.stringify({
+      from: analytics.from,
+      to: analytics.to,
+      isPinned: analytics.isPinned,
+      windowDays: analytics.windowDays,
+      selectedDate: analytics.selectedDate,
+      selectedDow: analytics.selectedDow,
+      selectedHour: analytics.selectedHour,
+    });
+  }
+
+  function applyAnalyticsPanelDate(state: PanelDateState): boolean {
+    const before = analyticsPanelDateSignature();
+    if (state.mode === "rolling" && state.windowDays) {
+      analytics.applyRollingWindow(state.windowDays);
+    } else {
+      analytics.applyDateRange(state.from, state.to);
+    }
+    const after = analyticsPanelDateSignature();
+    return before !== after;
+  }
+
+  function handleDateRangeChange(from: string, to: string) {
+    const state = panelDateState(from, to, { mode: "fixed" });
+    if (!state) return;
+    analytics.setDateRange(from, to);
+    yokedDates.updateFromPanel(state);
+    writeSessionDateParams(state);
   }
 
   function shortTz(tz: string): string {
@@ -69,13 +217,16 @@
   }
 
   let unsubEvents: (() => void) | undefined;
+  let analyticsDateUrlInitRan = $state(false);
+  let analyticsDateUrlInitComplete = $state(false);
+  let lastAnalyticsDateUrlSignature: string | null = $state(null);
 
   onMount(() => {
-    // The page owns the initial load; RefreshControl handles the periodic
-    // refresh after that. SSE events only flag new data -- refetching on every
-    // event would thrash the aggregation -- so refetching stays bounded to the
-    // RefreshControl scheduler and its manual button.
-    analytics.fetchAll();
+    // The URL-date effect owns the initial load so deep links and stored yoke
+    // ranges are applied before the first analytics request. RefreshControl
+    // handles the periodic refresh after that. SSE events only flag new data --
+    // refetching on every event would thrash the aggregation -- so refetching
+    // stays bounded to the RefreshControl scheduler and its manual button.
     unsubEvents = events.subscribe(() => analytics.markNewData());
   });
 
@@ -163,9 +314,97 @@
       changed = true;
     }
 
-    if (changed) {
+    if (changed && analyticsDateUrlInitComplete) {
       untrack(() => analytics.fetchAll());
     }
+  });
+
+  $effect(() => {
+    const route = router.route;
+    const params = router.params;
+    untrack(() => {
+      if (route !== "sessions") return;
+
+      const fixedState = sessionParamsToPanelDate(params);
+      const hasDateParams = hasSessionDateParams(params);
+      const windowDays = fixedState || hasDateParams
+        ? null
+        : parseSessionAnalyticsWindowDays(
+            params[SESSION_ANALYTICS_WINDOW_PARAM],
+          );
+      let state: PanelDateState | null = fixedState;
+
+      if (!state && windowDays !== null) {
+        state = rollingPanelDate(windowDays);
+      }
+
+      const firstRun = !analyticsDateUrlInitRan;
+      const dateSignature = sessionAnalyticsDateUrlSignature(
+        params,
+        state,
+      );
+      const dateChanged = firstRun ||
+        lastAnalyticsDateUrlSignature !== dateSignature;
+
+      if (!state) {
+        if (hasDateParams) {
+          if (firstRun) {
+            analytics.fetchAll();
+          }
+          lastAnalyticsDateUrlSignature = dateSignature;
+          analyticsDateUrlInitRan = true;
+          analyticsDateUrlInitComplete = true;
+          return;
+        }
+        let changed = false;
+        if (firstRun) {
+          const seed = yokedDates.seedForPanel();
+          state = seed
+            ? panelDateState(seed.from, seed.to, {
+                mode: seed.mode,
+                windowDays: seed.windowDays,
+              })
+            : null;
+          if (state) {
+            changed = applyAnalyticsPanelDate(state);
+            writeSessionDateParams(state);
+          }
+        } else if (dateChanged) {
+          state = rollingPanelDate(analytics.windowDays);
+          if (state) {
+            changed = applyAnalyticsPanelDate(state);
+            const sessionChanged =
+              syncSessionFiltersForDateState(state);
+            yokedDates.updateFromPanel(state);
+            if (sessionChanged) sessions.load();
+          }
+        }
+        if (changed || firstRun) {
+          analytics.fetchAll();
+        }
+        lastAnalyticsDateUrlSignature = dateSignature;
+        analyticsDateUrlInitRan = true;
+        analyticsDateUrlInitComplete = true;
+        return;
+      }
+
+      let changed = false;
+      let sessionChanged = false;
+      if (dateChanged) {
+        changed = applyAnalyticsPanelDate(state);
+        sessionChanged = syncSessionFiltersForDateState(state);
+        yokedDates.updateFromPanel(state);
+      }
+      if (changed || firstRun) {
+        analytics.fetchAll();
+      }
+      if (sessionChanged && !firstRun) {
+        sessions.load();
+      }
+      lastAnalyticsDateUrlSignature = dateSignature;
+      analyticsDateUrlInitRan = true;
+      analyticsDateUrlInitComplete = true;
+    });
   });
 
   onDestroy(() => {
@@ -229,7 +468,7 @@
             </span>
           </h3>
         </div>
-        <ActivityTimeline />
+        <ActivityTimeline onDateRangeChange={handleDateRangeChange} />
         <div class="chart-divider"></div>
         <HourOfWeekHeatmap />
       </div>

@@ -19,6 +19,7 @@ import {
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
+import { daysAgo, today } from "../utils/dates.js";
 
 type AnalyticsParams = Parameters<
   typeof AnalyticsService.getApiV1AnalyticsSummary
@@ -35,23 +36,6 @@ type TopSessionsParams = Parameters<
 export type Granularity = NonNullable<ActivityParams["granularity"]>;
 export type HeatmapMetric = NonNullable<HeatmapParams["metric"]>;
 export type TopSessionsMetric = NonNullable<TopSessionsParams["metric"]>;
-
-function localDateStr(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return localDateStr(d);
-}
-
-function today(): string {
-  return localDateStr(new Date());
-}
 
 type Panel =
   | "summary"
@@ -736,23 +720,31 @@ class AnalyticsStore {
     this.fetchTopSessions();
   }
 
-  setDateRange(from: string, to: string) {
+  applyDateRange(from: string, to: string) {
     this.isPinned = true;
     this.from = from;
     this.to = to;
     this.selectedDate = null;
     this.selectedDow = null;
     this.selectedHour = null;
-    this.fetchAll();
   }
 
-  setRollingWindow(days: number) {
+  applyRollingWindow(days: number) {
     this.windowDays = days;
     this.isPinned = false;
     this.selectedDate = null;
     this.selectedDow = null;
     this.selectedHour = null;
     this.rollDates();
+  }
+
+  setDateRange(from: string, to: string) {
+    this.applyDateRange(from, to);
+    this.fetchAll();
+  }
+
+  setRollingWindow(days: number) {
+    this.applyRollingWindow(days);
     this.fetchAll();
   }
 

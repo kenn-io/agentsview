@@ -10,6 +10,7 @@ import {
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
+import { daysAgo, today } from "../utils/dates.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePanel = "summary" | "comparison" | "topSessions";
@@ -79,23 +80,6 @@ function saveToggles(t: Toggles): void {
   } catch {
     // localStorage full or unavailable — silently skip.
   }
-}
-
-function localDateStr(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return localDateStr(d);
-}
-
-function today(): string {
-  return localDateStr(new Date());
 }
 
 const DEFAULT_WINDOW_DAYS = 30;
@@ -263,17 +247,25 @@ class UsageStore {
     return p;
   }
 
-  setDateRange(from: string, to: string) {
+  applyDateRange(from: string, to: string) {
     this.isPinned = true;
     this.from = from;
     this.to = to;
+  }
+
+  applyRollingWindow(days: number) {
+    this.windowDays = days;
+    this.isPinned = false;
+    this.rollDates();
+  }
+
+  setDateRange(from: string, to: string) {
+    this.applyDateRange(from, to);
     this.fetchAll();
   }
 
   setRollingWindow(days: number) {
-    this.windowDays = days;
-    this.isPinned = false;
-    this.rollDates();
+    this.applyRollingWindow(days);
     this.fetchAll();
   }
 
@@ -692,6 +684,11 @@ export function buildUsageUrlParams(
 }
 
 const CSV_MERGE_URL_KEYS = new Set(["exclude_project"]);
+const SESSION_DATE_URL_KEYS = new Set([
+  "date",
+  "date_from",
+  "date_to",
+]);
 
 export function mergeUsageAndSessionUrlParams(
   usageParams: Record<string, string>,
@@ -699,6 +696,7 @@ export function mergeUsageAndSessionUrlParams(
 ): Record<string, string> {
   const params = { ...usageParams };
   for (const [key, value] of Object.entries(sessionParams)) {
+    if (SESSION_DATE_URL_KEYS.has(key)) continue;
     if (CSV_MERGE_URL_KEYS.has(key) && params[key]) {
       params[key] = joinCsvParts(params[key], value);
     } else {

@@ -222,15 +222,70 @@
     messageListRef?.scrollToOrdinal(ordinal);
   }
 
+  const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";
+
   /** True when URL params contain session filter keys (deep-link). */
   const SESSION_FILTER_KEYS = new Set([
-    "project", "machine", "agent", "date", "date_from", "date_to",
+    "project", "machine", "agent", "termination",
+    "date", "date_from", "date_to",
     "active_since", "exclude_project", "min_messages", "max_messages",
     "min_user_messages", "include_one_shot", "include_automated",
+    "window_days",
   ]);
   function hasFilterParams(params: Record<string, string>): boolean {
     return Object.keys(params).some((k) => SESSION_FILTER_KEYS.has(k));
   }
+
+  function hasFixedSessionDateParams(
+    params: Record<string, string>,
+  ): boolean {
+    return !!params["date"] || !!params["date_from"] || !!params["date_to"];
+  }
+
+  function isValidWindowDaysParam(raw: string | undefined): raw is string {
+    if (!raw) return false;
+    const n = Number.parseInt(raw, 10);
+    return Number.isInteger(n) && n > 0 && String(n) === raw;
+  }
+
+  function sessionRouteParamsForFilters(
+    filterParams: Record<string, string>,
+    currentParams: Record<string, string>,
+  ): Record<string, string> {
+    const next = { ...filterParams };
+    const windowDays = currentParams[SESSION_ANALYTICS_WINDOW_PARAM];
+    if (
+      !hasFixedSessionDateParams(next) &&
+      isValidWindowDaysParam(windowDays)
+    ) {
+      next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays;
+    }
+    return next;
+  }
+
+  function currentSessionRouteParams(
+    currentParams: Record<string, string>,
+  ): Record<string, string> {
+    const next: Record<string, string> = {};
+    for (const key of SESSION_FILTER_KEYS) {
+      const value = currentParams[key];
+      if (value !== undefined) {
+        next[key] = value;
+      }
+    }
+    return next;
+  }
+
+  function sessionRouteParamsForDetailExit(
+    filterParams: Record<string, string>,
+    currentParams: Record<string, string>,
+  ): Record<string, string> {
+    const currentRouteParams = currentSessionRouteParams(currentParams);
+    if (hasFilterParams(currentRouteParams)) return currentRouteParams;
+    return sessionRouteParamsForFilters(filterParams, currentParams);
+  }
+
+  let lastDetailFilterParamsSignature: string | null = $state(null);
 
   // React to route changes: reload sessions and apply URL params.
   // Only apply URL deep-link params (initFromParams) when the URL
@@ -299,13 +354,50 @@
   $effect(() => {
     const activeId = sessions.activeSessionId;
     const currentUrlSessionId = router.sessionId;
+    const filterParams = filtersToParams(sessions.filters);
+    const filterParamsSignature = JSON.stringify(filterParams);
     untrack(() => {
-      if (router.route !== "sessions") return;
-      if (activeId === currentUrlSessionId) return;
+      if (router.route !== "sessions") {
+        lastDetailFilterParamsSignature = null;
+        return;
+      }
       if (activeId) {
-        router.navigateToSession(activeId);
+        const nextParams = sessionRouteParamsForFilters(
+          filterParams,
+          router.params,
+        );
+        if (activeId === currentUrlSessionId) {
+          if (
+            lastDetailFilterParamsSignature !== null &&
+            lastDetailFilterParamsSignature !== filterParamsSignature &&
+            !filterParamsEqual(router.params, nextParams)
+          ) {
+            router.replaceParams(nextParams);
+          }
+          lastDetailFilterParamsSignature = filterParamsSignature;
+          return;
+        }
+        router.navigateToSession(activeId, nextParams);
+        lastDetailFilterParamsSignature = filterParamsSignature;
       } else {
-        router.navigateFromSession(filtersToParams(sessions.filters));
+        if (currentUrlSessionId === null) {
+          lastDetailFilterParamsSignature = null;
+          return;
+        }
+        const filterChangedOnDetail =
+          lastDetailFilterParamsSignature !== null &&
+          lastDetailFilterParamsSignature !== filterParamsSignature;
+        const nextParams = filterChangedOnDetail
+          ? sessionRouteParamsForFilters(
+              filterParams,
+              router.params,
+            )
+          : sessionRouteParamsForDetailExit(
+              filterParams,
+              router.params,
+            );
+        router.navigateFromSession(nextParams);
+        lastDetailFilterParamsSignature = null;
       }
     });
   });
@@ -329,7 +421,10 @@
   // the URL with localStorage-restored filters.
   $effect(() => {
     const route = router.route;
-    const newParams = filtersToParams(sessions.filters);
+    const newParams = sessionRouteParamsForFilters(
+      filtersToParams(sessions.filters),
+      router.params,
+    );
     untrack(() => {
       if (route !== "sessions") return;
       if (router.sessionId) return;

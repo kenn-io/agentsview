@@ -9,7 +9,9 @@ import {
 } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { trends } from "../../stores/trends.svelte.js";
+import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import type { TrendsTermsResponse } from "../../api/types.js";
+import source from "./TrendsPage.svelte?raw";
 
 const mocks = vi.hoisted(() => ({
   getApiV1TrendsTerms: vi.fn(),
@@ -70,6 +72,8 @@ describe("TrendsPage", () => {
     trends.response = null;
     trends.loading.terms = false;
     trends.errors.terms = null;
+    yokedDates.range = null;
+    localStorage.clear();
     window.history.replaceState(null, "", "/trends");
   });
 
@@ -80,6 +84,7 @@ describe("TrendsPage", () => {
     }
     document.body.innerHTML = "";
     window.history.replaceState(null, "", "/");
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -142,6 +147,57 @@ describe("TrendsPage", () => {
     await flushPromises();
 
     expect(document.body.textContent).toContain("one per line");
+  });
+
+  it("seeds bare trends URLs from the saved yoke range", async () => {
+    yokedDates.updateFromPanel({
+      from: "2024-02-01",
+      to: "2024-02-07",
+      mode: "fixed",
+    });
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        from: "2024-02-01",
+        to: "2024-02-07",
+      }),
+    );
+    expect(window.location.search).toContain("from=2024-02-01");
+    expect(window.location.search).toContain("to=2024-02-07");
+  });
+
+  it("hydrates rolling window URLs before fixed date params", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-19T12:00:00"));
+    window.history.replaceState(
+      null,
+      "",
+      "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
+    );
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        from: "2026-05-20",
+        to: "2026-06-19",
+      }),
+    );
+    expect(yokedDates.range).toMatchObject({
+      mode: "rolling",
+      windowDays: 30,
+    });
+    expect(window.location.search).toContain("window_days=30");
+  });
+
+  it("updates shared yoke state from range selections", () => {
+    expect(source).toContain("<RangePicker");
+    expect(source).toContain("updateYokeFromTrends");
+    expect(source).toContain("rangeToPanelDate(seed)");
   });
 
   it("shows chart loading status while trends are computing", async () => {
@@ -293,5 +349,27 @@ describe("TrendsPage", () => {
       "background: var(--trend-slate);",
       "background: var(--trend-red);",
     ]);
+  });
+});
+
+describe("TrendsPage date yoke controls", () => {
+  it("preserves relative range selections as rolling yoke state", () => {
+    const applyIndex = source.indexOf("async function applyRange");
+    const helperIndex = source.indexOf("function yokeStateForSelection");
+    const applyBlock = source.slice(applyIndex, helperIndex);
+
+    expect(helperIndex).toBeGreaterThan(applyIndex);
+    expect(source).toContain('mode: "rolling"');
+    expect(source).toContain("windowDays: sel.days");
+    expect(applyBlock).toContain("yokeStateForSelection(sel, range)");
+    expect(applyBlock).toContain("updateYokeFromTrends(yokeState)");
+  });
+
+  it("preserves rolling window intent in trends URLs", () => {
+    expect(source).toContain('const TREND_WINDOW_PARAM = "window_days"');
+    expect(source).toContain("parseTrendWindowDays");
+    expect(source).toContain("rollingRange(windowDays)");
+    expect(source).toContain("q.set(TREND_WINDOW_PARAM");
+    expect(source).toContain("trendsWindowDays !== null");
   });
 });

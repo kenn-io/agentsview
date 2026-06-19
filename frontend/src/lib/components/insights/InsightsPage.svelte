@@ -8,7 +8,16 @@
   import { sync } from "../../stores/sync.svelte.js";
   import { events } from "../../stores/events.svelte.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
+  import {
+    yokedDates,
+    panelDateState,
+    panelStateToRange,
+    rangeToInsightParams,
+    rangeToPanelDate,
+    type PanelDateState,
+  } from "../../stores/yokedDates.svelte.js";
   import { renderMarkdown } from "../../utils/markdown.js";
+  import { rollingRange } from "../../utils/dates.js";
   import { scoreToGrade } from "../../utils/grade.js";
   import { agentLabel } from "../../utils/agents.js";
   import { AnalyticsService } from "../../api/generated/index.js";
@@ -39,6 +48,12 @@
   } from "./qualityPatterns.js";
 
   const REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+  const INSIGHTS_WINDOW_PARAM = "window_days";
+  const INSIGHTS_DATE_PARAM_KEYS = [
+    INSIGHTS_WINDOW_PARAM,
+    "date_from",
+    "date_to",
+  ] as const;
   type AnalyticsParams = Parameters<
     typeof AnalyticsService.getApiV1AnalyticsSignals
   >[0];
@@ -138,12 +153,129 @@
   ];
 
   function applyRange(sel: RangeSelection) {
+    let state: PanelDateState | null = null;
     if (sel.mode === "relative" && sel.days > 0) {
       analytics.setRollingWindow(sel.days);
+      state = panelDateState(analytics.from, analytics.to, {
+        mode: "rolling",
+        windowDays: sel.days,
+      });
     } else {
       const range = resolveRange(sel, earliestSession);
       analytics.setDateRange(range.from, range.to);
+      state = panelDateState(range.from, range.to, { mode: "fixed" });
     }
+    updateYokeFromInsights(state);
+  }
+
+  function parseInsightWindowDays(raw: string | undefined): number | null {
+    if (!raw) return null;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n <= 0 || String(n) !== raw) {
+      return null;
+    }
+    return n;
+  }
+
+  function insightParamsToPanelDate(
+    params: Record<string, string>,
+  ): PanelDateState | null {
+    const windowDays = parseInsightWindowDays(params[INSIGHTS_WINDOW_PARAM]);
+    if (windowDays !== null) {
+      const range = rollingRange(windowDays);
+      return panelDateState(range.from, range.to, {
+        mode: "rolling",
+        windowDays,
+      });
+    }
+    return panelDateState(
+      params.date_from ?? "",
+      params.date_to ?? "",
+      { mode: "fixed" },
+    );
+  }
+
+  function hasInsightDateParams(
+    params: Record<string, string>,
+  ): boolean {
+    return !!params.date_from || !!params.date_to ||
+      !!params[INSIGHTS_WINDOW_PARAM];
+  }
+
+  function applyInsightPanelDate(state: PanelDateState): boolean {
+    const before = JSON.stringify({
+      from: analytics.from,
+      to: analytics.to,
+      isPinned: analytics.isPinned,
+      windowDays: analytics.windowDays,
+    });
+    if (state.mode === "rolling" && state.windowDays) {
+      analytics.applyRollingWindow(state.windowDays);
+    } else {
+      analytics.applyDateRange(state.from, state.to);
+    }
+    const after = JSON.stringify({
+      from: analytics.from,
+      to: analytics.to,
+      isPinned: analytics.isPinned,
+      windowDays: analytics.windowDays,
+    });
+    return before !== after;
+  }
+
+  function currentInsightPanelDate(): PanelDateState | null {
+    if (!analytics.isPinned) {
+      return panelDateState(analytics.from, analytics.to, {
+        mode: "rolling",
+        windowDays: analytics.windowDays,
+      });
+    }
+    return panelDateState(analytics.from, analytics.to, {
+      mode: "fixed",
+    });
+  }
+
+  function paramsWithInsightDate(
+    state: PanelDateState | null = currentInsightPanelDate(),
+    extra: Record<string, string> = {},
+  ): Record<string, string> {
+    const nextParams = { ...router.params };
+    for (const key of INSIGHTS_DATE_PARAM_KEYS) {
+      delete nextParams[key];
+    }
+    if (state) {
+      const range = panelStateToRange(state, Date.now());
+      if (range) {
+        Object.assign(nextParams, rangeToInsightParams(range));
+      }
+    }
+    return { ...nextParams, ...extra };
+  }
+
+  function writeInsightDateParams(state: PanelDateState): void {
+    router.replaceParams(paramsWithInsightDate(state));
+  }
+
+  function updateYokeFromInsights(state: PanelDateState | null): void {
+    if (!state) return;
+    yokedDates.updateFromPanel(state);
+    writeInsightDateParams(state);
+  }
+
+  function seedInsightsYoke(): void {
+    const urlState = insightParamsToPanelDate(router.params);
+    if (urlState) {
+      applyInsightPanelDate(urlState);
+      yokedDates.updateFromPanel(urlState);
+      return;
+    }
+    if (hasInsightDateParams(router.params)) return;
+
+    const seed = yokedDates.seedForPanel();
+    const state = seed ? rangeToPanelDate(seed) : null;
+    if (!state) return;
+    applyInsightPanelDate(state);
+    writeInsightDateParams(state);
   }
 
   function fetchInsightSignals() {
@@ -297,8 +429,14 @@
 
   function insightLinkPath(id: number): string {
     const params = new URLSearchParams();
+    const dateParams = paramsWithInsightDate();
     if (Object.hasOwn(router.params, "desktop")) {
       params.set("desktop", router.params.desktop ?? "");
+    }
+    for (const [key, value] of Object.entries(dateParams)) {
+      if (key !== "desktop" && key !== "insight") {
+        params.set(key, value);
+      }
     }
     params.set("insight", String(id));
     return `${getBasePath()}/insights?${params.toString()}`;
@@ -323,12 +461,18 @@
 
   function selectGeneratedInsight(id: number) {
     insights.select(id);
-    router.replaceParams({ insight: String(id) });
+    router.replaceParams(
+      paramsWithInsightDate(currentInsightPanelDate(), {
+        insight: String(id),
+      }),
+    );
   }
 
   function selectGeneratedTask(clientId: string) {
     insights.selectTask(clientId);
-    router.replaceParams({});
+    const params = paramsWithInsightDate();
+    delete params.insight;
+    router.replaceParams(params);
   }
 
   function selectedInsightFromRoute(): number | null {
@@ -464,6 +608,7 @@
   }
 
   onMount(() => {
+    seedInsightsYoke();
     sessions.loadProjects();
     sessions.loadAgents();
     fetchInsightSignals();
@@ -1063,7 +1208,9 @@
                     onclick={() => {
                       if (insights.selectedItem) {
                         insights.deleteItem(insights.selectedItem.id);
-                        router.replaceParams({});
+                        const params = paramsWithInsightDate();
+                        delete params.insight;
+                        router.replaceParams(params);
                       }
                     }}
                     title="Delete generated insight"

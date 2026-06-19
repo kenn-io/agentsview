@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import { addDays, endOfMonth } from "../../utils/dates.js";
 
   const BAR_HEIGHT = 120;
   const LABEL_HEIGHT = 20;
@@ -9,6 +10,12 @@
   const BAR_GAP = 2;
 
   type Metric = "messages" | "sessions";
+  interface Props {
+    onDateRangeChange?: (from: string, to: string) => void;
+  }
+
+  let { onDateRangeChange }: Props = $props();
+
   let metric = $state<Metric>("messages");
 
   let containerEl = $state<HTMLDivElement | null>(null);
@@ -125,24 +132,6 @@
     };
   }
 
-  function addDays(dateStr: string, n: number): string {
-    const d = new Date(dateStr + "T00:00:00");
-    d.setDate(d.getDate() + n);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
-
-  function endOfMonth(dateStr: string): string {
-    const d = new Date(dateStr + "T00:00:00");
-    d.setMonth(d.getMonth() + 1, 0);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
-
   function handleBarClick(
     bar: (typeof chart.bars)[number],
   ) {
@@ -151,10 +140,18 @@
     if (g === "day") {
       analytics.selectDate(bar.date);
     } else if (g === "week") {
-      analytics.setDateRange(bar.date, addDays(bar.date, 6));
+      commitDateRange(bar.date, addDays(bar.date, 6));
     } else if (g === "month") {
-      analytics.setDateRange(bar.date, endOfMonth(bar.date));
+      commitDateRange(bar.date, endOfMonth(bar.date));
     }
+  }
+
+  function commitDateRange(from: string, to: string) {
+    if (onDateRangeChange) {
+      onDateRangeChange(from, to);
+      return;
+    }
+    analytics.setDateRange(from, to);
   }
 
   function handleBarLeave() {

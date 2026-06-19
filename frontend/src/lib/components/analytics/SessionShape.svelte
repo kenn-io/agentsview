@@ -55,7 +55,7 @@
     if (max !== undefined) {
       params["max_messages"] = String(max);
     }
-    router.navigate("sessions", params);
+    router.navigateToSessions(params, ["min_messages", "max_messages"]);
   }
 </script>
 

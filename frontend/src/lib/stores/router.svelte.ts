@@ -67,6 +67,23 @@ export function parsePath(): {
 
 /** Params that are not part of routing but must survive navigations. */
 const STICKY_PARAMS = new Set(["desktop"]);
+const SESSION_ROUTE_PARAMS = new Set([
+  "project",
+  "machine",
+  "agent",
+  "termination",
+  "date",
+  "date_from",
+  "date_to",
+  "active_since",
+  "exclude_project",
+  "min_messages",
+  "max_messages",
+  "min_user_messages",
+  "include_one_shot",
+  "include_automated",
+  "window_days",
+]);
 
 export class RouterStore {
   route: Route = $state("sessions");
@@ -136,14 +153,39 @@ export class RouterStore {
     return qs ? `${full}?${qs}` : full;
   }
 
+  #sessionRouteParams(): Record<string, string> {
+    if (this.route !== "sessions") return {};
+    const params: Record<string, string> = {};
+    for (const [key, value] of Object.entries(this.params)) {
+      if (SESSION_ROUTE_PARAMS.has(key)) {
+        params[key] = value;
+      }
+    }
+    return params;
+  }
+
+  #sessionEntryParams(
+    params: Record<string, string> | undefined,
+    clearParams: Iterable<string> = [],
+  ): Record<string, string> {
+    const current = this.#sessionRouteParams();
+    for (const key of clearParams) {
+      delete current[key];
+    }
+    return {
+      ...current,
+      ...(params ?? {}),
+    };
+  }
+
   /** Build an href for a session link (includes sticky params). */
   buildSessionHref(
     id: string,
-    params: Record<string, string> = {},
+    params?: Record<string, string>,
   ): string {
     return this.#buildUrl(
       `/sessions/${encodeURIComponent(id)}`,
-      params,
+      this.#sessionEntryParams(params),
     );
   }
 
@@ -166,17 +208,29 @@ export class RouterStore {
     return true;
   }
 
+  navigateToSessions(
+    params: Record<string, string> = {},
+    clearParams: Iterable<string> = [],
+  ): boolean {
+    return this.navigate(
+      "sessions",
+      this.#sessionEntryParams(params, clearParams),
+    );
+  }
+
   navigateToSession(
     id: string,
-    params: Record<string, string> = {},
+    params?: Record<string, string>,
+    clearParams: Iterable<string> = [],
   ) {
+    const nextParams = this.#sessionEntryParams(params, clearParams);
     const url = this.#buildUrl(
       `/sessions/${encodeURIComponent(id)}`,
-      params,
+      nextParams,
     );
-    this.#updateSticky(params);
+    this.#updateSticky(nextParams);
     this.route = "sessions";
-    this.params = { ...this.#stickyParams, ...params };
+    this.params = { ...this.#stickyParams, ...nextParams };
     this.sessionId = id;
     window.history.pushState(null, "", url);
   }

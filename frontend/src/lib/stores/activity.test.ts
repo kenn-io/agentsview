@@ -425,6 +425,26 @@ describe("url state", () => {
     expect(activity.agent).toBe("claude");
   });
 
+  it("hydrates rolling URL state from window_days before fixed dates", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-19T12:00:00"));
+      activity.hydrateFromUrl({
+        preset: "custom",
+        from: "2026-01-01",
+        to: "2026-01-31",
+        window_days: "30",
+      });
+
+      expect(activity.preset).toBe("custom");
+      expect(activity.from).toBe("2026-05-20");
+      expect(activity.to).toBe("2026-06-19");
+      expect(activity.rollingWindowDays).toBe(30);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("defaults preset to day and date to today when absent", () => {
     activity.hydrateFromUrl({});
     expect(activity.preset).toBe("day");
@@ -474,6 +494,27 @@ describe("url state", () => {
     expect(last.preset).toBe("week");
     expect(last.date).toBe("2026-06-16");
     expect("project" in last).toBe(false);
+  });
+
+  it("writes and clears rolling window URL intent for custom ranges", () => {
+    const spy = routerMod.router.replaceParams as ReturnType<typeof vi.fn>;
+    activity.setCustomRange("2026-05-20", "2026-06-19", 30);
+    spy.mockClear();
+
+    activity.writeUrl();
+    const rolling = spy.mock.calls.at(-1)![0] as Record<string, string>;
+    expect(rolling).toEqual({
+      preset: "custom",
+      from: "2026-05-20",
+      to: "2026-06-19",
+      window_days: "30",
+    });
+
+    spy.mockClear();
+    activity.setFrom("2026-05-21");
+    const fixed = spy.mock.calls.at(-1)![0] as Record<string, string>;
+    expect(fixed.from).toBe("2026-05-21");
+    expect("window_days" in fixed).toBe(false);
   });
 
   it("hydrates the automation class from params", () => {
