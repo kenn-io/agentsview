@@ -13,7 +13,10 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import MessageContent from "./MessageContent.svelte";
-  import { ChevronRightIcon } from "../../icons.js";
+  import {
+    ChevronRightIcon,
+    ExternalLinkIcon,
+  } from "../../icons.js";
 
   interface Props {
     sessionId: string;
@@ -124,7 +127,8 @@
       onclick={openAsSession}
       title="Open as full session"
     >
-      Open session &#8599;
+      Open session
+      <ExternalLinkIcon size="10" strokeWidth="2.2" aria-hidden="true" />
     </a>
   </div>
 
@@ -211,6 +215,9 @@
   }
 
   .open-session-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
     font-size: 10px;
     color: var(--text-secondary);
     padding: 6px 10px;
