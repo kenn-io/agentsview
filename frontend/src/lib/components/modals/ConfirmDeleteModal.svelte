@@ -4,6 +4,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { truncate } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
+  import { XIcon } from "../../icons.js";
   let deleting = $state(false);
   let deleteBtn = $state<HTMLButtonElement>();
 
@@ -57,7 +58,7 @@
 
 <!--
   Overlay is closed via Escape (svelte:window above) and via the
-  Cancel/× buttons inside the modal, so a separate keydown handler
+  Cancel/close buttons inside the modal, so a separate keydown handler
   here would be redundant.
 -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -71,7 +72,9 @@
         onclick={close}
         title="Close delete confirmation"
         aria-label="Close delete confirmation"
-      >&times;</button>
+      >
+        <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
+      </button>
     </div>
 
     <div class="confirm-body">

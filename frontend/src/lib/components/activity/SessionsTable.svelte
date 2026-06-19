@@ -2,6 +2,7 @@
   import type { Report } from "../../api/types.js";
   import type { ActivitySessionRow } from "../../api/generated/index";
   import { router } from "../../stores/router.svelte.js";
+  import { XIcon } from "../../icons.js";
 
   let {
     report,
@@ -187,7 +188,9 @@
           title="Clear time filter"
         >
           <span>Active: {filterLabel}</span>
-          <span class="filter-badge-x" aria-hidden="true">×</span>
+          <span class="filter-badge-x">
+            <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+          </span>
         </button>
       {/if}
       {#if rows.length > 0}
@@ -335,8 +338,9 @@
   }
 
   .filter-badge-x {
-    font-size: 13px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
   }
 
   .table-scroll {

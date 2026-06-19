@@ -6,6 +6,7 @@
     FolderIcon,
     MessageSquareTextIcon,
     MonitorIcon,
+    XIcon,
   } from "../../icons.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
 
@@ -92,7 +93,9 @@
           <CalendarIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
         {dateLabel}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -106,7 +109,9 @@
           <FolderIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
         {analytics.project}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -120,7 +125,9 @@
           <MonitorIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
         {machine}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/each}
 
@@ -135,7 +142,9 @@
           style:background={agentColor(agent)}
         ></span>
         {agentLabel(agent)}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/each}
 
@@ -149,7 +158,9 @@
           <MessageSquareTextIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
         &ge;{analytics.minUserMessages} prompts
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -163,7 +174,9 @@
           <ClockIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
         Active 24h
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -174,7 +187,9 @@
         title="Remove {STATUS_LABEL[status] ?? status} from status filter"
       >
         Status: {STATUS_LABEL[status] ?? status}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/each}
 
@@ -185,7 +200,9 @@
         title="Clear single-turn filter"
       >
         Single-turn hidden
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -196,7 +213,9 @@
         title="Clear automated filter"
       >
         Automated included
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -210,7 +229,9 @@
           <ClockIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
         {timeLabel}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -283,10 +304,11 @@
   }
 
   .chip-x {
-    font-size: 13px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
     margin-left: 2px;
     opacity: 0.6;
+    flex-shrink: 0;
   }
 
   .filter-chip:hover .chip-x {

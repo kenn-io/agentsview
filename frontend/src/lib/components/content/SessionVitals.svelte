@@ -16,6 +16,7 @@
   import CallRow from "./CallRow.svelte";
   import CallGroup from "./CallGroup.svelte";
   import SubagentCalls from "./SubagentCalls.svelte";
+  import { XIcon } from "../../icons.js";
 
   interface Props {
     sessionId: string;
@@ -237,9 +238,7 @@
       aria-label="Close session analysis"
       onclick={() => ui.closeVitals()}
     >
-      <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-        <path d="M3.22 3.22a.75.75 0 011.06 0L8 6.94l3.72-3.72a.75.75 0 111.06 1.06L9.06 8l3.72 3.72a.75.75 0 11-1.06 1.06L8 9.06l-3.72 3.72a.75.75 0 11-1.06-1.06L6.94 8 3.22 4.28a.75.75 0 010-1.06z"/>
-      </svg>
+      <XIcon size="12" strokeWidth="2.4" aria-hidden="true" />
     </button>
   </header>
 
@@ -304,7 +303,9 @@
               onclick={() => (categoryFilter = null)}
               aria-label="clear category filter"
             >
-              {categoryFilter}<span class="x">×</span>
+              {categoryFilter}<span class="x">
+                <XIcon size="10" strokeWidth="2.4" aria-hidden="true" />
+              </span>
             </button>
           {:else}
             <span class="v-meta">completed turns · click to highlight</span>
@@ -710,9 +711,10 @@
     background: rgba(255, 255, 255, 0.08);
   }
   .filter-chip .x {
+    display: inline-flex;
+    align-items: center;
     margin-left: 2px;
-    font-size: 11px;
-    line-height: 1;
+    flex-shrink: 0;
   }
 
   /* Timeline lanes ----------------------------------------------------- */

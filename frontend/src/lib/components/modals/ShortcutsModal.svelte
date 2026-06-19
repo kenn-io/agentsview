@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { XIcon } from "../../icons.js";
 
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const mod = isMac ? "Cmd" : "Ctrl";
@@ -62,7 +63,7 @@
         title="Close shortcuts"
         aria-label="Close shortcuts"
       >
-        &times;
+        <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
     </div>
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import { XIcon } from "../../icons.js";
 
   function handleOverlayClick(e: MouseEvent) {
     if (
@@ -52,7 +53,7 @@
         title="Close about dialog"
         aria-label="Close about dialog"
       >
-        &times;
+        <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
     </div>
 

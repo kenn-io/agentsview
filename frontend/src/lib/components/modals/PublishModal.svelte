@@ -7,6 +7,7 @@
   } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
   import type { PublishResponse } from "../../api/types.js";
+  import { XIcon } from "../../icons.js";
 
   type View = "setup" | "progress" | "success" | "error";
 
@@ -107,7 +108,7 @@
         title="Close publish dialog"
         aria-label="Close publish dialog"
       >
-        &times;
+        <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
     </div>
 

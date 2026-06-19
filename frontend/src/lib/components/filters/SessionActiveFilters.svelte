@@ -4,6 +4,7 @@
     agentColor,
     agentLabel,
   } from "../../utils/agents.js";
+  import { XIcon } from "../../icons.js";
 
   interface Props {
     projectFilters?: string[];
@@ -74,7 +75,9 @@
         title="Clear project filter"
       >
         {sessions.filters.project}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -85,7 +88,9 @@
         title="Remove {machine} filter"
       >
         {machine}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/each}
 
@@ -100,7 +105,9 @@
           style:background={agentColor(agent)}
         ></span>
         {agentLabel(agent)}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/each}
 
@@ -111,7 +118,9 @@
         title="Clear min prompts filter"
       >
         &ge;{sessions.filters.minUserMessages} prompts
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -122,7 +131,9 @@
         title="Clear recently active filter"
       >
         Active 24h
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -133,7 +144,9 @@
         title="Clear hidden unknown project filter"
       >
         Unknown hidden
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -144,7 +157,9 @@
         title="Remove {project} project filter"
       >
         {project}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/each}
 
@@ -155,7 +170,9 @@
         title="Clear single-turn filter"
       >
         Single-turn hidden
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -166,7 +183,9 @@
         title="Clear automated filter"
       >
         Automated included
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/if}
 
@@ -177,7 +196,9 @@
         title="Remove {model} model filter"
       >
         {model}
-        <span class="chip-x">&times;</span>
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
       </button>
     {/each}
 
@@ -242,9 +263,10 @@
   }
 
   .chip-x {
+    display: inline-flex;
+    align-items: center;
     opacity: 0.65;
-    font-size: 12px;
-    line-height: 1;
+    flex-shrink: 0;
   }
 
   .clear-all {

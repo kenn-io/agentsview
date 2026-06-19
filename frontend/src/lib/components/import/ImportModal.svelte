@@ -11,6 +11,7 @@
     FileXIcon,
     TriangleAlertIcon,
     UploadIcon,
+    XIcon,
   } from "../../icons.js";
 
   interface Props {
@@ -226,7 +227,9 @@
           disabled={importing}
           title="Close import dialog"
           aria-label="Close"
-        >&times;</button>
+        >
+          <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
+        </button>
       </div>
 
       <div class="modal-body">
