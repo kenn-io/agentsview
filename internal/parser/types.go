@@ -51,6 +51,7 @@ const (
 	AgentGptme          AgentType = "gptme"
 	AgentShelley        AgentType = "shelley"
 	AgentAider          AgentType = "aider"
+	AgentReasonix       AgentType = "reasonix"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -633,6 +634,18 @@ var Registry = []AgentDef{
 		ShallowWatch:   true,
 		DiscoverFunc:   DiscoverAiderSessions,
 		FindSourceFunc: FindAiderSourceFile,
+	},
+	{
+		Type:           AgentReasonix,
+		DisplayName:    "Reasonix",
+		EnvVar:         "REASONIX_DIR",
+		ConfigKey:      "reasonix_dirs",
+		DefaultDirs:    []string{".reasonix", "AppData/Roaming/reasonix"},
+		IDPrefix:       "reasonix:",
+		WatchSubdirs:   []string{"sessions", "archive", "projects"},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverReasonixSessions,
+		FindSourceFunc: FindReasonixSourceFile,
 	},
 }
 

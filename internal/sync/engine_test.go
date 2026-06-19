@@ -5,6 +5,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2579,6 +2580,475 @@ func TestEngine_ClassifyPathsQClawArchivedSession(t *testing.T) {
 	require.Len(t, files, 1, "len(files) = %d, want 1 (%v)", len(files), files)
 	assert.Equal(t, archived, files[0].Path)
 	assert.Equal(t, parser.AgentQClaw, files[0].Agent)
+}
+
+func TestEngine_ClassifyOnePathReasonixProjectBareMeta(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
+	)
+	metaPath := sessionPath + ".meta"
+	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
+	dbtest.WriteTestFile(t, metaPath, []byte(`{"model":"claude"}`))
+
+	got, ok := engine.classifyOnePath(metaPath, nil)
+	require.True(t, ok, "expected Reasonix sidecar to classify")
+	assert.Equal(t, sessionPath, got.Path)
+	assert.Equal(t, "proj", got.Project)
+	assert.Equal(t, parser.AgentReasonix, got.Agent)
+}
+
+func TestEngine_ClassifyOnePathReasonixDeletedMeta(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
+	)
+	metaPath := sessionPath + ".meta"
+	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
+
+	got, ok := engine.classifyOnePath(metaPath, nil)
+	require.True(t, ok, "expected deleted Reasonix sidecar to classify")
+	assert.Equal(t, sessionPath, got.Path)
+	assert.Equal(t, "proj", got.Project)
+	assert.Equal(t, parser.AgentReasonix, got.Agent)
+}
+
+func TestEngine_ClassifyOnePathReasonixDeletedTranscriptIgnored(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
+	)
+
+	_, ok := engine.classifyOnePath(sessionPath, nil)
+	assert.False(t, ok, "expected deleted Reasonix transcript to be ignored")
+}
+
+func TestEngine_SyncPathsReasonixMetadataOnlySessionFieldUpdate(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Initial title", *got.DisplayName)
+	assert.Equal(t, "Initial title", *got.SessionName)
+	assert.Equal(t, initialRoot, got.Cwd)
+	assert.Equal(t, "my_app", got.Project)
+
+	updatedRoot := filepath.Join("workspace", "renamed-app")
+	updatedMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Updated title",
+		"workspace_root": updatedRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, updatedMeta, 0o644))
+	future := time.Date(2026, time.June, 19, 2, 55, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(metaPath, future, future))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Updated title", *got.DisplayName)
+	assert.Equal(t, "Updated title", *got.SessionName)
+	assert.Equal(t, updatedRoot, got.Cwd)
+	assert.Equal(t, "renamed_app", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixDeletedMetadataClearsSessionFields(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	require.NoError(t, os.Remove(metaPath))
+	engine.SyncPaths([]string{metaPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.DisplayName)
+	assert.Nil(t, got.SessionName)
+	assert.Equal(t, "", got.Cwd)
+	assert.Equal(t, "", got.Project)
+}
+
+func TestEngine_SyncSingleSessionReasonixDeletedMetadataClearsProject(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "my_app", got.Project)
+
+	require.NoError(t, os.Remove(metaPath))
+	require.NoError(t, db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
+			"reasonix:session-123",
+		)
+		return err
+	}))
+
+	require.NoError(t, engine.SyncSingleSession("reasonix:session-123"))
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixMalformedMetadataPreservesSessionFields(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"topic_title":`), 0o644))
+	future := time.Date(2026, time.June, 19, 4, 15, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(metaPath, future, future))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Initial title", *got.DisplayName)
+	assert.Equal(t, "Initial title", *got.SessionName)
+	assert.Equal(t, initialRoot, got.Cwd)
+	assert.Equal(t, "my_app", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixMalformedMetadataRecoveryUpdatesSession(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	transcriptInfo, err := os.Stat(sessionPath)
+	require.NoError(t, err)
+	badMtime := transcriptInfo.ModTime().Add(time.Minute)
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"topic_title":`), 0o644))
+	require.NoError(t, os.Chtimes(metaPath, badMtime, badMtime))
+	engine.SyncPaths([]string{metaPath})
+
+	updatedRoot := filepath.Join("workspace", "renamed-app")
+	updatedMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Recovered title",
+		"workspace_root": updatedRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, updatedMeta, 0o644))
+	recoveredMtime := badMtime.Add(time.Minute)
+	require.NoError(t, os.Chtimes(metaPath, recoveredMtime, recoveredMtime))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Recovered title", *got.DisplayName)
+	assert.Equal(t, "Recovered title", *got.SessionName)
+	assert.Equal(t, updatedRoot, got.Cwd)
+	assert.Equal(t, "renamed_app", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixProjectLayoutMetadataProjectUpdate(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "layout-name", "sessions", "session-123", "session-123.jsonl",
+	)
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": filepath.Join("workspace", "my-app"),
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "my_app", got.Project)
+
+	updatedMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Updated title",
+		"workspace_root": filepath.Join("workspace", "renamed-app"),
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, updatedMeta, 0o644))
+	future := time.Date(2026, time.June, 19, 3, 30, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(metaPath, future, future))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "renamed_app", got.Project)
+}
+
+func TestEngine_SyncSingleSessionReasonixProjectLayoutPreservesProject(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "layout-name", "sessions",
+		"session-123", "session-123.jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "layout-name", got.Project)
+
+	require.NoError(t, db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
+			"reasonix:session-123",
+		)
+		return err
+	}))
+
+	require.NoError(t, engine.SyncSingleSession("reasonix:session-123"))
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "layout-name", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixPersistsToolResultContent(t *testing.T) {
+	database := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "tool-result.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"Read the file\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"I'll read it\","+
+			"\"tool_calls\":[{\"id\":\"call_1\",\"name\":\"read_file\","+
+			"\"arguments\":\"{\\\"path\\\":\\\"config.json\\\"}\"}]}\n"+
+			"{\"role\":\"tool\",\"content\":\"file contents here\","+
+			"\"tool_call_id\":\"call_1\"}\n",
+	), 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	msgs, err := database.GetAllMessages(context.Background(), "reasonix:tool-result")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "file contents here", msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len("file contents here"), msgs[1].ToolCalls[0].ResultContentLength)
 }
 
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {

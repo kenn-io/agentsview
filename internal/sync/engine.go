@@ -629,8 +629,19 @@ func (e *Engine) classifyOnePath(
 	if df, ok := e.classifyContainerPath(path, pathExists); ok {
 		return df, true
 	}
+	// Reasonix sidecar delete events arrive after .jsonl.meta no longer
+	// exists; classify them against the sibling transcript before the
+	// generic missing-path guard.
+	if strings.HasSuffix(path, ".jsonl.meta") {
+		if df, ok := e.classifyReasonixPath(path); ok {
+			return df, true
+		}
+	}
 	if !pathExists {
 		return parser.DiscoveredFile{}, false
+	}
+	if df, ok := e.classifyReasonixPath(path); ok {
+		return df, true
 	}
 
 	// Claude: <claudeDir>/<project>/<session>.jsonl
@@ -3069,6 +3080,13 @@ func discoveredFileMtime(
 		}
 		return vibeEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
 	}
+	if file.Agent == parser.AgentReasonix {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return reasonixEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
+	}
 
 	info, err := os.Stat(file.Path)
 	if err != nil {
@@ -3985,6 +4003,9 @@ func (e *Engine) processFile(
 		// of staying skipped on the unchanged transcript mtime.
 		mtime = vibeEffectiveInfo(file.Path, info).ModTime().UnixNano()
 	}
+	if file.Agent == parser.AgentReasonix {
+		mtime = reasonixEffectiveInfo(file.Path, info).ModTime().UnixNano()
+	}
 	cacheSkip := e.shouldCacheSkip(file)
 
 	// Skip files cached from a previous sync (parse errors
@@ -4017,6 +4038,8 @@ func (e *Engine) processFile(
 		res = e.processCodex(file, info)
 	case parser.AgentCopilot:
 		res = e.processCopilot(file, info)
+	case parser.AgentReasonix:
+		res = e.processReasonix(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
 	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode:
@@ -5054,6 +5077,139 @@ func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
 		}
 	}
 	return m
+}
+
+// classifyReasonixPath handles Reasonix session classification,
+// extracted from classifyOnePath to stay within nilaway limits.
+func (e *Engine) classifyReasonixPath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+	for _, reasonixDir := range e.agentDirs[parser.AgentReasonix] {
+		if reasonixDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(reasonixDir, path); ok {
+			// Map .jsonl.meta sidecar events to sibling .jsonl
+			if strings.HasSuffix(path, ".jsonl.meta") {
+				jsonlPath := strings.TrimSuffix(path, ".meta")
+				if _, err := os.Stat(jsonlPath); err != nil {
+					continue
+				}
+				path = jsonlPath
+				rel = strings.TrimSuffix(rel, ".meta")
+			}
+			if !strings.HasSuffix(path, ".jsonl") {
+				continue
+			}
+			parts := strings.Split(rel, sep)
+
+			// Project sessions: projects/{project}/sessions/{id}.jsonl
+			// or projects/{project}/sessions/{id}/{id}.jsonl
+			if len(parts) == 4 && parts[0] == "projects" &&
+				parts[2] == "sessions" &&
+				strings.HasSuffix(parts[3], ".jsonl") {
+				return parser.DiscoveredFile{
+					Path:    path,
+					Project: parts[1],
+					Agent:   parser.AgentReasonix,
+				}, true
+			}
+
+			// Project sessions: projects/{project}/sessions/{id}/{id}.jsonl
+			if len(parts) == 5 && parts[0] == "projects" &&
+				parts[2] == "sessions" {
+				base := strings.TrimSuffix(parts[4], ".jsonl")
+				if base != "" && parts[3] == base {
+					return parser.DiscoveredFile{
+						Path:    path,
+						Project: parts[1],
+						Agent:   parser.AgentReasonix,
+					}, true
+				}
+			}
+
+			// Global or archive sessions
+			if len(parts) == 2 {
+				if (parts[0] == "sessions" || parts[0] == "archive") &&
+					strings.HasSuffix(parts[1], ".jsonl") {
+					return parser.DiscoveredFile{
+						Path:  path,
+						Agent: parser.AgentReasonix,
+					}, true
+				}
+			}
+
+			// Nested global or subagent: sessions/{id}/{id}.jsonl or sessions/subagents/{id}.jsonl
+			if len(parts) == 3 {
+				base := strings.TrimSuffix(parts[2], ".jsonl")
+				if parts[0] == "sessions" &&
+					(parts[1] == "subagents" ||
+						parts[1] == base) {
+					if base != "" {
+						return parser.DiscoveredFile{
+							Path:  path,
+							Agent: parser.AgentReasonix,
+						}, true
+					}
+				}
+			}
+		}
+	}
+
+	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) processReasonix(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	effectiveInfo := reasonixEffectiveInfo(file.Path, info)
+	if e.shouldSkipByPath(file.Path, effectiveInfo) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, _, err := parser.ParseReasonixSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	// Use the discovered project only when metadata did not supply a
+	// project via workspace_root.
+	if file.Project != "" && sess.Project == "" {
+		sess.Project = file.Project
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	sess.File.Size = effectiveInfo.Size()
+	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
+	metaPath := path + ".meta"
+	if metaInfo, err := os.Stat(metaPath); err == nil {
+		size += metaInfo.Size()
+		if metaMtime := metaInfo.ModTime().UnixNano(); metaMtime > mtime {
+			mtime = metaMtime
+		}
+	}
+	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
 }
 
 // shouldSkipCopilot is like shouldSkipByPath but uses the
@@ -7412,7 +7568,8 @@ func shouldReplaceFullParseMessages(
 		// earlier assistant tool call. An incremental append would
 		// only add the new ordinals and leave the existing tool call's
 		// result_content empty, so force a full replace.
-		pw.sess.Agent == parser.AgentVibe
+		pw.sess.Agent == parser.AgentVibe ||
+		pw.sess.Agent == parser.AgentReasonix
 }
 
 // writeIncremental appends new messages and partially updates
@@ -8355,6 +8512,13 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		}
 		return vibeEffectiveInfo(path, info).ModTime().UnixNano()
 	}
+	if def.Type == parser.AgentReasonix {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		return reasonixEffectiveInfo(path, info).ModTime().UnixNano()
+	}
 
 	// FindSourceFile may return a virtual path (e.g. Visual Studio
 	// Copilot's <traceFile>#<conversationID>); resolve it to the
@@ -8590,6 +8754,16 @@ func (e *Engine) SyncSingleSessionContext(
 			if workspace, _, ok := strings.Cut(bareID, ":"); ok &&
 				workspace != "" {
 				file.Project = workspace
+			}
+		}
+	case parser.AgentReasonix:
+		if classified, ok := e.classifyReasonixPath(path); ok {
+			file.Project = classified.Project
+		} else {
+			if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+				sess.Project != "" &&
+				!parser.NeedsProjectReparse(sess.Project) {
+				file.Project = sess.Project
 			}
 		}
 	case parser.AgentQwen:

@@ -342,6 +342,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentShelley,
 		AgentVibe,
 		AgentAider,
+		AgentReasonix,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
@@ -1073,4 +1074,47 @@ func TestApplyUsageEventTokenTotals(t *testing.T) {
 	// Event 1 context = 1000 + 500 + 300 = 1800
 	// Event 2 context = 800 + 1200 + 100 = 2100
 	assert.Equal(t, 2100, sess.PeakContextTokens)
+}
+
+func TestReasonixRegistryEntry(t *testing.T) {
+	// Find Reasonix in the registry
+	var reasonixDef *AgentDef
+	for _, def := range Registry {
+		if def.Type == AgentReasonix {
+			reasonixDef = &def
+			break
+		}
+	}
+	require.NotNil(t, reasonixDef, "AgentReasonix must be in Registry")
+
+	// Verify basic properties
+	assert.Equal(t, AgentReasonix, reasonixDef.Type)
+	assert.Equal(t, "Reasonix", reasonixDef.DisplayName)
+	assert.Equal(t, "REASONIX_DIR", reasonixDef.EnvVar)
+	assert.Equal(t, "reasonix_dirs", reasonixDef.ConfigKey)
+	assert.Equal(t, "reasonix:", reasonixDef.IDPrefix)
+	assert.True(t, reasonixDef.FileBased)
+
+	// Verify watch subdirs
+	assert.Contains(t, reasonixDef.WatchSubdirs, "sessions")
+	assert.Contains(t, reasonixDef.WatchSubdirs, "archive")
+
+	// Verify function pointers are set
+	assert.NotNil(t, reasonixDef.DiscoverFunc, "DiscoverFunc must be set")
+	assert.NotNil(t, reasonixDef.FindSourceFunc, "FindSourceFunc must be set")
+
+	// Verify default dirs contain .reasonix and Windows path
+	assert.True(t, len(reasonixDef.DefaultDirs) > 0)
+	hasUnix := false
+	hasWindows := false
+	for _, dir := range reasonixDef.DefaultDirs {
+		if dir == ".reasonix" {
+			hasUnix = true
+		}
+		if dir == "AppData/Roaming/reasonix" {
+			hasWindows = true
+		}
+	}
+	assert.True(t, hasUnix, "DefaultDirs should contain .reasonix")
+	assert.True(t, hasWindows, "DefaultDirs should contain AppData/Roaming/reasonix")
 }
