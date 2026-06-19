@@ -5714,9 +5714,13 @@ func (e *Engine) aiderFileUnchanged(path string, info os.FileInfo) bool {
 			continue
 		}
 		expected++
-		storedSize, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
+		lookupPath := m.VirtualPath
+		if e.pathRewriter != nil {
+			lookupPath = e.pathRewriter(lookupPath)
+		}
+		storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
 		if !ok || storedSize != size || storedMtime != mtime ||
-			e.db.GetDataVersionByPath(m.VirtualPath) < current {
+			e.db.GetDataVersionByPath(lookupPath) < current {
 			// This run is missing or stale: do not skip the file, so the
 			// fan-out re-parses and repairs every run. The size is compared
 			// alongside mtime so a same-mtime append/truncate (which leaves

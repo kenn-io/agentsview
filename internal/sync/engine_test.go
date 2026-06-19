@@ -1486,6 +1486,26 @@ func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
 		assert.True(t, got, "file with all run rows current must be skipped")
 	})
 
+	t.Run("rewritten remote run rows current -> skip", func(t *testing.T) {
+		database := openTestDB(t)
+		path := writeAiderHistory(t)
+		metas := metasFor(t, path)
+		rewriter := func(p string) string {
+			return "host:" + p
+		}
+		// Remote sync stores the rewritten virtual run path, not the temp
+		// extraction path returned by ListAiderRunMetas.
+		insertAiderRunRow(t, database,
+			rewriter(metas[0].VirtualPath), size, mtime, cur)
+		insertAiderRunRow(t, database,
+			rewriter(metas[1].VirtualPath), size, mtime, cur)
+
+		e := &Engine{db: database, pathRewriter: rewriter}
+		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
+		assert.True(t, got,
+			"remote file with all rewritten run rows current must be skipped")
+	})
+
 	t.Run("one run row missing -> do not skip", func(t *testing.T) {
 		database := openTestDB(t)
 		path := writeAiderHistory(t)

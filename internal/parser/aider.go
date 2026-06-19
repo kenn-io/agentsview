@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -139,7 +140,7 @@ func splitAiderRuns(content string) []aiderRun {
 			runs = append(runs, *cur)
 		}
 	}
-	for _, raw := range strings.Split(content, "\n") {
+	for raw := range strings.SplitSeq(content, "\n") {
 		line := strings.TrimSuffix(raw, "\r")
 		if ts, ok := strings.CutPrefix(line, aiderHeaderPrefix); ok {
 			flush()
@@ -169,10 +170,8 @@ func pushUniqueAider(v []string, s string) []string {
 	if s == "" {
 		return v
 	}
-	for _, existing := range v {
-		if existing == s {
-			return v
-		}
+	if slices.Contains(v, s) {
+		return v
 	}
 	return append(v, s)
 }
@@ -232,7 +231,7 @@ func parseAiderTurns(body string) ([]ParsedMessage, []string) {
 		ordinal++
 	}
 
-	for _, raw := range strings.Split(body, "\n") {
+	for raw := range strings.SplitSeq(body, "\n") {
 		line := strings.TrimSuffix(raw, "\r")
 
 		var lineChan int
