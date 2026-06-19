@@ -7,6 +7,12 @@
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { InsightType, AgentName } from "../../api/types.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import {
+    resolveRange,
+    selectionFromRange,
+    type RangeSelection,
+  } from "../shared/rangeSelection.js";
   import {
     LightbulbIcon,
     MousePointer2Icon,
@@ -17,11 +23,6 @@
     XIcon,
   } from "../../icons.js";
 
-  type UIMode =
-    | "daily_activity"
-    | "range_activity"
-    | "agent_analysis";
-
   let promptExpanded = $state(false);
   const readOnly = $derived(
     sync.serverVersion?.read_only === true,
@@ -30,77 +31,36 @@
     sync.serverVersion === null || readOnly,
   );
 
-  const uiMode: UIMode = $derived.by(() => {
-    if (insights.type === "agent_analysis") {
-      return "agent_analysis";
+  const earliestSession = $derived(sync.stats?.earliest_session ?? null);
+
+  // A single day (dateFrom === dateTo) is the common case and maps to a
+  // Calendar - Day selection; a wider span is a range. The picker drives the
+  // dates; the insight kind (Activity vs Agent Analysis) is chosen separately.
+  const rangeSelection = $derived.by((): RangeSelection => {
+    if (insights.dateFrom === insights.dateTo) {
+      return { mode: "calendar", unit: "day", anchor: insights.dateFrom };
     }
-    if (insights.dateFrom !== insights.dateTo) {
-      return "range_activity";
-    }
-    return "daily_activity";
+    return selectionFromRange(
+      insights.dateFrom,
+      insights.dateTo,
+      earliestSession,
+    );
   });
 
-  function isRangeMode(mode: UIMode): boolean {
-    return mode === "range_activity";
+  function applyRange(sel: RangeSelection) {
+    if (sel.mode === "calendar" && sel.unit === "day") {
+      insights.setDateFrom(sel.anchor);
+      insights.setDateTo(sel.anchor);
+      return;
+    }
+    const range = resolveRange(sel, earliestSession);
+    insights.setDateFrom(range.from);
+    insights.setDateTo(range.to);
   }
 
-  function handleModeChange(e: Event) {
+  function handleTypeChange(e: Event) {
     const select = e.target as HTMLSelectElement;
-    const mode = select.value as UIMode;
-    if (mode === "range_activity") {
-      insights.setType("daily_activity");
-      if (insights.dateFrom === insights.dateTo) {
-        const d = new Date(
-          insights.dateFrom + "T00:00:00",
-        );
-        d.setDate(d.getDate() + 6);
-        insights.setDateTo(localDateStr(d));
-      }
-    } else {
-      insights.setType(
-        mode === "agent_analysis"
-          ? "agent_analysis"
-          : "daily_activity",
-      );
-      insights.setDateTo(insights.dateFrom);
-    }
-  }
-
-  function handleDateChange(e: Event) {
-    const input = e.target as HTMLInputElement;
-    insights.setDateFrom(input.value);
-    insights.setDateTo(input.value);
-  }
-
-  function handleDateFromChange(e: Event) {
-    const input = e.target as HTMLInputElement;
-    insights.setDateFrom(input.value);
-    if (input.value > insights.dateTo) {
-      insights.setDateTo(input.value);
-    }
-  }
-
-  function handleDateToChange(e: Event) {
-    const input = e.target as HTMLInputElement;
-    insights.setDateTo(input.value);
-    if (input.value < insights.dateFrom) {
-      insights.setDateFrom(input.value);
-    }
-  }
-
-  function setPreset(days: number) {
-    const today = new Date();
-    const from = new Date(today);
-    from.setDate(from.getDate() - days);
-    insights.setDateFrom(localDateStr(from));
-    insights.setDateTo(localDateStr(today));
-  }
-
-  function localDateStr(d: Date): string {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
+    insights.setType(select.value as InsightType);
   }
 
   function handleProjectChange(value: string) {
@@ -181,49 +141,21 @@
     <div class="controls">
       <select
         class="ctrl mode-ctrl"
-        value={uiMode}
-        onchange={handleModeChange}
+        value={insights.type === "agent_analysis"
+          ? "agent_analysis"
+          : "daily_activity"}
+        onchange={handleTypeChange}
       >
-        <option value="daily_activity">Daily Activity</option>
-        <option value="range_activity">Date Range Activity</option>
+        <option value="daily_activity">Activity</option>
         <option value="agent_analysis">Agent Analysis</option>
       </select>
 
-      {#if isRangeMode(uiMode)}
-        <div class="date-range-group">
-          <div class="controls-row">
-            <label class="date-label">
-              <span class="date-label-text">From</span>
-              <input
-                type="date"
-                class="ctrl date-ctrl"
-                value={insights.dateFrom}
-                onchange={handleDateFromChange}
-              />
-            </label>
-            <label class="date-label">
-              <span class="date-label-text">To</span>
-              <input
-                type="date"
-                class="ctrl date-ctrl"
-                value={insights.dateTo}
-                onchange={handleDateToChange}
-              />
-            </label>
-          </div>
-          <div class="presets-row">
-            <button class="preset-btn" onclick={() => setPreset(6)}>Last 7 days</button>
-            <button class="preset-btn" onclick={() => setPreset(29)}>Last 30 days</button>
-          </div>
-        </div>
-      {:else}
-        <input
-          type="date"
-          class="ctrl date-ctrl"
-          value={insights.dateFrom}
-          onchange={handleDateChange}
-        />
-      {/if}
+      <RangePicker
+        selection={rangeSelection}
+        {earliestSession}
+        block
+        onSelect={applyRange}
+      />
 
       <div class="controls-row">
         <ProjectTypeahead
@@ -613,52 +545,6 @@
   .mode-ctrl {
     width: 100%;
     flex: none;
-  }
-
-  .date-ctrl {
-    flex: 1;
-  }
-
-  .date-range-group {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .date-label {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .date-label-text {
-    font-size: 10px;
-    color: var(--text-muted);
-    padding-left: 2px;
-  }
-
-  .presets-row {
-    display: flex;
-    gap: 4px;
-  }
-
-  .preset-btn {
-    height: 22px;
-    padding: 0 8px;
-    border-radius: var(--radius-sm);
-    font-size: 10px;
-    color: var(--text-muted);
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    transition: background 0.1s, color 0.1s;
-    white-space: nowrap;
-  }
-
-  .preset-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
   }
 
   .prompt-area {

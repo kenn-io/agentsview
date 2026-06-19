@@ -14,12 +14,18 @@
   } from "../../stores/sessions.svelte.js";
   import { events } from "../../stores/events.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import {
+    resolveRange,
+    selectionFromWindow,
+    type RangeSelection,
+  } from "../shared/rangeSelection.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
   import AttributionPanel from "./AttributionPanel.svelte";
   import TopSessionsTable from "./TopSessionsTable.svelte";
   import CacheEfficiencyPanel from "./CacheEfficiencyPanel.svelte";
-  import DateRangeSelector from "../shared/DateRangeSelector.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
@@ -34,6 +40,27 @@
       count: p.session_count,
     })),
   );
+
+  const earliestSession = $derived(sync.stats?.earliest_session ?? null);
+
+  const rangeSelection = $derived(
+    selectionFromWindow({
+      isPinned: usage.isPinned,
+      windowDays: usage.windowDays,
+      from: usage.from,
+      to: usage.to,
+      earliestSession,
+    }),
+  );
+
+  function applyRange(sel: RangeSelection) {
+    if (sel.mode === "relative" && sel.days > 0) {
+      usage.setRollingWindow(sel.days);
+    } else {
+      const range = resolveRange(sel, earliestSession);
+      usage.setDateRange(range.from, range.to);
+    }
+  }
 
   // Track every model we've seen in any summary response or
   // model filter — never remove one. This keeps the model
@@ -266,12 +293,11 @@
         />
       </div>
 
-      <DateRangeSelector
-        from={usage.from}
-        to={usage.to}
+      <RangePicker
+        selection={rangeSelection}
         busy={usage.isQuerying}
-        onChange={(from, to) => usage.setDateRange(from, to)}
-        onPreset={(days) => usage.setRollingWindow(days)}
+        {earliestSession}
+        onSelect={applyRange}
       />
 
       <FilterDropdown

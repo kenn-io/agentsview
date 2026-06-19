@@ -5,7 +5,6 @@ import {
   isPresetActive,
   presetRange,
 } from "./dateRangeSelector.js";
-import source from "./DateRangeSelector.svelte?raw";
 
 describe("date range selector presets", () => {
   it("builds last-n-days ranges ending today", () => {
@@ -37,13 +36,5 @@ describe("date range selector presets", () => {
 
     expect(isPresetActive("2026-01-25", "2026-04-25", 90, null)).toBe(true);
     expect(isPresetActive("2026-01-26", "2026-04-25", 90, null)).toBe(false);
-  });
-});
-
-describe("DateRangeSelector busy state", () => {
-  it("does not render a separate updating spinner label", () => {
-    expect(source).not.toContain("Updating");
-    expect(source).not.toContain("range-spinner");
-    expect(source).toContain("aria-busy={busy}");
   });
 });

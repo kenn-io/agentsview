@@ -1,6 +1,11 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
-  import DateRangeSelector from "../shared/DateRangeSelector.svelte";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import {
+    resolveRange,
+    selectionFromWindow,
+    type RangeSelection,
+  } from "../shared/rangeSelection.js";
   import SummaryCards from "./SummaryCards.svelte";
   import Heatmap from "./Heatmap.svelte";
   import ActivityTimeline from "./ActivityTimeline.svelte";
@@ -19,8 +24,30 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { events } from "../../stores/events.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
+
+  const earliestSession = $derived(sync.stats?.earliest_session ?? null);
+
+  const rangeSelection = $derived(
+    selectionFromWindow({
+      isPinned: analytics.isPinned,
+      windowDays: analytics.windowDays,
+      from: analytics.from,
+      to: analytics.to,
+      earliestSession,
+    }),
+  );
+
+  function applyRange(sel: RangeSelection) {
+    if (sel.mode === "relative" && sel.days > 0) {
+      analytics.setRollingWindow(sel.days);
+    } else {
+      const range = resolveRange(sel, earliestSession);
+      analytics.setDateRange(range.from, range.to);
+    }
+  }
 
   function shortTz(tz: string): string {
     const slash = tz.lastIndexOf("/");
@@ -148,12 +175,11 @@
       </div>
     {/if}
 
-    <DateRangeSelector
-      from={analytics.from}
-      to={analytics.to}
+    <RangePicker
+      selection={rangeSelection}
       busy={analytics.isQuerying}
-      onChange={(from, to) => analytics.setDateRange(from, to)}
-      onPreset={(days) => analytics.setRollingWindow(days)}
+      {earliestSession}
+      onSelect={applyRange}
     />
     <RefreshControl
       lastUpdatedAt={analytics.lastUpdatedAt}

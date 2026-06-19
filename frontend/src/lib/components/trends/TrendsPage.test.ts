@@ -87,12 +87,23 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
+    // Open the unified range picker. The default 2024 span doesn't match any
+    // rolling preset, so it opens on the Custom tab with the From/To inputs.
+    const trigger = document.querySelector<HTMLButtonElement>(
+      "button.trigger",
+    );
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    await tick();
+
     const fromInput = document.querySelector<HTMLInputElement>(
       'input[type="date"]',
     );
     expect(fromInput).not.toBeNull();
 
     fromInput!.value = "2024-01-10";
+    // input updates the bound value; change commits the custom range.
+    fromInput!.dispatchEvent(new Event("input", { bubbles: true }));
     fromInput!.dispatchEvent(new Event("change", { bubbles: true }));
     await flushPromises();
 

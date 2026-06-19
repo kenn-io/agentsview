@@ -6,11 +6,15 @@
     type Automation,
   } from "../../stores/activity.svelte.js";
   import { events } from "../../stores/events.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import { ChevronDownIcon } from "../../icons.js";
-  import RangeControl from "./RangeControl.svelte";
-  import RangeNavigator from "./RangeNavigator.svelte";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import {
+    resolveRange,
+    type RangeSelection,
+  } from "../shared/rangeSelection.js";
   import SummaryCards from "./SummaryCards.svelte";
   import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
   import SessionsTable from "./SessionsTable.svelte";
@@ -47,6 +51,32 @@
     void activity.report;
     slotFilter = null;
   });
+
+  const earliestSession = $derived(sync.stats?.earliest_session ?? null);
+  const today = $derived(localDateStr(new Date()));
+
+  // The activity store is the source of truth: day/week/month map to a calendar
+  // period anchored on `date`; custom maps to from/to. Relative windows have no
+  // native equivalent here, so applyRange resolves them to a pinned custom range.
+  const rangeSelection = $derived.by((): RangeSelection => {
+    if (activity.preset === "custom") {
+      return { mode: "custom", from: activity.from, to: activity.to };
+    }
+    return { mode: "calendar", unit: activity.preset, anchor: activity.date };
+  });
+
+  function applyRange(sel: RangeSelection) {
+    if (sel.mode === "calendar") {
+      activity.setPreset(sel.unit);
+      activity.setDate(sel.anchor);
+    } else {
+      const range = resolveRange(sel, earliestSession);
+      activity.setPreset("custom");
+      activity.setFrom(range.from);
+      activity.setTo(range.to);
+    }
+    activity.load();
+  }
 
   function onProjectSelect(value: string) {
     activity.setProject(value);
@@ -95,8 +125,13 @@
 
 <div class="activity-page">
   <div class="activity-toolbar">
-    <RangeControl />
-    <RangeNavigator />
+    <RangePicker
+      selection={rangeSelection}
+      busy={activity.loading}
+      {earliestSession}
+      maxDate={today}
+      onSelect={applyRange}
+    />
 
     <ProjectTypeahead
       projects={activity.projects}

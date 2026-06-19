@@ -2,7 +2,14 @@
   import { onMount } from "svelte";
   import { trends } from "../../stores/trends.svelte.js";
   import { getBasePath } from "../../stores/router.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import type { TrendsGranularity } from "../../api/types.js";
+  import RangePicker from "../shared/RangePicker.svelte";
+  import {
+    resolveRange,
+    selectionFromRange,
+    type RangeSelection,
+  } from "../shared/rangeSelection.js";
   import TermTable from "./TermTable.svelte";
   import TrendsLineChart from "./TrendsLineChart.svelte";
 
@@ -71,13 +78,16 @@
     await trends.fetchTerms();
   }
 
-  async function setFromDate(event: Event) {
-    trends.from = (event.currentTarget as HTMLInputElement).value;
-    await refresh();
-  }
+  const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
-  async function setToDate(event: Event) {
-    trends.to = (event.currentTarget as HTMLInputElement).value;
+  const rangeSelection = $derived(
+    selectionFromRange(trends.from, trends.to, earliestSession),
+  );
+
+  async function applyRange(sel: RangeSelection) {
+    const range = resolveRange(sel, earliestSession);
+    trends.from = range.from;
+    trends.to = range.to;
     await refresh();
   }
 
@@ -118,14 +128,12 @@
   </div>
 
   <div class="toolbar">
-    <label>
-      <span>From</span>
-      <input type="date" bind:value={trends.from} onchange={setFromDate} />
-    </label>
-    <label>
-      <span>To</span>
-      <input type="date" bind:value={trends.to} onchange={setToDate} />
-    </label>
+    <RangePicker
+      selection={rangeSelection}
+      busy={trends.loading.terms}
+      {earliestSession}
+      onSelect={applyRange}
+    />
     <div class="granularity" aria-label="Granularity">
       {#each ["day", "week", "month"] as value}
         <button
