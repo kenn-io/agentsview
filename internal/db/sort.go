@@ -399,8 +399,8 @@ func secretsValue(s *Session, f SessionFilter) (string, bool) {
 }
 
 // sessionSorts is the allow-list of session-list sort keys, in display order.
-// The ordering is kept in sync with the huma `order_by` enum tag by
-// TestSortKeysMatchHumaEnum.
+// The keys here are kept documented on the huma order_by param by
+// TestSortKeysDocumented / TestSortKeysDocOmitsStaleKeys (internal/server).
 var sessionSorts = []SessionSort{
 	{key: "recent", kind: kindTimestamp, defaultDescending: true, expr: recentExpr, value: tsValue},
 	{key: "started", kind: kindTimestamp, expr: startedExpr, value: startedValue},
@@ -439,6 +439,11 @@ var sessionSortByKey = func() map[string]SessionSort {
 // defaultSortKey is the sort applied when OrderBy is empty; it preserves the
 // historical most-recent-activity-first behavior.
 const defaultSortKey = "recent"
+
+// DefaultSortKey returns the sort key applied when no sort is requested. The CLI
+// uses it to materialize the implicit default so --reverse can flip it even when
+// --sort is empty.
+func DefaultSortKey() string { return defaultSortKey }
 
 // SessionSortFor resolves a sort key (empty means the default). ok is false for
 // unknown keys; callers that have not pre-validated should treat that as the

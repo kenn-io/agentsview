@@ -83,6 +83,32 @@ func TestSessionList_MultiKeySort(t *testing.T) {
 	assert.Equal(t, []string{"c", "b", "a"}, sessionListIDs(t, out))
 }
 
+// TestSessionList_EmptySortReverse guards the edge where --sort is explicitly
+// cleared: --reverse must still flip the implicit default recent sort (to
+// ascending) rather than silently no-opping.
+func TestSessionList_EmptySortReverse(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	seedSessionWithOpts(t, dataDir, "old", "p", func(s *db.Session) {
+		s.EndedAt = new("2024-01-01T00:00:00Z")
+	})
+	seedSessionWithOpts(t, dataDir, "new", "p", func(s *db.Session) {
+		s.EndedAt = new("2024-03-01T00:00:00Z")
+	})
+
+	// Default recent is newest-first.
+	out, err := executeCommand(newRootCommand(),
+		"session", "list", "--sort", "", "--format", "json")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"new", "old"}, sessionListIDs(t, out))
+
+	// --reverse on the empty (default) sort flips recent to oldest-first.
+	out, err = executeCommand(newRootCommand(),
+		"session", "list", "--sort", "", "--reverse", "--format", "json")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"old", "new"}, sessionListIDs(t, out))
+}
+
 func TestSessionList_InvalidSort(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)

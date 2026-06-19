@@ -73,6 +73,11 @@ func newSessionListCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("invalid sort %q: %w", sort, err)
 			}
+			// An empty spec means the implicit default; materialize it so
+			// --reverse has a term to flip instead of silently no-opping.
+			if len(keys) == 0 {
+				keys = []db.SortKey{{Key: db.DefaultSortKey()}}
+			}
 			if reverse {
 				for i := range keys {
 					if keys[i].Descending == nil {
