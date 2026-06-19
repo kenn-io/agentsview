@@ -20,6 +20,7 @@ const approvedIconNames = [
   "CodeIcon",
   "CloudUploadIcon",
   "CopyIcon",
+  "DatabaseBackupIcon",
   "DownloadIcon",
   "EllipsisIcon",
   "EllipsisVerticalIcon",

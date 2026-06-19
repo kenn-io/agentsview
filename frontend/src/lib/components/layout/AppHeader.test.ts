@@ -170,4 +170,19 @@ describe("AppHeader export actions", () => {
     expect(shortcutsButton).not.toBeNull();
     expect(shortcutsButton?.title).toBe("Keyboard shortcuts (?)");
   });
+
+  it("distinguishes global sync from page refresh controls", async () => {
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const syncButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Sync sessions"]',
+    );
+
+    expect(syncButton).not.toBeNull();
+    expect(syncButton?.textContent?.trim()).toBe("Sync");
+    expect(
+      syncButton?.querySelector("svg.lucide-database-backup"),
+    ).not.toBeNull();
+  });
 });

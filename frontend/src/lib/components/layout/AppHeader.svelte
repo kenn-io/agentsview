@@ -7,6 +7,7 @@
     CheckIcon,
     CloudUploadIcon,
     CopyIcon,
+    DatabaseBackupIcon,
     DownloadIcon,
     EllipsisIcon,
     FunnelIcon,
@@ -21,7 +22,6 @@
     MenuIcon,
     MoonIcon,
     MoreHorizontalIcon,
-    RefreshCwIcon,
     SearchIcon,
     SettingsIcon,
     SunIcon,
@@ -665,14 +665,15 @@
     {/if}
 
     <button
-      class="header-btn"
+      class="header-btn sync-btn"
       class:syncing={sync.syncing}
       onclick={() => sync.triggerSync()}
       disabled={sync.syncing}
       title={sync.readOnly ? "Refresh data (r)" : "Sync sessions (r)"}
       aria-label={sync.readOnly ? "Refresh data" : "Sync sessions"}
     >
-      <RefreshCwIcon size="14" strokeWidth="2" aria-hidden="true" />
+      <DatabaseBackupIcon size="14" strokeWidth="2" aria-hidden="true" />
+      <span class="sync-label">Sync</span>
     </button>
 
     <button
@@ -1114,7 +1115,20 @@
   }
 
   .header-btn.syncing {
+    color: var(--text-secondary);
+  }
+
+  .header-btn.syncing :global(svg) {
     animation: spin 1s linear infinite;
+  }
+
+  .sync-btn {
+    width: auto;
+    min-width: 56px;
+    gap: 5px;
+    padding: 0 9px;
+    font-size: 11px;
+    font-weight: 500;
   }
 
   /* ── Import button (icon + label) ── */
