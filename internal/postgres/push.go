@@ -286,7 +286,8 @@ func (s *Sync) Push(
 		batch := sessions[i:end]
 
 		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, legacyMarkerMachines, &pushed,
+			ctx, batch, full, markerID, legacyMarkerMachines,
+			usageFingerprints, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -301,7 +302,8 @@ func (s *Sync) Push(
 			for _, sess := range batch {
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
-					full, markerID, legacyMarkerMachines, &pushed,
+					full, markerID, legacyMarkerMachines,
+					usageFingerprints, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -566,6 +568,7 @@ func (s *Sync) pushBatch(
 	full bool,
 	markerID string,
 	legacyMarkerMachines []string,
+	sessionUsageFingerprints map[string]string,
 	pushed *[]db.Session,
 ) (batchResult, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
@@ -578,6 +581,26 @@ func (s *Sync) pushBatch(
 	n := 0
 	msgs := 0
 	skippedConflicts := 0
+	sessionIDs := make([]string, 0, len(batch))
+	for _, sess := range batch {
+		sessionIDs = append(sessionIDs, sess.ID)
+	}
+	comparisons := (*pushMessageComparison)(nil)
+	if len(sessionIDs) > 0 && !full {
+		comparisonsBatch, err := readPushSessionMessageComparisons(
+			ctx, tx, sessionIDs,
+		)
+		if err != nil {
+			log.Printf(
+				"pgsync: preloading pg comparison fingerprints: %v",
+				err,
+			)
+			comparisons = nil
+		} else {
+			comparisons = comparisonsBatch
+		}
+	}
+
 	for _, sess := range batch {
 		if err := s.pushSession(
 			ctx, tx, sess, markerID, legacyMarkerMachines,
@@ -597,6 +620,7 @@ func (s *Sync) pushBatch(
 
 		msgCount, err := s.pushMessages(
 			ctx, tx, sess.ID, full,
+			sessionUsageFingerprints, comparisons,
 		)
 		if err != nil {
 			log.Printf(
@@ -1241,6 +1265,8 @@ func (s *Sync) pushMessages(
 	tx *sql.Tx,
 	sessionID string,
 	full bool,
+	sessionUsageFingerprints map[string]string,
+	comparisons *pushMessageComparison,
 ) (int, error) {
 	localCount, err := s.local.MessageCount(sessionID)
 	if err != nil {
@@ -1329,30 +1355,27 @@ func (s *Sync) pushMessages(
 	}
 
 	if !full && pgCount == localCount && pgCount > 0 {
-		localSum, localMax, localMin, err := s.local.MessageContentFingerprint(sessionID)
+		localFP := pushLocalMessageFingerprint{}
+
+		localFP.Sum, localFP.Max, localFP.Min, err = s.local.MessageContentFingerprint(
+			sessionID,
+		)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local content fingerprint: %w",
 				err,
 			)
 		}
-		localContentHashFP, err := s.local.MessageContentHashFingerprint(sessionID)
+		localFP.ContentHashFP, err = s.local.MessageContentHashFingerprint(
+			sessionID,
+		)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local content hash fingerprint: %w",
 				err,
 			)
 		}
-		pgContentHashFP, err := pgMessageContentHashFingerprint(
-			ctx, tx, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg content hash fingerprint: %w",
-				err,
-			)
-		}
-		localRoleTimeFP, err := localMessageRoleTimePGFingerprint(
+		localFP.RoleTimeFP, err = localMessageRoleTimePGFingerprint(
 			s.local, sessionID,
 		)
 		if err != nil {
@@ -1361,96 +1384,129 @@ func (s *Sync) pushMessages(
 				err,
 			)
 		}
-		pgRoleTimeFP, err := pgMessageRoleTimeFingerprint(
-			ctx, tx, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg role/time fingerprint: %w",
-				err,
-			)
-		}
-		localFlagsFP, err := s.local.MessageFlagsFingerprint(sessionID)
+		localFP.FlagsFP, err = s.local.MessageFlagsFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local message flags fingerprint: %w",
 				err,
 			)
 		}
-		pgFlagsFP, err := pgMessageFlagsFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg message flags fingerprint: %w",
-				err,
-			)
-		}
-		localSysFP, err := s.local.SystemMessageFingerprint(sessionID)
+		localFP.SystemFP, err = s.local.SystemMessageFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local system message fingerprint: %w", err,
 			)
 		}
-		localTCCount, err := s.local.ToolCallCount(sessionID)
+		localFP.ToolCallCount, err = s.local.ToolCallCount(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"counting local tool_calls: %w", err,
 			)
 		}
-		localTCSum, err := s.local.ToolCallContentFingerprint(sessionID)
+		localFP.ToolCallSum, err = s.local.ToolCallContentFingerprint(
+			sessionID,
+		)
 		if err != nil {
 			return 0, fmt.Errorf(
-				"computing local tool_call content "+
-					"fingerprint: %w", err,
+				"computing local tool_call content fingerprint: %w",
+				err,
 			)
 		}
-		localTCFP, err := s.local.ToolCallFingerprint(sessionID)
+		localFP.ToolCallFP, err = s.local.ToolCallFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local tool_call fingerprint: %w", err,
 			)
 		}
-		localTokenFP, err := s.local.MessageTokenFingerprint(sessionID)
+		localFP.TokenFP, err = s.local.MessageTokenFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
-				"computing local token fingerprint: %w", err,
+				"computing local token fingerprint: %w",
+				err,
 			)
 		}
-		pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg token fingerprint: %w", err,
-			)
+
+		usageFromMap := false
+		if sessionUsageFingerprints != nil {
+			var ok bool
+			localFP.UsageEventFP, ok = sessionUsageFingerprints[sessionID]
+			usageFromMap = ok
 		}
-		pgTCFP, err := pgToolCallFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg tool_call fingerprint: %w", err,
-			)
+		if !usageFromMap {
+			localFP.UsageEventFP, err = s.local.UsageEventFingerprint(sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing local usage event fingerprint: %w",
+					err,
+				)
+			}
 		}
-		localUsageFP, err := s.local.UsageEventFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local usage event fingerprint: %w", err,
+
+		if comparisons == nil {
+			pgContentHashFP, err := pgMessageContentHashFingerprint(
+				ctx, tx, sessionID,
 			)
-		}
-		pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg usage event fingerprint: %w", err,
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg content hash fingerprint: %w",
+					err,
+				)
+			}
+			pgRoleTimeFP, err := pgMessageRoleTimeFingerprint(
+				ctx, tx, sessionID,
 			)
-		}
-		if localSum == pgContentSum &&
-			localMax == pgContentMax &&
-			localMin == pgContentMin &&
-			localContentHashFP == pgContentHashFP &&
-			localRoleTimeFP == pgRoleTimeFP &&
-			localFlagsFP == pgFlagsFP &&
-			localSysFP == pgSystemFP.String &&
-			localTCCount == pgToolCallCount &&
-			localTCSum == pgTCContentSum &&
-			localTCFP == pgTCFP &&
-			localTokenFP == pgTokenFP &&
-			localUsageFP == pgUsageFP {
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg role/time fingerprint: %w",
+					err,
+				)
+			}
+			pgFlagsFP, err := pgMessageFlagsFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg message flags fingerprint: %w",
+					err,
+				)
+			}
+			pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg token fingerprint: %w",
+					err,
+				)
+			}
+			pgTCFP, err := pgToolCallFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg tool_call fingerprint: %w",
+					err,
+				)
+			}
+			pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg usage event fingerprint: %w",
+					err,
+				)
+			}
+
+			if localFP.Sum == pgContentSum &&
+				localFP.Max == pgContentMax &&
+				localFP.Min == pgContentMin &&
+				localFP.ContentHashFP == pgContentHashFP &&
+				localFP.RoleTimeFP == pgRoleTimeFP &&
+				localFP.FlagsFP == pgFlagsFP &&
+				localFP.SystemFP == pgSystemFP.String &&
+				localFP.ToolCallCount == pgToolCallCount &&
+				localFP.ToolCallSum == pgTCContentSum &&
+				localFP.ToolCallFP == pgTCFP &&
+				localFP.TokenFP == pgTokenFP &&
+				localFP.UsageEventFP == pgUsageFP {
+				return 0, nil
+			}
+		} else if shouldSkipSessionMessages(
+			sessionID, localCount, localFP, full, comparisons,
+		) {
 			return 0, nil
 		}
 	}
