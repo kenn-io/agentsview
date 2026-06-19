@@ -889,7 +889,7 @@ func (s *Store) GetSessionUsage(
 	if out.HasCost {
 		out.CostUSD = cost
 	}
-	if sess.Agent == "copilot" && out.HasCost {
+	if db.IsCopilotAgent(sess.Agent) && out.HasCost {
 		out.AICredits = cost / 0.01
 	}
 	if len(unpricedSet) > 0 {
@@ -1120,7 +1120,7 @@ func (s *Store) GetDailyUsage(
 
 		var copilotCost float64
 		for key, b := range accum {
-			if key.agent == "copilot" {
+			if db.IsCopilotAgent(key.agent) {
 				copilotCost += b.cost
 			}
 		}
@@ -1279,7 +1279,7 @@ func (s *Store) GetDailyUsage(
 	var copilotCost float64
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
-			if ab.Agent == "copilot" {
+			if db.IsCopilotAgent(ab.Agent) {
 				copilotCost += ab.Cost
 			}
 		}

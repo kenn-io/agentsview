@@ -13,6 +13,10 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
+func IsCopilotAgent(agent string) bool {
+	return agent == "copilot" || agent == "vscode-copilot" || agent == "visualstudio-copilot"
+}
+
 func lookupModelRates(
 	pricing map[string]modelRates, model string,
 ) (modelRates, bool) {
@@ -1206,7 +1210,7 @@ func (db *DB) GetDailyUsage(
 
 		var copilotCost float64
 		for key, b := range accum {
-			if key.agent == "copilot" {
+			if IsCopilotAgent(key.agent) {
 				copilotCost += b.cost
 			}
 		}
@@ -1379,7 +1383,7 @@ func (db *DB) GetDailyUsage(
 	var copilotCost float64
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
-			if ab.Agent == "copilot" {
+			if IsCopilotAgent(ab.Agent) {
 				copilotCost += ab.Cost
 			}
 		}
@@ -1707,7 +1711,7 @@ func (db *DB) GetSessionUsage(
 	if out.HasCost {
 		out.CostUSD = cost
 	}
-	if sess.Agent == "copilot" && out.HasCost {
+	if IsCopilotAgent(sess.Agent) && out.HasCost {
 		out.AICredits = cost / 0.01
 	}
 	if len(unpricedSet) > 0 {
