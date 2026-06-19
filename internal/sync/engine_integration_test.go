@@ -1250,6 +1250,49 @@ func TestSyncAllDedupesClaudeSourcesBySessionID(t *testing.T) {
 	})
 }
 
+func TestSyncAllClaudeDuplicateLiveGrowthBeatsUnchangedStoredArchive(t *testing.T) {
+	liveDir := t.TempDir()
+	archiveDir := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{liveDir, archiveDir}))
+
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "initial message").
+		String()
+	livePath := env.writeSession(
+		t, liveDir, filepath.Join("proj-live", "duplicate-grow.jsonl"), initial,
+	)
+	archivePath := env.writeSession(
+		t, archiveDir, filepath.Join("proj-archive", "duplicate-grow.jsonl"), initial,
+	)
+	older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Second)
+	require.NoError(t, os.Chtimes(livePath, older, older))
+	require.NoError(t, os.Chtimes(archivePath, newer, newer))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Equal(t, archivePath, env.db.GetSessionFilePath("duplicate-grow"))
+
+	f, err := os.OpenFile(livePath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZeroS5, "live follow-up").
+		String())
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-grow"))
+	assertMessageContent(t, env.db, "duplicate-grow", "initial message", "live follow-up")
+}
+
 func TestSyncEngineSkipCache(t *testing.T) {
 	env := setupTestEnv(t)
 

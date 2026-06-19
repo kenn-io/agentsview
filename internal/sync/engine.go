@@ -2963,7 +2963,17 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 				continue
 			}
 			if e.claudeSourceMatchesStored(fullID, candidate.Path) {
-				return candidate
+				best := candidate
+				for _, competing := range candidates {
+					if competing.Path == storedPath ||
+						!claudeCandidateHasAppendProgress(competing, candidate) {
+						continue
+					}
+					if preferClaudeDiscoveredFile(competing, best) {
+						best = competing
+					}
+				}
+				return best
 			}
 		}
 	}
@@ -2993,6 +3003,17 @@ func (e *Engine) claudeSourceMatchesStored(
 		return false
 	}
 	return e.db.GetSessionDataVersion(sessionID) >= db.CurrentDataVersion()
+}
+
+func claudeCandidateHasAppendProgress(
+	candidate, current parser.DiscoveredFile,
+) bool {
+	candidateInfo, candidateErr := os.Stat(candidate.Path)
+	currentInfo, currentErr := os.Stat(current.Path)
+	if candidateErr != nil || currentErr != nil {
+		return false
+	}
+	return candidateInfo.Size() > currentInfo.Size()
 }
 
 func preferClaudeDiscoveredFile(
