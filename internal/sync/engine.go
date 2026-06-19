@@ -3169,6 +3169,10 @@ func (e *Engine) countDBBackedSessions(
 func (e *Engine) filterShadowedLegacyKiroFiles(
 	files []parser.DiscoveredFile,
 ) []parser.DiscoveredFile {
+	if !hasLegacyKiroCandidates(files) {
+		return files
+	}
+
 	currentIDs := make(map[string]struct{})
 	for _, dir := range e.agentDirs[parser.AgentKiro] {
 		for id := range parser.KiroSQLiteSessionIDs(dir) {
@@ -3193,6 +3197,16 @@ func (e *Engine) filterShadowedLegacyKiroFiles(
 		out = append(out, file)
 	}
 	return out
+}
+
+func hasLegacyKiroCandidates(files []parser.DiscoveredFile) bool {
+	for _, file := range files {
+		if file.Agent == parser.AgentKiro &&
+			filepath.Base(file.Path) != "data.sqlite3" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) isShadowedLegacyKiroPath(path string) bool {

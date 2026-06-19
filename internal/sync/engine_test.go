@@ -48,6 +48,46 @@ func (f fakeFileInfo) ModTime() time.Time {
 func (f fakeFileInfo) IsDir() bool { return false }
 func (f fakeFileInfo) Sys() any    { return nil }
 
+func TestHasLegacyKiroCandidates(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []parser.DiscoveredFile
+		want  bool
+	}{
+		{
+			name: "empty",
+			want: false,
+		},
+		{
+			name: "non-kiro files",
+			files: []parser.DiscoveredFile{
+				{Agent: parser.AgentClaude, Path: "/tmp/claude/session.jsonl"},
+			},
+			want: false,
+		},
+		{
+			name: "kiro sqlite database source",
+			files: []parser.DiscoveredFile{
+				{Agent: parser.AgentKiro, Path: "/tmp/kiro/data.sqlite3"},
+			},
+			want: false,
+		},
+		{
+			name: "legacy kiro jsonl",
+			files: []parser.DiscoveredFile{
+				{Agent: parser.AgentKiro, Path: "/tmp/kiro/session.jsonl"},
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasLegacyKiroCandidates(tt.files))
+		})
+	}
+}
+
 func TestFilterEmptyMessages(t *testing.T) {
 	tests := []struct {
 		name string
