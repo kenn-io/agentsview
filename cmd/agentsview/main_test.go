@@ -229,14 +229,11 @@ func TestTruncateLogFileSymlink(t *testing.T) {
 }
 
 type fakeUnwatchedPollSyncer struct {
-	lastSyncStartedAt time.Time
-	roots             []string
-	since             time.Time
-	calls             int
-}
-
-func (f *fakeUnwatchedPollSyncer) LastSyncStartedAt() time.Time {
-	return f.lastSyncStartedAt
+	roots     []string
+	since     time.Time
+	calls     int
+	callRoots [][]string
+	callSince []time.Time
 }
 
 func (f *fakeUnwatchedPollSyncer) SyncRootsSince(
@@ -246,21 +243,23 @@ func (f *fakeUnwatchedPollSyncer) SyncRootsSince(
 	f.calls++
 	f.roots = append([]string(nil), roots...)
 	f.since = since
+	f.callRoots = append(f.callRoots, append([]string(nil), roots...))
+	f.callSince = append(f.callSince, since)
 	return sync.SyncStats{}
 }
 
-func TestPollUnwatchedRootsOnceUsesScopedIncrementalSync(t *testing.T) {
-	lastSyncStartedAt := time.Date(2026, 6, 18, 12, 0, 0, 0, time.UTC)
-	fake := &fakeUnwatchedPollSyncer{
-		lastSyncStartedAt: lastSyncStartedAt,
-	}
+func TestPollUnwatchedRootsOnceUsesScopedFullSync(t *testing.T) {
+	fake := &fakeUnwatchedPollSyncer{}
 	roots := []string{"/tmp/claude", "/tmp/codex"}
 
 	pollUnwatchedRootsOnce(fake, roots)
+	pollUnwatchedRootsOnce(fake, roots)
 
-	assert.Equal(t, 1, fake.calls)
-	assert.Equal(t, roots, fake.roots)
-	assert.Equal(t, lastSyncStartedAt.Add(-unwatchedPollSafetyMargin), fake.since)
+	require.Equal(t, 2, fake.calls)
+	assert.Equal(t, roots, fake.callRoots[0])
+	assert.True(t, fake.callSince[0].IsZero(), "first poll cutoff = %v", fake.callSince[0])
+	assert.Equal(t, roots, fake.callRoots[1])
+	assert.True(t, fake.callSince[1].IsZero(), "second poll cutoff = %v", fake.callSince[1])
 }
 
 func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
