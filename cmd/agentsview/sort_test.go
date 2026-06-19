@@ -53,6 +53,36 @@ func TestSessionList_SortAndReverse(t *testing.T) {
 	assert.Equal(t, []string{"hi", "mid", "lo"}, sessionListIDs(t, out))
 }
 
+func TestSessionList_MultiKeySort(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	seedSessionWithOpts(t, dataDir, "a", "p", func(s *db.Session) {
+		s.MessageCount = 1
+		s.StartedAt = new("2024-03-01T00:00:00Z")
+	})
+	seedSessionWithOpts(t, dataDir, "b", "p", func(s *db.Session) {
+		s.MessageCount = 1
+		s.StartedAt = new("2024-01-01T00:00:00Z")
+	})
+	seedSessionWithOpts(t, dataDir, "c", "p", func(s *db.Session) {
+		s.MessageCount = 2
+		s.StartedAt = new("2024-02-01T00:00:00Z")
+	})
+
+	// Per-key directions: messages asc, then started desc.
+	out, err := executeCommand(newRootCommand(),
+		"session", "list", "--sort", "messages:asc,started:desc", "--format", "json")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b", "c"}, sessionListIDs(t, out))
+
+	// --reverse flips only the unsuffixed key (messages -> desc); the explicit
+	// started:asc is left untouched.
+	out, err = executeCommand(newRootCommand(),
+		"session", "list", "--sort", "messages,started:asc", "-r", "--format", "json")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"c", "b", "a"}, sessionListIDs(t, out))
+}
+
 func TestSessionList_InvalidSort(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)

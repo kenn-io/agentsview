@@ -61,17 +61,27 @@ func newSessionListCommand() *cobra.Command {
 				HasSecret:        hasSecret,
 				Cursor:           cursor,
 				Limit:            limit,
-				OrderBy:          sort,
 			}
 			if cmd.Flags().Changed("min-tool-failures") {
 				f.MinToolFailures = &minToolFailures
 			}
-			// --reverse flips the sort key's canonical direction; leave
-			// Descending nil otherwise so the default applies.
-			if cmd.Flags().Changed("reverse") {
-				d := db.SortDefaultDescending(sort) != reverse
-				f.Descending = &d
+			// Parse the multi-key sort spec; --reverse flips the natural
+			// direction of any term left without an explicit :asc/:desc, which
+			// is folded into the canonical spec string so the wire form fully
+			// captures the ordering.
+			keys, err := db.ParseSortSpec(sort)
+			if err != nil {
+				return fmt.Errorf("invalid sort %q: %w", sort, err)
 			}
+			if reverse {
+				for i := range keys {
+					if keys[i].Descending == nil {
+						d := !db.SortDefaultDescending(keys[i].Key)
+						keys[i].Descending = &d
+					}
+				}
+			}
+			f.OrderBy = db.FormatSortSpec(keys)
 
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {
@@ -129,9 +139,12 @@ func newSessionListCommand() *cobra.Command {
 			db.DefaultSessionLimit, db.MaxSessionLimit,
 		))
 	flags.StringVar(&sort, "sort", "recent",
-		"Sort by: "+strings.Join(db.SortKeys(), ", "))
+		"Sort by a comma-separated list of keys, each optionally key:asc or "+
+			"key:desc (e.g. messages:desc,started:asc). Keys: "+
+			strings.Join(db.SortKeys(), ", "))
 	flags.BoolVarP(&reverse, "reverse", "r", false,
-		"Reverse the sort direction")
+		"Reverse the natural direction of sort keys that have no explicit "+
+			":asc/:desc suffix")
 
 	return cmd
 }
