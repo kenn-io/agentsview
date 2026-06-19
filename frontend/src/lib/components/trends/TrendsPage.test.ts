@@ -113,6 +113,30 @@ describe("TrendsPage", () => {
     expect(window.location.search).toContain("from=2024-01-10");
   });
 
+  it("changes bucketing via the chart Group by menu", async () => {
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    const trigger = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((b) => b.textContent?.includes("Group by"));
+    expect(trigger).not.toBeNull();
+    trigger!.click();
+    await tick();
+
+    const monthItem = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'),
+    ).find((b) => b.textContent?.trim() === "month");
+    expect(monthItem).not.toBeNull();
+    monthItem!.click();
+    await flushPromises();
+
+    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+      expect.objectContaining({ granularity: "month" }),
+    );
+    expect(window.location.search).toContain("granularity=month");
+  });
+
   it("shows the terms entry format hint", async () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();

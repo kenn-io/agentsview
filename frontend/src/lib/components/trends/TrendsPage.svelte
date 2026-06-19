@@ -4,6 +4,7 @@
   import { getBasePath } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import type { TrendsGranularity } from "../../api/types.js";
+  import { ChartColumnIcon, ChevronDownIcon } from "../../icons.js";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -29,6 +30,25 @@
   ] as const;
 
   let activeTerm: string | null = $state(null);
+
+  const GRANULARITIES: TrendsGranularity[] = ["day", "week", "month"];
+  let groupByOpen = $state(false);
+  let groupByEl: HTMLDivElement | undefined = $state();
+
+  function pickGranularity(g: TrendsGranularity) {
+    groupByOpen = false;
+    if (g !== trends.granularity) void setGranularity(g);
+  }
+
+  function onGroupByDocClick(e: MouseEvent) {
+    if (groupByEl && !groupByEl.contains(e.target as Node)) {
+      groupByOpen = false;
+    }
+  }
+
+  function onGroupByKey(e: KeyboardEvent) {
+    if (e.key === "Escape") groupByOpen = false;
+  }
 
   function colorFor(_term: string, index: number): string {
     return TREND_PALETTE[index % TREND_PALETTE.length]!;
@@ -110,6 +130,12 @@
     applyQueryParams();
     writeUrl();
     trends.fetchTerms();
+    document.addEventListener("click", onGroupByDocClick);
+    document.addEventListener("keydown", onGroupByKey);
+    return () => {
+      document.removeEventListener("click", onGroupByDocClick);
+      document.removeEventListener("keydown", onGroupByKey);
+    };
   });
 </script>
 
@@ -134,24 +160,6 @@
       {earliestSession}
       onSelect={applyRange}
     />
-    <div class="granularity" aria-label="Granularity">
-      {#each ["day", "week", "month"] as value}
-        <button
-          class:active={trends.granularity === value}
-          onclick={() => setGranularity(value as TrendsGranularity)}
-        >
-          {value}
-        </button>
-      {/each}
-    </div>
-    <label class="normalize-toggle">
-      <input
-        type="checkbox"
-        bind:checked={trends.normalized}
-        onchange={setNormalized}
-      />
-      <span>Normalize by number of messages</span>
-    </label>
   </div>
 
   <div class="content-grid">
@@ -172,6 +180,48 @@
     </div>
 
     <div class="chart-panel" aria-busy={trends.loading.terms}>
+      <div class="chart-options">
+        <div class="group-by" bind:this={groupByEl}>
+          <button
+            class="group-trigger"
+            onclick={() => (groupByOpen = !groupByOpen)}
+            aria-haspopup="menu"
+            aria-expanded={groupByOpen}
+          >
+            <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
+            Group by <span class="gval">{trends.granularity}</span>
+            <ChevronDownIcon
+              class={groupByOpen ? "g-chev open" : "g-chev"}
+              size="11"
+              strokeWidth="2.2"
+              aria-hidden="true"
+            />
+          </button>
+          {#if groupByOpen}
+            <div class="group-menu" role="menu">
+              {#each GRANULARITIES as g (g)}
+                <button
+                  class="group-item"
+                  class:active={trends.granularity === g}
+                  role="menuitemradio"
+                  aria-checked={trends.granularity === g}
+                  onclick={() => pickGranularity(g)}
+                >
+                  {g}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+        <label class="normalize-toggle">
+          <input
+            type="checkbox"
+            bind:checked={trends.normalized}
+            onchange={setNormalized}
+          />
+          <span>Normalize by number of messages</span>
+        </label>
+      </div>
       <TrendsLineChart
         buckets={trends.response?.buckets ?? []}
         series={trends.response?.series ?? []}
@@ -259,8 +309,7 @@
   }
 
   .head-actions,
-  .toolbar,
-  .granularity {
+  .toolbar {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -336,40 +385,96 @@
     font-size: 12px;
   }
 
-  .granularity {
-    align-self: end;
-    height: 32px;
-    padding: 2px;
-    border: 1px solid var(--border-default);
-    border-radius: 7px;
-    background: var(--bg-surface);
+  .chart-options {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+    padding: 2px 2px 10px;
   }
 
-  .granularity button {
+  .group-by {
+    position: relative;
+  }
+
+  .group-trigger {
     height: 26px;
-    min-width: 54px;
-    padding: 0 10px;
+    padding: 0 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     border: 0;
+    border-radius: 6px;
     background: transparent;
     color: var(--text-muted);
-    text-transform: capitalize;
     font-size: 12px;
   }
 
-  .granularity button.active {
-    background: var(--bg-hover);
-    color: var(--text-primary);
+  .group-trigger:hover:not(:disabled) {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+  }
+
+  .group-trigger .gval {
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-transform: capitalize;
+  }
+
+  :global(.g-chev) {
+    color: var(--text-muted);
+    transition: transform 0.15s;
+  }
+
+  :global(.g-chev.open) {
+    transform: rotate(180deg);
+  }
+
+  .group-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    z-index: 20;
+    min-width: 124px;
+    padding: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-muted);
+    border-radius: 7px;
+    box-shadow: var(--shadow-md);
+  }
+
+  .group-item {
+    width: 100%;
+    height: 28px;
+    padding: 0 9px;
+    display: flex;
+    align-items: center;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-align: left;
+    text-transform: capitalize;
+  }
+
+  .group-item:hover:not(:disabled) {
+    background: var(--bg-surface-hover);
+  }
+
+  .group-item.active {
+    color: var(--accent-blue);
+    font-weight: 500;
   }
 
   .normalize-toggle {
-    align-self: end;
-    height: 32px;
     display: flex;
     align-items: center;
-    gap: 7px;
-    color: var(--text-primary);
+    gap: 6px;
+    color: var(--text-muted);
     font-size: 12px;
     font-weight: 500;
+    cursor: pointer;
   }
 
   .normalize-toggle input {
