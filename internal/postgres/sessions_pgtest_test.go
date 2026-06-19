@@ -94,3 +94,61 @@ func TestListSessions_HasSecret(t *testing.T) {
 			"stale secret session included in versioned HasSecret results")
 	}
 }
+
+// TestListSessions_Sort verifies a non-default sort and its keyset cursor render
+// correctly on PostgreSQL (numbered placeholders, ::bigint cast). Scoped to a
+// unique project so the schema's seed session does not interfere.
+func TestListSessions_Sort(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, ended_at, message_count, user_message_count)
+		VALUES
+			('sort-a', 'm', 'sort-test', 'claude', 'a',
+			 '2026-03-01T00:00:00Z'::timestamptz, '2026-03-01T00:10:00Z'::timestamptz, 3, 1),
+			('sort-b', 'm', 'sort-test', 'claude', 'b',
+			 '2026-03-02T00:00:00Z'::timestamptz, '2026-03-02T00:10:00Z'::timestamptz, 9, 1),
+			('sort-c', 'm', 'sort-test', 'claude', 'c',
+			 '2026-03-03T00:00:00Z'::timestamptz, '2026-03-03T00:10:00Z'::timestamptz, 6, 1)
+	`)
+	require.NoError(t, err, "seeding sort sessions")
+
+	ctx := context.Background()
+	ids := func(sessions []db.Session) []string {
+		out := make([]string, len(sessions))
+		for i, s := range sessions {
+			out[i] = s.ID
+		}
+		return out
+	}
+
+	// messages ascending (the default for non-recent sorts).
+	asc, err := store.ListSessions(ctx, db.SessionFilter{
+		Project: "sort-test", OrderBy: "messages", Limit: 10,
+	})
+	require.NoError(t, err, "ListSessions sort asc")
+	require.Equal(t, []string{"sort-a", "sort-c", "sort-b"}, ids(asc.Sessions))
+
+	// Paginated walk one row at a time exercises the ::bigint keyset cursor.
+	var walked []string
+	cursor := ""
+	for {
+		page, err := store.ListSessions(ctx, db.SessionFilter{
+			Project: "sort-test", OrderBy: "messages", Limit: 1, Cursor: cursor,
+		})
+		require.NoError(t, err, "ListSessions sort page")
+		walked = append(walked, ids(page.Sessions)...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	require.Equal(t, []string{"sort-a", "sort-c", "sort-b"}, walked)
+}

@@ -58,6 +58,22 @@ func duckContractSessionsCursorsAndMetadata(
 	require.Equal(t, 2, next.Total)
 	require.Equal(t, []string{fixture.alphaID}, duckSessionIDs(next.Sessions))
 
+	// Sorting by a non-default column (messages, ascending by default) and its
+	// keyset cursor must render on DuckDB: beta has 1 message, alpha has 2.
+	byMsgs, err := store.ListSessions(ctx, db.SessionFilter{OrderBy: "messages", Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, []string{fixture.betaID, fixture.alphaID}, duckSessionIDs(byMsgs.Sessions))
+
+	msgPage1, err := store.ListSessions(ctx, db.SessionFilter{OrderBy: "messages", Limit: 1})
+	require.NoError(t, err)
+	require.Equal(t, []string{fixture.betaID}, duckSessionIDs(msgPage1.Sessions))
+	require.NotEmpty(t, msgPage1.NextCursor)
+	msgPage2, err := store.ListSessions(ctx, db.SessionFilter{
+		OrderBy: "messages", Limit: 1, Cursor: msgPage1.NextCursor,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{fixture.alphaID}, duckSessionIDs(msgPage2.Sessions))
+
 	alpha, err := store.GetSession(ctx, fixture.alphaID)
 	require.NoError(t, err)
 	require.NotNil(t, alpha)
