@@ -460,9 +460,9 @@ func TestStoreGetSessionUsage_CopilotAICreditsComputed(t *testing.T) {
 
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
-			session_id, model, input_tokens, output_tokens, cost_usd, ts
+			session_id, source, model, input_tokens, output_tokens, cost_usd, occurred_at
 		) VALUES (
-			'copilot:s1', 'gpt-4', 1000, 500, 0.10, '2026-03-12T10:00:00Z'::timestamptz
+			'copilot:s1', 'api', 'gpt-4', 1000, 500, 0.10, '2026-03-12T10:00:00Z'::timestamptz
 		)`)
 	require.NoError(t, err, "insert usage event")
 
@@ -490,9 +490,9 @@ func TestStoreGetSessionUsage_CopilotNoAICreditsUnpriced(t *testing.T) {
 
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
-			session_id, model, input_tokens, output_tokens, ts
+			session_id, source, model, input_tokens, output_tokens, occurred_at
 		) VALUES (
-			'copilot:s2', 'local-model', 1000, 500, '2026-03-12T10:00:00Z'::timestamptz
+			'copilot:s2', 'api', 'local-model', 1000, 500, '2026-03-12T10:00:00Z'::timestamptz
 		)`)
 	require.NoError(t, err, "insert usage event")
 
