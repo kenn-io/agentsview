@@ -501,7 +501,7 @@ describe("SessionList visible hydration", () => {
     expect(selectSession).toHaveBeenCalledWith("row-session");
   });
 
-  it("keeps session rows discoverable as buttons for virtual-list targeting", async () => {
+  it("keeps button-discoverable rows alongside native session links", async () => {
     sessions.sessions = [
       makeSession({
         id: "button-session",
@@ -517,9 +517,14 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     const row = document.querySelector<HTMLElement>(".session-item");
+    const link = document.querySelector<HTMLAnchorElement>(
+      ".session-info-link",
+    );
     expect(row).not.toBeNull();
     expect(row?.getAttribute("role")).toBe("button");
     expect(row?.getAttribute("tabindex")).toBe("0");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/sessions/button-session");
   });
 
   it("opens the same canonical href from the context menu in a new tab", async () => {
