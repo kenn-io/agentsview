@@ -1293,6 +1293,42 @@ func TestSyncAllClaudeDuplicateLiveGrowthBeatsUnchangedStoredArchive(t *testing.
 	assertMessageContent(t, env.db, "duplicate-grow", "initial message", "live follow-up")
 }
 
+func TestSyncAllSinceClaudeDuplicateTouchedStaleDoesNotBeatPreferred(t *testing.T) {
+	liveDir := t.TempDir()
+	archiveDir := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{liveDir, archiveDir}))
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "same logical session").
+		String()
+	livePath := env.writeSession(
+		t, liveDir, filepath.Join("proj-live", "duplicate-since.jsonl"), content,
+	)
+	archivePath := env.writeSession(
+		t, archiveDir, filepath.Join("proj-archive", "duplicate-since.jsonl"), content,
+	)
+	baseTime := time.Now().Add(-3 * time.Hour)
+	preferredTime := baseTime.Add(time.Hour)
+	require.NoError(t, os.Chtimes(archivePath, baseTime, baseTime))
+	require.NoError(t, os.Chtimes(livePath, preferredTime, preferredTime))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-since"))
+
+	cutoff := preferredTime.Add(time.Hour)
+	touchedArchive := cutoff.Add(time.Minute)
+	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	assert.Zero(t, stats.Synced, "stale duplicate must not be re-synced")
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-since"))
+	assertMessageContent(t, env.db, "duplicate-since", "same logical session")
+}
+
 func TestSyncEngineSkipCache(t *testing.T) {
 	env := setupTestEnv(t)
 

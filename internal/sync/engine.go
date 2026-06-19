@@ -2376,6 +2376,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	if !since.IsZero() {
+		all = e.dedupeClaudeDiscoveredFiles(all)
 		all = e.filterFilesByMtime(all, since)
 	}
 
