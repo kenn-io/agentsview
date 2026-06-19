@@ -54,14 +54,18 @@ func normalizeInsightAutomatedScope(scope string) (string, bool) {
 func normalizeCannedSessionFilters(
 	req generateInsightRequest,
 ) (insight.CannedSessionFilters, string, bool) {
+	requestTimezone := strings.TrimSpace(req.Timezone)
 	filters := insight.CannedSessionFilters{
-		Timezone:       "UTC",
+		Timezone:       requestTimezone,
 		AutomatedScope: req.AutomatedScope,
 	}
 	if req.Filters != nil {
 		filters = *req.Filters
 	}
 	filters.Timezone = strings.TrimSpace(filters.Timezone)
+	if filters.Timezone == "" {
+		filters.Timezone = requestTimezone
+	}
 	if filters.Timezone == "" {
 		filters.Timezone = "UTC"
 	}

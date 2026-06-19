@@ -747,6 +747,64 @@ func TestGenerateCannedInsight_CoachSummaryUsesFilterTimezone(t *testing.T) {
 	assert.NotContains(t, generatedPrompt, previousLocalDayPrompt)
 }
 
+func TestGenerateCannedInsight_CoachSummaryUsesTopLevelTimezone(t *testing.T) {
+	var generatedPrompt string
+	stubGen := func(
+		_ context.Context, _ string, prompt string, _ insight.LogFunc,
+	) (insight.Result, error) {
+		generatedPrompt = prompt
+		return insight.Result{
+			Agent: "claude",
+			Model: "test-model",
+			Content: `{
+				"schema_version":"llm_insight.v1",
+				"kind":"prompt_maturity_review",
+				"summary":"Prompt maturity evidence is scoped to the requested local day.",
+				"confidence":"medium",
+				"recommendations":[{
+					"title":"Keep local-day Coach scope aligned",
+					"rationale":"Coach prompt maturity uses the same local-date filter as the canned payload.",
+					"actions":["Generate recommendations from the selected local day"],
+					"evidence_refs":["coach:prompt_maturity"],
+					"impact":"medium",
+					"effort":"low"
+				}],
+				"risks":[],
+				"evidence_refs":["coach:prompt_maturity"]
+			}`,
+		}, nil
+	}
+	te := setupWithServerOpts(t, []server.Option{
+		server.WithGenerateStreamFunc(stubGen),
+	})
+
+	localDayPrompt := "Implement local-day filtering with acceptance criteria and verification steps"
+	previousLocalDayPrompt := "Implement previous-day filtering with acceptance criteria and verification steps"
+	te.seedSession(t, "local-day-match", "my-app", 4, func(s *db.Session) {
+		started := "2025-01-16T07:30:00Z"
+		ended := "2025-01-16T07:45:00Z"
+		s.StartedAt = &started
+		s.EndedAt = &ended
+		s.FirstMessage = &localDayPrompt
+	})
+	te.seedSession(t, "previous-local-day", "my-app", 4, func(s *db.Session) {
+		started := "2025-01-15T01:00:00Z"
+		ended := "2025-01-15T01:15:00Z"
+		s.StartedAt = &started
+		s.EndedAt = &ended
+		s.FirstMessage = &previousLocalDayPrompt
+	})
+
+	payload := `{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","project":"my-app","agent":"claude","llm_opt_in":true,"timezone":"America/Los_Angeles"}`
+	w := te.post(t, "/api/v1/insights/generate", payload)
+	assertStatus(t, w, http.StatusOK)
+
+	assert.Contains(t, generatedPrompt, `"timezone":"America/Los_Angeles"`)
+	assert.Contains(t, generatedPrompt, `"session_count":1`)
+	assert.Contains(t, generatedPrompt, localDayPrompt)
+	assert.NotContains(t, generatedPrompt, previousLocalDayPrompt)
+}
+
 func TestGenerateCannedInsight_RejectsOversizedFocus(t *testing.T) {
 	te := setup(t)
 	longFocus := strings.Repeat("x", insight.MaxCannedFocusRunes+1)
