@@ -1,6 +1,7 @@
 export { default as ActivityIcon } from "@lucide/svelte/icons/activity";
 export { default as ArrowDownIcon } from "@lucide/svelte/icons/arrow-down";
 export { default as ArrowDownWideNarrowIcon } from "@lucide/svelte/icons/arrow-down-wide-narrow";
+export { default as ArrowUpIcon } from "@lucide/svelte/icons/arrow-up";
 export { default as ArrowUpNarrowWideIcon } from "@lucide/svelte/icons/arrow-up-narrow-wide";
 export { default as CalendarIcon } from "@lucide/svelte/icons/calendar";
 export { default as CheckIcon } from "@lucide/svelte/icons/check";

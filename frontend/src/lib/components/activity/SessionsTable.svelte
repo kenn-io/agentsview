@@ -2,7 +2,11 @@
   import type { Report } from "../../api/types.js";
   import type { ActivitySessionRow } from "../../api/generated/index";
   import { router } from "../../stores/router.svelte.js";
-  import { XIcon } from "../../icons.js";
+  import {
+    ArrowDownIcon,
+    ArrowUpIcon,
+    XIcon,
+  } from "../../icons.js";
 
   let {
     report,
@@ -223,7 +227,11 @@
                   {col.label}
                   {#if sortKey === col.key}
                     <span class="sort-arrow">
-                      {sortDir === "asc" ? "↑" : "↓"}
+                      {#if sortDir === "asc"}
+                        <ArrowUpIcon size="10" strokeWidth="2.2" aria-hidden="true" />
+                      {:else}
+                        <ArrowDownIcon size="10" strokeWidth="2.2" aria-hidden="true" />
+                      {/if}
                     </span>
                   {/if}
                 </button>
@@ -396,7 +404,8 @@
   }
 
   .sort-arrow {
-    font-size: 9px;
+    display: inline-flex;
+    align-items: center;
     color: var(--accent-blue);
   }
 
