@@ -29,6 +29,10 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 48: the Codex and OpenCode parsers now persist cwd.
+// Existing Codex and OpenCode rows need re-parsing so worktree
+// project mappings can be applied to those sessions.
+//
 // Bumped to 47: the Visual Studio Copilot trace parser now
 // persists per-chat model and token usage from gen_ai.usage
 // attributes. Existing Visual Studio Copilot rows need re-parsing
@@ -224,7 +228,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 47
+const dataVersion = 48
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

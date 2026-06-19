@@ -47,6 +47,7 @@ func TestParseCodexSession_Basic(t *testing.T) {
 
 	require.NotNil(t, sess)
 	assert.Equal(t, "codex:abc-123", sess.ID)
+	assert.Equal(t, "/Users/alice/code/my-api", sess.Cwd)
 	assert.Equal(t, 2, len(msgs))
 	assertSessionMeta(t, sess, "codex:abc-123", "my_api", AgentCodex)
 }

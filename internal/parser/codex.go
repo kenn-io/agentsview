@@ -1360,6 +1360,7 @@ func ParseCodexSession(
 		Project:           b.project,
 		Machine:           machine,
 		Agent:             AgentCodex,
+		Cwd:               b.cwd,
 		FirstMessage:      b.firstMessage,
 		SessionName:       LookupCodexThreadName(path, b.sessionID),
 		StartedAt:         b.startedAt,

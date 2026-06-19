@@ -176,6 +176,7 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	assertEq(t, "Agent", s.Session.Agent, AgentOpenCode)
 	assertEq(t, "Machine", s.Session.Machine, "testmachine")
 	assertEq(t, "Project", s.Session.Project, "myapp")
+	assertEq(t, "Cwd", s.Session.Cwd, "/home/user/code/myapp")
 	assertEq(t, "MessageCount", s.Session.MessageCount, 2)
 	assertEq(t, "FirstMessage", s.Session.FirstMessage, "Test Session")
 
@@ -286,6 +287,7 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 	assertEq(t, "ID", sess.ID, "opencode:ses_storage")
 	assertEq(t, "Agent", sess.Agent, AgentOpenCode)
 	assertEq(t, "Project", sess.Project, "myapp")
+	assertEq(t, "Cwd", sess.Cwd, "/home/user/code/myapp")
 	assertEq(t, "Machine", sess.Machine, "testmachine")
 	assertEq(t, "MessageCount", sess.MessageCount, 2)
 	assertEq(t, "FirstMessage", sess.FirstMessage, "Storage Session")

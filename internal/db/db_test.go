@@ -588,9 +588,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionVisualStudioCopilotUsage(t *testing.T) {
-	assert.Equal(t, 47, CurrentDataVersion(),
-		"Visual Studio Copilot usage parsing requires a data version bump")
+func TestCurrentDataVersionCodexOpenCodeCwd(t *testing.T) {
+	assert.Equal(t, 48, CurrentDataVersion(),
+		"Codex and OpenCode cwd parsing requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

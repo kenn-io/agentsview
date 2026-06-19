@@ -600,6 +600,7 @@ func buildOpenCodeParsedSession(
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentOpenCode,
+		Cwd:              worktree,
 		ParentSessionID:  parentID,
 		FirstMessage:     firstMsg,
 		StartedAt:        startedAt,
