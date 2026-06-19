@@ -242,14 +242,7 @@ func buildPGSessionBaseFilter(
 }
 
 // EncodeCursor returns a base64-encoded, HMAC-signed cursor.
-func (s *Store) EncodeCursor(
-	endedAt, id string, total ...int,
-) string {
-	t := 0
-	if len(total) > 0 {
-		t = total[0]
-	}
-	c := db.SessionCursor{EndedAt: endedAt, ID: id, Total: t}
+func (s *Store) EncodeCursor(c db.SessionCursor) string {
 	data, _ := json.Marshal(c)
 
 	s.cursorMu.RLock()
@@ -345,6 +338,10 @@ func (s *Store) ListSessions(
 
 	where, args := buildPGSessionFilter(f)
 
+	dialect := db.PostgresQueryDialect()
+	sp, _ := db.SessionSortFor(f.OrderBy)
+	desc := sp.ResolveDescending(f.Descending)
+
 	var total int
 	var cur db.SessionCursor
 	if f.Cursor != "" {
@@ -368,21 +365,22 @@ func (s *Store) ListSessions(
 	}
 
 	cursorArgs := append([]any{}, args...)
-	pageBuilder := db.NewQueryBuilder(
-		db.PostgresQueryDialect(), len(args),
-	)
+	pageBuilder := db.NewQueryBuilder(dialect, len(args))
 	cursorWhere := where
 	if f.Cursor != "" {
-		cursorWhere += " AND " +
-			pageBuilder.CursorBeforePredicate(cur)
+		val, err := sp.CursorPredicateValue(cur, desc)
+		if err != nil {
+			return db.SessionPage{}, err
+		}
+		cursorWhere += " AND " + pageBuilder.CursorPredicate(
+			sp, desc, val, cur.ID,
+		)
 	}
 
 	query := "SELECT " + pgSessionCols +
-		" FROM sessions WHERE " + cursorWhere + `
-		ORDER BY COALESCE(
-			ended_at, started_at, created_at
-		) DESC, id DESC
-		` + pageBuilder.Limit(f.Limit+1)
+		" FROM sessions WHERE " + cursorWhere + " " +
+		pageBuilder.OrderByClause(sp, desc) + " " +
+		pageBuilder.Limit(f.Limit+1)
 	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 
 	rows, err := s.pg.QueryContext(
@@ -405,14 +403,9 @@ func (s *Store) ListSessions(
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
-		ea := last.CreatedAt
-		if last.StartedAt != nil && *last.StartedAt != "" {
-			ea = *last.StartedAt
-		}
-		if last.EndedAt != nil && *last.EndedAt != "" {
-			ea = *last.EndedAt
-		}
-		page.NextCursor = s.EncodeCursor(ea, last.ID, total)
+		page.NextCursor = s.EncodeCursor(
+			sp.NextCursor(&last, desc, total),
+		)
 	}
 
 	return page, nil
@@ -619,9 +612,11 @@ func (s *Store) getSidebarSessionIndexPage(
 	if len(roots) > f.Limit {
 		selected = roots[:f.Limit]
 		last := selected[f.Limit-1]
-		index.NextCursor = s.EncodeCursor(
-			FormatISO8601(last.activity), last.id, total,
-		)
+		index.NextCursor = s.EncodeCursor(db.SessionCursor{
+			EndedAt: FormatISO8601(last.activity),
+			ID:      last.id,
+			Total:   total,
+		})
 	}
 
 	page := db.NewQueryBuilder(db.PostgresQueryDialect(), 0)

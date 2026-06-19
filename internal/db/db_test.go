@@ -2240,17 +2240,17 @@ func TestGetSessionFull(t *testing.T) {
 
 func TestCursorEncodeDecode(t *testing.T) {
 	d := testDB(t)
-	encoded := d.EncodeCursor(tsZero, "session-1")
+	encoded := d.EncodeCursor(SessionCursor{EndedAt: tsZero, ID: "session-1"})
 	cur, err := d.DecodeCursor(encoded)
 	requireNoError(t, err, "DecodeCursor")
 	assert.Equal(t, tsZero, cur.EndedAt, "EndedAt")
 	assert.Equal(t, "session-1", cur.ID, "ID")
 
-	encodedWithTotal := d.EncodeCursor(
-		tsZero,
-		"session-1",
-		123,
-	)
+	encodedWithTotal := d.EncodeCursor(SessionCursor{
+		EndedAt: tsZero,
+		ID:      "session-1",
+		Total:   123,
+	})
 	cur, err = d.DecodeCursor(encodedWithTotal)
 	requireNoError(t, err, "DecodeCursor with total")
 	assert.Equal(t, 123, cur.Total, "Total")
@@ -2259,7 +2259,7 @@ func TestCursorEncodeDecode(t *testing.T) {
 func TestCursorTampering(t *testing.T) {
 	d := testDB(t)
 	// 1. Create a valid signed cursor
-	original := d.EncodeCursor(tsZero, "s1", 100)
+	original := d.EncodeCursor(SessionCursor{EndedAt: tsZero, ID: "s1", Total: 100})
 
 	parts := strings.Split(original, ".")
 	require.Len(t, parts, 2, "expected 2 parts (payload.sig)")
@@ -2330,15 +2330,15 @@ func TestCursorSecretConcurrency(t *testing.T) {
 					)
 					d.SetCursorSecret(secret)
 				case 1:
-					d.EncodeCursor(
-						tsZero,
-						fmt.Sprintf("s-%d-%d", id, j),
-						42,
-					)
+					d.EncodeCursor(SessionCursor{
+						EndedAt: tsZero,
+						ID:      fmt.Sprintf("s-%d-%d", id, j),
+						Total:   42,
+					})
 				case 2:
-					encoded := d.EncodeCursor(
-						tsZero, "s1",
-					)
+					encoded := d.EncodeCursor(SessionCursor{
+						EndedAt: tsZero, ID: "s1",
+					})
 					// Decode may fail if secret rotated
 					// between encode and decode; that's OK.
 					_, err := d.DecodeCursor(encoded)
@@ -2360,7 +2360,7 @@ func TestSetCursorSecretDefensiveCopy(t *testing.T) {
 	secret := []byte("my-secret-key-for-testing-copy!!")
 	d.SetCursorSecret(secret)
 
-	encoded := d.EncodeCursor(tsZero, "s1")
+	encoded := d.EncodeCursor(SessionCursor{EndedAt: tsZero, ID: "s1"})
 
 	// Mutate the original slice — should not affect the DB.
 	for i := range secret {

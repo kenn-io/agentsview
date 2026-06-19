@@ -18,7 +18,7 @@ func (errReadOnly) Error() string { return "not available in remote mode" }
 type Store interface {
 	// Cursor pagination.
 	SetCursorSecret(secret []byte)
-	EncodeCursor(endedAt, id string, total ...int) string
+	EncodeCursor(c SessionCursor) string
 	DecodeCursor(s string) (SessionCursor, error)
 
 	// Sessions.

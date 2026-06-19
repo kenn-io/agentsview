@@ -28,16 +28,22 @@ const (
 // ORM: callers still own SELECTs, JOINs, backend-specific search paths, and
 // table schemas.
 type QueryDialect struct {
-	name                        string
-	placeholderStyle            placeholderStyle
-	trueLiteral                 string
-	falseLiteral                string
-	dateExpr                    string
-	dateParam                   func(string) string
-	activityExpr                string
-	activityParam               func(string) string
-	cursorActivityExpr          string
-	cursorParam                 func(string) string
+	name               string
+	placeholderStyle   placeholderStyle
+	trueLiteral        string
+	falseLiteral       string
+	dateExpr           string
+	dateParam          func(string) string
+	activityExpr       string
+	activityParam      func(string) string
+	cursorActivityExpr string
+	cursorParam        func(string) string
+	// castCursor wraps a placeholder with the type cast a keyset cursor value of
+	// the given kind needs in this dialect.
+	castCursor func(string, valueKind) string
+	// emptyStringIsNull is true for backends (SQLite) that store unset
+	// timestamps as empty strings rather than SQL NULL.
+	emptyStringIsNull           bool
 	terminationExpr             string
 	terminationKind             timestampKind
 	caseInsensitiveLike         string
@@ -62,6 +68,8 @@ func SQLiteQueryDialect() QueryDialect {
 		activityParam:          func(ph string) string { return ph },
 		cursorActivityExpr:     "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
 		cursorParam:            func(ph string) string { return ph },
+		castCursor:             func(ph string, _ valueKind) string { return ph },
+		emptyStringIsNull:      true,
 		terminationExpr:        activityExprSQLite,
 		terminationKind:        timestampUnixSeconds,
 		caseInsensitiveLike:    "LIKE",
@@ -93,6 +101,7 @@ func PostgresQueryDialect() QueryDialect {
 		cursorParam: func(ph string) string {
 			return ph + "::timestamptz"
 		},
+		castCursor:             pgCastCursor,
 		terminationExpr:        "COALESCE(ended_at, started_at, created_at)",
 		terminationKind:        timestampTimestamptz,
 		caseInsensitiveLike:    "ILIKE",
@@ -124,6 +133,7 @@ func DuckDBQueryDialect() QueryDialect {
 		cursorParam: func(ph string) string {
 			return "CAST(" + ph + " AS TIMESTAMP)"
 		},
+		castCursor:             duckCastCursor,
 		terminationExpr:        "COALESCE(ended_at, started_at, created_at)",
 		terminationKind:        timestampCast,
 		caseInsensitiveLike:    "ILIKE",
@@ -205,6 +215,77 @@ func (b *QueryBuilder) CursorBeforePredicate(cur SessionCursor) string {
 	ea := b.dialect.cursorParam(b.Add(cur.EndedAt))
 	id := b.Add(cur.ID)
 	return "(" + b.dialect.cursorActivityExpr + ", id) < (" + ea + ", " + id + ")"
+}
+
+func pgCastCursor(ph string, kind valueKind) string {
+	switch kind {
+	case kindTimestamp:
+		return ph + "::timestamptz"
+	case kindInt:
+		return ph + "::bigint"
+	case kindReal:
+		return ph + "::double precision"
+	default:
+		return ph
+	}
+}
+
+func duckCastCursor(ph string, kind valueKind) string {
+	switch kind {
+	case kindTimestamp:
+		return "CAST(" + ph + " AS TIMESTAMP)"
+	case kindInt:
+		return "CAST(" + ph + " AS BIGINT)"
+	case kindReal:
+		return "CAST(" + ph + " AS DOUBLE)"
+	default:
+		return ph
+	}
+}
+
+// timestampExpr returns a column reference that treats unset timestamps as NULL.
+// SQLite stores empty strings for missing timestamps; other backends use real
+// NULLs, so the column reference passes through unchanged.
+func (d QueryDialect) timestampExpr(col string) string {
+	if d.emptyStringIsNull {
+		return "NULLIF(" + col + ", '')"
+	}
+	return col
+}
+
+// OrderByClause renders the session-list ordering for a resolved sort and
+// direction, with id as a same-direction tie-breaker so keyset pagination is
+// deterministic.
+func (b *QueryBuilder) OrderByClause(sp SessionSort, desc bool) string {
+	orderExpr := sp.orderExpr(b.dialect, desc)
+	dir := "ASC"
+	if desc {
+		dir = "DESC"
+	}
+	if orderExpr == "id" {
+		return "ORDER BY id " + dir
+	}
+	return "ORDER BY " + orderExpr + " " + dir + ", id " + dir
+}
+
+// CursorPredicate renders the keyset pagination predicate matching an
+// OrderByClause built from the same sort and direction. The bound value is cast
+// per dialect for the column's kind; it must already be the Go type produced by
+// SessionSort.CursorPredicateValue.
+func (b *QueryBuilder) CursorPredicate(
+	sp SessionSort, desc bool, value any, id string,
+) string {
+	orderExpr := sp.orderExpr(b.dialect, desc)
+	op := ">"
+	if desc {
+		op = "<"
+	}
+	if orderExpr == "id" {
+		return "id " + op + " " + b.dialect.castCursor(b.Add(id), kindText)
+	}
+	vp := b.dialect.castCursor(b.Add(value), sp.kind)
+	ip := b.Add(id)
+	return "(" + orderExpr + ", id) " + op + " (" + vp + ", " + ip + ")"
 }
 
 // LimitOffset renders a parameterized LIMIT/OFFSET clause.

@@ -203,20 +203,25 @@ type Session struct {
 	CreatedAt         string  `json:"created_at"`
 }
 
-// SessionCursor is the opaque pagination token.
+// SessionCursor is the opaque pagination token. EndedAt carries the
+// recent-activity value for the default sort (and legacy cursors); Sort/Desc/
+// Value generalize keyset pagination to any --sort column. New fields are
+// additive so cursors minted before they existed still decode as recent.
 type SessionCursor struct {
 	EndedAt string `json:"e"`
 	ID      string `json:"i"`
 	Total   int    `json:"t,omitempty"`
+	// Sort is the sort key the cursor was minted under ("" = legacy recent).
+	Sort string `json:"k,omitempty"`
+	// Desc is the direction the cursor was minted under.
+	Desc bool `json:"d,omitempty"`
+	// Value is the sort column's value for the page's last row, encoded as a
+	// string and re-typed per the sort's kind when comparing.
+	Value string `json:"v,omitempty"`
 }
 
-// EncodeCursor returns a base64-encoded cursor string.
-func (db *DB) EncodeCursor(endedAt, id string, total ...int) string {
-	t := 0
-	if len(total) > 0 {
-		t = total[0]
-	}
-	c := SessionCursor{EndedAt: endedAt, ID: id, Total: t}
+// EncodeCursor returns a base64-encoded, HMAC-signed cursor string.
+func (db *DB) EncodeCursor(c SessionCursor) string {
 	data, _ := json.Marshal(c)
 
 	db.cursorMu.RLock()
@@ -314,6 +319,11 @@ type SessionFilter struct {
 	//   "unclean"    → only sessions with status IN
 	//                  ('tool_call_pending', 'truncated')
 	Termination string
+	// OrderBy selects the sort column ("" = recent activity, the default).
+	// Valid keys are enumerated by SortKeys / ValidSortKey.
+	OrderBy string
+	// Descending overrides the sort key's canonical direction when non-nil.
+	Descending *bool
 }
 
 // activeWindow is the freshness window for "active" sessions
@@ -425,6 +435,10 @@ func (db *DB) ListSessions(
 
 	where, args := buildSessionFilter(f)
 
+	dialect := SQLiteQueryDialect()
+	sp, _ := SessionSortFor(f.OrderBy)
+	desc := sp.ResolveDescending(f.Descending)
+
 	var total int
 	var cur SessionCursor
 	if f.Cursor != "" {
@@ -450,21 +464,22 @@ func (db *DB) ListSessions(
 
 	// Paginated results
 	cursorArgs := append([]any{}, args...)
-	pageBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(args))
+	pageBuilder := NewQueryBuilder(dialect, len(args))
 	cursorWhere := where
 	if f.Cursor != "" {
-		cursorWhere += " AND " +
-			pageBuilder.CursorBeforePredicate(cur)
+		val, err := sp.CursorPredicateValue(cur, desc)
+		if err != nil {
+			return SessionPage{}, err
+		}
+		cursorWhere += " AND " + pageBuilder.CursorPredicate(
+			sp, desc, val, cur.ID,
+		)
 	}
 
 	query := "SELECT " + sessionBaseCols +
-		" FROM sessions WHERE " + cursorWhere + `
-		ORDER BY COALESCE(
-			NULLIF(ended_at, ''),
-			NULLIF(started_at, ''),
-			created_at
-		) DESC, id DESC
-		` + pageBuilder.Limit(f.Limit+1)
+		" FROM sessions WHERE " + cursorWhere + " " +
+		pageBuilder.OrderByClause(sp, desc) + " " +
+		pageBuilder.Limit(f.Limit+1)
 	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 
 	rows, err := db.getReader().QueryContext(ctx, query, cursorArgs...)
@@ -483,14 +498,9 @@ func (db *DB) ListSessions(
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
-		ea := last.CreatedAt
-		if last.StartedAt != nil && *last.StartedAt != "" {
-			ea = *last.StartedAt
-		}
-		if last.EndedAt != nil && *last.EndedAt != "" {
-			ea = *last.EndedAt
-		}
-		page.NextCursor = db.EncodeCursor(ea, last.ID, total)
+		page.NextCursor = db.EncodeCursor(
+			sp.NextCursor(&last, desc, total),
+		)
 	}
 
 	return page, nil
@@ -720,7 +730,9 @@ func (db *DB) getSidebarSessionIndexPage(
 	if len(roots) > f.Limit {
 		selected = roots[:f.Limit]
 		last := selected[f.Limit-1]
-		index.NextCursor = db.EncodeCursor(last.activity, last.id, total)
+		index.NextCursor = db.EncodeCursor(SessionCursor{
+			EndedAt: last.activity, ID: last.id, Total: total,
+		})
 	}
 
 	cteParts := make([]string, 0, len(selected))
