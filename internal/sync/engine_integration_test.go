@@ -1209,6 +1209,47 @@ func TestSyncEngineHashSkip(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1 + 0, Synced: 1, Skipped: 0})
 }
 
+func TestSyncAllDedupesClaudeSourcesBySessionID(t *testing.T) {
+	liveDir := t.TempDir()
+	archiveDir := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{liveDir, archiveDir}))
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "same logical session").
+		String()
+	livePath := env.writeSession(
+		t, liveDir, filepath.Join("proj-live", "duplicate.jsonl"), content,
+	)
+	archivePath := env.writeSession(
+		t, archiveDir, filepath.Join("proj-archive", "duplicate.jsonl"), content,
+	)
+	older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, older, older))
+	require.NoError(t, os.Chtimes(livePath, newer, newer))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	liveInfo, err := os.Stat(livePath)
+	require.NoError(t, err)
+	storedSize, storedMtime, ok := env.db.GetSessionFileInfo("duplicate")
+	require.True(t, ok, "file info not stored")
+	assert.Equal(t, liveInfo.Size(), storedSize)
+	assert.Equal(t, liveInfo.ModTime().UnixNano(), storedMtime)
+
+	touchedArchive := newer.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        0,
+		Skipped:       1,
+	})
+}
+
 func TestSyncEngineSkipCache(t *testing.T) {
 	env := setupTestEnv(t)
 

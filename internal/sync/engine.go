@@ -2380,6 +2380,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	all = dedupeDiscoveredFiles(all)
+	all = e.dedupeClaudeDiscoveredFiles(all)
 	all = e.filterShadowedLegacyKiroFiles(all)
 
 	verbose := onProgress == nil
@@ -2899,6 +2900,120 @@ func discoveredFileMtime(
 	}
 
 	return info.ModTime().UnixNano(), nil
+}
+
+func (e *Engine) dedupeClaudeDiscoveredFiles(
+	files []parser.DiscoveredFile,
+) []parser.DiscoveredFile {
+	bySessionID := make(map[string][]parser.DiscoveredFile)
+	for _, file := range files {
+		if file.Agent != parser.AgentClaude {
+			continue
+		}
+		sessionID := strings.TrimSuffix(filepath.Base(file.Path), ".jsonl")
+		if sessionID == "" {
+			continue
+		}
+		bySessionID[sessionID] = append(bySessionID[sessionID], file)
+	}
+	if len(bySessionID) == 0 {
+		return files
+	}
+
+	preferred := make(map[string]parser.DiscoveredFile, len(bySessionID))
+	for sessionID, candidates := range bySessionID {
+		preferred[sessionID] = e.pickPreferredClaudeDiscoveredFile(
+			sessionID, candidates,
+		)
+	}
+
+	out := files[:0]
+	seen := make(map[string]struct{}, len(preferred))
+	for _, file := range files {
+		if file.Agent != parser.AgentClaude {
+			out = append(out, file)
+			continue
+		}
+		sessionID := strings.TrimSuffix(filepath.Base(file.Path), ".jsonl")
+		if sessionID == "" {
+			out = append(out, file)
+			continue
+		}
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		out = append(out, preferred[sessionID])
+	}
+	return out
+}
+
+func (e *Engine) pickPreferredClaudeDiscoveredFile(
+	sessionID string, candidates []parser.DiscoveredFile,
+) parser.DiscoveredFile {
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+
+	fullID := e.idPrefix + sessionID
+	storedPath := e.db.GetSessionFilePath(fullID)
+	if storedPath != "" {
+		for _, candidate := range candidates {
+			if candidate.Path != storedPath {
+				continue
+			}
+			if e.claudeSourceMatchesStored(fullID, candidate.Path) {
+				return candidate
+			}
+		}
+	}
+
+	best := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if preferClaudeDiscoveredFile(candidate, best) {
+			best = candidate
+		}
+	}
+	return best
+}
+
+func (e *Engine) claudeSourceMatchesStored(
+	sessionID, path string,
+) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(sessionID)
+	if !ok {
+		return false
+	}
+	if storedSize != info.Size() ||
+		storedMtime != info.ModTime().UnixNano() {
+		return false
+	}
+	return e.db.GetSessionDataVersion(sessionID) >= db.CurrentDataVersion()
+}
+
+func preferClaudeDiscoveredFile(
+	candidate, current parser.DiscoveredFile,
+) bool {
+	candidateInfo, candidateErr := os.Stat(candidate.Path)
+	currentInfo, currentErr := os.Stat(current.Path)
+	switch {
+	case candidateErr == nil && currentErr != nil:
+		return true
+	case candidateErr != nil && currentErr == nil:
+		return false
+	case candidateErr == nil && currentErr == nil:
+		if candidateInfo.Size() != currentInfo.Size() {
+			return candidateInfo.Size() > currentInfo.Size()
+		}
+		if !candidateInfo.ModTime().Equal(currentInfo.ModTime()) {
+			return candidateInfo.ModTime().After(currentInfo.ModTime())
+		}
+	}
+	return candidate.Path < current.Path
 }
 
 // zedDBCompositeMtime returns the maximum mtime across the Zed
