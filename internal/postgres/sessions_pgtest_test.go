@@ -152,3 +152,124 @@ func TestListSessions_Sort(t *testing.T) {
 	}
 	require.Equal(t, []string{"sort-a", "sort-c", "sort-b"}, walked)
 }
+
+// TestListSessions_SortSecretsVersioned verifies the version-gated secrets sort
+// renders on PostgreSQL, where the gating CASE places numbered placeholders
+// inside both ORDER BY and the keyset cursor predicate.
+func TestListSessions_SortSecretsVersioned(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, ended_at, message_count, user_message_count,
+			 secret_leak_count, secrets_rules_version)
+		VALUES
+			('sec-cur', 'm', 'sec-test', 'claude', 'a',
+			 '2026-03-01T00:00:00Z'::timestamptz, '2026-03-01T00:10:00Z'::timestamptz, 2, 1, 5, 'v1'),
+			('sec-stale', 'm', 'sec-test', 'claude', 'b',
+			 '2026-03-02T00:00:00Z'::timestamptz, '2026-03-02T00:10:00Z'::timestamptz, 2, 1, 9, 'old'),
+			('sec-none', 'm', 'sec-test', 'claude', 'c',
+			 '2026-03-03T00:00:00Z'::timestamptz, '2026-03-03T00:10:00Z'::timestamptz, 2, 1, 0, '')
+	`)
+	require.NoError(t, err, "seeding secret sessions")
+
+	ctx := context.Background()
+	ids := func(sessions []db.Session) []string {
+		out := make([]string, len(sessions))
+		for i, s := range sessions {
+			out[i] = s.ID
+		}
+		return out
+	}
+
+	// With v1 active, the stale 9 gates to 0, so the current-version 5 leads.
+	gated, err := store.ListSessions(ctx, db.SessionFilter{
+		Project:              "sec-test",
+		OrderBy:              "secrets",
+		Descending:           boolPtr(true),
+		SecretsRulesVersions: []string{"v1"},
+		Limit:                10,
+	})
+	require.NoError(t, err, "ListSessions secrets gated")
+	require.Equal(t, "sec-cur", ids(gated.Sessions)[0])
+
+	// Paginate one at a time so the gating CASE also renders in the cursor
+	// predicate; the current-version session must still lead with no dupes.
+	var walked []string
+	seen := map[string]bool{}
+	cursor := ""
+	for {
+		page, err := store.ListSessions(ctx, db.SessionFilter{
+			Project:              "sec-test",
+			OrderBy:              "secrets",
+			Descending:           boolPtr(true),
+			SecretsRulesVersions: []string{"v1"},
+			Limit:                1,
+			Cursor:               cursor,
+		})
+		require.NoError(t, err, "ListSessions secrets page")
+		for _, s := range page.Sessions {
+			require.False(t, seen[s.ID], "duplicate %s", s.ID)
+			seen[s.ID] = true
+			walked = append(walked, s.ID)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	require.Len(t, walked, 3)
+	require.Equal(t, "sec-cur", walked[0])
+}
+
+// TestListSessions_SortNullsLast verifies a nullable sort (health) places NULL
+// rows last on PostgreSQL and paginates across the sentinel boundary.
+func TestListSessions_SortNullsLast(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, ended_at, message_count, user_message_count, health_score)
+		VALUES
+			('h20', 'm', 'null-test', 'claude', 'a',
+			 '2026-03-01T00:00:00Z'::timestamptz, '2026-03-01T00:10:00Z'::timestamptz, 2, 1, 20),
+			('h80', 'm', 'null-test', 'claude', 'b',
+			 '2026-03-02T00:00:00Z'::timestamptz, '2026-03-02T00:10:00Z'::timestamptz, 2, 1, 80),
+			('hnull', 'm', 'null-test', 'claude', 'c',
+			 '2026-03-03T00:00:00Z'::timestamptz, '2026-03-03T00:10:00Z'::timestamptz, 2, 1, NULL)
+	`)
+	require.NoError(t, err, "seeding health sessions")
+
+	ctx := context.Background()
+	var walked []string
+	cursor := ""
+	for {
+		page, err := store.ListSessions(ctx, db.SessionFilter{
+			Project: "null-test", OrderBy: "health", Limit: 1, Cursor: cursor,
+		})
+		require.NoError(t, err, "ListSessions health page")
+		for _, s := range page.Sessions {
+			walked = append(walked, s.ID)
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	// Ascending with NULLs last, paginated across the sentinel boundary.
+	require.Equal(t, []string{"h20", "h80", "hnull"}, walked)
+}
+
+func boolPtr(b bool) *bool { return &b }
