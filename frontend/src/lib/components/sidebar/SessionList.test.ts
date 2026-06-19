@@ -443,6 +443,64 @@ describe("SessionList visible hydration", () => {
     expect(link?.getAttribute("href")).toBe("/sessions/native-session");
   });
 
+  it("keeps keyboard-style anchor activation on the SPA session path", async () => {
+    const selectSession = vi
+      .spyOn(sessions, "selectSession")
+      .mockImplementation(() => {});
+    sessions.sessions = [
+      makeSession({
+        id: "keyboard-session",
+        display_name: "Keyboard target",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(
+      undefined,
+    );
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const link = document.querySelector<HTMLAnchorElement>(
+      ".session-info-link",
+    );
+    expect(link).not.toBeNull();
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      detail: 0,
+    });
+    link!.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(selectSession).toHaveBeenCalledWith("keyboard-session");
+  });
+
+  it("keeps the non-link parts of the row selectable", async () => {
+    const selectSession = vi
+      .spyOn(sessions, "selectSession")
+      .mockImplementation(() => {});
+    sessions.sessions = [
+      makeSession({
+        id: "row-session",
+        display_name: "Row target",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(
+      undefined,
+    );
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const sideMeta = document.querySelector<HTMLElement>(".side-meta");
+    expect(sideMeta).not.toBeNull();
+    sideMeta!.click();
+
+    expect(selectSession).toHaveBeenCalledWith("row-session");
+  });
+
   it("opens the same canonical href from the context menu in a new tab", async () => {
     const openSpy = vi
       .spyOn(window, "open")

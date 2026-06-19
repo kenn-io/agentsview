@@ -223,7 +223,6 @@
 
   function handleSessionClick(e: MouseEvent) {
     if (
-      e.detail === 0 ||
       e.metaKey ||
       e.ctrlKey ||
       e.shiftKey ||
@@ -233,6 +232,26 @@
       return;
     }
     e.preventDefault();
+    sessions.selectSession(session.id);
+  }
+
+  function handleRowClick(e: MouseEvent) {
+    if (
+      e.metaKey ||
+      e.ctrlKey ||
+      e.shiftKey ||
+      e.altKey ||
+      e.button !== 0
+    ) {
+      return;
+    }
+    const target = e.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    if (target.closest("a, button, input")) {
+      return;
+    }
     sessions.selectSession(session.id);
   }
 
@@ -266,6 +285,7 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   class="session-item"
   class:active={isActive}
@@ -276,6 +296,7 @@
   data-session-id={session.id}
   aria-current={isActive ? "page" : undefined}
   style:padding-left="{8 + depth * 16}px"
+  onclick={handleRowClick}
   oncontextmenu={handleContextMenu}
 >
   <!-- Tree expand/collapse or connector -->
