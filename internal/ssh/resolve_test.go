@@ -157,6 +157,14 @@ func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repoA, "source.go"), []byte("package main\n"), 0o644,
 	))
+	skippedDir := filepath.Join(codeRoot, "node_modules", "dep")
+	require.NoError(t, os.MkdirAll(skippedDir, 0o755), "mkdir skipped dir")
+	skippedHistory := filepath.Join(skippedDir, parser.AiderHistoryFileName())
+	require.NoError(t, os.WriteFile(skippedHistory, []byte("# aider\n"), 0o644))
+	deepDir := filepath.Join(codeRoot, "a", "b", "c", "d", "e")
+	require.NoError(t, os.MkdirAll(deepDir, 0o755), "mkdir deep dir")
+	deepHistory := filepath.Join(deepDir, parser.AiderHistoryFileName())
+	require.NoError(t, os.WriteFile(deepHistory, []byte("# aider\n"), 0o644))
 
 	script := buildResolveScript()
 	cmd := exec.Command("sh", "-c", script)
@@ -169,6 +177,10 @@ func TestResolveScriptAiderScopedByEnvFindsHistoryFiles(t *testing.T) {
 		"explicit AIDER_DIR must resolve only aider history files")
 	assert.NotContains(t, dirs[parser.AgentAider], codeRoot,
 		"AIDER_DIR itself must not become a tar target")
+	assert.NotContains(t, dirs[parser.AgentAider], skippedHistory,
+		"remote aider discovery must prune local-discovery skip dirs")
+	assert.NotContains(t, dirs[parser.AgentAider], deepHistory,
+		"remote aider discovery must enforce the local depth cap")
 }
 
 // TestResolveScriptAiderRejectsHomeOverride verifies that setting AIDER_DIR

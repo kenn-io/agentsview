@@ -13,6 +13,52 @@ import (
 // is not a valid agent type, so parseResolvedDirs routes it separately.
 const resolveFilePrefix = "@file"
 
+func aiderSkipDirCasePattern() string {
+	return strings.Join(parser.AiderDiscoverySkipDirNames(), "|")
+}
+
+func buildAiderResolveSnippet(envVar string) string {
+	return fmt.Sprintf(
+		"av_aider_walk() { "+
+			"[ \"$av_aider_files\" -ge %d ] && return; "+
+			"[ \"$av_aider_dirs\" -ge %d ] && return; "+
+			"for av_entry in \"$1\"/* \"$1\"/.[!.]* \"$1\"/..?*; do "+
+			"[ -e \"$av_entry\" ] || continue; "+
+			"[ -L \"$av_entry\" ] && continue; "+
+			"av_base=${av_entry##*/}; "+
+			"if [ -d \"$av_entry\" ]; then "+
+			"case \"$av_base\" in %s) continue;; esac; "+
+			"[ \"$2\" -ge %d ] && continue; "+
+			"av_aider_dirs=$((av_aider_dirs + 1)); "+
+			"av_aider_walk \"$av_entry\" $(($2 + 1)); "+
+			"[ \"$av_aider_files\" -ge %d ] && return; "+
+			"[ \"$av_aider_dirs\" -ge %d ] && return; "+
+			"elif [ -f \"$av_entry\" ] && [ \"$av_base\" = '%s' ]; then "+
+			"echo \"%s:$av_entry\"; "+
+			"av_aider_files=$((av_aider_files + 1)); "+
+			"[ \"$av_aider_files\" -ge %d ] && return; "+
+			"fi; "+
+			"done; "+
+			"}; "+
+			"dir=\"${%s:-}\"; "+
+			"case \"$dir\" in \"\"|\"$HOME\"|\"$HOME/\") ;; "+
+			"*) if [ -d \"$dir\" ]; then "+
+			"av_aider_files=0; av_aider_dirs=1; "+
+			"av_aider_walk \"$dir\" 0; "+
+			"fi;; esac\n",
+		parser.AiderDiscoveryMaxFiles(),
+		parser.AiderDiscoveryMaxDirs(),
+		aiderSkipDirCasePattern(),
+		parser.AiderDiscoveryMaxWalkDepth(),
+		parser.AiderDiscoveryMaxFiles(),
+		parser.AiderDiscoveryMaxDirs(),
+		parser.AiderHistoryFileName(),
+		string(parser.AgentAider),
+		parser.AiderDiscoveryMaxFiles(),
+		envVar,
+	)
+}
+
 // buildResolveScript generates a shell script that echoes each file-based
 // agent's resolved transfer target on the remote host. Output format:
 // "agentType:path\n" per agent target, plus "@file:path\n" lines for sibling
@@ -43,16 +89,7 @@ func buildResolveScript() string {
 			// whole-home scan or tar.
 			if def.Type == parser.AgentAider && rel == "" {
 				if def.EnvVar != "" {
-					fmt.Fprintf(&b,
-						"dir=\"${%s:-}\"; "+
-							"case \"$dir\" in \"\"|\"$HOME\"|\"$HOME/\") ;; "+
-							"*) if [ -d \"$dir\" ]; then "+
-							"find \"$dir\" -type f -name '%s' -print | sort | "+
-							"while IFS= read -r f; do echo \"%s:$f\"; done; "+
-							"fi;; esac\n",
-						def.EnvVar, parser.AiderHistoryFileName(),
-						string(def.Type),
-					)
+					b.WriteString(buildAiderResolveSnippet(def.EnvVar))
 				}
 				continue
 			}

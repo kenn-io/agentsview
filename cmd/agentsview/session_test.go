@@ -690,8 +690,10 @@ func TestSessionExport_AiderVirtualPathStreamsOnlySelectedRun(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		history, []byte("ignored preamble\n"+run0+run1+run2), 0o600,
 	))
+	rawID, ok := parser.AiderRawIDAt(history, 1)
+	require.True(t, ok, "run 1 raw ID")
 
-	seedSessionWithOpts(t, dataDir, "s-aider", "repo",
+	seedSessionWithOpts(t, dataDir, "aider:"+rawID, "repo",
 		func(s *db.Session) {
 			s.Agent = string(parser.AgentAider)
 			vp := parser.AiderVirtualPath(history, 1)
@@ -699,11 +701,47 @@ func TestSessionExport_AiderVirtualPathStreamsOnlySelectedRun(t *testing.T) {
 		})
 
 	out, err := executeCommand(newRootCommand(),
-		"session", "export", "s-aider")
+		"session", "export", "aider:"+rawID)
 	require.NoError(t, err)
 	assert.Equal(t, run1, out)
 	assert.NotContains(t, out, "first prompt")
 	assert.NotContains(t, out, "third prompt")
+}
+
+func TestSessionExport_AiderStaleIndexReResolvesBySessionID(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	history := filepath.Join(repo, parser.AiderHistoryFileName())
+	run0 := "# aider chat started at 2026-06-09 14:01:00\n" +
+		"#### first prompt\nanswer one\n"
+	run1 := "# aider chat started at 2026-06-09 15:30:00\n" +
+		"#### second prompt\nanswer two\n"
+	require.NoError(t, os.WriteFile(history, []byte(run0+run1), 0o600))
+	rawID, ok := parser.AiderRawIDAt(history, 1)
+	require.True(t, ok, "run 1 raw ID")
+
+	seedSessionWithOpts(t, dataDir, "aider:"+rawID, "repo",
+		func(s *db.Session) {
+			s.Agent = string(parser.AgentAider)
+			vp := parser.AiderVirtualPath(history, 1)
+			s.FilePath = &vp
+		})
+
+	inserted := "# aider chat started at 2026-06-09 13:00:00\n" +
+		"#### inserted prompt\ninserted answer\n"
+	require.NoError(t, os.WriteFile(
+		history, []byte(inserted+run0+run1), 0o600,
+	))
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "export", "aider:"+rawID)
+	require.NoError(t, err)
+	assert.Equal(t, run1, out)
+	assert.NotContains(t, out, "inserted prompt")
+	assert.NotContains(t, out, "first prompt")
 }
 
 func TestSessionExport_FailsWhenSourceMissing(t *testing.T) {

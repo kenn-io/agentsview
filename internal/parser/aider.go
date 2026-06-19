@@ -89,6 +89,29 @@ var aiderSkipDirs = map[string]struct{}{
 	".hg":          {},
 }
 
+// AiderDiscoverySkipDirNames returns the directory basenames pruned by Aider
+// discovery. Remote SSH discovery uses this to mirror local discovery semantics.
+func AiderDiscoverySkipDirNames() []string {
+	names := make([]string, 0, len(aiderSkipDirs))
+	for name := range aiderSkipDirs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// AiderDiscoveryMaxWalkDepth returns the maximum directory depth local Aider
+// discovery descends below the configured root.
+func AiderDiscoveryMaxWalkDepth() int { return aiderMaxWalkDepth }
+
+// AiderDiscoveryMaxFiles returns the maximum number of Aider history files
+// local discovery returns from one configured root.
+func AiderDiscoveryMaxFiles() int { return aiderMaxFiles }
+
+// AiderDiscoveryMaxDirs returns the maximum number of directories local Aider
+// discovery visits below one configured root.
+func AiderDiscoveryMaxDirs() int { return aiderMaxDirs }
+
 // AiderHistoryFileName returns the fixed Markdown filename aider writes
 // per repo (".aider.chat.history.md"). The sync engine uses it to match
 // watched files back to the aider agent.
@@ -429,6 +452,32 @@ func AiderRawIDAt(historyPath string, idx int) (string, bool) {
 	return aiderRawID(aiderAbsPath(historyPath), runs[idx].rawHeader, ordinals[idx]), true
 }
 
+// AiderVirtualPathForRawID resolves rawID to its current positional virtual
+// path within one physical history file. This is used when a previously stored
+// "<history>#<idx>" path has gone stale because an earlier run was inserted or
+// removed after the last sync.
+func AiderVirtualPathForRawID(historyPath, rawID string) (string, bool) {
+	if historyPath == "" || rawID == "" {
+		return "", false
+	}
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		return "", false
+	}
+	runs := splitAiderRuns(string(data))
+	if len(runs) == 0 {
+		return "", false
+	}
+	absPath := aiderAbsPath(historyPath)
+	ordinals := aiderEqualHeaderOrdinals(runs)
+	for idx, run := range runs {
+		if aiderRawID(absPath, run.rawHeader, ordinals[idx]) == rawID {
+			return AiderVirtualPath(historyPath, idx), true
+		}
+	}
+	return "", false
+}
+
 // AiderRunMeta describes one run within a history file: its virtual
 // source path, positional index, and parsed start time. The sync engine
 // fans a physical file out into one session per meta. HasMessages reports
@@ -735,20 +784,8 @@ func FindAiderSourceFile(root, rawID string) string {
 		return ""
 	}
 	for _, f := range DiscoverAiderSessions(root) {
-		data, err := os.ReadFile(f.Path)
-		if err != nil {
-			continue
-		}
-		runs := splitAiderRuns(string(data))
-		if len(runs) == 0 {
-			continue
-		}
-		absPath := aiderAbsPath(f.Path)
-		ordinals := aiderEqualHeaderOrdinals(runs)
-		for idx, run := range runs {
-			if aiderRawID(absPath, run.rawHeader, ordinals[idx]) == rawID {
-				return AiderVirtualPath(f.Path, idx)
-			}
+		if path, ok := AiderVirtualPathForRawID(f.Path, rawID); ok {
+			return path
 		}
 	}
 	return ""
