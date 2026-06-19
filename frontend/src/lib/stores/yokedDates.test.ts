@@ -182,6 +182,43 @@ describe("yoked date adapters", () => {
     });
   });
 
+  it("maps a sessions lower date bound to a range ending today", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-19T12:00:00"));
+      expect(
+        sessionParamsToPanelDate({ date_from: "2026-06-01" }),
+      ).toEqual({
+        from: "2026-06-01",
+        to: "2026-06-19",
+        mode: "fixed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("maps a sessions upper date bound using an available earliest date", () => {
+    expect(
+      sessionParamsToPanelDate(
+        { date_to: "2026-06-07" },
+        { earliest: "2026-05-01" },
+      ),
+    ).toEqual({
+      from: "2026-05-01",
+      to: "2026-06-07",
+      mode: "fixed",
+    });
+  });
+
+  it("maps a sessions upper date bound to a same-day range without an earliest date", () => {
+    expect(sessionParamsToPanelDate({ date_to: "2026-06-07" })).toEqual({
+      from: "2026-06-07",
+      to: "2026-06-07",
+      mode: "fixed",
+    });
+  });
+
   it("rejects incomplete and inverted panel ranges", () => {
     expect(panelDateState("", "2026-06-07")).toBeNull();
     expect(panelDateState("2026-06-08", "2026-06-07")).toBeNull();

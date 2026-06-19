@@ -322,10 +322,13 @@
   $effect(() => {
     const route = router.route;
     const params = router.params;
+    const earliestSession = sync.stats?.earliest_session ?? undefined;
     untrack(() => {
       if (route !== "sessions") return;
 
-      const fixedState = sessionParamsToPanelDate(params);
+      const fixedState = sessionParamsToPanelDate(params, {
+        earliest: earliestSession,
+      });
       const hasDateParams = hasSessionDateParams(params);
       const windowDays = fixedState || hasDateParams
         ? null

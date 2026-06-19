@@ -1,4 +1,4 @@
-import { parseLocalDate, rollingRange } from "../utils/dates.js";
+import { parseLocalDate, rollingRange, today } from "../utils/dates.js";
 
 export type YokedDateMode = "fixed" | "rolling";
 
@@ -190,14 +190,17 @@ export function rangeToPanelDate(
 
 export function sessionParamsToPanelDate(
   params: Record<string, string>,
+  bounds: { earliest?: string; latest?: string } = {},
 ): PanelDateState | null {
   if (params["date"]) {
     return panelDateState(params["date"], params["date"], {
       mode: "fixed",
     });
   }
-  if (params["date_from"] && params["date_to"]) {
-    return panelDateState(params["date_from"], params["date_to"], {
+  if (params["date_from"] || params["date_to"]) {
+    const from = params["date_from"] ?? bounds.earliest ?? params["date_to"]!;
+    const to = params["date_to"] ?? bounds.latest ?? today();
+    return panelDateState(from, to, {
       mode: "fixed",
     });
   }
