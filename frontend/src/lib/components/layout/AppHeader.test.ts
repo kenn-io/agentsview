@@ -26,6 +26,7 @@ vi.mock("../../utils/clipboard.js", () => ({
 }));
 
 import { sessions } from "../../stores/sessions.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import type { Session } from "../../api/types.js";
 
@@ -58,6 +59,7 @@ describe("AppHeader export actions", () => {
     vi.clearAllMocks();
     sessions.activeSessionId = "sess-123";
     sessions.sessions = [testSession()];
+    sync.serverVersion = null;
     ui.isMobileViewport = false;
     ui.followLatest = false;
   });
@@ -183,6 +185,28 @@ describe("AppHeader export actions", () => {
     expect(syncButton?.textContent?.trim()).toBe("Sync");
     expect(
       syncButton?.querySelector("svg.lucide-database-backup"),
+    ).not.toBeNull();
+  });
+
+  it("labels read-only global refresh with the refresh action", async () => {
+    sync.serverVersion = {
+      version: "dev",
+      commit: "unknown",
+      build_date: "",
+      read_only: true,
+    };
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const refreshButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh data"]',
+    );
+
+    expect(refreshButton).not.toBeNull();
+    expect(refreshButton?.textContent?.trim()).toBe("Refresh");
+    expect(
+      refreshButton?.querySelector("svg.lucide-database-backup"),
     ).not.toBeNull();
   });
 });

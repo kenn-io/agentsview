@@ -673,7 +673,7 @@
       aria-label={sync.readOnly ? "Refresh data" : "Sync sessions"}
     >
       <DatabaseBackupIcon size="14" strokeWidth="2" aria-hidden="true" />
-      <span class="sync-label">Sync</span>
+      <span class="sync-label">{sync.readOnly ? "Refresh" : "Sync"}</span>
     </button>
 
     <button
