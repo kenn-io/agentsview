@@ -334,6 +334,28 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 	require.Contains(t, *sess.FilePath, "data.sqlite3#overlap-session", "legacy event replaced sqlite-backed session: %+v", sess)
 }
 
+func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
+	legacyRoot := t.TempDir()
+	sqliteRoot := t.TempDir()
+	env := setupTestEnv(t, WithKiroDirs([]string{legacyRoot, sqliteRoot}))
+
+	ks := createKiroSQLiteDB(t, sqliteRoot)
+	ks.addSession(
+		t, "/home/user/code/current-kiro", "overlap-session",
+		readKiroSQLiteFixture(t, "overlap_payload.json"),
+		1779015600000, 1779015610000,
+	)
+	writeLegacyKiroSession(
+		t, legacyRoot, "overlap-session",
+		"legacy should not be imported",
+	)
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{legacyRoot}, time.Time{}, nil,
+	)
+	assert.Equal(t, 0, stats.TotalSessions, "total sessions")
+}
+
 func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {
 	env := setupTestEnv(t)
 	writeLegacyKiroSession(

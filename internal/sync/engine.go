@@ -2471,7 +2471,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	all = dedupeDiscoveredFiles(all)
-	all = e.filterShadowedLegacyKiroFiles(all, scope)
+	all = e.filterShadowedLegacyKiroFiles(all)
 
 	verbose := onProgress == nil
 
@@ -3167,13 +3167,10 @@ func (e *Engine) countDBBackedSessions(
 }
 
 func (e *Engine) filterShadowedLegacyKiroFiles(
-	files []parser.DiscoveredFile, scope *rootSyncScope,
+	files []parser.DiscoveredFile,
 ) []parser.DiscoveredFile {
 	currentIDs := make(map[string]struct{})
 	for _, dir := range e.agentDirs[parser.AgentKiro] {
-		if !scope.includes(dir) {
-			continue
-		}
 		for id := range parser.KiroSQLiteSessionIDs(dir) {
 			currentIDs[id] = struct{}{}
 		}
