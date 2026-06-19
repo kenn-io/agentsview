@@ -239,11 +239,11 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		if err != nil {
 			return db.SessionPage{}, err
 		}
-		cursorWhere += " AND " + pageBuilder.CursorPredicate(sp, desc, val, cur.ID)
+		cursorWhere += " AND " + pageBuilder.CursorPredicate(sp, desc, f, val, cur.ID)
 	}
 	query := "SELECT " + duckSessionCols +
 		" FROM sessions WHERE " + cursorWhere + " " +
-		pageBuilder.OrderByClause(sp, desc) + " " +
+		pageBuilder.OrderByClause(sp, desc, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
 	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 	rows, err := s.duck.QueryContext(ctx, query, cursorArgs...)
@@ -259,7 +259,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 	if len(sessions) > f.Limit {
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
-		page.NextCursor = s.EncodeCursor(sp.NextCursor(&last, desc, total))
+		page.NextCursor = s.EncodeCursor(sp.NextCursor(&last, desc, total, f))
 	}
 	return page, nil
 }

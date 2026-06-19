@@ -373,13 +373,13 @@ func (s *Store) ListSessions(
 			return db.SessionPage{}, err
 		}
 		cursorWhere += " AND " + pageBuilder.CursorPredicate(
-			sp, desc, val, cur.ID,
+			sp, desc, f, val, cur.ID,
 		)
 	}
 
 	query := "SELECT " + pgSessionCols +
 		" FROM sessions WHERE " + cursorWhere + " " +
-		pageBuilder.OrderByClause(sp, desc) + " " +
+		pageBuilder.OrderByClause(sp, desc, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
 	cursorArgs = append(cursorArgs, pageBuilder.Args()...)
 
@@ -404,7 +404,7 @@ func (s *Store) ListSessions(
 		page.Sessions = sessions[:f.Limit]
 		last := page.Sessions[f.Limit-1]
 		page.NextCursor = s.EncodeCursor(
-			sp.NextCursor(&last, desc, total),
+			sp.NextCursor(&last, desc, total, f),
 		)
 	}
 

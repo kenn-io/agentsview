@@ -5,6 +5,7 @@ package db
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 )
 
@@ -45,19 +46,23 @@ type SessionSort struct {
 	// context-pressure); their order expression is wrapped in a direction-aware
 	// sentinel COALESCE so NULLs sort last.
 	nullable bool
-	// baseExpr returns the (possibly nullable) SQL expression for this sort in
-	// the given dialect. Timestamp sorts use the dialect's empty-string-aware
-	// wrapping; everything else is a plain column name shared across backends.
-	baseExpr func(d QueryDialect) string
+	// expr renders the (possibly nullable) SQL expression for this sort. It
+	// receives the builder so the secrets sort can add bind parameters for its
+	// version-aware CASE, and the filter so it can mirror the active scanner
+	// rule versions. Timestamp sorts use the dialect's empty-string-aware
+	// wrapping; most sorts are a plain column name shared across backends.
+	expr func(b *QueryBuilder, f SessionFilter) string
 	// value returns the row's sort value formatted as the cursor stores it, plus
-	// ok=false when the underlying column is NULL.
-	value func(s *Session) (string, bool)
+	// ok=false when the underlying column is NULL. It receives the filter so the
+	// secrets sort encodes the same version-gated value it sorts by.
+	value func(s *Session, f SessionFilter) (string, bool)
 }
 
 // orderExpr renders the non-null SQL expression used in both ORDER BY and the
-// keyset cursor predicate for the resolved direction.
-func (sp SessionSort) orderExpr(d QueryDialect, desc bool) string {
-	e := sp.baseExpr(d)
+// keyset cursor predicate for the resolved direction. It may add bind
+// parameters to b, so callers must render it at its textual position.
+func (sp SessionSort) orderExpr(b *QueryBuilder, desc bool, f SessionFilter) string {
+	e := sp.expr(b, f)
 	if sp.nullable {
 		e = "COALESCE(" + e + ", " + sentinelLiteral(sp.kind, desc) + ")"
 	}
@@ -66,8 +71,8 @@ func (sp SessionSort) orderExpr(d QueryDialect, desc bool) string {
 
 // cursorValue returns the string-encoded comparison value for a page's last
 // row, substituting the matching sentinel when the column is NULL.
-func (sp SessionSort) cursorValue(s *Session, desc bool) string {
-	if v, ok := sp.value(s); ok {
+func (sp SessionSort) cursorValue(s *Session, desc bool, f SessionFilter) string {
+	if v, ok := sp.value(s, f); ok {
 		return v
 	}
 	return sentinelGoString(sp.kind, desc)
@@ -84,8 +89,8 @@ func (sp SessionSort) ResolveDescending(descending *bool) bool {
 
 // NextCursor builds the pagination token for a page's last row under the
 // resolved sort and direction.
-func (sp SessionSort) NextCursor(last *Session, desc bool, total int) SessionCursor {
-	v := sp.cursorValue(last, desc)
+func (sp SessionSort) NextCursor(last *Session, desc bool, total int, f SessionFilter) SessionCursor {
+	v := sp.cursorValue(last, desc, f)
 	cur := SessionCursor{
 		ID:    last.ID,
 		Total: total,
@@ -177,7 +182,7 @@ func typedCursorValue(value string, kind valueKind) (any, error) {
 	}
 }
 
-func tsValue(s *Session) (string, bool) {
+func tsValue(s *Session, _ SessionFilter) (string, bool) {
 	v := s.CreatedAt
 	if s.StartedAt != nil && *s.StartedAt != "" {
 		v = *s.StartedAt
@@ -188,60 +193,83 @@ func tsValue(s *Session) (string, bool) {
 	return v, true
 }
 
-func startedValue(s *Session) (string, bool) {
+func startedValue(s *Session, _ SessionFilter) (string, bool) {
 	if s.StartedAt != nil && *s.StartedAt != "" {
 		return *s.StartedAt, true
 	}
 	return s.CreatedAt, true
 }
 
-func intValue(get func(*Session) int) func(*Session) (string, bool) {
-	return func(s *Session) (string, bool) {
+func intValue(get func(*Session) int) func(*Session, SessionFilter) (string, bool) {
+	return func(s *Session, _ SessionFilter) (string, bool) {
 		return strconv.Itoa(get(s)), true
 	}
 }
 
-func recentExpr(d QueryDialect) string {
-	return "COALESCE(" + d.timestampExpr("ended_at") + ", " +
-		d.timestampExpr("started_at") + ", created_at)"
+func recentExpr(b *QueryBuilder, _ SessionFilter) string {
+	return "COALESCE(" + b.dialect.timestampExpr("ended_at") + ", " +
+		b.dialect.timestampExpr("started_at") + ", created_at)"
 }
 
-func startedExpr(d QueryDialect) string {
-	return "COALESCE(" + d.timestampExpr("started_at") + ", created_at)"
+func startedExpr(b *QueryBuilder, _ SessionFilter) string {
+	return "COALESCE(" + b.dialect.timestampExpr("started_at") + ", created_at)"
 }
 
-func plainExpr(col string) func(QueryDialect) string {
-	return func(QueryDialect) string { return col }
+func plainExpr(col string) func(*QueryBuilder, SessionFilter) string {
+	return func(*QueryBuilder, SessionFilter) string { return col }
+}
+
+// secretsExpr orders by the same secret count the service layer displays: when
+// active scanner rule versions are known, counts from stale versions are gated
+// to 0 (matching hideStaleSecretCount), so sessions shown with 0 secrets do not
+// rank above sessions with current findings. With no versions (raw db callers),
+// it falls back to the raw column, mirroring the HasSecret filter's convention.
+func secretsExpr(b *QueryBuilder, f SessionFilter) string {
+	versions := nonEmpty(f.SecretsRulesVersions)
+	if len(versions) == 0 {
+		return "secret_leak_count"
+	}
+	return "CASE WHEN " + inPredicate("secrets_rules_version", versions, b) +
+		" THEN secret_leak_count ELSE 0 END"
+}
+
+func secretsValue(s *Session, f SessionFilter) (string, bool) {
+	n := s.SecretLeakCount
+	versions := nonEmpty(f.SecretsRulesVersions)
+	if len(versions) > 0 && !slices.Contains(versions, s.SecretsRulesVersion) {
+		n = 0
+	}
+	return strconv.Itoa(n), true
 }
 
 // sessionSorts is the allow-list of session-list sort keys, in display order.
 // The ordering is kept in sync with the huma `order_by` enum tag by
 // TestSortKeysMatchHumaEnum.
 var sessionSorts = []SessionSort{
-	{key: "recent", kind: kindTimestamp, defaultDescending: true, baseExpr: recentExpr, value: tsValue},
-	{key: "started", kind: kindTimestamp, baseExpr: startedExpr, value: startedValue},
-	{key: "messages", kind: kindInt, baseExpr: plainExpr("message_count"), value: intValue(func(s *Session) int { return s.MessageCount })},
-	{key: "user-messages", kind: kindInt, baseExpr: plainExpr("user_message_count"), value: intValue(func(s *Session) int { return s.UserMessageCount })},
-	{key: "output-tokens", kind: kindInt, baseExpr: plainExpr("total_output_tokens"), value: intValue(func(s *Session) int { return s.TotalOutputTokens })},
-	{key: "peak-context", kind: kindInt, baseExpr: plainExpr("peak_context_tokens"), value: intValue(func(s *Session) int { return s.PeakContextTokens })},
-	{key: "failures", kind: kindInt, baseExpr: plainExpr("tool_failure_signal_count"), value: intValue(func(s *Session) int { return s.ToolFailureSignalCount })},
-	{key: "retries", kind: kindInt, baseExpr: plainExpr("tool_retry_count"), value: intValue(func(s *Session) int { return s.ToolRetryCount })},
-	{key: "edit-churn", kind: kindInt, baseExpr: plainExpr("edit_churn_count"), value: intValue(func(s *Session) int { return s.EditChurnCount })},
-	{key: "compactions", kind: kindInt, baseExpr: plainExpr("compaction_count"), value: intValue(func(s *Session) int { return s.CompactionCount })},
-	{key: "context-pressure", kind: kindReal, nullable: true, baseExpr: plainExpr("context_pressure_max"), value: func(s *Session) (string, bool) {
+	{key: "recent", kind: kindTimestamp, defaultDescending: true, expr: recentExpr, value: tsValue},
+	{key: "started", kind: kindTimestamp, expr: startedExpr, value: startedValue},
+	{key: "messages", kind: kindInt, expr: plainExpr("message_count"), value: intValue(func(s *Session) int { return s.MessageCount })},
+	{key: "user-messages", kind: kindInt, expr: plainExpr("user_message_count"), value: intValue(func(s *Session) int { return s.UserMessageCount })},
+	{key: "output-tokens", kind: kindInt, expr: plainExpr("total_output_tokens"), value: intValue(func(s *Session) int { return s.TotalOutputTokens })},
+	{key: "peak-context", kind: kindInt, expr: plainExpr("peak_context_tokens"), value: intValue(func(s *Session) int { return s.PeakContextTokens })},
+	{key: "failures", kind: kindInt, expr: plainExpr("tool_failure_signal_count"), value: intValue(func(s *Session) int { return s.ToolFailureSignalCount })},
+	{key: "retries", kind: kindInt, expr: plainExpr("tool_retry_count"), value: intValue(func(s *Session) int { return s.ToolRetryCount })},
+	{key: "edit-churn", kind: kindInt, expr: plainExpr("edit_churn_count"), value: intValue(func(s *Session) int { return s.EditChurnCount })},
+	{key: "compactions", kind: kindInt, expr: plainExpr("compaction_count"), value: intValue(func(s *Session) int { return s.CompactionCount })},
+	{key: "context-pressure", kind: kindReal, nullable: true, expr: plainExpr("context_pressure_max"), value: func(s *Session, _ SessionFilter) (string, bool) {
 		if s.ContextPressureMax == nil {
 			return "", false
 		}
 		return strconv.FormatFloat(*s.ContextPressureMax, 'g', -1, 64), true
 	}},
-	{key: "health", kind: kindInt, nullable: true, baseExpr: plainExpr("health_score"), value: func(s *Session) (string, bool) {
+	{key: "health", kind: kindInt, nullable: true, expr: plainExpr("health_score"), value: func(s *Session, _ SessionFilter) (string, bool) {
 		if s.HealthScore == nil {
 			return "", false
 		}
 		return strconv.Itoa(*s.HealthScore), true
 	}},
-	{key: "secrets", kind: kindInt, baseExpr: plainExpr("secret_leak_count"), value: intValue(func(s *Session) int { return s.SecretLeakCount })},
-	{key: "id", kind: kindText, baseExpr: plainExpr("id"), value: func(s *Session) (string, bool) { return s.ID, true }},
+	{key: "secrets", kind: kindInt, expr: secretsExpr, value: secretsValue},
+	{key: "id", kind: kindText, expr: plainExpr("id"), value: func(s *Session, _ SessionFilter) (string, bool) { return s.ID, true }},
 }
 
 var sessionSortByKey = func() map[string]SessionSort {

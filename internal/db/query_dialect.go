@@ -255,9 +255,10 @@ func (d QueryDialect) timestampExpr(col string) string {
 
 // OrderByClause renders the session-list ordering for a resolved sort and
 // direction, with id as a same-direction tie-breaker so keyset pagination is
-// deterministic.
-func (b *QueryBuilder) OrderByClause(sp SessionSort, desc bool) string {
-	orderExpr := sp.orderExpr(b.dialect, desc)
+// deterministic. The sort expression may add bind parameters (secrets sort), so
+// callers must render this at its textual position.
+func (b *QueryBuilder) OrderByClause(sp SessionSort, desc bool, f SessionFilter) string {
+	orderExpr := sp.orderExpr(b, desc, f)
 	dir := "ASC"
 	if desc {
 		dir = "DESC"
@@ -273,9 +274,9 @@ func (b *QueryBuilder) OrderByClause(sp SessionSort, desc bool) string {
 // per dialect for the column's kind; it must already be the Go type produced by
 // SessionSort.CursorPredicateValue.
 func (b *QueryBuilder) CursorPredicate(
-	sp SessionSort, desc bool, value any, id string,
+	sp SessionSort, desc bool, f SessionFilter, value any, id string,
 ) string {
-	orderExpr := sp.orderExpr(b.dialect, desc)
+	orderExpr := sp.orderExpr(b, desc, f)
 	op := ">"
 	if desc {
 		op = "<"
