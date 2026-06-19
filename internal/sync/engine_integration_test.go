@@ -1329,6 +1329,89 @@ func TestSyncAllSinceClaudeDuplicateTouchedStaleDoesNotBeatPreferred(t *testing.
 	assertMessageContent(t, env.db, "duplicate-since", "same logical session")
 }
 
+func TestSyncPathsClaudeDuplicateTouchedStaleDoesNotBeatPreferred(t *testing.T) {
+	liveDir := t.TempDir()
+	archiveDir := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{liveDir, archiveDir}))
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "same logical session").
+		String()
+	livePath := env.writeSession(
+		t, liveDir, filepath.Join("proj-live", "duplicate-watch.jsonl"), content,
+	)
+	archivePath := env.writeSession(
+		t, archiveDir, filepath.Join("proj-archive", "duplicate-watch.jsonl"), content,
+	)
+	older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, older, older))
+	require.NoError(t, os.Chtimes(livePath, newer, newer))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-watch"))
+
+	touchedArchive := newer.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
+
+	env.engine.SyncPaths([]string{archivePath})
+	assert.Zero(t, env.engine.LastSyncStats().Synced,
+		"stale watcher duplicate must not be re-synced")
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-watch"))
+	assertMessageContent(t, env.db, "duplicate-watch", "same logical session")
+}
+
+func TestSyncAllClaudeDuplicatePathRewriterKeepsStoredPreferred(t *testing.T) {
+	liveDir := t.TempDir()
+	archiveDir := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	rewriter := func(path string) string {
+		return "host:" + path
+	}
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {liveDir, archiveDir},
+		},
+		Machine:      "remote-host",
+		IDPrefix:     "host~",
+		PathRewriter: rewriter,
+	})
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "same logical session").
+		String()
+	livePath := filepath.Join(liveDir, "proj-live", "duplicate-remote.jsonl")
+	archivePath := filepath.Join(archiveDir, "proj-archive", "duplicate-remote.jsonl")
+	dbtest.WriteTestFile(t, livePath, []byte(content))
+	dbtest.WriteTestFile(t, archivePath, []byte(content))
+	older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, older, older))
+	require.NoError(t, os.Chtimes(livePath, newer, newer))
+
+	runSyncAndAssert(t, engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+		Skipped:       0,
+	})
+	assert.Equal(t, rewriter(livePath), database.GetSessionFilePath("host~duplicate-remote"))
+
+	touchedArchive := newer.Add(time.Second)
+	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
+
+	runSyncAndAssert(t, engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        0,
+		Skipped:       1,
+	})
+	assert.Equal(t, rewriter(livePath), database.GetSessionFilePath("host~duplicate-remote"))
+	assertMessageContent(t, database, "host~duplicate-remote", "same logical session")
+}
+
 func TestSyncEngineSkipCache(t *testing.T) {
 	env := setupTestEnv(t)
 

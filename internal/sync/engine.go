@@ -434,7 +434,9 @@ func (e *Engine) classifyPaths(
 			files = append(files, df)
 		}
 	}
-	return dedupeDiscoveredFiles(files)
+	files = e.expandClaudeDuplicateCandidates(files)
+	files = dedupeDiscoveredFiles(files)
+	return e.dedupeClaudeDiscoveredFiles(files)
 }
 
 func dedupeDiscoveredFiles(
@@ -489,6 +491,44 @@ func preferDiscoveredFile(
 		}
 	}
 	return false
+}
+
+func (e *Engine) expandClaudeDuplicateCandidates(
+	files []parser.DiscoveredFile,
+) []parser.DiscoveredFile {
+	sessionIDs := make(map[string]struct{})
+	seen := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		seen[string(file.Agent)+"\x00"+file.Path] = struct{}{}
+		if file.Agent != parser.AgentClaude {
+			continue
+		}
+		sessionID := claudeSessionIDFromPath(file.Path)
+		if sessionID == "" {
+			continue
+		}
+		sessionIDs[sessionID] = struct{}{}
+	}
+	if len(sessionIDs) == 0 {
+		return files
+	}
+
+	out := files
+	for _, claudeDir := range e.agentDirs[parser.AgentClaude] {
+		for _, candidate := range parser.DiscoverClaudeProjects(claudeDir) {
+			sessionID := claudeSessionIDFromPath(candidate.Path)
+			if _, ok := sessionIDs[sessionID]; !ok {
+				continue
+			}
+			key := string(candidate.Agent) + "\x00" + candidate.Path
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, candidate)
+		}
+	}
+	return out
 }
 
 func codexLayoutForPath(path string) parser.CodexLayout {
@@ -2911,7 +2951,7 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 		if file.Agent != parser.AgentClaude {
 			continue
 		}
-		sessionID := strings.TrimSuffix(filepath.Base(file.Path), ".jsonl")
+		sessionID := claudeSessionIDFromPath(file.Path)
 		if sessionID == "" {
 			continue
 		}
@@ -2935,7 +2975,7 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 			out = append(out, file)
 			continue
 		}
-		sessionID := strings.TrimSuffix(filepath.Base(file.Path), ".jsonl")
+		sessionID := claudeSessionIDFromPath(file.Path)
 		if sessionID == "" {
 			out = append(out, file)
 			continue
@@ -2949,6 +2989,15 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 	return out
 }
 
+func claudeSessionIDFromPath(path string) string {
+	name := filepath.Base(path)
+	sessionID, ok := strings.CutSuffix(name, ".jsonl")
+	if !ok {
+		return ""
+	}
+	return sessionID
+}
+
 func (e *Engine) pickPreferredClaudeDiscoveredFile(
 	sessionID string, candidates []parser.DiscoveredFile,
 ) parser.DiscoveredFile {
@@ -2960,13 +3009,13 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 	storedPath := e.db.GetSessionFilePath(fullID)
 	if storedPath != "" {
 		for _, candidate := range candidates {
-			if candidate.Path != storedPath {
+			if e.effectiveSourcePath(candidate.Path) != storedPath {
 				continue
 			}
 			if e.claudeSourceMatchesStored(fullID, candidate.Path) {
 				best := candidate
 				for _, competing := range candidates {
-					if competing.Path == storedPath ||
+					if e.effectiveSourcePath(competing.Path) == storedPath ||
 						!claudeCandidateHasAppendProgress(competing, candidate) {
 						continue
 					}
@@ -3004,6 +3053,13 @@ func (e *Engine) claudeSourceMatchesStored(
 		return false
 	}
 	return e.db.GetSessionDataVersion(sessionID) >= db.CurrentDataVersion()
+}
+
+func (e *Engine) effectiveSourcePath(path string) string {
+	if e.pathRewriter != nil {
+		return e.pathRewriter(path)
+	}
+	return path
 }
 
 func claudeCandidateHasAppendProgress(
