@@ -632,6 +632,49 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	assert.Equal(t, []string{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
+func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/openapi.json")
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	type openAPISchema struct {
+		Ref        string                   `json:"$ref"`
+		Type       any                      `json:"type"`
+		Items      *openAPISchema           `json:"items"`
+		Properties map[string]openAPISchema `json:"properties"`
+	}
+	var spec struct {
+		Components struct {
+			Schemas map[string]openAPISchema `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	for _, schemaName := range []string{"DbSession", "ServiceSessionDetail"} {
+		schema, ok := spec.Components.Schemas[schemaName]
+		require.True(t, ok, "schema %s missing", schemaName)
+		require.Contains(t, schema.Properties, "quality_signals",
+			"schema %s should expose runtime quality_signals", schemaName)
+		assert.Equal(t,
+			"#/components/schemas/DbQualitySignals",
+			schema.Properties["quality_signals"].Ref,
+			"schema %s quality_signals ref", schemaName)
+	}
+
+	response, ok := spec.Components.Schemas["DbSignalSessionsResponse"]
+	require.True(t, ok, "schema DbSignalSessionsResponse missing")
+	sessions, ok := response.Properties["sessions"]
+	require.True(t, ok, "DbSignalSessionsResponse.sessions missing")
+	assert.Equal(t, "array", sessions.Type,
+		"sessions should be a non-null array so the generated client keeps item type")
+	require.NotNil(t, sessions.Items, "sessions.items missing")
+	assert.Equal(t,
+		"#/components/schemas/DbSignalSessionExample",
+		sessions.Items.Ref,
+		"sessions item schema")
+}
+
 func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
 	te := setup(t)
 

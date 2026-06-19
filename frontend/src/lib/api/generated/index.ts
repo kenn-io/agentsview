@@ -46,6 +46,7 @@ export type { DbProjectAnalytics } from './models/DbProjectAnalytics';
 export type { DbProjectBreakdown } from './models/DbProjectBreakdown';
 export type { DbProjectInfo } from './models/DbProjectInfo';
 export type { DbProjectsAnalyticsResponse } from './models/DbProjectsAnalyticsResponse';
+export type { DbQualitySignals } from './models/DbQualitySignals';
 export type { DbQualitySignalTotals } from './models/DbQualitySignalTotals';
 export type { DbSearchResult } from './models/DbSearchResult';
 export type { DbSecretFindingRow } from './models/DbSecretFindingRow';

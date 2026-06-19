@@ -183,6 +183,9 @@ type QualitySignals struct {
 // deterministic quality-signal columns. Version 0 means the row has
 // not gone through the Phase 3 signal write/backfill path yet.
 func (s Session) StoredQualitySignals() *QualitySignals {
+	if s.QualitySignals != nil {
+		return s.QualitySignals
+	}
 	if s.QualitySignalVersion <= 0 {
 		return nil
 	}
@@ -201,6 +204,7 @@ func (s Session) StoredQualitySignals() *QualitySignals {
 // ApplyQualitySignals maps the grouped API representation back to the
 // scalar persistence fields used internally.
 func (s *Session) ApplyQualitySignals(qs *QualitySignals) {
+	s.QualitySignals = qs
 	if qs == nil {
 		s.QualitySignalVersion = 0
 		s.ShortPromptCount = 0
@@ -273,39 +277,42 @@ type Session struct {
 	IsAutomated          bool    `json:"is_automated"`
 
 	// Session signals (computed from messages/tool_calls).
-	ToolFailureSignalCount      int      `json:"tool_failure_signal_count"`
-	ToolRetryCount              int      `json:"tool_retry_count"`
-	EditChurnCount              int      `json:"edit_churn_count"`
-	ConsecutiveFailureMax       int      `json:"consecutive_failure_max"`
-	Outcome                     string   `json:"outcome"`
-	OutcomeConfidence           string   `json:"outcome_confidence"`
-	EndedWithRole               string   `json:"ended_with_role"`
-	FinalFailureStreak          int      `json:"final_failure_streak"`
-	SignalsPendingSince         *string  `json:"signals_pending_since,omitempty"`
-	CompactionCount             int      `json:"compaction_count"`
-	MidTaskCompactionCount      int      `json:"mid_task_compaction_count"`
-	ContextPressureMax          *float64 `json:"context_pressure_max,omitempty"`
-	HealthScore                 *int     `json:"health_score,omitempty"`
-	HealthGrade                 *string  `json:"health_grade,omitempty"`
-	HasToolCalls                bool     `json:"-"`
-	HasContextData              bool     `json:"-"`
-	SecretLeakCount             int      `json:"secret_leak_count"`
-	SecretsRulesVersion         string   `json:"-"`
-	QualitySignalVersion        int      `json:"-"`
-	ShortPromptCount            int      `json:"-"`
-	UnstructuredStart           bool     `json:"-"`
-	MissingSuccessCriteriaCount int      `json:"-"`
-	MissingVerificationCount    int      `json:"-"`
-	DuplicatePromptCount        int      `json:"-"`
-	NoCodeContextCount          int      `json:"-"`
-	RunawayToolLoopCount        int      `json:"-"`
-	DataVersion                 int      `json:"-"`
-	Cwd                         string   `json:"cwd,omitempty"`
-	GitBranch                   string   `json:"git_branch,omitempty"`
-	SourceSessionID             string   `json:"source_session_id,omitempty"`
-	SourceVersion               string   `json:"source_version,omitempty"`
-	ParserMalformedLines        int      `json:"parser_malformed_lines,omitempty"`
-	IsTruncated                 bool     `json:"is_truncated,omitempty"`
+	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
+	ToolRetryCount         int      `json:"tool_retry_count"`
+	EditChurnCount         int      `json:"edit_churn_count"`
+	ConsecutiveFailureMax  int      `json:"consecutive_failure_max"`
+	Outcome                string   `json:"outcome"`
+	OutcomeConfidence      string   `json:"outcome_confidence"`
+	EndedWithRole          string   `json:"ended_with_role"`
+	FinalFailureStreak     int      `json:"final_failure_streak"`
+	SignalsPendingSince    *string  `json:"signals_pending_since,omitempty"`
+	CompactionCount        int      `json:"compaction_count"`
+	MidTaskCompactionCount int      `json:"mid_task_compaction_count"`
+	ContextPressureMax     *float64 `json:"context_pressure_max,omitempty"`
+	HealthScore            *int     `json:"health_score,omitempty"`
+	HealthGrade            *string  `json:"health_grade,omitempty"`
+	// QualitySignals mirrors the scalar persistence fields below for API
+	// schema and JSON transport.
+	QualitySignals              *QualitySignals `json:"quality_signals,omitempty"`
+	HasToolCalls                bool            `json:"-"`
+	HasContextData              bool            `json:"-"`
+	SecretLeakCount             int             `json:"secret_leak_count"`
+	SecretsRulesVersion         string          `json:"-"`
+	QualitySignalVersion        int             `json:"-"`
+	ShortPromptCount            int             `json:"-"`
+	UnstructuredStart           bool            `json:"-"`
+	MissingSuccessCriteriaCount int             `json:"-"`
+	MissingVerificationCount    int             `json:"-"`
+	DuplicatePromptCount        int             `json:"-"`
+	NoCodeContextCount          int             `json:"-"`
+	RunawayToolLoopCount        int             `json:"-"`
+	DataVersion                 int             `json:"-"`
+	Cwd                         string          `json:"cwd,omitempty"`
+	GitBranch                   string          `json:"git_branch,omitempty"`
+	SourceSessionID             string          `json:"source_session_id,omitempty"`
+	SourceVersion               string          `json:"source_version,omitempty"`
+	ParserMalformedLines        int             `json:"parser_malformed_lines,omitempty"`
+	IsTruncated                 bool            `json:"is_truncated,omitempty"`
 
 	DeletedAt         *string `json:"deleted_at,omitempty"`
 	TerminationStatus *string `json:"termination_status,omitempty"`

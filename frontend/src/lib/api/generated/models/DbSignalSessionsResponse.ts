@@ -2,8 +2,9 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { DbSignalSessionExample } from './DbSignalSessionExample';
 export type DbSignalSessionsResponse = {
-  sessions: any[] | null;
+  sessions: Array<DbSignalSessionExample>;
   signal: string;
 };
 
