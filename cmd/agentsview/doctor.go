@@ -262,7 +262,8 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 		version, commit, buildDate)
 	fmt.Fprintf(w, "Data directory: %s\n", report.Config.DataDir)
 	fmt.Fprintf(w, "Database: %s\n", report.Config.DBPath)
-	fmt.Fprintf(w, "Database exists: %s\n", doctorYesNo(report.DBExists))
+	fmt.Fprintf(w, "Database exists: %s\n",
+		doctorDatabaseExistsLabel(report))
 	if report.DBError != nil {
 		fmt.Fprintf(w, "Database readable: no (%v)\n", report.DBError)
 	} else {
@@ -289,6 +290,9 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 func doctorStartupDecision(
 	report doctorSyncReport, currentVersion int,
 ) string {
+	if report.DBError != nil {
+		return "unknown (database could not be inspected)"
+	}
 	if report.UserVersion == nil {
 		if !report.DBExists {
 			return "normal initial sync (database will be created)"
@@ -303,6 +307,10 @@ func doctorStartupDecision(
 
 func writeDoctorSessionCounts(w io.Writer, report doctorSyncReport) {
 	fmt.Fprintln(w, "Session data versions:")
+	if report.DBError != nil {
+		fmt.Fprintf(w, "  unavailable: %v\n", report.DBError)
+		return
+	}
 	if report.SessionCountsErr != nil {
 		fmt.Fprintf(w, "  unavailable: %v\n", report.SessionCountsErr)
 		return
@@ -369,6 +377,9 @@ func writeDoctorDebugEvidence(
 func doctorLikelyCause(
 	report doctorSyncReport, currentVersion int,
 ) string {
+	if report.DBError != nil {
+		return "database could not be inspected; check database path and permissions"
+	}
 	if !report.DBExists {
 		return "database does not exist yet; the next startup will create it"
 	}
@@ -385,6 +396,13 @@ func doctorLikelyCause(
 		return "SQLite user_version is stale; inspect debug.log for resync aborts or failures"
 	}
 	return "data-version resync is not expected; Running initial sync... is normal incremental startup work"
+}
+
+func doctorDatabaseExistsLabel(report doctorSyncReport) string {
+	if report.DBError != nil && !report.DBExists {
+		return "unknown"
+	}
+	return doctorYesNo(report.DBExists)
 }
 
 func doctorHasMissingUserConfiguredRoot(roots []doctorAgentRoot) bool {

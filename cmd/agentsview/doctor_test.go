@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -82,4 +85,30 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 	assert.Contains(t, out, "resync aborted: 0 synced, 3 failed")
 	assert.Contains(t, out,
 		"Likely cause: previous data-version resync likely aborted before completion")
+}
+
+func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {
+	report := doctorSyncReport{
+		Config: config.Config{
+			DataDir: "/data",
+			DBPath:  "/data/sessions.db",
+		},
+		DBExists: false,
+		DBError:  errors.New("stat /data/sessions.db: permission denied"),
+	}
+
+	var out bytes.Buffer
+	writeDoctorSyncReport(&out, report)
+	got := out.String()
+
+	assert.Contains(t, got, "Database exists: unknown")
+	assert.Contains(t, got,
+		"Startup sync decision: unknown (database could not be inspected)")
+	assert.Contains(t, got, "Session data versions:")
+	assert.Contains(t, got,
+		"unavailable: stat /data/sessions.db: permission denied")
+	assert.Contains(t, got,
+		"Likely cause: database could not be inspected; check database path and permissions")
+	assert.NotContains(t, got, "database will be created")
+	assert.NotContains(t, got, "database does not exist yet")
 }
