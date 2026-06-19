@@ -334,6 +334,28 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 	require.Contains(t, *sess.FilePath, "data.sqlite3#overlap-session", "legacy event replaced sqlite-backed session: %+v", sess)
 }
 
+func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
+	legacyRoot := t.TempDir()
+	sqliteRoot := t.TempDir()
+	env := setupTestEnv(t, WithKiroDirs([]string{legacyRoot, sqliteRoot}))
+
+	ks := createKiroSQLiteDB(t, sqliteRoot)
+	ks.addSession(
+		t, "/home/user/code/current-kiro", "overlap-session",
+		readKiroSQLiteFixture(t, "overlap_payload.json"),
+		1779015600000, 1779015610000,
+	)
+	writeLegacyKiroSession(
+		t, legacyRoot, "overlap-session",
+		"legacy should not be imported",
+	)
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{legacyRoot}, time.Time{}, nil,
+	)
+	assert.Equal(t, 0, stats.TotalSessions, "total sessions")
+}
+
 func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {
 	env := setupTestEnv(t)
 	writeLegacyKiroSession(
@@ -7413,6 +7435,124 @@ func TestSyncAllSince_FiltersByMtime(t *testing.T) {
 	assert.Equal(t, 2, len(page.Sessions), "sessions = %d, want 2", len(page.Sessions))
 
 	_ = newPath
+}
+
+func TestSyncRootsSinceScopesDiscoveredFiles(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{rootA, rootB}))
+
+	contentA := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "root a").
+		String()
+	pathA := env.writeSession(
+		t, rootA, filepath.Join("proj-a", "root-a.jsonl"), contentA,
+	)
+
+	contentB := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "root b").
+		String()
+	pathB := env.writeSession(
+		t, rootB, filepath.Join("proj-b", "root-b.jsonl"), contentB,
+	)
+
+	longAgo := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(pathA, longAgo, longAgo), "chtimes root a")
+	require.NoError(t, os.Chtimes(pathB, longAgo, longAgo), "chtimes root b")
+
+	cutoff := time.Now().Add(-1 * time.Hour)
+	require.NoError(t, os.Chtimes(pathB, time.Now(), time.Now()), "touch root b")
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{rootB}, cutoff, nil,
+	)
+	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
+	assert.Equal(t, 1, stats.Synced, "synced sessions")
+
+	page, err := env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err, "list sessions")
+	require.Len(t, page.Sessions, 1, "sessions")
+	require.NotNil(t, page.Sessions[0].FirstMessage, "first message")
+	assert.Equal(t, "root b", *page.Sessions[0].FirstMessage)
+}
+
+func TestSyncRootsSinceScopesOpenCodeSQLiteRoots(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	env := setupTestEnv(t, WithOpenCodeDirs([]string{rootA, rootB}))
+
+	ocA := createOpenCodeDB(t, rootA)
+	ocA.addProject(t, "proj-a", "/home/user/code/root-a")
+	ocA.addSession(t, "oc-root-a", "proj-a", 1704067200000, 1704067205000)
+	ocA.addMessage(t, "msg-a-user", "oc-root-a", "user", 1704067200000)
+	ocA.addTextPart(
+		t, "part-a-user", "oc-root-a", "msg-a-user", "root a",
+		1704067200000,
+	)
+
+	ocB := createOpenCodeDB(t, rootB)
+	ocB.addProject(t, "proj-b", "/home/user/code/root-b")
+	ocB.addSession(t, "oc-root-b", "proj-b", 1704067200000, 1704067205000)
+	ocB.addMessage(t, "msg-b-user", "oc-root-b", "user", 1704067200000)
+	ocB.addTextPart(
+		t, "part-b-user", "oc-root-b", "msg-b-user", "root b",
+		1704067200000,
+	)
+
+	stats := env.engine.SyncRootsSince(
+		context.Background(), []string{rootB}, time.Time{}, nil,
+	)
+	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
+	assert.Equal(t, 1, stats.Synced, "synced sessions")
+
+	page, err := env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err, "list sessions")
+	require.Len(t, page.Sessions, 1, "sessions")
+	require.NotNil(t, page.Sessions[0].FirstMessage, "first message")
+	assert.Equal(t, "root b", *page.Sessions[0].FirstMessage)
+}
+
+func TestSyncRootsSinceDoesNotAdvanceGlobalWatermark(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	env := setupTestEnv(t, WithClaudeDirs([]string{rootA, rootB}))
+
+	watermark := time.Now().Add(-24 * time.Hour).UTC()
+	require.NoError(t, env.db.SetSyncState(
+		"last_sync_started_at",
+		watermark.Format(time.RFC3339Nano),
+	), "seed last_sync_started_at")
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "root a").
+		String()
+	pathA := env.writeSession(
+		t, rootA, filepath.Join("proj-a", "root-a.jsonl"), content,
+	)
+	fileTime := watermark.Add(time.Hour)
+	require.NoError(t, os.Chtimes(pathA, fileTime, fileTime), "chtimes root a")
+
+	env.engine.SyncRootsSince(
+		context.Background(), []string{rootB}, watermark, nil,
+	)
+
+	stats := env.engine.SyncAllSince(
+		context.Background(), env.engine.LastSyncStartedAt(), nil,
+	)
+	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
+	assert.Equal(t, 1, stats.Synced, "synced sessions")
+
+	page, err := env.db.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err, "list sessions")
+	require.Len(t, page.Sessions, 1, "sessions")
+	require.NotNil(t, page.Sessions[0].FirstMessage, "first message")
+	assert.Equal(t, "root a", *page.Sessions[0].FirstMessage)
 }
 
 func TestSyncAll_PersistsStartedAndFinishedAt(t *testing.T) {
