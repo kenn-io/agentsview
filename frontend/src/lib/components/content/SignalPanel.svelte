@@ -3,12 +3,17 @@
   import {
     getGradeStyle,
     getGradeLabel,
-    getOutcomeIcon,
     getOutcomeColor,
     getOutcomeLabel,
     getPenaltyLabel,
     getBasisLabel,
   } from "../../utils/grade.js";
+  import {
+    CheckIcon,
+    CircleQuestionMarkIcon,
+    TriangleAlertIcon,
+    XIcon,
+  } from "../../icons.js";
 
   interface Props {
     session: Session;
@@ -74,7 +79,15 @@
         aria-label={outcomeLabel}
       >
         <span class="outcome-icon" aria-hidden="true">
-          {getOutcomeIcon(outcome)}
+          {#if outcome === "completed"}
+            <CheckIcon size="14" strokeWidth="2.4" />
+          {:else if outcome === "abandoned"}
+            <TriangleAlertIcon size="14" strokeWidth="2" />
+          {:else if outcome === "errored"}
+            <XIcon size="14" strokeWidth="2.4" />
+          {:else}
+            <CircleQuestionMarkIcon size="14" strokeWidth="2" />
+          {/if}
         </span>
       </span>
 
@@ -162,8 +175,8 @@
     cursor: help;
   }
   .outcome-icon {
-    font-size: 14px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
   }
   .basis-tags {
     display: flex;

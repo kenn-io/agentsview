@@ -27,13 +27,6 @@ export function getGradeLabel(grade: string | null | undefined): string {
   return grade ?? "--";
 }
 
-const outcomeIcons: Record<string, string> = {
-  completed: "\u2713", // checkmark
-  abandoned: "\u26A0", // warning
-  errored: "\u2717",   // x
-  unknown: "?",
-};
-
 const outcomeColors: Record<string, string> = {
   completed: "var(--accent-green)",
   abandoned: "var(--accent-amber)",
@@ -47,10 +40,6 @@ const outcomeLabels: Record<string, string> = {
   errored: "Errored",
   unknown: "Outcome unknown",
 };
-
-export function getOutcomeIcon(outcome: string): string {
-  return outcomeIcons[outcome] ?? "?";
-}
 
 export function getOutcomeColor(outcome: string): string {
   return outcomeColors[outcome] ?? "var(--text-muted)";
