@@ -1113,6 +1113,22 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
+	// aider: <aiderRoot>/.../.aider.chat.history.md (rootless; any depth
+	// under the configured root).
+	if filepath.Base(path) == parser.AiderHistoryFileName() {
+		for _, aiderDir := range e.agentDirs[parser.AgentAider] {
+			if aiderDir == "" {
+				continue
+			}
+			if _, ok := isUnder(aiderDir, path); ok {
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: parser.AgentAider,
+				}, true
+			}
+		}
+	}
+
 	// Command Code: <projectsDir>/<slugified-cwd>/<session>.jsonl
 	for _, commandCodeDir := range e.agentDirs[parser.AgentCommandCode] {
 		if commandCodeDir == "" {
@@ -3631,6 +3647,10 @@ func (e *Engine) processFile(
 			statPath = dbPath
 		} else if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
 			statPath = tracePath
+		} else if historyPath, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
+			// aider stores "<historyFile>#<runIdx>"; stat the physical file
+			// so SyncSingleSession (live watcher / on-demand re-sync) works.
+			statPath = historyPath
 		}
 		info, err = os.Stat(statPath)
 	}
@@ -3751,6 +3771,8 @@ func (e *Engine) processFile(
 		res = e.processQwenPaw(file, info)
 	case parser.AgentGptme:
 		res = e.processGptme(file, info)
+	case parser.AgentAider:
+		res = e.processAider(file, info)
 	default:
 		res = processResult{
 			err: fmt.Errorf(
@@ -3801,6 +3823,16 @@ func (e *Engine) shouldCacheSkip(
 		}
 		if _, _, ok :=
 			parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentAider {
+		// A virtual aider path ("<historyFile>#<runIdx>") resolves to one
+		// run inside a shared physical file; let processAider own it so the
+		// generic per-file mtime cache cannot stand in for the per-run parse.
+		// The physical history file itself keeps the generic mtime skip: any
+		// write bumps the file mtime and re-parses every run.
+		if _, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
 			return false
 		}
 	}
@@ -5646,6 +5678,54 @@ func (e *Engine) processGptme(
 		results: []parser.ParseResult{
 			{Session: *sess, Messages: msgs},
 		},
+	}
+}
+
+func (e *Engine) processAider(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	// Virtual path "<historyFile>#<runIdx>": parse that one run only. Used
+	// when re-syncing a single session by its source path.
+	if historyPath, idx, ok := parser.ParseAiderVirtualPath(file.Path); ok {
+		sess, msgs, err := parser.ParseAiderRun(historyPath, idx, e.machine)
+		if err != nil {
+			return processResult{err: err}
+		}
+		if sess == nil {
+			return processResult{}
+		}
+		if hash, err := ComputeFileHash(historyPath); err == nil {
+			sess.File.Hash = hash
+		}
+		return processResult{
+			results:      []parser.ParseResult{{Session: *sess, Messages: msgs}},
+			forceReplace: true,
+		}
+	}
+
+	if e.shouldSkipByPath(file.Path, info) {
+		return processResult{skip: true}
+	}
+
+	// Physical history file: fan it out into one session per run. The file
+	// is read and split once. The whole file shares one content hash, so
+	// any write re-parses every run (acceptable: aider history is
+	// append-mostly and a single capped read).
+	results, err := parser.ParseAiderRuns(file.Path, e.machine)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if len(results) == 0 {
+		return processResult{}
+	}
+	if hash, err := ComputeFileHash(file.Path); err == nil {
+		for i := range results {
+			results[i].Session.File.Hash = hash
+		}
+	}
+	return processResult{
+		results:      results,
+		forceReplace: true,
 	}
 }
 

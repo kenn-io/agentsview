@@ -85,11 +85,15 @@ func IsVisualStudioCopilotTraceFile(path string) bool {
 // ResolveSourceFilePath maps a stored session source path to a path that can
 // be opened on disk. Visual Studio Copilot stores a
 // <traceFile>#<conversationID> virtual path whose conversations share one
-// physical trace file; every other agent stores a real path, returned
-// unchanged.
+// physical trace file, and aider stores a <historyFile>#<runIdx> virtual
+// path whose runs share one physical history file; both resolve to the
+// physical file. Every other agent stores a real path, returned unchanged.
 func ResolveSourceFilePath(storedPath string) string {
 	if tracePath, _, ok := ParseVisualStudioCopilotVirtualPath(storedPath); ok {
 		return tracePath
+	}
+	if historyPath, _, ok := ParseAiderVirtualPath(storedPath); ok {
+		return historyPath
 	}
 	return storedPath
 }

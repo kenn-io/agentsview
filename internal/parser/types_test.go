@@ -341,6 +341,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentQwenPaw,
 		AgentShelley,
 		AgentVibe,
+		AgentAider,
 	}
 
 	expected := make(map[AgentType]bool, len(allTypes))
