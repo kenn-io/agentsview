@@ -18,6 +18,7 @@
     UsersRoundIcon,
   } from "../../icons.js";
   import StatusDot from "../common/StatusDot.svelte";
+  import { router } from "../../stores/router.svelte.js";
 
   interface Props {
     session: SessionGroupInput;
@@ -140,6 +141,10 @@
 
   let hasChildren = $derived(childCount > 0 && !!onToggleExpand);
 
+  const sessionHref = $derived.by(() =>
+    router.buildSessionHref(session.id),
+  );
+
   /** Whether this is an orphaned teammate showing at root level. */
   let isOrphanedTeammate = $derived(
     depth === 0 && isTeamSession,
@@ -216,6 +221,21 @@
     startRename();
   }
 
+  function handleSessionClick(e: MouseEvent) {
+    if (
+      e.detail === 0 ||
+      e.metaKey ||
+      e.ctrlKey ||
+      e.shiftKey ||
+      e.altKey ||
+      e.button !== 0
+    ) {
+      return;
+    }
+    e.preventDefault();
+    sessions.selectSession(session.id);
+  }
+
   $effect(() => {
     if (!contextMenu) return;
     function handler() {
@@ -254,12 +274,8 @@
   class:depth-2={depth >= 2}
   class:orphaned-teammate={isOrphanedTeammate}
   data-session-id={session.id}
-  role="button"
   aria-current={isActive ? "page" : undefined}
-  tabindex="0"
   style:padding-left="{8 + depth * 16}px"
-  onclick={() => sessions.selectSession(session.id)}
-  onkeydown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); sessions.selectSession(session.id); } }}
   oncontextmenu={handleContextMenu}
 >
   <!-- Tree expand/collapse or connector -->
@@ -308,35 +324,40 @@
         }}
       />
     {:else}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div
-        class="session-name"
-        class:shell={displayLabel.isShell}
-        ondblclick={handleDblClick}
+      <a
+        class="session-info-link"
+        href={sessionHref}
+        onclick={handleSessionClick}
       >
-        {#if displayLabel.isShell}
-          <code>{displayLabel.text}</code>
-        {:else}
-          {displayLabel.text}
-        {/if}
-      </div>
+        <div
+          class="session-name"
+          class:shell={displayLabel.isShell}
+          ondblclick={handleDblClick}
+        >
+          {#if displayLabel.isShell}
+            <code>{displayLabel.text}</code>
+          {:else}
+            {displayLabel.text}
+          {/if}
+        </div>
+        <div class="session-meta">
+          {#if !hideProject}
+            <span class="session-project">{session.project}</span>
+          {/if}
+          <span class="session-time">{timeStr}</span>
+          <span class="session-count">{session.user_message_count}</span>
+          {#if hasSubagents}
+            <UserRoundIcon class="group-hint-icon" size="9" strokeWidth="2" aria-hidden="true" />
+          {/if}
+          {#if hasTeammates}
+            <UsersRoundIcon class="group-hint-icon" size="11" strokeWidth="2" aria-hidden="true" />
+          {/if}
+          {#if childCount > 0 && !onToggleExpand}
+            <span class="continuation-badge">x{continuationCount}</span>
+          {/if}
+        </div>
+      </a>
     {/if}
-    <div class="session-meta">
-      {#if !hideProject}
-        <span class="session-project">{session.project}</span>
-      {/if}
-      <span class="session-time">{timeStr}</span>
-      <span class="session-count">{session.user_message_count}</span>
-      {#if hasSubagents}
-        <UserRoundIcon class="group-hint-icon" size="9" strokeWidth="2" aria-hidden="true" />
-      {/if}
-      {#if hasTeammates}
-        <UsersRoundIcon class="group-hint-icon" size="11" strokeWidth="2" aria-hidden="true" />
-      {/if}
-      {#if childCount > 0 && !onToggleExpand}
-        <span class="continuation-badge">x{continuationCount}</span>
-      {/if}
-    </div>
   </div>
 
   {#if !compact}
@@ -376,6 +397,15 @@
   >
     <button class="context-menu-item" onclick={startRename}>
       Rename
+    </button>
+    <button
+      class="context-menu-item"
+      onclick={() => {
+        window.open(sessionHref, "_blank", "noopener");
+        closeContextMenu();
+      }}
+    >
+      Open in new tab
     </button>
     <button class="context-menu-item danger" onclick={handleDelete}>
       Delete
@@ -516,6 +546,13 @@
   .session-info {
     min-width: 0;
     flex: 1;
+  }
+
+  .session-info-link {
+    display: block;
+    color: inherit;
+    text-decoration: none;
+    min-width: 0;
   }
 
   .session-name {

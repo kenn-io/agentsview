@@ -421,6 +421,71 @@ describe("SessionList visible hydration", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it("renders the primary session surface as a native href", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "native-session",
+        display_name: "Native link session",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(
+      undefined,
+    );
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const link = document.querySelector<HTMLAnchorElement>(
+      ".session-info-link",
+    );
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/sessions/native-session");
+  });
+
+  it("opens the same canonical href from the context menu in a new tab", async () => {
+    const openSpy = vi
+      .spyOn(window, "open")
+      .mockReturnValue(null as unknown as Window);
+    sessions.sessions = [
+      makeSession({
+        id: "native-open-session",
+        display_name: "Open in new tab target",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(
+      undefined,
+    );
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const row = document.querySelector<HTMLElement>(".session-item");
+    expect(row).not.toBeNull();
+    row!.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 7,
+        clientY: 8,
+      }),
+    );
+    await tick();
+
+    const openInNewTab = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".context-menu-item"),
+    ).find((button) => button.textContent === "Open in new tab");
+    expect(openInNewTab).not.toBeNull();
+    openInNewTab!.click();
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "/sessions/native-open-session",
+      "_blank",
+      "noopener",
+    );
+  });
+
   it("uses is_teammate for the collapsed group teammate hint", async () => {
     sessions.sessions = [
       makeSession({ id: "root", display_name: "Root", is_index_only: true }),
