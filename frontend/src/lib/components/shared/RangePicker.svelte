@@ -94,14 +94,27 @@
     return selection.mode === "relative" && selection.days === days;
   }
 
+  // Keep the Custom tab's inputs in step with the latest committed selection so
+  // switching tabs after picking a preset edits that range, not a stale seed.
+  function syncCustomFields(sel: RangeSelection) {
+    const resolved = resolveRange(sel, earliestSession);
+    customFrom = resolved.from;
+    customTo = resolved.to;
+  }
+
   function applyRelative(days: number) {
-    onSelect({ mode: "relative", days });
+    const sel: RangeSelection = { mode: "relative", days };
+    calAnchor = resolveRange(sel, earliestSession).to;
+    syncCustomFields(sel);
+    onSelect(sel);
   }
 
   function applyCalendar(unit: CalendarUnit, anchor: string) {
     calUnit = unit;
     calAnchor = anchor;
-    onSelect({ mode: "calendar", unit, anchor });
+    const sel: RangeSelection = { mode: "calendar", unit, anchor };
+    syncCustomFields(sel);
+    onSelect(sel);
   }
 
   function step(dir: -1 | 1) {
@@ -109,9 +122,15 @@
   }
 
   function commitCustom() {
-    if (customFrom && customTo) {
-      onSelect({ mode: "custom", from: customFrom, to: customTo });
+    if (!customFrom || !customTo) return;
+    // Normalize a reversed range so consumers (and backend validation that
+    // rejects to < from) always get ordered bounds; reflect it in the inputs.
+    if (customFrom > customTo) {
+      const earlier = customTo;
+      customTo = customFrom;
+      customFrom = earlier;
     }
+    onSelect({ mode: "custom", from: customFrom, to: customTo });
   }
 
   function handleClickOutside(e: MouseEvent) {
@@ -259,6 +278,9 @@
 
   .trigger {
     height: 28px;
+    /* Hold a stable width so the label changing (e.g. "Jun 19" vs
+       "Mar 26 - Apr 25") never resizes the button and shifts neighbors. */
+    min-width: 168px;
     padding: 0 10px;
     display: inline-flex;
     align-items: center;
@@ -291,6 +313,8 @@
   }
 
   .trigger-label {
+    flex: 1;
+    text-align: left;
     font-variant-numeric: tabular-nums;
   }
 
