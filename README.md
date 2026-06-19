@@ -490,8 +490,9 @@ default fixture is 1,000 sessions and 64,000 messages; use
 When the Docker CLI uses a non-default socket, export `DOCKER_HOST` for that
 socket before running the benchmark.
 
-Pre-commit hooks via [prek](https://github.com/j178/prek): run `make lint-tools`
-and `make install-hooks` after cloning (requires `prek` and `uv`).
+Pre-commit and pre-push hooks via [prek](https://github.com/j178/prek): run
+`make lint-tools` and `make install-hooks` after cloning (requires `prek` and
+`uv`).
 
 ### Project Layout
 

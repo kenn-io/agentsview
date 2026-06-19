@@ -371,7 +371,7 @@ release-linux-amd64: frontend
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-linux-amd64 ./cmd/agentsview
 
-# Install pre-commit hooks via prek
+# Install pre-commit and pre-push hooks via prek
 install-hooks:
 	@if ! command -v prek >/dev/null 2>&1; then \
 		echo "prek not found. Install with: brew install prek" >&2; \
@@ -421,4 +421,4 @@ help:
 	@echo ""
 	@echo "  release        - Release build for current platform"
 	@echo "  clean          - Remove build artifacts"
-	@echo "  install-hooks  - Install pre-commit git hooks"
+	@echo "  install-hooks  - Install pre-commit and pre-push git hooks"

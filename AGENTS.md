@@ -152,7 +152,7 @@ make dev            # Run Go server in dev mode
 make frontend       # Build frontend SPA only
 make frontend-dev   # Run Vite dev server, use alongside make dev
 make install        # Build and install to ~/.local/bin or GOPATH
-make install-hooks  # Install pre-commit git hooks
+make install-hooks  # Install pre-commit and pre-push git hooks
 ```
 
 ## Testing

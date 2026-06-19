@@ -1,4 +1,6 @@
 minimum_prek_version = "0.3.6"
+default_install_hook_types = ["pre-commit", "pre-push"]
+default_stages = ["pre-commit"]
 
 [[repos]]
 repo = "local"
@@ -16,6 +18,7 @@ id = "nilaway"
 name = "NilAway"
 language = "system"
 entry = "make nilaway"
+stages = ["pre-push"]
 types = ["go"]
 pass_filenames = false
 always_run = true
