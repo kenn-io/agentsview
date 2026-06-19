@@ -911,6 +911,7 @@ describe("AnalyticsStore rolling default date range", () => {
     const { analytics } = await loadAnalyticsStore();
     analytics.from = "2026-04-01";
     analytics.to = "2026-04-30";
+    analytics.isPinned = true;
     analytics.selectedDate = "2026-04-12";
     analytics.selectedDow = 2;
     analytics.selectedHour = 16;
@@ -930,6 +931,24 @@ describe("AnalyticsStore rolling default date range", () => {
       expect.not.objectContaining({
         dow: expect.anything(),
         hour: expect.anything(),
+      }),
+    );
+  });
+
+  it("fetchSignalsForInsights re-derives rolling dates before fetching", async () => {
+    const { analytics } = await loadAnalyticsStore();
+    analytics.setRollingWindow(7);
+    vi.clearAllMocks();
+
+    vi.setSystemTime(new Date("2026-04-26T12:00:00"));
+    await analytics.fetchSignalsForInsights();
+
+    expect(analytics.from).toBe("2026-04-19");
+    expect(analytics.to).toBe("2026-04-26");
+    expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        from: "2026-04-19",
+        to: "2026-04-26",
       }),
     );
   });

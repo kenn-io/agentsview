@@ -201,6 +201,39 @@ describe("load", () => {
     expect(activity.lastUpdatedAt).toBe(stampedAt);
   });
 
+  it("recomputes rolling custom ranges before refreshing", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-06-19T12:00:00"));
+      activity.setCustomRange("2026-05-20", "2026-06-19", 30);
+      const replaceParams =
+        routerMod.router.replaceParams as ReturnType<typeof vi.fn>;
+      replaceParams.mockClear();
+      api.getActivityReport.mockResolvedValue(makeReport());
+
+      vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+      await activity.load({ background: true });
+
+      const arg = api.getActivityReport.mock.calls.at(-1)![0];
+      expect(arg.from).toBe(
+        new Date("2026-05-21T00:00:00").toISOString(),
+      );
+      expect(arg.to).toBe(
+        new Date("2026-06-21T00:00:00").toISOString(),
+      );
+      expect(activity.from).toBe("2026-05-21");
+      expect(activity.to).toBe("2026-06-20");
+      expect(replaceParams.mock.calls.at(-1)?.[0]).toMatchObject({
+        preset: "custom",
+        from: "2026-05-21",
+        to: "2026-06-20",
+        window_days: "30",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces the error when a background refresh fails before any report", async () => {
     // No successful load yet, so report is null and there is nothing to keep.
     api.getActivityReport.mockRejectedValueOnce(new Error("first load down"));

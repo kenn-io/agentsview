@@ -69,4 +69,16 @@ describe("InsightsPage date yoke controls", () => {
     expect(source).toContain("delete nextParams[key]");
     expect(source).toContain("paramsWithInsightDate");
   });
+
+  it("refreshes rolling insight URL/yoke bounds after signal fetches", () => {
+    const fetchIndex = source.indexOf("function fetchInsightSignals");
+    const nextHandlerIndex = source.indexOf(
+      "\n\n  function handleProjectChange",
+      fetchIndex,
+    );
+    const fetchBlock = source.slice(fetchIndex, nextHandlerIndex);
+
+    expect(fetchBlock).toContain("analytics.fetchSignalsForInsights()");
+    expect(fetchBlock).toContain("updateYokeFromInsights(state)");
+  });
 });

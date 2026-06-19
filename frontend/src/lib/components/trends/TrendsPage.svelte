@@ -125,7 +125,20 @@
     window.history.replaceState(null, "", url);
   }
 
+  function materializeRollingWindow(): void {
+    if (trendsWindowDays === null) return;
+    const range = rollingRange(trendsWindowDays);
+    if (trends.from === range.from && trends.to === range.to) return;
+    trends.from = range.from;
+    trends.to = range.to;
+    updateYokeFromTrends(panelDateState(range.from, range.to, {
+      mode: "rolling",
+      windowDays: trendsWindowDays,
+    }));
+  }
+
   async function refresh() {
+    materializeRollingWindow();
     writeUrl();
     await trends.fetchTerms();
   }

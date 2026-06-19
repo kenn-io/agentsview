@@ -194,6 +194,42 @@ describe("TrendsPage", () => {
     expect(window.location.search).toContain("window_days=30");
   });
 
+  it("recomputes rolling windows before manual refresh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-19T12:00:00"));
+    window.history.replaceState(
+      null,
+      "",
+      "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
+    );
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+    const refresh = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((b) => b.textContent?.trim() === "Refresh");
+    expect(refresh).not.toBeNull();
+    refresh!.click();
+    await flushPromises();
+
+    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        from: "2026-05-21",
+        to: "2026-06-20",
+      }),
+    );
+    expect(window.location.search).toContain("from=2026-05-21");
+    expect(window.location.search).toContain("to=2026-06-20");
+    expect(yokedDates.range).toMatchObject({
+      from: "2026-05-21",
+      to: "2026-06-20",
+      mode: "rolling",
+      windowDays: 30,
+    });
+  });
+
   it("updates shared yoke state from range selections", () => {
     expect(source).toContain("<RangePicker");
     expect(source).toContain("updateYokeFromTrends");

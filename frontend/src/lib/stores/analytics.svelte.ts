@@ -709,6 +709,7 @@ class AnalyticsStore {
   }
 
   async fetchSignalsForInsights() {
+    this.rollDates();
     this.selectedDate = null;
     this.selectedDow = null;
     this.selectedHour = null;

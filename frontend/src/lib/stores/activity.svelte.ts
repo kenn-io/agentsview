@@ -101,8 +101,24 @@ class ActivityStore {
     this.hasNewData = true;
   }
 
+  private materializeRollingWindow(): boolean {
+    if (this.preset !== "custom" || this.rollingWindowDays === null) {
+      return false;
+    }
+    const range = rollingRange(this.rollingWindowDays);
+    if (this.from === range.from && this.to === range.to) {
+      return false;
+    }
+    this.from = range.from;
+    this.to = range.to;
+    return true;
+  }
+
   async load({ background = false }: { background?: boolean } = {}) {
     const v = ++this.loadVersion;
+    if (this.materializeRollingWindow()) {
+      this.writeUrl();
+    }
     // A custom range needs both bounds. With only one present (a cleared date
     // input or a partial deep link) the backend rejects the request, so hold
     // the current view until both are set instead of flashing an error.

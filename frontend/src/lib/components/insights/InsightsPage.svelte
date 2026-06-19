@@ -280,6 +280,10 @@
 
   function fetchInsightSignals() {
     analytics.fetchSignalsForInsights();
+    const state = currentInsightPanelDate();
+    if (state?.mode === "rolling") {
+      updateYokeFromInsights(state);
+    }
   }
 
   function handleProjectChange(value: string) {
