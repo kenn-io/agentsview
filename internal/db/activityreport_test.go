@@ -388,9 +388,10 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 // TestGetActivityReport_TitleSkipsEmptyDisplayName confirms the Title fallback
 // null-checks each candidate independently: an empty (non-NULL) display_name
 // must not mask a real session_name. A nested COALESCE(display_name,
-// session_name) would return '' and be NULLIF'd away, wrongly skipping to
-// first_message. RenameSession stores a literal '' (only nil clears to NULL),
-// so this reproduces a session renamed to "" that still has a session_name.
+// session_name) would return an empty string and be NULLIF'd away, wrongly
+// skipping to first_message. RenameSession stores a literal empty string (only
+// nil clears to NULL), so this reproduces a session renamed to "" that still
+// has a session_name.
 func TestGetActivityReport_TitleSkipsEmptyDisplayName(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

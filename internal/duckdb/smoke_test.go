@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const duckDBGoModuleVersion = "v2.10503.1"
+const duckDBGoModuleVersion = "v2.10504.0"
 
 func TestLocalFileSmoke(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "agentsview.duckdb")
