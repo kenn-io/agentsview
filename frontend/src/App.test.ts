@@ -106,6 +106,28 @@ describe("App session URL date state", () => {
     );
   });
 
+  it("clears stored yoke when session date params are removed while analytics is unmounted", () => {
+    const syncUrlBlock = appSourceSlice(
+      "// Sync active session to URL.",
+      "\n\n  // URL write-back",
+    );
+    const writeBackBlock = appSourceSlice(
+      "// URL write-back",
+      "\n\n  function showAbout",
+    );
+
+    expect(source).toContain("import { yokedDates");
+    expect(source).toContain("function clearYokeForClearedSessionDates");
+    expect(source).toContain("sessionDateIntentCleared(");
+    expect(source).toContain("yokedDates.clear();");
+    expect(syncUrlBlock).toContain(
+      "clearYokeForClearedSessionDates(nextParams);",
+    );
+    expect(writeBackBlock).toContain(
+      "clearYokeForClearedSessionDates(newParams);",
+    );
+  });
+
   it("clears detail filter signatures outside session detail routes", () => {
     const syncUrlBlock = appSourceSlice(
       "// Sync active session to URL.",

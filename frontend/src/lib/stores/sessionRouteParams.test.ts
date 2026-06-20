@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   SESSION_FILTER_KEYS,
+  sessionDateIntentCleared,
   sessionRouteParamsForDetailExit,
   sessionRouteParamsForFilters,
 } from "./sessionRouteParams.js";
@@ -100,6 +101,25 @@ describe("session route params", () => {
     );
 
     expect(params).toEqual({ project: "agentsview" });
+  });
+
+  it("detects removed session date intent", () => {
+    expect(sessionDateIntentCleared(
+      {
+        date_from: "2026-05-21",
+        date_to: "2026-06-20",
+        window_days: "30",
+      },
+      { project: "agentsview" },
+    )).toBe(true);
+    expect(sessionDateIntentCleared(
+      { window_days: "30" },
+      { window_days: "30", project: "agentsview" },
+    )).toBe(false);
+    expect(sessionDateIntentCleared(
+      { project: "agentsview" },
+      { project: "agentsview" },
+    )).toBe(false);
   });
 
   it("prefers direct detail URL params over saved filters on exit", () => {

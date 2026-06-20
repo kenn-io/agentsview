@@ -33,6 +33,7 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
+  import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
@@ -40,6 +41,7 @@
   import {
     filterParamsEqual,
     hasFilterParams,
+    sessionDateIntentCleared,
     sessionRouteParamsForDetailExit,
     sessionRouteParamsForFilters,
   } from "./lib/stores/sessionRouteParams.js";
@@ -228,6 +230,14 @@
     messageListRef?.scrollToOrdinal(ordinal);
   }
 
+  function clearYokeForClearedSessionDates(
+    nextParams: Record<string, string>,
+  ): void {
+    if (sessionDateIntentCleared(router.params, nextParams)) {
+      yokedDates.clear();
+    }
+  }
+
   let lastDetailFilterParamsSignature: string | null = $state(null);
 
   // React to route changes: reload sessions and apply URL params.
@@ -315,11 +325,13 @@
             lastDetailFilterParamsSignature !== filterParamsSignature &&
             !filterParamsEqual(router.params, nextParams)
           ) {
+            clearYokeForClearedSessionDates(nextParams);
             router.replaceParams(nextParams);
           }
           lastDetailFilterParamsSignature = filterParamsSignature;
           return;
         }
+        clearYokeForClearedSessionDates(nextParams);
         router.navigateToSession(activeId, nextParams);
         lastDetailFilterParamsSignature = filterParamsSignature;
       } else {
@@ -339,6 +351,7 @@
               filterParams,
               router.params,
             );
+        clearYokeForClearedSessionDates(nextParams);
         router.navigateFromSession(nextParams);
         lastDetailFilterParamsSignature = null;
       }
@@ -360,6 +373,7 @@
       if (route !== "sessions") return;
       if (router.sessionId) return;
       if (filterParamsEqual(router.params, newParams)) return;
+      clearYokeForClearedSessionDates(newParams);
       router.replaceParams(newParams);
     });
   });

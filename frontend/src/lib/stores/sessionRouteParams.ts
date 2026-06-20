@@ -31,6 +31,21 @@ function hasFixedSessionDateParams(
   return !!params["date"] || !!params["date_from"] || !!params["date_to"];
 }
 
+function hasSessionDateIntent(
+  params: Record<string, string>,
+): boolean {
+  return hasFixedSessionDateParams(params) ||
+    !!params[SESSION_ANALYTICS_WINDOW_PARAM];
+}
+
+export function sessionDateIntentCleared(
+  currentParams: Record<string, string>,
+  nextParams: Record<string, string>,
+): boolean {
+  return hasSessionDateIntent(currentParams) &&
+    !hasSessionDateIntent(nextParams);
+}
+
 function isValidWindowDaysParam(raw: string | undefined): raw is string {
   if (!raw) return false;
   const n = Number.parseInt(raw, 10);
