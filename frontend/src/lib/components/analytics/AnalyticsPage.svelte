@@ -169,6 +169,7 @@
   }
 
   function writeSessionDateParams(state: PanelDateState): void {
+    analyticsDateYokeCleared = false;
     const sessionChanged = syncSessionFiltersForDateState(state);
     const params = filtersToParams(sessions.filters);
     delete params[SESSION_ANALYTICS_WINDOW_PARAM];
@@ -217,7 +218,7 @@
   function refreshAnalytics(): Promise<void> {
     const refresh = analytics.fetchAll();
     const state = currentAnalyticsPanelDate();
-    if (state) {
+    if (state && !analyticsDateYokeCleared) {
       yokedDates.updateFromPanel(state);
       writeSessionDateParams(state);
     }
@@ -255,6 +256,7 @@
   let analyticsDateUrlInitRan = $state(false);
   let analyticsDateUrlInitComplete = $state(false);
   let lastAnalyticsDateUrlSignature: string | null = $state(null);
+  let analyticsDateYokeCleared = $state(false);
 
   onMount(() => {
     // The URL-date effect owns the initial load so deep links and stored yoke
@@ -409,6 +411,7 @@
           }
         } else if (dateChanged && sessionDateFiltersAreClear()) {
           yokedDates.clear();
+          analyticsDateYokeCleared = true;
         } else if (dateChanged) {
           state = rollingPanelDate(analytics.windowDays);
           if (state) {
@@ -416,6 +419,7 @@
             const sessionChanged =
               syncSessionFiltersForDateState(state);
             yokedDates.updateFromPanel(state);
+            analyticsDateYokeCleared = false;
             if (sessionChanged) sessions.load();
           }
         }
@@ -434,6 +438,7 @@
         changed = applyAnalyticsPanelDate(state);
         sessionChanged = syncSessionFiltersForDateState(state);
         yokedDates.updateFromPanel(state);
+        analyticsDateYokeCleared = false;
       }
       if (changed || firstRun) {
         analytics.fetchAll();

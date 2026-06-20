@@ -103,6 +103,18 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(sessions.filters.dateFrom).toBe("");
     expect(sessions.filters.dateTo).toBe("");
     expect(yokedDates.range).toBeNull();
+
+    const refresh = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh analytics"]',
+    );
+    expect(refresh).not.toBeNull();
+    refresh!.click();
+    await flushEffects();
+
+    expect(sessions.filters.date).toBe("");
+    expect(sessions.filters.dateFrom).toBe("");
+    expect(sessions.filters.dateTo).toBe("");
+    expect(yokedDates.range).toBeNull();
   });
 
   it("does not refresh analytical scans from SSE updates", () => {
