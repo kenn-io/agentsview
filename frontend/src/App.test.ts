@@ -31,6 +31,25 @@ describe("App session URL date state", () => {
     );
   });
 
+  it("preserves rolling intent when materialized date bounds still match", () => {
+    const helperStart = source.indexOf(
+      "function sessionRouteParamsForFilters",
+    );
+    const helperEnd = source.indexOf(
+      "\n\n  function currentSessionRouteParams",
+      helperStart,
+    );
+    const helperBlock = source.slice(helperStart, helperEnd);
+
+    expect(source).toContain("function fixedSessionDateParamsEqual");
+    expect(helperBlock).toContain(
+      "!hasFixedSessionDateParams(next) ||\n        fixedSessionDateParamsEqual(next, currentParams)",
+    );
+    expect(helperBlock).toContain(
+      "next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays;",
+    );
+  });
+
   it("preserves rolling window dates when entering session detail", () => {
     const syncUrlIndex = source.indexOf("// Sync active session to URL.");
     const navigateFromSessionIndex = source.indexOf(

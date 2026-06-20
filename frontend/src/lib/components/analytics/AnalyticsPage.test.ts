@@ -45,6 +45,21 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(source).toContain("writeSessionDateParams");
   });
 
+  it("refreshes analytics through date-aware session writeback", () => {
+    const helperStart = source.indexOf("function refreshAnalytics");
+    const helperEnd = source.indexOf(
+      "\n\n  function handleDateRangeChange",
+      helperStart,
+    );
+    const helperBlock = source.slice(helperStart, helperEnd);
+
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helperBlock).toContain("analytics.fetchAll()");
+    expect(helperBlock).toContain("writeSessionDateParams(state)");
+    expect(source).toContain("onRefresh={refreshAnalytics}");
+    expect(source).not.toContain("onRefresh={() => analytics.fetchAll()}");
+  });
+
   it("applies URL and yoke dates before the initial analytics fetch", () => {
     const onMountIndex = source.indexOf("onMount(() =>");
     const firstEffectAfterMount = source.indexOf("$effect(() =>", onMountIndex);

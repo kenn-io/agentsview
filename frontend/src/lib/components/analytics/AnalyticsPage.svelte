@@ -196,6 +196,28 @@
     return before !== after;
   }
 
+  function currentAnalyticsPanelDate(): PanelDateState | null {
+    if (!analytics.isPinned) {
+      return panelDateState(analytics.from, analytics.to, {
+        mode: "rolling",
+        windowDays: analytics.windowDays,
+      });
+    }
+    return panelDateState(analytics.from, analytics.to, {
+      mode: "fixed",
+    });
+  }
+
+  function refreshAnalytics(): Promise<void> {
+    const refresh = analytics.fetchAll();
+    const state = currentAnalyticsPanelDate();
+    if (state) {
+      yokedDates.updateFromPanel(state);
+      writeSessionDateParams(state);
+    }
+    return refresh;
+  }
+
   function handleDateRangeChange(from: string, to: string) {
     const state = panelDateState(from, to, { mode: "fixed" });
     if (!state) return;
@@ -443,7 +465,7 @@
     <RefreshControl
       lastUpdatedAt={analytics.lastUpdatedAt}
       busy={analytics.isQuerying}
-      onRefresh={() => analytics.fetchAll()}
+      onRefresh={refreshAnalytics}
       label="Refresh analytics"
     />
     <button class="export-btn" onclick={handleExportCSV}>

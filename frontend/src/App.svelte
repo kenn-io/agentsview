@@ -248,6 +248,17 @@
     return Number.isInteger(n) && n > 0 && String(n) === raw;
   }
 
+  function fixedSessionDateParamsEqual(
+    a: Record<string, string>,
+    b: Record<string, string>,
+  ): boolean {
+    return (
+      (a["date"] ?? "") === (b["date"] ?? "") &&
+      (a["date_from"] ?? "") === (b["date_from"] ?? "") &&
+      (a["date_to"] ?? "") === (b["date_to"] ?? "")
+    );
+  }
+
   function sessionRouteParamsForFilters(
     filterParams: Record<string, string>,
     currentParams: Record<string, string>,
@@ -255,7 +266,10 @@
     const next = { ...filterParams };
     const windowDays = currentParams[SESSION_ANALYTICS_WINDOW_PARAM];
     if (
-      !hasFixedSessionDateParams(next) &&
+      (
+        !hasFixedSessionDateParams(next) ||
+        fixedSessionDateParamsEqual(next, currentParams)
+      ) &&
       isValidWindowDaysParam(windowDays)
     ) {
       next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays;
