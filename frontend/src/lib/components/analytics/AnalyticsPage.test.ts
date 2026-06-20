@@ -104,6 +104,10 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(sessions.filters.dateTo).toBe("");
     expect(yokedDates.range).toBeNull();
 
+    unmount(component);
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
     const refresh = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Refresh analytics"]',
     );
