@@ -31,7 +31,7 @@ function hasFixedSessionDateParams(
   return !!params["date"] || !!params["date_from"] || !!params["date_to"];
 }
 
-function hasSessionDateIntent(
+export function hasSessionDateIntent(
   params: Record<string, string>,
 ): boolean {
   return hasFixedSessionDateParams(params) ||

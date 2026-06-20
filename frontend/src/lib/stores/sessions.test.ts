@@ -14,6 +14,7 @@ import {
   splitExcludeProjectParam,
 } from "./sessions.svelte.js";
 import { starred } from "./starred.svelte.js";
+import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import { callGenerated } from "../api/runtime.js";
@@ -197,6 +198,7 @@ describe("SessionsStore", () => {
     mockSidebarIndex();
     starred.filterOnly = false;
     starred.ids = new Set();
+    yokedDates.clear();
     sessions = createSessionsStore();
   });
 
@@ -1381,6 +1383,82 @@ describe("SessionsStore", () => {
 
       expect(sessions.filters.project).toBe("myproj");
       expect(sessions.hasActiveFilters).toBe(false);
+    });
+
+    it("clears the date yoke before clearing the active session", () => {
+      sessions.activeSessionId = "session-1";
+      sessions.filters.dateFrom = "2025-05-01";
+      sessions.filters.dateTo = "2025-05-31";
+      yokedDates.updateFromPanel({
+        from: "2025-05-01",
+        to: "2025-05-31",
+        mode: "rolling",
+        windowDays: 30,
+      });
+      expect(yokedDates.range).not.toBeNull();
+
+      const store = sessions as unknown as {
+        setActiveSession: (id: string | null) => void;
+      };
+      const setActiveSession = store.setActiveSession.bind(sessions);
+      const spy = vi
+        .spyOn(store, "setActiveSession")
+        .mockImplementation((id) => {
+          expect(yokedDates.range).toBeNull();
+          setActiveSession(id);
+        });
+
+      sessions.clearSessionFilters();
+
+      expect(spy).toHaveBeenCalledWith(null);
+      expect(sessions.activeSessionId).toBeNull();
+      expect(yokedDates.range).toBeNull();
+    });
+
+    it("clears the date yoke before clearing the active session when requested by route intent", () => {
+      sessions.activeSessionId = "session-1";
+      sessions.filters.agent = "codex";
+      yokedDates.updateFromPanel({
+        from: "2025-05-01",
+        to: "2025-05-31",
+        mode: "rolling",
+        windowDays: 30,
+      });
+      expect(yokedDates.range).not.toBeNull();
+
+      const store = sessions as unknown as {
+        setActiveSession: (id: string | null) => void;
+      };
+      const setActiveSession = store.setActiveSession.bind(sessions);
+      const spy = vi
+        .spyOn(store, "setActiveSession")
+        .mockImplementation((id) => {
+          expect(yokedDates.range).toBeNull();
+          setActiveSession(id);
+        });
+
+      sessions.clearSessionFilters({ clearDateYoke: true });
+
+      expect(spy).toHaveBeenCalledWith(null);
+      expect(sessions.activeSessionId).toBeNull();
+      expect(yokedDates.range).toBeNull();
+    });
+
+    it("keeps the date yoke for non-date filter clears without route date intent", () => {
+      sessions.filters.agent = "codex";
+      yokedDates.updateFromPanel({
+        from: "2025-05-01",
+        to: "2025-05-31",
+        mode: "fixed",
+      });
+
+      sessions.clearSessionFilters();
+
+      expect(yokedDates.range).toMatchObject({
+        from: "2025-05-01",
+        to: "2025-05-31",
+        mode: "fixed",
+      });
     });
   });
 

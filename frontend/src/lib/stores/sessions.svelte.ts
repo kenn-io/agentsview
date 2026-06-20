@@ -17,6 +17,7 @@ import type {
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
+import { yokedDates } from "./yokedDates.svelte.js";
 
 type SidebarIndexParams = Parameters<
   typeof SessionsService.getApiV1SessionsSidebarIndex
@@ -24,6 +25,9 @@ type SidebarIndexParams = Parameters<
 type MetadataParams = Parameters<
   typeof MetadataService.getApiV1Projects
 >[0];
+type ClearSessionFiltersOptions = {
+  clearDateYoke?: boolean;
+};
 
 const SESSION_PAGE_SIZE = 500;
 const SIDEBAR_HYDRATION_CONCURRENCY = 6;
@@ -146,6 +150,10 @@ export function filtersToParams(
   if (!f.includeOneShot) p["include_one_shot"] = "false";
   if (f.includeAutomated) p["include_automated"] = "true";
   return p;
+}
+
+function hasDateFilters(f: Filters): boolean {
+  return !!(f.date || f.dateFrom || f.dateTo);
 }
 
 export function splitExcludeProjectParam(
@@ -1012,10 +1020,13 @@ class SessionsStore {
     );
   }
 
-  clearSessionFilters() {
+  clearSessionFilters(options: ClearSessionFiltersOptions = {}) {
     const project = this.filters.project;
     const wasOneShot = this.filters.includeOneShot;
     const wasAutomated = this.filters.includeAutomated;
+    if (options.clearDateYoke || hasDateFilters(this.filters)) {
+      yokedDates.clear();
+    }
     this.filters = { ...defaultFilters(), project };
     this.setActiveSession(null);
     if (wasOneShot !== this.filters.includeOneShot || wasAutomated) {

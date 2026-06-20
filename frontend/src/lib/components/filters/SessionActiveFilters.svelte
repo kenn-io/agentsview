@@ -1,5 +1,7 @@
 <script lang="ts">
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import { hasSessionDateIntent } from "../../stores/sessionRouteParams.js";
   import {
     agentColor,
     agentLabel,
@@ -58,7 +60,9 @@
 
   function clearAll() {
     sessions.filters.project = "";
-    sessions.clearSessionFilters();
+    sessions.clearSessionFilters({
+      clearDateYoke: hasSessionDateIntent(router.params),
+    });
     onClearProjects?.();
     onClearModels?.();
   }

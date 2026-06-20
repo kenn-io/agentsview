@@ -127,7 +127,17 @@ test.describe("Insights quality rollout", () => {
     await page.keyboard.press("Escape");
     await expect(savedInsight).toBeVisible();
     await savedInsight.click();
-    await expect(page).toHaveURL(/\/insights\?insight=42$/);
+    await expect(page).toHaveURL(/\/insights\?.*insight=42/);
+    const selectedInsightUrl = new URL(page.url());
+    expect(selectedInsightUrl.pathname).toBe("/insights");
+    expect(selectedInsightUrl.searchParams.get("insight")).toBe("42");
+    expect(selectedInsightUrl.searchParams.get("window_days")).toBe("365");
+    expect(selectedInsightUrl.searchParams.get("date_from")).toMatch(
+      /^\d{4}-\d{2}-\d{2}$/,
+    );
+    expect(selectedInsightUrl.searchParams.get("date_to")).toMatch(
+      /^\d{4}-\d{2}-\d{2}$/,
+    );
 
     await expect(
       page.locator(".generated-detail .badge", {
@@ -172,7 +182,17 @@ test.describe("Insights quality rollout", () => {
         (window as unknown as { __copiedInsightLink?: string })
           .__copiedInsightLink,
     );
-    expect(copied).toBe(`${new URL(page.url()).origin}/insights?insight=42`);
+    const copiedUrl = new URL(copied!);
+    expect(copiedUrl.origin).toBe(selectedInsightUrl.origin);
+    expect(copiedUrl.pathname).toBe("/insights");
+    expect(copiedUrl.searchParams.get("insight")).toBe("42");
+    expect(copiedUrl.searchParams.get("window_days")).toBe("365");
+    expect(copiedUrl.searchParams.get("date_from")).toBe(
+      selectedInsightUrl.searchParams.get("date_from"),
+    );
+    expect(copiedUrl.searchParams.get("date_to")).toBe(
+      selectedInsightUrl.searchParams.get("date_to"),
+    );
 
     await page.goto("/insights?insight=42");
     await expect(
