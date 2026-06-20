@@ -33,20 +33,37 @@ describe("App session URL date state", () => {
 
   it("preserves rolling intent when materialized date bounds still match", () => {
     const helperStart = source.indexOf(
-      "function sessionRouteParamsForFilters",
+      "function shouldPreserveSessionWindowDays",
     );
     const helperEnd = source.indexOf(
-      "\n\n  function currentSessionRouteParams",
+      "\n\n  function sessionRouteParamsForFilters",
       helperStart,
     );
     const helperBlock = source.slice(helperStart, helperEnd);
 
     expect(source).toContain("function fixedSessionDateParamsEqual");
     expect(helperBlock).toContain(
-      "!hasFixedSessionDateParams(next) ||\n        fixedSessionDateParamsEqual(next, currentParams)",
+      "fixedSessionDateParamsEqual(nextParams, currentParams)",
     );
+    expect(source).toContain(
+      "next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays!;",
+    );
+  });
+
+  it("preserves direct rolling links during first materialized date writeback", () => {
+    const helperStart = source.indexOf(
+      "function shouldPreserveSessionWindowDays",
+    );
+    const helperEnd = source.indexOf(
+      "\n\n  function sessionRouteParamsForFilters",
+      helperStart,
+    );
+    const helperBlock = source.slice(helperStart, helperEnd);
+
+    expect(helperStart).toBeGreaterThan(-1);
+    expect(helperBlock).toContain("!hasFixedSessionDateParams(currentParams)");
     expect(helperBlock).toContain(
-      "next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays;",
+      "fixedSessionDateParamsEqual(nextParams, currentParams)",
     );
   });
 

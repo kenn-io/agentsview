@@ -259,20 +259,27 @@
     );
   }
 
+  function shouldPreserveSessionWindowDays(
+    nextParams: Record<string, string>,
+    currentParams: Record<string, string>,
+  ): boolean {
+    const windowDays = currentParams[SESSION_ANALYTICS_WINDOW_PARAM];
+    if (!isValidWindowDaysParam(windowDays)) return false;
+    return (
+      !hasFixedSessionDateParams(nextParams) ||
+      !hasFixedSessionDateParams(currentParams) ||
+      fixedSessionDateParamsEqual(nextParams, currentParams)
+    );
+  }
+
   function sessionRouteParamsForFilters(
     filterParams: Record<string, string>,
     currentParams: Record<string, string>,
   ): Record<string, string> {
     const next = { ...filterParams };
     const windowDays = currentParams[SESSION_ANALYTICS_WINDOW_PARAM];
-    if (
-      (
-        !hasFixedSessionDateParams(next) ||
-        fixedSessionDateParamsEqual(next, currentParams)
-      ) &&
-      isValidWindowDaysParam(windowDays)
-    ) {
-      next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays;
+    if (shouldPreserveSessionWindowDays(next, currentParams)) {
+      next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays!;
     }
     return next;
   }
