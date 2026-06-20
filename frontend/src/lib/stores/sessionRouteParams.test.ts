@@ -87,6 +87,21 @@ describe("session route params", () => {
     });
   });
 
+  it("drops rolling intent when materialized date filters are cleared", () => {
+    const params = sessionRouteParamsForFilters(
+      { project: "agentsview" },
+      {
+        date_from: "2026-05-21",
+        date_to: "2026-06-20",
+        window_days: "30",
+        project: "agentsview",
+      },
+      new Date(2026, 5, 20, 12),
+    );
+
+    expect(params).toEqual({ project: "agentsview" });
+  });
+
   it("prefers direct detail URL params over saved filters on exit", () => {
     const params = sessionRouteParamsForDetailExit(
       { project: "saved", agent: "codex" },

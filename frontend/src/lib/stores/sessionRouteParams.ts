@@ -68,9 +68,10 @@ function shouldPreserveSessionWindowDays(
 ): boolean {
   const windowDays = currentParams[SESSION_ANALYTICS_WINDOW_PARAM];
   if (!isValidWindowDaysParam(windowDays)) return false;
+  const nextHasFixedDates = hasFixedSessionDateParams(nextParams);
+  const currentHasFixedDates = hasFixedSessionDateParams(currentParams);
   return (
-    !hasFixedSessionDateParams(nextParams) ||
-    !hasFixedSessionDateParams(currentParams) ||
+    (!nextHasFixedDates && !currentHasFixedDates) ||
     fixedSessionDateParamsMatchRollingWindow(nextParams, windowDays, now) ||
     fixedSessionDateParamsEqual(nextParams, currentParams)
   );

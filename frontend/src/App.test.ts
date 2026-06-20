@@ -2,6 +2,14 @@ import { describe, expect, it } from "vite-plus/test";
 import source from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
 
+function appSourceSlice(startMarker: string, endMarker: string): string {
+  const start = source.indexOf(startMarker);
+  expect(start).toBeGreaterThan(-1);
+  const end = source.indexOf(endMarker, start);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
 describe("App session URL date state", () => {
   it("treats rolling window and termination as sessions route params", () => {
     expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
@@ -65,12 +73,10 @@ describe("App session URL date state", () => {
   });
 
   it("updates detail URL params after explicit filter changes", () => {
-    const syncUrlIndex = source.indexOf("// Sync active session to URL.");
-    const syncUrlEnd = source.indexOf(
-      "\n\n  // Compare only filter keys",
-      syncUrlIndex,
+    const syncUrlBlock = appSourceSlice(
+      "// Sync active session to URL.",
+      "\n\n  // URL write-back",
     );
-    const syncUrlBlock = source.slice(syncUrlIndex, syncUrlEnd);
 
     expect(source).toContain(
       "let lastDetailFilterParamsSignature: string | null = $state(null);",
@@ -86,12 +92,10 @@ describe("App session URL date state", () => {
   });
 
   it("does not preserve stale detail params after filter changes", () => {
-    const syncUrlIndex = source.indexOf("// Sync active session to URL.");
-    const syncUrlEnd = source.indexOf(
-      "\n\n  // Compare only filter keys",
-      syncUrlIndex,
+    const syncUrlBlock = appSourceSlice(
+      "// Sync active session to URL.",
+      "\n\n  // URL write-back",
     );
-    const syncUrlBlock = source.slice(syncUrlIndex, syncUrlEnd);
 
     expect(syncUrlBlock).toContain("const filterChangedOnDetail =");
     expect(syncUrlBlock).toContain(
@@ -103,12 +107,10 @@ describe("App session URL date state", () => {
   });
 
   it("clears detail filter signatures outside session detail routes", () => {
-    const syncUrlIndex = source.indexOf("// Sync active session to URL.");
-    const syncUrlEnd = source.indexOf(
-      "\n\n  // Compare only filter keys",
-      syncUrlIndex,
+    const syncUrlBlock = appSourceSlice(
+      "// Sync active session to URL.",
+      "\n\n  // URL write-back",
     );
-    const syncUrlBlock = source.slice(syncUrlIndex, syncUrlEnd);
 
     expect(syncUrlBlock).toContain(
       'if (router.route !== "sessions") {\n        lastDetailFilterParamsSignature = null;',
