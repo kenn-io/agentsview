@@ -141,6 +141,12 @@
     sessions.filters.dateTo = "";
   }
 
+  function sessionDateFiltersAreClear(): boolean {
+    return !sessions.filters.date &&
+      !sessions.filters.dateFrom &&
+      !sessions.filters.dateTo;
+  }
+
   function syncSessionFiltersForDateState(
     state: PanelDateState,
   ): boolean {
@@ -401,6 +407,8 @@
             changed = applyAnalyticsPanelDate(state);
             writeSessionDateParams(state);
           }
+        } else if (dateChanged && sessionDateFiltersAreClear()) {
+          yokedDates.clear();
         } else if (dateChanged) {
           state = rollingPanelDate(analytics.windowDays);
           if (state) {

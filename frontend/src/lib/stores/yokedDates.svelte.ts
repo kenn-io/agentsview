@@ -310,6 +310,11 @@ export class YokedDatesStore {
     this.persist();
   }
 
+  clear(): void {
+    this.range = null;
+    this.persist();
+  }
+
   seedForPanel(): YokedDateRange | null {
     if (!this.range) return null;
     return copyRange(this.range);

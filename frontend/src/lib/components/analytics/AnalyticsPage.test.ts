@@ -1,7 +1,110 @@
-import { describe, expect, it } from "vite-plus/test";
+// @vitest-environment jsdom
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
+import { mount, tick, unmount } from "svelte";
+import { analytics } from "../../stores/analytics.svelte.js";
+import { router } from "../../stores/router.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
+import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import source from "./AnalyticsPage.svelte?raw";
+// @ts-ignore
+import AnalyticsPage from "./AnalyticsPage.svelte";
+
+async function flushEffects() {
+  await tick();
+  await Promise.resolve();
+  await tick();
+}
+
+let component: ReturnType<typeof mount> | undefined;
+
+afterEach(() => {
+  if (component) {
+    unmount(component);
+    component = undefined;
+  }
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
+  localStorage.clear();
+  window.history.replaceState(null, "", "/");
+  router.route = "sessions";
+  router.params = {};
+  router.sessionId = null;
+  analytics.isPinned = false;
+  analytics.windowDays = 365;
+  analytics.from = "";
+  analytics.to = "";
+  analytics.selectedDate = null;
+  analytics.selectedDow = null;
+  analytics.selectedHour = null;
+  sessions.filters.date = "";
+  sessions.filters.dateFrom = "";
+  sessions.filters.dateTo = "";
+  yokedDates.clear();
+});
 
 describe("AnalyticsPage refresh behavior", () => {
+  it("does not rematerialize rolling dates after cleared session date params", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+
+    window.history.replaceState(
+      null,
+      "",
+      "/sessions?window_days=30&date_from=2026-05-21&date_to=2026-06-20",
+    );
+    router.route = "sessions";
+    router.sessionId = null;
+    router.params = {
+      window_days: "30",
+      date_from: "2026-05-21",
+      date_to: "2026-06-20",
+    };
+    analytics.windowDays = 30;
+    analytics.isPinned = false;
+    analytics.from = "2026-05-21";
+    analytics.to = "2026-06-20";
+    sessions.filters.date = "";
+    sessions.filters.dateFrom = "2026-05-21";
+    sessions.filters.dateTo = "2026-06-20";
+    yokedDates.updateFromPanel({
+      from: "2026-05-21",
+      to: "2026-06-20",
+      mode: "rolling",
+      windowDays: 30,
+    });
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
+    sessions.filters.date = "";
+    sessions.filters.dateFrom = "";
+    sessions.filters.dateTo = "";
+    router.params = {};
+    await flushEffects();
+
+    expect(sessions.filters.date).toBe("");
+    expect(sessions.filters.dateFrom).toBe("");
+    expect(sessions.filters.dateTo).toBe("");
+    expect(yokedDates.range).toBeNull();
+  });
+
   it("does not refresh analytical scans from SSE updates", () => {
     expect(source).not.toContain("subscribeDebounced");
     // SSE only flags new data; the periodic refetch lives in RefreshControl.
@@ -149,7 +252,7 @@ describe("AnalyticsPage refresh behavior", () => {
     );
   });
 
-  it("resets analytics to rolling dates when URL date params are removed", () => {
+  it("does not use the rolling fallback when cleared session date filters remove URL dates", () => {
     const noStateStart = source.indexOf("if (!state) {");
     const noStateEnd = source.indexOf(
       "\n\n      let changed = false;\n      let sessionChanged = false;",
@@ -157,7 +260,11 @@ describe("AnalyticsPage refresh behavior", () => {
     );
     const noStateBlock = source.slice(noStateStart, noStateEnd);
 
-    expect(noStateBlock).toContain("else if (dateChanged) {");
+    expect(noStateBlock).toContain(
+      "dateChanged && sessionDateFiltersAreClear()",
+    );
+    expect(noStateBlock).toContain("yokedDates.clear();");
+    expect(noStateBlock).toContain("} else if (dateChanged) {");
     expect(noStateBlock).toContain(
       "state = rollingPanelDate(analytics.windowDays);",
     );
