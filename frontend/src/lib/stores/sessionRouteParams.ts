@@ -38,6 +38,13 @@ export function hasSessionDateIntent(
     !!params[SESSION_ANALYTICS_WINDOW_PARAM];
 }
 
+export function hasSessionRouteDateIntent(
+  route: string,
+  params: Record<string, string>,
+): boolean {
+  return route === "sessions" && hasSessionDateIntent(params);
+}
+
 export function sessionDateIntentCleared(
   currentParams: Record<string, string>,
   nextParams: Record<string, string>,
