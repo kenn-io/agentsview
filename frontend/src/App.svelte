@@ -37,6 +37,12 @@
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
+  import {
+    filterParamsEqual,
+    hasFilterParams,
+    sessionRouteParamsForDetailExit,
+    sessionRouteParamsForFilters,
+  } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
 
@@ -222,90 +228,6 @@
     messageListRef?.scrollToOrdinal(ordinal);
   }
 
-  const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";
-
-  /** True when URL params contain session filter keys (deep-link). */
-  const SESSION_FILTER_KEYS = new Set([
-    "project", "machine", "agent", "termination",
-    "date", "date_from", "date_to",
-    "active_since", "exclude_project", "min_messages", "max_messages",
-    "min_user_messages", "include_one_shot", "include_automated",
-    "window_days",
-  ]);
-  function hasFilterParams(params: Record<string, string>): boolean {
-    return Object.keys(params).some((k) => SESSION_FILTER_KEYS.has(k));
-  }
-
-  function hasFixedSessionDateParams(
-    params: Record<string, string>,
-  ): boolean {
-    return !!params["date"] || !!params["date_from"] || !!params["date_to"];
-  }
-
-  function isValidWindowDaysParam(raw: string | undefined): raw is string {
-    if (!raw) return false;
-    const n = Number.parseInt(raw, 10);
-    return Number.isInteger(n) && n > 0 && String(n) === raw;
-  }
-
-  function fixedSessionDateParamsEqual(
-    a: Record<string, string>,
-    b: Record<string, string>,
-  ): boolean {
-    return (
-      (a["date"] ?? "") === (b["date"] ?? "") &&
-      (a["date_from"] ?? "") === (b["date_from"] ?? "") &&
-      (a["date_to"] ?? "") === (b["date_to"] ?? "")
-    );
-  }
-
-  function shouldPreserveSessionWindowDays(
-    nextParams: Record<string, string>,
-    currentParams: Record<string, string>,
-  ): boolean {
-    const windowDays = currentParams[SESSION_ANALYTICS_WINDOW_PARAM];
-    if (!isValidWindowDaysParam(windowDays)) return false;
-    return (
-      !hasFixedSessionDateParams(nextParams) ||
-      !hasFixedSessionDateParams(currentParams) ||
-      fixedSessionDateParamsEqual(nextParams, currentParams)
-    );
-  }
-
-  function sessionRouteParamsForFilters(
-    filterParams: Record<string, string>,
-    currentParams: Record<string, string>,
-  ): Record<string, string> {
-    const next = { ...filterParams };
-    const windowDays = currentParams[SESSION_ANALYTICS_WINDOW_PARAM];
-    if (shouldPreserveSessionWindowDays(next, currentParams)) {
-      next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays!;
-    }
-    return next;
-  }
-
-  function currentSessionRouteParams(
-    currentParams: Record<string, string>,
-  ): Record<string, string> {
-    const next: Record<string, string> = {};
-    for (const key of SESSION_FILTER_KEYS) {
-      const value = currentParams[key];
-      if (value !== undefined) {
-        next[key] = value;
-      }
-    }
-    return next;
-  }
-
-  function sessionRouteParamsForDetailExit(
-    filterParams: Record<string, string>,
-    currentParams: Record<string, string>,
-  ): Record<string, string> {
-    const currentRouteParams = currentSessionRouteParams(currentParams);
-    if (hasFilterParams(currentRouteParams)) return currentRouteParams;
-    return sessionRouteParamsForFilters(filterParams, currentParams);
-  }
-
   let lastDetailFilterParamsSignature: string | null = $state(null);
 
   // React to route changes: reload sessions and apply URL params.
@@ -422,18 +344,6 @@
       }
     });
   });
-
-  // Compare only filter keys so sticky params (e.g. desktop)
-  // don't cause spurious replaceParams calls.
-  function filterParamsEqual(
-    a: Record<string, string>,
-    b: Record<string, string>,
-  ): boolean {
-    for (const k of SESSION_FILTER_KEYS) {
-      if ((a[k] ?? "") !== (b[k] ?? "")) return false;
-    }
-    return true;
-  }
 
   // URL write-back: keep query string in sync with filter state
   // when on /sessions with no session selected, so users can

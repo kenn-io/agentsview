@@ -1,20 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 import source from "./App.svelte?raw";
+import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
 
 describe("App session URL date state", () => {
   it("treats rolling window and termination as sessions route params", () => {
-    const filterKeysIndex = source.indexOf("const SESSION_FILTER_KEYS");
-    const hasFilterParamsIndex = source.indexOf(
-      "function hasFilterParams",
-      filterKeysIndex,
-    );
-    const filterKeysBlock = source.slice(
-      filterKeysIndex,
-      hasFilterParamsIndex,
-    );
-
-    expect(filterKeysBlock).toContain('"window_days"');
-    expect(filterKeysBlock).toContain('"termination"');
+    expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
+    expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);
   });
 
   it("preserves rolling window dates when writing sessions URLs", () => {
@@ -28,42 +19,6 @@ describe("App session URL date state", () => {
     );
     expect(source).not.toContain(
       "const newParams = filtersToParams(sessions.filters);",
-    );
-  });
-
-  it("preserves rolling intent when materialized date bounds still match", () => {
-    const helperStart = source.indexOf(
-      "function shouldPreserveSessionWindowDays",
-    );
-    const helperEnd = source.indexOf(
-      "\n\n  function sessionRouteParamsForFilters",
-      helperStart,
-    );
-    const helperBlock = source.slice(helperStart, helperEnd);
-
-    expect(source).toContain("function fixedSessionDateParamsEqual");
-    expect(helperBlock).toContain(
-      "fixedSessionDateParamsEqual(nextParams, currentParams)",
-    );
-    expect(source).toContain(
-      "next[SESSION_ANALYTICS_WINDOW_PARAM] = windowDays!;",
-    );
-  });
-
-  it("preserves direct rolling links during first materialized date writeback", () => {
-    const helperStart = source.indexOf(
-      "function shouldPreserveSessionWindowDays",
-    );
-    const helperEnd = source.indexOf(
-      "\n\n  function sessionRouteParamsForFilters",
-      helperStart,
-    );
-    const helperBlock = source.slice(helperStart, helperEnd);
-
-    expect(helperStart).toBeGreaterThan(-1);
-    expect(helperBlock).toContain("!hasFixedSessionDateParams(currentParams)");
-    expect(helperBlock).toContain(
-      "fixedSessionDateParamsEqual(nextParams, currentParams)",
     );
   });
 
@@ -100,31 +55,12 @@ describe("App session URL date state", () => {
       navigateFromSessionIndex + 80,
     );
 
-    expect(source).toContain("function sessionRouteParamsForDetailExit");
-    expect(source).toContain("function currentSessionRouteParams");
+    expect(source).toContain("sessionRouteParamsForDetailExit");
     expect(inactiveSessionBranch).toContain(
       ": sessionRouteParamsForDetailExit(",
     );
     expect(inactiveSessionBranch).toContain(
       "router.navigateFromSession(nextParams)",
-    );
-  });
-
-  it("prefers direct detail URL params over saved filters on exit", () => {
-    const helperStart = source.indexOf(
-      "function sessionRouteParamsForDetailExit",
-    );
-    const helperEnd = source.indexOf(
-      "\n\n  let lastDetailFilterParamsSignature",
-      helperStart,
-    );
-    const helperBlock = source.slice(helperStart, helperEnd);
-
-    expect(helperBlock).toContain(
-      "const currentRouteParams = currentSessionRouteParams(currentParams);",
-    );
-    expect(helperBlock).toContain(
-      "if (hasFilterParams(currentRouteParams)) return currentRouteParams;",
     );
   });
 
