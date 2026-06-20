@@ -110,6 +110,8 @@
       return JSON.stringify({
         mode: state.mode,
         windowDays: state.windowDays ?? null,
+        from: state.from,
+        to: state.to,
       });
     }
     if (state) {
@@ -118,6 +120,8 @@
         date: params["date"] ?? "",
         dateFrom: params["date_from"] ?? "",
         dateTo: params["date_to"] ?? "",
+        from: state.from,
+        to: state.to,
       });
     }
     if (hasSessionDateParams(params)) {
@@ -142,14 +146,17 @@
   ): boolean {
     const before = JSON.stringify(filtersToParams(sessions.filters));
     clearSessionDateFilters();
-    if (state.mode !== "rolling") {
-      const range = panelStateToRange(state, Date.now());
-      if (range) {
-        const params = rangeToSessionParams(range);
-        sessions.filters.date = params["date"] ?? "";
-        sessions.filters.dateFrom = params["date_from"] ?? "";
-        sessions.filters.dateTo = params["date_to"] ?? "";
-      }
+    const range = panelStateToRange(
+      state.mode === "rolling"
+        ? { ...state, mode: "fixed", windowDays: undefined }
+        : state,
+      Date.now(),
+    );
+    if (range) {
+      const params = rangeToSessionParams(range);
+      sessions.filters.date = params["date"] ?? "";
+      sessions.filters.dateFrom = params["date_from"] ?? "";
+      sessions.filters.dateTo = params["date_to"] ?? "";
     }
     const after = JSON.stringify(filtersToParams(sessions.filters));
     return before !== after;
@@ -330,15 +337,15 @@
         earliest: earliestSession,
       });
       const hasDateParams = hasSessionDateParams(params);
-      const windowDays = fixedState || hasDateParams
-        ? null
-        : parseSessionAnalyticsWindowDays(
-            params[SESSION_ANALYTICS_WINDOW_PARAM],
-          );
-      let state: PanelDateState | null = fixedState;
+      const windowDays = parseSessionAnalyticsWindowDays(
+        params[SESSION_ANALYTICS_WINDOW_PARAM],
+      );
+      let state: PanelDateState | null = null;
 
-      if (!state && windowDays !== null) {
+      if (windowDays !== null) {
         state = rollingPanelDate(windowDays);
+      } else {
+        state = fixedState;
       }
 
       const firstRun = !analyticsDateUrlInitRan;

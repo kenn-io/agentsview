@@ -305,7 +305,10 @@
   }
 
   function handleAutomatedScopeChange(value: string) {
-    analytics.setAutomatedScope(value as AutomatedScope);
+    const scope = value as AutomatedScope;
+    analytics.automatedScope = scope;
+    analytics.includeAutomated = scope !== "human";
+    fetchInsightSignals();
   }
 
   function handlePromptChange(e: Event) {

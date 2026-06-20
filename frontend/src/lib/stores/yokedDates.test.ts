@@ -202,7 +202,7 @@ describe("yoked date adapters", () => {
     expect(
       sessionParamsToPanelDate(
         { date_to: "2026-06-07" },
-        { earliest: "2026-05-01" },
+        { earliest: "2026-05-01T14:30:00Z" },
       ),
     ).toEqual({
       from: "2026-05-01",

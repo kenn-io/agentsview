@@ -40,6 +40,12 @@ function isDateString(value: unknown): value is string {
   return typeof value === "string" && DATE_RE.test(value);
 }
 
+function dateOnly(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const candidate = value.slice(0, 10);
+  return DATE_RE.test(candidate) ? candidate : undefined;
+}
+
 function validWindowDays(value: unknown): number | undefined {
   if (
     typeof value !== "number" ||
@@ -198,8 +204,14 @@ export function sessionParamsToPanelDate(
     });
   }
   if (params["date_from"] || params["date_to"]) {
-    const from = params["date_from"] ?? bounds.earliest ?? params["date_to"]!;
-    const to = params["date_to"] ?? bounds.latest ?? today();
+    const from =
+      dateOnly(params["date_from"]) ??
+      dateOnly(bounds.earliest) ??
+      dateOnly(params["date_to"])!;
+    const to =
+      dateOnly(params["date_to"]) ??
+      dateOnly(bounds.latest) ??
+      today();
     return panelDateState(from, to, {
       mode: "fixed",
     });

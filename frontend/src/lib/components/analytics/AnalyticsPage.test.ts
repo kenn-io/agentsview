@@ -118,6 +118,9 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(helperStart).toBeGreaterThan(-1);
     expect(helperBlock).toContain("state.mode");
     expect(helperBlock).toContain("state.windowDays");
+    expect(helperBlock).toContain("from: state.from");
+    expect(helperBlock).toContain("to: state.to");
+    expect(source).toContain("syncSessionFiltersForDateState(state)");
     expect(source).toContain(
       "let lastAnalyticsDateUrlSignature: string | null = $state(null);",
     );

@@ -183,6 +183,8 @@
   }
 
   async function resetTerms() {
+    materializeRollingWindow();
+    writeUrl();
     await trends.resetTerms();
     writeUrl();
   }

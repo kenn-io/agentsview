@@ -81,4 +81,18 @@ describe("InsightsPage date yoke controls", () => {
     expect(fetchBlock).toContain("analytics.fetchSignalsForInsights()");
     expect(fetchBlock).toContain("updateYokeFromInsights(state)");
   });
+
+  it("routes automated scope changes through the insight refresh wrapper", () => {
+    const handlerIndex = source.indexOf(
+      "function handleAutomatedScopeChange",
+    );
+    const nextHandlerIndex = source.indexOf(
+      "\n\n  function handlePromptChange",
+      handlerIndex,
+    );
+    const handlerBlock = source.slice(handlerIndex, nextHandlerIndex);
+
+    expect(handlerBlock).toContain("fetchInsightSignals()");
+    expect(handlerBlock).not.toContain("analytics.setAutomatedScope");
+  });
 });
