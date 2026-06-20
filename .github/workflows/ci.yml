@@ -139,8 +139,22 @@ jobs:
           New-Item -ItemType Directory -Force desktop/src-tauri/binaries | Out-Null
           New-Item -ItemType File -Force "desktop/src-tauri/binaries/agentsview-$hostTriple.exe" | Out-Null
 
+      - name: Fetch Windows desktop Rust dependencies
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            cargo fetch --locked --manifest-path desktop/src-tauri/Cargo.toml
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+            if ($attempt -eq 3) {
+              exit $LASTEXITCODE
+            }
+            Start-Sleep -Seconds (10 * $attempt)
+          }
+
       - name: Run Windows desktop update tests
-        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib install_downloaded_update
+        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib install_downloaded_update
 
   coverage:
     runs-on: ubuntu-latest
