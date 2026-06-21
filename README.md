@@ -4,7 +4,7 @@ Browse, search, and track costs across all your AI coding agents. One binary, no
 accounts, everything local.
 
 <p align="center">
-  <img src="https://agentsview.io/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
+  <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
 </p>
 
 ## Install
@@ -246,13 +246,13 @@ agentsview stats --include-git-outcomes
 
 ## Session Browser
 
-| Dashboard                                                     | Session viewer                                                          |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| ![Dashboard](https://agentsview.io/screenshots/dashboard.png) | ![Session viewer](https://agentsview.io/screenshots/message-viewer.png) |
+| Dashboard                                                                      | Session viewer                                                                           |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| ![Dashboard](https://agentsview.io/assets/generated/screenshots/dashboard.png) | ![Session viewer](https://agentsview.io/assets/generated/screenshots/message-viewer.png) |
 
-| Search                                                          | Activity heatmap                                          |
-| --------------------------------------------------------------- | --------------------------------------------------------- |
-| ![Search](https://agentsview.io/screenshots/search-results.png) | ![Heatmap](https://agentsview.io/screenshots/heatmap.png) |
+| Search                                                                           | Activity heatmap                                                           |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| ![Search](https://agentsview.io/assets/generated/screenshots/search-results.png) | ![Heatmap](https://agentsview.io/assets/generated/screenshots/heatmap.png) |
 
 - **Full-text search** across all message content (FTS5)
 - **Token usage and cost dashboard** -- per-session and per-model cost

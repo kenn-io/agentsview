@@ -19,7 +19,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -344,6 +344,33 @@ clean:
 	printf '%s\n' \
 		'keep embed dir for generated frontend assets' \
 		> internal/web/dist/.keep
+
+docs-install:
+	cd docs && uv sync --frozen --no-dev
+
+docs-build:
+	cd docs && uv run --frozen bash ./vercel-build.sh
+
+docs-serve:
+	cd docs && bash assets/hydrate-assets.sh && uv run bash ./zensical-docs.sh serve
+
+docs-check:
+	bash scripts/check-docs.sh
+
+docs-screenshots:
+	bash docs/screenshots/run.sh
+
+docs-assets-branch:
+	bash docs/assets/update-static-assets-branch.sh
+
+docs-generated-assets-branch:
+	bash docs/screenshots/update-generated-assets-branch.sh
+
+docs-deploy-staging:
+	vercel deploy docs
+
+docs-deploy:
+	vercel deploy docs --prod
 
 # Build release binary for current platform (CGO required for sqlite3)
 release: frontend

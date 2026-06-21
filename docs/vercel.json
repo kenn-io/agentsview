@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "uv sync --frozen --no-dev",
+  "buildCommand": "uv run --frozen bash ./vercel-build.sh",
+  "outputDirectory": "site",
+  "trailingSlash": true,
+  "redirects": [
+    {
+      "source": "/install.sh",
+      "destination": "https://raw.githubusercontent.com/kenn-io/agentsview/main/scripts/install.sh",
+      "permanent": false
+    },
+    {
+      "source": "/install.ps1",
+      "destination": "https://raw.githubusercontent.com/kenn-io/agentsview/main/scripts/install.ps1",
+      "permanent": false
+    }
+  ]
+}

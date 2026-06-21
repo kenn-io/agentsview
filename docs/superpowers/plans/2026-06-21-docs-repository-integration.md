@@ -32,7 +32,8 @@ ______________________________________________________________________
 - Create: `scripts/docs_assets_test.go` Unit tests for asset hydration and
   publisher safety.
 - Replace/create: `docs/` Public Zensical source, docs-local toolchain,
-  maintainer guide, wrappers, screenshot tooling, and preserved appendix pages.
+  maintainer guide, wrappers, screenshot tooling, and preserved internal
+  reference pages.
 - Create local refs: `docs-assets`, `docs-generated-assets` Single-commit asset
   branches seeded from `~/code/agentsview-docs` media files.
 
@@ -99,9 +100,9 @@ ______________________________________________________________________
 
 - Preserve:
 
-  - `docs/appendix/desktop-release-setup.md`
-  - `docs/appendix/huma-api-routes.md`
-  - `docs/appendix/visual-studio-copilot-traces.md`
+  - `docs/internal/desktop-release-setup.md`
+  - `docs/internal/huma-api-routes.md`
+  - `docs/internal/visual-studio-copilot-traces.md`
 
 - Drop:
 
@@ -136,17 +137,17 @@ ______________________________________________________________________
   extra_javascript = ["javascripts/lightbox.js"]
   ```
 
-- [ ] **Step 4: Add appendix pages**
+- [ ] **Step 4: Add internal reference pages**
 
-  Move durable current repo technical notes into `docs/appendix/` and add an
-  `Appendix` nav group in `docs/zensical.toml` with:
+  Move durable current repo technical notes into `docs/internal/`, which is
+  excluded from `zensical-docs.sh`:
 
   - `Desktop Release Setup`
   - `Huma API Routes`
   - `Visual Studio Copilot Trace Format`
 
-  Do not publish stale planning documents whose product behavior is already
-  covered by the current public docs.
+  Do not keep stale planning documents whose product behavior is already covered
+  by the current public docs.
 
 - [ ] **Step 5: Rewrite media references**
 

@@ -1,0 +1,8 @@
+{
+  "name": "agentsview-screenshots",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "1.55.1"
+  }
+}

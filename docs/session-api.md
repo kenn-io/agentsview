@@ -1,0 +1,682 @@
+______________________________________________________________________
+
+## title: Session API description: Programmatic access to session data via the agentsview session CLI and REST endpoints
+
+The `agentsview session` command group is a stable, programmatic surface for
+reading and writing session data. It is designed for shell scripts, automation
+agents, and CI jobs that need structured output rather than the web UI.
+
+When an AgentsView server is running, the CLI proxies all supported operations
+to it over HTTP. When no server is running, it opens the local SQLite archive
+directly and calls the same service functions the HTTP handler would have called
+— so results match regardless of transport.
+
+## Quick examples
+
+```bash
+# Search parsed message/tool content without scanning raw JSONL files.
+agentsview session search "database timeout" --json --limit 10
+
+# Recover recent context for one project, then fetch the first page
+# of messages from a selected session.
+agentsview session list --project myapp --limit 5 --json
+agentsview session messages <session-id> --from 0 --limit 20 --json
+
+# Query an already-running daemon explicitly.
+agentsview session list --server http://127.0.0.1:8080 --json
+
+# Read from configured PostgreSQL instead of local SQLite.
+agentsview session search "regression" --pg --json
+```
+
+## Stability
+
+- **Additive-only.** New fields may appear at any time. Existing fields are
+  never renamed or removed.
+- **Types are stable.** A field that is a string stays a string.
+- **Unknown fields are safe to ignore.** Well-behaved consumers tolerate
+  forward-compatible additions.
+
+HTTP and CLI share DTOs for bounded responses (same JSON object). The CLI
+`watch` command emits NDJSON whose lines mirror the underlying SSE events.
+
+## Transport
+
+Detection uses the existing per-port state file
+`$AGENTSVIEW_DATA_DIR/server.<port>.json`.
+
+- If `--server <url>` is set, supported commands proxy to that daemon over HTTP.
+  `--server` and `--pg` are mutually exclusive. The local config `auth_token` is
+  not sent to explicit URLs; set `AGENTSVIEW_SERVER_TOKEN` or pass
+  `--server-token-file <path>` when that remote daemon requires auth.
+- If no explicit server is set and a local daemon is running, read and write
+  commands proxy to it over HTTP.
+- If a [`pg serve`](/pg-sync/#agentsview-pg-serve) daemon is running
+  (read-only), read commands proxy to it but `session sync` refuses with a clear
+  error.
+- If both a writable local daemon and a `pg serve` daemon advertise the same
+  data directory, the writable one wins so sync/write operations don't silently
+  land on a read-only target.
+- If no daemon is running, the CLI opens the local archive directly.
+- `session export` always runs locally regardless of daemon state, and rejects
+  `--server`, `--pg`, and `--format` because it streams raw source bytes.
+
+When a discovered local daemon requires auth (`require_auth: true`), the CLI
+attaches `Authorization: Bearer <token>` using the `auth_token` from the shared
+config. Explicit `--server` URLs are different: they only receive a bearer token
+supplied with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`, so a
+local daemon token is not leaked to arbitrary remote URLs. Prefer
+`--server-token-file` for long-running commands and shared hosts so the token
+does not appear in process arguments.
+
+`--pg` opens the configured PostgreSQL read store directly. It is useful for
+automation running away from the UI server, but it is read-only: `session sync`
+and `session export` reject it. If `AGENTSVIEW_PG_URL` or `[pg].url` is
+configured, read commands use PostgreSQL by default; pass local SQLite commands
+from an environment without that setting when you need the local archive
+specifically.
+
+## Common flags
+
+| Flag                         | Description                                        |
+| ---------------------------- | -------------------------------------------------- |
+| `--format human\|json`       | Output format. Default `human`.                    |
+| `--json`                     | Alias for `--format json`.                         |
+| `--server <url>`             | Explicit daemon URL for HTTP-backed operations.    |
+| `--server-token-file <path>` | Bearer token file for an explicit `--server` URL.  |
+| `--pg`                       | Read from configured PostgreSQL instead of SQLite. |
+
+## Commands
+
+### `agentsview session get`
+
+Return session metadata plus computed signal fields. Shape matches
+`GET /api/v1/sessions/{id}`.
+
+```bash
+agentsview session get <id> [--format json]
+```
+
+```json
+{
+  "id": "abc-123",
+  "project": "myapp",
+  "machine": "local",
+  "agent": "claude",
+  "first_message": "...",
+  "display_name": "...",
+  "started_at": "2026-04-18T12:00:00Z",
+  "ended_at": "2026-04-18T13:00:00Z",
+  "message_count": 42,
+  "user_message_count": 7,
+  "health_score": 85,
+  "health_grade": "A",
+  "outcome": "completed",
+  "health_score_basis": ["..."],
+  "health_penalties": {"tool_retries": 5},
+  "secret_leak_count": 0
+}
+```
+
+`health_score_basis` and `health_penalties` are populated when `health_score` is
+non-null. Both HTTP and CLI surfaces return them.
+
+`secret_leak_count` (added in 0.30.0) counts definite-tier findings from
+[secret scanning](#secret-scanning) and is stamped inline during sync.
+Candidate-tier findings only show up after an explicit
+[`agentsview secrets scan --backfill`](/commands/#agentsview-secrets) and do not
+contribute to this count.
+
+______________________________________________________________________
+
+### `agentsview session list`
+
+Filtered session list. Response shape matches `GET /api/v1/sessions`.
+
+```bash
+agentsview session list [flags]
+```
+
+```json
+{
+  "sessions": [ ... ],
+  "next_cursor": "...",
+  "total": 42
+}
+```
+
+One-shot and automated sessions are excluded by default. Use the `--include-*`
+flags to opt back in.
+
+| Flag                  | HTTP param          | Notes                                                                              |
+| --------------------- | ------------------- | ---------------------------------------------------------------------------------- |
+| `--project`           | `project`           | string                                                                             |
+| `--exclude-project`   | `exclude_project`   | string                                                                             |
+| `--machine`           | `machine`           | string                                                                             |
+| `--agent`             | `agent`             | string                                                                             |
+| `--date`              | `date`              | `YYYY-MM-DD`                                                                       |
+| `--date-from`         | `date_from`         | `YYYY-MM-DD`                                                                       |
+| `--date-to`           | `date_to`           | `YYYY-MM-DD`                                                                       |
+| `--active-since`      | `active_since`      | RFC3339 timestamp                                                                  |
+| `--min-messages`      | `min_messages`      | int                                                                                |
+| `--max-messages`      | `max_messages`      | int                                                                                |
+| `--min-user-messages` | `min_user_messages` | int                                                                                |
+| `--include-one-shot`  | `include_one_shot`  | bool                                                                               |
+| `--include-automated` | `include_automated` | bool                                                                               |
+| `--include-children`  | `include_children`  | bool                                                                               |
+| `--outcome`           | `outcome`           | comma-separated                                                                    |
+| `--health-grade`      | `health_grade`      | comma-separated                                                                    |
+| `--min-tool-failures` | `min_tool_failures` | int; `0` is a meaningful filter                                                    |
+| `--has-secret`        | `has_secret`        | bool — only sessions with at least one definite [secret finding](#secret-scanning) |
+| `--sort`              | `order_by`          | comma-separated keys; optional `:asc` / `:desc` suffix per key                     |
+| `--reverse`, `-r`     | `descending`        | flips the default direction for unsuffixed sort keys                               |
+| `--cursor`            | `cursor`            | opaque string from prior response                                                  |
+| `--limit`             | `limit`             | int; default 200, max 500                                                          |
+
+Sort keys are `recent`, `started`, `messages`, `user-messages`, `output-tokens`,
+`peak-context`, `failures`, `retries`, `edit-churn`, `compactions`,
+`context-pressure`, `health`, `secrets`, and `id`. `recent` defaults descending;
+the other keys default ascending unless `--reverse`, `descending=true`, or an
+explicit suffix overrides them.
+
+Examples:
+
+```bash
+agentsview session list --sort messages:desc,started:asc
+agentsview session list --sort health --reverse
+```
+
+______________________________________________________________________
+
+### `agentsview session messages`
+
+Return a window of messages. Response shape matches
+`GET /api/v1/sessions/{id}/messages`.
+
+```bash
+agentsview session messages <id> [--from N] [--limit N] [--direction asc|desc]
+```
+
+`--from` is pointer-valued at the service layer: omitting it means "start at the
+beginning" for ascending and "start at the newest page" for descending; an
+explicit `--from 0` means "start at ordinal 0" in both directions. `--direction`
+is validated to `asc` or `desc`.
+
+```json
+{
+  "messages": [
+    {
+      "ordinal": 0,
+      "role": "user",
+      "content": "...",
+      "thinking_text": "",
+      "timestamp": "2026-04-18T12:00:00Z",
+      "is_system": false,
+      "source_type": "user",
+      "source_subtype": "",
+      "has_thinking": false,
+      "has_tool_use": false
+    }
+  ],
+  "count": 1
+}
+```
+
+`thinking_text` holds the concatenated text of any `thinking` blocks the agent
+emitted, separated from the flattened `content` which still contains inline
+`[Thinking]...[/Thinking]` markers for UI rendering.
+
+Promoted `source_subtype` values on `is_system: true` messages: `continuation`,
+`resume`, `interrupted`, `task_notification`, `stop_hook`, `compact_boundary`.
+
+______________________________________________________________________
+
+### `agentsview session tool-calls`
+
+Chronological flattened list of tool invocations.
+
+```bash
+agentsview session tool-calls <id>
+```
+
+```json
+{
+  "tool_calls": [
+    {
+      "ordinal": 3,
+      "timestamp": "2026-04-18T12:05:00Z",
+      "tool_use_id": "toolu_01abc...",
+      "tool_name": "Bash",
+      "category": "Bash",
+      "input_json": "{\"command\":\"ls\"}",
+      "skill_name": "",
+      "subagent_session_id": "",
+      "result_length": 128
+    }
+  ],
+  "count": 1
+}
+```
+
+`input_json` is a string — usually a serialized JSON object but may be a plain
+string (e.g. `"echo hello world"` from Codex).
+
+______________________________________________________________________
+
+### `agentsview session export`
+
+Stream the raw session source file to stdout. This is a **local-only**
+filesystem helper: the source file path is resolved from the local SQLite
+archive, never from any daemon. Both `--server` and `--format` are rejected with
+an error — the command also rejects `--pg`. It streams raw bytes, so
+structured-output and remote-store flags don't apply.
+
+```bash
+agentsview session export <id>
+```
+
+Exit states:
+
+| State                                  | Behavior                                         |
+| -------------------------------------- | ------------------------------------------------ |
+| Session in local archive, file on disk | Streams bytes verbatim                           |
+| Session in local archive, file missing | Exit 1: error prefixed `source file not found`   |
+| Session in local archive, path empty   | Exit 1: `source file not found for session <id>` |
+| Session not in local archive           | Exit 1: `session not in local archive: <id>`     |
+
+For a DB-derived export (HTML or markdown) use the HTTP endpoints
+`/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`.
+
+Markdown export accepts an optional `depth` query parameter:
+
+- omitted: root session only
+- `depth=1`: include direct child/subagent sessions
+- `depth=all`: recurse through the child-session tree
+
+Any other `depth` value is rejected.
+
+______________________________________________________________________
+
+### `agentsview session sync`
+
+Parse and insert a single session. Blocks until indexing and signal computation
+complete. JSON output is the `SessionDetail` of the synced session; human output
+is one line: `synced: <id>`.
+
+```bash
+agentsview session sync <path-or-id>
+```
+
+Argument resolution: if the argument is an existing filesystem path, it is
+treated as a raw JSONL file to parse. Otherwise it is treated as a session ID
+for re-parse.
+
+With `--server <url>`, path-shaped arguments such as
+`/var/log/agent/session.jsonl` or `./session.jsonl` are sent to the remote
+daemon as paths and resolved on that daemon host. Bare values without path
+separators are treated as session IDs.
+
+When a single JSONL maps to more than one session (for example a Claude
+transcript with forked/resumed branches), `session sync <path>` refuses with an
+error that lists every candidate id. The contract is "one session in, one
+`SessionDetail` back", so the CLI never picks arbitrarily.
+
+At that point the file has already been parsed and every candidate session
+written to the local archive — the ambiguity check runs after the sync engine
+finishes. Re-run `session sync <id>` with the specific session you want; the
+`<id>` form resolves the file path from the archive, so it only works for
+sessions already present there.
+
+- If a local daemon is running, syncs proxy to `POST /api/v1/sessions/sync` to
+  avoid racing signal computation.
+- If a [`pg serve`](/pg-sync/#agentsview-pg-serve) daemon is running
+  (read-only), sync refuses with a clear error.
+- If no daemon is running, the CLI runs the sync in-process.
+
+______________________________________________________________________
+
+### `agentsview session watch`
+
+Stream NDJSON events as the session updates. Each line is a small object that
+wraps an SSE event.
+
+```bash
+agentsview session watch <id>
+```
+
+```
+{"event":"session_updated","data":"abc-123"}
+{"event":"heartbeat","data":"2026-04-18T12:05:00Z"}
+```
+
+Recognized `event` values today: `session_updated`, `heartbeat`. New events may
+be added; consumers should ignore unknown events. The command runs until
+interrupted (Ctrl+C) or the context is cancelled.
+
+Watch validates the session id before opening the stream. An unknown id fails
+fast with a `watch: session not found: <id>` error and non-zero exit instead of
+producing an indefinite heartbeat stream — typos in automation scripts surface
+immediately. When proxied to a daemon, the same condition surfaces as HTTP 404
+at the transport layer before being translated to the CLI error.
+
+______________________________________________________________________
+
+### `agentsview session search`
+
+Substring, RE2 regex, or FTS5 search across message bodies, tool inputs, and
+tool result content. Response shape matches `GET /api/v1/search/content`.
+
+```bash
+agentsview session search <pattern> [flags]
+```
+
+```json
+{
+  "matches": [
+    {
+      "session_id": "abc-123",
+      "project": "myapp",
+      "ordinal": 17,
+      "location": "tool_result",
+      "tool_name": "Bash",
+      "snippet": "...connecting to db with token ***REDACTED***..."
+    }
+  ]
+}
+```
+
+One-shot, automated, and subagent sessions are excluded by default; opt back in
+with `--include-one-shot`, `--include-automated`, or `--include-children`.
+
+| Flag                  | HTTP param          | Notes                                                            |
+| --------------------- | ------------------- | ---------------------------------------------------------------- |
+| `--regex`             | `mode=regex`        | Treat pattern as an RE2 regex                                    |
+| `--fts`               | `mode=fts`          | Tokenized FTS5 search; messages-only                             |
+| `--in`                | `in`                | Comma-separated: `messages,tool_input,tool_result` (default all) |
+| `--exclude-system`    | `exclude_system`    | Drop system messages from the scan                               |
+| `--reveal`            | `reveal`            | Show full secret values (localhost-only; warning to stderr)      |
+| `--project`           | `project`           | string                                                           |
+| `--exclude-project`   | `exclude_project`   | string                                                           |
+| `--machine`           | `machine`           | string                                                           |
+| `--agent`             | `agent`             | string                                                           |
+| `--date`              | `date`              | `YYYY-MM-DD`                                                     |
+| `--date-from`         | `date_from`         | `YYYY-MM-DD`                                                     |
+| `--date-to`           | `date_to`           | `YYYY-MM-DD`                                                     |
+| `--active-since`      | `active_since`      | RFC3339 timestamp                                                |
+| `--include-children`  | `include_children`  | bool                                                             |
+| `--include-automated` | `include_automated` | bool                                                             |
+| `--include-one-shot`  | `include_one_shot`  | bool                                                             |
+| `--limit`             | `limit`             | int; default 50, max 500                                         |
+| `--cursor`            | `cursor`            | int — pagination cursor from a previous response                 |
+
+`--regex` and `--fts` are mutually exclusive. `--fts` is the fastest mode on
+large archives but only searches message bodies; substring (the default) and
+regex modes also walk `tool_calls.input_json`, `tool_calls.result_content`, and
+the `tool_result_events` rows.
+
+Snippets carry ~60 characters of context on each side of the match, snapped to
+rune boundaries. Any substring that matches the
+[secret scanner](#secret-scanning) rule set is masked unless `--reveal` is
+passed. The same masking applies to the HTTP endpoint when called from a remote
+origin — `reveal=true` is only honored on a localhost-bound daemon.
+
+______________________________________________________________________
+
+### `agentsview session usage`
+
+Per-session token usage and cost estimate. Output shape is stable for the fields
+shown below; new fields may be added.
+
+```bash
+agentsview session usage <id> [--format json]
+```
+
+```json
+{
+  "session_id": "abc-123",
+  "agent": "claude",
+  "project": "myapp",
+  "total_output_tokens": 15230,
+  "peak_context_tokens": 84000,
+  "has_token_data": true,
+  "cost_usd": 2.41,
+  "has_cost": true,
+  "models": ["claude-opus-4-7"],
+  "unpriced_models": [],
+  "server_running": false
+}
+```
+
+| Field                 | Notes                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------- |
+| `total_output_tokens` | Sum of generated output tokens across the session                                       |
+| `peak_context_tokens` | Highest context-token count observed during the session                                 |
+| `has_token_data`      | `false` when the session has no per-message token usage                                 |
+| `cost_usd`            | Model-pricing estimate in USD; `0` when `has_cost` is `false`                           |
+| `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
+| `models`              | Models that contributed to the cost estimate, sorted by model name                      |
+| `unpriced_models`     | Omitted from JSON when empty; lists models seen but missing from pricing                |
+| `server_running`      | `true` when the report came from an already-running daemon                              |
+
+Human output is a five-line summary:
+
+```
+Session:       abc-123
+Agent:         claude
+Output:        15230
+Peak ctx:      84000
+Cost:          ~$2.41 (claude-opus-4-7)
+```
+
+The leading `~` on the cost line marks the figure as a model-pricing estimate.
+When some contributing models are unpriced, the cost line reads
+`n/a (unpriced: model-x)`; when the session has no token data at all, it reads
+`n/a`.
+
+**HTTP endpoint** — as of 0.32.0, the same data is available over REST:
+
+```http
+GET /api/v1/sessions/{id}/usage
+```
+
+The response uses the same JSON fields shown above and is available from both
+local SQLite-backed `agentsview serve` and read-only
+[`agentsview pg serve`](/pg-sync/#agentsview-pg-serve). HTTP responses set
+`server_running: true`. Existing sessions return `200 OK` even when token or
+cost data is absent; inspect `has_token_data`, `has_cost`, and `unpriced_models`
+to decide how to present that state. Missing sessions return `404` with:
+
+```json
+{
+  "error": {
+    "code": "session_not_found",
+    "message": "session not found"
+  }
+}
+```
+
+Unexpected usage-query failures return `500` with
+`error.code = "usage_query_failed"`.
+
+**Exit codes** — `usage` keeps the older `token-use` contract:
+
+| Code | Meaning                                            |
+| ---- | -------------------------------------------------- |
+| `0`  | Token data or cost present and reported            |
+| `2`  | Session not found in the local archive             |
+| `3`  | Session exists but has neither token data nor cost |
+
+The command uses the local SQLite archive plus an on-demand sync when no daemon
+is running (with a 30-second wait if a startup lock is held). With `--server`,
+it calls `GET /api/v1/sessions/{id}/usage` on the explicit daemon. With `--pg`
+or configured PostgreSQL, it reads usage from the shared PostgreSQL store.
+
+Pricing comes from the same `model_pricing` table and
+[custom pricing overrides](/token-usage/#custom-model-pricing) that back
+`agentsview usage daily`. Replaces the older
+[`agentsview token-use`](/commands/#agentsview-token-use), which remains as a
+deprecated alias.
+
+______________________________________________________________________
+
+## Activity Report
+
+The Activity report endpoint powers the top-level [Activity](/activity/) page
+and the `agentsview activity report` CLI command. It returns one resolved range
+with concurrency buckets, summary totals, breakdowns, and contributing sessions.
+
+```http
+GET /api/v1/activity/report
+```
+
+Activity includes one-shot sessions by default. Automated sessions are also
+included by default and can be filtered with the `automation` query parameter.
+
+| Query param  | Notes                                                      |
+| ------------ | ---------------------------------------------------------- |
+| `preset`     | `day`, `week`, `month`, or `custom`                        |
+| `date`       | Anchor date for day/week/month presets (`YYYY-MM-DD`)      |
+| `from`       | Custom range start, RFC3339                                |
+| `to`         | Custom range end, RFC3339                                  |
+| `timezone`   | IANA timezone name; default `UTC`                          |
+| `bucket`     | Optional bucket override: `5m`, `15m`, `1h`, `1d`, or `1w` |
+| `project`    | Filter by project                                          |
+| `agent`      | Filter by agent                                            |
+| `machine`    | Filter by machine                                          |
+| `automation` | `all`, `interactive`, or `automated`; default `all`        |
+
+Response excerpt:
+
+```json
+{
+  "timezone": "America/Chicago",
+  "range_start": "2026-06-20T05:00:00Z",
+  "range_end": "2026-06-21T05:00:00Z",
+  "bucket_unit": "1h",
+  "bucket_seconds": 3600,
+  "partial": true,
+  "as_of": "2026-06-20T18:40:00Z",
+  "peak": {"agents": 4, "at": "2026-06-20T15:00:00Z"},
+  "totals": {
+    "active_minutes": 210.5,
+    "agent_minutes": 346.2,
+    "sessions": 18,
+    "untimed_sessions": 1,
+    "distinct_projects": 5,
+    "distinct_models": 4,
+    "output_tokens": 84231,
+    "cost": 12.34,
+    "automated_sessions": 3,
+    "interactive_sessions": 15
+  },
+  "buckets": [
+    {
+      "start": "2026-06-20T15:00:00Z",
+      "end": "2026-06-20T16:00:00Z",
+      "max_agents": 4,
+      "agent_minutes": 52.0,
+      "output_tokens": 12000,
+      "cost": 1.87,
+      "automated_at_peak": 1,
+      "interactive_at_peak": 3
+    }
+  ],
+  "by_project": [{"key": "agentsview", "agent_minutes": 96.4, "cost": 4.20}],
+  "by_model": [{"key": "claude-sonnet-4-6", "agent_minutes": 80.0, "cost": 3.10}],
+  "by_agent": [{"key": "codex", "agent_minutes": 64.0, "cost": 2.85}],
+  "by_session": [
+    {
+      "session_id": "codex:abc",
+      "title": "Update docs",
+      "project": "agentsview",
+      "agent": "codex",
+      "primary_model": "gpt-5.4",
+      "models": ["gpt-5.4"],
+      "agent_minutes": 24.5,
+      "cost": 1.12,
+      "output_tokens": 9200,
+      "first_active": "2026-06-20T15:04:00Z",
+      "last_active": "2026-06-20T15:38:00Z",
+      "timing_quality": "timed",
+      "is_automated": false
+    }
+  ],
+  "intervals": [
+    {
+      "session_id": "codex:abc",
+      "start": "2026-06-20T15:04:00Z",
+      "end": "2026-06-20T15:38:00Z"
+    }
+  ]
+}
+```
+
+Breakdown rows include total, automated, and interactive minutes and costs.
+Session rows with no reliable timestamped activity use
+`"timing_quality": "untimed"` and `agent_minutes: null`; they can still
+contribute cost and output tokens when usage rows exist.
+
+______________________________________________________________________
+
+## Secret Scanning
+
+As of 0.30.0, AgentsView scans session content for credentials during sync and
+exposes findings through CLI, HTTP, and per- session metadata. Two confidence
+tiers exist:
+
+| Tier          | Rules                                                                                                                                                                                                                                                                                                                                                         | When scanned                                        |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| **Definite**  | Well-anchored vendor formats: AWS access keys, Anthropic `sk-ant-…`, OpenAI `sk-proj-`/`sk-svcacct-`/`sk-admin-`, GitHub `ghp_…` and `github_pat_…`, GitLab `glpat-…`, Slack `xoxb`/`xoxa`/`xoxp`/`xoxr`/`xoxs`, Stripe `sk_live_…` and `rk_live_…`, Google `AIza…`, npm `npm_…`, PyPI `pypi-…`, Hugging Face `hf_…`, SendGrid `SG.…`, PEM private-key blocks | Inline during sync                                  |
+| **Candidate** | FP-prone heuristics: basic-auth URLs, JWTs, high-entropy assignments                                                                                                                                                                                                                                                                                          | Only when `agentsview secrets scan` runs explicitly |
+
+Findings are written to a `secret_findings` table keyed by session ID, with the
+rule name, confidence, location (message / tool_input / tool_result /
+tool_result_event), match coordinates, and a `redacted_match` value (the raw
+secret is never stored). Each session also carries a `secret_leak_count` and a
+`secrets_rules_version` so a future ruleset bump can drive an incremental
+backfill.
+
+### HTTP API
+
+```
+GET /api/v1/secrets
+POST /api/v1/secrets/scan
+GET /api/v1/search/content    (when called with text that matches a secret rule, snippets are masked)
+```
+
+`GET /api/v1/secrets` accepts: `project`, `agent`, `date_from`, `date_to`,
+`rule`, `confidence` (`definite` / `candidate` / `all`, default `definite`),
+`reveal`, `limit`, `cursor`. `reveal=true` is only honored on a localhost-bound
+daemon — remote callers that request reveal receive HTTP 403.
+
+`POST /api/v1/secrets/scan` streams progress with Server-Sent Events and accepts
+`backfill`, `project`, `agent`, `date_from`, and `date_to`. It is only available
+from a writable local daemon.
+
+### Listing sessions with findings
+
+`agentsview session list --has-secret` (or `has_secret=true` on
+`GET /api/v1/sessions`) returns only sessions with at least one definite
+finding. The candidate tier does not contribute to `secret_leak_count` and so
+does not surface through this filter.
+
+### CLI
+
+The [`agentsview secrets`](/commands/#agentsview-secrets) command group wraps
+the scan and list operations. The fast path is:
+
+```bash
+# Re-scan the archive with the full ruleset (definite + candidate)
+agentsview secrets scan
+
+# List definite findings (redacted; localhost-only --reveal for raw values)
+agentsview secrets list
+agentsview secrets list --reveal
+```
+
+### PostgreSQL parity
+
+When [PostgreSQL sync](/pg-sync/) is enabled, the `secret_findings` table, the
+session-level `secret_leak_count`, and the `--has-secret` filter all mirror to
+the shared database. Substring and regex content search work the same way
+against `pg serve`, with the same masking and `--reveal` constraints.
