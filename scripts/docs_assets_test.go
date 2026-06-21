@@ -62,11 +62,11 @@ func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
 
 	logo, err := os.ReadFile(filepath.Join(localRepo, "docs", "assets", "static", "og-image.png"))
 	require.NoError(t, err)
-	assert.Equal(t, "new static\n", string(logo))
+	assert.Equal(t, "new static", strings.TrimRight(string(logo), "\r\n"))
 
 	screenshot, err := os.ReadFile(filepath.Join(localRepo, "docs", "assets", "generated", "screenshots", "dashboard.png"))
 	require.NoError(t, err)
-	assert.Equal(t, "generated\n", string(screenshot))
+	assert.Equal(t, "generated", strings.TrimRight(string(screenshot), "\r\n"))
 }
 
 func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
@@ -139,12 +139,50 @@ func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
 	cmd.Dir = repo
 	pythonPath, err := exec.LookPath("python3")
 	require.NoError(t, err)
-	cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(pythonPath)+":/usr/bin:/bin")
+	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH=/usr/bin:/bin")
 	output, err := cmd.CombinedOutput()
 
 	require.Error(t, err, string(output))
 	assert.Contains(t, string(output), "docs markdown")
 	assert.Contains(t, string(output), "activity.md")
+}
+
+func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := filepath.Join(tempDir, "repo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+
+	checkScript := installRepoScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
+	installRepoScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "docs", "assets", "hydrate-assets.sh"),
+		[]byte("#!/usr/bin/env bash\nset -euo pipefail\n"),
+		0o755,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "docs", "activity.md"),
+		[]byte(strings.Join([]string{
+			"---",
+			"title: Activity",
+			"description: Activity docs",
+			"---",
+			"",
+			"Valid docs page.",
+			"",
+		}, "\n")),
+		0o644,
+	))
+
+	cmd := exec.Command("bash", checkScript)
+	cmd.Dir = repo
+	pythonPath, err := exec.LookPath("python3")
+	require.NoError(t, err)
+	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH=/usr/bin:/bin")
+	output, err := cmd.CombinedOutput()
+
+	require.Error(t, err, string(output))
+	assert.Contains(t, string(output), "rg not found")
 }
 
 func installAssetScript(t *testing.T, repo, scriptRel string) string {
@@ -165,6 +203,23 @@ func installRepoScript(t *testing.T, repo, scriptRel string) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
 	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
 	return scriptPath
+}
+
+func envWithout(names ...string) []string {
+	blocked := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		blocked[name] = struct{}{}
+	}
+
+	env := os.Environ()
+	filtered := env[:0]
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, ok := blocked[name]; !ok {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func writeStaticAssets(t *testing.T, dir, content string) {

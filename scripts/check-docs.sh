@@ -49,6 +49,11 @@ if [[ -z "$python_bin" ]]; then
 fi
 "$python_bin" docs/scripts/check_markdown_sources.py
 
+if ! command -v rg >/dev/null 2>&1; then
+  printf 'rg not found; cannot validate docs media references\n' >&2
+  exit 127
+fi
+
 root_media_refs="$(
   (rg -n '(<img[^>]+src="/|!\[[^]]*\]\(/)[^)" >]+\.(png|svg|jpg|jpeg|webp|gif)' docs README.md --glob '!docs/superpowers/**' || true) \
     | grep -v '/assets/static/' \
