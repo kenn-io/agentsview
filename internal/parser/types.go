@@ -391,10 +391,8 @@ var Registry = []AgentDef{
 			".kimi/sessions",
 			".kimi-code/sessions",
 		},
-		IDPrefix:       "kimi:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverKimiSessions,
-		FindSourceFunc: FindKimiSourceFile,
+		IDPrefix:  "kimi:",
+		FileBased: true,
 	},
 	{
 		Type:        AgentClaudeAI,
