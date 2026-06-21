@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -605,7 +606,21 @@ func TestDiscoverAiderSessions(t *testing.T) {
 	assert.Empty(t, DiscoverAiderSessions(""))
 }
 
+func TestAiderShouldSkipProtectedHomeDirsOnlyOnDarwinHomeRoot(t *testing.T) {
+	home := filepath.Join(string(os.PathSeparator), "home", "user")
+
+	assert.True(t, aiderShouldSkipProtectedHomeDirs(home, home, "darwin"))
+	assert.False(t, aiderShouldSkipProtectedHomeDirs(home, home, "linux"))
+	assert.False(t, aiderShouldSkipProtectedHomeDirs(home, home, "windows"))
+	assert.False(t,
+		aiderShouldSkipProtectedHomeDirs(filepath.Join(home, "Documents"), home, "darwin"),
+		"explicit protected roots are user-scoped opt-ins")
+}
+
 func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS TCC protected-directory pruning is Darwin-only")
+	}
 	root := t.TempDir()
 	t.Setenv("HOME", root)
 	for _, name := range []string{"Desktop", "Documents", "Downloads"} {

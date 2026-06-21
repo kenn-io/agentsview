@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -710,7 +711,7 @@ func DiscoverAiderSessions(root string) []DiscoveredFile {
 	if root == "" {
 		return nil
 	}
-	skipProtectedHomeDirs := aiderRootIsHome(root)
+	skipProtectedHomeDirs := aiderShouldSkipProtectedHomeDirs(root, aiderHomeDir(), runtime.GOOS)
 	rootDepth := strings.Count(filepath.Clean(root), string(os.PathSeparator))
 
 	var files []DiscoveredFile
@@ -788,9 +789,16 @@ func DiscoverAiderSessions(root string) []DiscoveredFile {
 	return files
 }
 
-func aiderRootIsHome(root string) bool {
+func aiderHomeDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
+		return ""
+	}
+	return home
+}
+
+func aiderShouldSkipProtectedHomeDirs(root, home, goos string) bool {
+	if goos != "darwin" || root == "" || home == "" {
 		return false
 	}
 	return filepath.Clean(root) == filepath.Clean(home)
