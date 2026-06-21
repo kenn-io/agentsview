@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,44 @@ func writeOpenClawTestFile(
 	return path, root
 }
 
+func parseOpenClawSessionForTest(
+	t *testing.T,
+	path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{
+		Roots:   []string{filepath.Dir(filepath.Dir(filepath.Dir(path)))},
+		Machine: machine,
+	})
+	require.True(t, ok)
+	claw, ok := provider.(*openClawProvider)
+	require.True(t, ok)
+	return claw.parseSession(path, project, machine)
+}
+
+func discoverOpenClawSessionsForTest(t *testing.T, root string) []SourceRef {
+	t.Helper()
+	provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	return sources
+}
+
+func findOpenClawSourceForTest(t *testing.T, root, rawID string) string {
+	t.Helper()
+	provider, ok := NewProvider(AgentOpenClaw, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: rawID,
+	})
+	require.NoError(t, err)
+	if !found {
+		return ""
+	}
+	return source.DisplayPath
+}
+
 func TestParseOpenClawSession_Basic(t *testing.T) {
 	path, _ := writeOpenClawTestFile(t, "main",
 		`{"type":"session","version":3,"id":"abc-123","timestamp":"2026-02-25T10:00:00Z","cwd":"/home/user/project"}`,
@@ -39,7 +78,7 @@ func TestParseOpenClawSession_Basic(t *testing.T) {
 		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"I'm doing well, thanks!"}],"timestamp":"2026-02-25T10:00:02Z"}}`,
 	)
 
-	sess, msgs, err := ParseOpenClawSession(path, "", "test-machine")
+	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test-machine")
 	require.NoError(t, err)
 	require.NotNil(t, sess, "expected session, got nil")
 
@@ -61,7 +100,7 @@ func TestParseOpenClawSession_Thinking(t *testing.T) {
 		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Let me consider..."},{"type":"text","text":"Here is my response."}],"timestamp":"2026-02-25T10:00:02Z"}}`,
 	)
 
-	_, msgs, err := ParseOpenClawSession(path, "", "test")
+	_, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.Equal(t, 2, len(msgs), "expected 2 messages, got %d")
 	assert.True(t, msgs[1].HasThinking, "expected HasThinking=true for assistant message")
@@ -76,7 +115,7 @@ func TestParseOpenClawSession_ToolResult(t *testing.T) {
 		`{"type":"message","id":"m4","timestamp":"2026-02-25T10:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"The hosts file contains localhost."}],"timestamp":"2026-02-25T10:00:04Z"}}`,
 	)
 
-	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.Equal(t, 4, len(msgs), "expected 4 messages, got %d")
 	// Assistant with tool_use
@@ -114,7 +153,7 @@ func TestParseOpenClawSession_RealToolCallFormat(t *testing.T) {
 		`{"type":"message","id":"m4","timestamp":"2026-02-25T10:00:04Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_2","name":"read","arguments":{"path":"/etc/hosts"}}],"timestamp":"2026-02-25T10:00:04Z"}}`,
 	)
 
-	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Equal(t, 4, len(msgs),
@@ -163,7 +202,7 @@ func TestParseOpenClawSession_OrphanToolResult(t *testing.T) {
 		`{"type":"message","id":"m4","timestamp":"2026-02-25T10:00:04Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":"2026-02-25T10:00:04Z"}}`,
 	)
 
-	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	// 3 messages: user, assistant (tool_use), assistant (text).
 	// The orphan toolResult is skipped entirely.
@@ -180,7 +219,7 @@ func TestParseOpenClawSession_EmptyFile(t *testing.T) {
 		`{"type":"session","version":3,"id":"empty","timestamp":"2026-02-25T10:00:00Z","cwd":"/tmp"}`,
 	)
 
-	sess, _, err := ParseOpenClawSession(path, "", "test")
+	sess, _, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	assert.Nil(t, sess, "expected nil session for file with no messages")
 }
@@ -196,7 +235,7 @@ func TestParseOpenClawSession_AssistantUsage(t *testing.T) {
 		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"timestamp":"2026-04-30T12:00:02Z","provider":"anthropic","model":"claude-sonnet-4-6","usage":{"input":3,"output":91,"cacheRead":0,"cacheWrite":9612,"totalTokens":9706,"cost":{"input":0.000009,"output":0.001365,"cacheRead":0,"cacheWrite":0.036045,"total":0.037419}}}}`,
 	)
 
-	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.Equal(t, 2, len(msgs), "expected 2 messages, got %d")
 
@@ -239,7 +278,7 @@ func TestParseOpenClawSession_AssistantUsageWithoutCost(t *testing.T) {
 		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"hi back"}],"timestamp":"2026-04-30T12:00:02Z","provider":"anthropic","model":"claude-haiku-4-5","usage":{"input":42,"output":17,"cacheRead":0,"cacheWrite":0,"totalTokens":59}}}`,
 	)
 
-	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.Equal(t, 2, len(msgs), "expected 2 messages, got %d")
 
@@ -263,7 +302,7 @@ func TestParseOpenClawSession_PartialUsage(t *testing.T) {
 		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"reply"}],"timestamp":"2026-04-30T12:00:02Z","provider":"anthropic","model":"claude-haiku-4-5","usage":{"output":17}}}`,
 	)
 
-	_, msgs, err := ParseOpenClawSession(path, "", "test")
+	_, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.Equal(t, 2, len(msgs), "expected 2 messages, got %d")
 
@@ -286,7 +325,7 @@ func TestParseOpenClawSession_NoUsage(t *testing.T) {
 		`{"type":"message","id":"a1","timestamp":"2026-04-30T12:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"reply"}],"timestamp":"2026-04-30T12:00:02Z"}}`,
 	)
 
-	_, msgs, err := ParseOpenClawSession(path, "", "test")
+	_, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.Equal(t, 2, len(msgs), "expected 2 messages, got %d")
 
@@ -303,7 +342,7 @@ func TestParseOpenClawSession_Compaction(t *testing.T) {
 		`{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"Continuing..."}],"timestamp":"2026-02-25T10:00:03Z"}}`,
 	)
 
-	sess, msgs, err := ParseOpenClawSession(path, "", "test")
+	sess, msgs, err := parseOpenClawSessionForTest(t, path, "", "test")
 	require.NoError(t, err)
 	require.False(t, sess == nil, "expected session, got nil")
 	// Compaction should be skipped, only messages remain.
@@ -322,9 +361,9 @@ func TestParseOpenClawSession_AgentIDInSessionID(t *testing.T) {
 		`{"type":"message","id":"m1","timestamp":"2026-02-25T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Hello"}],"timestamp":"2026-02-25T10:00:01Z"}}`,
 	)
 
-	sessA, _, err := ParseOpenClawSession(pathA, "", "test")
+	sessA, _, err := parseOpenClawSessionForTest(t, pathA, "", "test")
 	require.NoError(t, err)
-	sessB, _, err := ParseOpenClawSession(pathB, "", "test")
+	sessB, _, err := parseOpenClawSessionForTest(t, pathB, "", "test")
 	require.NoError(t, err)
 
 	assert.NotEqualf(t, sessB.ID, sessA.ID,
@@ -373,9 +412,9 @@ func TestBestOpenClawEntry_CrossSuffix(t *testing.T) {
 		))
 	}
 
-	files := DiscoverOpenClawSessions(root)
+	files := discoverOpenClawSessionsForTest(t, root)
 	require.Equal(t, 1, len(files), "expected 1 (deduplicated), got %d")
-	assert.Equal(t, newer, filepath.Base(files[0].Path), "expected %q, got %q")
+	assert.Equal(t, newer, filepath.Base(files[0].DisplayPath), "expected %q, got %q")
 }
 
 func TestDiscoverOpenClawSessions(t *testing.T) {
@@ -394,10 +433,10 @@ func TestDiscoverOpenClawSessions(t *testing.T) {
 	require.NoError(t, os.MkdirAll(claudeSessions, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(claudeSessions, "sess2.jsonl"), []byte("{}"), 0644))
 
-	files := DiscoverOpenClawSessions(root)
+	files := discoverOpenClawSessionsForTest(t, root)
 	require.Equal(t, 2, len(files), "expected 2 session files, got %d")
 	for _, f := range files {
-		assert.Equal(t, AgentOpenClaw, f.Agent, "expected agent openclaw, got %s")
+		assert.Equal(t, AgentOpenClaw, f.Provider, "expected agent openclaw, got %s")
 	}
 }
 
@@ -418,12 +457,12 @@ func TestDiscoverOpenClawSessions_DeduplicatesArchived(t *testing.T) {
 		))
 	}
 
-	files := DiscoverOpenClawSessions(root)
+	files := discoverOpenClawSessionsForTest(t, root)
 	require.Equal(t, 1, len(files), "expected 1 file (deduplicated), got %d")
 	// Active file should win.
-	assert.Truef(t, strings.HasSuffix(files[0].Path, "abc.jsonl"),
+	assert.Truef(t, strings.HasSuffix(files[0].DisplayPath, "abc.jsonl"),
 		"expected active .jsonl to win, got %s",
-		filepath.Base(files[0].Path))
+		filepath.Base(files[0].DisplayPath))
 }
 
 func TestDiscoverOpenClawSessions_ArchiveOnlyPicksNewest(t *testing.T) {
@@ -442,10 +481,10 @@ func TestDiscoverOpenClawSessions_ArchiveOnlyPicksNewest(t *testing.T) {
 		))
 	}
 
-	files := DiscoverOpenClawSessions(root)
+	files := discoverOpenClawSessionsForTest(t, root)
 	require.Equal(t, 1, len(files), "expected 1 file (deduplicated), got %d")
 	want := "xyz.jsonl.deleted.2026-03-01T00-00-00.000Z"
-	assert.Equal(t, want, filepath.Base(files[0].Path), "expected newest archive")
+	assert.Equal(t, want, filepath.Base(files[0].DisplayPath), "expected newest archive")
 }
 
 func TestDiscoverOpenClawSessions_DifferentSessionsNotDeduped(t *testing.T) {
@@ -464,7 +503,7 @@ func TestDiscoverOpenClawSessions_DifferentSessionsNotDeduped(t *testing.T) {
 		))
 	}
 
-	files := DiscoverOpenClawSessions(root)
+	files := discoverOpenClawSessionsForTest(t, root)
 	require.Len(t, files, 2, "expected 2 files (different sessions)")
 }
 
@@ -476,19 +515,19 @@ func TestFindOpenClawSourceFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("{}"), 0644))
 
 	// Raw ID is now "agentId:sessionId".
-	found := FindOpenClawSourceFile(root, "main:abc-123")
+	found := findOpenClawSourceForTest(t, root, "main:abc-123")
 	assert.Equal(t, target, found, "expected %s, got %s")
 
 	// Non-existent session.
-	notFound := FindOpenClawSourceFile(root, "main:nonexistent")
+	notFound := findOpenClawSourceForTest(t, root, "main:nonexistent")
 	assert.Equal(t, "", notFound, "expected empty string, got %s")
 
 	// Non-existent agent.
-	notFound2 := FindOpenClawSourceFile(root, "other:abc-123")
+	notFound2 := findOpenClawSourceForTest(t, root, "other:abc-123")
 	assert.Equal(t, "", notFound2, "expected empty string, got %s")
 
 	// Invalid format (no colon separator).
-	notFound3 := FindOpenClawSourceFile(root, "abc-123")
+	notFound3 := findOpenClawSourceForTest(t, root, "abc-123")
 	assert.Equal(t, "", notFound3, "expected empty string for bare ID, got %s")
 }
 
@@ -504,7 +543,7 @@ func TestFindOpenClawSourceFile_ArchiveOnly(t *testing.T) {
 		[]byte("{}"), 0644,
 	))
 
-	found := FindOpenClawSourceFile(root, "main:def-456")
+	found := findOpenClawSourceForTest(t, root, "main:def-456")
 	want := filepath.Join(sessDir, archived)
 	assert.Equal(t, want, found, "expected %s, got %s")
 }
@@ -523,7 +562,7 @@ func TestFindOpenClawSourceFile_PrefersActiveOverArchive(t *testing.T) {
 		[]byte("{}"), 0644,
 	))
 
-	found := FindOpenClawSourceFile(root, "main:ghi-789")
+	found := findOpenClawSourceForTest(t, root, "main:ghi-789")
 	assert.Equal(t, active, found, "expected active file %s, got %s")
 }
 
@@ -542,7 +581,7 @@ func TestFindOpenClawSourceFile_ArchiveOnlyNewest(t *testing.T) {
 		))
 	}
 
-	found := FindOpenClawSourceFile(root, "main:jkl")
+	found := findOpenClawSourceForTest(t, root, "main:jkl")
 	want := filepath.Join(sessDir, newest)
 	assert.Equal(t, want, found, "expected newest archive %s, got %s")
 }
