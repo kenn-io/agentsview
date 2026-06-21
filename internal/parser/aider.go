@@ -89,6 +89,16 @@ var aiderSkipDirs = map[string]struct{}{
 	".hg":          {},
 }
 
+// aiderProtectedHomeDirs are first-level home folders that trigger macOS
+// privacy prompts when a desktop app enumerates them. Aider's default root is
+// $HOME, so the best-effort discovery walk must not enter these folders unless
+// the user explicitly configures one of them as the Aider root.
+var aiderProtectedHomeDirs = map[string]struct{}{
+	"Desktop":   {},
+	"Documents": {},
+	"Downloads": {},
+}
+
 // AiderDiscoverySkipDirNames returns the directory basenames pruned by Aider
 // discovery. Remote SSH discovery uses this to mirror local discovery semantics.
 func AiderDiscoverySkipDirNames() []string {
@@ -700,6 +710,7 @@ func DiscoverAiderSessions(root string) []DiscoveredFile {
 	if root == "" {
 		return nil
 	}
+	skipProtectedHomeDirs := aiderRootIsHome(root)
 	rootDepth := strings.Count(filepath.Clean(root), string(os.PathSeparator))
 
 	var files []DiscoveredFile
@@ -727,14 +738,19 @@ func DiscoverAiderSessions(root string) []DiscoveredFile {
 			if d.Type()&os.ModeSymlink != 0 {
 				return filepath.SkipDir
 			}
+			depth := strings.Count(
+				filepath.Clean(path), string(os.PathSeparator),
+			) - rootDepth
+			if skipProtectedHomeDirs && depth == 1 {
+				if _, skip := aiderProtectedHomeDirs[d.Name()]; skip {
+					return filepath.SkipDir
+				}
+			}
 			if path != root {
 				if _, skip := aiderSkipDirs[d.Name()]; skip {
 					return filepath.SkipDir
 				}
 			}
-			depth := strings.Count(
-				filepath.Clean(path), string(os.PathSeparator),
-			) - rootDepth
 			// Skip descent BELOW the cap, but still visit files in a
 			// directory AT the cap, so a history file exactly
 			// aiderMaxWalkDepth levels under the root is discovered (the
@@ -770,6 +786,14 @@ func DiscoverAiderSessions(root string) []DiscoveredFile {
 		return files[i].Path < files[j].Path
 	})
 	return files
+}
+
+func aiderRootIsHome(root string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	return filepath.Clean(root) == filepath.Clean(home)
 }
 
 // FindAiderSourceFile resolves a single aider run's virtual source path
