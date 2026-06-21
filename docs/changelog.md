@@ -517,7 +517,7 @@ description: Release history for AgentsView
   returns a descriptive `403` body and logs a breadcrumb; the
   frontend Settings load surfaces the same actionable
   `--public-url` hint instead of a generic forbidden error. See
-  [Remote Access](/remote-access/#forwarded-host-rejections).
+  [Remote Access](/remote-access/#forwarded-dev-environments).
 - Update `agy-reader` install documentation to the current module
   root command: `go install github.com/mjacobs/agy-reader@latest`.
 
