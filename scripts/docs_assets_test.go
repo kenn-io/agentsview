@@ -97,7 +97,7 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 			tc.write(t, sourceDir, "asset")
 			require.NoError(t, os.WriteFile(filepath.Join(sourceDir, ".env.local"), []byte("TOKEN=secret\n"), 0o600))
 
-			scriptPath := installAssetScript(t, repo, tc.scriptRel)
+			scriptPath := installScript(t, repo, tc.scriptRel)
 			cmd := exec.Command("bash", scriptPath, "--source", sourceDir)
 			cmd.Dir = repo
 			output, err := cmd.CombinedOutput()
@@ -114,8 +114,8 @@ func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
 	repo := filepath.Join(tempDir, "repo")
 	require.NoError(t, os.MkdirAll(repo, 0o755))
 
-	checkScript := installRepoScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
-	installRepoScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
+	checkScript := installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
+	installScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repo, "docs", "assets", "hydrate-assets.sh"),
@@ -152,8 +152,8 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 	repo := filepath.Join(tempDir, "repo")
 	require.NoError(t, os.MkdirAll(repo, 0o755))
 
-	checkScript := installRepoScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
-	installRepoScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
+	checkScript := installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
+	installScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repo, "docs", "assets", "hydrate-assets.sh"),
@@ -174,28 +174,22 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 		0o644,
 	))
 
-	cmd := exec.Command("bash", checkScript)
+	bashPath, err := exec.LookPath("bash")
+	require.NoError(t, err)
+	cmd := exec.Command(bashPath, checkScript)
 	cmd.Dir = repo
 	pythonPath, err := exec.LookPath("python3")
 	require.NoError(t, err)
-	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH=/usr/bin:/bin")
+	emptyBin := filepath.Join(tempDir, "empty-bin")
+	require.NoError(t, os.MkdirAll(emptyBin, 0o755))
+	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH="+emptyBin)
 	output, err := cmd.CombinedOutput()
 
 	require.Error(t, err, string(output))
 	assert.Contains(t, string(output), "rg not found")
 }
 
-func installAssetScript(t *testing.T, repo, scriptRel string) string {
-	t.Helper()
-	script, err := os.ReadFile(filepath.Join("..", scriptRel))
-	require.NoError(t, err)
-	scriptPath := filepath.Join(repo, scriptRel)
-	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
-	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
-	return scriptPath
-}
-
-func installRepoScript(t *testing.T, repo, scriptRel string) string {
+func installScript(t *testing.T, repo, scriptRel string) string {
 	t.Helper()
 	script, err := os.ReadFile(filepath.Join("..", scriptRel))
 	require.NoError(t, err)

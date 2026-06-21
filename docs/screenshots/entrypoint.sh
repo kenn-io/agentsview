@@ -140,10 +140,10 @@ done
 # ── Run Playwright ───────────────────────────────────────
 echo ""
 echo "Capturing screenshots..."
+EXIT_CODE=0
 SCREENSHOT_DIR=/output \
 PG_BASE_URL="http://127.0.0.1:$PG_PORT" \
-npx playwright test --reporter=list "$@" 2>&1
-EXIT_CODE=$?
+npx playwright test --reporter=list "$@" 2>&1 || EXIT_CODE=$?
 
 echo ""
 if [ -d /output ]; then
