@@ -1216,40 +1216,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Kimi: <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
-	//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
-	// Components that cannot round-trip through the ':'-delimited
-	// session ID (per IsValidSessionID) are left unclassified so they
-	// are never imported in a non-resyncable state.
-	for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
-		if kimiDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(kimiDir, path); ok {
-			parts := strings.Split(rel, sep)
-			switch {
-			case len(parts) == 3 && parts[2] == "wire.jsonl" &&
-				parser.IsValidSessionID(parts[0]) &&
-				parser.IsValidSessionID(parts[1]):
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parser.DecodeKimiProjectDir(parts[0]),
-					Agent:   parser.AgentKimi,
-				}, true
-			case len(parts) == 5 && parts[2] == "agents" &&
-				parts[4] == "wire.jsonl" &&
-				parser.IsValidSessionID(parts[0]) &&
-				parser.IsValidSessionID(parts[1]) &&
-				parser.IsValidSessionID(parts[3]):
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parser.DecodeKimiProjectDir(parts[0]),
-					Agent:   parser.AgentKimi,
-				}, true
-			}
-		}
-	}
-
 	// QwenPaw: <qwenpawDir>/<workspace>/sessions/<name>.json
 	//       or <qwenpawDir>/<workspace>/sessions/<subdir>/<name>.json
 	for _, qwenpawDir := range e.agentDirs[parser.AgentQwenPaw] {
@@ -4664,8 +4630,6 @@ func (e *Engine) processFile(
 		res = e.processOpenClaw(file, info)
 	case parser.AgentQClaw:
 		res = e.processQClaw(file, info)
-	case parser.AgentKimi:
-		res = e.processKimi(file, info)
 	case parser.AgentKiro:
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
@@ -6421,35 +6385,6 @@ func (e *Engine) processVisualStudioCopilot(
 	return processResult{
 		results:      results,
 		forceReplace: true,
-	}
-}
-
-func (e *Engine) processKimi(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseKimiSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs, UsageEvents: sess.UsageEvents},
-		},
 	}
 }
 
@@ -9710,26 +9645,6 @@ func (e *Engine) SyncSingleSessionContext(
 			file.Project = sess.Project
 		} else {
 			file.Project = filepath.Base(filepath.Dir(path))
-		}
-	case parser.AgentKimi:
-		// path is <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
-		//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
-		// In both layouts the project is the first path segment relative
-		// to the sessions dir. Deriving two levels up (the old approach)
-		// mis-resolves to "agents" under the .kimi-code layout.
-		for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
-			rel, ok := isUnder(kimiDir, path)
-			if !ok {
-				continue
-			}
-			parts := strings.Split(rel, string(filepath.Separator))
-			if len(parts) > 0 {
-				file.Project = parser.DecodeKimiProjectDir(parts[0])
-			}
-			break
-		}
-		if file.Project == "" {
-			file.Project = "kimi"
 		}
 	case parser.AgentQwenPaw:
 		// path is <qwenpawDir>/<workspace>/sessions/<name>.json or

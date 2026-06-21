@@ -10,13 +10,11 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// TestClassifyOnePath_Kimi covers the file-watcher classification
-// gate for both Kimi session layouts. The new .kimi-code layout has
-// a 5-segment relative path and must be classified (and its project
-// decoded) just like the legacy 3-segment layout. classifyOnePath is
-// the sole consumer of SyncPaths / watcher events, so this is what
-// guards live updates for new-layout files.
-func TestClassifyOnePath_Kimi(t *testing.T) {
+// TestEngineClassifyKimiPaths covers provider changed-path classification for
+// both Kimi session layouts. The new .kimi-code layout has a 5-segment relative
+// path and must be classified with its decoded project just like the legacy
+// 3-segment layout.
+func TestEngineClassifyKimiPaths(t *testing.T) {
 	dir := t.TempDir()
 
 	// Legacy: <kimiDir>/<project>/<session>/wire.jsonl
@@ -51,11 +49,15 @@ func TestClassifyOnePath_Kimi(t *testing.T) {
 	}
 
 	eng := &Engine{
+		db: openTestDB(t),
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentKimi: {dir},
 		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentKimi: parser.ProviderMigrationProviderAuthoritative,
+		},
 	}
-	geminiMap := make(map[string]map[string]string)
 
 	tests := []struct {
 		name    string
@@ -95,13 +97,16 @@ func TestClassifyOnePath_Kimi(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := eng.classifyOnePath(tt.path, geminiMap)
-			assert.Equal(t, tt.want, ok)
-			if ok {
-				assert.Equal(t, parser.AgentKimi, got.Agent)
-				assert.Equal(t, tt.project, got.Project)
-				assert.Equal(t, tt.path, got.Path)
+			files := eng.classifyPaths([]string{tt.path})
+			if !tt.want {
+				assert.Empty(t, files)
+				return
 			}
+			require.Len(t, files, 1)
+			got := files[0]
+			assert.Equal(t, parser.AgentKimi, got.Agent)
+			assert.Equal(t, tt.project, got.Project)
+			assert.Equal(t, tt.path, got.Path)
 		})
 	}
 }

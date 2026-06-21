@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,14 @@ func writeKimiCodeWireJSONL(
 	return path
 }
 
+func parseKimiSessionForTest(
+	t *testing.T,
+	path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	return parseKimiSession(path, project, machine)
+}
+
 func TestParseKimiSession_Basic(t *testing.T) {
 	path := writeKimiWireJSONL(t,
 		"abc123", "sess-uuid-1234",
@@ -54,7 +63,7 @@ func TestParseKimiSession_Basic(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(
+	sess, msgs, err := parseKimiSessionForTest(t,
 		path, "myproject", "local",
 	)
 	require.NoError(t, err)
@@ -94,7 +103,7 @@ func TestParseKimiSession_ThinkingAndToolUse(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(
+	sess, msgs, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -139,7 +148,7 @@ func TestParseKimiSession_Empty(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(
+	sess, msgs, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -159,7 +168,7 @@ func TestParseKimiSession_ErrorToolResult(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(
+	sess, msgs, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -184,7 +193,7 @@ func TestParseKimiSession_ArrayToolResult(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(
+	sess, msgs, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -216,7 +225,7 @@ func TestParseKimiSession_MultipleStatusUpdates(t *testing.T) {
 		},
 	)
 
-	sess, _, err := ParseKimiSession(
+	sess, _, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -239,7 +248,7 @@ func TestParseKimiSession_StatusUpdate(t *testing.T) {
 		},
 	)
 
-	sess, _, err := ParseKimiSession(
+	sess, _, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -330,7 +339,7 @@ func TestParseKimiSession_ZeroValuedStatusUpdatePreservesCoverage(t *testing.T) 
 		},
 	)
 
-	sess, _, err := ParseKimiSession(
+	sess, _, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -352,7 +361,7 @@ func TestParseKimiSession_NoProject(t *testing.T) {
 		},
 	)
 
-	sess, _, err := ParseKimiSession(path, "", "local")
+	sess, _, err := parseKimiSessionForTest(t, path, "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "kimi", sess.Project)
@@ -372,7 +381,7 @@ func TestParseKimiSession_MessageTimestamps(t *testing.T) {
 		},
 	)
 
-	_, msgs, err := ParseKimiSession(
+	_, msgs, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -413,7 +422,7 @@ func TestParseKimiSession_EmptyFragmentTimestamp(t *testing.T) {
 			},
 		)
 
-		_, msgs, err := ParseKimiSession(
+		_, msgs, err := parseKimiSessionForTest(t,
 			path, "testproj", "local",
 		)
 		require.NoError(t, err)
@@ -437,7 +446,7 @@ func TestParseKimiSession_EmptyFragmentTimestamp(t *testing.T) {
 			},
 		)
 
-		_, msgs, err := ParseKimiSession(
+		_, msgs, err := parseKimiSessionForTest(t,
 			path, "testproj", "local",
 		)
 		require.NoError(t, err)
@@ -448,7 +457,7 @@ func TestParseKimiSession_EmptyFragmentTimestamp(t *testing.T) {
 }
 
 func TestParseKimiSession_MissingFile(t *testing.T) {
-	_, _, err := ParseKimiSession(
+	_, _, err := parseKimiSessionForTest(t,
 		"/nonexistent/wire.jsonl", "proj", "local",
 	)
 	assert.Error(t, err)
@@ -466,7 +475,7 @@ func TestParseKimiSession_FirstMessageTruncation(t *testing.T) {
 		},
 	)
 
-	sess, _, err := ParseKimiSession(
+	sess, _, err := parseKimiSessionForTest(t,
 		path, "testproj", "local",
 	)
 	require.NoError(t, err)
@@ -492,18 +501,26 @@ func TestDiscoverKimiSessions(t *testing.T) {
 		[]byte(`{"type":"metadata"}`+"\n"), 0o644,
 	))
 
-	files := DiscoverKimiSessions(dir)
-	require.Equal(t, 2, len(files))
-	assert.Equal(t, AgentKimi, files[0].Agent)
-	assert.Equal(t, "abc123", files[0].Project)
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	assert.Equal(t, []string{
+		filepath.Join(sessDir, "wire.jsonl"),
+		filepath.Join(sessDir2, "wire.jsonl"),
+	}, sourceDisplayPaths(sources))
+	assert.Equal(t, []string{"abc123", "abc123"}, sourceProjects(sources))
 }
 
 func TestDiscoverKimiSessions_Empty(t *testing.T) {
-	files := DiscoverKimiSessions("")
-	assert.Nil(t, files)
-
-	files = DiscoverKimiSessions("/nonexistent")
-	assert.Nil(t, files)
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{
+		Roots: []string{"", "/nonexistent"},
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, sources)
 }
 
 func TestFindKimiSourceFile(t *testing.T) {
@@ -517,15 +534,29 @@ func TestFindKimiSourceFile(t *testing.T) {
 		wirePath, []byte("{}"), 0o644,
 	))
 
-	found := FindKimiSourceFile(dir, "abc123:uuid-1")
-	assert.Equal(t, wirePath, found)
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "abc123:uuid-1",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, wirePath, found.DisplayPath)
 
-	assert.Equal(t, "",
-		FindKimiSourceFile(dir, "abc123:nonexistent"))
-	assert.Equal(t, "",
-		FindKimiSourceFile(dir, "invalid"))
-	assert.Equal(t, "",
-		FindKimiSourceFile("", "abc123:uuid-1"))
+	for _, rawID := range []string{"abc123:nonexistent", "invalid"} {
+		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			RawSessionID: rawID,
+		})
+		require.NoError(t, err)
+		assert.False(t, ok)
+	}
+	emptyProvider, ok := NewProvider(AgentKimi, ProviderConfig{})
+	require.True(t, ok)
+	_, ok, err = emptyProvider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "abc123:uuid-1",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestDiscoverKimiSessions_NewLayout(t *testing.T) {
@@ -540,12 +571,14 @@ func TestDiscoverKimiSessions_NewLayout(t *testing.T) {
 		wirePath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
 	))
 
-	files := DiscoverKimiSessions(dir)
-	require.Equal(t, 1, len(files))
-	assert.Equal(t, AgentKimi, files[0].Agent)
-	assert.Equal(t, wirePath, files[0].Path)
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, wirePath, sources[0].DisplayPath)
 	// Project is decoded from "wd_<workdir>_<hash>".
-	assert.Equal(t, "claude-code", files[0].Project)
+	assert.Equal(t, "claude-code", sources[0].ProjectHint)
 }
 
 func TestDiscoverKimiSessions_NewLayout_NonMainAgent(t *testing.T) {
@@ -560,9 +593,12 @@ func TestDiscoverKimiSessions_NewLayout_NonMainAgent(t *testing.T) {
 		wirePath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
 	))
 
-	files := DiscoverKimiSessions(dir)
-	require.Equal(t, 1, len(files))
-	assert.Equal(t, wirePath, files[0].Path)
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, wirePath, sources[0].DisplayPath)
 }
 
 func TestFindKimiSourceFile_NewLayout(t *testing.T) {
@@ -577,14 +613,26 @@ func TestFindKimiSourceFile_NewLayout(t *testing.T) {
 		wirePath, []byte("{}"), 0o644,
 	))
 
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
 	rawID := workdirDir + ":main:" + sessionDir
-	found := FindKimiSourceFile(dir, rawID)
-	assert.Equal(t, wirePath, found)
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: rawID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, wirePath, found.DisplayPath)
 
-	assert.Equal(t, "",
-		FindKimiSourceFile(dir, workdirDir+":main:nonexistent"))
-	assert.Equal(t, "",
-		FindKimiSourceFile(dir, workdirDir+":"+sessionDir))
+	for _, rawID := range []string{
+		workdirDir + ":main:nonexistent",
+		workdirDir + ":" + sessionDir,
+	} {
+		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			RawSessionID: rawID,
+		})
+		require.NoError(t, err)
+		assert.False(t, ok)
+	}
 }
 
 func TestParseKimiSession_NewLayoutSessionID(t *testing.T) {
@@ -598,7 +646,7 @@ func TestParseKimiSession_NewLayoutSessionID(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(path, "myproject", "local")
+	sess, msgs, err := parseKimiSessionForTest(t, path, "myproject", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -629,7 +677,7 @@ func TestParseKimiSession_NativeKimiCodeEvents(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(path, "myproject", "local")
+	sess, msgs, err := parseKimiSessionForTest(t, path, "myproject", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -687,7 +735,7 @@ func TestParseKimiSession_NativeKimiCodeToolCall(t *testing.T) {
 		},
 	)
 
-	sess, msgs, err := ParseKimiSession(path, "myproject", "local")
+	sess, msgs, err := parseKimiSessionForTest(t, path, "myproject", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -729,7 +777,7 @@ func TestParseKimiSession_NewLayout_AgentZero(t *testing.T) {
 		},
 	)
 
-	sess, _, err := ParseKimiSession(path, "myproject", "local")
+	sess, _, err := parseKimiSessionForTest(t, path, "myproject", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -760,9 +808,12 @@ func TestDiscoverKimiSessions_MixedLayouts(t *testing.T) {
 		newPath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
 	))
 
-	files := DiscoverKimiSessions(dir)
-	require.Equal(t, 2, len(files))
-	paths := []string{files[0].Path, files[1].Path}
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 2)
+	paths := sourceDisplayPaths(sources)
 	assert.Contains(t, paths, legacyPath)
 	assert.Contains(t, paths, newPath)
 }
@@ -837,7 +888,10 @@ func TestDiscoverKimiSessions_NewLayout_RejectsInvalidComponent(t *testing.T) {
 		goodPath, []byte(`{"type":"metadata"}`+"\n"), 0o644,
 	))
 
-	files := DiscoverKimiSessions(dir)
-	require.Len(t, files, 1)
-	assert.Equal(t, goodPath, files[0].Path)
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{dir}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, goodPath, sources[0].DisplayPath)
 }
