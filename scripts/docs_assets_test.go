@@ -109,7 +109,55 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 	}
 }
 
+func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := filepath.Join(tempDir, "repo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+
+	checkScript := installRepoScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
+	installRepoScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "docs", "assets", "hydrate-assets.sh"),
+		[]byte("#!/usr/bin/env bash\nset -euo pipefail\n"),
+		0o755,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "docs", "activity.md"),
+		[]byte(strings.Join([]string{
+			"______________________________________________________________________",
+			"",
+			"## title: Activity description: Activity, concurrency, and session-time reporting in AgentsView",
+			"",
+			"!!! warning \"Experimental\" This warning was collapsed by a formatter.",
+			"",
+		}, "\n")),
+		0o644,
+	))
+
+	cmd := exec.Command("bash", checkScript)
+	cmd.Dir = repo
+	pythonPath, err := exec.LookPath("python3")
+	require.NoError(t, err)
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Dir(pythonPath)+":/usr/bin:/bin")
+	output, err := cmd.CombinedOutput()
+
+	require.Error(t, err, string(output))
+	assert.Contains(t, string(output), "docs markdown")
+	assert.Contains(t, string(output), "activity.md")
+}
+
 func installAssetScript(t *testing.T, repo, scriptRel string) string {
+	t.Helper()
+	script, err := os.ReadFile(filepath.Join("..", scriptRel))
+	require.NoError(t, err)
+	scriptPath := filepath.Join(repo, scriptRel)
+	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
+	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
+	return scriptPath
+}
+
+func installRepoScript(t *testing.T, repo, scriptRel string) string {
 	t.Helper()
 	script, err := os.ReadFile(filepath.Join("..", scriptRel))
 	require.NoError(t, err)

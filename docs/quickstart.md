@@ -1,6 +1,7 @@
-______________________________________________________________________
-
-## title: Quick Start description: Get AgentsView running in under a minute
+---
+title: Quick Start
+description: Get AgentsView running in under a minute
+---
 
 ## Install
 
@@ -12,15 +13,16 @@ On macOS, the easiest install is via Homebrew Cask:
 brew install --cask agentsview
 ```
 
-On Windows and Linux (and as an alternative on macOS), download the latest
-`.dmg`, `.exe`, or `.AppImage` from
-[GitHub Releases](https://github.com/kenn-io/agentsview/releases). The desktop
-app is fully bundled — no CLI or dependencies needed — and includes built-in
-auto-update support.
+On Windows and Linux (and as an alternative on macOS),
+download the latest `.dmg`, `.exe`, or `.AppImage` from
+[GitHub Releases](https://github.com/kenn-io/agentsview/releases).
+The desktop app is fully bundled — no CLI or dependencies needed —
+and includes built-in auto-update support.
 
-!!! note The desktop app and CLI share the same data directory
-(`~/.agentsview/`), so you can use one or both. They are fully complementary,
-not mutually exclusive.
+!!! note
+    The desktop app and CLI share the same data directory
+    (`~/.agentsview/`), so you can use one or both. They are fully
+    complementary, not mutually exclusive.
 
 ### pip / uvx
 
@@ -29,8 +31,9 @@ pip install agentsview    # install permanently
 uvx agentsview            # or run without installing
 ```
 
-Platform-specific wheels are published to PyPI for Linux (x86_64, aarch64),
-macOS (x86_64, arm64), and Windows (x86_64, arm64).
+Platform-specific wheels are published to PyPI for Linux
+(x86_64, aarch64), macOS (x86_64, arm64), and Windows
+(x86_64, arm64).
 
 ### Shell Script
 
@@ -44,13 +47,16 @@ curl -fsSL https://agentsview.io/install.sh | bash
 powershell -ExecutionPolicy ByPass -c "irm https://agentsview.io/install.ps1 | iex"
 ```
 
-The installer detects your OS and architecture, downloads the latest release
-from GitHub Releases, verifies the SHA-256 checksum, and installs the binary.
+The installer detects your OS and architecture, downloads the latest
+release from GitHub Releases, verifies the SHA-256 checksum, and
+installs the binary.
 
-!!! note On Windows on ARM, the installer uses the native `arm64` build when one
-is available and otherwise falls back to the `x86_64` build, which runs under
-Windows' built-in x64 emulation. To get a native binary on a release that
-predates arm64 support, [build from source](#build-from-source).
+!!! note
+    On Windows on ARM, the installer uses the native `arm64` build when one
+    is available and otherwise falls back to the `x86_64` build, which runs
+    under Windows' built-in x64 emulation. To get a native binary on a
+    release that predates arm64 support, [build from
+    source](#build-from-source).
 
 ### Build from source
 
@@ -63,17 +69,18 @@ make build
 make install  # installs to ~/.local/bin
 ```
 
-!!! note CGO is required for the SQLite driver. The `fts5` build tag enables
-full-text search.
+!!! note
+    CGO is required for the SQLite driver. The `fts5` build tag
+    enables full-text search.
 
 #### Windows on ARM
 
-`make` isn't available on Windows, and CGO needs a C compiler that targets
-`aarch64`. Install [Go for Windows/ARM64](https://go.dev/dl/),
-[Node.js](https://nodejs.org/), and the aarch64
-[llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases) toolchain (a
-self-contained clang + runtime; no Visual Studio or Windows SDK required), then
-build manually in PowerShell:
+`make` isn't available on Windows, and CGO needs a C compiler that
+targets `aarch64`. Install [Go for
+Windows/ARM64](https://go.dev/dl/), [Node.js](https://nodejs.org/), and
+the aarch64 [llvm-mingw](https://github.com/mstorsjo/llvm-mingw/releases)
+toolchain (a self-contained clang + runtime; no Visual Studio or Windows
+SDK required), then build manually in PowerShell:
 
 ```powershell
 git clone https://github.com/kenn-io/agentsview.git
@@ -89,48 +96,53 @@ $env:CC = "C:\path\to\llvm-mingw\bin\aarch64-w64-mingw32-clang.exe"
 go build -tags fts5 -o agentsview.exe ./cmd/agentsview
 ```
 
-The resulting `agentsview.exe` is a native ARM64 binary. Most users don't need
-this — the installer and PyPI wheels ship native arm64 builds — but it's useful
-for development or to run unreleased changes.
+The resulting `agentsview.exe` is a native ARM64 binary. Most users
+don't need this — the installer and PyPI wheels ship native arm64 builds
+— but it's useful for development or to run unreleased changes.
 
 ### Docker
 
-Multi-arch images for `linux/amd64` and `linux/arm64` are published to GitHub
-Container Registry on every tagged release and on pushes to main:
+Multi-arch images for `linux/amd64` and `linux/arm64` are
+published to GitHub Container Registry on every tagged release
+and on pushes to main:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
   -v agentsview-data:/data \
-  -v "$HOME/.claude/projects:/agents/claude:ro" \
-  -e CLAUDE_PROJECTS_DIR=/agents/claude \
+  -v "$HOME/.claude/projects:/assets/static/agents/claude:ro" \
+  -e CLAUDE_PROJECTS_DIR=/assets/static/agents/claude \
   ghcr.io/kenn-io/agentsview:latest
 ```
 
-The container's entrypoint runs `agentsview serve` by default. Set `PG_SERVE=1`
-to switch to `agentsview pg serve` instead — the same image powers both modes.
+The container's entrypoint runs `agentsview serve` by default.
+Set `PG_SERVE=1` to switch to `agentsview pg serve` instead — the
+same image powers both modes.
 
-A containerized AgentsView only sees agent sessions from directories you
-explicitly bind-mount into the container. Mount each agent's session root
-read-only and point the matching
-[directory env var](/configuration/#session-discovery) at it. The data volume
-(`/data`) is owned by root inside the container, so prefer a named Docker volume
-over a host bind mount, or pre-create the host directory with the desired
-ownership.
+A containerized AgentsView only sees agent sessions from
+directories you explicitly bind-mount into the container. Mount
+each agent's session root read-only and point the matching
+[directory env var](/configuration/#session-discovery) at it.
+The data volume (`/data`) is owned by root inside the container,
+so prefer a named Docker volume over a host bind mount, or
+pre-create the host directory with the desired ownership.
 
 A production-style Compose example lives in the repo at
 [`docker-compose.prod.yaml`](https://github.com/kenn-io/agentsview/blob/main/docker-compose.prod.yaml).
-It persists `/data` in a named volume, mounts Claude, Codex, and OpenCode
-session roots read-only, and publishes the UI on `127.0.0.1:8080`:
+It persists `/data` in a named volume, mounts Claude, Codex,
+and OpenCode session roots read-only, and publishes the UI on
+`127.0.0.1:8080`:
 
 ```bash
 docker compose -f docker-compose.prod.yaml up -d
 ```
 
-The example publishes the UI on loopback only. To expose it beyond the host,
-also enable bearer-token [authentication](/remote-access/#authentication) and
-publish the port intentionally.
+The example publishes the UI on loopback only. To expose it
+beyond the host, also enable bearer-token
+[authentication](/remote-access/#authentication) and publish the
+port intentionally.
 
-For a PostgreSQL-backed deployment, point the container at your shared database:
+For a PostgreSQL-backed deployment, point the container at your
+shared database:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
@@ -141,8 +153,8 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 ## Run
 
-The desktop app handles startup automatically — just open the app. CLI users
-start the server manually:
+The desktop app handles startup automatically — just open
+the app. CLI users start the server manually:
 
 ```bash
 agentsview serve
@@ -151,14 +163,14 @@ agentsview serve
 This will:
 
 1. Initialize the SQLite database at `~/.agentsview/sessions.db`
-1. Discover and sync sessions from all
-   [supported agents](/configuration/#session-discovery)
-1. Start watching session directories for changes
-1. Launch the web UI at `http://127.0.0.1:8080`
+2. Discover and sync sessions from all [supported agents](/configuration/#session-discovery)
+3. Start watching session directories for changes
+4. Launch the web UI at `http://127.0.0.1:8080`
 
-Open `http://127.0.0.1:8080` in your browser. Pass `--no-browser` to disable
-automatic browser launch. To keep the server running after your shell exits,
-start it in managed background mode:
+Open `http://127.0.0.1:8080` in your browser. Pass
+`--no-browser` to disable automatic browser launch. To keep the
+server running after your shell exits, start it in managed
+background mode:
 
 ```bash
 agentsview serve --background
@@ -234,5 +246,4 @@ Once running, the web UI provides:
 - **Full-text search** across all message content
 - **Analytics** including activity heatmaps, tool usage, and velocity charts
 - **Activity reporting** with concurrency, agent-minutes, cost, and session rows
-- **Session export** to standalone HTML, markdown export links for agent
-  handoff, or GitHub Gist
+- **Session export** to standalone HTML, markdown export links for agent handoff, or GitHub Gist

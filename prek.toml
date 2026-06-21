@@ -27,5 +27,6 @@ always_run = true
 id = "mdformat"
 name = "mdformat"
 language = "system"
-entry = "uvx --from mdformat==0.7.22 --with mdformat-tables==1.0.0 mdformat --wrap 80"
+entry = "uvx --from mdformat==0.7.22 --with mdformat-frontmatter --with mdformat-mkdocs --with mdformat-tables==1.0.0 mdformat --wrap 80 --align-semantic-breaks-in-lists"
 types = ["markdown"]
+exclude = "^docs/(activity|changelog|chat-import|commands|configuration|duckdb|index|insights|pg-sync|quickstart|remote-access|session-api|session-intelligence|stats|token-usage|usage)\\.md$"
