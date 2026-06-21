@@ -3,6 +3,34 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.34.1
+<small>2026-06-21</small>
+
+**New features**
+
+- Add the **AgentsView documentation site**, including quickstart,
+  commands, configuration, usage, stats, token usage, API, remote
+  access, and PostgreSQL sync docs.
+- Add **documentation build and deployment support**, including
+  validation, asset hydration, screenshot handling, and Vercel
+  deployment configuration.
+
+**Improvements**
+
+- Clarify **forwarded development access** instructions for public
+  origins, tunnels, WSL2, Codespaces, Coder, and reverse proxy setups.
+- Move **internal-only documentation** into an internal docs area so
+  it stays available without publishing as user documentation.
+- Add automated checks for **docs sources, built site output,
+  redirects, and docs assets**.
+
+**Bug fixes**
+
+- Avoid scanning **protected home directories** during Aider session
+  discovery.
+
+---
+
 ## 0.34.0
 <small>2026-06-20</small>
 
