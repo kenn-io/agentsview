@@ -490,6 +490,13 @@ func ParseClaudeSessionFrom(
 		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
+	// Queue/progress events can repair subagent linkage on an already-stored
+	// tool call. If the mapped tool_use_id is not introduced in this append,
+	// incremental parsing would advance file_size without updating that row.
+	if needsClaudeFullParseForSubagentMap(entries, subagentMap) {
+		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
+
 	if len(entries) == 0 && len(queuedCommands) == 0 {
 		return nil, latestTS, consumed, nil
 	}
@@ -589,6 +596,41 @@ func needsClaudeFullParse(entries []dagEntry) bool {
 			continue
 		}
 		prevAssistantMID = ""
+	}
+	return false
+}
+
+func needsClaudeFullParseForSubagentMap(
+	entries []dagEntry, subagentMap map[string]string,
+) bool {
+	if len(subagentMap) == 0 {
+		return false
+	}
+
+	appendedToolUseIDs := make(map[string]struct{})
+	for _, e := range entries {
+		if e.entryType != "assistant" {
+			continue
+		}
+		content := gjson.Get(e.line, "message.content")
+		if !content.IsArray() {
+			continue
+		}
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Get("type").Str != "tool_use" {
+				return true
+			}
+			if toolUseID := part.Get("id").Str; toolUseID != "" {
+				appendedToolUseIDs[toolUseID] = struct{}{}
+			}
+			return true
+		})
+	}
+
+	for toolUseID := range subagentMap {
+		if _, ok := appendedToolUseIDs[toolUseID]; !ok {
+			return true
+		}
 	}
 	return false
 }

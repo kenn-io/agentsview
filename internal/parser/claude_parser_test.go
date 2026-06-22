@@ -1047,6 +1047,68 @@ func TestParseClaudeSessionFrom_SameMessageIDFallsBack(t *testing.T) {
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
+func TestParseClaudeSessionFrom_QueueOperationOnlyFallsBack(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u1","timestamp":"`+tsEarly+`","message":{"content":"go"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"`+tsEarlyS5+`","message":{"id":"msg_queue","content":[{"type":"tool_use","id":"toolu_queue","name":"Agent","input":{"description":"inspect","subagent_type":"Explore","prompt":"inspect"}}]}}`,
+	)
+	path := createTestFile(
+		t, "inc-queue-only.jsonl", initial,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := `{"type":"queue-operation","operation":"enqueue","timestamp":"` +
+		tsLate + `","sessionId":"queued-subagent","content":"{\"task_id\":\"childqueue\",\"tool_use_id\":\"toolu_queue\",\"description\":\"inspect\",\"task_type\":\"local_agent\"}"}` + "\n"
+
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseClaudeSessionFrom(path, offset, 2, "a1")
+	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
+	assert.True(t, IsIncrementalFullParseFallback(err))
+}
+
+func TestParseClaudeSessionFrom_ProgressOnlyFallsBack(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","uuid":"u1","timestamp":"`+tsEarly+`","message":{"content":"go"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"`+tsEarlyS5+`","message":{"id":"msg_progress","content":[{"type":"tool_use","id":"toolu_progress","name":"Agent","input":{"description":"inspect","subagent_type":"Explore","prompt":"inspect"}}]}}`,
+	)
+	path := createTestFile(
+		t, "inc-progress-only.jsonl", initial,
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := `{"type":"progress","timestamp":"` + tsLate +
+		`","parentToolUseID":"toolu_progress","data":{"type":"agent_progress","agentId":"childprogress"}}` + "\n"
+
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseClaudeSessionFrom(path, offset, 2, "a1")
+	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
+	assert.True(t, IsIncrementalFullParseFallback(err))
+}
+
 // Sanity: a benign incremental append (one user, one assistant
 // with a unique message.id, no toolUseResult.agentId) must NOT
 // trigger fallback.
