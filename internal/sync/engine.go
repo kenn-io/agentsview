@@ -8051,7 +8051,8 @@ func openCodeMessageLooksIncomplete(
 		parsed.Role != stored.Role {
 		return false
 	}
-	if parsed.ContentLength < stored.ContentLength {
+	if sanitizedMessageContentLength(parsed) <
+		sanitizedMessageContentLength(stored) {
 		return true
 	}
 	if parsed.HasThinking != stored.HasThinking &&
@@ -8073,6 +8074,14 @@ func openCodeMessageLooksIncomplete(
 	}
 	return countToolResultEvents(parsed.ToolCalls) <
 		countToolResultEvents(stored.ToolCalls)
+}
+
+func sanitizedMessageContentLength(msg db.Message) int {
+	sanitized := db.SanitizeUTF8(msg.Content)
+	if sanitized != msg.Content {
+		return len(sanitized)
+	}
+	return msg.ContentLength
 }
 
 func countToolResultEvents(calls []db.ToolCall) int {

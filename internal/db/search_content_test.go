@@ -268,7 +268,7 @@ func TestSearchContentPaginationStableAcrossTies(t *testing.T) {
 func TestSearchContentRegex(t *testing.T) {
 	d := testDB(t)
 	seedSearchSession(t, d, "r1", "proj", [][2]string{
-		{"user", "key AKIA7QHWN2DKR4FYPLJM here"},
+		{"user", "key AKIA" + "7QHWN2DKR4FYPLJM here"},
 		{"assistant", "no secrets in this line"},
 	})
 	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
@@ -311,6 +311,25 @@ func TestSearchContentFTS(t *testing.T) {
 	require.NoError(t, err, "SearchContent fts")
 	require.Len(t, got.Matches, 1, "fts match")
 	assert.Equal(t, "message", got.Matches[0].Location, "fts match Location")
+}
+
+func TestSearchContentFTSPhraseSnippetFallsBackToFirstToken(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	body := strings.Repeat("prefix ", 30) + "foo-bar lives here"
+	seedSearchSession(t, d, "f-phrase", "proj", [][2]string{
+		{"user", body},
+	})
+
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: `"foo bar"`, Mode: "fts",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent fts phrase")
+	require.Len(t, got.Matches, 1, "fts phrase match")
+	assert.Contains(t, got.Matches[0].Snippet, "foo-bar")
 }
 
 func TestSearchContentFTSInvalidQuery(t *testing.T) {

@@ -695,9 +695,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionCodexOpenCodeCwd(t *testing.T) {
-	assert.Equal(t, 49, CurrentDataVersion(),
-		"incremental resume metadata requires a data version bump")
+func TestCurrentDataVersionSanitizedMessageShape(t *testing.T) {
+	assert.Equal(t, 50, CurrentDataVersion(),
+		"sanitized message and session shape requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

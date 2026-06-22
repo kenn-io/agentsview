@@ -99,6 +99,7 @@ func (db *DB) Search(
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
+	f.Query = PrepareFTSQuery(f.Query)
 
 	// ORDER BY for the outer query. FTS5 ranks are negative (lower = better),
 	// so rank ASC places message matches (negative rank) before name-only rows
@@ -132,11 +133,11 @@ func (db *DB) Search(
 	}
 
 	innerWhereSQL := strings.Join(innerWhere, " AND ")
-	// Strip FTS phrase-matching quotes before substring operations.
-	// The HTTP handler wraps multi-word queries in double quotes for FTS
-	// (e.g. "fix bug" → `"fix bug"`). LIKE and instr() must use the
-	// plain text form so name/content substring searches work correctly.
-	plainQuery := stripFTSQuotes(f.Query)
+	// Strip FTS quoting before substring operations. PrepareFTSQuery wraps
+	// each term in double quotes for FTS (e.g. "fix bug" → `"fix" "bug"`).
+	// LIKE and instr() must use the plain text form so name/content substring
+	// searches work correctly.
+	plainQuery := StripFTSQuotes(f.Query)
 	if plainQuery == "" {
 		return SearchPage{}, nil
 	}
@@ -344,12 +345,97 @@ func (db *DB) SearchSession(
 	return ordinals, rows.Err()
 }
 
-// stripFTSQuotes removes surrounding double quotes added by the HTTP
-// handler's prepareFTSQuery for FTS phrase matching, returning the plain
-// search term for substring operations (LIKE, instr).
-func stripFTSQuotes(v string) string {
-	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
-		return v[1 : len(v)-1]
+// PrepareFTSQuery turns a user's raw search input into a well-formed SQLite
+// FTS5 MATCH expression. Each whitespace-separated term is wrapped in double
+// quotes (with any embedded quote doubled, per FTS5 escaping), which makes
+// punctuation literal inside the term and combines the terms under FTS5's
+// implicit AND. Quoting is what prevents a single token containing an FTS5
+// operator character (e.g. "error-401" or "status:500") from being parsed as
+// query syntax and raising a malformed-query error (an HTTP 500).
+//
+// An empty/whitespace-only input is returned unchanged. An input the caller
+// already opened with a double quote is treated as a deliberate FTS5 expression
+// (including an explicit "exact phrase") and is passed through untouched, so
+// exact-phrase matching remains opt-in via a leading quote.
+//
+// This is the single source of truth shared by the SQLite, PostgreSQL, and HTTP
+// search paths so the same user query behaves identically across backends.
+func PrepareFTSQuery(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, `"`) {
+		return raw
 	}
-	return v
+	var b strings.Builder
+	for i, term := range strings.Fields(raw) {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteByte('"')
+		b.WriteString(strings.ReplaceAll(term, `"`, `""`))
+		b.WriteByte('"')
+	}
+	return b.String()
+}
+
+// FTSTerms decomposes a PrepareFTSQuery output back into its individual terms,
+// un-doubling escaped quotes inside quoted terms and collecting bare tokens. A
+// multi-term AND query like `"error" "401"` yields ["error", "401"], a single
+// quoted operator token `"error-401"` yields ["error-401"], and an explicit
+// exact phrase `"fix bug"` yields a single ["fix bug"] term. This lets the
+// substring backends (SQLite name-branch LIKE/instr, PostgreSQL ILIKE)
+// reconstruct the same AND-of-terms vs. exact-phrase semantics the FTS engine
+// applies, keeping behavior identical across backends.
+func FTSTerms(v string) []string {
+	if !strings.Contains(v, `"`) {
+		if v = strings.TrimSpace(v); v == "" {
+			return nil
+		}
+		return strings.Fields(v)
+	}
+	var terms []string
+	var cur strings.Builder
+	inQuote := false
+	hasTerm := false
+	flush := func() {
+		if hasTerm {
+			terms = append(terms, cur.String())
+			cur.Reset()
+			hasTerm = false
+		}
+	}
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case c == '"':
+			if inQuote && i+1 < len(v) && v[i+1] == '"' {
+				// Doubled quote inside a quoted term is a literal quote.
+				cur.WriteByte('"')
+				hasTerm = true
+				i++
+				continue
+			}
+			inQuote = !inQuote
+			hasTerm = true
+		case !inQuote && (c == ' ' || c == '\t' || c == '\n' || c == '\r'):
+			flush()
+		default:
+			cur.WriteByte(c)
+			hasTerm = true
+		}
+	}
+	flush()
+	return terms
+}
+
+// StripFTSQuotes reverses PrepareFTSQuery into a plain substring suitable for
+// LIKE and instr() operations (name-branch matching, snippet centering). It
+// rejoins the parsed FTS terms with single spaces. So `"unique" "phrase"`
+// becomes "unique phrase", a single quoted token like `"error-401"` becomes
+// "error-401", and an explicit phrase `"fix bug"` becomes "fix bug". Input with
+// no quotes is returned unchanged.
+func StripFTSQuotes(v string) string {
+	if !strings.Contains(v, `"`) {
+		return v
+	}
+	return strings.Join(FTSTerms(v), " ")
 }

@@ -751,3 +751,97 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 			turn.MessageID)
 	}
 }
+
+// TestPGSearchOperatorTokenNoError mirrors the SQLite FTS 500 regression on the
+// PostgreSQL/ILIKE backend: a single token containing operator characters
+// (hyphen, colon), prepared the way the HTTP handler does, must match content
+// and not error. ILIKE has no FTS-operator hazard, but this pins parity.
+func TestPGSearchOperatorTokenNoError(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, false)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	_, err = pg.Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('optok-001', 'test-machine', 'test-project', 'claude',
+			 'first msg text',
+			 '2026-03-20T10:00:00Z'::timestamptz, 2, 2)
+		ON CONFLICT (id) DO NOTHING`)
+	require.NoError(t, err, "insert session")
+	_, err = pg.Exec(`
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp, content_length)
+		VALUES
+			('optok-001', 0, 'user', 'hit error-401 from the api',
+			 '2026-03-20T10:00:00Z'::timestamptz, 26),
+			('optok-001', 1, 'assistant', 'returned status:500 to client',
+			 '2026-03-20T10:00:01Z'::timestamptz, 30)
+		ON CONFLICT DO NOTHING`)
+	require.NoError(t, err, "insert messages")
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	for _, raw := range []string{"error-401", "status:500"} {
+		page, err := store.Search(context.Background(), db.SearchFilter{
+			Query: db.PrepareFTSQuery(raw), Limit: 10,
+		})
+		require.NoError(t, err, "Search(%q)", raw)
+		require.Len(t, page.Results, 1, "results for %q", raw)
+		assert.Equal(t, "optok-001", page.Results[0].SessionID, "session for %q", raw)
+	}
+}
+
+// TestPGSearchMultiTermAND verifies that a multi-term query matches a session
+// only when every term appears in its content (AND), matching SQLite FTS5's
+// implicit AND so the same user query behaves identically across backends.
+func TestPGSearchMultiTermAND(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, false)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	_, err = pg.Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('andboth-001', 'test-machine', 'test-project', 'claude',
+			 'first msg text',
+			 '2026-03-21T10:00:00Z'::timestamptz, 2, 2),
+			('andone-001', 'test-machine', 'test-project', 'claude',
+			 'first msg text',
+			 '2026-03-21T11:00:00Z'::timestamptz, 2, 2)
+		ON CONFLICT (id) DO NOTHING`)
+	require.NoError(t, err, "insert sessions")
+	_, err = pg.Exec(`
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp, content_length)
+		VALUES
+			('andboth-001', 0, 'user', 'pgquickterm and pgfoxterm both here',
+			 '2026-03-21T10:00:00Z'::timestamptz, 35),
+			('andone-001', 0, 'user', 'only pgquickterm present',
+			 '2026-03-21T11:00:00Z'::timestamptz, 24)
+		ON CONFLICT DO NOTHING`)
+	require.NoError(t, err, "insert messages")
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	page, err := store.Search(context.Background(), db.SearchFilter{
+		Query: db.PrepareFTSQuery("pgquickterm pgfoxterm"), Limit: 10,
+	})
+	require.NoError(t, err, "Search")
+	require.Len(t, page.Results, 1, "only the session containing both terms")
+	assert.Equal(t, "andboth-001", page.Results[0].SessionID, "session")
+}

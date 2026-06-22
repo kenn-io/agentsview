@@ -20,11 +20,16 @@ func TestPrepareFTSQuery(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{name: "single word unchanged", raw: "login", want: "login"},
-		{name: "multi-word gets quoted", raw: "fix bug", want: `"fix bug"`},
-		{name: "already quoted unchanged", raw: `"fix bug"`, want: `"fix bug"`},
+		{name: "single word quoted", raw: "login", want: `"login"`},
+		{name: "multi-word AND of quoted terms", raw: "fix bug", want: `"fix" "bug"`},
+		{name: "three words AND", raw: "a b c", want: `"a" "b" "c"`},
+		{name: "single hyphen token quoted literal", raw: "error-401", want: `"error-401"`},
+		{name: "single colon token quoted literal", raw: "status:500", want: `"status:500"`},
+		{name: "embedded quote doubled", raw: `say"hi`, want: `"say""hi"`},
+		{name: "exact phrase via leading quote passthrough", raw: `"fix bug"`, want: `"fix bug"`},
 		{name: "empty string unchanged", raw: "", want: ""},
-		{name: "three words quoted", raw: "a b c", want: `"a b c"`},
+		{name: "whitespace only trimmed to empty", raw: "   ", want: ""},
+		{name: "leading and trailing space trimmed", raw: "  login  ", want: `"login"`},
 	}
 
 	for _, tt := range tests {

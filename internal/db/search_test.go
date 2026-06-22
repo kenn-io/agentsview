@@ -316,6 +316,192 @@ func TestSearchEmptyQueryGuard(t *testing.T) {
 	}
 }
 
+func TestPrepareFTSQuery(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "empty unchanged", raw: "", want: ""},
+		{name: "whitespace only trimmed to empty", raw: "   ", want: ""},
+		{name: "single word quoted", raw: "login", want: `"login"`},
+		{name: "leading/trailing space trimmed", raw: "  login  ", want: `"login"`},
+		{name: "multi-term AND of quoted terms", raw: "fix bug", want: `"fix" "bug"`},
+		{name: "three terms AND", raw: "a b c", want: `"a" "b" "c"`},
+		{name: "single hyphen token quoted literal", raw: "error-401", want: `"error-401"`},
+		{name: "single colon token quoted literal", raw: "status:500", want: `"status:500"`},
+		{name: "embedded quote doubled", raw: `say"hi`, want: `"say""hi"`},
+		{name: "leading quote is passthrough phrase", raw: `"fix bug"`, want: `"fix bug"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, PrepareFTSQuery(tt.raw))
+		})
+	}
+}
+
+func TestFTSTerms(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{name: "empty", in: "", want: nil},
+		{name: "whitespace only", in: "  ", want: nil},
+		{name: "bare single word", in: "login", want: []string{"login"}},
+		{name: "bare multi word", in: "fix bug", want: []string{"fix", "bug"}},
+		{name: "AND of quoted terms", in: `"error" "401"`, want: []string{"error", "401"}},
+		{name: "single quoted operator token", in: `"error-401"`, want: []string{"error-401"}},
+		{name: "exact phrase is one term", in: `"fix bug"`, want: []string{"fix bug"}},
+		{name: "doubled quote is literal quote", in: `"say""hi"`, want: []string{`say"hi`}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, FTSTerms(tt.in))
+		})
+	}
+}
+
+func TestStripFTSQuotes(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "no quotes unchanged", in: "login", want: "login"},
+		{name: "bare multi word unchanged", in: "fix bug", want: "fix bug"},
+		{name: "AND of quoted terms rejoined", in: `"error" "401"`, want: "error 401"},
+		{name: "single quoted operator token", in: `"error-401"`, want: "error-401"},
+		{name: "exact phrase rejoined", in: `"fix bug"`, want: "fix bug"},
+		{name: "empty phrase collapses to empty", in: `""`, want: ""},
+		{name: "doubled quote is literal quote", in: `"say""hi"`, want: `say"hi`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, StripFTSQuotes(tt.in))
+		})
+	}
+}
+
+// TestSearchOperatorTokenNoError is the regression for the FTS 500: a single
+// token containing FTS5 operator characters (hyphen, colon) must, once run
+// through PrepareFTSQuery as the HTTP handler does, match content and not raise
+// a malformed-query error.
+func TestSearchOperatorTokenNoError(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+
+	insertSession(t, d, "s1", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+		s.StartedAt = new("2024-01-01T10:00:00Z")
+	})
+	insertMessages(t, d,
+		userMsg("s1", 0, "encountered error-401 from the api"),
+		asstMsg("s1", 1, "the status:500 response also appeared"),
+	)
+
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "hyphen token", raw: "error-401"},
+		{name: "colon token", raw: "status:500"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			page, err := d.Search(context.Background(), SearchFilter{
+				Query: PrepareFTSQuery(tt.raw), Limit: 10,
+			})
+			require.NoError(t, err, "Search(%q)", tt.raw)
+			require.Len(t, page.Results, 1, "results for %q", tt.raw)
+			assert.Equal(t, "s1", page.Results[0].SessionID, "session")
+		})
+	}
+}
+
+func TestSearchNormalizesRawOperatorToken(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+
+	insertSession(t, d, "s1", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 1
+		s.StartedAt = new("2024-01-01T10:00:00Z")
+	})
+	insertMessages(t, d,
+		userMsg("s1", 0, "encountered error-401 from the api"),
+	)
+
+	page, err := d.Search(context.Background(), SearchFilter{
+		Query: "error-401", Limit: 10,
+	})
+	require.NoError(t, err, "Search should normalize raw FTS input")
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "s1", page.Results[0].SessionID)
+}
+
+// TestSearchMultiTermAND verifies multi-term queries match a session only when
+// every term is present somewhere in its content (FTS5 implicit AND), not as a
+// contiguous phrase.
+func TestSearchMultiTermAND(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+
+	insertSession(t, d, "both", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+		s.StartedAt = new("2024-01-01T10:00:00Z")
+	})
+	insertMessages(t, d, userMsg("both", 0, "the quick brown fox jumps"))
+
+	insertSession(t, d, "one", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+		s.StartedAt = new("2024-01-02T10:00:00Z")
+	})
+	insertMessages(t, d, userMsg("one", 0, "only quick here"))
+
+	page, err := d.Search(context.Background(), SearchFilter{
+		Query: PrepareFTSQuery("quick fox"), Limit: 10,
+	})
+	require.NoError(t, err, "Search")
+	require.Len(t, page.Results, 1, "only the session with both terms")
+	assert.Equal(t, "both", page.Results[0].SessionID, "session")
+}
+
+// TestSearchContentFTSOperatorToken is the content-search counterpart of the
+// FTS 500 regression: fts mode must accept a single hyphen/colon token.
+func TestSearchContentFTSOperatorToken(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "saw error-401 then a status:500 page"},
+		{"assistant", "ack"},
+	})
+
+	for _, raw := range []string{"error-401", "status:500"} {
+		got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			Pattern: raw, Mode: "fts",
+			Sources: []string{"messages"}, Limit: 50,
+		})
+		require.NoError(t, err, "SearchContent(%q)", raw)
+		require.Len(t, got.Matches, 1, "matches for %q", raw)
+		assert.Equal(t, "s1", got.Matches[0].SessionID, "session for %q", raw)
+	}
+}
+
 // TestSearchDeduplicationManyMessages verifies that a session with many
 // matching messages produces exactly one search result. The large message
 // count forces FTS5 to maintain multiple internal index segments, which

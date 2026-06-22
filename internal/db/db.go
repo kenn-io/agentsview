@@ -29,6 +29,11 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 50: parser-derived text is sanitized for PostgreSQL
+// parity and fingerprints. Existing rows need re-parsing so stored
+// message/session shape, timestamps, roles, token counts, and content
+// fingerprints are based on the sanitized parse output.
+//
 // Bumped to 49: incremental JSONL resume now persists next_ordinal
 // and last_entry_uuid, and Claude incremental parsing restores
 // subagent linkage plus boundary fallback behavior from stored state.
@@ -234,7 +239,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 49
+const dataVersion = 50
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

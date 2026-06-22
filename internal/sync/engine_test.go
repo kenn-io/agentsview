@@ -1759,6 +1759,28 @@ func TestOpenCodeLegacyArchiveLooksIncomplete(t *testing.T) {
 		require.False(t, openCodeLegacyArchiveLooksIncomplete(parsed, stored),
 			"got incomplete archive detection, want false")
 	})
+
+	t.Run("stripped control bytes cannot pad parsed content", func(t *testing.T) {
+		stored := []db.Message{
+			{
+				Ordinal:       1,
+				Role:          "assistant",
+				Content:       "complete archived content",
+				ContentLength: len("complete archived content"),
+			},
+		}
+		parsed := []db.Message{
+			{
+				Ordinal:       1,
+				Role:          "assistant",
+				Content:       "short" + strings.Repeat("\x00", 20),
+				ContentLength: len("complete archived content"),
+			},
+		}
+
+		require.True(t, openCodeLegacyArchiveLooksIncomplete(parsed, stored),
+			"want sanitized parsed content to preserve complete archive")
+	})
 }
 
 func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *testing.T) {

@@ -540,20 +540,42 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if f.Query == "" {
 		return db.SearchPage{}, nil
 	}
-	searchTerm := stripSearchQuotes(f.Query)
-	if searchTerm == "" {
+	// plainTerm is the de-quoted query joined back into one string. It feeds the
+	// name-branch ILIKE (matching the typed text against the short session name)
+	// and centers the message snippet via match_pos, mirroring SQLite's
+	// plainQuery and PostgreSQL's plainTerm. terms is the per-term
+	// decomposition: every term must appear in the message content (AND),
+	// matching SQLite FTS5's implicit AND so the same user query behaves
+	// identically across backends. An explicit exact phrase (user-supplied
+	// leading quote) collapses to a single term, preserving the exact-phrase
+	// opt-in.
+	plainTerm := db.StripFTSQuotes(f.Query)
+	terms := db.FTSTerms(f.Query)
+	if plainTerm == "" || len(terms) == 0 {
 		return db.SearchPage{}, nil
 	}
-	pattern := "%" + db.EscapeLikePattern(searchTerm) + "%"
+	// firstTerm anchors INSTR-based ordering and snippet centering.
+	firstTerm := terms[0]
+	namePattern := "%" + db.EscapeLikePattern(plainTerm) + "%"
 	project := ""
 	nameProject := ""
-	args := []any{searchTerm, searchTerm, pattern}
+	args := []any{firstTerm, firstTerm}
+
+	// Message branch matches every term (AND). Each term gets its own escaped
+	// ILIKE placeholder so a multi-word query requires all terms to be present
+	// without demanding they be contiguous, exactly like SQLite FTS5.
+	termClauses := make([]string, len(terms))
+	for i, t := range terms {
+		termClauses[i] = "m.content ILIKE ? ESCAPE '\\'"
+		args = append(args, "%"+db.EscapeLikePattern(t)+"%")
+	}
+	msgTermPredicate := strings.Join(termClauses, "\n\t\t\t\tAND ")
 	if f.Project != "" {
 		project = "AND s.project = ?"
 		args = append(args, f.Project)
 		nameProject = "AND s.project = ?"
 	}
-	args = append(args, pattern, pattern, pattern, pattern)
+	args = append(args, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {
 		args = append(args, f.Project)
 	}
@@ -577,7 +599,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				) AS rn
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE m.content ILIKE ? ESCAPE '\'
+			WHERE `+msgTermPredicate+`
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
 				AND `+db.SystemPrefixSQL("m.content", "m.role")+`
@@ -652,13 +674,6 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	return page, nil
 }
 
-func stripSearchQuotes(q string) string {
-	if len(q) >= 2 && q[0] == '"' && q[len(q)-1] == '"' {
-		return q[1 : len(q)-1]
-	}
-	return q
-}
-
 func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]int, error) {
 	if query == "" {
 		return nil, nil
@@ -716,9 +731,9 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		}
 	}
 	switch f.Mode {
-	case "", "substring", "fts", "regex":
-		// fts falls back to DuckDB substring search, matching the PostgreSQL
-		// provider's explicit non-FTS behavior.
+	case "", "substring", "regex":
+	case "fts":
+		f.Sources = []string{"messages"}
 	default:
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}
@@ -784,12 +799,12 @@ func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
 	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
-	pattern := "%" + db.EscapeLikePattern(f.Pattern) + "%"
 	var branches []string
 	var args []any
-	addScopedArgs := func() {
-		args = append(args, pattern)
+	addSearchArgs := func(column string) string {
+		predicate := duckContentSearchPredicate(column, f, &args)
 		args = append(args, scopeArgs...)
+		return predicate
 	}
 	for _, source := range f.Sources {
 		switch source {
@@ -798,6 +813,7 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = "m.is_system = FALSE AND " + db.SystemPrefixSQL("m.content", "m.role")
 			}
+			contentPred := addSearchArgs("m.content")
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal,
@@ -807,11 +823,11 @@ func (s *Store) collectContentSubstringMatches(
 					0 AS src, COALESCE(m.id, 0) AS row_id,
 					0 AS call_index, 0 AS event_index
 				FROM messages m JOIN sessions s ON s.id = m.session_id
-				WHERE m.content ILIKE ? ESCAPE '\'
+				WHERE `+contentPred+`
 					AND `+sysPred+`
 					AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-			addScopedArgs()
 		case "tool_input":
+			inputPred := addSearchArgs("tc.input_json")
 			branches = append(branches, `
 				SELECT tc.session_id, s.project, s.agent, 'tool_input' AS location,
 					'assistant' AS role, tc.tool_name, m.ordinal,
@@ -823,10 +839,10 @@ func (s *Store) collectContentSubstringMatches(
 				FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 				JOIN messages m ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
-				WHERE tc.input_json ILIKE ? ESCAPE '\'
+				WHERE `+inputPred+`
 					AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-			addScopedArgs()
 		case "tool_result":
+			contentPred := addSearchArgs("tc.result_content")
 			branches = append(branches, `
 					SELECT tc.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, tc.tool_name, m.ordinal,
@@ -838,7 +854,7 @@ func (s *Store) collectContentSubstringMatches(
 					FROM tool_calls tc JOIN sessions s ON s.id = tc.session_id
 					JOIN messages m ON m.session_id = tc.session_id
 						AND m.id = tc.message_id
-					WHERE tc.result_content ILIKE ? ESCAPE '\'
+					WHERE `+contentPred+`
 						AND NOT EXISTS (
 							SELECT 1 FROM tool_result_events tre
 							WHERE tre.session_id = tc.session_id
@@ -846,7 +862,7 @@ func (s *Store) collectContentSubstringMatches(
 								AND tc.tool_use_id <> ''
 						)
 						AND tc.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-			addScopedArgs()
+			eventPred := addSearchArgs("tre.content")
 			branches = append(branches, `
 					SELECT tre.session_id, s.project, s.agent, 'tool_result' AS location,
 						'assistant' AS role, '' AS tool_name,
@@ -858,9 +874,8 @@ func (s *Store) collectContentSubstringMatches(
 						tre.call_index AS call_index,
 						tre.event_index AS event_index
 					FROM tool_result_events tre JOIN sessions s ON s.id = tre.session_id
-					WHERE tre.content ILIKE ? ESCAPE '\'
+					WHERE `+eventPred+`
 						AND tre.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)`)
-			addScopedArgs()
 		default:
 			return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 		}
@@ -877,9 +892,36 @@ func (s *Store) collectContentSubstringMatches(
 		LIMIT ? OFFSET ?`
 	args = append(args, f.Limit+1, f.Cursor)
 	return s.scanContentMatches(ctx, query, args, func(body string) string {
+		if f.Mode == "fts" {
+			start, end := db.FTSSnippetRange(f.Pattern, body)
+			return duckContentSnippet(f, body, start, end)
+		}
 		off := max(db.CaseInsensitiveIndex(body, f.Pattern), 0)
 		return duckContentSnippet(f, body, off, min(off+len(f.Pattern), len(body)))
 	})
+}
+
+func duckContentSearchPredicate(
+	column string, f db.ContentSearchFilter, args *[]any,
+) string {
+	if f.Mode != "fts" {
+		*args = append(*args, "%"+db.EscapeLikePattern(f.Pattern)+"%")
+		return column + ` ILIKE ? ESCAPE '\'`
+	}
+
+	terms := db.FTSTerms(db.PrepareFTSQuery(f.Pattern))
+	clauses := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if term == "" {
+			continue
+		}
+		*args = append(*args, "%"+db.EscapeLikePattern(term)+"%")
+		clauses = append(clauses, column+` ILIKE ? ESCAPE '\'`)
+	}
+	if len(clauses) == 0 {
+		return "FALSE"
+	}
+	return strings.Join(clauses, " AND ")
 }
 
 func duckContentSnippet(f db.ContentSearchFilter, body string, start, end int) string {

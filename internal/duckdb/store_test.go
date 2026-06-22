@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,7 +165,7 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "secret token sk-duckdb", source)
 }
 
-func TestSearchContentFTSFallsBackToSubstring(t *testing.T) {
+func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)
 
@@ -179,6 +180,61 @@ func TestSearchContentFTSFallsBackToSubstring(t *testing.T) {
 	require.NotEmpty(t, got.Matches)
 	assert.Equal(t, fixture.alphaID, got.Matches[0].SessionID)
 	assert.Equal(t, "message", got.Matches[0].Location)
+}
+
+func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	body := strings.Repeat("prefix ", 30) + "the quick brown fox jumps"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: syncSession(
+				"duck-fts-both", "alpha", "first",
+				"2026-03-22T10:00:00.000Z", 1,
+			),
+			Messages: []db.Message{syncMessage(
+				"duck-fts-both", 0, "user",
+				body,
+				"2026-03-22T10:00:00.000Z",
+			)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: syncSession(
+				"duck-fts-one", "alpha", "first",
+				"2026-03-22T11:00:00.000Z", 1,
+			),
+			Messages: []db.Message{syncMessage(
+				"duck-fts-one", 0, "user",
+				"the quick answer only",
+				"2026-03-22T11:00:00.000Z",
+			)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "fts-content.duckdb"),
+		local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern:        "quick fox",
+		Mode:           "fts",
+		Sources:        []string{"messages"},
+		IncludeOneShot: true,
+		Limit:          10,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "duck-fts-both", got.Matches[0].SessionID)
+	assert.Contains(t, got.Matches[0].Snippet, "quick")
+	assert.Contains(t, got.Matches[0].Snippet, "fox")
 }
 
 func TestSearchContentInvalidModeReturnsInputError(t *testing.T) {
@@ -300,6 +356,78 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	assert.Equal(t, "duck-search-name", overridden.Results[0].SessionID)
 	assert.Equal(t, -1, overridden.Results[0].Ordinal)
 	assert.Equal(t, "needle override rename", overridden.Results[0].Snippet)
+}
+
+// TestSearchOperatorTokenNoError mirrors the SQLite FTS 500 regression on the
+// DuckDB/ILIKE backend: a single token containing operator characters (hyphen,
+// colon), prepared the way the HTTP handler does, must match content and not
+// error. ILIKE has no FTS-operator hazard, but this pins backend parity.
+func TestSearchOperatorTokenNoError(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	sessionID := "duck-optok-001"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(sessionID, "alpha", "first msg text", "2026-03-20T10:00:00.000Z", 2),
+		Messages: []db.Message{
+			syncMessage(sessionID, 0, "user", "hit error-401 from the api", "2026-03-20T10:00:00.000Z"),
+			syncMessage(sessionID, 1, "assistant", "returned status:500 to client", "2026-03-20T10:00:01.000Z"),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "optok.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	for _, raw := range []string{"error-401", "status:500"} {
+		page, err := store.Search(ctx, db.SearchFilter{
+			Query: db.PrepareFTSQuery(raw), Limit: 10,
+		})
+		require.NoError(t, err, "Search(%q)", raw)
+		require.Len(t, page.Results, 1, "results for %q", raw)
+		assert.Equal(t, sessionID, page.Results[0].SessionID, "session for %q", raw)
+	}
+}
+
+// TestSearchMultiTermAND verifies that a multi-term query matches a session only
+// when every term appears in its content (AND), matching SQLite FTS5's implicit
+// AND so the same user query behaves identically across backends. Before the
+// fix, DuckDB stripped only the outer quote pair from PrepareFTSQuery's
+// `"fix" "bug"` output and matched the literal substring `fix" "bug`, which
+// found nothing.
+func TestSearchMultiTermAND(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         syncSession("duck-andboth-001", "alpha", "first msg text", "2026-03-21T10:00:00.000Z", 1),
+			Messages:        []db.Message{syncMessage("duck-andboth-001", 0, "user", "duckfixterm and duckbugterm both here", "2026-03-21T10:00:00.000Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         syncSession("duck-andone-001", "alpha", "first msg text", "2026-03-21T11:00:00.000Z", 1),
+			Messages:        []db.Message{syncMessage("duck-andone-001", 0, "user", "only duckfixterm present", "2026-03-21T11:00:00.000Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "andterm.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	page, err := store.Search(ctx, db.SearchFilter{
+		Query: db.PrepareFTSQuery("duckfixterm duckbugterm"), Limit: 10,
+	})
+	require.NoError(t, err, "Search")
+	require.Len(t, page.Results, 1, "only the session containing both terms")
+	assert.Equal(t, "duck-andboth-001", page.Results[0].SessionID, "session")
 }
 
 func TestStoreCurationMethods(t *testing.T) {
