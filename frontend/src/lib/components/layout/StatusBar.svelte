@@ -19,16 +19,30 @@
   let progressText = $derived.by(() => {
     if (!sync.syncing || !sync.progress) return null;
     const p = sync.progress;
-    if (p.phase === "scan") {
+    if (p.detail) {
+      if (p.sessions_total > 0) {
+        const pct = Math.round(
+          (p.sessions_done / p.sessions_total) * 100,
+        );
+        return `${p.detail}: ${pct}% (${p.sessions_done}/${p.sessions_total})`;
+      }
+      return p.detail;
+    }
+    if (p.phase === "discovering" || p.phase === "scan") {
       return `Scanning ${p.current_project || ""}...`;
     }
-    if (p.phase === "parse") {
+    if (p.phase === "syncing" || p.phase === "parse") {
       const pct = p.sessions_total > 0
         ? Math.round((p.sessions_done / p.sessions_total) * 100)
         : 0;
       return `Syncing ${pct}% (${p.sessions_done}/${p.sessions_total})`;
     }
     return "Syncing...";
+  });
+
+  let progressTitle = $derived.by(() => {
+    if (!sync.syncing || !sync.progress) return null;
+    return sync.progress.hint || sync.progress.detail || null;
   });
 
   let lastSyncText = $derived.by(() => {
@@ -143,7 +157,9 @@
     {/if}
     {#if progressText}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
-      <span class="sync-progress">{progressText}</span>
+      <span class="sync-progress" title={progressTitle ?? undefined}>
+        {progressText}
+      </span>
     {:else if lastSyncText}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
       <span title={lastSyncTimestamp ?? undefined}>

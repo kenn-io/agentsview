@@ -954,7 +954,8 @@ type projectListResponse struct {
 }
 
 type syncStatusResponse struct {
-	LastSync string `json:"last_sync"`
+	LastSync string         `json:"last_sync"`
+	Progress *sync.Progress `json:"progress"`
 }
 
 type githubConfigResponse struct {
@@ -1893,6 +1894,50 @@ func TestSyncStatus(t *testing.T) {
 	if resp.LastSync == "" {
 		t.Fatal("expected last_sync field")
 	}
+}
+
+func TestSyncStatusIncludesCurrentProgress(t *testing.T) {
+	te := setup(t)
+
+	te.writeSessionFile(t, "status-proj", "status.jsonl",
+		testjsonl.NewSessionBuilder().
+			AddClaudeUser(tsZero, "status progress"),
+	)
+
+	progressSeen := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		te.engine.SyncAll(context.Background(), func(p sync.Progress) {
+			if p.SessionsTotal == 0 {
+				return
+			}
+			select {
+			case <-progressSeen:
+			default:
+				close(progressSeen)
+				<-release
+			}
+		})
+	}()
+
+	select {
+	case <-progressSeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for sync progress")
+	}
+
+	w := te.get(t, "/api/v1/sync/status")
+	assertStatus(t, w, http.StatusOK)
+
+	close(release)
+	<-done
+
+	resp := decode[syncStatusResponse](t, w)
+	require.NotNil(t, resp.Progress, "expected current progress")
+	assert.Equal(t, sync.PhaseSyncing, resp.Progress.Phase)
+	assert.Equal(t, 1, resp.Progress.SessionsTotal)
 }
 
 func TestCORSHeaders(t *testing.T) {

@@ -4,15 +4,24 @@ package sync
 type Phase string
 
 const (
-	PhaseIdle        Phase = "idle"
-	PhaseDiscovering Phase = "discovering"
-	PhaseSyncing     Phase = "syncing"
-	PhaseDone        Phase = "done"
+	PhaseIdle             Phase = "idle"
+	PhaseDiscovering      Phase = "discovering"
+	PhasePreparingResync  Phase = "preparing_resync"
+	PhaseSyncing          Phase = "syncing"
+	PhaseCopyingMetadata  Phase = "copying_metadata"
+	PhaseCopyingOrphans   Phase = "copying_orphans"
+	PhaseReclassifying    Phase = "reclassifying"
+	PhaseRebuildingSearch Phase = "rebuilding_search"
+	PhaseSwappingDatabase Phase = "swapping_database"
+	PhaseDone             Phase = "done"
 )
 
 // Progress reports sync progress to listeners.
 type Progress struct {
 	Phase           Phase  `json:"phase"`
+	Detail          string `json:"detail,omitempty"`
+	Hint            string `json:"hint,omitempty"`
+	Resync          bool   `json:"resync,omitempty"`
 	CurrentProject  string `json:"current_project,omitempty"`
 	ProjectsTotal   int    `json:"projects_total"`
 	ProjectsDone    int    `json:"projects_done"`

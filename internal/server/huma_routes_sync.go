@@ -24,6 +24,7 @@ func (s *Server) registerSyncRoutes() {
 type syncStatusResponse struct {
 	LastSync string             `json:"last_sync"`
 	Stats    *syncpkg.SyncStats `json:"stats"`
+	Progress *syncpkg.Progress  `json:"progress,omitempty"`
 }
 
 type sessionSyncInput struct {
@@ -43,8 +44,16 @@ func (s *Server) humaSyncStatus(
 	if !lastSync.IsZero() {
 		lastSyncStr = lastSync.Format(time.RFC3339)
 	}
+	var progress *syncpkg.Progress
+	if p, ok := s.engine.CurrentProgress(); ok {
+		progress = &p
+	}
 	return &jsonOutput[syncStatusResponse]{
-		Body: syncStatusResponse{LastSync: lastSyncStr, Stats: &stats},
+		Body: syncStatusResponse{
+			LastSync: lastSyncStr,
+			Stats:    &stats,
+			Progress: progress,
+		},
 	}, nil
 }
 

@@ -491,6 +491,21 @@ func printSyncSummary(stats sync.SyncStats, t time.Time) {
 }
 
 func printSyncProgress(p sync.Progress) {
+	if p.Detail != "" {
+		detail := p.Detail
+		if p.SessionsTotal > 0 {
+			detail = fmt.Sprintf(
+				"%s: %d/%d sessions (%.0f%%) · %d messages",
+				detail, p.SessionsDone, p.SessionsTotal,
+				p.Percent(), p.MessagesIndexed,
+			)
+		}
+		if p.Hint != "" {
+			detail += " - " + p.Hint
+		}
+		fmt.Printf("\r  %s", detail)
+		return
+	}
 	if p.SessionsTotal > 0 {
 		fmt.Printf(
 			"\r  %d/%d sessions (%.0f%%) · %d messages",

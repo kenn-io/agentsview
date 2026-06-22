@@ -1175,6 +1175,62 @@ func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
 		"final MessagesIndexed = %d regressed from peak %d", last.MessagesIndexed, peakMessages)
 }
 
+func TestSyncEngineCurrentProgressDuringSync(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "msg").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	var seen sync.Progress
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		if seen.Phase != "" {
+			return
+		}
+		current, ok := env.engine.CurrentProgress()
+		require.True(t, ok, "CurrentProgress should be available during sync")
+		assert.Equal(t, p.Phase, current.Phase, "current progress phase")
+		assert.Equal(t, p.SessionsTotal, current.SessionsTotal, "current progress total")
+		seen = current
+	})
+
+	require.NotEmpty(t, seen.Phase, "expected progress to be observed")
+	_, ok := env.engine.CurrentProgress()
+	assert.False(t, ok, "CurrentProgress should be cleared after sync")
+}
+
+func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
+	env := setupTestEnv(t)
+	if !env.db.HasFTS() {
+		t.Skip("FTS unavailable")
+	}
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "findable prompt").
+		AddClaudeAssistant(tsZeroS5, "findable response").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	var events []sync.Progress
+	stats := env.engine.ResyncAll(context.Background(), func(p sync.Progress) {
+		events = append(events, p)
+	})
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
+
+	var fts sync.Progress
+	for _, event := range events {
+		if event.Phase == sync.PhaseRebuildingSearch {
+			fts = event
+			break
+		}
+	}
+	require.Equal(t, sync.PhaseRebuildingSearch, fts.Phase, "missing FTS rebuild progress event; events=%+v", events)
+	assert.True(t, fts.Resync, "FTS progress should identify full resync")
+	assert.Contains(t, fts.Detail, "Rebuilding search index")
+	assert.Contains(t, fts.Hint, "may take a while")
+}
+
 func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
 	env := setupTestEnv(t)
 
