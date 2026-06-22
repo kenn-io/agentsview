@@ -1005,7 +1005,12 @@ fn extract_startup_status(chunk: &str) -> Option<String> {
         .find(|s| !s.is_empty())?;
     // Only forward lines that look like sync output, not
     // arbitrary log noise.
-    if segment.contains("sessions") || segment.contains("ync") || segment.contains("atching") {
+    if segment.contains("sessions")
+        || segment.contains("ync")
+        || segment.contains("atching")
+        || segment.contains("search index")
+        || segment.contains("database")
+    {
         return Some(segment.to_string());
     }
     None
@@ -1627,6 +1632,19 @@ mod tests {
         assert_eq!(
             extract_startup_status("Watching 50 directories for changes (12ms)\n"),
             Some("Watching 50 directories for changes (12ms)".to_string())
+        );
+        assert_eq!(
+            extract_startup_status(
+                "\r  Rebuilding search index - Rebuilding the search index may take a while on large archives."
+            ),
+            Some(
+                "Rebuilding search index - Rebuilding the search index may take a while on large archives."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            extract_startup_status("\r  Swapping rebuilt database into place"),
+            Some("Swapping rebuilt database into place".to_string())
         );
 
         // Unrelated output is ignored
