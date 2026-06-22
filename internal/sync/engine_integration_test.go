@@ -1200,6 +1200,20 @@ func TestSyncEngineCurrentProgressDuringSync(t *testing.T) {
 	assert.False(t, ok, "CurrentProgress should be cleared after sync")
 }
 
+func TestSyncEngineCurrentProgressClearedAfterSyncPaths(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "msg").
+		String()
+	path := env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	env.engine.SyncPaths([]string{path})
+
+	_, ok := env.engine.CurrentProgress()
+	assert.False(t, ok, "CurrentProgress should be cleared after SyncPaths")
+}
+
 func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
 	env := setupTestEnv(t)
 	if !env.db.HasFTS() {

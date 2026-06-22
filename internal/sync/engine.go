@@ -409,6 +409,7 @@ func (e *Engine) SyncPaths(paths []string) {
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
 
 	results := e.startWorkers(context.Background(), files)
 	stats = e.collectAndBatch(
