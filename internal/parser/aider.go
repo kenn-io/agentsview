@@ -98,7 +98,10 @@ var aiderProtectedHomeDirs = map[string]struct{}{
 	"Desktop":   {},
 	"Documents": {},
 	"Downloads": {},
+	"Movies":    {},
 	"Music":     {},
+	"Photos":    {},
+	"Pictures":  {},
 }
 
 // AiderDiscoverySkipDirNames returns the directory basenames pruned by Aider

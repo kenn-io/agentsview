@@ -617,13 +617,36 @@ func TestAiderShouldSkipProtectedHomeDirsOnlyOnDarwinHomeRoot(t *testing.T) {
 		"explicit protected roots are user-scoped opt-ins")
 }
 
+func TestAiderProtectedHomeDirsCoversMacOSTCCPrompts(t *testing.T) {
+	for _, name := range []string{
+		"Desktop",
+		"Documents",
+		"Downloads",
+		"Movies",
+		"Music",
+		"Photos",
+		"Pictures",
+	} {
+		_, ok := aiderProtectedHomeDirs[name]
+		assert.True(t, ok, "%s should be pruned from default home discovery", name)
+	}
+}
+
 func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS TCC protected-directory pruning is Darwin-only")
 	}
 	root := t.TempDir()
 	t.Setenv("HOME", root)
-	for _, name := range []string{"Desktop", "Documents", "Downloads", "Music"} {
+	for _, name := range []string{
+		"Desktop",
+		"Documents",
+		"Downloads",
+		"Movies",
+		"Music",
+		"Photos",
+		"Pictures",
+	} {
 		protectedRepo := filepath.Join(root, name, "proj")
 		require.NoError(t, os.MkdirAll(protectedRepo, 0o755))
 		require.NoError(t, os.WriteFile(
