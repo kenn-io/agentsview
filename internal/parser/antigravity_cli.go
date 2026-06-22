@@ -192,8 +192,13 @@ func ParseAntigravityCLISessionWithStatus(
 	var messages []ParsedMessage
 	var usageEvents []ParsedUsageEvent
 	var hasTrajectory bool
+	// sourceVersion is the schema-fingerprint label of the .db source; it
+	// stays empty for legacy .pb and sidecar-only sessions where no schema
+	// is available, so SourceVersion is never fabricated.
+	var sourceVersion string
 	if ext == ".db" {
 		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
+		sourceVersion = dbResult.sourceVersion
 		// gen_metadata token usage describes the session's actual
 		// consumption no matter which transcript source wins below.
 		// The sidecar also extracts generatorMetadata usage, but
@@ -364,6 +369,7 @@ func ParseAntigravityCLISessionWithStatus(
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
+		SourceVersion:    sourceVersion,
 		File: FileInfo{
 			Path:  path,
 			Size:  size,
@@ -395,7 +401,14 @@ func loadAntigravityCLIDBSteps(
 		)
 	}
 	defer db.Close()
-	return loadAntigravityStepsWithRawCount(db)
+	result, err := loadAntigravityStepsWithRawCount(db)
+	if err != nil {
+		return result, err
+	}
+	// Schema-fingerprint label for the producing agy build, derived from the
+	// same shared helper the IDE path uses so both classify identically.
+	result.sourceVersion = antigravitySourceVersion(db)
+	return result, nil
 }
 
 func mergeAntigravityDBHistoryMessages(
