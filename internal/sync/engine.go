@@ -4519,6 +4519,14 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
+	// A prior sync that stored no message rows has no safe append
+	// boundary. Rewritten files can grow in place and keep the same
+	// identity, which makes a full-file replacement look like an
+	// append from the old file_size offset.
+	if inc.MsgCount == 0 {
+		return processResult{}, false
+	}
+
 	// If the file was replaced (different inode/device), fall
 	// back to a full parse so we don't append on top of stale
 	// state. Only check when both sides have a known identity
