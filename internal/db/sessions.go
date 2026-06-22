@@ -1822,6 +1822,22 @@ func (db *DB) GetFileInfoByPath(
 	return s.Int64, m.Int64, true
 }
 
+// GetProjectByPath returns the stored project for the newest
+// non-deleted session matching file_path.
+func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
+	err := db.getReader().QueryRow(
+		"SELECT project FROM sessions"+
+			" WHERE file_path = ?"+
+			" AND deleted_at IS NULL"+
+			" ORDER BY file_mtime DESC LIMIT 1",
+		path,
+	).Scan(&project)
+	if err != nil {
+		return "", false
+	}
+	return project, true
+}
+
 // GetFileHashByPath returns the stored file_hash for the session
 // matching file_path, preferring the most recently modified row.
 // The bool is false when no row exists or the column is NULL. Used

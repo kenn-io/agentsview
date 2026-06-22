@@ -1364,6 +1364,39 @@ func TestShouldSkipFileWithIDPrefix(t *testing.T) {
 	assert.False(t, got2, "shouldSkipFile without prefix should return false")
 }
 
+func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
+	database := openTestDB(t)
+	path := filepath.Join(t.TempDir(), "rollout-2026-06-21T18-59-38-abc.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+
+	sess := db.Session{
+		ID:        "host~codex:abc",
+		Project:   "roborev_ci_28293_3831737461",
+		Machine:   "host",
+		Agent:     "codex",
+		FilePath:  strPtr("host:" + path),
+		FileSize:  int64Ptr(info.Size()),
+		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	assert.False(t, e.shouldSkipCodex(path, info),
+		"stale generated roborev CI projects must be reparsed")
+}
+
 func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()

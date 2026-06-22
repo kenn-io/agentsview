@@ -790,6 +790,9 @@ func isDefaultBranchToken(branch string) bool {
 // NeedsProjectReparse checks if a stored project name looks like
 // an un-decoded encoded path that should be re-extracted.
 func NeedsProjectReparse(project string) bool {
+	if strings.HasPrefix(project, "roborev_ci_") {
+		return true
+	}
 	bad := []string{
 		"_Users", "_home", "_private", "_tmp", "_var",
 	}

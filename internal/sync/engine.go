@@ -4793,6 +4793,10 @@ func (e *Engine) shouldSkipCodex(
 	if !ok || storedSize != info.Size() {
 		return false
 	}
+	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
+		parser.NeedsProjectReparse(project) {
+		return false
+	}
 	if e.db.GetDataVersionByPath(lookupPath) <
 		db.CurrentDataVersion() {
 		return false

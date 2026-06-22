@@ -106,6 +106,7 @@ func TestNeedsProjectReparse(t *testing.T) {
 		{"_var_folders_xx_temp", true},
 		{"_private_tmp_build", true},
 		{"_tmp_workspace", true},
+		{"roborev_ci_28293_3831737461", true},
 		{"normal_var_project", false},
 	}
 
