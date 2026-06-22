@@ -80,9 +80,12 @@ func TestSessionList_ResumeHumanOutput(t *testing.T) {
 	out, err := executeCommand(newRootCommand(), "session", "list", "--resume")
 	require.NoError(t, err)
 	// Enriched human header is present and the in-flight marker is shown
-	// for the recently-active row.
+	// for the recently-active row. The ID column keeps a copyable handle
+	// for the surfaced session.
+	assert.Contains(t, out, "ID")
 	assert.Contains(t, out, "AGE")
 	assert.Contains(t, out, "NAME")
+	assert.Contains(t, out, "fresh")
 	assert.Contains(t, out, activeMarker)
 	assert.NotContains(t, out, "stale")
 }

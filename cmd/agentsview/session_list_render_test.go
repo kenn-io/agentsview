@@ -193,9 +193,15 @@ func TestPrintSessionListHuman(t *testing.T) {
 		&out, listFixture(home), renderNow, home))
 	s := out.String()
 
-	// Header carries the enriched columns.
-	for _, col := range []string{"AGE", "AGENT", "PROJECT", "BRANCH", "MSGS", "NAME", "CWD"} {
+	// Header carries the enriched columns, with ID restored as the first
+	// data column so every row has a copyable handle.
+	for _, col := range []string{"ID", "AGE", "AGENT", "PROJECT", "BRANCH", "MSGS", "NAME", "CWD"} {
 		assert.Contains(t, s, col)
+	}
+
+	// Every row carries its full, untruncated session ID.
+	for _, id := range []string{"s_live", "s_codex", "s_old"} {
+		assert.Contains(t, s, id)
 	}
 
 	// The live session (1m ago) is flagged in-flight; the codex session

@@ -1,6 +1,7 @@
 // ABOUTME: human-mode rendering helpers for `session list` — the
-// ABOUTME: resume-oriented table (AGE, in-flight marker, BRANCH, MSGS,
-// ABOUTME: NAME, ~-collapsed CWD) and the field formatters it relies on.
+// ABOUTME: resume-oriented table (in-flight marker, ID, AGE, AGENT,
+// ABOUTME: PROJECT, BRANCH, MSGS, NAME, ~-collapsed CWD) and the field
+// ABOUTME: formatters it relies on.
 package main
 
 import (

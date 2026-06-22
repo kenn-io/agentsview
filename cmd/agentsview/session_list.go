@@ -182,13 +182,14 @@ func newSessionListCommand() *cobra.Command {
 const sessionNameWidth = 44
 
 // printSessionListHuman writes a resume-oriented table of the session
-// list: an in-flight marker for recently-active sessions, the humanized
-// AGE since last activity, AGENT, PROJECT, BRANCH, MSGS, NAME, and a
-// ~-collapsed CWD. now and home are passed in so output is deterministic
-// under test. A trailing hint is printed when another page is available.
-// Prints "(no sessions)" for empty lists. Every session-derived string is
-// run through sanitizeTerminal so untrusted DB rows cannot drive terminal
-// escape sequences.
+// list: an in-flight marker for recently-active sessions, the full session
+// ID (the copyable handle for `session get`/`messages`/`usage`), the
+// humanized AGE since last activity, AGENT, PROJECT, BRANCH, MSGS, NAME,
+// and a ~-collapsed CWD. now and home are passed in so output is
+// deterministic under test. A trailing hint is printed when another page is
+// available. Prints "(no sessions)" for empty lists. Every session-derived
+// string is run through sanitizeTerminal so untrusted DB rows cannot drive
+// terminal escape sequences.
 func printSessionListHuman(
 	w io.Writer, list *service.SessionList, now time.Time, home string,
 ) error {
@@ -197,15 +198,16 @@ func printSessionListHuman(
 		return nil
 	}
 	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "\tAGE\tAGENT\tPROJECT\tBRANCH\tMSGS\tNAME\tCWD")
+	fmt.Fprintln(tw, "\tID\tAGE\tAGENT\tPROJECT\tBRANCH\tMSGS\tNAME\tCWD")
 	for _, s := range list.Sessions {
 		marker := ""
 		if isSessionRecentlyActive(s, now) {
 			marker = activeMarker
 		}
 		name := truncName(sessionDisplayName(s), sessionNameWidth)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 			marker,
+			sanitizeTerminal(s.ID),
 			humanizeSessionAge(s, now),
 			sanitizeTerminal(orEmDash(s.Agent)),
 			sanitizeTerminal(orEmDash(s.Project)),
