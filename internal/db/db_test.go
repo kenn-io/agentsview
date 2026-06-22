@@ -791,7 +791,7 @@ func TestOpenPreservesDataAtCurrentVersion(t *testing.T) {
 	require.Len(t, page.Sessions, 1, "expected 1 session preserved, got")
 }
 
-func TestOpenDoesNotDowngradeUserVersion(t *testing.T) {
+func TestOpenRejectsNewerDataVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
@@ -808,20 +808,23 @@ func TestOpenDoesNotDowngradeUserVersion(t *testing.T) {
 	d.Close()
 
 	// Reopen with current (lower) dataVersion.
-	d2, err := Open(path)
-	requireNoError(t, err, "reopen")
-	defer d2.Close()
+	d2, openErr := Open(path)
+	require.Nil(t, d2, "newer database must not open")
+	require.Error(t, openErr, "newer database must be rejected")
 
 	var version int
-	err = d2.getWriter().QueryRow(
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "raw sqlite open")
+	defer conn.Close()
+	err = conn.QueryRow(
 		"PRAGMA user_version",
 	).Scan(&version)
 	requireNoError(t, err, "read version")
 
 	assert.Equal(t, futureVersion, version,
-		"user_version should not downgrade")
-	assert.False(t, d2.NeedsResync(),
-		"NeedsResync should be false for higher version")
+		"user_version should not be mutated")
+	assert.True(t, IsDataVersionTooNew(openErr),
+		"expected too-new data version error")
 }
 
 func TestOpenProbeErrorPropagates(t *testing.T) {
@@ -853,8 +856,8 @@ func TestOpenProbeErrorPropagates(t *testing.T) {
 		require.Error(t, err, "expected error")
 		assert.ErrorIs(t, err, fs.ErrPermission,
 			"expected permission error")
-		assert.Contains(t, err.Error(), "checking schema",
-			"expected 'checking schema' wrapper")
+		assert.Contains(t, err.Error(), "checking database",
+			"expected database compatibility wrapper")
 	})
 
 	t.Run("ProbeReadError", func(t *testing.T) {
@@ -875,8 +878,8 @@ func TestOpenProbeErrorPropagates(t *testing.T) {
 		_, err = Open(path)
 		require.Error(t, err, "expected error")
 		assert.True(t,
-			strings.Contains(err.Error(), "checking schema") ||
-				strings.Contains(err.Error(), "probing schema"),
+			strings.Contains(err.Error(), "checking database") ||
+				strings.Contains(err.Error(), "probing data version"),
 			"unexpected error: %v", err)
 	})
 }

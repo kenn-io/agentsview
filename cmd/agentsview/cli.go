@@ -90,21 +90,26 @@ func newRootCommand() *cobra.Command {
 
 func newServeCommand() *cobra.Command {
 	var background bool
+	var checkDataVersion bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Start server",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if checkDataVersion {
+				return runServeDataVersionCheck(mustLoadConfig(cmd))
+			}
 			if background {
 				// Acquire the launch lock before loading config; config
 				// loading writes config.toml and must be single-writer
 				// across concurrent launches.
 				runServeBackgroundCommand(cmd)
-				return
+				return nil
 			}
 			runServe(mustLoadConfig(cmd))
+			return nil
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -113,10 +118,21 @@ func newServeCommand() *cobra.Command {
 		false,
 		"Start server in the background and return to the shell",
 	)
+	cmd.Flags().BoolVar(
+		&checkDataVersion,
+		"check-data-version",
+		false,
+		"Check whether the configured database is compatible with this binary",
+	)
+	_ = cmd.Flags().MarkHidden("check-data-version")
 	config.RegisterServePFlags(cmd.Flags())
 	cmd.AddCommand(newServeStatusCommand())
 	cmd.AddCommand(newServeStopCommand())
 	return cmd
+}
+
+func runServeDataVersionCheck(cfg config.Config) error {
+	return db.CheckDataVersion(cfg.DBPath)
 }
 
 func newServeStatusCommand() *cobra.Command {

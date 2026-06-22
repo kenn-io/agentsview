@@ -296,6 +296,11 @@ func runPGServe(appCfg config.Config, basePath string) {
 			"Drop and recreate the PG schema, then run "+
 			"'agentsview pg push --full' to repopulate.", err)
 	}
+	if err := postgres.CheckDataVersionCompat(
+		ctx, store.DB(),
+	); err != nil {
+		fatal("pg serve: %v", err)
+	}
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          "pg-serve",

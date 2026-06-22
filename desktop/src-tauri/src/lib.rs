@@ -83,9 +83,39 @@ pub fn run() {
         .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())
         .setup(|app| {
-            launch_backend(app)?;
             setup_menu(app)?;
-            schedule_auto_update_check(app.handle().clone());
+            match tauri::async_runtime::block_on(run_data_version_preflight(app.handle())) {
+                Ok(()) => {
+                    launch_backend(app)?;
+                    schedule_auto_update_check(app.handle().clone());
+                }
+                Err(DataVersionPreflightError::TooNew(message)) => {
+                    let window = main_window(app)?;
+                    show_preflight_error(
+                        &window,
+                        "AgentsView needs an update",
+                        format!(
+                            "{message}. AgentsView cannot open this archive with the bundled backend."
+                        )
+                        .as_str(),
+                    );
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        check_for_updates(&handle, false).await;
+                    });
+                }
+                Err(DataVersionPreflightError::Failed(message)) => {
+                    let window = main_window(app)?;
+                    show_preflight_error(
+                        &window,
+                        "AgentsView could not verify the archive",
+                        format!(
+                            "Database compatibility check failed: {message}. The backend was not started."
+                        )
+                        .as_str(),
+                    );
+                }
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -164,6 +194,87 @@ fn sidecar_args(port: &str) -> Vec<String> {
         "--port".to_string(),
         port.to_string(),
     ]
+}
+
+fn data_version_preflight_args() -> Vec<String> {
+    vec!["serve".to_string(), "--check-data-version".to_string()]
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DataVersionPreflightError {
+    TooNew(String),
+    Failed(String),
+}
+
+async fn run_data_version_preflight(app: &AppHandle) -> Result<(), DataVersionPreflightError> {
+    let mut command = app
+        .shell()
+        .sidecar("agentsview")
+        .map_err(|err| DataVersionPreflightError::Failed(err.to_string()))?;
+    for (key, value) in sidecar_env() {
+        command = command.env(key, value);
+    }
+
+    let (mut rx, _child) = command
+        .args(data_version_preflight_args())
+        .spawn()
+        .map_err(|err| DataVersionPreflightError::Failed(err.to_string()))?;
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                stdout.push_str(String::from_utf8_lossy(&bytes).as_ref());
+            }
+            CommandEvent::Stderr(bytes) => {
+                stderr.push_str(String::from_utf8_lossy(&bytes).as_ref());
+            }
+            CommandEvent::Terminated(payload) => {
+                return classify_data_version_preflight_exit(payload.code, &stdout, &stderr);
+            }
+            CommandEvent::Error(err) => {
+                stderr.push_str(err.as_str());
+                stderr.push('\n');
+            }
+            _ => {}
+        }
+    }
+
+    Err(DataVersionPreflightError::Failed(
+        "data version preflight ended without an exit status".to_string(),
+    ))
+}
+
+fn classify_data_version_preflight_exit(
+    code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> Result<(), DataVersionPreflightError> {
+    if code == Some(0) {
+        return Ok(());
+    }
+
+    let message = combined_preflight_output(stdout, stderr)
+        .unwrap_or_else(|| format!("data version preflight exited with code {code:?}"));
+    if message.contains("database data version")
+        && message.contains("is newer than this agentsview binary")
+    {
+        return Err(DataVersionPreflightError::TooNew(message));
+    }
+    Err(DataVersionPreflightError::Failed(message))
+}
+
+fn combined_preflight_output(stdout: &str, stderr: &str) -> Option<String> {
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        return Some(stderr.to_string());
+    }
+    let stdout = stdout.trim();
+    if !stdout.is_empty() {
+        return Some(stdout.to_string());
+    }
+    None
 }
 
 fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
@@ -843,6 +954,29 @@ fn main_window_from_handle(handle: &AppHandle) -> Result<WebviewWindow, DynError
     handle
         .get_webview_window("main")
         .ok_or_else(|| io::Error::other("missing main window").into())
+}
+
+fn show_preflight_error(window: &WebviewWindow, title: &str, message: &str) {
+    let title = js_string_literal(title);
+    let message = js_string_literal(message);
+    let script = format!(
+        "(function() {{\
+            var h = document.querySelector('h1');\
+            if (h) h.textContent = {title};\
+            if (window.__setStatus) window.__setStatus({message});\
+            var meter = document.querySelector('.meter');\
+            if (meter) meter.style.display = 'none';\
+            var stages = document.querySelector('.stage-list');\
+            if (stages) stages.style.display = 'none';\
+            var foot = document.querySelector('.foot');\
+            if (foot) foot.textContent = 'Use Check for Updates from the AgentsView menu after updating manually.';\
+        }})()"
+    );
+    let _ = window.eval(script.as_str());
+}
+
+fn js_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn desktop_redirect_url(port: u16) -> String {
@@ -1567,6 +1701,52 @@ mod tests {
                 "--port".to_string(),
                 "18080".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn data_version_preflight_args_use_serve_check() {
+        assert_eq!(
+            data_version_preflight_args(),
+            vec!["serve".to_string(), "--check-data-version".to_string()]
+        );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_accepts_success() {
+        assert_eq!(
+            classify_data_version_preflight_exit(Some(0), "", ""),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_detects_too_new_database() {
+        let err = classify_data_version_preflight_exit(
+            Some(1),
+            "",
+            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+        )
+        .expect_err("expected too-new error");
+
+        assert_eq!(
+            err,
+            DataVersionPreflightError::TooNew(
+                "fatal: database data version 59 is newer than this agentsview binary's data version 49"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_keeps_generic_failures_separate() {
+        let err =
+            classify_data_version_preflight_exit(Some(1), "", "fatal: loading config: bad toml")
+                .expect_err("expected preflight failure");
+
+        assert_eq!(
+            err,
+            DataVersionPreflightError::Failed("fatal: loading config: bad toml".to_string())
         );
     }
 

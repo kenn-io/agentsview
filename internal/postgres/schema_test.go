@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	localdb "go.kenn.io/agentsview/internal/db"
 )
 
 type schemaProbeDriver struct{}
@@ -32,6 +33,7 @@ type schemaProbeState struct {
 	alterTableExecs     []string
 	currentSchema       string
 	existingColumnNames map[string][]string
+	maxDataVersion      int
 }
 
 var (
@@ -138,6 +140,11 @@ func (c *schemaProbeConn) QueryContext(
 		return &schemaProbeRows{
 			columns: []string{"value"},
 		}, nil
+	case strings.Contains(normalized, "max(data_version)"):
+		return &schemaProbeRows{
+			columns: []string{"max"},
+			values:  [][]driver.Value{{int64(c.state.maxDataVersion)}},
+		}, nil
 	case strings.Contains(normalized, "select id, first_message"):
 		return &schemaProbeRows{
 			columns: []string{
@@ -238,6 +245,17 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 
 	assert.Equal(t, 1, state.informationQueryCount(),
 		"information_schema.columns queries")
+}
+
+func TestCheckDataVersionCompatRejectsNewerPGRows(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.maxDataVersion = localdb.CurrentDataVersion() + 10
+
+	err := CheckDataVersionCompat(context.Background(), pg)
+
+	require.Error(t, err, "newer PG data version must be rejected")
+	assert.True(t, localdb.IsDataVersionTooNew(err),
+		"expected too-new data version error")
 }
 
 func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {

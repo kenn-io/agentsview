@@ -73,6 +73,10 @@ func (s *Sync) Push(
 	start := time.Now()
 	var result PushResult
 
+	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
+		return result, err
+	}
+
 	if err := s.normalizeSyncTimestamps(ctx); err != nil {
 		return result, err
 	}

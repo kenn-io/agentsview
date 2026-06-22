@@ -255,6 +255,26 @@ const (
 // the WAL because another connection still had pages pinned.
 var ErrWALCheckpointBusy = errors.New("wal checkpoint busy")
 
+// DataVersionTooNewError reports that an archive was written by a newer
+// agentsview parser than the current binary understands.
+type DataVersionTooNewError struct {
+	DatabaseVersion int
+	BinaryVersion   int
+}
+
+func (e *DataVersionTooNewError) Error() string {
+	return fmt.Sprintf(
+		"database data version %d is newer than this agentsview binary's data version %d; upgrade agentsview before serving or syncing",
+		e.DatabaseVersion, e.BinaryVersion,
+	)
+}
+
+// IsDataVersionTooNew reports whether err wraps DataVersionTooNewError.
+func IsDataVersionTooNew(err error) bool {
+	var tooNew *DataVersionTooNewError
+	return errors.As(err, &tooNew)
+}
+
 // ClassifierHashKey is the shared SQLite stats / PG sync_metadata key
 // under which the current is_automated classifier hash is stored.
 // Exported so the postgres package and the classifier rebuild CLI
@@ -442,7 +462,7 @@ func Open(path string) (*DB, error) {
 
 	schemaStale, dataStale, err := probeDatabase(path)
 	if err != nil {
-		return nil, fmt.Errorf("checking schema: %w", err)
+		return nil, fmt.Errorf("checking database: %w", err)
 	}
 	if schemaStale {
 		if err := dropDatabase(path); err != nil {
@@ -483,6 +503,14 @@ func Open(path string) (*DB, error) {
 	return d, nil
 }
 
+// CheckDataVersion verifies that the database file, when present, was not
+// written by a newer agentsview binary. Older data versions are compatible
+// with startup because callers can run the normal non-destructive resync path.
+func CheckDataVersion(path string) error {
+	_, _, err := probeDatabase(path)
+	return err
+}
+
 // probeDatabase checks an existing database for schema and
 // data staleness. Returns (schemaStale, dataStale, err).
 // schemaStale means required columns are missing and the DB
@@ -508,6 +536,17 @@ func probeDatabase(
 	}
 	defer conn.Close()
 
+	version, err := readUserVersion(conn)
+	if err != nil {
+		return false, false, err
+	}
+	if version > dataVersion {
+		return false, false, &DataVersionTooNewError{
+			DatabaseVersion: version,
+			BinaryVersion:   dataVersion,
+		}
+	}
+
 	schema, err := needsSchemaRebuild(conn)
 	if err != nil {
 		return false, false, err
@@ -516,11 +555,7 @@ func probeDatabase(
 		return true, false, nil
 	}
 
-	data, err := needsDataResync(conn)
-	if err != nil {
-		return false, false, err
-	}
-	return false, data, nil
+	return false, version < dataVersion, nil
 }
 
 // needsSchemaRebuild probes for required columns that may be
@@ -558,20 +593,17 @@ func needsSchemaRebuild(conn *sql.DB) (bool, error) {
 	return false, nil
 }
 
-// needsDataResync checks whether user_version is behind the
-// current dataVersion, indicating parser changes that require
-// re-processing existing files.
-func needsDataResync(conn *sql.DB) (bool, error) {
+func readUserVersion(conn *sql.DB) (int, error) {
 	var version int
 	err := conn.QueryRow(
 		"PRAGMA user_version",
 	).Scan(&version)
 	if err != nil {
-		return false, fmt.Errorf(
+		return 0, fmt.Errorf(
 			"probing data version: %w", err,
 		)
 	}
-	return version < dataVersion, nil
+	return version, nil
 }
 
 // migrateColumns adds columns introduced by this branch to

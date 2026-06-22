@@ -1511,6 +1511,29 @@ func CheckSchemaCompat(
 	return nil
 }
 
+// CheckDataVersionCompat rejects PG datasets containing rows written by a
+// newer agentsview parser. PG does not have SQLite's global user_version, so
+// the highest session data_version is the compatibility marker.
+func CheckDataVersionCompat(ctx context.Context, pg *sql.DB) error {
+	var version int
+	err := pg.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`,
+	).Scan(&version)
+	if err != nil {
+		if isUndefinedTable(err) {
+			return nil
+		}
+		return fmt.Errorf("checking PG data version: %w", err)
+	}
+	if version > db.CurrentDataVersion() {
+		return &db.DataVersionTooNewError{
+			DatabaseVersion: version,
+			BinaryVersion:   db.CurrentDataVersion(),
+		}
+	}
+	return nil
+}
+
 // IsReadOnlyError returns true when the error indicates a PG
 // read-only or insufficient-privilege condition (SQLSTATE 25006
 // or 42501). Uses pgconn.PgError for reliable SQLSTATE matching.
