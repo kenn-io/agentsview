@@ -189,18 +189,19 @@ func writeOneSessionBatchTx(
 	if excluded == 1 {
 		return 0, ErrSessionExcluded
 	}
-	var trashed int
+	var deletedAt sql.NullString
 	err = tx.QueryRow(
-		"SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL",
+		"SELECT deleted_at FROM sessions WHERE id = ?",
 		write.Session.ID,
-	).Scan(&trashed)
+	).Scan(&deletedAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf(
 			"checking trash for %s: %w",
 			write.Session.ID, err,
 		)
 	}
-	if trashed == 1 {
+	sessionExists := err == nil
+	if deletedAt.Valid {
 		return 0, ErrSessionTrashed
 	}
 
@@ -221,7 +222,7 @@ func writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
-	if write.ReplaceMessages {
+	if write.ReplaceMessages && sessionExists {
 		pins, err = savePinsTx(tx, write.Session.ID)
 		if err != nil {
 			return 0, err

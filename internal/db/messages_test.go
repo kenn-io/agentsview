@@ -120,6 +120,19 @@ func requireMessagesDeleteTriggerRestored(t *testing.T, d *DB) {
 		"messages_ad trigger no longer matches the canonical FTS delete path")
 }
 
+func requireMessagesDeleteTriggerPoisoned(t *testing.T, d *DB) {
+	t.Helper()
+
+	var triggerSQL string
+	err := d.getReader().QueryRow(
+		`SELECT sql FROM sqlite_master
+		 WHERE type = 'trigger' AND name = 'messages_ad'`,
+	).Scan(&triggerSQL)
+	require.NoError(t, err, "read messages_ad trigger")
+	assert.Contains(t, triggerSQL, "poison messages_ad fired",
+		"fresh batch write should not touch the delete trigger")
+}
+
 func TestInsertAndGetMessage_ThinkingText(t *testing.T) {
 	t.Parallel()
 	d := testDB(t)
@@ -475,6 +488,34 @@ func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
 	require.NoError(t, err, "neighbor tool_calls count")
 	assert.Equal(t, crossSessionToolCallTotal, neighborToolCalls,
 		"neighbor tool_calls count")
+}
+
+func TestWriteSessionBatchFreshReplaceMessagesSkipsDeletePath(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+	poisonMessagesDeleteTrigger(t, d)
+
+	const sessionID = "batch-fresh"
+	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
+		Session: Session{
+			ID:               sessionID,
+			Project:          "proj",
+			Machine:          defaultMachine,
+			Agent:            defaultAgent,
+			MessageCount:     1,
+			UserMessageCount: 1,
+		},
+		Messages: []Message{
+			userMsg(sessionID, 0, "fresh"),
+		},
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "WriteSessionBatch")
+	assert.Equal(t, 1, result.WrittenSessions, "WrittenSessions")
+	assert.Equal(t, 1, result.WrittenMessages, "WrittenMessages")
+	requireMessagesDeleteTriggerPoisoned(t, d)
 }
 
 // TestMessageReadsTolerateNullTimestamp pins NULL-timestamp robustness
