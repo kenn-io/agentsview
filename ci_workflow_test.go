@@ -20,6 +20,7 @@ type githubWorkflowJob struct {
 type githubWorkflowStep struct {
 	Name string `yaml:"name"`
 	Run  string `yaml:"run"`
+	Uses string `yaml:"uses"`
 }
 
 func TestWindowsDesktopUpdateTestsRetryCargoNetworkFailures(t *testing.T) {
@@ -41,6 +42,24 @@ func TestWindowsDesktopUpdateTestsRetryCargoNetworkFailures(t *testing.T) {
 	assert.Contains(t, fetchStep.Run, "$LASTEXITCODE")
 	assert.Contains(t, fetchStep.Run, "Start-Sleep")
 	assert.Contains(t, testStep.Run, "cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml --lib install_downloaded_update")
+}
+
+func TestCIDocsJobRunsFullDocsCheck(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/ci.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	job, ok := workflow.Jobs["docs"]
+	require.True(t, ok, "docs job must exist")
+
+	uvIndex, uvStep := findWorkflowStep(t, job, "Set up uv")
+	checkIndex, checkStep := findWorkflowStep(t, job, "Run docs check")
+	require.Less(t, uvIndex, checkIndex, "uv must be installed before docs check")
+
+	assert.Contains(t, uvStep.Uses, "astral-sh/setup-uv")
+	assert.Equal(t, "make docs-check", checkStep.Run)
 }
 
 func findWorkflowStep(
