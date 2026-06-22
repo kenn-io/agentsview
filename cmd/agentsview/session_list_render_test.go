@@ -89,6 +89,28 @@ func TestIsSessionRecentlyActive(t *testing.T) {
 	}
 }
 
+func TestSessionActivityTimeCreatedAtFallback(t *testing.T) {
+	t.Parallel()
+	// A session with only created_at (no ended_at/started_at) can be
+	// returned by --resume because the backend active_since filter falls
+	// back to created_at; AGE/the marker must agree by using it too.
+	created := renderNow.Add(-2 * time.Minute)
+	s := db.Session{CreatedAt: created.Format(time.RFC3339)}
+	got := sessionActivityTime(s)
+	assert.False(t, got.IsZero(), "created_at must be the final fallback")
+	assert.WithinDuration(t, created, got, time.Second)
+	assert.True(t, isSessionRecentlyActive(s, renderNow),
+		"a recently-created session must render as active for --resume")
+
+	// ended_at still takes precedence over created_at.
+	ended := renderNow.Add(-time.Minute)
+	s2 := db.Session{
+		EndedAt:   new(ended.Format(time.RFC3339)),
+		CreatedAt: renderNow.Add(-time.Hour).Format(time.RFC3339),
+	}
+	assert.WithinDuration(t, ended, sessionActivityTime(s2), time.Second)
+}
+
 func TestCollapseHome(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

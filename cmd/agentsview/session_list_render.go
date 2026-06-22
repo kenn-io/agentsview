@@ -23,8 +23,11 @@ const resumeActiveWindow = 15 * time.Minute
 const activeMarker = "●"
 
 // sessionActivityTime returns a session's last-activity time: EndedAt if
-// present and parseable, else StartedAt, else the zero time. Timestamps are
-// stored as RFC3339/RFC3339Nano strings, so both layouts are accepted.
+// present and parseable, else StartedAt, else CreatedAt, else the zero time.
+// Timestamps are stored as RFC3339/RFC3339Nano strings, so both layouts are
+// accepted. CreatedAt is the final fallback so AGE and the in-flight marker
+// agree with the backend active_since filter and recent sort, which fall back
+// to COALESCE(ended_at, started_at, created_at).
 func sessionActivityTime(s db.Session) time.Time {
 	for _, ts := range []*string{s.EndedAt, s.StartedAt} {
 		if ts == nil {
@@ -33,6 +36,9 @@ func sessionActivityTime(s db.Session) time.Time {
 		if t, ok := parseSessionTime(*ts); ok {
 			return t
 		}
+	}
+	if t, ok := parseSessionTime(s.CreatedAt); ok {
+		return t
 	}
 	return time.Time{}
 }
