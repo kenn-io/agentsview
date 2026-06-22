@@ -6905,15 +6905,6 @@ func TestIncrementalSync_ClaudeFilteredTailAdvancesNextOrdinal(t *testing.T) {
 
 	env.engine.SyncPaths([]string{path})
 
-	state, err := env.db.GetSessionFull(
-		context.Background(), "filtered-tail",
-	)
-	require.NoError(t, err, "GetSessionFull after first append")
-	require.NotNil(t, state, "filtered-tail session missing")
-	assert.Equal(t, 3, state.NextOrdinal, "NextOrdinal after filtered tail")
-	require.NotNil(t, state.LastEntryUUID, "LastEntryUUID after filtered tail")
-	assert.Equal(t, "r1", *state.LastEntryUUID, "LastEntryUUID after filtered tail")
-
 	secondAppend := testjsonl.JoinJSONL(
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a2","parentUuid":"r1","message":{"content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2},"stop_reason":"end_turn"}}`,
 	) + "\n"

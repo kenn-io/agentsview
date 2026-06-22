@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -24,6 +26,34 @@ func runClaudeParserTest(t *testing.T, fileName, content string) (ParsedSession,
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
 	return results[0].Session, results[0].Messages
+}
+
+func callParseClaudeSessionFrom(
+	path string, offset int64, startOrdinal int, lastEntryUUID string,
+) ([]ParsedMessage, time.Time, int64, error) {
+	fn := reflect.ValueOf(ParseClaudeSessionFrom)
+	args := []reflect.Value{
+		reflect.ValueOf(path),
+		reflect.ValueOf(offset),
+		reflect.ValueOf(startOrdinal),
+	}
+	if fn.Type().NumIn() == 4 {
+		args = append(args, reflect.ValueOf(lastEntryUUID))
+	}
+	out := fn.Call(args)
+
+	var msgs []ParsedMessage
+	if !out[0].IsNil() {
+		msgs = out[0].Interface().([]ParsedMessage)
+	}
+	endedAt := out[1].Interface().(time.Time)
+	consumed := out[2].Interface().(int64)
+
+	var err error
+	if !out[3].IsNil() {
+		err = out[3].Interface().(error)
+	}
+	return msgs, endedAt, consumed, err
 }
 
 // TestParseClaudeSession_UsageProbe verifies that sessions whose only
@@ -512,7 +542,7 @@ func TestParseClaudeSessionFrom_Incremental(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	// Incremental parse from offset.
-	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
+	newMsgs, endedAt, _, err := callParseClaudeSessionFrom(
 		path, offset, 2, "",
 	)
 	require.NoError(t, err)
@@ -556,7 +586,7 @@ func TestParseClaudeSessionFrom_QueuedCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 2, "")
+	newMsgs, _, _, err := callParseClaudeSessionFrom(path, offset, 2, "")
 	require.NoError(t, err)
 	require.Len(t, newMsgs, 2)
 
@@ -596,7 +626,7 @@ func TestParseClaudeSessionFrom_QueueOperationPreservesSubagentMapping(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 1, "")
+	newMsgs, _, _, err := callParseClaudeSessionFrom(path, offset, 1, "")
 	require.NoError(t, err)
 	require.Len(t, newMsgs, 1)
 	require.Len(t, newMsgs[0].ToolCalls, 1)
@@ -637,7 +667,7 @@ func TestParseClaudeSessionFrom_SkipsNonMessages(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseClaudeSessionFrom(
+	newMsgs, _, _, err := callParseClaudeSessionFrom(
 		path, offset, 1, "",
 	)
 	require.NoError(t, err)
@@ -660,7 +690,7 @@ func TestParseClaudeSessionFrom_NoNewData(t *testing.T) {
 	require.NoError(t, err)
 
 	// Parse from EOF — should return empty.
-	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
+	newMsgs, endedAt, _, err := callParseClaudeSessionFrom(
 		path, info.Size(), 1, "",
 	)
 	require.NoError(t, err)
@@ -697,7 +727,7 @@ func TestParseClaudeSessionFrom_PartialLineAtEOF(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, consumed, err := ParseClaudeSessionFrom(
+	newMsgs, _, consumed, err := callParseClaudeSessionFrom(
 		path, offset, 1, "",
 	)
 	require.NoError(t, err)
@@ -745,7 +775,7 @@ func TestParseClaudeSessionFrom_DAGDetected(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(
+	_, _, _, err = callParseClaudeSessionFrom(
 		path, offset, 1, "",
 	)
 	assert.ErrorIs(t, err, ErrDAGDetected)
@@ -779,7 +809,7 @@ func TestParseClaudeSessionFrom_DAGBoundaryAgainstStoredLastUUID(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(
+	_, _, _, err = callParseClaudeSessionFrom(
 		path, offset, 1, "stored-tip",
 	)
 	assert.ErrorIs(t, err, ErrDAGDetected)
@@ -826,7 +856,7 @@ func TestParseClaudeSessionFrom_DAGAcrossNonUUID(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(
+	_, _, _, err = callParseClaudeSessionFrom(
 		path, offset, 1, "",
 	)
 	assert.ErrorIs(t, err, ErrDAGDetected)
@@ -869,7 +899,7 @@ func TestParseClaudeSessionFrom_LinearUUID(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
+	newMsgs, endedAt, _, err := callParseClaudeSessionFrom(
 		path, offset, 1, "",
 	)
 	require.NoError(t, err)
@@ -916,7 +946,7 @@ func TestParseClaudeSessionFrom_ToolUseResultAgentIDFallsBack(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(path, offset, 1, "")
+	_, _, _, err = callParseClaudeSessionFrom(path, offset, 1, "")
 	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -1042,7 +1072,7 @@ func TestParseClaudeSessionFrom_SameMessageIDFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(path, offset, 1, "")
+	_, _, _, err = callParseClaudeSessionFrom(path, offset, 1, "")
 	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -1073,7 +1103,7 @@ func TestParseClaudeSessionFrom_QueueOperationOnlyFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(path, offset, 2, "a1")
+	_, _, _, err = callParseClaudeSessionFrom(path, offset, 2, "a1")
 	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -1104,7 +1134,7 @@ func TestParseClaudeSessionFrom_ProgressOnlyFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(path, offset, 2, "a1")
+	_, _, _, err = callParseClaudeSessionFrom(path, offset, 2, "a1")
 	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -1143,7 +1173,7 @@ func TestParseClaudeSessionFrom_BenignAppendNoFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 1, "")
+	newMsgs, _, _, err := callParseClaudeSessionFrom(path, offset, 1, "")
 	require.NoError(t, err)
 	assert.Len(t, newMsgs, 2)
 }
@@ -1685,7 +1715,7 @@ func TestParseClaudeSession_CompactBoundary(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, f.Close())
 
-		newMsgs, _, _, err := ParseClaudeSessionFrom(
+		newMsgs, _, _, err := callParseClaudeSessionFrom(
 			path, offset, 1, "",
 		)
 		require.NoError(t, err)

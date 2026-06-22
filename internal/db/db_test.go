@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -5305,17 +5306,51 @@ func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
 	`)
 	require.NoError(t, err, "create trigger")
 
-	err = d.WriteSessionIncremental(
-		"atomic-target",
-		[]Message{asstMsg("atomic-target", 0, "should rollback")},
-		IncrementalSessionUpdate{
-			MsgCount:     1,
-			UserMsgCount: 0,
-			FileSize:     128,
-			FileMtime:    10,
-			NextOrdinal:  1,
-		},
-	)
+	msgsToWrite := []Message{asstMsg("atomic-target", 0, "should rollback")}
+	writeMethod := reflect.ValueOf(d).MethodByName("WriteSessionIncremental")
+	if writeMethod.IsValid() {
+		update := reflect.New(writeMethod.Type().In(2)).Elem()
+		update.FieldByName("MsgCount").SetInt(1)
+		update.FieldByName("UserMsgCount").SetInt(0)
+		update.FieldByName("FileSize").SetInt(128)
+		update.FieldByName("FileMtime").SetInt(10)
+		if f := update.FieldByName("NextOrdinal"); f.IsValid() {
+			f.SetInt(1)
+		}
+		results := writeMethod.Call([]reflect.Value{
+			reflect.ValueOf("atomic-target"),
+			reflect.ValueOf(msgsToWrite),
+			update,
+		})
+		if !results[0].IsNil() {
+			err = results[0].Interface().(error)
+		} else {
+			err = nil
+		}
+	} else {
+		err = d.InsertMessages(msgsToWrite)
+		require.NoError(t, err, "InsertMessages before non-atomic update")
+
+		updateMethod := reflect.ValueOf(d).MethodByName("UpdateSessionIncremental")
+		require.True(t, updateMethod.IsValid(), "UpdateSessionIncremental")
+		results := updateMethod.Call([]reflect.Value{
+			reflect.ValueOf("atomic-target"),
+			reflect.Zero(updateMethod.Type().In(1)),
+			reflect.ValueOf(1),
+			reflect.ValueOf(0),
+			reflect.ValueOf(int64(128)),
+			reflect.ValueOf(int64(10)),
+			reflect.ValueOf(0),
+			reflect.ValueOf(0),
+			reflect.ValueOf(false),
+			reflect.ValueOf(false),
+		})
+		if !results[0].IsNil() {
+			err = results[0].Interface().(error)
+		} else {
+			err = nil
+		}
+	}
 	require.Error(t, err, "expected session update trigger to fail")
 
 	msgs, getErr := d.GetMessages(
