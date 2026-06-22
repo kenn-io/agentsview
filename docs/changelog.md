@@ -3,6 +3,32 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.34.4
+<small>2026-06-22</small>
+
+**New features**
+
+- Reject **exported archives from newer AgentsView versions** so
+  incompatible imports fail safely.
+
+**Improvements**
+
+- Refresh **daily usage totals** correctly while reducing repeated
+  pricing lookup work.
+- Group **GitHub Actions Renovate updates** in CI dependency
+  automation.
+
+**Bug fixes**
+
+- Avoid **macOS Photos permission prompts** while scanning Aider
+  sessions.
+- Avoid **macOS Music permission prompts** while scanning Aider
+  sessions.
+- Reparse **stale Roborev CI projects** so updated session data
+  appears correctly.
+
+---
+
 ## 0.34.3
 <small>2026-06-22</small>
 
