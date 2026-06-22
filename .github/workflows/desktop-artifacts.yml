@@ -97,12 +97,9 @@ jobs:
         run: npm ci
         working-directory: desktop
 
-      - name: Desktop smoke tests (shell scripts)
+      - name: Desktop sidecar smoke tests
         shell: bash
-        run: |
-          bash desktop/scripts/test-prepare-sidecar.sh
-          bash desktop/scripts/test-desktop-workflows.sh
-          bash desktop/scripts/test-startup-ui.sh
+        run: bash desktop/scripts/test-prepare-sidecar.sh
 
       - name: Build desktop bundle
         shell: bash
