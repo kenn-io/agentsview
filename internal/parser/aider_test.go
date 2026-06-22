@@ -623,7 +623,7 @@ func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
 	}
 	root := t.TempDir()
 	t.Setenv("HOME", root)
-	for _, name := range []string{"Desktop", "Documents", "Downloads"} {
+	for _, name := range []string{"Desktop", "Documents", "Downloads", "Music"} {
 		protectedRepo := filepath.Join(root, name, "proj")
 		require.NoError(t, os.MkdirAll(protectedRepo, 0o755))
 		require.NoError(t, os.WriteFile(

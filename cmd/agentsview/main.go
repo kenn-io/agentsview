@@ -505,12 +505,12 @@ func printSyncProgress(p sync.Progress) {
 		if p.Hint != "" {
 			detail += " - " + p.Hint
 		}
-		fmt.Printf("\r  %s", detail)
+		fmt.Printf("\r  %s\x1b[K", detail)
 		return
 	}
 	if p.SessionsTotal > 0 {
 		fmt.Printf(
-			"\r  %d/%d sessions (%.0f%%) · %d messages",
+			"\r  %d/%d sessions (%.0f%%) · %d messages\x1b[K",
 			p.SessionsDone, p.SessionsTotal,
 			p.Percent(), p.MessagesIndexed,
 		)

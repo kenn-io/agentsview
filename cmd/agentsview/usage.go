@@ -238,7 +238,7 @@ func ensureFreshData(
 func printSyncProgressStderr(p sync.Progress) {
 	if p.SessionsTotal > 0 {
 		fmt.Fprintf(os.Stderr,
-			"\r  %d/%d sessions (%.0f%%) · %d messages",
+			"\r  %d/%d sessions (%.0f%%) · %d messages\x1b[K",
 			p.SessionsDone, p.SessionsTotal,
 			p.Percent(), p.MessagesIndexed,
 		)

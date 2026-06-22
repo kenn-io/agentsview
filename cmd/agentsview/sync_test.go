@@ -2,11 +2,13 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestRunRemoteHosts_AttemptsAllAndCollectsFailures(t *testing.T) {
@@ -75,4 +77,20 @@ func TestSyncLocalAndRemotes_ResyncForcesRemoteFull(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPrintSyncProgressClearsShorterOverwrites(t *testing.T) {
+	out := captureStdout(t, func() {
+		printSyncProgress(agentsync.Progress{
+			Detail: "Rebuilding search index",
+			Hint:   "Rebuilding the search index may take a while on large archives.",
+		})
+		printSyncProgress(agentsync.Progress{
+			Detail: "Swapping rebuilt database into place",
+		})
+	})
+
+	require.GreaterOrEqual(t, strings.Count(out, "\x1b[K"), 2,
+		"each carriage-return progress line must clear stale text")
+	assert.Contains(t, out, "\r  Swapping rebuilt database into place\x1b[K")
 }
