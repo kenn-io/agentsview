@@ -14,6 +14,9 @@ import (
 )
 
 const largeSessionPerfCeiling = 10 * time.Second
+const crossSessionNeighborCount = 40
+const crossSessionToolCallsPerNeighbor = 250
+const crossSessionToolCallTotal = crossSessionNeighborCount * crossSessionToolCallsPerNeighbor
 
 func largeSessionMessages(sessionID, blobToken string) []Message {
 	const n = 1000
@@ -36,24 +39,39 @@ func largeSessionMessages(sessionID, blobToken string) []Message {
 func seedCrossSessionFKGrowth(t *testing.T, d *DB, sessionID string) {
 	t.Helper()
 
-	insertSession(t, d, sessionID, "proj")
-	insertMessages(t, d, userMsg(sessionID, 0, "neighbor"))
-	msgs, err := d.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err, "GetAllMessages neighbor")
-	require.Len(t, msgs, 1)
-	_, err = d.PinMessage(sessionID, msgs[0].ID, nil)
-	require.NoError(t, err, "PinMessage neighbor")
+	type neighborSeed struct {
+		sessionID string
+		messageID int64
+	}
+
+	seeds := make([]neighborSeed, 0, crossSessionNeighborCount)
+	for i := range crossSessionNeighborCount {
+		neighborID := sessionID + "-" + strconv.Itoa(i)
+		insertSession(t, d, neighborID, "proj")
+		insertMessages(t, d, userMsg(neighborID, 0, "neighbor"))
+		msgs, err := d.GetAllMessages(context.Background(), neighborID)
+		require.NoError(t, err, "GetAllMessages neighbor %s", neighborID)
+		require.Len(t, msgs, 1)
+		_, err = d.PinMessage(neighborID, msgs[0].ID, nil)
+		require.NoError(t, err, "PinMessage neighbor %s", neighborID)
+		seeds = append(seeds, neighborSeed{
+			sessionID: neighborID,
+			messageID: msgs[0].ID,
+		})
+	}
 
 	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		for i := range 2000 {
-			if _, err := tx.Exec(
-				`INSERT INTO tool_calls
-				 (message_id, session_id, tool_name, category, tool_use_id)
-				 VALUES (?, ?, ?, ?, ?)`,
-				msgs[0].ID, sessionID, "Read", "Read",
-				"neighbor-tool-"+strconv.Itoa(i),
-			); err != nil {
-				return err
+		for _, seed := range seeds {
+			for i := range crossSessionToolCallsPerNeighbor {
+				if _, err := tx.Exec(
+					`INSERT INTO tool_calls
+					 (message_id, session_id, tool_name, category, tool_use_id)
+					 VALUES (?, ?, ?, ?, ?)`,
+					seed.messageID, seed.sessionID, "Read", "Read",
+					seed.sessionID+"-tool-"+strconv.Itoa(i),
+				); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -70,6 +88,36 @@ func assertNoFTSLeak(t *testing.T, d *DB, token string) {
 	).Scan(&leaked)
 	require.NoError(t, err, "fts leak check")
 	assert.Zero(t, leaked, "FTS still contains rows matching %q", token)
+}
+
+func poisonMessagesDeleteTrigger(t *testing.T, d *DB) {
+	t.Helper()
+
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		if _, err := tx.Exec("DROP TRIGGER IF EXISTS messages_ad"); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`
+			CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+				SELECT RAISE(FAIL, 'poison messages_ad fired');
+			END`)
+		return err
+	}), "poison messages_ad trigger")
+}
+
+func requireMessagesDeleteTriggerRestored(t *testing.T, d *DB) {
+	t.Helper()
+
+	var triggerSQL string
+	err := d.getReader().QueryRow(
+		`SELECT sql FROM sqlite_master
+		 WHERE type = 'trigger' AND name = 'messages_ad'`,
+	).Scan(&triggerSQL)
+	require.NoError(t, err, "read messages_ad trigger")
+	assert.NotContains(t, triggerSQL, "poison messages_ad fired",
+		"messages_ad trigger was not restored")
+	assert.Contains(t, triggerSQL, "INSERT INTO messages_fts",
+		"messages_ad trigger no longer matches the canonical FTS delete path")
 }
 
 func TestInsertAndGetMessage_ThinkingText(t *testing.T) {
@@ -385,6 +433,7 @@ func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
 	insertSession(t, d, targetID, "proj")
 	insertMessages(t, d, largeSessionMessages(targetID, blobToken)...)
 	seedCrossSessionFKGrowth(t, d, "batch-neighbor")
+	poisonMessagesDeleteTrigger(t, d)
 
 	repl := make([]Message, 0, 10)
 	for i := range 10 {
@@ -416,14 +465,16 @@ func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
 	require.NoError(t, err, "GetAllMessages after batch replace")
 	require.Len(t, got, len(repl), "after batch replace")
 	assertNoFTSLeak(t, d, blobToken)
+	requireMessagesDeleteTriggerRestored(t, d)
 
 	var neighborToolCalls int
 	err = d.getReader().QueryRow(
-		"SELECT count(*) FROM tool_calls WHERE session_id = ?",
-		"batch-neighbor",
+		"SELECT count(*) FROM tool_calls WHERE session_id LIKE ?",
+		"batch-neighbor-%",
 	).Scan(&neighborToolCalls)
 	require.NoError(t, err, "neighbor tool_calls count")
-	assert.Equal(t, 2000, neighborToolCalls, "neighbor tool_calls count")
+	assert.Equal(t, crossSessionToolCallTotal, neighborToolCalls,
+		"neighbor tool_calls count")
 }
 
 // TestMessageReadsTolerateNullTimestamp pins NULL-timestamp robustness

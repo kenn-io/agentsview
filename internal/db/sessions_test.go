@@ -22,6 +22,7 @@ func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 	insertSession(t, d, targetID, "proj")
 	insertMessages(t, d, largeSessionMessages(targetID, blobToken)...)
 	seedCrossSessionFKGrowth(t, d, "delete-neighbor")
+	poisonMessagesDeleteTrigger(t, d)
 
 	start := time.Now()
 	require.NoError(t, d.DeleteSession(targetID), "DeleteSession")
@@ -32,14 +33,16 @@ func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 
 	requireSessionGone(t, d, targetID)
 	assertNoFTSLeak(t, d, blobToken)
+	requireMessagesDeleteTriggerRestored(t, d)
 
 	var neighborPins int
 	err := d.getReader().QueryRow(
-		"SELECT count(*) FROM pinned_messages WHERE session_id = ?",
-		"delete-neighbor",
+		"SELECT count(*) FROM pinned_messages WHERE session_id LIKE ?",
+		"delete-neighbor-%",
 	).Scan(&neighborPins)
 	require.NoError(t, err, "neighbor pins count")
-	assert.Equal(t, 1, neighborPins, "neighbor pins count")
+	assert.Equal(t, crossSessionNeighborCount, neighborPins,
+		"neighbor pins count")
 }
 
 func TestFindSessionIDsByPartial(t *testing.T) {
