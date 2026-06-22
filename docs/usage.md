@@ -339,6 +339,10 @@ Each session item shows:
 - **Relative time** — "2h ago", "Mon", "Dec 1"
 - **User prompt count** — number of user messages in the session
 
+When a session has a native resume target, the sidebar also exposes
+a direct native session link so supported agents can reopen their own
+session instead of only navigating inside AgentsView.
+
 ### Session Status Indicator
 
 As of 0.27.0, the small dot at the left edge of each session
@@ -912,6 +916,10 @@ For Claude sessions on macOS, a **Claude Desktop** option
 appears at the bottom of the resume menu. It opens the session
 in Claude Desktop's Code tab via the `claude://resume` URL
 scheme.
+
+The `agentsview session list --resume` and `--active` CLI modes use
+the same recent-activity signal to produce a compact terminal table
+for picking up in-flight work.
 
 These actions let you quickly pick up where you left off
 without manually navigating to the project directory.

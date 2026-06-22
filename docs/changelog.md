@@ -3,6 +3,52 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.34.2
+<small>2026-06-22</small>
+
+**New features**
+
+- Show **detailed resync progress** while full resyncs are running,
+  so the UI can report the current phase instead of only showing a
+  generic syncing state.
+- Add a **resume-focused session table** to
+  `agentsview session list`, including `--resume` and `--active`
+  modes for quickly finding recently active sessions.
+
+**Improvements**
+
+- Add **native session links in the sidebar** when an agent exposes
+  a supported resume target.
+- Redesign the **supported agents docs grid** as uniform clickable
+  chips.
+
+**Bug fixes**
+
+- Handle **search terms with operator characters** without returning
+  server errors.
+- Parse **native Kimi Code records** correctly.
+- Improve **incremental JSONL resume reliability**.
+- Make **large-session deletes safer** for full-text search cleanup.
+- Prevent **Ctrl+K command palette input** from reselecting text on
+  every keystroke.
+- Avoid **DuckDB tool-call attachment failures** from invalid
+  negative call indexes.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for detailed
+  resync progress, native Kimi Code record parsing, and the supported
+  agents docs grid redesign.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for the
+  resume-focused session table and search operator-character fix.
+- Thanks to [Rod Boev](https://github.com/rodboev) for native sidebar
+  session links, incremental JSONL resume reliability, safer
+  large-session full-text cleanup, and the Ctrl+K palette input fix.
+- Thanks to [MirzaSamadAhmedBaig](https://github.com/Mirza-Samad-Ahmed-Baig)
+  for the DuckDB negative call-index fix.
+
+---
+
 ## 0.34.1
 <small>2026-06-21</small>
 

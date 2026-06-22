@@ -638,6 +638,7 @@ auto-detection, and every subcommand.
 ```bash
 agentsview session get <id>              # metadata + signals
 agentsview session list [flags]          # filtered list
+agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
 agentsview session tool-calls <id>       # flat tool-call list
 agentsview session export <id>           # stream raw source file
@@ -663,6 +664,13 @@ Use [`agentsview health`](#agentsview-health) for a human-first
 signal view and [Session API](/session-api/) for the full
 programmatic contract, including transport behavior and markdown
 export details.
+
+`agentsview session list` renders a resume-oriented human table by
+default, including a recently-active marker, session ID, age, agent,
+project, branch, message count, title, and working directory. Pass
+`--resume` or its `--active` alias to show sessions active in the
+last 15 minutes; combine either flag with `--active-since <RFC3339>`
+to choose a wider or narrower window.
 
 ---
 

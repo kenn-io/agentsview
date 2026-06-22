@@ -168,6 +168,8 @@ One-shot and automated sessions are excluded by default. Use the
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                      |
 | `--date-to`           | `date_to`           | `YYYY-MM-DD`                      |
 | `--active-since`      | `active_since`      | RFC3339 timestamp                 |
+| `--resume`            | `active_since`      | CLI shortcut for sessions active in the last 15 minutes |
+| `--active`            | `active_since`      | Alias for `--resume`              |
 | `--min-messages`      | `min_messages`      | int                               |
 | `--max-messages`      | `max_messages`      | int                               |
 | `--min-user-messages` | `min_user_messages` | int                               |
@@ -190,9 +192,17 @@ Sort keys are `recent`, `started`, `messages`, `user-messages`,
 default ascending unless `--reverse`, `descending=true`, or an
 explicit suffix overrides them.
 
+Human CLI output is formatted for resuming work: it shows the full
+session ID, age, agent, project, branch, message count, title, and
+working directory, with a marker on sessions active in the last 15
+minutes. `--resume` and `--active` set `active_since` to that
+15-minute window unless `--active-since` is supplied explicitly.
+HTTP callers should pass `active_since` directly.
+
 Examples:
 
 ```bash
+agentsview session list --resume
 agentsview session list --sort messages:desc,started:asc
 agentsview session list --sort health --reverse
 ```
