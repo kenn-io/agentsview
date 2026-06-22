@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,65 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const largeSessionPerfCeiling = 10 * time.Second
+
+func largeSessionMessages(sessionID, blobToken string) []Message {
+	const n = 1000
+	msgs := make([]Message, 0, n)
+	for i := range n {
+		msgs = append(msgs, userMsg(sessionID, i, "small"))
+	}
+	big := strings.Repeat(blobToken+" ", 5*1024*1024/len(blobToken+" "))
+	msgs[n/2] = Message{
+		SessionID:     sessionID,
+		Ordinal:       n / 2,
+		Role:          "assistant",
+		Content:       big,
+		ContentLength: len(big),
+		Timestamp:     tsZero,
+	}
+	return msgs
+}
+
+func seedCrossSessionFKGrowth(t *testing.T, d *DB, sessionID string) {
+	t.Helper()
+
+	insertSession(t, d, sessionID, "proj")
+	insertMessages(t, d, userMsg(sessionID, 0, "neighbor"))
+	msgs, err := d.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err, "GetAllMessages neighbor")
+	require.Len(t, msgs, 1)
+	_, err = d.PinMessage(sessionID, msgs[0].ID, nil)
+	require.NoError(t, err, "PinMessage neighbor")
+
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		for i := range 2000 {
+			if _, err := tx.Exec(
+				`INSERT INTO tool_calls
+				 (message_id, session_id, tool_name, category, tool_use_id)
+				 VALUES (?, ?, ?, ?, ?)`,
+				msgs[0].ID, sessionID, "Read", "Read",
+				"neighbor-tool-"+strconv.Itoa(i),
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}), "seed neighbor tool_calls")
+}
+
+func assertNoFTSLeak(t *testing.T, d *DB, token string) {
+	t.Helper()
+	var leaked int
+	err := d.getReader().QueryRow(
+		`SELECT count(*) FROM messages_fts
+		 WHERE messages_fts MATCH ?`,
+		token,
+	).Scan(&leaked)
+	require.NoError(t, err, "fts leak check")
+	assert.Zero(t, leaked, "FTS still contains rows matching %q", token)
+}
 
 func TestInsertAndGetMessage_ThinkingText(t *testing.T) {
 	t.Parallel()
@@ -282,25 +342,9 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	const sessionID = "perf-large"
+	const blobToken = "ftsreplxxx"
 	insertSession(t, d, sessionID, "proj")
-
-	const n = 1000
-	msgs := make([]Message, 0, n)
-	for i := range n {
-		msgs = append(msgs, userMsg(sessionID, i, "small"))
-	}
-	// One ~5MB content blob in the middle of the stream — the
-	// pathological case that blew up the per-row FTS delete path.
-	big := strings.Repeat("x ", 5*1024*1024/2)
-	msgs[n/2] = Message{
-		SessionID:     sessionID,
-		Ordinal:       n / 2,
-		Role:          "assistant",
-		Content:       big,
-		ContentLength: len(big),
-		Timestamp:     tsZero,
-	}
-	insertMessages(t, d, msgs...)
+	insertMessages(t, d, largeSessionMessages(sessionID, blobToken)...)
 
 	// Replace with a different small set so the delete path has to
 	// remove all 1000 rows including the 5MB blob.
@@ -312,7 +356,7 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionMessages(sessionID, repl),
 		"ReplaceSessionMessages")
 	elapsed := time.Since(start)
-	require.LessOrEqual(t, elapsed, 10*time.Second,
+	require.LessOrEqual(t, elapsed, largeSessionPerfCeiling,
 		"ReplaceSessionMessages took %s, want < 10s (per-row FTS trigger regression?)",
 		elapsed.Round(time.Millisecond))
 
@@ -325,14 +369,61 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	// session rows. Should be zero. If the messages_ad trigger
 	// restoration failed silently or the bulk-delete INSERT...SELECT
 	// got skipped, stale tokens would still resolve here.
-	var leaked int
+	assertNoFTSLeak(t, d, blobToken)
+}
+
+func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping perf test in -short mode")
+	}
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+
+	const targetID = "batch-large"
+	const blobToken = "ftsbatchyyy"
+	insertSession(t, d, targetID, "proj")
+	insertMessages(t, d, largeSessionMessages(targetID, blobToken)...)
+	seedCrossSessionFKGrowth(t, d, "batch-neighbor")
+
+	repl := make([]Message, 0, 10)
+	for i := range 10 {
+		repl = append(repl, userMsg(targetID, i, "after"))
+	}
+	start := time.Now()
+	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
+		Session: Session{
+			ID:               targetID,
+			Project:          "proj",
+			Machine:          defaultMachine,
+			Agent:            defaultAgent,
+			MessageCount:     len(repl),
+			UserMessageCount: len(repl),
+		},
+		Messages:        repl,
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "WriteSessionBatch")
+	elapsed := time.Since(start)
+	require.Equal(t, 1, result.WrittenSessions, "WrittenSessions")
+	require.Equal(t, len(repl), result.WrittenMessages, "WrittenMessages")
+	require.LessOrEqual(t, elapsed, largeSessionPerfCeiling,
+		"WriteSessionBatch replace took %s, want < 10s (per-row FTS trigger regression?)",
+		elapsed.Round(time.Millisecond))
+
+	got, err := d.GetAllMessages(context.Background(), targetID)
+	require.NoError(t, err, "GetAllMessages after batch replace")
+	require.Len(t, got, len(repl), "after batch replace")
+	assertNoFTSLeak(t, d, blobToken)
+
+	var neighborToolCalls int
 	err = d.getReader().QueryRow(
-		`SELECT count(*) FROM messages_fts
-		 WHERE messages_fts MATCH 'xxx'`,
-	).Scan(&leaked)
-	require.NoError(t, err, "fts leak check")
-	assert.Zero(t, leaked,
-		"FTS still contains rows matching 'xxx' from deleted blob")
+		"SELECT count(*) FROM tool_calls WHERE session_id = ?",
+		"batch-neighbor",
+	).Scan(&neighborToolCalls)
+	require.NoError(t, err, "neighbor tool_calls count")
+	assert.Equal(t, 2000, neighborToolCalls, "neighbor tool_calls count")
 }
 
 // TestMessageReadsTolerateNullTimestamp pins NULL-timestamp robustness

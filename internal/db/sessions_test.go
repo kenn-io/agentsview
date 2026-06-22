@@ -9,6 +9,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping perf test in -short mode")
+	}
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+
+	const targetID = "delete-large"
+	const blobToken = "ftsdeletezzz"
+	insertSession(t, d, targetID, "proj")
+	insertMessages(t, d, largeSessionMessages(targetID, blobToken)...)
+	seedCrossSessionFKGrowth(t, d, "delete-neighbor")
+
+	start := time.Now()
+	require.NoError(t, d.DeleteSession(targetID), "DeleteSession")
+	elapsed := time.Since(start)
+	require.LessOrEqual(t, elapsed, largeSessionPerfCeiling,
+		"DeleteSession took %s, want < 10s (per-row FTS trigger regression?)",
+		elapsed.Round(time.Millisecond))
+
+	requireSessionGone(t, d, targetID)
+	assertNoFTSLeak(t, d, blobToken)
+
+	var neighborPins int
+	err := d.getReader().QueryRow(
+		"SELECT count(*) FROM pinned_messages WHERE session_id = ?",
+		"delete-neighbor",
+	).Scan(&neighborPins)
+	require.NoError(t, err, "neighbor pins count")
+	assert.Equal(t, 1, neighborPins, "neighbor pins count")
+}
+
 func TestFindSessionIDsByPartial(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "abcdef-1111-2222", "proj")

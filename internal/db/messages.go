@@ -554,43 +554,50 @@ func replaceSessionMessagesTx(
 		return err
 	}
 
-	if _, err := tx.Exec(
-		"DELETE FROM tool_calls WHERE session_id = ?",
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("deleting old tool_calls: %w", err)
-	}
-	if _, err := tx.Exec(
-		"DELETE FROM tool_result_events WHERE session_id = ?",
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"deleting old tool_result_events: %w", err,
-		)
+	if err := deleteSessionMessagesTx(tx, sessionID); err != nil {
+		return err
 	}
 
-	// FTS5 is optional (the module may be missing in the runtime).
-	// Probe sqlite_master so the bulk-delete + trigger-swap dance
-	// only runs when there's actually an FTS table to maintain.
+	if len(msgs) > 0 {
+		ids, err := insertMessagesTx(tx, msgs)
+		if err != nil {
+			return err
+		}
+		toolCalls := resolveToolCalls(msgs, ids)
+		if err := insertToolCallsTx(tx, toolCalls); err != nil {
+			return err
+		}
+		events := resolveToolResultEvents(msgs)
+		if err := insertToolResultEventsTx(tx, events); err != nil {
+			return err
+		}
+	}
+
+	return restorePinsTx(tx, sessionID, pins)
+}
+
+func sessionHasFTSTx(tx *sql.Tx) (bool, error) {
 	var ftsCount int
 	if err := tx.QueryRow(
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type='table' AND name='messages_fts'`,
 	).Scan(&ftsCount); err != nil {
-		return fmt.Errorf("probing fts table: %w", err)
+		return false, fmt.Errorf("probing fts table: %w", err)
 	}
-	hasFTS := ftsCount > 0
+	return ftsCount > 0, nil
+}
+
+func deleteSessionMessageRowsTx(
+	tx *sql.Tx, sessionID string,
+) error {
+	hasFTS, err := sessionHasFTSTx(tx)
+	if err != nil {
+		return err
+	}
 
 	if hasFTS {
-		// Bulk-delete the FTS index entries up-front in a single SQL
-		// statement, then drop the per-row messages_ad trigger so the
-		// upcoming DELETE FROM messages doesn't re-fire the FTS5
-		// 'delete' command for every row. With large sessions
-		// (thousands of rows where a single content blob can be many
-		// MB) the per-row trigger path is dominated by FTS
-		// tokenization and stalls the writer for minutes; the bulk
-		// INSERT...SELECT path is effectively flat. The trigger is
-		// restored before the transaction is allowed to commit.
+		// Bulk-delete the FTS entries first so the later row delete
+		// does not re-tokenize large message blobs through messages_ad.
 		if _, err := tx.Exec(
 			`INSERT INTO messages_fts(messages_fts, rowid, content)
 			 SELECT 'delete', id, content
@@ -615,23 +622,25 @@ func replaceSessionMessagesTx(
 			return fmt.Errorf("restoring messages_ad trigger: %w", err)
 		}
 	}
+	return nil
+}
 
-	if len(msgs) > 0 {
-		ids, err := insertMessagesTx(tx, msgs)
-		if err != nil {
-			return err
-		}
-		toolCalls := resolveToolCalls(msgs, ids)
-		if err := insertToolCallsTx(tx, toolCalls); err != nil {
-			return err
-		}
-		events := resolveToolResultEvents(msgs)
-		if err := insertToolResultEventsTx(tx, events); err != nil {
-			return err
-		}
+func deleteSessionMessagesTx(tx *sql.Tx, sessionID string) error {
+	if _, err := tx.Exec(
+		"DELETE FROM tool_calls WHERE session_id = ?",
+		sessionID,
+	); err != nil {
+		return fmt.Errorf("deleting old tool_calls: %w", err)
 	}
-
-	return restorePinsTx(tx, sessionID, pins)
+	if _, err := tx.Exec(
+		"DELETE FROM tool_result_events WHERE session_id = ?",
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"deleting old tool_result_events: %w", err,
+		)
+	}
+	return deleteSessionMessageRowsTx(tx, sessionID)
 }
 
 // ReplaceSessionContent atomically replaces a session's messages, signal

@@ -288,30 +288,6 @@ func writeOneSessionBatchTx(
 	return len(msgs), nil
 }
 
-func deleteSessionMessagesTx(tx *sql.Tx, sessionID string) error {
-	if _, err := tx.Exec(
-		"DELETE FROM tool_calls WHERE session_id = ?",
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("deleting old tool_calls: %w", err)
-	}
-	if _, err := tx.Exec(
-		"DELETE FROM tool_result_events WHERE session_id = ?",
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"deleting old tool_result_events: %w", err,
-		)
-	}
-	if _, err := tx.Exec(
-		"DELETE FROM messages WHERE session_id = ?",
-		sessionID,
-	); err != nil {
-		return fmt.Errorf("deleting old messages: %w", err)
-	}
-	return nil
-}
-
 func maxOrdinalTx(tx *sql.Tx, sessionID string) (int, error) {
 	var n sql.NullInt64
 	err := tx.QueryRow(
