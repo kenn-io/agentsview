@@ -131,19 +131,19 @@
 
 .md-typeset .agent-section__lead {
   max-width: 760px;
-  margin: 0.5rem auto 1.25rem;
+  margin: 0.25rem auto 0.9rem;
   text-align: center;
   color: var(--agentsview-muted);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   letter-spacing: 0.01em;
 }
 
 .md-typeset .agent-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 0.4rem;
   max-width: 880px;
-  margin: 0.25rem auto 1.6rem;
+  margin: 0.25rem auto 1.4rem;
   padding: 0;
 }
 
@@ -151,10 +151,10 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.6rem;
-  padding: 1rem 0.55rem 0.85rem;
+  gap: 0.45rem;
+  padding: 0.65rem 0.35rem 0.55rem;
   border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(148, 163, 184, 0.03);
   color: var(--agentsview-muted);
   text-decoration: none;
@@ -175,9 +175,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: rgba(10, 10, 10, 0.4);
   color: rgba(232, 232, 232, 0.82);
@@ -185,14 +185,14 @@
 }
 
 .md-typeset .agent-chip__glyph svg {
-  width: 25px;
-  height: 25px;
+  width: 20px;
+  height: 20px;
   fill: currentColor;
 }
 
 .md-typeset .agent-chip__glyph--mono {
   font-family: var(--md-text-font);
-  font-size: 1.05rem;
+  font-size: 0.9rem;
   font-weight: 600;
   letter-spacing: 0.01em;
 }
@@ -205,11 +205,14 @@
 }
 
 .md-typeset .agent-chip__name {
-  font-size: 0.78rem;
+  font-size: 0.7rem;
   font-weight: 550;
-  line-height: 1.25;
+  line-height: 1.2;
   text-align: center;
   color: inherit;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: none;
 }
 
 .md-typeset .grid.cards > ul > li {
@@ -275,25 +278,25 @@
   }
 
   .md-typeset .agent-grid {
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-    gap: 0.5rem;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 0.35rem;
   }
 
   .md-typeset .agent-chip {
-    padding: 0.85rem 0.4rem 0.7rem;
+    padding: 0.6rem 0.3rem 0.5rem;
   }
 
   .md-typeset .agent-chip__glyph {
-    width: 42px;
-    height: 42px;
+    width: 36px;
+    height: 36px;
   }
 
   .md-typeset .agent-chip__glyph svg {
-    width: 22px;
-    height: 22px;
+    width: 19px;
+    height: 19px;
   }
 
   .md-typeset .agent-chip__name {
-    font-size: 0.72rem;
+    font-size: 0.68rem;
   }
 }
