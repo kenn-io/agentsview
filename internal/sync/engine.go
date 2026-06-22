@@ -4141,7 +4141,7 @@ func (e *Engine) processFile(
 		cachedMtime, cached := e.skipCache[file.Path]
 		e.skipMu.RUnlock()
 		if cached && cachedMtime == mtime {
-			if e.cachedPathNeedsProjectReparse(file.Path) {
+			if e.pathNeedsProjectReparse(file.Path) {
 				e.clearSkip(file.Path)
 			} else {
 				return processResult{
@@ -4237,7 +4237,7 @@ func (e *Engine) processFile(
 	return res
 }
 
-func (e *Engine) cachedPathNeedsProjectReparse(path string) bool {
+func (e *Engine) pathNeedsProjectReparse(path string) bool {
 	if e == nil || e.db == nil {
 		return false
 	}
@@ -4990,6 +4990,7 @@ func (e *Engine) processCodex(
 	}
 
 	indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
+	projectNeedsReparse := e.pathNeedsProjectReparse(file.Path)
 	forceReplace := false
 
 	codexParseFn := func(
@@ -4999,19 +5000,21 @@ func (e *Engine) processCodex(
 			path, offset, startOrd, false,
 		)
 	}
-	if res, ok := e.tryIncrementalJSONL(
-		file, info, parser.AgentCodex, codexParseFn,
-	); ok {
-		if !indexMtimeChanged {
-			return res
+	if !projectNeedsReparse {
+		if res, ok := e.tryIncrementalJSONL(
+			file, info, parser.AgentCodex, codexParseFn,
+		); ok {
+			if !indexMtimeChanged {
+				return res
+			}
+			// The index title changed, so a full parse still needs to refresh
+			// session metadata. Keep any fallback signal discovered while probing
+			// appended bytes so existing rows rewritten by the full parse are not
+			// dropped by the append-only write path.
+			forceReplace = res.forceReplace
+		} else {
+			forceReplace = res.forceReplace
 		}
-		// The index title changed, so a full parse still needs to refresh
-		// session metadata. Keep any fallback signal discovered while probing
-		// appended bytes so existing rows rewritten by the full parse are not
-		// dropped by the append-only write path.
-		forceReplace = res.forceReplace
-	} else {
-		forceReplace = res.forceReplace
 	}
 
 	sess, msgs, err := parser.ParseCodexSession(
