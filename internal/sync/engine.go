@@ -8288,9 +8288,9 @@ func nextParsedOrdinal(
 func lastParsedSourceUUID(
 	current string, msgs []parser.ParsedMessage,
 ) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].SourceUUID != "" {
-			return msgs[i].SourceUUID
+	for _, v := range slices.Backward(msgs) {
+		if v.SourceUUID != "" {
+			return v.SourceUUID
 		}
 	}
 	return current
