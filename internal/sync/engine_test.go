@@ -1397,6 +1397,57 @@ func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
 		"stale generated roborev CI projects must be reparsed")
 }
 
+func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"abc",
+			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
+			"user",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+
+	sess := db.Session{
+		ID:        "host~codex:abc",
+		Project:   "roborev_ci_28293_3831737461",
+		Machine:   "host",
+		Agent:     "codex",
+		FilePath:  strPtr("host:" + path),
+		FileSize:  int64Ptr(info.Size()),
+		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	e := &Engine{
+		db:        database,
+		idPrefix:  "host~",
+		skipCache: map[string]int64{path: info.ModTime().UnixNano()},
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  path,
+	})
+	require.NoError(t, res.err)
+	require.False(t, res.skip,
+		"remote skip cache must not hide stale generated roborev CI projects")
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "agentsview", res.results[0].Session.Project)
+}
+
 func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()

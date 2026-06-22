@@ -4141,10 +4141,14 @@ func (e *Engine) processFile(
 		cachedMtime, cached := e.skipCache[file.Path]
 		e.skipMu.RUnlock()
 		if cached && cachedMtime == mtime {
-			return processResult{
-				skip:      true,
-				mtime:     mtime,
-				cacheSkip: true,
+			if e.cachedPathNeedsProjectReparse(file.Path) {
+				e.clearSkip(file.Path)
+			} else {
+				return processResult{
+					skip:      true,
+					mtime:     mtime,
+					cacheSkip: true,
+				}
 			}
 		}
 	}
@@ -4231,6 +4235,18 @@ func (e *Engine) processFile(
 	res.cacheSkip = cacheSkip
 	res.mtime = mtime
 	return res
+}
+
+func (e *Engine) cachedPathNeedsProjectReparse(path string) bool {
+	if e == nil || e.db == nil {
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	project, ok := e.db.GetProjectByPath(lookupPath)
+	return ok && parser.NeedsProjectReparse(project)
 }
 
 func (e *Engine) shouldCacheSkip(
