@@ -3138,7 +3138,8 @@ func discoveredFileMtime(
 		}
 	}
 	if isOpenCodeFormatStorageAgent(file.Agent) {
-		if isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) {
+		if isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) ||
+			isOpenCodeFormatStoragePath(file.Agent, file.Path) {
 			return openCodeFormatSourceMtime(
 				file.Agent, file.Path,
 			)

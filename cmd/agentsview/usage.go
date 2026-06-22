@@ -279,23 +279,27 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // every restart while still propagating corrected fallback
 // rates when the binary is upgraded.
 func seedPricing(database *db.DB) {
+	if err := seedFallbackPricing(database); err != nil {
+		log.Printf("pricing seed: %v", err)
+	}
+	go refreshPricingFromLiteLLM(database)
+}
+
+func seedFallbackPricing(database *db.DB) error {
 	const metaKey = "_fallback_version"
 	stored, err := database.GetPricingMeta(metaKey)
 	if err != nil {
-		log.Printf("pricing seed: %v", err)
+		return err
 	}
-	if stored != pricing.FallbackVersion {
-		if err := upsertPricing(
-			database, pricing.FallbackPricing(),
-		); err != nil {
-			log.Printf("pricing seed: %v", err)
-		} else if err := database.SetPricingMeta(
-			metaKey, pricing.FallbackVersion,
-		); err != nil {
-			log.Printf("pricing seed: %v", err)
-		}
+	if stored == pricing.FallbackVersion {
+		return nil
 	}
-	go refreshPricingFromLiteLLM(database)
+	if err := upsertPricing(
+		database, pricing.FallbackPricing(),
+	); err != nil {
+		return err
+	}
+	return database.SetPricingMeta(metaKey, pricing.FallbackVersion)
 }
 
 // refreshPricingFromLiteLLM fetches the upstream LiteLLM
@@ -371,25 +375,30 @@ func refreshPricingIfStale(
 }
 
 func ensurePricing(database *db.DB, offline bool) {
-	var prices []pricing.ModelPricing
-
-	if offline {
-		prices = pricing.FallbackPricing()
-	} else {
-		var err error
-		prices, err = pricing.FetchLiteLLMPricing()
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"warning: pricing fetch failed: %v"+
-					"; using fallback\n", err)
-			prices = pricing.FallbackPricing()
-		}
-	}
-
-	if err := upsertPricing(database, prices); err != nil {
+	if _, err := ensurePricingWithFetcher(
+		database, offline, pricing.FetchLiteLLMPricing, time.Now(),
+	); err != nil {
 		fmt.Fprintf(os.Stderr,
-			"warning: pricing upsert failed: %v\n", err)
+			"warning: pricing refresh failed: %v\n", err)
 	}
+}
+
+func ensurePricingWithFetcher(
+	database *db.DB, offline bool,
+	fetch func() ([]pricing.ModelPricing, error),
+	now time.Time,
+) (bool, error) {
+	if offline {
+		return false, upsertPricing(database, pricing.FallbackPricing())
+	}
+
+	if err := seedFallbackPricing(database); err != nil {
+		return false, err
+	}
+
+	return refreshPricingIfStale(
+		database, fetch, pricingRefreshCooldown, now,
+	)
 }
 
 // upsertPricing copies pricing rows into the db.ModelPricing

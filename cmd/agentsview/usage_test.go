@@ -309,3 +309,34 @@ func TestRefreshPricingIfStale_FetchFailureRecordsAttempt(t *testing.T) {
 		t.Error("second call should be suppressed by cooldown")
 	}
 }
+
+func TestEnsurePricingWithFetcherSkipsFetchWithinCooldown(t *testing.T) {
+	d := newTestDB(t)
+	now := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
+
+	prev := now.Add(-10 * time.Minute).Format(time.RFC3339)
+	require.NoError(t, d.SetPricingMeta(pricingRefreshMetaKey, prev))
+
+	called := false
+	refreshed, err := ensurePricingWithFetcher(
+		d, false, func() ([]pricing.ModelPricing, error) {
+			called = true
+			return []pricing.ModelPricing{{
+				ModelPattern:  "network-only-model",
+				InputPerMTok:  1,
+				OutputPerMTok: 1,
+			}}, nil
+		}, now,
+	)
+	require.NoError(t, err)
+	assert.False(t, refreshed)
+	assert.False(t, called, "fetch should not run within cooldown")
+
+	fallback, err := d.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, fallback, "fallback pricing should be seeded")
+
+	networkOnly, err := d.GetModelPricing("network-only-model")
+	require.NoError(t, err)
+	assert.Nil(t, networkOnly, "cooldown should prevent network upsert")
+}

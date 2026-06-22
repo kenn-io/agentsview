@@ -4404,21 +4404,23 @@ func TestResyncAllAllowsKiloSQLiteOnlySessions(t *testing.T) {
 	)
 }
 
-func TestSyncAllSinceOpenCodeStorageRequiresSessionMtime(t *testing.T) {
+func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionPath := oc.addSession(
-		t, "global", "oc-since-child",
-		"/home/user/code/myapp", "Since Child",
+		t, "global", "oc-since-usage-part",
+		"/home/user/code/myapp", "Since Usage Part",
 		1704067200000, 1704067205000,
 	)
 	oc.addMessage(
-		t, "oc-since-child", "msg-a1", "assistant",
-		1704067201000, nil,
+		t, "oc-since-usage-part", "msg-a1", "assistant",
+		1704067201000, map[string]any{
+			"modelID": "Gemini 3.5 Flash (High)",
+		},
 	)
-	partPath := oc.addTextPart(
-		t, "oc-since-child", "msg-a1", "part-a1",
+	oc.addTextPart(
+		t, "oc-since-usage-part", "msg-a1", "part-a1",
 		"initial reply", 1704067201000,
 	)
 
@@ -4434,28 +4436,43 @@ func TestSyncAllSinceOpenCodeStorageRequiresSessionMtime(t *testing.T) {
 	sessionMtime := info.ModTime()
 	future := cutoff.Add(2 * time.Second)
 
-	err = os.WriteFile(partPath, []byte(
-		`{"id":"part-a1","sessionID":"oc-since-child","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
-	), 0o644)
-	require.NoError(t, err, "rewrite part")
-	require.NoError(t, os.Chtimes(partPath, future, future), "chtimes part")
+	usagePartPath := oc.writeJSON(t, filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-a1", "part-finish.json",
+	), map[string]any{
+		"id":        "part-finish",
+		"sessionID": "oc-since-usage-part",
+		"messageID": "msg-a1",
+		"type":      "step-finish",
+		"tokens": map[string]any{
+			"input":  123,
+			"output": 45,
+			"cache": map[string]any{
+				"read":  67,
+				"write": 89,
+			},
+		},
+		"time": map[string]any{
+			"created": int64(1704067201000),
+		},
+	})
+	require.NoError(t, os.Chtimes(usagePartPath, future, future), "chtimes usage part")
 	require.NoError(t, os.Chtimes(sessionPath, sessionMtime, sessionMtime), "restore session mtime")
 
 	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
-	require.Equal(t, 0, stats.Synced, "SyncAllSince synced = %d, want 0", stats.Synced)
-	assertMessageContent(
-		t, env.db, "opencode:oc-since-child",
-		"initial reply",
-	)
-
-	require.NoError(t, os.Chtimes(sessionPath, future, future), "chtimes session path")
-
-	stats = env.engine.SyncAllSince(context.Background(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
-	assertMessageContent(
-		t, env.db, "opencode:oc-since-child",
-		"updated reply",
-	)
+
+	daily, err := env.db.GetDailyUsage(context.Background(), db.UsageFilter{
+		From:     "2024-01-01",
+		To:       "2024-01-01",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	require.Len(t, daily.Daily, 1, "daily rows")
+	assert.Equal(t, 123, daily.Totals.InputTokens)
+	assert.Equal(t, 45, daily.Totals.OutputTokens)
+	assert.Equal(t, 67, daily.Totals.CacheReadTokens)
+	assert.Equal(t, 89, daily.Totals.CacheCreationTokens)
+	assert.Equal(t, []string{"Gemini 3.5 Flash (High)"}, daily.Daily[0].ModelsUsed)
 }
 
 func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
