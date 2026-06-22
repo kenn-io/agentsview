@@ -1708,6 +1708,41 @@ func TestParseCodexSessionFrom_LateTokenCountRequiresFullParse(t *testing.T) {
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
+func TestParseCodexSessionFrom_FunctionCallOutputRequiresFullParse(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"inc-function-output", "/projects/api",
+			"codex_exec", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "run command", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_cmd",
+			map[string]any{"cmd": "sleep 1"}, tsEarlyS5,
+		),
+	)
+	path := createTestFile(t, "function-call-output.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_cmd", "done", tsLate,
+		),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	require.Error(t, err)
+	assert.True(t, IsIncrementalFullParseFallback(err))
+}
+
 // TestParseCodexSessionFrom_DedupsReemittedPrompt covers the
 // incremental-sync case of the re-emitted-prompt dedup: when Codex
 // appends a positive replay signal followed by a verbatim replay of
@@ -2069,7 +2104,7 @@ func TestParseCodexSessionFrom_RunningNotificationRequiresFullParse(t *testing.T
 	assert.Contains(t, err.Error(), "full parse")
 }
 
-func TestParseCodexSessionFrom_NonSubagentFunctionOutputDoesNotRequireFullParse(t *testing.T) {
+func TestParseCodexSessionFrom_NonSubagentFunctionOutputRequiresFullParse(t *testing.T) {
 	t.Parallel()
 
 	initial := testjsonl.JoinJSONL(
@@ -2090,10 +2125,9 @@ func TestParseCodexSessionFrom_NonSubagentFunctionOutputDoesNotRequireFullParse(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, endedAt, _, err := ParseCodexSessionFrom(path, offset, 1, false)
-	require.NoError(t, err)
-	assert.Equal(t, 0, len(newMsgs))
-	assert.False(t, endedAt.IsZero())
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 1, false)
+	require.Error(t, err)
+	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
 func TestParseCodexSessionFrom_SeedsModelFromTurnContext(

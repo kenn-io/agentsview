@@ -488,9 +488,11 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		return
 	}
 
-	output, _ := parseCodexFunctionOutput(payload)
+	output, raw := parseCodexFunctionOutput(payload)
 	if !output.Exists() {
-		return
+		if strings.TrimSpace(raw) == "" {
+			return
+		}
 	}
 
 	switch b.callNames[callID] {
@@ -523,6 +525,15 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 			})
 			return true
 		})
+	default:
+		if text := strings.TrimSpace(raw); text != "" {
+			b.appendCallResultEvent(callID, ParsedToolResultEvent{
+				ToolUseID: callID,
+				Source:    "function_call_output",
+				Content:   text,
+				Timestamp: ts,
+			})
+		}
 	}
 }
 
@@ -1740,8 +1751,9 @@ func codexIncrementalNeedsFullParse(line string) bool {
 	case "function_call":
 		return isCodexWaitAgentCall(payload.Get("name").Str)
 	case "function_call_output":
-		output, _ := parseCodexFunctionOutput(payload)
-		return isCodexSubagentFunctionOutput(output)
+		output, raw := parseCodexFunctionOutput(payload)
+		return isCodexSubagentFunctionOutput(output) ||
+			strings.TrimSpace(raw) != ""
 	default:
 		role := payload.Get("role").Str
 		if role != "user" {

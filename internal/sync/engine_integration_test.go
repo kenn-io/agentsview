@@ -6993,6 +6993,42 @@ func TestIncrementalSync_ClaudeQueueOperationOnlyRepairsStoredSubagentMapping(
 	)
 }
 
+func TestIncrementalSync_ClaudeProgressOnlyRepairsStoredSubagentMapping(
+	t *testing.T,
+) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_progress_only","name":"Agent","input":{"description":"inspect","subagent_type":"Explore","prompt":"inspect"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "progress-subagent-split.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"progress","timestamp":"2024-01-01T10:00:02Z","parentToolUseID":"toolu_progress_only","data":{"type":"agent_progress","agentId":"childprogressonly"}}`,
+	) + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append progress mapping")
+	require.NoError(t, f.Close())
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "progress-subagent-split")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(
+		t,
+		"agent-childprogressonly",
+		msgs[1].ToolCalls[0].SubagentSessionID,
+		"subagent_session_id",
+	)
+}
+
 // TestIncrementalSync_ClaudeFileReplaced verifies that when a
 // session file is replaced atomically (new inode/device), the
 // sync engine detects the identity change and falls back to a
@@ -7324,6 +7360,7 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "exec_command", msgs[1].ToolCalls[0].ToolName, "tool name")
+	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent, "result_content")
 }
 
 func TestIncrementalSync_CodexLateTokenCountRewritesStoredMessage(t *testing.T) {
