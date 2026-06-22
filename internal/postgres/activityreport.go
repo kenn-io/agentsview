@@ -204,6 +204,7 @@ func (s *Store) activityReportUsage(
 	if err != nil {
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
 	}
+	rateResolver := newModelRateResolver(pricing)
 
 	// Accumulate the dedup sort keys (ts, session_id, ordinal) alongside
 	// each mapped row so we can impose one global order across all chunks.
@@ -245,7 +246,7 @@ func (s *Store) activityReportUsage(
 				return fmt.Errorf(
 					"scanning activity report usage: %w", scanErr)
 			}
-			_, outputTok, _, _, cost, _ := pgDailyUsageAmounts(r, pricing)
+			_, outputTok, _, _, cost, _ := pgDailyUsageAmounts(r, rateResolver)
 			ord := int64(-1)
 			if r.messageOrdinal.Valid {
 				ord = r.messageOrdinal.Int64

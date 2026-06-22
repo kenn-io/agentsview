@@ -206,6 +206,7 @@ func (db *DB) activityReportUsage(
 	if err != nil {
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
+	rateResolver := newModelRateResolver(pricing)
 
 	// Accumulate the parsed ts and dedup ordinal alongside each mapped row so
 	// we can impose one global (ts, session_id, ordinal) order across all
@@ -252,7 +253,7 @@ func (db *DB) activityReportUsage(
 				return fmt.Errorf(
 					"scanning activity report usage: %w", scanErr)
 			}
-			_, outputTok, _, _, cost, _ := dailyUsageAmounts(r, pricing)
+			_, outputTok, _, _, cost, _ := dailyUsageAmounts(r, rateResolver)
 			ord := int64(-1)
 			if r.messageOrdinal.Valid {
 				ord = r.messageOrdinal.Int64

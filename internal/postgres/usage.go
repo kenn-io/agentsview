@@ -714,7 +714,7 @@ func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
 }
 
 func pgDailyUsageAmounts(
-	r pgDailyUsageScanRow, pricing map[string]modelRates,
+	r pgDailyUsageScanRow, pricing *modelRateResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
@@ -729,7 +729,7 @@ func pgDailyUsageAmounts(
 		cacheRdTok = r.cacheReadInputTokens
 	}
 
-	rates, _ := lookupModelRates(pricing, r.model)
+	rates, _ := pricing.lookup(r.model)
 	if r.costUSD.Valid {
 		cost = r.costUSD.Float64
 	} else {
@@ -972,6 +972,7 @@ func (s *Store) GetDailyUsage(
 		return db.DailyUsageResult{},
 			fmt.Errorf("loading pg pricing: %w", err)
 	}
+	rateResolver := newModelRateResolver(pricing)
 
 	pb := &paramBuilder{}
 	query := pgUsageRowQuery(pb, f)
@@ -1045,7 +1046,7 @@ func (s *Store) GetDailyUsage(
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
-			pgDailyUsageAmounts(r, pricing)
+			pgDailyUsageAmounts(r, rateResolver)
 		totalSavings += savings
 
 		key := accumKey{
@@ -1365,6 +1366,7 @@ func (s *Store) GetTopSessionsByCost(
 	if err != nil {
 		return nil, fmt.Errorf("loading pg pricing: %w", err)
 	}
+	rateResolver := newModelRateResolver(pricing)
 
 	pb := &paramBuilder{}
 	query := pgTopSessionsUsageRowQuery(pb, f)
@@ -1421,7 +1423,7 @@ func (s *Store) GetTopSessionsByCost(
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _ :=
-			pgDailyUsageAmounts(r, pricing)
+			pgDailyUsageAmounts(r, rateResolver)
 
 		sa, ok := accum[r.sessionID]
 		if !ok {

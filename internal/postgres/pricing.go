@@ -33,6 +33,37 @@ func lookupModelRates(
 	return pricing.Resolve(prices, model)
 }
 
+type modelRateResolution struct {
+	rates modelRates
+	ok    bool
+}
+
+type modelRateResolver struct {
+	prices map[string]modelRates
+	cache  map[string]modelRateResolution
+}
+
+func newModelRateResolver(
+	prices map[string]modelRates,
+) *modelRateResolver {
+	return &modelRateResolver{
+		prices: prices,
+		cache:  make(map[string]modelRateResolution),
+	}
+}
+
+func (r *modelRateResolver) lookup(model string) (modelRates, bool) {
+	if r == nil {
+		return modelRates{}, false
+	}
+	if cached, ok := r.cache[model]; ok {
+		return cached.rates, cached.ok
+	}
+	rates, ok := lookupModelRates(r.prices, model)
+	r.cache[model] = modelRateResolution{rates: rates, ok: ok}
+	return rates, ok
+}
+
 func fallbackPricingRows() []db.ModelPricing {
 	src := pricing.FallbackPricing()
 	out := make([]db.ModelPricing, len(src))

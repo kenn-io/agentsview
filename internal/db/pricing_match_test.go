@@ -30,3 +30,24 @@ func TestLookupModelRates_DotDashFallback(t *testing.T) {
 	_, ok = lookupModelRates(pricing, "gpt-5.5")
 	assert.False(t, ok, "unknown model stays unpriced")
 }
+
+func TestModelRateResolverCachesResolvedModels(t *testing.T) {
+	pricing := map[string]modelRates{
+		"gemini-3.5-flash": {input: 1.25, output: 10},
+	}
+	resolver := newModelRateResolver(pricing)
+
+	first, ok := resolver.lookup("Gemini 3.5 Flash (High)")
+	require.True(t, ok)
+	assert.Equal(t, 1.25, first.input)
+
+	second, ok := resolver.lookup("Gemini 3.5 Flash (High)")
+	require.True(t, ok)
+	assert.Equal(t, first, second)
+
+	_, ok = resolver.lookup("unknown-model")
+	assert.False(t, ok)
+
+	_, ok = resolver.lookup("unknown-model")
+	assert.False(t, ok)
+}

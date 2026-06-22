@@ -23,6 +23,37 @@ func lookupModelRates(
 	return pricingpkg.Resolve(pricing, model)
 }
 
+type modelRateResolution struct {
+	rates modelRates
+	ok    bool
+}
+
+type modelRateResolver struct {
+	pricing map[string]modelRates
+	cache   map[string]modelRateResolution
+}
+
+func newModelRateResolver(
+	pricing map[string]modelRates,
+) *modelRateResolver {
+	return &modelRateResolver{
+		pricing: pricing,
+		cache:   make(map[string]modelRateResolution),
+	}
+}
+
+func (r *modelRateResolver) lookup(model string) (modelRates, bool) {
+	if r == nil {
+		return modelRates{}, false
+	}
+	if cached, ok := r.cache[model]; ok {
+		return cached.rates, cached.ok
+	}
+	rates, ok := lookupModelRates(r.pricing, model)
+	r.cache[model] = modelRateResolution{rates: rates, ok: ok}
+	return rates, ok
+}
+
 // UsageFilter controls the date range, agent, and timezone
 // for daily usage aggregation queries.
 type UsageFilter struct {
@@ -796,7 +827,7 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 }
 
 func dailyUsageAmounts(
-	r dailyUsageScanRow, pricing map[string]modelRates,
+	r dailyUsageScanRow, pricing *modelRateResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
@@ -813,7 +844,7 @@ func dailyUsageAmounts(
 		cacheRdTok = r.cacheReadInputTokens
 	}
 
-	rates, _ := lookupModelRates(pricing, r.model)
+	rates, _ := pricing.lookup(r.model)
 	if r.costUSD.Valid {
 		cost = r.costUSD.Float64
 	} else {
@@ -1032,6 +1063,7 @@ func (db *DB) GetDailyUsage(
 		return DailyUsageResult{},
 			fmt.Errorf("loading pricing: %w", err)
 	}
+	rateResolver := newModelRateResolver(pricing)
 
 	// Filter on usage timestamp (not only session started_at) so
 	// long-lived sessions that span date boundaries are included.
@@ -1121,7 +1153,7 @@ func (db *DB) GetDailyUsage(
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
-			dailyUsageAmounts(r, pricing)
+			dailyUsageAmounts(r, rateResolver)
 		totalSavings += savings
 
 		key := accumKey{
@@ -1484,6 +1516,7 @@ func (db *DB) GetTopSessionsByCost(
 		return nil,
 			fmt.Errorf("loading pricing: %w", err)
 	}
+	rateResolver := newModelRateResolver(pricing)
 
 	query, args := topSessionsUsageRowQuery(f)
 	// Deterministic order so the dedup "winner" (the session
@@ -1556,7 +1589,7 @@ func (db *DB) GetTopSessionsByCost(
 		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, _ :=
-			dailyUsageAmounts(r, pricing)
+			dailyUsageAmounts(r, rateResolver)
 
 		sa, ok := accum[r.sessionID]
 		if !ok {
