@@ -112,6 +112,7 @@ const sessionFullCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, file_path, file_size, file_mtime,
+	next_ordinal, last_entry_uuid,
 	file_inode, file_device,
 	file_hash, local_modified_at, created_at`
 
@@ -319,6 +320,8 @@ type Session struct {
 	FilePath          *string `json:"file_path,omitempty"`
 	FileSize          *int64  `json:"file_size,omitempty"`
 	FileMtime         *int64  `json:"file_mtime,omitempty"`
+	NextOrdinal       int     `json:"-"`
+	LastEntryUUID     *string `json:"-"`
 	FileInode         *int64  `json:"file_inode,omitempty"`
 	FileDevice        *int64  `json:"file_device,omitempty"`
 	FileHash          *string `json:"file_hash,omitempty"`
@@ -1043,7 +1046,8 @@ func (db *DB) GetSessionFull(
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
-		&s.FileMtime, &s.FileInode, &s.FileDevice,
+		&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
+		&s.FileInode, &s.FileDevice,
 		&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -1162,8 +1166,9 @@ const upsertSessionSQL = `
 			source_version, parser_malformed_lines,
 			is_truncated,
 			file_path, file_size, file_mtime,
+			next_ordinal, last_entry_uuid,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -1193,6 +1198,8 @@ const upsertSessionSQL = `
 			file_path = excluded.file_path,
 			file_size = excluded.file_size,
 			file_mtime = excluded.file_mtime,
+			next_ordinal = excluded.next_ordinal,
+			last_entry_uuid = excluded.last_entry_uuid,
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
 			file_hash = excluded.file_hash`
@@ -1218,6 +1225,7 @@ func upsertSessionArgs(s Session) []any {
 		s.SourceVersion, s.ParserMalformedLines,
 		s.IsTruncated,
 		s.FilePath, s.FileSize, s.FileMtime,
+		s.NextOrdinal, s.LastEntryUUID,
 		s.FileInode, s.FileDevice, s.FileHash,
 	}
 }
@@ -1574,11 +1582,27 @@ type IncrementalInfo struct {
 	ID                   string
 	FileSize             int64
 	FileMtime            int64
+	NextOrdinal          int
+	LastEntryUUID        string
 	FileInode            int64
 	FileDevice           int64
 	MsgCount             int
 	UserMsgCount         int
 	FirstMessage         string
+	TotalOutputTokens    int
+	PeakContextTokens    int
+	HasTotalOutputTokens bool
+	HasPeakContextTokens bool
+}
+
+type IncrementalSessionUpdate struct {
+	EndedAt              *string
+	MsgCount             int
+	UserMsgCount         int
+	FileSize             int64
+	FileMtime            int64
+	NextOrdinal          int
+	LastEntryUUID        string
 	TotalOutputTokens    int
 	PeakContextTokens    int
 	HasTotalOutputTokens bool
@@ -1607,9 +1631,10 @@ func (db *DB) GetSessionForIncremental(
 
 	var info IncrementalInfo
 	var fs, fm, fi, fd sql.NullInt64
-	var firstMsg sql.NullString
+	var firstMsg, lastEntryUUID sql.NullString
 	err = db.getReader().QueryRow(
 		`SELECT id, file_size, file_mtime,
+			next_ordinal, last_entry_uuid,
 			file_inode, file_device,
 			message_count, user_message_count,
 			first_message,
@@ -1620,7 +1645,7 @@ func (db *DB) GetSessionForIncremental(
 		   AND deleted_at IS NULL`,
 		path,
 	).Scan(
-		&info.ID, &fs, &fm, &fi, &fd,
+		&info.ID, &fs, &fm, &info.NextOrdinal, &lastEntryUUID, &fi, &fd,
 		&info.MsgCount, &info.UserMsgCount,
 		&firstMsg,
 		&info.TotalOutputTokens, &info.PeakContextTokens,
@@ -1631,6 +1656,9 @@ func (db *DB) GetSessionForIncremental(
 	}
 	if firstMsg.Valid {
 		info.FirstMessage = firstMsg.String
+	}
+	if lastEntryUUID.Valid {
+		info.LastEntryUUID = lastEntryUUID.String
 	}
 	if fs.Valid {
 		info.FileSize = fs.Int64
@@ -1675,13 +1703,55 @@ func (db *DB) GetSessionForIncremental(
 // resolving result or sent a new message. Clearing makes the
 // session render with the time-based StatusDot tier (working /
 // idle / quiet) until the next full sync reclassifies.
+func updateSessionIncrementalTx(
+	tx *sql.Tx, id string, update IncrementalSessionUpdate,
+) error {
+	var lastEntryUUID any
+	if update.LastEntryUUID != "" {
+		lastEntryUUID = update.LastEntryUUID
+	}
+	result, err := tx.Exec(`
+		UPDATE sessions SET
+			ended_at = COALESCE(?, ended_at),
+			message_count = ?,
+			user_message_count = ?,
+			file_size = ?,
+			file_mtime = ?,
+			next_ordinal = ?,
+			last_entry_uuid = ?,
+			total_output_tokens = ?,
+			peak_context_tokens = ?,
+			has_total_output_tokens = ?,
+			has_peak_context_tokens = ?,
+			termination_status = NULL
+		WHERE id = ?`,
+		update.EndedAt, update.MsgCount, update.UserMsgCount,
+		update.FileSize, update.FileMtime,
+		update.NextOrdinal, lastEntryUUID,
+		update.TotalOutputTokens, update.PeakContextTokens,
+		update.HasTotalOutputTokens, update.HasPeakContextTokens, id,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"incremental update session %s: %w", id, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"incremental update session %s rows affected: %w", id, err,
+		)
+	}
+	if rows != 1 {
+		return fmt.Errorf(
+			"incremental update session %s: updated %d rows", id, rows,
+		)
+	}
+	return nil
+}
+
 func (db *DB) UpdateSessionIncremental(
-	id string,
-	endedAt *string,
-	msgCount, userMsgCount int,
-	fileSize, fileMtime int64,
-	totalOutputTokens, peakContextTokens int,
-	hasTotalOutputTokens, hasPeakContextTokens bool,
+	id string, update IncrementalSessionUpdate,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1692,28 +1762,9 @@ func (db *DB) UpdateSessionIncremental(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.Exec(`
-		UPDATE sessions SET
-			ended_at = COALESCE(?, ended_at),
-			message_count = ?,
-			user_message_count = ?,
-			file_size = ?,
-			file_mtime = ?,
-			total_output_tokens = ?,
-			peak_context_tokens = ?,
-			has_total_output_tokens = ?,
-			has_peak_context_tokens = ?,
-			termination_status = NULL
-		WHERE id = ?`,
-		endedAt, msgCount, userMsgCount,
-		fileSize, fileMtime,
-		totalOutputTokens, peakContextTokens,
-		hasTotalOutputTokens, hasPeakContextTokens, id,
-	)
+	err = updateSessionIncrementalTx(tx, id, update)
 	if err != nil {
-		return fmt.Errorf(
-			"incremental update session %s: %w", id, err,
-		)
+		return err
 	}
 	if err := updateSessionAutomationFromMessagesTx(tx, id); err != nil {
 		return err
@@ -2520,7 +2571,8 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
-			&s.FileMtime, &s.FileInode, &s.FileDevice,
+			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
+			&s.FileInode, &s.FileDevice,
 			&s.FileHash, &s.LocalModifiedAt, &s.CreatedAt,
 		)
 		if err != nil {

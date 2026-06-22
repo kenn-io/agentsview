@@ -431,6 +431,62 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	return tx.Commit()
 }
 
+func writeMessagesTx(tx *sql.Tx, msgs []Message) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	ids, err := insertMessagesTx(tx, msgs)
+	if err != nil {
+		return err
+	}
+	toolCalls := resolveToolCalls(msgs, ids)
+	if err := insertToolCallsTx(tx, toolCalls); err != nil {
+		return err
+	}
+	events := resolveToolResultEvents(msgs)
+	if err := insertToolResultEventsTx(tx, events); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (db *DB) WriteSessionIncremental(
+	sessionID string, msgs []Message, update IncrementalSessionUpdate,
+) error {
+	t := time.Now()
+	defer func() {
+		if d := time.Since(t); d > slowOpThreshold {
+			log.Printf(
+				"db: WriteSessionIncremental (%d msgs): %s",
+				len(msgs), d.Round(time.Millisecond),
+			)
+		}
+	}()
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning incremental write tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := writeMessagesTx(tx, msgs); err != nil {
+		return err
+	}
+	if err := updateSessionIncrementalTx(tx, sessionID, update); err != nil {
+		return err
+	}
+	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing incremental write tx: %w", err)
+	}
+	return nil
+}
+
 func messageSessionIDs(msgs []Message) []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0, 1)

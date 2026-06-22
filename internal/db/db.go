@@ -29,6 +29,12 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 49: incremental JSONL resume now persists next_ordinal
+// and last_entry_uuid, and Claude incremental parsing restores
+// subagent linkage plus boundary fallback behavior from stored state.
+// Existing rows need re-parsing so incremental appends resume from
+// the raw parser tip instead of the filtered stored tail.
+//
 // Bumped to 48: the Codex and OpenCode parsers now persist cwd.
 // Existing Codex and OpenCode rows need re-parsing so worktree
 // project mappings can be applied to those sessions.
@@ -228,7 +234,7 @@ import (
 //
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 48
+const dataVersion = 49
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -803,6 +809,14 @@ func (db *DB) migrateColumns() error {
 		{
 			"sessions", "file_device",
 			"ALTER TABLE sessions ADD COLUMN file_device INTEGER",
+		},
+		{
+			"sessions", "next_ordinal",
+			"ALTER TABLE sessions ADD COLUMN next_ordinal INTEGER NOT NULL DEFAULT 0",
+		},
+		{
+			"sessions", "last_entry_uuid",
+			"ALTER TABLE sessions ADD COLUMN last_entry_uuid TEXT",
 		},
 		{
 			"messages", "thinking_text",

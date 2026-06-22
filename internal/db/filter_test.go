@@ -1547,7 +1547,12 @@ func TestIncrementalUpdateClearsAutomated(t *testing.T) {
 
 	// Simulate a second user turn via incremental update.
 	err = d.UpdateSessionIncremental(
-		"s1", nil, 6, 2, 100, 12345, 0, 0, false, false,
+		"s1", IncrementalSessionUpdate{
+			MsgCount:     6,
+			UserMsgCount: 2,
+			FileSize:     100,
+			FileMtime:    12345,
+		},
 	)
 	require.NoError(t, err, "incremental update")
 

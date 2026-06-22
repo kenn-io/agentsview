@@ -361,8 +361,17 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 		// must be carried forward, not reset to zero.
 		ended := "2024-01-15T10:30:00Z"
 		err := d.UpdateSessionIncremental(
-			"inc-tokens", &ended, 5, 2, 4096, 200,
-			1000, 8000, true, true,
+			"inc-tokens", IncrementalSessionUpdate{
+				EndedAt:              &ended,
+				MsgCount:             5,
+				UserMsgCount:         2,
+				FileSize:             4096,
+				FileMtime:            200,
+				TotalOutputTokens:    1000,
+				PeakContextTokens:    8000,
+				HasTotalOutputTokens: true,
+				HasPeakContextTokens: true,
+			},
 		)
 		require.NoError(t, err, "incremental update")
 
@@ -377,8 +386,17 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 	t.Run("update with new messages advances tokens", func(t *testing.T) {
 		ended := "2024-01-15T11:00:00Z"
 		err := d.UpdateSessionIncremental(
-			"inc-tokens", &ended, 8, 3, 8192, 300,
-			1500, 9000, true, true,
+			"inc-tokens", IncrementalSessionUpdate{
+				EndedAt:              &ended,
+				MsgCount:             8,
+				UserMsgCount:         3,
+				FileSize:             8192,
+				FileMtime:            300,
+				TotalOutputTokens:    1500,
+				PeakContextTokens:    9000,
+				HasTotalOutputTokens: true,
+				HasPeakContextTokens: true,
+			},
 		)
 		require.NoError(t, err, "incremental update")
 
@@ -395,8 +413,17 @@ func TestIncrementalUpdatePreservesTokenTotals(t *testing.T) {
 		// should produce the same result.
 		ended := "2024-01-15T11:00:00Z"
 		err := d.UpdateSessionIncremental(
-			"inc-tokens", &ended, 8, 3, 8192, 300,
-			1500, 9000, true, true,
+			"inc-tokens", IncrementalSessionUpdate{
+				EndedAt:              &ended,
+				MsgCount:             8,
+				UserMsgCount:         3,
+				FileSize:             8192,
+				FileMtime:            300,
+				TotalOutputTokens:    1500,
+				PeakContextTokens:    9000,
+				HasTotalOutputTokens: true,
+				HasPeakContextTokens: true,
+			},
 		)
 		require.NoError(t, err, "retry update")
 

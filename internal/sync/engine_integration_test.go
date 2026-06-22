@@ -6882,6 +6882,90 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	assert.Equal(t, 500, msgs[1].ContextTokens, "assistant ContextTokens = %d, want 500", msgs[1].ContextTokens)
 }
 
+func TestIncrementalSync_ClaudeFilteredTailAdvancesNextOrdinal(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "filtered-tail.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	firstAppend := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_pair","name":"Read","input":{"file_path":"README.md"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_pair","content":"ok"}]}}`,
+	) + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open first append")
+	_, err = f.WriteString(firstAppend)
+	require.NoError(t, err, "write first append")
+	require.NoError(t, f.Close())
+
+	env.engine.SyncPaths([]string{path})
+
+	state, err := env.db.GetSessionFull(
+		context.Background(), "filtered-tail",
+	)
+	require.NoError(t, err, "GetSessionFull after first append")
+	require.NotNil(t, state, "filtered-tail session missing")
+	assert.Equal(t, 3, state.NextOrdinal, "NextOrdinal after filtered tail")
+	require.NotNil(t, state.LastEntryUUID, "LastEntryUUID after filtered tail")
+	assert.Equal(t, "r1", *state.LastEntryUUID, "LastEntryUUID after filtered tail")
+
+	secondAppend := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a2","parentUuid":"r1","message":{"content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":2},"stop_reason":"end_turn"}}`,
+	) + "\n"
+	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open second append")
+	_, err = f.WriteString(secondAppend)
+	require.NoError(t, err, "write second append")
+	require.NoError(t, f.Close())
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "filtered-tail")
+	require.Len(t, msgs, 3)
+	assert.Equal(t, 0, msgs[0].Ordinal, "ordinal 0")
+	assert.Equal(t, 1, msgs[1].Ordinal, "ordinal 1")
+	assert.Equal(t, 3, msgs[2].Ordinal, "ordinal 2")
+}
+
+func TestIncrementalSync_ClaudeQueueOperationPreservesSubagentMapping(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "queued-subagent.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_queue","name":"Agent","input":{"description":"inspect","subagent_type":"Explore","prompt":"inspect"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","sessionId":"queued-subagent","content":"{\"task_id\":\"childqueue\",\"tool_use_id\":\"toolu_queue\",\"description\":\"inspect\",\"task_type\":\"local_agent\"}"}`,
+	) + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append queue mapping")
+	require.NoError(t, f.Close())
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "queued-subagent")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(
+		t,
+		"agent-childqueue",
+		msgs[1].ToolCalls[0].SubagentSessionID,
+		"subagent_session_id",
+	)
+}
+
 // TestIncrementalSync_ClaudeFileReplaced verifies that when a
 // session file is replaced atomically (new inode/device), the
 // sync engine detects the identity change and falls back to a
@@ -7097,6 +7181,33 @@ func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T
 	assert.Equal(t, "agent-childlate", got.String, "subagent_session_id = %q, want %q", got.String, "agent-childlate")
 }
 
+func TestIncrementalSync_ClaudeCrossSyncToolResultFallback(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_tool","content":[{"type":"tool_use","id":"toolu_cross","name":"Read","input":{"file_path":"README.md"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-cross-tool", "cross-tool.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_cross","content":"done"}]}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append tool_result")
+	require.NoError(t, f.Close())
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "cross-tool")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent, "result_content")
+}
+
 func TestIncrementalSync_CodexAppend(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -7145,6 +7256,47 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	for i, m := range msgs {
 		assert.Equal(t, "codex:inc-cx", m.SessionID, "msgs[%d].SessionID = %q, want codex:inc-cx", i, m.SessionID)
 	}
+}
+
+func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"inc-cx-exec", "/tmp/proj",
+			"codex_exec", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "run command", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_cmd",
+			map[string]any{"cmd": "sleep 1"}, tsEarlyS5,
+		),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-20240101-inc-cx-exec.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_cmd", "done", "2024-01-01T10:01:00Z",
+		),
+	)
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close())
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "exec_command", msgs[1].ToolCalls[0].ToolName, "tool name")
 }
 
 func TestIncrementalSync_CodexLateTokenCountRewritesStoredMessage(t *testing.T) {

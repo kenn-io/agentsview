@@ -513,7 +513,7 @@ func TestParseClaudeSessionFrom_Incremental(t *testing.T) {
 
 	// Incremental parse from offset.
 	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
-		path, offset, 2,
+		path, offset, 2, "",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(newMsgs))
@@ -556,7 +556,7 @@ func TestParseClaudeSessionFrom_QueuedCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 2)
+	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 2, "")
 	require.NoError(t, err)
 	require.Len(t, newMsgs, 2)
 
@@ -568,6 +568,43 @@ func TestParseClaudeSessionFrom_QueuedCommand(t *testing.T) {
 
 	assert.Equal(t, RoleAssistant, newMsgs[1].Role)
 	assert.Equal(t, 3, newMsgs[1].Ordinal)
+}
+
+func TestParseClaudeSessionFrom_QueueOperationPreservesSubagentMapping(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsEarly),
+	)
+	path := createTestFile(t, "inc-subagent.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := strings.Join([]string{
+		`{"type":"assistant","timestamp":"` + tsEarlyS1 + `","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_agent","name":"Agent","input":{"description":"inspect","subagent_type":"Explore","prompt":"inspect"}}]}}`,
+		`{"type":"queue-operation","operation":"enqueue","timestamp":"` + tsEarlyS5 + `","sessionId":"test-session","content":"{\"task_id\":\"child123\",\"tool_use_id\":\"toolu_agent\",\"description\":\"inspect\",\"task_type\":\"local_agent\"}"}`,
+	}, "\n") + "\n"
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 1, "")
+	require.NoError(t, err)
+	require.Len(t, newMsgs, 1)
+	require.Len(t, newMsgs[0].ToolCalls, 1)
+	assert.Equal(
+		t,
+		"agent-child123",
+		newMsgs[0].ToolCalls[0].SubagentSessionID,
+	)
 }
 
 func TestParseClaudeSessionFrom_SkipsNonMessages(
@@ -601,7 +638,7 @@ func TestParseClaudeSessionFrom_SkipsNonMessages(
 	require.NoError(t, f.Close())
 
 	newMsgs, _, _, err := ParseClaudeSessionFrom(
-		path, offset, 1,
+		path, offset, 1, "",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(newMsgs))
@@ -624,7 +661,7 @@ func TestParseClaudeSessionFrom_NoNewData(t *testing.T) {
 
 	// Parse from EOF — should return empty.
 	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
-		path, info.Size(), 1,
+		path, info.Size(), 1, "",
 	)
 	require.NoError(t, err)
 	assert.Empty(t, newMsgs)
@@ -661,7 +698,7 @@ func TestParseClaudeSessionFrom_PartialLineAtEOF(
 	require.NoError(t, f.Close())
 
 	newMsgs, _, consumed, err := ParseClaudeSessionFrom(
-		path, offset, 1,
+		path, offset, 1, "",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, len(newMsgs))
@@ -709,7 +746,41 @@ func TestParseClaudeSessionFrom_DAGDetected(
 	require.NoError(t, f.Close())
 
 	_, _, _, err = ParseClaudeSessionFrom(
-		path, offset, 1,
+		path, offset, 1, "",
+	)
+	assert.ErrorIs(t, err, ErrDAGDetected)
+}
+
+func TestParseClaudeSessionFrom_DAGBoundaryAgainstStoredLastUUID(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	path := createTestFile(
+		t, "inc-dag-boundary.jsonl",
+		testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON("hello", tsEarly),
+		),
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","uuid":"a1","parentUuid":"wrong-parent","timestamp":"` +
+			tsEarlyS5 + `","message":{"content":[{"type":"text","text":"branch"}]}}`,
+	)
+	f, err := os.OpenFile(
+		path, os.O_APPEND|os.O_WRONLY, 0o644,
+	)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseClaudeSessionFrom(
+		path, offset, 1, "stored-tip",
 	)
 	assert.ErrorIs(t, err, ErrDAGDetected)
 }
@@ -756,7 +827,7 @@ func TestParseClaudeSessionFrom_DAGAcrossNonUUID(
 	require.NoError(t, f.Close())
 
 	_, _, _, err = ParseClaudeSessionFrom(
-		path, offset, 1,
+		path, offset, 1, "",
 	)
 	assert.ErrorIs(t, err, ErrDAGDetected)
 }
@@ -799,7 +870,7 @@ func TestParseClaudeSessionFrom_LinearUUID(
 	require.NoError(t, f.Close())
 
 	newMsgs, endedAt, _, err := ParseClaudeSessionFrom(
-		path, offset, 1,
+		path, offset, 1, "",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 2, len(newMsgs))
@@ -845,7 +916,7 @@ func TestParseClaudeSessionFrom_ToolUseResultAgentIDFallsBack(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(path, offset, 1)
+	_, _, _, err = ParseClaudeSessionFrom(path, offset, 1, "")
 	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -971,7 +1042,7 @@ func TestParseClaudeSessionFrom_SameMessageIDFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseClaudeSessionFrom(path, offset, 1)
+	_, _, _, err = ParseClaudeSessionFrom(path, offset, 1, "")
 	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -1010,7 +1081,7 @@ func TestParseClaudeSessionFrom_BenignAppendNoFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 1)
+	newMsgs, _, _, err := ParseClaudeSessionFrom(path, offset, 1, "")
 	require.NoError(t, err)
 	assert.Len(t, newMsgs, 2)
 }
@@ -1553,7 +1624,7 @@ func TestParseClaudeSession_CompactBoundary(t *testing.T) {
 		require.NoError(t, f.Close())
 
 		newMsgs, _, _, err := ParseClaudeSessionFrom(
-			path, offset, 1,
+			path, offset, 1, "",
 		)
 		require.NoError(t, err)
 		require.Len(t, newMsgs, 2)

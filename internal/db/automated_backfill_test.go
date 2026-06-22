@@ -236,7 +236,12 @@ func TestIncrementalUpdateReclassifiesOnPatternChange(t *testing.T) {
 
 	// Incremental update with umc still <= 1.
 	err = d.UpdateSessionIncremental(
-		"changelog-inc", nil, 2, 1, 1024, 100, 0, 0, false, false,
+		"changelog-inc", IncrementalSessionUpdate{
+			MsgCount:     2,
+			UserMsgCount: 1,
+			FileSize:     1024,
+			FileMtime:    100,
+		},
 	)
 	require.NoError(t, err, "incremental update")
 
@@ -267,7 +272,12 @@ func TestIncrementalUpdateClearsWhenCountGrows(t *testing.T) {
 
 	// Incremental update pushes umc > 1 — must clear.
 	err = d.UpdateSessionIncremental(
-		"grew-past-one", nil, 7, 3, 2048, 200, 0, 0, false, false,
+		"grew-past-one", IncrementalSessionUpdate{
+			MsgCount:     7,
+			UserMsgCount: 3,
+			FileSize:     2048,
+			FileMtime:    200,
+		},
 	)
 	require.NoError(t, err, "incremental update")
 
@@ -292,7 +302,12 @@ func TestIncrementalUpdateLeavesNonMatching(t *testing.T) {
 	})
 
 	err := d.UpdateSessionIncremental(
-		"normal-single", nil, 2, 1, 1024, 100, 0, 0, false, false,
+		"normal-single", IncrementalSessionUpdate{
+			MsgCount:     2,
+			UserMsgCount: 1,
+			FileSize:     1024,
+			FileMtime:    100,
+		},
 	)
 	require.NoError(t, err, "incremental update")
 
@@ -328,7 +343,12 @@ func TestIncrementalUpdateClearsTerminationStatus(t *testing.T) {
 		"precondition: expected tool_call_pending")
 
 	err = d.UpdateSessionIncremental(
-		"stale-term", nil, 4, 2, 2048, 200, 0, 0, false, false,
+		"stale-term", IncrementalSessionUpdate{
+			MsgCount:     4,
+			UserMsgCount: 2,
+			FileSize:     2048,
+			FileMtime:    200,
+		},
 	)
 	require.NoError(t, err, "incremental update")
 
