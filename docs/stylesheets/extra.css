@@ -139,22 +139,23 @@
 }
 
 .md-typeset .agent-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
-  gap: 0.4rem;
-  max-width: 880px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem;
+  max-width: 860px;
   margin: 0.25rem auto 1.4rem;
   padding: 0;
 }
 
 .md-typeset .agent-chip {
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
+  flex-direction: row;
   align-items: center;
   gap: 0.45rem;
-  padding: 0.65rem 0.35rem 0.55rem;
+  padding: 0.35rem 0.6rem 0.35rem 0.35rem;
   border: 1px solid rgba(148, 163, 184, 0.12);
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(148, 163, 184, 0.03);
   color: var(--agentsview-muted);
   text-decoration: none;
@@ -175,9 +176,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 9px;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: rgba(10, 10, 10, 0.4);
   color: rgba(232, 232, 232, 0.82);
@@ -185,14 +187,14 @@
 }
 
 .md-typeset .agent-chip__glyph svg {
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
   fill: currentColor;
 }
 
 .md-typeset .agent-chip__glyph--mono {
   font-family: var(--md-text-font);
-  font-size: 0.9rem;
+  font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: 0.01em;
 }
@@ -205,14 +207,12 @@
 }
 
 .md-typeset .agent-chip__name {
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 550;
   line-height: 1.2;
-  text-align: center;
+  text-align: left;
+  white-space: nowrap;
   color: inherit;
-  word-break: normal;
-  overflow-wrap: break-word;
-  hyphens: none;
 }
 
 .md-typeset .grid.cards > ul > li {
@@ -278,25 +278,11 @@
   }
 
   .md-typeset .agent-grid {
-    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
-    gap: 0.35rem;
-  }
-
-  .md-typeset .agent-chip {
-    padding: 0.6rem 0.3rem 0.5rem;
-  }
-
-  .md-typeset .agent-chip__glyph {
-    width: 36px;
-    height: 36px;
-  }
-
-  .md-typeset .agent-chip__glyph svg {
-    width: 19px;
-    height: 19px;
+    justify-content: flex-start;
+    gap: 0.3rem;
   }
 
   .md-typeset .agent-chip__name {
-    font-size: 0.68rem;
+    font-size: 0.7rem;
   }
 }
