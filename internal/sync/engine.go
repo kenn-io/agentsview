@@ -4989,7 +4989,6 @@ func (e *Engine) processCodex(
 		return processResult{skip: true}
 	}
 
-	indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
 	projectNeedsReparse := e.pathNeedsProjectReparse(file.Path)
 	forceReplace := false
 
@@ -5000,10 +4999,11 @@ func (e *Engine) processCodex(
 			path, offset, startOrd, false,
 		)
 	}
-	if !projectNeedsReparse {
-		if res, ok := e.tryIncrementalJSONL(
-			file, info, parser.AgentCodex, codexParseFn,
-		); ok {
+	if res, ok := e.tryIncrementalJSONL(
+		file, info, parser.AgentCodex, codexParseFn,
+	); ok {
+		if !projectNeedsReparse {
+			indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
 			if !indexMtimeChanged {
 				return res
 			}
@@ -5012,9 +5012,9 @@ func (e *Engine) processCodex(
 			// appended bytes so existing rows rewritten by the full parse are not
 			// dropped by the append-only write path.
 			forceReplace = res.forceReplace
-		} else {
-			forceReplace = res.forceReplace
 		}
+	} else {
+		forceReplace = res.forceReplace
 	}
 
 	sess, msgs, err := parser.ParseCodexSession(

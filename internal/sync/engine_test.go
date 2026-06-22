@@ -1520,6 +1520,98 @@ func TestProcessCodexAppendedStaleProjectDoesFullReparse(t *testing.T) {
 	assert.Equal(t, "agentsview", res.results[0].Session.Project)
 }
 
+func TestProcessCodexAppendedStaleProjectCarriesForceReplace(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"abc",
+			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
+			"user",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "run command", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command",
+			"call_cmd",
+			map[string]any{"cmd": "go test"},
+			"2024-01-01T10:00:02Z",
+		),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat initial codex fixture")
+
+	sess := db.Session{
+		ID:               "host~codex:abc",
+		Project:          "roborev_ci_28293_3831737461",
+		Machine:          "host",
+		Agent:            "codex",
+		FirstMessage:     strPtr("run command"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+		FilePath:         strPtr("host:" + path),
+		FileSize:         int64Ptr(info.Size()),
+		FileMtime:        int64Ptr(info.ModTime().UnixNano()),
+		NextOrdinal:      2,
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{
+			SessionID: "host~codex:abc",
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "run command",
+		},
+		{
+			SessionID: "host~codex:abc",
+			Ordinal:   1,
+			Role:      "assistant",
+			ToolCalls: []db.ToolCall{
+				{
+					ToolUseID: "call_cmd",
+					ToolName:  "exec_command",
+					InputJSON: `{"cmd":"go test"}`,
+				},
+			},
+		},
+	}))
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err, "open codex fixture for append")
+	_, err = f.WriteString(testjsonl.CodexFunctionCallOutputJSON(
+		"call_cmd", `{"status":"ok"}`, "2024-01-01T10:00:03Z",
+	) + "\n")
+	require.NoError(t, err, "append codex fixture")
+	require.NoError(t, f.Close(), "close codex fixture")
+	info, err = os.Stat(path)
+	require.NoError(t, err, "stat appended codex fixture")
+
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	res := e.processCodex(parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  path,
+	}, info)
+	require.NoError(t, res.err)
+	require.Nil(t, res.incremental,
+		"stale project metadata must force full parse even when file appended")
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "agentsview", res.results[0].Session.Project)
+	assert.True(t, res.forceReplace,
+		"fallback-triggering appended data must replace existing messages")
+}
+
 func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()
