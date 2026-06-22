@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -34,6 +35,7 @@ type schemaProbeState struct {
 	currentSchema       string
 	existingColumnNames map[string][]string
 	maxDataVersion      int
+	maxDataVersionErr   error
 }
 
 var (
@@ -141,6 +143,9 @@ func (c *schemaProbeConn) QueryContext(
 			columns: []string{"value"},
 		}, nil
 	case strings.Contains(normalized, "max(data_version)"):
+		if c.state.maxDataVersionErr != nil {
+			return nil, c.state.maxDataVersionErr
+		}
 		return &schemaProbeRows{
 			columns: []string{"max"},
 			values:  [][]driver.Value{{int64(c.state.maxDataVersion)}},
@@ -191,6 +196,12 @@ func (s *schemaProbeState) alterTableExecCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.alterTableExecs)
+}
+
+func (s *schemaProbeState) execCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.execs)
 }
 
 func (s *schemaProbeState) executedSQL() string {
@@ -256,6 +267,31 @@ func TestCheckDataVersionCompatRejectsNewerPGRows(t *testing.T) {
 	require.Error(t, err, "newer PG data version must be rejected")
 	assert.True(t, localdb.IsDataVersionTooNew(err),
 		"expected too-new data version error")
+}
+
+func TestCheckDataVersionCompatAllowsMissingDataVersionColumn(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.maxDataVersionErr = errors.New(
+		`ERROR: column "data_version" does not exist (SQLSTATE 42703)`,
+	)
+
+	err := CheckDataVersionCompat(context.Background(), pg)
+
+	require.NoError(t, err,
+		"legacy PG schemas without sessions.data_version should migrate")
+}
+
+func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.maxDataVersion = localdb.CurrentDataVersion() + 10
+
+	err := EnsureSchema(context.Background(), pg, "agentsview")
+
+	require.Error(t, err, "newer PG data version must be rejected")
+	assert.True(t, localdb.IsDataVersionTooNew(err),
+		"expected too-new data version error")
+	assert.Equal(t, 0, state.execCount(),
+		"EnsureSchema must not mutate PG before data-version refusal")
 }
 
 func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {

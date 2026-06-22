@@ -960,10 +960,10 @@ fn spawn_preflight_error_render(window: WebviewWindow, title: &str, message: &st
     let message = message.to_string();
     let footer = footer.to_string();
     thread::spawn(move || {
+        let script = preflight_error_script(title.as_str(), message.as_str(), footer.as_str());
         let deadline = Instant::now() + READY_TIMEOUT;
         while Instant::now() < deadline {
-            if window.eval(preflight_error_ready_probe()).is_ok() {
-                show_preflight_error(&window, title.as_str(), message.as_str(), footer.as_str());
+            if window.eval(script.as_str()).is_ok() {
                 return;
             }
             thread::sleep(READY_POLL_INTERVAL);
@@ -972,26 +972,20 @@ fn spawn_preflight_error_render(window: WebviewWindow, title: &str, message: &st
     });
 }
 
-fn preflight_error_ready_probe() -> &'static str {
-    "if (!document.querySelector('h1') || !document.getElementById('status')) { \
-        throw new Error('loading') \
-    }"
-}
-
-fn show_preflight_error(window: &WebviewWindow, title: &str, message: &str, footer: &str) {
-    let script = preflight_error_script(title, message, footer);
-    let _ = window.eval(script.as_str());
-}
-
 fn preflight_error_script(title: &str, message: &str, footer: &str) -> String {
     let title = js_string_literal(title);
     let message = js_string_literal(message);
     let footer = js_string_literal(footer);
+    let retry_ms = READY_POLL_INTERVAL.as_millis();
     format!(
-        "(function() {{\
+        "(function renderPreflightError() {{\
             var h = document.querySelector('h1');\
-            if (h) h.textContent = {title};\
             var status = document.getElementById('status');\
+            if (!h || !status) {{\
+                window.setTimeout(renderPreflightError, {retry_ms});\
+                return;\
+            }}\
+            if (h) h.textContent = {title};\
             if (status) status.textContent = {message};\
             var meter = document.querySelector('.meter');\
             if (meter) meter.style.display = 'none';\
@@ -1828,12 +1822,12 @@ mod tests {
     }
 
     #[test]
-    fn preflight_error_ready_probe_requires_loading_dom() {
-        let probe = preflight_error_ready_probe();
+    fn preflight_error_script_polls_until_loading_dom_exists() {
+        let script = preflight_error_script("Needs update", "Archive is too new", "Footer");
 
-        assert!(probe.contains("document.querySelector('h1')"));
-        assert!(probe.contains("document.getElementById('status')"));
-        assert!(probe.contains("throw new Error"));
+        assert!(script.contains("function renderPreflightError"));
+        assert!(script.contains("setTimeout(renderPreflightError"));
+        assert!(script.contains("if (!h || !status)"));
     }
 
     #[test]

@@ -280,6 +280,9 @@ func EnsureSchema(
 	if err != nil {
 		return fmt.Errorf("invalid schema name: %w", err)
 	}
+	if err := CheckDataVersionCompat(ctx, db); err != nil {
+		return err
+	}
 	step := time.Now()
 	if _, err := db.ExecContext(ctx,
 		"CREATE SCHEMA IF NOT EXISTS "+quoted,
@@ -1520,7 +1523,7 @@ func CheckDataVersionCompat(ctx context.Context, pg *sql.DB) error {
 		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`,
 	).Scan(&version)
 	if err != nil {
-		if isUndefinedTable(err) {
+		if isUndefinedTable(err) || isUndefinedColumn(err) {
 			return nil
 		}
 		return fmt.Errorf("checking PG data version: %w", err)

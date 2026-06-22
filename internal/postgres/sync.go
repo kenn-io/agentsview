@@ -22,6 +22,15 @@ func isUndefinedTable(err error) bool {
 	return strings.Contains(err.Error(), "42P01")
 }
 
+// isUndefinedColumn returns true when a query references a column
+// that does not exist (PG SQLSTATE 42703).
+func isUndefinedColumn(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "42703")
+}
+
 // Sync manages push-only sync from local SQLite to a remote
 // PostgreSQL database.
 type Sync struct {
