@@ -39,7 +39,6 @@ type HeuristicSignals struct {
 
 var (
 	codeFenceRe = regexp.MustCompile("(?s)```.*?```")
-	spaceRe     = regexp.MustCompile(`\s+`)
 	fileRefRe   = regexp.MustCompile(
 		`(?i)(?:^|[\s"'` + "`" + `])(?:\.{0,2}/)?[a-z0-9_.-]+(?:/[a-z0-9_. -]+)+|[a-z0-9_.-]+\.(?:go|ts|tsx|js|jsx|py|rs|java|kt|rb|php|cs|cpp|c|h|hpp|sql|svelte|vue|css|scss|html|json|ya?ml|toml|md|sh|zsh|bash)`,
 	)
@@ -67,7 +66,7 @@ func AnalyzeHeuristics(in HeuristicInput) HeuristicSignals {
 
 	if codeTask {
 		if first, ok := firstSubstantivePrompt(prompts); ok {
-			s.UnstructuredStart = isUnstructuredStart(first.Content)
+			s.UnstructuredStart = isUnstructuredStart(first)
 		}
 		if !hasSuccessCriteria(prompts) {
 			s.MissingSuccessCriteriaCount = 1
@@ -237,9 +236,34 @@ func parsePromptTime(raw string) (time.Time, bool) {
 }
 
 func normalizePrompt(content string) string {
-	withoutCode := codeFenceRe.ReplaceAllString(content, " ")
+	withoutCode := content
+	if strings.Contains(content, "```") {
+		withoutCode = codeFenceRe.ReplaceAllString(content, " ")
+	}
 	lower := strings.ToLower(strings.TrimSpace(withoutCode))
-	return spaceRe.ReplaceAllString(lower, " ")
+	return collapseWhitespace(lower)
+}
+
+func collapseWhitespace(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inSpace := false
+	wrote := false
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			if wrote {
+				inSpace = true
+			}
+			continue
+		}
+		if inSpace {
+			b.WriteByte(' ')
+			inSpace = false
+		}
+		b.WriteRune(r)
+		wrote = true
+	}
+	return b.String()
 }
 
 func promptTokens(normalized string) []string {
@@ -308,10 +332,10 @@ func firstSubstantivePrompt(prompts []promptInfo) (promptInfo, bool) {
 func isCodeTask(prompts []promptInfo) bool {
 	for _, p := range prompts {
 		text := p.Normalized
-		if hasFileRef(p.Content) && hasCodeAction(text) {
+		if hasFileRef(p.Content) && hasCodeAction(p.Tokens) {
 			return true
 		}
-		if hasCodeAction(text) && hasCodeObject(text) {
+		if hasCodeAction(p.Tokens) && hasCodeObject(p.Tokens) {
 			return true
 		}
 		if strings.Contains(text, "failing test") ||
@@ -324,48 +348,43 @@ func isCodeTask(prompts []promptInfo) bool {
 	return false
 }
 
-func hasCodeAction(text string) bool {
+func hasCodeAction(tokens []string) bool {
 	phrases := []string{
 		"implement", "fix", "debug", "refactor", "update",
 		"change", "add", "remove", "create", "write",
 		"test", "lint", "compile", "build", "wire",
 	}
-	return containsAnyWord(text, phrases)
+	return containsAnyToken(tokens, phrases)
 }
 
-func hasCodeObject(text string) bool {
+func hasCodeObject(tokens []string) bool {
 	phrases := []string{
 		"code", "codebase", "repo", "repository", "app",
 		"backend", "frontend", "api", "endpoint", "component",
 		"function", "class", "module", "package", "schema",
 		"migration", "test", "tests", "bug", "error",
 	}
-	return containsAnyWord(text, phrases)
+	return containsAnyToken(tokens, phrases)
 }
 
-func containsAnyWord(text string, words []string) bool {
+func containsAnyToken(tokens []string, words []string) bool {
 	for _, word := range words {
-		if containsWord(text, word) {
+		if slices.Contains(tokens, word) {
 			return true
 		}
 	}
 	return false
 }
 
-func containsWord(text, word string) bool {
-	return slices.Contains(promptTokens(text), word)
-}
-
-func isUnstructuredStart(content string) bool {
-	normalized := normalizePrompt(content)
-	if hasFileRef(content) || hasConstraintLanguage(normalized) ||
-		hasSpecStructure(content, normalized) {
+func isUnstructuredStart(p promptInfo) bool {
+	if hasFileRef(p.Content) || hasConstraintLanguage(p.Tokens) ||
+		hasSpecStructure(p.Content, p.Normalized) {
 		return false
 	}
 	return true
 }
 
-func hasConstraintLanguage(text string) bool {
+func hasConstraintLanguage(tokens []string) bool {
 	phrases := []string{
 		"must", "never", "only", "preserve", "keep", "avoid",
 		"require", "requires", "constraint", "constraints",
@@ -373,7 +392,7 @@ func hasConstraintLanguage(text string) bool {
 		"output", "format", "verify", "validation", "test",
 		"tests",
 	}
-	return containsAnyWord(text, phrases)
+	return containsAnyToken(tokens, phrases)
 }
 
 func hasSpecStructure(content, normalized string) bool {
@@ -415,7 +434,7 @@ func hasVerificationLanguage(prompts []promptInfo) bool {
 			"validate", "validation", "check", "reproduce",
 			"proof", "run",
 		} {
-			if containsWord(text, phrase) || strings.Contains(text, phrase) {
+			if strings.Contains(text, phrase) {
 				return true
 			}
 		}
@@ -519,36 +538,40 @@ func hasRunawayToolLoop(calls []ToolCallRow) bool {
 	if len(calls) < 12 {
 		return false
 	}
-	if hasRepeatedFailingExactToolRun(calls, 5, 3) {
+	facts := make([]toolLoopFact, len(calls))
+	for i, c := range calls {
+		facts[i] = toolLoopFact{
+			failure:        IsFailure(c),
+			exactSignature: toolSignature(c),
+			commandClass:   commandClass(c),
+		}
+	}
+	if hasRepeatedFailingExactToolRun(facts, 5, 3) {
 		return true
 	}
-	for start := 0; start+12 <= len(calls); start++ {
-		window := calls[start : start+12]
-		if countWindowFailures(window) >= 6 {
-			return true
-		}
-		if dominantToolSignatureCount(window) >= 10 &&
-			countWindowFailures(window) >= 3 {
-			return true
-		}
-	}
-	return false
+	return hasRunawayToolWindow(facts)
+}
+
+type toolLoopFact struct {
+	failure        bool
+	exactSignature string
+	commandClass   string
 }
 
 func hasRepeatedFailingExactToolRun(
-	calls []ToolCallRow,
+	facts []toolLoopFact,
 	threshold int,
 	failureThreshold int,
 ) bool {
 	run := 1
 	failures := 0
-	if len(calls) > 0 && IsFailure(calls[0]) {
+	if len(facts) > 0 && facts[0].failure {
 		failures = 1
 	}
-	for i := 1; i < len(calls); i++ {
-		if toolSignature(calls[i]) == toolSignature(calls[i-1]) {
+	for i := 1; i < len(facts); i++ {
+		if facts[i].exactSignature == facts[i-1].exactSignature {
 			run++
-			if IsFailure(calls[i]) {
+			if facts[i].failure {
 				failures++
 			}
 			if run >= threshold && failures >= failureThreshold {
@@ -557,7 +580,7 @@ func hasRepeatedFailingExactToolRun(
 		} else {
 			run = 1
 			failures = 0
-			if IsFailure(calls[i]) {
+			if facts[i].failure {
 				failures = 1
 			}
 		}
@@ -565,24 +588,53 @@ func hasRepeatedFailingExactToolRun(
 	return false
 }
 
-func countWindowFailures(calls []ToolCallRow) int {
+func hasRunawayToolWindow(facts []toolLoopFact) bool {
+	const windowSize = 12
 	failures := 0
-	for _, c := range calls {
-		if IsFailure(c) {
+	classCounts := make(map[string]int, windowSize)
+	for _, fact := range facts[:windowSize] {
+		if fact.failure {
 			failures++
 		}
+		classCounts[fact.commandClass]++
 	}
-	return failures
+	if isRunawayToolWindow(failures, classCounts) {
+		return true
+	}
+	for start := 1; start+windowSize <= len(facts); start++ {
+		removed := facts[start-1]
+		if removed.failure {
+			failures--
+		}
+		if classCounts[removed.commandClass] == 1 {
+			delete(classCounts, removed.commandClass)
+		} else {
+			classCounts[removed.commandClass]--
+		}
+		added := facts[start+windowSize-1]
+		if added.failure {
+			failures++
+		}
+		classCounts[added.commandClass]++
+		if isRunawayToolWindow(failures, classCounts) {
+			return true
+		}
+	}
+	return false
 }
 
-func dominantToolSignatureCount(calls []ToolCallRow) int {
-	counts := map[string]int{}
+func isRunawayToolWindow(failures int, classCounts map[string]int) bool {
+	if failures >= 6 {
+		return true
+	}
+	return failures >= 3 && dominantCount(classCounts) >= 10
+}
+
+func dominantCount(counts map[string]int) int {
 	maxCount := 0
-	for _, c := range calls {
-		sig := commandClass(c)
-		counts[sig]++
-		if counts[sig] > maxCount {
-			maxCount = counts[sig]
+	for _, count := range counts {
+		if count > maxCount {
+			maxCount = count
 		}
 	}
 	return maxCount

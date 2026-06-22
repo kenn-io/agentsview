@@ -1,6 +1,7 @@
 package signals
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -278,6 +279,51 @@ func TestAnalyzeHeuristics_RunawayToolLoop(t *testing.T) {
 		}
 		got := AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
 		assert.Equal(t, 0, got.RunawayToolLoopCount)
+	})
+
+	t.Run("six failures in any twelve-call window", func(t *testing.T) {
+		calls := make([]ToolCallRow, 13)
+		for i := range calls {
+			calls[i] = ToolCallRow{
+				Category: "Bash",
+				ToolName: "Bash",
+				InputJSON: fmt.Sprintf(
+					`{"command":"npm run step-%c"}`,
+					rune('a'+i),
+				),
+			}
+		}
+		for _, i := range []int{1, 3, 5, 7, 9, 11} {
+			calls[i].EventStatus = "errored"
+			calls[i].ResultContent = "exit status 1\nFAIL"
+		}
+		got := AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 1, got.RunawayToolLoopCount)
+	})
+
+	t.Run("dominant command class requires three failures", func(t *testing.T) {
+		calls := make([]ToolCallRow, 12)
+		for i := range calls {
+			calls[i] = ToolCallRow{
+				Category: "Bash",
+				ToolName: "Bash",
+				InputJSON: fmt.Sprintf(
+					`{"command":"npm run step-%c"}`,
+					rune('a'+i),
+				),
+			}
+		}
+		for _, i := range []int{2, 5} {
+			calls[i].EventStatus = "errored"
+			calls[i].ResultContent = "exit status 1\nFAIL"
+		}
+		got := AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 0, got.RunawayToolLoopCount)
+
+		calls[9].EventStatus = "errored"
+		calls[9].ResultContent = "exit status 1\nFAIL"
+		got = AnalyzeHeuristics(HeuristicInput{ToolRows: calls})
+		assert.Equal(t, 1, got.RunawayToolLoopCount)
 	})
 }
 
