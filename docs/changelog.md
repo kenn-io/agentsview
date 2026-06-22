@@ -3,6 +3,23 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.34.3
+<small>2026-06-22</small>
+
+**Improvements**
+
+- Make **full resync rebuilds** more efficient, reducing sync cost for
+  large archives.
+- Update documentation for the latest **command, usage, and session API**
+  changes.
+
+**Bug fixes**
+
+- Recognize **embedded security review prompts** correctly in stored
+  messages.
+
+---
+
 ## 0.34.2
 <small>2026-06-22</small>
 
