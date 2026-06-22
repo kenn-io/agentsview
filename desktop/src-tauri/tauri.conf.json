@@ -42,6 +42,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "linux": {
+      "appimage": {
+        "files": {
+          "/.DirIcon": "icons/icon.png"
+        }
+      }
+    },
     "macOS": {
       "entitlements": "./Entitlements.plist",
       "minimumSystemVersion": "11.0"
