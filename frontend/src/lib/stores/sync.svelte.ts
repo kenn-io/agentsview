@@ -154,6 +154,7 @@ class SyncStore {
       const statusProgress =
         (status as unknown as { progress?: SyncProgress | null })
           .progress ?? null;
+      let statusProgressCompleted = false;
       if (statusProgress) {
         this.statusProgressActive = true;
         this.syncing = true;
@@ -162,12 +163,18 @@ class SyncStore {
         this.statusProgressActive = false;
         this.syncing = false;
         this.progress = null;
+        statusProgressCompleted = true;
       }
       const shouldRetryStats = this.backendDegraded;
       // Suppress notifications on initial hydration and
       // when a local sync just completed (pendingHydration).
       if (this.pendingHydration) {
         this.pendingHydration = false;
+      } else if (statusProgress) {
+        return;
+      } else if (statusProgressCompleted) {
+        await this.loadStats();
+        this.notifySyncComplete();
       } else if (changed && !isInitial) {
         await this.loadStats();
         this.notifySyncComplete();
