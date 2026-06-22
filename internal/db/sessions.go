@@ -1991,20 +1991,26 @@ func (db *DB) DeleteSessionIfTrashed(id string) (int64, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	res, err := tx.Exec(
+		`UPDATE sessions
+		 SET deleted_at = deleted_at
+		 WHERE id = ? AND deleted_at IS NOT NULL`,
+		id,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"locking trashed session %s: %w", id, err,
+		)
+	}
+	locked, _ := res.RowsAffected()
+	if locked == 0 {
+		return 0, nil
+	}
 	aliasIDs, err := sessionAliasIDsTx(
 		tx, "id = ? AND deleted_at IS NOT NULL", id,
 	)
 	if err != nil {
 		return 0, err
-	}
-	ids, err := sessionIDsTx(
-		tx, "id = ? AND deleted_at IS NOT NULL", id,
-	)
-	if err != nil {
-		return 0, err
-	}
-	if len(ids) == 0 {
-		return 0, nil
 	}
 	if err := deleteSessionMessagesTx(tx, id); err != nil {
 		return 0, fmt.Errorf(
@@ -2013,7 +2019,7 @@ func (db *DB) DeleteSessionIfTrashed(id string) (int64, error) {
 		)
 	}
 
-	res, err := tx.Exec(
+	res, err = tx.Exec(
 		"DELETE FROM sessions WHERE id = ? AND deleted_at IS NOT NULL",
 		id,
 	)
@@ -2368,6 +2374,14 @@ func (db *DB) EmptyTrash() (int, error) {
 		return 0, fmt.Errorf("begin empty-trash tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(
+		`UPDATE sessions
+		 SET deleted_at = deleted_at
+		 WHERE deleted_at IS NOT NULL`,
+	); err != nil {
+		return 0, fmt.Errorf("locking trashed sessions: %w", err)
+	}
 
 	aliasIDs, err := sessionAliasIDsTx(tx, "deleted_at IS NOT NULL")
 	if err != nil {
