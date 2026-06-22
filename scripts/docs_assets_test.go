@@ -219,26 +219,6 @@ func envWithout(names ...string) []string {
 func writeStaticAssets(t *testing.T, dir, content string) {
 	t.Helper()
 	files := []string{
-		"agents/amp.svg",
-		"agents/claude-code.svg",
-		"agents/codex.svg",
-		"agents/copilot.svg",
-		"agents/cortex-code.svg",
-		"agents/cursor.svg",
-		"agents/forge.png",
-		"agents/gemini.svg",
-		"agents/hermes.svg",
-		"agents/iflow.svg",
-		"agents/kimi.svg",
-		"agents/kiro.svg",
-		"agents/openclaw.svg",
-		"agents/opencode.svg",
-		"agents/openhands.svg",
-		"agents/pi.svg",
-		"agents/positron.svg",
-		"agents/vscode-copilot.svg",
-		"agents/warp.svg",
-		"agents/zencoder.svg",
 		"architecture.svg",
 		"og-image.png",
 	}

@@ -27,8 +27,8 @@ and `docs/zensical-public-docs.*` are ignored local outputs.
 
 ## Asset Branches
 
-- `docs-assets`: curated static media, including agent icons, the architecture
-  diagram, and Open Graph image.
+- `docs-assets`: curated static media, including the architecture diagram and
+  Open Graph image.
 - `docs-generated-assets`: generated UI screenshots.
 
 Docs pages should reference media through:
