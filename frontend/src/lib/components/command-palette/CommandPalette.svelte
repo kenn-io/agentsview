@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SearchIcon } from "../../icons.js";
-  import { tick, onDestroy } from "svelte";
+  import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { searchStore } from "../../stores/search.svelte.js";
@@ -133,7 +133,7 @@
   $effect(() => {
     if (inputRef) {
       inputRef.focus();
-      if (inputValue) {
+      if (untrack(() => inputValue)) {
         inputRef.select();
       }
     }
