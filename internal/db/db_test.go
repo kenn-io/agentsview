@@ -5295,8 +5295,18 @@ func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "atomic-target", "proj")
 
-	err := d.WriteSessionIncremental(
-		"missing-session",
+	_, err := d.getWriter().Exec(`
+		CREATE TRIGGER sessions_incremental_atomicity_abort
+		BEFORE UPDATE ON sessions
+		WHEN NEW.id = 'atomic-target'
+		BEGIN
+			SELECT RAISE(FAIL, 'atomicity proof trigger');
+		END;
+	`)
+	require.NoError(t, err, "create trigger")
+
+	err = d.WriteSessionIncremental(
+		"atomic-target",
 		[]Message{asstMsg("atomic-target", 0, "should rollback")},
 		IncrementalSessionUpdate{
 			MsgCount:     1,
@@ -5306,7 +5316,7 @@ func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
 			NextOrdinal:  1,
 		},
 	)
-	require.Error(t, err, "expected missing-session update to fail")
+	require.Error(t, err, "expected session update trigger to fail")
 
 	msgs, getErr := d.GetMessages(
 		context.Background(), "atomic-target", 0, 10, true,
