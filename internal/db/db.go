@@ -264,7 +264,7 @@ type DataVersionTooNewError struct {
 
 func (e *DataVersionTooNewError) Error() string {
 	return fmt.Sprintf(
-		"database data version %d is newer than this agentsview binary's data version %d; upgrade agentsview before serving or syncing",
+		"database data version %d is newer than this agentsview binary's data version %d. Run \"agentsview update\" or install the latest AgentsView release before serving or syncing this archive",
 		e.DatabaseVersion, e.BinaryVersion,
 	)
 }

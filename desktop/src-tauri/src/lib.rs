@@ -91,14 +91,13 @@ pub fn run() {
                     schedule_auto_update_check(app.handle().clone());
                 }
                 Err(DataVersionPreflightError::TooNew(message)) => {
+                    eprintln!("[agentsview] data version preflight rejected archive: {message}");
                     let window = main_window(app)?;
                     spawn_preflight_error_render(
                         window,
                         "AgentsView needs an update",
-                        format!(
-                            "{message}. AgentsView cannot open this archive with the bundled backend."
-                        )
-                        .as_str(),
+                        too_new_archive_status_message(message.as_str()).as_str(),
+                        too_new_archive_footer_message(),
                     );
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
@@ -114,6 +113,7 @@ pub fn run() {
                             "Database compatibility check failed: {message}. The backend was not started."
                         )
                         .as_str(),
+                        "Close and reopen AgentsView after fixing the issue.",
                     );
                 }
             }
@@ -955,14 +955,15 @@ fn main_window_from_handle(handle: &AppHandle) -> Result<WebviewWindow, DynError
         .ok_or_else(|| io::Error::other("missing main window").into())
 }
 
-fn spawn_preflight_error_render(window: WebviewWindow, title: &str, message: &str) {
+fn spawn_preflight_error_render(window: WebviewWindow, title: &str, message: &str, footer: &str) {
     let title = title.to_string();
     let message = message.to_string();
+    let footer = footer.to_string();
     thread::spawn(move || {
         let deadline = Instant::now() + READY_TIMEOUT;
         while Instant::now() < deadline {
             if window.eval(preflight_error_ready_probe()).is_ok() {
-                show_preflight_error(&window, title.as_str(), message.as_str());
+                show_preflight_error(&window, title.as_str(), message.as_str(), footer.as_str());
                 return;
             }
             thread::sleep(READY_POLL_INTERVAL);
@@ -977,14 +978,15 @@ fn preflight_error_ready_probe() -> &'static str {
     }"
 }
 
-fn show_preflight_error(window: &WebviewWindow, title: &str, message: &str) {
-    let script = preflight_error_script(title, message);
+fn show_preflight_error(window: &WebviewWindow, title: &str, message: &str, footer: &str) {
+    let script = preflight_error_script(title, message, footer);
     let _ = window.eval(script.as_str());
 }
 
-fn preflight_error_script(title: &str, message: &str) -> String {
+fn preflight_error_script(title: &str, message: &str, footer: &str) -> String {
     let title = js_string_literal(title);
     let message = js_string_literal(message);
+    let footer = js_string_literal(footer);
     format!(
         "(function() {{\
             var h = document.querySelector('h1');\
@@ -996,9 +998,19 @@ fn preflight_error_script(title: &str, message: &str) -> String {
             var stages = document.querySelector('.stage-list');\
             if (stages) stages.style.display = 'none';\
             var foot = document.querySelector('.foot');\
-            if (foot) foot.textContent = 'Use Check for Updates from the AgentsView menu after updating manually.';\
+            if (foot) foot.textContent = {footer};\
         }})()"
     )
+}
+
+fn too_new_archive_status_message(_detail: &str) -> String {
+    "This session archive was updated by a newer version of AgentsView. \
+     Update the app before opening it so your data is not read or synced by an older version."
+        .to_string()
+}
+
+fn too_new_archive_footer_message() -> &'static str {
+    "AgentsView is checking for updates now. If no update appears, use Check for Updates from the AgentsView menu or install the latest release manually."
 }
 
 fn js_string_literal(value: &str) -> String {
@@ -1792,11 +1804,26 @@ mod tests {
     }
 
     #[test]
+    fn too_new_archive_status_message_is_user_facing() {
+        let message = too_new_archive_status_message(
+            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+        );
+        let footer = too_new_archive_footer_message();
+
+        assert!(message.contains("updated by a newer version of AgentsView"));
+        assert!(!message.contains("database data version"));
+        assert!(!message.contains("bundled backend"));
+        assert!(footer.contains("checking for updates now"));
+        assert!(footer.contains("Check for Updates"));
+    }
+
+    #[test]
     fn preflight_error_script_updates_dom_directly() {
-        let script = preflight_error_script("Needs update", "Archive is too new");
+        let script = preflight_error_script("Needs update", "Archive is too new", "Footer");
 
         assert!(script.contains("document.querySelector('h1')"));
         assert!(script.contains("document.getElementById('status')"));
+        assert!(script.contains("querySelector('.foot')"));
         assert!(!script.contains("window.__setStatus"));
     }
 
