@@ -48,7 +48,9 @@ func main() {
 	secrets.EnableFixtureDeny()
 
 	if err := executeCLI(); err != nil {
-		fatal("%v", err)
+		code := exitCodeFromError(err)
+		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
+		os.Exit(code)
 	}
 }
 

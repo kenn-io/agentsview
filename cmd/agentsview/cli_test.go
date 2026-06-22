@@ -132,9 +132,23 @@ func TestServeCheckDataVersionRejectsNewerDatabase(t *testing.T) {
 
 	out, err := executeCommand(newRootCommand(), "serve", "--check-data-version")
 	require.Error(t, err, "preflight should reject newer archive")
+	assert.Equal(t, dataVersionTooNewExitCode, exitCodeFromError(err))
 	assert.Empty(t, out)
 	assert.Contains(t, err.Error(), "database data version")
 	assert.Contains(t, err.Error(), "is newer than this agentsview binary")
+}
+
+func TestServeCheckDataVersionDoesNotCreateConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	out, err := executeCommand(newRootCommand(), "serve", "--check-data-version")
+
+	require.NoError(t, err, "preflight with no database")
+	assert.Empty(t, out)
+	_, statErr := os.Stat(filepath.Join(dataDir, "config.toml"))
+	require.ErrorIs(t, statErr, os.ErrNotExist,
+		"preflight must not create config.toml")
 }
 
 func TestRootNoArgsShowsHelp(t *testing.T) {

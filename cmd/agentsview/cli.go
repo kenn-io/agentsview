@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,6 +21,36 @@ const (
 	groupUsage = "usage"
 	groupMeta  = "meta"
 )
+
+const dataVersionTooNewExitCode = 3
+
+type cliExitError struct {
+	code int
+	err  error
+}
+
+func (e *cliExitError) Error() string {
+	return e.err.Error()
+}
+
+func (e *cliExitError) Unwrap() error {
+	return e.err
+}
+
+func withExitCode(err error, code int) error {
+	if err == nil {
+		return nil
+	}
+	return &cliExitError{code: code, err: err}
+}
+
+func exitCodeFromError(err error) int {
+	var exitErr *cliExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.code
+	}
+	return 1
+}
 
 func newRootCommand() *cobra.Command {
 	var showVersion bool
@@ -99,7 +130,11 @@ func newServeCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if checkDataVersion {
-				return runServeDataVersionCheck(mustLoadConfig(cmd))
+				cfg, err := config.LoadReadOnly()
+				if err != nil {
+					return err
+				}
+				return runServeDataVersionCheck(cfg)
 			}
 			if background {
 				// Acquire the launch lock before loading config; config
@@ -132,7 +167,11 @@ func newServeCommand() *cobra.Command {
 }
 
 func runServeDataVersionCheck(cfg config.Config) error {
-	return db.CheckDataVersion(cfg.DBPath)
+	err := db.CheckDataVersion(cfg.DBPath)
+	if db.IsDataVersionTooNew(err) {
+		return withExitCode(err, dataVersionTooNewExitCode)
+	}
+	return err
 }
 
 func newServeStatusCommand() *cobra.Command {

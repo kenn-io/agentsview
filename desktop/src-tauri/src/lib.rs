@@ -28,6 +28,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
 const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -91,8 +92,8 @@ pub fn run() {
                 }
                 Err(DataVersionPreflightError::TooNew(message)) => {
                     let window = main_window(app)?;
-                    show_preflight_error(
-                        &window,
+                    spawn_preflight_error_render(
+                        window,
                         "AgentsView needs an update",
                         format!(
                             "{message}. AgentsView cannot open this archive with the bundled backend."
@@ -106,8 +107,8 @@ pub fn run() {
                 }
                 Err(DataVersionPreflightError::Failed(message)) => {
                     let window = main_window(app)?;
-                    show_preflight_error(
-                        &window,
+                    spawn_preflight_error_render(
+                        window,
                         "AgentsView could not verify the archive",
                         format!(
                             "Database compatibility check failed: {message}. The backend was not started."
@@ -257,9 +258,7 @@ fn classify_data_version_preflight_exit(
 
     let message = combined_preflight_output(stdout, stderr)
         .unwrap_or_else(|| format!("data version preflight exited with code {code:?}"));
-    if message.contains("database data version")
-        && message.contains("is newer than this agentsview binary")
-    {
+    if code == Some(DATA_VERSION_TOO_NEW_EXIT_CODE) {
         return Err(DataVersionPreflightError::TooNew(message));
     }
     Err(DataVersionPreflightError::Failed(message))
@@ -956,14 +955,42 @@ fn main_window_from_handle(handle: &AppHandle) -> Result<WebviewWindow, DynError
         .ok_or_else(|| io::Error::other("missing main window").into())
 }
 
+fn spawn_preflight_error_render(window: WebviewWindow, title: &str, message: &str) {
+    let title = title.to_string();
+    let message = message.to_string();
+    thread::spawn(move || {
+        let deadline = Instant::now() + READY_TIMEOUT;
+        while Instant::now() < deadline {
+            if window.eval(preflight_error_ready_probe()).is_ok() {
+                show_preflight_error(&window, title.as_str(), message.as_str());
+                return;
+            }
+            thread::sleep(READY_POLL_INTERVAL);
+        }
+        eprintln!("[agentsview] timed out waiting to render data-version preflight error");
+    });
+}
+
+fn preflight_error_ready_probe() -> &'static str {
+    "if (!document.querySelector('h1') || !document.getElementById('status')) { \
+        throw new Error('loading') \
+    }"
+}
+
 fn show_preflight_error(window: &WebviewWindow, title: &str, message: &str) {
+    let script = preflight_error_script(title, message);
+    let _ = window.eval(script.as_str());
+}
+
+fn preflight_error_script(title: &str, message: &str) -> String {
     let title = js_string_literal(title);
     let message = js_string_literal(message);
-    let script = format!(
+    format!(
         "(function() {{\
             var h = document.querySelector('h1');\
             if (h) h.textContent = {title};\
-            if (window.__setStatus) window.__setStatus({message});\
+            var status = document.getElementById('status');\
+            if (status) status.textContent = {message};\
             var meter = document.querySelector('.meter');\
             if (meter) meter.style.display = 'none';\
             var stages = document.querySelector('.stage-list');\
@@ -971,8 +998,7 @@ fn show_preflight_error(window: &WebviewWindow, title: &str, message: &str) {
             var foot = document.querySelector('.foot');\
             if (foot) foot.textContent = 'Use Check for Updates from the AgentsView menu after updating manually.';\
         }})()"
-    );
-    let _ = window.eval(script.as_str());
+    )
 }
 
 fn js_string_literal(value: &str) -> String {
@@ -1723,18 +1749,15 @@ mod tests {
     #[test]
     fn classify_data_version_preflight_exit_detects_too_new_database() {
         let err = classify_data_version_preflight_exit(
-            Some(1),
+            Some(DATA_VERSION_TOO_NEW_EXIT_CODE),
             "",
-            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+            "fatal: archive is too new",
         )
         .expect_err("expected too-new error");
 
         assert_eq!(
             err,
-            DataVersionPreflightError::TooNew(
-                "fatal: database data version 59 is newer than this agentsview binary's data version 49"
-                    .to_string()
-            )
+            DataVersionPreflightError::TooNew("fatal: archive is too new".to_string())
         );
     }
 
@@ -1748,6 +1771,42 @@ mod tests {
             err,
             DataVersionPreflightError::Failed("fatal: loading config: bad toml".to_string())
         );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_does_not_parse_error_prose() {
+        let err = classify_data_version_preflight_exit(
+            Some(1),
+            "",
+            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+        )
+        .expect_err("expected generic failure");
+
+        assert_eq!(
+            err,
+            DataVersionPreflightError::Failed(
+                "fatal: database data version 59 is newer than this agentsview binary's data version 49"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn preflight_error_script_updates_dom_directly() {
+        let script = preflight_error_script("Needs update", "Archive is too new");
+
+        assert!(script.contains("document.querySelector('h1')"));
+        assert!(script.contains("document.getElementById('status')"));
+        assert!(!script.contains("window.__setStatus"));
+    }
+
+    #[test]
+    fn preflight_error_ready_probe_requires_loading_dom() {
+        let probe = preflight_error_ready_probe();
+
+        assert!(probe.contains("document.querySelector('h1')"));
+        assert!(probe.contains("document.getElementById('status')"));
+        assert!(probe.contains("throw new Error"));
     }
 
     #[test]
