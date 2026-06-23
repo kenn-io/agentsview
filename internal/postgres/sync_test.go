@@ -778,6 +778,79 @@ func TestPushDetectsPGTargetChange(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
+func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
+	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
+	t.Cleanup(func() {
+		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
+		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
+	})
+
+	local := testDB(t)
+	ctx := context.Background()
+
+	const project = "alpha"
+	const createdAt = "2026-03-11T12:00:00Z"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:           "sess-filtered-target-001",
+		Project:      project,
+		Machine:      "local",
+		Agent:        "claude",
+		CreatedAt:    createdAt,
+		MessageCount: 1,
+	}), "upsert session")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID:     "sess-filtered-target-001",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello filtered target",
+		ContentLength: len("hello filtered target"),
+		Timestamp:     createdAt,
+	}}), "insert message")
+
+	filteredA, err := New(
+		pgURL, "agentsview_filtered_a", local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{project}},
+	)
+	require.NoError(t, err, "creating filtered sync A")
+	defer filteredA.Close()
+
+	unfilteredB, err := New(
+		pgURL, "agentsview_filtered_b", local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating unfiltered sync B")
+	defer unfilteredB.Close()
+
+	r1, err := filteredA.Push(ctx, false, nil)
+	require.NoError(t, err, "filtered push to schema A")
+	require.Equal(t, 1, r1.SessionsPushed)
+
+	lastPush, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err, "reading filtered watermark")
+	assert.Empty(t, lastPush, "filtered push should keep last_push_at empty")
+
+	boundaryState, err := local.GetSyncState(lastPushBoundaryStateKey)
+	require.NoError(t, err, "reading filtered boundary state")
+	require.NotEmpty(t, boundaryState,
+		"filtered push should persist boundary fingerprints")
+
+	r2, err := unfilteredB.Push(ctx, false, nil)
+	require.NoError(t, err, "push to schema B after filtered target change")
+	require.Equal(t, 1, r2.SessionsPushed)
+
+	var count int
+	err = unfilteredB.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE id = $1",
+		"sess-filtered-target-001",
+	).Scan(&count)
+	require.NoError(t, err, "counting session in schema B")
+	assert.Equal(t, 1, count)
+}
+
 func TestPushFullAfterSchemaDropRecreatesSchema(
 	t *testing.T,
 ) {

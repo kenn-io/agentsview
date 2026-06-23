@@ -433,6 +433,7 @@ func TestPushTargetState(t *testing.T) {
 	tests := []struct {
 		name       string
 		lastPush   string
+		boundary   string
 		stored     string
 		current    string
 		wantReset  bool
@@ -456,7 +457,14 @@ func TestPushTargetState(t *testing.T) {
 			lastPush:   "2026-03-11T12:34:56.123Z",
 			current:    "v1:new",
 			wantReset:  true,
-			wantReason: "local watermark exists without a stored PG target fingerprint",
+			wantReason: "local push state exists without a stored PG target fingerprint",
+		},
+		{
+			name:       "legacy filtered boundary without fingerprint resets",
+			boundary:   `{"cutoff":"2026-03-11T12:34:56.123Z","fingerprints":{"sess-001":"fp"}}`,
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "local push state exists without a stored PG target fingerprint",
 		},
 		{
 			name:       "changed target resets",
@@ -473,12 +481,27 @@ func TestPushTargetState(t *testing.T) {
 			current:   "v1:same",
 			wantReset: false,
 		},
+		{
+			name:      "filtered boundary keeps same target state",
+			boundary:  `{"cutoff":"2026-03-11T12:34:56.123Z","fingerprints":{"sess-001":"fp"}}`,
+			stored:    "v1:same",
+			current:   "v1:same",
+			wantReset: false,
+		},
+		{
+			name:       "filtered boundary resets on target change",
+			boundary:   `{"cutoff":"2026-03-11T12:34:56.123Z","fingerprints":{"sess-001":"fp"}}`,
+			stored:     "v1:old",
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "PG target fingerprint changed",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			gotReset, gotReason := pushTargetState(
-				tc.lastPush, tc.stored, tc.current,
+				tc.lastPush, tc.boundary, tc.stored, tc.current,
 			)
 			assert.Equal(t, tc.wantReset, gotReset)
 			assert.Equal(t, tc.wantReason, gotReason)

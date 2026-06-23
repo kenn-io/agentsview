@@ -99,9 +99,19 @@ func (s *Sync) Push(
 			lastPushTargetFingerprintKey, err,
 		)
 	}
+	boundaryState, err := s.local.GetSyncState(
+		lastPushBoundaryStateKey,
+	)
+	if err != nil {
+		return result, fmt.Errorf(
+			"reading %s: %w",
+			lastPushBoundaryStateKey, err,
+		)
+	}
 	pushStateCleared := false
 	if reset, reason := pushTargetState(
 		lastPush,
+		boundaryState,
 		storedTargetFingerprint,
 		s.targetFingerprint,
 	); reset {
@@ -811,14 +821,18 @@ func persistPushTargetFingerprint(
 }
 
 func pushTargetState(
-	lastPush, storedTargetFingerprint, currentTargetFingerprint string,
+	lastPush, boundaryState,
+	storedTargetFingerprint, currentTargetFingerprint string,
 ) (bool, string) {
-	if lastPush == "" || currentTargetFingerprint == "" {
+	if currentTargetFingerprint == "" {
+		return false, ""
+	}
+	if lastPush == "" && boundaryState == "" {
 		return false, ""
 	}
 	if storedTargetFingerprint == "" {
 		return true,
-			"local watermark exists without a stored PG target fingerprint"
+			"local push state exists without a stored PG target fingerprint"
 	}
 	if storedTargetFingerprint != currentTargetFingerprint {
 		return true, "PG target fingerprint changed"
