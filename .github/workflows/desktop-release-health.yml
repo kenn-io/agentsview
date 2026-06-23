@@ -32,8 +32,4 @@ jobs:
       - name: Check desktop release health
         env:
           GH_TOKEN: ${{ github.token }}
-          DESKTOP_RELEASE_HEALTH_TAG: >-
-            ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
-          DESKTOP_RELEASE_HEALTH_WORKFLOW_CONCLUSION: >-
-            ${{ github.event.workflow_run.conclusion || 'success' }}
-        run: bash scripts/check_desktop_release_health.sh "$DESKTOP_RELEASE_HEALTH_TAG"
+        run: bash scripts/check_desktop_release_health_from_event.sh
