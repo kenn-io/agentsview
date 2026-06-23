@@ -236,6 +236,34 @@ func installWindowsBuildStubs(t *testing.T, root string) buildStubs {
 	t.Helper()
 
 	stubs := newBuildStubs(t, root)
+	writeExecutable(t, filepath.Join(stubs.binDir, "go.ps1"), `Add-Content -Path $env:CALL_LOG -Value ("go " + ($args -join " "))
+if ($args.Length -gt 0 -and $args[0] -eq "run") {
+  if ($env:RESTORE_FAIL -eq "1") { exit 42 }
+  exit 0
+}
+if ($args.Length -gt 0 -and $args[0] -eq "build") {
+  $out = $null
+  for ($i = 0; $i -lt $args.Length - 1; $i++) {
+    if ($args[$i] -eq "-o") {
+      $out = $args[$i+1]
+      break
+    }
+  }
+  if ($out) {
+    $dir = [System.IO.Path]::GetDirectoryName($out)
+    if ($dir) {
+      New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    Set-Content -Path $out -Value @'
+@echo off
+echo built-binary %*>> "%CALL_LOG%"
+exit /b 0
+'@ -NoNewline
+  }
+  exit 0
+}
+exit 0
+`)
 	writeExecutable(t, filepath.Join(stubs.binDir, "go.cmd"), `@echo off
 echo go %*>> "%CALL_LOG%"
 if "%1"=="run" (
@@ -265,6 +293,13 @@ if "%1"=="build" (
 )
 exit /b 0
 `)
+	writeExecutable(t, filepath.Join(stubs.binDir, "npm.ps1"), `Add-Content -Path $env:CALL_LOG -Value ("npm " + ($args -join " "))
+if ($args.Length -ge 2 -and $args[0] -eq "run" -and $args[1] -eq "build") {
+  New-Item -ItemType Directory -Path dist -Force | Out-Null
+  Set-Content -Path "dist/index.html" -Value "ok" -NoNewline
+}
+exit 0
+`)
 	writeExecutable(t, filepath.Join(stubs.binDir, "npm.cmd"), `@echo off
 echo npm %*>> "%CALL_LOG%"
 if "%1"=="run" if "%2"=="build" (
@@ -272,6 +307,18 @@ if "%1"=="run" if "%2"=="build" (
   echo ok>dist\index.html
 )
 exit /b 0
+`)
+	writeExecutable(t, filepath.Join(stubs.binDir, "git.ps1"), `$joined = $args -join " "
+Add-Content -Path $env:CALL_LOG -Value ("git " + $joined)
+if ($joined -like "*describe*") {
+  Write-Output "v1.2.3-4-gabcdef"
+  exit 0
+}
+if ($joined -like "*rev-parse*") {
+  Write-Output "abcdef1"
+  exit 0
+}
+exit 0
 `)
 	writeExecutable(t, filepath.Join(stubs.binDir, "git.cmd"), `@echo off
 echo git %*>> "%CALL_LOG%"
@@ -285,9 +332,17 @@ echo %* | findstr /C:"rev-parse" >nul && (
 )
 exit /b 0
 `)
+	writeExecutable(t, filepath.Join(stubs.binDir, "rustc.ps1"), `if ($args.Length -gt 0 -and $args[0] -eq "-vV") {
+  Write-Output "host: x86_64-pc-windows-msvc"
+}
+exit 0
+`)
 	writeExecutable(t, filepath.Join(stubs.binDir, "rustc.cmd"), `@echo off
 if "%1"=="-vV" echo host: x86_64-pc-windows-msvc
 exit /b 0
+`)
+	writeExecutable(t, filepath.Join(stubs.binDir, "cargo.ps1"), `Add-Content -Path $env:CALL_LOG -Value ("cargo " + ($args -join " "))
+exit 0
 `)
 	writeExecutable(t, filepath.Join(stubs.binDir, "cargo.cmd"), `@echo off
 echo cargo %*>> "%CALL_LOG%"
