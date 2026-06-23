@@ -226,6 +226,8 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 - Prefer stdlib over external dependencies.
 - Tests should be fast and isolated.
 - No emojis in code or output.
+- For frontend UI work, read `DESIGN.md` before adding or changing controls,
+  styling, or reusable components.
 - Use `mdformat --wrap 80` to format Markdown files when mdformat and
   `mdformat-tables` are available.
 
