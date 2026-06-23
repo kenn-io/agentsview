@@ -54,17 +54,19 @@ type hermesStateMessage struct {
 	codexMessageItems   string
 }
 
-// ParseHermesArchive parses a Hermes root directory. If a state.db is
-// present, it uses that database for session metadata and usage while
-// selecting the richest available message stream. Without state.db it
-// falls back to the transcript-file parser.
-func ParseHermesArchive(root, project, machine string) ([]ParseResult, error) {
+// parseArchive parses a Hermes root directory. If a state.db is present, it
+// uses that database for session metadata and usage while selecting the richest
+// available message stream. Without state.db it falls back to the
+// transcript-file parser. It owns the archive on-disk shape (state.db plus the
+// sessions transcript directory) for the Hermes provider; the package-level
+// entrypoint was folded onto the provider.
+func (p *hermesProvider) parseArchive(root, project, machine string) ([]ParseResult, error) {
 	stateDB, sessionsDir, ok := hermesStatePaths(root)
 	if !ok {
-		return parseHermesTranscriptArchive(root, project, machine)
+		return p.parseTranscriptArchive(root, project, machine)
 	}
 
-	results, err := parseHermesStateDB(
+	results, err := p.parseStateDB(
 		stateDB, sessionsDir, project, machine,
 	)
 	if err == nil {
@@ -74,12 +76,12 @@ func ParseHermesArchive(root, project, machine string) ([]ParseResult, error) {
 		"hermes: state db parse failed for %s: %v; falling back to transcripts",
 		stateDB, err,
 	)
-	return parseHermesTranscriptArchive(
+	return p.parseTranscriptArchive(
 		sessionsDir, project, machine,
 	)
 }
 
-func parseHermesTranscriptArchive(
+func (p *hermesProvider) parseTranscriptArchive(
 	root, project, machine string,
 ) ([]ParseResult, error) {
 	var results []ParseResult
@@ -88,7 +90,7 @@ func parseHermesTranscriptArchive(
 		if project != "" {
 			fileProject = project
 		}
-		sess, msgs, err := ParseHermesSession(
+		sess, msgs, err := p.parseSession(
 			file.Path, fileProject, machine,
 		)
 		if err != nil {
@@ -103,7 +105,9 @@ func parseHermesTranscriptArchive(
 	return results, nil
 }
 
-// ParseHermesSession parses a Hermes Agent JSONL session file.
+// parseSession parses a Hermes Agent session file. It owns the on-disk shape
+// (flat JSONL transcripts plus session_*.json snapshots) for the Hermes
+// provider; the package-level entrypoint was folded onto the provider.
 //
 // Hermes stores sessions as flat JSONL files in ~/.hermes/sessions/
 // with filenames like 20260403_153620_5a3e2ff1.jsonl.
@@ -114,7 +118,7 @@ func parseHermesTranscriptArchive(
 //   - Assistant messages: {"role":"assistant", "content":"...", "reasoning":"...",
 //     "finish_reason":"tool_calls|stop", "tool_calls":[...], "timestamp":"..."}
 //   - Tool results: {"role":"tool", "content":"...", "tool_call_id":"...", "timestamp":"..."}
-func ParseHermesSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func (p *hermesProvider) parseSession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
 	if strings.HasSuffix(path, ".json") {
 		return parseHermesJSONSession(path, project, machine)
 	}
@@ -546,7 +550,7 @@ func hermesStatePaths(root string) (stateDB, sessionsDir string, ok bool) {
 	return "", "", false
 }
 
-func parseHermesStateDB(
+func (p *hermesProvider) parseStateDB(
 	stateDB, sessionsDir, project, machine string,
 ) ([]ParseResult, error) {
 	conn, err := sql.Open("sqlite3", "file:"+stateDB+"?mode=ro")
@@ -580,7 +584,7 @@ func parseHermesStateDB(
 		if _, ok := seen[rawID]; ok {
 			continue
 		}
-		sess, msgs, err := ParseHermesSession(
+		sess, msgs, err := p.parseSession(
 			file.Path, file.Project, machine,
 		)
 		if err != nil {
@@ -1043,10 +1047,11 @@ func HermesSessionID(name string) string {
 	return name
 }
 
-// DiscoverHermesSessions finds Hermes session sources. When a sibling
-// state.db exists, it prefers that archive root; otherwise it returns
-// transcript files from the sessions directory.
-func DiscoverHermesSessions(sessionsDir string) []DiscoveredFile {
+// discoverHermesSessions finds Hermes session sources under root. When a
+// sibling state.db exists, it prefers that archive root; otherwise it returns
+// transcript files from the sessions directory. It is the provider-owned
+// discovery body folded off the package-level entrypoint.
+func discoverHermesSessions(sessionsDir string) []DiscoveredFile {
 	if sessionsDir == "" {
 		return nil
 	}
@@ -1112,8 +1117,10 @@ func discoverHermesTranscriptFiles(sessionsDir string) []DiscoveredFile {
 	return files
 }
 
-// FindHermesSourceFile finds a Hermes session file by session ID.
-func FindHermesSourceFile(sessionsDir, sessionID string) string {
+// findHermesSourceFile finds a Hermes transcript file by session ID under
+// sessionsDir. It is the provider-owned find-source body folded off the
+// package-level entrypoint.
+func findHermesSourceFile(sessionsDir, sessionID string) string {
 	if !IsValidSessionID(sessionID) {
 		return ""
 	}

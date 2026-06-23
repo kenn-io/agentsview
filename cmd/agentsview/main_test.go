@@ -570,6 +570,29 @@ func TestStartRemoteHostSync_NilEmitterSafe(t *testing.T) {
 	<-exited
 }
 
+func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.Mkdir(sessionsDir, 0o755), "mkdir sessions")
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsDir},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs, "unwatched dirs before watcher setup")
+	require.Len(t, roots, 2)
+	assert.Equal(t, root, roots[0].root)
+	assert.True(t, roots[0].shallow)
+	assert.Equal(t, []string{sessionsDir}, roots[0].dirs)
+	assert.Equal(t, sessionsDir, roots[1].root)
+	assert.False(t, roots[1].shallow)
+	assert.Equal(t, []string{sessionsDir}, roots[1].dirs)
+}
+
 func TestResyncCoversSignals(t *testing.T) {
 	tests := []struct {
 		name     string

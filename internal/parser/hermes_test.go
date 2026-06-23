@@ -13,6 +13,57 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newHermesTestProvider builds a concrete hermesProvider for the given roots so
+// package tests can exercise the folded parse, discovery, and source-lookup
+// behavior directly through provider methods.
+func newHermesTestProvider(t *testing.T, roots ...string) *hermesProvider {
+	t.Helper()
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{
+		Roots:   roots,
+		Machine: "local",
+	})
+	require.True(t, ok)
+	hp, ok := provider.(*hermesProvider)
+	require.True(t, ok)
+	return hp
+}
+
+// parseHermesTestSession parses a Hermes transcript at path through the
+// provider-owned parse method, replacing the removed package-level
+// ParseHermesSession entrypoint.
+func parseHermesTestSession(
+	t *testing.T, path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	return newHermesTestProvider(t).parseSession(path, project, machine)
+}
+
+// parseHermesTestArchive parses a Hermes archive root through the provider-owned
+// archive method, replacing the removed package-level ParseHermesArchive
+// entrypoint.
+func parseHermesTestArchive(
+	t *testing.T, root, project, machine string,
+) ([]ParseResult, error) {
+	t.Helper()
+	return newHermesTestProvider(t).parseArchive(root, project, machine)
+}
+
+// discoverHermesTestSessions discovers Hermes sources under root through the
+// provider source set, replacing the removed package-level
+// DiscoverHermesSessions entrypoint.
+func discoverHermesTestSessions(t *testing.T, root string) []DiscoveredFile {
+	t.Helper()
+	return discoverHermesSessions(root)
+}
+
+// findHermesTestSourceFile resolves a Hermes session ID to a transcript path
+// through the provider source set, replacing the removed package-level
+// FindHermesSourceFile entrypoint.
+func findHermesTestSourceFile(t *testing.T, sessionsDir, sessionID string) string {
+	t.Helper()
+	return findHermesSourceFile(sessionsDir, sessionID)
+}
+
 func runHermesJSONLTest(
 	t *testing.T, filename, content string,
 ) (*ParsedSession, []ParsedMessage) {
@@ -21,8 +72,8 @@ func runHermesJSONLTest(
 		filename = "20260403_153620_5a3e2ff1.jsonl"
 	}
 	path := createTestFile(t, filename, content)
-	sess, msgs, err := ParseHermesSession(
-		path, "", "local",
+	sess, msgs, err := parseHermesTestSession(
+		t, path, "", "local",
 	)
 	require.NoError(t, err)
 	return sess, msgs
@@ -36,8 +87,8 @@ func runHermesJSONTest(
 		filename = "session_20260403_153620_5a3e2ff1.json"
 	}
 	path := createTestFile(t, filename, content)
-	sess, msgs, err := ParseHermesSession(
-		path, "", "local",
+	sess, msgs, err := parseHermesTestSession(
+		t, path, "", "local",
 	)
 	require.NoError(t, err)
 	return sess, msgs
@@ -135,7 +186,7 @@ func TestParseHermesArchive_StateDBMetadataUsageAndTranscriptChoice(
 		0o644,
 	))
 
-	results, err := ParseHermesArchive(root, "", "local")
+	results, err := parseHermesTestArchive(t, root, "", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 
@@ -183,7 +234,7 @@ func TestParseHermesArchive_FallsBackToTranscriptsWhenStateDBUnreadable(
 		0o644,
 	))
 
-	results, err := ParseHermesArchive(root, "override-project", "local")
+	results, err := parseHermesTestArchive(t, root, "override-project", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 
@@ -211,7 +262,7 @@ func TestParseHermesArchive_UsesStateMessagesWhenJSONLIsLowerQuality(
 		0o644,
 	))
 
-	results, err := ParseHermesArchive(root, "", "local")
+	results, err := parseHermesTestArchive(t, root, "", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 
@@ -240,7 +291,7 @@ func TestParseHermesArchiveIncludesTranscriptsMissingFromStateDB(
 		0o644,
 	))
 
-	results, err := ParseHermesArchive(root, "", "local")
+	results, err := parseHermesTestArchive(t, root, "", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 
@@ -408,7 +459,7 @@ func TestDiscoverHermesSessionsFindsTranscriptOnlyRoot(
 	path := filepath.Join(sessionsDir, "session_child.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{"messages":[]}`), 0o644))
 
-	files := DiscoverHermesSessions(root)
+	files := discoverHermesTestSessions(t, root)
 	require.Len(t, files, 1)
 	assert.Equal(t, path, files[0].Path)
 }
@@ -530,8 +581,8 @@ func TestParseHermesSession_JSONL_ExplicitProject(t *testing.T) {
 	path := createTestFile(
 		t, "20260403_153620_abc.jsonl", content,
 	)
-	sess, _, err := ParseHermesSession(
-		path, "my-project", "local",
+	sess, _, err := parseHermesTestSession(
+		t, path, "my-project", "local",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
@@ -638,8 +689,8 @@ func TestParseHermesSession_JSONL_FirstMessageTruncation(t *testing.T) {
 
 func TestParseHermesSession_JSONL_Errors(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
-		_, _, err := ParseHermesSession(
-			"/nonexistent/file.jsonl", "", "local",
+		_, _, err := parseHermesTestSession(
+			t, "/nonexistent/file.jsonl", "", "local",
 		)
 		assert.Error(t, err)
 	})
@@ -767,8 +818,8 @@ func TestParseHermesSession_JSON_MessageTimestampsExtendBounds(
 
 func TestParseHermesSession_JSON_Errors(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
-		_, _, err := ParseHermesSession(
-			"/nonexistent/file.json", "", "local",
+		_, _, err := parseHermesTestSession(
+			t, "/nonexistent/file.json", "", "local",
 		)
 		assert.Error(t, err)
 	})
@@ -777,7 +828,7 @@ func TestParseHermesSession_JSON_Errors(t *testing.T) {
 		path := createTestFile(
 			t, "session_bad.json", `"just a string"`,
 		)
-		_, _, err := ParseHermesSession(path, "", "local")
+		_, _, err := parseHermesTestSession(t, path, "", "local")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid JSON")
 	})
@@ -1025,7 +1076,7 @@ func TestDiscoverHermesSessions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
-			files := DiscoverHermesSessions(dir)
+			files := discoverHermesTestSessions(t, dir)
 			assertDiscoveredFiles(
 				t, files, tt.wantFiles, AgentHermes,
 			)
@@ -1033,13 +1084,13 @@ func TestDiscoverHermesSessions(t *testing.T) {
 	}
 
 	t.Run("empty string dir", func(t *testing.T) {
-		files := DiscoverHermesSessions("")
+		files := discoverHermesTestSessions(t, "")
 		assert.Nil(t, files)
 	})
 
 	t.Run("nonexistent dir", func(t *testing.T) {
-		files := DiscoverHermesSessions(
-			filepath.Join(t.TempDir(), "nope"),
+		files := discoverHermesTestSessions(
+			t, filepath.Join(t.TempDir(), "nope"),
 		)
 		assert.Nil(t, files)
 	})
@@ -1088,7 +1139,7 @@ func TestFindHermesSourceFile(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 
-			got := FindHermesSourceFile(dir, tt.sessionID)
+			got := findHermesTestSourceFile(t, dir, tt.sessionID)
 			want := ""
 			if tt.wantFile != "" {
 				want = filepath.Join(dir, tt.wantFile)
@@ -1105,7 +1156,7 @@ func TestFindHermesSourceFile(t *testing.T) {
 			"20260403_aaa.jsonl": "{}",
 		})
 		for _, id := range []string{"", "../etc/passwd", "a/b", "a b"} {
-			got := FindHermesSourceFile(dir, id)
+			got := findHermesTestSourceFile(t, dir, id)
 			if got != "" {
 				t.Errorf(
 					"FindHermesSourceFile(%q) = %q, want empty",
@@ -1172,8 +1223,13 @@ func TestHermesRegistryEntry(t *testing.T) {
 	assert.Equal(t, "hermes:", found.IDPrefix)
 	assert.True(t, found.FileBased)
 	assert.Contains(t, found.DefaultDirs, ".hermes/sessions")
-	assert.NotNil(t, found.DiscoverFunc)
-	assert.NotNil(t, found.FindSourceFunc)
+	// Hermes is provider-authoritative: discovery and source lookup live on the
+	// hermesProvider, not on legacy AgentDef hooks. The watch-root resolvers
+	// stay because they are provider-owned and consumed by watcher setup.
+	assert.Nil(t, found.DiscoverFunc)
+	assert.Nil(t, found.FindSourceFunc)
+	assert.NotNil(t, found.WatchRootsFunc)
+	assert.NotNil(t, found.ShallowWatchRootsFunc)
 }
 
 // --- File info ---
@@ -1190,7 +1246,7 @@ func TestParseHermesSession_FileInfo(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 
-	sess, _, err := ParseHermesSession(path, "", "local")
+	sess, _, err := parseHermesTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
