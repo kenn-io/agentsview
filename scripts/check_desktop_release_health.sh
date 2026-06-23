@@ -12,8 +12,8 @@ error() {
     echo "::error::$*" >&2
 }
 
-if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    error "expected release tag like v0.34.5, got '${tag:-<empty>}'"
+if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+    error "expected release tag like v0.34.5 or v0.34.5-rc.1, got '${tag:-<empty>}'"
     exit 1
 fi
 

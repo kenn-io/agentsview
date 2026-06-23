@@ -80,6 +80,11 @@ write_fixture "$tmp" "0.34.5" "0.34.5"
 
 assert_success "healthy desktop release passes" run_checker "$tmp" "v0.34.5"
 
+write_fixture "$tmp" "0.0.1-staging.1" "0.0.1-staging.1"
+assert_success \
+    "semver prerelease desktop release passes" \
+    run_checker "$tmp" "v0.0.1-staging.1"
+
 assert_failure_contains \
     "failed desktop workflow is loud" \
     "Desktop Release workflow concluded failure for v0.34.5" \

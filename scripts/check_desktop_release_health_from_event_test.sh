@@ -78,6 +78,15 @@ assert_success \
     "workflow_run tag event passes validated tag" \
     run_wrapper "$tmp" "workflow_run" "$tmp/workflow-run.json"
 
+write_fixture "$tmp" "0.0.1-staging.1"
+cat >"$tmp/workflow-run-prerelease.json" <<'EOF'
+{"workflow_run":{"event":"push","head_branch":"v0.0.1-staging.1","conclusion":"success"}}
+EOF
+assert_success \
+    "workflow_run prerelease tag passes validated tag" \
+    run_wrapper "$tmp" "workflow_run" "$tmp/workflow-run-prerelease.json"
+write_fixture "$tmp" "0.34.5"
+
 cat >"$tmp/manual.json" <<'EOF'
 {"inputs":{"tag":"v0.34.5"}}
 EOF
