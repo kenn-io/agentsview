@@ -99,6 +99,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newDuckDBCommand())
 	root.AddCommand(newSessionCommand())
+	root.AddCommand(newMCPCommand())
 	root.AddCommand(newStatsCommand())
 	root.AddCommand(newParseDiffCommand())
 	root.AddCommand(newClassifierCommand())

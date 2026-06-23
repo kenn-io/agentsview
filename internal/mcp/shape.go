@@ -4,6 +4,7 @@
 package mcp
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -115,10 +116,5 @@ func roleAllowed(role string, roles []string) bool {
 	if len(roles) == 0 {
 		return role == "user" || role == "assistant"
 	}
-	for _, r := range roles {
-		if role == r {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(roles, role)
 }
