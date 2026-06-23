@@ -147,7 +147,6 @@ func (s *Sync) Push(
 			if err := clearPushState(s.local); err != nil {
 				return result, err
 			}
-			pushStateCleared = true
 		}
 	}
 
@@ -179,7 +178,6 @@ func (s *Sync) Push(
 				if err := clearPushState(s.local); err != nil {
 					return result, err
 				}
-				pushStateCleared = true
 			}
 		}
 	}
@@ -815,7 +813,7 @@ func persistPushTargetFingerprint(
 func pushTargetState(
 	lastPush, storedTargetFingerprint, currentTargetFingerprint string,
 ) (bool, string) {
-	if lastPush == "" {
+	if lastPush == "" || currentTargetFingerprint == "" {
 		return false, ""
 	}
 	if storedTargetFingerprint == "" {

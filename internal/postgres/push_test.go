@@ -445,6 +445,13 @@ func TestPushTargetState(t *testing.T) {
 			wantReset: false,
 		},
 		{
+			name:      "missing runtime fingerprint skips reset",
+			lastPush:  "2026-03-11T12:34:56.123Z",
+			stored:    "v1:old",
+			current:   "",
+			wantReset: false,
+		},
+		{
 			name:       "legacy watermark without fingerprint resets",
 			lastPush:   "2026-03-11T12:34:56.123Z",
 			current:    "v1:new",
