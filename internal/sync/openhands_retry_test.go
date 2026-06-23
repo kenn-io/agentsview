@@ -39,8 +39,15 @@ func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
 	oldDirMtime := dirInfo.ModTime()
 
 	engine := &Engine{
-		db:        dbtest.OpenTestDB(t),
-		machine:   "local",
+		db:      dbtest.OpenTestDB(t),
+		machine: "local",
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentOpenHands: {root},
+		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentOpenHands: parser.ProviderMigrationProviderAuthoritative,
+		},
 		skipCache: map[string]int64{sessionDir: oldDirMtime.UnixNano()},
 	}
 

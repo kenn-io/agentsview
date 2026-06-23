@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -25,19 +26,30 @@ func TestDiscoverAndFindOpenHandsSessions(t *testing.T) {
 		0o644,
 	))
 
-	files := DiscoverOpenHandsSessions(root)
-	require.Len(t, files, 1)
-	assert.Equal(t, sessionDir, files[0].Path)
-	assert.Equal(t, AgentOpenHands, files[0].Agent)
+	provider, ok := NewProvider(AgentOpenHands, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
 
-	assert.Equal(
-		t, sessionDir,
-		FindOpenHandsSourceFile(root, sessionID),
-	)
-	assert.Equal(
-		t, sessionDir,
-		FindOpenHandsSourceFile(root, dirName),
-	)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, sessionDir, sources[0].DisplayPath)
+	assert.Equal(t, AgentOpenHands, sources[0].Provider)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: sessionID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sessionDir, found.DisplayPath)
+
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: dirName,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sessionDir, found.DisplayPath)
 }
 
 func TestParseOpenHandsSession(t *testing.T) {
@@ -116,10 +128,27 @@ func TestParseOpenHandsSession(t *testing.T) {
 		))
 	}
 
-	sess, msgs, err := ParseOpenHandsSession(
-		sessionDir, "local",
-	)
+	provider, ok := NewProvider(AgentOpenHands, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: sessionDir,
+	})
 	require.NoError(t, err)
+	require.True(t, found)
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      source,
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	sess := &outcome.Results[0].Result.Session
+	msgs := outcome.Results[0].Result.Messages
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 4)
 

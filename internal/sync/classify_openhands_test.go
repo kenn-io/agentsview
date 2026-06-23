@@ -34,11 +34,15 @@ func TestClassifyOnePath_OpenHands(t *testing.T) {
 	))
 
 	eng := &Engine{
+		db: openTestDB(t),
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenHands: {root},
 		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentOpenHands: parser.ProviderMigrationProviderAuthoritative,
+		},
 	}
-	geminiMap := make(map[string]map[string]string)
 
 	tests := []struct {
 		name    string
@@ -80,12 +84,15 @@ func TestClassifyOnePath_OpenHands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := eng.classifyOnePath(tt.path, geminiMap)
-			assert.Equal(t, tt.want, ok)
-			if ok {
-				assert.Equal(t, parser.AgentOpenHands, got.Agent)
-				assert.Equal(t, tt.retPath, got.Path)
+			files := eng.classifyPaths([]string{tt.path})
+			if !tt.want {
+				assert.Empty(t, files)
+				return
 			}
+			require.Len(t, files, 1)
+			got := files[0]
+			assert.Equal(t, parser.AgentOpenHands, got.Agent)
+			assert.Equal(t, tt.retPath, got.Path)
 		})
 	}
 }
