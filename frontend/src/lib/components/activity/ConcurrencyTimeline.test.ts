@@ -489,4 +489,36 @@ describe("ConcurrencyTimeline", () => {
     unmount(c);
     target.remove();
   });
+
+  it("labels the overlay scale on the right y-axis", async () => {
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
+    await tick();
+
+    const select = target.querySelector(
+      ".overlay-toggle select",
+    ) as HTMLSelectElement;
+    select.value = "cost";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+
+    const labels = Array.from(
+      target.querySelectorAll("text.overlay-y-label"),
+    ).map((el) => el.textContent?.trim() ?? "");
+    expect(labels).toContain("$0.90");
+    expect(labels).toContain("$0.00");
+
+    select.value = "tokens";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await tick();
+
+    const tokenLabels = Array.from(
+      target.querySelectorAll("text.overlay-y-label"),
+    ).map((el) => el.textContent?.trim() ?? "");
+    expect(tokenLabels).toContain("9k");
+
+    unmount(c);
+    target.remove();
+  });
 });

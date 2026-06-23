@@ -25,6 +25,7 @@
   const STRIP_GAP = 6;
   const Y_LABEL_W = 32;
   const RIGHT_PAD = 8;
+  const OVERLAY_AXIS_W = 48;
   // Reserved headroom so the tallest bar, its grid line, and
   // the top y-axis label do not clip against the viewBox edge.
   const TOP_PAD = 10;
@@ -177,6 +178,23 @@
     return overlayMetric === "cost" ? b.cost : b.output_tokens;
   }
 
+  function trimDecimal(v: number, digits: number): string {
+    return v.toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+  }
+
+  function fmtCompact(v: number): string {
+    const abs = Math.abs(v);
+    if (abs >= 1_000_000) return `${trimDecimal(v / 1_000_000, 1)}M`;
+    if (abs >= 1_000) return `${trimDecimal(v / 1_000, 1)}k`;
+    if (Number.isInteger(v)) return String(v);
+    return trimDecimal(v, 1);
+  }
+
+  function fmtOverlayTick(v: number): string {
+    if (overlayMetric === "cost") return `$${v.toFixed(2)}`;
+    return fmtCompact(v);
+  }
+
   let containerEl: HTMLDivElement | undefined = $state();
   let containerWidth = $state(600);
 
@@ -192,8 +210,11 @@
     return () => ro.disconnect();
   });
 
+  const rightAxisW = $derived(
+    overlayMetric === "none" ? RIGHT_PAD : OVERLAY_AXIS_W,
+  );
   const plotWidth = $derived(
-    Math.max(containerWidth - Y_LABEL_W - RIGHT_PAD, 100),
+    Math.max(containerWidth - Y_LABEL_W - rightAxisW, 100),
   );
 
   // The plot maps the full [range_start, range_end) window onto plotWidth; every
@@ -285,14 +306,15 @@
     return out;
   });
 
-  const overlayMax = $derived.by(() => {
+  const overlayDataMax = $derived.by(() => {
     let m = 0;
     for (const b of buckets) {
       const v = bucketOverlayValue(b);
       if (v > m) m = v;
     }
-    return m || 1;
+    return m;
   });
+  const overlayMax = $derived(overlayDataMax || 1);
 
   const overlayPath = $derived.by(() => {
     if (overlayMetric === "none" || buckets.length === 0) return "";
@@ -305,6 +327,16 @@
       d += i === 0 ? `M${x},${y}` : `L${x},${y}`;
     }
     return d;
+  });
+
+  const overlayTicks = $derived.by(() => {
+    if (overlayMetric === "none") return [];
+    const values =
+      overlayDataMax <= 0 ? [0] : [0, overlayDataMax / 2, overlayDataMax];
+    return values.map((val) => ({
+      y: scaleY(val, overlayMax, CHART_H),
+      label: fmtOverlayTick(val),
+    }));
   });
 
   const yTicks = $derived.by(() => {
@@ -397,7 +429,7 @@
     Math.max(((rangeEndMs - futureStartMs) / rangeSpanMs) * plotWidth, 0),
   );
 
-  const svgW = $derived(plotWidth + Y_LABEL_W + RIGHT_PAD);
+  const svgW = $derived(plotWidth + Y_LABEL_W + rightAxisW);
   const svgH = $derived(CHART_H + STRIP_GAP + STRIP_H + X_LABEL_H);
   const stripY = $derived(CHART_H + STRIP_GAP);
 </script>
@@ -492,6 +524,30 @@
 
       {#if overlayMetric !== "none" && overlayPath}
         <path class="overlay-line" d={overlayPath} />
+        <line
+          class="overlay-axis-line"
+          x1={Y_LABEL_W + plotWidth}
+          y1={TOP_PAD}
+          x2={Y_LABEL_W + plotWidth}
+          y2={CHART_H}
+        />
+        {#each overlayTicks as tick}
+          <line
+            class="overlay-axis-tick"
+            x1={Y_LABEL_W + plotWidth}
+            y1={tick.y}
+            x2={Y_LABEL_W + plotWidth + 4}
+            y2={tick.y}
+          />
+          <text
+            x={Y_LABEL_W + plotWidth + 6}
+            y={tick.y + 3}
+            class="overlay-y-label"
+            text-anchor="start"
+          >
+            {tick.label}
+          </text>
+        {/each}
       {/if}
 
       {#each xTicks as tick}
@@ -690,6 +746,19 @@
     stroke: var(--accent-amber);
     stroke-width: 1.5;
     opacity: 0.85;
+  }
+
+  .overlay-axis-line,
+  .overlay-axis-tick {
+    stroke: var(--accent-amber);
+    stroke-width: 1;
+    opacity: 0.55;
+  }
+
+  .overlay-y-label {
+    font-size: 9px;
+    fill: var(--accent-amber);
+    font-family: var(--font-mono);
   }
 
   .strip-cell {
