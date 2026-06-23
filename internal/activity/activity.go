@@ -56,8 +56,10 @@ type UsageRow struct {
 	Timestamp       string // ts, RFC3339 or ""
 	OutputTokens    int
 	Cost            float64
+	Agent           string
 	ClaudeMessageID string
 	ClaudeRequestID string
+	SourceUUID      string
 	UsageDedupKey   string
 }
 
@@ -518,6 +520,33 @@ type usageAgg struct {
 	models       map[string]float64 // model -> cost (for primary/mixed)
 }
 
+type usageDedupToken struct {
+	kind  string
+	value string
+}
+
+func usageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
+	if u.ClaudeMessageID != "" && u.ClaudeRequestID != "" {
+		return usageDedupToken{
+			kind:  "claude",
+			value: u.ClaudeMessageID + ":" + u.ClaudeRequestID,
+		}, true
+	}
+	if u.Agent != "" && u.SourceUUID != "" {
+		return usageDedupToken{
+			kind:  "source",
+			value: u.Agent + ":" + u.SourceUUID,
+		}, true
+	}
+	if u.UsageDedupKey != "" {
+		return usageDedupToken{
+			kind:  "usage",
+			value: u.UsageDedupKey,
+		}, true
+	}
+	return usageDedupToken{}, false
+}
+
 // dedupUsage filters usage rows to the range and applies the two-tier,
 // first-seen-wins dedup that mirrors GetDailyUsage. Rows arrive pre-sorted by
 // (ts, session_id, COALESCE(message_ordinal,-1)). The half-open instant filter
@@ -526,8 +555,7 @@ type usageAgg struct {
 // dedup key, matching the activity/bucket clipping Aggregate applies. For a
 // full range effEnd == end, so nothing extra is excluded.
 func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
-	type dk struct{ a, b string }
-	seen := map[dk]struct{}{}
+	seen := map[usageDedupToken]struct{}{}
 	out := make([]UsageRow, 0, len(usage))
 	for _, u := range usage {
 		t, ok := parseTS(u.Timestamp)
@@ -537,14 +565,7 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 		if !t.Before(effEnd) {
 			continue // partial range: rows at/after as_of never claim a key
 		}
-		if u.ClaudeMessageID != "" && u.ClaudeRequestID != "" {
-			k := dk{u.ClaudeMessageID, u.ClaudeRequestID}
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-		} else if u.UsageDedupKey != "" {
-			k := dk{"usage", u.UsageDedupKey}
+		if k, ok := usageDedupTokenForRow(u); ok {
 			if _, dup := seen[k]; dup {
 				continue
 			}

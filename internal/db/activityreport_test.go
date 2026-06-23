@@ -385,6 +385,57 @@ func TestGetActivityReport_UsageDedupSubSecondOrder(t *testing.T) {
 		"first-seen dedup keeps the chronologically earlier whole-second row")
 }
 
+func TestGetActivityReport_UsageDedupFallsBackToSourceUUID(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-20250514",
+		InputPerMTok:  3.0,
+		OutputPerMTok: 15.0,
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "earlier", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID:       "earlier",
+		Ordinal:         0,
+		Role:            "assistant",
+		Content:         "x",
+		Timestamp:       "2026-06-16T10:30:00Z",
+		Model:           "claude-sonnet-4-20250514",
+		ClaudeMessageID: "m-dup",
+		ClaudeRequestID: "",
+		SourceUUID:      "src-dup",
+		TokenUsage:      json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+	})
+	insertSession(t, d, "later", "proj2", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:30:01Z")
+		s.EndedAt = Ptr("2026-06-16T10:30:01Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID:       "later",
+		Ordinal:         0,
+		Role:            "assistant",
+		Content:         "x",
+		Timestamp:       "2026-06-16T10:30:01Z",
+		Model:           "claude-sonnet-4-20250514",
+		ClaudeMessageID: "m-dup",
+		ClaudeRequestID: "",
+		SourceUUID:      "src-dup",
+		TokenUsage:      json.RawMessage(`{"input_tokens":1000,"output_tokens":900}`),
+	})
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens,
+		"incomplete Claude pairs fall back to source_uuid dedup in activity reports")
+}
+
 // TestGetActivityReport_TitleSkipsEmptyDisplayName confirms the Title fallback
 // null-checks each candidate independently: an empty (non-NULL) display_name
 // must not mask a real session_name. A nested COALESCE(display_name,

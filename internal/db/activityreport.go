@@ -268,8 +268,10 @@ func (db *DB) activityReportUsage(
 					Timestamp:       r.ts,
 					OutputTokens:    outputTok,
 					Cost:            cost,
+					Agent:           r.agent,
 					ClaudeMessageID: r.claudeMessageID,
 					ClaudeRequestID: r.claudeRequestID,
+					SourceUUID:      r.sourceUUID,
 					UsageDedupKey:   r.usageDedupKey,
 				},
 			})

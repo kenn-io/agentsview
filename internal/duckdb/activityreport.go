@@ -191,11 +191,14 @@ func (s *Store) activityReportActivity(
 // dedup keys the aggregator and per-row cost need.
 type duckActivityReportUsageRow struct {
 	sessionID       string
+	source          string
 	model           string
 	ts              string
 	messageOrdinal  any
+	agent           string
 	claudeMessageID string
 	claudeRequestID string
+	sourceUUID      string
 	usageDedupKey   string
 	inputTok        int
 	outputTok       int
@@ -252,8 +255,9 @@ func (s *Store) activityReportUsage(
 	for rows.Next() {
 		var r duckActivityReportUsageRow
 		if err := rows.Scan(
-			&r.sessionID, &r.messageOrdinal, &r.ts, &r.model,
-			&r.claudeMessageID, &r.claudeRequestID, &r.usageDedupKey,
+			&r.sessionID, &r.messageOrdinal, &r.ts, &r.source, &r.model,
+			&r.agent, &r.claudeMessageID, &r.claudeRequestID, &r.sourceUUID,
+			&r.usageDedupKey,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd, &r.costUSD,
 		); err != nil {
 			return nil, fmt.Errorf(
@@ -275,8 +279,10 @@ func (s *Store) activityReportUsage(
 				Timestamp:       tsStr,
 				OutputTokens:    r.outputTok,
 				Cost:            cost,
+				Agent:           r.agent,
 				ClaudeMessageID: r.claudeMessageID,
 				ClaudeRequestID: r.claudeRequestID,
+				SourceUUID:      r.sourceUUID,
 				UsageDedupKey:   r.usageDedupKey,
 			},
 		})
@@ -317,8 +323,10 @@ func duckActivityReportUsageQuery(inClause string) string {
 			SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 				'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
 				m.model AS model, m.token_usage AS token_json,
+				s.agent AS agent,
 				m.claude_message_id AS claude_message_id,
 				m.claude_request_id AS claude_request_id,
+				m.source_uuid AS source_uuid,
 				'' AS usage_dedup_key,
 				0 AS input_tokens, 0 AS output_tokens,
 				0 AS cache_create, 0 AS cache_read, NULL AS cost_usd
@@ -333,7 +341,9 @@ func duckActivityReportUsageQuery(inClause string) string {
 			SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 				ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
 				ue.model AS model, '' AS token_json,
+				s.agent AS agent,
 				'' AS claude_message_id, '' AS claude_request_id,
+				'' AS source_uuid,
 				CASE
 					WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 					ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
@@ -349,8 +359,8 @@ func duckActivityReportUsageQuery(inClause string) string {
 				AND ue.session_id IN (%[1]s)
 		),
 		usage_normalized AS (
-			SELECT session_id, message_ordinal, ts, model,
-				claude_message_id, claude_request_id, usage_dedup_key,
+			SELECT session_id, message_ordinal, ts, source, model, agent,
+				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				CASE
 					WHEN source = 'message' THEN COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0)
 					ELSE input_tokens
@@ -370,8 +380,8 @@ func duckActivityReportUsageQuery(inClause string) string {
 				cost_usd
 			FROM usage_raw
 		)
-		SELECT session_id, message_ordinal, ts, model,
-			claude_message_id, claude_request_id, usage_dedup_key,
+		SELECT session_id, message_ordinal, ts, source, model, agent,
+			claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 			input_tokens_norm, output_tokens_norm,
 			cache_create_norm, cache_read_norm, cost_usd
 		FROM usage_normalized

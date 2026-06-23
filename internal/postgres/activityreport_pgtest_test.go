@@ -430,6 +430,53 @@ func TestPGGetActivityReportDedupsAcrossChunks(t *testing.T) {
 	assert.Equal(t, 900, shared[1].OutputTokens)
 }
 
+func TestPGGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_daily_report_sourceuuid_test")
+	ctx := context.Background()
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES ('claude-sonnet-4-20250514', 3, 15, 0, 0, 'seed')`)
+	require.NoError(t, err, "insert pricing")
+
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES
+			('earlier', 'test-machine', 'proj1', 'claude',
+			 '2026-06-16T10:30:00Z'::timestamptz,
+			 '2026-06-16T10:30:00Z'::timestamptz, 1, 1),
+			('later', 'test-machine', 'proj2', 'claude',
+			 '2026-06-16T10:30:01Z'::timestamptz,
+			 '2026-06-16T10:30:01Z'::timestamptz, 1, 1)`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model, token_usage,
+			claude_message_id, source_uuid
+		) VALUES
+			('earlier', 0, 'assistant', 'x',
+			 '2026-06-16T10:30:00Z'::timestamptz, 1,
+			 'claude-sonnet-4-20250514',
+			 '{"input_tokens":1000,"output_tokens":500}', 'M1', 'SRC1'),
+			('later', 0, 'assistant', 'x',
+			 '2026-06-16T10:30:01Z'::timestamptz, 1,
+			 'claude-sonnet-4-20250514',
+			 '{"input_tokens":1000,"output_tokens":900}', 'M1', 'SRC1')`)
+	require.NoError(t, err, "insert messages")
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens,
+		"incomplete Claude pairs fall back to source_uuid dedup in activity reports")
+}
+
 // TestPGGetActivityReportAutomationFilterAndSessionSplit confirms the shared
 // AnalyticsFilter automation class is honored through the PG analytics WHERE
 // builder and that the Totals carry the automated/interactive session-count

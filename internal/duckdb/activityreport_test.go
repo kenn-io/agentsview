@@ -306,6 +306,48 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 		"first-seen dedup keeps the chronologically earlier whole-second row")
 }
 
+func TestDuckGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {
+	ctx := context.Background()
+	pricing := []db.ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-20250514",
+		InputPerMTok:  3.0,
+		OutputPerMTok: 15.0,
+	}}
+
+	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
+	earlier.Agent = "claude"
+	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
+	earlierMsg.Model = "claude-sonnet-4-20250514"
+	earlierMsg.ClaudeMessageID = "dup-m"
+	earlierMsg.SourceUUID = "src-dup"
+	earlierMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	earlierMsg.OutputTokens = 500
+
+	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:01Z", 1)
+	later.Agent = "claude"
+	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:30:01Z")
+	laterMsg.Model = "claude-sonnet-4-20250514"
+	laterMsg.ClaudeMessageID = "dup-m"
+	laterMsg.SourceUUID = "src-dup"
+	laterMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":900}`)
+	laterMsg.OutputTokens = 900
+
+	writes := []db.SessionBatchWrite{
+		{Session: earlier, Messages: []db.Message{earlierMsg},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: later, Messages: []db.Message{laterMsg},
+			DataVersion: 1, ReplaceMessages: true},
+	}
+	store := activityReportStore(t, writes, pricing)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens,
+		"incomplete Claude pairs fall back to source_uuid dedup in activity reports")
+}
+
 // TestDuckGetActivityReportZeroCostKeepsPrimaryModel confirms a usage-only
 // (untimed) session whose known-model usage carries zero cost still reports
 // that model as primary through the DuckDB path, guarding the shared zero-cost

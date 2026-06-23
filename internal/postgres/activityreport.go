@@ -260,8 +260,10 @@ func (s *Store) activityReportUsage(
 					Timestamp:       startedAtString(r.ts),
 					OutputTokens:    outputTok,
 					Cost:            cost,
+					Agent:           r.agent,
 					ClaudeMessageID: r.claudeMessageID,
 					ClaudeRequestID: r.claudeRequestID,
+					SourceUUID:      r.sourceUUID,
 					UsageDedupKey:   r.usageDedupKey,
 				},
 			})
