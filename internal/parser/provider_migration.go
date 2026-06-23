@@ -52,7 +52,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentPositron:       ProviderMigrationLegacyOnly,
 	AgentAntigravity:    ProviderMigrationLegacyOnly,
 	AgentAntigravityCLI: ProviderMigrationLegacyOnly,
-	AgentVibe:           ProviderMigrationLegacyOnly,
+	AgentVibe:           ProviderMigrationProviderAuthoritative,
 	AgentZed:            ProviderMigrationLegacyOnly,
 	AgentQwenPaw:        ProviderMigrationProviderAuthoritative,
 	AgentGptme:          ProviderMigrationProviderAuthoritative,

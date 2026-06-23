@@ -62,7 +62,6 @@ var pendingShimProviderFiles = map[string]bool{
 	"opencode_provider.go":             true,
 	"positron_provider.go":             true,
 	"shelley_provider.go":              true,
-	"vibe_provider.go":                 true,
 	"visualstudio_copilot_provider.go": true,
 	"vscode_copilot_provider.go":       true,
 	"zed_provider.go":                  true,
