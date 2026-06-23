@@ -3,6 +3,20 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.34.5
+<small>2026-06-23</small>
+
+**Bug fixes**
+
+- Keep **PostgreSQL session reads** opt-in instead of enabling them
+  unexpectedly.
+
+**Documentation**
+
+- Refresh **command and session API docs** for current behavior.
+
+---
+
 ## 0.34.4
 <small>2026-06-22</small>
 
