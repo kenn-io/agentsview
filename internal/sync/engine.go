@@ -923,9 +923,6 @@ func (e *Engine) classifyContainerPath(
 	if df, ok := e.classifyShelleySQLitePath(path); ok {
 		return df, true
 	}
-	if df, ok := e.classifyVibePath(path); ok {
-		return df, true
-	}
 	return parser.DiscoveredFile{}, false
 }
 
@@ -1336,55 +1333,6 @@ func (e *Engine) classifyAiderPath(
 				Path:  path,
 				Agent: parser.AgentAider,
 			}, true
-		}
-	}
-	return parser.DiscoveredFile{}, false
-}
-
-// classifyVibePath handles Vibe's session directory layout:
-//
-//	<vibeDir>/session_<timestamp>_<uuid>/messages.jsonl
-//	<vibeDir>/session_<timestamp>_<uuid>/meta.json
-//
-// meta.json changes route back to messages.jsonl because title, model,
-// timestamps, and usage stats are sourced from the sidecar metadata file.
-func (e *Engine) classifyVibePath(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	sep := string(filepath.Separator)
-	for _, vibeDir := range e.agentDirs[parser.AgentVibe] {
-		if vibeDir == "" {
-			continue
-		}
-		rel, ok := isUnder(vibeDir, path)
-		if !ok {
-			continue
-		}
-		parts := strings.Split(rel, sep)
-		if len(parts) != 2 || !strings.HasPrefix(parts[0], "session_") {
-			continue
-		}
-		switch parts[1] {
-		case "messages.jsonl":
-			if _, err := os.Stat(path); err != nil {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parts[0],
-				Agent:   parser.AgentVibe,
-			}, true
-		case "meta.json":
-			messagesPath := filepath.Join(
-				vibeDir, parts[0], "messages.jsonl",
-			)
-			if _, err := os.Stat(messagesPath); err == nil {
-				return parser.DiscoveredFile{
-					Path:    messagesPath,
-					Project: parts[0],
-					Agent:   parser.AgentVibe,
-				}, true
-			}
 		}
 	}
 	return parser.DiscoveredFile{}, false
@@ -4044,8 +3992,6 @@ func (e *Engine) processFile(
 		res = e.processKiroIDE(file, info)
 	case parser.AgentHermes:
 		res = e.processHermes(file, info)
-	case parser.AgentVibe:
-		res = e.processVibe(file, info)
 	case parser.AgentPositron:
 		res = e.processPositron(file, info)
 	case parser.AgentZed:
@@ -4227,7 +4173,124 @@ func (e *Engine) processProviderFile(
 			})
 		}
 	}
+	e.applyProviderFilePathPolicies(provider, file.Agent, &res)
 	return res, true
+}
+
+// applyProviderFilePathPolicies reproduces the DB-aware, file-path-scoped
+// session bookkeeping that a provider cannot do on its own (it has no database
+// handle). It runs only for single-session-per-file providers whose canonical
+// ID can change while the source path is unchanged (e.g. Vibe, whose ID flips
+// between the meta.json session_id and the directory-name fallback as meta.json
+// appears or is removed). Multi-session sources are skipped, where several
+// distinct sessions legitimately share one path; for stable-ID providers it is
+// a no-op because the stored ID always matches the freshly parsed one.
+//
+// Two policies are applied per result, keyed by the (path-rewritten) file_path:
+//
+//  1. Resurrection guard: if the user removed the session occupying this path —
+//     a trashed row at the same path, or an alternate identity for the path
+//     (the provider's excluded fallback ID, or a stale stored ID) that is now
+//     trashed or permanently excluded — the freshly parsed row must not be
+//     written under its new ID. The result is dropped and its ID is excluded.
+//  2. Stale-row cleanup: any other live stored ID at the same path that the
+//     current parse no longer emits is added to the exclusion list so the
+//     superseded row is deleted.
+func (e *Engine) applyProviderFilePathPolicies(
+	provider parser.Provider,
+	agent parser.AgentType,
+	res *processResult,
+) {
+	if provider.Capabilities().Source.MultiSessionSource == parser.CapabilitySupported {
+		return
+	}
+	if len(res.results) == 0 {
+		return
+	}
+
+	excluded := make(map[string]struct{}, len(res.excludedSessionIDs))
+	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+		excluded[id] = struct{}{}
+	}
+	addExclusion := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, ok := excluded[id]; ok {
+			return
+		}
+		excluded[id] = struct{}{}
+		res.excludedSessionIDs = append(res.excludedSessionIDs, id)
+	}
+
+	kept := res.results[:0]
+	for _, result := range res.results {
+		path := result.Session.File.Path
+		if path == "" {
+			kept = append(kept, result)
+			continue
+		}
+		lookupPath := path
+		if e.pathRewriter != nil {
+			lookupPath = e.pathRewriter(path)
+		}
+		currentID := result.Session.ID
+		currentPrefixedID := e.idPrefix + result.Session.ID
+
+		existingIDs, err := e.db.ListSessionIDsByFilePath(lookupPath, string(agent))
+		if err != nil {
+			log.Printf("list session IDs by file path: %v", err)
+			kept = append(kept, result)
+			continue
+		}
+
+		// Resurrection guard. The path's identity is removed when a trashed row
+		// shares it, or when any alternate identity for the path (the
+		// provider's excluded fallback IDs or a stale stored ID) is trashed or
+		// permanently excluded. In that case the new row must not be written.
+		suppress := e.db.HasTrashedSessionByFilePath(lookupPath, string(agent))
+		if !suppress {
+			for id := range excluded {
+				if id == currentID || id == currentPrefixedID {
+					continue
+				}
+				if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
+					suppress = true
+					break
+				}
+			}
+		}
+		if !suppress {
+			for _, id := range existingIDs {
+				if id == currentID || id == currentPrefixedID {
+					continue
+				}
+				if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
+					suppress = true
+					break
+				}
+			}
+		}
+		if suppress {
+			// Keep a trashed current ID trashed rather than converting it to a
+			// parser deletion; the upsert's trash guard already hides it.
+			if (currentPrefixedID == "" || !e.db.IsSessionTrashed(currentPrefixedID)) &&
+				!e.db.IsSessionTrashed(currentID) {
+				addExclusion(currentID)
+			}
+			continue
+		}
+
+		// Stale-row cleanup for live siblings the current parse supersedes.
+		for _, id := range existingIDs {
+			if id == currentID || id == currentPrefixedID {
+				continue
+			}
+			addExclusion(id)
+		}
+		kept = append(kept, result)
+	}
+	res.results = kept
 }
 
 func providerOutcomeAllowsCleanSkipCache(outcome parser.ParseOutcome) bool {
@@ -5924,100 +5987,6 @@ func (e *Engine) processHermes(
 			{Session: *sess, Messages: msgs},
 		},
 	}
-}
-
-func (e *Engine) processVibe(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Title/model/usage stats come from the sibling meta.json, so the
-	// skip check and stored file info must account for it too, or a
-	// meta.json-only update never refreshes those fields.
-	effectiveInfo := vibeEffectiveInfo(file.Path, info)
-	if e.shouldSkipByPath(file.Path, effectiveInfo) {
-		return processResult{skip: true}
-	}
-
-	// Pass an empty project so the parser-derived project (from the
-	// session's working directory) is kept. file.Project holds the
-	// cryptic session directory name, which must not become the project.
-	sess, msgs, usageEvents, err := parser.ParseVibeSessionWrapper(
-		file.Path, "", e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-	sess.File.Size = effectiveInfo.Size()
-	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	var excludedIDs []string
-	lookupPath := file.Path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(file.Path)
-	}
-	existingIDs, err := e.db.ListSessionIDsByFilePath(
-		lookupPath, string(parser.AgentVibe),
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	currentID := sess.ID
-	currentPrefixedID := e.idPrefix + sess.ID
-	fallbackID := "vibe:" + filepath.Base(filepath.Dir(file.Path))
-	for _, id := range existingIDs {
-		if id != currentID && id != currentPrefixedID {
-			excludedIDs = append(excludedIDs, id)
-		}
-	}
-
-	currentFallbackTrashed := sess.ID == fallbackID && e.isSessionTrashed(fallbackID)
-	if e.isSessionBlocked(fallbackID) ||
-		(sess.ID == fallbackID &&
-			e.db.HasTrashedSessionByFilePath(lookupPath, string(parser.AgentVibe))) {
-		if !currentFallbackTrashed && !slices.Contains(excludedIDs, sess.ID) {
-			excludedIDs = append(excludedIDs, sess.ID)
-		}
-		return processResult{excludedSessionIDs: excludedIDs}
-	}
-
-	// Sessions parsed before meta.json existed (or was parseable) are stored
-	// under the directory-name fallback ID. Keep excluding that legacy row even
-	// if it predates file_path metadata and did not appear in the path lookup.
-	if sess.ID != fallbackID && !slices.Contains(excludedIDs, fallbackID) {
-		excludedIDs = append(excludedIDs, fallbackID)
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
-		},
-		excludedSessionIDs: excludedIDs,
-	}
-}
-
-func (e *Engine) isSessionBlocked(id string) bool {
-	if e.idPrefix != "" && !strings.HasPrefix(id, e.idPrefix) {
-		prefixed := e.idPrefix + id
-		return e.db.IsSessionExcluded(prefixed) || e.db.IsSessionTrashed(prefixed)
-	}
-	if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
-		return true
-	}
-	return false
-}
-
-func (e *Engine) isSessionTrashed(id string) bool {
-	if e.idPrefix != "" && !strings.HasPrefix(id, e.idPrefix) {
-		return e.db.IsSessionTrashed(e.idPrefix + id)
-	}
-	return e.db.IsSessionTrashed(id)
 }
 
 // vibeEffectiveInfo returns size/mtime for a Vibe session that account

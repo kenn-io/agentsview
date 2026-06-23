@@ -1225,10 +1225,15 @@ func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 
 func TestProcessVibeMetaOnlyUpdateNotSkipped(t *testing.T) {
 	database := openTestDB(t)
-	e := &Engine{db: database}
 	ctx := context.Background()
 
 	root := t.TempDir()
+	e := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVibe: {root},
+		},
+	})
+
 	sessionDir := filepath.Join(root, "session_20260616_083518_0107f266")
 	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
 
@@ -1246,32 +1251,19 @@ func TestProcessVibeMetaOnlyUpdateNotSkipped(t *testing.T) {
 		0o644,
 	))
 
-	file := parser.DiscoveredFile{
-		Agent: parser.AgentVibe,
-		Path:  msgPath,
-	}
+	canonicalID := "vibe:abc"
 
-	res := e.processFile(ctx, file)
-	require.NoError(t, res.err)
-	require.False(t, res.skip)
-	require.Len(t, res.results, 1)
-	require.Equal(t, "Original title", res.results[0].Session.SessionName)
-
-	pw := pendingWrite{
-		sess: res.results[0].Session,
-		msgs: res.results[0].Messages,
-	}
-	written, _, failed := e.writeBatch(
-		[]pendingWrite{pw}, syncWriteDefault, false,
-	)
-	require.Equal(t, 0, failed)
-	require.Equal(t, 1, written)
-
-	res = e.processFile(ctx, file)
-	require.True(t, res.skip, "unchanged session should skip")
+	e.SyncPaths([]string{msgPath})
+	sess, err := database.GetSession(ctx, canonicalID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.DisplayName)
+	assert.Equal(t, "Original title", *sess.DisplayName)
 
 	// meta.json-only update: messages.jsonl is untouched, but the title
-	// (sourced from meta.json) changes.
+	// (sourced from meta.json) changes. The Vibe provider's composite
+	// fingerprint folds the sibling meta.json mtime in, so the change busts
+	// the skip cache and triggers a reparse rather than a skip.
 	info, err := os.Stat(msgPath)
 	require.NoError(t, err)
 	metaTime := info.ModTime().Add(5 * time.Second)
@@ -1282,10 +1274,12 @@ func TestProcessVibeMetaOnlyUpdateNotSkipped(t *testing.T) {
 	))
 	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
 
-	res = e.processFile(ctx, file)
-	require.False(t, res.skip, "meta.json-only update must trigger a reparse")
-	require.Len(t, res.results, 1)
-	assert.Equal(t, "Renamed title", res.results[0].Session.SessionName)
+	e.SyncPaths([]string{msgPath})
+	sess, err = database.GetSession(ctx, canonicalID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.DisplayName)
+	assert.Equal(t, "Renamed title", *sess.DisplayName)
 }
 
 func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {

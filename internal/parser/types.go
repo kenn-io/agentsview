@@ -574,15 +574,13 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindShelleySourceFile,
 	},
 	{
-		Type:           AgentVibe,
-		DisplayName:    "Mistral Vibe",
-		EnvVar:         "VIBE_SESSIONS_DIR",
-		ConfigKey:      "vibe_session_dirs",
-		DefaultDirs:    []string{".vibe/logs/session"},
-		IDPrefix:       "vibe:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverVibeSessions,
-		FindSourceFunc: FindVibeSourceFile,
+		Type:        AgentVibe,
+		DisplayName: "Mistral Vibe",
+		EnvVar:      "VIBE_SESSIONS_DIR",
+		ConfigKey:   "vibe_session_dirs",
+		DefaultDirs: []string{".vibe/logs/session"},
+		IDPrefix:    "vibe:",
+		FileBased:   true,
 	},
 	{
 		// Aider has no central session store. It writes one Markdown

@@ -1424,7 +1424,7 @@ func TestIsPiSessionFile(t *testing.T) {
 
 func TestDiscoverVibeSessionsIntegration(t *testing.T) {
 	// Test discovery with testdata
-	files := DiscoverVibeSessions("testdata/vibe")
+	files := discoverVibeTestSessions(t, "testdata/vibe")
 
 	// Should find all session directories with messages.jsonl
 	require.NotEmpty(t, files)
@@ -1442,7 +1442,7 @@ func TestDiscoverVibeSessionsIntegration(t *testing.T) {
 func TestFindVibeSourceFileIntegration(t *testing.T) {
 	// Test with actual testdata
 	sessionID := "session_basic"
-	result := FindVibeSourceFile("testdata/vibe", sessionID)
+	result := findVibeTestSourceFile(t, "testdata/vibe", sessionID)
 
 	expected := filepath.Join("testdata", "vibe", sessionID, "messages.jsonl")
 	assert.Equal(t, expected, result)
