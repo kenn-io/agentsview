@@ -4744,6 +4744,8 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 	require.NoError(t, os.Chtimes(usagePartPath, future, future), "chtimes usage part")
 	require.NoError(t, os.Chtimes(sessionPath, sessionMtime, sessionMtime), "restore session mtime")
 
+	// Composite freshness includes the part file, so the part-only edit is
+	// fresh relative to the cutoff and re-syncs the updated reply.
 	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
@@ -7250,6 +7252,265 @@ func TestSyncPathsVSCodeCopilotPersistsUsageEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, "claude-opus-4-8", events[0].Model)
+}
+
+func TestSyncPathsPositronJSONLPriority(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	chatDir := filepath.Join(
+		positronDir, "workspaceStorage", "abc123",
+		"chatSessions",
+	)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	uuid := "cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+
+	jsonPath := filepath.Join(chatDir, uuid+".json")
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+	dbtest.WriteTestFile(t, jsonPath, []byte(session))
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncPaths([]string{jsonPath})
+
+	page, err := database.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(page.Sessions), "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
+}
+
+func TestSyncAllPositronJSONLPriority(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	hashDir := filepath.Join(positronDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	uuid := "cccccccc-dddd-eeee-ffff-bbbbbbbbbbbb"
+	jsonSession := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"json fallback"},`+
+			`"response":[{"value":"json response"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlSession := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"jsonl preferred"},`+
+			`"response":[{"value":"jsonl response"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+
+	jsonPath := filepath.Join(chatDir, uuid+".json")
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+	dbtest.WriteTestFile(t, jsonPath, []byte(jsonSession))
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+jsonlSession+`}`),
+	)
+
+	stats := engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
+
+	sess, err := database.GetSession(context.Background(), "positron:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assertSessionMessageCount(t, database, "positron:"+uuid, 2)
+	msgs := fetchMessages(t, database, "positron:"+uuid)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "jsonl preferred", msgs[0].Content)
+}
+
+func TestSyncPathsPositronWorkspaceMetadataRefreshesProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	hashDir := filepath.Join(positronDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+	workspacePath := filepath.Join(hashDir, "workspace.json")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	writeWorkspace := func(name string) {
+		t.Helper()
+		dbtest.WriteTestFile(t, workspacePath, fmt.Appendf(nil,
+			`{"folder":"file:///Users/alice/code/%s"}`,
+			name,
+		))
+	}
+
+	uuid := "dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+
+	writeWorkspace("one")
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncPaths([]string{jsonlPath})
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	info, err := os.Stat(jsonlPath)
+	require.NoError(t, err, "stat positron session")
+	engine.InjectSkipCache(map[string]int64{
+		jsonlPath: info.ModTime().UnixNano(),
+	})
+
+	writeWorkspace("two")
+	engine.SyncPaths([]string{workspacePath})
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
+
+	writeWorkspace("three")
+	engine.SyncPaths([]string{jsonlPath, workspacePath})
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "three", sess.Project)
+		},
+	)
+}
+
+func TestSyncAllSincePositronWorkspaceMetadataRefreshesProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	hashDir := filepath.Join(positronDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+	workspacePath := filepath.Join(hashDir, "workspace.json")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	writeWorkspace := func(name string) {
+		t.Helper()
+		dbtest.WriteTestFile(t, workspacePath, fmt.Appendf(nil,
+			`{"folder":"file:///Users/alice/code/%s"}`,
+			name,
+		))
+	}
+
+	uuid := "dddddddd-eeee-ffff-aaaa-cccccccccccc"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+
+	writeWorkspace("one")
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncAll(context.Background(), nil)
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	oldTime := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(jsonlPath, oldTime, oldTime), "chtimes session")
+	require.NoError(t, os.Chtimes(workspacePath, oldTime, oldTime), "chtimes workspace")
+	cutoff := time.Now().Add(-1 * time.Hour)
+
+	writeWorkspace("two")
+	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
+	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
+
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
 }
 
 func TestPiSessionIntegration(t *testing.T) {

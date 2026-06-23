@@ -2852,12 +2852,33 @@ func (e *Engine) filterFilesByMtime(
 	return out
 }
 
+// discoveredFileEffectiveMtime returns the freshness timestamp used to filter a
+// discovered file against an incremental-sync cutoff. For provider-sourced
+// files it consults the provider's Fingerprint so composite/sibling-file
+// freshness (for example a Positron session whose workspace.json changed while
+// the chat transcript did not) is honored without a per-agent legacy helper.
+// Files without a provider source fall back to the legacy mtime computation.
 func (e *Engine) discoveredFileEffectiveMtime(
-	ctx context.Context,
-	file parser.DiscoveredFile,
+	ctx context.Context, file parser.DiscoveredFile,
 ) (int64, error) {
+	// Codex is excluded from the provider-Fingerprint path on purpose. Its
+	// Fingerprint folds the shared session_index.jsonl mtime into every
+	// session's freshness (see CodexEffectiveMtime). That shared signal is
+	// correct for the skip cache but wrong for the incremental-sync cutoff:
+	// when the index changes, both the live and archived copies of a UUID
+	// would look fresh, defeating the per-copy mtime discrimination that
+	// expandCodexProviderDuplicates relies on to preserve a changed archived
+	// duplicate. Index refreshes are handled separately by the codexIndexRefresh
+	// pass in filterFilesByMtime, so codex uses its raw per-file mtime here.
+	if file.Agent == parser.AgentCodex {
+		return discoveredFileMtime(file)
+	}
+	// Only provider-authoritative sources resolve freshness through the
+	// provider Fingerprint. Shadow-compare files keep the legacy mtime path so
+	// agent-specific incremental-sync behavior (for example the Codex index
+	// refresh below) is unchanged while a provider is still shadowed.
 	if file.ProviderSource != nil && file.ProviderProcess {
-		if mtime, ok, err := e.providerFingerprintMtime(ctx, file); err != nil {
+		if mtime, ok, err := e.providerSourceMtime(ctx, file); err != nil {
 			return 0, err
 		} else if ok {
 			return mtime, nil
@@ -2866,9 +2887,12 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	return discoveredFileMtime(file)
 }
 
-func (e *Engine) providerFingerprintMtime(
-	ctx context.Context,
-	file parser.DiscoveredFile,
+// providerSourceMtime resolves a provider-sourced file's effective mtime through
+// the owning provider's Fingerprint. The boolean reports whether the provider
+// runtime produced a usable timestamp; a false result tells the caller to fall
+// back to the legacy mtime path.
+func (e *Engine) providerSourceMtime(
+	ctx context.Context, file parser.DiscoveredFile,
 ) (int64, bool, error) {
 	if file.ProviderSource == nil {
 		return 0, false, nil
@@ -3855,8 +3879,6 @@ func (e *Engine) processFile(
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
-	case parser.AgentPositron:
-		res = e.processPositron(file, info)
 	case parser.AgentZed:
 		res = e.processZed(file, info)
 	case parser.AgentShelley:
@@ -6093,35 +6115,6 @@ func vibeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
 }
 
-func (e *Engine) processPositron(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParsePositronSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 // aiderFileUnchanged reports whether a physical aider history file is
 // unchanged since the last sync. Aider sessions are stored under virtual
 // "<history>#<idx>" paths, so the generic shouldSkipByPath (which looks the
@@ -6289,6 +6282,8 @@ func (e *Engine) processAntigravityCLI(
 	if sess == nil {
 		return processResult{}
 	}
+	sess.File.Size = effectiveInfo.Size()
+	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
 
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {
