@@ -9,7 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParsePositronSession(t *testing.T) {
+func newPositronTestSourceSet(roots ...string) positronSourceSet {
+	return newPositronSourceSet(roots)
+}
+
+func TestPositronProviderParseSession(t *testing.T) {
 	// Create a minimal Positron session JSON
 	sessionJSON := `{
 		"version": 3,
@@ -60,10 +64,11 @@ func TestParsePositronSession(t *testing.T) {
 		sessionPath, []byte(sessionJSON), 0644,
 	))
 
-	sess, msgs, err := ParsePositronSession(
+	p := &positronProvider{}
+	sess, msgs, err := p.parseSession(
 		sessionPath, "test-project", "test-machine",
 	)
-	require.NoError(t, err, "ParsePositronSession failed")
+	require.NoError(t, err, "parseSession failed")
 	require.NotNil(t, sess, "expected session, got nil")
 
 	// Verify session metadata
@@ -86,7 +91,7 @@ func TestParsePositronSession(t *testing.T) {
 	assert.True(t, msgs[3].HasToolUse, "msgs[3] should have tool use")
 }
 
-func TestDiscoverPositronSessions(t *testing.T) {
+func TestPositronSourceSetDiscoverSessions(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create directory structure:
@@ -106,11 +111,13 @@ func TestDiscoverPositronSessions(t *testing.T) {
 		0644,
 	))
 
-	// Create session files
+	// Create session files. The .json file with a .jsonl sibling must be
+	// deduped so full discovery matches changed-path sync precedence.
 	sessionJSON := `{"version": 3, "requests": []}`
 	for _, name := range []string{
 		"session-1.json",
 		"session-2.jsonl",
+		"session-2.json",
 	} {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(chatDir, name),
@@ -126,16 +133,20 @@ func TestDiscoverPositronSessions(t *testing.T) {
 		0644,
 	))
 
-	files := DiscoverPositronSessions(tmpDir)
+	set := newPositronTestSourceSet(tmpDir)
+	files := set.discoverSessions(tmpDir)
 	require.Len(t, files, 2)
 
+	paths := make([]string, 0, len(files))
 	for _, f := range files {
+		paths = append(paths, filepath.Base(f.Path))
 		assert.Equal(t, AgentPositron, f.Agent)
 		assert.Equal(t, "myproject", f.Project)
 	}
+	assert.ElementsMatch(t, []string{"session-1.json", "session-2.jsonl"}, paths)
 }
 
-func TestFindPositronSourceFile(t *testing.T) {
+func TestPositronSourceSetFindSourceFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create directory structure
@@ -151,11 +162,13 @@ func TestFindPositronSourceFile(t *testing.T) {
 		sessionPath, []byte(`{}`), 0644,
 	))
 
+	set := newPositronTestSourceSet(tmpDir)
+
 	// Test finding existing session
-	found := FindPositronSourceFile(tmpDir, "test-uuid")
+	found := set.findSourceFile(tmpDir, "test-uuid")
 	assert.Equal(t, sessionPath, found)
 
 	// Test finding non-existent session
-	notFound := FindPositronSourceFile(tmpDir, "nonexistent")
+	notFound := set.findSourceFile(tmpDir, "nonexistent")
 	assert.Empty(t, notFound)
 }

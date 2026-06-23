@@ -474,11 +474,9 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{
 			"Library/Application Support/Positron/User",
 		},
-		IDPrefix:       "positron:",
-		WatchSubdirs:   []string{"workspaceStorage"},
-		FileBased:      true,
-		DiscoverFunc:   DiscoverPositronSessions,
-		FindSourceFunc: FindPositronSourceFile,
+		IDPrefix:     "positron:",
+		WatchSubdirs: []string{"workspaceStorage"},
+		FileBased:    true,
 	},
 	{
 		Type:           AgentZed,

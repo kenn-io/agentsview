@@ -999,7 +999,7 @@ func discoverVSCodeSessionFiles(
 			files = append(files, DiscoveredFile{
 				Path:    filepath.Join(dir, name),
 				Project: project,
-				Agent:   AgentVSCodeCopilot,
+				Agent:   agent,
 			})
 		} else if uuid, ok := strings.CutSuffix(name, ".json"); ok {
 			// Skip .json if a .jsonl exists for the same UUID
@@ -1009,7 +1009,7 @@ func discoverVSCodeSessionFiles(
 			files = append(files, DiscoveredFile{
 				Path:    filepath.Join(dir, name),
 				Project: project,
-				Agent:   AgentVSCodeCopilot,
+				Agent:   agent,
 			})
 		}
 	}
