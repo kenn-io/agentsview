@@ -151,8 +151,7 @@ func resolveWritableService(
 func resolvePGReadConfig(
 	cmd *cobra.Command, cfg config.Config,
 ) (config.PGConfig, bool, error) {
-	requested := pgReadRequested(cmd)
-	if !requested && cfg.PG.URL == "" {
+	if !pgReadRequested(cmd) {
 		return config.PGConfig{}, false, nil
 	}
 	pgCfg, err := cfg.ResolvePG()
