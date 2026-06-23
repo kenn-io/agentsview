@@ -182,6 +182,19 @@ func TestPGTargetFingerprint(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, base, samePasswordChanged)
 
+	baseWithFallback, err := pgTargetFingerprint(
+		"postgres://alice:secret@db.example.com:5432/agents?sslmode=require&application_name=agentsview&host=db.example.com,standby-a.example.com&port=5432,6432",
+		"agentsview",
+	)
+	assert.NoError(t, err)
+
+	sameFallbackNoiseChanged, err := pgTargetFingerprint(
+		"postgres://alice:new-secret@db.example.com:5432/agents?sslmode=require&application_name=other&host=DB.EXAMPLE.COM,standby-a.example.com&port=5432,6432",
+		"agentsview",
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, baseWithFallback, sameFallbackNoiseChanged)
+
 	cases := []struct {
 		name   string
 		dsn    string
@@ -207,13 +220,27 @@ func TestPGTargetFingerprint(t *testing.T) {
 			dsn:    "postgres://alice:secret@db.example.com:5432/agents?sslmode=require",
 			schema: "agentsview_alt",
 		},
+		{
+			name:   "fallback host change",
+			dsn:    "postgres://alice:secret@db.example.com:5432/agents?sslmode=require&host=db.example.com,standby-b.example.com&port=5432,6432",
+			schema: "agentsview",
+		},
+		{
+			name:   "fallback port change",
+			dsn:    "postgres://alice:secret@db.example.com:5432/agents?sslmode=require&host=db.example.com,standby-a.example.com&port=5432,7432",
+			schema: "agentsview",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := pgTargetFingerprint(tc.dsn, tc.schema)
 			assert.NoError(t, err)
-			assert.NotEqual(t, base, got)
+			wantDifferentFrom := base
+			if tc.name == "fallback host change" || tc.name == "fallback port change" {
+				wantDifferentFrom = baseWithFallback
+			}
+			assert.NotEqual(t, wantDifferentFrom, got)
 		})
 	}
 }

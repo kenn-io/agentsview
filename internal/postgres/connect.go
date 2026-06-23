@@ -208,18 +208,21 @@ func pgTargetFingerprint(dsn, schema string) (string, error) {
 		return "", fmt.Errorf("parsing pg connection string: %w", err)
 	}
 
-	host := cfg.Host
-	if host != "" && !strings.HasPrefix(host, "/") {
-		host = strings.ToLower(host)
-	}
-
 	fields := []string{
 		"v1",
-		host,
-		fmt.Sprintf("%d", cfg.Port),
 		cfg.Database,
 		cfg.User,
 		schema,
+	}
+	appendTargetEndpoint := func(host string, port uint16) {
+		if host != "" && !strings.HasPrefix(host, "/") {
+			host = strings.ToLower(host)
+		}
+		fields = append(fields, host, fmt.Sprintf("%d", port))
+	}
+	appendTargetEndpoint(cfg.Host, cfg.Port)
+	for _, fallback := range cfg.Fallbacks {
+		appendTargetEndpoint(fallback.Host, fallback.Port)
 	}
 	h := sha256.New()
 	for _, field := range fields {
