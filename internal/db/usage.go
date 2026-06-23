@@ -249,10 +249,11 @@ func (f UsageFilter) location() *time.Location {
 //
 // Note: this does NOT filter by s.relationship_type. Duplicate
 // messages across fork/subagent boundaries are handled by the
-// per-query claude_message_id + claude_request_id dedup in
-// GetDailyUsage, which is more precise than a blanket exclusion:
-// a fork session can legitimately contribute unique-keyed messages
-// that should still be counted (see
+// per-query usage dedup in GetDailyUsage, which prefers the
+// Claude message/request pair and falls back to persisted source
+// identity when the pair is incomplete. That is more precise than
+// a blanket exclusion: a fork session can legitimately contribute
+// unique-keyed messages that should still be counted (see
 // TestGetDailyUsage_DedupesByClaudeMessageAndRequestID).
 const usageMessageEligibility = `
     m.token_usage != ''
@@ -292,6 +293,7 @@ SELECT
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
+	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
 	s.agent,
@@ -325,6 +327,7 @@ SELECT
 	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	CASE
 		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
@@ -367,6 +370,7 @@ SELECT
 	NULL AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
+	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
 	s.agent
@@ -390,6 +394,7 @@ SELECT
 	ue.cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	CASE
 		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
@@ -415,6 +420,7 @@ SELECT
 	NULL AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
+	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
 	s.agent
@@ -437,6 +443,7 @@ SELECT
 	ue.cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	CASE
 		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
@@ -472,7 +479,8 @@ message_timestamp_rows AS MATERIALIZED (
 		m.model,
 		m.token_usage,
 		m.claude_message_id,
-		m.claude_request_id
+		m.claude_request_id,
+		m.source_uuid
 	FROM messages m
 	WHERE ` + messageTimestampWhere + `
 ),
@@ -541,6 +549,7 @@ type usageScanRow struct {
 	costSource               string
 	claudeMessageID          string
 	claudeRequestID          string
+	sourceUUID               string
 	usageDedupKey            string
 	project                  string
 	agent                    string
@@ -567,6 +576,7 @@ type dailyUsageScanRow struct {
 	costUSD                  sql.NullFloat64
 	claudeMessageID          string
 	claudeRequestID          string
+	sourceUUID               string
 	usageDedupKey            string
 	project                  string
 	agent                    string
@@ -598,6 +608,7 @@ SELECT
 	u.cost_source,
 	u.claude_message_id,
 	u.claude_request_id,
+	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
 	u.agent,
@@ -635,6 +646,7 @@ SELECT
 	u.cost_usd,
 	u.claude_message_id,
 	u.claude_request_id,
+	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
 	u.agent
@@ -789,6 +801,7 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.costSource,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
+		&r.sourceUUID,
 		&r.usageDedupKey,
 		&r.project,
 		&r.agent,
@@ -819,6 +832,7 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 		&r.costUSD,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
+		&r.sourceUUID,
 		&r.usageDedupKey,
 		&r.project,
 		&r.agent,
@@ -860,6 +874,35 @@ func dailyUsageAmounts(
 		(rates.input - rates.cacheCreation) / 1_000_000
 	savings = readDelta + crDelta
 	return
+}
+
+type usageDedupToken struct {
+	kind  string
+	value string
+}
+
+func usageDedupTokenForRow(
+	usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string,
+) (usageDedupToken, bool) {
+	if claudeMessageID != "" && claudeRequestID != "" {
+		return usageDedupToken{
+			kind:  "claude",
+			value: claudeMessageID + ":" + claudeRequestID,
+		}, true
+	}
+	if usageSource == "message" && agent != "" && sourceUUID != "" {
+		return usageDedupToken{
+			kind:  "source",
+			value: agent + ":" + sourceUUID,
+		}, true
+	}
+	if usageDedupKey != "" {
+		return usageDedupToken{
+			kind:  "usage",
+			value: usageDedupKey,
+		}, true
+	}
+	return usageDedupToken{}, false
 }
 
 func (db *DB) loadTopSessionMetadata(
@@ -1097,10 +1140,7 @@ func (db *DB) GetDailyUsage(
 
 	accum := make(map[accumKey]*bucket)
 
-	type dedupKey struct {
-		msgID, reqID string
-	}
-	seen := make(map[dedupKey]struct{})
+	seen := make(map[usageDedupToken]struct{})
 	seenSessions := make(map[string]UsageSessionInfo)
 
 	// totalSavings is the running sum of per-message cache
@@ -1128,17 +1168,10 @@ func (db *DB) GetDailyUsage(
 		// Dedup AFTER the date filter so out-of-range rows
 		// (pulled in by the ±14h timezone padding) don't mark
 		// a key as seen and suppress the in-range duplicate.
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{
-				msgID: r.claudeMessageID,
-				reqID: r.claudeRequestID,
-			}
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{msgID: "usage", reqID: r.usageDedupKey}
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := seen[key]; dup {
 				continue
 			}
@@ -1544,13 +1577,10 @@ func (db *DB) GetTopSessionsByCost(
 	// Track insertion order for stable iteration.
 	var order []string
 
-	// Dedup duplicate Claude messages across fork/subagent
+	// Dedup duplicate usage rows across fork/subagent
 	// boundaries so per-session totals match the aggregate
 	// totals from GetDailyUsage. Same key and ordering rules.
-	type dedupKey struct {
-		msgID, reqID string
-	}
-	seen := make(map[dedupKey]struct{})
+	seen := make(map[usageDedupToken]struct{})
 
 	for rows.Next() {
 		r, err := scanDailyUsageRow(rows)
@@ -1571,17 +1601,10 @@ func (db *DB) GetTopSessionsByCost(
 		// Dedup AFTER the date filter, matching GetDailyUsage,
 		// so out-of-range rows pulled in by the ±14h padding
 		// don't claim a key and suppress the in-range duplicate.
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{
-				msgID: r.claudeMessageID,
-				reqID: r.claudeRequestID,
-			}
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{msgID: "usage", reqID: r.usageDedupKey}
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := seen[key]; dup {
 				continue
 			}
@@ -1748,22 +1771,17 @@ func (db *DB) GetSessionUsage(
 	modelsSet := make(map[string]struct{})
 	unpricedSet := make(map[string]struct{})
 
-	type dedupKey struct{ msgID, reqID string }
-	seen := make(map[dedupKey]struct{})
+	seen := make(map[usageDedupToken]struct{})
 
 	for rows.Next() {
 		r, scanErr := scanUsageRow(rows)
 		if scanErr != nil {
 			return nil, fmt.Errorf("scanning session usage row: %w", scanErr)
 		}
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{r.claudeMessageID, r.claudeRequestID}
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{"usage", r.usageDedupKey}
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := seen[key]; dup {
 				continue
 			}
@@ -1885,17 +1903,12 @@ func (db *DB) GetUsageSessionCounts(
 	}
 	seen := make(map[string]sessInfo)
 
-	// Claude message dedup mirrors GetDailyUsage: if a session
-	// only qualifies because of messages that are duplicates of
-	// an earlier session's rows (fork/subagent replays), that
-	// session should NOT be counted. Otherwise sessionCounts
-	// would disagree with the deduped token totals — a fork
-	// with zero unique messages would inflate the count even
-	// though it contributes zero cost.
-	type dedupKey struct {
-		msgID, reqID string
-	}
-	dedup := make(map[dedupKey]struct{})
+	// Usage dedup mirrors GetDailyUsage: if a session only
+	// qualifies because of rows that duplicate an earlier
+	// session's usage (fork/subagent replays), that session
+	// should NOT be counted. Otherwise sessionCounts would
+	// disagree with the deduped token totals.
+	dedup := make(map[usageDedupToken]struct{})
 
 	for rows.Next() {
 		r, err := scanDailyUsageRow(rows)
@@ -1915,17 +1928,10 @@ func (db *DB) GetUsageSessionCounts(
 
 		// Dedup AFTER the date filter, matching the other two
 		// queries so ±14h padding rows don't claim keys.
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{
-				msgID: r.claudeMessageID,
-				reqID: r.claudeRequestID,
-			}
-			if _, dup := dedup[key]; dup {
-				continue
-			}
-			dedup[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{msgID: "usage", reqID: r.usageDedupKey}
+		if key, ok := usageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := dedup[key]; dup {
 				continue
 			}

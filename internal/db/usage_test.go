@@ -703,6 +703,65 @@ func TestGetDailyUsage_DedupesByClaudeMessageAndRequestID(t *testing.T) {
 	assert.Equal(t, 55000, day.CacheReadTokens, "cache_rd")
 }
 
+func TestGetDailyUsage_DedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	d := testDB(t)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "claude-opus-4-6",
+		InputPerMTok:         15.0,
+		OutputPerMTok:        75.0,
+		CacheCreationPerMTok: 18.75,
+		CacheReadPerMTok:     1.50,
+	}}), "seed pricing")
+
+	insertSession(t, d, "s-main", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-04-10T10:00:00Z")
+		s.EndedAt = new("2026-04-10T10:05:00Z")
+	})
+	insertSession(t, d, "s-fork", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-04-10T10:01:00Z")
+		s.EndedAt = new("2026-04-10T10:06:00Z")
+		s.ParentSessionID = new("s-main")
+		s.RelationshipType = "fork"
+	})
+
+	shared := json.RawMessage(`{"input_tokens":100,"output_tokens":500,"cache_creation_input_tokens":1000,"cache_read_input_tokens":50000}`)
+	unique := json.RawMessage(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`)
+
+	insertMessages(t, d,
+		Message{
+			SessionID: "s-main", Ordinal: 0,
+			Role: "assistant", Timestamp: "2026-04-10T10:02:00Z",
+			Model: "claude-opus-4-6", TokenUsage: shared,
+			ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
+		},
+		Message{
+			SessionID: "s-fork", Ordinal: 0,
+			Role: "assistant", Timestamp: "2026-04-10T10:02:00Z",
+			Model: "claude-opus-4-6", TokenUsage: shared,
+			ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
+		},
+		Message{
+			SessionID: "s-fork", Ordinal: 1,
+			Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
+			Model: "claude-opus-4-6", TokenUsage: unique,
+			ClaudeMessageID: "msg_uniq", SourceUUID: "source_uniq",
+		},
+	)
+
+	result, err := d.GetDailyUsage(context.Background(), UsageFilter{
+		From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	require.Len(t, result.Daily, 1, "daily entries =")
+	day := result.Daily[0]
+	assert.Equal(t, 120, day.InputTokens, "input")
+	assert.Equal(t, 580, day.OutputTokens, "output")
+	assert.Equal(t, 1200, day.CacheCreationTokens, "cache_cr")
+	assert.Equal(t, 55000, day.CacheReadTokens, "cache_rd")
+}
+
 func TestGetDailyUsage_MissingDedupKeysCountedEveryTime(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
@@ -1374,6 +1433,79 @@ func TestGetTopSessionsByCost_DedupesByClaudeMessageAndRequestID(
 	assert.Equal(t, 4730, total, "sum of per-session totals")
 }
 
+func TestGetTopSessionsByCost_DedupesBySourceUUIDWhenClaudePairIncomplete(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "claude-sonnet",
+		InputPerMTok:         3.0,
+		OutputPerMTok:        15.0,
+		CacheCreationPerMTok: 3.75,
+		CacheReadPerMTok:     0.30,
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "s-parent", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertSession(t, d, "s-fork", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T10:01:00Z")
+		s.ParentSessionID = new("s-parent")
+		s.RelationshipType = "fork"
+	})
+
+	shared := json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":500,` +
+			`"cache_creation_input_tokens":200,` +
+			`"cache_read_input_tokens":3000}`)
+	unique := json.RawMessage(
+		`{"input_tokens":10,"output_tokens":20,` +
+			`"cache_creation_input_tokens":0,` +
+			`"cache_read_input_tokens":0}`)
+
+	insertMessages(t, d, Message{
+		SessionID: "s-parent", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:02:00Z",
+		Model: "claude-sonnet", TokenUsage: shared,
+		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
+	})
+	insertMessages(t, d, Message{
+		SessionID: "s-fork", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:03:00Z",
+		Model: "claude-sonnet", TokenUsage: shared,
+		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
+	})
+	insertMessages(t, d, Message{
+		SessionID: "s-fork", Ordinal: 1,
+		Role: "assistant", Timestamp: "2024-06-15T10:04:00Z",
+		Model: "claude-sonnet", TokenUsage: unique,
+		ClaudeMessageID: "msg_uniq", SourceUUID: "source_uniq",
+	})
+
+	top, err := d.GetTopSessionsByCost(ctx, UsageFilter{
+		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+	}, 20)
+	requireNoError(t, err, "GetTopSessionsByCost")
+
+	require.Len(t, top, 2, "len")
+	byID := map[string]TopSessionEntry{}
+	for _, e := range top {
+		byID[e.SessionID] = e
+	}
+
+	parent, ok := byID["s-parent"]
+	require.True(t, ok, "s-parent missing from top sessions")
+	assert.Equal(t, 4700, parent.TotalTokens, "parent.TotalTokens")
+
+	fork, ok := byID["s-fork"]
+	require.True(t, ok, "s-fork missing from top sessions")
+	assert.Equal(t, 30, fork.TotalTokens, "fork.TotalTokens want 30")
+}
+
 func TestGetTopSessionsByCostLimit(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -1552,6 +1684,48 @@ func TestGetUsageSessionCounts_DedupesByClaudeMessageAndRequestID(
 
 	assert.Equal(t, 1, counts.Total,
 		"Total want 1 (fork should dedup out)")
+	assert.Equal(t, 1, counts.ByProject["proj"], "ByProject[proj]")
+	assert.Equal(t, 1, counts.ByAgent["claude"], "ByAgent[claude]")
+}
+
+func TestGetUsageSessionCounts_DedupesBySourceUUIDWhenClaudePairIncomplete(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s-parent", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertSession(t, d, "s-fork", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T10:01:00Z")
+		s.ParentSessionID = new("s-parent")
+		s.RelationshipType = "fork"
+	})
+
+	shared := json.RawMessage(`{"input_tokens":100,"output_tokens":50}`)
+
+	insertMessages(t, d, Message{
+		SessionID: "s-parent", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:02:00Z",
+		Model: "claude-sonnet", TokenUsage: shared,
+		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
+	})
+	insertMessages(t, d, Message{
+		SessionID: "s-fork", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:03:00Z",
+		Model: "claude-sonnet", TokenUsage: shared,
+		ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
+	})
+
+	counts, err := d.GetUsageSessionCounts(ctx, UsageFilter{
+		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+	})
+	requireNoError(t, err, "GetUsageSessionCounts")
+
+	assert.Equal(t, 1, counts.Total, "Total want 1 (fork should dedup out)")
 	assert.Equal(t, 1, counts.ByProject["proj"], "ByProject[proj]")
 	assert.Equal(t, 1, counts.ByAgent["claude"], "ByAgent[claude]")
 }
@@ -2408,6 +2582,34 @@ func TestGetSessionUsage_DedupesDuplicateClaudeRows(t *testing.T) {
 	u, err := d.GetSessionUsage(ctx, "claude:s6")
 	requireNoError(t, err, "GetSessionUsage")
 	// One row priced at 1000*5/1e6 + 500*25/1e6 = 0.0175; deduped, not 0.035.
+	assert.InDelta(t, 0.0175, u.CostUSD, 1e-9, "CostUSD want 0.0175 (deduped)")
+	assert.True(t, u.HasCost, "HasCost = false, want true")
+}
+
+func TestGetSessionUsage_DedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedOpusPricing(t, d)
+	insertSession(t, d, "claude:s7", "proj", func(s *Session) {
+		s.Agent = "claude-code"
+		s.StartedAt = new("2026-05-20T10:00:00Z")
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "claude:s7", Ordinal: 0, Role: "assistant",
+			Timestamp: "2026-05-20T10:30:00Z", Model: "claude-opus-4-6",
+			ClaudeMessageID: "msg-1", SourceUUID: "source-1",
+			TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		},
+		Message{
+			SessionID: "claude:s7", Ordinal: 1, Role: "assistant",
+			Timestamp: "2026-05-20T10:31:00Z", Model: "claude-opus-4-6",
+			ClaudeMessageID: "msg-1", SourceUUID: "source-1",
+			TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+		},
+	)
+	u, err := d.GetSessionUsage(ctx, "claude:s7")
+	requireNoError(t, err, "GetSessionUsage")
 	assert.InDelta(t, 0.0175, u.CostUSD, 1e-9, "CostUSD want 0.0175 (deduped)")
 	assert.True(t, u.HasCost, "HasCost = false, want true")
 }

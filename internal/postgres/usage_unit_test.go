@@ -130,6 +130,7 @@ func (c *usageProbeConn) QueryContext(
 				"cost_usd",
 				"claude_message_id",
 				"claude_request_id",
+				"source_uuid",
 				"usage_dedup_key",
 				"project",
 				"agent",
@@ -160,6 +161,7 @@ func usageProbeUsageRow(
 		nil,
 		"msg-dup",
 		"req-dup",
+		"",
 		"",
 		project,
 		agent,
@@ -195,6 +197,22 @@ func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
 	assert.Equal(t, 1, result.SessionCounts.ByAgent["claude"])
 	assert.Zero(t, result.SessionCounts.ByProject["proj-b"])
 	assert.Zero(t, result.SessionCounts.ByAgent["codex"])
+}
+
+func TestPGUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	got, ok := pgUsageDedupTokenForRow(
+		"message",
+		"claude-code",
+		"msg-dup",
+		"",
+		"source-dup",
+		"",
+	)
+	require.True(t, ok, "expected source_uuid fallback key")
+	assert.Equal(t, pgUsageDedupToken{
+		kind:  "source",
+		value: "claude-code:source-dup",
+	}, got)
 }
 
 func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {

@@ -212,6 +212,7 @@ SELECT
 	'' AS cost_source,
 	m.claude_message_id,
 	m.claude_request_id,
+	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
 	s.agent,
@@ -244,6 +245,7 @@ SELECT
 	ue.cost_source,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	CASE
 		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
@@ -285,6 +287,7 @@ SELECT
 	NULL::double precision AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
+	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
 	s.agent
@@ -308,6 +311,7 @@ SELECT
 	ue.cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	CASE
 		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
@@ -333,6 +337,7 @@ SELECT
 	NULL::double precision AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
+	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
 	s.agent
@@ -355,6 +360,7 @@ SELECT
 	ue.cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	CASE
 		WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
@@ -390,7 +396,8 @@ message_timestamp_rows AS MATERIALIZED (
 		m.model,
 		m.token_usage,
 		m.claude_message_id,
-		m.claude_request_id
+		m.claude_request_id,
+		m.source_uuid
 	FROM messages m
 	WHERE ` + messageTimestampWhere + `
 ),
@@ -459,6 +466,7 @@ type pgUsageScanRow struct {
 	costSource               string
 	claudeMessageID          string
 	claudeRequestID          string
+	sourceUUID               string
 	usageDedupKey            string
 	project                  string
 	agent                    string
@@ -484,6 +492,7 @@ type pgDailyUsageScanRow struct {
 	costUSD                  sql.NullFloat64
 	claudeMessageID          string
 	claudeRequestID          string
+	sourceUUID               string
 	usageDedupKey            string
 	project                  string
 	agent                    string
@@ -515,6 +524,7 @@ SELECT
 	u.cost_source,
 	u.claude_message_id,
 	u.claude_request_id,
+	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
 	u.agent,
@@ -551,6 +561,7 @@ SELECT
 	u.cost_usd,
 	u.claude_message_id,
 	u.claude_request_id,
+	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
 	u.agent
@@ -677,6 +688,7 @@ func scanPGUsageRow(rows *sql.Rows) (pgUsageScanRow, error) {
 		&r.costSource,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
+		&r.sourceUUID,
 		&r.usageDedupKey,
 		&r.project,
 		&r.agent,
@@ -706,6 +718,7 @@ func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
 		&r.costUSD,
 		&r.claudeMessageID,
 		&r.claudeRequestID,
+		&r.sourceUUID,
 		&r.usageDedupKey,
 		&r.project,
 		&r.agent,
@@ -744,6 +757,35 @@ func pgDailyUsageAmounts(
 		(rates.input - rates.cacheCreation) / 1_000_000
 	savings = readDelta + createDelta
 	return
+}
+
+type pgUsageDedupToken struct {
+	kind  string
+	value string
+}
+
+func pgUsageDedupTokenForRow(
+	usageSource, agent, claudeMessageID, claudeRequestID, sourceUUID, usageDedupKey string,
+) (pgUsageDedupToken, bool) {
+	if claudeMessageID != "" && claudeRequestID != "" {
+		return pgUsageDedupToken{
+			kind:  "claude",
+			value: claudeMessageID + ":" + claudeRequestID,
+		}, true
+	}
+	if usageSource == "message" && agent != "" && sourceUUID != "" {
+		return pgUsageDedupToken{
+			kind:  "source",
+			value: agent + ":" + sourceUUID,
+		}, true
+	}
+	if usageDedupKey != "" {
+		return pgUsageDedupToken{
+			kind:  "usage",
+			value: usageDedupKey,
+		}, true
+	}
+	return pgUsageDedupToken{}, false
 }
 
 func pgSessionRowCost(
@@ -880,11 +922,7 @@ func (s *Store) GetSessionUsage(
 	modelsSet := make(map[string]struct{})
 	unpricedSet := make(map[string]struct{})
 
-	type dedupKey struct {
-		msgID string
-		reqID string
-	}
-	seen := make(map[dedupKey]struct{})
+	seen := make(map[pgUsageDedupToken]struct{})
 
 	for rows.Next() {
 		r, scanErr := scanPGUsageRow(rows)
@@ -892,20 +930,10 @@ func (s *Store) GetSessionUsage(
 			return nil,
 				fmt.Errorf("scanning pg session usage row: %w", scanErr)
 		}
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{
-				msgID: r.claudeMessageID,
-				reqID: r.claudeRequestID,
-			}
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{
-				msgID: "usage",
-				reqID: r.usageDedupKey,
-			}
+		if key, ok := pgUsageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := seen[key]; dup {
 				continue
 			}
@@ -999,13 +1027,8 @@ func (s *Store) GetDailyUsage(
 		cacheRd   int
 		cost      float64
 	}
-	type dedupKey struct {
-		msgID string
-		reqID string
-	}
-
 	accum := make(map[accumKey]*bucket)
-	seen := make(map[dedupKey]struct{})
+	seen := make(map[pgUsageDedupToken]struct{})
 	seenSessions := make(map[string]db.UsageSessionInfo)
 	var totalSavings float64
 
@@ -1024,14 +1047,10 @@ func (s *Store) GetDailyUsage(
 			continue
 		}
 
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{msgID: r.claudeMessageID, reqID: r.claudeRequestID}
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{msgID: "usage", reqID: r.usageDedupKey}
+		if key, ok := pgUsageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := seen[key]; dup {
 				continue
 			}
@@ -1384,14 +1403,10 @@ func (s *Store) GetTopSessionsByCost(
 		totalTokens int
 		cost        float64
 	}
-	type dedupKey struct {
-		msgID string
-		reqID string
-	}
 
 	accum := make(map[string]*sessAccum)
 	var order []string
-	seen := make(map[dedupKey]struct{})
+	seen := make(map[pgUsageDedupToken]struct{})
 
 	for rows.Next() {
 		r, err := scanPGDailyUsageRow(rows)
@@ -1408,14 +1423,10 @@ func (s *Store) GetTopSessionsByCost(
 			continue
 		}
 
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{msgID: r.claudeMessageID, reqID: r.claudeRequestID}
-			if _, dup := seen[key]; dup {
-				continue
-			}
-			seen[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{msgID: "usage", reqID: r.usageDedupKey}
+		if key, ok := pgUsageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := seen[key]; dup {
 				continue
 			}
@@ -1503,13 +1514,9 @@ func (s *Store) GetUsageSessionCounts(
 		project string
 		agent   string
 	}
-	type dedupKey struct {
-		msgID string
-		reqID string
-	}
 
 	seen := make(map[string]sessInfo)
-	dedup := make(map[dedupKey]struct{})
+	dedup := make(map[pgUsageDedupToken]struct{})
 
 	for rows.Next() {
 		r, err := scanPGDailyUsageRow(rows)
@@ -1526,14 +1533,10 @@ func (s *Store) GetUsageSessionCounts(
 			continue
 		}
 
-		if r.claudeMessageID != "" && r.claudeRequestID != "" {
-			key := dedupKey{msgID: r.claudeMessageID, reqID: r.claudeRequestID}
-			if _, dup := dedup[key]; dup {
-				continue
-			}
-			dedup[key] = struct{}{}
-		} else if r.usageDedupKey != "" {
-			key := dedupKey{msgID: "usage", reqID: r.usageDedupKey}
+		if key, ok := pgUsageDedupTokenForRow(
+			r.usageSource, r.agent, r.claudeMessageID,
+			r.claudeRequestID, r.sourceUUID, r.usageDedupKey,
+		); ok {
 			if _, dup := dedup[key]; dup {
 				continue
 			}

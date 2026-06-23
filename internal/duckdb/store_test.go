@@ -1697,6 +1697,68 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
 }
 
+func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-test",
+		InputPerMTok:  3,
+		OutputPerMTok: 15,
+	}}))
+
+	first := syncMessage("duck-usage-source-a", 0, "assistant", "shared usage", "2026-01-13T00:00:00.000Z")
+	first.ClaudeMessageID = "shared-message"
+	first.SourceUUID = "shared-source"
+	second := syncMessage("duck-usage-source-b", 0, "assistant", "replayed usage", "2026-01-13T00:01:00.000Z")
+	second.ClaudeMessageID = "shared-message"
+	second.SourceUUID = "shared-source"
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         syncSession("duck-usage-source-a", "alpha", "usage a", "2026-01-13T00:00:00.000Z", 1),
+			Messages:        []db.Message{first},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         syncSession("duck-usage-source-b", "beta", "usage b", "2026-01-13T00:01:00.000Z", 1),
+			Messages:        []db.Message{second},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "usage-source.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31"}
+
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, daily.Totals.InputTokens)
+	assert.Equal(t, 2, daily.Totals.OutputTokens)
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "duck-usage-source-a", top[0].SessionID)
+
+	counts, err := store.GetUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, counts.Total)
+	assert.Equal(t, 1, counts.ByProject["alpha"])
+	assert.NotContains(t, counts.ByProject, "beta")
+
+	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-source-b")
+	require.NoError(t, err)
+	require.NotNil(t, sessionUsage)
+	assert.True(t, sessionUsage.HasCost)
+	assert.InDelta(t, 0.000033, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
+}
+
 func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

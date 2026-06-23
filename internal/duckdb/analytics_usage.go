@@ -2204,6 +2204,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			m.model AS model, m.token_usage AS token_json,
 			m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
+			m.source_uuid AS source_uuid,
 			'' AS usage_dedup_key,
 			0 AS input_tokens, 0 AS output_tokens,
 			0 AS cache_create, 0 AS cache_read, NULL AS cost_usd,
@@ -2220,6 +2221,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
 			ue.model AS model, '' AS token_json,
 			'' AS claude_message_id, '' AS claude_request_id,
+			'' AS source_uuid,
 			CASE
 				WHEN ue.dedup_key != '' THEN ue.session_id || ':' || ue.source || ':' || ue.dedup_key
 				ELSE ue.session_id || ':' || ue.source || ':id:' || CAST(ue.id AS VARCHAR)
@@ -2299,6 +2301,8 @@ func duckUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 				CASE
 					WHEN claude_message_id != '' AND claude_request_id != ''
 						THEN 'claude:' || claude_message_id || ':' || claude_request_id
+					WHEN source = 'message' AND agent != '' AND source_uuid != ''
+						THEN 'source:' || agent || ':' || source_uuid
 					WHEN usage_dedup_key != ''
 						THEN 'usage:' || usage_dedup_key
 					ELSE 'row:' || session_id || ':' || source || ':' ||
