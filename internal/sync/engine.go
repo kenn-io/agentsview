@@ -3968,8 +3968,6 @@ func (e *Engine) processFile(
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
-	case parser.AgentHermes:
-		res = e.processHermes(file, info)
 	case parser.AgentPositron:
 		res = e.processPositron(file, info)
 	case parser.AgentZed:
@@ -5908,45 +5906,6 @@ func (e *Engine) processKiroIDE(
 
 	sess, msgs, err := parser.ParseKiroIDESession(
 		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processHermes(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	if filepath.Base(file.Path) == "state.db" {
-		results, err := parser.ParseHermesArchive(
-			file.Path, file.Project, e.machine,
-		)
-		if err != nil {
-			return processResult{err: err}
-		}
-		return processResult{results: results, forceReplace: true}
-	}
-
-	sess, msgs, err := parser.ParseHermesSession(
-		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
 		return processResult{err: err}
@@ -8443,23 +8402,6 @@ func (e *Engine) SyncSingleSessionContext(
 		}
 		return err
 	}
-	if def.Type == parser.AgentHermes {
-		hermesProject := ""
-		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
-			sess.Project != "" && !parser.NeedsProjectReparse(sess.Project) {
-			hermesProject = sess.Project
-		}
-		ok, err := e.syncSingleHermesArchive(
-			sessionID, path, hermesProject,
-		)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
-	}
-
 	agent := def.Type
 
 	// Clear skip cache so explicit re-sync always processes
@@ -8646,52 +8588,6 @@ func (e *Engine) SyncSingleSessionContext(
 	}
 
 	return nil
-}
-
-func (e *Engine) syncSingleHermesArchive(
-	sessionID, path, project string,
-) (bool, error) {
-	stateDB := ""
-	if filepath.Base(path) == "state.db" {
-		stateDB = path
-	} else if filepath.Base(filepath.Dir(path)) == "sessions" {
-		candidate := filepath.Join(
-			filepath.Dir(filepath.Dir(path)), "state.db",
-		)
-		if parser.IsRegularFile(candidate) {
-			stateDB = candidate
-		}
-	}
-	if stateDB == "" {
-		return false, nil
-	}
-
-	results, err := parser.ParseHermesArchive(
-		stateDB, project, e.machine,
-	)
-	if err != nil {
-		return true, err
-	}
-	for _, pr := range results {
-		if pr.Session.ID != sessionID {
-			continue
-		}
-		if err := e.writeSessionFull(pendingWrite{
-			sess:        pr.Session,
-			msgs:        pr.Messages,
-			usageEvents: pr.UsageEvents,
-		}); err != nil && !isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
-			return true, fmt.Errorf(
-				"write session %s: %w", pr.Session.ID, err,
-			)
-		}
-		return true, nil
-	}
-	return true, fmt.Errorf(
-		"session %s not found in Hermes archive %s",
-		sessionID, stateDB,
-	)
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(
