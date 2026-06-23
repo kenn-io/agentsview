@@ -85,7 +85,7 @@ func TestClassifierRebuildClearsSQLiteHash(t *testing.T) {
 		"precondition: expected stored hash, got empty")
 
 	require.NoError(t, runClassifierRebuild(
-		context.Background(), cfg, &bytes.Buffer{},
+		context.Background(), cfg, &bytes.Buffer{}, false,
 	), "rebuild")
 
 	assert.Empty(t, readStoredHash(t, cfg.DBPath),
@@ -106,7 +106,7 @@ func TestClassifierRebuildPrintsLoadedPrefixes(t *testing.T) {
 
 	out := &bytes.Buffer{}
 	require.NoError(t, runClassifierRebuild(
-		context.Background(), cfg, out,
+		context.Background(), cfg, out, false,
 	), "rebuild")
 	got := out.String()
 	for _, p := range prefixes {
@@ -144,11 +144,29 @@ func TestClassifierRebuildAllowsDirectWritable(t *testing.T) {
 	assert.NoError(t, guardClassifierRebuild(tr))
 }
 
-// TestClassifierRebuildHardFailsOnPGUnreachable confirms
-// that when PG is configured (pg.url non-empty) and the
-// connection fails, runClassifierRebuild returns an error
-// instead of silently skipping the PG delete.
-func TestClassifierRebuildHardFailsOnPGUnreachable(t *testing.T) {
+// TestClassifierRebuildSkipsConfiguredPGByDefault confirms that
+// configured sync PG is not touched by the local recovery command
+// unless the caller explicitly opts in.
+func TestClassifierRebuildSkipsConfiguredPGByDefault(t *testing.T) {
+	dir := classifierTestEnv(t, nil)
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err, "load")
+	cfg.DBPath = filepath.Join(dir, "sessions.db")
+	cfg.PG.URL = "postgres://nobody:nobody@127.0.0.1:1/nonexistent?sslmode=disable&connect_timeout=2"
+	cfg.PG.AllowInsecure = true
+	applyClassifierConfig(cfg)
+	seedHash(t, cfg)
+
+	require.NoError(t, runClassifierRebuild(
+		context.Background(), cfg, &bytes.Buffer{}, false,
+	), "configured PG must be ignored unless --pg is requested")
+}
+
+// TestClassifierRebuildPGFlagHardFailsOnPGUnreachable confirms
+// that when PG cleanup is explicitly requested and the connection
+// fails, runClassifierRebuild returns an error instead of silently
+// skipping the PG delete.
+func TestClassifierRebuildPGFlagHardFailsOnPGUnreachable(t *testing.T) {
 	dir := classifierTestEnv(t, nil)
 	cfg, err := config.LoadMinimal()
 	require.NoError(t, err, "load")
@@ -162,7 +180,7 @@ func TestClassifierRebuildHardFailsOnPGUnreachable(t *testing.T) {
 	seedHash(t, cfg)
 
 	err = runClassifierRebuild(
-		context.Background(), cfg, &bytes.Buffer{},
+		context.Background(), cfg, &bytes.Buffer{}, true,
 	)
 	require.Error(t, err, "expected error for unreachable PG")
 	assert.True(t,
@@ -190,7 +208,7 @@ func TestClassifierRebuildSkipsPGWhenNotConfigured(t *testing.T) {
 	seedHash(t, cfg)
 
 	require.NoError(t, runClassifierRebuild(
-		context.Background(), cfg, &bytes.Buffer{},
+		context.Background(), cfg, &bytes.Buffer{}, false,
 	), "unexpected error when PG unconfigured")
 }
 

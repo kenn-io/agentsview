@@ -1250,7 +1250,7 @@ func TestSessionUsage_PGFlagUsesPGStore(t *testing.T) {
 	assert.False(t, out.ServerRunning)
 }
 
-func TestSessionUsage_PGEnvResolvesBareSessionID(t *testing.T) {
+func TestSessionUsage_PGFlagResolvesBareSessionID(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
@@ -1294,7 +1294,7 @@ func TestSessionUsage_PGEnvResolvesBareSessionID(t *testing.T) {
 	assert.Equal(t, 42, out.TotalOutputTokens)
 }
 
-func TestSessionUsage_PGEnvResolvesColonBearingRawSessionID(t *testing.T) {
+func TestSessionUsage_PGFlagResolvesColonBearingRawSessionID(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")

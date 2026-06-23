@@ -654,11 +654,11 @@ target an explicit running daemon, `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>` when that daemon requires auth, or
 `--pg` to read from configured PostgreSQL.
 
-When `AGENTSVIEW_PG_URL` or `[pg].url` is configured, read commands
-use PostgreSQL by default. Pass `--pg` to require PostgreSQL and
-fail fast if no connection URL is available. Mutating commands such
-as `session sync` and local-only raw source export continue to use
-the local archive.
+`AGENTSVIEW_PG_URL` and `[pg].url` are sync configuration only; they
+do not change the default read path. Read commands use local SQLite
+unless `--pg` is supplied, in which case they fail fast if no
+connection URL is available. Mutating commands such as `session sync`
+and local-only raw source export continue to use the local archive.
 
 Use [`agentsview health`](#agentsview-health) for a human-first
 signal view and [Session API](/session-api/) for the full

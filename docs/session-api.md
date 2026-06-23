@@ -81,9 +81,8 @@ the token does not appear in process arguments.
 `--pg` opens the configured PostgreSQL read store directly. It is
 useful for automation running away from the UI server, but it is
 read-only: `session sync` and `session export` reject it. If
-`AGENTSVIEW_PG_URL` or `[pg].url` is configured, read commands use
-PostgreSQL by default; pass local SQLite commands from an environment
-without that setting when you need the local archive specifically.
+`AGENTSVIEW_PG_URL` or `[pg].url` is configured, read commands still
+use local SQLite unless `--pg` is supplied.
 
 ## Common flags
 
@@ -544,8 +543,7 @@ The command uses the local SQLite archive plus an on-demand
 sync when no daemon is running (with a 30-second wait if a
 startup lock is held). With `--server`, it calls
 `GET /api/v1/sessions/{id}/usage` on the explicit daemon. With
-`--pg` or configured PostgreSQL, it reads usage from the shared
-PostgreSQL store.
+`--pg`, it reads usage from the shared PostgreSQL store.
 
 Pricing comes from the same `model_pricing` table and
 [custom pricing overrides](/token-usage/#custom-model-pricing)
