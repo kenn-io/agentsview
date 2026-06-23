@@ -270,7 +270,7 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             libappindicator3-dev librsvg2-dev \
-            patchelf xdg-utils
+            patchelf squashfs-tools xdg-utils
 
       - name: Install desktop dependencies
         run: npm ci
@@ -308,6 +308,8 @@ jobs:
             build_cmd+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
           fi
           "${build_cmd[@]}"
+          bash scripts/repair-appimage-diricon.sh \
+            "../${{ matrix.artifact_dir }}"/*.AppImage
         working-directory: desktop
 
       - name: Collect build artifacts

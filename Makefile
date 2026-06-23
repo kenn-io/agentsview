@@ -204,6 +204,8 @@ desktop-windows-installer:
 desktop-linux-appimage:
 	cd desktop && npm ci && npm run tauri:build:linux \
 		$(if $(TAURI_SIGNING_PRIVATE_KEY),,-- --config '{"bundle":{"createUpdaterArtifacts":false}}')
+	cd desktop && bash scripts/repair-appimage-diricon.sh \
+		src-tauri/target/release/bundle/appimage/*.AppImage
 	mkdir -p $(DESKTOP_DIST_DIR)/linux
 	rm -f $(DESKTOP_DIST_DIR)/linux/*.AppImage
 	@ai_count=$$(find desktop/src-tauri/target/release/bundle/appimage \

@@ -163,6 +163,51 @@ func assertSnapshotRestoreStep(t *testing.T, step githubWorkflowStep) {
 	assert.Equal(t, "go run ./internal/pricing/cmd/litellm-snapshot -restore", step.Run)
 }
 
+func TestDesktopLinuxWorkflowsRepairAppImageDirIcon(t *testing.T) {
+	cases := []struct {
+		name      string
+		path      string
+		job       string
+		depsStep  string
+		buildStep string
+	}{
+		{
+			name:      "artifacts",
+			path:      ".github/workflows/desktop-artifacts.yml",
+			job:       "build",
+			depsStep:  "Install Linux system dependencies",
+			buildStep: "Build desktop bundle",
+		},
+		{
+			name:      "release",
+			path:      ".github/workflows/desktop-release.yml",
+			job:       "build-linux",
+			depsStep:  "Install Linux system dependencies",
+			buildStep: "Build AppImage and updater bundle",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contents, err := os.ReadFile(tc.path)
+			require.NoError(t, err)
+
+			var workflow githubWorkflow
+			require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+			job, ok := workflow.Jobs[tc.job]
+			require.True(t, ok, "%s job must exist", tc.job)
+
+			_, depsStep := findWorkflowStep(t, job, tc.depsStep)
+			_, buildStep := findWorkflowStep(t, job, tc.buildStep)
+
+			assert.Contains(t, depsStep.Run, "squashfs-tools")
+			assert.Contains(t, buildStep.Run, "repair-appimage-diricon.sh")
+			assert.Contains(t, buildStep.Run, "*.AppImage")
+		})
+	}
+}
+
 func findWorkflowStep(
 	t *testing.T,
 	job githubWorkflowJob,
