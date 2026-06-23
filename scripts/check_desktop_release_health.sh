@@ -6,6 +6,7 @@ tag="${1:-}"
 repo="${GITHUB_REPOSITORY:-kenn-io/agentsview}"
 workflow_conclusion="${DESKTOP_RELEASE_HEALTH_WORKFLOW_CONCLUSION:-success}"
 assets_file="${DESKTOP_RELEASE_HEALTH_ASSETS_FILE:-}"
+updater_assets_file="${DESKTOP_RELEASE_HEALTH_UPDATER_ASSETS_FILE:-}"
 manifest_file="${DESKTOP_RELEASE_HEALTH_MANIFEST_FILE:-}"
 
 error() {
@@ -58,11 +59,32 @@ if [ "$manifest_version" != "$version" ]; then
     exit 1
 fi
 
+if [ -n "$updater_assets_file" ]; then
+    updater_assets="$(cat "$updater_assets_file")"
+else
+    updater_assets="$(gh release view updater --repo "$repo" --json assets --jq '.assets[].name')"
+fi
+
+updater_url_prefix="https://github.com/${repo}/releases/download/updater/"
+
 for platform in darwin-aarch64 darwin-x86_64 windows-x86_64 linux-x86_64; do
     url="$(jq -r --arg platform "$platform" '.platforms[$platform].url // ""' <<<"$manifest")"
     signature="$(jq -r --arg platform "$platform" '.platforms[$platform].signature // ""' <<<"$manifest")"
     if [ -z "$url" ] || [ -z "$signature" ]; then
         error "updater manifest missing url or signature for $platform"
+        exit 1
+    fi
+    if [[ "$url" != "$updater_url_prefix"* ]]; then
+        error "unexpected updater URL for $platform: $url"
+        exit 1
+    fi
+    asset="${url#"$updater_url_prefix"}"
+    if [ -z "$asset" ] || [[ "$asset" == */* ]]; then
+        error "unexpected updater URL asset for $platform: $url"
+        exit 1
+    fi
+    if ! grep -Fxq "$asset" <<<"$updater_assets"; then
+        error "manifest URL asset is missing from updater release: $asset"
         exit 1
     fi
 done

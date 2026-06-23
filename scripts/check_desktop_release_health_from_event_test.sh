@@ -51,8 +51,15 @@ AgentsView_${version}_x64-setup.exe
 AgentsView_${version}_x64.dmg
 SHA256SUMS-desktop
 EOF
+    cat >"$dir/updater-assets.txt" <<EOF
+AgentsView_aarch64.app.tar.gz
+AgentsView_x86_64.app.tar.gz
+AgentsView_${version}_x64-setup.nsis.zip
+AgentsView_${version}_amd64.AppImage.tar.gz
+latest.json
+EOF
     cat >"$dir/latest.json" <<EOF
-{"version":"${version}","platforms":{"darwin-aarch64":{"url":"u","signature":"s"},"darwin-x86_64":{"url":"u","signature":"s"},"windows-x86_64":{"url":"u","signature":"s"},"linux-x86_64":{"url":"u","signature":"s"}}}
+{"version":"${version}","platforms":{"darwin-aarch64":{"url":"https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_aarch64.app.tar.gz","signature":"s"},"darwin-x86_64":{"url":"https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_x86_64.app.tar.gz","signature":"s"},"windows-x86_64":{"url":"https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_${version}_x64-setup.nsis.zip","signature":"s"},"linux-x86_64":{"url":"https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_${version}_amd64.AppImage.tar.gz","signature":"s"}}}
 EOF
 }
 
@@ -61,6 +68,7 @@ run_wrapper() {
     GITHUB_EVENT_NAME="$event_name" \
     GITHUB_EVENT_PATH="$event_file" \
     DESKTOP_RELEASE_HEALTH_ASSETS_FILE="$dir/assets.txt" \
+    DESKTOP_RELEASE_HEALTH_UPDATER_ASSETS_FILE="$dir/updater-assets.txt" \
     DESKTOP_RELEASE_HEALTH_MANIFEST_FILE="$dir/latest.json" \
     "$WRAPPER"
 }
