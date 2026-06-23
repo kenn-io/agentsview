@@ -1139,38 +1139,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// OpenHands CLI:
-	//   <openhandsDir>/<conversation-id>/base_state.json
-	//   <openhandsDir>/<conversation-id>/TASKS.json
-	//   <openhandsDir>/<conversation-id>/events/*.json
-	for _, openHandsDir := range e.agentDirs[parser.AgentOpenHands] {
-		if openHandsDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(openHandsDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) < 2 || !parser.IsValidSessionID(parts[0]) {
-				continue
-			}
-			switch {
-			case len(parts) == 2 &&
-				(parts[1] == "base_state.json" ||
-					parts[1] == "TASKS.json"):
-			case len(parts) == 3 &&
-				parts[1] == "events" &&
-				strings.HasSuffix(parts[2], ".json"):
-			default:
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path: filepath.Join(
-					openHandsDir, parts[0],
-				),
-				Agent: parser.AgentOpenHands,
-			}, true
-		}
-	}
-
 	// Cursor:
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
 	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
@@ -4039,13 +4007,6 @@ func (e *Engine) processFile(
 	// Capture mtime once from the initial stat so all
 	// downstream cache operations use a consistent value.
 	mtime := info.ModTime().UnixNano()
-	if file.Agent == parser.AgentOpenHands {
-		snapshot, err := parser.OpenHandsSnapshot(file.Path)
-		if err != nil {
-			return processResult{err: err}
-		}
-		mtime = snapshot.Mtime
-	}
 	if file.Agent == parser.AgentCowork {
 		mtime = parser.CoworkSessionMtime(file.Path, mtime)
 	}
@@ -4111,8 +4072,6 @@ func (e *Engine) processFile(
 		res = e.processReasonix(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
-	case parser.AgentOpenHands:
-		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
 	case parser.AgentVSCodeCopilot:
@@ -6328,38 +6287,6 @@ func (e *Engine) processAntigravityCLI(
 				Messages:    msgs,
 				UsageEvents: usageEvents,
 			},
-		},
-	}
-}
-
-func (e *Engine) processOpenHands(
-	file parser.DiscoveredFile, _ os.FileInfo,
-) processResult {
-	snapshot, err := parser.OpenHandsSnapshot(file.Path)
-	if err != nil {
-		return processResult{err: err}
-	}
-
-	fi := fakeSnapshotInfo{
-		fSize: snapshot.Size, fMtime: snapshot.Mtime,
-	}
-	if e.shouldSkipByPath(file.Path, fi) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseOpenHandsSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
 		},
 	}
 }

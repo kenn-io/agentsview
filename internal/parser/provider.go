@@ -369,6 +369,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newIcodemateProviderFactory(def)
 	case AgentOpenCode:
 		return newOpenCodeProviderFactory(def)
+	case AgentOpenHands:
+		return newOpenHandsProviderFactory(def)
 	case AgentOpenClaw:
 		return newOpenClawProviderFactory(def)
 	case AgentOMP, AgentPi:
