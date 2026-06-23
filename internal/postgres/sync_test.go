@@ -34,6 +34,16 @@ func cleanPGSchema(t *testing.T, pgURL string) {
 	)
 }
 
+func cleanNamedPGSchema(t *testing.T, pgURL, schema string) {
+	t.Helper()
+	pg, err := sql.Open("pgx", pgURL)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+	quoted, err := quoteIdentifier(schema)
+	require.NoError(t, err, "quote schema")
+	_, _ = pg.Exec("DROP SCHEMA IF EXISTS " + quoted + " CASCADE")
+}
+
 func TestEnsureSchemaIdempotent(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
@@ -690,6 +700,82 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 	assert.Equal(t, 1, r2.SessionsPushed,
 		"should auto-detect schema reset")
 	assert.Equal(t, 1, r2.MessagesPushed)
+}
+
+func TestPushDetectsPGTargetChange(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, "agentsview_a")
+	cleanNamedPGSchema(t, pgURL, "agentsview_b")
+	t.Cleanup(func() {
+		cleanNamedPGSchema(t, pgURL, "agentsview_a")
+		cleanNamedPGSchema(t, pgURL, "agentsview_b")
+	})
+
+	local := testDB(t)
+	ctx := context.Background()
+
+	insertSession := func(id, createdAt string) {
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID:           id,
+			Project:      "target-change",
+			Machine:      "local",
+			Agent:        "claude",
+			CreatedAt:    createdAt,
+			MessageCount: 1,
+		}), "upsert session %s", id)
+		require.NoError(t, local.InsertMessages([]db.Message{{
+			SessionID:     id,
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "hello " + id,
+			ContentLength: len("hello " + id),
+			Timestamp:     createdAt,
+		}}), "insert message %s", id)
+	}
+
+	insertSession("sess-target-001", "2026-03-11T12:00:00Z")
+
+	syncA, err := New(
+		pgURL, "agentsview_a", local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating sync A")
+	defer syncA.Close()
+
+	syncB, err := New(
+		pgURL, "agentsview_b", local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating sync B")
+	defer syncB.Close()
+
+	r1, err := syncA.Push(ctx, false, nil)
+	require.NoError(t, err, "initial push to schema A")
+	require.Equal(t, 1, r1.SessionsPushed)
+
+	r2, err := syncB.Push(ctx, false, nil)
+	require.NoError(t, err, "initial push to schema B")
+	require.Equal(t, 1, r2.SessionsPushed)
+
+	insertSession("sess-target-002", "2026-03-11T12:10:00Z")
+
+	r3, err := syncA.Push(ctx, false, nil)
+	require.NoError(t, err, "incremental push back to schema A")
+	require.GreaterOrEqual(t, r3.SessionsPushed, 1)
+
+	r4, err := syncB.Push(ctx, false, nil)
+	require.NoError(t, err, "switch back to populated schema B")
+	require.Equal(t, 2, r4.SessionsPushed)
+
+	var count int
+	err = syncB.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE id = $1",
+		"sess-target-002",
+	).Scan(&count)
+	require.NoError(t, err, "counting repushed session")
+	assert.Equal(t, 1, count)
 }
 
 func TestPushFullAfterSchemaDropRecreatesSchema(

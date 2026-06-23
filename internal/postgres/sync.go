@@ -34,10 +34,11 @@ func isUndefinedColumn(err error) bool {
 // Sync manages push-only sync from local SQLite to a remote
 // PostgreSQL database.
 type Sync struct {
-	pg      *sql.DB
-	local   *db.DB
-	machine string
-	schema  string
+	pg                *sql.DB
+	local             *db.DB
+	machine           string
+	schema            string
+	targetFingerprint string
 
 	// Project filtering for push scope.
 	projects        []string
@@ -93,14 +94,22 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	targetFingerprint, err := pgTargetFingerprint(pgURL, schema)
+	if err != nil {
+		pg.Close()
+		return nil, fmt.Errorf(
+			"computing pg target fingerprint: %w", err,
+		)
+	}
 
 	return &Sync{
-		pg:              pg,
-		local:           local,
-		machine:         machine,
-		schema:          schema,
-		projects:        opts.Projects,
-		excludeProjects: opts.ExcludeProjects,
+		pg:                pg,
+		local:             local,
+		machine:           machine,
+		schema:            schema,
+		targetFingerprint: targetFingerprint,
+		projects:          opts.Projects,
+		excludeProjects:   opts.ExcludeProjects,
 	}, nil
 }
 

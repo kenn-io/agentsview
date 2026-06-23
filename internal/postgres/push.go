@@ -19,7 +19,10 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const lastPushBoundaryStateKey = "last_push_boundary_state"
+const (
+	lastPushBoundaryStateKey     = "last_push_boundary_state"
+	lastPushTargetFingerprintKey = "pg_target_fingerprint_v1"
+)
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
 // stable push-marker identifier. pushMarkerKeyPrefix prefixes that identifier
@@ -87,6 +90,32 @@ func (s *Sync) Push(
 			"reading last_push_at: %w", err,
 		)
 	}
+	storedTargetFingerprint, err := s.local.GetSyncState(
+		lastPushTargetFingerprintKey,
+	)
+	if err != nil {
+		return result, fmt.Errorf(
+			"reading %s: %w",
+			lastPushTargetFingerprintKey, err,
+		)
+	}
+	pushStateCleared := false
+	if reset, reason := pushTargetState(
+		lastPush,
+		storedTargetFingerprint,
+		s.targetFingerprint,
+	); reset {
+		log.Printf(
+			"pgsync: %s; clearing local push watermark state",
+			reason,
+		)
+		if err := clearPushState(s.local); err != nil {
+			return result, err
+		}
+		lastPush = ""
+		full = true
+		pushStateCleared = true
+	}
 	markerID, err := s.pushMarkerID()
 	if err != nil {
 		return result, err
@@ -114,10 +143,11 @@ func (s *Sync) Push(
 		// When a filtered full push runs, clear persisted
 		// watermark and boundary state so the next
 		// unfiltered push also starts from scratch.
-		if s.isFiltered() {
+		if s.isFiltered() && !pushStateCleared {
 			if err := clearPushState(s.local); err != nil {
 				return result, err
 			}
+			pushStateCleared = true
 		}
 	}
 
@@ -145,10 +175,11 @@ func (s *Sync) Push(
 			// Filtered push against a reset PG: clear
 			// watermark and boundary state so the next
 			// unfiltered push also starts from scratch.
-			if s.isFiltered() {
+			if s.isFiltered() && !pushStateCleared {
 				if err := clearPushState(s.local); err != nil {
 					return result, err
 				}
+				pushStateCleared = true
 			}
 		}
 	}
@@ -274,6 +305,11 @@ func (s *Sync) Push(
 				return result, err
 			}
 		}
+		if err := persistPushTargetFingerprint(
+			s.local, s.targetFingerprint,
+		); err != nil {
+			return result, err
+		}
 		if err := s.writePushMarker(
 			ctx, markerID, markerMachine, markerMachineAliases,
 		); err != nil {
@@ -370,6 +406,11 @@ func (s *Sync) Push(
 		); err != nil {
 			return result, err
 		}
+	}
+	if err := persistPushTargetFingerprint(
+		s.local, s.targetFingerprint,
+	); err != nil {
+		return result, err
 	}
 
 	// Write the push marker only after the push and local finalization
@@ -753,6 +794,38 @@ func clearPushState(local syncStateStore) error {
 		)
 	}
 	return nil
+}
+
+func persistPushTargetFingerprint(
+	local syncStateStore,
+	fingerprint string,
+) error {
+	if err := local.SetSyncState(
+		lastPushTargetFingerprintKey,
+		fingerprint,
+	); err != nil {
+		return fmt.Errorf(
+			"updating %s: %w",
+			lastPushTargetFingerprintKey, err,
+		)
+	}
+	return nil
+}
+
+func pushTargetState(
+	lastPush, storedTargetFingerprint, currentTargetFingerprint string,
+) (bool, string) {
+	if lastPush == "" {
+		return false, ""
+	}
+	if storedTargetFingerprint == "" {
+		return true,
+			"local watermark exists without a stored PG target fingerprint"
+	}
+	if storedTargetFingerprint != currentTargetFingerprint {
+		return true, "PG target fingerprint changed"
+	}
+	return false, ""
 }
 
 func readBoundaryAndFingerprints(

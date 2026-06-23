@@ -429,6 +429,56 @@ func TestFinalizePushStatePersistsEmptyBoundary(
 	assert.Empty(t, state.Fingerprints)
 }
 
+func TestPushTargetState(t *testing.T) {
+	tests := []struct {
+		name       string
+		lastPush   string
+		stored     string
+		current    string
+		wantReset  bool
+		wantReason string
+	}{
+		{
+			name:      "first push has no reset",
+			stored:    "",
+			current:   "v1:new",
+			wantReset: false,
+		},
+		{
+			name:       "legacy watermark without fingerprint resets",
+			lastPush:   "2026-03-11T12:34:56.123Z",
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "local watermark exists without a stored PG target fingerprint",
+		},
+		{
+			name:       "changed target resets",
+			lastPush:   "2026-03-11T12:34:56.123Z",
+			stored:     "v1:old",
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "PG target fingerprint changed",
+		},
+		{
+			name:      "same target keeps watermark",
+			lastPush:  "2026-03-11T12:34:56.123Z",
+			stored:    "v1:same",
+			current:   "v1:same",
+			wantReset: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotReset, gotReason := pushTargetState(
+				tc.lastPush, tc.stored, tc.current,
+			)
+			assert.Equal(t, tc.wantReset, gotReset)
+			assert.Equal(t, tc.wantReason, gotReason)
+		})
+	}
+}
+
 func TestFinalizePushStateMergesPriorFingerprints(
 	t *testing.T,
 ) {

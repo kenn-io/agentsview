@@ -2,7 +2,9 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -195,6 +197,35 @@ func Open(
 		)
 	}
 	return db, nil
+}
+
+func pgTargetFingerprint(dsn, schema string) (string, error) {
+	if dsn == "" {
+		return "", fmt.Errorf("postgres URL is required")
+	}
+	cfg, err := pgconn.ParseConfig(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parsing pg connection string: %w", err)
+	}
+
+	host := cfg.Host
+	if host != "" && !strings.HasPrefix(host, "/") {
+		host = strings.ToLower(host)
+	}
+
+	fields := []string{
+		"v1",
+		host,
+		fmt.Sprintf("%d", cfg.Port),
+		cfg.Database,
+		cfg.User,
+		schema,
+	}
+	h := sha256.New()
+	for _, field := range fields {
+		fmt.Fprintf(h, "%d:%s", len(field), field)
+	}
+	return "v1:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // appendConnParams injects key=value connection parameters into
