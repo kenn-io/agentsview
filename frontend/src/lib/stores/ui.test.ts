@@ -640,6 +640,9 @@ describe("UIStore", () => {
       expect(ui.messageLayout).toBe("stream");
 
       ui.cycleLayout();
+      expect(ui.messageLayout).toBe("skim");
+
+      ui.cycleLayout();
       expect(ui.messageLayout).toBe("default");
     });
   });

@@ -566,7 +566,7 @@ describe("ToolBlock collapsed preview", () => {
     expect(preview!.textContent).toBe("$ cat <<EOF");
   });
 
-  it("prefers explicit content over command fallback", async () => {
+  it("prefers the structured command summary over display content", async () => {
     const toolCall: ToolCall = {
       tool_name: "exec_command",
       category: "Bash",
@@ -579,7 +579,74 @@ describe("ToolBlock collapsed preview", () => {
     await tick();
 
     const preview = document.querySelector(".tool-header .tool-preview");
-    expect(preview!.textContent).toBe("$ from content");
+    expect(preview!.textContent).toBe("$ from json");
+  });
+
+  it("keeps the structured summary visible after expanding (ungated)", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "Read",
+      category: "Read",
+      input_json: JSON.stringify({ file_path: "README.md" }),
+      result_content: "line one\nline two",
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", label: "Read", toolCall },
+    });
+    await tick();
+
+    const before = document.querySelector(".tool-header .tool-preview");
+    expect(before!.textContent).toBe("README.md (2 lines)");
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const after = document.querySelector(".tool-header .tool-preview");
+    expect(after).not.toBeNull();
+    expect(after!.textContent).toBe("README.md (2 lines)");
+  });
+
+  it("shows the +added -removed suffix for an Edit", async () => {
+    const toolCall: ToolCall = {
+      tool_name: "Edit",
+      category: "Edit",
+      input_json: JSON.stringify({
+        file_path: "main.go",
+        old_string: "a",
+        new_string: "a\nb\nc",
+      }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "", label: "Edit", toolCall },
+    });
+    await tick();
+
+    const preview = document.querySelector(".tool-header .tool-preview");
+    expect(preview!.textContent).toBe("main.go (+3 -1)");
+  });
+
+  it("keeps the legacy first-line preview collapsed-only", async () => {
+    // "mystery" with no recognized fields makes summarizeToolCall return
+    // null, so the legacy content-first-line preview is the only thing
+    // rendered — and it must stay gated on the collapsed state.
+    const toolCall: ToolCall = {
+      tool_name: "mystery",
+      input_json: JSON.stringify({ foo: 1 }),
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "plain first line", label: "mystery", toolCall },
+    });
+    await tick();
+
+    const collapsed = document.querySelector(".tool-header .tool-preview");
+    expect(collapsed!.textContent).toBe("plain first line");
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    expect(document.querySelector(".tool-header .tool-preview")).toBeNull();
   });
 
   it("shows in-progress todo content for TodoWrite", async () => {

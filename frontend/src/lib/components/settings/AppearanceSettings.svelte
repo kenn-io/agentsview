@@ -11,6 +11,7 @@
     { value: "default", label: "Default" },
     { value: "compact", label: "Compact" },
     { value: "stream", label: "Stream" },
+    { value: "skim", label: "Skim" },
   ];
 
   const BLOCK_LABELS: Record<BlockType, string> = {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     ActivityIcon,
+    AlignJustifyIcon,
     ArrowDownIcon,
     ArrowDownWideNarrowIcon,
     ArrowUpNarrowWideIcon,
@@ -261,8 +262,10 @@
     <LayoutListIcon {size} strokeWidth="2" aria-hidden="true" />
   {:else if ui.messageLayout === "compact"}
     <ListCollapseIcon {size} strokeWidth="2" aria-hidden="true" />
-  {:else}
+  {:else if ui.messageLayout === "stream"}
     <LogsIcon {size} strokeWidth="2" aria-hidden="true" />
+  {:else}
+    <AlignJustifyIcon {size} strokeWidth="2" aria-hidden="true" />
   {/if}
 {/snippet}
 
