@@ -12,6 +12,7 @@ LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
 GOLANGCI_LINT_VERSION ?= v2.11.4
 CUSTOM_GCL := ./custom-gcl
+PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 
 GOPATH_FIRST := $(shell go env GOPATH | cut -d: -f1)
 AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
@@ -19,7 +20,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -29,13 +30,18 @@ ensure-embed-dir:
 			'keep embed dir for generated frontend assets' \
 			> internal/web/dist/.keep
 
-# Build the binary (debug, with embedded frontend)
-build: frontend
+# Restore the generated LiteLLM fallback snapshot from its artifact branch.
+# Pinned ref, SHA256, and branch are compiled into the snapshot tool.
+pricing-snapshot:
+	go run ./internal/pricing/cmd/litellm-snapshot -restore
+
+# Build the binary (debug, with embedded pricing snapshot and frontend)
+build: pricing-snapshot frontend
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS)" -o agentsview ./cmd/agentsview
 	@chmod +x agentsview
 
 # Build with optimizations (release)
-build-release: frontend
+build-release: pricing-snapshot frontend
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
 	@chmod +x agentsview
 
@@ -137,7 +143,7 @@ air-install:
 
 # Run Go server in dev mode with live reload (use with frontend-dev).
 # Edits to .go files trigger a rebuild + restart via air.
-dev: ensure-embed-dir check-air
+dev: pricing-snapshot ensure-embed-dir check-air
 	"$(AIR_BIN)" -c .air.toml -- $(ARGS)
 
 # Run the Tauri desktop wrapper in development mode
@@ -215,11 +221,11 @@ desktop-linux-appimage:
 desktop-app: desktop-macos-app
 
 # Run tests
-test: ensure-embed-dir
+test: pricing-snapshot ensure-embed-dir
 	go test -tags "fts5" ./... -v -count=1
 
 # Run fast tests only
-test-short: ensure-embed-dir
+test-short: pricing-snapshot ensure-embed-dir
 	go test -tags "fts5" ./... -short -count=1
 
 # Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
@@ -227,7 +233,7 @@ test-short: ensure-embed-dir
 BENCH_BACKENDS_FLAGS ?= -bench . -run '^$$' -benchmem
 BENCH_BACKENDS_SESSIONS ?= 1000
 BENCH_BACKENDS_MESSAGES_PER_SESSION ?= 64
-bench-backends: ensure-embed-dir
+bench-backends: pricing-snapshot ensure-embed-dir
 	AGENTSVIEW_BENCH_SESSIONS=$(BENCH_BACKENDS_SESSIONS) \
 		AGENTSVIEW_BENCH_MESSAGES_PER_SESSION=$(BENCH_BACKENDS_MESSAGES_PER_SESSION) \
 		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
@@ -241,14 +247,14 @@ postgres-down:
 	docker compose -f docker-compose.test.yml down
 
 # Run PostgreSQL integration tests (starts postgres automatically)
-test-postgres: ensure-embed-dir postgres-up
+test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 	@echo "Waiting for postgres to be ready..."
 	@sleep 2
 	TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable" \
 		CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1
 
 # PostgreSQL integration tests for CI (postgres already running as service)
-test-postgres-ci: ensure-embed-dir
+test-postgres-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1
 
 # Start test SSH container
@@ -262,13 +268,13 @@ ssh-down:
 	docker compose -f docker-compose.test.yml down sshd
 
 # Run SSH integration tests (starts sshd automatically)
-test-ssh: ensure-embed-dir ssh-up
+test-ssh: pricing-snapshot ensure-embed-dir ssh-up
 	TEST_SSH_HOST=localhost TEST_SSH_PORT=2222 TEST_SSH_USER=testuser \
 		TEST_SSH_KEY=$(CURDIR)/testdata/ssh/test_key \
 		CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
 
 # SSH integration tests for CI (sshd already running)
-test-ssh-ci: ensure-embed-dir
+test-ssh-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
 
 # Run Playwright E2E tests
@@ -281,14 +287,14 @@ e2e-duckdb:
 		e2e/duckdb-backend.spec.ts e2e/session-list.spec.ts --project=chromium
 
 # Vet
-vet: ensure-embed-dir
+vet: pricing-snapshot ensure-embed-dir
 	go vet -tags fts5 ./...
 
 # Lint Go code and auto-fix where possible (local development)
 lint: lint-golangci nilaway
 
 # Run golangci-lint with auto-fixes for local development.
-lint-golangci: ensure-embed-dir
+lint-golangci: pricing-snapshot ensure-embed-dir
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
@@ -299,7 +305,7 @@ lint-golangci: ensure-embed-dir
 lint-ci: lint-golangci-ci nilaway
 
 # Run golangci-lint without auto-fixes for CI.
-lint-golangci-ci: ensure-embed-dir
+lint-golangci-ci: pricing-snapshot ensure-embed-dir
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
@@ -325,7 +331,7 @@ nilaway-golangci-build:
 		golangci-lint custom --version "$(GOLANGCI_LINT_VERSION)" --name custom-gcl
 
 # Run NilAway through the custom golangci-lint module plugin.
-nilaway: ensure-embed-dir nilaway-golangci-build
+nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	$(CUSTOM_GCL) run --config .golangci.nilaway.yml ./...
 
 # Install pinned local lint tools.
@@ -333,12 +339,13 @@ lint-tools:
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 # Tidy dependencies
-tidy:
+tidy: pricing-snapshot
 	go mod tidy
 
 # Clean build artifacts
 clean:
 	rm -f agentsview agentsv
+	rm -f $(PRICING_SNAPSHOT_FILE)
 	rm -rf internal/web/dist dist/ tmp/
 	mkdir -p internal/web/dist
 	printf '%s\n' \
@@ -373,26 +380,26 @@ docs-deploy:
 	vercel deploy docs --prod
 
 # Build release binary for current platform (CGO required for sqlite3)
-release: frontend
+release: pricing-snapshot frontend
 	mkdir -p dist
 	CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-$$(go env GOOS)-$$(go env GOARCH) ./cmd/agentsview
 
 # Cross-compile targets (require CC set to target cross-compiler)
-release-darwin-arm64: frontend
+release-darwin-arm64: pricing-snapshot frontend
 	mkdir -p dist
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-darwin-arm64 ./cmd/agentsview
 
-release-darwin-amd64: frontend
+release-darwin-amd64: pricing-snapshot frontend
 	mkdir -p dist
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
 		-o dist/agentsview-darwin-amd64 ./cmd/agentsview
 
-release-linux-amd64: frontend
+release-linux-amd64: pricing-snapshot frontend
 	mkdir -p dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags fts5 \
 		-ldflags="$(LDFLAGS_RELEASE)" -trimpath \
@@ -412,6 +419,7 @@ help:
 	@echo ""
 	@echo "  build          - Build with embedded frontend"
 	@echo "  build-release  - Release build (optimized, stripped)"
+	@echo "  pricing-snapshot - Restore LiteLLM snapshot from artifact branch"
 	@echo "  install        - Build and install to ~/.local/bin or GOPATH"
 	@echo ""
 	@echo "  dev            - Run Go server with live reload via air (use with frontend-dev)"

@@ -21,5 +21,7 @@ LDFLAGS="-X main.version=${VERSION} \
          -X main.commit=${COMMIT} \
          -X main.buildDate=${BUILD_DATE}"
 
+go run ./internal/pricing/cmd/litellm-snapshot -restore
+
 CGO_ENABLED=1 go build -tags fts5 -ldflags="${LDFLAGS}" \
   -o ./tmp/agentsview ./cmd/agentsview

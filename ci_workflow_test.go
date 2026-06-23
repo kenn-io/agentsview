@@ -62,6 +62,107 @@ func TestCIDocsJobRunsFullDocsCheck(t *testing.T) {
 	assert.Equal(t, "make docs-check", checkStep.Run)
 }
 
+func TestReleaseWorkflowRestoresPricingSnapshotBeforeGoBuild(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/release.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	for _, jobName := range []string{"build-linux", "build"} {
+		job, ok := workflow.Jobs[jobName]
+		require.True(t, ok, "%s job must exist", jobName)
+
+		restoreIndex, restoreStep := findWorkflowStep(t, job, "Restore pricing snapshot")
+		buildIndex, buildStep := findWorkflowStep(t, job, "Build")
+		require.Less(t, restoreIndex, buildIndex,
+			"%s must restore pricing snapshot before building", jobName)
+
+		if jobName == "build-linux" {
+			trustIndex, trustStep := findWorkflowStep(t, job, "Trust git checkout")
+			require.Less(t, trustIndex, restoreIndex,
+				"%s must trust the checkout before restoring the snapshot", jobName)
+			assert.Contains(t, trustStep.Run, `safe.directory "$GITHUB_WORKSPACE"`)
+			assert.Contains(t, trustStep.Run, "git status")
+		}
+
+		assertSnapshotRestoreStep(t, restoreStep)
+		assert.Contains(t, buildStep.Run, "go build")
+	}
+}
+
+func TestCIWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/ci.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	cases := []struct {
+		jobName   string
+		buildStep string
+	}{
+		{"test", "Run Go tests"},
+		{"coverage", "Test with coverage"},
+		{"integration", "Run PostgreSQL integration tests"},
+		{"e2e", "Pre-build Go binaries"},
+	}
+
+	for _, tc := range cases {
+		job, ok := workflow.Jobs[tc.jobName]
+		require.True(t, ok, "%s job must exist", tc.jobName)
+
+		restoreIndex, restoreStep := findWorkflowStep(t, job, "Restore pricing snapshot")
+		buildIndex, _ := findWorkflowStep(t, job, tc.buildStep)
+		require.Less(t, restoreIndex, buildIndex,
+			"%s must restore pricing snapshot before %s", tc.jobName, tc.buildStep)
+
+		assertSnapshotRestoreStep(t, restoreStep)
+	}
+}
+
+func TestMSYS2UpdateWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/msys2-update-check.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	job, ok := workflow.Jobs["windows-update-check"]
+	require.True(t, ok, "windows-update-check job must exist")
+
+	restoreIndex, restoreStep := findWorkflowStep(t, job, "Restore pricing snapshot")
+	testIndex, _ := findWorkflowStep(t, job, "Run Go tests")
+	require.Less(t, restoreIndex, testIndex,
+		"msys2 update check must restore pricing snapshot before tests")
+
+	assertSnapshotRestoreStep(t, restoreStep)
+}
+
+func TestDockerWorkflowRestoresPricingSnapshotBeforeImageBuild(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/docker.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	job, ok := workflow.Jobs["build-and-push"]
+	require.True(t, ok, "build-and-push job must exist")
+
+	restoreIndex, restoreStep := findWorkflowStep(t, job, "Restore pricing snapshot")
+	buildIndex, _ := findWorkflowStep(t, job, "Build and push Docker image")
+	require.Less(t, restoreIndex, buildIndex,
+		"docker workflow must restore pricing snapshot before image build")
+
+	assertSnapshotRestoreStep(t, restoreStep)
+}
+
+func assertSnapshotRestoreStep(t *testing.T, step githubWorkflowStep) {
+	t.Helper()
+
+	assert.Equal(t, "go run ./internal/pricing/cmd/litellm-snapshot -restore", step.Run)
+}
+
 func findWorkflowStep(
 	t *testing.T,
 	job githubWorkflowJob,

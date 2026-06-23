@@ -21,23 +21,41 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(prices) == 0 {
 		prices = duckFallbackPricingRows()
 	}
+	if len(prices) == 0 {
+		return nil
+	}
+	tx, err := s.duck.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb pricing sync: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(model_pattern) DO UPDATE SET
+			input_per_mtok = excluded.input_per_mtok,
+			output_per_mtok = excluded.output_per_mtok,
+			cache_creation_per_mtok = excluded.cache_creation_per_mtok,
+			cache_read_per_mtok = excluded.cache_read_per_mtok,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		return fmt.Errorf("preparing duckdb pricing sync: %w", err)
+	}
+	defer stmt.Close()
 	for _, p := range prices {
-		if _, err := s.duck.ExecContext(ctx, `
-			INSERT INTO model_pricing (
-				model_pattern, input_per_mtok, output_per_mtok,
-				cache_creation_per_mtok, cache_read_per_mtok, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(model_pattern) DO UPDATE SET
-				input_per_mtok = excluded.input_per_mtok,
-				output_per_mtok = excluded.output_per_mtok,
-				cache_creation_per_mtok = excluded.cache_creation_per_mtok,
-				cache_read_per_mtok = excluded.cache_read_per_mtok,
-				updated_at = excluded.updated_at`,
+		if _, err := stmt.ExecContext(ctx,
 			p.ModelPattern, p.InputPerMTok, p.OutputPerMTok,
 			p.CacheCreationPerMTok, p.CacheReadPerMTok, p.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("syncing model pricing %q: %w", p.ModelPattern, err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb pricing sync: %w", err)
 	}
 	return nil
 }

@@ -120,6 +120,13 @@ patch_tauri_version() {
   echo "Patched tauri.conf.json version to $semver"
 }
 
+restore_pricing_snapshot() {
+  (
+    cd "$REPO_ROOT"
+    go run ./internal/pricing/cmd/litellm-snapshot -restore
+  )
+}
+
 install_frontend_deps() {
   npm ci
 }
@@ -164,6 +171,7 @@ main() {
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir:-}"' EXIT
   build_bin="$tmp_dir/agentsview$ext"
+  restore_pricing_snapshot
 
   (
     cd "$REPO_ROOT"

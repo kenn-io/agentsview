@@ -122,6 +122,10 @@ if (-not $SkipBuild) {
     $env:CGO_ENABLED = "1"
     Push-Location $RepoRoot
     try {
+        go run ./internal/pricing/cmd/litellm-snapshot -restore
+        if ($LASTEXITCODE -ne 0) {
+            throw "pricing snapshot restore failed with exit code $LASTEXITCODE"
+        }
         go build -tags fts5 -ldflags $ldflags -o agentsview.exe ./cmd/agentsview
     } finally {
         Pop-Location

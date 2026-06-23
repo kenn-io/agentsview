@@ -28,6 +28,8 @@ ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=
 
+RUN go run ./internal/pricing/cmd/litellm-snapshot -restore
+
 RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -tags fts5 -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
