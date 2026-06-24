@@ -219,6 +219,44 @@ func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
 	assert.Len(t, first.Content, 10)
 }
 
+// Even when a caller explicitly allow-lists the "system" role, get_messages
+// must still drop IsSystem-flagged messages: the schema promises system
+// messages are always excluded. The IsSystem gate short-circuits ahead of the
+// role allowlist, so an allow-listed assistant message comes through while the
+// equally allow-listed system message stays filtered. This pins the
+// security-relevant ordering against a future change that let an explicit
+// roles request surface system content.
+func TestGetMessages_ExplicitSystemRoleStillFiltered(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "hello"),
+		{
+			SessionID: "s1", Ordinal: 1, Role: "system",
+			Content: "system noise", IsSystem: true, ContentLength: len("system noise"),
+		},
+		dbtest.AsstMsg("s1", 2, "short reply"),
+	}))
+
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1",
+		Roles:     []string{"system", "assistant"},
+	})
+	require.NoError(t, err)
+	// The allow-listed assistant message is returned; the system message is
+	// not, even though "system" was also allow-listed. The user message is
+	// filtered because its role is not in the allowlist.
+	require.Len(t, out.Messages, 1)
+	assert.Equal(t, "assistant", out.Messages[0].Role)
+	for _, m := range out.Messages {
+		assert.NotEqual(t, "system", m.Role, "system messages must never be returned")
+	}
+	assert.Equal(t, 2, out.Filtered)
+}
+
 func TestSearchContent_SubstringMatch(t *testing.T) {
 	ts, d := newTestToolset(t)
 	// Not a one-shot: content search excludes one-shot sessions by default.
