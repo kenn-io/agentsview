@@ -800,6 +800,7 @@ SELECT
 	cu.charged_cents / 100.0 AS cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	cu.dedup_key AS usage_dedup_key,
 	'' AS project,
 	'cursor' AS agent
@@ -1562,7 +1563,6 @@ func (db *DB) GetDailyUsage(
 			seen[key] = struct{}{}
 		}
 
-<<<<<<< HEAD
 		if seenSessions != nil && r.usageSource != "cursor" {
 			if _, ok := seenSessions[r.sessionID]; !ok {
 				seenSessions[r.sessionID] = UsageSessionInfo{

@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/cursorusage"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -45,7 +46,14 @@ func newUsageCursorCommand() *cobra.Command {
 }
 
 func runUsageCursor(cfg UsageCursorConfig) error {
-	database, appCfg := openUsageDB()
+	appCfg, err := config.LoadMinimal()
+	if err != nil {
+		return err
+	}
+	database, err := openDB(appCfg)
+	if err != nil {
+		return err
+	}
 	defer database.Close()
 
 	apiKey := strings.TrimSpace(appCfg.CursorAdminAPIKey)
@@ -128,7 +136,7 @@ func resolveCursorUsageWindow(
 	startDate := strings.TrimSpace(cfg.Since)
 	endDate := strings.TrimSpace(cfg.Until)
 	if startDate == "" && endDate == "" {
-		startDate = resolveDefaultSince("", "", false, now, loc.String())
+		startDate, _ = defaultUsageDateRange("", "", now)
 	}
 
 	var start time.Time

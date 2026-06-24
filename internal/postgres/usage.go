@@ -1176,7 +1176,6 @@ func (s *Store) GetDailyUsage(
 			seen[key] = struct{}{}
 		}
 
-<<<<<<< HEAD
 		if seenSessions != nil && r.usageSource != "cursor" {
 			if _, ok := seenSessions[r.sessionID]; !ok {
 				seenSessions[r.sessionID] = db.UsageSessionInfo{

@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -29,7 +28,7 @@ type CursorUsageEvent struct {
 	DedupKey         string
 }
 
-func (db *DB) ensureCursorUsageEventsSchemaLocked(w *sql.DB) error {
+func (db *DB) ensureCursorUsageEventsSchemaLocked(w *writerHandle) error {
 	if _, err := w.Exec(`
 		CREATE TABLE IF NOT EXISTS cursor_usage_events (
 			id INTEGER PRIMARY KEY,
