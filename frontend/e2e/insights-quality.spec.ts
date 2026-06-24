@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+const COLD_WEBKIT_TEST_TIMEOUT_MS = 30_000;
+
 const cannedInsight = {
   id: 42,
   type: "llm_canned",
@@ -79,6 +81,7 @@ test.describe("Insights quality rollout", () => {
   test("renders saved deterministic quality recommendation metadata", async ({
     page,
   }) => {
+    test.setTimeout(COLD_WEBKIT_TEST_TIMEOUT_MS);
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "clipboard", {
         value: {

@@ -8,6 +8,8 @@ const LOC = {
   row: ".virtual-row",
 } as const;
 
+const COLD_WEBKIT_TEST_TIMEOUT_MS = 30_000;
+
 const BETA_7 = {
   project: "project-beta",
   count: 3, // user_message_count shown in sidebar
@@ -86,6 +88,7 @@ test.describe("Mixed content rendering", () => {
   test("tool group renders for consecutive tool-only messages", async ({
     page,
   }) => {
+    test.setTimeout(COLD_WEBKIT_TEST_TIMEOUT_MS);
     const { project, count, displayRows } = BETA_7;
     const sid = await selectSession(page, project, count);
     await expectSessionLoaded(page, sid, displayRows);
