@@ -807,6 +807,14 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	assert.Equal(t, 42, out)
 	assert.Zero(t, cacheCreate)
 	assert.Zero(t, cacheRead)
+
+	in, out, cacheCreate, cacheRead = parseUsageTokenCounters(
+		`{"metadata":{"url":"https:\/\/x"},"output_tokens":42}`,
+	)
+	assert.Zero(t, in)
+	assert.Equal(t, 42, out)
+	assert.Zero(t, cacheCreate)
+	assert.Zero(t, cacheRead)
 }
 
 func TestUsageAggregationClampsMessageTokenJSON(t *testing.T) {

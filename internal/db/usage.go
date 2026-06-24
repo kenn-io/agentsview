@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -936,7 +937,8 @@ func parseJSONString(tokenJSON string, i int) (string, int, bool) {
 			j++
 		case '"':
 			raw := tokenJSON[i : j+1]
-			value, err := strconv.Unquote(raw)
+			var value string
+			err := json.Unmarshal([]byte(raw), &value)
 			if err != nil {
 				return "", j + 1, false
 			}
