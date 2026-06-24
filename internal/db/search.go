@@ -53,6 +53,32 @@ func SystemPrefixSQL(contentCol, roleCol string) string {
 		strings.Join(parts, " OR ") + "))"
 }
 
+// systemPrefixTrimCutset is the leading-whitespace set SystemPrefixSQL's
+// LTRIM strips: ASCII whitespace, BOM, and the Unicode spaces. Kept
+// identical so the Go and SQL system-prefix checks agree.
+const systemPrefixTrimCutset = " \t\n\v\f\r" +
+	"\u0085\u00A0\u1680" +
+	"\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A" +
+	"\u2028\u2029\u202F\u205F\u3000\uFEFF"
+
+// IsSystemPrefixed reports whether a user-role message is a system-injected
+// message identified by a SystemMsgPrefixes prefix. It is the Go equivalent
+// of SystemPrefixSQL for callers that filter in Go rather than SQL: only
+// user-role messages match, and leading whitespace is trimmed with the same
+// cutset before the case-sensitive prefix comparison.
+func IsSystemPrefixed(content, role string) bool {
+	if role != "user" {
+		return false
+	}
+	trimmed := strings.TrimLeft(content, systemPrefixTrimCutset)
+	for _, p := range SystemMsgPrefixes {
+		if strings.HasPrefix(trimmed, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // SearchResult holds a session-level match with the best-ranked snippet.
 type SearchResult struct {
 	SessionID      string  `json:"session_id"`

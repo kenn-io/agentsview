@@ -504,6 +504,68 @@ func TestGetMessages_FromZeroAnchors(t *testing.T) {
 		"from:0 anchors at ordinal 0, not newest-first")
 }
 
+// get_messages promises system messages are always excluded. Legacy
+// sessions store system-injected messages as user-role rows without the
+// is_system flag, identified only by a content prefix; those must be
+// excluded too, not just is_system rows.
+func TestGetMessages_ExcludesSystemPrefixedUserMessage(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "real question"),
+		// User role, is_system not set, but a system content prefix.
+		{
+			SessionID: "s1", Ordinal: 1, Role: "user",
+			Content:       "<task-notification>done</task-notification>",
+			ContentLength: 44,
+		},
+	}))
+
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 1)
+	assert.Equal(t, "real question", out.Messages[0].Content)
+	assert.Equal(t, 1, out.Filtered, "the system-prefixed user message is filtered")
+}
+
+// search_sessions must exclude a session active now even when its search
+// result carries no ended_at/started_at (empty SessionEndedAt), by falling
+// back to created_at like search_content -- mirroring the canonical
+// activity expression.
+func TestSearchSessions_TimestamplessExcludedByCreatedAt(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	if !d.HasFTS() {
+		t.Skip("FTS not available")
+	}
+	ts := &toolset{svc: service.NewDirectBackend(d, nil), now: time.Now}
+	// No ended_at/started_at; created_at defaults to now, so it is active.
+	dbtest.SeedSession(t, d, "fresh", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("fresh", 0, "uniquesearchmarker here"),
+	}))
+
+	_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+		Query: "uniquesearchmarker",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, out.Results)
+	assert.Equal(t, 1, out.ExcludedActive)
+
+	_, all, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+		Query: "uniquesearchmarker", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, all.Results, 1)
+}
+
 // TestServer_EndToEnd connects a real MCP client to the server over an
 // in-memory transport and calls a tool, validating registration, schema
 // inference, and the structured-output round-trip through the SDK.

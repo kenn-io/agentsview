@@ -51,6 +51,32 @@ func sessionActivity(s db.Session) string {
 	return s.CreatedAt
 }
 
+// isSystemMessage reports whether a message is system content that
+// get_messages and the overview tail must never surface: the persisted
+// is_system flag, or a legacy system prefix on a user message (the prefix
+// rule catches older sessions parsed before is_system was backfilled).
+func isSystemMessage(m db.Message) bool {
+	return m.IsSystem || db.IsSystemPrefixed(m.Content, m.Role)
+}
+
+// lookupActivity returns a session's activity timestamp (ended_at, then
+// started_at, then created_at) via the service, cached per call so each
+// session is fetched at most once. ok is false when the lookup fails, so
+// callers can pick their own fallback.
+func (t *toolset) lookupActivity(
+	ctx context.Context, id string, cache map[string]string,
+) (string, bool) {
+	if a, ok := cache[id]; ok {
+		return a, true
+	}
+	if d, err := t.svc.Get(ctx, id); err == nil && d != nil {
+		a := sessionActivity(d.Session)
+		cache[id] = a
+		return a, true
+	}
+	return "", false
+}
+
 // --- search_sessions ---
 
 type searchSessionsIn struct {
@@ -92,11 +118,23 @@ func (t *toolset) searchSessions(
 		return nil, searchSessionsOut{}, err
 	}
 	now := t.clock()
+	activity := make(map[string]string)
 	out := searchSessionsOut{Results: make([]sessionHit, 0, len(res.Results))}
 	for _, r := range res.Results {
-		if !in.IncludeActive && isActiveSince(r.SessionEndedAt, now) {
-			out.ExcludedActive++
-			continue
+		if !in.IncludeActive {
+			act := r.SessionEndedAt
+			if act == "" {
+				// Search results COALESCE only ended_at/started_at; a current,
+				// timestampless session has an empty SessionEndedAt, so fall
+				// back to created_at via a lookup like search_content does.
+				if a, ok := t.lookupActivity(ctx, r.SessionID, activity); ok {
+					act = a
+				}
+			}
+			if isActiveSince(act, now) {
+				out.ExcludedActive++
+				continue
+			}
 		}
 		name, _ := truncate(r.Name, nameMaxChars)
 		out.Results = append(out.Results, sessionHit{
@@ -252,7 +290,7 @@ func (t *toolset) sessionOverview(
 		return nil, sessionOverviewOut{}, err
 	}
 	for _, m := range msgs.Messages {
-		if m.IsSystem || !roleAllowed(m.Role, nil) {
+		if isSystemMessage(m) || !roleAllowed(m.Role, nil) {
 			continue
 		}
 		content, cut := truncate(m.Content, overviewMaxChars)
@@ -316,7 +354,7 @@ func (t *toolset) getMessages(
 		in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
 	out := getMessagesOut{Messages: make([]messageOut, 0, len(res.Messages))}
 	for _, m := range res.Messages {
-		if m.IsSystem || !roleAllowed(m.Role, in.Roles) {
+		if isSystemMessage(m) || !roleAllowed(m.Role, in.Roles) {
 			out.Filtered++
 			continue
 		}
@@ -396,16 +434,11 @@ func (t *toolset) searchContent(
 	out := searchContentOut{Matches: make([]contentMatch, 0, len(res.Matches))}
 	for _, m := range res.Matches {
 		if !in.IncludeActive {
-			ts, ok := activity[m.SessionID]
+			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
 			if !ok {
-				if d, gerr := t.svc.Get(ctx, m.SessionID); gerr == nil && d != nil {
-					ts = sessionActivity(d.Session)
-					activity[m.SessionID] = ts
-				} else {
-					// Lookup failed: fall back to the match timestamp so the
-					// guard degrades to its prior behavior rather than erroring.
-					ts = m.Timestamp
-				}
+				// Lookup failed: fall back to the match timestamp so the
+				// guard degrades to its prior behavior rather than erroring.
+				ts = m.Timestamp
 			}
 			if isActiveSince(ts, now) {
 				out.ExcludedActive++

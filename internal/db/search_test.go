@@ -9,6 +9,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsSystemPrefixed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		content string
+		role    string
+		want    bool
+	}{
+		{"plain user message", "fix the build", "user", false},
+		{"continued-session prefix", SystemMsgPrefixes[0] + " from a prior run", "user", true},
+		{"task-notification prefix", "<task-notification>done</task-notification>", "user", true},
+		{"leading whitespace then prefix", "\n\t  <command-name>/foo", "user", true},
+		{"bom then prefix", "\uFEFF<command-message>x", "user", true},
+		{"assistant role is never system-prefixed", SystemMsgPrefixes[0], "assistant", false},
+		{"prefix mid-content does not match", "see <task-notification> later", "user", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, IsSystemPrefixed(tc.content, tc.role))
+		})
+	}
+}
+
 func TestSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
