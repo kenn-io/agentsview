@@ -143,7 +143,7 @@ func TestParseWarpDB_StandardConversation(t *testing.T) {
 	defer db.Close()
 	seedWarpConversation(t, seeder)
 
-	sessions, err := ParseWarpDB(dbPath, "testmachine")
+	sessions, err := parseWarpAll(dbPath, "testmachine")
 	require.NoError(t, err, "ParseWarpDB")
 
 	require.Len(t, sessions, 1, "sessions len")
@@ -183,10 +183,10 @@ func TestParseWarpSession_SingleConversation(t *testing.T) {
 	defer db.Close()
 	seedWarpConversation(t, seeder)
 
-	sess, msgs, err := ParseWarpSession(
+	sess, msgs, err := parseWarpSession(
 		dbPath, "conv-001", "testmachine",
 	)
-	require.NoError(t, err, "ParseWarpSession")
+	require.NoError(t, err, "parseWarpSession")
 	require.NotNil(t, sess, "expected non-nil session")
 
 	assert.Equal(t, "warp:conv-001", sess.ID, "ID")
@@ -222,7 +222,7 @@ func TestParseWarpDB_EmptyConversation(t *testing.T) {
 		"conv-empty", "{}", "2026-04-07 10:00:00",
 	)
 
-	sessions, err := ParseWarpDB(dbPath, "m")
+	sessions, err := parseWarpAll(dbPath, "m")
 	require.NoError(t, err, "ParseWarpDB")
 	assert.Empty(t, sessions, "sessions len")
 }
@@ -241,13 +241,13 @@ func TestParseWarpDB_NoQueryText(t *testing.T) {
 		`[]`, "/tmp", `"Completed"`, "auto",
 	)
 
-	sessions, err := ParseWarpDB(dbPath, "m")
+	sessions, err := parseWarpAll(dbPath, "m")
 	require.NoError(t, err, "ParseWarpDB")
 	assert.Empty(t, sessions, "sessions len")
 }
 
 func TestParseWarpDB_NonExistent(t *testing.T) {
-	sessions, err := ParseWarpDB(
+	sessions, err := parseWarpAll(
 		"/nonexistent/warp.sqlite", "m",
 	)
 	require.NoError(t, err)
@@ -295,13 +295,13 @@ func TestParseWarpTimestamp(t *testing.T) {
 	}
 }
 
-func TestFindWarpDBPath(t *testing.T) {
+func TestWarpDBPath(t *testing.T) {
 	// Create a temp dir with warp.sqlite
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "warp.sqlite")
 
 	// Before creating the file
-	assert.Empty(t, FindWarpDBPath(dir), "not found")
+	assert.Empty(t, warpDBPath(dir), "not found")
 
 	// Create the file (sql.Open is lazy; Ping forces creation)
 	db, err := sql.Open("sqlite3", dbPath)
@@ -309,7 +309,7 @@ func TestFindWarpDBPath(t *testing.T) {
 	require.NoError(t, db.Ping())
 	db.Close()
 
-	assert.Equal(t, dbPath, FindWarpDBPath(dir), "found")
+	assert.Equal(t, dbPath, warpDBPath(dir), "found")
 }
 
 func TestParseWarpConversationMeta(t *testing.T) {
