@@ -788,6 +788,25 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	assert.Equal(t, 4242, out)
 	assert.Zero(t, cacheCreate)
 	assert.Zero(t, cacheRead)
+
+	in, out, cacheCreate, cacheRead = parseUsageTokenCounters(
+		`{"input_tokens":"-5","cache_read_input_tokens":"100",` +
+			`"output_tokens":"42"}`,
+	)
+	assert.Equal(t, -5, in)
+	assert.Equal(t, 42, out)
+	assert.Zero(t, cacheCreate)
+	assert.Equal(t, 100, cacheRead)
+
+	in, out, cacheCreate, cacheRead = parseUsageTokenCounters(
+		`{"metadata":{"input_tokens":999},` +
+			`"note":"\"output_tokens\":777",` +
+			`"output_tokens":42}`,
+	)
+	assert.Zero(t, in)
+	assert.Equal(t, 42, out)
+	assert.Zero(t, cacheCreate)
+	assert.Zero(t, cacheRead)
 }
 
 func TestUsageAggregationClampsMessageTokenJSON(t *testing.T) {

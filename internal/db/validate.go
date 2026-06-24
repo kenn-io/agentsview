@@ -189,10 +189,10 @@ func SanitizeMessage(m *Message) ValidationStats {
 	sanitizeStringField(&m.SourceUUID, &stats)
 	sanitizeStringField(&m.SourceParentUUID, &stats)
 
+	sanitizeStringField(&m.Model, &stats)
 	if ClampModel(&m.Model) {
 		stats.ModelClamped++
 	}
-	sanitizeStringField(&m.Model, &stats)
 
 	if clampTokens(&m.ContextTokens) {
 		stats.TokensClamped++
@@ -217,10 +217,10 @@ func SanitizeUsageEvent(ev *UsageEvent) ValidationStats {
 	sanitizeStringField(&ev.CostSource, &stats)
 	sanitizeStringField(&ev.DedupKey, &stats)
 
+	sanitizeStringField(&ev.Model, &stats)
 	if ClampModel(&ev.Model) {
 		stats.ModelClamped++
 	}
-	sanitizeStringField(&ev.Model, &stats)
 
 	if clampUsageEventTokens(ev.Source, &ev.InputTokens) {
 		stats.TokensClamped++

@@ -80,6 +80,16 @@ func TestSanitizeMessage(t *testing.T) {
 			wantStats: validationStats{ModelClamped: 1},
 		},
 		{
+			name: "dirty model prefix stripped before clamp",
+			in: db.Message{
+				Role:  "assistant",
+				Model: strings.Repeat("\x00", maxModelLen+16) + "claude-opus-4",
+			},
+			wantRole:  "assistant",
+			wantModel: "claude-opus-4",
+			wantStats: validationStats{ControlCharsStripped: 1},
+		},
+		{
 			name: "out-of-enum role coerced to blank",
 			in: db.Message{
 				Role:    "wizard",
@@ -321,6 +331,18 @@ func TestSanitizeUsageEvent(t *testing.T) {
 	// InputTokens, CacheCreationInputTokens (negative), ReasoningTokens.
 	assert.Equal(t, 3, stats.TokensClamped)
 	assert.Equal(t, 1, stats.TimestampsBlanked)
+}
+
+func TestSanitizeUsageEventStripsDirtyModelPrefixBeforeClamp(t *testing.T) {
+	ev := db.UsageEvent{
+		Source: "api",
+		Model:  strings.Repeat("\x00", maxModelLen+16) + "claude-opus-4",
+	}
+	stats := sanitizeUsageEvent(&ev)
+
+	assert.Equal(t, "claude-opus-4", ev.Model)
+	assert.Equal(t, 1, stats.ControlCharsStripped)
+	assert.Zero(t, stats.ModelClamped)
 }
 
 func TestSanitizeSession(t *testing.T) {
