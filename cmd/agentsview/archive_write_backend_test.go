@@ -15,33 +15,23 @@ import (
 )
 
 func TestLocalArchiveWriteBackendPGPushStopsAfterCanceledLocalSync(t *testing.T) {
-	backend := testLocalArchiveWriteBackend(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	var err error
-	captureStdout(t, func() {
-		_, err = backend.PGPush(
-			ctx, config.PGConfig{}, PGPushConfig{}, nil, nil,
-		)
-	})
-
-	require.ErrorIs(t, err, context.Canceled)
+	testLocalArchivePushStopsAfterCanceledSync(t,
+		func(backend *localArchiveWriteBackend, ctx context.Context) error {
+			_, err := backend.PGPush(
+				ctx, config.PGConfig{}, PGPushConfig{}, nil, nil,
+			)
+			return err
+		})
 }
 
 func TestLocalArchiveWriteBackendDuckDBPushStopsAfterCanceledLocalSync(t *testing.T) {
-	backend := testLocalArchiveWriteBackend(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	var err error
-	captureStdout(t, func() {
-		_, err = backend.DuckDBPush(
-			ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-		)
-	})
-
-	require.ErrorIs(t, err, context.Canceled)
+	testLocalArchivePushStopsAfterCanceledSync(t,
+		func(backend *localArchiveWriteBackend, ctx context.Context) error {
+			_, err := backend.DuckDBPush(
+				ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
+			)
+			return err
+		})
 }
 
 func TestRunPGWatchStartupSyncFallsBackAfterAbortedResync(t *testing.T) {
@@ -65,11 +55,9 @@ func TestRunPGWatchStartupSyncFallsBackAfterAbortedResync(t *testing.T) {
 
 func TestLocalArchiveWriteBackendPGPushWatchCanceledStartupIsClean(t *testing.T) {
 	backend := testLocalArchiveWriteBackend(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
 
 	err := backend.PGPushWatch(
-		ctx,
+		canceledContext(),
 		config.PGConfig{},
 		PGPushConfig{},
 		nil,
@@ -99,6 +87,31 @@ func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	daemonBackend, ok := backend.(daemonArchiveWriteBackend)
 	require.True(t, ok)
 	assert.True(t, daemonBackend.appCfg.NoSync)
+}
+
+// canceledContext returns a context that has already been canceled.
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
+}
+
+// testLocalArchivePushStopsAfterCanceledSync asserts that a local push aborts
+// with context.Canceled when its context is already canceled. push runs the
+// backend-specific push call and returns its error.
+func testLocalArchivePushStopsAfterCanceledSync(
+	t *testing.T,
+	push func(*localArchiveWriteBackend, context.Context) error,
+) {
+	t.Helper()
+	backend := testLocalArchiveWriteBackend(t)
+
+	var err error
+	captureStdout(t, func() {
+		err = push(backend, canceledContext())
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func testLocalArchiveWriteBackend(t *testing.T) *localArchiveWriteBackend {
