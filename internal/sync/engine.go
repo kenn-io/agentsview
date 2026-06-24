@@ -6906,6 +6906,11 @@ func computeFinalStreak(calls []signals.ToolCallRow) int {
 func (e *Engine) RecomputeSignals(
 	ctx context.Context, sessionID string,
 ) error {
+	if e.refuseWriteInForceParse("RecomputeSignals") {
+		return errors.New(
+			"RecomputeSignals refused on report-only parse-diff engine",
+		)
+	}
 	return e.recomputeSignalsFromDB(ctx, sessionID)
 }
 
@@ -10109,6 +10114,11 @@ func (e *Engine) ScanSecrets(
 	ctx context.Context, in SecretScanInput,
 	progress func(SecretScanProgress),
 ) (SecretScanSummary, error) {
+	if e.refuseWriteInForceParse("ScanSecrets") {
+		return SecretScanSummary{}, errors.New(
+			"ScanSecrets refused on report-only parse-diff engine",
+		)
+	}
 	ver := secrets.RulesVersion()
 	ids, err := e.db.SecretScanCandidates(ctx, db.SecretScanCandidateFilter{
 		CurrentVersion: ver, OnlyStale: in.Backfill,

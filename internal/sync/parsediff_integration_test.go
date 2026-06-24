@@ -1686,7 +1686,10 @@ func TestParseDiffEngineRefusesWrites(t *testing.T) {
 	env := setupTestEnv(t)
 
 	path := env.writeClaudeSession(t, "test-proj", "pd-guard.jsonl",
-		parseDiffClaudeContent("guard prompt", "guard reply"))
+		parseDiffClaudeContent(
+			"guard prompt with AKIA7QHWN2DKR4FYPLJM",
+			"guard reply",
+		))
 
 	diffEngine := newParseDiffEngine(env)
 	ctx := context.Background()
@@ -1732,6 +1735,40 @@ func TestParseDiffEngineRefusesWrites(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 1, Synced: 1,
 	})
+
+	const sessionID = "pd-guard"
+	mutateDB(t, env,
+		"UPDATE sessions SET secret_leak_count = 0, "+
+			"secrets_rules_version = '', quality_signal_version = 0"+
+			" WHERE id = ?", sessionID)
+	mutateDB(t, env,
+		"DELETE FROM secret_findings WHERE session_id = ?", sessionID)
+	require.Error(t, diffEngine.RecomputeSignals(ctx, sessionID),
+		"RecomputeSignals on a report-only engine must error")
+	mutateDB(t, env,
+		"UPDATE sessions SET secret_leak_count = 0, "+
+			"secrets_rules_version = '', quality_signal_version = 0"+
+			" WHERE id = ?", sessionID)
+	mutateDB(t, env,
+		"DELETE FROM secret_findings WHERE session_id = ?", sessionID)
+	_, err = diffEngine.ScanSecrets(
+		ctx, sync.SecretScanInput{Backfill: true}, nil,
+	)
+	require.Error(t, err,
+		"ScanSecrets on a report-only engine must error")
+	stored, err := env.db.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err, "GetSessionFull after refused scans")
+	require.NotNil(t, stored, "stored session after refused scans")
+	assert.Zero(t, stored.SecretLeakCount,
+		"refused scans must not update secret_leak_count")
+	assert.Empty(t, stored.SecretsRulesVersion,
+		"refused scans must not update secrets_rules_version")
+	assert.Nil(t, stored.StoredQualitySignals(),
+		"refused recompute must not update quality signals")
+	findings, err := env.db.SessionSecretFindings(ctx, sessionID)
+	require.NoError(t, err, "SessionSecretFindings after refused scans")
+	assert.Empty(t, findings,
+		"refused scans must not persist secret findings")
 }
 
 func TestParseDiffPresenceSweep(t *testing.T) {
