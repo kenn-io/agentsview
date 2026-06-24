@@ -16,12 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/kit/daemon"
 )
-
-func pgConfigForTest(projects, exclude []string) config.PGConfig {
-	return config.PGConfig{Projects: projects, ExcludeProjects: exclude}
-}
 
 func TestResolvePushProjects(t *testing.T) {
 	tests := []struct {
@@ -73,23 +68,18 @@ func TestResolvePushProjects(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pg := pgConfigForTest(tt.pgProjects, tt.pgExclude)
+			pg := config.PGConfig{
+				Projects:        tt.pgProjects,
+				ExcludeProjects: tt.pgExclude,
+			}
 			inc, exc, err := resolvePushProjects(pg, tt.cfg)
 			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
+				require.Error(t, err)
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !equalStrings(inc, tt.wantInclude) {
-				t.Errorf("include = %v, want %v", inc, tt.wantInclude)
-			}
-			if !equalStrings(exc, tt.wantExclude) {
-				t.Errorf("exclude = %v, want %v", exc, tt.wantExclude)
-			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantInclude, inc)
+			assert.Equal(t, tt.wantExclude, exc)
 		})
 	}
 }
@@ -111,21 +101,16 @@ func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
 		assert.Equal(t, "mirror", req.PG.Schema)
 		assert.Equal(t, "laptop", req.PG.MachineName)
 		assert.True(t, req.PG.AllowInsecure)
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(postgres.PushResult{
+		writeJSONPushResult(t, w, postgres.PushResult{
 			SessionsPushed: 2,
 			MessagesPushed: 3,
 			Duration:       time.Second,
-		}))
+		})
 	})
 
-	backend := daemonArchiveWriteBackend{
-		appCfg: config.Config{AuthToken: "secret"},
-		tr: transport{
-			Mode: transportHTTP,
-			URL:  ts.URL,
-		},
-	}
+	backend := newDaemonArchiveWriteBackendForTest(
+		config.Config{AuthToken: "secret"}, ts.URL,
+	)
 	result, err := backend.PGPush(
 		context.Background(),
 		config.PGConfig{
@@ -178,10 +163,7 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 		r *http.Request,
 	) {
 		startupPushes++
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(postgres.PushResult{
-			SessionsPushed: 1,
-		}))
+		writeJSONPushResult(t, w, postgres.PushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
 	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
@@ -190,20 +172,13 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	) {
 		resolvedPushes++
 		cancel()
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(postgres.PushResult{
-			SessionsPushed: 1,
-		}))
+		writeJSONPushResult(t, w, postgres.PushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
 
-	backend := daemonArchiveWriteBackend{
-		appCfg: config.Config{DataDir: dataDir},
-		tr: transport{
-			Mode: transportHTTP,
-			URL:  startup.URL,
-		},
-	}
+	backend := newDaemonArchiveWriteBackendForTest(
+		config.Config{DataDir: dataDir}, startup.URL,
+	)
 	err := backend.PGPushWatch(
 		ctx,
 		config.PGConfig{URL: "postgres://user:pass@host/db"},
@@ -219,43 +194,40 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
+// pushRuntimeServer starts a daemon test server that serves a single push route
+// at pushPath in addition to the standard daemon ping probe.
 func pushRuntimeServer(
 	t *testing.T,
 	pushPath string,
 	pushHandler http.HandlerFunc,
 ) *httptest.Server {
 	t.Helper()
-	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
-		Service: daemonService,
-		Version: "test",
+	return daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		pushPath: pushHandler,
 	})
-	ts := httptest.NewServer(http.HandlerFunc(func(
-		w http.ResponseWriter,
-		r *http.Request,
-	) {
-		switch r.URL.Path {
-		case "/api/ping":
-			ping.ServeHTTP(w, r)
-		case pushPath:
-			pushHandler(w, r)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(ts.Close)
-	return ts
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+// writeJSONPushResult encodes result as the JSON daemon push response.
+func writeJSONPushResult(
+	t *testing.T,
+	w http.ResponseWriter,
+	result postgres.PushResult,
+) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	require.NoError(t, json.NewEncoder(w).Encode(result))
+}
+
+// newDaemonArchiveWriteBackendForTest builds a daemon-backed archive write
+// backend that talks HTTP to url.
+func newDaemonArchiveWriteBackendForTest(
+	appCfg config.Config,
+	url string,
+) daemonArchiveWriteBackend {
+	return daemonArchiveWriteBackend{
+		appCfg: appCfg,
+		tr:     transport{Mode: transportHTTP, URL: url},
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // fakeTarget is a test double for pgTarget.
@@ -276,53 +248,63 @@ func (f *fakeTarget) Push(
 }
 func (f *fakeTarget) Close() error { f.closed++; return nil }
 
-func TestPgPusher_ConnectsOnceAndReuses(t *testing.T) {
-	target := &fakeTarget{}
-	connects := 0
+// pusherRecorder tracks how many times a test pgPusher dialed a connection.
+type pusherRecorder struct {
+	connects int
+}
+
+// newTestPgPusher builds a pgPusher whose localSync is a no-op and whose
+// connect hands out the supplied targets in order, recording each dial.
+func newTestPgPusher(targets ...*fakeTarget) (*pgPusher, *pusherRecorder) {
+	rec := &pusherRecorder{}
 	p := &pgPusher{
 		localSync: func(context.Context) error { return nil },
 		connect: func() (pgTarget, error) {
-			connects++
-			return target, nil
+			tgt := targets[rec.connects]
+			rec.connects++
+			return tgt, nil
 		},
 	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("push 1: %v", err)
-	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("push 2: %v", err)
-	}
-	if connects != 1 {
-		t.Fatalf("connects = %d, want 1 (connection reused)", connects)
-	}
-	if target.pushes != 2 {
-		t.Fatalf("pushes = %d, want 2", target.pushes)
-	}
+	return p, rec
+}
+
+// captureLogOutput redirects the standard logger into a buffer for the
+// duration of the test and restores the previous writer on cleanup.
+func captureLogOutput(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
+// requireReconnectAfterTargetError verifies that a push failure on first closes
+// the target and the next push dials a fresh connection that succeeds.
+func requireReconnectAfterTargetError(t *testing.T, first *fakeTarget) {
+	t.Helper()
+	p, rec := newTestPgPusher(first, &fakeTarget{})
+	require.Error(t, p.push(context.Background(), reasonChange, false))
+	require.Equal(t, 1, first.closed, "errored target should have been closed")
+	require.NoError(t, p.push(context.Background(), reasonChange, false))
+	require.Equal(t, 2, rec.connects, "should reconnect after error")
+}
+
+func TestPgPusher_ConnectsOnceAndReuses(t *testing.T) {
+	target := &fakeTarget{}
+	p, rec := newTestPgPusher(target)
+	require.NoError(t, p.push(context.Background(), reasonChange, false))
+	require.NoError(t, p.push(context.Background(), reasonChange, false))
+	assert.Equal(t, 1, rec.connects, "connection should be reused")
+	assert.Equal(t, 2, target.pushes)
 }
 
 func TestPgPusher_ReconnectsAfterPushError(t *testing.T) {
-	connects := 0
-	targets := []*fakeTarget{{pushErr: errors.New("conn reset")}, {}}
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			t := targets[connects]
-			connects++
-			return t, nil
-		},
-	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected first push to error")
-	}
-	if targets[0].closed != 1 {
-		t.Fatal("errored target should have been closed")
-	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("second push should reconnect and succeed: %v", err)
-	}
-	if connects != 2 {
-		t.Fatalf("connects = %d, want 2 (reconnect after error)", connects)
-	}
+	requireReconnectAfterTargetError(t, &fakeTarget{pushErr: errors.New("conn reset")})
+}
+
+func TestPgPusher_ReconnectsAfterEnsureSchemaError(t *testing.T) {
+	requireReconnectAfterTargetError(t, &fakeTarget{ensureErr: errors.New("schema down")})
 }
 
 func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
@@ -332,9 +314,7 @@ func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
 			return nil, errors.New("dial timeout")
 		},
 	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected connect error to surface")
-	}
+	require.Error(t, p.push(context.Background(), reasonChange, false))
 }
 
 func TestPgPusher_LocalSyncErrorSkipsConnect(t *testing.T) {
@@ -346,37 +326,8 @@ func TestPgPusher_LocalSyncErrorSkipsConnect(t *testing.T) {
 			return &fakeTarget{}, nil
 		},
 	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected local sync error")
-	}
-	if connects != 0 {
-		t.Fatal("connect should not run when local sync fails")
-	}
-}
-
-func TestPgPusher_ReconnectsAfterEnsureSchemaError(t *testing.T) {
-	connects := 0
-	targets := []*fakeTarget{{ensureErr: errors.New("schema down")}, {}}
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			tgt := targets[connects]
-			connects++
-			return tgt, nil
-		},
-	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected first push to error on ensure schema")
-	}
-	if targets[0].closed != 1 {
-		t.Fatal("errored target should have been closed")
-	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("second push should reconnect and succeed: %v", err)
-	}
-	if connects != 2 {
-		t.Fatalf("connects = %d, want 2 (reconnect after ensure schema error)", connects)
-	}
+	require.Error(t, p.push(context.Background(), reasonChange, false))
+	assert.Equal(t, 0, connects, "connect should not run when local sync fails")
 }
 
 func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
@@ -387,17 +338,9 @@ func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
 			Errors:         2,
 		},
 	}
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(prev) })
+	logs := captureLogOutput(t)
 
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			return target, nil
-		},
-	}
+	p, _ := newTestPgPusher(target)
 	require.NoError(t, p.push(context.Background(), reasonChange, false))
 
 	got := logs.String()
@@ -414,17 +357,9 @@ func TestPgPusher_LogsSkippedConflicts(t *testing.T) {
 			SkippedConflicts: 2,
 		},
 	}
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(prev) })
+	logs := captureLogOutput(t)
 
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			return target, nil
-		},
-	}
+	p, _ := newTestPgPusher(target)
 	require.NoError(t, p.push(context.Background(), reasonChange, false))
 
 	got := logs.String()
@@ -438,9 +373,7 @@ func TestPgPusher_LogsSkippedConflicts(t *testing.T) {
 func TestResolveWatchTargets_ErrorsOnEmptyURL(t *testing.T) {
 	appCfg := config.Config{} // no PG URL
 	_, _, _, err := resolveWatchTargets(appCfg, PGPushConfig{})
-	if err == nil {
-		t.Fatal("expected error when url not configured")
-	}
+	require.Error(t, err, "expected error when url not configured")
 }
 
 func TestResolveWatchTargets_ResolvesProjects(t *testing.T) {
@@ -453,13 +386,7 @@ func TestResolveWatchTargets_ResolvesProjects(t *testing.T) {
 	pg, inc, _, err := resolveWatchTargets(
 		appCfg, PGPushConfig{ProjectsFlag: "a,b"},
 	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if pg.URL == "" {
-		t.Fatal("expected resolved URL")
-	}
-	if !equalStrings(inc, []string{"a", "b"}) {
-		t.Fatalf("include = %v, want [a b]", inc)
-	}
+	require.NoError(t, err)
+	assert.NotEmpty(t, pg.URL, "expected resolved URL")
+	assert.Equal(t, []string{"a", "b"}, inc)
 }
