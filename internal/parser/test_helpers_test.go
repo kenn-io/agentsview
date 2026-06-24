@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"testing"
@@ -11,6 +12,43 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// parseChatGPTExport parses a ChatGPT export through the ChatGPT import-only
+// provider. It is the test harness replacement for the former
+// ParseChatGPTExport free function.
+func parseChatGPTExport(
+	dir string,
+	assets AssetResolver,
+	onConversation func(ParseResult) error,
+) error {
+	p, ok := NewProvider(AgentChatGPT, ProviderConfig{})
+	if !ok {
+		return fmt.Errorf("chatgpt provider unavailable")
+	}
+	exporter, ok := p.(ChatGPTExportParser)
+	if !ok {
+		return fmt.Errorf("chatgpt provider does not support exports")
+	}
+	return exporter.ParseChatGPTExport(dir, assets, onConversation)
+}
+
+// parseClaudeAIExport parses a Claude.ai export through the Claude.ai
+// import-only provider. It is the test harness replacement for the former
+// ParseClaudeAIExport free function.
+func parseClaudeAIExport(
+	r io.Reader,
+	onConversation func(ParseResult) error,
+) error {
+	p, ok := NewProvider(AgentClaudeAI, ProviderConfig{})
+	if !ok {
+		return fmt.Errorf("claude.ai provider unavailable")
+	}
+	exporter, ok := p.(ClaudeAIExportParser)
+	if !ok {
+		return fmt.Errorf("claude.ai provider does not support exports")
+	}
+	return exporter.ParseClaudeAIExport(r, onConversation)
+}
 
 // Timestamp constants for test data.
 const (

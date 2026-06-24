@@ -74,15 +74,11 @@ type EngineConfig struct {
 	// that wrote data. Safe to leave nil (e.g., in PG serve mode
 	// where the engine is not run).
 	Emitter Emitter
-	// ProviderFactories and ProviderMigrationModes let stacked provider
-	// migration branches opt concrete providers into side-effect-free
-	// caller-level shadow observation before provider writes become
-	// authoritative. Nil uses the parser package registry/manifest.
+	// ProviderFactories and ProviderMigrationModes select which concrete
+	// providers own discovery and parsing for their agents. Nil uses the
+	// parser package registry/manifest.
 	ProviderFactories      []parser.ProviderFactory
 	ProviderMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
-	// ProviderShadowRecorder receives serialized shadow observations.
-	// Nil logs only provider errors or mismatches.
-	ProviderShadowRecorder func(ProviderShadowComparison)
 }
 
 // Engine orchestrates session file discovery and sync.
@@ -117,8 +113,6 @@ type Engine struct {
 	emitter                Emitter
 	providerFactories      map[parser.AgentType]parser.ProviderFactory
 	providerMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
-	providerShadowMu       gosync.Mutex
-	providerShadowRecorder func(ProviderShadowComparison)
 
 	// forceParse disables every stored-state skip (skip cache,
 	// size/mtime/data_version checks, incremental JSONL deltas) so
@@ -226,7 +220,6 @@ func NewEngine(
 		emitter:                 cfg.Emitter,
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
-		providerShadowRecorder:  cfg.ProviderShadowRecorder,
 	}
 }
 
@@ -587,8 +580,7 @@ func (e *Engine) classifyProviderChangedPath(
 	for _, agentType := range agents {
 		mode := e.providerMigrationModes[agentType]
 		switch mode {
-		case parser.ProviderMigrationShadowCompare,
-			parser.ProviderMigrationProviderAuthoritative:
+		case parser.ProviderMigrationProviderAuthoritative:
 		default:
 			continue
 		}
@@ -984,63 +976,12 @@ func (e *Engine) classifyOnePath(
 	if df, ok := e.classifyContainerPath(path, pathExists); ok {
 		return df, true
 	}
-	// Reasonix sidecar delete events arrive after .jsonl.meta no longer
-	// exists; classify them against the sibling transcript before the
-	// generic missing-path guard.
-	if strings.HasSuffix(path, ".jsonl.meta") {
-		if df, ok := e.classifyReasonixPath(path); ok {
-			return df, true
-		}
-	}
-	if !pathExists {
-		return parser.DiscoveredFile{}, false
-	}
-	if df, ok := e.classifyReasonixPath(path); ok {
-		return df, true
-	}
-
-	// Claude change-path classification is provider-authoritative; the
-	// Claude provider's SourcesForChangedPath reproduces the
-	// <claudeDir>/<project>/<session>.jsonl and
-	// <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
-	// shapes, so the legacy block was removed when Claude was folded
-	// onto its provider.
-
-	if df, ok := e.classifyAiderPath(path); ok {
-		return df, true
-	}
-
-	// Antigravity IDE and CLI source/sidecar paths (conversations/<uuid>.db,
-	// conversations|implicit/<uuid>.pb, their WAL/SHM and trajectory.json
-	// sidecars, and annotations/brain/history.jsonl) are owned by the
-	// provider-authoritative SourcesForChangedPath path in
-	// classifyProviderChangedPath.
-
-	return parser.DiscoveredFile{}, false
-}
-
-// classifyAiderPath handles Aider's rootless chat-history layout:
-//
-//	<aiderRoot>/.../.aider.chat.history.md
-//
-// extracted from classifyOnePath to stay within nilaway CFG limits.
-func (e *Engine) classifyAiderPath(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	if filepath.Base(path) != parser.AiderHistoryFileName() {
-		return parser.DiscoveredFile{}, false
-	}
-	for _, aiderDir := range e.agentDirs[parser.AgentAider] {
-		if aiderDir == "" {
-			continue
-		}
-		if _, ok := isUnder(aiderDir, path); ok {
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentAider,
-			}, true
-		}
-	}
+	// All file-backed agents are provider-authoritative: changed-path
+	// classification (including Reasonix's .jsonl.meta sidecar mapping,
+	// Aider's rootless history files, Claude's project transcripts, and
+	// Antigravity's sidecar fan-out) is owned by each provider's
+	// SourcesForChangedPath via classifyProviderChangedPath, so no legacy
+	// classifier remains here.
 	return parser.DiscoveredFile{}, false
 }
 
@@ -2342,10 +2283,9 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	if file.Agent == parser.AgentCodex {
 		return discoveredFileMtime(file)
 	}
-	// Only provider-authoritative sources resolve freshness through the
-	// provider Fingerprint. Shadow-compare files keep the legacy mtime path so
-	// agent-specific incremental-sync behavior (for example the Codex index
-	// refresh below) is unchanged while a provider is still shadowed.
+	// Provider-authoritative sources resolve freshness through the provider
+	// Fingerprint so composite provider-owned source state participates in
+	// incremental-sync cutoff checks.
 	if file.ProviderSource != nil && file.ProviderProcess {
 		if mtime, ok, err := e.providerSourceMtime(ctx, file); err != nil {
 			return 0, err
@@ -3291,122 +3231,69 @@ func (e *Engine) processFile(
 		return res
 	}
 
-	var info os.FileInfo
-	var err error
-	if strings.HasPrefix(file.Path, "s3://") {
-		if file.SourceMtime == 0 {
-			obj, err := statS3SourceObject(file)
-			if err != nil {
-				return processResult{
-					err: fmt.Errorf(
-						"stat %s: %w", file.Path, err,
-					),
-				}
-			}
-			file.SourceSize = obj.Size
-			file.SourceMtime = obj.LastModified.UnixNano()
-			file.SourceFingerprint = obj.Fingerprint
+	// Every registered agent is provider-authoritative, so processProviderFile
+	// owns all local-file processing. The only sources that fall through are
+	// s3:// Claude/Codex objects, which bypass the provider (its source sets
+	// read local files) and use the legacy S3 sync path. Anything else is an
+	// unrecognized agent type.
+	if !strings.HasPrefix(file.Path, "s3://") {
+		return processResult{
+			err: fmt.Errorf("unknown agent type: %s", file.Agent),
 		}
-		info, err = s3SourceFileInfo(file)
-	} else {
-		statPath := file.Path
-		if dbPath, _, ok := parseKiroSQLiteVirtualPath(file.Path); ok {
-			statPath = dbPath
-		} else if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
-			statPath = dbPath
-		} else if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, shelleyDBFile); ok {
-			statPath = dbPath
-		} else if historyPath, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
-			// aider stores "<historyFile>#<runIdx>"; stat the physical file
-			// so SyncSingleSession (live watcher / on-demand re-sync) works.
-			statPath = historyPath
-		}
-		info, err = os.Stat(statPath)
 	}
-	if err != nil {
-		if os.IsNotExist(err) &&
-			file.ForceParse &&
-			providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) {
-			return processResult{forceReplace: true}
+
+	if file.SourceMtime == 0 {
+		obj, err := statS3SourceObject(file)
+		if err != nil {
+			return processResult{
+				err: fmt.Errorf("stat %s: %w", file.Path, err),
+			}
 		}
+		file.SourceSize = obj.Size
+		file.SourceMtime = obj.LastModified.UnixNano()
+		file.SourceFingerprint = obj.Fingerprint
+	}
+	info, err := s3SourceFileInfo(file)
+	if err != nil {
 		return processResult{
 			err: fmt.Errorf("stat %s: %w", file.Path, err),
 		}
 	}
 
-	// Capture mtime once from the initial stat so all
-	// downstream cache operations use a consistent value.
+	// Capture mtime once from the initial stat so all downstream cache
+	// operations use a consistent value.
 	mtime := info.ModTime().UnixNano()
-	if file.Agent == parser.AgentCowork {
-		mtime = parser.CoworkSessionMtime(file.Path, mtime)
-	}
-	if file.Agent == parser.AgentVibe {
-		// Vibe metadata (title, model, usage, canonical ID) lives in the
-		// sibling meta.json, so the skip-cache key must move when either file
-		// changes. Match vibeEffectiveInfo (max of messages.jsonl and
-		// meta.json) so a fixed meta.json retries a cached parse error instead
-		// of staying skipped on the unchanged transcript mtime.
-		mtime = vibeEffectiveInfo(file.Path, info).ModTime().UnixNano()
-	}
-	if file.Agent == parser.AgentReasonix {
-		mtime = reasonixEffectiveInfo(file.Path, info).ModTime().UnixNano()
-	}
 	cacheSkip := e.shouldCacheSkip(file)
-	sourceFingerprint := ""
-	if isS3SourcePath(file.Path) {
-		sourceFingerprint = s3SourceFingerprint(file)
-	}
+	sourceFingerprint := s3SourceFingerprint(file)
 
-	// Skip files cached from a previous sync (parse errors
-	// or non-interactive sessions) whose mtime is unchanged.
-	// Legacy codex_exec entries from pre-bulk-sync builds are
-	// scrubbed once at engine construction by
-	// migrateLegacyCodexExecSkips, so this check can treat
-	// the skip cache as authoritative without per-file
-	// re-validation.
+	// Skip files cached from a previous sync whose mtime and source
+	// fingerprint are unchanged.
 	if cacheSkip && !e.forceParse && !file.ForceParse { // parse-diff: ignore the skip cache
 		if e.shouldUseCachedSkip(file, mtime, sourceFingerprint) {
 			if e.pathNeedsCachedSkipBypass(file.Path) {
 				e.clearSkip(file.Path)
 			} else {
-				res := processResult{
+				return processResult{
 					skip:      true,
 					mtime:     mtime,
 					cacheSkip: true,
 				}
-				e.observeProviderShadow(ctx, file, res)
-				return res
 			}
 		}
 	}
 
 	var res processResult
 	switch file.Agent {
-	case parser.AgentClaude:
-		// Non-S3 Claude is provider-authoritative and handled earlier by
-		// processProviderFile; only s3:// Claude sources fall through to the
-		// legacy dispatch, via the S3 sync path.
+	case parser.AgentClaude, parser.AgentCodex:
 		res = e.processS3Session(ctx, file, info)
-	case parser.AgentCodex:
-		// Non-S3 Codex is provider-authoritative and handled earlier by
-		// processProviderFile; only s3:// Codex sources fall through to the
-		// legacy dispatch, via the S3 sync path.
-		res = e.processS3Session(ctx, file, info)
-	case parser.AgentReasonix:
-		res = e.processReasonix(file, info)
-	case parser.AgentAider:
-		res = e.processAider(file, info)
 	default:
 		res = processResult{
-			err: fmt.Errorf(
-				"unknown agent type: %s", file.Agent,
-			),
+			err: fmt.Errorf("unsupported s3 agent type: %s", file.Agent),
 		}
 	}
 	res.cacheSkip = cacheSkip
 	res.mtime = mtime
 	res.sourceFingerprint = sourceFingerprint
-	e.observeProviderShadow(ctx, file, res)
 	return res
 }
 
@@ -3486,8 +3373,9 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:   e.agentDirs[file.Agent],
-		Machine: e.machine,
+		Roots:        e.agentDirs[file.Agent],
+		Machine:      e.machine,
+		PathRewriter: e.pathRewriter,
 	})
 
 	source, found, err := e.providerSourceForDiscoveredFile(ctx, provider, file)
@@ -3731,11 +3619,13 @@ func (e *Engine) processProviderFile(
 }
 
 // dropUnchangedSharedSQLiteResults reproduces the legacy per-session skip the
-// folded processZed/processShelley loops performed. Zed and Shelley keep every
-// session in one shared SQLite database, so the provider re-parses every
-// session on any database change. Without a per-session filter the engine would
-// rewrite and recount unchanged sessions. This drops results whose stored
-// file_mtime (and, for Shelley's second-precision timestamps, the content
+// folded processZed/processShelley loops and the aiderFileUnchanged check
+// performed. Zed and Shelley keep every session in one shared SQLite database,
+// and Aider fans every run out of one shared history file, so the provider
+// re-parses every session on any change to that shared source. Without a
+// per-session filter the engine would rewrite and recount unchanged sessions.
+// This drops results whose stored file_mtime (and, for Shelley's
+// second-precision timestamps and Aider's whole-file content hash, the
 // fingerprint stored in file_hash) and data_version already match, using the
 // path rewriter so remote stored paths resolve. Force-parse runs (parse-diff,
 // single-session resync) keep every result so they always re-emit.
@@ -3749,6 +3639,10 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 	compareHash := false
 	switch file.Agent {
 	case parser.AgentShelley:
+		compareHash = true
+	case parser.AgentAider:
+		// Every aider run in a history file shares the file's content hash, so
+		// a same-mtime append/truncate is caught by the hash compare.
 		compareHash = true
 	case parser.AgentZed, parser.AgentKiro:
 		// Zed and Kiro fan one container DB out to a session per row and have no
@@ -3998,119 +3892,6 @@ func providerProcessCacheKey(
 	return file.Path
 }
 
-func (e *Engine) observeProviderShadow(
-	ctx context.Context,
-	file parser.DiscoveredFile,
-	legacy processResult,
-) {
-	mode := e.providerMigrationModes[file.Agent]
-	if mode != parser.ProviderMigrationShadowCompare {
-		return
-	}
-	comparison := ProviderShadowComparison{File: file, Mode: mode}
-	if reason := providerShadowNotComparableReason(legacy); reason != "" {
-		comparison.NotComparableReason = reason
-		e.recordProviderShadowComparison(comparison)
-		return
-	}
-	factory, ok := e.providerFactories[file.Agent]
-	if !ok {
-		return
-	}
-	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:   e.agentDirs[file.Agent],
-		Machine: e.machine,
-	})
-	source, found, err := e.providerSourceForDiscoveredFile(ctx, provider, file)
-	comparison.Err = err
-	if err == nil && found {
-		comparison.Source = source
-		comparison.Observation, comparison.Err = ObserveProviderSource(
-			ctx,
-			provider,
-			ProviderObserveRequest{
-				Source:     source,
-				Machine:    e.machine,
-				ForceParse: e.forceParse || file.ForceParse,
-			},
-		)
-		if comparison.Err == nil {
-			comparison.Mismatches = compareProviderObservationToProcessResult(
-				comparison.Observation,
-				legacy,
-				file,
-			)
-		}
-	}
-	if err == nil && !found {
-		comparison.Err = fmt.Errorf(
-			"%s provider shadow source not found for %s",
-			file.Agent,
-			file.Path,
-		)
-	}
-	e.recordProviderShadowComparison(comparison)
-}
-
-func providerShadowNotComparableReason(legacy processResult) string {
-	switch {
-	case legacy.err != nil:
-		return "legacy error"
-	case legacy.incremental != nil:
-		return "legacy incremental"
-	case legacy.skip:
-		return "legacy skip"
-	default:
-		return ""
-	}
-}
-
-func (e *Engine) recordProviderShadowComparison(
-	comparison ProviderShadowComparison,
-) {
-	if e.providerShadowRecorder != nil {
-		e.providerShadowMu.Lock()
-		defer e.providerShadowMu.Unlock()
-		e.providerShadowRecorder(comparison)
-		return
-	}
-	if comparison.NotComparableReason != "" {
-		return
-	}
-	sourceKey := comparison.Source.Key
-	if sourceKey == "" {
-		sourceKey = comparison.Source.FingerprintKey
-	}
-	fingerprintKey := comparison.Observation.Fingerprint.Key
-	if fingerprintKey == "" {
-		fingerprintKey = comparison.Source.FingerprintKey
-	}
-	if comparison.Err != nil {
-		log.Printf(
-			"%s provider shadow %s mode=%s source=%q fingerprint=%q: %v",
-			comparison.File.Agent,
-			comparison.File.Path,
-			comparison.Mode,
-			sourceKey,
-			fingerprintKey,
-			comparison.Err,
-		)
-		return
-	}
-	if len(comparison.Mismatches) == 0 {
-		return
-	}
-	log.Printf(
-		"%s provider shadow %s mode=%s source=%q fingerprint=%q mismatches: %s",
-		comparison.File.Agent,
-		comparison.File.Path,
-		comparison.Mode,
-		sourceKey,
-		fingerprintKey,
-		strings.Join(comparison.Mismatches, "; "),
-	)
-}
-
 func processFileUsesProvider(agent parser.AgentType) bool {
 	switch agent {
 	case parser.AgentForge, parser.AgentPiebald, parser.AgentWarp:
@@ -4222,14 +4003,12 @@ func (e *Engine) shouldCacheSkip(
 		}
 	}
 	if file.Agent == parser.AgentAider {
-		// A virtual aider path ("<historyFile>#<runIdx>") resolves to one
-		// run inside a shared physical file; let processAider own it so the
-		// generic per-file mtime cache cannot stand in for the per-run parse.
-		// The physical history file itself keeps the generic mtime skip: any
-		// write bumps the file mtime and re-parses every run.
-		if _, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
-			return false
-		}
+		// Aider fans one physical history file out into per-run virtual
+		// sessions. A mtime-only skip can hide same-mtime content changes,
+		// missing run rows, or stale per-run data versions before the
+		// provider fingerprint and dropUnchangedSharedSQLiteResults hash
+		// checks run, so all Aider freshness stays on that provider-aware path.
+		return false
 	}
 	if !isOpenCodeFormatStorageAgent(file.Agent) {
 		return true
@@ -5480,45 +5259,6 @@ func (e *Engine) classifyReasonixPath(
 	return parser.DiscoveredFile{}, false
 }
 
-func (e *Engine) processReasonix(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	effectiveInfo := reasonixEffectiveInfo(file.Path, info)
-	if e.shouldSkipByPath(file.Path, effectiveInfo) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, _, err := parser.ParseReasonixSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	// Use the discovered project only when metadata did not supply a
-	// project via workspace_root.
-	if file.Project != "" && sess.Project == "" {
-		sess.Project = file.Project
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	sess.File.Size = effectiveInfo.Size()
-	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
@@ -5547,126 +5287,6 @@ func vibeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-// aiderFileUnchanged reports whether a physical aider history file is
-// unchanged since the last sync. Aider sessions are stored under virtual
-// "<history>#<idx>" paths, so the generic shouldSkipByPath (which looks the
-// physical path up in the DB) never matches and would re-parse, re-hash, and
-// re-write every run on every full/periodic sync. Mirror the per-virtual-path
-// skip the other multi-session agents use (cf. kiroSQLitePendingSessionIDs).
-//
-// The whole file is skipped only when EVERY expected run row is known
-// current: each run meta's virtual path must have a stored row whose size and
-// mtime match this file's and whose data version is current. Size is checked
-// alongside mtime so a same-mtime append/truncate is not wrongly skipped. If
-// any run row is missing (e.g. a previous batch wrote only some runs, or a new run was
-// appended whose row does not exist yet) or stale (an older data version, or
-// resynced after a data-version bump while siblings were not), the file is
-// re-parsed so the remaining sessions are repaired. Skipping on the first
-// matching row would strand those runs forever. A run-less or unreadable
-// file is treated as changed (never skipped) so it is retried.
-func (e *Engine) aiderFileUnchanged(path string, info os.FileInfo) bool {
-	metas, err := parser.ListAiderRunMetas(path)
-	if err != nil || len(metas) == 0 {
-		return false
-	}
-	mtime := info.ModTime().UnixNano()
-	size := info.Size()
-	current := db.CurrentDataVersion()
-	expected := 0
-	for _, m := range metas {
-		// Header-only runs produce no session row, so the fan-out never
-		// writes one for them; do not expect a stored row.
-		if !m.HasMessages {
-			continue
-		}
-		expected++
-		lookupPath := m.VirtualPath
-		if e.pathRewriter != nil {
-			lookupPath = e.pathRewriter(lookupPath)
-		}
-		storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-		if !ok || storedSize != size || storedMtime != mtime ||
-			e.db.GetDataVersionByPath(lookupPath) < current {
-			// This run is missing or stale: do not skip the file, so the
-			// fan-out re-parses and repairs every run. The size is compared
-			// alongside mtime so a same-mtime append/truncate (which leaves
-			// new or removed runs unsynced) is never wrongly skipped.
-			return false
-		}
-	}
-	// Skip only when at least one run was expected and all expected run rows
-	// are current. A file whose runs all lack turns produces no sessions, so
-	// there is nothing to skip-and-strand; re-parse it (cheap, capped read).
-	return expected > 0
-}
-
-// aiderIdentityPath returns the canonical history-file path used to derive
-// stable aider session IDs. During remote SSH sync the file is read from a
-// random temp extraction dir, so hashing the on-disk path would re-key the
-// run on every sync; rewriting it to its canonical remote path keeps the ID
-// stable. Returns "" for local sync (no pathRewriter), which makes the
-// parser fall back to the on-disk path -- the original local behavior.
-func (e *Engine) aiderIdentityPath(historyPath string) string {
-	if e.pathRewriter == nil {
-		return ""
-	}
-	return e.pathRewriter(historyPath)
-}
-
-func (e *Engine) processAider(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Virtual path "<historyFile>#<runIdx>": parse that one run only. Used
-	// when re-syncing a single session by its source path.
-	if historyPath, idx, ok := parser.ParseAiderVirtualPath(file.Path); ok {
-		sess, msgs, err := parser.ParseAiderRunWithID(
-			historyPath, e.aiderIdentityPath(historyPath), idx, e.machine,
-		)
-		if err != nil {
-			return processResult{err: err}
-		}
-		if sess == nil {
-			return processResult{}
-		}
-		if hash, err := ComputeFileHash(historyPath); err == nil {
-			sess.File.Hash = hash
-		}
-		return processResult{
-			results:      []parser.ParseResult{{Session: *sess, Messages: msgs}},
-			forceReplace: true,
-		}
-	}
-
-	// parse-diff: !e.forceParse disables the stored-state skip so a forced
-	// reparse re-reads already-synced aider files instead of skipping them.
-	if !e.forceParse && e.aiderFileUnchanged(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	// Physical history file: fan it out into one session per run. The file
-	// is read and split once. The whole file shares one content hash, so
-	// any write re-parses every run (acceptable: aider history is
-	// append-mostly and a single capped read).
-	results, err := parser.ParseAiderRunsWithID(
-		file.Path, e.aiderIdentityPath(file.Path), e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if len(results) == 0 {
-		return processResult{}
-	}
-	if hash, err := ComputeFileHash(file.Path); err == nil {
-		for i := range results {
-			results[i].Session.File.Hash = hash
-		}
-	}
-	return processResult{
-		results:      results,
-		forceReplace: true,
-	}
 }
 
 func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
@@ -7484,8 +7104,9 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		if !e.isProviderAuthoritative(def.Type) {
 			return ""
 		}
+		storedPath := e.db.GetSessionFilePath(sessionID)
 		if f := e.findProviderSourceFile(
-			context.Background(), def, sessionID, rawSessionID,
+			context.Background(), def, sessionID, rawSessionID, storedPath,
 		); f != "" {
 			return f
 		}
@@ -7507,6 +7128,13 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 
 	bareID := strings.TrimPrefix(rawID, def.IDPrefix)
+	storedPath := e.db.GetSessionFilePath(sessionID)
+
+	if f := e.findProviderSourceFile(
+		context.Background(), def, sessionID, bareID, storedPath,
+	); f != "" {
+		return f
+	}
 
 	// Prefer stored file_path — it's authoritative and handles
 	// cases where the session ID doesn't match the filename.
@@ -7514,7 +7142,7 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	// <traceFile>#<conversationID>) for the existence check, but
 	// return the stored path so downstream parsing stays scoped to
 	// the requested conversation rather than the whole trace file.
-	if fp := e.db.GetSessionFilePath(sessionID); fp != "" {
+	if fp := storedPath; fp != "" {
 		// s3:// sources have no local file to stat; the path is itself
 		// the authoritative source and processFile fetches it directly.
 		if strings.HasPrefix(fp, "s3://") {
@@ -7541,11 +7169,6 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 			}
 		}
 	}
-	if f := e.findProviderSourceFile(
-		context.Background(), def, sessionID, bareID,
-	); f != "" {
-		return f
-	}
 	return ""
 }
 
@@ -7567,6 +7190,7 @@ func (e *Engine) findProviderSourceFile(
 	def parser.AgentDef,
 	sessionID string,
 	rawSessionID string,
+	storedPath string,
 ) string {
 	mode := e.providerMigrationModes[def.Type]
 	if mode != parser.ProviderMigrationProviderAuthoritative {
@@ -7577,12 +7201,17 @@ func (e *Engine) findProviderSourceFile(
 		return ""
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
-		Roots:   e.agentDirs[def.Type],
-		Machine: e.machine,
+		Roots:        e.agentDirs[def.Type],
+		Machine:      e.machine,
+		PathRewriter: e.pathRewriter,
 	})
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
-		RawSessionID:  rawSessionID,
-		FullSessionID: sessionID,
+		RawSessionID:       rawSessionID,
+		FullSessionID:      sessionID,
+		StoredFilePath:     storedPath,
+		FingerprintKey:     storedPath,
+		RequireFreshSource: true,
+		PreferStoredSource: true,
 	})
 	if err != nil {
 		log.Printf("%s provider source lookup: %v", def.Type, err)

@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -14,7 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestProcessFileProviderShadowCompareForgeVirtualSource(t *testing.T) {
+func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	engine := NewEngine(openTestDB(t), EngineConfig{
@@ -42,7 +44,7 @@ func TestProcessFileProviderShadowCompareForgeVirtualSource(t *testing.T) {
 	assert.Len(t, res.results[0].Messages, 2)
 }
 
-func TestProcessFileProviderShadowCompareSkipsStoredFreshSource(t *testing.T) {
+func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	virtualPath := dbPath + "#conv-001"
@@ -86,7 +88,7 @@ func TestProcessFileProviderShadowCompareSkipsStoredFreshSource(t *testing.T) {
 	assert.Empty(t, second.results)
 }
 
-func TestProcessFileProviderShadowComparePiebaldVirtualSource(t *testing.T) {
+func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
@@ -113,7 +115,7 @@ func TestProcessFileProviderShadowComparePiebaldVirtualSource(t *testing.T) {
 	assert.Len(t, res.results[0].Messages, 2)
 }
 
-// TestProcessFileProviderShadowComparePiebaldSkipsStoredFreshSource verifies
+// TestProcessFileProviderPiebaldSkipsStoredFreshSource verifies
 // that a provider-authoritative Piebald chat whose stored fingerprint already
 // matches is not reparsed on a repeat processFile. Piebald keeps every chat in
 // one app.db, but the provider fingerprint's mtime is the chat's own updated_at
@@ -121,7 +123,7 @@ func TestProcessFileProviderShadowComparePiebaldVirtualSource(t *testing.T) {
 // per-session signal and skips on the DB-stored-fingerprint check. This mirrors
 // the legacy syncPiebald/piebaldPendingSessionIDs skip and the Forge
 // SkipsStoredFreshSource behavior; the in-memory skip cache stays empty.
-func TestProcessFileProviderShadowComparePiebaldSkipsStoredFreshSource(t *testing.T) {
+func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
@@ -166,7 +168,7 @@ func TestProcessFileProviderShadowComparePiebaldSkipsStoredFreshSource(t *testin
 	assert.Empty(t, second.results)
 }
 
-func TestProcessFileProviderShadowCompareWarpVirtualSource(t *testing.T) {
+func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "warp.sqlite")
 	warpDB := openProcessProviderWarpDB(t, dbPath)
@@ -204,6 +206,264 @@ func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
 	assert.False(t, processFileUsesProvider(parser.AgentClaude))
 }
 
+func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "owned.jsonl")
+	provider := newProcessFixtureProvider(
+		parser.SourceRef{
+			Provider:       parser.AgentCowork,
+			Key:            "source-owned",
+			DisplayPath:    sourcePath,
+			FingerprintKey: sourcePath,
+			ProjectHint:    "fixture-project",
+		},
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:owned",
+					parser.AgentCowork,
+					"fixture-project",
+					sourcePath,
+					fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+			ForceReplace:      true,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCowork,
+	})
+
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.False(t, res.skip)
+	assert.True(t, res.forceReplace)
+	assert.Equal(t, fingerprint.MTimeNS, res.mtime)
+	assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+	assert.True(t, provider.findRequests[0].RequireFreshSource)
+	assert.Equal(t, sourcePath, provider.findRequests[0].StoredFilePath)
+	assert.Equal(t, parser.AgentCowork, res.results[0].Session.Agent)
+	assert.Equal(t, "cowork:owned", res.results[0].Session.ID)
+	assert.Equal(t, "devbox", res.results[0].Session.Machine)
+	assert.Equal(t, "fixture-project", res.results[0].Session.Project)
+}
+
+func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "retry.jsonl")
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath),
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{
+				{
+					Result: processFixtureResult(
+						"cowork:current",
+						parser.AgentCowork,
+						"fixture-project",
+						sourcePath,
+						fingerprint,
+					),
+					DataVersion: parser.DataVersionCurrent,
+				},
+				{
+					Result: processFixtureResult(
+						"cowork:retry",
+						parser.AgentCowork,
+						"fixture-project",
+						sourcePath,
+						fingerprint,
+					),
+					DataVersion: parser.DataVersionNeedsRetry,
+				},
+			},
+			ResultSetComplete: true,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCowork,
+	})
+
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 2)
+	assert.False(t, res.needsRetryForSession("cowork:current"))
+	assert.True(t, res.needsRetryForSession("cowork:retry"))
+	assert.False(t, res.suppressesPresenceSweepForRetry())
+}
+
+func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "unclean.jsonl")
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath),
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:unclean",
+					parser.AgentCowork,
+					"fixture-project",
+					sourcePath,
+					fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: false,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCowork,
+	})
+
+	require.NoError(t, res.err)
+	assert.True(t, res.cacheSkip)
+	assert.True(t, res.noCacheSkip)
+	assert.True(t, res.suppressPresenceSweep)
+}
+
+func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "skip.jsonl")
+	source := processFixtureSource(sourcePath)
+	source.FingerprintKey = sourcePath + "#provider-key"
+	provider := newProcessFixtureProvider(
+		source,
+		fingerprint,
+		parser.ParseOutcome{
+			SkipReason:        parser.SkipNonInteractive,
+			ResultSetComplete: true,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCowork,
+	})
+
+	require.NoError(t, res.err)
+	assert.True(t, res.skip)
+	assert.True(t, res.cacheSkip)
+	assert.False(t, res.noCacheSkip)
+	assert.Equal(t, source.FingerprintKey, res.skipCacheKey(sourcePath))
+}
+
+func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "force.jsonl")
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath),
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:force",
+					parser.AgentCowork,
+					"fixture-project",
+					sourcePath,
+					fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:       sourcePath,
+		Agent:      parser.AgentCowork,
+		ForceParse: true,
+	})
+
+	require.NoError(t, res.err)
+	require.Len(t, provider.findRequests, 1)
+	assert.False(t, provider.findRequests[0].RequireFreshSource)
+	require.Len(t, provider.parseRequests, 1)
+	assert.True(t, provider.parseRequests[0].ForceParse)
+}
+
+func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "missing.jsonl")
+	provider := newProcessFixtureProvider(
+		processFixtureSource(sourcePath),
+		fingerprint,
+		parser.ParseOutcome{ResultSetComplete: true},
+	)
+	provider.findFound = false
+	engine := newProcessFixtureEngine(t, root, provider)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCowork,
+	})
+
+	require.Error(t, res.err)
+	assert.ErrorContains(t, res.err, "provider source not found")
+	assert.Equal(t, []string{"find-source"}, provider.calls)
+}
+
+func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "single.jsonl")
+	source := processFixtureSource(sourcePath)
+	source.FingerprintKey = sourcePath + "#provider-key"
+	provider := newProcessFixtureProvider(
+		source,
+		fingerprint,
+		parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: processFixtureResult(
+					"cowork:single",
+					parser.AgentCowork,
+					"fixture-project",
+					sourcePath,
+					fingerprint,
+				),
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	)
+	engine := newProcessFixtureEngine(t, root, provider)
+	engine.cacheSkip(source.FingerprintKey, fingerprint.MTimeNS)
+
+	require.NoError(t, engine.SyncSingleSession("cowork:single"))
+
+	assert.Equal(
+		t,
+		[]string{
+			"find-source",
+			"find-source",
+			"fingerprint",
+			"parse",
+		},
+		provider.calls,
+	)
+	require.Len(t, provider.findRequests, 2)
+	assert.Equal(t, "single", provider.findRequests[0].RawSessionID)
+	assert.False(t, provider.findRequests[1].RequireFreshSource)
+	require.Len(t, provider.parseRequests, 1)
+	assert.True(t, provider.parseRequests[0].ForceParse)
+	engine.skipMu.RLock()
+	_, cached := engine.skipCache[source.FingerprintKey]
+	engine.skipMu.RUnlock()
+	assert.False(t, cached)
+}
+
 func writeProcessProviderForgeDB(t *testing.T, root string) string {
 	t.Helper()
 	dbPath := filepath.Join(root, ".forge.db")
@@ -239,6 +499,170 @@ func writeProcessProviderForgeDB(t *testing.T, root string) string {
 	)
 	require.NoError(t, err)
 	return dbPath
+}
+
+func newProcessFixtureEngine(
+	t *testing.T,
+	root string,
+	provider *processFixtureProvider,
+) *Engine {
+	t.Helper()
+	return NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCowork: {root},
+		},
+		Machine:           "devbox",
+		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+}
+
+func writeProcessProviderSource(
+	t *testing.T,
+	root string,
+	name string,
+) (string, parser.SourceFingerprint) {
+	t.Helper()
+	path := filepath.Join(root, name)
+	require.NoError(t, os.WriteFile(path, []byte(`{"session":"fixture"}`+"\n"), 0o644))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	return path, parser.SourceFingerprint{
+		Key:     path,
+		Size:    info.Size(),
+		MTimeNS: info.ModTime().UnixNano(),
+	}
+}
+
+func processFixtureSource(path string) parser.SourceRef {
+	return parser.SourceRef{
+		Provider:       parser.AgentCowork,
+		Key:            path,
+		DisplayPath:    path,
+		FingerprintKey: path,
+		ProjectHint:    "fixture-project",
+	}
+}
+
+func processFixtureResult(
+	id string,
+	agent parser.AgentType,
+	project string,
+	path string,
+	fingerprint parser.SourceFingerprint,
+) parser.ParseResult {
+	started := time.Unix(1_800_000_000, 0).UTC()
+	ended := started.Add(time.Second)
+	return parser.ParseResult{
+		Session: parser.ParsedSession{
+			ID:               id,
+			Project:          project,
+			Machine:          "devbox",
+			Agent:            agent,
+			StartedAt:        started,
+			EndedAt:          ended,
+			FirstMessage:     "fixture prompt",
+			MessageCount:     1,
+			UserMessageCount: 1,
+			File: parser.FileInfo{
+				Path:  path,
+				Size:  fingerprint.Size,
+				Mtime: fingerprint.MTimeNS,
+			},
+		},
+		Messages: []parser.ParsedMessage{{
+			Ordinal:   0,
+			Role:      parser.RoleUser,
+			Content:   "fixture prompt",
+			Timestamp: started,
+		}},
+	}
+}
+
+func newProcessFixtureProvider(
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+	outcome parser.ParseOutcome,
+) *processFixtureProvider {
+	return &processFixtureProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{
+				Type:        parser.AgentCowork,
+				DisplayName: "Cowork",
+				IDPrefix:    "cowork:",
+				FileBased:   true,
+			},
+			Caps: parser.Capabilities{
+				Source: parser.SourceCapabilities{
+					FindSource:           parser.CapabilitySupported,
+					CompositeFingerprint: parser.CapabilitySupported,
+				},
+			},
+		},
+		source:      source,
+		findFound:   true,
+		fingerprint: fingerprint,
+		outcome:     outcome,
+	}
+}
+
+type processFixtureFactory struct {
+	provider *processFixtureProvider
+}
+
+func (f processFixtureFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f processFixtureFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f processFixtureFactory) NewProvider(parser.ProviderConfig) parser.Provider {
+	return f.provider
+}
+
+type processFixtureProvider struct {
+	parser.ProviderBase
+
+	source        parser.SourceRef
+	findFound     bool
+	fingerprint   parser.SourceFingerprint
+	outcome       parser.ParseOutcome
+	calls         []string
+	findRequests  []parser.FindSourceRequest
+	parseRequests []parser.ParseRequest
+}
+
+func (p *processFixtureProvider) FindSource(
+	_ context.Context,
+	req parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	p.calls = append(p.calls, "find-source")
+	p.findRequests = append(p.findRequests, req)
+	if !p.findFound {
+		return parser.SourceRef{}, false, nil
+	}
+	return p.source, true, nil
+}
+
+func (p *processFixtureProvider) Fingerprint(
+	context.Context,
+	parser.SourceRef,
+) (parser.SourceFingerprint, error) {
+	p.calls = append(p.calls, "fingerprint")
+	return p.fingerprint, nil
+}
+
+func (p *processFixtureProvider) Parse(
+	_ context.Context,
+	req parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	p.calls = append(p.calls, "parse")
+	p.parseRequests = append(p.parseRequests, req)
+	return p.outcome, nil
 }
 
 func openProcessProviderPiebaldDB(t *testing.T, path string) *sql.DB {

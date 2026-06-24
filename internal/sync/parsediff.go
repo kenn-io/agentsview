@@ -214,7 +214,10 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 }
 
 // parseDiffProviderSources discovers an agent's on-disk sources through
-// the provider facade for agents that have dropped their DiscoverFunc.
+// the provider facade for agents that have dropped their DiscoverFunc
+// and run provider-authoritatively. It is the provider-shape counterpart
+// to the per-agent DiscoverFunc loop and is scoped to a single agent type
+// so parse-diff respects the requested agent set.
 func (e *Engine) parseDiffProviderSources(
 	ctx context.Context,
 	agentType parser.AgentType,

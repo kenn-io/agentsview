@@ -72,7 +72,7 @@ const testExportJSON = `[
 
 func TestParseClaudeAIExport(t *testing.T) {
 	var results []ParseResult
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader(testExportJSON),
 		func(r ParseResult) error {
 			results = append(results, r)
@@ -148,7 +148,7 @@ func TestParseClaudeAIExport_ContentBlocks(t *testing.T) {
 	}]`
 
 	var results []ParseResult
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader(input),
 		func(r ParseResult) error {
 			results = append(results, r)
@@ -174,7 +174,7 @@ func TestParseClaudeAIExport_ContentBlocks(t *testing.T) {
 
 func TestParseClaudeAIExport_EmptyArray(t *testing.T) {
 	var results []ParseResult
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader("[]"),
 		func(r ParseResult) error {
 			results = append(results, r)
@@ -186,7 +186,7 @@ func TestParseClaudeAIExport_EmptyArray(t *testing.T) {
 }
 
 func TestParseClaudeAIExport_InvalidJSON(t *testing.T) {
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader("{not json"),
 		func(r ParseResult) error { return nil },
 	)

@@ -272,9 +272,13 @@ func TestDefault_IncludesCodexArchivedSessionsDir(t *testing.T) {
 }
 
 func TestDefault_SkipsAiderUntilConfigured(t *testing.T) {
+	t.Setenv("AIDER_DIR", "")
 	cfg, err := Default()
 	require.NoError(t, err)
 
+	// Aider has no safe default root: a passive viewer must not enumerate
+	// $HOME (macOS privacy prompts), so it stays unresolved until the user
+	// opts in via AIDER_DIR or aider_dirs.
 	assert.Empty(t, cfg.ResolveDirs(parser.AgentAider))
 	assert.False(t, cfg.IsUserConfigured(parser.AgentAider))
 }
