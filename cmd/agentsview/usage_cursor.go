@@ -50,11 +50,14 @@ func runUsageCursor(cfg UsageCursorConfig) error {
 	if err != nil {
 		return err
 	}
-	database, err := openDB(appCfg)
+	database, writeLock, err := openWriteDB(
+		context.Background(),
+		appCfg,
+	)
 	if err != nil {
 		return err
 	}
-	defer database.Close()
+	defer closeWriteDB(database, writeLock)
 
 	apiKey := strings.TrimSpace(appCfg.CursorAdminAPIKey)
 	if apiKey == "" {
