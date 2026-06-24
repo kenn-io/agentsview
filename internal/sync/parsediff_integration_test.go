@@ -1701,6 +1701,22 @@ func TestParseDiffEngineRefusesWrites(t *testing.T) {
 	assert.Equal(t, sync.SyncStats{},
 		diffEngine.SyncRootsSince(ctx, nil, time.Time{}, nil),
 		"SyncRootsSince on a report-only engine must be a no-op")
+	stats, err := diffEngine.SyncThenRun(
+		ctx, false, nil, func(forceFull bool) error {
+			return env.db.UpsertSession(db.Session{
+				ID: "sync-then-run-wrote",
+			})
+		},
+	)
+	require.NoError(t, err,
+		"SyncThenRun on a report-only engine should refuse cleanly")
+	assert.Equal(t, sync.SyncStats{}, stats,
+		"SyncThenRun on a report-only engine must be a no-op")
+	require.Error(t, diffEngine.RunExclusive(func() error {
+		return env.db.UpsertSession(db.Session{
+			ID: "run-exclusive-wrote",
+		})
+	}), "RunExclusive on a report-only engine must error")
 	require.Error(t, diffEngine.SyncSingleSession("claude:pd-guard"),
 		"SyncSingleSession on a report-only engine must error")
 

@@ -2547,6 +2547,9 @@ func (e *Engine) SyncThenRun(
 	onProgress ProgressFunc,
 	work func(forceFull bool) error,
 ) (stats SyncStats, err error) {
+	if e.refuseWriteInForceParse("SyncThenRun") {
+		return SyncStats{}, nil
+	}
 	e.syncMu.Lock()
 	// Defers run LIFO: Unlock runs before emit.
 	defer func() {
@@ -2585,6 +2588,11 @@ func (e *Engine) SyncThenRun(
 // sync and resync operations. Use this for daemon-owned maintenance operations
 // that must serialize with sync but should not force a local sync first.
 func (e *Engine) RunExclusive(work func() error) error {
+	if e.refuseWriteInForceParse("RunExclusive") {
+		return errors.New(
+			"RunExclusive refused on report-only parse-diff engine",
+		)
+	}
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 	return work()
