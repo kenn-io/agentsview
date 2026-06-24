@@ -363,18 +363,22 @@ func duckActivityReportUsageQuery(inClause string) string {
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				CASE
 					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[2]d)
+					WHEN source = 'session' THEN GREATEST(input_tokens, 0)
 					ELSE LEAST(GREATEST(input_tokens, 0), %[2]d)
 				END AS input_tokens_norm,
 				CASE
 					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[2]d)
+					WHEN source = 'session' THEN GREATEST(output_tokens, 0)
 					ELSE LEAST(GREATEST(output_tokens, 0), %[2]d)
 				END AS output_tokens_norm,
 				CASE
 					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[2]d)
+					WHEN source = 'session' THEN GREATEST(cache_create, 0)
 					ELSE LEAST(GREATEST(cache_create, 0), %[2]d)
 				END AS cache_create_norm,
 				CASE
 					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[2]d)
+					WHEN source = 'session' THEN GREATEST(cache_read, 0)
 					ELSE LEAST(GREATEST(cache_read, 0), %[2]d)
 				END AS cache_read_norm,
 				cost_usd

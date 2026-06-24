@@ -1759,6 +1759,69 @@ func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
 }
 
+func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "summary-model",
+		InputPerMTok:  1,
+		OutputPerMTok: 2,
+	}}))
+
+	rawInput := db.MaxPlausibleTokens + 250_000
+	rawOutput := db.MaxPlausibleTokens + 500_000
+	sessionID := "duck-summary-usage"
+	sess := syncSession(sessionID, "alpha", "summary first", "2026-01-18T00:00:00.000Z", 0)
+	sess.Agent = "hermes"
+	sess.TotalOutputTokens = rawOutput
+	sess.PeakContextTokens = rawInput
+	sess.HasTotalOutputTokens = true
+	sess.HasPeakContextTokens = true
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		UsageEvents: []db.UsageEvent{{
+			Source:       "session",
+			Model:        "summary-model",
+			InputTokens:  rawInput,
+			OutputTokens: rawOutput,
+			OccurredAt:   "2026-01-18T00:01:00.000Z",
+			DedupKey:     "summary",
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "summary-usage.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
+
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, rawInput, daily.Totals.InputTokens)
+	assert.Equal(t, rawOutput, daily.Totals.OutputTokens)
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, sessionID, top[0].SessionID)
+	assert.Equal(t, rawInput+rawOutput, top[0].TotalTokens)
+	wantCost := (float64(rawInput)*1 + float64(rawOutput)*2) / 1_000_000
+	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
+
+	sessionUsage, err := store.GetSessionUsage(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sessionUsage)
+	assert.Equal(t, rawOutput, sessionUsage.TotalOutputTokens)
+	assert.Equal(t, rawInput, sessionUsage.PeakContextTokens)
+	assert.True(t, sessionUsage.HasCost)
+	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, []string{"summary-model"}, sessionUsage.Models)
+}
+
 func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
