@@ -492,6 +492,16 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 70, all.Totals.InputTokens)
+
+	withBreakdowns, err := backend.DailyUsage(context.Background(), dailyUsageQuery{
+		Filter:         db.UsageFilter{Timezone: "UTC"},
+		NoDefaultRange: true,
+		Breakdowns:     true,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, withBreakdowns.Daily)
+	assert.NotEmpty(t, withBreakdowns.Daily[0].ProjectBreakdowns)
+	assert.NotEmpty(t, withBreakdowns.Daily[0].AgentBreakdowns)
 }
 
 func TestFormatDailyUsageJSON(t *testing.T) {

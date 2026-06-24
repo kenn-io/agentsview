@@ -1894,6 +1894,17 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	assert.Equal(t, "alpha", day.ProjectBreakdowns[0].Project)
 	assert.Equal(t, "claude", day.AgentBreakdowns[0].Agent)
 	assert.InDelta(t, 0.00001, got.Totals.CacheSavings, 0.000001)
+
+	noCounts, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:              "2026-01-01",
+		To:                "2026-01-31",
+		SkipSessionCounts: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, got.Totals.InputTokens, noCounts.Totals.InputTokens)
+	assert.Zero(t, noCounts.SessionCounts.Total)
+	assert.Nil(t, noCounts.SessionCounts.ByProject)
+	assert.Nil(t, noCounts.SessionCounts.ByAgent)
 }
 
 func TestGetChildSessionsOrderedByStartedAt(t *testing.T) {

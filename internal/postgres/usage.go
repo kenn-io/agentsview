@@ -1029,7 +1029,10 @@ func (s *Store) GetDailyUsage(
 	}
 	accum := make(map[accumKey]*bucket)
 	seen := make(map[pgUsageDedupToken]struct{})
-	seenSessions := make(map[string]db.UsageSessionInfo)
+	var seenSessions map[string]db.UsageSessionInfo
+	if !f.SkipSessionCounts {
+		seenSessions = make(map[string]db.UsageSessionInfo)
+	}
 	var totalSavings float64
 
 	for rows.Next() {
@@ -1057,10 +1060,12 @@ func (s *Store) GetDailyUsage(
 			seen[key] = struct{}{}
 		}
 
-		if _, ok := seenSessions[r.sessionID]; !ok {
-			seenSessions[r.sessionID] = db.UsageSessionInfo{
-				Project: r.project,
-				Agent:   r.agent,
+		if seenSessions != nil {
+			if _, ok := seenSessions[r.sessionID]; !ok {
+				seenSessions[r.sessionID] = db.UsageSessionInfo{
+					Project: r.project,
+					Agent:   r.agent,
+				}
 			}
 		}
 
@@ -1202,7 +1207,10 @@ func (s *Store) GetDailyUsage(
 			totals.CopilotAICredits = copilotCost / 0.01
 		}
 
-		sessionCounts := db.NewUsageSessionCounts(seenSessions)
+		var sessionCounts db.UsageSessionCounts
+		if seenSessions != nil {
+			sessionCounts = db.NewUsageSessionCounts(seenSessions)
+		}
 		return db.DailyUsageResult{
 			Daily:         daily,
 			Totals:        totals,
@@ -1362,7 +1370,10 @@ func (s *Store) GetDailyUsage(
 		totals.CopilotAICredits = copilotCost / 0.01
 	}
 
-	sessionCounts := db.NewUsageSessionCounts(seenSessions)
+	var sessionCounts db.UsageSessionCounts
+	if seenSessions != nil {
+		sessionCounts = db.NewUsageSessionCounts(seenSessions)
+	}
 	return db.DailyUsageResult{
 		Daily:         daily,
 		Totals:        totals,

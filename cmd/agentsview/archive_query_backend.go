@@ -206,6 +206,7 @@ func (b localArchiveQueryBackend) DailyUsage(
 
 func localDailyUsageFilter(query dailyUsageQuery) db.UsageFilter {
 	filter := query.Filter
+	filter.Breakdowns = query.Breakdowns
 	filter.SkipSessionCounts = !query.SessionCounts
 	if filter.Timezone == "" {
 		filter.Timezone = "UTC"

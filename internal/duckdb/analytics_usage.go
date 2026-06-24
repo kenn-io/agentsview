@@ -2562,11 +2562,13 @@ func (s *Store) GetDailyUsage(
 	if result.Daily == nil {
 		result.Daily = []db.DailyUsageEntry{}
 	}
-	counts, err := s.GetUsageSessionCounts(ctx, f)
-	if err != nil {
-		return db.DailyUsageResult{}, err
+	if !f.SkipSessionCounts {
+		counts, err := s.GetUsageSessionCounts(ctx, f)
+		if err != nil {
+			return db.DailyUsageResult{}, err
+		}
+		result.SessionCounts = counts
 	}
-	result.SessionCounts = counts
 	return result, nil
 }
 

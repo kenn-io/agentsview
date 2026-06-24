@@ -121,6 +121,18 @@ func TestStoreGetDailyUsageWithBreakdowns(t *testing.T) {
 	assert.Len(t, day.AgentBreakdowns, 2)
 	assert.Len(t, day.ModelBreakdowns, 2)
 	assert.Greater(t, day.TotalCost, 0.0)
+
+	noCounts, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:              "2026-03-12",
+		To:                "2026-03-12",
+		Timezone:          "UTC",
+		SkipSessionCounts: true,
+	})
+	require.NoError(t, err, "GetDailyUsage skip session counts")
+	assert.Equal(t, result.Totals.InputTokens, noCounts.Totals.InputTokens)
+	assert.Zero(t, noCounts.SessionCounts.Total)
+	assert.Nil(t, noCounts.SessionCounts.ByProject)
+	assert.Nil(t, noCounts.SessionCounts.ByAgent)
 }
 
 func TestStoreGetDailyUsageDedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
