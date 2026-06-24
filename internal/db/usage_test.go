@@ -558,6 +558,55 @@ func TestGetDailyUsageSkipsCursorUsageEventsForExcludeOneShot(t *testing.T) {
 	assert.Zero(t, result.SessionCounts.Total, "cursor rows should not count as sessions")
 }
 
+func TestGetDailyUsageSkipsCursorUsageEventsForTerminationFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern: "claude-sonnet-4-20250514",
+		InputPerMTok: 3.0, OutputPerMTok: 15.0,
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "clean-session", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-05-14T10:00:00Z")
+		s.TerminationStatus = new("clean")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "clean-session",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-14T10:30:00Z",
+		Model:     "claude-sonnet-4-20250514",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":100,"output_tokens":40}`,
+		),
+	})
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:      "2026-05-14T10:05:00Z",
+		Model:           "claude-4.6-opus-high-thinking",
+		Kind:            "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:     1234,
+		OutputTokens:    567,
+		CacheReadTokens: 8901,
+		ChargedCents:    15.66,
+		CursorTokenFee:  3.32,
+		UserID:          "152683922",
+		UserEmail:       "member@example.com",
+	}}), "InsertCursorUsageEvents")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:        "2026-05-14",
+		To:          "2026-05-14",
+		Termination: "clean",
+	})
+	require.NoError(t, err, "GetDailyUsage clean termination")
+	require.Len(t, result.Daily, 1, "daily len =")
+	assert.Equal(t, 100, result.Totals.InputTokens, "InputTokens")
+	assert.Equal(t, 40, result.Totals.OutputTokens, "OutputTokens")
+	assert.Equal(t, 1, result.SessionCounts.Total, "SessionCounts.Total")
+}
+
 func TestInsertCursorUsageEventsDedupesByFingerprint(t *testing.T) {
 	d := testDB(t)
 

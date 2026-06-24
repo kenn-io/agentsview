@@ -598,6 +598,57 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.InDelta(t, wantCost, usage.CostUSD, 1e-9, "session cost")
 }
 
+func TestStoreGetDailyUsageSkipsCursorUsageForTerminationFilter(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_cursor_termination_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count, termination_status
+		) VALUES (
+			'clean-session', 'test-machine', 'proj', 'claude',
+			'2026-05-14T10:00:00Z'::timestamptz, 1, 1, 'clean'
+		)`)
+	require.NoError(t, err, "insert session")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model, token_usage
+		) VALUES (
+			'clean-session', 0, 'assistant', 'one',
+			'2026-05-14T10:30:00Z'::timestamptz, 3,
+			'claude-sonnet-4-20250514',
+			'{"input_tokens":100,"output_tokens":40}'
+		)`)
+	require.NoError(t, err, "insert message")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO cursor_usage_events (
+			occurred_at, model, kind, input_tokens, output_tokens,
+			cache_read_tokens, charged_cents, cursor_token_fee,
+			user_id, user_email, dedup_key
+		) VALUES (
+			'2026-05-14T10:05:00Z'::timestamptz,
+			'claude-4.6-opus-high-thinking',
+			'USAGE_EVENT_KIND_USAGE_BASED',
+			1234, 567, 8901, 15.66, 3.32,
+			'152683922', 'member@example.com', 'cursor:termination'
+		)`)
+	require.NoError(t, err, "insert cursor usage")
+
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:        "2026-05-14",
+		To:          "2026-05-14",
+		Timezone:    "UTC",
+		Termination: "clean",
+	})
+	require.NoError(t, err, "GetDailyUsage clean termination")
+	require.Len(t, result.Daily, 1, "daily entries")
+	assert.Equal(t, 100, result.Totals.InputTokens, "InputTokens")
+	assert.Equal(t, 40, result.Totals.OutputTokens, "OutputTokens")
+	assert.Equal(t, 1, result.SessionCounts.Total, "SessionCounts.Total")
+}
+
 func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)

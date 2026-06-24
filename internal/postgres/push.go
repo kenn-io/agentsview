@@ -2430,6 +2430,7 @@ func bulkInsertCursorUsageEvents(
 				sanitizePG(ev.DedupKey),
 			)
 		}
+		b.WriteString(` ON CONFLICT DO NOTHING`)
 		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
 			return fmt.Errorf("bulk inserting cursor_usage_events: %w", err)
 		}
@@ -2714,21 +2715,12 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		return nil
 	}
 
-	localFP, err := s.local.CursorUsageEventFingerprint()
-	if err != nil {
-		return fmt.Errorf("computing local cursor usage fingerprint: %w", err)
-	}
-	pgFP, err := pgCursorUsageEventFingerprint(ctx, s.pg)
-	if err != nil {
-		return fmt.Errorf("computing pg cursor usage fingerprint: %w", err)
-	}
-	if localFP == pgFP {
-		return nil
-	}
-
 	events, err := s.local.GetCursorUsageEvents(ctx)
 	if err != nil {
 		return fmt.Errorf("loading local cursor usage events: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
 	}
 
 	tx, err := s.pg.BeginTx(ctx, nil)
@@ -2737,9 +2729,6 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM cursor_usage_events`); err != nil {
-		return fmt.Errorf("deleting pg cursor_usage_events: %w", err)
-	}
 	if err := bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
 		return err
 	}
@@ -2747,58 +2736,4 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		return fmt.Errorf("committing pg cursor usage sync: %w", err)
 	}
 	return nil
-}
-
-func pgCursorUsageEventFingerprint(
-	ctx context.Context, conn *sql.DB,
-) (string, error) {
-	rows, err := conn.QueryContext(ctx,
-		`SELECT occurred_at, model, kind,
-			input_tokens, output_tokens,
-			cache_write_tokens, cache_read_tokens,
-			charged_cents, cursor_token_fee,
-			user_id, user_email, is_headless, dedup_key
-		 FROM cursor_usage_events
-		 ORDER BY occurred_at, id`,
-	)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var b strings.Builder
-	for rows.Next() {
-		var occurredAt time.Time
-		var model, kind, userID, userEmail, dedupKey string
-		var inputTokens, outputTokens int
-		var cacheWriteTokens, cacheReadTokens int
-		var chargedCents, cursorTokenFee float64
-		var isHeadless bool
-		if err := rows.Scan(
-			&occurredAt, &model, &kind,
-			&inputTokens, &outputTokens,
-			&cacheWriteTokens, &cacheReadTokens,
-			&chargedCents, &cursorTokenFee,
-			&userID, &userEmail, &isHeadless, &dedupKey,
-		); err != nil {
-			return "", err
-		}
-		occurred := FormatISO8601(occurredAt)
-		fmt.Fprintf(&b, "%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%g|%g|%d:%s|%d:%s|%t|%d:%s;",
-			len(occurred), occurred,
-			len(model), model,
-			len(kind), kind,
-			inputTokens,
-			outputTokens,
-			cacheWriteTokens,
-			cacheReadTokens,
-			chargedCents,
-			cursorTokenFee,
-			len(userID), userID,
-			len(userEmail), userEmail,
-			isHeadless,
-			len(dedupKey), dedupKey,
-		)
-	}
-	return b.String(), rows.Err()
 }

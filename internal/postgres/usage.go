@@ -693,7 +693,7 @@ func pgCursorUsageRowsSQLForBounds(
 ) (string, bool) {
 	if f.Project != "" || f.ExcludeProject != "" ||
 		f.Machine != "" || f.MinUserMessages > 0 ||
-		f.ExcludeOneShot || f.ActiveSince != "" {
+		f.ExcludeOneShot || f.Termination != "" || f.ActiveSince != "" {
 		return "", false
 	}
 	if f.Agent != "" {

@@ -613,6 +613,69 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
 }
 
+func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_cursor_usage_append_only_pg_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO cursor_usage_events (
+			occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		) VALUES (
+			'2026-05-14T09:05:00Z'::timestamptz,
+			'claude-4.6-opus-high-thinking',
+			'USAGE_EVENT_KIND_USAGE_BASED',
+			10, 20, 0, 30,
+			1.25, 0.25,
+			'other-user', 'other@example.com', false, 'other-machine-row'
+		)`)
+	require.NoError(t, err, "seed existing pg row")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	require.NoError(t, err, "open local db")
+	defer localDB.Close()
+	require.NoError(t, localDB.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 12,
+		CacheReadTokens:  34,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+		DedupKey:         "local-machine-row",
+	}}), "InsertCursorUsageEvents")
+
+	sync := &Sync{
+		local:      localDB,
+		pg:         pg,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push")
+
+	assert.Equal(t, 2, pgTableCount(t, ctx, pg, "cursor_usage_events"))
+}
+
 // checkIsSystem asserts that PG contains exactly wantTotal rows for the
 // session with ordinals 0..wantTotal-1, and that each row's is_system
 // matches wantSystem. Tracking the exact ordinal set prevents false

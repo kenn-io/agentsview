@@ -713,6 +713,7 @@ var readOnlyRequiredTables = []string{
 	"messages",
 	"stats",
 	"usage_events",
+	"cursor_usage_events",
 	"tool_calls",
 	"tool_result_events",
 	"insights",
