@@ -22,8 +22,8 @@ func TestLiveDaemonRecordsFiltersDeadProcesses(t *testing.T) {
 	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
 	require.NoError(t, err)
 
-	// A record for a process that has already exited must be excluded.
-	dead := startReapedProcess(t)
+	// A record for a dead process must be excluded.
+	dead := deadPID(t)
 	_, err = writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
 		PID:     dead,
 		Network: daemon.NetworkTCP,

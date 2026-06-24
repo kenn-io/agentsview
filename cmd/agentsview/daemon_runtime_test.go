@@ -76,18 +76,18 @@ func startReapedSleepProcess(t *testing.T) (int, <-chan struct{}) {
 	return cmd.Process.Pid, reaped
 }
 
-// startReapedProcess starts and fully reaps a short-lived process, returning a
-// PID that is guaranteed dead.
-func startReapedProcess(t *testing.T) int {
+// deadPID returns a PID that daemon.ProcessAlive reports as dead. Reaping a
+// just-started process is not portable here: on Windows, OpenProcess can still
+// succeed briefly for a terminated process object.
+func deadPID(t *testing.T) int {
 	t.Helper()
-	cmd := exec.Command("true")
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", "exit")
+	for _, pid := range []int{99999999, 999999999, 1 << 30} {
+		if !daemon.ProcessAlive(pid) {
+			return pid
+		}
 	}
-	require.NoError(t, cmd.Start())
-	pid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-	return pid
+	t.Skip("could not find an unused PID for stale runtime test")
+	return 0
 }
 
 // onlyLiveRuntimeRecord asserts exactly one live runtime record exists in dir
@@ -338,13 +338,6 @@ func requireMigratedIncompatibleRuntime(
 	require.NotNil(t, rt, "expected incompatible runtime")
 	require.Error(t, err)
 	return rt
-}
-
-func deadPID(t *testing.T) int {
-	t.Helper()
-	pid := startReapedProcess(t)
-	require.False(t, daemon.ProcessAlive(pid), "reaped process should be dead")
-	return pid
 }
 
 func writeLegacyRuntimeStateForTest(
