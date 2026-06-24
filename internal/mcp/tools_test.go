@@ -87,6 +87,41 @@ func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOu
 	return out
 }
 
+// TestSearchSessions_Pagination walks the int cursor end to end: a first
+// page sets next_cursor, and feeding it back returns the following,
+// non-overlapping page.
+func TestSearchSessions_Pagination(t *testing.T) {
+	ts, d := newTestToolset(t)
+	if !d.HasFTS() {
+		t.Skip("FTS not available")
+	}
+	// Six sessions all matching "pageterm", with increasing ended_at so
+	// recency ordering is deterministic. All old enough to not be excluded.
+	for i := 0; i < 6; i++ {
+		id := "p" + string(rune('0'+i))
+		ended := "2024-06-1" + string(rune('0'+i)) + "T10:00:00Z"
+		seedFTSSession(t, d, id, "proj", "pageterm body", ended)
+	}
+
+	page1 := mustSearch(t, ts, searchSessionsIn{Query: "pageterm", Sort: "recency", Limit: 2})
+	require.Len(t, page1.Results, 2)
+	require.NotNil(t, page1.NextCursor, "first page should set next_cursor")
+
+	page2 := mustSearch(t, ts, searchSessionsIn{
+		Query: "pageterm", Sort: "recency", Limit: 2, Cursor: *page1.NextCursor,
+	})
+	require.Len(t, page2.Results, 2)
+
+	seen := map[string]bool{}
+	for _, r := range page1.Results {
+		seen[r.SessionID] = true
+	}
+	for _, r := range page2.Results {
+		assert.False(t, seen[r.SessionID],
+			"page 2 must not repeat page 1 (overlap on %s)", r.SessionID)
+	}
+}
+
 func TestListSessions_ReturnsRows(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "a-1", "proj-a", func(s *db.Session) {
