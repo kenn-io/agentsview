@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -680,6 +681,7 @@ SELECT
 	cu.charged_cents / 100.0 AS cost_usd,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
+	'' AS source_uuid,
 	cu.dedup_key AS usage_dedup_key,
 	'' AS project,
 	'cursor' AS agent
@@ -699,7 +701,7 @@ func pgCursorUsageRowsSQLForBounds(
 		for i := range vals {
 			vals[i] = strings.TrimSpace(vals[i])
 		}
-		if !containsString(vals, "cursor") {
+		if !slices.Contains(vals, "cursor") {
 			return "", false
 		}
 	}
@@ -708,7 +710,7 @@ func pgCursorUsageRowsSQLForBounds(
 		for i := range vals {
 			vals[i] = strings.TrimSpace(vals[i])
 		}
-		if containsString(vals, "cursor") {
+		if slices.Contains(vals, "cursor") {
 			return "", false
 		}
 	}
@@ -731,15 +733,6 @@ func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
 		rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
 	}
 	return pgDailyUsageRowSelectFromRows(rowsSQL)
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }
 
 func pgTopSessionsUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
