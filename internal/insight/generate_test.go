@@ -199,7 +199,13 @@ func createMockBinary(
 		bin = filepath.Join(dir, name+".cmd")
 		var script string
 		if writeArgs {
-			script = fmt.Sprintf("@echo %%* > %q\r\n@type %q\r\n@exit /b %d\r\n", argsFile, dataFile, exitCode)
+			script = fmt.Sprintf(
+				"@echo off\r\n@break > %q\r\n@:write_args\r\n@if \"%%~1\"==\"\" goto done_args\r\n@>> %q echo %%~1\r\n@shift\r\n@goto write_args\r\n@:done_args\r\n@type %q\r\n@exit /b %d\r\n",
+				argsFile,
+				argsFile,
+				dataFile,
+				exitCode,
+			)
 		} else {
 			script = fmt.Sprintf("@type %q\r\n@exit /b %d\r\n", dataFile, exitCode)
 		}
@@ -230,6 +236,21 @@ func fakeClaudeBin(
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func readArgLines(t *testing.T, argsFile string) []string {
+	t.Helper()
+	argsData, err := os.ReadFile(argsFile)
+	require.NoError(t, err, "reading args")
+	lines := strings.Split(strings.TrimSpace(string(argsData)), "\n")
+	args := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			args = append(args, line)
+		}
+	}
+	return args
 }
 
 func TestGenerateStreamWithOptions_UsesConfiguredBinary(t *testing.T) {
@@ -462,10 +483,6 @@ func fakeGeminiBin(
 }
 
 func TestGenerateGemini_ModelFlag(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell script test not supported on windows")
-	}
-
 	streamJSON := `{"type":"message","role":"assistant","content":"Hello"}
 {"type":"result","result":"# Analysis"}
 `
@@ -482,11 +499,7 @@ func TestGenerateGemini_ModelFlag(t *testing.T) {
 	assert.Equal(t, geminiInsightModel, result.Model)
 
 	// Verify the CLI was invoked with --model flag.
-	argsData, err := os.ReadFile(argsFile)
-	require.NoError(t, err, "reading args")
-	args := strings.Split(
-		strings.TrimSpace(string(argsData)), "\n",
-	)
+	args := readArgLines(t, argsFile)
 
 	wantArgs := []string{
 		"--model", geminiInsightModel,
