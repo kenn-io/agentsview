@@ -340,6 +340,40 @@ func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
 		"session_name should be refreshed on ChatGPT re-import")
 }
 
+func TestImportChatGPTSanitizesSessionNameOnReimport(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(testChatGPTConv), 0o644,
+	))
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	dirty := strings.ReplaceAll(
+		testChatGPTConv,
+		`"title":"Test"`,
+		`"title":"Renamed\u0000\u001b[31m"`,
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(dirty), 0o644,
+	))
+
+	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	s, err := d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Renamed[31m", *s.DisplayName)
+}
+
 func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

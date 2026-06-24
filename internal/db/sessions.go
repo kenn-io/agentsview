@@ -1402,6 +1402,13 @@ func (db *DB) BumpLocalModifiedAt(id string) error {
 // full UpsertSession is unsafe because the caller does not have a complete
 // row to avoid overwriting existing fields with zero values.
 func (db *DB) RefreshSessionName(id string, sessionName *string) error {
+	if sessionName != nil {
+		clean := *sessionName
+		var stats ValidationStats
+		sanitizeStringField(&clean, &stats)
+		sessionName = &clean
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	_, err := db.getWriter().Exec(
