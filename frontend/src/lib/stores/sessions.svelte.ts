@@ -1138,12 +1138,21 @@ class SessionsStore {
     const ids = [...deleted.ids];
     if (ids.length === 0) return;
     configureGeneratedClient();
+    const failed: string[] = [];
     for (const id of ids) {
-      await SessionsService.postApiV1SessionsIdRestore({ id });
+      try {
+        await SessionsService.postApiV1SessionsIdRestore({ id });
+      } catch {
+        failed.push(id);
+      }
     }
-    this.clearRecentlyDeletedBatch(deleted);
+    this.updateRecentlyDeletedBatch(deleted, failed);
     this.invalidateFilterCaches();
     await this.load();
+    if (failed.length > 0) {
+      const noun = failed.length === 1 ? "session" : "sessions";
+      throw new Error(`Failed to restore ${failed.length} ${noun}`);
+    }
   }
 
   private get metadataParams(): MetadataParams {
@@ -1172,12 +1181,14 @@ class SessionsStore {
   /** Remove one or all entries from the undo toast list. */
   clearRecentlyDeleted(id?: string) {
     if (id) {
-      this.recentlyDeleted = this.recentlyDeleted.filter((d) => {
-        if (d.ids.includes(id)) {
+      this.recentlyDeleted = this.recentlyDeleted.flatMap((d) => {
+        if (!d.ids.includes(id)) return [d];
+        const ids = d.ids.filter((deletedId) => deletedId !== id);
+        if (ids.length === 0) {
           clearTimeout(d.timer);
-          return false;
+          return [];
         }
-        return true;
+        return [{ ...d, ids }];
       });
     } else {
       for (const d of this.recentlyDeleted) clearTimeout(d.timer);
@@ -1185,11 +1196,18 @@ class SessionsStore {
     }
   }
 
-  private clearRecentlyDeletedBatch(deleted: RecentlyDeletedSessions) {
-    clearTimeout(deleted.timer);
-    this.recentlyDeleted = this.recentlyDeleted.filter(
-      (d) => d.key !== deleted.key,
-    );
+  private updateRecentlyDeletedBatch(
+    deleted: RecentlyDeletedSessions,
+    ids: string[],
+  ) {
+    this.recentlyDeleted = this.recentlyDeleted.flatMap((d) => {
+      if (d.key !== deleted.key) return [d];
+      if (ids.length === 0) {
+        clearTimeout(d.timer);
+        return [];
+      }
+      return [{ ...d, ids: [...ids] }];
+    });
   }
 
   async renameSession(id: string, displayName: string | null) {

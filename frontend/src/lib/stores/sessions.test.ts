@@ -811,6 +811,20 @@ describe("SessionsStore", () => {
       expect(sessions.sessions.map((s) => s.id)).toEqual(["after"]);
     });
 
+    it("removes only one id from a recently deleted batch", () => {
+      const timer = setTimeout(() => {}, 10_000);
+      sessions.recentlyDeleted = [
+        { key: 1, ids: ["restore-a", "restore-b"], timer },
+      ];
+
+      sessions.clearRecentlyDeleted("restore-a");
+
+      expect(sessions.recentlyDeleted).toHaveLength(1);
+      expect(sessions.recentlyDeleted[0]!.ids).toEqual(["restore-b"]);
+
+      sessions.clearRecentlyDeleted();
+    });
+
     it("restores all sessions from one recently deleted batch", async () => {
       const timer = setTimeout(() => {}, 10_000);
       sessions.recentlyDeleted = [
@@ -834,6 +848,44 @@ describe("SessionsStore", () => {
       );
       expect(sessions.recentlyDeleted).toEqual([]);
       expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps only failed ids when batch undo partially fails", async () => {
+      const timer = setTimeout(() => {}, 10_000);
+      sessions.recentlyDeleted = [
+        {
+          key: 1,
+          ids: ["restore-a", "restore-b", "restore-c"],
+          timer,
+        },
+      ];
+      vi.mocked((api as any).restoreSession)
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("restore failed"))
+        .mockResolvedValueOnce(undefined);
+      mockSidebarIndex([makeSkinnyRow({ id: "restore-b" })]);
+
+      await expect(
+        sessions.restoreRecentlyDeleted(sessions.recentlyDeleted[0]!),
+      ).rejects.toThrow("Failed to restore 1 session");
+
+      expect((api as any).restoreSession).toHaveBeenNthCalledWith(
+        1,
+        "restore-a",
+      );
+      expect((api as any).restoreSession).toHaveBeenNthCalledWith(
+        2,
+        "restore-b",
+      );
+      expect((api as any).restoreSession).toHaveBeenNthCalledWith(
+        3,
+        "restore-c",
+      );
+      expect(sessions.recentlyDeleted).toHaveLength(1);
+      expect(sessions.recentlyDeleted[0]!.ids).toEqual(["restore-b"]);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+
+      sessions.clearRecentlyDeleted();
     });
   });
 
