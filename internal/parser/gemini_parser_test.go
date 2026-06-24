@@ -281,12 +281,18 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.Empty(t, msgs[0].TokenUsage)
 
 		// First assistant message (a1): input=1500, cached=100,
-		// output=200, thoughts=50
+		// output=200, thoughts=50; deltas equal cumulative (first turn).
 		assert.Equal(t, 1600, msgs[1].ContextTokens)
 		assert.Equal(t, 250, msgs[1].OutputTokens)
 		assert.True(t, msgs[1].HasContextTokens)
 		assert.True(t, msgs[1].HasOutputTokens)
 		assert.NotEmpty(t, msgs[1].TokenUsage)
+		assert.Equal(t, int64(1500),
+			gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
+		assert.Equal(t, int64(250),
+			gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())
+		assert.Equal(t, int64(100),
+			gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int())
 
 		// Second user message has no tokens
 		assert.Equal(t, 0, msgs[2].ContextTokens)
@@ -294,12 +300,20 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.False(t, msgs[2].HasContextTokens)
 		assert.False(t, msgs[2].HasOutputTokens)
 
-		// Second assistant message (a2): cumulative=2050, delta from 1600
-		assert.Equal(t, 450, msgs[3].ContextTokens)
+		// Second assistant message (a2): input=2000, cached=50;
+		// cached went down from 100 so it resets, inputDelta=500,
+		// cachedDelta=50, ContextTokens=550.
+		assert.Equal(t, 550, msgs[3].ContextTokens)
 		assert.Equal(t, 400, msgs[3].OutputTokens)
 		assert.True(t, msgs[3].HasContextTokens)
 		assert.True(t, msgs[3].HasOutputTokens)
 		assert.NotEmpty(t, msgs[3].TokenUsage)
+		assert.Equal(t, int64(500),
+			gjson.GetBytes(msgs[3].TokenUsage, "input_tokens").Int())
+		assert.Equal(t, int64(400),
+			gjson.GetBytes(msgs[3].TokenUsage, "output_tokens").Int())
+		assert.Equal(t, int64(50),
+			gjson.GetBytes(msgs[3].TokenUsage, "cache_read_input_tokens").Int())
 
 		// Session totals
 		assert.Equal(t, 650, sess.TotalOutputTokens)
@@ -507,15 +521,17 @@ func TestParseGeminiSession_ContextTokensDelta(t *testing.T) {
 		assert.False(t, msgs[0].HasContextTokens)
 		assert.False(t, msgs[2].HasContextTokens)
 
-		// gemini msg 0 (answer one): cumulative=10000, delta from 0 = 10000
+		// gemini msg 0 (answer one): input=10000, cached=0, deltas=10000+0
 		assert.Equal(t, 10000, msgs[1].ContextTokens)
-		// gemini msg 1 (answer two): cumulative=25000, delta from 10000 = 15000
+		// gemini msg 1 (answer two): input=22000, cached=3000,
+		// inputDelta=12000, cachedDelta=3000, total=15000
 		assert.Equal(t, 15000, msgs[3].ContextTokens)
-		// gemini msg 2 (answer three): cumulative=60000, delta from 25000 = 35000
-		assert.Equal(t, 35000, msgs[4].ContextTokens)
+		// gemini msg 2 (answer three): input=60000, cached=0;
+		// cached reset (3000->0), inputDelta=38000, cachedDelta=0, total=38000
+		assert.Equal(t, 38000, msgs[4].ContextTokens)
 
 		// PeakContextTokens is the largest delta, not the final cumulative
-		assert.Equal(t, 35000, sess.PeakContextTokens)
+		assert.Equal(t, 38000, sess.PeakContextTokens)
 	})
 
 	t.Run("counter reset clamps to cumulative", func(t *testing.T) {
