@@ -471,6 +471,29 @@ func parseDiffLiveMtime(
 	})
 }
 
+// parseDiffCodexTranscriptChangedSinceStored reports whether the Codex
+// transcript file itself differs from the archived source fingerprint. Codex
+// rows persist file_mtime on an index-folded basis so title changes can
+// invalidate sync caches, but parse-diff's raced guard uses transcript-only
+// live mtimes to avoid letting the global session_index.jsonl mask unrelated
+// parser drift. When the index-folded stored mtime is newer than a later
+// transcript write, the mtime comparison alone cannot prove the write; the
+// transcript fingerprint can.
+func parseDiffCodexTranscriptChangedSinceStored(
+	stored *db.Session, parsed parser.ParsedSession,
+) bool {
+	if stored == nil || parsed.Agent != parser.AgentCodex {
+		return false
+	}
+	if stored.FileHash != nil && parsed.File.Hash != "" {
+		return *stored.FileHash != parsed.File.Hash
+	}
+	if stored.FileSize != nil {
+		return *stored.FileSize != parsed.File.Size
+	}
+	return false
+}
+
 // parseDiffCollectFile folds one worker result into the report.
 func (e *Engine) parseDiffCollectFile(
 	ctx context.Context,
@@ -579,7 +602,10 @@ func (e *Engine) parseDiffCollectFile(
 		// the value is floored by the parsed File.Mtime so a source
 		// rewritten with an older mtime mid-run still reads as raced;
 		// Codex skips that floor because the parsed File.Mtime also folds
-		// in the shared index. The guard runs only for
+		// in the shared index. If that same index-folded stored mtime hides
+		// a newer transcript mtime, Codex falls back to the transcript
+		// hash/size fingerprint to prove the source file changed. The
+		// guard runs only for
 		// reliable, literal-file sources (see
 		// parseDiffSourceReliableForRaced); virtual and DB-backed sources
 		// are gated out and keep their real changed/unchanged verdict. A
@@ -605,6 +631,10 @@ func (e *Engine) parseDiffCollectFile(
 			raced = parseDiffSourceRaced(
 				storedMtime, liveMtime, liveOK,
 			)
+			if !raced && liveOK &&
+				parseDiffCodexTranscriptChangedSinceStored(stored, pw.sess) {
+				raced = true
+			}
 		}
 
 		class, reason := classifyParseDiffSession(

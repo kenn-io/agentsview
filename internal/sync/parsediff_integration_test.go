@@ -1438,6 +1438,82 @@ func TestParseDiffCodexIndexSkewDoesNotMaskTranscriptDrift(t *testing.T) {
 		"transcript drift must trip --fail-on-change")
 }
 
+// TestParseDiffCodexTranscriptSkewUsesTranscriptStoredMtime pins the other
+// Codex mtime basis: the raced guard must compare the transcript-only live
+// mtime against the transcript-only stored mtime. Stored file_mtime still folds
+// in session_index.jsonl for normal sync invalidation, and that index mtime can
+// be newer than both transcript mtimes; it must not prevent a later transcript
+// write from being classified DiffRaced.
+func TestParseDiffCodexTranscriptSkewUsesTranscriptStoredMtime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e2"
+	original := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Add tests").
+		AddCodexMessage(tsEarlyS5, "assistant", "Adding coverage.").
+		String()
+	sessionPath := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", original,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Codex title",`+
+			`"updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+	), 0o644))
+	transcriptSnapshot := time.Now().Add(-4 * time.Hour)
+	transcriptWrite := time.Now().Add(-3 * time.Hour)
+	indexSnapshot := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(
+		sessionPath, transcriptSnapshot, transcriptSnapshot,
+	), "chtimes session snapshot")
+	require.NoError(t, os.Chtimes(indexPath, indexSnapshot, indexSnapshot),
+		"chtimes index snapshot")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	stored, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, stored, "stored Codex session")
+	require.NotNil(t, stored.FileMtime, "stored file_mtime")
+	assert.Equal(t, indexSnapshot.UnixNano(), *stored.FileMtime,
+		"stored file_mtime should be index-folded")
+
+	changed := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Changed prompt").
+		AddCodexMessage(tsEarlyS5, "assistant", "Adding coverage.").
+		String()
+	require.NoError(t, os.WriteFile(sessionPath, []byte(changed), 0o644),
+		"rewrite transcript")
+	require.NoError(t, os.Chtimes(sessionPath, transcriptWrite, transcriptWrite),
+		"advance transcript below index-folded stored mtime")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Raced: 1},
+		report.Totals, "transcript write should be raced")
+	assert.Empty(t, report.FieldCounts,
+		"raced field diffs must not count as parser drift")
+	raced := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, raced, "codex session not listed")
+	assert.Equal(t, sync.DiffRaced, raced.Class, "raced class")
+	assert.False(t, report.HasFailures(),
+		"transcript write skew must not trip --fail-on-change")
+}
+
 // writeHermesFanoutStateDB writes a Hermes state.db at <root>/state.db holding
 // two sessions (each one user message) and no sibling transcripts, so both
 // sessions resolve to the SAME shared state.db File.Path -- the literal-path
