@@ -353,6 +353,26 @@ func TestParsePiSession_V1Session(t *testing.T) {
 	assert.Equal(t, "pi:v1-session", sess.ID, "PRSR-09: V1 session ID from filename")
 }
 
+func TestParsePiSession_V1MessageLineageStaysEmpty(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/v1-project"}`,
+		`{"type":"message","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"message","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":"ok"}}`,
+		"",
+	}, "\n")
+
+	path := createTestFile(t, "v1-lineage.jsonl", content)
+	sess, msgs, err := ParsePiSession(path, "v1_project", "local")
+	require.NoError(t, err)
+
+	assert.Equal(t, "pi:v1-lineage", sess.ID)
+	require.Len(t, msgs, 2)
+	for _, msg := range msgs {
+		assert.Empty(t, msg.SourceUUID)
+		assert.Empty(t, msg.SourceParentUUID)
+	}
+}
+
 // TestParsePiSession_BranchedFrom verifies the exact ParentSessionID value
 // extracted from the branchedFrom field (PRSR-10).
 func TestParsePiSession_BranchedFrom(t *testing.T) {
@@ -371,6 +391,33 @@ func TestParsePiSession_BranchedFrom(t *testing.T) {
 			"PRSR-10: basename of branchedFrom without .jsonl extension, prefixed",
 		)
 	})
+}
+
+func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"tree-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
+		`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"root"}}`,
+		`{"type":"session_info","id":"info-1","parentId":"u1","timestamp":"2025-01-01T10:00:02Z","name":"Checkpoint"}`,
+		`{"type":"model_change","id":"mc-1","parentId":"info-1","timestamp":"2025-01-01T10:00:03Z","provider":"anthropic","modelId":"claude-opus-4-5"}`,
+		`{"type":"compaction","id":"cmp-1","parentId":"mc-1","timestamp":"2025-01-01T10:00:04Z","summary":"# compacted","firstKeptEntryIndex":0,"tokensBefore":5000}`,
+		`{"type":"message","id":"u2","parentId":"cmp-1","timestamp":"2025-01-01T10:00:05Z","message":{"role":"user","content":"after compaction"}}`,
+		`{"type":"message","id":"a2","parentId":"u2","timestamp":"2025-01-01T10:00:06Z","message":{"role":"assistant","content":"reply"}}`,
+		"",
+	}, "\n")
+
+	sess, msgs := runPiParserTest(t, content)
+
+	assert.Equal(t, "Checkpoint", sess.SessionName)
+	require.Len(t, msgs, 3)
+
+	assert.Equal(t, "u1", msgs[0].SourceUUID)
+	assert.Empty(t, msgs[0].SourceParentUUID)
+
+	assert.Equal(t, "u2", msgs[1].SourceUUID)
+	assert.Equal(t, "u1", msgs[1].SourceParentUUID)
+
+	assert.Equal(t, "a2", msgs[2].SourceUUID)
+	assert.Equal(t, "u2", msgs[2].SourceParentUUID)
 }
 
 // TestParsePiSession_IOError verifies that I/O errors encountered after the

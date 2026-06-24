@@ -105,6 +105,15 @@ func parsePiLikeSession(
 		userCount    int
 		currentModel string
 	)
+	// Pi emits metadata rows that stay in the tree, so bridge them to the
+	// nearest visible ancestor before assigning SourceParentUUID.
+	visibleAncestorByID := map[string]string{}
+	resolveVisibleAncestor := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		return visibleAncestorByID[id]
+	}
 
 	for {
 		line, ok := lr.next()
@@ -120,6 +129,8 @@ func parsePiLikeSession(
 		if entryType == "" {
 			continue
 		}
+		entryID := gjson.Get(line, "id").Str
+		parentID := gjson.Get(line, "parentId").Str
 
 		// If any message entry has an id field, this is a V2 session.
 		if isV1 && gjson.Get(line, "id").Str != "" {
@@ -131,7 +142,10 @@ func parsePiLikeSession(
 			role := gjson.Get(line, "message.role").Str
 			switch role {
 			case "user":
-				msg := parsePiUserMessage(line, ordinal)
+				sourceParentUUID := resolveVisibleAncestor(parentID)
+				msg := parsePiUserMessage(
+					line, ordinal, entryID, sourceParentUUID,
+				)
 				if msg == nil {
 					continue
 				}
@@ -142,11 +156,18 @@ func parsePiLikeSession(
 					)
 				}
 				messages = append(messages, *msg)
+				if entryID != "" {
+					visibleAncestorByID[entryID] = entryID
+				}
 				ordinal++
 				userCount++
 
 			case "assistant":
-				msg := parsePiAssistantMessage(line, ordinal, currentModel)
+				sourceParentUUID := resolveVisibleAncestor(parentID)
+				msg := parsePiAssistantMessage(
+					line, ordinal, currentModel, entryID,
+					sourceParentUUID,
+				)
 				if msg == nil {
 					continue
 				}
@@ -154,34 +175,68 @@ func parsePiLikeSession(
 					currentModel = msg.Model
 				}
 				messages = append(messages, *msg)
+				if entryID != "" {
+					visibleAncestorByID[entryID] = entryID
+				}
 				ordinal++
 
 			case "toolResult":
-				msg := parsePiToolResultMessage(line, ordinal)
+				sourceParentUUID := resolveVisibleAncestor(parentID)
+				msg := parsePiToolResultMessage(
+					line, ordinal, entryID, sourceParentUUID,
+				)
 				if msg == nil {
 					continue
 				}
 				messages = append(messages, *msg)
+				if entryID != "" {
+					visibleAncestorByID[entryID] = entryID
+				}
 				ordinal++
 
 			default:
+				if entryID != "" {
+					visibleAncestorByID[entryID] = resolveVisibleAncestor(
+						parentID,
+					)
+				}
 				// skip silently
 			}
 
 		case "model_change":
+			if entryID != "" {
+				visibleAncestorByID[entryID] = resolveVisibleAncestor(
+					parentID,
+				)
+			}
 			if id := gjson.Get(line, "modelId").Str; id != "" {
 				currentModel = id
 			}
 
 		case "compaction":
+			if entryID != "" {
+				visibleAncestorByID[entryID] = resolveVisibleAncestor(
+					parentID,
+				)
+			}
 			continue
 
 		case "session_info":
+			if entryID != "" {
+				visibleAncestorByID[entryID] = resolveVisibleAncestor(
+					parentID,
+				)
+			}
 			if name := gjson.Get(line, "name"); name.Exists() {
 				sessionName = name.Str
 			}
 
 		default:
+			if entryID != "" {
+				visibleAncestorByID[entryID] = resolveVisibleAncestor(
+					parentID,
+				)
+			}
 			// skip silently (e.g., thinking_level_change)
 		}
 	}
@@ -237,7 +292,9 @@ func parsePiLikeSession(
 
 // parsePiUserMessage parses a message entry with role="user".
 // Returns nil if the entry is malformed.
-func parsePiUserMessage(line string, ordinal int) *ParsedMessage {
+func parsePiUserMessage(
+	line string, ordinal int, sourceUUID, sourceParentUUID string,
+) *ParsedMessage {
 	content := gjson.Get(line, "message.content")
 
 	var text string
@@ -259,11 +316,14 @@ func parsePiUserMessage(line string, ordinal int) *ParsedMessage {
 	ts := piTimestamp(line)
 
 	return &ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          RoleUser,
-		Content:       text,
-		Timestamp:     ts,
-		ContentLength: len(text),
+		Ordinal:          ordinal,
+		Role:             RoleUser,
+		SourceType:       "user",
+		SourceUUID:       sourceUUID,
+		SourceParentUUID: sourceParentUUID,
+		Content:          text,
+		Timestamp:        ts,
+		ContentLength:    len(text),
 	}
 }
 
@@ -272,7 +332,8 @@ func parsePiUserMessage(line string, ordinal int) *ParsedMessage {
 // recent model id seen (from a prior assistant message or
 // model_change entry), used when this message has no inline model.
 func parsePiAssistantMessage(
-	line string, ordinal int, fallbackModel string,
+	line string, ordinal int, fallbackModel, sourceUUID,
+	sourceParentUUID string,
 ) *ParsedMessage {
 	var (
 		parts       []string
@@ -329,14 +390,17 @@ func parsePiAssistantMessage(
 	ts := piTimestamp(line)
 
 	pm := &ParsedMessage{
-		Ordinal:       ordinal,
-		Role:          RoleAssistant,
-		Content:       content,
-		Timestamp:     ts,
-		HasThinking:   hasThinking,
-		HasToolUse:    hasToolUse,
-		ContentLength: len(content),
-		ToolCalls:     toolCalls,
+		Ordinal:          ordinal,
+		Role:             RoleAssistant,
+		SourceType:       "assistant",
+		SourceUUID:       sourceUUID,
+		SourceParentUUID: sourceParentUUID,
+		Content:          content,
+		Timestamp:        ts,
+		HasThinking:      hasThinking,
+		HasToolUse:       hasToolUse,
+		ContentLength:    len(content),
+		ToolCalls:        toolCalls,
 	}
 	applyPiTokenUsage(pm, line, fallbackModel)
 	return pm
@@ -410,7 +474,9 @@ func applyPiTokenUsage(
 
 // parsePiToolResultMessage parses a message entry with role="toolResult".
 // Returns nil if the entry is malformed.
-func parsePiToolResultMessage(line string, ordinal int) *ParsedMessage {
+func parsePiToolResultMessage(
+	line string, ordinal int, sourceUUID, sourceParentUUID string,
+) *ParsedMessage {
 	toolUseID := gjson.Get(line, "message.toolCallId").Str
 	content := gjson.Get(line, "message.content")
 	contentLen := toolResultContentLength(content)
@@ -418,9 +484,12 @@ func parsePiToolResultMessage(line string, ordinal int) *ParsedMessage {
 	ts := piTimestamp(line)
 
 	return &ParsedMessage{
-		Ordinal:   ordinal,
-		Role:      RoleUser,
-		Timestamp: ts,
+		Ordinal:          ordinal,
+		Role:             RoleUser,
+		SourceType:       "toolResult",
+		SourceUUID:       sourceUUID,
+		SourceParentUUID: sourceParentUUID,
+		Timestamp:        ts,
 		ToolResults: []ParsedToolResult{
 			{
 				ToolUseID:     toolUseID,
