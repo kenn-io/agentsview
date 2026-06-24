@@ -813,7 +813,9 @@ func startPeriodicSync(
 	if validRemotes {
 		for _, rh := range cfg.RemoteHosts {
 			if rh.Interval > 0 {
-				go startRemoteHostSync(cfg, database, engine, rh, emitter)
+				go startRemoteHostSync(
+					cfg, database, engine, rh, emitter, idleTracker,
+				)
 			}
 		}
 	}
@@ -834,6 +836,7 @@ func startRemoteHostSync(
 	engine *sync.Engine,
 	rh config.RemoteHost,
 	emitter sync.Emitter,
+	idleTracker *server.IdleTracker,
 ) {
 	syncFn := remoteHostSyncFunc(
 		cfg, database, engine, rh,
@@ -841,7 +844,7 @@ func startRemoteHostSync(
 			return rs.Run(ctx)
 		},
 	)
-	runRemoteHostSyncLoop(rh.Host, rh.Interval, syncFn, emitter, nil)
+	runRemoteHostSyncLoop(rh.Host, rh.Interval, syncFn, emitter, idleTracker, nil)
 }
 
 type remoteSyncExclusiveRunner interface {
@@ -882,7 +885,14 @@ func remoteHostSyncFunc(
 // runRemoteHostSyncLoop drives the per-host sync ticker. syncFn returns
 // the number of sessions synced so we only emit when data changed.
 // When done is non-nil, closing it stops the loop.
-func runRemoteHostSyncLoop(host string, interval time.Duration, syncFn func() (int, error), emitter sync.Emitter, done <-chan struct{}) {
+func runRemoteHostSyncLoop(
+	host string,
+	interval time.Duration,
+	syncFn func() (int, error),
+	emitter sync.Emitter,
+	idleTracker *server.IdleTracker,
+	done <-chan struct{},
+) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -892,7 +902,17 @@ func runRemoteHostSyncLoop(host string, interval time.Duration, syncFn func() (i
 		case <-ticker.C:
 		}
 		log.Printf("Running scheduled remote sync for %s...", host)
-		synced, err := syncFn()
+		finishWork, ok := idleTracker.BeginWork()
+		if !ok {
+			log.Printf("scheduled remote sync %s skipped: daemon is shutting down", host)
+			continue
+		}
+		var synced int
+		var err error
+		func() {
+			defer finishWork()
+			synced, err = syncFn()
+		}()
 		if err != nil {
 			log.Printf("scheduled remote sync %s: %v", host, err)
 			continue
