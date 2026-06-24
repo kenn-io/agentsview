@@ -472,13 +472,16 @@ func parseDiffLiveMtime(
 }
 
 // parseDiffCodexTranscriptChangedSinceStored reports whether the Codex
-// transcript's parsed byte boundary differs from the archived source snapshot.
-// Codex rows persist file_mtime on an index-folded basis so title changes can
-// invalidate sync caches, but parse-diff's raced guard uses transcript-only
-// live mtimes to avoid letting the global session_index.jsonl mask unrelated
-// parser drift. When the index-folded stored mtime is newer than a later
-// transcript append, the mtime comparison alone cannot prove the write; the
-// parser-consumed JSONL boundary can.
+// transcript differs from the archived source snapshot on a size basis Codex
+// has historically stored. Full parses store the raw file size, while
+// incremental parses can store only the parser-consumed JSONL boundary when a
+// partial line trails the file. Codex rows persist file_mtime on an
+// index-folded basis so title changes can invalidate sync caches, but
+// parse-diff's raced guard uses transcript-only live mtimes to avoid letting the
+// global session_index.jsonl mask unrelated parser drift. When the index-folded
+// stored mtime is newer than a later transcript append, the mtime comparison
+// alone cannot prove the write; the live raw size or parser-consumed JSONL
+// boundary can.
 func parseDiffCodexTranscriptChangedSinceStored(
 	stored *db.Session, parsed parser.ParsedSession,
 ) bool {
@@ -490,6 +493,14 @@ func parseDiffCodexTranscriptChangedSinceStored(
 	}
 
 	storedSize := *stored.FileSize
+	info, err := os.Stat(parsed.File.Path)
+	if err != nil {
+		return true
+	}
+	if info.Size() == storedSize {
+		return false
+	}
+
 	consumedSize, err := parser.CodexTranscriptConsumedSize(parsed.File.Path)
 	if err != nil {
 		return true

@@ -1634,6 +1634,58 @@ func TestParseDiffCodexLegacyStaleIncrementalHashDoesNotLookRaced(t *testing.T) 
 		"stable-source parser drift must trip --fail-on-change")
 }
 
+func TestParseDiffCodexFullParsePartialTailDoesNotLookRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e6"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	) + `{"timestamp":"2024-01-01T10:00:10Z"`
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", content,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
+
+	stored, err := env.db.GetSessionFull(
+		context.Background(), "codex:"+uuid,
+	)
+	require.NoError(t, err, "GetSessionFull after full parse")
+	require.NotNil(t, stored, "stored session after full parse")
+	require.NotNil(t, stored.FileSize, "stored file_size")
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat transcript")
+	assert.Equal(t, info.Size(), *stored.FileSize,
+		"full Codex parse stores raw file size including ignored tail")
+
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "unchanged full-parse partial tail drift must stay changed")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must be counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"stable-source parser drift must trip --fail-on-change")
+}
+
 func TestParseDiffCodexIncrementalPartialTailDoesNotLookRaced(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
