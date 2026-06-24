@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { untrack } from "svelte";
   import {
     importClaudeAI,
@@ -172,7 +173,7 @@
       error =
         e instanceof Error
           ? e.message
-          : "Import failed";
+          : $_("import.failed");
     } finally {
       importing = false;
     }
@@ -217,16 +218,16 @@
       class="modal-panel import-panel"
       role="dialog"
       aria-modal="true"
-      aria-label="Import conversations"
+      aria-label={$_("import.title")}
     >
       <div class="modal-header">
-        <h3 class="modal-title">Import Conversations</h3>
+        <h3 class="modal-title">{$_("import.title")}</h3>
         <button
           class="modal-close"
           onclick={handleClose}
           disabled={importing}
-          title="Close import dialog"
-          aria-label="Close"
+          title={$_("import.close")}
+          aria-label={$_("import.closeAria")}
         >
           <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
         </button>
@@ -241,11 +242,7 @@
             </div>
 
             <p class="result-heading">
-              {totalProcessed}
-              conversation{totalProcessed !== 1
-                ? "s"
-                : ""}
-              processed
+              {$_("import.processed", { values: { count: totalProcessed } })}
             </p>
 
             <div class="result-stats">
@@ -253,20 +250,20 @@
                 <span class="stat-num new">
                   {result.imported}
                 </span>
-                <span class="stat-lbl">new</span>
+                <span class="stat-lbl">{$_("import.new")}</span>
               </div>
               <div class="stat">
                 <span class="stat-num updated">
                   {result.updated}
                 </span>
-                <span class="stat-lbl">updated</span>
+                <span class="stat-lbl">{$_("import.updated")}</span>
               </div>
               {#if result.skipped > 0}
                 <div class="stat">
                   <span class="stat-num skipped">
                     {result.skipped}
                   </span>
-                  <span class="stat-lbl">unchanged</span>
+                  <span class="stat-lbl">{$_("import.unchanged")}</span>
                 </div>
               {/if}
               {#if result.errors > 0}
@@ -274,7 +271,7 @@
                   <span class="stat-num errors">
                     {result.errors}
                   </span>
-                  <span class="stat-lbl">errors</span>
+                  <span class="stat-lbl">{$_("import.errors")}</span>
                 </div>
               {/if}
             </div>
@@ -284,13 +281,13 @@
                 class="modal-btn"
                 onclick={handleReset}
               >
-                Import more
+                {$_("import.importMore")}
               </button>
               <button
                 class="modal-btn modal-btn-primary"
                 onclick={handleClose}
               >
-                Done
+                {$_("import.done")}
               </button>
             </div>
           </div>
@@ -319,12 +316,9 @@
 
           <p class="hint">
             {#if provider === "claude-ai"}
-              Upload <code>conversations.json</code> or
-              the <code>.zip</code> from a Claude.ai data
-              export.
+              {@html $_("import.hintClaude", { values: { json: "<code>conversations.json</code>", zip: "<code>.zip</code>" } })}
             {:else}
-              Upload the <code>.zip</code> from a ChatGPT
-              data export.
+              {@html $_("import.hintChatgpt", { values: { zip: "<code>.zip</code>" } })}
             {/if}
           </p>
 
@@ -334,7 +328,7 @@
               <div class="modal-spinner"></div>
               {#if phase === "indexing"}
                 <span class="importing-label">
-                  Rebuilding search index...
+                  {$_("import.rebuildingIndex")}
                 </span>
               {:else if progressStats}
                 {@const n =
@@ -343,12 +337,11 @@
                   progressStats.skipped +
                   progressStats.errors}
                 <span class="importing-label">
-                  {n} conversation{n !== 1 ? "s" : ""}
-                  processed...
+                  {$_("import.processingProgress", { values: { count: n } })}
                 </span>
               {:else}
                 <span class="importing-label">
-                  Importing conversations...
+                  {$_("import.importing")}
                 </span>
               {/if}
             </div>
@@ -367,8 +360,8 @@
                 <button
                   class="file-clear"
                   onclick={clearFile}
-                  title="Remove file"
-                  aria-label="Remove file"
+                  title={$_("import.removeFile")}
+                  aria-label={$_("import.removeFile")}
                 >
                   <FileXIcon size="14" strokeWidth="1.8" aria-hidden="true" />
                 </button>
@@ -397,10 +390,10 @@
             >
               <UploadIcon class="upload-icon" size="28" strokeWidth="1.5" aria-hidden="true" />
               <span class="drop-label">
-                Drop your file here
+                {$_("import.dropHere")}
               </span>
               <span class="drop-sub">
-                or click to browse
+                {$_("import.orBrowse")}
               </span>
             </div>
           {/if}
@@ -426,14 +419,14 @@
               onclick={handleClose}
               disabled={importing}
             >
-              Cancel
+              {$_("import.cancel")}
             </button>
             <button
               class="modal-btn modal-btn-primary"
               onclick={handleImport}
               disabled={!selectedFile || importing}
             >
-              Import
+              {$_("import.import")}
             </button>
           </div>
         {/if}
@@ -519,7 +512,7 @@
     line-height: 1.5;
   }
 
-  .hint code {
+  .hint :global(code) {
     font-family: var(--font-mono);
     font-size: 11px;
     background: var(--bg-inset);

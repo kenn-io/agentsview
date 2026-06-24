@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import {
     CalendarIcon,
@@ -27,15 +28,21 @@
       : [],
   );
 
-  const STATUS_LABEL: Record<string, string> = {
-    active: "Active",
-    stale: "Stale",
-    unclean: "Unclean",
-  };
+  const STATUS_LABEL: Record<string, string> = $derived({
+    active: $_("sessionList.statusActive"),
+    stale: $_("sessionList.statusStale"),
+    unclean: $_("sessionList.statusUnclean"),
+  });
 
-  const DAY_LABELS = [
-    "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
-  ];
+  const DAY_LABELS = $derived([
+    $_("analytics.weekday.mon"),
+    $_("analytics.weekday.tue"),
+    $_("analytics.weekday.wed"),
+    $_("analytics.weekday.thu"),
+    $_("analytics.weekday.fri"),
+    $_("analytics.weekday.sat"),
+    $_("analytics.weekday.sun"),
+  ]);
 
   const dateLabel = $derived.by(() => {
     if (!analytics.selectedDate) return "";
@@ -81,13 +88,13 @@
 
 {#if analytics.hasActiveFilters}
   <div class="active-filters">
-    <span class="filters-label">Filters:</span>
+    <span class="filters-label">{$_("activeFilters.label")}</span>
 
     {#if analytics.selectedDate}
       <button
         class="filter-chip"
         onclick={() => analytics.clearDate()}
-        title="Clear date filter"
+        title={$_("activeFilters.clearDate")}
       >
         <span class="chip-icon">
           <CalendarIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -103,7 +110,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearProject()}
-        title="Clear project filter"
+        title={$_("activeFilters.clearProject")}
       >
         <span class="chip-icon">
           <FolderIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -119,7 +126,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.removeMachine(machine)}
-        title="Remove {machine} filter"
+        title={$_("activeFilters.removeFilter", { values: { name: machine } })}
       >
         <span class="chip-icon">
           <MonitorIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -135,7 +142,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.toggleAgent(agent)}
-        title="Remove {agentLabel(agent)} filter"
+        title={$_("activeFilters.removeFilter", { values: { name: agentLabel(agent) } })}
       >
         <span
           class="agent-chip-dot"
@@ -152,12 +159,12 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearMinUserMessages()}
-        title="Clear min prompts filter"
+        title={$_("activeFilters.clearMinPrompts")}
       >
         <span class="chip-icon">
           <MessageSquareTextIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
-        &ge;{analytics.minUserMessages} prompts
+        {$_("activeFilters.minPrompts", { values: { count: analytics.minUserMessages } })}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -168,12 +175,12 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearRecentlyActive()}
-        title="Clear recently active filter"
+        title={$_("activeFilters.clearRecentlyActive")}
       >
         <span class="chip-icon">
           <ClockIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
-        Active 24h
+        {$_("activeFilters.active24h")}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -184,9 +191,9 @@
       <button
         class="filter-chip"
         onclick={() => analytics.toggleTerminationStatus(status)}
-        title="Remove {STATUS_LABEL[status] ?? status} from status filter"
+        title={$_("activeFilters.removeStatus", { values: { status: STATUS_LABEL[status] ?? status } })}
       >
-        Status: {STATUS_LABEL[status] ?? status}
+        {$_("activeFilters.statusPrefix", { values: { status: STATUS_LABEL[status] ?? status } })}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -197,9 +204,9 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearIncludeOneShot()}
-        title="Clear single-turn filter"
+        title={$_("activeFilters.clearSingleTurn")}
       >
-        Single-turn hidden
+        {$_("activeFilters.singleTurnHidden")}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -210,11 +217,11 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearIncludeAutomated()}
-        title="Clear automated filter"
+        title={$_("activeFilters.clearAutomated")}
       >
         {analytics.automatedScope === "automated"
-          ? "Only automated"
-          : "Automated included"}
+          ? $_("activeFilters.onlyAutomated")
+          : $_("activeFilters.automatedIncluded")}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -225,7 +232,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearTimeFilter()}
-        title="Clear time filter"
+        title={$_("activeFilters.clearTime")}
       >
         <span class="chip-icon">
           <ClockIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -241,9 +248,9 @@
       <button
         class="clear-all"
         onclick={() => analytics.clearAllFilters()}
-        title="Clear all filters"
+        title={$_("activeFilters.clearAllTitle")}
       >
-        Clear all
+        {$_("activeFilters.clearAll")}
       </button>
     {/if}
   </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type {
     VelocityOverview,
@@ -39,7 +40,7 @@
 
 <div class="velocity-container">
   <div class="velocity-header">
-    <h3 class="chart-title">Velocity</h3>
+    <h3 class="chart-title">{$_("analytics.velocity")}</h3>
     <div class="tab-toggle">
       {#each (["overall", "agent", "complexity"] as const) as t}
         <button
@@ -48,10 +49,10 @@
           onclick={() => (activeTab = t)}
         >
           {t === "overall"
-            ? "Overview"
+            ? $_("analytics.overview")
             : t === "agent"
-              ? "By Agent"
-              : "By Size"}
+              ? $_("analytics.byAgent")
+              : $_("analytics.bySize")}
         </button>
       {/each}
     </div>
@@ -64,7 +65,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchVelocity()}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if velocity}
@@ -72,43 +73,43 @@
       {@const o = velocity.overall}
       <div class="metrics-grid">
         <div class="metric-card">
-          <div class="metric-label">Turn Cycle (p50)</div>
+          <div class="metric-label">{$_("analytics.turnCycleP50")}</div>
           <div class="metric-value">
             {formatDuration(o.turn_cycle_sec.p50)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Turn Cycle (p90)</div>
+          <div class="metric-label">{$_("analytics.turnCycleP90")}</div>
           <div class="metric-value">
             {formatDuration(o.turn_cycle_sec.p90)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">First Response (p50)</div>
+          <div class="metric-label">{$_("analytics.firstResponseP50")}</div>
           <div class="metric-value">
             {formatDuration(o.first_response_sec.p50)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">First Response (p90)</div>
+          <div class="metric-label">{$_("analytics.firstResponseP90")}</div>
           <div class="metric-value">
             {formatDuration(o.first_response_sec.p90)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Msgs / Active Min</div>
+          <div class="metric-label">{$_("analytics.msgsPerActiveMin")}</div>
           <div class="metric-value">
             {formatRate(o.msgs_per_active_min)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Chars / Active Min</div>
+          <div class="metric-label">{$_("analytics.charsPerActiveMin")}</div>
           <div class="metric-value">
             {formatRate(o.chars_per_active_min)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Tools / Active Min</div>
+          <div class="metric-label">{$_("analytics.toolsPerActiveMin")}</div>
           <div class="metric-value">
             {formatRate(o.tool_calls_per_active_min)}
           </div>
@@ -117,12 +118,12 @@
     {:else if breakdowns.length > 0}
       <div class="breakdown-table">
         <div class="breakdown-header">
-          <span class="col-label">Group</span>
-          <span class="col-num">Sessions</span>
-          <span class="col-num">Cycle p50</span>
-          <span class="col-num">Cycle p90</span>
-          <span class="col-num">Msgs/min</span>
-          <span class="col-num">Tools/min</span>
+          <span class="col-label">{$_("analytics.group")}</span>
+          <span class="col-num">{$_("analytics.sessions")}</span>
+          <span class="col-num">{$_("analytics.cycleP50")}</span>
+          <span class="col-num">{$_("analytics.cycleP90")}</span>
+          <span class="col-num">{$_("analytics.msgsPerMin")}</span>
+          <span class="col-num">{$_("analytics.toolsPerMin")}</span>
         </div>
         {#each breakdowns as bd}
           <div class="breakdown-row">
@@ -144,10 +145,10 @@
         {/each}
       </div>
     {:else}
-      <div class="empty">No breakdown data</div>
+      <div class="empty">{$_("analytics.noBreakdownData")}</div>
     {/if}
   {:else}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{$_("analytics.noDataPeriod")}</div>
   {/if}
 </div>
 

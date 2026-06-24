@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import {
@@ -100,13 +101,13 @@
   <div class="modal-panel publish-panel">
     <div class="modal-header">
       <h3 class="modal-title">
-        Publish to {ui.publishSecret ? "secret" : "public"} GitHub Gist
+        {ui.publishSecret ? $_("publish.titleSecret") : $_("publish.titlePublic")}
       </h3>
       <button
         class="modal-close"
         onclick={() => ui.activeModal = null}
-        title="Close publish dialog"
-        aria-label="Close publish dialog"
+        title={$_("publish.close")}
+        aria-label={$_("publish.close")}
       >
         <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
@@ -115,8 +116,7 @@
     <div class="modal-body">
       {#if view === "setup"}
         <p class="setup-text">
-          Enter a GitHub personal access token with the
-          <code>gist</code> scope.
+          {@html $_("publish.setupText", { values: { scope: "<code>gist</code>" } })}
         </p>
         <input
           class="token-input"
@@ -134,14 +134,14 @@
             target="_blank"
             rel="noopener noreferrer"
           >
-            Create token on GitHub
+            {$_("publish.createToken")}
           </a>
           <button
             class="modal-btn modal-btn-primary"
             onclick={handleSaveToken}
             disabled={!tokenInput.trim()}
           >
-            Save & Publish
+            {$_("publish.saveAndPublish")}
           </button>
         </div>
 
@@ -149,7 +149,7 @@
         <div class="progress-view">
           <div class="modal-spinner"></div>
           <p>
-            Creating {ui.publishSecret ? "secret" : "public"} GitHub Gist...
+            {ui.publishSecret ? $_("publish.creatingSecret") : $_("publish.creatingPublic")}
           </p>
         </div>
 
@@ -157,7 +157,7 @@
         <div class="success-view">
           <div class="url-field">
             <label class="url-label" for="publish-view-url">
-              View URL
+              {$_("publish.viewUrl")}
             </label>
             <div class="url-row">
               <input
@@ -171,13 +171,13 @@
                 class="modal-btn btn-copy"
                 onclick={() => copyToClipboard(result!.view_url)}
               >
-                Copy
+                {$_("publish.copy")}
               </button>
             </div>
           </div>
           <div class="url-field">
             <label class="url-label" for="publish-gist-url">
-              Gist URL
+              {$_("publish.gistUrl")}
             </label>
             <div class="url-row">
               <input
@@ -191,7 +191,7 @@
                 class="modal-btn btn-copy"
                 onclick={() => copyToClipboard(result!.gist_url)}
               >
-                Copy
+                {$_("publish.copy")}
               </button>
             </div>
           </div>
@@ -200,13 +200,13 @@
               class="modal-btn modal-btn-primary"
               onclick={() => window.open(result!.view_url, "_blank")}
             >
-              Open in Browser
+              {$_("publish.openInBrowser")}
             </button>
             <button
               class="modal-btn"
               onclick={() => ui.activeModal = null}
             >
-              Close
+              {$_("publish.closeBtn")}
             </button>
           </div>
         </div>
@@ -219,13 +219,13 @@
               class="modal-btn modal-btn-primary"
               onclick={doPublish}
             >
-              Retry
+              {$_("publish.retry")}
             </button>
             <button
               class="modal-btn"
               onclick={() => ui.activeModal = null}
             >
-              Close
+              {$_("publish.closeBtn")}
             </button>
           </div>
         </div>
@@ -245,7 +245,7 @@
     margin-bottom: 12px;
   }
 
-  .setup-text code {
+  .setup-text :global(code) {
     font-family: var(--font-mono);
     background: var(--bg-inset);
     padding: 1px 4px;

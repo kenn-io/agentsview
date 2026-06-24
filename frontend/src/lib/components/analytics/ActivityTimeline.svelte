@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { addDays, endOfMonth } from "../../utils/dates.js";
 
@@ -119,10 +120,11 @@
       day: "numeric",
       year: "numeric",
     });
-    const lines = [`${label}: ${bar.value.toLocaleString()} ${metric}`];
+    const metricLabel = metric === "messages" ? $_("analytics.messages") : $_("analytics.sessions");
+    const lines = [`${label}: ${bar.value.toLocaleString()} ${metricLabel}`];
     if (metric === "messages") {
       lines.push(
-        `user: ${bar.userMessages} / assistant: ${bar.assistantMessages}`,
+        $_("analytics.userAssistantSplit", { values: { user: bar.userMessages, assistant: bar.assistantMessages } }),
       );
     }
     tooltip = {
@@ -168,14 +170,14 @@
           class:active={metric === "messages"}
           onclick={() => (metric = "messages")}
         >
-          Messages
+          {$_("analytics.messages")}
         </button>
         <button
           class="toggle-btn"
           class:active={metric === "sessions"}
           onclick={() => (metric = "sessions")}
         >
-          Sessions
+          {$_("analytics.sessions")}
         </button>
       </div>
       <div class="granularity-toggle">
@@ -184,21 +186,21 @@
           class:active={analytics.granularity === "day"}
           onclick={() => analytics.setGranularity("day")}
         >
-          Day
+          {$_("analytics.day")}
         </button>
         <button
           class="toggle-btn"
           class:active={analytics.granularity === "week"}
           onclick={() => analytics.setGranularity("week")}
         >
-          Week
+          {$_("analytics.week")}
         </button>
         <button
           class="toggle-btn"
           class:active={analytics.granularity === "month"}
           onclick={() => analytics.setGranularity("month")}
         >
-          Month
+          {$_("analytics.month")}
         </button>
       </div>
     </div>
@@ -211,7 +213,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchActivity()}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if chart.bars.length > 0}
@@ -281,7 +283,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No activity data</div>
+    <div class="empty">{$_("analytics.noActivityData")}</div>
   {/if}
 </div>
 

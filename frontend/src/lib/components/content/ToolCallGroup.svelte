@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Message } from "../../api/types.js";
   import type { CallTiming, TurnTiming } from "../../api/types/timing.js";
   import { formatTimestamp } from "../../utils/format.js";
@@ -128,10 +129,10 @@
     <span class="group-label">{label}</span>
     <CopyButton
       {copied}
-      ariaLabel="Copy tool calls"
-      copiedAriaLabel="Copied tool calls"
-      title="Copy tool calls"
-      copiedTitle="Copied!"
+      ariaLabel={$_("toolCallGroup.copy")}
+      copiedAriaLabel={$_("toolCallGroup.copied")}
+      title={$_("toolCallGroup.copy")}
+      copiedTitle={$_("common.copied")}
       onclick={handleCopy}
     />
     <span class="group-timestamp">

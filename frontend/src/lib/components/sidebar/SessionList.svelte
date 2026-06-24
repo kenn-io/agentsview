@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onDestroy, onMount } from "svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
@@ -415,11 +416,11 @@
 
 <div class="session-list-header">
   <span class="session-count">
-    {formatNumber(totalCount)} sessions
+    {$_("sessionList.count", { values: { count: formatNumber(totalCount) } })}
   </span>
   <div class="header-actions">
     {#if sessions.loading}
-      <span class="loading-indicator">loading</span>
+      <span class="loading-indicator">{$_("sessionList.loading")}</span>
     {/if}
     <SessionFilterControl
       {groupMode}
@@ -432,31 +433,31 @@
     />
     {#snippet statusFilterSection()}
       <div class="filter-section">
-        <div class="filter-section-label">Status</div>
+        <div class="filter-section-label">{$_("sessionList.status")}</div>
         <div class="pill-buttons">
           <button
             class="pill-btn pill-btn--status-active"
             class:active={sessions.hasTerminationStatus("active")}
             onclick={() => sessions.toggleTerminationStatus("active")}
-            title="Last activity within 10 minutes"
+            title={$_("sessionList.statusActiveTitle")}
           >
-            Active
+            {$_("sessionList.statusActive")}
           </button>
           <button
             class="pill-btn pill-btn--status-stale"
             class:active={sessions.hasTerminationStatus("stale")}
             onclick={() => sessions.toggleTerminationStatus("stale")}
-            title="Flagged session, idle 10 minutes to 1 hour"
+            title={$_("sessionList.statusStaleTitle")}
           >
-            Stale
+            {$_("sessionList.statusStale")}
           </button>
           <button
             class="pill-btn pill-btn--status-unclean"
             class:active={sessions.hasTerminationStatus("unclean")}
             onclick={() => sessions.toggleTerminationStatus("unclean")}
-            title="Terminated mid tool call (over 1 hour idle)"
+            title={$_("sessionList.statusUncleanTitle")}
           >
-            Unclean
+            {$_("sessionList.statusUnclean")}
           </button>
         </div>
       </div>
@@ -480,8 +481,8 @@
           <button
             class="group-header"
             onclick={() => toggleGroup(item.label)}
-            title="{collapsed.has(item.label) ? 'Expand' : 'Collapse'} {item.label} group"
-            aria-label="{collapsed.has(item.label) ? 'Expand' : 'Collapse'} {item.label} group"
+            title={collapsed.has(item.label) ? $_("sessionList.expandGroup", { values: { label: item.label } }) : $_("sessionList.collapseGroup", { values: { label: item.label } })}
+            aria-label={collapsed.has(item.label) ? $_("sessionList.expandGroup", { values: { label: item.label } }) : $_("sessionList.collapseGroup", { values: { label: item.label } })}
           >
             {#if collapsed.has(item.label)}
               <ChevronRightIcon class="chevron" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -506,8 +507,8 @@
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(subKey)}
-            title="{subExpanded ? 'Collapse' : 'Expand'} Subagents group"
-            aria-label="{subExpanded ? 'Collapse' : 'Expand'} Subagents group"
+            title={subExpanded ? $_("sessionList.collapseSubagents") : $_("sessionList.expandSubagents")}
+            aria-label={subExpanded ? $_("sessionList.collapseSubagents") : $_("sessionList.expandSubagents")}
           >
             {#if subExpanded}
               <ChevronDownIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -515,7 +516,7 @@
               <ChevronRightIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
             {/if}
             <UserRoundIcon class="sub-group-icon" size="10" strokeWidth="2" aria-hidden="true" />
-            <span class="sub-group-label">Subagents</span>
+            <span class="sub-group-label">{$_("sessionList.subagents")}</span>
             <span class="sub-group-count">({item.count})</span>
           </button>
         {:else if item.type === "team-group" && item.group}
@@ -525,8 +526,8 @@
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(teamKey)}
-            title="{teamExpanded ? 'Collapse' : 'Expand'} Team group"
-            aria-label="{teamExpanded ? 'Collapse' : 'Expand'} Team group"
+            title={teamExpanded ? $_("sessionList.collapseTeam") : $_("sessionList.expandTeam")}
+            aria-label={teamExpanded ? $_("sessionList.collapseTeam") : $_("sessionList.expandTeam")}
           >
             {#if teamExpanded}
               <ChevronDownIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -534,7 +535,7 @@
               <ChevronRightIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
             {/if}
             <UsersRoundIcon class="sub-group-icon" size="12" strokeWidth="2" aria-hidden="true" />
-            <span class="sub-group-label">Team</span>
+            <span class="sub-group-label">{$_("sessionList.team")}</span>
             <span class="sub-group-count">({item.count})</span>
           </button>
         {:else if item.isChild && item.session}

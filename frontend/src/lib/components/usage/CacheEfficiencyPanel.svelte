@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { usage } from "../../stores/usage.svelte.js";
   import { savingsState } from "../../utils/usageSavings.js";
 
@@ -40,25 +41,25 @@
     if (total === 0) return [];
     return [
       {
-        label: "Cache Reads",
+        label: $_("usage.cacheReads"),
         value: cs.cacheReadTokens,
         pct: cs.cacheReadTokens / total,
         color: "var(--accent-green)",
       },
       {
-        label: "Cache Writes",
+        label: $_("usage.cacheWrites"),
         value: cs.cacheCreationTokens,
         pct: cs.cacheCreationTokens / total,
         color: "var(--accent-teal)",
       },
       {
-        label: "Uncached Input",
+        label: $_("usage.uncachedInput"),
         value: cs.uncachedInputTokens,
         pct: cs.uncachedInputTokens / total,
         color: "var(--accent-amber)",
       },
       {
-        label: "Output",
+        label: $_("usage.output"),
         value: cs.outputTokens,
         pct: cs.outputTokens / total,
         color: "var(--accent-blue)",
@@ -73,10 +74,10 @@
 </script>
 
 <div class="cache-panel">
-  <h3 class="chart-title">Cache Efficiency</h3>
+  <h3 class="chart-title">{$_("usage.cacheEfficiency")}</h3>
 
   {#if bars.length === 0}
-    <div class="empty">No token data</div>
+    <div class="empty">{$_("usage.noTokenData")}</div>
   {:else}
     <div class="bar-list">
       {#each bars as bar}
@@ -98,11 +99,11 @@
 
     {#if savingsLabel === "saved"}
       <div class="savings-callout saved">
-        {fmtCost(savings)} saved vs uncached
+        {$_("usage.savedVsUncached", { values: { cost: fmtCost(savings) } })}
       </div>
     {:else if savingsLabel === "costlier"}
       <div class="savings-callout costlier">
-        {fmtCost(Math.abs(savings))} more than uncached
+        {$_("usage.moreThanUncached", { values: { cost: fmtCost(Math.abs(savings)) } })}
       </div>
     {/if}
   {/if}

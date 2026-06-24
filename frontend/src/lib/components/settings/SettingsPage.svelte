@@ -37,16 +37,15 @@
     <div class="settings-loading">{$_("settings.loading")}</div>
   {:else if settings.needsAuth}
     <div class="auth-prompt">
-      <h3 class="auth-title">Authentication Required</h3>
+      <h3 class="auth-title">{$_("settingsPage.authRequired")}</h3>
       <p class="auth-description">
-        This server requires an auth token. Enter the token displayed
-        on the server's console or settings page.
+        {$_("settingsPage.authDescription")}
       </p>
       <div class="auth-field">
         <input
           class="auth-input"
           type="password"
-          placeholder="Paste auth token"
+          placeholder={$_("settingsPage.pasteAuthToken")}
           bind:value={authTokenInput}
           onkeydown={(e) => { if (e.key === "Enter") handleAuthSubmit(); }}
         />
@@ -55,7 +54,7 @@
           disabled={!authTokenInput.trim()}
           onclick={handleAuthSubmit}
         >
-          Authenticate
+          {$_("settingsPage.authenticate")}
         </button>
       </div>
       <button
@@ -67,7 +66,7 @@
           settings.load();
         }}
       >
-        Disconnect and reset
+        {$_("settingsPage.disconnectReset")}
       </button>
     </div>
   {:else if settings.error}
@@ -82,7 +81,7 @@
             window.location.reload();
           }}
         >
-          Disconnect and reset
+          {$_("settingsPage.disconnectReset")}
         </button>
       {/if}
     </div>
@@ -104,15 +103,15 @@
           }}
           disabled={sync.readOnly}
           title={sync.readOnly
-            ? "Full resync unavailable in read-only mode"
-            : "Full resync"}
+            ? $_("settingsPage.resyncUnavailable")
+            : $_("settingsPage.fullResyncTitle")}
         >
-          Full Resync
+          {$_("settingsPage.fullResync")}
         </button>
         <span class="settings-actions-hint">
           {sync.readOnly
-            ? "Unavailable while connected to a read-only backend"
-            : "Re-scan all session files from scratch"}
+            ? $_("settingsPage.resyncUnavailableHint")
+            : $_("settingsPage.rescanHint")}
         </span>
       </div>
     </div>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { ProjectAnalytics } from "../../api/types.js";
 
@@ -71,8 +72,8 @@
       .map(([name, count]) => `${name}: ${count}`)
       .join(", ");
     const parts = [
-      `${project.messages.toLocaleString()} messages`,
-      `${project.sessions} sessions`,
+      $_("analytics.messagesCount", { values: { count: project.messages.toLocaleString() } }),
+      $_("analytics.sessionCount", { values: { count: project.sessions } }),
     ];
     if (agents) parts.push(agents);
     tooltip = {
@@ -89,9 +90,9 @@
 
 <div class="breakdown-container">
   <div class="breakdown-header">
-    <h3 class="chart-title">Projects</h3>
+    <h3 class="chart-title">{$_("analytics.projects")}</h3>
     {#if rows.length > 0}
-      <span class="count">{analytics.projects?.projects.length ?? 0} total</span>
+      <span class="count">{$_("analytics.totalCount", { values: { count: analytics.projects?.projects.length ?? 0 } })}</span>
     {/if}
   </div>
 
@@ -102,7 +103,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchProjects()}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if rows.length > 0}
@@ -144,7 +145,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No project data</div>
+    <div class="empty">{$_("analytics.noProjectData")}</div>
   {/if}
 </div>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import SettingsSection from "./SettingsSection.svelte";
   import { settings } from "../../stores/settings.svelte.js";
 
@@ -30,8 +31,8 @@
 </script>
 
 <SettingsSection
-  title="Agent Directories"
-  description="Directories scanned for session data. Configured via environment variables or config file."
+  title={$_("settingsAgentDir.title")}
+  description={$_("settingsAgentDir.description")}
 >
   <div class="dir-list">
     {#each Object.entries(settings.agentDirs) as [agent, dirs]}
@@ -39,7 +40,7 @@
         <span class="dir-agent">{AGENT_LABELS[agent] ?? agent}</span>
         <div class="dir-paths">
           {#if dirs.length === 0}
-            <span class="dir-none">Not configured</span>
+            <span class="dir-none">{$_("settingsAgentDir.notConfigured")}</span>
           {:else}
             {#each dirs as dir}
               <code class="dir-path">{dir}</code>

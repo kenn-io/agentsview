@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
 
   function formatNum(n: number): string {
@@ -15,29 +16,29 @@
     sub?: () => string;
   }
 
-  const cards: Card[] = [
+  const cards: Card[] = $derived([
     {
-      label: "Sessions",
+      label: $_("analytics.sessions"),
       value: () =>
         formatNum(analytics.summary?.total_sessions ?? 0),
     },
     {
-      label: "Messages",
+      label: $_("analytics.messages"),
       value: () =>
         formatNum(analytics.summary?.total_messages ?? 0),
     },
     {
-      label: "Projects",
+      label: $_("analytics.projects"),
       value: () =>
         String(analytics.summary?.active_projects ?? 0),
     },
     {
-      label: "Active Days",
+      label: $_("analytics.activeDays"),
       value: () =>
         String(analytics.summary?.active_days ?? 0),
     },
     {
-      label: "Messages/Session",
+      label: $_("analytics.messagesPerSession"),
       value: () => {
         const s = analytics.summary;
         if (!s) return "-";
@@ -46,15 +47,15 @@
       sub: () => {
         const s = analytics.summary;
         if (!s) return "";
-        return `med ${s.median_messages} / p90 ${s.p90_messages}`;
+        return $_("analytics.medP90", { values: { med: s.median_messages, p90: s.p90_messages } });
       },
     },
     {
-      label: "Concentration",
+      label: $_("analytics.concentration"),
       value: () => pct(analytics.summary?.concentration ?? 0),
       sub: () => analytics.summary?.most_active_project ?? "",
     },
-  ];
+  ]);
 </script>
 
 <div class="summary-cards">
@@ -86,7 +87,7 @@
       class="retry-btn"
       onclick={() => analytics.fetchSummary()}
     >
-      Retry
+      {$_("analytics.retry")}
     </button>
   </div>
 {/if}

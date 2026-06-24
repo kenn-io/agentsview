@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { XIcon } from "../../icons.js";
@@ -32,12 +33,12 @@
 >
   <div class="modal-panel update-panel">
     <div class="modal-header">
-      <h3 class="modal-title">Software Update</h3>
+      <h3 class="modal-title">{$_("update.title")}</h3>
       <button
         class="modal-close"
         onclick={close}
-        title="Close update dialog"
-        aria-label="Close update dialog"
+        title={$_("update.close")}
+        aria-label={$_("update.close")}
       >
         <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
@@ -46,21 +47,17 @@
     <div class="modal-body">
       {#if sync.updateAvailable && sync.latestVersion}
         <p class="update-text">
-          A new version is available:
-          <strong>{sync.latestVersion}</strong>
+          {@html $_("update.available", { values: { version: `<strong>${sync.latestVersion}</strong>` } })}
         </p>
         <p class="update-current">
-          You are running
-          {sync.serverVersion?.version ?? "unknown"}.
+          {$_("update.current", { values: { version: sync.serverVersion?.version ?? $_("update.unknown") } })}
         </p>
         <p class="update-instructions">
-          Run <code>agentsview update</code> on the command
-          line to install.
+          {@html $_("update.instructions", { values: { cmd: "<code>agentsview update</code>" } })}
         </p>
       {:else}
         <p class="update-text">
-          You're running the latest version
-          ({sync.serverVersion?.version ?? "unknown"}).
+          {$_("update.latest", { values: { version: sync.serverVersion?.version ?? $_("update.unknown") } })}
         </p>
       {/if}
       <div class="update-actions">
@@ -68,7 +65,7 @@
           class="modal-btn modal-btn-primary"
           onclick={close}
         >
-          Close
+          {$_("update.closeBtn")}
         </button>
       </div>
     </div>
@@ -100,7 +97,7 @@
     margin-top: 8px;
   }
 
-  .update-instructions code {
+  .update-instructions :global(code) {
     font-family: var(--font-mono);
     background: var(--bg-inset);
     padding: 1px 4px;

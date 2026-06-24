@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import {
     CheckIcon,
     CopyIcon,
@@ -92,27 +93,27 @@
 <div class="pinned-page">
   <div class="pinned-header">
     <PinIcon size="18" strokeWidth="2" class="pin-icon" aria-hidden="true" />
-    <h2>Pinned Messages</h2>
+    <h2>{$_("pinned.title")}</h2>
     {#if pins.pins.length > 0}
       <span class="pin-count">{pins.pins.length}</span>
     {/if}
   </div>
 
   {#if pins.loading}
-    <div class="loading-state">Loading pins...</div>
+    <div class="loading-state">{$_("pinned.loading")}</div>
   {:else if pins.pins.length === 0 && sessions.filters.project}
     <div class="empty-state">
-      <p class="empty-title">No pinned messages for this project</p>
+      <p class="empty-title">{$_("pinned.noneForProject")}</p>
       <p class="empty-desc">
-        Try selecting a different project or clear the project filter.
+        {$_("pinned.noneForProjectHint")}
       </p>
     </div>
   {:else if pins.pins.length === 0}
     <div class="empty-state">
       <PinIcon size="40" strokeWidth="1.6" class="empty-icon" aria-hidden="true" />
-      <p class="empty-title">No pinned messages</p>
+      <p class="empty-title">{$_("pinned.none")}</p>
       <p class="empty-desc">
-        Pin messages from any session by clicking the pin icon in the message header.
+        {$_("pinned.noneHint")}
       </p>
     </div>
   {:else}
@@ -156,7 +157,7 @@
             <button
               class="pin-card-meta"
               onclick={() => navigateToPin(pin.session_id, pin.ordinal)}
-              title="Go to message"
+              title={$_("pinned.goToMessage")}
             >
               <ExternalLinkIcon size="10" strokeWidth="2.2" aria-hidden="true" />
               <span>{info.project}</span>
@@ -167,12 +168,12 @@
                   class="expand-btn"
                   onclick={() => toggleExpand(pin.id)}
                 >
-                  {isExpanded ? "Collapse" : "Expand"}
+                  {isExpanded ? $_("pinned.collapse") : $_("pinned.expand")}
                 </button>
               {/if}
               <button
                 class="copy-btn"
-                title="Copy message"
+                title={$_("pinned.copyMessage")}
                 onclick={() => handleCopy(pin.id, pin.content)}
               >
                 {#if copiedId === pin.id}
@@ -183,7 +184,7 @@
               </button>
               <button
                 class="unpin-btn"
-                title="Unpin"
+                title={$_("pinned.unpin")}
                 onclick={() => pins.unpin(pin.session_id, pin.message_id)}
               >
                 <XIcon size="12" strokeWidth="2.4" aria-hidden="true" />

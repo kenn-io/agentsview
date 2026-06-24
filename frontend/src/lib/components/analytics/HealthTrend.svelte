@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { SignalsTrendBucket } from "../../api/types/analytics.js";
   import { getGradeStyle, scoreToGrade } from "../../utils/grade.js";
 
@@ -12,7 +13,7 @@
 </script>
 
 <div class="health-trend">
-  <div class="chart-title">Health Trend</div>
+  <div class="chart-title">{$_("analytics.healthTrend")}</div>
   {#if trend.length > 0}
     <div class="chart-area">
       <div class="y-axis">
@@ -35,7 +36,7 @@
             style:background={style.bg}
             title="{bucket.date}: {score != null
               ? Math.round(score)
-              : 'no scored sessions'} ({bucket.session_count} sessions)"
+              : $_('analytics.noScoredSessions')} ({$_('analytics.sessionCount', { values: { count: bucket.session_count } })})"
           ></div>
         {/each}
       </div>
@@ -49,10 +50,10 @@
       {/if}
     </div>
     <div class="chart-caption">
-      Daily average health score &middot; bar color = grade
+      {$_("analytics.healthTrendCaption")}
     </div>
   {:else}
-    <div class="empty">No trend data</div>
+    <div class="empty">{$_("analytics.noTrendData")}</div>
   {/if}
 </div>
 

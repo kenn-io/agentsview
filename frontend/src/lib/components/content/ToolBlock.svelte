@@ -1,6 +1,7 @@
 <!-- ABOUTME: Renders a collapsible tool call block with metadata tags and content. -->
 <!-- ABOUTME: Supports Task tool calls with inline subagent conversation expansion. -->
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { ToolCall } from "../../api/types.js";
   import SubagentInline from "./SubagentInline.svelte";
   import {
@@ -315,7 +316,7 @@
             contentFullyExpanded = !contentFullyExpanded;
           }}
         >
-          {contentFullyExpanded ? "show less" : `show all ${displayContent.totalLines} lines`}
+          {contentFullyExpanded ? $_("toolBlock.showLess") : $_("toolBlock.showAllLines", { values: { count: displayContent.totalLines } })}
         </button>
       {/if}
     {/if}
@@ -333,7 +334,7 @@
         <span class="tool-chevron" class:open={!outputCollapsed}>
           <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
         </span>
-        <span class="output-label">output</span>
+        <span class="output-label">{$_("toolBlock.output")}</span>
         {#if outputCollapsed && outputPreviewLine}
           <span class="tool-preview">{outputPreviewLine}</span>
         {/if}
@@ -356,7 +357,7 @@
         <span class="tool-chevron" class:open={!historyCollapsed}>
           <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
         </span>
-        <span class="output-label">history</span>
+        <span class="output-label">{$_("toolBlock.history")}</span>
         {#if historyCollapsed && historyPreviewLine}
           <span class="tool-preview">{historyPreviewLine}</span>
         {/if}

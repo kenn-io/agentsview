@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { XIcon } from "../../icons.js";
@@ -50,8 +51,8 @@
       <button
         class="close-btn"
         onclick={() => ui.activeModal = null}
-        title="Close about dialog"
-        aria-label="Close about dialog"
+        title={$_("about.close")}
+        aria-label={$_("about.close")}
       >
         <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
@@ -59,25 +60,25 @@
 
     <div class="about-body">
       <div class="about-row">
-        <span class="about-label">Author</span>
+        <span class="about-label">{$_("about.author")}</span>
         <span class="about-value">Kenn Software LLC</span>
       </div>
       {#if sync.serverVersion}
         <div class="about-row">
-          <span class="about-label">Version</span>
+          <span class="about-label">{$_("about.version")}</span>
           <span class="about-value mono">
             {sync.serverVersion.version}
           </span>
         </div>
         <div class="about-row">
-          <span class="about-label">Commit</span>
+          <span class="about-label">{$_("about.commit")}</span>
           <span class="about-value mono">
             {sync.serverVersion.commit}
           </span>
         </div>
         {#if buildDate}
           <div class="about-row">
-            <span class="about-label">Build date</span>
+            <span class="about-label">{$_("about.buildDate")}</span>
             <span class="about-value">{buildDate}</span>
           </div>
         {/if}
@@ -85,7 +86,7 @@
     </div>
 
     <div class="about-footer">
-      Local viewer for AI agent sessions
+      {$_("about.footer")}
     </div>
   </div>
 </div>

@@ -42,21 +42,11 @@ function storedLocale(): SupportedLocale | null {
   return null;
 }
 
-function browserLocales(): string[] {
-  if (typeof navigator === "undefined") return [];
-  const languages = Array.isArray(navigator.languages)
-    ? navigator.languages
-    : [];
-  return [...languages, navigator.language].filter(Boolean);
-}
-
 export function chooseInitialLocale(): SupportedLocale {
-  const stored = storedLocale();
-  if (stored) return stored;
-  const browserLocale = browserLocales()
-    .map(matchingLocale)
-    .find((value): value is SupportedLocale => value !== null);
-  return browserLocale ?? DEFAULT_LOCALE;
+  // Default to English; only honor an explicit stored preference.
+  // We intentionally do not auto-detect the browser language so the
+  // interface stays in English until the user opts into another locale.
+  return storedLocale() ?? DEFAULT_LOCALE;
 }
 
 export function setLocale(value: SupportedLocale) {

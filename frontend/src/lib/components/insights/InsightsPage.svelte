@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onMount, onDestroy, untrack } from "svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { insights } from "../../stores/insights.svelte.js";
@@ -123,8 +124,8 @@
     return [
       {
         name: "",
-        label: "All Agents",
-        displayLabel: "All Agents",
+        label: $_("insightsPage.allAgents"),
+        displayLabel: $_("insightsPage.allAgents"),
         count: 0,
       },
       ...opts,
@@ -135,22 +136,22 @@
     label: agentLabel(name),
     displayLabel: agentLabel(name),
   }));
-  const templateOptions = [
-    { name: "prompt_maturity_review", label: "Prompt Maturity" },
-    { name: "context_setup_review", label: "Context Setup" },
-    { name: "workflow_hygiene_review", label: "Workflow Hygiene" },
-    { name: "tool_reliability_review", label: "Tool Reliability" },
-    { name: "model_cost_review", label: "Model and Cost" },
+  const templateOptions = $derived([
+    { name: "prompt_maturity_review", label: $_("insightsPage.template.promptMaturity") },
+    { name: "context_setup_review", label: $_("insightsPage.template.contextSetup") },
+    { name: "workflow_hygiene_review", label: $_("insightsPage.template.workflowHygiene") },
+    { name: "tool_reliability_review", label: $_("insightsPage.template.toolReliability") },
+    { name: "model_cost_review", label: $_("insightsPage.template.modelCost") },
     {
       name: "instruction_opportunity_review",
-      label: "Instruction Opportunities",
+      label: $_("insightsPage.template.instructionOpportunities"),
     },
-  ];
-  const scopeOptions = [
-    { name: "human", label: "No automated" },
-    { name: "all", label: "Both" },
-    { name: "automated", label: "Only automated" },
-  ];
+  ]);
+  const scopeOptions = $derived([
+    { name: "human", label: $_("insightsPage.scope.noAutomated") },
+    { name: "all", label: $_("insightsPage.scope.both") },
+    { name: "automated", label: $_("insightsPage.scope.onlyAutomated") },
+  ]);
 
   function applyRange(sel: RangeSelection) {
     let state: PanelDateState | null = null;
@@ -400,7 +401,7 @@
       ) {
         signalExamples = [];
         signalExamplesError =
-          err instanceof Error ? err.message : "Could not load examples";
+          err instanceof Error ? err.message : $_("insightsPage.couldNotLoadExamples");
       }
     } finally {
       if (
@@ -492,7 +493,7 @@
 
   function formatDateRange(from: string, to: string): string {
     if (from === to) return formatDate(from);
-    return `${formatDate(from)} to ${formatDate(to)}`;
+    return $_("insightsPage.dateRange", { values: { from: formatDate(from), to: formatDate(to) } });
   }
 
   function formatDate(date: string): string {
@@ -514,21 +515,21 @@
   function severityLabel(severity: QualityPatternSeverity): string {
     switch (severity) {
       case "critical":
-        return "Critical";
+        return $_("insightsPage.severity.critical");
       case "warning":
-        return "Warning";
+        return $_("insightsPage.severity.warning");
       case "watch":
-        return "Watch";
+        return $_("insightsPage.severity.watch");
       case "clear":
-        return "Clear";
+        return $_("insightsPage.severity.clear");
       case "unavailable":
-        return "No data";
+        return $_("insightsPage.severity.unavailable");
     }
   }
 
   function affectedLabel(pattern: QualityPatternView): string {
-    if (pattern.totalSessions === 0) return "No computed sessions";
-    return `${pattern.affectedSessions} of ${pattern.totalSessions} sessions`;
+    if (pattern.totalSessions === 0) return $_("insightsPage.noComputedSessions");
+    return $_("insightsPage.affectedSessions", { values: { affected: pattern.affectedSessions, total: pattern.totalSessions } });
   }
 
   function pct(count: number, total: number): number {
@@ -546,23 +547,23 @@
 
   function calibrationLabel(signal: string): string {
     if (signal.startsWith("outcome_")) {
-      return "Outcome cohort";
+      return $_("insightsPage.calibration.outcomeCohort");
     }
     const calibration = calibrationFor(signal);
     if (!calibration) {
-      return "Examples only";
+      return $_("insightsPage.calibration.examplesOnly");
     }
     if (calibration.affected_sessions === 0) {
-      return "No affected sessions";
+      return $_("insightsPage.calibration.noAffected");
     }
     if (calibration.incomplete_lift == null) {
-      return `${calibration.affected_incomplete_rate}% incomplete`;
+      return $_("insightsPage.calibration.incompleteRate", { values: { rate: calibration.affected_incomplete_rate } });
     }
-    return `${calibration.incomplete_lift.toFixed(1)}x incomplete`;
+    return $_("insightsPage.calibration.incompleteLift", { values: { lift: calibration.incomplete_lift.toFixed(1) } });
   }
 
   function selectedSignalLabel(): string {
-    if (!selectedSignalId) return "Signal examples";
+    if (!selectedSignalId) return $_("insightsPage.signalExamples");
     for (const pattern of patterns) {
       const found = pattern.drivers.find(
         (driver) => driver.id === selectedSignalId,
@@ -573,9 +574,9 @@
   }
 
   function qualityBadge(example: SignalSessionExample): string {
-    if (example.health_grade) return `Grade ${example.health_grade}`;
+    if (example.health_grade) return $_("insightsPage.gradeBadge", { values: { grade: example.health_grade } });
     if (example.health_score != null) return String(example.health_score);
-    return "Unscored";
+    return $_("insightsPage.unscored");
   }
 
   function cannedKindLabel(
@@ -583,19 +584,19 @@
   ): string {
     switch (kind) {
       case "prompt_maturity_review":
-        return "Prompt Maturity";
+        return $_("insightsPage.template.promptMaturity");
       case "context_setup_review":
-        return "Context Setup";
+        return $_("insightsPage.template.contextSetup");
       case "workflow_hygiene_review":
-        return "Workflow Hygiene";
+        return $_("insightsPage.template.workflowHygiene");
       case "tool_reliability_review":
-        return "Tool Reliability";
+        return $_("insightsPage.template.toolReliability");
       case "model_cost_review":
-        return "Model and Cost";
+        return $_("insightsPage.template.modelCost");
       case "instruction_opportunity_review":
-        return "Instruction Opportunities";
+        return $_("insightsPage.template.instructionOpportunities");
       default:
-        return "Generated Recommendation";
+        return $_("insightsPage.generatedRecommendation");
     }
   }
 
@@ -604,13 +605,13 @@
     kind: CannedInsightKind | "" | undefined,
   ): string {
     if (type === "llm_canned") return cannedKindLabel(kind);
-    if (type === "agent_analysis") return "Agent Analysis";
-    return "Activity";
+    if (type === "agent_analysis") return $_("insightsPage.agentAnalysis");
+    return $_("insightsPage.activity");
   }
 
   function cacheStatusLabel(status: string | undefined): string {
-    if (status === "hit") return "cache hit";
-    if (status === "fresh") return "fresh";
+    if (status === "hit") return $_("insightsPage.cacheHit");
+    if (status === "fresh") return $_("insightsPage.fresh");
     return "";
   }
 
@@ -722,21 +723,21 @@
         value={analytics.agent}
         fallbackLabel={analytics.agent
           ? agentLabel(analytics.agent)
-          : "All Agents"}
-        placeholder="Filter agents..."
-        title="Filter insights by agent"
-        emptyLabel="No matching agents"
+          : $_("insightsPage.allAgents")}
+        placeholder={$_("insightsPage.filterAgents")}
+        title={$_("insightsPage.filterByAgent")}
+        emptyLabel={$_("insightsPage.noMatchingAgents")}
         onselect={handleAgentChange}
       />
       <label class="toolbar-scope">
-        <span>Session scope</span>
+        <span>{$_("insightsPage.sessionScope")}</span>
         <OptionTypeahead
           options={scopeOptions}
           value={analytics.automatedScope}
-          fallbackLabel="No automated"
-          placeholder="Filter scopes..."
-          title="Filter insights by session scope"
-          emptyLabel="No matching scopes"
+          fallbackLabel={$_("insightsPage.scope.noAutomated")}
+          placeholder={$_("insightsPage.filterScopes")}
+          title={$_("insightsPage.filterByScope")}
+          emptyLabel={$_("insightsPage.noMatchingScopes")}
           onselect={handleAutomatedScopeChange}
         />
       </label>
@@ -745,8 +746,8 @@
     <button
       class="icon-btn"
       onclick={handleRefresh}
-      title="Refresh insights"
-      aria-label="Refresh insights"
+      title={$_("insightsPage.refresh")}
+      aria-label={$_("insightsPage.refresh")}
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 3a5 5 0 00-4.546 2.914.5.5 0 01-.908-.418A6 6 0 0114 8a.5.5 0 01-1 0 5 5 0 00-5-5zm4.546 7.086a.5.5 0 01.908.418A6 6 0 012 8a.5.5 0 011 0 5 5 0 005 5 5 5 0 004.546-2.914z"/>
@@ -759,25 +760,25 @@
       <div class="section-heading compact">
         <div>
           <div class="eyebrow">
-            <span class="badge rule">Rule-based</span>
-            <span>Next actions</span>
+            <span class="badge rule">{$_("insightsPage.ruleBased")}</span>
+            <span>{$_("insightsPage.nextActions")}</span>
           </div>
-          <h2 id="actions-title">Deterministic Recommendations</h2>
+          <h2 id="actions-title">{$_("insightsPage.deterministicRecommendations")}</h2>
         </div>
       </div>
 
       {#if recommendations.length === 0}
         <div class="state-panel compact-state">
-          <strong>No rule-based actions are firing.</strong>
+          <strong>{$_("insightsPage.noRuleActions")}</strong>
           <span>
-            Patterns are clear or unavailable for the current filters.
+            {$_("insightsPage.patternsClear")}
           </span>
         </div>
       {:else}
         <div class="recommendation-list">
           {#each recommendations as rec}
             <article class="recommendation">
-              <span class="badge rule">Rule-based</span>
+              <span class="badge rule">{$_("insightsPage.ruleBased")}</span>
               <strong>{rec.label}</strong>
               <p>{rec.rationale}</p>
             </article>
@@ -790,14 +791,13 @@
       <div class="section-heading">
         <div>
           <div class="eyebrow">
-            <span class="badge rule">Rule-based</span>
-            <span>Scored facts</span>
+            <span class="badge rule">{$_("insightsPage.ruleBased")}</span>
+            <span>{$_("insightsPage.scoredFacts")}</span>
           </div>
-          <h2 id="facts-title">Quality Patterns</h2>
+          <h2 id="facts-title">{$_("insightsPage.qualityPatterns")}</h2>
         </div>
         <p>
-          Deterministic counts from persisted session signals for
-          {formatDateRange(analytics.from, analytics.to)}.
+          {$_("insightsPage.deterministicCounts", { values: { range: formatDateRange(analytics.from, analytics.to) } })}
         </p>
       </div>
 
@@ -814,31 +814,29 @@
         </div>
       {:else if error && !signals}
         <div class="state-panel error" role="alert">
-          <strong>Could not load deterministic insights.</strong>
+          <strong>{$_("insightsPage.couldNotLoad")}</strong>
           <span>{error}</span>
           <button onclick={fetchInsightSignals}>
-            Retry
+            {$_("insightsPage.retry")}
           </button>
         </div>
       {:else if !hasData}
         <div class="state-panel">
-          <strong>No scored quality data for this range.</strong>
+          <strong>{$_("insightsPage.noScoredData")}</strong>
           <span>
-            Sync or backfill sessions with Phase 3 quality signals to
-            populate prompt, context, workflow, and tool patterns.
+            {$_("insightsPage.noScoredDataHint")}
           </span>
         </div>
       {:else}
         {#if error}
           <div class="inline-warning" role="status">
-            Showing cached deterministic data. Latest refresh failed:
-            {error}
+            {$_("insightsPage.cachedWarning", { values: { error } })}
           </div>
         {/if}
 
         <div class="summary-grid">
           <article class="summary-card">
-            <span class="label">Average score</span>
+            <span class="label">{$_("insightsPage.averageScore")}</span>
             <strong>
               {summary.avgHealthScore == null
                 ? "--"
@@ -846,28 +844,28 @@
             </strong>
             <span>
               {summary.avgHealthScore == null
-                ? "No scored sessions"
-                : `Grade ${scoreToGrade(summary.avgHealthScore)}`}
+                ? $_("insightsPage.noScoredSessions")
+                : $_("insightsPage.gradeBadge", { values: { grade: scoreToGrade(summary.avgHealthScore) } })}
             </span>
           </article>
           <article class="summary-card">
-            <span class="label">Scored sessions</span>
+            <span class="label">{$_("insightsPage.scoredSessions")}</span>
             <strong>{summary.scoredSessions}</strong>
-            <span>{summary.unscoredSessions} unscored</span>
+            <span>{$_("insightsPage.unscoredCount", { values: { count: summary.unscoredSessions } })}</span>
           </article>
           <article class="summary-card">
-            <span class="label">Low quality</span>
+            <span class="label">{$_("insightsPage.lowQuality")}</span>
             <strong>{summary.lowQualitySessions}</strong>
-            <span>D/F graded sessions</span>
+            <span>{$_("insightsPage.dfGraded")}</span>
           </article>
           <article class="summary-card">
-            <span class="label">Prompt signals</span>
+            <span class="label">{$_("insightsPage.promptSignals")}</span>
             <strong>{summary.computedQualitySessions}</strong>
-            <span>sessions computed</span>
+            <span>{$_("insightsPage.sessionsComputed")}</span>
           </article>
         </div>
 
-        <div class="distribution-row" aria-label="Score distribution">
+        <div class="distribution-row" aria-label={$_("insightsPage.scoreDistribution")}>
           {#each summary.scoreDistribution as bucket}
             <div class="grade-bar">
               <span>{bucket.grade}</span>
@@ -903,8 +901,7 @@
               <div class="affected">
                 <strong>{affectedLabel(pattern)}</strong>
                 <span>
-                  {pct(pattern.affectedSessions, pattern.totalSessions)}%
-                  affected
+                  {$_("insightsPage.pctAffected", { values: { pct: pct(pattern.affectedSessions, pattern.totalSessions) } })}
                 </span>
               </div>
 
@@ -920,7 +917,7 @@
                     <strong>
                       {driver.total}{driver.unit ?? ""}
                     </strong>
-                    <em>{driver.sessions} sessions</em>
+                    <em>{$_("insightsPage.driverSessions", { values: { count: driver.sessions } })}</em>
                     <small>{calibrationLabel(String(driver.id))}</small>
                   </button>
                 {/each}
@@ -959,7 +956,7 @@
           <section class="evidence-panel" aria-live="polite">
             <div class="evidence-head">
               <div>
-                <span class="examples-label">Session evidence</span>
+                <span class="examples-label">{$_("insightsPage.sessionEvidence")}</span>
                 <h3>{selectedSignalLabel()}</h3>
               </div>
               <button
@@ -972,16 +969,16 @@
                   signalExamplesFilterKey = null;
                 }}
               >
-                Close
+                {$_("insightsPage.close")}
               </button>
             </div>
             {#if signalExamplesLoading}
-              <p class="evidence-state">Loading examples...</p>
+              <p class="evidence-state">{$_("insightsPage.loadingExamples")}</p>
             {:else if signalExamplesError}
               <p class="evidence-state error">{signalExamplesError}</p>
             {:else if signalExamples.length === 0}
               <p class="evidence-state">
-                No sessions currently trigger this signal in the selected filters.
+                {$_("insightsPage.noTriggeringSessions")}
               </p>
             {:else}
               <div class="evidence-list">
@@ -996,14 +993,14 @@
                       openEvidenceSession(example, event)}
                   >
                     <span class="evidence-main">
-                      <strong>{example.project || "Unassigned project"}</strong>
-                      <em>{example.excerpt || "No prompt excerpt available"}</em>
+                      <strong>{example.project || $_("insightsPage.unassignedProject")}</strong>
+                      <em>{example.excerpt || $_("insightsPage.noExcerpt")}</em>
                     </span>
                     <span class="evidence-meta">
                       <span>{agentLabel(example.agent)}</span>
-                      <span>{example.outcome || "unknown"}</span>
+                      <span>{example.outcome || $_("insightsPage.unknown")}</span>
                       <span>{qualityBadge(example)}</span>
-                      <span>{example.failure_signals} failures</span>
+                      <span>{$_("insightsPage.failures", { values: { count: example.failure_signals } })}</span>
                     </span>
                   </a>
                 {/each}
@@ -1021,53 +1018,51 @@
       <div class="section-heading">
         <div>
           <div class="eyebrow">
-            <span class="badge generated">Generated</span>
-            <span>Separate from scored facts</span>
+            <span class="badge generated">{$_("insightsPage.generated")}</span>
+            <span>{$_("insightsPage.separateFromFacts")}</span>
           </div>
-          <h2 id="generated-title">Generated Insights Archive</h2>
+          <h2 id="generated-title">{$_("insightsPage.generatedArchive")}</h2>
         </div>
         <p>
-          Saved generated text is shown separately and does not affect
-          deterministic quality scores. Creation remains out of scope
-          for this deterministic phase.
+          {$_("insightsPage.generatedArchiveHint")}
         </p>
       </div>
 
       <div class="generated-controls">
         <label class="generated-control">
-          <span>Template</span>
+          <span>{$_("insightsPage.templateLabel")}</span>
           <OptionTypeahead
             options={templateOptions}
             value={insights.cannedKind}
             fallbackLabel={cannedKindLabel(insights.cannedKind)}
-            placeholder="Filter templates..."
-            title="Select template"
-            emptyLabel="No matching templates"
+            placeholder={$_("insightsPage.filterTemplates")}
+            title={$_("insightsPage.selectTemplate")}
+            emptyLabel={$_("insightsPage.noMatchingTemplates")}
             onselect={handleCannedKindChange}
           />
         </label>
 
         <label class="generated-control">
-          <span>Generator</span>
+          <span>{$_("insightsPage.generatorLabel")}</span>
           <OptionTypeahead
             options={generationAgentOptions}
             value={insights.agent}
             fallbackLabel={agentLabel(insights.agent)}
-            placeholder="Filter generators..."
-            title="Select generator"
-            emptyLabel="No matching generators"
+            placeholder={$_("insightsPage.filterGenerators")}
+            title={$_("insightsPage.selectGenerator")}
+            emptyLabel={$_("insightsPage.noMatchingGenerators")}
             onselect={handleInsightAgentChange}
           />
         </label>
 
         <label class="generated-control focus-control">
-          <span>Optional focus</span>
+          <span>{$_("insightsPage.optionalFocus")}</span>
           <textarea
             class="generated-focus"
             value={insights.promptText}
             maxlength="1200"
             rows="2"
-            placeholder="Narrow the recommendation without changing scored facts"
+            placeholder={$_("insightsPage.focusPlaceholder")}
             oninput={handlePromptChange}
           ></textarea>
         </label>
@@ -1076,23 +1071,21 @@
           class="generate-action"
           disabled={generationUnavailable}
           title={readOnly
-            ? "Generation is disabled in read-only mode"
-            : "Generate quality recommendation"}
+            ? $_("insightsPage.generateDisabled")
+            : $_("insightsPage.generateTitle")}
           onclick={handleGenerateCanned}
         >
-          Generate
+          {$_("insightsPage.generate")}
         </button>
       </div>
 
       {#if insights.loading}
-        <div class="state-panel compact-state">Loading archive...</div>
+        <div class="state-panel compact-state">{$_("insightsPage.loadingArchive")}</div>
       {:else if insights.items.length === 0 && insights.tasks.length === 0}
         <div class="state-panel compact-state">
-          <strong>No generated insights saved.</strong>
+          <strong>{$_("insightsPage.noGeneratedSaved")}</strong>
           <span>
-            The deterministic dashboard above works without LLM
-            configuration. Generated insight creation is reserved for
-            the generated-insights phase.
+            {$_("insightsPage.noGeneratedHint")}
           </span>
         </div>
       {:else}
@@ -1104,8 +1097,8 @@
                 class:error-task={task.status === "error"}
                 onclick={() => selectGeneratedTask(task.clientId)}
               >
-                <span>{task.status === "error" ? "Error" : "Running"}</span>
-                <strong>{task.project || "global"}</strong>
+                <span>{task.status === "error" ? $_("insightsPage.error") : $_("insightsPage.running")}</span>
+                <strong>{task.project || $_("insightsPage.global")}</strong>
                 <em>
                   {task.kind ? cannedKindLabel(task.kind) : task.phase}
                 </em>
@@ -1119,7 +1112,7 @@
                 <span>
                   {insightTypeLabel(item.type, item.kind)}
                 </span>
-                <strong>{item.project || "global"}</strong>
+                <strong>{item.project || $_("insightsPage.global")}</strong>
                 <em>
                   {formatDateRange(item.date_from, item.date_to)}
                   · {formatTime(item.created_at)}
@@ -1133,8 +1126,8 @@
               <div class="generated-detail-head">
                 <span class="badge generated">
                   {insights.selectedTask.status === "error"
-                    ? "Generation error"
-                    : "Generating"}
+                    ? $_("insightsPage.generationError")
+                    : $_("insightsPage.generating")}
                 </span>
                 {#if insights.selectedTask.status === "error"}
                   <div class="generated-actions">
@@ -1146,7 +1139,7 @@
                           insights.selectedTask!.clientId,
                         )}
                     >
-                      Retry
+                      {$_("insightsPage.retry")}
                     </button>
                     <button
                       class="icon-action danger"
@@ -1155,8 +1148,8 @@
                         insights.dismissTask(
                           insights.selectedTask!.clientId,
                         )}
-                      title="Dismiss failed generation"
-                      aria-label="Dismiss failed generation"
+                      title={$_("insightsPage.dismissFailed")}
+                      aria-label={$_("insightsPage.dismissFailed")}
                     >
                       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                         <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
@@ -1188,12 +1181,12 @@
                     {/if}
                     {#if insights.selectedItem.template_version}
                       <span class="detail-chip muted">
-                        template {insights.selectedItem.template_version}
+                        {$_("insightsPage.templateVersion", { values: { version: insights.selectedItem.template_version } })}
                       </span>
                     {/if}
                     {#if insights.selectedItem.aggregate_hash}
                       <span class="detail-chip muted">
-                        aggregate {insights.selectedItem.aggregate_hash.slice(0, 12)}
+                        {$_("insightsPage.aggregateHash", { values: { hash: insights.selectedItem.aggregate_hash.slice(0, 12) } })}
                       </span>
                     {/if}
                   {/if}
@@ -1202,10 +1195,10 @@
                   <CopyButton
                     class="insight-link-copy"
                     copied={copiedInsightLinkId === insights.selectedItem.id}
-                    ariaLabel="Copy generated insight link"
-                    copiedAriaLabel="Copied generated insight link"
-                    title="Copy link to generated insight"
-                    copiedTitle="Copied link"
+                    ariaLabel={$_("insightsPage.copyLink")}
+                    copiedAriaLabel={$_("insightsPage.copiedLink")}
+                    title={$_("insightsPage.copyLinkTitle")}
+                    copiedTitle={$_("insightsPage.copiedLinkShort")}
                     onclick={() =>
                       handleCopyInsightLink(insights.selectedItem!.id)}
                   />
@@ -1220,8 +1213,8 @@
                         router.replaceParams(params);
                       }
                     }}
-                    title="Delete generated insight"
-                    aria-label="Delete generated insight"
+                    title={$_("insightsPage.deleteInsight")}
+                    aria-label={$_("insightsPage.deleteInsight")}
                   >
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                       <path d="M5.5 5.5A.5.5 0 016 6v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm2.5 0a.5.5 0 01.5.5v6a.5.5 0 01-1 0V6a.5.5 0 01.5-.5zm3 .5a.5.5 0 00-1 0v6a.5.5 0 001 0V6z"/>
@@ -1234,7 +1227,7 @@
                 {@html renderMarkdown(insights.selectedItem.content)}
               </div>
             {:else}
-              <p>Select a generated insight to read it.</p>
+              <p>{$_("insightsPage.selectToRead")}</p>
             {/if}
           </article>
         </div>

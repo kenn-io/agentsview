@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import {
     ChevronDownIcon,
     ChevronUpIcon,
@@ -41,13 +42,13 @@
   let counterText = $derived.by(() => {
     if (!hasQuery) return "";
     if (inSessionSearch.loading) return "…";
-    if (inSessionSearch.matches.length === 0) return "No results";
-    return `${inSessionSearch.currentMatchIndex + 1} of ${inSessionSearch.matches.length}`;
+    if (inSessionSearch.matches.length === 0) return $_("findBar.noResults");
+    return $_("findBar.matchCounter", { values: { current: inSessionSearch.currentMatchIndex + 1, total: inSessionSearch.matches.length } });
   });
 </script>
 
 {#if inSessionSearch.isOpen}
-  <div class="find-bar" role="search" aria-label="Find in session">
+  <div class="find-bar" role="search" aria-label={$_("findBar.findInSession")}>
     <SearchIcon class="find-icon" size="13" strokeWidth="2" aria-hidden="true" />
 
     <input
@@ -55,14 +56,14 @@
       class="find-input"
       class:no-results={noResults}
       type="text"
-      placeholder="Find in session…"
+      placeholder={$_("findBar.placeholder")}
       spellcheck="false"
       autocomplete="off"
       value={inSessionSearch.query}
       oninput={(e) =>
         (inSessionSearch.query = (e.currentTarget as HTMLInputElement).value)}
       onkeydown={handleKeydown}
-      aria-label="Search query"
+      aria-label={$_("findBar.searchQuery")}
     />
 
     {#if hasQuery}
@@ -74,21 +75,21 @@
     <div class="nav-buttons">
       <button
         class="nav-btn"
-        title="Previous match (⇧ ↩)"
+        title={$_("findBar.prevTitle")}
         disabled={!hasMatches}
         onclick={() => inSessionSearch.prev()}
         tabindex="0"
-        aria-label="Previous match"
+        aria-label={$_("findBar.prev")}
       >
         <ChevronUpIcon size="11" strokeWidth="2.4" aria-hidden="true" />
       </button>
       <button
         class="nav-btn"
-        title="Next match (↩)"
+        title={$_("findBar.nextTitle")}
         disabled={!hasMatches}
         onclick={() => inSessionSearch.next()}
         tabindex="0"
-        aria-label="Next match"
+        aria-label={$_("findBar.next")}
       >
         <ChevronDownIcon size="11" strokeWidth="2.4" aria-hidden="true" />
       </button>
@@ -98,10 +99,10 @@
 
     <button
       class="close-btn"
-      title="Close (⎋)"
+      title={$_("findBar.closeTitle")}
       onclick={() => inSessionSearch.close()}
       tabindex="0"
-      aria-label="Close find bar"
+      aria-label={$_("findBar.close")}
     >
       <XIcon size="12" strokeWidth="2.4" aria-hidden="true" />
     </button>

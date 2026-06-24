@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Report } from "../../api/types.js";
   import type { ActivitySessionRow } from "../../api/generated/index";
   import { router } from "../../stores/router.svelte.js";
@@ -134,7 +135,7 @@
 
   function rowModel(row: ActivitySessionRow): string {
     const models = (row.models ?? []) as string[];
-    if (models.length > 1) return "mixed";
+    if (models.length > 1) return $_("activity.mixed");
     return row.primary_model || "—";
   }
 
@@ -166,13 +167,13 @@
     label: string;
   }
 
-  const sortColumns: Column[] = [
-    { key: "project", label: "Project" },
-    { key: "agent", label: "Agent" },
-    { key: "agent_minutes", label: "Agent-min" },
-    { key: "cost", label: "Cost" },
-    { key: "first_active", label: "Window" },
-  ];
+  const sortColumns: Column[] = $derived([
+    { key: "project", label: $_("activity.project") },
+    { key: "agent", label: $_("activity.agent") },
+    { key: "agent_minutes", label: $_("activity.agentMin") },
+    { key: "cost", label: $_("activity.cost") },
+    { key: "first_active", label: $_("activity.window") },
+  ]);
 
   function ariaSort(key: SortKey): "ascending" | "descending" | "none" {
     if (sortKey !== key) return "none";
@@ -182,23 +183,23 @@
 
 <div class="sessions-table">
   <div class="sessions-header">
-    <h3 class="chart-title">Sessions</h3>
+    <h3 class="chart-title">{$_("activity.sessions")}</h3>
     <div class="header-meta">
       {#if filterSet}
         <button
           type="button"
           class="filter-badge"
           onclick={() => onClearFilter?.()}
-          title="Clear time filter"
+          title={$_("activity.clearTimeFilter")}
         >
-          <span>Active: {filterLabel}</span>
+          <span>{$_("activity.activeFilter", { values: { label: filterLabel } })}</span>
           <span class="filter-badge-x">
             <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
           </span>
         </button>
       {/if}
       {#if rows.length > 0}
-        <span class="count">{rows.length} total</span>
+        <span class="count">{$_("activity.totalCount", { values: { count: rows.length } })}</span>
       {/if}
     </div>
   </div>
@@ -208,8 +209,8 @@
       <table class="table">
         <thead>
           <tr>
-            <th class="col-session" scope="col">Session</th>
-            <th class="col-model" scope="col">Model</th>
+            <th class="col-session" scope="col">{$_("activity.session")}</th>
+            <th class="col-model" scope="col">{$_("activity.model")}</th>
             {#each sortColumns as col}
               <th
                 class="col-sortable"
@@ -264,7 +265,7 @@
                     {row.title || row.session_id}
                   </a>
                   {#if row.is_automated}
-                    <span class="auto-badge" title="Automated session">Auto</span>
+                    <span class="auto-badge" title={$_("activity.automatedSession")}>{$_("activity.auto")}</span>
                   {/if}
                 </div>
               </td>

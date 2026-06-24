@@ -4,6 +4,7 @@
 // component tests using render() would otherwise leak mounted DOM between
 // cases. cleanup() is idempotent, so tests that unmount manually are unharmed.
 import "@testing-library/svelte/vitest";
+import { initI18n } from "./lib/i18n/index.js";
 
 type StorageName = "localStorage";
 
@@ -58,3 +59,8 @@ export function installFallbackStorage(name: StorageName): void {
 }
 
 installFallbackStorage("localStorage");
+
+// Initialize svelte-i18n so components using $_ can format messages in
+// tests. Resolves to the "en" locale (jsdom navigator is en-US), so
+// English-facing assertions render the same strings as before i18n.
+initI18n();

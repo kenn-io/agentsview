@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { usage } from "../../stores/usage.svelte.js";
 
   function fmtCost(v: number): string {
@@ -71,7 +72,7 @@
     const c = usage.summary?.comparison;
     if (!c) return null;
     const sign = c.deltaPct >= 0 ? "+" : "";
-    return `${sign}${(c.deltaPct * 100).toFixed(0)}% vs prior`;
+    return $_("usage.vsPrior", { values: { pct: `${sign}${(c.deltaPct * 100).toFixed(0)}` } });
   });
 
   function fmtCredits(v: number): string {
@@ -88,7 +89,7 @@
   const cards = $derived.by(() => {
     const baseCards: Card[] = [
       {
-        label: "Total Cost",
+        label: $_("usage.totalCost"),
         value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
         sub: () => vsPrior ?? "",
         featured: true,
@@ -96,38 +97,38 @@
       ...(usage.summary?.totals.copilotAICredits
         ? [
             {
-              label: "Copilot AI Credits",
+              label: $_("usage.copilotCredits"),
               value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
             },
           ]
         : []),
       {
-        label: "Input Tokens",
+        label: $_("usage.inputTokens"),
         value: () => fmtTokens(inputTokens),
         sub: () =>
-          cachedTokens > 0 ? `+${fmtTokens(cachedTokens)} cached` : "",
+          cachedTokens > 0 ? $_("usage.cachedSuffix", { values: { tokens: fmtTokens(cachedTokens) } }) : "",
       },
       {
-        label: "Output Tokens",
+        label: $_("usage.outputTokens"),
         value: () => fmtTokens(outputTokens),
       },
       {
-        label: "Daily Burn",
+        label: $_("usage.dailyBurn"),
         value: () => fmtCost(dailyBurn),
-        sub: () => "avg/day",
+        sub: () => $_("usage.avgPerDay"),
       },
       {
-        label: "Peak Day",
+        label: $_("usage.peakDay"),
         value: () => fmtCost(peak.cost),
         sub: () => peak.date,
       },
       {
-        label: "Cache Hit",
+        label: $_("usage.cacheHit"),
         value: () =>
           fmtPct(usage.summary?.cacheStats.hitRate ?? 0),
       },
       {
-        label: "Projects",
+        label: $_("usage.projects"),
         value: () =>
           String(
             Object.keys(
@@ -136,12 +137,12 @@
           ),
       },
       {
-        label: "Models",
+        label: $_("usage.models"),
         value: () =>
           String(usage.summary?.modelTotals.length ?? 0),
       },
       {
-        label: "Active Days",
+        label: $_("usage.activeDays"),
         value: () => String(activeDays),
       },
     ];

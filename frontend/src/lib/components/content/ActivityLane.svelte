@@ -4,6 +4,7 @@
      positioned `.activity-bar` per populated bucket. Click-to-scroll uses
      `ui.scrollToOrdinal`, matching ActivityMinimap's behavior. -->
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import type { SessionActivityBucket } from "../../api/types/session-activity.js";
@@ -63,7 +64,7 @@
   function barTitle(bucket: SessionActivityBucket): string {
     const range = `${formatTime(bucket.start_time)}–${formatTime(bucket.end_time)}`;
     const total = bucket.user_count + bucket.assistant_count;
-    return `${range} · ${total} message${total === 1 ? "" : "s"}`;
+    return `${range} · ${$_("activityLane.messageCount", { values: { count: total } })}`;
   }
 
   function handleBarClick(bucket: SessionActivityBucket) {
@@ -76,7 +77,7 @@
 </script>
 
 <div class="lane-row">
-  <span class="lane-label">activity</span>
+  <span class="lane-label">{$_("activityLane.activity")}</span>
   <span class="lane-track activity">
     {#if chart}
       {#each chart.bars as bar (bar.index)}

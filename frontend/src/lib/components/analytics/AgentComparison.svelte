@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { router } from "../../stores/router.svelte.js";
 
@@ -85,7 +86,7 @@
 </script>
 
 <div class="agent-comparison">
-  <h3 class="chart-title">Agent Comparison</h3>
+  <h3 class="chart-title">{$_("analytics.agentComparison")}</h3>
 
   {#if analytics.errors.velocity || analytics.errors.summary || analytics.errors.tools}
     <div class="error">
@@ -98,24 +99,24 @@
           analytics.fetchTools();
         }}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if agents.length < 2}
     <div class="empty">
-      No comparison data (need 2+ agents)
+      {$_("analytics.noComparisonData")}
     </div>
   {:else}
     <div class="comparison-table">
       <div class="table-header">
-        <span class="col-agent">Agent</span>
-        <span class="col-num">Sessions</span>
-        <span class="col-num">Messages</span>
-        <span class="col-num">Cycle p50</span>
-        <span class="col-num">Msgs/min</span>
-        <span class="col-num">Tools/min</span>
-        <span class="col-num">Tool Calls</span>
-        <span class="col-cats">Top Categories</span>
+        <span class="col-agent">{$_("analytics.agent")}</span>
+        <span class="col-num">{$_("analytics.sessions")}</span>
+        <span class="col-num">{$_("analytics.messages")}</span>
+        <span class="col-num">{$_("analytics.cycleP50")}</span>
+        <span class="col-num">{$_("analytics.msgsPerMin")}</span>
+        <span class="col-num">{$_("analytics.toolsPerMin")}</span>
+        <span class="col-num">{$_("analytics.toolCalls")}</span>
+        <span class="col-cats">{$_("analytics.topCategories")}</span>
       </div>
       {#each agents as agent}
         <!-- svelte-ignore a11y_click_events_have_key_events -->

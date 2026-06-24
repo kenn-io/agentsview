@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { squarify } from "../../utils/treemap.js";
 
   interface TreemapItem {
@@ -108,7 +109,7 @@
       class="tile"
       tabindex="0"
       role="button"
-      aria-label="Hide {tile.label} from chart"
+      aria-label={$_("usage.hideFromChart", { values: { label: tile.label } })}
       onclick={() => onSelect?.(tile.id)}
       onkeydown={(e) => handleKey(e, tile.id)}
       clip-path="url(#{clipId})"

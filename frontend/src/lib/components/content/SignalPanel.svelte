@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Session } from "../../api/types/core.js";
   import {
     getGradeStyle,
@@ -55,14 +56,14 @@
 <div class="signal-panel">
   {#if !hasUsefulData}
     <div class="empty-state">
-      Not enough activity to analyze this session.
+      {$_("signalPanel.notEnoughActivity")}
     </div>
   {:else}
     <div class="signal-row">
       <span
         class="grade-large"
         style:color={gradeStyle.text}
-        title={`Health grade ${getGradeLabel(session.health_grade)}`}
+        title={$_("signalPanel.healthGrade", { values: { grade: getGradeLabel(session.health_grade) } })}
       >
         {getGradeLabel(session.health_grade)}
       </span>
@@ -74,7 +75,7 @@
         class="outcome"
         style:color={getOutcomeColor(outcome)}
         title={confidence
-          ? `${outcomeLabel} (${confidence} confidence)`
+          ? $_("signalPanel.outcomeConfidence", { values: { outcome: outcomeLabel, confidence } })
           : outcomeLabel}
         aria-label={outcomeLabel}
       >
@@ -93,11 +94,11 @@
 
       {#if basis.length > 0}
         <span class="basis-tags">
-          <span class="basis-heading">Based on:</span>
+          <span class="basis-heading">{$_("signalPanel.basedOn")}</span>
           {#each basis as b}
             <span
               class="basis-tag"
-              title={`${getBasisLabel(b)} factored into the score`}
+              title={$_("signalPanel.basisTitle", { values: { factor: getBasisLabel(b) } })}
             >
               {getBasisLabel(b)}
             </span>
@@ -110,29 +111,28 @@
           class="compaction-chip"
           class:mid-task={midTaskCompactions > 0}
           title={midTaskCompactions > 0
-            ? `${midTaskCompactions} of ${compactions} interrupted active work`
-            : "Context compactions in this session"}
+            ? $_("signalPanel.compactionInterrupted", { values: { mid: midTaskCompactions, total: compactions } })
+            : $_("signalPanel.compactionTitle")}
         >
-          {compactions}
-          {compactions === 1 ? "compaction" : "compactions"}
+          {$_("signalPanel.compactionCount", { values: { count: compactions } })}
           {#if midTaskCompactions > 0}
-            &middot; {midTaskCompactions} mid-task
+            &middot; {$_("signalPanel.midTask", { values: { count: midTaskCompactions } })}
           {/if}
         </span>
       {/if}
 
       {#if !hasPenalties}
-        <span class="no-penalties">No penalties</span>
+        <span class="no-penalties">{$_("signalPanel.noPenalties")}</span>
       {/if}
     </div>
 
     {#if hasPenalties && penalties}
       <div class="penalties-row">
-        <span class="penalties-heading">Penalties:</span>
+        <span class="penalties-heading">{$_("signalPanel.penalties")}</span>
         {#each Object.entries(penalties) as [key, value]}
           <div
             class="penalty"
-            title={`${getPenaltyLabel(key)} subtracted ${value} from the score`}
+            title={$_("signalPanel.penaltyTitle", { values: { label: getPenaltyLabel(key), value } })}
           >
             <span class="penalty-value">-{value}</span>
             <span class="penalty-label">

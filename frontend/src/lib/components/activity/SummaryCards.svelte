@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Report } from "../../api/types.js";
 
   let { report }: { report: Report } = $props();
@@ -18,12 +19,11 @@
     const parts: string[] = [];
     if (t.automated_sessions > 0) {
       parts.push(
-        `${fmtInt(t.interactive_sessions)} interactive / ` +
-          `${fmtInt(t.automated_sessions)} automated`,
+        $_("activity.interactiveAutomatedSplit", { values: { interactive: fmtInt(t.interactive_sessions), automated: fmtInt(t.automated_sessions) } }),
       );
     }
     if (t.untimed_sessions > 0) {
-      parts.push(`${fmtInt(t.untimed_sessions)} untimed`);
+      parts.push($_("activity.untimedCount", { values: { count: fmtInt(t.untimed_sessions) } }));
     }
     return parts.join(", ");
   }
@@ -66,37 +66,37 @@
     const t = report.totals;
     return [
       {
-        label: "Peak Concurrency",
+        label: $_("activity.peakConcurrency"),
         value: String(report.peak.agents),
-        sub: peakAt ? `at ${peakAt}` : "",
+        sub: peakAt ? $_("activity.atTime", { values: { time: peakAt } }) : "",
         featured: true,
       },
       {
-        label: "Active",
+        label: $_("activity.active"),
         value: fmtDuration(t.active_minutes),
-        sub: `${fmtDuration(t.idle_minutes)} idle`,
+        sub: $_("activity.idleDuration", { values: { duration: fmtDuration(t.idle_minutes) } }),
       },
       {
-        label: "Agent-minutes",
+        label: $_("activity.agentMinutes"),
         // Round to a whole minute so the card shows "134", not "134.226";
         // matches the Breakdowns rounding of the same metric.
         value: fmtInt(Math.round(t.agent_minutes)),
       },
       {
-        label: "Sessions",
+        label: $_("activity.sessions"),
         value: fmtInt(t.sessions),
         sub: sessionsSub(t),
       },
       {
-        label: "Projects",
+        label: $_("activity.projects"),
         value: fmtInt(t.distinct_projects),
       },
       {
-        label: "Models",
+        label: $_("activity.models"),
         value: fmtInt(t.distinct_models),
       },
       {
-        label: "Total Cost",
+        label: $_("activity.totalCost"),
         value: fmtCost(t.cost),
       },
     ];
@@ -116,7 +116,7 @@
 </div>
 
 {#if report.partial && asOf}
-  <div class="partial-note">In progress, as of {asOf}</div>
+  <div class="partial-note">{$_("activity.inProgressAsOf", { values: { time: asOf } })}</div>
 {/if}
 
 <style>

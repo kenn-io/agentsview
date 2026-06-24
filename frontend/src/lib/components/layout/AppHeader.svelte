@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import {
     ActivityIcon,
     AlignJustifyIcon,
@@ -79,13 +80,13 @@
   let moreDropRef: HTMLDivElement | undefined =
     $state(undefined);
 
-  const BLOCK_LABELS: Record<BlockType, string> = {
-    user: "User messages",
-    assistant: "Assistant text",
-    thinking: "Thinking blocks",
-    tool: "Tool calls",
-    code: "Code blocks",
-  };
+  const BLOCK_LABELS: Record<BlockType, string> = $derived({
+    user: $_("header.blockFilter.user"),
+    assistant: $_("header.blockFilter.assistant"),
+    thinking: $_("header.blockFilter.thinking"),
+    tool: $_("header.blockFilter.tool"),
+    code: $_("header.blockFilter.code"),
+  });
 
   const BLOCK_COLORS: Record<BlockType, string> = {
     user: "var(--accent-blue)",
@@ -281,15 +282,15 @@
           ui.toggleSidebar();
         }
       }}
-      title="Toggle sidebar (b)"
-      aria-label="Toggle sidebar"
+      title={$_("header.toggleSidebarTitle")}
+      aria-label={$_("header.toggleSidebar")}
     >
       <MenuIcon size="16" strokeWidth="2" aria-hidden="true" />
     </button>
     <button
       class="header-home"
       onclick={() => router.navigate("sessions")}
-      title="Home"
+      title={$_("header.home")}
     >
       <svg class="header-logo" width="18" height="18" viewBox="0 0 32 32" aria-hidden="true">
         <rect width="32" height="32" rx="6" fill="var(--accent-blue, #3b82f6)"/>
@@ -311,33 +312,33 @@
       class="nav-btn"
       class:active={router.route === "sessions"}
       onclick={() => router.navigate("sessions")}
-      title="Sessions"
-      aria-label="Sessions"
+      title={$_("header.nav.sessions")}
+      aria-label={$_("header.nav.sessions")}
     >
       <LayoutGridIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="nav-label">Sessions</span>
+      <span class="nav-label">{$_("header.nav.sessions")}</span>
     </button>
 
     <button
       class="nav-btn"
       class:active={router.route === "usage"}
       onclick={() => router.navigate("usage")}
-      title="Token Usage"
-      aria-label="Usage"
+      title={$_("header.nav.usageTitle")}
+      aria-label={$_("header.nav.usage")}
     >
       <Grid2x2Icon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="nav-label">Usage</span>
+      <span class="nav-label">{$_("header.nav.usage")}</span>
     </button>
 
     <button
       class="nav-btn"
       class:active={router.route === "activity"}
       onclick={() => router.navigate("activity")}
-      title="Activity"
-      aria-label="Activity"
+      title={$_("header.nav.activity")}
+      aria-label={$_("header.nav.activity")}
     >
       <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="nav-label">Activity</span>
+      <span class="nav-label">{$_("header.nav.activity")}</span>
     </button>
 
     <div class="more-wrap">
@@ -346,34 +347,34 @@
         class:active={router.route === "trends" || router.route === "pinned" || router.route === "insights" || router.route === "trash" || moreOpen}
         bind:this={moreBtnRef}
         onclick={() => { moreOpen = !moreOpen; }}
-        title="More navigation"
-        aria-label="More navigation"
+        title={$_("header.nav.more")}
+        aria-label={$_("header.nav.more")}
         aria-expanded={moreOpen}
       >
         <EllipsisIcon size="12" strokeWidth="2.4" aria-hidden="true" />
-        <span class="nav-label">More</span>
+        <span class="nav-label">{$_("header.nav.moreLabel")}</span>
       </button>
       {#if moreOpen}
         <div class="more-dropdown" role="menu" bind:this={moreDropRef}>
           <button class="more-item" role="menuitem"
             class:active={router.route === "trends"}
             onclick={() => { router.navigate("trends"); moreOpen = false; }}>
-            Trends
+            {$_("header.nav.trends")}
           </button>
           <button class="more-item" role="menuitem"
             class:active={router.route === "pinned"}
             onclick={() => { router.navigate("pinned"); moreOpen = false; }}>
-            Pinned
+            {$_("header.nav.pinned")}
           </button>
           <button class="more-item" role="menuitem"
             class:active={router.route === "insights"}
             onclick={() => { router.navigate("insights"); moreOpen = false; }}>
-            Insights
+            {$_("header.nav.insights")}
           </button>
           <button class="more-item" role="menuitem"
             class:active={router.route === "trash"}
             onclick={() => { router.navigate("trash"); moreOpen = false; }}>
-            Trash
+            {$_("header.nav.trash")}
           </button>
         </div>
       {/if}
@@ -383,10 +384,10 @@
   <button
     class="search-hint"
     onclick={() => (ui.activeModal = "commandPalette")}
-    title="Search sessions ({modKey} K)"
+    title={$_("header.search.title", { values: { key: modKey } })}
   >
     <SearchIcon size="12" strokeWidth="2" aria-hidden="true" />
-    <span class="search-hint-text">Search sessions...</span>
+    <span class="search-hint-text">{$_("header.search.placeholder")}</span>
     <kbd class="search-hint-kbd">{modKey} K</kbd>
   </button>
 
@@ -398,19 +399,19 @@
           class="pill"
           class:active={ui.transcriptMode === "normal"}
           onclick={() => ui.setTranscriptMode("normal")}
-          title="Normal transcript — show all messages"
-          aria-label="Normal transcript mode"
+          title={$_("header.transcript.normalTitle")}
+          aria-label={$_("header.transcript.normalAria")}
         >
-          <span class="pill-label">Normal</span>
+          <span class="pill-label">{$_("header.transcript.normal")}</span>
         </button>
         <button
           class="pill"
           class:active={ui.transcriptMode === "focused"}
           onclick={() => ui.setTranscriptMode("focused")}
-          title="Focused transcript — user prompts and final answers only"
-          aria-label="Focused transcript mode"
+          title={$_("header.transcript.focusedTitle")}
+          aria-label={$_("header.transcript.focusedAria")}
         >
-          <span class="pill-label">Focused</span>
+          <span class="pill-label">{$_("header.transcript.focused")}</span>
         </button>
 
         <span class="strip-divider"></span>
@@ -421,8 +422,8 @@
             class:filter-active={ui.hasBlockFilters}
             bind:this={filterBtnRef}
             onclick={() => (showBlockFilter = !showBlockFilter)}
-            title="Filter block types"
-            aria-label="Filter block types"
+            title={$_("header.blockFilter.filterTitle")}
+            aria-label={$_("header.blockFilter.filterTitle")}
           >
             <FunnelIcon size="12" strokeWidth="2" aria-hidden="true" />
             {#if ui.hasBlockFilters}
@@ -432,7 +433,7 @@
 
           {#if showBlockFilter}
             <div class="block-filter-dropdown" bind:this={filterDropRef}>
-              <div class="block-filter-title">Block Visibility</div>
+              <div class="block-filter-title">{$_("header.blockFilter.title")}</div>
               {#each ALL_BLOCK_TYPES as bt}
                 {@const visible = ui.isBlockVisible(bt)}
                 <button
@@ -457,7 +458,7 @@
                   class="block-filter-reset"
                   onclick={() => ui.showAllBlocks()}
                 >
-                  Show all
+                  {$_("header.blockFilter.showAll")}
                 </button>
               {/if}
             </div>
@@ -469,8 +470,8 @@
         class="header-btn"
         class:active={ui.followLatest}
         onclick={() => ui.toggleFollowLatest()}
-        title="Follow latest messages"
-        aria-label="Follow latest messages"
+        title={$_("header.followLatest")}
+        aria-label={$_("header.followLatest")}
         aria-pressed={ui.followLatest}
       >
         <ArrowDownIcon size="14" strokeWidth="2" aria-hidden="true" />
@@ -479,8 +480,8 @@
       <button
         class="header-btn"
         onclick={() => ui.toggleSort()}
-        title="Toggle sort order (o)"
-        aria-label="Toggle sort order"
+        title={$_("header.toggleSortTitle")}
+        aria-label={$_("header.toggleSort")}
       >
         {#if ui.sortNewestFirst}
           <ArrowDownWideNarrowIcon size="14" strokeWidth="2" aria-hidden="true" />
@@ -493,8 +494,8 @@
       <button
         class="header-btn collapsible"
         onclick={() => ui.cycleLayout()}
-        title="Cycle layout: {ui.messageLayout} (l)"
-        aria-label="Cycle message layout"
+        title={$_("header.cycleLayoutTitle", { values: { layout: ui.messageLayout } })}
+        aria-label={$_("header.cycleLayout")}
       >
         {@render messageLayoutIcon("14")}
       </button>
@@ -508,8 +509,8 @@
             showOverflow = false;
           }}
           disabled={!sessions.activeSessionId}
-          title="Export session options"
-          aria-label="Export session"
+          title={$_("header.export.title")}
+          aria-label={$_("header.export.aria")}
           aria-expanded={showExportMenu}
         >
           <CloudUploadIcon size="14" strokeWidth="2" aria-hidden="true" />
@@ -525,7 +526,7 @@
               }}
             >
               <CloudUploadIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>Download HTML export</span>
+              <span>{$_("header.export.downloadHtml")}</span>
             </button>
             <button
               class="overflow-item"
@@ -538,9 +539,9 @@
               {/if}
               <span>
                 {#if copiedMarkdownLink}
-                  Copied markdown link
+                  {$_("header.export.copiedMarkdownLink")}
                 {:else}
-                  Copy markdown export link
+                  {$_("header.export.copyMarkdownLink")}
                 {/if}
               </span>
             </button>
@@ -550,7 +551,7 @@
                 onclick={handleCopySourceFilePath}
               >
                 <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
-                <span>Copy source file path</span>
+                <span>{$_("header.export.copySourcePath")}</span>
               </button>
             {/if}
           </div>
@@ -567,8 +568,8 @@
             showOverflow = false;
           }}
           disabled={!sessions.activeSessionId}
-          title="Publish to Gist (p)"
-          aria-label="Publish to Gist"
+          title={$_("header.publish.title")}
+          aria-label={$_("header.publish.aria")}
           aria-expanded={showPublishMenu}
         >
           <UploadIcon size="14" strokeWidth="2" aria-hidden="true" />
@@ -581,14 +582,14 @@
               onclick={() => openPublish(false)}
             >
               <GlobeIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>Publish public Gist</span>
+              <span>{$_("header.publish.public")}</span>
             </button>
             <button
               class="overflow-item"
               onclick={() => openPublish(true)}
             >
               <LockIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>Publish secret Gist</span>
+              <span>{$_("header.publish.secret")}</span>
             </button>
           </div>
         {/if}
@@ -600,8 +601,8 @@
           class="header-btn overflow-btn"
           bind:this={overflowBtnRef}
           onclick={() => (showOverflow = !showOverflow)}
-          title="More actions"
-          aria-label="More actions"
+          title={$_("header.overflow.moreActions")}
+          aria-label={$_("header.overflow.moreActions")}
         >
           <MoreHorizontalIcon size="14" strokeWidth="2.4" aria-hidden="true" />
         </button>
@@ -613,14 +614,14 @@
               onclick={() => { ui.cycleLayout(); showOverflow = false; }}
             >
               {@render messageLayoutIcon("13")}
-              <span>Layout: {ui.messageLayout}</span>
+              <span>{$_("header.overflow.layout", { values: { layout: ui.messageLayout } })}</span>
             </button>
             <button
               class="overflow-item"
               onclick={() => { handleExport(); showOverflow = false; }}
             >
               <CloudUploadIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>Download HTML export</span>
+              <span>{$_("header.export.downloadHtml")}</span>
             </button>
             <button
               class="overflow-item"
@@ -633,9 +634,9 @@
               {/if}
               <span>
                 {#if copiedMarkdownLink}
-                  Copied markdown link
+                  {$_("header.export.copiedMarkdownLink")}
                 {:else}
-                  Copy markdown export link
+                  {$_("header.export.copyMarkdownLink")}
                 {/if}
               </span>
             </button>
@@ -645,7 +646,7 @@
                 onclick={handleCopySourceFilePath}
               >
                 <CopyIcon size="13" strokeWidth="2" aria-hidden="true" />
-                <span>Copy source file path</span>
+                <span>{$_("header.export.copySourcePath")}</span>
               </button>
             {/if}
             <button
@@ -653,14 +654,14 @@
               onclick={() => openPublish(false)}
             >
               <UploadIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>Publish public Gist</span>
+              <span>{$_("header.publish.public")}</span>
             </button>
             <button
               class="overflow-item"
               onclick={() => openPublish(true)}
             >
               <LockIcon size="13" strokeWidth="2" aria-hidden="true" />
-              <span>Publish secret Gist</span>
+              <span>{$_("header.publish.secret")}</span>
             </button>
           </div>
         {/if}
@@ -672,11 +673,11 @@
       class:syncing={sync.syncing}
       onclick={() => sync.triggerSync()}
       disabled={sync.syncing}
-      title={sync.readOnly ? "Refresh data (r)" : "Sync sessions (r)"}
-      aria-label={sync.readOnly ? "Refresh data" : "Sync sessions"}
+      title={sync.readOnly ? $_("header.sync.refreshTitle") : $_("header.sync.syncTitle")}
+      aria-label={sync.readOnly ? $_("header.sync.refreshAria") : $_("header.sync.syncAria")}
     >
       <DatabaseBackupIcon size="14" strokeWidth="2" aria-hidden="true" />
-      <span class="sync-label">{sync.readOnly ? "Refresh" : "Sync"}</span>
+      <span class="sync-label">{sync.readOnly ? $_("header.sync.refresh") : $_("header.sync.sync")}</span>
     </button>
 
     <button
@@ -686,12 +687,12 @@
       }}
       disabled={sync.readOnly}
       title={sync.readOnly
-        ? "Import unavailable in read-only mode"
-        : "Import conversations"}
-      aria-label="Import conversations"
+        ? $_("header.import.unavailable")
+        : $_("header.import.title")}
+      aria-label={$_("header.import.title")}
     >
       <DownloadIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="import-label">Import</span>
+      <span class="import-label">{$_("header.import.label")}</span>
     </button>
 
     <span class="header-divider"></span>
@@ -699,8 +700,8 @@
     <button
       class="header-btn"
       onclick={() => ui.toggleTheme()}
-      title="Toggle theme"
-      aria-label="Toggle theme"
+      title={$_("header.toggleTheme")}
+      aria-label={$_("header.toggleTheme")}
     >
       {#if ui.theme === "light"}
         <MoonIcon size="14" strokeWidth="2" aria-hidden="true" />
@@ -713,8 +714,8 @@
       class="header-btn"
       class:active={router.route === "settings"}
       onclick={() => router.navigate("settings")}
-      title="Settings"
-      aria-label="Settings"
+      title={$_("header.settings")}
+      aria-label={$_("header.settings")}
     >
       <SettingsIcon size="14" strokeWidth="2" aria-hidden="true" />
     </button>
@@ -722,8 +723,8 @@
     <button
       class="header-btn"
       onclick={() => (ui.activeModal = "shortcuts")}
-      title="Keyboard shortcuts (?)"
-      aria-label="Keyboard shortcuts"
+      title={$_("header.shortcutsTitle")}
+      aria-label={$_("header.shortcuts")}
     >
       ?
     </button>

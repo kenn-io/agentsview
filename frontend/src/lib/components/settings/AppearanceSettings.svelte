@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import SettingsSection from "./SettingsSection.svelte";
   import {
     ui,
@@ -7,35 +8,35 @@
     type MessageLayout,
   } from "../../stores/ui.svelte.js";
 
-  const LAYOUT_OPTIONS: { value: MessageLayout; label: string }[] = [
-    { value: "default", label: "Default" },
-    { value: "compact", label: "Compact" },
-    { value: "stream", label: "Stream" },
-    { value: "skim", label: "Skim" },
-  ];
+  const LAYOUT_OPTIONS: { value: MessageLayout; label: string }[] = $derived([
+    { value: "default", label: $_("appearance.layoutDefault") },
+    { value: "compact", label: $_("appearance.layoutCompact") },
+    { value: "stream", label: $_("appearance.layoutStream") },
+    { value: "skim", label: $_("appearance.layoutSkim") },
+  ]);
 
-  const BLOCK_LABELS: Record<BlockType, string> = {
-    user: "User messages",
-    assistant: "Assistant text",
-    thinking: "Thinking blocks",
-    tool: "Tool calls",
-    code: "Code blocks",
-  };
+  const BLOCK_LABELS: Record<BlockType, string> = $derived({
+    user: $_("header.blockFilter.user"),
+    assistant: $_("header.blockFilter.assistant"),
+    thinking: $_("header.blockFilter.thinking"),
+    tool: $_("header.blockFilter.tool"),
+    code: $_("header.blockFilter.code"),
+  });
 </script>
 
 <SettingsSection
-  title="Appearance"
-  description="Theme, layout, and block visibility preferences."
+  title={$_("appearance.title")}
+  description={$_("appearance.description")}
 >
   <div class="setting-row">
-    <span class="setting-label">Theme</span>
+    <span class="setting-label">{$_("appearance.theme")}</span>
     <button class="setting-toggle" onclick={() => ui.toggleTheme()}>
-      {ui.theme === "light" ? "Light" : "Dark"}
+      {ui.theme === "light" ? $_("appearance.light") : $_("appearance.dark")}
     </button>
   </div>
 
   <div class="setting-row">
-    <span class="setting-label">Message layout</span>
+    <span class="setting-label">{$_("appearance.messageLayout")}</span>
     <div class="setting-options">
       {#each LAYOUT_OPTIONS as opt}
         <button
@@ -50,7 +51,7 @@
   </div>
 
   <div class="setting-row column">
-    <span class="setting-label">Block visibility</span>
+    <span class="setting-label">{$_("appearance.blockVisibility")}</span>
     <div class="block-toggles">
       {#each ALL_BLOCK_TYPES as bt}
         <label class="block-toggle">

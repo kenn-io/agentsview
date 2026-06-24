@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onMount, untrack } from "svelte";
   import {
     activity,
@@ -275,9 +276,9 @@
         class="filter-select"
         value={activity.agent}
         onchange={onAgentChange}
-        aria-label="Filter by agent"
+        aria-label={$_("activity.filterByAgent")}
       >
-        <option value="">All Agents</option>
+        <option value="">{$_("activity.allAgents")}</option>
         {#each activity.agents as a}
           <option value={a.name}>{a.name}</option>
         {/each}
@@ -295,9 +296,9 @@
         class="filter-select"
         value={activity.machine}
         onchange={onMachineChange}
-        aria-label="Filter by machine"
+        aria-label={$_("activity.filterByMachine")}
       >
-        <option value="">All Machines</option>
+        <option value="">{$_("activity.allMachines")}</option>
         {#each activity.machines as m}
           <option value={m}>{m}</option>
         {/each}
@@ -315,11 +316,11 @@
         class="filter-select"
         value={activity.automation}
         onchange={onAutomationChange}
-        aria-label="Filter by automation"
+        aria-label={$_("activity.filterByAutomation")}
       >
-        <option value="all">All Sessions</option>
-        <option value="interactive">Interactive</option>
-        <option value="automated">Automated</option>
+        <option value="all">{$_("activity.allSessions")}</option>
+        <option value="interactive">{$_("activity.interactive")}</option>
+        <option value="automated">{$_("activity.automated")}</option>
       </select>
       <ChevronDownIcon
         class="filter-select-chevron"
@@ -333,7 +334,7 @@
       lastUpdatedAt={activity.lastUpdatedAt}
       busy={activity.loading}
       onRefresh={() => activity.load({ background: true })}
-      label="Refresh activity"
+      label={$_("activity.refresh")}
     />
   </div>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import {
     usage,
@@ -380,7 +381,7 @@
       />
 
       <FilterDropdown
-        label="Project"
+        label={$_("usage.project")}
         items={projectItems}
         excludedCsv={usage.excludedProjects}
         onToggle={(name) => usage.toggleProject(name)}
@@ -390,7 +391,7 @@
       />
 
       <FilterDropdown
-        label="Model"
+        label={$_("usage.model")}
         items={modelItems}
         excludedCsv={usage.selectedModels}
         mode="include"
@@ -404,8 +405,8 @@
         lastUpdatedAt={usage.lastUpdatedAt}
         busy={usage.isQuerying}
         onRefresh={() => usage.fetchAll()}
-        label="Refresh usage data"
-        title="Refresh"
+        label={$_("usage.refreshData")}
+        title={$_("usage.refresh")}
       />
 
     </div>

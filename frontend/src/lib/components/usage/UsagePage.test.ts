@@ -13,8 +13,8 @@ describe("UsagePage refresh behavior", () => {
   it("delegates the refresh affordance and scheduler to RefreshControl", () => {
     expect(source).toContain("<RefreshControl");
     expect(source).toContain("usage.lastUpdatedAt");
-    expect(source).toContain('label="Refresh usage data"');
-    expect(source).toContain('title="Refresh"');
+    expect(source).toContain('label={$_("usage.refreshData")}');
+    expect(source).toContain('title={$_("usage.refresh")}');
     // The scheduler, label tick, and icon now live in the shared component.
     expect(source).not.toContain("REFRESH_LABEL_INTERVAL_MS");
     expect(source).not.toContain("formatRefreshAge");

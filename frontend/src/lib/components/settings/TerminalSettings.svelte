@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import SettingsSection from "./SettingsSection.svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import {
@@ -7,11 +8,11 @@
   } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
 
-  const MODES = [
-    { value: "auto", label: "Auto-detect" },
-    { value: "custom", label: "Custom" },
-    { value: "clipboard", label: "Clipboard only" },
-  ] as const;
+  const MODES = $derived([
+    { value: "auto", label: $_("settingsTerminal.modeAuto") },
+    { value: "custom", label: $_("settingsTerminal.modeCustom") },
+    { value: "clipboard", label: $_("settingsTerminal.modeClipboard") },
+  ] as const);
 
   let localMode: string = $state(settings.terminal.mode || "auto");
   let localBin: string = $state(settings.terminal.custom_bin ?? "");
@@ -44,11 +45,11 @@
 </script>
 
 <SettingsSection
-  title="Terminal"
-  description="Configure how sessions are resumed in your terminal."
+  title={$_("settingsTerminal.title")}
+  description={$_("settingsTerminal.description")}
 >
   <div class="setting-row">
-    <span class="setting-label">Launch mode</span>
+    <span class="setting-label">{$_("settingsTerminal.launchMode")}</span>
     <div class="setting-options">
       {#each MODES as opt}
         <button
@@ -64,7 +65,7 @@
 
   {#if localMode === "custom"}
     <div class="setting-row column">
-      <label class="setting-label" for="terminal-bin">Terminal binary</label>
+      <label class="setting-label" for="terminal-bin">{$_("settingsTerminal.terminalBinary")}</label>
       <input
         id="terminal-bin"
         class="setting-input"
@@ -76,7 +77,7 @@
 
     <div class="setting-row column">
       <label class="setting-label" for="terminal-args">
-        Arguments <span class="hint">(use {"{cmd}"} as placeholder)</span>
+        {$_("settingsTerminal.arguments")} <span class="hint">{$_("settingsTerminal.argsHint")}</span>
       </label>
       <input
         id="terminal-args"
@@ -95,7 +96,7 @@
         disabled={settings.saving}
         onclick={saveTerminal}
       >
-        {settings.saving ? "Saving..." : "Save"}
+        {settings.saving ? $_("settingsTerminal.saving") : $_("settingsTerminal.save")}
       </button>
     </div>
   {/if}

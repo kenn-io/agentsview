@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onMount, onDestroy, untrack } from "svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -485,10 +486,10 @@
       lastUpdatedAt={analytics.lastUpdatedAt}
       busy={analytics.isQuerying}
       onRefresh={refreshAnalytics}
-      label="Refresh analytics"
+      label={$_("analyticsPage.refresh")}
     />
     <button class="export-btn" onclick={handleExportCSV}>
-      Export CSV
+      {$_("analyticsPage.exportCsv")}
     </button>
   </div>
 
@@ -513,7 +514,7 @@
       <div class="chart-panel">
         <div class="chart-header">
           <h3 class="chart-title">
-            Activity by Day and Hour
+            {$_("analyticsPage.activityByDayHour")}
             <span class="tz-label">
               {shortTz(analytics.timezone)}
             </span>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onMount } from "svelte";
   import { sync } from "../../stores/sync.svelte.js";
   import { perf } from "../../stores/perf.svelte.js";
@@ -29,15 +30,15 @@
       return p.detail;
     }
     if (p.phase === "discovering" || p.phase === "scan") {
-      return `Scanning ${p.current_project || ""}...`;
+      return $_("statusBar.scanning", { values: { project: p.current_project || "" } });
     }
     if (p.phase === "syncing" || p.phase === "parse") {
       const pct = p.sessions_total > 0
         ? Math.round((p.sessions_done / p.sessions_total) * 100)
         : 0;
-      return `Syncing ${pct}% (${p.sessions_done}/${p.sessions_total})`;
+      return $_("statusBar.syncingProgress", { values: { pct, done: p.sessions_done, total: p.sessions_total } });
     }
-    return "Syncing...";
+    return $_("statusBar.syncing");
   });
 
   let progressTitle = $derived.by(() => {
@@ -68,11 +69,11 @@
 <footer class="status-bar">
   <div class="status-left">
     {#if sync.stats}
-      <span>{formatNumber(sync.stats.session_count)} sessions</span>
+      <span>{$_("statusBar.sessions", { values: { count: formatNumber(sync.stats.session_count) } })}</span>
       <span class="sep">&middot;</span>
-      <span>{formatNumber(sync.stats.message_count)} messages</span>
+      <span>{$_("statusBar.messages", { values: { count: formatNumber(sync.stats.message_count) } })}</span>
       <span class="sep">&middot;</span>
-      <span>{formatNumber(sync.stats.project_count)} projects</span>
+      <span>{$_("statusBar.projects", { values: { count: formatNumber(sync.stats.project_count) } })}</span>
     {/if}
   </div>
 
@@ -81,20 +82,20 @@
       class="perf-toggle"
       class:active={perf.panelOpen}
       onclick={() => perf.togglePanel()}
-      title="Open performance debug"
-      aria-label="Open performance debug"
+      title={$_("statusBar.perfTitle")}
+      aria-label={$_("statusBar.perfTitle")}
     >
       <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span>Perf</span>
+      <span>{$_("statusBar.perf")}</span>
     </button>
     <span class="sep">&middot;</span>
     {#if sync.remoteUnreachable}
       <button
         class="remote-warn"
         onclick={() => router.navigate("settings")}
-        title="Can't reach the remote server. Open settings to check the URL, token, or disconnect."
+        title={$_("statusBar.remoteUnreachableTitle")}
       >
-        remote server unreachable
+        {$_("statusBar.remoteUnreachable")}
       </button>
       <span class="sep">&middot;</span>
     {/if}
@@ -102,9 +103,9 @@
       <button
         class="backend-warn"
         onclick={() => sync.loadStats()}
-        title={sync.backendDegradedMessage ?? "sync not ready"}
+        title={sync.backendDegradedMessage ?? $_("statusBar.syncNotReady")}
       >
-        sync not ready
+        {$_("statusBar.syncNotReady")}
       </button>
       <span class="sep">&middot;</span>
     {/if}
@@ -114,14 +115,14 @@
           class="zoom-btn"
           onclick={() => ui.zoomOut()}
           disabled={ui.zoomLevel <= 67}
-          title="Zoom out ({mod} -)"
+          title={$_("statusBar.zoomOut", { values: { mod } })}
         >
           &minus;
         </button>
         <button
           class="zoom-level"
           onclick={() => ui.resetZoom()}
-          title="Reset zoom ({mod} 0)"
+          title={$_("statusBar.zoomReset", { values: { mod } })}
         >
           {ui.zoomLevel}%
         </button>
@@ -129,7 +130,7 @@
           class="zoom-btn"
           onclick={() => ui.zoomIn()}
           disabled={ui.zoomLevel >= 200}
-          title="Zoom in ({mod} +)"
+          title={$_("statusBar.zoomIn", { values: { mod } })}
         >
           +
         </button>
@@ -140,9 +141,9 @@
       <button
         class="update-available"
         onclick={() => (ui.activeModal = "update")}
-        title="A new version is available: {sync.latestVersion}"
+        title={$_("statusBar.updateAvailableTitle", { values: { version: sync.latestVersion } })}
       >
-        update available
+        {$_("statusBar.updateAvailable")}
       </button>
       <span class="sep">&middot;</span>
     {/if}
@@ -150,9 +151,9 @@
       <button
         class="version-warn"
         onclick={() => window.location.reload()}
-        title="Frontend and backend versions differ. Click to reload."
+        title={$_("statusBar.versionMismatchTitle")}
       >
-        version mismatch - reload
+        {$_("statusBar.versionMismatch")}
       </button>
     {/if}
     {#if progressText}
@@ -163,7 +164,7 @@
     {:else if lastSyncText}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
       <span title={lastSyncTimestamp ?? undefined}>
-        synced {lastSyncText}
+        {$_("statusBar.syncedAgo", { values: { time: lastSyncText } })}
       </span>
     {/if}
     {#if sync.serverVersion}
@@ -172,7 +173,7 @@
       {/if}
       <button
         class="version"
-        title="Build: {sync.serverVersion.commit}"
+        title={$_("statusBar.buildTitle", { values: { commit: sync.serverVersion.commit } })}
         onclick={() => {
           if (ui.activeModal === "resync" && sync.syncing) return;
           ui.activeModal = "about";

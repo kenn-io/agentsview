@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { getOutcomeColor } from "../../utils/grade.js";
 
   interface Props {
@@ -19,7 +20,7 @@
 </script>
 
 <div class="outcome-dist">
-  <div class="chart-title">Outcome Distribution</div>
+  <div class="chart-title">{$_("analytics.outcomeDistribution")}</div>
   {#if total > 0}
     <div class="stacked-bar">
       {#each outcomes as outcome}
@@ -29,7 +30,7 @@
             class="segment"
             style:width="{(count / total) * 100}%"
             style:background={getOutcomeColor(outcome)}
-            title="{outcome}: {count}"
+            title="{$_('analytics.outcome.' + outcome)}: {count}"
           ></div>
         {/if}
       {/each}
@@ -44,14 +45,14 @@
               style:background={getOutcomeColor(outcome)}
             ></span>
             <span class="legend-text">
-              {outcome} {count}
+              {$_('analytics.outcome.' + outcome)} {count}
             </span>
           </div>
         {/if}
       {/each}
     </div>
   {:else}
-    <div class="empty">No data</div>
+    <div class="empty">{$_("analytics.noData")}</div>
   {/if}
 </div>
 

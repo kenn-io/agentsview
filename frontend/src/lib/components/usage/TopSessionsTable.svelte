@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { usage } from "../../stores/usage.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { formatTokenCount } from "../../utils/format.js";
@@ -14,7 +15,7 @@
 </script>
 
 <div class="top-sessions-container">
-  <h3 class="chart-title">Top Sessions by Cost</h3>
+  <h3 class="chart-title">{$_("usage.topSessionsByCost")}</h3>
 
   {#if usage.errors.topSessions}
     <div class="error">
@@ -23,7 +24,7 @@
         class="retry-btn"
         onclick={() => usage.fetchTopSessions()}
       >
-        Retry
+        {$_("usage.retry")}
       </button>
     </div>
   {:else if usage.topSessions && usage.topSessions.length > 0}
@@ -57,7 +58,7 @@
       {/each}
     </div>
   {:else}
-    <div class="empty">No sessions in range</div>
+    <div class="empty">{$_("usage.noSessionsRange")}</div>
   {/if}
 </div>
 

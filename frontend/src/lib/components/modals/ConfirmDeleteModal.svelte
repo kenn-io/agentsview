@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { tick } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -10,12 +11,12 @@
 
   let sessionName = $derived.by(() => {
     const s = sessions.activeSession;
-    if (!s) return "this session";
+    if (!s) return $_("confirmDelete.thisSession");
     // normalizeMessagePreview can return "" for empty/null input, so use ||
     // (not ??) to fall through to the project/default fallback.
     const raw =
       s.display_name
-      ?? (normalizeMessagePreview(s.first_message) || s.project || "this session");
+      ?? (normalizeMessagePreview(s.first_message) || s.project || $_("confirmDelete.thisSession"));
     return truncate(raw, 60);
   });
 
@@ -66,12 +67,12 @@
 <div class="confirm-overlay" onclick={handleOverlayClick}>
   <div class="confirm-modal">
     <div class="confirm-header">
-      <h3 class="confirm-title">Delete Session</h3>
+      <h3 class="confirm-title">{$_("confirmDelete.title")}</h3>
       <button
         class="close-btn"
         onclick={close}
-        title="Close delete confirmation"
-        aria-label="Close delete confirmation"
+        title={$_("confirmDelete.close")}
+        aria-label={$_("confirmDelete.close")}
       >
         <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
@@ -79,15 +80,15 @@
 
     <div class="confirm-body">
       <p class="confirm-message">
-        Move <strong>{sessionName}</strong> to trash?
+        {@html $_("confirmDelete.message", { values: { name: `<strong>${sessionName}</strong>` } })}
       </p>
       <p class="confirm-hint">
-        You can restore it later from the Trash page.
+        {$_("confirmDelete.hint")}
       </p>
     </div>
 
     <div class="confirm-actions">
-      <button class="cancel-btn" onclick={close}>Cancel</button>
+      <button class="cancel-btn" onclick={close}>{$_("confirmDelete.cancel")}</button>
       <!-- svelte-ignore a11y_autofocus -->
       <button
         class="delete-btn"
@@ -96,7 +97,7 @@
         disabled={deleting}
         autofocus
       >
-        {deleting ? "Deleting..." : "Move to Trash"}
+        {deleting ? $_("confirmDelete.deleting") : $_("confirmDelete.moveToTrash")}
       </button>
     </div>
   </div>

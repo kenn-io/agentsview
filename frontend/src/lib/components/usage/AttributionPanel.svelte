@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import {
     usage,
     type GroupBy,
@@ -103,7 +104,7 @@
 
 <div class="attribution-panel">
   <div class="panel-header">
-    <h3 class="chart-title">Cost Attribution</h3>
+    <h3 class="chart-title">{$_("usage.costAttribution")}</h3>
     <div class="toggles">
       <div class="segment-toggle">
         <button
@@ -111,21 +112,21 @@
           class:active={groupBy === "project"}
           onclick={() => handleGroupByChange("project")}
         >
-          Project
+          {$_("usage.project")}
         </button>
         <button
           class="toggle-btn"
           class:active={groupBy === "model"}
           onclick={() => handleGroupByChange("model")}
         >
-          Model
+          {$_("usage.model")}
         </button>
         <button
           class="toggle-btn"
           class:active={groupBy === "agent"}
           onclick={() => handleGroupByChange("agent")}
         >
-          Agent
+          {$_("usage.agent")}
         </button>
       </div>
       <div class="segment-toggle">
@@ -134,23 +135,23 @@
           class:active={view === "treemap"}
           onclick={() => handleViewChange("treemap")}
         >
-          Treemap
+          {$_("usage.treemap")}
         </button>
         <button
           class="toggle-btn"
           class:active={view === "list"}
           onclick={() => handleViewChange("list")}
         >
-          List
+          {$_("usage.list")}
         </button>
       </div>
     </div>
   </div>
 
   {#if rows.length === 0}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{$_("usage.noDataPeriod")}</div>
   {:else}
-    <div class="hint">Click to hide from chart</div>
+    <div class="hint">{$_("usage.clickToHide")}</div>
     {#if view === "treemap"}
       <div class="treemap-layout">
         <div class="treemap-main">
@@ -166,7 +167,7 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="rail-row"
-              title="Click to hide {row.label}"
+              title={$_("usage.clickToHideItem", { values: { label: row.label } })}
               onclick={() => handleSelect(row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -187,7 +188,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="list-row"
-            title="Click to hide {row.label}"
+            title={$_("usage.clickToHideItem", { values: { label: row.label } })}
             onclick={() => handleSelect(row.id)}
           >
             <span class="list-rank">{i + 1}</span>

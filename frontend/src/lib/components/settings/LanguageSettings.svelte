@@ -39,6 +39,7 @@
 <SettingsSection
   title={$_("settings.language.title")}
   description={$_("settings.language.description")}
+  allowOverflow
 >
   <div class="setting-row">
     <span class="setting-label">{$_("settings.language.label")}</span>

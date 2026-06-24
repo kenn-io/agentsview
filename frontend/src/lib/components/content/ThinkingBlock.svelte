@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
   import { ChevronRightIcon } from "../../icons.js";
 
@@ -44,7 +45,7 @@
     <span class="thinking-chevron" class:open={!collapsed}>
       <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
     </span>
-    <span class="thinking-label">Thinking</span>
+    <span class="thinking-label">{$_("thinkingBlock.thinking")}</span>
   </button>
   {#if !collapsed}
     <div

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Message } from "../../api/types.js";
   import type { CallTiming, TurnTiming } from "../../api/types/timing.js";
   import {
@@ -135,11 +136,11 @@
 
   /** Context-aware role labels based on session type. */
   let roleLabel = $derived.by(() => {
-    if (!isUser) return "Assistant";
-    if (isSubagentContext) return "Agent";
-    if (sessionKind === "teammate") return "Teammate";
-    if (sessionKind === "subagent") return "Agent";
-    return "User";
+    if (!isUser) return $_("messageContent.roleAssistant");
+    if (isSubagentContext) return $_("messageContent.roleAgent");
+    if (sessionKind === "teammate") return $_("messageContent.roleTeammate");
+    if (sessionKind === "subagent") return $_("messageContent.roleAgent");
+    return $_("messageContent.roleUser");
   });
 
   let roleIcon = $derived.by(() => {
@@ -271,7 +272,7 @@
         message.ordinal,
       );
       clearTimeout(pinTimer);
-      pinFeedback = wasPinned ? "Unpinned" : "Pinned";
+      pinFeedback = wasPinned ? $_("messageContent.unpinned") : $_("messageContent.pinned");
       pinTimer = setTimeout(() => { pinFeedback = ""; }, 1500);
     } catch {
       // silently fail
@@ -300,17 +301,17 @@
     </span>
     <CopyButton
       {copied}
-      ariaLabel="Copy message"
-      copiedAriaLabel="Copied message"
-      title="Copy message"
-      copiedTitle="Copied!"
+      ariaLabel={$_("messageContent.copy")}
+      copiedAriaLabel={$_("messageContent.copied")}
+      title={$_("messageContent.copy")}
+      copiedTitle={$_("common.copied")}
       onclick={handleCopy}
     />
     <button
       type="button"
       class="pin-btn"
       class:pinned
-      title={pinned ? "Unpin message" : "Pin message"}
+      title={pinned ? $_("messageContent.unpin") : $_("messageContent.pin")}
       onclick={handleTogglePin}
     >
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />

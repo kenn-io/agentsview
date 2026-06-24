@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
 
   const CELL_SIZE = 17;
@@ -6,15 +7,15 @@
   const CELL_STEP = CELL_SIZE + CELL_GAP;
   const ROW_LABEL_WIDTH = 29;
   const COL_LABEL_HEIGHT = 18;
-  const DAYS = [
-    { label: "Sun", dayIdx: 6 },
-    { label: "Mon", dayIdx: 0 },
-    { label: "Tue", dayIdx: 1 },
-    { label: "Wed", dayIdx: 2 },
-    { label: "Thu", dayIdx: 3 },
-    { label: "Fri", dayIdx: 4 },
-    { label: "Sat", dayIdx: 5 },
-  ];
+  const DAYS = $derived([
+    { label: $_("analytics.weekday.sun"), dayIdx: 6 },
+    { label: $_("analytics.weekday.mon"), dayIdx: 0 },
+    { label: $_("analytics.weekday.tue"), dayIdx: 1 },
+    { label: $_("analytics.weekday.wed"), dayIdx: 2 },
+    { label: $_("analytics.weekday.thu"), dayIdx: 3 },
+    { label: $_("analytics.weekday.fri"), dayIdx: 4 },
+    { label: $_("analytics.weekday.sat"), dayIdx: 5 },
+  ]);
 
   const LEVEL_COLORS_LIGHT = [
     "var(--bg-inset)",
@@ -116,7 +117,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${day} ${h}:00 - ${value.toLocaleString()} messages`,
+      text: `${day} ${h}:00 - ${$_("analytics.messagesCount", { values: { count: value.toLocaleString() } })}`,
     };
   }
 
@@ -157,7 +158,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchHourOfWeek()}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if grid}
@@ -246,7 +247,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{$_("analytics.noDataPeriod")}</div>
   {/if}
 </div>
 

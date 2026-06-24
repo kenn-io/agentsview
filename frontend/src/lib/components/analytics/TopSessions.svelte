@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import {
     sessions,
@@ -80,15 +81,15 @@
 
 <div class="top-sessions-container">
   <div class="top-header">
-    <h3 class="chart-title">Top Sessions</h3>
+    <h3 class="chart-title">{$_("analytics.topSessions")}</h3>
     <div class="header-controls">
       {#if uncleanCount > 0}
         <button
           class="status-count-pill"
           onclick={() => sessions.setTerminationFilter("unclean")}
-          title="Filter to unclean sessions"
+          title={$_("analytics.filterUnclean")}
         >
-          {uncleanCount} unclean
+          {$_("analytics.uncleanCount", { values: { count: uncleanCount } })}
         </button>
       {/if}
       <div class="metric-toggle">
@@ -97,14 +98,14 @@
           class:active={analytics.topMetric === "messages"}
           onclick={() => analytics.setTopMetric("messages")}
         >
-          By Messages
+          {$_("analytics.byMessages")}
         </button>
         <button
           class="toggle-btn"
           class:active={analytics.topMetric === "duration"}
           onclick={() => analytics.setTopMetric("duration")}
         >
-          By Duration
+          {$_("analytics.byDuration")}
         </button>
         {#if supportsOutputTokens}
           <button
@@ -112,7 +113,7 @@
             class:active={analytics.topMetric === "output_tokens"}
             onclick={() => analytics.setTopMetric("output_tokens")}
           >
-            By Output Tokens
+            {$_("analytics.byOutputTokens")}
           </button>
         {/if}
       </div>
@@ -126,7 +127,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchTopSessions()}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if analytics.topSessions && analytics.topSessions.sessions.length > 0}
@@ -162,7 +163,7 @@
       {/each}
     </div>
   {:else}
-    <div class="empty">No sessions in range</div>
+    <div class="empty">{$_("analytics.noSessionsRange")}</div>
   {/if}
 </div>
 

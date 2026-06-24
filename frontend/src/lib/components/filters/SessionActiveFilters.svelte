@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
@@ -73,13 +74,13 @@
 
 {#if hasFilters}
   <div class="active-filters">
-    <span class="filters-label">Filters:</span>
+    <span class="filters-label">{$_("activeFilters.label")}</span>
 
     {#if sessions.filters.project}
       <button
         class="filter-chip"
         onclick={clearProject}
-        title="Clear project filter"
+        title={$_("activeFilters.clearProject")}
       >
         {sessions.filters.project}
         <span class="chip-x">
@@ -92,7 +93,7 @@
       <button
         class="filter-chip"
         onclick={() => removeMachine(machine)}
-        title="Remove {machine} filter"
+        title={$_("activeFilters.removeFilter", { values: { name: machine } })}
       >
         {machine}
         <span class="chip-x">
@@ -105,7 +106,7 @@
       <button
         class="filter-chip"
         onclick={() => removeAgent(agent)}
-        title="Remove {agentLabel(agent)} filter"
+        title={$_("activeFilters.removeFilter", { values: { name: agentLabel(agent) } })}
       >
         <span
           class="agent-chip-dot"
@@ -122,9 +123,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setMinUserMessagesFilter(0)}
-        title="Clear min prompts filter"
+        title={$_("activeFilters.clearMinPrompts")}
       >
-        &ge;{sessions.filters.minUserMessages} prompts
+        {$_("activeFilters.minPrompts", { values: { count: sessions.filters.minUserMessages } })}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -135,9 +136,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setRecentlyActiveFilter(false)}
-        title="Clear recently active filter"
+        title={$_("activeFilters.clearRecentlyActive")}
       >
-        Active 24h
+        {$_("activeFilters.active24h")}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -148,9 +149,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setHideUnknownProjectFilter(false)}
-        title="Clear hidden unknown project filter"
+        title={$_("activeFilters.clearUnknownHidden")}
       >
-        Unknown hidden
+        {$_("activeFilters.unknownHidden")}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -161,7 +162,7 @@
       <button
         class="filter-chip"
         onclick={() => onRemoveProject?.(project)}
-        title="Remove {project} project filter"
+        title={$_("activeFilters.removeProject", { values: { project } })}
       >
         {project}
         <span class="chip-x">
@@ -174,9 +175,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setIncludeOneShotFilter(true)}
-        title="Clear single-turn filter"
+        title={$_("activeFilters.clearSingleTurn")}
       >
-        Single-turn hidden
+        {$_("activeFilters.singleTurnHidden")}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -187,9 +188,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setIncludeAutomatedFilter(false)}
-        title="Clear automated filter"
+        title={$_("activeFilters.clearAutomated")}
       >
-        Automated included
+        {$_("activeFilters.automatedIncluded")}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -200,7 +201,7 @@
       <button
         class="filter-chip"
         onclick={() => onRemoveModel?.(model)}
-        title="Remove {model} model filter"
+        title={$_("activeFilters.removeModel", { values: { model } })}
       >
         {model}
         <span class="chip-x">
@@ -212,9 +213,9 @@
     <button
       class="clear-all"
       onclick={clearAll}
-      title="Clear all filters"
+      title={$_("activeFilters.clearAllTitle")}
     >
-      Clear all
+      {$_("activeFilters.clearAll")}
     </button>
   </div>
 {/if}

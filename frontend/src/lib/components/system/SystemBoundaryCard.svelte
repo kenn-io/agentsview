@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { formatTimestamp } from "../../utils/format.js";
 
   interface Props {
@@ -8,13 +9,13 @@
   }
   let { subtype, content, timestamp }: Props = $props();
 
-  const LABELS: Record<string, string> = {
-    continuation: "Session continuation",
-    resume: "Session resume",
-    interrupted: "Request interrupted",
-    task_notification: "Task notification",
-    stop_hook: "Stop hook feedback",
-  };
+  const LABELS: Record<string, string> = $derived({
+    continuation: $_("systemBoundary.continuation"),
+    resume: $_("systemBoundary.resume"),
+    interrupted: $_("systemBoundary.interrupted"),
+    task_notification: $_("systemBoundary.taskNotification"),
+    stop_hook: $_("systemBoundary.stopHook"),
+  });
 
   let label = $derived(LABELS[subtype] ?? subtype);
   let preview = $derived.by(() => {
@@ -29,7 +30,7 @@
 
 <div
   class="system-boundary"
-  title="System boundary: {subtype}"
+  title={$_("systemBoundary.title", { values: { subtype } })}
 >
   <span class="label">{label}</span>
   {#if timestamp}
@@ -39,7 +40,7 @@
   {/if}
   {#if preview}
     <details class="details">
-      <summary>Show content</summary>
+      <summary>{$_("systemBoundary.showContent")}</summary>
       <pre>{content}</pre>
     </details>
   {/if}

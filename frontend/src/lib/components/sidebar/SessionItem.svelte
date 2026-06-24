@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import {
     sessions,
     type SessionGroupInput,
@@ -317,7 +318,7 @@
       class="tree-toggle"
       onclick={handleToggle}
       tabindex="-1"
-      aria-label={expanded ? "Collapse" : "Expand"}
+      aria-label={expanded ? $_("sessionItem.collapse") : $_("sessionItem.expand")}
     >
       {#if expanded}
         <ChevronDownIcon class="tree-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -397,8 +398,8 @@
       class="star-btn"
       class:starred={isStarred}
       onclick={handleStar}
-      title={isStarred ? "Unstar session" : "Star session"}
-      aria-label={isStarred ? "Unstar session" : "Star session"}
+      title={isStarred ? $_("sessionItem.unstar") : $_("sessionItem.star")}
+      aria-label={isStarred ? $_("sessionItem.unstar") : $_("sessionItem.star")}
     >
       {#if isStarred}
         <StarIcon size="12" fill="currentColor" strokeWidth="0" aria-hidden="true" />
@@ -428,7 +429,7 @@
     style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
   >
     <button class="context-menu-item" onclick={startRename}>
-      Rename
+      {$_("sessionItem.rename")}
     </button>
     <button
       class="context-menu-item"
@@ -437,10 +438,10 @@
         closeContextMenu();
       }}
     >
-      Open in new tab
+      {$_("sessionItem.openInNewTab")}
     </button>
     <button class="context-menu-item danger" onclick={handleDelete}>
-      Delete
+      {$_("sessionItem.delete")}
     </button>
   </div>
 {/if}

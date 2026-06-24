@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Message } from "../../api/types.js";
   import { formatTimestamp } from "../../utils/format.js";
   import { RefreshCwIcon } from "../../icons.js";
@@ -20,13 +21,13 @@
   let hasMore = $derived(content.length > 0 && content !== preview);
 </script>
 
-<div class="boundary" title="Context window compacted at this point">
+<div class="boundary" title={$_("compactBoundary.title")}>
   <span class="boundary-line"></span>
   <span class="boundary-label">
     <span class="boundary-icon">
       <RefreshCwIcon size="12" strokeWidth="2.2" aria-hidden="true" />
     </span>
-    Context compacted
+    {$_("compactBoundary.label")}
     {#if message.timestamp}
       <span class="boundary-time">
         &middot; {formatTimestamp(message.timestamp)}
@@ -40,7 +41,7 @@
     <details class="boundary-details">
       <summary class="boundary-preview">
         <span>{preview}</span>
-        <span class="boundary-expand-hint">Show full summary</span>
+        <span class="boundary-expand-hint">{$_("compactBoundary.showFull")}</span>
       </summary>
       <pre class="boundary-full">{content}</pre>
     </details>

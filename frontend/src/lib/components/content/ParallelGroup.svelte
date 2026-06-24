@@ -1,5 +1,6 @@
 <!-- ABOUTME: Wraps a contiguous run of parallel tool_use calls. -->
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { ToolCall } from "../../api/types.js";
   import type { CallTiming } from "../../api/types/timing.js";
   import ToolBlock from "./ToolBlock.svelte";
@@ -27,17 +28,17 @@
   let upperBoundLabel = $derived.by(() => {
     if (isRunning) return null;
     if (turnDurationMs == null) return null;
-    return `≤ ${formatDuration(turnDurationMs)} each`;
+    return $_("parallelGroup.upperBound", { values: { duration: formatDuration(turnDurationMs) } });
   });
 </script>
 
 <div class="parallel-group">
   <div class="pg-header">
-    <span class="pg-label">parallel</span>
-    <span class="pg-count">{toolCalls.length} calls</span>
+    <span class="pg-label">{$_("parallelGroup.parallel")}</span>
+    <span class="pg-count">{$_("parallelGroup.callCount", { values: { count: toolCalls.length } })}</span>
     <span class="pg-spacer"></span>
     {#if isRunning}
-      <span class="pg-running">running…</span>
+      <span class="pg-running">{$_("parallelGroup.running")}</span>
     {:else if upperBoundLabel}
       <span class="pg-upper">{upperBoundLabel}</span>
     {/if}

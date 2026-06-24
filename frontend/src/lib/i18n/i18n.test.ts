@@ -25,7 +25,7 @@ describe("i18n locale selection", () => {
     expect(normalizeLocale("")).toBe(DEFAULT_LOCALE);
   });
 
-  it("uses the stored locale before browser languages", () => {
+  it("uses the stored locale when one is set", () => {
     localStorage.setItem(LOCALE_STORAGE_KEY, "zh-CN");
     vi.stubGlobal("navigator", {
       languages: ["en-US"],
@@ -35,25 +35,16 @@ describe("i18n locale selection", () => {
     expect(chooseInitialLocale()).toBe("zh-CN");
   });
 
-  it("uses the browser language when no stored locale exists", () => {
+  it("defaults to English regardless of browser language", () => {
     vi.stubGlobal("navigator", {
       languages: ["zh-CN", "en-US"],
-      language: "en-US",
-    });
-
-    expect(chooseInitialLocale()).toBe("zh-CN");
-  });
-
-  it("respects browser language priority", () => {
-    vi.stubGlobal("navigator", {
-      languages: ["en-US", "zh-CN"],
       language: "zh-CN",
     });
 
-    expect(chooseInitialLocale()).toBe("en");
+    expect(chooseInitialLocale()).toBe(DEFAULT_LOCALE);
   });
 
-  it("falls back to English when browser languages are unsupported", () => {
+  it("defaults to English when no locale is stored", () => {
     vi.stubGlobal("navigator", {
       languages: ["fr-FR"],
       language: "fr-FR",

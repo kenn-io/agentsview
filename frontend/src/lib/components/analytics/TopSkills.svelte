@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type {
     SkillAgentBreakdown,
@@ -49,7 +50,7 @@
   }
 
   function formatLastUsed(value: string): string {
-    if (!value) return "Never";
+    if (!value) return $_("analytics.never");
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return value;
     return d.toLocaleDateString(undefined, {
@@ -62,7 +63,7 @@
     items: SkillProjectBreakdown[] | null,
   ): string {
     const top = (items ?? []).slice(0, 2);
-    if (top.length === 0) return "None";
+    if (top.length === 0) return $_("analytics.none");
     return top
       .map((item) => {
         return `${item.project}: ${item.count}`;
@@ -96,7 +97,7 @@
   function handleSkillHover(e: MouseEvent, skill: SkillUsage) {
     showTooltip(
       e,
-      `${skill.skill_name}: ${skill.call_count.toLocaleString()} calls (${skill.pct}%)`,
+      `${skill.skill_name}: ${$_("analytics.callsCount", { values: { count: skill.call_count.toLocaleString() } })} (${skill.pct}%)`,
     );
   }
 
@@ -111,7 +112,7 @@
       .map(([skill, count]) => `${skill}: ${count}`);
     showTooltip(
       e,
-      `${entry.date} | ${total} total | ${parts.join(", ")}`,
+      `${entry.date} | ${$_("analytics.totalCount", { values: { count: total } })} | ${parts.join(", ")}`,
     );
   }
 
@@ -122,11 +123,11 @@
 
 <div class="skills-container">
   <div class="skills-header">
-    <h3 class="chart-title">Top Skills</h3>
+    <h3 class="chart-title">{$_("analytics.topSkills")}</h3>
     {#if analytics.skills}
       <span class="count">
-        {analytics.skills.total_skill_calls.toLocaleString()} calls ·
-        {analytics.skills.distinct_skills.toLocaleString()} skills
+        {$_("analytics.callsCount", { values: { count: analytics.skills.total_skill_calls.toLocaleString() } })} ·
+        {$_("analytics.skillsCount", { values: { count: analytics.skills.distinct_skills.toLocaleString() } })}
       </span>
     {/if}
   </div>
@@ -138,7 +139,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchSkills()}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if skills.length > 0}
@@ -163,15 +164,15 @@
                 {skill.call_count.toLocaleString()}
               </span>
               <span class="session-value">
-                {skill.session_count.toLocaleString()} sessions
+                {$_("analytics.sessionCount", { values: { count: skill.session_count.toLocaleString() } })}
               </span>
               <span class="last-used">
                 {formatLastUsed(skill.last_used_at)}
               </span>
             </div>
             <div class="breakdowns">
-              <div class="agent-breakdown" aria-label="Agent breakdown">
-                <span class="breakdown-label">Agents</span>
+              <div class="agent-breakdown" aria-label={$_("analytics.agentBreakdown")}>
+                <span class="breakdown-label">{$_("analytics.agents")}</span>
                 {#if skill.agent_breakdown?.length}
                   {#each skill.agent_breakdown as agent}
                     <span class="agent-chip">
@@ -183,11 +184,11 @@
                     </span>
                   {/each}
                 {:else}
-                  <span class="muted">None</span>
+                  <span class="muted">{$_("analytics.none")}</span>
                 {/if}
               </div>
               <span class="project-breakdown">
-                Projects: {projectBreakdownLabel(skill.project_breakdown)}
+                {$_("analytics.projectsBreakdown", { values: { breakdown: projectBreakdownLabel(skill.project_breakdown) } })}
               </span>
             </div>
           {/each}
@@ -196,7 +197,7 @@
 
       {#if trendEntries.length > 1}
         <div class="section">
-          <h4 class="section-title">Weekly Trend</h4>
+          <h4 class="section-title">{$_("analytics.weeklyTrend")}</h4>
           <div class="trend-chart">
             {#each trendEntries as entry}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -228,7 +229,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No skill usage data</div>
+    <div class="empty">{$_("analytics.noSkillData")}</div>
   {/if}
 </div>
 

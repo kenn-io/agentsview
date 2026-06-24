@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Report } from "../../api/types.js";
   import { activeSessionsInSlot } from "./activeSessions.js";
   import type {
@@ -101,15 +102,15 @@
     const rect = (e.currentTarget as Element).getBoundingClientRect();
     const peakSplit =
       b.automated_at_peak > 0
-        ? ` (${b.interactive_at_peak} int / ${b.automated_at_peak} auto)`
+        ? ` (${$_("activity.intAutoShort", { values: { int: b.interactive_at_peak, auto: b.automated_at_peak } })})`
         : "";
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
       text:
-        `${fmtBucketRange(b)} · peak ${b.max_agents}${peakSplit} · ` +
-        `${b.agent_minutes.toFixed(1)} agent-min · ` +
-        `${b.output_tokens.toLocaleString()} output tokens · ` +
+        `${fmtBucketRange(b)} · ${$_("activity.peakLabel", { values: { count: b.max_agents } })}${peakSplit} · ` +
+        `${$_("activity.agentMinValue", { values: { value: b.agent_minutes.toFixed(1) } })} · ` +
+        `${$_("activity.outputTokensValue", { values: { count: b.output_tokens.toLocaleString() } })} · ` +
         `$${b.cost.toFixed(2)}`,
     };
   }
@@ -404,22 +405,22 @@
 
 <div class="timeline">
   <div class="timeline-header">
-    <h3 class="timeline-title">Concurrency</h3>
+    <h3 class="timeline-title">{$_("activity.concurrency")}</h3>
     <div class="header-right">
       <div class="legend" aria-hidden="true">
         <span class="legend-item">
-          <span class="swatch interactive"></span>Interactive
+          <span class="swatch interactive"></span>{$_("activity.interactive")}
         </span>
         <span class="legend-item">
-          <span class="swatch automated"></span>Automated
+          <span class="swatch automated"></span>{$_("activity.automated")}
         </span>
       </div>
       <label class="overlay-toggle">
-        <span>Overlay</span>
-        <select bind:value={overlayMetric} aria-label="Concurrency overlay metric">
-          <option value="none">None</option>
-          <option value="tokens">Tokens</option>
-          <option value="cost">Cost</option>
+        <span>{$_("activity.overlay")}</span>
+        <select bind:value={overlayMetric} aria-label={$_("activity.overlayMetric")}>
+          <option value="none">{$_("activity.overlayNone")}</option>
+          <option value="tokens">{$_("activity.tokens")}</option>
+          <option value="cost">{$_("activity.cost")}</option>
         </select>
       </label>
     </div>
@@ -542,7 +543,7 @@
           role="button"
           tabindex="0"
           aria-pressed={selectedBucket === bar.idx}
-          aria-label="Filter sessions active in this time slot"
+          aria-label={$_("activity.filterActiveInSlot")}
           onmouseenter={(e) => b && showSlotTip(e, b)}
           onmouseleave={hideTip}
           onclick={() => selectSlot(bar.idx)}

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { TrendsSeries } from "../../api/types.js";
 
   interface Props {
@@ -37,8 +38,8 @@
   <table class="term-table">
     <thead>
       <tr>
-        <th>Term</th>
-        <th class="count-col">{normalized ? "Per 1k messages" : "Count"}</th>
+        <th>{$_("trends.term")}</th>
+        <th class="count-col">{normalized ? $_("trends.per1kMessages") : $_("trends.count")}</th>
       </tr>
     </thead>
     <tbody>

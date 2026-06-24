@@ -13,6 +13,7 @@
     SearchIcon,
     SquareTerminalIcon,
   } from "../../icons.js";
+  import { _ } from "svelte-i18n";
   import { onMount } from "svelte";
   import type { Session } from "../../api/types.js";
   import {
@@ -301,14 +302,14 @@
           } satisfies ResumeRequest,
         }) as ResumeResponse;
       if (resp.launched) {
-        showFeedback(`Resumed in ${resp.terminal ?? opener.name}`);
+        showFeedback($_("breadcrumb.feedback.resumedIn", { values: { terminal: resp.terminal ?? opener.name } }));
         return;
       }
       // Launch failed — fall back to clipboard copy.
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(ok ? "Command copied!" : "Failed");
+        showFeedback(ok ? $_("breadcrumb.feedback.commandCopied") : $_("breadcrumb.feedback.failed"));
         return;
       }
     } catch {
@@ -317,9 +318,9 @@
     const cmd = buildResumeCommand(session.agent, session.id);
     if (cmd) {
       const ok = await copyToClipboard(cmd);
-      showFeedback(ok ? "Command copied!" : "Failed");
+      showFeedback(ok ? $_("breadcrumb.feedback.commandCopied") : $_("breadcrumb.feedback.failed"));
     } else {
-      showFeedback("Not supported");
+      showFeedback($_("breadcrumb.feedback.notSupported"));
     }
   }
 
@@ -336,7 +337,7 @@
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(ok ? "Command copied!" : "Failed");
+        showFeedback(ok ? $_("breadcrumb.feedback.commandCopied") : $_("breadcrumb.feedback.failed"));
         return;
       }
     } catch {
@@ -345,20 +346,20 @@
     const cmd = buildResumeCommand(session.agent, session.id);
     if (cmd) {
       const ok = await copyToClipboard(cmd);
-      showFeedback(ok ? "Command copied!" : "Failed");
+      showFeedback(ok ? $_("breadcrumb.feedback.commandCopied") : $_("breadcrumb.feedback.failed"));
     } else {
-      showFeedback("Not supported");
+      showFeedback($_("breadcrumb.feedback.notSupported"));
     }
   }
 
   async function handleCopyFilePath() {
     showOpenMenu = false;
     if (!sessionDir) {
-      showFeedback("No path available");
+      showFeedback($_("breadcrumb.feedback.noPath"));
       return;
     }
     const ok = await copyToClipboard(sessionDir);
-    showFeedback(ok ? "Path copied!" : "Failed");
+    showFeedback(ok ? $_("breadcrumb.feedback.pathCopied") : $_("breadcrumb.feedback.failed"));
   }
 
   async function handleOpenIn(opener: Opener) {
@@ -370,9 +371,9 @@
         id: session.id,
         requestBody: { opener_id: opener.id },
       });
-      showFeedback(`Opened in ${opener.name}`);
+      showFeedback($_("breadcrumb.feedback.openedIn", { values: { name: opener.name } }));
     } catch {
-      showFeedback("Failed to open");
+      showFeedback($_("breadcrumb.feedback.failedToOpen"));
     }
   }
 
@@ -388,14 +389,14 @@
         }) as ResumeResponse;
       if (resp.launched) {
         showFeedback(
-          `Resumed in ${resp.terminal ?? "terminal"}`,
+          $_("breadcrumb.feedback.resumedIn", { values: { terminal: resp.terminal ?? $_("breadcrumb.feedback.terminal") } }),
         );
         return;
       }
       if (resp.command) {
         const cmd = formatResumeResponseCommand(session.agent, resp);
         const ok = cmd ? await copyToClipboard(cmd) : false;
-        showFeedback(ok ? "Command copied!" : "Failed");
+        showFeedback(ok ? $_("breadcrumb.feedback.commandCopied") : $_("breadcrumb.feedback.failed"));
         return;
       }
     } catch {
@@ -404,9 +405,9 @@
     const cmd = buildResumeCommand(session.agent, session.id);
     if (cmd) {
       const ok = await copyToClipboard(cmd);
-      showFeedback(ok ? "Command copied!" : "Failed");
+      showFeedback(ok ? $_("breadcrumb.feedback.commandCopied") : $_("breadcrumb.feedback.failed"));
     } else {
-      showFeedback("Not supported");
+      showFeedback($_("breadcrumb.feedback.notSupported"));
     }
   }
 
@@ -501,9 +502,9 @@
   <button
     class="breadcrumb-link"
     onclick={onBack}
-    title="Back to sessions"
+    title={$_("breadcrumb.backToSessions")}
   >
-    Sessions
+    {$_("breadcrumb.sessions")}
   </button>
   <span class="breadcrumb-sep">/</span>
   {#if renaming}
@@ -547,7 +548,7 @@
         style:color={gradeStyle.text}
         style:border-color={gradeStyle.border}
         onclick={() => ui.toggleSignalPanel()}
-        title="Session health"
+        title={$_("breadcrumb.sessionHealth")}
       >
         {getGradeLabel(session.health_grade)}
       </button>
@@ -557,14 +558,14 @@
             class="resume-btn"
             class:has-feedback={openFeedback !== ""}
             onclick={(e) => { e.stopPropagation(); showOpenMenu = !showOpenMenu; }}
-            title={canResume ? "Resume session in terminal" : "Session actions"}
-            aria-label={canResume ? "Resume session" : "Session actions"}
+            title={canResume ? $_("breadcrumb.resumeInTerminal") : $_("breadcrumb.sessionActions")}
+            aria-label={canResume ? $_("breadcrumb.resumeSession") : $_("breadcrumb.sessionActions")}
           >
             {#if openFeedback}
               <CheckIcon size="11" strokeWidth="2.4" aria-hidden="true" />
               {openFeedback}
             {:else}
-              {canResume ? "Resume" : "Open"}
+              {canResume ? $_("breadcrumb.resume") : $_("breadcrumb.open")}
               <ChevronDownIcon size="8" strokeWidth="2.6" aria-hidden="true" />
             {/if}
           </button>
@@ -584,14 +585,14 @@
                   <span class="open-menu-num">
                     <SquareTerminalIcon size="10" strokeWidth="2" aria-hidden="true" />
                   </span>
-                  <span class="open-menu-name">Default terminal</span>
+                  <span class="open-menu-name">{$_("breadcrumb.defaultTerminal")}</span>
                 </button>
                 <div class="open-menu-divider"></div>
                 <button class="open-menu-item" onclick={handleCopyResumeCommand}>
                   <span class="open-menu-num">
                     <CopyIcon size="10" strokeWidth="2" aria-hidden="true" />
                   </span>
-                  <span class="open-menu-name">Copy command</span>
+                  <span class="open-menu-name">{$_("breadcrumb.copyCommand")}</span>
                 </button>
               {/if}
               {#if isLocal}
@@ -599,11 +600,11 @@
                 <span class="open-menu-num">
                   <FileTextIcon size="10" strokeWidth="2" aria-hidden="true" />
                 </span>
-                <span class="open-menu-name">Copy directory path</span>
+                <span class="open-menu-name">{$_("breadcrumb.copyDirectoryPath")}</span>
               </button>
               {#if editorOpeners.length > 0 || fileOpeners.length > 0}
                 <div class="open-menu-divider"></div>
-                <div class="open-menu-section">Open in</div>
+                <div class="open-menu-section">{$_("breadcrumb.openIn")}</div>
                 {#each editorOpeners as opener (opener.id)}
                   <button
                     class="open-menu-item"
@@ -648,12 +649,12 @@
         {@const rawId = sessionDisplayId(session.id)}
         <button
           class="session-id"
-          title="Copy session ID: {rawId}"
+          title={$_("breadcrumb.copySessionIdValue", { values: { id: rawId } })}
           onclick={() => copySessionId(rawId, session.id)}
-          aria-label="Copy session ID"
+          aria-label={$_("breadcrumb.copySessionId")}
         >
           {copiedSessionId === session.id
-            ? "Copied!"
+            ? $_("breadcrumb.copied")
             : rawId.slice(0, 8)}
         </button>
       {/if}
@@ -669,7 +670,7 @@
         </span>
       {/if}
       {#if sessionCostLabel}
-        <span class="cost-badge" title="Estimated session cost">
+        <span class="cost-badge" title={$_("breadcrumb.estimatedCost")}>
           {sessionCostLabel}
         </span>
       {/if}
@@ -680,9 +681,9 @@
         <button
           class="link-btn"
           class:link-btn--copied={copiedLinkId === session?.id}
-          title="Copy link to session"
+          title={$_("breadcrumb.copyLink")}
           onclick={copySessionLink}
-          aria-label="Copy link to session"
+          aria-label={$_("breadcrumb.copyLink")}
         >
           {#if copiedLinkId === session?.id}
             <CheckIcon size="13" strokeWidth="2.4" aria-hidden="true" />
@@ -694,28 +695,28 @@
           class="minimap-btn"
           class:minimap-btn--active={ui.vitalsOpen}
           title={ui.vitalsOpen
-            ? "Hide session analysis"
-            : "Show session analysis"}
+            ? $_("breadcrumb.hideAnalysis")
+            : $_("breadcrumb.showAnalysis")}
           onclick={() => ui.toggleVitals()}
           aria-label={ui.vitalsOpen
-            ? "Hide session analysis"
-            : "Show session analysis"}
+            ? $_("breadcrumb.hideAnalysis")
+            : $_("breadcrumb.showAnalysis")}
         >
           <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
         </button>
         <button
           class="find-btn"
           class:find-btn--active={inSessionSearch.isOpen}
-          title="Find in session (/)"
+          title={$_("breadcrumb.findInSessionTitle")}
           onclick={() => inSessionSearch.toggle()}
-          aria-label="Find in session"
+          aria-label={$_("breadcrumb.findInSession")}
         >
           <SearchIcon size="13" strokeWidth="2" aria-hidden="true" />
         </button>
         <button
           class="actions-btn"
-          title="Session actions"
-          aria-label="Session actions"
+          title={$_("breadcrumb.sessionActions")}
+          aria-label={$_("breadcrumb.sessionActions")}
           bind:this={menuBtnEl}
           onclick={toggleMenu}
         >
@@ -727,13 +728,13 @@
               class="actions-menu-item"
               onclick={startRename}
             >
-              Rename
+              {$_("breadcrumb.rename")}
             </button>
             <button
               class="actions-menu-item danger"
               onclick={handleDelete}
             >
-              Delete
+              {$_("breadcrumb.delete")}
             </button>
           </div>
         {/if}

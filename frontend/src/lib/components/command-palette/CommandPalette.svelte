@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { SearchIcon } from "../../icons.js";
   import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
@@ -163,7 +164,7 @@
         bind:this={inputRef}
         type="text"
         class="palette-input"
-        placeholder="Search sessions and messages..."
+        placeholder={$_("commandPalette.placeholder")}
         value={inputValue}
         oninput={handleInput}
       />
@@ -178,18 +179,18 @@
             class:active={searchStore.sort === "relevance"}
             onmousedown={(e: MouseEvent) => e.preventDefault()}
             onclick={() => { searchStore.setSort("relevance"); selectedIndex = 0; }}
-          >Relevance</button>
+          >{$_("commandPalette.relevance")}</button>
           <button
             class="sort-btn"
             class:active={searchStore.sort === "recency"}
             onmousedown={(e: MouseEvent) => e.preventDefault()}
             onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
-          >Recency</button>
+          >{$_("commandPalette.recency")}</button>
         </div>
         {#if searchStore.isSearching}
-          <div class="palette-empty">Searching...</div>
+          <div class="palette-empty">{$_("commandPalette.searching")}</div>
         {:else if searchStore.results.length === 0}
-          <div class="palette-empty">No results</div>
+          <div class="palette-empty">{$_("commandPalette.noResults")}</div>
         {:else}
           {#each searchStore.results as result, i}
             <button
@@ -219,7 +220,7 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <span
                 class="item-id"
-                title="Copy session ID"
+                title={$_("commandPalette.copySessionId")}
                 onclick={(e) => {
                   e.stopPropagation();
                   copyToClipboard(result.session_id);
@@ -229,7 +230,7 @@
           {/each}
         {/if}
       {:else}
-        <div class="palette-section-label">Recent Sessions</div>
+        <div class="palette-section-label">{$_("commandPalette.recentSessions")}</div>
         {#each recentSessions as session, i}
           {@const preview = session.display_name ?? normalizeMessagePreview(session.first_message)}
           <button

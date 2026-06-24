@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { ProjectInfo } from "../../api/types/core.js";
   import OptionTypeahead from "./OptionTypeahead.svelte";
 
@@ -10,12 +11,12 @@
 
   let { projects, value, onselect }: Props = $props();
 
-  const allOption = {
+  const allOption = $derived({
     name: "",
-    label: "All Projects",
-    displayLabel: "All Projects",
+    label: $_("projectFilter.allProjects"),
+    displayLabel: $_("projectFilter.allProjects"),
     count: 0,
-  };
+  });
 
   const options = $derived.by(() => {
     const items = projects.map((p) => ({
@@ -28,7 +29,7 @@
   });
 
   const displayValue = $derived(
-    value ? projects.find((p) => p.name === value)?.name ?? value : "All Projects",
+    value ? projects.find((p) => p.name === value)?.name ?? value : $_("projectFilter.allProjects"),
   );
 </script>
 
@@ -36,8 +37,8 @@
   {options}
   {value}
   fallbackLabel={displayValue}
-  placeholder="Filter projects..."
-  title="Select project"
-  emptyLabel="No matching projects"
+  placeholder={$_("projectFilter.placeholder")}
+  title={$_("projectFilter.title")}
+  emptyLabel={$_("projectFilter.empty")}
   {onselect}
 />

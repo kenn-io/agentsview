@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import {
     getSessionStatus,
     type SessionStatusInput,
@@ -27,15 +28,15 @@
   let label = $derived.by(() => {
     switch (status) {
       case "working":
-        return "Working — last write within the last minute";
+        return $_("statusDot.working");
       case "waiting":
-        return "Waiting on user input";
+        return $_("statusDot.waiting");
       case "idle":
-        return "Recently active, currently idle";
+        return $_("statusDot.idle");
       case "stale":
-        return "Flagged session, idle for 10–60 minutes";
+        return $_("statusDot.stale");
       case "unclean":
-        return "Terminated mid tool call (or file truncated)";
+        return $_("statusDot.unclean");
       case "quiet":
         return "";
     }

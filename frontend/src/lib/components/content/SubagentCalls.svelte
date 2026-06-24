@@ -1,5 +1,6 @@
 <!-- ABOUTME: Inline-expansion of a sub-agent session's call list inside the parent Calls section. -->
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type {
     SessionTiming,
     CallTiming,
@@ -57,12 +58,10 @@
 
 <div class="sa-expand">
   <div class="sa-eh">
-    <span class="sa-eh-label">↳ sub-agent</span>
+    <span class="sa-eh-label">↳ {$_("subagentCalls.subAgent")}</span>
     <span class="sa-eh-meta"
-      >{timing.tool_call_count} call{timing.tool_call_count === 1
-        ? ""
-        : "s"} ·
-      {timing.running ? "running " : ""}{formatDuration(
+      >{$_("subagentCalls.callCount", { values: { count: timing.tool_call_count } })} ·
+      {timing.running ? $_("subagentCalls.runningPrefix") : ""}{formatDuration(
         timing.total_duration_ms,
       )}{timing.running ? "+" : ""}</span
     >

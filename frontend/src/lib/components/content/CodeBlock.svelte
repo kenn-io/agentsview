@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { onDestroy, tick, untrack } from "svelte";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { applyHighlight, applyMarks, clearMarks, escapeHTML } from "../../utils/highlight.js";
@@ -70,10 +71,10 @@
   <CopyButton
     class="code-copy"
     {copied}
-    ariaLabel="Copy code block"
-    copiedAriaLabel="Copied code block"
-    title="Copy code"
-    copiedTitle="Copied!"
+    ariaLabel={$_("codeBlock.copy")}
+    copiedAriaLabel={$_("codeBlock.copied")}
+    title={$_("codeBlock.copyTitle")}
+    copiedTitle={$_("common.copied")}
     onclick={handleCopy}
   />
   {#if language}

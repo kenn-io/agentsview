@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { ToolCategoryCount } from "../../api/types.js";
 
@@ -97,7 +98,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${entry.date} | ${total} total | ${parts.join(", ")}`,
+      text: `${entry.date} | ${$_("analytics.totalCount", { values: { count: total } })} | ${parts.join(", ")}`,
     };
   }
 
@@ -108,10 +109,10 @@
 
 <div class="tool-container">
   <div class="tool-header">
-    <h3 class="chart-title">Tool Usage</h3>
+    <h3 class="chart-title">{$_("analytics.toolUsage")}</h3>
     {#if analytics.tools}
       <span class="count">
-        {analytics.tools.total_calls.toLocaleString()} calls
+        {$_("analytics.callsCount", { values: { count: analytics.tools.total_calls.toLocaleString() } })}
       </span>
     {/if}
   </div>
@@ -123,13 +124,13 @@
         class="retry-btn"
         onclick={() => analytics.fetchTools()}
       >
-        Retry
+        {$_("analytics.retry")}
       </button>
     </div>
   {:else if categories.length > 0}
     <div class="sections">
       <div class="section">
-        <h4 class="section-title">By Category</h4>
+        <h4 class="section-title">{$_("analytics.byCategory")}</h4>
         <div class="bar-list">
           {#each categories as cat}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -157,7 +158,7 @@
 
       {#if trendEntries.length > 1}
         <div class="section">
-          <h4 class="section-title">Weekly Trend</h4>
+          <h4 class="section-title">{$_("analytics.weeklyTrend")}</h4>
           <div class="trend-chart">
             {#each trendEntries as entry}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -189,7 +190,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No tool usage data</div>
+    <div class="empty">{$_("analytics.noToolData")}</div>
   {/if}
 </div>
 

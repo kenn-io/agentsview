@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import type { Snippet } from "svelte";
   import {
     SIDEBAR_DESKTOP_BREAKPOINT,
@@ -291,7 +292,7 @@
   {#if ui.isMobileViewport && ui.sidebarOpen}
     <button
       class="sidebar-backdrop"
-      aria-label="Close sidebar"
+      aria-label={$_("layout.closeSidebar")}
       onclick={handleBackdropClick}
     ></button>
   {/if}
@@ -308,7 +309,7 @@
         onclick={() => mobileNav("sessions")}
       >
         <LayoutGridIcon size="12" strokeWidth="2" aria-hidden="true" />
-        Sessions
+        {$_("header.nav.sessions")}
       </button>
       <button
         class="mobile-nav-btn"
@@ -316,7 +317,7 @@
         onclick={() => mobileNav("usage")}
       >
         <Grid2x2Icon size="12" strokeWidth="2" aria-hidden="true" />
-        Usage
+        {$_("header.nav.usage")}
       </button>
       <button
         class="mobile-nav-btn"
@@ -324,7 +325,7 @@
         onclick={() => mobileNav("activity")}
       >
         <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
-        Activity
+        {$_("header.nav.activity")}
       </button>
       <button
         class="mobile-nav-btn"
@@ -332,7 +333,7 @@
         onclick={() => mobileNav("trends")}
       >
         <ChartColumnIcon size="12" strokeWidth="2" aria-hidden="true" />
-        Trends
+        {$_("header.nav.trends")}
       </button>
       <button
         class="mobile-nav-btn"
@@ -340,7 +341,7 @@
         onclick={() => mobileNav("pinned")}
       >
         <PinIcon size="12" strokeWidth="2" aria-hidden="true" />
-        Pinned
+        {$_("header.nav.pinned")}
       </button>
       <button
         class="mobile-nav-btn"
@@ -348,7 +349,7 @@
         onclick={() => mobileNav("insights")}
       >
         <LogsIcon size="12" strokeWidth="2" aria-hidden="true" />
-        Insights
+        {$_("header.nav.insights")}
       </button>
       <button
         class="mobile-nav-btn"
@@ -356,7 +357,7 @@
         onclick={() => mobileNav("trash")}
       >
         <TrashIcon size="12" strokeWidth="2" aria-hidden="true" />
-        Trash
+        {$_("header.nav.trash")}
       </button>
     </nav>
     {@render sidebar()}
@@ -368,7 +369,7 @@
       bind:this={resizeHandleElement}
       data-testid="sidebar-resize-handle"
       role="separator"
-      aria-label="Resize sidebar"
+      aria-label={$_("layout.resizeSidebar")}
       aria-orientation="vertical"
       aria-valuemin={SIDEBAR_WIDTH_MIN}
       aria-valuemax={SIDEBAR_WIDTH_STORAGE_MAX}

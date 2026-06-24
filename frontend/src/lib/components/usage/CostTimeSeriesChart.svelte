@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import { projectColor } from "../../utils/projectColor.js";
 
@@ -335,34 +336,34 @@
 
 <div class="chart-container">
   <div class="chart-header">
-    <h3 class="chart-title">Cost Over Time</h3>
+    <h3 class="chart-title">{$_("usage.costOverTime")}</h3>
     <div class="segment-toggle">
       <button
         class="toggle-btn"
         class:active={groupBy === "project"}
         onclick={() => handleGroupByChange("project")}
       >
-        Project
+        {$_("usage.project")}
       </button>
       <button
         class="toggle-btn"
         class:active={groupBy === "model"}
         onclick={() => handleGroupByChange("model")}
       >
-        Model
+        {$_("usage.model")}
       </button>
       <button
         class="toggle-btn"
         class:active={groupBy === "agent"}
         onclick={() => handleGroupByChange("agent")}
       >
-        Agent
+        {$_("usage.agent")}
       </button>
     </div>
   </div>
 
   {#if seriesData.points.length === 0}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{$_("usage.noDataPeriod")}</div>
   {:else}
     <div class="chart-scroll" bind:this={containerEl}>
       <svg

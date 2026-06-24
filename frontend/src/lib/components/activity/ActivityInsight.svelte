@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { _ } from "svelte-i18n";
   import { InsightsService } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
   import {
@@ -57,10 +58,10 @@
   );
   const unavailableTitle = $derived(
     readOnly
-      ? "Unavailable in read-only remote mode"
+      ? $_("activityInsight.unavailableReadOnly")
       : sync.serverVersion === null
-        ? "Waiting for server version"
-        : "Generate insight",
+        ? $_("activityInsight.waitingServer")
+        : $_("activityInsight.generateInsight"),
   );
 
   function abortGeneration() {
@@ -150,7 +151,7 @@
         if (e instanceof DOMException && e.name === "AbortError") {
           return;
         }
-        error = e instanceof Error ? e.message : "Generation failed";
+        error = e instanceof Error ? e.message : $_("activityInsight.generationFailed");
         generating = false;
       });
   }
@@ -160,7 +161,7 @@
   <header class="panel-header">
     <span class="panel-title">
       <LightbulbIcon size="13" strokeWidth="1.8" aria-hidden="true" />
-      <span>Activity Insight</span>
+      <span>{$_("activityInsight.title")}</span>
       {#if !loading && insight?.model}
         <span class="insight-model">{insight.model}</span>
       {/if}
@@ -170,7 +171,7 @@
       href={getBasePath() + "/insights"}
       onclick={openInsightsPage}
     >
-      Open in Insights page
+      {$_("activityInsight.openInsightsPage")}
     </a>
   </header>
 
@@ -180,8 +181,8 @@
       value={insights.agent}
       onchange={onAgentChange}
       disabled={generationUnavailable}
-      title="Agent CLI used to generate the insight"
-      aria-label="Insight agent"
+      title={$_("activityInsight.agentCliTitle")}
+      aria-label={$_("activityInsight.insightAgent")}
     >
       <option value="claude">Claude</option>
       <option value="codex">Codex</option>
@@ -192,11 +193,11 @@
   {/snippet}
 
   {#if loading}
-    <div class="state muted">Loading insight…</div>
+    <div class="state muted">{$_("activityInsight.loading")}</div>
   {:else if generating}
     <div class="state generating">
       <span class="spinner"></span>
-      <span>Generating… {phase}</span>
+      <span>{$_("activityInsight.generatingPhase", { values: { phase } })}</span>
     </div>
   {:else if error}
     <div class="state error">
@@ -209,7 +210,7 @@
           disabled={generationUnavailable}
           title={unavailableTitle}
         >
-          Retry
+          {$_("activityInsight.retry")}
         </button>
       </div>
     </div>
@@ -223,8 +224,7 @@
   {:else}
     <div class="empty-state">
       <span class="empty-text">
-        No insight yet for this range. Generate one to summarize this
-        period's activity.
+        {$_("activityInsight.emptyText")}
       </span>
       <div class="gen-row">
         {@render agentPicker()}
@@ -235,7 +235,7 @@
           title={unavailableTitle}
         >
           <PlusIcon size="12" strokeWidth="2.2" aria-hidden="true" />
-          Generate
+          {$_("activityInsight.generate")}
         </button>
       </div>
     </div>
