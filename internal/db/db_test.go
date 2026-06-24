@@ -696,8 +696,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionSanitizedMessageShape(t *testing.T) {
-	assert.Equal(t, 50, CurrentDataVersion(),
-		"sanitized message and session shape requires a data version bump")
+	assert.Equal(t, 51, CurrentDataVersion(),
+		"Gemini cumulative-to-delta reparse requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
