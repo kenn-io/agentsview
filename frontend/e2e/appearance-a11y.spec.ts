@@ -105,7 +105,7 @@ test.describe("Appearance accessibility", () => {
     const sp = new SessionsPage(page);
     await expect(sp.sessionItems.first()).toBeVisible({ timeout: 5_000 });
 
-    expect(await readZoom(page)).toBe("1.2");
+    expect(await readZoom(page)).toBe("1.8");
   });
 
   test("high contrast applies the root class and overrides tokens", async ({
