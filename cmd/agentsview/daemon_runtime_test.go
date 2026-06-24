@@ -111,6 +111,75 @@ func writeRuntimeRecordForTest(
 	return runtimeStore(dataDir).Write(rec)
 }
 
+// writeRuntimeRecordFixture writes rec to dir, failing the test on error and
+// registering cleanup that removes the runtime record.
+func writeRuntimeRecordFixture(
+	t *testing.T, dir string, rec daemon.RuntimeRecord,
+) string {
+	t.Helper()
+	path, err := writeRuntimeRecordForTest(dir, rec)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	return path
+}
+
+// runtimeRecordOption mutates a daemon.RuntimeRecord built by
+// daemonRuntimeRecord.
+type runtimeRecordOption func(*daemon.RuntimeRecord)
+
+func withRuntimeVersion(v string) runtimeRecordOption {
+	return func(rec *daemon.RuntimeRecord) { rec.Version = v }
+}
+
+func withRuntimePID(pid int) runtimeRecordOption {
+	return func(rec *daemon.RuntimeRecord) { rec.PID = pid }
+}
+
+func withRuntimeAPIVersion(v int) runtimeRecordOption {
+	return func(rec *daemon.RuntimeRecord) {
+		rec.Metadata[runtimeAPIVersion] = strconv.Itoa(v)
+	}
+}
+
+func withRuntimeNoSync(noSync bool) runtimeRecordOption {
+	return func(rec *daemon.RuntimeRecord) {
+		rec.Metadata[runtimeNoSync] = strconv.FormatBool(noSync)
+	}
+}
+
+func withRuntimeRequireAuth(requireAuth bool) runtimeRecordOption {
+	return func(rec *daemon.RuntimeRecord) {
+		rec.Metadata[runtimeRequireAuth] = strconv.FormatBool(requireAuth)
+	}
+}
+
+// daemonRuntimeRecord builds a runtime record for the given address with the
+// metadata fields the daemon writes. It defaults to a live, current-API,
+// writable record; options override individual fields.
+func daemonRuntimeRecord(
+	host string, port int, opts ...runtimeRecordOption,
+) daemon.RuntimeRecord {
+	rec := daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Service:   daemonService,
+		Version:   "test",
+		StartedAt: time.Now(),
+		Metadata: map[string]string{
+			runtimeHost:        host,
+			runtimePort:        strconv.Itoa(port),
+			runtimeReadOnly:    "false",
+			runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
+			runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+		},
+	}
+	for _, opt := range opts {
+		opt(&rec)
+	}
+	return rec
+}
+
 func runtimePathForTest(dataDir string, pid int) string {
 	path, err := runtimeStore(dataDir).Path(pid)
 	if err != nil {

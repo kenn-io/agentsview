@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -154,23 +151,11 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 func TestEnsureBackgroundServeIncompatibleDaemonReturnsError(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
-	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-		PID:       os.Getpid(),
-		Network:   daemon.NetworkTCP,
-		Address:   net.JoinHostPort(host, strconv.Itoa(port)),
-		Service:   daemonService,
-		Version:   "old",
-		StartedAt: time.Now(),
-		Metadata: map[string]string{
-			runtimeHost:        host,
-			runtimePort:        strconv.Itoa(port),
-			runtimeReadOnly:    "false",
-			runtimeAPIVersion:  "0",
-			runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
-		},
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("old"),
+		withRuntimeAPIVersion(0),
+	))
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
@@ -191,23 +176,11 @@ func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 	t.Cleanup(func() { _ = launchLock.Unlock() })
 
 	host, port := testPingServer(t)
-	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-		PID:       os.Getpid(),
-		Network:   daemon.NetworkTCP,
-		Address:   net.JoinHostPort(host, strconv.Itoa(port)),
-		Service:   daemonService,
-		Version:   "old",
-		StartedAt: time.Now(),
-		Metadata: map[string]string{
-			runtimeHost:        host,
-			runtimePort:        strconv.Itoa(port),
-			runtimeReadOnly:    "false",
-			runtimeAPIVersion:  "0",
-			runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
-		},
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("old"),
+		withRuntimeAPIVersion(0),
+	))
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
@@ -228,23 +201,11 @@ func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 	t.Cleanup(func() { _ = launchLock.Unlock() })
 
 	oldHost, oldPort := testPingServer(t)
-	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-		PID:       os.Getpid(),
-		Network:   daemon.NetworkTCP,
-		Address:   net.JoinHostPort(oldHost, strconv.Itoa(oldPort)),
-		Service:   daemonService,
-		Version:   "old",
-		StartedAt: time.Now(),
-		Metadata: map[string]string{
-			runtimeHost:        oldHost,
-			runtimePort:        strconv.Itoa(oldPort),
-			runtimeReadOnly:    "false",
-			runtimeAPIVersion:  "0",
-			runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
-		},
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		oldHost, oldPort,
+		withRuntimeVersion("old"),
+		withRuntimeAPIVersion(0),
+	))
 
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
@@ -356,21 +317,11 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 	errCh := make(chan error, 1)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-			PID:       os.Getpid(),
-			Network:   daemon.NetworkTCP,
-			Address:   net.JoinHostPort(oldHost, strconv.Itoa(oldPort)),
-			Service:   daemonService,
-			Version:   "1.0.0",
-			StartedAt: time.Now(),
-			Metadata: map[string]string{
-				runtimeHost:        oldHost,
-				runtimePort:        strconv.Itoa(oldPort),
-				runtimeReadOnly:    "false",
-				runtimeAPIVersion:  "0",
-				runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
-			},
-		})
+		_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+			oldHost, oldPort,
+			withRuntimeVersion("1.0.0"),
+			withRuntimeAPIVersion(0),
+		))
 		UnmarkDaemonStarting(dir)
 		errCh <- err
 	}()
@@ -497,23 +448,13 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			name: "incompatible older API",
 			writeRuntime: func(t *testing.T, dir, host string, port int) {
 				t.Helper()
-				_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-					PID:       os.Getpid(),
-					Network:   daemon.NetworkTCP,
-					Address:   net.JoinHostPort(host, strconv.Itoa(port)),
-					Service:   daemonService,
-					Version:   "1.0.0",
-					StartedAt: time.Now(),
-					Metadata: map[string]string{
-						runtimeHost:        host,
-						runtimePort:        strconv.Itoa(port),
-						runtimeReadOnly:    "false",
-						runtimeRequireAuth: "false",
-						runtimeNoSync:      "true",
-						runtimeAPIVersion:  "0",
-						runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
-					},
-				})
+				_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+					host, port,
+					withRuntimeVersion("1.0.0"),
+					withRuntimeRequireAuth(false),
+					withRuntimeNoSync(true),
+					withRuntimeAPIVersion(0),
+				))
 				require.NoError(t, err)
 			},
 		},
@@ -609,21 +550,11 @@ func TestEnsureTransportArchiveWriteRecoversStaleBackgroundRuntime(t *testing.T)
 	dir := runtimeTestDir(t)
 	const deadPID = 99999999
 	require.False(t, daemon.ProcessAlive(deadPID))
-	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
-		PID:       deadPID,
-		Network:   daemon.NetworkTCP,
-		Address:   net.JoinHostPort("127.0.0.1", "9"),
-		Service:   daemonService,
-		Version:   "stale",
-		StartedAt: time.Now(),
-		Metadata: map[string]string{
-			runtimeHost:        "127.0.0.1",
-			runtimePort:        "9",
-			runtimeReadOnly:    "false",
-			runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
-			runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
-		},
-	})
+	_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		"127.0.0.1", 9,
+		withRuntimePID(deadPID),
+		withRuntimeVersion("stale"),
+	))
 	require.NoError(t, err)
 
 	oldStart := startBackgroundServeForTransport
