@@ -99,6 +99,7 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 		assert.Equal(t, "America/Chicago", r.URL.Query().Get("timezone"))
 		assert.Equal(t, "codex", r.URL.Query().Get("agent"))
 		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
+		assert.Equal(t, "false", r.URL.Query().Get("breakdowns"))
 		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
 		assert.Equal(t, "true", r.URL.Query().Get("include_automated"))
 		gotAuth = r.Header.Get("Authorization")
@@ -218,6 +219,7 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 		assert.Equal(t, "2026-06-01", r.URL.Query().Get("from"))
 		assert.Equal(t, "2026-06-02", r.URL.Query().Get("to"))
 		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
+		assert.Equal(t, "false", r.URL.Query().Get("breakdowns"))
 		writeJSONResponse(w, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
@@ -233,6 +235,28 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 
 	assert.Equal(t, "/api/v1/usage/summary", gotPath)
 	assert.Contains(t, out, `"totalCost": 0.42`)
+	assertNoLocalSessionsDB(t, dataDir)
+}
+
+func TestRunUsageDailyBreakdownUsesDaemonBreakdowns(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	var gotBreakdowns string
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotBreakdowns = r.URL.Query().Get("breakdowns")
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	_ = captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{
+			JSON:      true,
+			Breakdown: true,
+			Timezone:  "UTC",
+		})
+	})
+
+	assert.Equal(t, "true", gotBreakdowns)
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
@@ -338,27 +362,15 @@ func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 
 func TestArchiveQueryBackendNoSyncDoesNotAutostartDaemonForDailyUsage(t *testing.T) {
 	newAgentDataDir(t)
+	forbidStartBackgroundServeForTransport(t,
+		"--no-sync usage must not auto-start a daemon")
 
-	oldStart := startBackgroundServeForTransport
-	startBackgroundServeForTransport = func(
-		context.Context, *config.Config, time.Duration,
-	) (*DaemonRuntime, error) {
-		t.Fatal("--no-sync usage must not auto-start a daemon")
-		return nil, nil
-	}
-	t.Cleanup(func() { startBackgroundServeForTransport = oldStart })
-
-	backend, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(),
-		archiveQueryPolicy{
-			NoSync:               true,
-			AutoStart:            true,
-			ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
-			DirectReadOnlyAction: "refresh usage directly",
+	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
+		func(p *archiveQueryPolicy) {
+			p.NoSync = true
+			p.AutoStart = true
 		},
-	)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
+	))
 	assert.IsType(t, localArchiveQueryBackend{}, backend)
 }
 
@@ -372,16 +384,9 @@ func TestArchiveQueryBackendIgnoresReadOnlyDaemonForDailyUsage(t *testing.T) {
 	})
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
-	backend, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(),
-		archiveQueryPolicy{
-			AutoStart:            true,
-			ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
-			DirectReadOnlyAction: "refresh usage directly",
-		},
-	)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
+	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
+		func(p *archiveQueryPolicy) { p.AutoStart = true },
+	))
 	assert.IsType(t, localArchiveQueryBackend{}, backend)
 	assert.False(t, called)
 }
@@ -397,17 +402,12 @@ func TestArchiveQueryBackendOfflineSkipsDaemonForDailyUsage(t *testing.T) {
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
-	backend, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(),
-		archiveQueryPolicy{
-			Offline:              true,
-			AutoStart:            true,
-			ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
-			DirectReadOnlyAction: "refresh usage directly",
+	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
+		func(p *archiveQueryPolicy) {
+			p.Offline = true
+			p.AutoStart = true
 		},
-	)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
+	))
 	assert.IsType(t, localArchiveQueryBackend{}, backend)
 	assert.False(t, called)
 }

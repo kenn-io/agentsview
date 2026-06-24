@@ -15,26 +15,12 @@ import (
 
 func TestResolveArchiveQueryBackendNoSyncDoesNotAutostartDaemon(t *testing.T) {
 	testDataDir(t)
+	forbidStartBackgroundServeForTransport(t,
+		"--no-sync archive query must not auto-start a daemon")
 
-	oldStart := startBackgroundServeForTransport
-	startBackgroundServeForTransport = func(
-		context.Context, *config.Config, time.Duration,
-	) (*DaemonRuntime, error) {
-		t.Fatal("--no-sync archive query must not auto-start a daemon")
-		return nil, nil
-	}
-	t.Cleanup(func() { startBackgroundServeForTransport = oldStart })
-
-	backend, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(),
-		archiveQueryPolicy{
-			NoSync:               true,
-			ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
-			DirectReadOnlyAction: "refresh usage directly",
-		},
-	)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
+	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
+		func(p *archiveQueryPolicy) { p.NoSync = true },
+	))
 	assert.IsType(t, localArchiveQueryBackend{}, backend)
 }
 
@@ -50,15 +36,7 @@ func TestResolveArchiveQueryBackendSkipsReadOnlyDaemonForFreshQueries(t *testing
 	})
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
-	backend, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(),
-		archiveQueryPolicy{
-			ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
-			DirectReadOnlyAction: "refresh usage directly",
-		},
-	)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
+	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(nil))
 	assert.IsType(t, localArchiveQueryBackend{}, backend)
 	assert.False(t, called)
 }
@@ -66,25 +44,19 @@ func TestResolveArchiveQueryBackendSkipsReadOnlyDaemonForFreshQueries(t *testing
 func TestResolveArchiveQueryBackendUsesGeneratedAutostartToken(t *testing.T) {
 	testDataDir(t)
 
-	oldStart := startBackgroundServeForTransport
-	startBackgroundServeForTransport = func(
+	stubStartBackgroundServeForTransport(t, func(
 		_ context.Context, cfg *config.Config, _ time.Duration,
 	) (*DaemonRuntime, error) {
 		cfg.AuthToken = "generated-token"
 		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
-	}
-	t.Cleanup(func() { startBackgroundServeForTransport = oldStart })
+	})
 
-	backend, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(),
-		archiveQueryPolicy{
-			AutoStart:            true,
-			ReadOnlyDaemon:       archiveQueryRejectReadOnlyDaemon,
-			DirectReadOnlyAction: "refresh usage directly",
+	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
+		func(p *archiveQueryPolicy) {
+			p.AutoStart = true
+			p.ReadOnlyDaemon = archiveQueryRejectReadOnlyDaemon
 		},
-	)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
+	))
 
 	daemonBackend, ok := backend.(daemonArchiveQueryBackend)
 	require.True(t, ok)

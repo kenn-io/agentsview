@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -11,6 +12,32 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+// defaultArchiveQueryPolicy builds an archiveQueryPolicy seeded with the
+// defaults shared by the usage tests: skip the read-only daemon and refresh
+// usage directly. mut may override any field; pass nil to use the defaults.
+func defaultArchiveQueryPolicy(mut func(*archiveQueryPolicy)) archiveQueryPolicy {
+	policy := archiveQueryPolicy{
+		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
+		DirectReadOnlyAction: "refresh usage directly",
+	}
+	if mut != nil {
+		mut(&policy)
+	}
+	return policy
+}
+
+// resolveTestArchiveQueryBackend resolves an archive-query backend for policy,
+// failing the test on error and registering the cleanup hook.
+func resolveTestArchiveQueryBackend(
+	t *testing.T, policy archiveQueryPolicy,
+) archiveQueryBackend {
+	t.Helper()
+	backend, cleanup, err := resolveArchiveQueryBackend(context.Background(), policy)
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	return backend
+}
 
 // testDataDir creates an isolated data directory, exports it via
 // AGENTSVIEW_DATA_DIR for the duration of the test, and returns the path.
