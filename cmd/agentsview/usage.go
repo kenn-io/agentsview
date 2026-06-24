@@ -33,24 +33,25 @@ const quickSyncMargin = 10 * time.Second
 // full history when users usually want recent spend.
 const defaultUsageDays = 30
 
-// resolveDefaultSince returns the effective --since value,
-// applying a 30-day lookback only when the caller gave no
-// explicit range at all. If --until is set we leave --since
-// empty so "everything up to --until" still works; otherwise
-// a bare --until would produce From > To and empty results.
-func resolveDefaultSince(
-	since, until string, all bool, now time.Time, tz string,
-) string {
-	if since != "" || until != "" || all {
-		return since
+// defaultUsageDateRange mirrors the HTTP usage route's default range:
+// fill a missing upper bound with today, then fill a missing lower
+// bound relative to that upper bound. Callers that intentionally want
+// an open-ended range must set NoDefaultRange instead of calling this.
+func defaultUsageDateRange(
+	from, to string, now time.Time,
+) (string, string) {
+	now = now.UTC()
+	if to == "" {
+		to = now.Format("2006-01-02")
 	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		loc = time.Local
+	if from == "" {
+		t, err := time.Parse("2006-01-02", to)
+		if err != nil {
+			t = now
+		}
+		from = t.AddDate(0, 0, -defaultUsageDays).Format("2006-01-02")
 	}
-	return now.In(loc).
-		AddDate(0, 0, -(defaultUsageDays - 1)).
-		Format("2006-01-02")
+	return from, to
 }
 
 type UsageDailyConfig struct {
@@ -71,16 +72,13 @@ func runUsageDaily(cfg UsageDailyConfig) {
 		tz = localTimezone()
 	}
 
-	effectiveSince := resolveDefaultSince(
-		cfg.Since, cfg.Until, cfg.All, time.Now(), tz,
-	)
-
 	filter := db.UsageFilter{
-		From:     effectiveSince,
+		From:     cfg.Since,
 		To:       cfg.Until,
 		Agent:    cfg.Agent,
 		Timezone: tz,
 	}
+	noDefaultRange := cfg.All || cfg.Since != "" || cfg.Until != ""
 
 	ctx := context.Background()
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
@@ -98,7 +96,7 @@ func runUsageDaily(cfg UsageDailyConfig) {
 
 	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
 		Filter:         filter,
-		NoDefaultRange: cfg.All || filter.From != "" || filter.To != "",
+		NoDefaultRange: noDefaultRange,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

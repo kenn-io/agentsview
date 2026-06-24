@@ -204,15 +204,14 @@ func (b localArchiveQueryBackend) DailyUsage(
 
 func localDailyUsageFilter(query dailyUsageQuery) db.UsageFilter {
 	filter := query.Filter
-	if query.NoDefaultRange || filter.From != "" || filter.To != "" {
+	if filter.Timezone == "" {
+		filter.Timezone = "UTC"
+	}
+	if query.NoDefaultRange {
 		return filter
 	}
-	if filter.Timezone == "" {
-		filter.Timezone = localTimezone()
-	}
-	filter.From = resolveDefaultSince(
-		filter.From, filter.To, false,
-		time.Now(), filter.Timezone,
+	filter.From, filter.To = defaultUsageDateRange(
+		filter.From, filter.To, time.Now(),
 	)
 	return filter
 }

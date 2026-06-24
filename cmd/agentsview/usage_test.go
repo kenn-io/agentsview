@@ -42,50 +42,47 @@ func TestFmtCost(t *testing.T) {
 	}
 }
 
-func TestResolveDefaultSince(t *testing.T) {
+func TestDefaultUsageDateRange(t *testing.T) {
 	now := time.Date(2024, 6, 15, 12, 0, 0, 0, time.UTC)
-	const utc = "UTC"
 
 	tests := []struct {
 		name  string
-		since string
-		until string
-		all   bool
-		want  string
+		from  string
+		to    string
+		wantF string
+		wantT string
 	}{
 		{
-			name: "no flags returns 30-day window",
-			want: "2024-05-17",
+			name:  "no flags returns 30-day window",
+			wantF: "2024-05-16",
+			wantT: "2024-06-15",
 		},
 		{
-			name:  "explicit since preserved",
-			since: "2024-01-01",
-			want:  "2024-01-01",
+			name:  "explicit from fills to",
+			from:  "2024-01-01",
+			wantF: "2024-01-01",
+			wantT: "2024-06-15",
 		},
 		{
-			name: "all flag disables default",
-			all:  true,
-			want: "",
-		},
-		{
-			name:  "until without since does not backfill since",
-			until: "2024-01-31",
-			want:  "",
+			name:  "explicit to fills from",
+			to:    "2024-01-31",
+			wantF: "2024-01-01",
+			wantT: "2024-01-31",
 		},
 		{
 			name:  "explicit range preserved",
-			since: "2024-01-01",
-			until: "2024-01-31",
-			want:  "2024-01-01",
+			from:  "2024-01-01",
+			to:    "2024-01-31",
+			wantF: "2024-01-01",
+			wantT: "2024-01-31",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resolveDefaultSince(
-				tc.since, tc.until, tc.all, now, utc,
-			)
-			assert.Equal(t, tc.want, got)
+			gotF, gotT := defaultUsageDateRange(tc.from, tc.to, now)
+			assert.Equal(t, tc.wantF, gotF)
+			assert.Equal(t, tc.wantT, gotT)
 		})
 	}
 }
@@ -235,6 +232,30 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 	})
 
 	assert.Equal(t, "/api/v1/usage/summary", gotPath)
+	assert.Contains(t, out, `"totalCost": 0.42`)
+	assertNoLocalSessionsDB(t, dataDir)
+}
+
+func TestRunUsageDailyDefaultRangeUsesDaemonDefaults(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	var gotQuery url.Values
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query()
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	out := captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{
+			JSON:     true,
+			Timezone: "UTC",
+		})
+	})
+
+	assert.Equal(t, "false", gotQuery.Get("no_default_range"))
+	assert.NotContains(t, gotQuery, "from")
+	assert.NotContains(t, gotQuery, "to")
 	assert.Contains(t, out, `"totalCost": 0.42`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
@@ -401,8 +422,10 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 
 	recent := time.Now().UTC().AddDate(0, 0, -2).Format(time.RFC3339)
 	old := time.Now().UTC().AddDate(0, 0, -60).Format(time.RFC3339)
+	future := time.Now().UTC().AddDate(0, 0, 2).Format(time.RFC3339)
 	upsertSession(t, d, "recent", "codex", recent)
 	upsertSession(t, d, "old", "codex", old)
+	upsertSession(t, d, "future", "codex", future)
 	require.NoError(t, d.InsertMessages([]db.Message{
 		{
 			SessionID:  "recent",
@@ -419,6 +442,14 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 			Timestamp:  old,
 			Model:      "test-model",
 			TokenUsage: json.RawMessage(`{"input_tokens":20,"output_tokens":2}`),
+		},
+		{
+			SessionID:  "future",
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  future,
+			Model:      "test-model",
+			TokenUsage: json.RawMessage(`{"input_tokens":40,"output_tokens":4}`),
 		},
 	}))
 
@@ -439,7 +470,7 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 		NoDefaultRange: true,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 30, all.Totals.InputTokens)
+	assert.Equal(t, 70, all.Totals.InputTokens)
 }
 
 func TestFormatDailyUsageJSON(t *testing.T) {
