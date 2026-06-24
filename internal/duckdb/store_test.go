@@ -1621,19 +1621,29 @@ func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T)
 	ctx := context.Background()
 	local := newLocalDB(t)
 	sessionID := "duck-usage-blank-ts"
-	session := syncSession(sessionID, "alpha", "blank timestamp usage", "", 1)
+	session := syncSession(sessionID, "alpha", "blank timestamp usage", "", 2)
 	session.StartedAt = nil
 
 	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: session,
-		Messages: []db.Message{{
-			SessionID:  sessionID,
-			Ordinal:    0,
-			Role:       "assistant",
-			Timestamp:  "",
-			Model:      "claude-test",
-			TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":50}`),
-		}},
+		Messages: []db.Message{
+			{
+				SessionID:  sessionID,
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "",
+				Model:      "claude-test",
+				TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":50}`),
+			},
+			{
+				SessionID:  sessionID,
+				Ordinal:    1,
+				Role:       "assistant",
+				Timestamp:  "",
+				Model:      "claude-test",
+				TokenUsage: json.RawMessage(`{"input_tokens":200,"output_tokens":75}`),
+			},
+		},
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
@@ -1646,8 +1656,8 @@ func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T)
 
 	got, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
 	require.NoError(t, err)
-	assert.Equal(t, 100, got.Totals.InputTokens)
-	assert.Equal(t, 50, got.Totals.OutputTokens)
+	assert.Equal(t, 300, got.Totals.InputTokens)
+	assert.Equal(t, 125, got.Totals.OutputTokens)
 }
 
 func hourOfWeekMessages(cells []db.HourOfWeekCell, dow, hour int) int {

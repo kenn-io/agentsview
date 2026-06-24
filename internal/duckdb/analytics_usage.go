@@ -2311,7 +2311,7 @@ func duckUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 						THEN 'usage:' || usage_dedup_key
 					ELSE 'row:' || session_id || ':' || source || ':' ||
 						COALESCE(CAST(message_ordinal AS VARCHAR), '') || ':' ||
-						CAST(ts AS VARCHAR) || ':' || model
+						COALESCE(CAST(ts AS VARCHAR), '') || ':' || model
 				END AS dedup_group,
 				%[2]s AS local_date
 			FROM usage_raw
