@@ -261,7 +261,7 @@ type getMessagesIn struct {
 	From               int      `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions)."`
 	Direction          string   `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first)."`
 	Limit              int      `json:"limit,omitempty" jsonschema:"Max messages, default 20, max 100."`
-	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include. Default: user and assistant only (no tool or system messages)."`
+	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
 }
 
