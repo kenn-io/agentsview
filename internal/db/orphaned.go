@@ -333,9 +333,6 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		}
 		return fmt.Errorf("probing pg_sync_state table: %w", err)
 	}
-	if tableExists != 1 {
-		return nil
-	}
 
 	_, err = conn.ExecContext(ctx, `
 		INSERT OR REPLACE INTO main.pg_sync_state (key, value)
@@ -385,9 +382,6 @@ func (d *DB) CopyExcludedSessionsFrom(
 			return nil
 		}
 		return fmt.Errorf("probing excluded_sessions table: %w", err)
-	}
-	if tableExists != 1 {
-		return nil
 	}
 
 	_, err = conn.ExecContext(ctx, `
