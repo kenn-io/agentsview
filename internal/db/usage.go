@@ -811,6 +811,7 @@ func cursorUsageRowsSQLForBounds(
 ) (string, []any, bool) {
 	if f.Project != "" || f.ExcludeProject != "" ||
 		f.Machine != "" || f.MinUserMessages > 0 ||
+		f.ExcludeOneShot ||
 		f.ActiveSince != "" {
 		return "", nil, false
 	}

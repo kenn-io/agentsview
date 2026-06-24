@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // CursorUsageEvent stores authoritative Cursor admin usage data.
@@ -138,22 +137,4 @@ func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
-}
-
-func cursorUsageOccurredAtFromMillis(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("empty timestamp")
-	}
-	if ms, err := strconv.ParseInt(raw, 10, 64); err == nil {
-		return time.Unix(0, ms*int64(time.Millisecond)).
-			UTC().Format(time.RFC3339Nano), nil
-	}
-	if t, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-		return t.UTC().Format(time.RFC3339Nano), nil
-	}
-	if t, err := time.Parse(time.RFC3339, raw); err == nil {
-		return t.UTC().Format(time.RFC3339Nano), nil
-	}
-	return "", fmt.Errorf("parsing timestamp %q", raw)
 }

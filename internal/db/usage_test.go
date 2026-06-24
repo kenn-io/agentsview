@@ -527,6 +527,37 @@ func TestGetDailyUsageIncludesCursorUsageEventsWithSessionDefaults(t *testing.T)
 	assert.Equal(t, 0, result.SessionCounts.Total, "cursor rows should not count as sessions")
 }
 
+func TestGetDailyUsageSkipsCursorUsageEventsForExcludeOneShot(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 0,
+		CacheReadTokens:  8901,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}), "InsertCursorUsageEvents")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:           "2026-05-14",
+		To:             "2026-05-14",
+		Breakdowns:     true,
+		ExcludeOneShot: true,
+	})
+	require.NoError(t, err, "GetDailyUsage cursor exclude one-shot")
+	assert.Empty(t, result.Daily, "daily entries should be empty")
+	assert.Zero(t, result.Totals.InputTokens, "InputTokens")
+	assert.Zero(t, result.SessionCounts.Total, "cursor rows should not count as sessions")
+}
+
 func TestInsertCursorUsageEventsDedupesByFingerprint(t *testing.T) {
 	d := testDB(t)
 

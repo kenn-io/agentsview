@@ -285,6 +285,22 @@ func TestLoadEnv_OverridesDataDir(t *testing.T) {
 	assert.Equal(t, custom, cfg.DataDir)
 }
 
+func TestLoadEnv_UsesPrefixedCursorAdminVarsWithLegacyFallback(t *testing.T) {
+	setupTestEnv(t)
+	t.Setenv("AGENTSVIEW_CURSOR_ADMIN_API_KEY", "prefixed-key")
+	t.Setenv("CURSOR_ADMIN_API_KEY", "legacy-key")
+	t.Setenv("CURSOR_ADMIN_EMAIL", "legacy@example.com")
+	t.Setenv("AGENTSVIEW_CURSOR_ADMIN_USER_ID", "prefixed-user")
+
+	cfg, err := Default()
+	require.NoError(t, err)
+	cfg.loadEnv()
+
+	assert.Equal(t, "prefixed-key", cfg.CursorAdminAPIKey)
+	assert.Equal(t, "legacy@example.com", cfg.CursorAdminEmail)
+	assert.Equal(t, "prefixed-user", cfg.CursorAdminUserID)
+}
+
 func TestLoad_AppliesExplicitFlags(t *testing.T) {
 	cfg, err := loadConfigFromFlags(t, "-host", "0.0.0.0", "-port", "9090")
 	require.NoError(t, err)

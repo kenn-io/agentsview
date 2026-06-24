@@ -13,6 +13,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+var newCursorUsageClient = cursorusage.NewClient
+
 type UsageCursorConfig struct {
 	Since    string
 	Until    string
@@ -70,63 +72,47 @@ func runUsageCursor(cfg UsageCursorConfig) error {
 		return err
 	}
 
-	client := cursorusage.NewClient(apiKey)
 	pageSize := cfg.PageSize
 	if pageSize <= 0 {
 		pageSize = 100
 	}
 
-	ctx := context.Background()
-	fetched := 0
-	for page := 1; ; page++ {
-		resp, err := client.ListUsageEvents(ctx, cursorusage.Query{
-			StartDate: start,
-			EndDate:   end,
-			Page:      page,
-			PageSize:  pageSize,
-			Email:     email,
-			UserID:    userID,
+	client := newCursorUsageClient(apiKey)
+	events, err := client.FetchAllUsageEvents(context.Background(), cursorusage.Query{
+		StartDate: start,
+		EndDate:   end,
+		PageSize:  pageSize,
+		Email:     email,
+		UserID:    userID,
+	})
+	if err != nil {
+		return err
+	}
+
+	rows := make([]db.CursorUsageEvent, 0, len(events))
+	for _, ev := range events {
+		rows = append(rows, db.CursorUsageEvent{
+			OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
+			Model:            ev.Model,
+			Kind:             ev.Kind,
+			InputTokens:      ev.TokenUsage.InputTokens,
+			OutputTokens:     ev.TokenUsage.OutputTokens,
+			CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
+			CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
+			ChargedCents:     ev.ChargedCents,
+			CursorTokenFee:   ev.CursorTokenFee,
+			UserID:           ev.UserID,
+			UserEmail:        ev.UserEmail,
+			IsHeadless:       ev.IsHeadless,
 		})
-		if err != nil {
-			return err
-		}
-
-		rows := make([]db.CursorUsageEvent, 0, len(resp.Events))
-		for _, ev := range resp.Events {
-			rows = append(rows, db.CursorUsageEvent{
-				OccurredAt:       ev.Timestamp.UTC().Format(time.RFC3339Nano),
-				Model:            ev.Model,
-				Kind:             ev.Kind,
-				InputTokens:      ev.TokenUsage.InputTokens,
-				OutputTokens:     ev.TokenUsage.OutputTokens,
-				CacheWriteTokens: ev.TokenUsage.CacheWriteTokens,
-				CacheReadTokens:  ev.TokenUsage.CacheReadTokens,
-				ChargedCents:     ev.ChargedCents,
-				CursorTokenFee:   ev.CursorTokenFee,
-				UserID:           ev.UserID,
-				UserEmail:        ev.UserEmail,
-				IsHeadless:       ev.IsHeadless,
-			})
-		}
-		if err := database.InsertCursorUsageEvents(rows); err != nil {
-			return err
-		}
-		fetched += len(rows)
-
-		if len(resp.Events) == 0 {
-			break
-		}
-		if resp.TotalCount > 0 && page*pageSize >= resp.TotalCount {
-			break
-		}
-		if len(resp.Events) < pageSize {
-			break
-		}
+	}
+	if err := database.InsertCursorUsageEvents(rows); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(os.Stdout,
 		"Fetched %d Cursor usage events into the archive\n",
-		fetched,
+		len(rows),
 	)
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/cursorusage"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/pricing"
 )
@@ -576,6 +578,170 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 		assert.Contains(t, totals, f,
 			"missing field %q in totals", f)
 	}
+}
+
+func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(
+			"cursor_admin_api_key = 'config-key'\n"+
+				"cursor_admin_email = 'config@example.com'\n"+
+				"cursor_admin_user_id = 'config-user'\n",
+		),
+		0o600,
+	), "write config")
+
+	var requests []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/teams/filtered-usage-events", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		user, pass, ok := r.BasicAuth()
+		require.True(t, ok, "basic auth")
+		assert.Equal(t, "config-key", user)
+		assert.Empty(t, pass)
+
+		var req map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req), "decode request")
+		requests = append(requests, req)
+
+		page, _ := req["page"].(float64)
+		switch int(page) {
+		case 1:
+			_, _ = w.Write([]byte(`{
+				"totalUsageEventsCount": 2,
+				"usageEvents": [{
+					"timestamp": "1778753100000",
+					"model": "claude-4.6-opus-high-thinking",
+					"kind": "USAGE_EVENT_KIND_USAGE_BASED",
+					"tokenUsage": {
+						"inputTokens": 1234,
+						"outputTokens": 567,
+						"cacheWriteTokens": 12,
+						"cacheReadTokens": 34
+					},
+					"chargedCents": 15.66,
+					"cursorTokenFee": 3.32,
+					"userId": "config-user",
+					"userEmail": "config@example.com",
+					"isHeadless": false
+				}]
+			}`))
+		case 2:
+			_, _ = w.Write([]byte(`{
+				"totalUsageEventsCount": 2,
+				"usageEvents": [{
+					"timestamp": "2026-05-14T11:05:00Z",
+					"model": "gpt-5.4",
+					"kind": "USAGE_EVENT_KIND_USAGE_BASED",
+					"tokenUsage": {
+						"inputTokens": 1,
+						"outputTokens": 2,
+						"cacheWriteTokens": 3,
+						"cacheReadTokens": 4
+					},
+					"chargedCents": 1.5,
+					"cursorTokenFee": 0.5,
+					"userId": "config-user",
+					"userEmail": "config@example.com",
+					"isHeadless": true
+				}]
+			}`))
+		default:
+			t.Fatalf("unexpected page request: %#v", req)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	origNewCursorUsageClient := newCursorUsageClient
+	newCursorUsageClient = func(apiKey string) *cursorusage.Client {
+		return cursorusage.NewClientWithBaseURL(server.URL, apiKey)
+	}
+	t.Cleanup(func() {
+		newCursorUsageClient = origNewCursorUsageClient
+	})
+
+	cmd := newUsageCursorCommand()
+	cmd.SetArgs([]string{
+		"--since", "2026-05-14",
+		"--until", "2026-05-14",
+		"--page-size", "1",
+	})
+	out := captureStdout(t, func() {
+		require.NoError(t, cmd.Execute(), "Execute")
+	})
+	assert.Contains(t, out, "Fetched 2 Cursor usage events into the archive")
+
+	require.Len(t, requests, 2, "request count")
+	for _, req := range requests {
+		assert.Equal(t, "config@example.com", req["email"])
+		assert.Equal(t, "config-user", req["userId"])
+		assert.Equal(t, float64(1), req["pageSize"])
+	}
+	assert.Equal(t, float64(1), requests[0]["page"])
+	assert.Equal(t, float64(2), requests[1]["page"])
+
+	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err, "open archive db")
+	t.Cleanup(func() { database.Close() })
+
+	var count int
+	require.NoError(t, database.Reader().QueryRow(
+		"SELECT count(*) FROM cursor_usage_events",
+	).Scan(&count))
+	assert.Equal(t, 2, count)
+
+	rows, err := database.Reader().Query(
+		`SELECT occurred_at, model, input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens, user_email, is_headless
+		FROM cursor_usage_events
+		ORDER BY occurred_at ASC`,
+	)
+	require.NoError(t, err, "query cursor events")
+	defer rows.Close()
+
+	type storedEvent struct {
+		occurredAt       string
+		model            string
+		inputTokens      int
+		outputTokens     int
+		cacheWriteTokens int
+		cacheReadTokens  int
+		userEmail        string
+		isHeadless       int
+	}
+	var got []storedEvent
+	for rows.Next() {
+		var ev storedEvent
+		require.NoError(t, rows.Scan(
+			&ev.occurredAt,
+			&ev.model,
+			&ev.inputTokens,
+			&ev.outputTokens,
+			&ev.cacheWriteTokens,
+			&ev.cacheReadTokens,
+			&ev.userEmail,
+			&ev.isHeadless,
+		))
+		got = append(got, ev)
+	}
+	require.NoError(t, rows.Err(), "iterate cursor events")
+	require.Len(t, got, 2)
+	assert.Equal(t, "2026-05-14T10:05:00Z", got[0].occurredAt)
+	assert.Equal(t, "claude-4.6-opus-high-thinking", got[0].model)
+	assert.Equal(t, 1234, got[0].inputTokens)
+	assert.Equal(t, 567, got[0].outputTokens)
+	assert.Equal(t, 12, got[0].cacheWriteTokens)
+	assert.Equal(t, 34, got[0].cacheReadTokens)
+	assert.Equal(t, "config@example.com", got[0].userEmail)
+	assert.Equal(t, 0, got[0].isHeadless)
+	assert.Equal(t, "2026-05-14T11:05:00Z", got[1].occurredAt)
+	assert.Equal(t, 1, got[1].inputTokens)
+	assert.Equal(t, 2, got[1].outputTokens)
+	assert.Equal(t, 3, got[1].cacheWriteTokens)
+	assert.Equal(t, 4, got[1].cacheReadTokens)
+	assert.Equal(t, 1, got[1].isHeadless)
 }
 
 func TestRefreshPricingIfStale_FreshAttemptSkipsFetch(t *testing.T) {

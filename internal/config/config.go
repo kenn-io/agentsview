@@ -866,13 +866,22 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
 		c.pgEnvOverrides.MachineName = v
 	}
-	if v := os.Getenv("CURSOR_ADMIN_API_KEY"); v != "" {
+	if v := firstEnv(
+		"AGENTSVIEW_CURSOR_ADMIN_API_KEY",
+		"CURSOR_ADMIN_API_KEY",
+	); v != "" {
 		c.CursorAdminAPIKey = v
 	}
-	if v := os.Getenv("CURSOR_ADMIN_EMAIL"); v != "" {
+	if v := firstEnv(
+		"AGENTSVIEW_CURSOR_ADMIN_EMAIL",
+		"CURSOR_ADMIN_EMAIL",
+	); v != "" {
 		c.CursorAdminEmail = v
 	}
-	if v := os.Getenv("CURSOR_ADMIN_USER_ID"); v != "" {
+	if v := firstEnv(
+		"AGENTSVIEW_CURSOR_ADMIN_USER_ID",
+		"CURSOR_ADMIN_USER_ID",
+	); v != "" {
 		c.CursorAdminUserID = v
 	}
 	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
@@ -890,6 +899,15 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
 	}
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 type stringListFlag []string
