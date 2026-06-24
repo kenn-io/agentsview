@@ -26,7 +26,8 @@ func rejectEnvDependentServicePGURL(rawURL string) error {
 	if os.Getenv("AGENTSVIEW_PG_URL") != "" {
 		return fmt.Errorf(
 			"AGENTSVIEW_PG_URL is set; pg service install requires a " +
-				"literal pg.url in config.toml because background " +
+				"literal PostgreSQL URL in config.toml, either " +
+				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because background " +
 				"services do not inherit your shell environment",
 		)
 	}
@@ -35,7 +36,8 @@ func rejectEnvDependentServicePGURL(rawURL string) error {
 	if config.IsEnvDependentURL(rawURL) {
 		return fmt.Errorf(
 			"pg.url uses environment variable expansion; pg service " +
-				"install requires a literal pg.url in config.toml because " +
+				"install requires a literal PostgreSQL URL in config.toml, either " +
+				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because " +
 				"background services do not inherit your shell environment",
 		)
 	}
@@ -113,7 +115,11 @@ func isUnsafeServiceRune(r rune) bool {
 // build a spec when the PG URL is not resolvable so the service is
 // only ever created in a working state.
 func buildServiceSpec(appCfg config.Config) (serviceSpec, error) {
-	if err := rejectEnvDependentServicePGURL(appCfg.PG.URL); err != nil {
+	rawPG, err := appCfg.RawPGTarget("")
+	if err != nil {
+		return serviceSpec{}, err
+	}
+	if err := rejectEnvDependentServicePGURL(rawPG.URL); err != nil {
 		return serviceSpec{}, err
 	}
 	pgCfg, err := appCfg.ResolvePG()
@@ -122,7 +128,7 @@ func buildServiceSpec(appCfg config.Config) (serviceSpec, error) {
 	}
 	if pgCfg.URL == "" {
 		return serviceSpec{}, fmt.Errorf(
-			"pg.url not configured; set it before installing the service",
+			"pg url not configured; configure a legacy [pg].url or the default_pg-selected [pg.NAME].url before installing the service",
 		)
 	}
 	exe, err := os.Executable()

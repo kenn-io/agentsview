@@ -49,7 +49,7 @@ func CheckSSL(dsn string) error {
 			"pg connection to %s permits plaintext; "+
 				"set sslmode=require (or verify-full) "+
 				"for non-local hosts, "+
-				"or set allow_insecure = true under [pg] "+
+				"or set allow_insecure = true under [pg] or [pg.NAME] "+
 				"in config to override",
 			cfg.Host,
 		)

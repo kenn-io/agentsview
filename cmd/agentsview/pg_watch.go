@@ -110,21 +110,34 @@ func (p *pgPusher) reset() {
 // resolveWatchTargets validates PG config and resolves the project
 // filters for a watch run.
 func resolveWatchTargets(
-	appCfg config.Config, cfg PGPushConfig,
-) (pgCfg config.PGConfig, projects, exclude []string, err error) {
-	pgCfg, err = appCfg.ResolvePG()
+	appCfg config.Config,
+	cfg PGPushConfig,
+	targetName string,
+) (
+	target pgTargetSelection,
+	projects, exclude []string,
+	err error,
+) {
+	targets, err := resolvePGTargetSelections(
+		appCfg, targetName, false,
+	)
 	if err != nil {
-		return config.PGConfig{}, nil, nil, err
+		return pgTargetSelection{}, nil, nil, err
 	}
-	if pgCfg.URL == "" {
-		return config.PGConfig{}, nil, nil,
+	target = targets[0]
+	target, err = resolvePGTargetConfig(appCfg, target)
+	if err != nil {
+		return pgTargetSelection{}, nil, nil, err
+	}
+	if target.PG.URL == "" {
+		return pgTargetSelection{}, nil, nil,
 			fmt.Errorf("url not configured")
 	}
-	projects, exclude, err = resolvePushProjects(pgCfg, cfg)
+	projects, exclude, err = resolvePushProjects(target.PG, cfg)
 	if err != nil {
-		return config.PGConfig{}, nil, nil, err
+		return pgTargetSelection{}, nil, nil, err
 	}
-	return pgCfg, projects, exclude, nil
+	return target, projects, exclude, nil
 }
 
 const (
@@ -135,19 +148,24 @@ const (
 // runPGPushWatch runs the long-lived auto-push daemon: an initial
 // catch-up push, then pushes triggered by file changes (debounced)
 // and a periodic floor tick, until interrupted.
-func runPGPushWatch(cfg PGPushConfig) {
+func runPGPushWatch(
+	cfg PGPushConfig,
+	targetName string,
+) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		return fmt.Errorf("creating data dir: %w", err)
 	}
 	setupLogFileNamed(appCfg.DataDir, "pg-watch.log")
 
-	pgCfg, projects, exclude, err := resolveWatchTargets(appCfg, cfg)
+	target, projects, exclude, err := resolveWatchTargets(
+		appCfg, cfg, targetName,
+	)
 	if err != nil {
-		fatal("pg push --watch: %v", err)
+		return err
 	}
 
 	debounce := cfg.Debounce
@@ -165,15 +183,15 @@ func runPGPushWatch(cfg PGPushConfig) {
 		Prefix: "pg-watch",
 	}).LockPath()
 	if err != nil {
-		fatal("pg push --watch: %v", err)
+		return err
 	}
 	lock := flock.New(lockPath)
 	locked, err := lock.TryLock()
 	if err != nil {
-		fatal("pg push --watch: locking %s: %v", lockPath, err)
+		return fmt.Errorf("locking %s: %w", lockPath, err)
 	}
 	if !locked {
-		fatal("pg push --watch: already locked (%s)", lockPath)
+		return fmt.Errorf("already locked (%s)", lockPath)
 	}
 	defer func() {
 		if rerr := lock.Unlock(); rerr != nil {
@@ -188,17 +206,18 @@ func runPGPushWatch(cfg PGPushConfig) {
 
 	log.Printf(
 		"pg watch: starting (machine=%q debounce=%s interval=%s)",
-		pgCfg.MachineName, debounce, interval,
+		target.PG.MachineName, debounce, interval,
 	)
 
 	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
 	if err != nil {
-		fatal("opening writer: %v", err)
+		return fmt.Errorf("opening writer: %w", err)
 	}
 	defer cleanup()
 	if err := backend.PGPushWatch(
-		ctx, pgCfg, cfg, projects, exclude, debounce, interval,
+		ctx, target, cfg, projects, exclude, debounce, interval,
 	); err != nil {
-		fatal("pg push --watch: %v", err)
+		return err
 	}
+	return nil
 }

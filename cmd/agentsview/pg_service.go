@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/postgres"
 )
 
 func newPGServiceCommand() *cobra.Command {
@@ -174,22 +175,51 @@ func runServiceStatus() {
 	}
 	ctx := context.Background()
 	out, _ := mgr.status(ctx)
-	fmt.Print(out)
-	if out != "" && !strings.HasSuffix(out, "\n") {
-		fmt.Println()
-	}
 	// Show the last successful push time from local sync state.
 	appCfg := loadServiceConfig()
 	database, derr := openReadOnlyDB(appCfg)
 	if derr != nil {
+		writeServiceStatus(os.Stdout, out, "", false)
 		return
 	}
 	defer database.Close()
-	lastPush, gerr := database.GetSyncState("last_push_at")
+	lastPush, gerr := readServiceLastPush(appCfg, database)
 	if gerr != nil {
+		writeServiceStatus(os.Stdout, out, "", false)
 		return
 	}
-	fmt.Printf("Last push: %s\n", valueOrNever(lastPush))
+	writeServiceStatus(os.Stdout, out, lastPush, true)
+}
+
+func writeServiceStatus(
+	out io.Writer,
+	serviceOut, lastPush string,
+	lastPushAvailable bool,
+) {
+	fmt.Fprint(out, serviceOut)
+	if serviceOut != "" && !strings.HasSuffix(serviceOut, "\n") {
+		fmt.Fprintln(out)
+	}
+	if !lastPushAvailable {
+		return
+	}
+	fmt.Fprintf(out, "Last push: %s\n", valueOrNever(lastPush))
+}
+
+func readServiceLastPush(
+	appCfg config.Config,
+	database postgres.SyncStateStore,
+) (string, error) {
+	targets, err := resolvePGTargetSelections(appCfg, "", false)
+	if err != nil {
+		return "", err
+	}
+	target := targets[0]
+	return postgres.ReadLastPushAt(
+		database,
+		target.SyncStateTarget,
+		target.MigrateLegacySyncState,
+	)
 }
 
 func runServiceSimple(action string) {

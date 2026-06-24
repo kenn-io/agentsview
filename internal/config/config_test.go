@@ -861,8 +861,182 @@ func TestLoadFile_PGConfig(t *testing.T) {
 
 			cfg := f.LoadMinimal(t)
 
-			assert.Equal(t, tt.want.URL, cfg.PG.URL)
-			assert.Equal(t, tt.want.MachineName, cfg.PG.MachineName)
+			resolved, err := cfg.ResolvePG()
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.want.URL, resolved.URL)
+			if tt.want.MachineName == "" {
+				assert.NotEmpty(t, resolved.MachineName)
+			} else {
+				assert.Equal(t, tt.want.MachineName, resolved.MachineName)
+			}
+		})
+	}
+}
+
+func TestResolvePGTarget_NamedTargets(t *testing.T) {
+	cfg := Config{
+		DefaultPG: "work",
+		PGTargets: map[string]PGConfig{
+			"work": {
+				URL:         "postgres://work",
+				MachineName: "workbox",
+			},
+			"archive": {
+				URL:         "postgres://archive",
+				MachineName: "archivebox",
+			},
+		},
+		pgEnvOverrides: pgEnvOverrides{
+			URL:         "postgres://env-default",
+			MachineName: "envbox",
+		},
+	}
+
+	defaultTarget, err := cfg.ResolvePG()
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://env-default", defaultTarget.URL)
+	assert.Equal(t, "envbox", defaultTarget.MachineName)
+
+	archiveTarget, err := cfg.ResolvePGTarget("archive")
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://archive", archiveTarget.URL)
+	assert.Equal(t, "archivebox", archiveTarget.MachineName)
+}
+
+func TestResolvePGTargets_DefaultFirst(t *testing.T) {
+	cfg := Config{
+		DefaultPG: "work",
+		PGTargets: map[string]PGConfig{
+			"archive": {URL: "postgres://archive"},
+			"work":    {URL: "postgres://work"},
+		},
+	}
+
+	targets, err := cfg.ResolvePGTargets()
+	require.NoError(t, err)
+	require.Len(t, targets, 2)
+	assert.Equal(t, "work", targets[0].Name)
+	assert.True(t, targets[0].IsDefault)
+	assert.Equal(t, "archive", targets[1].Name)
+	assert.False(t, targets[1].IsDefault)
+}
+
+func TestResolvePGTargets_OneNamedTargetWithoutDefault(t *testing.T) {
+	cfg := Config{
+		PGTargets: map[string]PGConfig{
+			"work": {URL: "postgres://work"},
+		},
+	}
+
+	targets, err := cfg.ResolvePGTargets()
+	require.NoError(t, err)
+	require.Len(t, targets, 1)
+	assert.Equal(t, "work", targets[0].Name)
+	assert.True(t, targets[0].IsDefault)
+}
+
+func TestResolvePGTargets_MultipleNamedTargetsRequireDefault(t *testing.T) {
+	cfg := Config{
+		PGTargets: map[string]PGConfig{
+			"work":    {URL: "postgres://work"},
+			"archive": {URL: "postgres://archive"},
+		},
+	}
+
+	_, err := cfg.ResolvePGTargets()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "default_pg is required")
+}
+
+func TestLoadMinimal_DefersNamedPGValidationForNonPGCommands(t *testing.T) {
+	dir := setupTestEnv(t)
+	path := filepath.Join(dir, configFileName)
+	data := []byte(`
+default_pg = "missing"
+
+[pg.work]
+url = "postgres://work"
+`)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	_, err = cfg.ResolvePG()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `default_pg "missing" does not match any named [pg.NAME] target`)
+}
+
+func TestLoadFile_PGMixedLegacyAndNamedTargetsFails(t *testing.T) {
+	dir := setupTestEnv(t)
+	path := filepath.Join(dir, configFileName)
+	data := []byte(`
+[pg]
+url = "postgres://legacy"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	_, err := LoadMinimal()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot mix legacy [pg] fields with named [pg.NAME] targets")
+}
+
+func TestLoadFile_PGNamedTargetValidationErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		toml    string
+		wantErr string
+	}{
+		{
+			name: "reserved all target",
+			toml: `
+[pg.all]
+url = "postgres://all"
+`,
+			wantErr: `named PG target "all" is reserved`,
+		},
+		{
+			name: "reserved local target",
+			toml: `
+[pg.local]
+url = "postgres://local"
+`,
+			wantErr: `named PG target "local" is reserved`,
+		},
+		{
+			name: "duplicate normalized target names",
+			toml: `
+[pg.Work]
+url = "postgres://work"
+
+[pg.work]
+url = "postgres://work2"
+`,
+			wantErr: `normalize to the same name "work"`,
+		},
+		{
+			name: "named target must be table",
+			toml: `
+[pg]
+archive = "postgres://archive"
+`,
+			wantErr: `[pg].archive must be a named target table`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			path := filepath.Join(dir, configFileName)
+			require.NoError(t, os.WriteFile(path, []byte(tt.toml), 0o600))
+
+			_, err := LoadMinimal()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }

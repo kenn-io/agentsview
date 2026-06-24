@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -64,6 +65,29 @@ type PGConfig struct {
 	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
 	Projects        []string `toml:"projects" json:"projects,omitempty"`
 	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
+}
+
+type pgEnvOverrides struct {
+	URL         string
+	Schema      string
+	MachineName string
+}
+
+// ResolvedPGTarget is one PostgreSQL target after target selection,
+// defaulting, and default-target env overrides are applied.
+type ResolvedPGTarget struct {
+	Name      string
+	Config    PGConfig
+	IsDefault bool
+}
+
+var pgConfigKeys = map[string]struct{}{
+	"url":              {},
+	"schema":           {},
+	"machine_name":     {},
+	"allow_insecure":   {},
+	"projects":         {},
+	"exclude_projects": {},
 }
 
 // DuckDBConfig holds DuckDB mirror and Quack connection settings.
@@ -125,6 +149,8 @@ type Config struct {
 	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
 	NoSync               bool                   `json:"-" toml:"-"`
 	PG                   PGConfig               `json:"pg,omitempty" toml:"pg"`
+	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
+	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
@@ -160,6 +186,8 @@ type Config struct {
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
 	HostExplicit bool `json:"-" toml:"-"`
+
+	pgEnvOverrides pgEnvOverrides
 }
 
 type dirSource int
@@ -532,6 +560,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		RequireAuth                    bool                       `toml:"require_auth"`
 		RemoteAccess                   bool                       `toml:"remote_access"`
 		DisableUpdateCheck             bool                       `toml:"disable_update_check"`
+		DefaultPG                      string                     `toml:"default_pg"`
 		PG                             PGConfig                   `toml:"pg"`
 		DuckDB                         DuckDBConfig               `toml:"duckdb"`
 		Automated                      AutomatedConfig            `toml:"automated"`
@@ -543,6 +572,10 @@ func (c *Config) applyConfigTOML(data string) error {
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
+	}
+	var raw map[string]any
+	if _, err := toml.Decode(data, &raw); err != nil {
+		return fmt.Errorf("parsing config raw: %w", err)
 	}
 	if file.GithubToken != "" {
 		c.GithubToken = file.GithubToken
@@ -576,25 +609,36 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	c.RequireAuth = file.RequireAuth || file.RemoteAccess
 	c.DisableUpdateCheck = file.DisableUpdateCheck
-	// Merge pg field-by-field so env vars override only
-	// the fields they set, preserving config-file settings.
-	if file.PG.URL != "" && c.PG.URL == "" {
-		c.PG.URL = file.PG.URL
+	if meta.IsDefined("default_pg") {
+		c.DefaultPG = normalizePGTargetName(file.DefaultPG)
 	}
-	if file.PG.Schema != "" && c.PG.Schema == "" {
-		c.PG.Schema = file.PG.Schema
+	legacyPG, namedPG, err := parsePGConfigSection(raw["pg"])
+	if err != nil {
+		return fmt.Errorf("pg: %w", err)
 	}
-	if file.PG.MachineName != "" && c.PG.MachineName == "" {
-		c.PG.MachineName = file.PG.MachineName
-	}
-	if file.PG.AllowInsecure {
-		c.PG.AllowInsecure = true
-	}
-	if file.PG.Projects != nil && c.PG.Projects == nil {
-		c.PG.Projects = file.PG.Projects
-	}
-	if file.PG.ExcludeProjects != nil && c.PG.ExcludeProjects == nil {
-		c.PG.ExcludeProjects = file.PG.ExcludeProjects
+	if len(namedPG) > 0 {
+		c.PG = PGConfig{}
+		c.PGTargets = namedPG
+	} else {
+		c.PGTargets = nil
+		if legacyPG.URL != "" {
+			c.PG.URL = legacyPG.URL
+		}
+		if legacyPG.Schema != "" {
+			c.PG.Schema = legacyPG.Schema
+		}
+		if legacyPG.MachineName != "" {
+			c.PG.MachineName = legacyPG.MachineName
+		}
+		if legacyPG.AllowInsecure {
+			c.PG.AllowInsecure = true
+		}
+		if legacyPG.Projects != nil {
+			c.PG.Projects = legacyPG.Projects
+		}
+		if legacyPG.ExcludeProjects != nil {
+			c.PG.ExcludeProjects = legacyPG.ExcludeProjects
+		}
 	}
 	// Merge duckdb field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
@@ -658,10 +702,6 @@ func (c *Config) applyConfigTOML(data string) error {
 
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
-	var raw map[string]any
-	if _, err := toml.Decode(data, &raw); err != nil {
-		return fmt.Errorf("parsing config raw: %w", err)
-	}
 	for _, def := range parser.Registry {
 		if def.ConfigKey == "" {
 			continue
@@ -795,13 +835,13 @@ func (c *Config) loadEnv() {
 		c.DataDir = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
-		c.PG.URL = v
+		c.pgEnvOverrides.URL = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_SCHEMA"); v != "" {
-		c.PG.Schema = v
+		c.pgEnvOverrides.Schema = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
-		c.PG.MachineName = v
+		c.pgEnvOverrides.MachineName = v
 	}
 	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
 		c.DuckDB.Path = v
@@ -1306,6 +1346,109 @@ func hostLiteral(host string) string {
 	return host
 }
 
+func normalizePGTargetName(name string) string {
+	return strings.TrimSpace(strings.ToLower(name))
+}
+
+func isReservedPGTargetName(name string) bool {
+	switch normalizePGTargetName(name) {
+	case "all", "local":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodePGConfigMap(raw map[string]any) (PGConfig, error) {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
+		return PGConfig{}, fmt.Errorf("encoding pg config: %w", err)
+	}
+	var cfg PGConfig
+	if _, err := toml.Decode(buf.String(), &cfg); err != nil {
+		return PGConfig{}, fmt.Errorf("decoding pg config: %w", err)
+	}
+	return cfg, nil
+}
+
+func parsePGConfigSection(value any) (PGConfig, map[string]PGConfig, error) {
+	if value == nil {
+		return PGConfig{}, nil, nil
+	}
+	section, ok := value.(map[string]any)
+	if !ok {
+		return PGConfig{}, nil, fmt.Errorf("expected [pg] to be a table")
+	}
+	hasLegacyFields := false
+	hasNamedTargets := false
+	legacyRaw := make(map[string]any)
+	namedTargets := make(map[string]PGConfig)
+	seenNames := make(map[string]string)
+	for rawName, rawValue := range section {
+		name := normalizePGTargetName(rawName)
+		if _, ok := pgConfigKeys[name]; ok {
+			if _, nested := rawValue.(map[string]any); nested {
+				return PGConfig{}, nil, fmt.Errorf(
+					"[pg].%s must be a scalar or array field, not a nested table",
+					rawName,
+				)
+			}
+			hasLegacyFields = true
+			legacyRaw[rawName] = rawValue
+			continue
+		}
+		targetRaw, ok := rawValue.(map[string]any)
+		if !ok {
+			return PGConfig{}, nil, fmt.Errorf(
+				"[pg].%s must be a named target table",
+				rawName,
+			)
+		}
+		hasNamedTargets = true
+		if name == "" {
+			return PGConfig{}, nil, fmt.Errorf(
+				"named PG targets must not be blank",
+			)
+		}
+		if isReservedPGTargetName(name) {
+			return PGConfig{}, nil, fmt.Errorf(
+				"named PG target %q is reserved",
+				name,
+			)
+		}
+		if prev, exists := seenNames[name]; exists {
+			return PGConfig{}, nil, fmt.Errorf(
+				"named PG targets %q and %q normalize to the same name %q",
+				prev, rawName, name,
+			)
+		}
+		seenNames[name] = rawName
+		targetCfg, err := decodePGConfigMap(targetRaw)
+		if err != nil {
+			return PGConfig{}, nil, fmt.Errorf(
+				"[pg].%s: %w", rawName, err,
+			)
+		}
+		namedTargets[name] = targetCfg
+	}
+	if hasLegacyFields && hasNamedTargets {
+		return PGConfig{}, nil, fmt.Errorf(
+			"cannot mix legacy [pg] fields with named [pg.NAME] targets",
+		)
+	}
+	if hasLegacyFields {
+		legacyCfg, err := decodePGConfigMap(legacyRaw)
+		if err != nil {
+			return PGConfig{}, nil, err
+		}
+		return legacyCfg, nil, nil
+	}
+	if hasNamedTargets {
+		return PGConfig{}, namedTargets, nil
+	}
+	return PGConfig{}, nil, nil
+}
+
 // ResolveDataDir returns the effective data directory by applying
 // defaults and environment overrides, without reading any files.
 // Use this to determine where migration should target before
@@ -1321,10 +1464,114 @@ func ResolveDataDir() (string, error) {
 	return cfg.DataDir, nil
 }
 
-// ResolvePG returns a copy of PG config with defaults applied
-// and environment variables expanded in URL.
-func (c *Config) ResolvePG() (PGConfig, error) {
-	pg := c.PG
+// DefaultPGTargetName returns the effective named PG target for this config.
+func (c *Config) DefaultPGTargetName() (string, error) {
+	if len(c.PGTargets) == 0 {
+		if c.DefaultPG != "" {
+			return "", fmt.Errorf(
+				"default_pg requires named [pg.NAME] targets",
+			)
+		}
+		return "", nil
+	}
+	if c.DefaultPG != "" {
+		if _, ok := c.PGTargets[c.DefaultPG]; !ok {
+			return "", fmt.Errorf(
+				"default_pg %q does not match any named [pg.NAME] target",
+				c.DefaultPG,
+			)
+		}
+		return c.DefaultPG, nil
+	}
+	if len(c.PGTargets) == 1 {
+		for name := range c.PGTargets {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"default_pg is required when more than one [pg.NAME] target is defined",
+	)
+}
+
+func (c *Config) validatePGTargets() error {
+	_, err := c.DefaultPGTargetName()
+	return err
+}
+
+func (c *Config) PGTargetNames() ([]string, string, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return nil, "", err
+	}
+	if len(c.PGTargets) == 0 {
+		return nil, "", nil
+	}
+	defaultName, err := c.DefaultPGTargetName()
+	if err != nil {
+		return nil, "", err
+	}
+	names := make([]string, 0, len(c.PGTargets))
+	for name := range c.PGTargets {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i] == defaultName {
+			return true
+		}
+		if names[j] == defaultName {
+			return false
+		}
+		return names[i] < names[j]
+	})
+	return names, defaultName, nil
+}
+
+// RawPGTarget returns the configured PG target before env expansion and
+// default-field synthesis. An empty name selects the effective default target.
+func (c *Config) RawPGTarget(name string) (PGConfig, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return PGConfig{}, err
+	}
+	targetName := normalizePGTargetName(name)
+	if len(c.PGTargets) == 0 {
+		if targetName != "" {
+			return PGConfig{}, fmt.Errorf(
+				"pg target %q is not configured; config uses a single legacy [pg] block",
+				name,
+			)
+		}
+		return c.PG, nil
+	}
+	if targetName == "" {
+		var err error
+		targetName, err = c.DefaultPGTargetName()
+		if err != nil {
+			return PGConfig{}, err
+		}
+	}
+	targetCfg, ok := c.PGTargets[targetName]
+	if !ok {
+		return PGConfig{}, fmt.Errorf(
+			"pg target %q is not configured",
+			targetName,
+		)
+	}
+	return targetCfg, nil
+}
+
+func (c *Config) resolvePGConfig(
+	pg PGConfig, applyDefaultEnv bool,
+) (PGConfig, error) {
+	if applyDefaultEnv {
+		if c.pgEnvOverrides.URL != "" {
+			pg.URL = c.pgEnvOverrides.URL
+		}
+		if c.pgEnvOverrides.Schema != "" {
+			pg.Schema = c.pgEnvOverrides.Schema
+		}
+		if c.pgEnvOverrides.MachineName != "" {
+			pg.MachineName = c.pgEnvOverrides.MachineName
+		}
+	}
 	if pg.URL != "" {
 		expanded, err := expandBracedEnv(pg.URL)
 		if err != nil {
@@ -1343,6 +1590,83 @@ func (c *Config) ResolvePG() (PGConfig, error) {
 		pg.MachineName = h
 	}
 	return pg, nil
+}
+
+// ResolvePG returns the effective default PG target with defaults applied
+// and environment variables expanded in URL.
+func (c *Config) ResolvePG() (PGConfig, error) {
+	return c.ResolvePGTarget("")
+}
+
+// ResolvePGTarget resolves one named PG target, or the effective default
+// target when name is empty. In legacy single-target mode, only the empty
+// name is valid.
+func (c *Config) ResolvePGTarget(name string) (PGConfig, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return PGConfig{}, err
+	}
+	targetName := normalizePGTargetName(name)
+	if len(c.PGTargets) == 0 {
+		if targetName != "" {
+			return PGConfig{}, fmt.Errorf(
+				"pg target %q is not configured; config uses a single legacy [pg] block",
+				name,
+			)
+		}
+		return c.resolvePGConfig(c.PG, true)
+	}
+	defaultName, err := c.DefaultPGTargetName()
+	if err != nil {
+		return PGConfig{}, err
+	}
+	if targetName == "" {
+		targetName = defaultName
+	}
+	targetCfg, ok := c.PGTargets[targetName]
+	if !ok {
+		return PGConfig{}, fmt.Errorf(
+			"pg target %q is not configured",
+			targetName,
+		)
+	}
+	return c.resolvePGConfig(targetCfg, targetName == defaultName)
+}
+
+// ResolvePGTargets resolves every configured PG target. Legacy single-target
+// mode returns one unnamed default target.
+func (c *Config) ResolvePGTargets() ([]ResolvedPGTarget, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return nil, err
+	}
+	if len(c.PGTargets) == 0 {
+		pg, err := c.resolvePGConfig(c.PG, true)
+		if err != nil {
+			return nil, err
+		}
+		return []ResolvedPGTarget{{
+			Config:    pg,
+			IsDefault: true,
+		}}, nil
+	}
+	names, defaultName, err := c.PGTargetNames()
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]ResolvedPGTarget, 0, len(names))
+	for _, name := range names {
+		targetCfg, err := c.resolvePGConfig(
+			c.PGTargets[name], name == defaultName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, ResolvedPGTarget{
+			Name:      name,
+			Config:    targetCfg,
+			IsDefault: name == defaultName,
+		})
+	}
+	return targets, nil
 }
 
 // ResolveDuckDB returns a copy of DuckDB config with defaults applied

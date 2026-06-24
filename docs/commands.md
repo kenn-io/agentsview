@@ -397,7 +397,7 @@ Sync sessions from local SQLite to PostgreSQL. See
 [PostgreSQL Sync](/pg-sync/) for full documentation.
 
 ```bash
-agentsview pg push [flags]
+agentsview pg push [target] [flags]
 ```
 
 | Flag | Default | Description |
@@ -406,6 +406,7 @@ agentsview pg push [flags]
 | `--projects` | | Comma-separated projects to push (inclusive) |
 | `--exclude-projects` | | Comma-separated projects to exclude from push |
 | `--all-projects` | `false` | Ignore configured project filters for this run |
+| `--all` | `false` | Push every configured PostgreSQL target sequentially |
 | `--watch` | `false` | Run continuously, pushing on change plus a periodic floor |
 | `--debounce` | `30s` | Coalesce window after a change before pushing (`--watch` only) |
 | `--interval` | `15m` | Periodic floor push interval (`--watch` only) |
@@ -420,7 +421,7 @@ for details on how filtering interacts with the push watermark.
 Show PostgreSQL sync status.
 
 ```bash
-agentsview pg status
+agentsview pg status [target] [--all]
 ```
 
 ---
@@ -688,7 +689,7 @@ target an explicit running daemon, `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>` when that daemon requires auth, or
 `--pg` to read from configured PostgreSQL.
 
-`AGENTSVIEW_PG_URL` and `[pg].url` are sync configuration only; they
+`AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from `default_pg` plus `[pg.NAME]` are sync configuration only; they
 do not change the default read path. Read commands use local SQLite
 unless `--pg` is supplied, in which case they fail fast if no
 connection URL is available. Mutating commands such as `session sync`

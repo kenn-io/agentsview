@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -82,6 +83,8 @@ func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
 		assert.Equal(t, "mirror", req.PG.Schema)
 		assert.Equal(t, "laptop", req.PG.MachineName)
 		assert.True(t, req.PG.AllowInsecure)
+		assert.Equal(t, "work", req.SyncStateTarget)
+		assert.True(t, req.MigrateLegacySyncState)
 		writeTestJSON(t, w, postgres.PushResult{
 			SessionsPushed: 2,
 			MessagesPushed: 3,
@@ -94,11 +97,15 @@ func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
 	)
 	result, err := backend.PGPush(
 		context.Background(),
-		config.PGConfig{
-			URL:           "postgres://user:pass@host/db",
-			Schema:        "mirror",
-			MachineName:   "laptop",
-			AllowInsecure: true,
+		pgTargetSelection{
+			PG: config.PGConfig{
+				URL:           "postgres://user:pass@host/db",
+				Schema:        "mirror",
+				MachineName:   "laptop",
+				AllowInsecure: true,
+			},
+			SyncStateTarget:        "work",
+			MigrateLegacySyncState: true,
 		},
 		PGPushConfig{Full: true},
 		[]string{"a"},
@@ -162,7 +169,11 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	)
 	err := backend.PGPushWatch(
 		ctx,
-		config.PGConfig{URL: "postgres://user:pass@host/db"},
+		pgTargetSelection{
+			PG: config.PGConfig{
+				URL: "postgres://user:pass@host/db",
+			},
+		},
 		PGPushConfig{},
 		nil,
 		nil,
@@ -306,7 +317,9 @@ func TestPgPusher_LogsSkippedConflicts(t *testing.T) {
 
 func TestResolveWatchTargets_ErrorsOnEmptyURL(t *testing.T) {
 	appCfg := config.Config{} // no PG URL
-	_, _, _, err := resolveWatchTargets(appCfg, PGPushConfig{})
+	_, _, _, err := resolveWatchTargets(
+		appCfg, PGPushConfig{}, "",
+	)
 	require.Error(t, err, "expected error when url not configured")
 }
 
@@ -317,10 +330,139 @@ func TestResolveWatchTargets_ResolvesProjects(t *testing.T) {
 			MachineName: "box1",
 		},
 	}
-	pg, inc, _, err := resolveWatchTargets(
-		appCfg, PGPushConfig{ProjectsFlag: "a,b"},
+	target, inc, _, err := resolveWatchTargets(
+		appCfg, PGPushConfig{ProjectsFlag: "a,b"}, "",
 	)
 	require.NoError(t, err)
-	assert.NotEmpty(t, pg.URL, "expected resolved URL")
+	assert.NotEmpty(t, target.PG.URL, "expected resolved URL")
 	assert.Equal(t, []string{"a", "b"}, inc)
+}
+
+func TestResolveWatchTargets_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {
+				URL:         "${BROKEN_WORK_TARGET}",
+				MachineName: "workbox",
+			},
+			"archive": {
+				URL:         "postgres://archive",
+				MachineName: "archivebox",
+			},
+		},
+	}
+
+	target, _, _, err := resolveWatchTargets(
+		appCfg, PGPushConfig{}, "archive",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "archive", target.Name)
+	assert.Equal(t, "postgres://archive", target.PG.URL)
+}
+
+func TestResolvePGTargetSelections_DefaultAndAll(t *testing.T) {
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work":    {URL: "postgres://work", MachineName: "workbox"},
+			"archive": {URL: "postgres://archive", MachineName: "archivebox"},
+		},
+	}
+
+	defaultTarget, err := resolvePGTargetSelections(
+		appCfg, "", false,
+	)
+	require.NoError(t, err)
+	require.Len(t, defaultTarget, 1)
+	assert.Equal(t, "work", defaultTarget[0].Name)
+	assert.True(t, defaultTarget[0].IsDefault)
+	assert.Equal(t, "work", defaultTarget[0].SyncStateTarget)
+	assert.True(t, defaultTarget[0].MigrateLegacySyncState)
+	assert.Empty(t, defaultTarget[0].PG.URL)
+
+	allTargets, err := resolvePGTargetSelections(
+		appCfg, "", true,
+	)
+	require.NoError(t, err)
+	require.Len(t, allTargets, 2)
+	assert.Equal(t, "work", allTargets[0].Name)
+	assert.Equal(t, "archive", allTargets[1].Name)
+}
+
+func TestResolvePGTargetConfig_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {
+				URL:         "${BROKEN_WORK_TARGET}",
+				MachineName: "workbox",
+			},
+			"archive": {
+				URL:         "postgres://archive",
+				MachineName: "archivebox",
+			},
+		},
+	}
+
+	target, err := resolvePGTargetConfig(
+		appCfg,
+		pgTargetSelection{Name: "archive"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://archive", target.PG.URL)
+}
+
+func restoreUnsetEnv(t *testing.T, name string) {
+	t.Helper()
+	oldValue, hadValue := os.LookupEnv(name)
+	require.NoError(t, os.Unsetenv(name))
+	t.Cleanup(func() {
+		if hadValue {
+			require.NoError(t, os.Setenv(name, oldValue))
+			return
+		}
+		require.NoError(t, os.Unsetenv(name))
+	})
+}
+
+func TestResolvePGTargetSelections_RejectsLegacyNamedLookup(t *testing.T) {
+	appCfg := config.Config{
+		PG: config.PGConfig{
+			URL:         "postgres://legacy",
+			MachineName: "legacybox",
+		},
+	}
+
+	_, err := resolvePGTargetSelections(
+		appCfg, "archive", false,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "single legacy [pg] block")
+}
+
+func TestResolvePGTargetSelections_RejectsTargetWithAll(t *testing.T) {
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {URL: "postgres://work"},
+		},
+	}
+
+	_, err := resolvePGTargetSelections(
+		appCfg, "work", true,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be combined with --all")
+}
+
+func TestNewPGPushCommandRejectsAllWatch(t *testing.T) {
+	cmd := newPGPushCommand()
+	cmd.SetArgs([]string{"--all", "--watch"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--all cannot be combined with --watch")
 }

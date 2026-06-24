@@ -19,7 +19,7 @@ import (
 type archiveWriteBackend interface {
 	PGPush(
 		ctx context.Context,
-		pgCfg config.PGConfig,
+		target pgTargetSelection,
 		cfg PGPushConfig,
 		projects []string,
 		excludeProjects []string,
@@ -33,7 +33,7 @@ type archiveWriteBackend interface {
 	) (duckdbsync.PushResult, error)
 	PGPushWatch(
 		ctx context.Context,
-		pgCfg config.PGConfig,
+		target pgTargetSelection,
 		cfg PGPushConfig,
 		projects []string,
 		excludeProjects []string,
@@ -87,7 +87,7 @@ type daemonArchiveWriteBackend struct {
 
 func (b daemonArchiveWriteBackend) PGPush(
 	ctx context.Context,
-	pgCfg config.PGConfig,
+	target pgTargetSelection,
 	cfg PGPushConfig,
 	projects []string,
 	excludeProjects []string,
@@ -95,10 +95,12 @@ func (b daemonArchiveWriteBackend) PGPush(
 	return postDaemonPush[postgres.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/pg",
 		daemonPushRequest{
-			Full:            cfg.Full,
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-			PG:              &pgCfg,
+			Full:                   cfg.Full,
+			Projects:               projects,
+			ExcludeProjects:        excludeProjects,
+			PG:                     &target.PG,
+			SyncStateTarget:        target.SyncStateTarget,
+			MigrateLegacySyncState: target.MigrateLegacySyncState,
 		},
 	)
 }
@@ -141,7 +143,7 @@ func absolutizeDuckDBPath(
 
 func (b daemonArchiveWriteBackend) PGPushWatch(
 	ctx context.Context,
-	pgCfg config.PGConfig,
+	target pgTargetSelection,
 	cfg PGPushConfig,
 	projects []string,
 	exclude []string,
@@ -170,7 +172,7 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 		}
 		defer cleanup()
 		res, err := backend.PGPush(
-			pctx, pgCfg, pushCfg, projects, exclude,
+			pctx, target, pushCfg, projects, exclude,
 		)
 		if err != nil {
 			return err
@@ -213,7 +215,7 @@ type localArchiveWriteBackend struct {
 
 func (b *localArchiveWriteBackend) PGPush(
 	ctx context.Context,
-	pgCfg config.PGConfig,
+	target pgTargetSelection,
 	cfg PGPushConfig,
 	projects []string,
 	excludeProjects []string,
@@ -228,12 +230,9 @@ func (b *localArchiveWriteBackend) PGPush(
 	connectStart := time.Now()
 	applyClassifierConfig(b.appCfg)
 	ps, err := postgres.New(
-		pgCfg.URL, pgCfg.Schema, b.database,
-		pgCfg.MachineName, pgCfg.AllowInsecure,
-		postgres.SyncOptions{
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-		},
+		target.PG.URL, target.PG.Schema, b.database,
+		target.PG.MachineName, target.PG.AllowInsecure,
+		target.syncOptions(projects, excludeProjects),
 	)
 	if err != nil {
 		return postgres.PushResult{}, err
@@ -324,7 +323,7 @@ func (b *localArchiveWriteBackend) DuckDBPush(
 
 func (b *localArchiveWriteBackend) PGPushWatch(
 	ctx context.Context,
-	pgCfg config.PGConfig,
+	target pgTargetSelection,
 	cfg PGPushConfig,
 	projects []string,
 	exclude []string,
@@ -367,12 +366,9 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 		connect: func() (pgTarget, error) {
 			applyClassifierConfig(b.appCfg)
 			s, cErr := postgres.New(
-				pgCfg.URL, pgCfg.Schema, b.database,
-				pgCfg.MachineName, pgCfg.AllowInsecure,
-				postgres.SyncOptions{
-					Projects:        projects,
-					ExcludeProjects: exclude,
-				},
+				target.PG.URL, target.PG.Schema, b.database,
+				target.PG.MachineName, target.PG.AllowInsecure,
+				target.syncOptions(projects, exclude),
 			)
 			if cErr != nil {
 				return nil, cErr
@@ -385,7 +381,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	fmt.Printf(
 		"agentsview pg watch: pushing to PostgreSQL as %q "+
 			"(debounce %s, floor %s)\n",
-		pgCfg.MachineName, debounce, interval,
+		target.PG.MachineName, debounce, interval,
 	)
 
 	if err := pusher.push(ctx, reasonStartup, didResync); err != nil {

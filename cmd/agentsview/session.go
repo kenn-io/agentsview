@@ -181,7 +181,7 @@ func resolvePGReadConfig(
 	}
 	if pgCfg.URL == "" {
 		return config.PGConfig{}, false, errors.New(
-			"pg url not configured; set AGENTSVIEW_PG_URL or [pg].url",
+			"pg url not configured; set AGENTSVIEW_PG_URL, use a legacy [pg].url, or configure default_pg with named [pg.NAME] targets",
 		)
 	}
 	return pgCfg, true, nil

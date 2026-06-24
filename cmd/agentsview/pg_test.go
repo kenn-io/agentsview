@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 )
 
@@ -22,6 +24,36 @@ func loadPGServeConfigForTest(t *testing.T, args ...string) (config.Config, stri
 		return config.Config{}, "", err
 	}
 	return loadPGServeConfig(cmd)
+}
+
+func restoreTestLogger(t *testing.T) {
+	t.Helper()
+	oldWriter := log.Writer()
+	t.Cleanup(func() {
+		if file, ok := log.Writer().(*os.File); ok && file != os.Stderr && file != os.Stdout {
+			_ = file.Close()
+		}
+		log.SetOutput(oldWriter)
+	})
+}
+
+func clearConfiguredAgentEnvVars(t *testing.T) {
+	t.Helper()
+	for _, def := range parser.Registry {
+		if def.EnvVar != "" {
+			t.Setenv(def.EnvVar, "")
+		}
+	}
+}
+
+func isolateDefaultAgentDirs(t *testing.T, root string) {
+	t.Helper()
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
+	t.Setenv("APPDATA", root)
+	t.Setenv("LOCALAPPDATA", root)
+	t.Setenv("HOMEDRIVE", filepath.VolumeName(root))
+	t.Setenv("HOMEPATH", `\`)
 }
 
 func TestLoadPGServeConfigDoesNotInheritServeProxySettings(t *testing.T) {
@@ -105,6 +137,150 @@ func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
 	assert.Equal(t, "10.0.0.0/16",
 		strings.Join(cfg.Proxy.AllowedSubnets, ","))
 	assert.Empty(t, basePath, "basePath should be empty")
+}
+
+func TestRunPGPush_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	err := runPGPush(PGPushConfig{}, "archive")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
+}
+
+func TestRunPGStatus_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	err := runPGStatus("archive", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
+}
+
+func TestRunPGPushAll_AggregatesTargetFailures(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "work"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	err := runPGPush(PGPushConfig{AllTargets: true}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2 pg target(s) failed")
+	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
+	assert.Contains(t, err.Error(), "archive: pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+}
+
+func TestRunPGStatusAll_AggregatesTargetFailures(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "work"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	err := runPGStatus("", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2 pg target(s) failed")
+	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
+	assert.Contains(t, err.Error(), "archive: pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+}
+
+func TestPGPushCommandPrefixesErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	_, err := executeCommand(newRootCommand(), "pg", "push", "archive")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg push: pg connection to archive permits plaintext")
+}
+
+func TestPGPushWatchCommandPrefixesErrors(t *testing.T) {
+	_, err := executeCommand(newRootCommand(), "pg", "push", "--watch", "--all")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg push --watch: --all cannot be combined with --watch")
+}
+
+func TestPGStatusCommandPrefixesErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	_, err := executeCommand(newRootCommand(), "pg", "status", "archive")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg status: pg connection to archive permits plaintext")
 }
 
 func TestRunPGServeRejectsInvalidManagedCaddyConfigBeforePGSetup(t *testing.T) {

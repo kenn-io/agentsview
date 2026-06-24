@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,11 +14,13 @@ import (
 )
 
 type daemonPushRequest struct {
-	Full            bool                 `json:"full"`
-	Projects        []string             `json:"projects,omitempty"`
-	ExcludeProjects []string             `json:"exclude_projects,omitempty"`
-	PG              *config.PGConfig     `json:"pg,omitempty"`
-	DuckDB          *config.DuckDBConfig `json:"duckdb,omitempty"`
+	Full                   bool                 `json:"full"`
+	Projects               []string             `json:"projects,omitempty"`
+	ExcludeProjects        []string             `json:"exclude_projects,omitempty"`
+	PG                     *config.PGConfig     `json:"pg,omitempty"`
+	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
+	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
+	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitempty"`
 }
 
 func postDaemonPush[T any](
@@ -51,6 +54,13 @@ func postDaemonPush[T any](
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)
+		var apiErr struct {
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(msg, &apiErr); err == nil &&
+			apiErr.Error != "" {
+			return zero, errors.New(apiErr.Error)
+		}
 		return zero, fmt.Errorf(
 			"HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)),
 		)

@@ -28,11 +28,13 @@ type daemonPushInput struct {
 }
 
 type daemonPushRequest struct {
-	Full            bool                 `json:"full"`
-	Projects        []string             `json:"projects,omitempty"`
-	ExcludeProjects []string             `json:"exclude_projects,omitempty"`
-	PG              *config.PGConfig     `json:"pg,omitempty"`
-	DuckDB          *config.DuckDBConfig `json:"duckdb,omitempty"`
+	Full                   bool                 `json:"full"`
+	Projects               []string             `json:"projects,omitempty"`
+	ExcludeProjects        []string             `json:"exclude_projects,omitempty"`
+	PG                     *config.PGConfig     `json:"pg,omitempty"`
+	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
+	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
+	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitempty"`
 }
 
 type pgPushOutput struct {
@@ -94,8 +96,10 @@ func (s *Server) humaPGPush(
 				pgCfg.URL, pgCfg.Schema, local,
 				pgCfg.MachineName, pgCfg.AllowInsecure,
 				postgres.SyncOptions{
-					Projects:        in.Body.Projects,
-					ExcludeProjects: in.Body.ExcludeProjects,
+					Projects:               in.Body.Projects,
+					ExcludeProjects:        in.Body.ExcludeProjects,
+					SyncStateTarget:        in.Body.SyncStateTarget,
+					MigrateLegacySyncState: in.Body.MigrateLegacySyncState,
 				},
 			)
 			if err != nil {

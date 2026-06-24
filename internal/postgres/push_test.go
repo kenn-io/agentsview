@@ -90,6 +90,41 @@ func TestPushMarkerIDReturnsInsertWinner(t *testing.T) {
 	assert.Equal(t, "winner-marker", stored)
 }
 
+func TestPushMarkerIDUsesUnscopedStateAcrossNamedTargets(t *testing.T) {
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+
+	workSync := &Sync{
+		local:     local,
+		syncState: newScopedSyncStateStore(local, "work", true),
+	}
+	archiveSync := &Sync{
+		local:     local,
+		syncState: newScopedSyncStateStore(local, "archive", false),
+	}
+
+	workMarker, err := workSync.pushMarkerID()
+	require.NoError(t, err, "work pushMarkerID")
+	archiveMarker, err := archiveSync.pushMarkerID()
+	require.NoError(t, err, "archive pushMarkerID")
+
+	assert.Equal(t, workMarker, archiveMarker)
+
+	stored, err := local.GetSyncState(pushMarkerIDStateKey)
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, workMarker, stored)
+
+	for _, key := range []string{
+		pushMarkerIDStateKey + ":work",
+		pushMarkerIDStateKey + ":archive",
+	} {
+		value, err := local.GetSyncState(key)
+		require.NoError(t, err, "GetSyncState %s", key)
+		assert.Empty(t, value)
+	}
+}
+
 func TestReadPushBoundaryStateValidity(t *testing.T) {
 	const cutoff = "2026-03-11T12:34:56.123Z"
 

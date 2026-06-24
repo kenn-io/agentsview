@@ -72,6 +72,171 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	}
 }
 
+func TestScopedSyncStateStoreMigratesLegacyState(t *testing.T) {
+	local := testDB(t)
+
+	require.NoError(t, local.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123Z",
+	))
+	require.NoError(t, local.SetSyncState(
+		lastPushBoundaryStateKey,
+		`{"cutoff":"2026-03-11T12:34:56.123Z"}`,
+	))
+	require.NoError(t, local.SetSyncState(
+		lastPushTargetFingerprintKey,
+		"fingerprint-a",
+	))
+	require.NoError(t, local.SetSyncState(
+		pushMarkerIDStateKey,
+		"marker-a",
+	))
+
+	store := newScopedSyncStateStore(local, "work", true)
+
+	lastPush, err := store.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", lastPush)
+
+	for _, key := range []string{
+		"last_push_at",
+		lastPushBoundaryStateKey,
+		lastPushTargetFingerprintKey,
+	} {
+		legacyValue, err := local.GetSyncState(key)
+		require.NoError(t, err)
+		assert.Empty(t, legacyValue)
+
+		scopedValue, err := local.GetSyncState(key + ":work")
+		require.NoError(t, err)
+		assert.NotEmpty(t, scopedValue)
+	}
+
+	legacyMarker, err := local.GetSyncState(pushMarkerIDStateKey)
+	require.NoError(t, err)
+	assert.Equal(t, "marker-a", legacyMarker)
+
+	scopedMarker, err := local.GetSyncState(
+		pushMarkerIDStateKey + ":work",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, scopedMarker)
+}
+
+func TestScopedSyncStateStoreNonDefaultTargetDoesNotMigrateLegacyState(t *testing.T) {
+	local := testDB(t)
+
+	require.NoError(t, local.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123Z",
+	))
+
+	store := newScopedSyncStateStore(local, "archive", false)
+
+	got, err := store.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	legacyValue, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", legacyValue)
+}
+
+func TestScopedSyncStateStoreLegacyModeUsesUnscopedKeys(t *testing.T) {
+	local := testDB(t)
+	store := newScopedSyncStateStore(local, "", false)
+
+	require.NoError(t, store.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123Z",
+	))
+
+	got, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
+}
+
+func TestSyncEffectiveSyncStateFallsBackToLocalDB(t *testing.T) {
+	local := testDB(t)
+	require.NoError(t, local.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123456789Z",
+	))
+
+	sync := &Sync{local: local}
+	require.NoError(t, NormalizeLocalSyncStateTimestamps(
+		sync.effectiveSyncState(),
+	))
+
+	got, err := sync.effectiveSyncState().GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
+}
+
+func TestSyncScopedStateUsesTargetKeys(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+		SyncOptions{
+			SyncStateTarget:        "work",
+			MigrateLegacySyncState: true,
+		},
+	)
+	require.NoError(t, err, "creating sync")
+	defer ps.Close()
+
+	ctx := context.Background()
+	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
+
+	started := "2026-03-11T12:00:00Z"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:           "sess-scoped-001",
+		Project:      "test-project",
+		Machine:      "local",
+		Agent:        "claude",
+		StartedAt:    &started,
+		MessageCount: 1,
+	}), "upsert session")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: "sess-scoped-001",
+		Ordinal:   0,
+		Role:      "user",
+		Content:   "hello",
+	}}), "insert message")
+
+	_, err = ps.Push(ctx, false, nil)
+	require.NoError(t, err, "push")
+
+	scopedLastPush, err := local.GetSyncState("last_push_at:work")
+	require.NoError(t, err)
+	assert.NotEmpty(t, scopedLastPush)
+
+	legacyLastPush, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Empty(t, legacyLastPush)
+
+	scopedBoundary, err := local.GetSyncState(
+		lastPushBoundaryStateKey + ":work",
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, scopedBoundary)
+
+	scopedFingerprint, err := local.GetSyncState(
+		lastPushTargetFingerprintKey + ":work",
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, scopedFingerprint)
+
+	status, err := ps.Status(ctx)
+	require.NoError(t, err, "status")
+	assert.Equal(t, scopedLastPush, status.LastPushAt)
+}
+
 func TestEnsureSchemaMigratesLegacySchema(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)

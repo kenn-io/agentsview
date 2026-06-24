@@ -531,22 +531,40 @@ func newPGCommand() *cobra.Command {
 func newPGPushCommand() *cobra.Command {
 	var cfg PGPushConfig
 	cmd := &cobra.Command{
-		Use:          "push",
+		Use:          "push [target]",
 		Short:        "Push local data to PostgreSQL",
 		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		Args:         cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targetName := ""
+			if len(args) == 1 {
+				targetName = args[0]
+			}
+			if cfg.AllTargets && cfg.Watch {
+				return fmt.Errorf(
+					"pg push --watch: %w",
+					fmt.Errorf(
+						"--all cannot be combined with --watch",
+					),
+				)
+			}
 			if cfg.Watch {
-				runPGPushWatch(cfg)
-				return
+				if err := runPGPushWatch(cfg, targetName); err != nil {
+					return fmt.Errorf("pg push --watch: %w", err)
+				}
+				return nil
 			}
 			if cmd.Flags().Changed("debounce") || cmd.Flags().Changed("interval") {
 				fmt.Fprintln(os.Stderr,
 					"warning: --debounce and --interval have no effect without --watch")
 			}
-			runPGPush(cfg)
+			if err := runPGPush(cfg, targetName); err != nil {
+				return fmt.Errorf("pg push: %w", err)
+			}
+			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&cfg.AllTargets, "all", false, "Push every configured PG target sequentially")
 	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and PG push")
 	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects to push (inclusive)")
 	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
@@ -558,15 +576,25 @@ func newPGPushCommand() *cobra.Command {
 }
 
 func newPGStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:          "status",
+	var allTargets bool
+	cmd := &cobra.Command{
+		Use:          "status [target]",
 		Short:        "Show PG sync status",
 		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runPGStatus()
+		Args:         cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			targetName := ""
+			if len(args) == 1 {
+				targetName = args[0]
+			}
+			if err := runPGStatus(targetName, allTargets); err != nil {
+				return fmt.Errorf("pg status: %w", err)
+			}
+			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&allTargets, "all", false, "Show status for every configured PG target")
+	return cmd
 }
 
 func newPGServeCommand() *cobra.Command {

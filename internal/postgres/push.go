@@ -35,14 +35,6 @@ const (
 
 var errSessionOwnershipConflict = errors.New("session ownership conflict")
 
-// syncStateStore abstracts sync state read/write operations on the
-// local database. Used by push boundary state helpers.
-type syncStateStore interface {
-	GetSyncState(key string) (string, error)
-	SetSyncState(key, value string) error
-	GetOrCreateSyncState(key, defaultValue string) (string, error)
-}
-
 type pushBoundaryState struct {
 	Cutoff       string            `json:"cutoff"`
 	Fingerprints map[string]string `json:"fingerprints"`
@@ -75,6 +67,7 @@ func (s *Sync) Push(
 ) (PushResult, error) {
 	start := time.Now()
 	var result PushResult
+	state := s.effectiveSyncState()
 
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
 		return result, err
@@ -84,13 +77,13 @@ func (s *Sync) Push(
 		return result, err
 	}
 
-	lastPush, err := s.local.GetSyncState("last_push_at")
+	lastPush, err := state.GetSyncState("last_push_at")
 	if err != nil {
 		return result, fmt.Errorf(
 			"reading last_push_at: %w", err,
 		)
 	}
-	storedTargetFingerprint, err := s.local.GetSyncState(
+	storedTargetFingerprint, err := state.GetSyncState(
 		lastPushTargetFingerprintKey,
 	)
 	if err != nil {
@@ -99,7 +92,7 @@ func (s *Sync) Push(
 			lastPushTargetFingerprintKey, err,
 		)
 	}
-	boundaryState, err := s.local.GetSyncState(
+	boundaryState, err := state.GetSyncState(
 		lastPushBoundaryStateKey,
 	)
 	if err != nil {
@@ -119,7 +112,7 @@ func (s *Sync) Push(
 			"pgsync: %s; clearing local push watermark state",
 			reason,
 		)
-		if err := clearPushState(s.local); err != nil {
+		if err := clearPushState(state); err != nil {
 			return result, err
 		}
 		lastPush = ""
@@ -154,7 +147,7 @@ func (s *Sync) Push(
 		// watermark and boundary state so the next
 		// unfiltered push also starts from scratch.
 		if s.isFiltered() && !pushStateCleared {
-			if err := clearPushState(s.local); err != nil {
+			if err := clearPushState(state); err != nil {
 				return result, err
 			}
 		}
@@ -185,7 +178,7 @@ func (s *Sync) Push(
 			// watermark and boundary state so the next
 			// unfiltered push also starts from scratch.
 			if s.isFiltered() && !pushStateCleared {
-				if err := clearPushState(s.local); err != nil {
+				if err := clearPushState(state); err != nil {
 					return result, err
 				}
 			}
@@ -218,7 +211,7 @@ func (s *Sync) Push(
 	if !full {
 		var bErr error
 		priorFingerprints, _, _, bErr = readBoundaryAndFingerprints(
-			s.local, lastPush,
+			state, lastPush,
 		)
 		if bErr != nil {
 			return result, bErr
@@ -300,21 +293,21 @@ func (s *Sync) Push(
 				boundaryKey = cutoff
 			}
 			if err := writePushBoundaryState(
-				s.local, boundaryKey, sessions,
+				state, boundaryKey, sessions,
 				priorFingerprints, sessionFingerprints,
 			); err != nil {
 				return result, err
 			}
 		} else {
 			if err := finalizePushState(
-				s.local, cutoff, sessions, nil,
+				state, cutoff, sessions, nil,
 				sessionFingerprints,
 			); err != nil {
 				return result, err
 			}
 		}
 		if err := persistPushTargetFingerprint(
-			s.local, s.targetFingerprint,
+			state, s.targetFingerprint,
 		); err != nil {
 			return result, err
 		}
@@ -390,7 +383,7 @@ func (s *Sync) Push(
 			boundaryKey = cutoff
 		}
 		if err := writePushBoundaryState(
-			s.local, boundaryKey, pushed,
+			state, boundaryKey, pushed,
 			priorFingerprints, sessionFingerprints,
 		); err != nil {
 			return result, err
@@ -409,14 +402,14 @@ func (s *Sync) Push(
 			mergedFingerprints = priorFingerprints
 		}
 		if err := finalizePushState(
-			s.local, finalizeCutoff, pushed,
+			state, finalizeCutoff, pushed,
 			mergedFingerprints, sessionFingerprints,
 		); err != nil {
 			return result, err
 		}
 	}
 	if err := persistPushTargetFingerprint(
-		s.local, s.targetFingerprint,
+		state, s.targetFingerprint,
 	); err != nil {
 		return result, err
 	}
@@ -583,7 +576,11 @@ func normalizePushMarkerMachineAliases(
 // name, so a machine rename keeps the same marker, and unique per local DB, so
 // a different host pushing to the same PG cannot mask this host's reset.
 func (s *Sync) pushMarkerID() (string, error) {
-	id, err := s.local.GetSyncState(pushMarkerIDStateKey)
+	state := s.local
+	if state == nil {
+		return "", fmt.Errorf("local db is required")
+	}
+	id, err := state.GetSyncState(pushMarkerIDStateKey)
 	if err != nil {
 		return "", fmt.Errorf("reading push marker id: %w", err)
 	}
@@ -595,7 +592,9 @@ func (s *Sync) pushMarkerID() (string, error) {
 		return "", fmt.Errorf("generating push marker id: %w", err)
 	}
 	id = hex.EncodeToString(buf)
-	storedID, err := s.local.GetOrCreateSyncState(pushMarkerIDStateKey, id)
+	storedID, err := state.GetOrCreateSyncState(
+		pushMarkerIDStateKey, id,
+	)
 	if err != nil {
 		return "", fmt.Errorf("persisting push marker id: %w", err)
 	}
@@ -2621,7 +2620,7 @@ func (s *Sync) normalizeSyncTimestamps(
 		}
 		s.schemaDone = true
 	}
-	return NormalizeLocalSyncStateTimestamps(s.local)
+	return NormalizeLocalSyncStateTimestamps(s.effectiveSyncState())
 }
 
 // sanitizePG strips null bytes and replaces invalid UTF-8

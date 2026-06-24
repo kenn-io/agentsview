@@ -30,6 +30,12 @@ The `machine_name` identifies which machine pushed each session.
 It defaults to the system hostname if omitted. It must not be
 `"local"` (reserved for the local SQLite sentinel).
 
+For multiple PostgreSQL destinations, use named `[pg.NAME]` blocks and
+`default_pg` instead of the legacy single `[pg]` block. Named target names
+are normalized case-insensitively, and `all`, `local`, plus the legacy `[pg]`
+field names `url`, `schema`, `machine_name`, `allow_insecure`, `projects`, and
+`exclude_projects` are unavailable as `[pg.NAME]` names.
+
 ### 2. Push Sessions
 
 ```bash
@@ -71,11 +77,12 @@ entirely by PostgreSQL. No local SQLite, file watching, or uploads
 Sync sessions from the local SQLite database to PostgreSQL.
 
 ```bash
-agentsview pg push [flags]
+agentsview pg push [target] [flags]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--all` | `false` | Push every configured PG target sequentially |
 | `--full` | `false` | Force full local resync and re-push, bypassing change detection |
 | `--projects` | | Comma-separated projects to push (inclusive) |
 | `--exclude-projects` | | Comma-separated projects to exclude |
@@ -87,6 +94,11 @@ agentsview pg push [flags]
 Without `--watch`, push is on-demand — run it whenever you want
 to sync. With `--watch`, the command stays in the foreground and
 keeps pushing until interrupted.
+
+When no target is passed, `pg push` uses the effective default target.
+Pass one named target explicitly to push just that destination, or use
+`--all` to fan out across every configured target. `--all --watch` is
+rejected.
 
 **What happens on push:**
 
@@ -138,8 +150,9 @@ Operational details:
   bounded final flush.
 - Logs are written to `pg-watch.log` under the AgentsView data
   directory.
-- The watcher uses the same `[pg]` config, machine name, project
-  filters, classifier settings, and
+- The watcher uses the selected PostgreSQL target, or the
+  `default_pg` target when no name is passed, along with the same
+  machine name, project filters, classifier settings, and
   `result_content_blocked_categories` behavior as one-shot
   `pg push`.
 
@@ -214,8 +227,13 @@ filter).
 Show the current sync state.
 
 ```bash
-agentsview pg status
+agentsview pg status [target]
+agentsview pg status --all
 ```
+
+Without a target name, `pg status` uses the effective default target.
+Pass one named target explicitly to inspect that destination, or use
+`--all` to print every configured target sequentially.
 
 Output:
 
@@ -259,8 +277,9 @@ The generated unit runs `agentsview pg push --watch`, pins
 and writes logs to `~/.agentsview/pg-watch.log` unless you changed
 the data directory.
 
-`install` requires a literal `[pg].url` in
-`~/.agentsview/config.toml`. It intentionally rejects
+`install` requires a literal PostgreSQL URL in the effective default target of
+`~/.agentsview/config.toml`, either the legacy `[pg].url` or the target selected
+by `default_pg` from named `[pg.NAME]` blocks. It intentionally rejects
 `AGENTSVIEW_PG_URL` and environment-expanded URLs such as
 `${PG_PASSWORD}` because background services do not inherit your
 interactive shell environment. Other session-directory environment
@@ -396,7 +415,7 @@ filter in the sidebar to show sessions from specific machines.
 
 ## Configuration
 
-All PostgreSQL settings live in the `[pg]` section of
+Single-target PostgreSQL settings can live in the legacy `[pg]` section of
 `~/.agentsview/config.toml`:
 
 ```toml
@@ -415,6 +434,29 @@ allow_insecure = false
 | `allow_insecure` | `false` | Allow non-TLS connections to non-loopback hosts |
 | `projects` | | Array of project names to include in push |
 | `exclude_projects` | | Array of project names to exclude from push |
+
+To manage more than one PostgreSQL destination, define named `[pg.NAME]` blocks
+and select the effective default target with `default_pg`:
+
+```toml
+default_pg = "work"
+
+[pg.work]
+url = "postgres://user:pass@work-db:5432/agentsview?sslmode=require"
+machine_name = "my-laptop"
+
+[pg.archive]
+url = "postgres://user:pass@archive-db:5432/agentsview?sslmode=require"
+machine_name = "my-laptop-archive"
+exclude_projects = ["scratch"]
+```
+
+`agentsview pg push` and `agentsview pg status` use the effective default target
+when no target name is passed, accept one target name explicitly, and also
+support `--all` for sequential multi-target runs. `agentsview pg push --watch`
+follows the effective default target unless you pass one named target
+explicitly. `agentsview pg serve` and `agentsview pg service` stay on the
+effective default target in this release, and `--all --watch` is rejected.
 
 !!! warning
     The `url` field is required for all `pg` commands. If it
@@ -437,7 +479,9 @@ url = "postgres://${PG_USER}:${PG_PASSWORD}@host:5432/dbname?sslmode=require"
 ### Environment Variables
 
 PostgreSQL settings can also be configured via environment
-variables, which override `config.toml` values:
+variables. In legacy single-target mode they override the `[pg]`
+values. In named-target mode they apply only to the effective default
+target:
 
 | Variable | Description |
 |----------|-------------|

@@ -10,12 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestBuildServiceSpec_RequiresURL(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_URL", "")
 	_, err := buildServiceSpec(config.Config{})
 	require.Error(t, err, "expected error when pg.url is not configured")
+	assert.Contains(t, err.Error(), "default_pg-selected [pg.NAME].url")
 }
 
 func TestBuildServiceSpec_PopulatesFields(t *testing.T) {
@@ -42,6 +44,30 @@ func TestBuildServiceSpec_PopulatesFields(t *testing.T) {
 	}
 }
 
+func TestBuildServiceSpec_UsesNamedDefaultTarget(t *testing.T) {
+	t.Setenv("AGENTSVIEW_PG_URL", "")
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	dataDir := t.TempDir()
+	spec, err := buildServiceSpec(config.Config{
+		DataDir:   dataDir,
+		DefaultPG: "archive",
+		PGTargets: map[string]config.PGConfig{
+			"work": {
+				URL:         "${BROKEN_WORK_TARGET}",
+				MachineName: "workbox",
+			},
+			"archive": {
+				URL:         "postgres://u:p@localhost/archive?sslmode=disable",
+				MachineName: "archivebox",
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, dataDir, spec.DataDir)
+	assert.Equal(t, filepath.Join(dataDir, "pg-watch.log"), spec.LogPath)
+	assert.NotEmpty(t, spec.BinPath)
+}
+
 func TestBuildServiceSpec_RejectsEnvPGURL(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://from-env")
 	_, err := buildServiceSpec(config.Config{
@@ -53,7 +79,8 @@ func TestBuildServiceSpec_RejectsEnvPGURL(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "AGENTSVIEW_PG_URL")
-	assert.Contains(t, err.Error(), "literal pg.url")
+	assert.Contains(t, err.Error(), "literal PostgreSQL URL")
+	assert.Contains(t, err.Error(), "default_pg-selected [pg.NAME].url")
 }
 
 func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
@@ -68,6 +95,7 @@ func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "environment variable expansion")
+	assert.Contains(t, err.Error(), "literal PostgreSQL URL")
 
 	_, err = buildServiceSpec(config.Config{
 		DataDir: t.TempDir(),
@@ -78,6 +106,7 @@ func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "environment variable expansion")
+	assert.Contains(t, err.Error(), "default_pg-selected [pg.NAME].url")
 }
 
 func TestValidateServiceSpec_RejectsUnsafeChars(t *testing.T) {
@@ -181,6 +210,78 @@ func TestWarnUninheritedServiceEnv(t *testing.T) {
 	assert.Contains(t, out, "AGENTSVIEW_PG_SCHEMA")
 	assert.Contains(t, out, "CLAUDE_PROJECTS_DIR")
 	assert.Contains(t, out, "config.toml")
+}
+
+func TestReadServiceLastPush_UsesDefaultTargetScope(t *testing.T) {
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+
+	require.NoError(t, local.SetSyncState(
+		"last_push_at:work",
+		"2026-03-11T12:34:56.123Z",
+	))
+
+	lastPush, err := readServiceLastPush(config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {URL: "postgres://work"},
+		},
+	}, local)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", lastPush)
+}
+
+func TestReadServiceLastPush_ReadsLegacyDefaultStateWithoutMigration(t *testing.T) {
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+
+	require.NoError(t, local.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123Z",
+	))
+
+	lastPush, err := readServiceLastPush(config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {URL: "postgres://work"},
+		},
+	}, local)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", lastPush)
+
+	legacyValue, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", legacyValue)
+
+	scopedValue, err := local.GetSyncState("last_push_at:work")
+	require.NoError(t, err)
+	assert.Empty(t, scopedValue)
+}
+
+func TestWriteServiceStatus_AppendsScopedLastPush(t *testing.T) {
+	var out strings.Builder
+	writeServiceStatus(
+		&out, "Service is active",
+		"2026-03-11T12:34:56.123Z", true,
+	)
+	assert.Equal(t,
+		"Service is active\nLast push: 2026-03-11T12:34:56.123Z\n",
+		out.String(),
+	)
+}
+
+func TestWriteServiceStatus_PrintsNeverWhenNoPushCompleted(t *testing.T) {
+	var out strings.Builder
+	writeServiceStatus(&out, "Service is active\n", "", true)
+	assert.Equal(t, "Service is active\nLast push: never\n", out.String())
+}
+
+func TestWriteServiceStatus_SkipsLastPushWhenUnavailable(t *testing.T) {
+	var out strings.Builder
+	writeServiceStatus(&out, "Service is active\n", "", false)
+	assert.Equal(t, "Service is active\n", out.String())
 }
 
 // recordingRunner captures shell-out calls for assertions.

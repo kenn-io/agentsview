@@ -18,7 +18,7 @@ func TestLocalArchiveWriteBackendPGPushStopsAfterCanceledLocalSync(t *testing.T)
 	testLocalArchivePushStopsAfterCanceledSync(t,
 		func(backend *localArchiveWriteBackend, ctx context.Context) error {
 			_, err := backend.PGPush(
-				ctx, config.PGConfig{}, PGPushConfig{}, nil, nil,
+				ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
 			)
 			return err
 		})
@@ -58,7 +58,7 @@ func TestLocalArchiveWriteBackendPGPushWatchCanceledStartupIsClean(t *testing.T)
 
 	err := backend.PGPushWatch(
 		canceledContext(),
-		config.PGConfig{},
+		pgTargetSelection{},
 		PGPushConfig{},
 		nil,
 		nil,
