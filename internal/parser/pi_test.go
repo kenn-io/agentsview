@@ -699,7 +699,7 @@ func TestParsePiSession_TokenUsageFromFixture(t *testing.T) {
 
 	var assistants []ParsedMessage
 	for _, m := range msgs {
-		if m.Role == RoleAssistant {
+		if m.Role == RoleAssistant && m.SourceType == "assistant" {
 			assistants = append(assistants, m)
 		}
 	}
