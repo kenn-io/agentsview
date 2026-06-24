@@ -38,7 +38,7 @@
   <div class="pg-header">
     <span class="pg-label">{m.parallel_group_label()}</span>
     <span class="pg-count">{m.parallel_group_call_count({
-      count: String(toolCalls.length),
+      count: toolCalls.length,
     })}</span>
     <span class="pg-spacer"></span>
     {#if isRunning}

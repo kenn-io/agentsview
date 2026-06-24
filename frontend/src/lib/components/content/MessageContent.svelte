@@ -225,12 +225,6 @@
     return turn != null && turn.duration_ms == null;
   }
 
-  function callUnit(count: number): string {
-    return count === 1
-      ? m.message_content_call_singular()
-      : m.message_content_call_plural();
-  }
-
   /** Build the chip payload for an assistant turn. Returns null
    *  when the message has no tool calls or timing isn't loaded. */
   let turnSummary = $derived.by(() => {
@@ -241,8 +235,7 @@
       return {
         text: m.message_content_turn_summary({
           duration: formatDuration(turn.duration_ms),
-          count: String(calls),
-          unit: callUnit(calls),
+          count: calls,
         }),
         slow: false,
         running: false,
@@ -257,8 +250,7 @@
       return {
         text: m.message_content_running_turn_summary({
           duration: formatDuration(elapsed),
-          count: String(calls),
-          unit: callUnit(calls),
+          count: calls,
         }),
         slow: false,
         running: true,

@@ -154,22 +154,64 @@
   "message_content_unpinned": "Unpinned",
   "message_content_pinned": "Pinned",
   "message_content_running_duration": "running {duration}+",
-  "message_content_turn_summary": "turn {duration} · {count} {unit}",
-  "message_content_running_turn_summary": "running {duration}+ · {count} {unit}",
-  "message_content_call_singular": "call",
-  "message_content_call_plural": "calls",
-  "tool_call_group_call_count_singular": "1 tool call",
-  "tool_call_group_call_count_plural": "{count} tool calls",
+  "message_content_turn_summary": [
+    {
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "turn {duration} · {count} call",
+        "countPlural=other": "turn {duration} · {count} calls"
+      }
+    }
+  ],
+  "message_content_running_turn_summary": [
+    {
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "running {duration}+ · {count} call",
+        "countPlural=other": "running {duration}+ · {count} calls"
+      }
+    }
+  ],
+  "tool_call_group_call_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} tool call",
+        "countPlural=other": "{count} tool calls"
+      }
+    }
+  ],
   "tool_call_group_copy_tool_calls": "Copy tool calls",
   "tool_call_group_copied_tool_calls": "Copied tool calls",
   "tool_call_group_copied": "Copied!",
   "tool_call_group_running_duration": "running {duration}+",
   "parallel_group_label": "parallel",
-  "parallel_group_call_count": "{count} calls",
+  "parallel_group_call_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} call",
+        "countPlural=other": "{count} calls"
+      }
+    }
+  ],
   "parallel_group_each_duration": "≤ {duration} each",
   "parallel_group_running": "running...",
   "subagent_inline_label": "Subagent session",
-  "subagent_inline_message_count": "{count} messages",
+  "subagent_inline_message_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} message",
+        "countPlural=other": "{count} messages"
+      }
+    }
+  ],
   "subagent_inline_open_as_full_session": "Open as full session",
   "subagent_inline_open_session": "Open session",
   "subagent_inline_failed_to_load": "Failed to load",

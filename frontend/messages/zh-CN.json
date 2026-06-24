@@ -154,22 +154,59 @@
   "message_content_unpinned": "已取消固定",
   "message_content_pinned": "已固定",
   "message_content_running_duration": "运行中 {duration}+",
-  "message_content_turn_summary": "turn {duration} · {count} 次调用",
-  "message_content_running_turn_summary": "运行中 {duration}+ · {count} 次调用",
-  "message_content_call_singular": "call",
-  "message_content_call_plural": "calls",
-  "tool_call_group_call_count_singular": "1 次 tool call",
-  "tool_call_group_call_count_plural": "{count} 次 tool call",
+  "message_content_turn_summary": [
+    {
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "turn {duration} · {count} 次调用"
+      }
+    }
+  ],
+  "message_content_running_turn_summary": [
+    {
+      "declarations": ["input count", "input duration", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "运行中 {duration}+ · {count} 次调用"
+      }
+    }
+  ],
+  "tool_call_group_call_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{count} 次 tool call"
+      }
+    }
+  ],
   "tool_call_group_copy_tool_calls": "复制 tool calls",
   "tool_call_group_copied_tool_calls": "Tool calls 已复制",
   "tool_call_group_copied": "已复制！",
   "tool_call_group_running_duration": "运行中 {duration}+",
   "parallel_group_label": "并行",
-  "parallel_group_call_count": "{count} 次调用",
+  "parallel_group_call_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{count} 次调用"
+      }
+    }
+  ],
   "parallel_group_each_duration": "每个 ≤ {duration}",
   "parallel_group_running": "运行中...",
   "subagent_inline_label": "Subagent 会话",
-  "subagent_inline_message_count": "{count} 条消息",
+  "subagent_inline_message_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{count} 条消息"
+      }
+    }
+  ],
   "subagent_inline_open_as_full_session": "作为完整会话打开",
   "subagent_inline_open_session": "打开会话",
   "subagent_inline_failed_to_load": "加载失败",

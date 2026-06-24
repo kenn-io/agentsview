@@ -51,13 +51,7 @@
     messages.reduce((n, m) => n + messageToolCount(m), 0),
   );
 
-  let label = $derived(
-    totalCalls === 1
-      ? m.tool_call_group_call_count_singular()
-      : m.tool_call_group_call_count_plural({
-          count: String(totalCalls),
-        }),
-  );
+  let label = $derived(m.tool_call_group_call_count({ count: totalCalls }));
 
   /** Index turn timings by message id for O(1) lookup. */
   let turnByMessage = $derived.by(() => {

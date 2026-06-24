@@ -71,7 +71,7 @@
   let messageCountLabel = $derived(
     tokenSourceSession
       ? m.subagent_inline_message_count({
-          count: String(tokenSourceSession.message_count),
+          count: tokenSourceSession.message_count,
         })
       : null,
   );
