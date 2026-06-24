@@ -28,8 +28,7 @@ func sessionListIDs(t *testing.T, out string) []string {
 }
 
 func TestSessionList_SortAndReverse(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSessionWithOpts(t, dataDir, "lo", "p", func(s *db.Session) { s.MessageCount = 2 })
 	seedSessionWithOpts(t, dataDir, "mid", "p", func(s *db.Session) { s.MessageCount = 5 })
 	seedSessionWithOpts(t, dataDir, "hi", "p", func(s *db.Session) { s.MessageCount = 9 })
@@ -54,8 +53,7 @@ func TestSessionList_SortAndReverse(t *testing.T) {
 }
 
 func TestSessionList_MultiKeySort(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSessionWithOpts(t, dataDir, "a", "p", func(s *db.Session) {
 		s.MessageCount = 1
 		s.StartedAt = new("2024-03-01T00:00:00Z")
@@ -87,8 +85,7 @@ func TestSessionList_MultiKeySort(t *testing.T) {
 // cleared: --reverse must still flip the implicit default recent sort (to
 // ascending) rather than silently no-opping.
 func TestSessionList_EmptySortReverse(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSessionWithOpts(t, dataDir, "old", "p", func(s *db.Session) {
 		s.EndedAt = new("2024-01-01T00:00:00Z")
 	})
@@ -110,8 +107,7 @@ func TestSessionList_EmptySortReverse(t *testing.T) {
 }
 
 func TestSessionList_InvalidSort(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "s-a", "p")
 
 	_, err := executeCommand(newRootCommand(),

@@ -25,8 +25,7 @@ func loadPGServeConfigForTest(t *testing.T, args ...string) (config.Config, stri
 }
 
 func TestLoadPGServeConfigDoesNotInheritServeProxySettings(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(`
 public_url = "https://viewer.example.test"
@@ -56,8 +55,7 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 }
 
 func TestLoadPGServeConfigIgnoresInvalidPersistedServeSettings(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(`
 public_url = "not a url"
@@ -78,7 +76,7 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 }
 
 func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	testDataDir(t)
 
 	cfg, basePath, err := loadPGServeConfigForTest(t,
 		"--host", "127.0.0.1",

@@ -16,8 +16,7 @@ import (
 )
 
 func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err, "open db")
@@ -43,8 +42,7 @@ func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
 }
 
 func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
 	database, err := db.Open(dbPath)
@@ -88,8 +86,7 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 }
 
 func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
 	database, err := db.Open(dbPath)

@@ -20,8 +20,7 @@ import (
 // minimal config.toml with the given user prefixes.
 func classifierTestEnv(t *testing.T, prefixes []string) string {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	dir := testDataDir(t)
 
 	tomlBuf := &bytes.Buffer{}
 	tomlBuf.WriteString("[automated]\nprefixes = [")

@@ -68,8 +68,7 @@ func TestResolveActivityReport_JSONShape(t *testing.T) {
 }
 
 func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
 		Service: daemonService,

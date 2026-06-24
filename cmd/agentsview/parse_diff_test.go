@@ -24,7 +24,7 @@ import (
 // discover the developer machine's real session files.
 func isolateParseDiffEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	testDataDir(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for _, def := range parser.Registry {
@@ -43,7 +43,7 @@ func TestParseDiff_RegisteredInRootHelp(t *testing.T) {
 }
 
 func TestParseDiff_UnknownAgentListsSupported(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	testDataDir(t)
 
 	_, err := executeCommand(newRootCommand(),
 		"parse-diff", "--agent", "definitely-not-an-agent")
@@ -73,7 +73,7 @@ func TestParseDiff_RejectsAgentsWithoutOnDiskSource(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+			testDataDir(t)
 
 			_, err := executeCommand(newRootCommand(),
 				"parse-diff", "--agent", tc.agent)
@@ -86,7 +86,7 @@ func TestParseDiff_RejectsAgentsWithoutOnDiskSource(t *testing.T) {
 }
 
 func TestParseDiff_RejectsNegativeLimit(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	testDataDir(t)
 
 	_, err := executeCommand(newRootCommand(),
 		"parse-diff", "--limit", "-1")
@@ -665,8 +665,7 @@ func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
 // phantom stored row keeps the test independent of the parser's session
 // ID derivation.
 func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	t.Setenv("HOME", t.TempDir())
 	claudeDir := t.TempDir()
 	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)

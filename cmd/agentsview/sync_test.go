@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -343,8 +342,7 @@ type syncCLIEnv struct {
 
 func newSyncCLIEnv(t *testing.T) syncCLIEnv {
 	t.Helper()
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	restoreTestLogOutput(t)
 	return syncCLIEnv{
 		DataDir: dataDir,
@@ -398,17 +396,6 @@ func writeDoneSSE(t *testing.T, w io.Writer, stats agentsync.SyncStats) {
 	t.Helper()
 	_, err := io.Copy(w, doneSSE(t, stats, true))
 	require.NoError(t, err)
-}
-
-func restoreTestLogOutput(t *testing.T) {
-	t.Helper()
-	orig := log.Writer()
-	t.Cleanup(func() {
-		if closer, ok := log.Writer().(io.Closer); ok {
-			_ = closer.Close()
-		}
-		log.SetOutput(orig)
-	})
 }
 
 // daemonRouteTestServer starts an httptest server that answers daemon ping

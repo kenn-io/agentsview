@@ -68,8 +68,7 @@ func TestServeBackgroundChildArgsRemovesBackgroundFlag(t *testing.T) {
 }
 
 func TestServeCommandParsesBackgroundFlag(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	cmd := newServeCommand()
 	require.NoError(t,

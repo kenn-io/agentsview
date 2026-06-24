@@ -115,8 +115,7 @@ func TestOpenAPICommandEmitsSpec(t *testing.T) {
 }
 
 func TestServeCheckDataVersionRejectsNewerDatabase(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
 	database, err := db.Open(dbPath)
@@ -140,8 +139,7 @@ func TestServeCheckDataVersionRejectsNewerDatabase(t *testing.T) {
 }
 
 func TestServeCheckDataVersionDoesNotCreateConfig(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	out, err := executeCommand(newRootCommand(), "serve", "--check-data-version")
 

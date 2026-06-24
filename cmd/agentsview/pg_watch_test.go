@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -266,17 +264,6 @@ func newTestPgPusher(targets ...*fakeTarget) (*pgPusher, *pusherRecorder) {
 		},
 	}
 	return p, rec
-}
-
-// captureLogOutput redirects the standard logger into a buffer for the
-// duration of the test and restores the previous writer on cleanup.
-func captureLogOutput(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(prev) })
-	return &buf
 }
 
 // requireReconnectAfterTargetError verifies that a push failure on first closes

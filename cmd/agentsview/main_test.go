@@ -3,12 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 
@@ -56,7 +53,7 @@ func TestMustLoadConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+			testDataDir(t)
 			cmd := newServeCommand()
 			require.NoError(t, cmd.Flags().Parse(tt.args), "Parse")
 			cfg := mustLoadConfig(cmd)
@@ -97,49 +94,13 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 		"missing ephemeral port message")
 }
 
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err, "pipe")
-	os.Stdout = w
-	t.Cleanup(func() {
-		os.Stdout = orig
-	})
-
-	var buf bytes.Buffer
-	readDone := make(chan error, 1)
-	go func() {
-		_, err := io.Copy(&buf, r)
-		readDone <- err
-	}()
-
-	fn()
-
-	require.NoError(t, w.Close(), "close stdout pipe writer")
-	os.Stdout = orig
-
-	require.NoError(t, <-readDone, "read stdout pipe")
-	require.NoError(t, r.Close(), "close stdout pipe reader")
-	return buf.String()
-}
-
 func TestSetupLogFile(t *testing.T) {
-	origOutput := log.Writer()
-
 	dir := t.TempDir()
-	setupLogFile(dir)
+	// Register after TempDir so LIFO cleanup closes the log file before
+	// TempDir removes the directory. On Windows, open files can't be deleted.
+	restoreTestLogOutput(t)
 
-	// Close the log file before TempDir cleanup removes the
-	// directory. On Windows, open files can't be deleted.
-	// Registered after TempDir so LIFO ordering runs this first.
-	t.Cleanup(func() {
-		if c, ok := log.Writer().(io.Closer); ok {
-			c.Close()
-		}
-		log.SetOutput(origOutput)
-	})
+	setupLogFile(dir)
 
 	// Log something and verify it reaches the file.
 	log.Print("test-log-message")
@@ -152,17 +113,13 @@ func TestSetupLogFile(t *testing.T) {
 }
 
 func TestSetupLogFileOpenFailure(t *testing.T) {
-	origOutput := log.Writer()
-	t.Cleanup(func() { log.SetOutput(origOutput) })
-
 	// Capture log output to verify warning is emitted.
-	var buf bytes.Buffer
-	log.SetOutput(io.MultiWriter(origOutput, &buf))
+	buf := captureLogOutput(t)
 
 	// Pass a path that can't be opened (dir doesn't exist
 	// and we use a file as the "dir").
 	tmpFile := filepath.Join(t.TempDir(), "notadir")
-	os.WriteFile(tmpFile, []byte("x"), 0o644)
+	writeTestFile(t, tmpFile, []byte("x"))
 
 	setupLogFile(tmpFile)
 
@@ -176,7 +133,7 @@ func TestTruncateLogFile(t *testing.T) {
 
 	// Write a file larger than the limit.
 	big := bytes.Repeat([]byte("x"), 1024)
-	os.WriteFile(path, big, 0o644)
+	writeTestFile(t, path, big)
 
 	// Truncate with limit smaller than file size.
 	truncateLogFile(path, 512)
@@ -191,7 +148,7 @@ func TestTruncateLogFileUnderLimit(t *testing.T) {
 	path := filepath.Join(dir, "test.log")
 
 	content := []byte("small log content")
-	os.WriteFile(path, content, 0o644)
+	writeTestFile(t, path, content)
 
 	// File is under limit: should not be truncated.
 	truncateLogFile(path, 1024)
@@ -214,17 +171,8 @@ func TestTruncateLogFileSymlink(t *testing.T) {
 
 	// Write a target file larger than the limit.
 	big := bytes.Repeat([]byte("x"), 1024)
-	require.NoError(t, os.WriteFile(target, big, 0o644), "write target")
-	if err := os.Symlink(target, link); err != nil {
-		if errors.Is(err, syscall.EPERM) ||
-			errors.Is(err, syscall.EACCES) ||
-			errors.Is(err, os.ErrPermission) ||
-			errors.Is(err, syscall.ENOSYS) ||
-			errors.Is(err, syscall.ENOTSUP) {
-			t.Skip("symlinks not supported:", err)
-		}
-		t.Fatalf("symlink: %v", err)
-	}
+	writeTestFile(t, target, big)
+	requireSymlinkOrSkip(t, target, link)
 
 	// Truncate via symlink: should be a no-op.
 	truncateLogFile(link, 512)

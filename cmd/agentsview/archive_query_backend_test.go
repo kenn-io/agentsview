@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,8 +14,7 @@ import (
 )
 
 func TestResolveArchiveQueryBackendNoSyncDoesNotAutostartDaemon(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	testDataDir(t)
 
 	oldStart := startBackgroundServeForTransport
 	startBackgroundServeForTransport = func(
@@ -43,8 +39,7 @@ func TestResolveArchiveQueryBackendNoSyncDoesNotAutostartDaemon(t *testing.T) {
 }
 
 func TestResolveArchiveQueryBackendSkipsReadOnlyDaemonForFreshQueries(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	var called bool
 	ts := sessionUsageRuntimeServer(t, func(
@@ -69,8 +64,7 @@ func TestResolveArchiveQueryBackendSkipsReadOnlyDaemonForFreshQueries(t *testing
 }
 
 func TestResolveArchiveQueryBackendUsesGeneratedAutostartToken(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	testDataDir(t)
 
 	oldStart := startBackgroundServeForTransport
 	startBackgroundServeForTransport = func(
@@ -138,30 +132,4 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 	})
 	assert.NotContains(t, stderr, "warning: sync failed")
 	assert.NotContains(t, stderr, "warning: pricing seed failed")
-}
-
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-
-	orig := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-	t.Cleanup(func() { os.Stderr = orig })
-
-	var buf bytes.Buffer
-	readDone := make(chan error, 1)
-	go func() {
-		_, err := io.Copy(&buf, r)
-		readDone <- err
-	}()
-
-	fn()
-
-	require.NoError(t, w.Close())
-	os.Stderr = orig
-
-	require.NoError(t, <-readDone)
-	require.NoError(t, r.Close())
-	return buf.String()
 }

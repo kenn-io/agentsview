@@ -26,8 +26,7 @@ func seedActivity(t *testing.T, dataDir, id string, ago time.Duration) {
 func TestSessionList_ResumeFiltersToActiveWindow(t *testing.T) {
 	for _, flag := range []string{"--resume", "--active"} {
 		t.Run(flag, func(t *testing.T) {
-			dataDir := t.TempDir()
-			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			dataDir := testDataDir(t)
 			seedActivity(t, dataDir, "fresh", 2*time.Minute)
 			seedActivity(t, dataDir, "stale", 2*time.Hour)
 
@@ -42,8 +41,7 @@ func TestSessionList_ResumeFiltersToActiveWindow(t *testing.T) {
 }
 
 func TestSessionList_NoResumeShowsAll(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedActivity(t, dataDir, "fresh", 2*time.Minute)
 	seedActivity(t, dataDir, "stale", 2*time.Hour)
 
@@ -59,8 +57,7 @@ func TestSessionList_NoResumeShowsAll(t *testing.T) {
 // --active-since is not clobbered by --resume: the caller can widen the
 // window to include older sessions.
 func TestSessionList_ResumeRespectsExplicitActiveSince(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedActivity(t, dataDir, "fresh", 2*time.Minute)
 	seedActivity(t, dataDir, "stale", 2*time.Hour)
 
@@ -72,8 +69,7 @@ func TestSessionList_ResumeRespectsExplicitActiveSince(t *testing.T) {
 }
 
 func TestSessionList_ResumeHumanOutput(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedActivity(t, dataDir, "fresh", 2*time.Minute)
 	seedActivity(t, dataDir, "stale", 2*time.Hour)
 

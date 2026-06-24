@@ -663,8 +663,7 @@ const pricingTestCooldown = time.Hour
 // newAgentDataDir creates a temp data dir and points AGENTSVIEW_DATA_DIR at it.
 func newAgentDataDir(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	dir := testDataDir(t)
 	return dir
 }
 
