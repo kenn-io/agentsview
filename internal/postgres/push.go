@@ -1387,22 +1387,28 @@ func (s *Sync) pushSession(
 		return err
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
-		currentOwnerMarker := existingOwnerMarker.String
-		currentMachine := existingMachine.String
 		refreshErr := tx.QueryRowContext(ctx,
 			`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
 		).Scan(&existingMachine, &existingOwnerMarker)
-		if refreshErr == nil {
-			currentOwnerMarker = existingOwnerMarker.String
-			currentMachine = existingMachine.String
+		if refreshErr != nil {
+			// The guarded upsert changed no rows and we cannot
+			// re-read the current owner, so we cannot prove this
+			// pusher owns the session. Surface the error instead of
+			// reporting a blocked write as success, so the caller's
+			// retry path handles it rather than pushing messages for
+			// a row this pusher did not write.
+			return fmt.Errorf(
+				"re-reading session %s ownership after blocked upsert: %w",
+				sess.ID, refreshErr,
+			)
 		}
-		if refreshErr == nil && !sameSessionOwner(
-			currentOwnerMarker, currentMachine, markerID, pushedMachine,
-			legacyMarkerMachines,
+		if !sameSessionOwner(
+			existingOwnerMarker.String, existingMachine.String,
+			markerID, pushedMachine, legacyMarkerMachines,
 		) {
 			log.Printf(
 				"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
-				sess.ID, currentMachine, pushedMachine,
+				sess.ID, existingMachine.String, pushedMachine,
 			)
 			return errSessionOwnershipConflict
 		}
