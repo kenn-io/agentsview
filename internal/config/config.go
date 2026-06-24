@@ -596,13 +596,13 @@ func (c *Config) applyConfigTOML(data string) error {
 	if file.CursorSecret != "" {
 		c.CursorSecret = file.CursorSecret
 	}
-	if file.CursorAdminAPIKey != "" {
+	if file.CursorAdminAPIKey != "" && c.CursorAdminAPIKey == "" {
 		c.CursorAdminAPIKey = file.CursorAdminAPIKey
 	}
-	if file.CursorAdminEmail != "" {
+	if file.CursorAdminEmail != "" && c.CursorAdminEmail == "" {
 		c.CursorAdminEmail = file.CursorAdminEmail
 	}
-	if file.CursorAdminUserID != "" {
+	if file.CursorAdminUserID != "" && c.CursorAdminUserID == "" {
 		c.CursorAdminUserID = file.CursorAdminUserID
 	}
 	if file.PublicURL != "" {

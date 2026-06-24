@@ -3518,6 +3518,70 @@ func TestCopyInsightsFrom(t *testing.T) {
 	assert.Equal(t, "test insight content", insights[0].Content, "content")
 }
 
+func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err, "Open src")
+	require.NoError(t, srcDB.InsertCursorUsageEvents([]CursorUsageEvent{
+		{
+			OccurredAt:       "2026-05-14T10:05:00Z",
+			Model:            "claude-4.6-opus-high-thinking",
+			Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+			InputTokens:      1234,
+			OutputTokens:     567,
+			CacheWriteTokens: 12,
+			CacheReadTokens:  34,
+			ChargedCents:     15.66,
+			CursorTokenFee:   3.32,
+			UserID:           "152683922",
+			UserEmail:        "member@example.com",
+			DedupKey:         "first",
+		},
+		{
+			OccurredAt:     "2026-05-15T11:15:00Z",
+			Model:          "gpt-5",
+			Kind:           "USAGE_EVENT_KIND_USAGE_BASED",
+			InputTokens:    80,
+			OutputTokens:   20,
+			ChargedCents:   1.25,
+			CursorTokenFee: 0.5,
+			UserID:         "777",
+			UserEmail:      "next@example.com",
+			IsHeadless:     true,
+			DedupKey:       "second",
+		},
+	}), "InsertCursorUsageEvents src")
+	wantFingerprint, err := srcDB.CursorUsageEventFingerprint()
+	require.NoError(t, err, "CursorUsageEventFingerprint src")
+	require.NoError(t, srcDB.CloseConnections(), "CloseConnections src")
+	defer srcDB.Close()
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "Open dst")
+	defer dstDB.Close()
+	require.NoError(t, dstDB.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:   "2026-01-01T00:00:00Z",
+		Model:        "stale-model",
+		Kind:         "USAGE_EVENT_KIND_USAGE_BASED",
+		ChargedCents: 99,
+		DedupKey:     "stale",
+	}}), "InsertCursorUsageEvents dst")
+
+	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
+
+	gotEvents, err := dstDB.GetCursorUsageEvents(ctx)
+	require.NoError(t, err, "GetCursorUsageEvents")
+	require.Len(t, gotEvents, 2, "cursor usage events")
+	gotFingerprint, err := dstDB.CursorUsageEventFingerprint()
+	require.NoError(t, err, "CursorUsageEventFingerprint dst")
+	assert.Equal(t, wantFingerprint, gotFingerprint,
+		"final metadata copy should preserve cursor usage rows verbatim")
+}
+
 func TestCopyOrphanedDataFrom(t *testing.T) {
 	dir := t.TempDir()
 

@@ -301,6 +301,25 @@ func TestLoadEnv_UsesPrefixedCursorAdminVarsWithLegacyFallback(t *testing.T) {
 	assert.Equal(t, "prefixed-user", cfg.CursorAdminUserID)
 }
 
+func TestLoadMinimal_PreservesCursorAdminEnvOverFile(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeConfig(t, dir, map[string]any{
+		"cursor_admin_api_key": "file-key",
+		"cursor_admin_email":   "file@example.com",
+		"cursor_admin_user_id": "file-user",
+	})
+	t.Setenv("AGENTSVIEW_CURSOR_ADMIN_API_KEY", "env-key")
+	t.Setenv("AGENTSVIEW_CURSOR_ADMIN_EMAIL", "env@example.com")
+	t.Setenv("AGENTSVIEW_CURSOR_ADMIN_USER_ID", "env-user")
+
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	assert.Equal(t, "env-key", cfg.CursorAdminAPIKey)
+	assert.Equal(t, "env@example.com", cfg.CursorAdminEmail)
+	assert.Equal(t, "env-user", cfg.CursorAdminUserID)
+}
+
 func TestLoad_AppliesExplicitFlags(t *testing.T) {
 	cfg, err := loadConfigFromFlags(t, "-host", "0.0.0.0", "-port", "9090")
 	require.NoError(t, err)

@@ -607,6 +607,8 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
 	assert.InDelta(t, 0.1566, result.Daily[0].TotalCost, 1e-9)
 	assert.Equal(t, 0, result.SessionCounts.Total)
+	assert.Empty(t, result.SessionCounts.ByAgent)
+	assert.Empty(t, result.SessionCounts.ByProject)
 	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
 }

@@ -513,6 +513,31 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	if oldDBHasTable(ctx, tx, "cursor_usage_events") {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM main.cursor_usage_events`); err != nil {
+			return fmt.Errorf("clearing cursor usage events: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.cursor_usage_events (
+				occurred_at, model, kind,
+				input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens,
+				charged_cents, cursor_token_fee,
+				user_id, user_email, is_headless, dedup_key
+			)
+			SELECT
+				occurred_at, model, kind,
+				input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens,
+				charged_cents, cursor_token_fee,
+				user_id, user_email, is_headless, dedup_key
+			FROM old_db.cursor_usage_events
+			ORDER BY occurred_at, id`); err != nil {
+			return fmt.Errorf("copying cursor usage events: %w", err)
+		}
+	}
+
 	// Copy persistent worktree project mappings. Omit id so
 	// primary-key values from old_db cannot shadow existing
 	// destination rows. ResyncAll may pre-copy mappings into
