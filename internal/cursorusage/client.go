@@ -106,9 +106,14 @@ func (c *Client) ListUsageEvents(
 		q.PageSize = 100
 	}
 
+	userID, err := requestUserID(q.UserID)
+	if err != nil {
+		return Page{}, err
+	}
+
 	body := map[string]any{
-		"startDate": timestampMillisString(q.StartDate),
-		"endDate":   timestampMillisString(q.EndDate),
+		"startDate": timestampMillis(q.StartDate),
+		"endDate":   timestampMillis(q.EndDate),
 		"page":      q.Page,
 		"pageSize":  q.PageSize,
 	}
@@ -116,7 +121,7 @@ func (c *Client) ListUsageEvents(
 		body["email"] = strings.TrimSpace(q.Email)
 	}
 	if strings.TrimSpace(q.UserID) != "" {
-		body["userId"] = strings.TrimSpace(q.UserID)
+		body["userId"] = userID
 	}
 
 	data, err := json.Marshal(body)
@@ -166,11 +171,23 @@ func (c *Client) ListUsageEvents(
 	}, nil
 }
 
-func timestampMillisString(t time.Time) string {
+func timestampMillis(t time.Time) int64 {
 	if t.IsZero() {
-		return "0"
+		return 0
 	}
-	return strconv.FormatInt(t.UTC().UnixMilli(), 10)
+	return t.UTC().UnixMilli()
+}
+
+func requestUserID(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	userID, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid Cursor user ID %q", raw)
+	}
+	return userID, nil
 }
 
 func (c *Client) FetchAllUsageEvents(

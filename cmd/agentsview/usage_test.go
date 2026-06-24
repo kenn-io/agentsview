@@ -588,7 +588,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 		[]byte(
 			"cursor_admin_api_key = 'config-key'\n"+
 				"cursor_admin_email = 'config@example.com'\n"+
-				"cursor_admin_user_id = 'config-user'\n",
+				"cursor_admin_user_id = '152683922'\n",
 		),
 		0o600,
 	), "write config")
@@ -623,7 +623,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 					},
 					"chargedCents": 15.66,
 					"cursorTokenFee": 3.32,
-					"userId": "config-user",
+					"userId": "152683922",
 					"userEmail": "config@example.com",
 					"isHeadless": false
 				}]
@@ -643,7 +643,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 					},
 					"chargedCents": 1.5,
 					"cursorTokenFee": 0.5,
-					"userId": "config-user",
+					"userId": "152683922",
 					"userEmail": "config@example.com",
 					"isHeadless": true
 				}]
@@ -676,8 +676,10 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 	require.Len(t, requests, 2, "request count")
 	for _, req := range requests {
 		assert.Equal(t, "config@example.com", req["email"])
-		assert.Equal(t, "config-user", req["userId"])
+		assert.Equal(t, float64(152683922), req["userId"])
 		assert.Equal(t, float64(1), req["pageSize"])
+		assert.IsType(t, float64(0), req["startDate"])
+		assert.IsType(t, float64(0), req["endDate"])
 	}
 	assert.Equal(t, float64(1), requests[0]["page"])
 	assert.Equal(t, float64(2), requests[1]["page"])
