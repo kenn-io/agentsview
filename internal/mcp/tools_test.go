@@ -593,6 +593,40 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 	assert.Equal(t, 2, *dpage.NextFrom)
 }
 
+// next_from must advance past the last SCANNED ordinal, not the last visible
+// one, so a filtered message at the page boundary is not re-scanned on the
+// next page. The raw page fills the limit but a system message is filtered,
+// making the visible page shorter than the limit.
+func TestGetMessages_NextFromUsesScannedNotVisible(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "v0"),
+		{
+			SessionID: "s1", Ordinal: 1, Role: "system",
+			Content: "sys", IsSystem: true, ContentLength: 3,
+		},
+		dbtest.UserMsg("s1", 2, "v2"),
+	}))
+
+	// asc, limit 2: raw page = ordinals 0,1; ordinal 1 (system) is filtered.
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "asc", Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 1, "filtered system message shortens the page")
+	assert.Equal(t, 0, out.Messages[0].Ordinal)
+	assert.Equal(t, 1, out.Filtered)
+	require.NotNil(t, out.NextFrom)
+	assert.Equal(t, 2, *out.NextFrom,
+		"next_from advances past scanned ordinal 1, not visible ordinal 0")
+}
+
 // search_sessions must exclude a session active now even when its search
 // result carries no ended_at/started_at (empty SessionEndedAt), by falling
 // back to created_at like search_content -- mirroring the canonical
