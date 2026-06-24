@@ -257,7 +257,7 @@ func TestStartRemoteHostSync_EmitsAfterSuccess(t *testing.T) {
 	exited := make(chan struct{})
 	interval := 10 * time.Millisecond
 	go func() {
-		runRemoteHostSyncLoop("test-host", interval, syncFn, em, nil, done)
+		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
 		close(exited)
 	}()
 
@@ -280,6 +280,7 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 	remoteEntered := make(chan struct{})
 	releaseRemote := make(chan struct{})
 	syncFn := remoteHostSyncFunc(
+		context.Background(),
 		config.Config{},
 		database,
 		engine,
@@ -334,6 +335,32 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 	}
 }
 
+func TestRemoteHostSyncFuncUsesCallerContext(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{},
+		Machine:   "local",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	syncFn := remoteHostSyncFunc(
+		ctx,
+		config.Config{},
+		database,
+		engine,
+		config.RemoteHost{Host: "test-host"},
+		func(runCtx context.Context, _ *ssh.RemoteSync) (ssh.SyncStats, error) {
+			return ssh.SyncStats{}, runCtx.Err()
+		},
+	)
+
+	_, err = syncFn()
+
+	require.ErrorIs(t, err, context.Canceled)
+}
+
 func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	database, err := db.Open(dbPath)
@@ -357,6 +384,7 @@ func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 
 	var gotFull bool
 	syncFn := remoteHostSyncFunc(
+		context.Background(),
 		config.Config{},
 		database,
 		engine,
@@ -394,7 +422,7 @@ func TestStartRemoteHostSync_TracksRemoteWorkForIdleReaper(t *testing.T) {
 	done := make(chan struct{})
 	exited := make(chan struct{})
 	go func() {
-		runRemoteHostSyncLoop("test-host", time.Millisecond, syncFn, nil, idleTracker, done)
+		runRemoteHostSyncLoop(ctx, "test-host", time.Millisecond, syncFn, nil, idleTracker, done)
 		close(exited)
 	}()
 
@@ -420,6 +448,40 @@ func TestStartRemoteHostSync_TracksRemoteWorkForIdleReaper(t *testing.T) {
 	}
 }
 
+func TestStartRemoteHostSync_ExitsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	exited := make(chan struct{})
+	syncCalled := make(chan struct{}, 1)
+	go func() {
+		runRemoteHostSyncLoop(
+			ctx,
+			"test-host",
+			time.Hour,
+			func() (int, error) {
+				syncCalled <- struct{}{}
+				return 0, nil
+			},
+			nil,
+			nil,
+			nil,
+		)
+		close(exited)
+	}()
+
+	cancel()
+
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote sync loop did not exit after context cancel")
+	}
+	select {
+	case <-syncCalled:
+		require.FailNow(t, "sync ran before context cancel")
+	default:
+	}
+}
+
 type scopedEmitter struct {
 	scopes chan string
 }
@@ -439,7 +501,7 @@ func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
 	exited := make(chan struct{})
 	interval := 10 * time.Millisecond
 	go func() {
-		runRemoteHostSyncLoop("test-host", interval, syncFn, em, nil, done)
+		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
 		close(exited)
 	}()
 
@@ -461,7 +523,7 @@ func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
 	exited := make(chan struct{})
 	interval := 10 * time.Millisecond
 	go func() {
-		runRemoteHostSyncLoop("test-host", interval, syncFn, em, nil, done)
+		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
 		close(exited)
 	}()
 
@@ -480,7 +542,7 @@ func TestStartRemoteHostSync_NoEmitOnError(t *testing.T) {
 	exited := make(chan struct{})
 	interval := 10 * time.Millisecond
 	go func() {
-		runRemoteHostSyncLoop("test-host", interval, syncFn, em, nil, done)
+		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, em, nil, done)
 		close(exited)
 	}()
 
@@ -498,7 +560,7 @@ func TestStartRemoteHostSync_NilEmitterSafe(t *testing.T) {
 	exited := make(chan struct{})
 	interval := 10 * time.Millisecond
 	go func() {
-		runRemoteHostSyncLoop("test-host", interval, syncFn, nil, nil, done)
+		runRemoteHostSyncLoop(context.Background(), "test-host", interval, syncFn, nil, nil, done)
 		close(exited)
 	}()
 

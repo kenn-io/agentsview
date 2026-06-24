@@ -214,7 +214,7 @@ func runServe(cfg config.Config) {
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}
-		go startPeriodicSync(cfg, engine, database, idleTracker, validRemotes, broadcaster)
+		go startPeriodicSync(ctx, cfg, engine, database, idleTracker, validRemotes, broadcaster)
 	}
 
 	// Seed model_pricing after any resync swap so the new DB
@@ -803,6 +803,7 @@ func collectWatchRoots(cfg config.Config) (roots []watchRoot, unwatchedDirs []st
 }
 
 func startPeriodicSync(
+	ctx context.Context,
 	cfg config.Config,
 	engine *sync.Engine,
 	database *db.DB,
@@ -814,23 +815,29 @@ func startPeriodicSync(
 		for _, rh := range cfg.RemoteHosts {
 			if rh.Interval > 0 {
 				go startRemoteHostSync(
-					cfg, database, engine, rh, emitter, idleTracker,
+					ctx, cfg, database, engine, rh, emitter, idleTracker,
 				)
 			}
 		}
 	}
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		log.Println("Running scheduled sync...")
 		idleTracker.Do(func() {
-			engine.SyncAll(context.Background(), nil)
+			engine.SyncAll(ctx, nil)
 			recomputePendingSessions(engine, database)
 		})
 	}
 }
 
 func startRemoteHostSync(
+	ctx context.Context,
 	cfg config.Config,
 	database *db.DB,
 	engine *sync.Engine,
@@ -839,12 +846,12 @@ func startRemoteHostSync(
 	idleTracker *server.IdleTracker,
 ) {
 	syncFn := remoteHostSyncFunc(
-		cfg, database, engine, rh,
+		ctx, cfg, database, engine, rh,
 		func(ctx context.Context, rs *ssh.RemoteSync) (ssh.SyncStats, error) {
 			return rs.Run(ctx)
 		},
 	)
-	runRemoteHostSyncLoop(rh.Host, rh.Interval, syncFn, emitter, idleTracker, nil)
+	runRemoteHostSyncLoop(ctx, rh.Host, rh.Interval, syncFn, emitter, idleTracker, nil)
 }
 
 type remoteSyncExclusiveRunner interface {
@@ -854,6 +861,7 @@ type remoteSyncExclusiveRunner interface {
 type remoteSyncRunner func(context.Context, *ssh.RemoteSync) (ssh.SyncStats, error)
 
 func remoteHostSyncFunc(
+	ctx context.Context,
 	cfg config.Config,
 	database *db.DB,
 	runner remoteSyncExclusiveRunner,
@@ -875,7 +883,7 @@ func remoteHostSyncFunc(
 				BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			}
 			var err error
-			stats, err = runRemote(context.Background(), rs)
+			stats, err = runRemote(ctx, rs)
 			return err
 		})
 		return stats.SessionsSynced, err
@@ -886,6 +894,7 @@ func remoteHostSyncFunc(
 // the number of sessions synced so we only emit when data changed.
 // When done is non-nil, closing it stops the loop.
 func runRemoteHostSyncLoop(
+	ctx context.Context,
 	host string,
 	interval time.Duration,
 	syncFn func() (int, error),
@@ -897,6 +906,8 @@ func runRemoteHostSyncLoop(
 	defer ticker.Stop()
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case <-done:
 			return
 		case <-ticker.C:
