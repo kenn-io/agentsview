@@ -1973,6 +1973,7 @@ fn version_response_looks_valid(response: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use std::collections::HashMap;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
@@ -2289,6 +2290,24 @@ mode:    writable
         let localhost_name =
             Url::parse("http://localhost:18080/").expect("valid localhost-name url");
         assert!(!is_allowed_navigation_url(&localhost_name, Some(18080)));
+    }
+
+    #[test]
+    fn default_capability_grants_zoom_to_the_sidecar_origin() {
+        let capability: Value = serde_json::from_str(include_str!("../capabilities/default.json"))
+            .expect("capability json parses");
+
+        assert_eq!(capability["windows"], serde_json::json!(["main"]));
+        assert_eq!(
+            capability["remote"]["urls"],
+            serde_json::json!(["http://127.0.0.1:*"])
+        );
+        assert!(capability["permissions"]
+            .as_array()
+            .expect("permissions array")
+            .contains(&Value::String(
+                "core:webview:allow-set-webview-zoom".to_string()
+            )));
     }
 
     #[test]
