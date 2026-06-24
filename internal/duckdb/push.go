@@ -60,6 +60,38 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	return nil
 }
 
+func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
+	// Cursor admin rows are global and unattributed, so project-filtered pushes
+	// cannot sync them honestly.
+	if s.isFiltered() {
+		return nil
+	}
+
+	events, err := s.local.GetCursorUsageEvents(ctx)
+	if err != nil {
+		return fmt.Errorf("loading local cursor usage events: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
+	}
+
+	tx, err := s.duck.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb cursor usage sync: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb cursor usage sync: %w", err)
+	}
+	return nil
+}
+
 func duckFallbackPricingRows() []db.ModelPricing {
 	src := pricingpkg.FallbackPricing()
 	out := make([]db.ModelPricing, len(src))
@@ -627,6 +659,59 @@ func insertUsageEvent(ctx context.Context, tx *sql.Tx, ev db.UsageEvent) error {
 		ev.CostSource, occurredAt, ev.DedupKey,
 	); err != nil {
 		return err
+	}
+	return nil
+}
+
+func bulkInsertCursorUsageEvents(
+	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
+) error {
+	if len(events) == 0 {
+		return nil
+	}
+	const cursorBatch = 100
+	for i := 0; i < len(events); i += cursorBatch {
+		end := min(i+cursorBatch, len(events))
+		batch := events[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO cursor_usage_events (
+			occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		) VALUES `)
+		args := make([]any, 0, len(batch)*13)
+		for j, ev := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			occurredAt, ok := parseTimestamp(ev.OccurredAt)
+			if !ok {
+				return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
+			}
+			args = append(args,
+				occurredAt,
+				db.SanitizeUTF8(ev.Model),
+				db.SanitizeUTF8(ev.Kind),
+				ev.InputTokens,
+				ev.OutputTokens,
+				ev.CacheWriteTokens,
+				ev.CacheReadTokens,
+				ev.ChargedCents,
+				ev.CursorTokenFee,
+				db.SanitizeUTF8(ev.UserID),
+				db.SanitizeUTF8(ev.UserEmail),
+				ev.IsHeadless,
+				db.SanitizeUTF8(ev.DedupKey),
+			)
+		}
+		b.WriteString(` ON CONFLICT DO NOTHING`)
+		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+			return fmt.Errorf("bulk inserting duckdb cursor_usage_events: %w", err)
+		}
 	}
 	return nil
 }

@@ -44,6 +44,7 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 		"sessions",
 		"messages",
 		"usage_events",
+		"cursor_usage_events",
 		"model_pricing",
 		"tool_calls",
 		"tool_result_events",

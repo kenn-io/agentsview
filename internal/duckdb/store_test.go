@@ -1913,6 +1913,50 @@ func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	assert.Equal(t, 2, got.Totals.OutputTokens)
 }
 
+func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 12,
+		CacheReadTokens:  34,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}), "InsertCursorUsageEvents")
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "cursor-usage.duckdb"), local, SyncOptions{})
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assertDuckDBCount(t, syncer.DB(), "cursor_usage_events", 1)
+
+	store := NewStoreFromDB(syncer.DB())
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:       "2026-05-14",
+		To:         "2026-05-14",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 1234, result.Daily[0].InputTokens)
+	assert.Equal(t, 567, result.Daily[0].OutputTokens)
+	assert.Equal(t, 12, result.Daily[0].CacheCreationTokens)
+	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
+	assert.InDelta(t, 0.1566, result.Daily[0].TotalCost, 1e-9)
+	assert.Equal(t, 0, result.SessionCounts.Total)
+	assert.Empty(t, result.SessionCounts.ByAgent)
+	assert.Empty(t, result.SessionCounts.ByProject)
+	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
+	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
+}
+
 func TestTrendsTermsWordBoundaryAndOverlapParity(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -2172,6 +2173,34 @@ func duckUsageTerminationPred(status string) (string, []any) {
 	)
 }
 
+const duckDailyCursorUsageRowsSQLTemplate = `
+SELECT
+	'' AS session_id,
+	NULL AS message_ordinal,
+	'cursor' AS source,
+	cu.occurred_at AS ts,
+	cu.model AS model,
+	'' AS token_json,
+	'' AS claude_message_id,
+	'' AS claude_request_id,
+	'' AS source_uuid,
+	cu.dedup_key AS usage_dedup_key,
+	cu.input_tokens AS input_tokens,
+	cu.output_tokens AS output_tokens,
+	cu.cache_write_tokens AS cache_create,
+	cu.cache_read_tokens AS cache_read,
+	cu.charged_cents / 100.0 AS cost_usd,
+	'' AS project,
+	'cursor' AS agent,
+	'' AS machine,
+	0 AS user_message_count,
+	FALSE AS is_automated,
+	'' AS display_name,
+	NULL AS started_at,
+	cu.occurred_at AS activity_at
+FROM cursor_usage_events cu
+WHERE %s`
+
 func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	bounds := duckUsageBoundsForFilter(f)
 	messageWhere := `
@@ -2245,6 +2274,59 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	return query, args
 }
 
+func duckCursorUsageRowsSQLForBounds(
+	f db.UsageFilter, b duckUsageBounds,
+) (string, []any, bool) {
+	if f.Project != "" || f.ExcludeProject != "" ||
+		f.Machine != "" || f.MinUserMessages > 0 ||
+		f.ExcludeOneShot || f.Termination != "" ||
+		f.ActiveSince != "" {
+		return "", nil, false
+	}
+	if f.Agent != "" {
+		vals := strings.Split(f.Agent, ",")
+		for i := range vals {
+			vals[i] = strings.TrimSpace(vals[i])
+		}
+		if !slices.Contains(vals, "cursor") {
+			return "", nil, false
+		}
+	}
+	if f.ExcludeAgent != "" {
+		vals := strings.Split(f.ExcludeAgent, ",")
+		for i := range vals {
+			vals[i] = strings.TrimSpace(vals[i])
+		}
+		if slices.Contains(vals, "cursor") {
+			return "", nil, false
+		}
+	}
+
+	where := "cu.model != ''"
+	var args []any
+	where, args = appendDuckUsageSourceFilterClauses(
+		where, args, "cu.model", f,
+	)
+	where, args = appendDuckUsageColumnBounds(
+		where, "cu.occurred_at", b, args,
+	)
+	return fmt.Sprintf(duckDailyCursorUsageRowsSQLTemplate, where), args, true
+}
+
+func duckDailyUsageRawSQL(f db.UsageFilter) (string, []any) {
+	bounds := duckUsageBoundsForFilter(f)
+	sessionRowsSQL, sessionArgs := duckUsageRawSQL(f, "")
+	cursorRowsSQL, cursorArgs, ok := duckCursorUsageRowsSQLForBounds(f, bounds)
+	if !ok {
+		return sessionRowsSQL, sessionArgs
+	}
+	rowsSQL := sessionRowsSQL + "\n\t\tUNION ALL\n" + cursorRowsSQL
+	args := make([]any, 0, len(sessionArgs)+len(cursorArgs))
+	args = append(args, sessionArgs...)
+	args = append(args, cursorArgs...)
+	return rowsSQL, args
+}
+
 func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 	if f.Timezone != "" {
 		return "COALESCE(strftime(timezone(?, timezone('UTC', ts)), '%Y-%m-%d'), '')", f.Timezone
@@ -2261,6 +2343,17 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 
 func duckUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 	rawSQL, args := duckUsageRawSQL(f, sessionID)
+	return duckUsageCTEFromRaw(f, rawSQL, args)
+}
+
+func duckDailyUsageCTE(f db.UsageFilter) (string, []any) {
+	rawSQL, args := duckDailyUsageRawSQL(f)
+	return duckUsageCTEFromRaw(f, rawSQL, args)
+}
+
+func duckUsageCTEFromRaw(
+	f db.UsageFilter, rawSQL string, args []any,
+) (string, []any) {
 	localDateSQL, localDateArg := duckUsageLocalDateSQL(f)
 	// Apply the local-date window BEFORE deduping so an out-of-range
 	// duplicate (pulled in by the padded UTC bounds) cannot win
@@ -2391,7 +2484,7 @@ func duckUsageAggregateCost(
 func (s *Store) dailyUsageAggregateRows(
 	ctx context.Context, f db.UsageFilter,
 ) ([]duckUsageAggregateRow, error) {
-	cte, args := duckUsageCTE(f, "")
+	cte, args := duckDailyUsageCTE(f)
 	query := cte + `
 		SELECT local_date, project, agent, model,
 			SUM(input_tokens_norm) AS input_tokens,

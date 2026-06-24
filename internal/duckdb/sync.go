@@ -163,6 +163,9 @@ func (s *Sync) Push(
 	if err := s.syncModelPricing(ctx); err != nil {
 		return result, err
 	}
+	if err := s.syncCursorUsageEvents(ctx); err != nil {
+		return result, err
+	}
 
 	lastPush, err := s.local.GetSyncState(lastPushStateKey)
 	if err != nil {
