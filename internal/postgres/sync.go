@@ -298,14 +298,51 @@ func (s *Sync) Status(
 		lastPush = ""
 	}
 
+	return readStatus(ctx, s.pg, s.machine, lastPush)
+}
+
+// ReadStatus reads PostgreSQL status without requiring a local SQLite sync
+// handle. Callers pass any local last-push watermark they want displayed.
+func ReadStatus(
+	ctx context.Context,
+	pgURL, schema, machine string,
+	allowInsecure bool,
+	lastPush string,
+) (SyncStatus, error) {
+	if machine == "" {
+		return SyncStatus{}, fmt.Errorf(
+			"machine name must not be empty",
+		)
+	}
+	if machine == "local" {
+		return SyncStatus{}, fmt.Errorf(
+			"machine name %q is reserved; "+
+				"choose a different pg.machine_name",
+			machine,
+		)
+	}
+	pg, err := Open(pgURL, schema, allowInsecure)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	defer pg.Close()
+	return readStatus(ctx, pg, machine, lastPush)
+}
+
+func readStatus(
+	ctx context.Context,
+	pg *sql.DB,
+	machine string,
+	lastPush string,
+) (SyncStatus, error) {
 	var pgSessions int
-	err = s.pg.QueryRowContext(ctx,
+	err := pg.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM sessions",
 	).Scan(&pgSessions)
 	if err != nil {
 		if isUndefinedTable(err) {
 			return SyncStatus{
-				Machine:    s.machine,
+				Machine:    machine,
 				LastPushAt: lastPush,
 			}, nil
 		}
@@ -315,13 +352,13 @@ func (s *Sync) Status(
 	}
 
 	var pgMessages int
-	err = s.pg.QueryRowContext(ctx,
+	err = pg.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM messages",
 	).Scan(&pgMessages)
 	if err != nil {
 		if isUndefinedTable(err) {
 			return SyncStatus{
-				Machine:    s.machine,
+				Machine:    machine,
 				LastPushAt: lastPush,
 				PGSessions: pgSessions,
 			}, nil
@@ -332,7 +369,7 @@ func (s *Sync) Status(
 	}
 
 	return SyncStatus{
-		Machine:    s.machine,
+		Machine:    machine,
 		LastPushAt: lastPush,
 		PGSessions: pgSessions,
 		PGMessages: pgMessages,

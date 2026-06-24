@@ -142,6 +142,7 @@ func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
 func TestRunPGPush_IgnoresBrokenUnselectedTarget(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
 	restoreTestLogger(t)
@@ -191,11 +192,13 @@ url = "postgres://archive"
 	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
 	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
 	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
 func TestRunPGPushAll_AggregatesTargetFailures(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
 	restoreTestLogger(t)
@@ -248,6 +251,7 @@ url = "postgres://archive"
 func TestPGPushCommandPrefixesErrors(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	clearConfiguredAgentEnvVars(t)
 	isolateDefaultAgentDirs(t, dataDir)
 	restoreTestLogger(t)

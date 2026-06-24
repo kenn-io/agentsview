@@ -223,11 +223,16 @@ func runPGStatus(
 	}
 
 	applyClassifierConfig(appCfg)
-	database, err := openDB(appCfg)
+	database, err := openReadOnlyDB(appCfg)
 	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("opening database: %w", err)
+		}
+		database = nil
 	}
-	defer database.Close()
+	if database != nil {
+		defer database.Close()
+	}
 
 	var failures []string
 	for i, target := range targets {
@@ -275,22 +280,33 @@ func runPGStatusTarget(
 		return fmt.Errorf("url not configured")
 	}
 
-	ps, err := postgres.New(
-		target.PG.URL, target.PG.Schema, database,
-		target.PG.MachineName, target.PG.AllowInsecure,
-		target.syncOptions(nil, nil),
-	)
-	if err != nil {
-		return err
-	}
-	defer ps.Close()
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt,
 	)
 	defer stop()
 
-	status, err := ps.Status(ctx)
+	lastPush := ""
+	if database != nil {
+		lastPush, err = postgres.ReadLastPushAt(
+			database,
+			target.SyncStateTarget,
+			target.MigrateLegacySyncState,
+		)
+		if err != nil {
+			log.Printf(
+				"warning: reading last_push_at: %v", err,
+			)
+			lastPush = ""
+		}
+	}
+	status, err := postgres.ReadStatus(
+		ctx,
+		target.PG.URL,
+		target.PG.Schema,
+		target.PG.MachineName,
+		target.PG.AllowInsecure,
+		lastPush,
+	)
 	if err != nil {
 		return err
 	}
