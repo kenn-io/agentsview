@@ -506,6 +506,7 @@ func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
+		Items      *openAPISchema           `json:"items"`
 		Properties map[string]openAPISchema `json:"properties"`
 	}
 	type openAPIResponse struct {
@@ -535,6 +536,25 @@ func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
 	schema, ok := spec.Components.Schemas["UsageSummaryResponse"]
 	require.True(t, ok, "UsageSummaryResponse schema missing")
 	assert.Contains(t, schema.Properties, "comparison")
+	require.Contains(t, schema.Properties, "projectTotals")
+	require.NotNil(t, schema.Properties["projectTotals"].Items)
+	assert.Equal(t,
+		"#/components/schemas/ProjectTotal",
+		schema.Properties["projectTotals"].Items.Ref)
+	require.Contains(t, schema.Properties, "modelTotals")
+	require.NotNil(t, schema.Properties["modelTotals"].Items)
+	assert.Equal(t,
+		"#/components/schemas/ModelTotal",
+		schema.Properties["modelTotals"].Items.Ref)
+	require.Contains(t, schema.Properties, "agentTotals")
+	require.NotNil(t, schema.Properties["agentTotals"].Items)
+	assert.Equal(t,
+		"#/components/schemas/AgentTotal",
+		schema.Properties["agentTotals"].Items.Ref)
+	require.Contains(t, schema.Properties, "cacheStats")
+	assert.Equal(t,
+		"#/components/schemas/CacheStats",
+		schema.Properties["cacheStats"].Ref)
 }
 
 func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
