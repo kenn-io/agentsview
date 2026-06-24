@@ -836,8 +836,28 @@ describe("UIStore", () => {
 
     it("composes desktop window zoom with font scale", async () => {
       const original = globalThis.localStorage;
+      const tauriWindow = window as Window & {
+        __TAURI__?: unknown;
+      };
+      const hadTauri = Object.prototype.hasOwnProperty.call(
+        tauriWindow,
+        "__TAURI__",
+      );
+      const originalTauri = tauriWindow.__TAURI__;
+      const setZoom = vi.fn(() => Promise.resolve());
       Object.defineProperty(globalThis, "localStorage", {
         value: { getItem: vi.fn(() => null), setItem: vi.fn() },
+        writable: true,
+        configurable: true,
+      });
+      Object.defineProperty(tauriWindow, "__TAURI__", {
+        value: {
+          webviewWindow: {
+            getCurrentWebviewWindow: () => ({
+              setZoom,
+            }),
+          },
+        },
         writable: true,
         configurable: true,
       });
@@ -850,7 +870,8 @@ describe("UIStore", () => {
         await tick();
         expect(
           document.documentElement.style.getPropertyValue("zoom"),
-        ).toBe("2.2");
+        ).toBe("1.1");
+        expect(setZoom).toHaveBeenLastCalledWith(2);
       } finally {
         window.history.replaceState({}, "", "/");
         Object.defineProperty(globalThis, "localStorage", {
@@ -858,6 +879,15 @@ describe("UIStore", () => {
           writable: true,
           configurable: true,
         });
+        if (hadTauri) {
+          Object.defineProperty(tauriWindow, "__TAURI__", {
+            value: originalTauri,
+            writable: true,
+            configurable: true,
+          });
+        } else {
+          delete tauriWindow.__TAURI__;
+        }
       }
     });
 
