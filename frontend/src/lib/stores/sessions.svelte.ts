@@ -68,6 +68,12 @@ export interface SessionGroup {
   endedAt: string | null;
 }
 
+export interface RecentlyDeletedSessions {
+  key: number;
+  ids: string[];
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export interface Filters {
   project: string;
   machine: string;
@@ -1035,9 +1041,23 @@ class SessionsStore {
     this.load();
   }
 
-  /** Recently deleted session IDs for undo toast. */
-  recentlyDeleted: { id: string; timer: ReturnType<typeof setTimeout> }[] =
-    $state([]);
+  /** Recently deleted session batches for undo toast. */
+  recentlyDeleted: RecentlyDeletedSessions[] = $state([]);
+  private recentlyDeletedNextKey = 0;
+
+  private addRecentlyDeleted(ids: string[]) {
+    if (ids.length === 0) return;
+    const key = this.recentlyDeletedNextKey++;
+    const timer = setTimeout(() => {
+      this.recentlyDeleted = this.recentlyDeleted.filter(
+        (d) => d.key !== key,
+      );
+    }, 10_000);
+    this.recentlyDeleted = [
+      ...this.recentlyDeleted,
+      { key, ids: [...ids], timer },
+    ];
+  }
 
   /** Multi-select state for batch operations. */
   selectedIds: Set<string> = $state(new Set());
@@ -1080,12 +1100,7 @@ class SessionsStore {
     if (this.activeSessionId === id) {
       this.setActiveSession(null);
     }
-    const timer = setTimeout(() => {
-      this.recentlyDeleted = this.recentlyDeleted.filter(
-        (d) => d.id !== id,
-      );
-    }, 10_000);
-    this.recentlyDeleted = [...this.recentlyDeleted, { id, timer }];
+    this.addRecentlyDeleted([id]);
     this.invalidateFilterCaches();
   }
 
@@ -1105,14 +1120,7 @@ class SessionsStore {
     if (this.activeSessionId && idSet.has(this.activeSessionId)) {
       this.setActiveSession(null);
     }
-    for (const id of ids) {
-      const timer = setTimeout(() => {
-        this.recentlyDeleted = this.recentlyDeleted.filter(
-          (d) => d.id !== id,
-        );
-      }, 10_000);
-      this.recentlyDeleted = [...this.recentlyDeleted, { id, timer }];
-    }
+    this.addRecentlyDeleted(ids);
     this.selectedIds = new Set();
     this.selectMode = false;
     this.invalidateFilterCaches();
@@ -1122,6 +1130,18 @@ class SessionsStore {
     configureGeneratedClient();
     await SessionsService.postApiV1SessionsIdRestore({ id });
     this.clearRecentlyDeleted(id);
+    this.invalidateFilterCaches();
+    await this.load();
+  }
+
+  async restoreRecentlyDeleted(deleted: RecentlyDeletedSessions) {
+    const ids = [...deleted.ids];
+    if (ids.length === 0) return;
+    configureGeneratedClient();
+    for (const id of ids) {
+      await SessionsService.postApiV1SessionsIdRestore({ id });
+    }
+    this.clearRecentlyDeletedBatch(deleted);
     this.invalidateFilterCaches();
     await this.load();
   }
@@ -1153,7 +1173,7 @@ class SessionsStore {
   clearRecentlyDeleted(id?: string) {
     if (id) {
       this.recentlyDeleted = this.recentlyDeleted.filter((d) => {
-        if (d.id === id) {
+        if (d.ids.includes(id)) {
           clearTimeout(d.timer);
           return false;
         }
@@ -1163,6 +1183,13 @@ class SessionsStore {
       for (const d of this.recentlyDeleted) clearTimeout(d.timer);
       this.recentlyDeleted = [];
     }
+  }
+
+  private clearRecentlyDeletedBatch(deleted: RecentlyDeletedSessions) {
+    clearTimeout(deleted.timer);
+    this.recentlyDeleted = this.recentlyDeleted.filter(
+      (d) => d.key !== deleted.key,
+    );
   }
 
   async renameSession(id: string, displayName: string | null) {

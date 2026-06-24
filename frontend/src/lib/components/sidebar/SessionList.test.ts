@@ -538,6 +538,46 @@ describe("SessionList visible hydration", () => {
     expect(selectSession).toHaveBeenCalledWith("keyboard-session");
   });
 
+  it("toggles selection from the session link in select mode", async () => {
+    const selectSession = vi
+      .spyOn(sessions, "selectSession")
+      .mockImplementation(() => {});
+    sessions.sessions = [
+      makeSession({
+        id: "link-select-session",
+        display_name: "Link selection target",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(
+      undefined,
+    );
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const selectModeButton = document.querySelector<HTMLButtonElement>(
+      ".select-toggle-btn",
+    );
+    expect(selectModeButton).not.toBeNull();
+    selectModeButton!.click();
+    await tick();
+
+    const link = document.querySelector<HTMLAnchorElement>(
+      ".session-info-link",
+    );
+    expect(link).not.toBeNull();
+    const click = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+    });
+    link!.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(selectSession).not.toHaveBeenCalled();
+    expect([...sessions.selectedIds]).toEqual(["link-select-session"]);
+  });
+
   it("keeps the non-link parts of the row selectable", async () => {
     const selectSession = vi
       .spyOn(sessions, "selectSession")

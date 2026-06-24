@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   getAgents: vi.fn(),
   getMachines: vi.fn(),
   deleteSession: vi.fn(),
+  batchDeleteSessions: vi.fn(),
   restoreSession: vi.fn(),
   renameSession: vi.fn(),
   getStats: vi.fn().mockResolvedValue({
@@ -71,6 +72,9 @@ vi.mock("../api/generated/index", () => ({
     ),
     getApiV1SessionsId: vi.fn(({ id }) => api.getSession(id)),
     deleteApiV1SessionsId: vi.fn(({ id }) => api.deleteSession(id)),
+    postApiV1SessionsBatchDelete: vi.fn(({ requestBody }) =>
+      api.batchDeleteSessions(requestBody.session_ids)
+    ),
     postApiV1SessionsIdRestore: vi.fn(({ id }) => api.restoreSession(id)),
     patchApiV1SessionsIdRename: vi.fn(({ id, requestBody }) =>
       api.renameSession(id, requestBody.display_name)
@@ -767,6 +771,33 @@ describe("SessionsStore", () => {
       expect((api as any).getMachines).toHaveBeenCalled();
     });
 
+    it("batch delete creates one undo entry for the whole batch", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "remove-a" }),
+        makeSkinnyRow({ id: "remove-b" }),
+        makeSkinnyRow({ id: "keep-me" }),
+      ]);
+      vi.mocked(api.batchDeleteSessions).mockResolvedValue(undefined);
+      vi.mocked(api.getProjects).mockResolvedValue({ projects: [] });
+      vi.mocked(api.getAgents).mockResolvedValue({ agents: [] });
+      vi.mocked((api as any).getMachines).mockResolvedValue({ machines: [] });
+
+      await sessions.load();
+      await sessions.batchDeleteSessions(["remove-a", "remove-b"]);
+
+      expect(api.batchDeleteSessions).toHaveBeenCalledWith([
+        "remove-a",
+        "remove-b",
+      ]);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["keep-me"]);
+      expect(sessions.total).toBe(1);
+      expect(sessions.recentlyDeleted).toHaveLength(1);
+      expect(sessions.recentlyDeleted[0]!.ids).toEqual([
+        "remove-a",
+        "remove-b",
+      ]);
+    });
+
     it("restore reloads the sidebar index", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "before" })]);
       vi.mocked((api as any).restoreSession).mockResolvedValue(undefined);
@@ -778,6 +809,31 @@ describe("SessionsStore", () => {
       expect((api as any).restoreSession).toHaveBeenCalledWith("before");
       expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
       expect(sessions.sessions.map((s) => s.id)).toEqual(["after"]);
+    });
+
+    it("restores all sessions from one recently deleted batch", async () => {
+      const timer = setTimeout(() => {}, 10_000);
+      sessions.recentlyDeleted = [
+        { key: 1, ids: ["restore-a", "restore-b"], timer },
+      ];
+      vi.mocked((api as any).restoreSession).mockResolvedValue(undefined);
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "restore-a" }),
+        makeSkinnyRow({ id: "restore-b" }),
+      ]);
+
+      await sessions.restoreRecentlyDeleted(sessions.recentlyDeleted[0]!);
+
+      expect((api as any).restoreSession).toHaveBeenNthCalledWith(
+        1,
+        "restore-a",
+      );
+      expect((api as any).restoreSession).toHaveBeenNthCalledWith(
+        2,
+        "restore-b",
+      );
+      expect(sessions.recentlyDeleted).toEqual([]);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
     });
   });
 

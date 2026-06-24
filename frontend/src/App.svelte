@@ -551,7 +551,7 @@
         if (!last) return;
         btn.disabled = true;
         try {
-          await sessions.restoreSession(last.id);
+          await sessions.restoreRecentlyDeleted(last);
         } catch {
           // restore failed — toast will remain
         } finally {

@@ -239,7 +239,11 @@
       return;
     }
     e.preventDefault();
-    sessions.selectSession(session.id);
+    if (selectMode) {
+      sessions.toggleSelection(session.id);
+    } else {
+      sessions.selectSession(session.id);
+    }
   }
 
   function handleRowClick(e: MouseEvent) {

@@ -141,4 +141,16 @@ describe("App session URL date state", () => {
       "if (currentUrlSessionId === null) {\n          lastDetailFilterParamsSignature = null;",
     );
   });
+
+  it("restores the full recently deleted batch from the undo toast", () => {
+    const undoBlock = appSourceSlice(
+      "{#if sessions.recentlyDeleted.length > 0}",
+      "\n  </div>\n{/if}",
+    );
+
+    expect(undoBlock).toContain(
+      "await sessions.restoreRecentlyDeleted(last);",
+    );
+    expect(undoBlock).not.toContain("await sessions.restoreSession(last.id);");
+  });
 });
