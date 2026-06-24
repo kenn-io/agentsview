@@ -472,13 +472,13 @@ func parseDiffLiveMtime(
 }
 
 // parseDiffCodexTranscriptChangedSinceStored reports whether the Codex
-// transcript file itself differs from the archived parsed source fingerprint.
+// transcript's parsed byte boundary differs from the archived source snapshot.
 // Codex rows persist file_mtime on an index-folded basis so title changes can
 // invalidate sync caches, but parse-diff's raced guard uses transcript-only
 // live mtimes to avoid letting the global session_index.jsonl mask unrelated
 // parser drift. When the index-folded stored mtime is newer than a later
-// transcript write, the mtime comparison alone cannot prove the write; the
-// transcript fingerprint can.
+// transcript append, the mtime comparison alone cannot prove the write; the
+// parser-consumed JSONL boundary can.
 func parseDiffCodexTranscriptChangedSinceStored(
 	stored *db.Session, parsed parser.ParsedSession,
 ) bool {
@@ -486,30 +486,12 @@ func parseDiffCodexTranscriptChangedSinceStored(
 		return false
 	}
 	if stored.FileSize == nil {
-		if stored.FileHash != nil && parsed.File.Hash != "" {
-			return *stored.FileHash != parsed.File.Hash
-		}
 		return false
 	}
 
 	storedSize := *stored.FileSize
 	if parsed.File.Size == storedSize {
-		if stored.FileHash != nil && parsed.File.Hash != "" {
-			return *stored.FileHash != parsed.File.Hash
-		}
 		return false
-	}
-
-	if stored.FileHash != nil {
-		livePrefixHash, err := ComputeFileHashPrefix(
-			parsed.File.Path, storedSize,
-		)
-		if err != nil {
-			return true
-		}
-		if livePrefixHash != *stored.FileHash {
-			return true
-		}
 	}
 
 	consumedSize, err := parser.CodexTranscriptConsumedSize(parsed.File.Path)

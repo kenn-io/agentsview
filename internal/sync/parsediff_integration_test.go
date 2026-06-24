@@ -1570,6 +1570,70 @@ func TestParseDiffCodexIncrementalAppendDoesNotLookRaced(t *testing.T) {
 		"stable-source parser drift must trip --fail-on-change")
 }
 
+func TestParseDiffCodexLegacyStaleIncrementalHashDoesNotLookRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", initial,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	beforeAppend, err := env.db.GetSessionFull(
+		context.Background(), "codex:"+uuid,
+	)
+	require.NoError(t, err, "GetSessionFull before append")
+	require.NotNil(t, beforeAppend, "session before append")
+	require.NotNil(t, beforeAppend.FileHash, "file_hash before append")
+	staleHash := *beforeAppend.FileHash
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "world", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, f.Close(), "close after append")
+	require.NoError(t, err, "append")
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+
+	// Simulate a current data-version archive written by the legacy
+	// incremental path: size/mtime advanced, but file_hash stayed on the
+	// previous full-parse snapshot.
+	mutateDB(t, env,
+		"UPDATE sessions SET file_hash = ? WHERE id = ?",
+		staleHash, "codex:"+uuid)
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "legacy stale hash drift must stay changed")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must be counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"stable-source parser drift must trip --fail-on-change")
+}
+
 func TestParseDiffCodexIncrementalPartialTailDoesNotLookRaced(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
