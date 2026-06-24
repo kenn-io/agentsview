@@ -314,7 +314,7 @@ type getMessagesIn struct {
 	SessionID          string   `json:"session_id" jsonschema:"The session to read."`
 	From               *int     `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message)."`
 	Direction          string   `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first)."`
-	Limit              int      `json:"limit,omitempty" jsonschema:"Max messages, default 20, max 100."`
+	Limit              int      `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. System/tool messages are filtered after this limit, so a page can return fewer; use next_from to continue."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
 }
@@ -333,6 +333,11 @@ type messageOut struct {
 type getMessagesOut struct {
 	Messages []messageOut `json:"messages"`
 	Filtered int          `json:"filtered,omitempty"`
+	// NextFrom is the from anchor for the next page when more messages may
+	// remain. It is set off the last scanned ordinal (not the last visible
+	// one), so paging stays reliable even though filtering can make a page
+	// return fewer than the limit. An empty follow-up result means the end.
+	NextFrom *int `json:"next_from,omitempty"`
 }
 
 func (t *toolset) getMessages(
@@ -342,10 +347,11 @@ func (t *toolset) getMessages(
 	// anchors at the first message rather than being mistaken for
 	// "omitted". A nil From lets the service default: desc to
 	// newest-first, asc to oldest-first.
+	limit := clampLimit(in.Limit, defaultMessageLimit, maxMessageLimit)
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
 		From:      in.From,
 		Direction: in.Direction,
-		Limit:     clampLimit(in.Limit, defaultMessageLimit, maxMessageLimit),
+		Limit:     limit,
 	})
 	if err != nil {
 		return nil, getMessagesOut{}, err
@@ -372,6 +378,20 @@ func (t *toolset) getMessages(
 			mo.FullLength = m.ContentLength
 		}
 		out.Messages = append(out.Messages, mo)
+	}
+	// A full raw page means more rows may remain. Anchor next_from just past
+	// the last scanned ordinal in the scan direction (asc moves up, desc
+	// moves down) so the caller can continue; the From anchor is inclusive,
+	// so +/-1 avoids re-returning the boundary message.
+	if limit > 0 && len(res.Messages) == limit {
+		last := res.Messages[len(res.Messages)-1].Ordinal
+		next := last + 1
+		if in.Direction == "desc" {
+			next = last - 1
+		}
+		if next >= 0 {
+			out.NextFrom = &next
+		}
 	}
 	return nil, out, nil
 }

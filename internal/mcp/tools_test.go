@@ -533,6 +533,66 @@ func TestGetMessages_ExcludesSystemPrefixedUserMessage(t *testing.T) {
 	assert.Equal(t, 1, out.Filtered, "the system-prefixed user message is filtered")
 }
 
+// get_messages returns next_from when a full page may have more rows, so a
+// client can page reliably even when filtering shortens a page. next_from
+// is anchored on the last scanned ordinal, and the final partial page omits
+// it.
+func TestGetMessages_NextFromCursor(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 3
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		dbtest.AsstMsg("s1", 1, "m1"),
+		dbtest.UserMsg("s1", 2, "m2"),
+		dbtest.AsstMsg("s1", 3, "m3"),
+		dbtest.UserMsg("s1", 4, "m4"),
+	}))
+
+	// asc page 1: ordinals 0,1 -> next_from 2.
+	_, p1, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "asc", Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, p1.Messages, 2)
+	assert.Equal(t, 0, p1.Messages[0].Ordinal)
+	require.NotNil(t, p1.NextFrom)
+	assert.Equal(t, 2, *p1.NextFrom)
+
+	// asc page 2 from the cursor: ordinals 2,3 -> next_from 4.
+	_, p2, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "asc", Limit: 2, From: p1.NextFrom,
+	})
+	require.NoError(t, err)
+	require.Len(t, p2.Messages, 2)
+	assert.Equal(t, 2, p2.Messages[0].Ordinal)
+	require.NotNil(t, p2.NextFrom)
+	assert.Equal(t, 4, *p2.NextFrom)
+
+	// asc final page: ordinal 4 only; partial page has no next cursor.
+	_, p3, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "asc", Limit: 2, From: p2.NextFrom,
+	})
+	require.NoError(t, err)
+	require.Len(t, p3.Messages, 1)
+	assert.Equal(t, 4, p3.Messages[0].Ordinal)
+	assert.Nil(t, p3.NextFrom, "final partial page omits next_from")
+
+	// desc page 1 from newest: ordinals 4,3 -> next_from 2 (anchor moves down).
+	_, dpage, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "desc", Limit: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, dpage.Messages, 2)
+	assert.Equal(t, 4, dpage.Messages[0].Ordinal)
+	require.NotNil(t, dpage.NextFrom)
+	assert.Equal(t, 2, *dpage.NextFrom)
+}
+
 // search_sessions must exclude a session active now even when its search
 // result carries no ended_at/started_at (empty SessionEndedAt), by falling
 // back to created_at like search_content -- mirroring the canonical
