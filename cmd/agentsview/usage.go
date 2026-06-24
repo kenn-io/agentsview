@@ -97,6 +97,7 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
 		Filter:         filter,
 		NoDefaultRange: noDefaultRange,
+		Breakdowns:     cfg.Breakdown,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -450,6 +451,7 @@ func fetchHTTPDailyUsage(
 	filter := query.Filter
 	q := url.Values{}
 	q.Set("no_default_range", strconv.FormatBool(query.NoDefaultRange))
+	q.Set("breakdowns", strconv.FormatBool(query.Breakdowns))
 	setIfNotEmpty := func(k, v string) {
 		if v != "" {
 			q.Set(k, v)

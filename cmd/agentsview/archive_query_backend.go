@@ -39,6 +39,7 @@ type archiveQueryBackend interface {
 type dailyUsageQuery struct {
 	Filter         db.UsageFilter
 	NoDefaultRange bool
+	Breakdowns     bool
 }
 
 func resolveArchiveQueryBackend(

@@ -34,6 +34,7 @@ type UsageFilterInput struct {
 	IncludeOneShot   bool   `query:"include_one_shot" default:"true" doc:"Include one-shot sessions"`
 	IncludeAutomated bool   `query:"include_automated" doc:"Include automated sessions"`
 	NoDefaultRange   bool   `query:"no_default_range" doc:"Preserve omitted from/to without applying default range"`
+	Breakdowns       bool   `query:"breakdowns" default:"true" doc:"Include per-model, per-project, and per-agent breakdowns"`
 }
 
 type usageTopSessionsInput struct {
@@ -87,7 +88,7 @@ func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
 		ExcludeAutomated: !in.IncludeAutomated,
 		ActiveSince:      in.ActiveSince,
 		Termination:      in.Termination,
-		Breakdowns:       true,
+		Breakdowns:       in.Breakdowns,
 	}, nil
 }
 
@@ -114,11 +115,17 @@ func (s *Server) humaUsageSummary(
 		To:            f.To,
 		Totals:        result.Totals,
 		Daily:         result.Daily,
-		ProjectTotals: foldProjectTotals(result.Daily),
-		ModelTotals:   foldModelTotals(result.Daily),
-		AgentTotals:   foldAgentTotals(result.Daily),
 		SessionCounts: result.SessionCounts,
 		CacheStats:    computeCacheStats(result.Totals),
+	}
+	if f.Breakdowns {
+		resp.ProjectTotals = foldProjectTotals(result.Daily)
+		resp.ModelTotals = foldModelTotals(result.Daily)
+		resp.AgentTotals = foldAgentTotals(result.Daily)
+	} else {
+		resp.ProjectTotals = []ProjectTotal{}
+		resp.ModelTotals = []ModelTotal{}
+		resp.AgentTotals = []AgentTotal{}
 	}
 	return &jsonOutput[UsageSummaryResponse]{Body: resp}, nil
 }

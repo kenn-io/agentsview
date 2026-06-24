@@ -20,6 +20,7 @@ type usageSummaryCountsSpy struct {
 	db.Store
 	dailyCalls  int
 	countsCalls int
+	filters     []db.UsageFilter
 }
 
 // assertUsageQueryCalls verifies how many times the usage handler
@@ -34,9 +35,10 @@ func assertUsageQueryCalls(
 }
 
 func (s *usageSummaryCountsSpy) GetDailyUsage(
-	_ context.Context, _ db.UsageFilter,
+	_ context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
 	s.dailyCalls++
+	s.filters = append(s.filters, f)
 	return db.DailyUsageResult{
 		Daily: []db.DailyUsageEntry{{
 			Date:      "2024-06-01",
@@ -66,6 +68,29 @@ func TestUsageSummaryScansCurrentPeriodOnly(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	assertUsageQueryCalls(t, spy, 1, 0)
+}
+
+func TestUsageSummaryDefaultsToBreakdowns(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s, "/api/v1/usage/summary?"+oneDayUsageRange)
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.True(t, spy.filters[0].Breakdowns)
+}
+
+func TestUsageSummaryCanSkipBreakdowns(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/summary?"+oneDayUsageRange+"&breakdowns=false")
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.False(t, spy.filters[0].Breakdowns)
 }
 
 func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
