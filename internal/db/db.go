@@ -29,6 +29,7 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+<<<<<<< HEAD
 // Bumped to 50: parser-derived text is sanitized for PostgreSQL
 // parity and fingerprints. Existing rows need re-parsing so stored
 // message/session shape, timestamps, roles, token counts, and content
@@ -53,11 +54,20 @@ import (
 // titles from session_index.jsonl. Existing Codex rows need
 // re-parsing so their titles reflect later renames.
 //
+// Bumped to 44: the Pi parser now persists per-message
+// source_uuid and source_parent_uuid lineage. Existing Pi rows need
+// re-parsing so stored message trees gain the new lineage anchors.
+//
 // Bumped to 44: the VSCode Copilot parser now extracts per-turn
 // token usage (promptTokens/outputTokens) and the resolved model from
 // result.metadata into usage events, session output totals, and peak
 // context, so existing VSCode Copilot rows need re-parsing to gain
 // usage and cost.
+=======
+// Bumped to 44: the Pi parser now persists per-message
+// source_uuid and source_parent_uuid lineage. Existing Pi rows need
+// re-parsing so stored message trees gain the new lineage anchors.
+>>>>>>> 2642fa09 (fix(db): force Pi lineage backfill on resync (#368))
 //
 // Bumped to 43: the Pi parser now persists cwd from the
 // session header. Existing Pi rows need re-parsing so their cwd column
