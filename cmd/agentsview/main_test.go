@@ -264,6 +264,34 @@ func TestStartRemoteHostSync_EmitsAfterSuccess(t *testing.T) {
 	assert.Positive(t, em.count.Load(), "emitter should have been called at least once")
 }
 
+type scopedEmitter struct {
+	scopes chan string
+}
+
+func (e *scopedEmitter) Emit(scope string) { e.scopes <- scope }
+
+func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
+	em := &scopedEmitter{scopes: make(chan string, 1)}
+	syncFn := func() (int, error) { return 3, nil }
+
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	interval := 10 * time.Millisecond
+	go func() {
+		runRemoteHostSyncLoop("test-host", interval, syncFn, em, done)
+		close(exited)
+	}()
+
+	select {
+	case scope := <-em.scopes:
+		assert.Equal(t, "sessions", scope)
+	case <-time.After(3 * interval):
+		require.FailNow(t, "timed out waiting for remote sync event")
+	}
+	close(done)
+	<-exited
+}
+
 func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
 	em := &fakeEmitter{}
 	syncFn := func() (int, error) { return 0, nil }

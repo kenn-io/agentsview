@@ -235,12 +235,12 @@ func (s *Server) authorizeRemoteSyncHosts(
 		return hosts, nil
 	}
 
-	allowed := make(map[config.RemoteHost]struct{}, len(s.cfg.RemoteHosts))
+	allowed := make(map[remoteHostIdentity]struct{}, len(s.cfg.RemoteHosts))
 	for _, h := range s.cfg.RemoteHosts {
-		allowed[h] = struct{}{}
+		allowed[remoteHostIdentityFrom(h)] = struct{}{}
 	}
 	for _, h := range hosts {
-		if _, ok := allowed[h]; !ok {
+		if _, ok := allowed[remoteHostIdentityFrom(h)]; !ok {
 			return nil, apiError(
 				http.StatusForbidden,
 				fmt.Sprintf(
@@ -251,6 +251,20 @@ func (s *Server) authorizeRemoteSyncHosts(
 		}
 	}
 	return hosts, nil
+}
+
+type remoteHostIdentity struct {
+	Host string
+	User string
+	Port int
+}
+
+func remoteHostIdentityFrom(h config.RemoteHost) remoteHostIdentity {
+	return remoteHostIdentity{
+		Host: h.Host,
+		User: h.User,
+		Port: h.Port,
+	}
 }
 
 func (s *Server) runRemoteSyncRequest(

@@ -863,7 +863,7 @@ func runRemoteHostSyncLoop(host string, interval time.Duration, syncFn func() (i
 			continue
 		}
 		if synced > 0 && emitter != nil {
-			emitter.Emit("remote")
+			emitter.Emit("sessions")
 		}
 	}
 }

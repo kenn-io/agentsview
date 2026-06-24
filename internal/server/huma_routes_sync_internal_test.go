@@ -501,3 +501,35 @@ func TestHumaSyncRemotesAllowsNonLocalConfiguredExactHost(t *testing.T) {
 	assert.Equal(t, allowed.User, got.User)
 	assert.Equal(t, allowed.Port, got.Port)
 }
+
+func TestHumaSyncRemotesAllowsNonLocalConfiguredHostIgnoringInterval(t *testing.T) {
+	allowed := config.RemoteHost{
+		Host:     "allowed-box",
+		User:     "alice",
+		Port:     2222,
+		Interval: 5 * time.Minute,
+	}
+	requested := config.RemoteHost{
+		Host: "allowed-box",
+		User: "alice",
+		Port: 2222,
+	}
+	f := newSyncRouteFixture(t, withRemoteHosts(allowed))
+
+	var got *ssh.RemoteSync
+	stubRunRemoteSync(t, func(
+		_ context.Context,
+		rs *ssh.RemoteSync,
+	) (ssh.SyncStats, error) {
+		got = rs
+		return ssh.SyncStats{SessionsSynced: 1, SessionsTotal: 1}, nil
+	})
+	w := postRemoteSync(t, f.handler, []config.RemoteHost{requested},
+		withRemoteAddr("192.168.1.50:1234"))
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.NotNil(t, got)
+	assert.Equal(t, requested.Host, got.Host)
+	assert.Equal(t, requested.User, got.User)
+	assert.Equal(t, requested.Port, got.Port)
+}
