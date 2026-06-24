@@ -1642,6 +1642,14 @@ func (s *codexIncrementalSeed) observeUserMessage(
 	}
 }
 
+// CodexTranscriptConsumedSize returns the byte offset after the last complete,
+// valid JSON line in a Codex transcript. Bytes after this offset are ignored by
+// the Codex JSONL parser, so partial trailing writes are not part of the parsed
+// source snapshot.
+func CodexTranscriptConsumedSize(path string) (int64, error) {
+	return readJSONLFrom(path, 0, func(line string) {})
+}
+
 // ParseCodexSessionFrom parses only new lines from a Codex
 // JSONL file starting at the given byte offset. Returns only
 // the newly parsed messages (with ordinals starting at
