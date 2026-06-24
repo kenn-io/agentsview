@@ -279,7 +279,7 @@ SELECT
 	m.session_id,
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
-	COALESCE(m.timestamp, s.started_at) AS ts,
+	COALESCE(NULLIF(m.timestamp, ''), s.started_at) AS ts,
 	m.model,
 	m.token_usage,
 	0 AS input_tokens,
@@ -359,7 +359,7 @@ SELECT
 	m.session_id,
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
-	COALESCE(m.timestamp, s.started_at) AS ts,
+	COALESCE(NULLIF(m.timestamp, ''), s.started_at) AS ts,
 	m.model,
 	m.token_usage,
 	0 AS input_tokens,
@@ -409,7 +409,7 @@ SELECT
 	m.session_id,
 	m.ordinal AS message_ordinal,
 	'message' AS usage_source,
-	COALESCE(m.timestamp, s.started_at) AS ts,
+	COALESCE(NULLIF(m.timestamp, ''), s.started_at) AS ts,
 	m.model,
 	m.token_usage,
 	0 AS input_tokens,
@@ -474,7 +474,7 @@ message_timestamp_rows AS MATERIALIZED (
 	SELECT
 		m.session_id,
 		m.ordinal,
-		m.timestamp,
+		NULLIF(m.timestamp, '') AS timestamp,
 		m.model,
 		m.token_usage,
 		m.claude_message_id,
@@ -705,13 +705,14 @@ func dailyUsageRowsSQLForBounds(
 	}
 
 	messageTimestampSourceWhere := usageMessageSourceEligibility +
-		"\n\tAND m.timestamp IS NOT NULL"
+		"\n\tAND NULLIF(m.timestamp, '') IS NOT NULL"
 	var messageTimestampArgs []any
 	messageTimestampSourceWhere, messageTimestampArgs =
 		f.appendUsageSourceFilterClauses(
 			messageTimestampSourceWhere, messageTimestampArgs, "m.model")
 	messageTimestampSourceWhere, messageTimestampArgs = appendUsageColumnBounds(
-		messageTimestampSourceWhere, "m.timestamp", b, messageTimestampArgs)
+		messageTimestampSourceWhere, "NULLIF(m.timestamp, '')",
+		b, messageTimestampArgs)
 	var messageTimestampJoinArgs []any
 	messageTimestampJoinWhere, messageTimestampJoinArgs :=
 		f.appendUsageSessionFilterClauses(
@@ -731,7 +732,7 @@ func dailyUsageRowsSQLForBounds(
 			usageSessionEligibility, eventTimestampJoinArgs)
 
 	messageFallbackWhere := usageMessageEligibility +
-		"\n\tAND m.timestamp IS NULL"
+		"\n\tAND NULLIF(m.timestamp, '') IS NULL"
 	var messageFallbackArgs []any
 	messageFallbackWhere, messageFallbackArgs =
 		f.appendUsageBranchFilterClauses(
