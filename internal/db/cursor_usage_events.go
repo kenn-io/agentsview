@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -137,4 +138,96 @@ func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
 	)
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
+}
+
+func (db *DB) GetCursorUsageEvents(
+	ctx context.Context,
+) ([]CursorUsageEvent, error) {
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT id, occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		FROM cursor_usage_events
+		ORDER BY occurred_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("querying cursor usage events: %w", err)
+	}
+	defer rows.Close()
+
+	var out []CursorUsageEvent
+	for rows.Next() {
+		var ev CursorUsageEvent
+		var isHeadless int
+		if err := rows.Scan(
+			&ev.ID, &ev.OccurredAt, &ev.Model, &ev.Kind,
+			&ev.InputTokens, &ev.OutputTokens,
+			&ev.CacheWriteTokens, &ev.CacheReadTokens,
+			&ev.ChargedCents, &ev.CursorTokenFee,
+			&ev.UserID, &ev.UserEmail, &isHeadless, &ev.DedupKey,
+		); err != nil {
+			return nil, fmt.Errorf("scanning cursor usage event: %w", err)
+		}
+		ev.IsHeadless = isHeadless != 0
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating cursor usage events: %w", err)
+	}
+	return out, nil
+}
+
+func (db *DB) CursorUsageEventFingerprint() (string, error) {
+	rows, err := db.getReader().Query(`
+		SELECT occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		FROM cursor_usage_events
+		ORDER BY occurred_at, id`)
+	if err != nil {
+		return "", fmt.Errorf("querying cursor usage fingerprint: %w", err)
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var ev CursorUsageEvent
+		var isHeadless int
+		if err := rows.Scan(
+			&ev.OccurredAt, &ev.Model, &ev.Kind,
+			&ev.InputTokens, &ev.OutputTokens,
+			&ev.CacheWriteTokens, &ev.CacheReadTokens,
+			&ev.ChargedCents, &ev.CursorTokenFee,
+			&ev.UserID, &ev.UserEmail, &isHeadless, &ev.DedupKey,
+		); err != nil {
+			return "", fmt.Errorf("scanning cursor usage fingerprint: %w", err)
+		}
+		ev.Model = SanitizeUTF8(ev.Model)
+		ev.Kind = SanitizeUTF8(ev.Kind)
+		ev.UserID = SanitizeUTF8(ev.UserID)
+		ev.UserEmail = SanitizeUTF8(ev.UserEmail)
+		ev.DedupKey = SanitizeUTF8(ev.DedupKey)
+		fmt.Fprintf(&b, "%d:%s|%d:%s|%d:%s|%d|%d|%d|%d|%g|%g|%d:%s|%d:%s|%t|%d:%s;",
+			len(ev.OccurredAt), ev.OccurredAt,
+			len(ev.Model), ev.Model,
+			len(ev.Kind), ev.Kind,
+			ev.InputTokens,
+			ev.OutputTokens,
+			ev.CacheWriteTokens,
+			ev.CacheReadTokens,
+			ev.ChargedCents,
+			ev.CursorTokenFee,
+			len(ev.UserID), ev.UserID,
+			len(ev.UserEmail), ev.UserEmail,
+			isHeadless != 0,
+			len(ev.DedupKey), ev.DedupKey,
+		)
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterating cursor usage fingerprint: %w", err)
+	}
+	return b.String(), nil
 }

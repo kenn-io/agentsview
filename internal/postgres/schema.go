@@ -147,6 +147,33 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events (occurred_at);
 
+CREATE TABLE IF NOT EXISTS cursor_usage_events (
+    id BIGSERIAL PRIMARY KEY,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    model TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT '',
+    input_tokens INT NOT NULL DEFAULT 0,
+    output_tokens INT NOT NULL DEFAULT 0,
+    cache_write_tokens INT NOT NULL DEFAULT 0,
+    cache_read_tokens INT NOT NULL DEFAULT 0,
+    charged_cents DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cursor_token_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+    user_id TEXT NOT NULL DEFAULT '',
+    user_email TEXT NOT NULL DEFAULT '',
+    is_headless BOOLEAN NOT NULL DEFAULT FALSE,
+    dedup_key TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup
+    ON cursor_usage_events (dedup_key)
+    WHERE dedup_key != '';
+
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
+    ON cursor_usage_events (occurred_at);
+
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
+    ON cursor_usage_events (model);
+
 CREATE TABLE IF NOT EXISTS starred_sessions (
     session_id TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1496,6 +1523,17 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf(
 			"usage_events table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT id, occurred_at, model, dedup_key
+		 FROM cursor_usage_events LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"cursor_usage_events table missing required columns: %w",
 			err,
 		)
 	}
