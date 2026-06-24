@@ -624,23 +624,19 @@ var Registry = []AgentDef{
 	{
 		// Aider has no central session store. It writes one Markdown
 		// chat log per repo at <repo>/.aider.chat.history.md. There is
-		// no canonical home dir, so discovery defaults to a bounded,
-		// symlink-safe walk of $HOME (DefaultDirs below); point
-		// AIDER_DIR (or the aider_dirs config key) at a narrower code
-		// root to scope and speed up the scan. The walk is depth-capped,
-		// time-budgeted, and skips vendor/build/VCS directories by name.
+		// no safe canonical root: an always-on $HOME walk is prone to
+		// macOS privacy prompts and surprising background work. Users
+		// must opt in by setting AIDER_DIR or the aider_dirs config key
+		// to a code root they want scanned.
 		//
-		// ShallowWatch is true: DefaultDirs [""] resolves to $HOME, and a
-		// recursive live watch there would inotify-register the entire home
-		// tree (the watcher walk ignores the discovery skip-set and depth
-		// cap). Watch the root only and rely on the 15-minute periodic
-		// sync to pick up new repos' history files; aider history is
-		// append-mostly, so this is an acceptable latency tradeoff.
+		// ShallowWatch is true because users can still opt into broad
+		// roots. Watch those roots shallowly and rely on the 15-minute
+		// periodic sync to pick up new repos' history files; aider history
+		// is append-mostly, so this is an acceptable latency tradeoff.
 		Type:           AgentAider,
 		DisplayName:    "Aider",
 		EnvVar:         "AIDER_DIR",
 		ConfigKey:      "aider_dirs",
-		DefaultDirs:    []string{""},
 		IDPrefix:       "aider:",
 		FileBased:      true,
 		ShallowWatch:   true,

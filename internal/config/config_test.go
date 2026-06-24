@@ -267,6 +267,14 @@ func TestDefault_IncludesCodexArchivedSessionsDir(t *testing.T) {
 	assert.True(t, strings.HasSuffix(dirs[1], filepath.Join(".codex", "archived_sessions")), "dirs[1] = %q", dirs[1])
 }
 
+func TestDefault_SkipsAiderUntilConfigured(t *testing.T) {
+	cfg, err := Default()
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.ResolveDirs(parser.AgentAider))
+	assert.False(t, cfg.IsUserConfigured(parser.AgentAider))
+}
+
 func TestLoadEnv_OverridesDataDir(t *testing.T) {
 	custom := setupTestEnv(t)
 
@@ -561,6 +569,7 @@ func TestLoadFile_ReadsDirArrays(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"claude_project_dirs": []string{"/path/one", "/path/two"},
 		"codex_sessions_dirs": []string{"/codex/a"},
+		"aider_dirs":          []string{"/code"},
 	})
 
 	claudeDirs := cfg.ResolveDirs(parser.AgentClaude)
@@ -570,6 +579,8 @@ func TestLoadFile_ReadsDirArrays(t *testing.T) {
 	codexDirs := cfg.ResolveDirs(parser.AgentCodex)
 	require.Len(t, codexDirs, 1)
 	assert.Equal(t, "/codex/a", codexDirs[0])
+	assert.Equal(t, []string{"/code"}, cfg.ResolveDirs(parser.AgentAider))
+	assert.True(t, cfg.IsUserConfigured(parser.AgentAider))
 }
 
 func TestResolveDirs(t *testing.T) {

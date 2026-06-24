@@ -274,11 +274,12 @@ agentsview stats --include-git-outcomes
 
 ## Supported Agents
 
-agentsview auto-discovers sessions from all of these:
+agentsview discovers sessions from all of these. Aider is opt-in because it has
+no central session directory; set `AIDER_DIR` or `aider_dirs` to enable it.
 
 | Agent                 | Session Directory                                                                                                                                                       |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Aider                 | `<repo>/.aider.chat.history.md` (per repo; bounded scan of `~`, set `AIDER_DIR` to scope)                                                                               |
+| Aider                 | `<repo>/.aider.chat.history.md` (per repo; opt in with `AIDER_DIR` or `aider_dirs`)                                                                                     |
 | Amp                   | `~/.local/share/amp/threads/`                                                                                                                                           |
 | Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                           |
@@ -328,17 +329,18 @@ Markdown log per repository, and one log accumulates many runs (one per `aider`
 launch, delimited by `# aider chat started at ...` headers). agentsview indexes
 **each run as its own session**.
 
-Discovery is a bounded, symlink-safe walk of your home directory: it descends at
-most four levels below `~`, skips vendor/build/VCS directories by name
-(`node_modules`, `target`, `.git`, `Library`, `go`, `.cargo`, and similar), and
-stops after a two-second wall-clock budget so a large home tree cannot stall the
-scan. **A repository whose `.aider.chat.history.md` sits more than four levels
-under `~`, or outside your home directory, will not be found by the default
-scan.** Point `AIDER_DIR` (or the `aider_dirs` config key) at that code root to
-index it and to scope and speed up the walk. The live file watcher only watches
-the home root shallowly (registering it recursively would inotify the entire
-home tree); new repos are picked up by the periodic sync, which runs every 15
-minutes.
+AgentsView does not scan for Aider logs by default. Earlier builds attempted an
+always-on bounded scan of the home directory, but that was not trustworthy:
+desktop launches and background usage refreshes could still trigger macOS
+privacy prompts for protected folders. To enable Aider, point `AIDER_DIR` (or
+the `aider_dirs` config key) at a code root you explicitly want scanned. The
+scan descends at most four levels below each configured root, skips
+vendor/build/VCS directories by name (`node_modules`, `target`, `.git`,
+`Library`, `go`, `.cargo`, and similar), and stops after a two-second wall-clock
+budget. On macOS, broad home roots still skip protected top-level folders unless
+one of those folders is configured directly. The live file watcher only watches
+configured Aider roots shallowly; new repos are picked up by the periodic sync,
+which runs every 15 minutes.
 
 Because the format is Markdown-derived, roles are reconstructed from line
 prefixes and there are no per-message timestamps; a run's start time comes from

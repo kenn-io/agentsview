@@ -91,9 +91,10 @@ var aiderSkipDirs = map[string]struct{}{
 }
 
 // aiderProtectedHomeDirs are first-level home folders that trigger macOS
-// privacy prompts when a desktop app enumerates them. Aider's default root is
-// $HOME, so the best-effort discovery walk must not enter these folders unless
-// the user explicitly configures one of them as the Aider root.
+// privacy prompts when a desktop app enumerates them. Aider discovery is
+// opt-in, but a user-configured broad root such as $HOME still must not enter
+// these folders unless the user explicitly configures one of them as the Aider
+// root.
 var aiderProtectedHomeDirs = map[string]struct{}{
 	"Desktop":   {},
 	"Documents": {},
@@ -715,82 +716,132 @@ func DiscoverAiderSessions(root string) []DiscoveredFile {
 	if root == "" {
 		return nil
 	}
-	skipProtectedHomeDirs := aiderShouldSkipProtectedHomeDirs(root, aiderHomeDir(), runtime.GOOS)
+	home := aiderHomeDir()
+	skipProtectedHomeDirs := aiderShouldSkipProtectedHomeDirs(root, home, runtime.GOOS)
 	rootDepth := strings.Count(filepath.Clean(root), string(os.PathSeparator))
+	walkRoots := aiderDiscoveryWalkRoots(root, home, runtime.GOOS)
 
 	var files []DiscoveredFile
+	if skipProtectedHomeDirs {
+		files = appendAiderHistoryFile(files, filepath.Join(root, aiderHistoryFile))
+	}
 	dirCount := 0
 	start := time.Now()
-	_ = filepath.WalkDir(root, func(
-		path string, d os.DirEntry, err error,
-	) error {
-		// Wall-clock budget: stop the whole walk once it is exceeded,
-		// returning whatever was found so far. Mirrors the upstream Rust
-		// adapter's WALK_BUDGET_SECS.
-		if time.Since(start) >= aiderWalkBudget {
-			return filepath.SkipAll
+	stopAll := false
+	for _, walkRoot := range walkRoots {
+		if stopAll {
+			break
 		}
-		if err != nil {
-			// Unreadable entry: skip it (and its subtree if a dir) but
-			// keep walking the rest of the tree.
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
+		_ = filepath.WalkDir(walkRoot, func(
+			path string, d os.DirEntry, err error,
+		) error {
+			// Wall-clock budget: stop the whole walk once it is exceeded,
+			// returning whatever was found so far. Mirrors the upstream Rust
+			// adapter's WALK_BUDGET_SECS.
+			if time.Since(start) >= aiderWalkBudget {
+				stopAll = true
+				return filepath.SkipAll
 			}
-			return nil
-		}
-		if d.IsDir() {
-			// Never follow symlinked directories.
+			if err != nil {
+				// Unreadable entry: skip it (and its subtree if a dir) but
+				// keep walking the rest of the tree.
+				if d != nil && d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.IsDir() {
+				// Never follow symlinked directories.
+				if d.Type()&os.ModeSymlink != 0 {
+					return filepath.SkipDir
+				}
+				depth := strings.Count(
+					filepath.Clean(path), string(os.PathSeparator),
+				) - rootDepth
+				if skipProtectedHomeDirs && depth == 1 {
+					if _, skip := aiderProtectedHomeDirs[d.Name()]; skip {
+						return filepath.SkipDir
+					}
+				}
+				if path != root {
+					if _, skip := aiderSkipDirs[d.Name()]; skip {
+						return filepath.SkipDir
+					}
+				}
+				// Skip descent BELOW the cap, but still visit files in a
+				// directory AT the cap, so a history file exactly
+				// aiderMaxWalkDepth levels under the root is discovered (the
+				// documented N-level scan). A `>=` test would skip the
+				// max-depth directory before its files were seen.
+				if depth > aiderMaxWalkDepth {
+					return filepath.SkipDir
+				}
+				dirCount++
+				if dirCount > aiderMaxDirs {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Name() != aiderHistoryFile {
+				return nil
+			}
+			// Skip symlinked files; only index real history files.
 			if d.Type()&os.ModeSymlink != 0 {
-				return filepath.SkipDir
+				return nil
 			}
-			depth := strings.Count(
-				filepath.Clean(path), string(os.PathSeparator),
-			) - rootDepth
-			if skipProtectedHomeDirs && depth == 1 {
-				if _, skip := aiderProtectedHomeDirs[d.Name()]; skip {
-					return filepath.SkipDir
-				}
-			}
-			if path != root {
-				if _, skip := aiderSkipDirs[d.Name()]; skip {
-					return filepath.SkipDir
-				}
-			}
-			// Skip descent BELOW the cap, but still visit files in a
-			// directory AT the cap, so a history file exactly
-			// aiderMaxWalkDepth levels under the root is discovered (the
-			// documented N-level scan). A `>=` test would skip the
-			// max-depth directory before its files were seen.
-			if depth > aiderMaxWalkDepth {
-				return filepath.SkipDir
-			}
-			dirCount++
-			if dirCount > aiderMaxDirs {
-				return filepath.SkipDir
+			files = append(files, DiscoveredFile{
+				Path:  path,
+				Agent: AgentAider,
+			})
+			if len(files) >= aiderMaxFiles {
+				stopAll = true
+				return filepath.SkipAll
 			}
 			return nil
-		}
-		if d.Name() != aiderHistoryFile {
-			return nil
-		}
-		// Skip symlinked files; only index real history files.
-		if d.Type()&os.ModeSymlink != 0 {
-			return nil
-		}
-		files = append(files, DiscoveredFile{
-			Path:  path,
-			Agent: AgentAider,
 		})
-		if len(files) >= aiderMaxFiles {
-			return filepath.SkipAll
-		}
-		return nil
-	})
+	}
 
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
 	return files
+}
+
+func aiderDiscoveryWalkRoots(root, home, goos string) []string {
+	if !aiderShouldSkipProtectedHomeDirs(root, home, goos) {
+		return []string{root}
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	roots := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if _, skip := aiderProtectedHomeDirs[name]; skip {
+			continue
+		}
+		if _, skip := aiderSkipDirs[name]; skip {
+			continue
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.IsDir() {
+			continue
+		}
+		roots = append(roots, filepath.Join(root, name))
+	}
+	return roots
+}
+
+func appendAiderHistoryFile(files []DiscoveredFile, path string) []DiscoveredFile {
+	info, err := os.Lstat(path)
+	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return files
+	}
+	return append(files, DiscoveredFile{
+		Path:  path,
+		Agent: AgentAider,
+	})
 }
 
 func aiderHomeDir() string {

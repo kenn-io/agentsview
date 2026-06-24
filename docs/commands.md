@@ -760,7 +760,7 @@ agentsview help
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AIDER_DIR` | `~` | Aider discovery root; point it at a narrower code root for faster scans |
+| `AIDER_DIR` | unset | Aider discovery root; set this to opt into scanning a code root |
 | `AMP_DIR` | `~/.local/share/amp/threads` | Amp threads directory |
 | `ANTIGRAVITY_DIR` | `~/.gemini/antigravity` | Google Antigravity IDE sessions directory |
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Google Antigravity CLI sessions directory |

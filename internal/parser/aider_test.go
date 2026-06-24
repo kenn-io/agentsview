@@ -561,16 +561,16 @@ func TestListAiderRunMetas(t *testing.T) {
 	assert.False(t, metas[2].HasMessages, "header-only run produces no session")
 }
 
-// TestAiderRegistryUsesShallowWatch pins the watcher fix: aider's
-// DefaultDirs [""] resolves to $HOME, so a recursive live watch there
-// would inotify-register the entire home tree (the watcher walk ignores
-// the discovery skip-set and depth cap). ShallowWatch must stay true so
-// the watcher registers only the root and relies on the periodic sync.
-func TestAiderRegistryUsesShallowWatch(t *testing.T) {
+// TestAiderRegistryOptInDiscovery pins that Aider is not discovered by
+// default. Aider has no central store; a rootless home scan can trigger macOS
+// privacy prompts and is not trustworthy for always-on sync. Users must
+// opt in with AIDER_DIR or aider_dirs.
+func TestAiderRegistryOptInDiscovery(t *testing.T) {
 	def, ok := AgentByType(AgentAider)
 	require.True(t, ok, "AgentAider missing from Registry")
+	assert.Empty(t, def.DefaultDirs)
 	assert.True(t, def.ShallowWatch,
-		"aider must watch the home root shallowly, not recurse all of $HOME")
+		"aider must not recursively watch a broad opt-in root")
 	// The shallow-watch contract relies on no static subdir or custom
 	// watch-roots wiring overriding it.
 	assert.Empty(t, def.WatchSubdirs)
@@ -628,8 +628,23 @@ func TestAiderProtectedHomeDirsCoversMacOSTCCPrompts(t *testing.T) {
 		"Pictures",
 	} {
 		_, ok := aiderProtectedHomeDirs[name]
-		assert.True(t, ok, "%s should be pruned from default home discovery", name)
+		assert.True(t, ok, "%s should be pruned from broad home discovery", name)
 	}
+}
+
+func TestAiderBroadHomeWalkRootsExcludeMacOSProtectedDirs(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"Code", "Documents", "Downloads"} {
+		require.NoError(t, os.Mkdir(filepath.Join(home, name), 0o755))
+	}
+
+	roots := aiderDiscoveryWalkRoots(home, home, "darwin")
+
+	assert.Contains(t, roots, filepath.Join(home, "Code"))
+	assert.NotContains(t, roots, home,
+		"broad Aider home discovery must not recursively walk $HOME on macOS")
+	assert.NotContains(t, roots, filepath.Join(home, "Documents"))
+	assert.NotContains(t, roots, filepath.Join(home, "Downloads"))
 }
 
 func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
@@ -655,7 +670,7 @@ func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
 	}
 
 	files := DiscoverAiderSessions(root)
-	assert.Empty(t, files, "default home discovery must not enter macOS TCC-protected folders")
+	assert.Empty(t, files, "broad home discovery must not enter macOS TCC-protected folders")
 }
 
 func TestDiscoverAiderSessionsAllowsExplicitProtectedRoot(t *testing.T) {

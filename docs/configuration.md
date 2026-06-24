@@ -82,7 +82,7 @@ sources:
 
 | Agent | Default Directory | File Format |
 |-------|-------------------|-------------|
-| Aider | `$HOME` bounded scan; set `AIDER_DIR` to a narrower code root | `.aider.chat.history.md` Markdown history files |
+| Aider | No default; opt in with `AIDER_DIR` or `aider_dirs` | `.aider.chat.history.md` Markdown history files |
 | Amp | `~/.local/share/amp/threads/` | JSON per thread |
 | Antigravity (IDE) | `~/.gemini/antigravity/` | SQLite database per session |
 | Antigravity CLI | `~/.gemini/antigravity-cli/` | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl` |
@@ -198,11 +198,13 @@ Kilo reads from `storage/session`, while MiMoCode reads from
 SQLite databases when the file-backed storage layout is absent.
 
 **aider discovery:** aider writes one `.aider.chat.history.md`
-file per repository instead of a central session directory. With no
-configuration, AgentsView performs a bounded, symlink-safe scan of
-`$HOME`, skipping common vendor, build, and VCS directories. For
-faster and more predictable syncs, set `AIDER_DIR` or `aider_dirs`
-to a narrower code root.
+file per repository instead of a central session directory. AgentsView
+does not scan for Aider logs unless you opt in with `AIDER_DIR` or
+`aider_dirs`. Always-on home-directory discovery has caused unwanted
+macOS privacy prompts from background refreshes, so Aider discovery is
+limited to roots you explicitly configure. On macOS, broad home roots
+still skip protected top-level folders unless one of those folders is
+configured directly.
 
 **Warp default directories** vary by platform:
 
@@ -269,7 +271,8 @@ agy-reader --watch
 ```
 
 Override any default with an environment variable (single
-directory):
+directory). For Aider, this opt-in is required because there is no
+default discovery root:
 
 ```bash
 export AIDER_DIR=~/code

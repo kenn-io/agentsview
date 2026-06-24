@@ -206,7 +206,8 @@ agentsview serve --background  # Run as a managed background server
     `/api/v1/settings` returns `401`. See
     [Remote Access](/remote-access/#forwarded-dev-environments).
 
-Point to custom session directories with environment variables:
+Point to custom session directories with environment variables. Aider has no
+default discovery root, so set `AIDER_DIR` to opt into scanning Aider logs:
 
 ```bash
 export AIDER_DIR=~/code
