@@ -86,7 +86,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 						return fmt.Errorf("provisioning auth token: %w", err)
 					}
 				}
-				token, err := mcpListenerAuth(addr, cfg.AuthToken)
+				token, err := mcpListenerAuth(addr, cfg.AuthToken, cfg.RequireAuth)
 				if err != nil {
 					return err
 				}
@@ -127,24 +127,28 @@ Add to your MCP client config (e.g. Claude Desktop):
 }
 
 // mcpListenerAuth decides the bearer token the MCP HTTP listener must
-// enforce for the given (already-normalized) bind address. A loopback
-// bind is local-trust and runs without listener auth (empty token). A
-// non-loopback bind must be authenticated: it returns the configured
-// token, or an error when none is set, so the network-reachable surface
-// is never unauthenticated.
-func mcpListenerAuth(addr, configuredToken string) (string, error) {
+// enforce for the given (already-normalized) bind address. A loopback bind
+// is local-trust and runs without listener auth (empty token) UNLESS
+// require_auth is set, which forces authentication on every bind so a
+// forwarded loopback port (reverse proxy, SSH tunnel) is never an
+// unauthenticated surface. A non-loopback bind, or any bind under
+// require_auth, must be authenticated: it returns the configured token, or
+// an error when none is set, so the network-reachable surface is never
+// unauthenticated.
+func mcpListenerAuth(addr, configuredToken string, requireAuth bool) (string, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return "", fmt.Errorf("parsing --http address %q: %w", addr, err)
 	}
-	if isLoopbackHost(host) {
+	if isLoopbackHost(host) && !requireAuth {
 		return "", nil
 	}
 	if configuredToken == "" {
 		return "", fmt.Errorf(
-			"--http %q is non-loopback but no auth token is configured; set "+
+			"--http %q requires an auth token but none is configured; set "+
 				"auth_token in config.toml (or enable require_auth) so the MCP "+
-				"server requires Authorization: Bearer, or bind a loopback address",
+				"server enforces Authorization: Bearer, or bind a loopback "+
+				"address without require_auth",
 			addr)
 	}
 	return configuredToken, nil

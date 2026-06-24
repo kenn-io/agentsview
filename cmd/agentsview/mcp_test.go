@@ -47,21 +47,33 @@ func TestNormalizeMCPHTTPAddr(t *testing.T) {
 
 func TestMCPListenerAuth(t *testing.T) {
 	t.Parallel()
-	// Loopback never requires listener auth, even when a token exists.
-	tok, err := mcpListenerAuth("127.0.0.1:8085", "")
+	// Loopback without require_auth is local-trust: no listener auth, even
+	// when a token happens to be configured.
+	tok, err := mcpListenerAuth("127.0.0.1:8085", "", false)
 	require.NoError(t, err)
 	assert.Empty(t, tok)
-	tok, err = mcpListenerAuth("[::1]:8085", "abc")
+	tok, err = mcpListenerAuth("[::1]:8085", "abc", false)
 	require.NoError(t, err)
-	assert.Empty(t, tok, "loopback bind does not enforce a token")
+	assert.Empty(t, tok, "loopback bind does not enforce a token without require_auth")
+
+	// require_auth forces auth even on loopback, so a forwarded port is
+	// never an unauthenticated surface.
+	tok, err = mcpListenerAuth("127.0.0.1:8085", "abc", true)
+	require.NoError(t, err)
+	assert.Equal(t, "abc", tok, "require_auth enforces the token on loopback")
+
+	// require_auth on loopback without a token is refused.
+	_, err = mcpListenerAuth("127.0.0.1:8085", "", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth token")
 
 	// Non-loopback with a token enforces it.
-	tok, err = mcpListenerAuth("192.168.1.5:8085", "abc")
+	tok, err = mcpListenerAuth("192.168.1.5:8085", "abc", false)
 	require.NoError(t, err)
 	assert.Equal(t, "abc", tok)
 
 	// Non-loopback without a token is refused (no unauthenticated remote surface).
-	_, err = mcpListenerAuth("192.168.1.5:8085", "")
+	_, err = mcpListenerAuth("192.168.1.5:8085", "", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "auth token")
 }
