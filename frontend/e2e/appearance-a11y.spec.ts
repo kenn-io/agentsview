@@ -94,7 +94,7 @@ test.describe("Appearance accessibility", () => {
     await expect(sp.messageRows.first()).toBeVisible();
   });
 
-  test("desktop window zoom and text size compose multiplicatively", async ({
+  test("desktop window zoom stays separate from text size in the browser", async ({
     page,
   }) => {
     await page.addInitScript(() => {
@@ -105,7 +105,7 @@ test.describe("Appearance accessibility", () => {
     const sp = new SessionsPage(page);
     await expect(sp.sessionItems.first()).toBeVisible({ timeout: 5_000 });
 
-    expect(await readZoom(page)).toBe("1.8");
+    expect(await readZoom(page)).toBe("1.2");
   });
 
   test("high contrast applies the root class and overrides tokens", async ({
