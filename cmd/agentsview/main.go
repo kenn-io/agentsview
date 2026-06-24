@@ -870,7 +870,7 @@ func remoteHostSyncFunc(
 				Host:                    rh.Host,
 				User:                    rh.User,
 				Port:                    rh.Port,
-				Full:                    false,
+				Full:                    database.NeedsResync(),
 				DB:                      database,
 				BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"log"
 	"os"
@@ -331,6 +332,45 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "exclusive operation did not finish")
 	}
+}
+
+func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.Exec("PRAGMA user_version = 0")
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	database, err = db.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.True(t, database.NeedsResync())
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{},
+		Machine:   "local",
+	})
+
+	var gotFull bool
+	syncFn := remoteHostSyncFunc(
+		config.Config{},
+		database,
+		engine,
+		config.RemoteHost{Host: "test-host"},
+		func(_ context.Context, rs *ssh.RemoteSync) (ssh.SyncStats, error) {
+			gotFull = rs.Full
+			return ssh.SyncStats{}, nil
+		},
+	)
+
+	_, err = syncFn()
+
+	require.NoError(t, err)
+	assert.True(t, gotFull, "scheduled remote sync should force full when DB needs resync")
 }
 
 func TestStartRemoteHostSync_TracksRemoteWorkForIdleReaper(t *testing.T) {
