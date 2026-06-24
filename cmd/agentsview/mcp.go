@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -62,14 +63,22 @@ Add to your MCP client config (e.g. Claude Desktop):
 
 			opts := mcpserver.ServeOptions{Service: svc, Version: version}
 
+			var serveErr error
 			if httpAddr != "" {
 				addr, err := normalizeMCPHTTPAddr(httpAddr, httpAllowInsecure)
 				if err != nil {
 					return err
 				}
-				return mcpserver.ServeHTTP(ctx, opts, addr)
+				serveErr = mcpserver.ServeHTTP(ctx, opts, addr)
+			} else {
+				serveErr = mcpserver.ServeStdio(ctx, opts)
 			}
-			return mcpserver.ServeStdio(ctx, opts)
+			// A SIGINT/SIGTERM-triggered shutdown cancels ctx; that is a
+			// clean stop, not a failure, so it should not exit non-zero.
+			if errors.Is(serveErr, context.Canceled) {
+				return nil
+			}
+			return serveErr
 		},
 	}
 
