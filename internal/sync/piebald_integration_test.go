@@ -195,7 +195,10 @@ func TestSyncSingleSessionPiebaldFork(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "piebald:42", 4)
 
 	src := env.engine.FindSourceFile("piebald:42-200")
-	wantSrc := filepath.Join(env.piebaldDir, "app.db")
+	// Piebald is a provider-authoritative DB-backed provider. A fork session
+	// resolves to its base chat virtual <db>#<chatID> path, matching the
+	// stored session file_path the provider re-parses.
+	wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#42"
 	assert.Equal(t, wantSrc, src)
 
 	mtime := env.engine.SourceMtime("piebald:42-200")
@@ -240,7 +243,9 @@ func TestSyncSingleSessionPiebald(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "piebald:7", 2)
 
 	src := env.engine.FindSourceFile("piebald:7")
-	wantSrc := filepath.Join(env.piebaldDir, "app.db")
+	// Piebald resolves the per-session virtual <db>#<chatID> path the provider
+	// parses, matching the stored session file_path.
+	wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#7"
 	assert.Equal(t, wantSrc, src)
 
 	mtime := env.engine.SourceMtime("piebald:7")

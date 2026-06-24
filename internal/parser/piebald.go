@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,13 +13,6 @@ import (
 
 const piebaldDBFilename = "app.db"
 
-// PiebaldSession bundles a parsed Piebald chat with its messages.
-type PiebaldSession struct {
-	Session     ParsedSession
-	Messages    []ParsedMessage
-	UsageEvents []ParsedUsageEvent
-}
-
 // PiebaldSessionMeta is lightweight metadata for a Piebald chat.
 type PiebaldSessionMeta struct {
 	SessionID   string
@@ -28,8 +20,8 @@ type PiebaldSessionMeta struct {
 	FileMtime   int64
 }
 
-// FindPiebaldDBPath returns the Piebald SQLite database path when present.
-func FindPiebaldDBPath(dir string) string {
+// piebaldDBPath returns the Piebald SQLite database path when present.
+func piebaldDBPath(dir string) string {
 	if dir == "" {
 		return ""
 	}
@@ -81,49 +73,9 @@ func ListPiebaldSessionMeta(dbPath string) ([]PiebaldSessionMeta, error) {
 	return metas, rows.Err()
 }
 
-// ParsePiebaldDB opens the Piebald SQLite database read-only and returns chats.
-func ParsePiebaldDB(dbPath, machine string) ([]PiebaldSession, error) {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	db, err := openPiebaldDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	chats, err := loadPiebaldChats(db)
-	if err != nil {
-		return nil, fmt.Errorf("loading piebald chats: %w", err)
-	}
-
-	var results []PiebaldSession
-	for _, c := range chats {
-		parsedResults, err := buildPiebaldSessionResults(db, c, dbPath, machine)
-		if err != nil {
-			log.Printf("piebald chat %d: %v", c.id, err)
-			continue
-		}
-		for _, parsed := range parsedResults {
-			results = append(results, PiebaldSession(parsed))
-		}
-	}
-	return results, nil
-}
-
-// ParsePiebaldSession parses a single Piebald chat by ID from app.db.
-func ParsePiebaldSession(dbPath, chatID, machine string) (*ParsedSession, []ParsedMessage, error) {
-	results, err := ParsePiebaldSessionResults(dbPath, chatID, machine)
-	if err != nil || len(results) == 0 {
-		return nil, nil, err
-	}
-	return &results[0].Session, results[0].Messages, nil
-}
-
-// ParsePiebaldSessionResults parses a single Piebald chat and any large
+// parsePiebaldSessionResults parses a single Piebald chat and any large
 // message-DAG branches as fork child sessions.
-func ParsePiebaldSessionResults(dbPath, chatID, machine string) ([]ParseResult, error) {
+func parsePiebaldSessionResults(dbPath, chatID, machine string) ([]ParseResult, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("piebald db not found: %s", dbPath)
 	}
@@ -161,28 +113,6 @@ type piebaldChatRow struct {
 	branchName       string
 	projectDirectory string
 	projectName      string
-}
-
-func loadPiebaldChats(db *sql.DB) ([]piebaldChatRow, error) {
-	rows, err := db.Query(piebaldChatSelect(`
-		WHERE COALESCE(c.is_deleted, 0) = 0
-		  AND c.message_count > 0
-		ORDER BY COALESCE(c.updated_at, c.created_at)
-	`))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var chats []piebaldChatRow
-	for rows.Next() {
-		c, err := scanPiebaldChat(rows)
-		if err != nil {
-			return nil, err
-		}
-		chats = append(chats, c)
-	}
-	return chats, rows.Err()
 }
 
 func loadOnePiebaldChat(db *sql.DB, chatID string) (piebaldChatRow, error) {

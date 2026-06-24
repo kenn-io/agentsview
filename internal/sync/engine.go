@@ -723,6 +723,10 @@ func providerChangedPathForceParse(
 	eventKind string,
 	mode parser.ProviderMigrationMode,
 ) bool {
+	if processFileUsesProvider(agent) {
+		return eventKind == "remove" &&
+			providerDeletedPhysicalSQLiteSource(agent, sourcePath)
+	}
 	if mode != parser.ProviderMigrationProviderAuthoritative {
 		return true
 	}
@@ -1968,193 +1972,42 @@ func (e *Engine) syncAllLocked(
 	// through the provider facade in the file-sync phase above, so no
 	// dedicated DB-backed sync pass is needed here.
 
-	// Sync Warp sessions (DB-backed, not file-based).
-	tWarp := time.Now()
-	var warpPending []pendingWrite
+	// Sync Warp, Forge, and Piebald sessions. These are provider-authoritative
+	// DB-backed providers: a shared SQLite DB hosts every session, so the
+	// provider facade enumerates sources and parses only the changed ones.
 	if scope.includesAny(e.agentDirs[parser.AgentWarp]) {
-		warpPending = e.syncWarp(ctx, scope)
-	}
-	if len(warpPending) > 0 {
-		stats.TotalSessions += len(warpPending)
-		tWrite := time.Now()
-		var warpWritten int
-		if writeMode == syncWriteBulk {
-			var failedWrites int
-			warpWritten, _, failedWrites = e.writeBatch(
-				warpPending, writeMode, true,
-			)
-			for range failedWrites {
-				stats.RecordFailed()
-			}
-		} else {
-			resolveWorktreeProject := e.loadWorktreeProjectResolver()
-			for _, pw := range warpPending {
-				if ctx.Err() != nil {
-					break
-				}
-				switch err := e.writeSessionFullWithResolver(
-					pw, resolveWorktreeProject,
-				); {
-				case err == nil:
-					warpWritten++
-				case isIntentionalSessionSkip(err),
-					errors.Is(err, errSessionPreserved):
-					// Intentional skip, not a failure.
-				default:
-					stats.RecordFailed()
-				}
-			}
-		}
-		stats.RecordSynced(warpWritten)
-		if verbose {
-			log.Printf(
-				"warp write: %d sessions in %s",
-				len(warpPending),
-				time.Since(tWrite).Round(time.Millisecond),
-			)
+		if e.syncProviderDBBackedAgent(
+			ctx, parser.AgentWarp, "warp",
+			writeMode, verbose, scope, &stats, advanceDBProgress,
+		) {
+			stats.Aborted = true
+			return stats
 		}
 	}
-	if verbose {
-		log.Printf(
-			"warp sync: %s",
-			time.Since(tWarp).Round(time.Millisecond),
-		)
-	}
-	advanceDBProgress(
-		e.countDBBackedProgressTotal(parser.AgentWarp, scope),
-		warpPending,
-	)
-
-	if ctx.Err() != nil {
-		stats.Aborted = true
-		return stats
-	}
-
-	// Sync Forge sessions (DB-backed, not file-based).
-	tForge := time.Now()
-	var forgePending []pendingWrite
 	if scope.includesAny(e.agentDirs[parser.AgentForge]) {
-		forgePending = e.syncForge(ctx, scope)
-	}
-	if len(forgePending) > 0 {
-		stats.TotalSessions += len(forgePending)
-		tWrite := time.Now()
-		var forgeWritten int
-		if writeMode == syncWriteBulk {
-			var failedWrites int
-			forgeWritten, _, failedWrites = e.writeBatch(
-				forgePending, writeMode, true,
-			)
-			for range failedWrites {
-				stats.RecordFailed()
-			}
-		} else {
-			resolveWorktreeProject := e.loadWorktreeProjectResolver()
-			for _, pw := range forgePending {
-				if ctx.Err() != nil {
-					break
-				}
-				switch err := e.writeSessionFullWithResolver(
-					pw, resolveWorktreeProject,
-				); {
-				case err == nil:
-					forgeWritten++
-				case errors.Is(err, db.ErrSessionExcluded),
-					errors.Is(err, errSessionPreserved):
-					// Intentional skip, not a failure.
-				default:
-					stats.RecordFailed()
-				}
-			}
-		}
-		stats.RecordSynced(forgeWritten)
-		if verbose {
-			log.Printf(
-				"forge write: %d sessions in %s",
-				len(forgePending),
-				time.Since(tWrite).Round(time.Millisecond),
-			)
+		if e.syncProviderDBBackedAgent(
+			ctx, parser.AgentForge, "forge",
+			writeMode, verbose, scope, &stats, advanceDBProgress,
+		) {
+			stats.Aborted = true
+			return stats
 		}
 	}
-	if verbose {
-		log.Printf(
-			"forge sync: %s",
-			time.Since(tForge).Round(time.Millisecond),
-		)
-	}
-	advanceDBProgress(
-		e.countDBBackedProgressTotal(parser.AgentForge, scope),
-		forgePending,
-	)
-
-	if ctx.Err() != nil {
-		stats.Aborted = true
-		return stats
-	}
-
-	// Sync Piebald sessions (DB-backed, not file-based).
-	tPiebald := time.Now()
-	var piebaldPending []pendingWrite
 	if scope.includesAny(e.agentDirs[parser.AgentPiebald]) {
-		piebaldPending = e.syncPiebald(ctx, scope)
-	}
-	if len(piebaldPending) > 0 {
-		stats.TotalSessions += len(piebaldPending)
-		tWrite := time.Now()
-		var piebaldWritten int
-		if writeMode == syncWriteBulk {
-			var failedWrites int
-			piebaldWritten, _, failedWrites = e.writeBatch(
-				piebaldPending, writeMode, true,
-			)
-			for range failedWrites {
-				stats.RecordFailed()
-			}
-		} else {
-			for _, pw := range piebaldPending {
-				if ctx.Err() != nil {
-					break
-				}
-				switch err := e.writeSessionFull(pw); {
-				case err == nil:
-					piebaldWritten++
-				case errors.Is(err, db.ErrSessionExcluded),
-					errors.Is(err, errSessionPreserved):
-					// Intentional skip, not a failure.
-				default:
-					stats.RecordFailed()
-				}
-			}
+		if e.syncProviderDBBackedAgent(
+			ctx, parser.AgentPiebald, "piebald",
+			writeMode, verbose, scope, &stats, advanceDBProgress,
+		) {
+			stats.Aborted = true
+			return stats
 		}
-		stats.RecordSynced(piebaldWritten)
-		if verbose {
-			log.Printf(
-				"piebald write: %d sessions in %s",
-				len(piebaldPending),
-				time.Since(tWrite).Round(time.Millisecond),
-			)
-		}
-	}
-	if verbose {
-		log.Printf(
-			"piebald sync: %s",
-			time.Since(tPiebald).Round(time.Millisecond),
-		)
-	}
-	advanceDBProgress(
-		e.countDBBackedProgressTotal(parser.AgentPiebald, scope),
-		piebaldPending,
-	)
-
-	if ctx.Err() != nil {
-		stats.Aborted = true
-		return stats
 	}
 
 	// Link subagent child sessions to their parents after all DB-backed
-	// agent writes (Warp, Forge, Piebald). LinkSubagentSessions is idempotent — its
-	// WHERE filter and partial index make it a cheap no-op when nothing new
-	// was written — so no guard is needed.
+	// agent writes (including provider-authoritative Forge and Piebald).
+	// LinkSubagentSessions is idempotent — its WHERE filter and partial index
+	// make it a cheap no-op when nothing new was written — so no guard is
+	// needed.
 	if err := e.db.LinkSubagentSessions(); err != nil {
 		log.Printf("link subagent sessions: %v", err)
 	}
@@ -2246,6 +2099,16 @@ func (e *Engine) discoverProviderSources(
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
+			continue
+		}
+		// Forge, Piebald, and Warp are DB-backed providers: a shared SQLite
+		// DB hosts every session. Full-sync change detection and counting
+		// run through their dedicated provider-driven DB sync phase
+		// (syncProviderDBBacked), not the per-source discovery list, so a
+		// full sync re-counts only changed sessions exactly as the legacy
+		// path did. The watcher path still classifies their changes through
+		// classifyProviderChangedPath.
+		if processFileUsesProvider(agentType) {
 			continue
 		}
 		def := provider.Definition()
@@ -2878,21 +2741,53 @@ func shelleyDBCompositeMtime(dbPath string) (int64, error) {
 func (e *Engine) countDBBackedProgressTotal(
 	agent parser.AgentType, scope *rootSyncScope,
 ) int {
+	if processFileUsesProvider(agent) {
+		return e.countProviderDBBackedSessions(
+			context.Background(), agent, scope,
+		)
+	}
 	total := 0
 	for _, dir := range e.agentDirs[agent] {
 		if dir == "" || !scope.includes(dir) {
 			continue
 		}
 		switch agent {
-		case parser.AgentWarp:
-			total += e.countOneWarpSessions(dir)
-		case parser.AgentForge:
-			total += e.countOneForgeSessions(dir)
-		case parser.AgentPiebald:
-			total += e.countOnePiebaldSessions(dir)
 		}
 	}
 	return total
+}
+
+// countProviderDBBackedSessions counts every session a DB-backed provider
+// (Forge, Piebald, Warp) currently exposes, via provider discovery. It feeds
+// the progress total so the DB-backed family contributes the same fixed count
+// the legacy countOne*Sessions helpers did.
+func (e *Engine) countProviderDBBackedSessions(
+	ctx context.Context, agent parser.AgentType, scope *rootSyncScope,
+) int {
+	roots := make([]string, 0, len(e.agentDirs[agent]))
+	for _, dir := range e.agentDirs[agent] {
+		if dir == "" || !scope.includes(dir) {
+			continue
+		}
+		roots = append(roots, dir)
+	}
+	if len(roots) == 0 {
+		return 0
+	}
+	factory, ok := e.providerFactories[agent]
+	if !ok || factory == nil {
+		return 0
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   roots,
+		Machine: e.machine,
+	})
+	sources, err := provider.Discover(ctx)
+	if err != nil {
+		log.Printf("%s provider session count: %v", agent, err)
+		return 0
+	}
+	return len(sources)
 }
 
 func (e *Engine) countDBBackedSessions(
@@ -2910,6 +2805,182 @@ func (e *Engine) countDBBackedSessions(
 		total += e.countDBBackedProgressTotal(agent, scope)
 	}
 	return total
+}
+
+// syncProviderDBBacked enumerates a DB-backed provider's sources, parses only
+// the changed ones through the provider facade, and returns their pending
+// writes. Change detection compares the provider fingerprint mtime against the
+// stored source mtime and requires the stored data version to be current,
+// reproducing the legacy *PendingSessionIDs behavior.
+func (e *Engine) syncProviderDBBacked(
+	ctx context.Context, agent parser.AgentType, scope *rootSyncScope,
+) []pendingWrite {
+	roots := make([]string, 0, len(e.agentDirs[agent]))
+	for _, dir := range e.agentDirs[agent] {
+		if dir == "" || !scope.includes(dir) {
+			continue
+		}
+		roots = append(roots, dir)
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	factory, ok := e.providerFactories[agent]
+	if !ok || factory == nil {
+		return nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   roots,
+		Machine: e.machine,
+	})
+	sources, err := provider.Discover(ctx)
+	if err != nil {
+		log.Printf("sync %s: %v", agent, err)
+		return nil
+	}
+
+	var pending []pendingWrite
+	for _, source := range sources {
+		if ctx.Err() != nil {
+			break
+		}
+		fingerprint, err := provider.Fingerprint(ctx, source)
+		if err != nil {
+			log.Printf("sync %s fingerprint: %v", agent, err)
+			continue
+		}
+		if e.providerDBBackedSourceFresh(source, fingerprint) {
+			continue
+		}
+		outcome, err := provider.Parse(ctx, parser.ParseRequest{
+			Source:      source,
+			Fingerprint: fingerprint,
+			Machine:     e.machine,
+		})
+		if err != nil {
+			log.Printf("sync %s parse: %v", agent, err)
+			continue
+		}
+		for _, result := range outcome.Results {
+			pending = append(pending, pendingWrite{
+				sess:        result.Result.Session,
+				msgs:        result.Result.Messages,
+				usageEvents: result.Result.UsageEvents,
+			})
+		}
+	}
+	return pending
+}
+
+// providerDBBackedSourceFresh reports whether a DB-backed provider source is
+// already stored at the current data version with an unchanged source mtime, so
+// it can be skipped during a full sync. This is the change-detection half of
+// the legacy *PendingSessionIDs helpers.
+func (e *Engine) providerDBBackedSourceFresh(
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+) bool {
+	if e.forceParse {
+		return false
+	}
+	if fingerprint.MTimeNS == 0 {
+		return false
+	}
+	lookupPath := ""
+	for _, candidate := range []string{
+		fingerprint.Key,
+		source.FingerprintKey,
+		source.DisplayPath,
+		source.Key,
+	} {
+		if candidate != "" {
+			lookupPath = candidate
+			break
+		}
+	}
+	if lookupPath == "" {
+		return false
+	}
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	if storedMtime != fingerprint.MTimeNS {
+		return false
+	}
+	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
+}
+
+// syncProviderDBBackedAgent runs the full-sync phase for a provider-authoritative
+// DB-backed agent (Forge, Piebald, Warp). It mirrors syncOpenCodeFormatAgent:
+// only changed sessions are parsed (so the second sync of unchanged data is a
+// no-op), and the per-session write semantics match the legacy DB sync.
+func (e *Engine) syncProviderDBBackedAgent(
+	ctx context.Context, agent parser.AgentType, label string,
+	writeMode syncWriteMode, verbose bool, scope *rootSyncScope,
+	stats *SyncStats,
+	advanceDBProgress func(total int, pending []pendingWrite),
+) bool {
+	start := time.Now()
+	pending := e.syncProviderDBBacked(ctx, agent, scope)
+	useWorktreeResolver := agent != parser.AgentPiebald
+	if len(pending) > 0 {
+		stats.TotalSessions += len(pending)
+		tWrite := time.Now()
+		var written int
+		if writeMode == syncWriteBulk {
+			var failedWrites int
+			written, _, failedWrites = e.writeBatch(
+				pending, writeMode, true,
+			)
+			for range failedWrites {
+				stats.RecordFailed()
+			}
+		} else {
+			resolveWorktreeProject := e.loadWorktreeProjectResolver()
+			for _, pw := range pending {
+				if ctx.Err() != nil {
+					break
+				}
+				var err error
+				if useWorktreeResolver {
+					err = e.writeSessionFullWithResolver(
+						pw, resolveWorktreeProject,
+					)
+				} else {
+					err = e.writeSessionFull(pw)
+				}
+				switch {
+				case err == nil:
+					written++
+				case isIntentionalSessionSkip(err),
+					errors.Is(err, errSessionPreserved):
+					// Intentional skip, not a failure.
+				default:
+					stats.RecordFailed()
+				}
+			}
+		}
+		stats.RecordSynced(written)
+		if verbose {
+			log.Printf(
+				"%s write: %d sessions in %s",
+				label, len(pending),
+				time.Since(tWrite).Round(time.Millisecond),
+			)
+		}
+	}
+	if verbose {
+		log.Printf(
+			"%s sync: %s",
+			label, time.Since(start).Round(time.Millisecond),
+		)
+	}
+	advanceDBProgress(e.countDBBackedProgressTotal(agent, scope), pending)
+	return ctx.Err() != nil
 }
 
 // startWorkers fans out file processing across a worker pool
@@ -3385,7 +3456,8 @@ func (e *Engine) processProviderFile(
 	file parser.DiscoveredFile,
 ) (processResult, bool) {
 	mode := e.providerMigrationModes[file.Agent]
-	if mode != parser.ProviderMigrationProviderAuthoritative {
+	usesProvider := processFileUsesProvider(file.Agent)
+	if mode != parser.ProviderMigrationProviderAuthoritative && !usesProvider {
 		return processResult{}, false
 	}
 	// S3 sources are not provider-owned: the provider source sets read local
@@ -3394,7 +3466,7 @@ func (e *Engine) processProviderFile(
 	if strings.HasPrefix(file.Path, "s3://") {
 		return processResult{}, false
 	}
-	if file.ProviderSource != nil && !file.ProviderProcess {
+	if file.ProviderSource != nil && !file.ProviderProcess && !usesProvider {
 		return processResult{}, false
 	}
 
@@ -3499,6 +3571,14 @@ func (e *Engine) processProviderFile(
 				}, true
 			}
 		}
+	}
+	if cacheSkip && e.shouldSkipProviderSource(file, source, fingerprint) {
+		return processResult{
+			skip:      true,
+			mtime:     fingerprint.MTimeNS,
+			cacheSkip: true,
+			cacheKey:  cacheKey,
+		}, true
 	}
 
 	// Append-only incremental parse for already-synced JSONL files.
@@ -4016,6 +4096,75 @@ func (e *Engine) recordProviderShadowComparison(
 		fingerprintKey,
 		strings.Join(comparison.Mismatches, "; "),
 	)
+}
+
+func processFileUsesProvider(agent parser.AgentType) bool {
+	switch agent {
+	case parser.AgentForge, parser.AgentPiebald, parser.AgentWarp:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) shouldSkipProviderSource(
+	file parser.DiscoveredFile,
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+) bool {
+	agent := file.Agent
+	if agent == "" {
+		agent = source.Provider
+	}
+	if !providerSourceSupportsPersistedFreshness(agent) {
+		return false
+	}
+	if e.forceParse || file.ForceParse {
+		return false
+	}
+	lookupPath := providerSkipLookupPath(file, source, fingerprint)
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	if fingerprint.Size != 0 && storedSize != fingerprint.Size {
+		return false
+	}
+	if storedMtime != fingerprint.MTimeNS {
+		return false
+	}
+	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
+}
+
+func providerSourceSupportsPersistedFreshness(agent parser.AgentType) bool {
+	switch agent {
+	case parser.AgentForge, parser.AgentWarp:
+		return true
+	default:
+		return false
+	}
+}
+
+func providerSkipLookupPath(
+	file parser.DiscoveredFile,
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+) string {
+	for _, path := range []string{
+		fingerprint.Key,
+		source.FingerprintKey,
+		source.DisplayPath,
+		source.Key,
+		file.Path,
+	} {
+		if path != "" {
+			return path
+		}
+	}
+	return file.Path
 }
 
 func (e *Engine) shouldCacheSkip(
@@ -7314,39 +7463,13 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		switch def.Type {
-		case parser.AgentWarp:
-			for _, d := range e.agentDirs[def.Type] {
-				dbPath := parser.FindWarpDBPath(d)
-				if dbPath == "" {
-					continue
-				}
-				if _, _, err := parser.ParseWarpSession(dbPath, rawSessionID, e.machine); err == nil {
-					return dbPath
-				}
-			}
-		case parser.AgentForge:
-			for _, d := range e.agentDirs[def.Type] {
-				dbPath := parser.FindForgeDBPath(d)
-				if dbPath == "" {
-					continue
-				}
-				if _, _, err := parser.ParseForgeSession(dbPath, rawSessionID, e.machine); err == nil {
-					return dbPath
-				}
-			}
-		case parser.AgentPiebald:
-			chatID, _, _ := strings.Cut(rawSessionID, "-")
-			for _, d := range e.agentDirs[def.Type] {
-				dbPath := parser.FindPiebaldDBPath(d)
-				if dbPath == "" {
-					continue
-				}
-				results, err := parser.ParsePiebaldSessionResults(dbPath, chatID, e.machine)
-				if err == nil && piebaldResultsContain(results, sessionID) {
-					return dbPath
-				}
-			}
+		// Forge, Piebald, and Warp are DB-backed providers that own
+		// discovery and source lookup through the provider facade. Their
+		// virtual <db>#<sessionID> path is resolved by findProviderSourceFile
+		// below. Non-provider, non-file-based agents (e.g. remote imports)
+		// have no local source file.
+		if !e.isProviderAuthoritative(def.Type) {
+			return ""
 		}
 		if f := e.findProviderSourceFile(
 			context.Background(), def, sessionID, rawSessionID,
@@ -7413,6 +7536,13 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	return ""
 }
 
+// isProviderAuthoritative reports whether the agent's runtime sync is owned by
+// the provider facade rather than a legacy engine dispatch path.
+func (e *Engine) isProviderAuthoritative(agent parser.AgentType) bool {
+	return e.providerMigrationModes[agent] ==
+		parser.ProviderMigrationProviderAuthoritative
+}
+
 // findProviderSourceFile resolves a single session's source file through the
 // provider facade for authoritative concrete providers. It is the
 // provider-shape counterpart to AgentDef.FindSourceFunc, so a provider can drop
@@ -7448,7 +7578,101 @@ func (e *Engine) findProviderSourceFile(
 	if !found {
 		return ""
 	}
+	// A fork session ID (Piebald piebald:<chat>-<row>) resolves to its base
+	// chat source. Confirm the requested fork is actually produced before
+	// treating the chat source as a hit, mirroring the legacy parse-verify.
+	if providerSessionIsFork(def, sessionID, rawSessionID) {
+		outcome, err := provider.Parse(ctx, parser.ParseRequest{
+			Source:  source,
+			Machine: e.machine,
+		})
+		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
+			return ""
+		}
+	}
 	return providerDiscoveredPath(source)
+}
+
+// providerSourceMtime resolves the source-backed mtime for a DB-backed
+// provider session through the provider facade. The provider fingerprint
+// mirrors the legacy List*SessionMeta last-modified value. Piebald fork IDs
+// (piebald:<chat>-<row>) resolve to their base chat source, so a fork is
+// confirmed by parsing the chat and checking the requested session ID is
+// actually produced before returning the chat mtime.
+func (e *Engine) providerDBSourceMtime(
+	ctx context.Context,
+	def parser.AgentDef,
+	sessionID string,
+	rawSessionID string,
+) int64 {
+	factory, ok := e.providerFactories[def.Type]
+	if !ok || factory == nil {
+		return 0
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[def.Type],
+		Machine: e.machine,
+	})
+	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+		RawSessionID:  rawSessionID,
+		FullSessionID: sessionID,
+	})
+	if err != nil {
+		log.Printf("%s provider source mtime lookup: %v", def.Type, err)
+		return 0
+	}
+	if !found {
+		return 0
+	}
+	fingerprint, err := provider.Fingerprint(ctx, source)
+	if err != nil {
+		log.Printf("%s provider source mtime fingerprint: %v", def.Type, err)
+		return 0
+	}
+	if fingerprint.MTimeNS == 0 {
+		return 0
+	}
+	// A fork session ID resolves to its base chat source. Confirm the
+	// requested fork exists before treating the chat mtime as authoritative.
+	if providerSessionIsFork(def, sessionID, rawSessionID) {
+		outcome, err := provider.Parse(ctx, parser.ParseRequest{
+			Source:  source,
+			Machine: e.machine,
+		})
+		if err != nil || !providerOutcomeContainsSession(outcome, sessionID) {
+			return 0
+		}
+	}
+	return fingerprint.MTimeNS
+}
+
+// providerSessionIsFork reports whether the session ID addresses a fork child
+// whose base differs from the resolved source session. Only Piebald uses the
+// "<chat>-<row>" fork-ID shape among the DB-backed providers.
+func providerSessionIsFork(
+	def parser.AgentDef,
+	sessionID string,
+	rawSessionID string,
+) bool {
+	if def.Type != parser.AgentPiebald {
+		return false
+	}
+	chatID, _, _ := strings.Cut(rawSessionID, "-")
+	return chatID != rawSessionID
+}
+
+// providerOutcomeContainsSession reports whether a parse outcome produced the
+// given full session ID.
+func providerOutcomeContainsSession(
+	outcome parser.ParseOutcome,
+	sessionID string,
+) bool {
+	for _, result := range outcome.Results {
+		if result.Result.Session.ID == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 // SourceMtime returns the current source-backed mtime for a
@@ -7491,70 +7715,14 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		switch def.Type {
-		case parser.AgentWarp:
-			for _, d := range e.agentDirs[def.Type] {
-				dbPath := parser.FindWarpDBPath(d)
-				if dbPath == "" {
-					continue
-				}
-				metas, err := parser.ListWarpSessionMeta(dbPath)
-				if err != nil {
-					continue
-				}
-				for _, meta := range metas {
-					if meta.SessionID == rawSessionID {
-						return meta.FileMtime
-					}
-				}
-			}
-		case parser.AgentForge:
-			for _, d := range e.agentDirs[def.Type] {
-				dbPath := parser.FindForgeDBPath(d)
-				if dbPath == "" {
-					continue
-				}
-				metas, err := parser.ListForgeSessionMeta(dbPath)
-				if err != nil {
-					continue
-				}
-				for _, meta := range metas {
-					if meta.SessionID == rawSessionID {
-						return meta.FileMtime
-					}
-				}
-			}
-		case parser.AgentPiebald:
-			chatID, _, _ := strings.Cut(rawSessionID, "-")
-			for _, d := range e.agentDirs[def.Type] {
-				dbPath := parser.FindPiebaldDBPath(d)
-				if dbPath == "" {
-					continue
-				}
-				metas, err := parser.ListPiebaldSessionMeta(dbPath)
-				if err != nil {
-					continue
-				}
-				var mtime int64
-				for _, meta := range metas {
-					if meta.SessionID == chatID {
-						mtime = meta.FileMtime
-						break
-					}
-				}
-				if mtime == 0 {
-					continue
-				}
-				// Base chat IDs are confirmed by meta. Fork IDs
-				// need a parse to verify the requested fork exists.
-				if chatID == rawSessionID {
-					return mtime
-				}
-				results, err := parser.ParsePiebaldSessionResults(dbPath, chatID, e.machine)
-				if err == nil && piebaldResultsContain(results, sessionID) {
-					return mtime
-				}
-			}
+		// Forge, Piebald, and Warp are DB-backed providers: their
+		// per-session source mtime comes from the provider fingerprint
+		// (which mirrors the legacy List*SessionMeta last-modified value).
+		// Non-provider, non-file-based agents have no local source.
+		if e.isProviderAuthoritative(def.Type) {
+			return e.providerDBSourceMtime(
+				context.Background(), def, sessionID, rawSessionID,
+			)
 		}
 		return 0
 	}
@@ -7716,14 +7884,12 @@ func (e *Engine) SyncSingleSessionContext(
 		return fmt.Errorf("unknown agent for session %s", sessionID)
 	}
 	if !def.FileBased {
-		switch def.Type {
-		case parser.AgentWarp:
-			return e.syncSingleWarp(sessionID)
-		case parser.AgentForge:
-			return e.syncSingleForge(sessionID)
-		case parser.AgentPiebald:
-			return e.syncSinglePiebald(sessionID)
-		default:
+		// Forge, Piebald, and Warp are DB-backed providers: re-sync routes
+		// through FindSourceFile (resolving the virtual <db>#<sessionID>
+		// path) plus the provider-aware processFile path below, mirroring
+		// the file-based agents. Other non-file-based agents use the
+		// OpenCode-format storage path.
+		if !e.isProviderAuthoritative(def.Type) {
 			return fmt.Errorf(
 				"cannot resync non-file-based session %s for agent %s",
 				sessionID, def.Type,
@@ -8029,412 +8195,6 @@ func kiroSQLiteDBPath(dir string) string {
 // virtual-source-path resolver.
 func parseKiroSQLiteVirtualPath(path string) (string, string, bool) {
 	return parser.ParseVirtualSourcePathForBase(path, kiroSQLiteDBName)
-}
-
-func (e *Engine) warpPendingSessionIDs(dir string) []string {
-	dbPath := parser.FindWarpDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-	metas, err := parser.ListWarpSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync warp: %v", err)
-		return nil
-	}
-	var changed []string
-	for _, m := range metas {
-		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
-	return changed
-}
-
-func (e *Engine) countOneWarpSessions(dir string) int {
-	dbPath := parser.FindWarpDBPath(dir)
-	if dbPath == "" {
-		return 0
-	}
-	metas, err := parser.ListWarpSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync warp: %v", err)
-		return 0
-	}
-	return len(metas)
-}
-
-// syncWarp syncs sessions from Warp SQLite databases.
-// Uses per-conversation last_modified_at to detect changes,
-// so only modified conversations are fully parsed.
-func (e *Engine) syncWarp(
-	ctx context.Context, scope *rootSyncScope,
-) []pendingWrite {
-	var allPending []pendingWrite
-	for _, dir := range e.agentDirs[parser.AgentWarp] {
-		if ctx.Err() != nil {
-			break
-		}
-		if dir == "" || !scope.includes(dir) {
-			continue
-		}
-		allPending = append(
-			allPending, e.syncOneWarp(ctx, dir)...,
-		)
-	}
-	return allPending
-}
-
-// syncOneWarp handles a single Warp directory.
-func (e *Engine) syncOneWarp(
-	ctx context.Context, dir string,
-) []pendingWrite {
-	dbPath := parser.FindWarpDBPath(dir)
-	changed := e.warpPendingSessionIDs(dir)
-	if len(changed) == 0 {
-		return nil
-	}
-
-	var pending []pendingWrite
-	for _, cid := range changed {
-		if ctx.Err() != nil {
-			break
-		}
-		sess, msgs, err := parser.ParseWarpSession(
-			dbPath, cid, e.machine,
-		)
-		if err != nil {
-			log.Printf(
-				"warp conversation %s: %v", cid, err,
-			)
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		pending = append(pending, pendingWrite{
-			sess: *sess,
-			msgs: msgs,
-		})
-	}
-
-	return pending
-}
-
-// syncSingleWarp re-syncs a single Warp conversation.
-func (e *Engine) syncSingleWarp(
-	sessionID string,
-) error {
-	rawID := strings.TrimPrefix(sessionID, "warp:")
-
-	var lastErr error
-	for _, dir := range e.agentDirs[parser.AgentWarp] {
-		if dir == "" {
-			continue
-		}
-		dbPath := parser.FindWarpDBPath(dir)
-		if dbPath == "" {
-			continue
-		}
-		sess, msgs, err := parser.ParseWarpSession(
-			dbPath, rawID, e.machine,
-		)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		if err := e.writeSessionFull(
-			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil && !isIntentionalSessionSkip(err) {
-			return fmt.Errorf("write session %s: %w",
-				sess.ID, err)
-		}
-		return nil
-	}
-
-	if len(e.agentDirs[parser.AgentWarp]) == 0 {
-		return fmt.Errorf("warp dir not configured")
-	}
-	if lastErr != nil {
-		return fmt.Errorf(
-			"warp session %s: %w", sessionID, lastErr,
-		)
-	}
-	return fmt.Errorf("warp session %s not found", sessionID)
-}
-
-func (e *Engine) forgePendingSessionIDs(dir string) []string {
-	dbPath := parser.FindForgeDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-	metas, err := parser.ListForgeSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync forge: %v", err)
-		return nil
-	}
-	var changed []string
-	for _, m := range metas {
-		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime &&
-			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
-	return changed
-}
-
-func (e *Engine) countOneForgeSessions(dir string) int {
-	dbPath := parser.FindForgeDBPath(dir)
-	if dbPath == "" {
-		return 0
-	}
-	metas, err := parser.ListForgeSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync forge: %v", err)
-		return 0
-	}
-	return len(metas)
-}
-
-// syncForge syncs sessions from Forge SQLite databases.
-func (e *Engine) syncForge(
-	ctx context.Context, scope *rootSyncScope,
-) []pendingWrite {
-	var allPending []pendingWrite
-	for _, dir := range e.agentDirs[parser.AgentForge] {
-		if ctx.Err() != nil {
-			break
-		}
-		if dir == "" || !scope.includes(dir) {
-			continue
-		}
-		allPending = append(allPending, e.syncOneForge(ctx, dir)...)
-	}
-	return allPending
-}
-
-// syncOneForge handles a single Forge directory.
-func (e *Engine) syncOneForge(
-	ctx context.Context, dir string,
-) []pendingWrite {
-	dbPath := parser.FindForgeDBPath(dir)
-	changed := e.forgePendingSessionIDs(dir)
-	if len(changed) == 0 {
-		return nil
-	}
-
-	var pending []pendingWrite
-	for _, cid := range changed {
-		if ctx.Err() != nil {
-			break
-		}
-		sess, msgs, err := parser.ParseForgeSession(dbPath, cid, e.machine)
-		if err != nil {
-			log.Printf("forge conversation %s: %v", cid, err)
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		pending = append(pending, pendingWrite{sess: *sess, msgs: msgs})
-	}
-	return pending
-}
-
-// syncSingleForge re-syncs a single Forge conversation.
-func (e *Engine) syncSingleForge(
-	sessionID string,
-) error {
-	rawID := strings.TrimPrefix(sessionID, "forge:")
-
-	var lastErr error
-	for _, dir := range e.agentDirs[parser.AgentForge] {
-		if dir == "" {
-			continue
-		}
-		dbPath := parser.FindForgeDBPath(dir)
-		if dbPath == "" {
-			continue
-		}
-		sess, msgs, err := parser.ParseForgeSession(dbPath, rawID, e.machine)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		if err := e.writeSessionFull(
-			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
-			return fmt.Errorf("write session %s: %w", sess.ID, err)
-		}
-		if err := e.db.LinkSubagentSessions(); err != nil {
-			log.Printf("link subagent sessions: %v", err)
-		}
-		return nil
-	}
-
-	if len(e.agentDirs[parser.AgentForge]) == 0 {
-		return fmt.Errorf("forge dir not configured")
-	}
-	if lastErr != nil {
-		return fmt.Errorf("forge session %s: %w", sessionID, lastErr)
-	}
-	return fmt.Errorf("forge session %s not found", sessionID)
-}
-
-func (e *Engine) piebaldPendingSessionIDs(dir string) []string {
-	dbPath := parser.FindPiebaldDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-	metas, err := parser.ListPiebaldSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync piebald: %v", err)
-		return nil
-	}
-	var changed []string
-	for _, m := range metas {
-		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime &&
-			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
-	return changed
-}
-
-func (e *Engine) countOnePiebaldSessions(dir string) int {
-	dbPath := parser.FindPiebaldDBPath(dir)
-	if dbPath == "" {
-		return 0
-	}
-	metas, err := parser.ListPiebaldSessionMeta(dbPath)
-	if err != nil {
-		log.Printf("sync piebald: %v", err)
-		return 0
-	}
-	return len(metas)
-}
-
-// syncPiebald syncs sessions from Piebald SQLite databases.
-func (e *Engine) syncPiebald(
-	ctx context.Context, scope *rootSyncScope,
-) []pendingWrite {
-	var allPending []pendingWrite
-	for _, dir := range e.agentDirs[parser.AgentPiebald] {
-		if ctx.Err() != nil {
-			break
-		}
-		if dir == "" || !scope.includes(dir) {
-			continue
-		}
-		allPending = append(allPending, e.syncOnePiebald(ctx, dir)...)
-	}
-	return allPending
-}
-
-// syncOnePiebald handles a single Piebald data directory.
-func (e *Engine) syncOnePiebald(
-	ctx context.Context, dir string,
-) []pendingWrite {
-	dbPath := parser.FindPiebaldDBPath(dir)
-	changed := e.piebaldPendingSessionIDs(dir)
-	if len(changed) == 0 {
-		return nil
-	}
-
-	var pending []pendingWrite
-	for _, cid := range changed {
-		if ctx.Err() != nil {
-			break
-		}
-		results, err := parser.ParsePiebaldSessionResults(dbPath, cid, e.machine)
-		if err != nil {
-			log.Printf("piebald chat %s: %v", cid, err)
-			continue
-		}
-		for _, result := range results {
-			pending = append(pending, pendingWrite{
-				sess:        result.Session,
-				msgs:        result.Messages,
-				usageEvents: result.UsageEvents,
-			})
-		}
-	}
-	return pending
-}
-
-// syncSinglePiebald re-syncs a single Piebald chat. Fork session IDs of the
-// form "piebald:<chat>-<row>" are mapped back to their base chat so the parser
-// re-emits the main session and every fork branch together.
-func (e *Engine) syncSinglePiebald(
-	sessionID string,
-) error {
-	rawID := strings.TrimPrefix(sessionID, "piebald:")
-	chatID, _, _ := strings.Cut(rawID, "-")
-
-	var lastErr error
-	for _, dir := range e.agentDirs[parser.AgentPiebald] {
-		if dir == "" {
-			continue
-		}
-		dbPath := parser.FindPiebaldDBPath(dir)
-		if dbPath == "" {
-			continue
-		}
-		results, err := parser.ParsePiebaldSessionResults(dbPath, chatID, e.machine)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if !piebaldResultsContain(results, sessionID) {
-			continue
-		}
-		for _, result := range results {
-			if err := e.writeSessionFull(
-				pendingWrite{
-					sess:        result.Session,
-					msgs:        result.Messages,
-					usageEvents: result.UsageEvents,
-				},
-			); err != nil && !errors.Is(err, db.ErrSessionExcluded) {
-				return fmt.Errorf("write session %s: %w", result.Session.ID, err)
-			}
-		}
-		if err := e.db.LinkSubagentSessions(); err != nil {
-			log.Printf("link subagent sessions: %v", err)
-		}
-		return nil
-	}
-
-	if len(e.agentDirs[parser.AgentPiebald]) == 0 {
-		return fmt.Errorf("piebald dir not configured")
-	}
-	if lastErr != nil {
-		return fmt.Errorf("piebald session %s: %w", sessionID, lastErr)
-	}
-	return fmt.Errorf("piebald session %s not found", sessionID)
-}
-
-// piebaldResultsContain reports whether any parsed result has the given
-// session ID. Used to verify a requested fork session was actually
-// produced by the parser before treating a base-chat lookup as a hit.
-func piebaldResultsContain(results []parser.ParseResult, sessionID string) bool {
-	for _, r := range results {
-		if r.Session.ID == sessionID {
-			return true
-		}
-	}
-	return false
 }
 
 func strPtr(s string) *string {

@@ -374,6 +374,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCursorProviderFactory(def)
 	case AgentDeepSeekTUI:
 		return newDeepSeekTUIProviderFactory(def)
+	case AgentForge:
+		return newForgeProviderFactory(def)
 	case AgentHermes:
 		return newHermesProviderFactory(def)
 	case AgentIflow:
@@ -400,7 +402,11 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newOpenHandsProviderFactory(def)
 	case AgentOpenClaw:
 		return newOpenClawProviderFactory(def)
-	case AgentOMP, AgentPi:
+	case AgentOMP:
+		return newPiProviderFactory(def)
+	case AgentPiebald:
+		return newPiebaldProviderFactory(def)
+	case AgentPi:
 		return newPiProviderFactory(def)
 	case AgentPositron:
 		return newPositronProviderFactory(def)
@@ -418,6 +424,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newVSCodeCopilotProviderFactory(def)
 	case AgentVibe:
 		return newVibeProviderFactory(def)
+	case AgentWarp:
+		return newWarpProviderFactory(def)
 	case AgentWorkBuddy:
 		return newWorkBuddyProviderFactory(def)
 	case AgentZencoder:
