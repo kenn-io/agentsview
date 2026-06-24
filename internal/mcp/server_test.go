@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,6 +139,40 @@ func TestWithBearerAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, serve(h, "Bearer wrong"), "wrong token")
 	assert.Equal(t, http.StatusUnauthorized, serve(h, "s3cret"), "missing Bearer prefix")
 	assert.Equal(t, http.StatusOK, serve(h, "Bearer s3cret"), "correct token")
+}
+
+// TestHTTPHandler_DNSRebindingProtection guards the SDK's built-in
+// localhost protection: a request reaching a loopback listener with a
+// non-loopback Host header (the DNS-rebinding signature) must be
+// rejected. This is regression coverage in case an SDK upgrade flips the
+// default or DisableLocalhostProtection is ever set.
+func TestHTTPHandler_DNSRebindingProtection(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	ts := httptest.NewServer(newHTTPHandler(ServeOptions{
+		Service: service.NewDirectBackend(d, nil),
+	}))
+	t.Cleanup(ts.Close)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}`
+	do := func(host string) int {
+		req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
+		require.NoError(t, err)
+		if host != "" {
+			req.Host = host
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	assert.Equal(t, http.StatusForbidden, do("evil.example:1234"),
+		"spoofed non-loopback Host must be rejected (DNS rebinding)")
+	assert.NotEqual(t, http.StatusForbidden, do(""),
+		"legit loopback Host must pass the rebinding check")
 }
 
 // TestServeHTTP_ShutsDownOnContextCancel verifies the StreamableHTTP

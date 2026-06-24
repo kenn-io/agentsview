@@ -78,6 +78,14 @@ Add to your MCP client config (e.g. Claude Desktop):
 				if err != nil {
 					return fmt.Errorf("loading config: %w", err)
 				}
+				// Provision a token when auth is required but none exists
+				// yet, matching serve/pg/duckdb so enabling require_auth is
+				// sufficient for first-time authenticated startup.
+				if cfg.RequireAuth && cfg.AuthToken == "" {
+					if err := cfg.EnsureAuthToken(); err != nil {
+						return fmt.Errorf("provisioning auth token: %w", err)
+					}
+				}
 				token, err := mcpListenerAuth(addr, cfg.AuthToken)
 				if err != nil {
 					return err

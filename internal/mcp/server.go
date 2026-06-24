@@ -114,6 +114,20 @@ func newServer(opts ServeOptions) *mcp.Server {
 	return s
 }
 
+// newHTTPHandler builds the StreamableHTTP handler with its protections.
+// Passing nil options keeps the SDK's default DNS-rebinding protection
+// (DisableLocalhostProtection stays false): a request arriving on a
+// loopback address with a non-loopback Host header is rejected 403,
+// which blocks a malicious web page from reaching a loopback MCP server
+// via DNS rebinding. withBearerAuth then adds token auth for non-loopback
+// binds (see the command layer).
+func newHTTPHandler(opts ServeOptions) http.Handler {
+	srv := newServer(opts)
+	var handler http.Handler = mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return srv }, nil)
+	return withBearerAuth(handler, opts.Token)
+}
+
 // withBearerAuth wraps next so every request must present
 // "Authorization: Bearer <token>". When token is empty the handler is
 // returned unwrapped (loopback binds run without listener auth). The
@@ -173,11 +187,7 @@ func isCleanStdioShutdown(err error) bool {
 // calls can finish. addr must already be validated as a safe bind
 // address (see the cmd layer's loopback guard).
 func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) error {
-	srv := newServer(opts)
-	var handler http.Handler = mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return srv }, nil)
-	handler = withBearerAuth(handler, opts.Token)
-	httpServer := &http.Server{Addr: addr, Handler: handler}
+	httpServer := &http.Server{Addr: addr, Handler: newHTTPHandler(opts)}
 	fmt.Fprintf(os.Stderr, "agentsview mcp: serving on %s\n", addr)
 
 	errCh := make(chan error, 1)
