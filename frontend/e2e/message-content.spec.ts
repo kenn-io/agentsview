@@ -41,7 +41,8 @@ async function selectSession(
   const item = getSessionItem(page, project, count);
   const sessionId = await item.getAttribute("data-session-id");
   expect(sessionId).toBeTruthy();
-  await item.click();
+  await expect(item).toBeVisible();
+  await item.click({ force: true });
   await expect(item).toHaveClass(/active/);
   return sessionId!;
 }

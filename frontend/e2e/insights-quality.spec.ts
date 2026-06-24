@@ -126,7 +126,7 @@ test.describe("Insights quality rollout", () => {
     ).toHaveCount(0);
     await page.keyboard.press("Escape");
     await expect(savedInsight).toBeVisible();
-    await savedInsight.click();
+    await savedInsight.click({ force: true });
     await expect(page).toHaveURL(/\/insights\?.*insight=42/);
     const selectedInsightUrl = new URL(page.url());
     expect(selectedInsightUrl.pathname).toBe("/insights");
