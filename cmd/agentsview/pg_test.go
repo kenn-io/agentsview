@@ -195,6 +195,32 @@ url = "postgres://archive"
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
+func TestRunPGStatus_IgnoresUnreadableLocalWatermark(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "sessions.db"),
+		nil,
+		0o600,
+	))
+
+	err := runPGStatus("archive", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(t, err.Error(), "opening database")
+	assert.NotContains(t, err.Error(), "sessions.db is empty")
+}
+
 func TestRunPGPushAll_AggregatesTargetFailures(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)

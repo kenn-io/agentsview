@@ -225,9 +225,10 @@ func runPGStatus(
 	applyClassifierConfig(appCfg)
 	database, err := openReadOnlyDB(appCfg)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("opening database: %w", err)
-		}
+		log.Printf(
+			"warning: reading local pg status watermark: %v",
+			err,
+		)
 		database = nil
 	}
 	if database != nil {
