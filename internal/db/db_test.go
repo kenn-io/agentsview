@@ -696,7 +696,7 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionSanitizedMessageShape(t *testing.T) {
-	assert.Equal(t, 51, CurrentDataVersion(),
+	assert.Equal(t, 52, CurrentDataVersion(),
 		"current parser data version must stay bumped past the Pi lineage reparse")
 }
 
