@@ -4829,12 +4829,18 @@ func (e *Engine) tryIncrementalJSONL(
 	hasPeakCtx := inc.HasPeakContextTokens
 	for _, m := range newMsgs {
 		msgHasCtx, msgHasOut := m.TokenPresence()
+		// Accumulate from per-message values already bounded to the
+		// per-message clamp the central pass applies to the stored rows, so
+		// a corrupt new message cannot inflate the session aggregates past
+		// what the persisted rows justify (parity with the full path, which
+		// re-derives message-derived totals from the clamped rows).
 		if msgHasOut {
-			totalOut += m.OutputTokens
+			totalOut += clampedTokens(m.OutputTokens)
 			hasTotalOut = true
 		}
-		if msgHasCtx && (!hasPeakCtx || m.ContextTokens > peakCtx) {
-			peakCtx = m.ContextTokens
+		if ctx := clampedTokens(m.ContextTokens); msgHasCtx &&
+			(!hasPeakCtx || ctx > peakCtx) {
+			peakCtx = ctx
 			hasPeakCtx = true
 		}
 	}
@@ -7099,6 +7105,54 @@ func (e *Engine) prepareSessionWrite(
 		applySessionMessageDerivedFields(&s, msgs)
 		applySessionTokenTotalsFromMessages(&s, msgs)
 	}
+	// Snapshot, before sanitizing, whether the session's token aggregates
+	// are derived from the per-message rows or the per-usage-event rows, by
+	// matching the stored value against each source's raw sum/max. Aggregates
+	// set directly from a session-level usage summary -- agents like
+	// Warp/Vibe/Hermes -- match neither source and must survive the per-row
+	// clamp untouched.
+	msgTotal, msgHasOut, msgPeak, msgHasCtx := messageTokenTotals(msgs)
+	evtTotal, evtHasOut, evtPeak, evtHasCtx := usageEventTokenTotals(
+		pw.usageEvents, false,
+	)
+	totalFromMsgs := s.HasTotalOutputTokens == msgHasOut &&
+		s.TotalOutputTokens == msgTotal
+	totalFromEvts := s.HasTotalOutputTokens == evtHasOut &&
+		s.TotalOutputTokens == evtTotal
+	peakFromMsgs := s.HasPeakContextTokens == msgHasCtx &&
+		s.PeakContextTokens == msgPeak
+	peakFromEvts := s.HasPeakContextTokens == evtHasCtx &&
+		s.PeakContextTokens == evtPeak
+
+	// Central validation/sanitization pass: every session write flows
+	// through here so all agents are covered uniformly. Stats are discarded
+	// for now; a later anomaly-counter task will surface them.
+	_ = validateAndSanitize(&s, msgs, nil)
+
+	// A per-row token clamp must not leave an inflated value stranded in a
+	// row-derived session total while the row that produced it was clamped.
+	// Re-derive a matched aggregate from its now-clamped source (messages
+	// clamped above; usage events clamped on the fly the same way
+	// toDBUsageEvents will store them). Summary-derived aggregates match
+	// neither source and are left as-is. The sum is re-summed from clamped
+	// rows rather than clamped to the per-row bound, so a legitimately large
+	// total over many rows is preserved. Re-deriving is a no-op when nothing
+	// was clamped, keeping the pass idempotent. Messages take precedence when
+	// both sources match (identical values).
+	if totalFromMsgs {
+		t, h, _, _ := messageTokenTotals(msgs)
+		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
+	} else if totalFromEvts {
+		t, h, _, _ := usageEventTokenTotals(pw.usageEvents, true)
+		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
+	}
+	if peakFromMsgs {
+		_, _, p, h := messageTokenTotals(msgs)
+		s.PeakContextTokens, s.HasPeakContextTokens = p, h
+	} else if peakFromEvts {
+		_, _, p, h := usageEventTokenTotals(pw.usageEvents, true)
+		s.PeakContextTokens, s.HasPeakContextTokens = p, h
+	}
 	return s, msgs, true
 }
 
@@ -7109,11 +7163,15 @@ func applySessionMessageDerivedFields(s *db.Session, msgs []db.Message) {
 	)
 }
 
-func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
-	totalOut := 0
-	hasOut := false
-	peakCtx := 0
-	hasCtx := false
+// messageTokenTotals computes the message-derived session token
+// aggregates: the sum of per-message output tokens and the peak
+// per-message context tokens, each with a presence flag. It is the
+// canonical derivation shared by applySessionTokenTotalsFromMessages and
+// the post-sanitize reconciliation that re-derives message-derived totals
+// from the clamped rows. Absent values return 0 with a false presence.
+func messageTokenTotals(
+	msgs []db.Message,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
 	for _, msg := range msgs {
 		if msg.HasOutputTokens {
 			hasOut = true
@@ -7126,20 +7184,44 @@ func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
 			}
 		}
 	}
-	if hasOut {
-		s.TotalOutputTokens = totalOut
-		s.HasTotalOutputTokens = true
-	} else {
-		s.TotalOutputTokens = 0
-		s.HasTotalOutputTokens = false
+	return totalOut, hasOut, peakCtx, hasCtx
+}
+
+func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
+	totalOut, hasOut, peakCtx, hasCtx := messageTokenTotals(msgs)
+	s.TotalOutputTokens = totalOut
+	s.HasTotalOutputTokens = hasOut
+	s.PeakContextTokens = peakCtx
+	s.HasPeakContextTokens = hasCtx
+}
+
+// usageEventTokenTotals computes the event-derived session token aggregates
+// through parser.UsageEventTokenAggregate -- the SAME rollup parsers use to
+// populate the stored session totals (positive output summed, peak full
+// context = input + cache-creation + cache-read where positive). Sharing that
+// function keeps the detection from drifting from the parser. When clamp is
+// true each per-event token field is first bounded to the per-row plausibility
+// cap, matching how sanitizeUsageEvent bounds the stored usage_event row
+// (a negative value floors to 0 and so drops out of the positive-only rollup,
+// exactly as it would after sanitization), so the post-clamp aggregate equals
+// what re-running the rollup over the stored rows would produce.
+func usageEventTokenTotals(
+	events []parser.ParsedUsageEvent, clamp bool,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
+	rolled := events
+	if clamp {
+		rolled = make([]parser.ParsedUsageEvent, len(events))
+		for i, ev := range events {
+			ev.InputTokens = clampedTokens(ev.InputTokens)
+			ev.OutputTokens = clampedTokens(ev.OutputTokens)
+			ev.CacheCreationInputTokens = clampedTokens(
+				ev.CacheCreationInputTokens,
+			)
+			ev.CacheReadInputTokens = clampedTokens(ev.CacheReadInputTokens)
+			rolled[i] = ev
+		}
 	}
-	if hasCtx {
-		s.PeakContextTokens = peakCtx
-		s.HasPeakContextTokens = true
-	} else {
-		s.PeakContextTokens = 0
-		s.HasPeakContextTokens = false
-	}
+	return parser.UsageEventTokenAggregate(rolled)
 }
 
 func applyVisualStudioCopilotArchiveSessionFields(
@@ -7583,31 +7665,46 @@ func visualStudioCopilotMessageLooksIncomplete(
 	if parsed.Role != stored.Role {
 		return false
 	}
-	if parsed.ContentLength < stored.ContentLength {
+	// Stored rows are sanitized and length-adjusted on write; measure the
+	// parsed side the same way so a reparse that only stripped control bytes
+	// is not judged shorter and allowed to bypass archive preservation.
+	p := sanitizedForArchiveCompare(parsed)
+	if p.ContentLength < stored.ContentLength {
 		return true
 	}
-	if stored.HasThinking && !parsed.HasThinking {
+	if stored.HasThinking && !p.HasThinking {
 		return true
 	}
 	if stored.HasOutputTokens &&
-		(!parsed.HasOutputTokens ||
-			parsed.OutputTokens < stored.OutputTokens) {
+		(!p.HasOutputTokens ||
+			p.OutputTokens < stored.OutputTokens) {
 		return true
 	}
 	if stored.HasContextTokens &&
-		(!parsed.HasContextTokens ||
-			parsed.ContextTokens < stored.ContextTokens) {
+		(!p.HasContextTokens ||
+			p.ContextTokens < stored.ContextTokens) {
 		return true
 	}
-	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
+	if len(p.ToolCalls) < len(stored.ToolCalls) {
 		return true
 	}
-	if countToolResultEvents(parsed.ToolCalls) <
+	if countToolResultEvents(p.ToolCalls) <
 		countToolResultEvents(stored.ToolCalls) {
 		return true
 	}
-	return countToolResultContentLength(parsed.ToolCalls) <
+	return countToolResultContentLength(p.ToolCalls) <
 		countToolResultContentLength(stored.ToolCalls)
+}
+
+// sanitizedForArchiveCompare returns a copy of m with the same
+// validation/sanitization stored rows receive on write (control runes
+// stripped, ContentLength delta-adjusted, tokens clamped), so the VS Copilot
+// archive reconcile compares freshly parsed messages against archived rows
+// like-for-like. The copy is shallow; sanitizeMessage only rewrites value
+// fields, leaving the shared ToolCalls slice untouched.
+func sanitizedForArchiveCompare(m db.Message) db.Message {
+	_ = sanitizeMessage(&m)
+	return m
 }
 
 func visualStudioCopilotMessageHasArchiveUpdate(
@@ -7616,33 +7713,38 @@ func visualStudioCopilotMessageHasArchiveUpdate(
 	if parsed.Role != stored.Role {
 		return false
 	}
-	if parsed.ContentLength > stored.ContentLength {
+	// Stored rows are sanitized and length-adjusted on write, but the parsed
+	// message still carries raw content here. Compare a sanitized copy so a
+	// reparse that differs only in stripped control bytes is not treated as
+	// an archive update, preserving idempotency.
+	p := sanitizedForArchiveCompare(parsed)
+	if p.ContentLength > stored.ContentLength {
 		return true
 	}
-	if parsed.ContentLength == stored.ContentLength &&
-		parsed.Content != stored.Content {
+	if p.ContentLength == stored.ContentLength &&
+		p.Content != stored.Content {
 		return true
 	}
-	if parsed.HasThinking && (!stored.HasThinking ||
-		parsed.ThinkingText != stored.ThinkingText) {
+	if p.HasThinking && (!stored.HasThinking ||
+		p.ThinkingText != stored.ThinkingText) {
 		return true
 	}
-	if parsed.HasOutputTokens &&
+	if p.HasOutputTokens &&
 		(!stored.HasOutputTokens ||
-			parsed.OutputTokens > stored.OutputTokens) {
+			p.OutputTokens > stored.OutputTokens) {
 		return true
 	}
-	if parsed.HasContextTokens &&
+	if p.HasContextTokens &&
 		(!stored.HasContextTokens ||
-			parsed.ContextTokens > stored.ContextTokens) {
+			p.ContextTokens > stored.ContextTokens) {
 		return true
 	}
-	if string(parsed.TokenUsage) != "" &&
-		string(parsed.TokenUsage) != string(stored.TokenUsage) {
+	if string(p.TokenUsage) != "" &&
+		string(p.TokenUsage) != string(stored.TokenUsage) {
 		return true
 	}
 	return visualStudioCopilotToolCallsHaveArchiveUpdate(
-		parsed.ToolCalls, stored.ToolCalls,
+		p.ToolCalls, stored.ToolCalls,
 	)
 }
 
@@ -7809,6 +7911,10 @@ func (e *Engine) writeIncremental(
 		},
 		e.blockedResultCategories,
 	)
+	// The incremental append path bypasses prepareSessionWrite, so run
+	// the central validation/sanitization pass on the new message rows
+	// here to keep coverage uniform across write paths.
+	_ = validateAndSanitize(nil, dbMsgs, nil)
 
 	// Adjust counts for blocked-category filtering.
 	newTotal, newUser := postFilterCounts(dbMsgs)
@@ -7822,6 +7928,19 @@ func (e *Engine) writeIncremental(
 		s := inc.endedAt.Format(time.RFC3339Nano)
 		endedAt = &s
 	}
+	// Run the appended ended_at through the same timestamp plausibility
+	// check the full path applies in sanitizeSession, so an implausible
+	// appended timestamp is blanked here instead of persisting via the
+	// incremental path while a full sync of the same file would blank it
+	// (an incremental-vs-full parity divergence). The session token
+	// aggregates (totalOutputTokens/peakContextTokens) are accumulated from
+	// per-message values already clamped to the per-message bound (see the
+	// clampedTokens calls feeding this update), so a corrupt new message
+	// cannot inflate them past what the stored rows justify -- parity with
+	// the full path, which re-derives message-derived totals from the
+	// clamped rows. The sum itself is not clamped to the per-message bound,
+	// since a long session legitimately exceeds it.
+	endedAt, _ = blankImplausibleTimestampPtr(endedAt)
 
 	if err := e.db.WriteSessionIncremental(
 		inc.sessionID,
@@ -8447,6 +8566,10 @@ func toDBUsageEvents(
 			DedupKey:                 ev.DedupKey,
 		})
 	}
+	// Route usage events through the central validation/sanitization
+	// pass so they get the same treatment as messages and sessions at
+	// every call site. Stats are discarded for now.
+	_ = validateAndSanitize(nil, nil, out)
 	return out
 }
 

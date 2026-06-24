@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tidwall/gjson"
-
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -916,17 +914,38 @@ func isJSONSpace(b byte) bool {
 	return b == ' ' || b == '\n' || b == '\r' || b == '\t'
 }
 
+func clampedUsageRowTokens(
+	inputTokens, outputTokens, cacheCreationInputTokens,
+	cacheReadInputTokens int,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	return ClampPlausibleTokens(int64(inputTokens)),
+		ClampPlausibleTokens(int64(outputTokens)),
+		ClampPlausibleTokens(int64(cacheCreationInputTokens)),
+		ClampPlausibleTokens(int64(cacheReadInputTokens))
+}
+
+func clampedUsageTokenCounters(
+	tokenJSON string,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	inputTok, outputTok, cacheCrTok, cacheRdTok =
+		parseUsageTokenCounters(tokenJSON)
+	return ClampPlausibleTokens(int64(inputTok)),
+		ClampPlausibleTokens(int64(outputTok)),
+		ClampPlausibleTokens(int64(cacheCrTok)),
+		ClampPlausibleTokens(int64(cacheRdTok))
+}
+
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *modelRateResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
 	if r.usageSource == "message" {
 		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			parseUsageTokenCounters(r.tokenJSON)
+			clampedUsageTokenCounters(r.tokenJSON)
 	} else {
-		inputTok = r.inputTokens
-		outputTok = r.outputTokens
-		cacheCrTok = r.cacheCreationInputTokens
-		cacheRdTok = r.cacheReadInputTokens
+		inputTok, outputTok, cacheCrTok, cacheRdTok =
+			clampedUsageRowTokens(
+				r.inputTokens, r.outputTokens,
+				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
 	rates, _ := pricing.lookup(r.model)
@@ -1785,16 +1804,12 @@ func sessionRowCost(
 ) (cost float64, priced, contributes bool) {
 	var inTok, outTok, crTok, rdTok int
 	if r.usageSource == "message" {
-		usage := gjson.Parse(r.tokenJSON)
-		inTok = int(usage.Get("input_tokens").Int())
-		outTok = int(usage.Get("output_tokens").Int())
-		crTok = int(usage.Get("cache_creation_input_tokens").Int())
-		rdTok = int(usage.Get("cache_read_input_tokens").Int())
+		inTok, outTok, crTok, rdTok =
+			clampedUsageTokenCounters(r.tokenJSON)
 	} else {
-		inTok = r.inputTokens
-		outTok = r.outputTokens
-		crTok = r.cacheCreationInputTokens
-		rdTok = r.cacheReadInputTokens
+		inTok, outTok, crTok, rdTok = clampedUsageRowTokens(
+			r.inputTokens, r.outputTokens,
+			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
 	if r.costUSD.Valid {

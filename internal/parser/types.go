@@ -734,7 +734,28 @@ type RoleType string
 const (
 	RoleUser      RoleType = "user"
 	RoleAssistant RoleType = "assistant"
+	// RoleSystem and RoleTool are emitted by several parsers (for
+	// system-injected notices and standalone tool-result records) and
+	// persist to the messages table, so they are part of the known
+	// role enum even though the user/assistant pair carries the common
+	// case.
+	RoleSystem RoleType = "system"
+	RoleTool   RoleType = "tool"
 )
+
+// ValidRole reports whether r is a recognized message role. It is the
+// authoritative enum check for the central output-validation pass,
+// which coerces out-of-enum roles rather than persisting garbage
+// strings. The empty role is treated as valid (absent) so a parser
+// that legitimately leaves the role unset is not flagged.
+func ValidRole(r RoleType) bool {
+	switch r {
+	case "", RoleUser, RoleAssistant, RoleSystem, RoleTool:
+		return true
+	default:
+		return false
+	}
+}
 
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
@@ -930,25 +951,8 @@ func applyUsageEventTokenTotals(
 	sess *ParsedSession,
 	events []ParsedUsageEvent,
 ) {
-	totalOutput := 0
-	peakContext := 0
-	hasOutput := false
-	hasContext := false
-	for _, ev := range events {
-		if ev.OutputTokens > 0 {
-			hasOutput = true
-			totalOutput += ev.OutputTokens
-		}
-		context := ev.InputTokens +
-			ev.CacheCreationInputTokens +
-			ev.CacheReadInputTokens
-		if context > 0 {
-			hasContext = true
-			if context > peakContext {
-				peakContext = context
-			}
-		}
-	}
+	totalOutput, hasOutput, peakContext, hasContext :=
+		UsageEventTokenAggregate(events)
 	if hasOutput {
 		sess.HasTotalOutputTokens = true
 		sess.TotalOutputTokens = totalOutput
@@ -957,6 +961,35 @@ func applyUsageEventTokenTotals(
 		sess.HasPeakContextTokens = true
 		sess.PeakContextTokens = peakContext
 	}
+}
+
+// UsageEventTokenAggregate is the canonical event-derived token rollup:
+// the sum of POSITIVE per-event output tokens and the peak per-event full
+// context (input + cache-creation + cache-read) where that context is
+// positive, each with a presence flag. It is the single source of truth
+// shared by applyUsageEventTokenTotals (parser side) and the sync layer's
+// post-sanitize aggregate reconciliation, so the two never drift: a value
+// that did not contribute to the stored aggregate (zero or negative) is
+// excluded on both sides, before and after clamping.
+func UsageEventTokenAggregate(
+	events []ParsedUsageEvent,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
+	for _, ev := range events {
+		if ev.OutputTokens > 0 {
+			hasOut = true
+			totalOut += ev.OutputTokens
+		}
+		context := ev.InputTokens +
+			ev.CacheCreationInputTokens +
+			ev.CacheReadInputTokens
+		if context > 0 {
+			hasCtx = true
+			if context > peakCtx {
+				peakCtx = context
+			}
+		}
+	}
+	return totalOut, hasOut, peakCtx, hasCtx
 }
 
 // InferTokenPresence determines whether context/output tokens were

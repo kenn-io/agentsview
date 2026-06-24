@@ -726,20 +726,35 @@ func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
 	return r, err
 }
 
+func pgTokenJSONCount(usage gjson.Result, key string) int {
+	return db.ClampPlausibleTokens(usage.Get(key).Int())
+}
+
+func pgClampedUsageRowTokens(
+	inputTokens, outputTokens, cacheCreationInputTokens,
+	cacheReadInputTokens int,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	return db.ClampPlausibleTokens(int64(inputTokens)),
+		db.ClampPlausibleTokens(int64(outputTokens)),
+		db.ClampPlausibleTokens(int64(cacheCreationInputTokens)),
+		db.ClampPlausibleTokens(int64(cacheReadInputTokens))
+}
+
 func pgDailyUsageAmounts(
 	r pgDailyUsageScanRow, pricing *modelRateResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
-		inputTok = int(usage.Get("input_tokens").Int())
-		outputTok = int(usage.Get("output_tokens").Int())
-		cacheCrTok = int(usage.Get("cache_creation_input_tokens").Int())
-		cacheRdTok = int(usage.Get("cache_read_input_tokens").Int())
+		inputTok = pgTokenJSONCount(usage, "input_tokens")
+		outputTok = pgTokenJSONCount(usage, "output_tokens")
+		cacheCrTok = pgTokenJSONCount(
+			usage, "cache_creation_input_tokens")
+		cacheRdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
 	} else {
-		inputTok = r.inputTokens
-		outputTok = r.outputTokens
-		cacheCrTok = r.cacheCreationInputTokens
-		cacheRdTok = r.cacheReadInputTokens
+		inputTok, outputTok, cacheCrTok, cacheRdTok =
+			pgClampedUsageRowTokens(
+				r.inputTokens, r.outputTokens,
+				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
 	rates, _ := pricing.lookup(r.model)
@@ -794,15 +809,14 @@ func pgSessionRowCost(
 	var inTok, outTok, crTok, rdTok int
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
-		inTok = int(usage.Get("input_tokens").Int())
-		outTok = int(usage.Get("output_tokens").Int())
-		crTok = int(usage.Get("cache_creation_input_tokens").Int())
-		rdTok = int(usage.Get("cache_read_input_tokens").Int())
+		inTok = pgTokenJSONCount(usage, "input_tokens")
+		outTok = pgTokenJSONCount(usage, "output_tokens")
+		crTok = pgTokenJSONCount(usage, "cache_creation_input_tokens")
+		rdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
 	} else {
-		inTok = r.inputTokens
-		outTok = r.outputTokens
-		crTok = r.cacheCreationInputTokens
-		rdTok = r.cacheReadInputTokens
+		inTok, outTok, crTok, rdTok = pgClampedUsageRowTokens(
+			r.inputTokens, r.outputTokens,
+			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
 
 	if r.costUSD.Valid {

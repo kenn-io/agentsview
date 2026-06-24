@@ -2077,6 +2077,305 @@ func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *t
 	}
 }
 
+// TestPrepareSessionWriteReclampsMessageDerivedTokenTotals proves the full
+// write path does not strand a corrupt per-message token value in the session
+// aggregates. A message with an implausible OutputTokens/ContextTokens is
+// clamped to maxPlausibleTokens in its row, so the message-derived session
+// totals must be re-derived from the clamped rows -- while a legitimately
+// large sum over many messages (above the per-message bound) is preserved.
+func TestPrepareSessionWriteReclampsMessageDerivedTokenTotals(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts,
+			OutputTokens: 1_000_000, HasOutputTokens: true,
+			ContextTokens: 1_500_000, HasContextTokens: true,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "b",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+			OutputTokens: 1_500_000, HasOutputTokens: true,
+			ContextTokens: 1_000_000, HasContextTokens: true,
+		},
+		{
+			Ordinal: 2, Role: parser.RoleAssistant, Content: "c",
+			ContentLength: 1, Timestamp: ts.Add(2 * time.Second),
+			// Corrupt: both counts are far above maxPlausibleTokens and
+			// will be clamped to it in the stored row.
+			OutputTokens: 999_999_999, HasOutputTokens: true,
+			ContextTokens: 999_999_999, HasContextTokens: true,
+		},
+	}
+
+	newSess := func() parser.ParsedSession {
+		return parser.ParsedSession{
+			ID: "tok-session", Project: "proj", Machine: "test-machine",
+			Agent: parser.AgentClaude, StartedAt: ts,
+			EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+			File: parser.FileInfo{
+				Path: "/tmp/tok.jsonl", Size: 10, Mtime: ts.UnixNano(),
+			},
+		}
+	}
+
+	// Message-derived totals (the parser accumulated them via
+	// accumulateMessageTokenUsage): sum of output and peak context, raw.
+	sess := newSess()
+	sess.TotalOutputTokens = 1_000_000 + 1_500_000 + 999_999_999
+	sess.HasTotalOutputTokens = true
+	sess.PeakContextTokens = 999_999_999
+	sess.HasPeakContextTokens = true
+
+	prepared, dbMsgs, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs}, nil,
+	)
+	require.True(t, ok)
+	require.Len(t, dbMsgs, 3)
+
+	// The corrupt message row is clamped to the per-message bound.
+	assert.Equal(t, maxPlausibleTokens, dbMsgs[2].OutputTokens,
+		"corrupt message OutputTokens clamped")
+	assert.Equal(t, maxPlausibleTokens, dbMsgs[2].ContextTokens,
+		"corrupt message ContextTokens clamped")
+	// The session total is re-derived from the clamped rows: a legitimately
+	// large sum (above maxPlausibleTokens) survives, the corrupt value does
+	// not pollute it.
+	assert.Equal(t, 1_000_000+1_500_000+maxPlausibleTokens,
+		prepared.TotalOutputTokens,
+		"message-derived total re-derived from clamped rows")
+	assert.Equal(t, maxPlausibleTokens, prepared.PeakContextTokens,
+		"message-derived peak re-derived from clamped rows")
+
+	// Summary-derived totals (agents like Warp/Vibe set the session totals
+	// directly, not from per-message rows) must survive the per-message
+	// clamp untouched: they do not match the message-derived values.
+	const summaryTotal = 4_242_424
+	const summaryPeak = 3_333_333
+	summarySess := newSess()
+	summarySess.TotalOutputTokens = summaryTotal
+	summarySess.HasTotalOutputTokens = true
+	summarySess.PeakContextTokens = summaryPeak
+	summarySess.HasPeakContextTokens = true
+
+	preparedSummary, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: summarySess, msgs: msgs}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, summaryTotal, preparedSummary.TotalOutputTokens,
+		"summary-derived total left untouched by per-message clamp")
+	assert.Equal(t, summaryPeak, preparedSummary.PeakContextTokens,
+		"summary-derived peak left untouched by per-message clamp")
+}
+
+// TestPrepareSessionWriteReclampsEventDerivedTokenTotals covers the
+// usage-event-derived case (VS Code Copilot accumulates session totals from
+// per-turn usage events, not per-message rows). A corrupt usage event is
+// clamped in its usage_events row, so the event-derived session aggregates
+// must be re-derived from the clamped events rather than left at the raw
+// inflated value.
+func TestPrepareSessionWriteReclampsEventDerivedTokenTotals(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	// Per-message rows carry no tokens; the tokens live in usage events.
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	events := []parser.ParsedUsageEvent{
+		{OutputTokens: 1_000_000, InputTokens: 1_500_000},
+		{OutputTokens: 1_500_000, InputTokens: 1_000_000},
+		// Corrupt event: both counts are clamped in the usage_events row.
+		{OutputTokens: 999_999_999, InputTokens: 999_999_999},
+	}
+	sess := parser.ParsedSession{
+		ID: "evt-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentVSCodeCopilot, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/evt.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		// Event-derived aggregates, raw (as the parser accumulates them):
+		// sum of event output tokens, peak of event input tokens.
+		TotalOutputTokens:    1_000_000 + 1_500_000 + 999_999_999,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    999_999_999,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, 1_000_000+1_500_000+maxPlausibleTokens,
+		prepared.TotalOutputTokens,
+		"event-derived total re-derived from clamped usage events")
+	assert.Equal(t, maxPlausibleTokens, prepared.PeakContextTokens,
+		"event-derived peak re-derived from clamped usage events")
+}
+
+// TestPrepareSessionWriteReclampsEventDerivedCacheContext covers an
+// event-derived peak context that, like the parser-side rollup, sums input and
+// cache tokens. A corrupt cache value is clamped per-component in its
+// usage_events row, so the event-derived peak must be re-derived from the
+// clamped components rather than left at the raw inflated value.
+func TestPrepareSessionWriteReclampsEventDerivedCacheContext(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	// Per-event context = input + cache-creation + cache-read.
+	events := []parser.ParsedUsageEvent{
+		{OutputTokens: 100_000, InputTokens: 1_000_000, CacheReadInputTokens: 500_000},
+		{OutputTokens: 100_000, InputTokens: 800_000, CacheCreationInputTokens: 200_000},
+		// Corrupt event: each component is clamped to maxPlausibleTokens.
+		{
+			OutputTokens: 999_999_999, InputTokens: 999_999_999,
+			CacheReadInputTokens: 999_999_999,
+		},
+	}
+	rawTotal := 100_000 + 100_000 + 999_999_999
+	rawPeak := 999_999_999 + 999_999_999 // the corrupt event's input+cache
+	sess := parser.ParsedSession{
+		ID: "evt-cache-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentVSCodeCopilot, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/evtcache.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		TotalOutputTokens:    rawTotal,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    rawPeak,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, 100_000+100_000+maxPlausibleTokens,
+		prepared.TotalOutputTokens,
+		"event-derived total re-derived from clamped output tokens")
+	// Peak = the corrupt event's input + cache-read, each clamped to the
+	// per-row bound: 2M + 2M. The sum is not clamped to the per-row bound.
+	assert.Equal(t, maxPlausibleTokens+maxPlausibleTokens,
+		prepared.PeakContextTokens,
+		"event-derived peak re-derived from clamped input+cache components")
+}
+
+// TestPrepareSessionWriteReclampsEventDerivedMixedSignTokens covers the
+// parser rollup semantics shared with parser.UsageEventTokenAggregate: only
+// positive output is summed and only positive context contributes to the peak.
+// A mix of a negative (corrupt) event and an over-bound event must still be
+// recognized as event-derived and re-derived from the clamped rows.
+func TestPrepareSessionWriteReclampsEventDerivedMixedSignTokens(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	events := []parser.ParsedUsageEvent{
+		{OutputTokens: 1_000_000, InputTokens: 1_500_000},
+		// Corrupt negative event: excluded from the positive-only rollup.
+		{OutputTokens: -5, InputTokens: -10},
+		// Over-bound event: clamped to the per-row cap.
+		{OutputTokens: 999_999_999, InputTokens: 999_999_999},
+	}
+	// Raw rollup (positive-only): output 1M + 999,999,999; peak context
+	// max(1.5M, 999,999,999).
+	rawTotal := 1_000_000 + 999_999_999
+	rawPeak := 999_999_999
+	sess := parser.ParsedSession{
+		ID: "evt-mixed-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentVSCodeCopilot, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/evtmixed.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		TotalOutputTokens:    rawTotal,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    rawPeak,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	// Negative output floors to 0 (dropped); over-bound output clamps to 2M.
+	assert.Equal(t, 1_000_000+maxPlausibleTokens, prepared.TotalOutputTokens,
+		"negative event excluded, over-bound event clamped in event total")
+	assert.Equal(t, maxPlausibleTokens, prepared.PeakContextTokens,
+		"event peak re-derived from clamped positive context")
+}
+
+// TestVisualStudioCopilotArchiveCompareUsesSanitizedParsed guards against a
+// truncated reparse padded with control bytes bypassing archive preservation.
+// Stored rows are sanitized and length-adjusted on write, so the reconcile must
+// measure the parsed side the same way rather than against its raw length.
+func TestVisualStudioCopilotArchiveCompareUsesSanitizedParsed(t *testing.T) {
+	stored := db.Message{
+		Role:          "assistant",
+		Content:       "complete answer",
+		ContentLength: len("complete answer"),
+	}
+	// Genuinely truncated content ("trunc"), padded with BEL control bytes so
+	// the RAW length (25) exceeds the stored length (15); sanitized it is 5.
+	raw := "trunc" + strings.Repeat("\x07", 20)
+	require.Greater(t, len(raw), stored.ContentLength,
+		"raw length must look long enough to expose the bug")
+	truncated := db.Message{Role: "assistant", Content: raw, ContentLength: len(raw)}
+
+	assert.True(t,
+		visualStudioCopilotMessageLooksIncomplete(truncated, stored),
+		"truncated reparse padded with control bytes must be incomplete")
+
+	// A reparse that differs only by stripped control bytes is neither
+	// incomplete nor an archive update: "complete\x07 answer" sanitizes to the
+	// stored "complete answer".
+	withControl := db.Message{
+		Role:          "assistant",
+		Content:       "complete\x07 answer",
+		ContentLength: len("complete\x07 answer"),
+	}
+	assert.False(t,
+		visualStudioCopilotMessageLooksIncomplete(withControl, stored),
+		"stripped-control reparse of equal text is not incomplete")
+	assert.False(t,
+		visualStudioCopilotMessageHasArchiveUpdate(withControl, stored),
+		"stripped-control reparse of equal text is not an archive update")
+}
+
 func TestVisualStudioCopilotArchiveDecisionMatchesTimestampShiftedToolCall(t *testing.T) {
 	stored := []db.Message{
 		{
@@ -3428,4 +3727,143 @@ func TestDiscoveredFileMtimeVisualStudioCopilotResolvesVirtualPath(t *testing.T)
 	require.NoError(t, err,
 		"virtual path must resolve to the physical trace for stat")
 	assert.Equal(t, info.ModTime().UnixNano(), mtime)
+}
+
+// TestWriteIncrementalBlanksImplausibleEndedAt verifies that the
+// incremental sync path runs the appended ended_at through the same
+// timestamp plausibility check the full path applies in sanitizeSession.
+// An out-of-window ended_at must not persist via incremental sync while a
+// full sync of the same file would blank it (an incremental-vs-full
+// parity divergence).
+func TestWriteIncrementalBlanksImplausibleEndedAt(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		endedAt time.Time
+	}{
+		{name: "far past", endedAt: time.Date(1850, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "far future", endedAt: time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			e := &Engine{db: database}
+
+			plausibleEnd := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+			start := plausibleEnd.Add(-time.Hour)
+			pw := pendingWrite{
+				sess: parser.ParsedSession{
+					ID:           "inc-ts",
+					Project:      "proj",
+					Machine:      "host",
+					Agent:        parser.AgentClaude,
+					StartedAt:    start,
+					EndedAt:      plausibleEnd,
+					MessageCount: 1,
+				},
+				msgs: []parser.ParsedMessage{{
+					Role:      parser.RoleUser,
+					Content:   "hello",
+					Timestamp: start,
+				}},
+			}
+			_, _, failed := e.writeBatch(
+				[]pendingWrite{pw}, syncWriteDefault, false,
+			)
+			require.Equal(t, 0, failed, "initial session write must not fail")
+
+			before, err := database.GetSessionFull(context.Background(), "inc-ts")
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			require.NotNil(t, before.EndedAt, "baseline ended_at must be set")
+			wantEnd := *before.EndedAt
+
+			err = e.writeIncremental(&incrementalUpdate{
+				sessionID: "inc-ts",
+				msgs: []parser.ParsedMessage{{
+					Role:      parser.RoleAssistant,
+					Content:   "world",
+					Timestamp: plausibleEnd,
+					Ordinal:   1,
+				}},
+				endedAt:      tc.endedAt,
+				msgCount:     2,
+				userMsgCount: 1,
+				fileSize:     100,
+				fileMtime:    plausibleEnd.UnixNano(),
+			})
+			require.NoError(t, err, "writeIncremental")
+
+			after, err := database.GetSessionFull(context.Background(), "inc-ts")
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			require.NotNil(t, after.EndedAt,
+				"implausible ended_at must be blanked, leaving the prior value via COALESCE")
+			// The implausible appended timestamp must not have been
+			// stored. Because it is blanked to nil, COALESCE keeps the
+			// prior plausible value.
+			assert.Equal(t, wantEnd, *after.EndedAt,
+				"implausible ended_at must not overwrite the plausible value")
+			assert.NotContains(t, *after.EndedAt, "1850",
+				"far-past ended_at must not persist")
+			assert.NotContains(t, *after.EndedAt, "2999",
+				"far-future ended_at must not persist")
+		})
+	}
+}
+
+// TestWriteIncrementalKeepsPlausibleEndedAt is the positive control for
+// TestWriteIncrementalBlanksImplausibleEndedAt: a plausible appended
+// ended_at must still update the column.
+func TestWriteIncrementalKeepsPlausibleEndedAt(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+
+	start := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	firstEnd := start.Add(time.Hour)
+	pw := pendingWrite{
+		sess: parser.ParsedSession{
+			ID:           "inc-ts-ok",
+			Project:      "proj",
+			Machine:      "host",
+			Agent:        parser.AgentClaude,
+			StartedAt:    start,
+			EndedAt:      firstEnd,
+			MessageCount: 1,
+		},
+		msgs: []parser.ParsedMessage{{
+			Role:      parser.RoleUser,
+			Content:   "hello",
+			Timestamp: start,
+		}},
+	}
+	_, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed, "initial session write must not fail")
+
+	newEnd := start.Add(2 * time.Hour)
+	err := e.writeIncremental(&incrementalUpdate{
+		sessionID: "inc-ts-ok",
+		msgs: []parser.ParsedMessage{{
+			Role:      parser.RoleAssistant,
+			Content:   "world",
+			Timestamp: newEnd,
+			Ordinal:   1,
+		}},
+		endedAt:      newEnd,
+		msgCount:     2,
+		userMsgCount: 1,
+		fileSize:     100,
+		fileMtime:    newEnd.UnixNano(),
+	})
+	require.NoError(t, err, "writeIncremental")
+
+	after, err := database.GetSessionFull(context.Background(), "inc-ts-ok")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.EndedAt)
+	gotEnd, ok := parseStoredTimestamp(*after.EndedAt)
+	require.True(t, ok, "stored ended_at must parse")
+	assert.True(t, gotEnd.Equal(newEnd),
+		"plausible appended ended_at must update the column: got %q want %s",
+		*after.EndedAt, newEnd.Format(time.RFC3339Nano))
 }

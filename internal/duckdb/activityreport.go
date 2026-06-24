@@ -362,20 +362,20 @@ func duckActivityReportUsageQuery(inClause string) string {
 			SELECT session_id, message_ordinal, ts, source, model, agent,
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
 				CASE
-					WHEN source = 'message' THEN COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0)
-					ELSE input_tokens
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[2]d)
+					ELSE LEAST(GREATEST(input_tokens, 0), %[2]d)
 				END AS input_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0)
-					ELSE output_tokens
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[2]d)
+					ELSE LEAST(GREATEST(output_tokens, 0), %[2]d)
 				END AS output_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0)
-					ELSE cache_create
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[2]d)
+					ELSE LEAST(GREATEST(cache_create, 0), %[2]d)
 				END AS cache_create_norm,
 				CASE
-					WHEN source = 'message' THEN COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0)
-					ELSE cache_read
+					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[2]d)
+					ELSE LEAST(GREATEST(cache_read, 0), %[2]d)
 				END AS cache_read_norm,
 				cost_usd
 			FROM usage_raw
@@ -386,7 +386,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 			cache_create_norm, cache_read_norm, cost_usd
 		FROM usage_normalized
 		WHERE ts >= CAST(? AS TIMESTAMP)
-			AND ts <= CAST(? AS TIMESTAMP)`, inClause)
+			AND ts <= CAST(? AS TIMESTAMP)`, inClause, db.MaxPlausibleTokens)
 }
 
 // duckActivityReportRowCost computes one usage row's cost the same way

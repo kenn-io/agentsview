@@ -10,6 +10,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -1159,15 +1160,51 @@ func (db *DB) MessageContentFingerprint(sessionID string) (sum, max, min int64, 
 	return sum, max, min, err
 }
 
-// SanitizeUTF8 strips NUL bytes and replaces invalid UTF-8
-// sequences. PostgreSQL enforces strict UTF-8 and rejects NUL in
-// text columns, so the push boundary applies this to every
-// parser-derived string; the local fingerprint builders below apply
-// it too so local fingerprints stay comparable to PG-readback
-// fingerprints when a stored row carries NUL bytes.
+// SanitizeUTF8 strips NUL bytes, replaces invalid UTF-8 sequences,
+// and removes control runes (other than \n, \t, \r). PostgreSQL
+// enforces strict UTF-8 and rejects NUL in text columns, so the push
+// boundary applies this to every parser-derived string; the local
+// fingerprint builders below apply it too so local fingerprints stay
+// comparable to PG-readback fingerprints when a stored row carries
+// NUL bytes.
+//
+// The control-rune strip runs per rune, not per byte: C1 controls
+// (U+0080..U+009F) are valid two-byte UTF-8 and survive
+// strings.ToValidUTF8, so a terminal escape such as ESC ]0;...BEL
+// embedded in parsed content would otherwise persist intact. This
+// function is the single sanitization seam shared by the write path
+// (sync.validateAndSanitize), the local fingerprint builders, and the
+// PG push/readback path, so it MUST stay idempotent:
+// SanitizeUTF8(SanitizeUTF8(s)) == SanitizeUTF8(s). The byte-level
+// NUL strip is retained because it is the pg-push breaker fix and a
+// raw NUL must be removed before strings.ToValidUTF8 (which treats it
+// as valid).
 func SanitizeUTF8(s string) string {
 	s = strings.ReplaceAll(s, "\x00", "")
-	return strings.ToValidUTF8(s, "")
+	s = strings.ToValidUTF8(s, "")
+	// Fast path: skip the rune scan and allocation when the string
+	// carries no control runes to strip.
+	if strings.IndexFunc(s, isStrippableControl) < 0 {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if isStrippableControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// isStrippableControl reports whether r is a control rune that
+// SanitizeUTF8 removes. Newline, tab, and carriage return are
+// preserved because they are legitimate whitespace in message
+// content; every other control rune (C0 below U+0020, DEL, and the
+// C1 block U+0080..U+009F) is stripped.
+func isStrippableControl(r rune) bool {
+	if r == '\n' || r == '\t' || r == '\r' {
+		return false
+	}
+	return unicode.IsControl(r)
 }
 
 // MessageTokenFingerprint returns an exact ordered fingerprint of

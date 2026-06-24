@@ -593,11 +593,11 @@ func TestGetDailyUsageNoPricing(t *testing.T) {
 }
 
 // TestGetDailyUsageTruncatedTokenJSON documents what happens when
-// a message lands in the DB with truncated token_usage — gjson is
-// permissive and still extracts the leading fields, so the valid
-// data is preserved. This is why we don't run gjson.Valid on the
-// hot aggregation path: the realistic corruption modes reachable
-// from our parsers don't produce silent zeros.
+// a message lands in the DB with truncated token_usage. The hot
+// aggregation counter is intentionally permissive and still extracts
+// leading fields, so the valid data is preserved. This is why we don't
+// require fully valid JSON on the hot aggregation path: the realistic
+// corruption modes reachable from our parsers don't produce silent zeros.
 func TestGetDailyUsageTruncatedTokenJSON(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -627,8 +627,8 @@ func TestGetDailyUsageTruncatedTokenJSON(t *testing.T) {
 			Role:      "assistant",
 			Timestamp: "2024-06-15T10:31:00Z",
 			Model:     "claude-sonnet-4-20250514",
-			// Truncated mid-key. gjson still finds the two
-			// leading numeric fields and extracts them.
+			// Truncated mid-key. The usage counter still finds
+			// the two leading numeric fields and extracts them.
 			TokenUsage: json.RawMessage(
 				`{"input_tokens":9999,"output_tokens":4242,"ca`),
 		},
@@ -645,7 +645,7 @@ func TestGetDailyUsageTruncatedTokenJSON(t *testing.T) {
 	// 1000 (valid row) + 9999 (truncated but still parseable)
 	assert.Equal(t, 10999, day.InputTokens,
 		"InputTokens want 10999 "+
-			"(gjson should extract leading fields from truncated JSON)")
+			"(counter should extract leading fields from truncated JSON)")
 	assert.Equal(t, 4742, day.OutputTokens, "OutputTokens")
 }
 
@@ -667,6 +667,65 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	assert.Equal(t, 4242, out)
 	assert.Zero(t, cacheCreate)
 	assert.Zero(t, cacheRead)
+}
+
+func TestUsageAggregationClampsMessageTokenJSON(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	const maxTokens = 2_000_000
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "claude-sonnet-4-20250514",
+		InputPerMTok:         1.0,
+		OutputPerMTok:        2.0,
+		CacheCreationPerMTok: 3.0,
+		CacheReadPerMTok:     4.0,
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "sess1", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+		s.TotalOutputTokens = maxTokens
+		s.PeakContextTokens = maxTokens
+		s.HasTotalOutputTokens = true
+		s.HasPeakContextTokens = true
+	})
+	insertMessages(t, d, Message{
+		SessionID: "sess1", Ordinal: 0,
+		Role:      "assistant",
+		Timestamp: "2024-06-15T10:30:00Z",
+		Model:     "claude-sonnet-4-20250514",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":9999999999,` +
+				`"output_tokens":9999999999,` +
+				`"cache_creation_input_tokens":9999999999,` +
+				`"cache_read_input_tokens":9999999999}`),
+		ContextTokens:    maxTokens,
+		OutputTokens:     maxTokens,
+		HasContextTokens: true,
+		HasOutputTokens:  true,
+	})
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2024-06-01",
+		To:   "2024-06-30",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+
+	assert.Equal(t, maxTokens, result.Totals.InputTokens, "InputTokens")
+	assert.Equal(t, maxTokens, result.Totals.OutputTokens, "OutputTokens")
+	assert.Equal(t, maxTokens, result.Totals.CacheCreationTokens,
+		"CacheCreationTokens")
+	assert.Equal(t, maxTokens, result.Totals.CacheReadTokens,
+		"CacheReadTokens")
+	assert.InDelta(t, 20.0, result.Totals.TotalCost, 1e-9,
+		"TotalCost")
+
+	usage, err := d.GetSessionUsage(ctx, "sess1")
+	requireNoError(t, err, "GetSessionUsage")
+	require.NotNil(t, usage, "session usage")
+	require.True(t, usage.HasCost, "HasCost")
+	assert.InDelta(t, 20.0, usage.CostUSD, 1e-9, "CostUSD")
 }
 
 func TestGetDailyUsage_DedupesByClaudeMessageAndRequestID(t *testing.T) {
