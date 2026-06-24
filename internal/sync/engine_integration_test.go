@@ -2274,6 +2274,74 @@ func TestSyncAllSinceCodexRefreshesSessionNameFromIndex(t *testing.T) {
 	}
 }
 
+// TestSyncAllSinceCodexIndexRenameBelowStoredMtimeRefreshesName covers the
+// quick-sync sibling of the incremental masking race: a title-only index rename
+// whose mtime lands at/after the cutoff but at or below the stored (index-folded)
+// file_mtime must still refresh the session_name. codexIndexNeedsRefreshSince
+// must compare the title directly instead of gating on indexMtime > storedMtime.
+func TestSyncAllSinceCodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Rename me").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+		uuid,
+	), 0o644))
+
+	// Transcript is well before the cutoff; the index is newer, so the initial
+	// parse stores the high index mtime as the effective file_mtime.
+	transcriptTime := time.Now().Add(-3 * time.Hour)
+	highIndexTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime), "chtimes initial session")
+	require.NoError(t, os.Chtimes(indexPath, highIndexTime, highIndexTime), "chtimes initial index")
+
+	env.engine.SyncAll(context.Background(), nil)
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess, "expected Codex session to sync")
+	require.NotNil(t, sess.SessionName, "expected session_name to be imported")
+	require.Equal(t, "Original title", *sess.SessionName)
+	require.NotNil(t, sess.FileMtime, "expected stored file_mtime")
+	require.Equal(t, highIndexTime.UnixNano(), *sess.FileMtime,
+		"expected stored file_mtime to fold in the higher index mtime")
+
+	// Rename the index with an mtime that is after the cutoff but BELOW the
+	// stored file_mtime. The old indexMtime > storedMtime gate would filter this
+	// out of the quick sync, stranding the stale title.
+	cutoff := time.Now().Add(-1 * time.Hour)
+	lowIndexTime := time.Now().Add(-45 * time.Minute)
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2026-06-11T18:00:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, lowIndexTime, lowIndexTime), "chtimes renamed index")
+
+	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
+
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull after rename")
+	require.NotNil(t, sess, "expected renamed Codex session to remain")
+	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
+		assert.Equal(t, "Renamed title", *sess.SessionName)
+	}
+}
+
 func TestSyncAllSinceCodexIndexRefreshOnlySyncsRenamedSession(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
@@ -7408,6 +7476,83 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	}
 }
 
+// TestIncrementalSync_CodexStoresEffectiveMtime pins that the incremental
+// append path persists the same session_index.jsonl-folded effective mtime a
+// full Codex parse stores (parser.CodexEffectiveMtime). Without it an
+// incrementally-synced Codex session would carry the plain rollout mtime,
+// leaving the stored file_mtime on a different basis than the effective
+// File.Mtime parse-diff's raced guard reads -- which would let an index newer
+// than the rollout mask genuine transcript drift as raced.
+func TestIncrementalSync_CodexStoresEffectiveMtime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
+	)
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Title",`+
+			`"updated_at":"2024-01-01T10:00:00Z"}`+"\n",
+	), 0o644))
+	base := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(path, base, base), "chtimes initial session")
+	require.NoError(t, os.Chtimes(indexPath, base, base), "chtimes initial index")
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
+
+	// Append an assistant message so the next sync takes the incremental
+	// append path (the title is unchanged, so no index-rename full parse).
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "world", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, f.Close())
+	require.NoError(t, err, "append")
+
+	// Push the index strictly past the rollout so the effective mtime differs
+	// from the plain rollout mtime.
+	rollTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.Chtimes(path, rollTime, rollTime), "chtimes rollout")
+	require.NoError(t, os.Chtimes(
+		indexPath, rollTime.Add(time.Hour), rollTime.Add(time.Hour),
+	), "chtimes index")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess, "session present")
+	require.NotNil(t, sess.FileMtime, "file_mtime stored")
+
+	// Compare against re-stats (not the requested Chtimes values) so the
+	// assertion is robust to filesystem mtime granularity.
+	idxInfo, err := os.Stat(indexPath)
+	require.NoError(t, err, "stat index")
+	rollInfo, err := os.Stat(path)
+	require.NoError(t, err, "stat rollout")
+	assert.Equal(t, idxInfo.ModTime().UnixNano(), *sess.FileMtime,
+		"incremental Codex write stores the index-folded effective mtime")
+	assert.Greater(t, *sess.FileMtime, rollInfo.ModTime().UnixNano(),
+		"effective mtime exceeds the plain rollout mtime")
+}
+
 func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -7580,6 +7725,93 @@ func TestIncrementalSync_CodexLateTokenCountWithIndexRenameRewritesStoredMessage
 	assert.NotEmpty(t, msgs[1].TokenUsage)
 	assert.Equal(t, 250, msgs[1].OutputTokens)
 	assert.Equal(t, 100_000, msgs[1].ContextTokens)
+}
+
+// TestIncrementalSync_CodexIndexRenameBelowStoredMtimeRefreshesName covers a
+// stale-title race introduced by folding the session_index.jsonl mtime into the
+// incremental write's stored file_mtime. The initial parse stores a high
+// effective mtime (the index mtime is newer than the transcript). A later index
+// rename whose mtime is <= that stored value cannot be detected by a
+// indexMtime > storedMtime gate, so the incremental path must compare the
+// session name directly and fall back to a full parse, otherwise
+// shouldSkipCodex's storedMtime==effectiveMtime fast path would strand the
+// stale title on every subsequent sync.
+func TestIncrementalSync_CodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.5", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "first", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+		initial,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Original title","updated_at":"2024-01-01T10:00:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+
+	// The transcript is older than the index, so the initial parse stores the
+	// index mtime as the effective file_mtime.
+	transcriptTime := time.Now().Add(-2 * time.Hour)
+	highIndexTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime), "chtimes initial session")
+	require.NoError(t, os.Chtimes(indexPath, highIndexTime, highIndexTime), "chtimes initial index")
+
+	env.engine.SyncAll(context.Background(), nil)
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess, "expected Codex session to sync")
+	require.NotNil(t, sess.SessionName, "expected session_name to be imported")
+	require.Equal(t, "Original title", *sess.SessionName)
+	require.NotNil(t, sess.FileMtime, "expected stored file_mtime")
+	require.Equal(t, highIndexTime.UnixNano(), *sess.FileMtime,
+		"expected stored file_mtime to fold in the higher index mtime")
+
+	// Append to the transcript (an incremental update) and rename the index with
+	// an mtime BELOW the stored file_mtime. effectiveMtime never exceeds the
+	// stored value, so only a direct session-name comparison can catch the
+	// rename.
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "second", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close())
+
+	appendTime := time.Now().Add(-90 * time.Minute)
+	lowIndexTime := time.Now().Add(-45 * time.Minute)
+	require.NoError(t, os.Chtimes(path, appendTime, appendTime), "chtimes appended session")
+	require.NoError(t, os.WriteFile(indexPath, fmt.Appendf(nil,
+		`{"id":"%s","thread_name":"Renamed title","updated_at":"2024-01-01T10:01:00Z"}`+"\n",
+		uuid,
+	), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, lowIndexTime, lowIndexTime), "chtimes renamed index")
+
+	env.engine.SyncPaths([]string{path})
+
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull after rename")
+	require.NotNil(t, sess, "expected Codex session to remain")
+	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
+		assert.Equal(t, "Renamed title", *sess.SessionName)
+	}
+	// The incremental append must still have landed.
+	msgs := fetchMessages(t, env.db, "codex:"+uuid)
+	require.Len(t, msgs, 2)
 }
 
 func TestIncrementalSync_CodexSubagentAppendFallsBackToFullParse(t *testing.T) {

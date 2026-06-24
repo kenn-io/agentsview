@@ -1190,10 +1190,15 @@ func compareUsageEvents(
 //   - hasStored / storedTrashed: archive row state.
 //   - pendingResync: stored data_version is behind the binary.
 //   - realDiffs: count of non-informational field diffs.
+//   - raced: the on-disk source advanced past the snapshot mtime, so a
+//     would-be change is a torn comparison against live content rather
+//     than parser drift. Only meaningful when realDiffs > 0; an
+//     unchanged session is identical regardless of a mid-run write.
 func classifyParseDiffSession(
 	needsRetry, prepared, hasStored, storedTrashed,
 	pendingResync bool,
 	realDiffs int,
+	raced bool,
 ) (DiffClass, string) {
 	switch {
 	case needsRetry:
@@ -1212,9 +1217,46 @@ func classifyParseDiffSession(
 		return DiffSkipped, "trashed in archive"
 	case pendingResync:
 		return DiffPendingResync, ""
+	case realDiffs > 0 && raced:
+		// A change against a source the daemon (or an active session)
+		// rewrote after the snapshot: inconclusive, not parser drift.
+		return DiffRaced, "source file changed after snapshot (live-write skew)"
 	case realDiffs > 0:
 		return DiffChanged, ""
 	default:
 		return DiffIdentical, ""
 	}
+}
+
+// parseDiffSourceRaced reports whether the on-disk source file moved
+// past the snapshot's stored file_mtime, so a detected change is a torn
+// comparison against live content rather than parser drift.
+//
+// Both sides are nanoseconds: storedMtime is the file_mtime column the
+// last sync recorded, and liveMtime is the freshly parsed session's
+// File.Mtime -- the same agent-aware effective value this parse would
+// persist. A direct integer comparison is therefore exact -- there is no
+// text-timestamp truncation here, so a sub-millisecond move is real, not
+// a rounding artifact.
+//
+// The verdict is conservative to avoid a false regression:
+//   - liveOK false (the parse produced no usable mtime, e.g. File.Mtime
+//     was never set): ambiguous -> raced.
+//   - storedMtime nil (the archive row has no file_mtime to anchor to):
+//     ambiguous -> raced.
+//   - liveMtime > storedMtime: the file was written after the snapshot
+//     -> raced.
+//   - liveMtime <= storedMtime: the file was demonstrably not touched
+//     after the snapshot -> NOT raced; a change there is genuine and
+//     must not be masked.
+func parseDiffSourceRaced(
+	storedMtime *int64, liveMtime int64, liveOK bool,
+) bool {
+	if !liveOK {
+		return true
+	}
+	if storedMtime == nil {
+		return true
+	}
+	return liveMtime > *storedMtime
 }

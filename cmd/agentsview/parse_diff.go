@@ -299,6 +299,7 @@ func renderParseDiffReport(
 	renderParseDiffFieldCounts(w, r.FieldCounts)
 	renderParseDiffParseErrors(w, r.Sessions)
 	renderParseDiffChanged(w, r.Sessions, verbose)
+	renderParseDiffRaced(w, r.Sessions, verbose)
 	if verbose {
 		renderParseDiffPendingResync(w, r.Sessions)
 	}
@@ -379,6 +380,8 @@ func renderParseDiffSummary(w io.Writer, t sync.ParseDiffTotals) {
 		"(no stored row; sync would add them)")
 	line("Skipped", t.Skipped,
 		"(source not re-parsed: missing, remote, trashed, or not sampled)")
+	line("Raced", t.Raced,
+		"(source changed mid-run; inconclusive, not counted as drift)")
 	line("Excluded by parser", t.ExcludedByParser,
 		"(parser intentionally drops these; sync would delete them)")
 	line("Parse errors", t.ParseErrors,
@@ -442,6 +445,53 @@ func renderParseDiffChanged(
 	}
 	tw.Flush()
 	if extra := len(changed) - len(shown); extra > 0 {
+		fmt.Fprintf(w, "  ... (%d more; use --verbose or --json)\n",
+			extra)
+	}
+	fmt.Fprintln(w)
+}
+
+// renderParseDiffRaced lists sessions whose would-be change was
+// reclassified as a live-write skew: the on-disk source advanced past
+// the snapshot mtime, so the change is a torn comparison rather than
+// parser drift. These never trip --fail-on-change, but surfacing them
+// tells the operator a comparison was inconclusive and the run should
+// be repeated against a quiescent archive. Compact by default; verbose
+// shows the masked field diffs.
+func renderParseDiffRaced(
+	w io.Writer, sessions []sync.SessionDiff, verbose bool,
+) {
+	var raced []sync.SessionDiff
+	for _, s := range sessions {
+		if s.Class == sync.DiffRaced {
+			raced = append(raced, s)
+		}
+	}
+	if len(raced) == 0 {
+		return
+	}
+	fmt.Fprintln(w,
+		"Raced sessions (source changed mid-run; not counted as drift)")
+	if verbose {
+		for _, s := range raced {
+			renderParseDiffSessionVerbose(w, s)
+		}
+		fmt.Fprintln(w)
+		return
+	}
+	shown := raced
+	if len(shown) > parseDiffChangedCap {
+		shown = shown[:parseDiffChangedCap]
+	}
+	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+	for _, s := range shown {
+		fmt.Fprintf(tw, "  %s\t%s\t%s\n",
+			sanitizeTerminal(s.Agent),
+			sanitizeTerminal(shortID(s.SessionID)),
+			sanitizeTerminal(parseDiffFieldSummary(s.Fields)))
+	}
+	tw.Flush()
+	if extra := len(raced) - len(shown); extra > 0 {
 		fmt.Fprintf(w, "  ... (%d more; use --verbose or --json)\n",
 			extra)
 	}

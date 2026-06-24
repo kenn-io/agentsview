@@ -3,6 +3,8 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1458,6 +1460,7 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 		storedTrashed bool
 		pendingResync bool
 		realDiffs     int
+		raced         bool
 		wantClass     DiffClass
 		wantReason    string
 	}{
@@ -1465,6 +1468,7 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 			name:       "needs retry wins over everything",
 			needsRetry: true, prepared: false, hasStored: true,
 			storedTrashed: true, pendingResync: true, realDiffs: 3,
+			raced:      true,
 			wantClass:  DiffNeedsRetry,
 			wantReason: "transient low-fidelity parse; differences expected",
 		},
@@ -1493,9 +1497,26 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 			wantClass: DiffPendingResync,
 		},
 		{
+			name:     "pending resync wins over raced",
+			prepared: true, hasStored: true, pendingResync: true,
+			realDiffs: 2, raced: true,
+			wantClass: DiffPendingResync,
+		},
+		{
+			name:     "raced wins over changed when source moved",
+			prepared: true, hasStored: true, realDiffs: 1, raced: true,
+			wantClass:  DiffRaced,
+			wantReason: "source file changed after snapshot (live-write skew)",
+		},
+		{
 			name:     "real diffs mean changed",
 			prepared: true, hasStored: true, realDiffs: 1,
 			wantClass: DiffChanged,
+		},
+		{
+			name:     "raced flag is inert without a real diff",
+			prepared: true, hasStored: true, realDiffs: 0, raced: true,
+			wantClass: DiffIdentical,
 		},
 		{
 			name:     "no real diffs mean identical",
@@ -1508,9 +1529,190 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 			class, reason := classifyParseDiffSession(
 				tt.needsRetry, tt.prepared, tt.hasStored,
 				tt.storedTrashed, tt.pendingResync, tt.realDiffs,
+				tt.raced,
 			)
 			assert.Equal(t, tt.wantClass, class)
 			assert.Equal(t, tt.wantReason, reason)
+		})
+	}
+}
+
+// TestParseDiffSourceRaced pins the conservative mtime-skew verdict: a
+// source that moved past the snapshot mtime (or whose mtime cannot be
+// resolved) is raced; one that is demonstrably at or before the snapshot
+// is not, so a genuine change there is never masked.
+func TestParseDiffSourceRaced(t *testing.T) {
+	mtime := func(v int64) *int64 { return &v }
+	tests := []struct {
+		name        string
+		storedMtime *int64
+		liveMtime   int64
+		liveOK      bool
+		want        bool
+	}{
+		{
+			name:        "live mtime advanced past snapshot is raced",
+			storedMtime: mtime(1000), liveMtime: 2000, liveOK: true,
+			want: true,
+		},
+		{
+			name:        "live mtime equal to snapshot is not raced",
+			storedMtime: mtime(1000), liveMtime: 1000, liveOK: true,
+			want: false,
+		},
+		{
+			name:        "live mtime before snapshot is not raced",
+			storedMtime: mtime(2000), liveMtime: 1000, liveOK: true,
+			want: false,
+		},
+		{
+			name:        "one nanosecond advance is raced (no truncation)",
+			storedMtime: mtime(1000), liveMtime: 1001, liveOK: true,
+			want: true,
+		},
+		{
+			name:        "unreadable source is conservatively raced",
+			storedMtime: mtime(1000), liveMtime: 0, liveOK: false,
+			want: true,
+		},
+		{
+			name:        "missing stored mtime is conservatively raced",
+			storedMtime: nil, liveMtime: 1000, liveOK: true,
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseDiffSourceRaced(
+				tt.storedMtime, tt.liveMtime, tt.liveOK,
+			)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestParseDiffLiveMtimeIgnoresCodexIndex pins that Codex's raced guard uses
+// the transcript mtime, not the global session_index.jsonl mtime. The index is
+// shared by every Codex session, so an unrelated title/index write is not a
+// per-session signal that transcript-derived diffs raced with live content.
+func TestParseDiffLiveMtimeIgnoresCodexIndex(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions", "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	rollout := filepath.Join(sessionsDir, "rollout-x.jsonl")
+	require.NoError(t, os.WriteFile(rollout, []byte("{}\n"), 0o644))
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, []byte("{}\n"), 0o644))
+
+	// Index not newer than the rollout: raced mtime is the rollout's.
+	base := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(rollout, base, base), "chtimes rollout")
+	require.NoError(t, os.Chtimes(indexPath, base, base), "chtimes index")
+
+	m1, err := parseDiffLiveMtime(parser.AgentCodex, rollout)
+	require.NoError(t, err)
+	rollInfo, err := os.Stat(rollout)
+	require.NoError(t, err)
+	assert.Equal(t, rollInfo.ModTime().UnixNano(), m1,
+		"codex raced mtime is the rollout's when the index is not newer")
+
+	// A sibling write advances the global index past the rollout AFTER the
+	// first resolution; the Codex raced resolver must keep reporting the
+	// transcript mtime.
+	future := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(indexPath, future, future), "advance index")
+	m2, err := parseDiffLiveMtime(parser.AgentCodex, rollout)
+	require.NoError(t, err)
+	assert.Equal(t, rollInfo.ModTime().UnixNano(), m2,
+		"codex raced mtime ignores the advanced session_index.jsonl")
+	assert.Equal(t, m1, m2, "the global index write is not observed")
+}
+
+// TestParseDiffSourceReliableForRaced pins the reliability gate that decides
+// whether the live-write skew (raced) reclassification may run for a session.
+// Only plain file-based agents reading a literal on-disk file have a live
+// mtime that is basis-matching with the stored file_mtime; every virtual-path
+// or DB-backed source must be treated as unreliable so the raced guard is
+// skipped and genuine parser drift is never masked.
+func TestParseDiffSourceReliableForRaced(t *testing.T) {
+	// Each virtual-path constructor is paired with a basename its parser
+	// accepts; stripVirtualSourceSuffix only recognizes the real shapes.
+	kiroPath := parser.KiroSQLiteVirtualPath(
+		"/data/data.sqlite3", "kiro_sess",
+	)
+	zedPath := parser.ZedSQLiteVirtualPath("/data/threads.db", "zed_thread")
+	shelleyPath := parser.ShelleyVirtualPath(
+		"/data/shelley.db", "shelley_conv",
+	)
+	vsCopilotPath := parser.VisualStudioCopilotVirtualPath(
+		"/traces/20260612T194439_abc_VSGitHubCopilot_traces.jsonl",
+		"conv_1",
+	)
+	tests := []struct {
+		name  string
+		agent parser.AgentType
+		path  string
+		want  bool
+	}{
+		{
+			name:  "plain file-based literal path is reliable",
+			agent: parser.AgentClaude,
+			path:  "/projects/proj/session.jsonl",
+			want:  true,
+		},
+		{
+			name:  "another plain file-based literal path is reliable",
+			agent: parser.AgentCodex,
+			path:  "/sessions/2026/06/rollout.jsonl",
+			want:  true,
+		},
+		{
+			name:  "aider virtual run-index path is unreliable",
+			agent: parser.AgentAider,
+			path:  parser.AiderVirtualPath("/repo/.aider.chat.history.md", 3),
+			want:  false,
+		},
+		{
+			name:  "kiro shared-db virtual path is unreliable",
+			agent: parser.AgentKiro,
+			path:  kiroPath,
+			want:  false,
+		},
+		{
+			name:  "zed shared-db virtual path is unreliable",
+			agent: parser.AgentZed,
+			path:  zedPath,
+			want:  false,
+		},
+		{
+			name:  "shelley shared-db virtual path is unreliable",
+			agent: parser.AgentShelley,
+			path:  shelleyPath,
+			want:  false,
+		},
+		{
+			name:  "visual studio copilot virtual path is unreliable",
+			agent: parser.AgentVSCopilot,
+			path:  vsCopilotPath,
+			want:  false,
+		},
+		{
+			name:  "db-backed agent on a literal path is unreliable",
+			agent: parser.AgentForge,
+			path:  "/forge/store.db",
+			want:  false,
+		},
+		{
+			name:  "unknown agent is unreliable",
+			agent: parser.AgentType("does-not-exist"),
+			path:  "/anywhere/file.jsonl",
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseDiffSourceReliableForRaced(tt.agent, tt.path)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -1548,6 +1750,15 @@ func TestParseDiffReportHasFailures(t *testing.T) {
 				NeedsRetry: 2, NewOnDisk: 3,
 				ExcludedByParser: 1, InformationalOnly: 5,
 			},
+		},
+		{
+			name:   "raced sessions alone do not fail",
+			totals: ParseDiffTotals{Examined: 3, Identical: 2, Raced: 1},
+		},
+		{
+			name:   "a real change still fails alongside raced sessions",
+			totals: ParseDiffTotals{Changed: 1, Raced: 2},
+			want:   true,
 		},
 	}
 	for _, tt := range tests {

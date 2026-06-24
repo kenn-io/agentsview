@@ -4,12 +4,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -229,6 +232,21 @@ func TestParseDiffExitFailure(t *testing.T) {
 		{
 			name:         "parse error fails without stderr note",
 			totals:       sync.ParseDiffTotals{Examined: 1, Identical: 1, ParseErrors: 1},
+			failOnChange: true,
+			wantFail:     true,
+		},
+		{
+			name: "raced sessions alone do not fail",
+			totals: sync.ParseDiffTotals{
+				Examined: 3, Identical: 2, Raced: 1,
+			},
+			failOnChange: true,
+		},
+		{
+			name: "a real change still fails alongside raced sessions",
+			totals: sync.ParseDiffTotals{
+				Examined: 4, Identical: 2, Changed: 1, Raced: 1,
+			},
 			failOnChange: true,
 			wantFail:     true,
 		},
@@ -665,8 +683,13 @@ func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
 // phantom stored row keeps the test independent of the parser's session
 // ID derivation.
 func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
-	dataDir := testDataDir(t)
-	t.Setenv("HOME", t.TempDir())
+	// Isolate every other agent's directory env var to a temp path so an
+	// inherited dir from the developer or CI environment cannot be scanned and
+	// trip --fail-on-change with an unrelated parse error. The data dir and
+	// Claude dir are then overridden to the paths this test controls.
+	isolateParseDiffEnv(t)
+	dataDir := os.Getenv("AGENTSVIEW_DATA_DIR")
+	require.NotEmpty(t, dataDir)
 	claudeDir := t.TempDir()
 	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
 
@@ -708,4 +731,138 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 	})
 	assert.False(t, notFailed,
 		"without --fail-on-change the same drift must not fail")
+}
+
+// TestDoParseDiff_RacedSessionDoesNotFail is the end-to-end exit-code
+// proof of the live-write skew guard: a stored row whose source file
+// advanced past its snapshot file_mtime mid-run is reclassified raced,
+// so --fail-on-change exits clean even though the content diverged.
+// Staged through a real sync so the row's id, file_path, and file_mtime
+// are exactly what the parser derives, then drifted and the source mtime
+// pushed forward to simulate a daemon write after the snapshot.
+func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
+	// Isolate every other agent's directory env var to a temp path so an
+	// inherited dir from the developer or CI environment cannot be scanned and
+	// trip --fail-on-change with an unrelated parse error. The data dir and
+	// Claude dir are then overridden to the paths this test controls.
+	isolateParseDiffEnv(t)
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
+
+	projDir := filepath.Join(claudeDir, "-home-proj")
+	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	srcPath := filepath.Join(projDir, "raced-session.jsonl")
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "hello").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
+		String()
+	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
+
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	d, err := db.Open(dbPath)
+	require.NoError(t, err)
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine: "local",
+	})
+	stats := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, stats.Synced, "one session synced")
+
+	// Find the synced session id so the drift targets the real row.
+	rows, err := d.ListSessionsModifiedBetween(
+		context.Background(), "", "", nil, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "exactly one stored session")
+	sessionID := rows[0].ID
+
+	// Drift the stored row so a fresh parse reports a real change, then
+	// push the source mtime past the recorded snapshot file_mtime.
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		_, uerr := tx.Exec(
+			"UPDATE sessions SET first_message = ? WHERE id = ?",
+			"drifted first message", sessionID,
+		)
+		return uerr
+	}))
+	require.NoError(t, d.Close())
+
+	future := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(srcPath, future, future),
+		"advance source mtime past the snapshot")
+
+	var racedBuf bytes.Buffer
+	racedFailed := doParseDiff(ParseDiffConfig{
+		FailOnChange: true, Stdout: &racedBuf, Stderr: &racedBuf,
+	})
+	assert.False(t, racedFailed,
+		"a raced session must not trip --fail-on-change")
+	assert.Contains(t, racedBuf.String(), "Raced",
+		"the summary must surface the raced session")
+}
+
+// TestDoParseDiff_UntouchedDriftStillFails is the negative control for
+// the skew guard: the same staged drift WITHOUT advancing the source
+// mtime stays a genuine change and trips --fail-on-change, proving the
+// guard never masks a real regression on an untouched file.
+func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
+	// Isolate every other agent's directory env var to a temp path so an
+	// inherited dir from the developer or CI environment cannot be scanned and
+	// trip --fail-on-change with an unrelated parse error. The data dir and
+	// Claude dir are then overridden to the paths this test controls.
+	isolateParseDiffEnv(t)
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	claudeDir := t.TempDir()
+	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
+
+	projDir := filepath.Join(claudeDir, "-home-proj")
+	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	srcPath := filepath.Join(projDir, "drift-session.jsonl")
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "hello").
+		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
+		String()
+	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
+
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	d, err := db.Open(dbPath)
+	require.NoError(t, err)
+	engine := sync.NewEngine(d, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine: "local",
+	})
+	stats := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, stats.Synced, "one session synced")
+
+	rows, err := d.ListSessionsModifiedBetween(
+		context.Background(), "", "", nil, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	sessionID := rows[0].ID
+
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		_, uerr := tx.Exec(
+			"UPDATE sessions SET first_message = ? WHERE id = ?",
+			"drifted first message", sessionID,
+		)
+		return uerr
+	}))
+	require.NoError(t, d.Close())
+
+	// Source mtime is left untouched: the change is genuine drift.
+	var buf bytes.Buffer
+	failed := doParseDiff(ParseDiffConfig{
+		FailOnChange: true, Stdout: &buf, Stderr: &buf,
+	})
+	assert.True(t, failed,
+		"untouched-source drift must still trip --fail-on-change")
+	assert.Contains(t, buf.String(), "sessions changed")
 }
