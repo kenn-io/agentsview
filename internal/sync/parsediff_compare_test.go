@@ -1628,6 +1628,29 @@ func TestParseDiffLiveMtimeIgnoresCodexIndex(t *testing.T) {
 	assert.Equal(t, m1, m2, "the global index write is not observed")
 }
 
+func TestParseDiffCodexTranscriptChangedRecomputesConsumedSize(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout-x.jsonl")
+	initial := "{}\n"
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+	storedSize := int64(len(initial))
+	stored := &db.Session{FileSize: &storedSize}
+	parsed := parser.ParsedSession{
+		Agent: parser.AgentCodex,
+		File: parser.FileInfo{
+			Path: path,
+			Size: storedSize,
+		},
+	}
+
+	require.NoError(t, os.WriteFile(
+		path, []byte(initial+`{"appended":true}`+"\n"), 0o644,
+	))
+
+	assert.True(t,
+		parseDiffCodexTranscriptChangedSinceStored(stored, parsed),
+		"collect-time Codex race check must not trust the parser's stale size")
+}
+
 // TestParseDiffSourceReliableForRaced pins the reliability gate that decides
 // whether the live-write skew (raced) reclassification may run for a session.
 // Only plain file-based agents reading a literal on-disk file have a live

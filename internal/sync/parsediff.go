@@ -490,18 +490,11 @@ func parseDiffCodexTranscriptChangedSinceStored(
 	}
 
 	storedSize := *stored.FileSize
-	if parsed.File.Size == storedSize {
-		return false
-	}
-
 	consumedSize, err := parser.CodexTranscriptConsumedSize(parsed.File.Path)
 	if err != nil {
 		return true
 	}
-	if consumedSize != storedSize {
-		return true
-	}
-	return false
+	return consumedSize != storedSize
 }
 
 // parseDiffCollectFile folds one worker result into the report.
