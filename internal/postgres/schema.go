@@ -1529,7 +1529,11 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT id, occurred_at, model, dedup_key
+		`SELECT id, occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
 		 FROM cursor_usage_events LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

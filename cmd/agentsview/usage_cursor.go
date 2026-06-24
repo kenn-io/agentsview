@@ -164,7 +164,7 @@ func resolveCursorUsageWindow(
 				"invalid until date %q: %w", endDate, err,
 			)
 		}
-		end = end.Add(24*time.Hour - time.Millisecond)
+		end = end.AddDate(0, 0, 1).Add(-time.Millisecond)
 	} else {
 		end = now
 	}
