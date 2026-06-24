@@ -54,14 +54,15 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
 	assert.Contains(t, normalized, "from message_timestamp_rows m\njoin sessions s")
 	assert.Contains(t, normalized, "from usage_event_timestamp_rows ue\njoin sessions s")
-	assert.Contains(t, normalized, "nullif(m.timestamp, '') is not null")
+	assert.Contains(t, normalized, "m.timestamp is not null")
+	assert.Contains(t, normalized, "m.timestamp != ''")
 	assert.Contains(t, normalized, "ue.occurred_at is not null")
 	assert.Contains(t, normalized, "nullif(m.timestamp, '') is null")
 	assert.Contains(t, normalized, "ue.occurred_at is null")
-	assert.Contains(t, normalized, "nullif(m.timestamp, '') >= ?")
+	assert.Contains(t, normalized, "m.timestamp >= ?")
 	assert.Contains(t, normalized, "ue.occurred_at >= ?")
 	assert.Contains(t, normalized, "s.started_at >= ?")
-	assert.Contains(t, normalized, "nullif(m.timestamp, '') <= ?")
+	assert.Contains(t, normalized, "m.timestamp <= ?")
 	assert.Contains(t, normalized, "ue.occurred_at <= ?")
 	assert.Contains(t, normalized, "s.started_at <= ?")
 	require.Len(t, args, 8)
@@ -91,17 +92,18 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.NotContains(t, normalized, "session_activity_at")
 	assert.NotContains(t, normalized, " as started_at")
 	assert.NotContains(t, normalized, "u.machine")
-	assert.Contains(t, normalized, "nullif(m.timestamp, '') is not null")
+	assert.Contains(t, normalized, "m.timestamp is not null")
+	assert.Contains(t, normalized, "m.timestamp != ''")
 	assert.Contains(t, normalized, "ue.occurred_at is not null")
 	assert.Contains(t, normalized, "nullif(m.timestamp, '') is null")
 	assert.Contains(t, normalized, "ue.occurred_at is null")
-	assert.Contains(t, normalized, "nullif(m.timestamp, '') >= ?")
+	assert.Contains(t, normalized, "m.timestamp >= ?")
 	assert.Contains(t, normalized, "ue.occurred_at >= ?")
 	assert.Contains(t, normalized,
 		"nullif(m.timestamp, '') is null\n\tand s.started_at >= ?")
 	assert.Contains(t, normalized,
 		"ue.occurred_at is null\n\tand s.started_at >= ?")
-	assert.Contains(t, normalized, "nullif(m.timestamp, '') <= ?")
+	assert.Contains(t, normalized, "m.timestamp <= ?")
 	assert.Contains(t, normalized, "ue.occurred_at <= ?")
 	require.Len(t, args, 8)
 	assert.Equal(t, "2024-05-31T10:00:00Z", args[0])
@@ -239,6 +241,59 @@ func TestGetDailyUsageWithData(t *testing.T) {
 	assert.Equal(t, 1000, result.Totals.InputTokens, "Totals.InputTokens")
 	assert.InDelta(t, wantCost, result.Totals.TotalCost, 1e-9,
 		"Totals.TotalCost")
+}
+
+func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	rawInput := MaxPlausibleTokens + 250_000
+	rawOutput := MaxPlausibleTokens + 500_000
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "gpt-5.4",
+		InputPerMTok:  1.0,
+		OutputPerMTok: 2.0,
+	}}), "UpsertModelPricing")
+
+	insertSession(t, d, "hermes:summary", "proj", func(s *Session) {
+		s.Agent = "hermes"
+		s.StartedAt = new("2026-05-14T10:00:00Z")
+		s.UserMessageCount = 2
+		s.TotalOutputTokens = rawOutput
+		s.PeakContextTokens = rawInput
+		s.HasTotalOutputTokens = true
+		s.HasPeakContextTokens = true
+	})
+	requireNoError(t, d.ReplaceSessionUsageEvents(
+		"hermes:summary",
+		[]UsageEvent{{
+			SessionID:    "hermes:summary",
+			Source:       "session",
+			Model:        "gpt-5.4",
+			InputTokens:  rawInput,
+			OutputTokens: rawOutput,
+			OccurredAt:   "2026-05-14T10:05:00Z",
+			DedupKey:     "session:hermes:summary",
+		}},
+	), "ReplaceSessionUsageEvents")
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-14",
+		To:   "2026-05-14",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+	require.Len(t, daily.Daily, 1, "daily entries")
+	assert.Equal(t, rawInput, daily.Totals.InputTokens, "daily input")
+	assert.Equal(t, rawOutput, daily.Totals.OutputTokens, "daily output")
+
+	usage, err := d.GetSessionUsage(ctx, "hermes:summary")
+	requireNoError(t, err, "GetSessionUsage")
+	require.NotNil(t, usage, "session usage")
+	assert.Equal(t, rawOutput, usage.TotalOutputTokens, "session output total")
+	assert.Equal(t, rawInput, usage.PeakContextTokens, "session peak context")
+	require.True(t, usage.HasCost, "HasCost")
+	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
+	assert.InDelta(t, wantCost, usage.CostUSD, 1e-9, "session usage cost")
 }
 
 func TestGetDailyUsageFallsBackForEmptyMessageTimestamp(t *testing.T) {

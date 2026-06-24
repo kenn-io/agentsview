@@ -210,19 +210,19 @@ func sanitizeUsageEvent(ev *db.UsageEvent) validationStats {
 	}
 	sanitizeStringField(&ev.Model, &stats)
 
-	if clampTokens(&ev.InputTokens) {
+	if clampUsageEventTokens(ev.Source, &ev.InputTokens) {
 		stats.TokensClamped++
 	}
-	if clampTokens(&ev.OutputTokens) {
+	if clampUsageEventTokens(ev.Source, &ev.OutputTokens) {
 		stats.TokensClamped++
 	}
-	if clampTokens(&ev.CacheCreationInputTokens) {
+	if clampUsageEventTokens(ev.Source, &ev.CacheCreationInputTokens) {
 		stats.TokensClamped++
 	}
-	if clampTokens(&ev.CacheReadInputTokens) {
+	if clampUsageEventTokens(ev.Source, &ev.CacheReadInputTokens) {
 		stats.TokensClamped++
 	}
-	if clampTokens(&ev.ReasoningTokens) {
+	if clampUsageEventTokens(ev.Source, &ev.ReasoningTokens) {
 		stats.TokensClamped++
 	}
 
@@ -231,6 +231,20 @@ func sanitizeUsageEvent(ev *db.UsageEvent) validationStats {
 	}
 
 	return stats
+}
+
+func clampUsageEventTokens(source string, p *int) bool {
+	if p == nil {
+		return false
+	}
+	if source == "session" {
+		if *p < 0 {
+			*p = 0
+			return true
+		}
+		return false
+	}
+	return clampTokens(p)
 }
 
 // sanitizeSession applies the contract to the session row's free-text

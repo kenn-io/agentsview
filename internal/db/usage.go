@@ -705,14 +705,14 @@ func dailyUsageRowsSQLForBounds(
 	}
 
 	messageTimestampSourceWhere := usageMessageSourceEligibility +
-		"\n\tAND NULLIF(m.timestamp, '') IS NOT NULL"
+		"\n\tAND m.timestamp IS NOT NULL" +
+		"\n\tAND m.timestamp != ''"
 	var messageTimestampArgs []any
 	messageTimestampSourceWhere, messageTimestampArgs =
 		f.appendUsageSourceFilterClauses(
 			messageTimestampSourceWhere, messageTimestampArgs, "m.model")
 	messageTimestampSourceWhere, messageTimestampArgs = appendUsageColumnBounds(
-		messageTimestampSourceWhere, "NULLIF(m.timestamp, '')",
-		b, messageTimestampArgs)
+		messageTimestampSourceWhere, "m.timestamp", b, messageTimestampArgs)
 	var messageTimestampJoinArgs []any
 	messageTimestampJoinWhere, messageTimestampJoinArgs :=
 		f.appendUsageSessionFilterClauses(
@@ -925,6 +925,29 @@ func clampedUsageRowTokens(
 		ClampPlausibleTokens(int64(cacheReadInputTokens))
 }
 
+func usageEventRowTokens(
+	source string,
+	inputTokens, outputTokens, cacheCreationInputTokens,
+	cacheReadInputTokens int,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	if source == "session" {
+		return floorNegativeTokens(inputTokens),
+			floorNegativeTokens(outputTokens),
+			floorNegativeTokens(cacheCreationInputTokens),
+			floorNegativeTokens(cacheReadInputTokens)
+	}
+	return clampedUsageRowTokens(
+		inputTokens, outputTokens,
+		cacheCreationInputTokens, cacheReadInputTokens)
+}
+
+func floorNegativeTokens(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
 func clampedUsageTokenCounters(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
@@ -944,7 +967,8 @@ func dailyUsageAmounts(
 			clampedUsageTokenCounters(r.tokenJSON)
 	} else {
 		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			clampedUsageRowTokens(
+			usageEventRowTokens(
+				r.usageSource,
 				r.inputTokens, r.outputTokens,
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
@@ -1808,7 +1832,8 @@ func sessionRowCost(
 		inTok, outTok, crTok, rdTok =
 			clampedUsageTokenCounters(r.tokenJSON)
 	} else {
-		inTok, outTok, crTok, rdTok = clampedUsageRowTokens(
+		inTok, outTok, crTok, rdTok = usageEventRowTokens(
+			r.usageSource,
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}

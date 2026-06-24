@@ -901,6 +901,43 @@ func TestToDBUsageEventsStampsFinalSessionID(t *testing.T) {
 	}
 }
 
+func TestToDBUsageEventsPreservesSessionSummaryTokenUpperBounds(t *testing.T) {
+	rawInput := maxPlausibleTokens + 250_000
+	rawOutput := maxPlausibleTokens + 500_000
+	got := toDBUsageEvents("hermes:summary", []parser.ParsedUsageEvent{
+		{
+			Source:                   "session",
+			Model:                    "gpt-5.4",
+			InputTokens:              rawInput,
+			OutputTokens:             rawOutput,
+			CacheCreationInputTokens: rawInput + 1,
+			CacheReadInputTokens:     rawInput + 2,
+			ReasoningTokens:          rawOutput + 3,
+		},
+		{
+			Source:                   "session",
+			Model:                    "gpt-5.4",
+			InputTokens:              -1,
+			OutputTokens:             -2,
+			CacheCreationInputTokens: -3,
+			CacheReadInputTokens:     -4,
+			ReasoningTokens:          -5,
+		},
+	})
+
+	require.Len(t, got, 2)
+	assert.Equal(t, rawInput, got[0].InputTokens)
+	assert.Equal(t, rawOutput, got[0].OutputTokens)
+	assert.Equal(t, rawInput+1, got[0].CacheCreationInputTokens)
+	assert.Equal(t, rawInput+2, got[0].CacheReadInputTokens)
+	assert.Equal(t, rawOutput+3, got[0].ReasoningTokens)
+	assert.Equal(t, 0, got[1].InputTokens)
+	assert.Equal(t, 0, got[1].OutputTokens)
+	assert.Equal(t, 0, got[1].CacheCreationInputTokens)
+	assert.Equal(t, 0, got[1].CacheReadInputTokens)
+	assert.Equal(t, 0, got[1].ReasoningTokens)
+}
+
 func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
 	database := openTestDB(t)
 	e := &Engine{db: database, idPrefix: "host~"}
