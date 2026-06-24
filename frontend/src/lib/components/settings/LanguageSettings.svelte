@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m, t } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import {
     SUPPORTED_LOCALES,
     chooseInitialLocale,
@@ -20,11 +20,11 @@
   const localeOptions: TypeaheadOption[] = $derived([
     {
       name: "en",
-      label: t(m.settings_language_english),
+      label: m.settings_language_english(),
     },
     {
       name: "zh-CN",
-      label: t(m.settings_language_simplified_chinese),
+      label: m.settings_language_simplified_chinese(),
     },
   ]);
 
@@ -37,18 +37,18 @@
 </script>
 
 <SettingsSection
-  title={t(m.settings_language_title)}
-  description={t(m.settings_language_description)}
+  title={m.settings_language_title()}
+  description={m.settings_language_description()}
 >
   <div class="setting-row">
-    <span class="setting-label">{t(m.settings_language_label)}</span>
+    <span class="setting-label">{m.settings_language_label()}</span>
     <OptionTypeahead
       options={localeOptions}
       value={selectedLocale}
-      fallbackLabel={t(m.settings_language_english)}
-      placeholder={t(m.settings_language_label)}
-      title={t(m.settings_language_label)}
-      emptyLabel={t(m.settings_language_no_results)}
+      fallbackLabel={m.settings_language_english()}
+      placeholder={m.settings_language_label()}
+      title={m.settings_language_label()}
+      emptyLabel={m.settings_language_no_results()}
       onselect={handleLocaleSelect}
     />
   </div>

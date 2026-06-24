@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m, t } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import { SearchIcon } from "../../icons.js";
   import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
@@ -164,7 +164,7 @@
         bind:this={inputRef}
         type="text"
         class="palette-input"
-        placeholder={t(m.command_palette_placeholder)}
+        placeholder={m.command_palette_placeholder()}
         value={inputValue}
         oninput={handleInput}
       />
@@ -179,18 +179,18 @@
             class:active={searchStore.sort === "relevance"}
             onmousedown={(e: MouseEvent) => e.preventDefault()}
             onclick={() => { searchStore.setSort("relevance"); selectedIndex = 0; }}
-          >{t(m.command_palette_relevance)}</button>
+          >{m.command_palette_relevance()}</button>
           <button
             class="sort-btn"
             class:active={searchStore.sort === "recency"}
             onmousedown={(e: MouseEvent) => e.preventDefault()}
             onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
-          >{t(m.command_palette_recency)}</button>
+          >{m.command_palette_recency()}</button>
         </div>
         {#if searchStore.isSearching}
-          <div class="palette-empty">{t(m.command_palette_searching)}</div>
+          <div class="palette-empty">{m.command_palette_searching()}</div>
         {:else if searchStore.results.length === 0}
-          <div class="palette-empty">{t(m.command_palette_no_results)}</div>
+          <div class="palette-empty">{m.command_palette_no_results()}</div>
         {:else}
           {#each searchStore.results as result, i}
             <button
@@ -220,7 +220,7 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <span
                 class="item-id"
-                title={t(m.command_palette_copy_session_id)}
+                title={m.command_palette_copy_session_id()}
                 onclick={(e) => {
                   e.stopPropagation();
                   copyToClipboard(result.session_id);
@@ -230,7 +230,7 @@
           {/each}
         {/if}
       {:else}
-        <div class="palette-section-label">{t(m.command_palette_recent_sessions)}</div>
+        <div class="palette-section-label">{m.command_palette_recent_sessions()}</div>
         {#each recentSessions as session, i}
           {@const preview = session.display_name ?? normalizeMessagePreview(session.first_message)}
           <button

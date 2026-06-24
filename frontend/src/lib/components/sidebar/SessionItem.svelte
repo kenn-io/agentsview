@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m, t } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import {
     sessions,
     type SessionGroupInput,
@@ -318,7 +318,7 @@
       class="tree-toggle"
       onclick={handleToggle}
       tabindex="-1"
-      aria-label={expanded ? t(m.sidebar_row_collapse) : t(m.sidebar_row_expand)}
+      aria-label={expanded ? m.sidebar_row_collapse() : m.sidebar_row_expand()}
     >
       {#if expanded}
         <ChevronDownIcon class="tree-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -398,8 +398,8 @@
       class="star-btn"
       class:starred={isStarred}
       onclick={handleStar}
-      title={isStarred ? t(m.sidebar_row_unstar_session) : t(m.sidebar_row_star_session)}
-      aria-label={isStarred ? t(m.sidebar_row_unstar_session) : t(m.sidebar_row_star_session)}
+      title={isStarred ? m.sidebar_row_unstar_session() : m.sidebar_row_star_session()}
+      aria-label={isStarred ? m.sidebar_row_unstar_session() : m.sidebar_row_star_session()}
     >
       {#if isStarred}
         <StarIcon size="12" fill="currentColor" strokeWidth="0" aria-hidden="true" />
@@ -429,7 +429,7 @@
     style="left: {contextMenu.x}px; top: {contextMenu.y}px;"
   >
     <button class="context-menu-item" onclick={startRename}>
-      {t(m.sidebar_row_rename)}
+      {m.sidebar_row_rename()}
     </button>
     <button
       class="context-menu-item"
@@ -438,10 +438,10 @@
         closeContextMenu();
       }}
     >
-      {t(m.sidebar_row_open_in_new_tab)}
+      {m.sidebar_row_open_in_new_tab()}
     </button>
     <button class="context-menu-item danger" onclick={handleDelete}>
-      {t(m.sidebar_row_delete)}
+      {m.sidebar_row_delete()}
     </button>
   </div>
 {/if}

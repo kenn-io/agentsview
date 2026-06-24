@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m, t } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import type { ProjectInfo } from "../../api/types/core.js";
   import OptionTypeahead from "./OptionTypeahead.svelte";
 
@@ -13,8 +13,8 @@
 
   const allOption = {
     name: "",
-    label: t(m.shared_all_projects),
-    displayLabel: t(m.shared_all_projects),
+    label: m.shared_all_projects(),
+    displayLabel: m.shared_all_projects(),
     count: 0,
   };
 
@@ -29,7 +29,7 @@
   });
 
   const displayValue = $derived(
-    value ? projects.find((p) => p.name === value)?.name ?? value : t(m.shared_all_projects),
+    value ? projects.find((p) => p.name === value)?.name ?? value : m.shared_all_projects(),
   );
 </script>
 
@@ -37,8 +37,8 @@
   {options}
   {value}
   fallbackLabel={displayValue}
-  placeholder={t(m.shared_project_filter_placeholder)}
-  title={t(m.shared_select_project)}
-  emptyLabel={t(m.shared_no_matching_projects)}
+  placeholder={m.shared_project_filter_placeholder()}
+  title={m.shared_select_project()}
+  emptyLabel={m.shared_no_matching_projects()}
   {onselect}
 />

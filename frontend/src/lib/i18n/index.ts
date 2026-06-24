@@ -1,5 +1,4 @@
 import { setLocale as setParaglideLocale } from "../paraglide/runtime.js";
-import { i18nState } from "./state.svelte.js";
 
 export { m } from "../paraglide/messages.js";
 
@@ -53,8 +52,7 @@ export function chooseInitialLocale(): SupportedLocale {
 }
 
 export function setLocale(value: SupportedLocale) {
-  setParaglideLocale(value, { reload: false });
-  i18nState.locale = value;
+  setParaglideLocale(value);
   try {
     localStorage?.setItem(LOCALE_STORAGE_KEY, value);
   } catch {
@@ -64,20 +62,4 @@ export function setLocale(value: SupportedLocale) {
 
 export function initI18n() {
   setLocale(chooseInitialLocale());
-}
-
-export function t(message: () => string): string;
-export function t<TInputs>(
-  message: (inputs: TInputs) => string,
-  inputs: TInputs,
-): string;
-export function t<TInputs>(
-  message: ((inputs?: TInputs) => string) | ((inputs: TInputs) => string),
-  inputs?: TInputs,
-): string {
-  i18nState.locale;
-  if (inputs === undefined) {
-    return (message as () => string)();
-  }
-  return (message as (inputs: TInputs) => string)(inputs);
 }

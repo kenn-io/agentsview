@@ -9,13 +9,14 @@ import {
   setLocale,
 } from "./index.js";
 import { m } from "../paraglide/messages.js";
-import { setLocale as setParaglideLocale } from "../paraglide/runtime.js";
+import * as runtime from "../paraglide/runtime.js";
 import en from "../../../messages/en.json";
 import zhCN from "../../../messages/zh-CN.json";
 
 describe("i18n locale selection", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -76,21 +77,23 @@ describe("i18n locale selection", () => {
   });
 
   it("renders generated Paraglide messages for each supported locale", () => {
-    setParaglideLocale("en");
+    runtime.setLocale("en", { reload: false });
     expect(m.nav_sessions()).toBe("Sessions");
     expect(m.status_bar_sessions({ count: "12" })).toBe("12 sessions");
 
-    setParaglideLocale("zh-CN");
+    runtime.setLocale("zh-CN", { reload: false });
     expect(m.nav_sessions()).toBe("会话");
     expect(m.status_bar_sessions({ count: "12" })).toBe("12 个会话");
   });
 
-  it("sets and persists the Paraglide runtime locale", async () => {
-    const runtime = await import("../paraglide/runtime.js");
+  it("sets the Paraglide runtime locale with its default reload behavior", () => {
+    const setParaglideLocale = vi
+      .spyOn(runtime, "setLocale")
+      .mockImplementation(() => undefined);
 
     setLocale("zh-CN");
 
-    expect(runtime.getLocale()).toBe("zh-CN");
+    expect(setParaglideLocale).toHaveBeenCalledWith("zh-CN");
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("zh-CN");
   });
 });

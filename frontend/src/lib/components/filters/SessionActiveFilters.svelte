@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m, t } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
@@ -46,21 +46,21 @@
   );
 
   function removeMachineTitle(machine: string): string {
-    return t(m.shared_active_filters_remove_machine, { machine });
+    return m.shared_active_filters_remove_machine({ machine });
   }
 
   function removeAgentTitle(agent: string): string {
-    return t(m.shared_active_filters_remove_agent, {
+    return m.shared_active_filters_remove_agent({
       agent: agentLabel(agent),
     });
   }
 
   function removeProjectTitle(project: string): string {
-    return t(m.shared_active_filters_remove_project, { project });
+    return m.shared_active_filters_remove_project({ project });
   }
 
   function removeModelTitle(model: string): string {
-    return t(m.shared_active_filters_remove_model, { model });
+    return m.shared_active_filters_remove_model({ model });
   }
 
   function clearProject() {
@@ -92,13 +92,13 @@
 
 {#if hasFilters}
   <div class="active-filters">
-    <span class="filters-label">{t(m.shared_active_filters_label)}</span>
+    <span class="filters-label">{m.shared_active_filters_label()}</span>
 
     {#if sessions.filters.project}
       <button
         class="filter-chip"
         onclick={clearProject}
-        title={t(m.shared_active_filters_clear_project)}
+        title={m.shared_active_filters_clear_project()}
       >
         {sessions.filters.project}
         <span class="chip-x">
@@ -141,9 +141,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setMinUserMessagesFilter(0)}
-        title={t(m.shared_active_filters_clear_min_prompts)}
+        title={m.shared_active_filters_clear_min_prompts()}
       >
-        {t(m.shared_active_filters_min_prompts, { count: sessions.filters.minUserMessages })}
+        {m.shared_active_filters_min_prompts({ count: sessions.filters.minUserMessages })}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -154,9 +154,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setRecentlyActiveFilter(false)}
-        title={t(m.shared_active_filters_clear_recently_active)}
+        title={m.shared_active_filters_clear_recently_active()}
       >
-        {t(m.shared_active_filters_active24h)}
+        {m.shared_active_filters_active24h()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -167,9 +167,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setHideUnknownProjectFilter(false)}
-        title={t(m.shared_active_filters_clear_hidden_unknown)}
+        title={m.shared_active_filters_clear_hidden_unknown()}
       >
-        {t(m.shared_active_filters_unknown_hidden)}
+        {m.shared_active_filters_unknown_hidden()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -193,9 +193,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setIncludeOneShotFilter(true)}
-        title={t(m.shared_active_filters_clear_single_turn)}
+        title={m.shared_active_filters_clear_single_turn()}
       >
-        {t(m.shared_active_filters_single_turn_hidden)}
+        {m.shared_active_filters_single_turn_hidden()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -206,9 +206,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setIncludeAutomatedFilter(false)}
-        title={t(m.shared_active_filters_clear_automated)}
+        title={m.shared_active_filters_clear_automated()}
       >
-        {t(m.shared_active_filters_automated_included)}
+        {m.shared_active_filters_automated_included()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -231,9 +231,9 @@
     <button
       class="clear-all"
       onclick={clearAll}
-      title={t(m.shared_active_filters_clear_all)}
+      title={m.shared_active_filters_clear_all()}
     >
-      {t(m.shared_active_filters_clear_all_label)}
+      {m.shared_active_filters_clear_all_label()}
     </button>
   </div>
 {/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { m, t } from "../../i18n/index.js";
+  import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
   import SessionItem from "./SessionItem.svelte";
@@ -415,18 +415,18 @@
 
   function groupToggleLabel(expanded: boolean, name: string): string {
     return expanded
-      ? t(m.sidebar_collapse_group, { name })
-      : t(m.sidebar_expand_group, { name });
+      ? m.sidebar_collapse_group({ name })
+      : m.sidebar_expand_group({ name });
   }
 </script>
 
 <div class="session-list-header">
   <span class="session-count">
-    {t(m.sidebar_session_count, { count: formatNumber(totalCount) })}
+    {m.sidebar_session_count({ count: formatNumber(totalCount) })}
   </span>
   <div class="header-actions">
     {#if sessions.loading}
-      <span class="loading-indicator">{t(m.sidebar_loading)}</span>
+      <span class="loading-indicator">{m.sidebar_loading()}</span>
     {/if}
     <SessionFilterControl
       {groupMode}
@@ -439,31 +439,31 @@
     />
     {#snippet statusFilterSection()}
       <div class="filter-section">
-        <div class="filter-section-label">{t(m.sidebar_status)}</div>
+        <div class="filter-section-label">{m.sidebar_status()}</div>
         <div class="pill-buttons">
           <button
             class="pill-btn pill-btn--status-active"
             class:active={sessions.hasTerminationStatus("active")}
             onclick={() => sessions.toggleTerminationStatus("active")}
-            title={t(m.sidebar_active_title)}
+            title={m.sidebar_active_title()}
           >
-            {t(m.sidebar_active)}
+            {m.sidebar_active()}
           </button>
           <button
             class="pill-btn pill-btn--status-stale"
             class:active={sessions.hasTerminationStatus("stale")}
             onclick={() => sessions.toggleTerminationStatus("stale")}
-            title={t(m.sidebar_stale_title)}
+            title={m.sidebar_stale_title()}
           >
-            {t(m.sidebar_stale)}
+            {m.sidebar_stale()}
           </button>
           <button
             class="pill-btn pill-btn--status-unclean"
             class:active={sessions.hasTerminationStatus("unclean")}
             onclick={() => sessions.toggleTerminationStatus("unclean")}
-            title={t(m.sidebar_unclean_title)}
+            title={m.sidebar_unclean_title()}
           >
-            {t(m.sidebar_unclean)}
+            {m.sidebar_unclean()}
           </button>
         </div>
       </div>
@@ -513,8 +513,8 @@
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(subKey)}
-            title={groupToggleLabel(subExpanded, t(m.sidebar_subagents))}
-            aria-label={groupToggleLabel(subExpanded, t(m.sidebar_subagents))}
+            title={groupToggleLabel(subExpanded, m.sidebar_subagents())}
+            aria-label={groupToggleLabel(subExpanded, m.sidebar_subagents())}
           >
             {#if subExpanded}
               <ChevronDownIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -522,7 +522,7 @@
               <ChevronRightIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
             {/if}
             <UserRoundIcon class="sub-group-icon" size="10" strokeWidth="2" aria-hidden="true" />
-            <span class="sub-group-label">{t(m.sidebar_subagents)}</span>
+            <span class="sub-group-label">{m.sidebar_subagents()}</span>
             <span class="sub-group-count">({item.count})</span>
           </button>
         {:else if item.type === "team-group" && item.group}
@@ -532,8 +532,8 @@
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(teamKey)}
-            title={groupToggleLabel(teamExpanded, t(m.sidebar_team))}
-            aria-label={groupToggleLabel(teamExpanded, t(m.sidebar_team))}
+            title={groupToggleLabel(teamExpanded, m.sidebar_team())}
+            aria-label={groupToggleLabel(teamExpanded, m.sidebar_team())}
           >
             {#if teamExpanded}
               <ChevronDownIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -541,7 +541,7 @@
               <ChevronRightIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
             {/if}
             <UsersRoundIcon class="sub-group-icon" size="12" strokeWidth="2" aria-hidden="true" />
-            <span class="sub-group-label">{t(m.sidebar_team)}</span>
+            <span class="sub-group-label">{m.sidebar_team()}</span>
             <span class="sub-group-count">({item.count})</span>
           </button>
         {:else if item.isChild && item.session}

@@ -89,7 +89,7 @@ describe("SettingsPage", () => {
     unmount(component);
   });
 
-  it("lets users switch the interface language", async () => {
+  it("persists the selected interface language for reload", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
       github_configured: false,
@@ -133,7 +133,7 @@ describe("SettingsPage", () => {
     await tick();
 
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("zh-CN");
-    expect(document.body.textContent).toContain("设置");
+    expect(document.body.textContent).toContain("Settings");
 
     unmount(component);
   });
