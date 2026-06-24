@@ -167,6 +167,19 @@ func TestRestartDaemonAfterUpdateArgsDropsLegacyNonLoopbackWithoutAuthConfig(t *
 	}, args)
 }
 
+func TestRestartDaemonAfterUpdateArgsDropsKnownUnauthenticatedNonLoopback(t *testing.T) {
+	args := restartDaemonAfterUpdateArgs(config.Config{}, updateDaemonStopResult{
+		Host:             "0.0.0.0",
+		Port:             18080,
+		RequireAuth:      false,
+		RequireAuthKnown: true,
+	})
+
+	assert.Equal(t, []string{
+		"serve", "--background", "--host", "127.0.0.1", "--port", "18080",
+	}, args)
+}
+
 func TestRestartDaemonAfterUpdateArgsKeepsLegacyNonLoopbackWithAuthConfig(t *testing.T) {
 	args := restartDaemonAfterUpdateArgs(
 		config.Config{RequireAuth: true},

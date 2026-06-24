@@ -223,6 +223,9 @@ func shouldForceLoopbackUpdateRestartHost(
 	if stopResult.Host == "" || isLoopbackHost(stopResult.Host) {
 		return false
 	}
+	if stopResult.RequireAuthKnown {
+		return !stopResult.RequireAuth
+	}
 	return !stopResult.RequireAuthKnown && !cfg.RequireAuth
 }
 
@@ -236,7 +239,7 @@ func shouldPreserveUpdateRestartHost(
 		return true
 	}
 	if stopResult.RequireAuthKnown {
-		return true
+		return stopResult.RequireAuth
 	}
 	return cfg.RequireAuth
 }
