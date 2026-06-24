@@ -9,6 +9,7 @@
 # Frontend
 node_modules/
 frontend/dist/
+frontend/src/lib/paraglide/
 frontend/test-results/
 test-results/
 frontend/playwright-report/
