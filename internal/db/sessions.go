@@ -1632,6 +1632,7 @@ type IncrementalSessionUpdate struct {
 	UserMsgCount         int
 	FileSize             int64
 	FileMtime            int64
+	FileHash             *string
 	NextOrdinal          int
 	LastEntryUUID        string
 	TotalOutputTokens    int
@@ -1712,7 +1713,7 @@ func (db *DB) GetSessionForIncremental(
 
 // UpdateSessionIncremental updates only the fields that change
 // during an incremental append: ended_at, message_count,
-// user_message_count, file_size, file_mtime, and token
+// user_message_count, file_size, file_mtime, optional file_hash, and token
 // aggregates. All values are absolute (not deltas) so the
 // update is idempotent on retry.
 //
@@ -1748,6 +1749,7 @@ func updateSessionIncrementalTx(
 			user_message_count = ?,
 			file_size = ?,
 			file_mtime = ?,
+			file_hash = COALESCE(?, file_hash),
 			next_ordinal = ?,
 			last_entry_uuid = ?,
 			total_output_tokens = ?,
@@ -1758,6 +1760,7 @@ func updateSessionIncrementalTx(
 		WHERE id = ?`,
 		update.EndedAt, update.MsgCount, update.UserMsgCount,
 		update.FileSize, update.FileMtime,
+		update.FileHash,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
 		update.HasTotalOutputTokens, update.HasPeakContextTokens, id,

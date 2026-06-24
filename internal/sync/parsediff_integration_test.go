@@ -1514,6 +1514,62 @@ func TestParseDiffCodexTranscriptSkewUsesTranscriptStoredMtime(t *testing.T) {
 		"transcript write skew must not trip --fail-on-change")
 }
 
+// TestParseDiffCodexIncrementalAppendDoesNotLookRaced covers the stable-source
+// side of the Codex transcript fingerprint fallback. A Codex incremental append
+// advances the stored source snapshot, so later parser drift against that
+// unchanged transcript must remain DiffChanged rather than being hidden as a
+// stale-fingerprint race.
+func TestParseDiffCodexIncrementalAppendDoesNotLookRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e3"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", initial,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "world", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, f.Close(), "close after append")
+	require.NoError(t, err, "append")
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "unchanged-source drift must stay changed")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must be counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"stable-source parser drift must trip --fail-on-change")
+}
+
 // writeHermesFanoutStateDB writes a Hermes state.db at <root>/state.db holding
 // two sessions (each one user message) and no sibling transcripts, so both
 // sessions resolve to the SAME shared state.db File.Path -- the literal-path

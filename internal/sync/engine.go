@@ -4116,6 +4116,7 @@ type incrementalUpdate struct {
 	userMsgCount         int // total (old + new)
 	fileSize             int64
 	fileMtime            int64
+	fileHash             string
 	nextOrdinal          int
 	lastEntryUUID        string
 	totalOutputTokens    int // absolute (old + new)
@@ -4812,6 +4813,12 @@ func (e *Engine) tryIncrementalJSONL(
 	// info.Size(), so partial lines at EOF are retried on
 	// the next sync.
 	newOffset := inc.FileSize + consumed
+	var incHash string
+	if agent == parser.AgentCodex {
+		if hash, err := ComputeFileHash(file.Path); err == nil {
+			incHash = hash
+		}
+	}
 
 	if len(newMsgs) == 0 {
 		// No new messages, but advance the offset past
@@ -4828,6 +4835,7 @@ func (e *Engine) tryIncrementalJSONL(
 					userMsgCount:         inc.UserMsgCount,
 					fileSize:             newOffset,
 					fileMtime:            incMtime,
+					fileHash:             incHash,
 					nextOrdinal:          inc.NextOrdinal,
 					lastEntryUUID:        inc.LastEntryUUID,
 					totalOutputTokens:    inc.TotalOutputTokens,
@@ -4901,6 +4909,7 @@ func (e *Engine) tryIncrementalJSONL(
 			userMsgCount:         inc.UserMsgCount + newUserCount,
 			fileSize:             newOffset,
 			fileMtime:            incMtime,
+			fileHash:             incHash,
 			nextOrdinal:          nextOrdinal,
 			lastEntryUUID:        lastEntryUUID,
 			totalOutputTokens:    totalOut,
@@ -7844,8 +7853,9 @@ func shouldReplaceFullParseMessages(
 
 // writeIncremental appends new messages and partially updates
 // session metadata without overwriting columns that are not
-// recomputed during incremental parsing (e.g. file_hash,
-// parent_session_id, relationship_type).
+// recomputed during incremental parsing (e.g. parent_session_id,
+// relationship_type). Codex refreshes file_hash because parse-diff
+// uses it as the transcript fingerprint for raced-skew detection.
 func (e *Engine) writeIncremental(
 	inc *incrementalUpdate,
 ) error {
@@ -7879,6 +7889,7 @@ func (e *Engine) writeIncremental(
 			UserMsgCount:         userMsgCount,
 			FileSize:             inc.fileSize,
 			FileMtime:            inc.fileMtime,
+			FileHash:             strPtr(inc.fileHash),
 			NextOrdinal:          inc.nextOrdinal,
 			LastEntryUUID:        inc.lastEntryUUID,
 			TotalOutputTokens:    inc.totalOutputTokens,
