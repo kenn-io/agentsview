@@ -4,6 +4,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,11 @@ type ServeOptions struct {
 	Service service.SessionService
 	Version string
 	Now     func() time.Time
+	// Token, when non-empty, requires every StreamableHTTP request to
+	// carry "Authorization: Bearer <Token>". It has no effect on stdio.
+	// The command layer sets it for non-loopback HTTP binds so the
+	// network-reachable surface is never unauthenticated.
+	Token string
 }
 
 // newServer builds an MCP server with all six read-only tools
@@ -108,6 +114,26 @@ func newServer(opts ServeOptions) *mcp.Server {
 	return s
 }
 
+// withBearerAuth wraps next so every request must present
+// "Authorization: Bearer <token>". When token is empty the handler is
+// returned unwrapped (loopback binds run without listener auth). The
+// comparison is constant-time to avoid leaking the token via timing.
+func withBearerAuth(next http.Handler, token string) http.Handler {
+	if token == "" {
+		return next
+	}
+	want := []byte("Bearer " + token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := []byte(r.Header.Get("Authorization"))
+		if subtle.ConstantTimeCompare(got, want) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ServeStdio runs the MCP server over stdio. It blocks until stdin is
 // closed (the client disconnected) or ctx is cancelled, both of which are
 // the normal end of life for a stdio server and return nil. Only an
@@ -148,8 +174,9 @@ func isCleanStdioShutdown(err error) bool {
 // address (see the cmd layer's loopback guard).
 func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) error {
 	srv := newServer(opts)
-	handler := mcp.NewStreamableHTTPHandler(
+	var handler http.Handler = mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return srv }, nil)
+	handler = withBearerAuth(handler, opts.Token)
 	httpServer := &http.Server{Addr: addr, Handler: handler}
 	fmt.Fprintf(os.Stderr, "agentsview mcp: serving on %s\n", addr)
 

@@ -45,6 +45,27 @@ func TestNormalizeMCPHTTPAddr(t *testing.T) {
 	}
 }
 
+func TestMCPListenerAuth(t *testing.T) {
+	t.Parallel()
+	// Loopback never requires listener auth, even when a token exists.
+	tok, err := mcpListenerAuth("127.0.0.1:8085", "")
+	require.NoError(t, err)
+	assert.Empty(t, tok)
+	tok, err = mcpListenerAuth("[::1]:8085", "abc")
+	require.NoError(t, err)
+	assert.Empty(t, tok, "loopback bind does not enforce a token")
+
+	// Non-loopback with a token enforces it.
+	tok, err = mcpListenerAuth("192.168.1.5:8085", "abc")
+	require.NoError(t, err)
+	assert.Equal(t, "abc", tok)
+
+	// Non-loopback without a token is refused (no unauthenticated remote surface).
+	_, err = mcpListenerAuth("192.168.1.5:8085", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "auth token")
+}
+
 func TestNewMCPCommand_Wiring(t *testing.T) {
 	t.Parallel()
 	cmd := newMCPCommand()

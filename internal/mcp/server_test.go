@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -108,6 +110,34 @@ func TestServeStdio_ClientDisconnectIsClean(t *testing.T) {
 			t.Fatal("server did not return after client disconnect")
 		}
 	}
+}
+
+func TestWithBearerAuth(t *testing.T) {
+	t.Parallel()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	req := func(auth string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		if auth != "" {
+			r.Header.Set("Authorization", auth)
+		}
+		return r
+	}
+	serve := func(h http.Handler, auth string) int {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req(auth))
+		return rec.Code
+	}
+
+	// Empty token -> no auth wrapper, request passes through.
+	assert.Equal(t, http.StatusOK, serve(withBearerAuth(ok, ""), ""))
+
+	h := withBearerAuth(ok, "s3cret")
+	assert.Equal(t, http.StatusUnauthorized, serve(h, ""), "missing header")
+	assert.Equal(t, http.StatusUnauthorized, serve(h, "Bearer wrong"), "wrong token")
+	assert.Equal(t, http.StatusUnauthorized, serve(h, "s3cret"), "missing Bearer prefix")
+	assert.Equal(t, http.StatusOK, serve(h, "Bearer s3cret"), "correct token")
 }
 
 // TestServeHTTP_ShutsDownOnContextCancel verifies the StreamableHTTP

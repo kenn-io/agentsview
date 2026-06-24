@@ -15,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"go.kenn.io/agentsview/internal/config"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
 )
 
@@ -69,6 +70,19 @@ Add to your MCP client config (e.g. Claude Desktop):
 				if err != nil {
 					return err
 				}
+				// A non-loopback listener must be authenticated, or it is
+				// an unauthenticated remote read surface over the session
+				// archive. Loopback binds stay local-trust (no listener
+				// auth), matching the daemon.
+				cfg, err := config.LoadPFlags(cmd.Flags())
+				if err != nil {
+					return fmt.Errorf("loading config: %w", err)
+				}
+				token, err := mcpListenerAuth(addr, cfg.AuthToken)
+				if err != nil {
+					return err
+				}
+				opts.Token = token
 				serveErr = mcpserver.ServeHTTP(ctx, opts, addr)
 			} else {
 				serveErr = mcpserver.ServeStdio(ctx, opts)
@@ -87,10 +101,11 @@ Add to your MCP client config (e.g. Claude Desktop):
 			"instead of stdio. Bare port forms (':8085', '8085') bind to "+
 			"loopback only; non-loopback hosts require --http-allow-insecure.")
 	cmd.Flags().BoolVar(&httpAllowInsecure, "http-allow-insecure", false,
-		"Allow --http to bind a non-loopback address. The MCP server has no "+
-			"built-in authentication, so any reachable client can read your "+
-			"sessions. Only set this on trusted networks (Tailscale, VPN-only) "+
-			"or behind an authenticating reverse proxy.")
+		"Allow --http to bind a non-loopback address. A non-loopback bind "+
+			"requires a configured auth token (auth_token in config.toml, or "+
+			"enable require_auth) and then enforces Authorization: Bearer on "+
+			"every request. Only expose it on trusted networks (Tailscale, "+
+			"VPN-only) or behind an authenticating reverse proxy.")
 
 	// Transport-selection flags, mirroring the `session` command, so the
 	// MCP server can target a remote daemon or PostgreSQL read store.
@@ -101,6 +116,30 @@ Add to your MCP client config (e.g. Claude Desktop):
 		"Read session data from configured PostgreSQL")
 
 	return cmd
+}
+
+// mcpListenerAuth decides the bearer token the MCP HTTP listener must
+// enforce for the given (already-normalized) bind address. A loopback
+// bind is local-trust and runs without listener auth (empty token). A
+// non-loopback bind must be authenticated: it returns the configured
+// token, or an error when none is set, so the network-reachable surface
+// is never unauthenticated.
+func mcpListenerAuth(addr, configuredToken string) (string, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("parsing --http address %q: %w", addr, err)
+	}
+	if isLoopbackHost(host) {
+		return "", nil
+	}
+	if configuredToken == "" {
+		return "", fmt.Errorf(
+			"--http %q is non-loopback but no auth token is configured; set "+
+				"auth_token in config.toml (or enable require_auth) so the MCP "+
+				"server requires Authorization: Bearer, or bind a loopback address",
+			addr)
+	}
+	return configuredToken, nil
 }
 
 // normalizeMCPHTTPAddr canonicalises a --http argument and rejects values

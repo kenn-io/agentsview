@@ -97,7 +97,7 @@ func TestSearchSessions_Pagination(t *testing.T) {
 	}
 	// Six sessions all matching "pageterm", with increasing ended_at so
 	// recency ordering is deterministic. All old enough to not be excluded.
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		id := "p" + string(rune('0'+i))
 		ended := "2024-06-1" + string(rune('0'+i)) + "T10:00:00Z"
 		seedFTSSession(t, d, id, "proj", "pageterm body", ended)
