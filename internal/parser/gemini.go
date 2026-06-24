@@ -276,6 +276,22 @@ func parseGeminiMessage(
 	}, true
 }
 
+func applyGeminiContextDeltas(messages []ParsedMessage) {
+	prev := 0
+	for i := range messages {
+		if !messages[i].HasContextTokens {
+			continue
+		}
+		cumulative := messages[i].ContextTokens
+		delta := cumulative - prev
+		if delta < 0 {
+			delta = cumulative
+		}
+		messages[i].ContextTokens = delta
+		prev = cumulative
+	}
+}
+
 func buildGeminiSession(
 	path, project, machine string,
 	info os.FileInfo,
@@ -284,6 +300,7 @@ func buildGeminiSession(
 	firstMessage string,
 	messages []ParsedMessage,
 ) *ParsedSession {
+	applyGeminiContextDeltas(messages)
 	var userCount int
 	for _, m := range messages {
 		if m.Role == RoleUser && m.Content != "" {

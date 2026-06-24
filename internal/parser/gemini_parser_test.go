@@ -294,9 +294,8 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		assert.False(t, msgs[2].HasContextTokens)
 		assert.False(t, msgs[2].HasOutputTokens)
 
-		// Second assistant message (a2): input=2000, cached=50,
-		// output=300, thoughts=100
-		assert.Equal(t, 2050, msgs[3].ContextTokens)
+		// Second assistant message (a2): cumulative=2050, delta from 1600
+		assert.Equal(t, 450, msgs[3].ContextTokens)
 		assert.Equal(t, 400, msgs[3].OutputTokens)
 		assert.True(t, msgs[3].HasContextTokens)
 		assert.True(t, msgs[3].HasOutputTokens)
@@ -304,7 +303,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 
 		// Session totals
 		assert.Equal(t, 650, sess.TotalOutputTokens)
-		assert.Equal(t, 2050, sess.PeakContextTokens)
+		assert.Equal(t, 1600, sess.PeakContextTokens)
 		assert.True(t, sess.HasTotalOutputTokens)
 		assert.True(t, sess.HasPeakContextTokens)
 	})
@@ -489,5 +488,63 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 		path := createTestFile(t, "session.json", content)
 		_, _, err := ParseGeminiSession(path, "my_project", "local")
 		assert.Error(t, err)
+	})
+}
+
+func TestParseGeminiSession_ContextTokensDelta(t *testing.T) {
+	t.Run("multi-turn increasing cumulative", func(t *testing.T) {
+		content := `{"sessionId":"sess-ctx-delta","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:13:42.783Z","messages":[
+  {"type":"user","timestamp":"2026-04-23T16:12:43Z","content":[{"text":"first question"}]},
+  {"type":"gemini","timestamp":"2026-04-23T16:12:45Z","content":"answer one","tokens":{"input":10000,"output":50,"cached":0}},
+  {"type":"user","timestamp":"2026-04-23T16:12:50Z","content":[{"text":"second question"}]},
+  {"type":"gemini","timestamp":"2026-04-23T16:12:55Z","content":"answer two","tokens":{"input":22000,"output":80,"cached":3000}},
+  {"type":"gemini","timestamp":"2026-04-23T16:13:05Z","content":"answer three","tokens":{"input":60000,"output":120,"cached":0}}
+]}`
+		sess, msgs := runGeminiParserTest(t, content)
+
+		// user messages have no tokens
+		require.Len(t, msgs, 5)
+		assert.False(t, msgs[0].HasContextTokens)
+		assert.False(t, msgs[2].HasContextTokens)
+
+		// gemini msg 0 (answer one): cumulative=10000, delta from 0 = 10000
+		assert.Equal(t, 10000, msgs[1].ContextTokens)
+		// gemini msg 1 (answer two): cumulative=25000, delta from 10000 = 15000
+		assert.Equal(t, 15000, msgs[3].ContextTokens)
+		// gemini msg 2 (answer three): cumulative=60000, delta from 25000 = 35000
+		assert.Equal(t, 35000, msgs[4].ContextTokens)
+
+		// PeakContextTokens is the largest delta, not the final cumulative
+		assert.Equal(t, 35000, sess.PeakContextTokens)
+	})
+
+	t.Run("counter reset clamps to cumulative", func(t *testing.T) {
+		content := `{"sessionId":"sess-ctx-reset","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:13:42.783Z","messages":[
+  {"type":"user","timestamp":"2026-04-23T16:12:43Z","content":[{"text":"first"}]},
+  {"type":"gemini","timestamp":"2026-04-23T16:12:45Z","content":"reply one","tokens":{"input":10000,"output":50,"cached":0}},
+  {"type":"user","timestamp":"2026-04-23T16:12:50Z","content":[{"text":"second"}]},
+  {"type":"gemini","timestamp":"2026-04-23T16:12:55Z","content":"reply two","tokens":{"input":25000,"output":80,"cached":0}},
+  {"type":"user","timestamp":"2026-04-23T16:13:00Z","content":[{"text":"third"}]},
+  {"type":"gemini","timestamp":"2026-04-23T16:13:05Z","content":"reply three","tokens":{"input":5000,"output":120,"cached":0}}
+]}`
+		_, msgs := runGeminiParserTest(t, content)
+
+		require.Len(t, msgs, 6)
+		// deltas: 10000, 15000, 5000 (reset clamps to cumulative)
+		assert.Equal(t, 10000, msgs[1].ContextTokens)
+		assert.Equal(t, 15000, msgs[3].ContextTokens)
+		assert.Equal(t, 5000, msgs[5].ContextTokens)
+	})
+
+	t.Run("no token field", func(t *testing.T) {
+		content := `{"sessionId":"sess-ctx-no-tokens","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:12:50.783Z","messages":[
+  {"type":"user","timestamp":"2026-04-23T16:12:43Z","content":[{"text":"hello"}]},
+  {"type":"gemini","timestamp":"2026-04-23T16:12:45Z","content":"hi there"}
+]}`
+		_, msgs := runGeminiParserTest(t, content)
+
+		require.Len(t, msgs, 2)
+		assert.False(t, msgs[1].HasContextTokens)
+		assert.Equal(t, 0, msgs[1].ContextTokens)
 	})
 }
