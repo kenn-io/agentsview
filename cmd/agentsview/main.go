@@ -813,7 +813,7 @@ func startPeriodicSync(
 	if validRemotes {
 		for _, rh := range cfg.RemoteHosts {
 			if rh.Interval > 0 {
-				go startRemoteHostSync(cfg, database, rh, emitter)
+				go startRemoteHostSync(cfg, database, engine, rh, emitter)
 			}
 		}
 	}
@@ -828,20 +828,55 @@ func startPeriodicSync(
 	}
 }
 
-func startRemoteHostSync(cfg config.Config, database *db.DB, rh config.RemoteHost, emitter sync.Emitter) {
-	syncFn := func() (int, error) {
-		rs := &ssh.RemoteSync{
-			Host:                    rh.Host,
-			User:                    rh.User,
-			Port:                    rh.Port,
-			Full:                    false,
-			DB:                      database,
-			BlockedResultCategories: cfg.ResultContentBlockedCategories,
+func startRemoteHostSync(
+	cfg config.Config,
+	database *db.DB,
+	engine *sync.Engine,
+	rh config.RemoteHost,
+	emitter sync.Emitter,
+) {
+	syncFn := remoteHostSyncFunc(
+		cfg, database, engine, rh,
+		func(ctx context.Context, rs *ssh.RemoteSync) (ssh.SyncStats, error) {
+			return rs.Run(ctx)
+		},
+	)
+	runRemoteHostSyncLoop(rh.Host, rh.Interval, syncFn, emitter, nil)
+}
+
+type remoteSyncExclusiveRunner interface {
+	RunExclusive(func() error) error
+}
+
+type remoteSyncRunner func(context.Context, *ssh.RemoteSync) (ssh.SyncStats, error)
+
+func remoteHostSyncFunc(
+	cfg config.Config,
+	database *db.DB,
+	runner remoteSyncExclusiveRunner,
+	rh config.RemoteHost,
+	runRemote remoteSyncRunner,
+) func() (int, error) {
+	return func() (int, error) {
+		if runner == nil {
+			return 0, fmt.Errorf("scheduled remote sync missing exclusive runner")
 		}
-		stats, err := rs.Run(context.Background())
+		var stats ssh.SyncStats
+		err := runner.RunExclusive(func() error {
+			rs := &ssh.RemoteSync{
+				Host:                    rh.Host,
+				User:                    rh.User,
+				Port:                    rh.Port,
+				Full:                    false,
+				DB:                      database,
+				BlockedResultCategories: cfg.ResultContentBlockedCategories,
+			}
+			var err error
+			stats, err = runRemote(context.Background(), rs)
+			return err
+		})
 		return stats.SessionsSynced, err
 	}
-	runRemoteHostSyncLoop(rh.Host, rh.Interval, syncFn, emitter, nil)
 }
 
 // runRemoteHostSyncLoop drives the per-host sync ticker. syncFn returns

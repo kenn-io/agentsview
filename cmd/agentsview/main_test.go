@@ -14,7 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/ssh"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -262,6 +264,72 @@ func TestStartRemoteHostSync_EmitsAfterSuccess(t *testing.T) {
 	<-exited
 
 	assert.Positive(t, em.count.Load(), "emitter should have been called at least once")
+}
+
+func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{},
+		Machine:   "local",
+	})
+
+	remoteEntered := make(chan struct{})
+	releaseRemote := make(chan struct{})
+	syncFn := remoteHostSyncFunc(
+		config.Config{},
+		database,
+		engine,
+		config.RemoteHost{Host: "test-host"},
+		func(context.Context, *ssh.RemoteSync) (ssh.SyncStats, error) {
+			close(remoteEntered)
+			<-releaseRemote
+			return ssh.SyncStats{}, nil
+		},
+	)
+
+	syncErr := make(chan error, 1)
+	go func() {
+		_, err := syncFn()
+		syncErr <- err
+	}()
+
+	select {
+	case <-remoteEntered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "remote sync did not enter")
+	}
+
+	exclusiveEntered := make(chan struct{})
+	exclusiveErr := make(chan error, 1)
+	go func() {
+		exclusiveErr <- engine.RunExclusive(func() error {
+			close(exclusiveEntered)
+			return nil
+		})
+	}()
+
+	select {
+	case <-exclusiveEntered:
+		assert.Fail(t, "exclusive operation overlapped scheduled remote sync")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(releaseRemote)
+
+	select {
+	case err := <-syncErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "scheduled remote sync did not finish")
+	}
+	select {
+	case err := <-exclusiveErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.FailNow(t, "exclusive operation did not finish")
+	}
 }
 
 type scopedEmitter struct {
