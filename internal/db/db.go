@@ -237,9 +237,10 @@ import (
 // classification, so historical skill usage is backfilled on
 // re-parse.)
 //
+// (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 50
+const dataVersion = 51
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
