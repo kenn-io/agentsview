@@ -133,7 +133,7 @@ func parsePiLikeSession(
 		parentID := gjson.Get(line, "parentId").Str
 
 		// If any message entry has an id field, this is a V2 session.
-		if isV1 && gjson.Get(line, "id").Str != "" {
+		if isV1 && entryID != "" {
 			isV1 = false
 		}
 
