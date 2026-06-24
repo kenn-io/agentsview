@@ -356,7 +356,7 @@
     font-size: 11px;
     font-weight: 600;
     background: var(--accent-blue);
-    color: white;
+    color: var(--accent-blue-foreground);
     letter-spacing: 0.01em;
     transition: opacity 0.12s, transform 0.1s, box-shadow 0.12s;
     box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);

@@ -372,7 +372,7 @@
   }
 
   .connect-btn {
-    color: white;
+    color: var(--accent-blue-foreground);
     background: var(--accent-blue);
   }
 

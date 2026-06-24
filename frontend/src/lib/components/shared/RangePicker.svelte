@@ -404,7 +404,7 @@
 
   .pill.active {
     background: var(--accent-blue);
-    color: #fff;
+    color: var(--accent-blue-foreground);
   }
 
   .stepper {

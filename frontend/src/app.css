@@ -19,6 +19,7 @@
   --text-secondary: #555b6e;
   --text-muted: #878ea0;
   --accent-blue: #2563eb;
+  --accent-blue-foreground: #ffffff;
   --accent-rose: #e11d48;
   --accent-purple: #7c3aed;
   --accent-amber: #d97706;
@@ -89,6 +90,7 @@
   --text-secondary: #9ea5b4;
   --text-muted: #6c7385;
   --accent-blue: #60a5fa;
+  --accent-blue-foreground: #07111f;
   --accent-rose: #fb7185;
   --accent-purple: #a78bfa;
   --accent-amber: #fbbf24;
@@ -124,7 +126,7 @@
 }
 
 /* High contrast — overrides neutral text/border tokens (and
-   --accent-blue, which also colors links and the focus ring) to
+   --accent-blue, which colors links, focus rings, and filled accents) to
    clear WCAG AA. Semantic/identity tokens (--cat-*, --slow-*,
    --running-*, --status-waiting, --user-bg, data-viz palettes) are
    intentionally left unchanged so meaning is preserved. */
@@ -194,7 +196,7 @@ body {
 /* Selection */
 ::selection {
   background: var(--accent-blue);
-  color: white;
+  color: var(--accent-blue-foreground);
 }
 
 /* Focus visible */
@@ -344,7 +346,7 @@ mark.search-highlight--current {
 
 .modal-panel .modal-btn-primary {
   background: var(--accent-blue);
-  color: white;
+  color: var(--accent-blue-foreground);
   border-color: var(--accent-blue);
 }
 

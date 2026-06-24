@@ -7,6 +7,33 @@ function readZoom(page: import("@playwright/test").Page): Promise<string> {
   );
 }
 
+function luminance([r, g, b]: [number, number, number]): number {
+  const [rr, gg, bb] = [r, g, b].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928
+      ? value / 12.92
+      : Math.pow((value + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * rr! + 0.7152 * gg! + 0.0722 * bb!;
+}
+
+function contrastRatio(
+  foreground: [number, number, number],
+  background: [number, number, number],
+): number {
+  const lighter = Math.max(luminance(foreground), luminance(background));
+  const darker = Math.min(luminance(foreground), luminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function parseRgb(value: string): [number, number, number] {
+  const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (!match) {
+    throw new Error(`Expected rgb() color, got ${value}`);
+  }
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
 test.describe("Appearance accessibility", () => {
   test("text size scales the UI on web without horizontal overflow", async ({
     page,
@@ -87,5 +114,35 @@ test.describe("Appearance accessibility", () => {
       return raw;
     });
     expect(textPrimary).toBe("#000000");
+  });
+
+  test("dark high contrast keeps accent-filled controls readable", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("theme", "dark");
+      localStorage.setItem("agentsview-high-contrast", "true");
+    });
+    const sp = new SessionsPage(page);
+    await sp.goto();
+
+    const colors = await page.evaluate(() => {
+      const panel = document.createElement("div");
+      panel.className = "modal-panel";
+      panel.innerHTML = '<button class="modal-btn modal-btn-primary">Save</button>';
+      document.body.append(panel);
+      const button = panel.querySelector("button")!;
+      const styles = getComputedStyle(button);
+      const result = {
+        background: styles.backgroundColor,
+        foreground: styles.color,
+      };
+      panel.remove();
+      return result;
+    });
+
+    expect(
+      contrastRatio(parseRgb(colors.foreground), parseRgb(colors.background)),
+    ).toBeGreaterThanOrEqual(4.5);
   });
 });

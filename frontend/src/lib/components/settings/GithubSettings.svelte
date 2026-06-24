@@ -116,7 +116,7 @@
     border-radius: var(--radius-sm);
     font-size: 12px;
     font-weight: 500;
-    color: white;
+    color: var(--accent-blue-foreground);
     background: var(--accent-blue);
     border: none;
     cursor: pointer;

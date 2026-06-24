@@ -223,7 +223,7 @@
 
   .pin-count {
     background: var(--accent-blue);
-    color: white;
+    color: var(--accent-blue-foreground);
     font-size: 11px;
     font-weight: 600;
     padding: 1px 7px;
@@ -301,6 +301,7 @@
 
   .role-badge.user {
     background: var(--accent-blue);
+    color: var(--accent-blue-foreground);
   }
 
   .pin-agent {

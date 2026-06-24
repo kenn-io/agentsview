@@ -366,7 +366,7 @@
   .primary-btn {
     border-color: var(--accent-blue);
     background: var(--accent-blue);
-    color: white;
+    color: var(--accent-blue-foreground);
   }
 
   .danger {

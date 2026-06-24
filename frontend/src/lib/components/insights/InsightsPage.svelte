@@ -2098,7 +2098,7 @@
     height: 26px;
     padding: 0 10px;
     background: var(--accent-blue);
-    color: white;
+    color: var(--accent-blue-foreground);
     border-radius: var(--radius-sm);
     font-size: 12px;
     font-weight: 700;
