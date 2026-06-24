@@ -243,6 +243,35 @@ func TestGetDailyUsageWithData(t *testing.T) {
 		"Totals.TotalCost")
 }
 
+func TestUsageRowsHandleBlankMessageTimestampWithoutSessionStart(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "blank-ts", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.MessageCount = 1
+		s.StartedAt = nil
+	})
+	insertMessages(t, d, Message{
+		SessionID:  "blank-ts",
+		Ordinal:    0,
+		Role:       "assistant",
+		Timestamp:  "",
+		Model:      "claude-sonnet-4-20250514",
+		TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":50}`),
+	})
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{})
+	requireNoError(t, err, "GetDailyUsage")
+	assert.Equal(t, 100, daily.Totals.InputTokens)
+	assert.Equal(t, 50, daily.Totals.OutputTokens)
+
+	usage, err := d.GetSessionUsage(ctx, "blank-ts")
+	requireNoError(t, err, "GetSessionUsage")
+	require.NotNil(t, usage)
+	assert.Equal(t, []string{"claude-sonnet-4-20250514"}, usage.Models)
+}
+
 func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

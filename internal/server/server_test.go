@@ -2934,6 +2934,55 @@ func TestUploadSession(t *testing.T) {
 	}
 }
 
+func TestUploadSessionSanitizesParsedRows(t *testing.T) {
+	te := setup(t)
+
+	rawInput := db.MaxPlausibleTokens + 200
+	rawOutput := db.MaxPlausibleTokens + 100
+	longModel := strings.Repeat("m", 160)
+	assistantWithBadUsage, err := json.Marshal(map[string]any{
+		"type":      "assistant",
+		"timestamp": tsEarlyS5,
+		"message": map[string]any{
+			"model": longModel,
+			"usage": map[string]any{
+				"input_tokens":  rawInput,
+				"output_tokens": rawOutput,
+			},
+			"content": []map[string]any{
+				{"type": "text", "text": "Hi!"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Hello \x1b[31mupload\x07").
+		AddRaw(string(assistantWithBadUsage)).
+		String()
+
+	w := te.upload(t, "upload-sanitize.jsonl", content,
+		"project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+
+	msgs, err := te.db.GetMessages(
+		context.Background(), "upload-sanitize", 0, 10, true,
+	)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Hello [31mupload", msgs[0].Content)
+	assert.Equal(t, len("Hello [31mupload"), msgs[0].ContentLength)
+	assert.Len(t, msgs[1].Model, 128)
+	assert.Equal(t, db.MaxPlausibleTokens, msgs[1].ContextTokens)
+	assert.Equal(t, db.MaxPlausibleTokens, msgs[1].OutputTokens)
+
+	sess, err := te.db.GetSession(context.Background(), "upload-sanitize")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, db.MaxPlausibleTokens, sess.TotalOutputTokens)
+	assert.Equal(t, db.MaxPlausibleTokens, sess.PeakContextTokens)
+}
+
 func TestUploadSession_InfersRelationshipType(t *testing.T) {
 	te := setup(t)
 
