@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db/git"
 )
 
@@ -1020,20 +1019,17 @@ func addMessageToCacheTotals(
 	sessionID, model, tokenJSON string,
 	pricing map[string]modelRates,
 ) {
-	usage := gjson.Parse(tokenJSON)
-	inputTok := usage.Get("input_tokens").Int()
-	outputTok := usage.Get("output_tokens").Int()
-	cacheCrTok := usage.Get("cache_creation_input_tokens").Int()
-	cacheRdTok := usage.Get("cache_read_input_tokens").Int()
+	inputTok, outputTok, cacheCrTok, cacheRdTok :=
+		clampedUsageTokenCounters(tokenJSON)
 
 	totals, ok := perSession[sessionID]
 	if !ok {
 		totals = &sessionCacheTotals{}
 		perSession[sessionID] = totals
 	}
-	totals.inputTok += inputTok
-	totals.cacheCreateT += cacheCrTok
-	totals.cacheReadT += cacheRdTok
+	totals.inputTok += int64(inputTok)
+	totals.cacheCreateT += int64(cacheCrTok)
+	totals.cacheReadT += int64(cacheRdTok)
 
 	rates, _ := lookupModelRates(pricing, model)
 	totals.dollarsSpent += (float64(inputTok)*rates.input +

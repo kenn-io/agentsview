@@ -2225,6 +2225,52 @@ func TestPrepareSessionWriteReclampsEventDerivedTokenTotals(t *testing.T) {
 		"event-derived peak re-derived from clamped usage events")
 }
 
+func TestPrepareSessionWritePreservesSummaryUsageEventTokenTotals(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	rawTotal := maxPlausibleTokens + 500_000
+	rawPeak := maxPlausibleTokens + 250_000
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	events := []parser.ParsedUsageEvent{{
+		Source:       "session",
+		Model:        "claude-sonnet-4",
+		InputTokens:  rawPeak,
+		OutputTokens: rawTotal,
+	}}
+	sess := parser.ParsedSession{
+		ID: "summary-event-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentHermes, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/summary.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		TotalOutputTokens:    rawTotal,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    rawPeak,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, rawTotal, prepared.TotalOutputTokens,
+		"session-summary usage event must not make the session aggregate event-derived")
+	assert.Equal(t, rawPeak, prepared.PeakContextTokens,
+		"summary-derived peak context must survive the per-row event clamp")
+}
+
 // TestPrepareSessionWriteReclampsEventDerivedCacheContext covers an
 // event-derived peak context that, like the parser-side rollup, sums input and
 // cache tokens. A corrupt cache value is clamped per-component in its

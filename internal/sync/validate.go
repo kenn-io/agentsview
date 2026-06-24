@@ -155,7 +155,21 @@ func sanitizeMessage(m *db.Message) validationStats {
 			m.ContentLength = 0
 		}
 	}
+	origThinkingLen := len(m.ThinkingText)
 	sanitizeStringField(&m.ThinkingText, &stats)
+	if removed := origThinkingLen - len(m.ThinkingText); removed > 0 {
+		// Some parsers include ThinkingText in ContentLength. If the
+		// current length still has semantic bytes beyond the sanitized
+		// visible Content, subtract stripped thinking bytes from that
+		// excess without driving the length below stored Content.
+		excess := m.ContentLength - len(m.Content)
+		if excess > 0 {
+			if removed > excess {
+				removed = excess
+			}
+			m.ContentLength -= removed
+		}
+	}
 	sanitizeStringField(&m.ClaudeMessageID, &stats)
 	sanitizeStringField(&m.ClaudeRequestID, &stats)
 	sanitizeStringField(&m.SourceType, &stats)

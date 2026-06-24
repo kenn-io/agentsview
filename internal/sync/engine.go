@@ -7109,8 +7109,9 @@ func (e *Engine) prepareSessionWrite(
 	// are derived from the per-message rows or the per-usage-event rows, by
 	// matching the stored value against each source's raw sum/max. Aggregates
 	// set directly from a session-level usage summary -- agents like
-	// Warp/Vibe/Hermes -- match neither source and must survive the per-row
-	// clamp untouched.
+	// Warp/Vibe/Hermes/Zed -- must survive the per-row clamp untouched.
+	// Source=="session" usage events mirror those same summary totals, so
+	// exclude them from the event-derived detector and re-clamp path.
 	msgTotal, msgHasOut, msgPeak, msgHasCtx := messageTokenTotals(msgs)
 	evtTotal, evtHasOut, evtPeak, evtHasCtx := usageEventTokenTotals(
 		pw.usageEvents, false,
@@ -7195,23 +7196,26 @@ func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
 	s.HasPeakContextTokens = hasCtx
 }
 
-// usageEventTokenTotals computes the event-derived session token aggregates
-// through parser.UsageEventTokenAggregate -- the SAME rollup parsers use to
-// populate the stored session totals (positive output summed, peak full
-// context = input + cache-creation + cache-read where positive). Sharing that
-// function keeps the detection from drifting from the parser. When clamp is
-// true each per-event token field is first bounded to the per-row plausibility
-// cap, matching how sanitizeUsageEvent bounds the stored usage_event row
-// (a negative value floors to 0 and so drops out of the positive-only rollup,
-// exactly as it would after sanitization), so the post-clamp aggregate equals
-// what re-running the rollup over the stored rows would produce.
+// usageEventTokenTotals computes event-derived session token aggregates through
+// parser.UsageEventTokenAggregate -- the same rollup per-turn event parsers use
+// to populate stored session totals (positive output summed, peak full context
+// = input + cache-creation + cache-read where positive). Session-summary usage
+// events mirror parser summary totals rather than per-turn rows, so they are
+// excluded from this detector and re-clamp path. When clamp is true each
+// included event token field is first bounded to the per-row plausibility cap,
+// matching how sanitizeUsageEvent bounds the stored usage_event row.
 func usageEventTokenTotals(
 	events []parser.ParsedUsageEvent, clamp bool,
 ) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
-	rolled := events
+	rolled := make([]parser.ParsedUsageEvent, 0, len(events))
+	for _, ev := range events {
+		if ev.Source == "session" {
+			continue
+		}
+		rolled = append(rolled, ev)
+	}
 	if clamp {
-		rolled = make([]parser.ParsedUsageEvent, len(events))
-		for i, ev := range events {
+		for i, ev := range rolled {
 			ev.InputTokens = clampedTokens(ev.InputTokens)
 			ev.OutputTokens = clampedTokens(ev.OutputTokens)
 			ev.CacheCreationInputTokens = clampedTokens(

@@ -267,6 +267,30 @@ func TestSanitizeMessageContentLengthDelta(t *testing.T) {
 		assert.NotEqual(t, len(m.Content), m.ContentLength,
 			"delta adjustment must not collapse the semantic length to len(Content)")
 	})
+
+	t.Run("thinking-inclusive length reduced by thinking delta", func(t *testing.T) {
+		content := "visible answer"
+		rawThinking := "think\x1b]0;title\x07more"
+		sanitizedThinking := "think]0;titlemore"
+		removed := len(rawThinking) - len(sanitizedThinking)
+		require.Greater(t, removed, 0, "this case requires thinking bytes to be stripped")
+		m := db.Message{
+			Role:          "assistant",
+			Content:       content,
+			ThinkingText:  rawThinking,
+			ContentLength: len(content) + len(rawThinking),
+		}
+
+		stats := sanitizeMessage(&m)
+
+		assert.Equal(t, content, m.Content)
+		assert.Equal(t, sanitizedThinking, m.ThinkingText)
+		assert.Equal(t, 1, stats.ControlCharsStripped)
+		assert.Equal(t, len(content)+len(sanitizedThinking), m.ContentLength,
+			"ContentLength must drop by stripped thinking bytes when thinking contributes to the parser semantic length")
+		assert.Equal(t, len(content)+len(rawThinking)-removed, m.ContentLength,
+			"length adjustment must use the same removed-byte delta as content stripping")
+	})
 }
 
 func TestSanitizeUsageEvent(t *testing.T) {
