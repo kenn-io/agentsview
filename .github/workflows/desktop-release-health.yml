@@ -30,6 +30,4 @@ jobs:
           persist-credentials: false
 
       - name: Check desktop release health
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: bash scripts/check_desktop_release_health_from_event.sh

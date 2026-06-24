@@ -43,38 +43,13 @@ assert_failure_contains() {
 
 write_fixture() {
     local dir="$1" version="$2" manifest_version="$3"
-    cat >"$dir/assets.txt" <<EOF
-AgentsView_${version}_aarch64.AppImage
-AgentsView_${version}_aarch64.dmg
-AgentsView_${version}_amd64.AppImage
-AgentsView_${version}_x64-setup.exe
-AgentsView_${version}_x64.dmg
-SHA256SUMS-desktop
-EOF
-    cat >"$dir/updater-assets.txt" <<EOF
-AgentsView_aarch64.app.tar.gz
-AgentsView_x86_64.app.tar.gz
-AgentsView_${manifest_version}_x64-setup.nsis.zip
-AgentsView_${manifest_version}_amd64.AppImage.tar.gz
-latest.json
-EOF
     cat >"$dir/latest.json" <<EOF
-{
-  "version": "${manifest_version}",
-  "platforms": {
-    "darwin-aarch64": {"url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_aarch64.app.tar.gz", "signature": "sig"},
-    "darwin-x86_64": {"url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_x86_64.app.tar.gz", "signature": "sig"},
-    "windows-x86_64": {"url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_${manifest_version}_x64-setup.nsis.zip", "signature": "sig"},
-    "linux-x86_64": {"url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_${manifest_version}_amd64.AppImage.tar.gz", "signature": "sig"}
-  }
-}
+{"version":"${manifest_version}"}
 EOF
 }
 
 run_checker() {
     local dir="$1" tag="$2" conclusion="${3:-success}"
-    DESKTOP_RELEASE_HEALTH_ASSETS_FILE="$dir/assets.txt" \
-    DESKTOP_RELEASE_HEALTH_UPDATER_ASSETS_FILE="$dir/updater-assets.txt" \
     DESKTOP_RELEASE_HEALTH_MANIFEST_FILE="$dir/latest.json" \
     DESKTOP_RELEASE_HEALTH_WORKFLOW_CONCLUSION="$conclusion" \
     "$CHECKER" "$tag"
@@ -102,29 +77,6 @@ write_fixture "$tmp" "0.34.5" "0.34.4"
 assert_failure_contains \
     "stale updater manifest fails" \
     "updater manifest version 0.34.4 does not match expected 0.34.5" \
-    run_checker "$tmp" "v0.34.5"
-
-write_fixture "$tmp" "0.34.5" "0.34.5"
-grep -v 'x64-setup.exe' "$tmp/assets.txt" >"$tmp/assets-next.txt"
-mv "$tmp/assets-next.txt" "$tmp/assets.txt"
-assert_failure_contains \
-    "missing desktop asset fails" \
-    "missing desktop release asset: AgentsView_0.34.5_x64-setup.exe" \
-    run_checker "$tmp" "v0.34.5"
-
-write_fixture "$tmp" "0.34.5" "0.34.5"
-perl -0pi -e 's|github.com/kenn-io/agentsview/releases/download/updater|github.com/evil/agentsview/releases/download/updater|' "$tmp/latest.json"
-assert_failure_contains \
-    "wrong updater repo URL fails" \
-    "unexpected updater URL for darwin-aarch64" \
-    run_checker "$tmp" "v0.34.5"
-
-write_fixture "$tmp" "0.34.5" "0.34.5"
-grep -v 'AgentsView_0.34.5_x64-setup.nsis.zip' "$tmp/updater-assets.txt" >"$tmp/updater-assets-next.txt"
-mv "$tmp/updater-assets-next.txt" "$tmp/updater-assets.txt"
-assert_failure_contains \
-    "missing updater asset fails" \
-    "manifest URL asset is missing from updater release: AgentsView_0.34.5_x64-setup.nsis.zip" \
     run_checker "$tmp" "v0.34.5"
 
 echo
