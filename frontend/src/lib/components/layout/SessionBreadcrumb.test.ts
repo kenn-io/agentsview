@@ -17,6 +17,7 @@ import {
   SessionsService,
 } from "../../api/generated/index";
 import { messages } from "../../stores/messages.svelte.js";
+import { setLocale } from "../../i18n/index.js";
 
 vi.mock("../../api/client.js", () => ({
   listOpeners: vi.fn().mockResolvedValue({ openers: [] }),
@@ -165,10 +166,88 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setLocale("en");
   document.body.innerHTML = "";
 });
 
 describe("SessionBreadcrumb", () => {
+  it("renders session reading controls in Simplified Chinese", async () => {
+    setLocale("zh-CN");
+    openersService.getApiV1Openers.mockResolvedValue({
+      openers: [
+        {
+          id: "vscode",
+          name: "VS Code",
+          kind: "editor",
+          bin: "code",
+        },
+      ],
+    });
+    sessionsService.getApiV1SessionsIdDirectory.mockResolvedValue({
+      path: "/tmp/project",
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          file_path: "/tmp/project/session.jsonl",
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".resume-btn")).toBeTruthy();
+    });
+    await tick();
+
+    const backButton = document.querySelector<HTMLButtonElement>(
+      ".breadcrumb-link",
+    );
+    expect(backButton?.textContent?.trim()).toBe("会话");
+    expect(backButton?.getAttribute("title")).toBe("返回会话列表");
+
+    const linkButton = document.querySelector<HTMLButtonElement>(
+      ".link-btn",
+    );
+    expect(linkButton?.getAttribute("aria-label")).toBe("复制会话链接");
+    expect(linkButton?.getAttribute("title")).toBe("复制会话链接");
+
+    const findButton = document.querySelector<HTMLButtonElement>(
+      ".find-btn",
+    );
+    expect(findButton?.getAttribute("aria-label")).toBe("在会话中查找");
+    expect(findButton?.getAttribute("title")).toBe("在会话中查找 (/)");
+
+    const resumeButton = document.querySelector<HTMLButtonElement>(
+      ".resume-btn",
+    );
+    expect(resumeButton?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "继续",
+    );
+    resumeButton?.click();
+    await tick();
+
+    expect(document.body.textContent).toContain("默认终端");
+    expect(document.body.textContent).toContain("复制命令");
+    expect(document.body.textContent).toContain("复制目录路径");
+    expect(document.body.textContent).toContain("打开方式");
+    expect(document.body.textContent).toContain("VS Code");
+
+    const actionsButton = document.querySelector<HTMLButtonElement>(
+      ".actions-btn",
+    );
+    expect(actionsButton?.getAttribute("aria-label")).toBe("会话操作");
+    actionsButton?.click();
+    await tick();
+
+    expect(document.body.textContent).toContain("重命名");
+    expect(document.body.textContent).toContain("删除");
+
+    unmount(component);
+  });
+
   it("renders gemini with rose badge color", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,

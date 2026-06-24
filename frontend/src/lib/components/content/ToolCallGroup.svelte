@@ -16,6 +16,7 @@
   import CopyButton from "../shared/CopyButton.svelte";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { SettingsIcon } from "../../icons.js";
+  import { m, t } from "../../i18n/index.js";
 
   interface Props {
     messages: Message[];
@@ -51,7 +52,11 @@
   );
 
   let label = $derived(
-    totalCalls === 1 ? "1 tool call" : `${totalCalls} tool calls`,
+    totalCalls === 1
+      ? t(m.tool_call_group_call_count_singular)
+      : t(m.tool_call_group_call_count_plural, {
+          count: String(totalCalls),
+        }),
   );
 
   /** Index turn timings by message id for O(1) lookup. */
@@ -94,7 +99,9 @@
       const elapsed = Number.isNaN(startMs)
         ? 0
         : Math.max(0, liveTick.now - startMs);
-      return `running ${formatDuration(elapsed)}+`;
+      return t(m.tool_call_group_running_duration, {
+        duration: formatDuration(elapsed),
+      });
     }
     return undefined;
   }
@@ -128,10 +135,10 @@
     <span class="group-label">{label}</span>
     <CopyButton
       {copied}
-      ariaLabel="Copy tool calls"
-      copiedAriaLabel="Copied tool calls"
-      title="Copy tool calls"
-      copiedTitle="Copied!"
+      ariaLabel={t(m.tool_call_group_copy_tool_calls)}
+      copiedAriaLabel={t(m.tool_call_group_copied_tool_calls)}
+      title={t(m.tool_call_group_copy_tool_calls)}
+      copiedTitle={t(m.tool_call_group_copied)}
       onclick={handleCopy}
     />
     <span class="group-timestamp">

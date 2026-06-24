@@ -17,6 +17,7 @@
     ChevronRightIcon,
     ExternalLinkIcon,
   } from "../../icons.js";
+  import { m, t } from "../../i18n/index.js";
 
   interface Props {
     sessionId: string;
@@ -51,7 +52,9 @@
         messages = resp.messages;
         sessionMeta = meta;
       } catch (e) {
-        error = e instanceof Error ? e.message : "Failed to load";
+        error = e instanceof Error
+          ? e.message
+          : t(m.subagent_inline_failed_to_load);
       } finally {
         loading = false;
       }
@@ -66,7 +69,11 @@
 
   let agentLabel = $derived(sessionMeta?.agent ?? null);
   let messageCountLabel = $derived(
-    sessionMeta ? `${sessionMeta.message_count} messages` : null,
+    tokenSourceSession
+      ? t(m.subagent_inline_message_count, {
+          count: String(tokenSourceSession.message_count),
+        })
+      : null,
   );
   let subagentModel = $derived(
     messages && sessionMeta &&
@@ -104,7 +111,7 @@
       <span class="toggle-chevron" class:open={expanded}>
         <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
       </span>
-      <span class="toggle-label">Subagent session</span>
+      <span class="toggle-label">{t(m.subagent_inline_label)}</span>
       {#if agentLabel}
         <span class="toggle-meta">{agentLabel}</span>
       {/if}
@@ -125,9 +132,9 @@
       href={router.buildSessionHref(sessionId)}
       class="open-session-link"
       onclick={openAsSession}
-      title="Open as full session"
+      title={t(m.subagent_inline_open_as_full_session)}
     >
-      Open session
+      {t(m.subagent_inline_open_session)}
       <ExternalLinkIcon size="10" strokeWidth="2.2" aria-hidden="true" />
     </a>
   </div>
@@ -135,7 +142,7 @@
   {#if expanded}
     <div class="subagent-messages">
       {#if loading}
-        <div class="subagent-status">Loading...</div>
+        <div class="subagent-status">{t(m.subagent_inline_loading)}</div>
       {:else if error}
         <div class="subagent-status subagent-error">{error}</div>
       {:else if messages && messages.length > 0}
@@ -143,7 +150,7 @@
           <MessageContent {message} isSubagentContext={true} />
         {/each}
       {:else if messages}
-        <div class="subagent-status">No messages</div>
+        <div class="subagent-status">{t(m.subagent_inline_no_messages)}</div>
       {/if}
     </div>
   {/if}

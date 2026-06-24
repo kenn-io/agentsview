@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types.js";
+import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import SubagentInline from "./SubagentInline.svelte";
 
@@ -69,6 +70,7 @@ function makeSession(
 }
 
 afterEach(() => {
+  setLocale("en");
   childSessions.clear();
   getMessages.mockReset();
   getSession.mockReset();
@@ -76,6 +78,40 @@ afterEach(() => {
 });
 
 describe("SubagentInline", () => {
+  it("renders subagent controls in Simplified Chinese", async () => {
+    setLocale("zh-CN");
+    childSessions.set(
+      "subagent-session-id",
+      makeSession({ message_count: 2 }),
+    );
+    getMessages.mockResolvedValue({
+      messages: [],
+      count: 0,
+    });
+    getSession.mockResolvedValue(makeSession({ message_count: 2 }));
+
+    const component = mount(SubagentInline, {
+      target: document.body,
+      props: { sessionId: "subagent-session-id" },
+    });
+
+    await tick();
+    expect(document.body.textContent).toContain("Subagent 会话");
+    expect(document.body.textContent).toContain("2 条消息");
+    const openLink = document.querySelector<HTMLAnchorElement>(
+      ".open-session-link",
+    );
+    expect(openLink?.textContent).toContain("打开会话");
+    expect(openLink?.getAttribute("title")).toBe("作为完整会话打开");
+
+    document.querySelector<HTMLButtonElement>(".subagent-toggle")?.click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("无消息");
+    });
+
+    unmount(component);
+  });
+
   it("prefers fetched session metadata for the token summary when available", async () => {
     childSessions.set(
       "subagent-session-id",

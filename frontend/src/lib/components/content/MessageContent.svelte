@@ -30,6 +30,7 @@
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { PinIcon } from "../../icons.js";
   import type { Session } from "../../api/types.js";
+  import { m, t } from "../../i18n/index.js";
 
   interface Props {
     message: Message;
@@ -135,11 +136,11 @@
 
   /** Context-aware role labels based on session type. */
   let roleLabel = $derived.by(() => {
-    if (!isUser) return "Assistant";
-    if (isSubagentContext) return "Agent";
-    if (sessionKind === "teammate") return "Teammate";
-    if (sessionKind === "subagent") return "Agent";
-    return "User";
+    if (!isUser) return t(m.message_content_role_assistant);
+    if (isSubagentContext) return t(m.message_content_role_agent);
+    if (sessionKind === "teammate") return t(m.message_content_role_teammate);
+    if (sessionKind === "subagent") return t(m.message_content_role_agent);
+    return t(m.message_content_role_user);
   });
 
   let roleIcon = $derived.by(() => {
@@ -209,7 +210,9 @@
       const elapsed = Number.isNaN(startMs)
         ? 0
         : Math.max(0, liveTick.now - startMs);
-      return `running ${formatDuration(elapsed)}+`;
+      return t(m.message_content_running_duration, {
+        duration: formatDuration(elapsed),
+      });
     }
     return undefined;
   }
@@ -222,6 +225,12 @@
     return turn != null && turn.duration_ms == null;
   }
 
+  function callUnit(count: number): string {
+    return count === 1
+      ? t(m.message_content_call_singular)
+      : t(m.message_content_call_plural);
+  }
+
   /** Build the chip payload for an assistant turn. Returns null
    *  when the message has no tool calls or timing isn't loaded. */
   let turnSummary = $derived.by(() => {
@@ -230,7 +239,11 @@
     const turn = turnByMessage.get(message.id);
     if (turn?.duration_ms != null) {
       return {
-        text: `turn ${formatDuration(turn.duration_ms)} · ${calls} call${calls === 1 ? "" : "s"}`,
+        text: t(m.message_content_turn_summary, {
+          duration: formatDuration(turn.duration_ms),
+          count: String(calls),
+          unit: callUnit(calls),
+        }),
         slow: false,
         running: false,
       };
@@ -242,7 +255,11 @@
         ? 0
         : Math.max(0, liveTick.now - startMs);
       return {
-        text: `running ${formatDuration(elapsed)}+ · ${calls} call${calls === 1 ? "" : "s"}`,
+        text: t(m.message_content_running_turn_summary, {
+          duration: formatDuration(elapsed),
+          count: String(calls),
+          unit: callUnit(calls),
+        }),
         slow: false,
         running: true,
       };
@@ -271,7 +288,9 @@
         message.ordinal,
       );
       clearTimeout(pinTimer);
-      pinFeedback = wasPinned ? "Unpinned" : "Pinned";
+      pinFeedback = wasPinned
+        ? t(m.message_content_unpinned)
+        : t(m.message_content_pinned);
       pinTimer = setTimeout(() => { pinFeedback = ""; }, 1500);
     } catch {
       // silently fail
@@ -300,17 +319,19 @@
     </span>
     <CopyButton
       {copied}
-      ariaLabel="Copy message"
-      copiedAriaLabel="Copied message"
-      title="Copy message"
-      copiedTitle="Copied!"
+      ariaLabel={t(m.message_content_copy_message)}
+      copiedAriaLabel={t(m.message_content_copied_message)}
+      title={t(m.message_content_copy_message)}
+      copiedTitle={t(m.message_content_copied)}
       onclick={handleCopy}
     />
     <button
       type="button"
       class="pin-btn"
       class:pinned
-      title={pinned ? "Unpin message" : "Pin message"}
+      title={pinned
+        ? t(m.message_content_unpin_message)
+        : t(m.message_content_pin_message)}
       onclick={handleTogglePin}
     >
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
