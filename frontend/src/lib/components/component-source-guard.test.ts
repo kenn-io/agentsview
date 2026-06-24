@@ -40,6 +40,20 @@ function oneOffControlStyleOffenders(source: string): string[] {
   });
 }
 
+function accentFillForegroundOffenders(source: string): string[] {
+  return styleBlocks(source).flatMap((style) => {
+    return Array.from(style.matchAll(/([^{}]+)\{([^{}]*)\}/g)).flatMap((match) => {
+      const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
+      const block = match[2] ?? "";
+      const hasAccentFill = /background\s*:\s*var\(--accent-[a-z]+/.test(block);
+      const hasHardCodedWhite = /color\s*:\s*(?:white|#fff(?:fff)?)\b/i.test(block);
+      return hasAccentFill && hasHardCodedWhite
+        ? [`${selector}: hard-coded white foreground on accent fill`]
+        : [];
+    });
+  });
+}
+
 describe("component source guardrails", () => {
   it("keeps new native select controls out of component source", () => {
     const offenders = svelteFiles(componentsRoot)
@@ -59,6 +73,18 @@ describe("component source guardrails", () => {
         const rel = relative(componentsRoot, path);
         const source = readFileSync(path, "utf8");
         return oneOffControlStyleOffenders(source).map((reason) => `${rel}: ${reason}`);
+      })
+      .sort((a, b) => a.localeCompare(b));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps accent-filled component styles on foreground tokens", () => {
+    const offenders = svelteFiles(componentsRoot)
+      .flatMap((path) => {
+        const rel = relative(componentsRoot, path);
+        const source = readFileSync(path, "utf8");
+        return accentFillForegroundOffenders(source).map((reason) => `${rel}: ${reason}`);
       })
       .sort((a, b) => a.localeCompare(b));
 

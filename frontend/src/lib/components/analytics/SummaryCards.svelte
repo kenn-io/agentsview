@@ -156,6 +156,6 @@
 
   .retry-btn:hover {
     background: var(--accent-red);
-    color: #fff;
+    color: var(--accent-red-foreground);
   }
 </style>

@@ -1891,7 +1891,7 @@
     height: 30px;
     padding: 0 12px;
     background: var(--accent-purple);
-    color: white;
+    color: var(--accent-purple-foreground);
     border-radius: var(--radius-sm);
     font-size: 12px;
     font-weight: 700;

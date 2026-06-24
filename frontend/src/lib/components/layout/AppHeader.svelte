@@ -983,7 +983,7 @@
     height: 11px;
     border-radius: 50%;
     background: var(--accent-amber);
-    color: white;
+    color: var(--accent-amber-foreground);
     font-size: 7px;
     font-weight: 700;
     display: flex;
