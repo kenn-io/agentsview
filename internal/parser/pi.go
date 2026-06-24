@@ -214,12 +214,18 @@ func parsePiLikeSession(
 			}
 
 		case "compaction":
-			if entryID != "" {
-				visibleAncestorByID[entryID] = resolveVisibleAncestor(
-					parentID,
-				)
+			sourceParentUUID := resolveVisibleAncestor(parentID)
+			msg := parsePiCompactionMessage(
+				line, ordinal, entryID, sourceParentUUID,
+			)
+			if msg == nil {
+				continue
 			}
-			continue
+			messages = append(messages, *msg)
+			if entryID != "" {
+				visibleAncestorByID[entryID] = entryID
+			}
+			ordinal++
 
 		case "session_info":
 			if entryID != "" {
@@ -497,6 +503,26 @@ func parsePiToolResultMessage(
 				ContentRaw:    content.Raw,
 			},
 		},
+	}
+}
+
+func parsePiCompactionMessage(
+	line string, ordinal int, sourceUUID, sourceParentUUID string,
+) *ParsedMessage {
+	summary := gjson.Get(line, "summary").Str
+	ts := parseTimestamp(gjson.Get(line, "timestamp").Str)
+	return &ParsedMessage{
+		Ordinal:           ordinal,
+		Role:              RoleAssistant,
+		Content:           summary,
+		Timestamp:         ts,
+		IsSystem:          true,
+		ContentLength:     len(summary),
+		SourceType:        "system",
+		SourceSubtype:     "compact_boundary",
+		SourceUUID:        sourceUUID,
+		SourceParentUUID:  sourceParentUUID,
+		IsCompactBoundary: true,
 	}
 }
 

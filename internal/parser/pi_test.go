@@ -291,8 +291,8 @@ func TestParsePiSession_ThinkingBlocks(t *testing.T) {
 	})
 }
 
-// TestParsePiSession_UserMessageCount verifies that model_change and
-// compaction entries are skipped entirely and do not inflate user counts.
+// TestParsePiSession_UserMessageCount verifies that metadata entries do
+// not inflate user counts even when compactions persist as system rows.
 func TestParsePiSession_UserMessageCount(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
@@ -301,8 +301,8 @@ func TestParsePiSession_UserMessageCount(t *testing.T) {
 	sess, _, err := ParsePiSession(fixturePath, "", "local")
 	require.NoError(t, err)
 
-	// The fixture has 2 real user messages. model_change and compaction
-	// entries are skipped entirely and never enter the messages slice.
+	// The fixture has 2 real user messages. Metadata rows must not count
+	// as user messages.
 	assert.Equal(t, 2, sess.UserMessageCount,
 		"UserMessageCount must only count real user messages")
 }
@@ -410,29 +410,37 @@ func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
 	sess, msgs := runPiParserTest(t, content)
 
 	assert.Equal(t, "Checkpoint", sess.SessionName)
-	require.Len(t, msgs, 5)
+	require.Len(t, msgs, 6)
 
 	assert.Equal(t, "u1", msgs[0].SourceUUID)
 	assert.Empty(t, msgs[0].SourceParentUUID)
 	assert.Equal(t, "user", msgs[0].SourceType)
 
-	assert.Equal(t, "u2", msgs[1].SourceUUID)
+	assert.Equal(t, "cmp-1", msgs[1].SourceUUID)
 	assert.Equal(t, "u1", msgs[1].SourceParentUUID)
-	assert.Equal(t, "user", msgs[1].SourceType)
+	assert.Equal(t, "system", msgs[1].SourceType)
+	assert.Equal(t, "compact_boundary", msgs[1].SourceSubtype)
+	assert.True(t, msgs[1].IsSystem)
+	assert.True(t, msgs[1].IsCompactBoundary)
+	assert.Equal(t, "# compacted", msgs[1].Content)
 
-	assert.Equal(t, "a2", msgs[2].SourceUUID)
-	assert.Equal(t, "u2", msgs[2].SourceParentUUID)
-	assert.Equal(t, "assistant", msgs[2].SourceType)
+	assert.Equal(t, "u2", msgs[2].SourceUUID)
+	assert.Equal(t, "cmp-1", msgs[2].SourceParentUUID)
+	assert.Equal(t, "user", msgs[2].SourceType)
 
-	assert.Equal(t, "t1", msgs[3].SourceUUID)
-	assert.Equal(t, "a2", msgs[3].SourceParentUUID)
-	assert.Equal(t, "toolResult", msgs[3].SourceType)
-	require.Len(t, msgs[3].ToolResults, 1)
-	assert.Equal(t, "toolu_42", msgs[3].ToolResults[0].ToolUseID)
+	assert.Equal(t, "a2", msgs[3].SourceUUID)
+	assert.Equal(t, "u2", msgs[3].SourceParentUUID)
+	assert.Equal(t, "assistant", msgs[3].SourceType)
 
-	assert.Equal(t, "a3", msgs[4].SourceUUID)
+	assert.Equal(t, "t1", msgs[4].SourceUUID)
 	assert.Equal(t, "a2", msgs[4].SourceParentUUID)
-	assert.Equal(t, "assistant", msgs[4].SourceType)
+	assert.Equal(t, "toolResult", msgs[4].SourceType)
+	require.Len(t, msgs[4].ToolResults, 1)
+	assert.Equal(t, "toolu_42", msgs[4].ToolResults[0].ToolUseID)
+
+	assert.Equal(t, "a3", msgs[5].SourceUUID)
+	assert.Equal(t, "a2", msgs[5].SourceParentUUID)
+	assert.Equal(t, "assistant", msgs[5].SourceType)
 }
 
 // TestParsePiSession_IOError verifies that I/O errors encountered after the
