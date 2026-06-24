@@ -9,6 +9,7 @@ import (
 )
 
 func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
+	t.Parallel()
 	// SavingsVsUncached is computed per-model in the DB layer;
 	// computeCacheStats just forwards totals.CacheSavings. Verify the
 	// pass-through at the positive, negative, and zero boundaries so a
@@ -23,6 +24,7 @@ func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			cs := computeCacheStats(db.UsageTotals{CacheSavings: tc.in})
 			assert.InDelta(t, tc.in, cs.SavingsVsUncached, 1e-9)
 		})

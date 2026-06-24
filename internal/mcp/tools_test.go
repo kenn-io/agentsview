@@ -216,6 +216,104 @@ func TestUsageSummary_EmptyRange(t *testing.T) {
 	assert.Equal(t, "2024-06-03", out.To)
 }
 
+// recordingService captures the request a tool builds, so MCP-layer
+// request mapping can be asserted without a full backend. Unused methods
+// fall through to the embedded nil interface (never called by the tools
+// under test).
+type recordingService struct {
+	service.SessionService
+	lastUsage service.UsageRequest
+}
+
+func (r *recordingService) UsageSummary(
+	_ context.Context, req service.UsageRequest,
+) (*service.UsageSummaryResult, error) {
+	r.lastUsage = req
+	return &service.UsageSummaryResult{From: req.From, To: req.To}, nil
+}
+
+// get_usage_summary must request one-shot sessions (matching the REST
+// /usage/summary default), since cost analysis wants every session.
+func TestUsageSummary_RequestsOneShotSessions(t *testing.T) {
+	t.Parallel()
+	rec := &recordingService{}
+	ts := &toolset{svc: rec, now: func() time.Time { return fixedNow }}
+	_, _, err := ts.usageSummary(context.Background(), nil, usageSummaryIn{
+		From: "2024-06-01", To: "2024-06-02", Project: "p", Agent: "claude",
+	})
+	require.NoError(t, err)
+	assert.True(t, rec.lastUsage.IncludeOneShot,
+		"usage summary should include one-shot sessions")
+	assert.Equal(t, "p", rec.lastUsage.Project)
+	assert.Equal(t, "claude", rec.lastUsage.Agent)
+}
+
+// search_content excludes one-shot sessions by default, matching the
+// standalone/REST behavior. (Tracked as a possible follow-up: expose an
+// include_one_shot opt-in so single-exchange sessions can be searched.)
+func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
+	ts, d := newTestToolset(t)
+	// One-shot (UserMessageCount=1) with the marker.
+	dbtest.SeedSession(t, d, "one", "proj", func(s *db.Session) {
+		s.MessageCount = 1
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("one", 0, "marker ZEBRA42"),
+	}))
+	// Multi-turn with the same marker.
+	dbtest.SeedSession(t, d, "multi", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("multi", 0, "marker ZEBRA42"),
+		dbtest.AsstMsg("multi", 1, "ok"),
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "ZEBRA42", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1, "one-shot session should be excluded")
+	assert.Equal(t, "multi", out.Matches[0].SessionID)
+}
+
+func TestGetMessages_DescAndFromAnchor(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 3
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		dbtest.AsstMsg("s1", 1, "m1"),
+		dbtest.UserMsg("s1", 2, "m2"),
+		dbtest.AsstMsg("s1", 3, "m3"),
+		dbtest.UserMsg("s1", 4, "m4"),
+	}))
+
+	// desc with no anchor -> newest first.
+	_, desc, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "desc",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, desc.Messages)
+	assert.Equal(t, 4, desc.Messages[0].Ordinal, "desc returns newest first")
+
+	// asc anchored at ordinal 2 -> starts at 2, ascending.
+	from := 2
+	_, asc, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "asc", From: from,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, asc.Messages)
+	assert.Equal(t, 2, asc.Messages[0].Ordinal, "asc honors the from anchor")
+	for i := 1; i < len(asc.Messages); i++ {
+		assert.Less(t, asc.Messages[i-1].Ordinal, asc.Messages[i].Ordinal)
+	}
+}
+
 // TestServer_EndToEnd connects a real MCP client to the server over an
 // in-memory transport and calls a tool, validating registration, schema
 // inference, and the structured-output round-trip through the SDK.

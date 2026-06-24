@@ -89,7 +89,7 @@ func TestServeStdio_ClientDisconnectIsClean(t *testing.T) {
 `
 	// Retry to exercise both the nil and the "server is closing" race
 	// outcomes; both must be recognized as clean.
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		srv := newServer(ServeOptions{
 			Service: service.NewDirectBackend(d, nil),
 			Now:     func() time.Time { return fixedNow },
@@ -107,5 +107,26 @@ func TestServeStdio_ClientDisconnectIsClean(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("server did not return after client disconnect")
 		}
+	}
+}
+
+// TestServeHTTP_ShutsDownOnContextCancel verifies the StreamableHTTP
+// serve path tears down gracefully when its context is cancelled,
+// returning context.Canceled (which the command treats as a clean exit).
+func TestServeHTTP_ShutsDownOnContextCancel(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- ServeHTTP(ctx, ServeOptions{
+			Service: service.NewDirectBackend(d, nil),
+		}, "127.0.0.1:0")
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, context.Canceled)
+	case <-time.After(10 * time.Second):
+		t.Fatal("ServeHTTP did not return after context cancel")
 	}
 }

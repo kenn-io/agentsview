@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -111,6 +112,31 @@ func TestHTTPBackend_Search_Roundtrip(t *testing.T) {
 	require.NotNil(t, res)
 	require.Len(t, res.Results, 1)
 	assert.Equal(t, "s1", res.Results[0].SessionID)
+}
+
+// The HTTP backend must forward all search params to the daemon's
+// /api/v1/search endpoint with the expected query-key names.
+func TestHTTPBackend_Search_SendsParams(t *testing.T) {
+	t.Parallel()
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			got = r.URL.Query()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"results":[],"next":0}`))
+		}))
+	t.Cleanup(srv.Close)
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+
+	_, err := svc.Search(context.Background(), service.SearchRequest{
+		Query: "needle", Project: "proj", Sort: "recency", Cursor: 7, Limit: 5,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "needle", got.Get("q"))
+	assert.Equal(t, "proj", got.Get("project"))
+	assert.Equal(t, "recency", got.Get("sort"))
+	assert.Equal(t, "7", got.Get("cursor"))
+	assert.Equal(t, "5", got.Get("limit"))
 }
 
 // A daemon without an FTS index responds 501; the HTTP backend maps that

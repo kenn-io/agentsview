@@ -122,16 +122,19 @@ func ServeStdio(ctx context.Context, opts ServeOptions) error {
 
 // isCleanStdioShutdown reports whether a Run error represents the normal
 // end of a stdio session (client disconnect or signal) rather than a
-// failure. When stdin closes while requests are in flight, the SDK
-// surfaces the internal jsonrpc2 "server is closing" wire error, which it
-// neither exports nor wraps in an errors.Is-traversable way - so that one
-// case is matched on its stable message. A stdio MCP server that loses
-// its client has simply finished its job.
+// failure. A stdio MCP server that loses its client has simply finished
+// its job. When stdin closes while requests are in flight, the SDK
+// surfaces the internal jsonrpc2 "server is closing" wire error: it is
+// not the exported mcp.ErrConnectionClosed and does not wrap io.EOF in an
+// errors.Is-traversable way, so that specific case is matched on its
+// stable message as a last resort.
 func isCleanStdioShutdown(err error) bool {
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
+	if errors.Is(err, context.Canceled) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, mcp.ErrConnectionClosed) {
 		return true
 	}
 	msg := err.Error()
