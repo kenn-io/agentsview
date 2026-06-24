@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { fireEvent, render } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import ConcurrencyTimeline from "./ConcurrencyTimeline.svelte";
@@ -14,11 +14,56 @@ function makeReport(overrides: Partial<Report> = {}): Report {
   // idx 2 (peak 3) carries a mixed split (2 interactive / 1 automated) for the
   // stacking and split-tooltip tests; idx 3 (peak 1) is all-interactive.
   const buckets = [
-    { start: "2026-06-16T00:00:00Z", end: "2026-06-16T03:00:00Z", max_agents: 0, agent_minutes: 0, output_tokens: 0, cost: 0, interactive_at_peak: 0, automated_at_peak: 0 },
-    { start: "2026-06-16T03:00:00Z", end: "2026-06-16T06:00:00Z", max_agents: 2, agent_minutes: 12, output_tokens: 4000, cost: 0.4, interactive_at_peak: 1, automated_at_peak: 1 },
-    { start: "2026-06-16T06:00:00Z", end: "2026-06-16T09:00:00Z", max_agents: 3, agent_minutes: 30, output_tokens: 9000, cost: 0.9, interactive_at_peak: 2, automated_at_peak: 1 },
-    { start: "2026-06-16T09:00:00Z", end: "2026-06-16T12:00:00Z", max_agents: 1, agent_minutes: 8, output_tokens: 2000, cost: 0.2, interactive_at_peak: 1, automated_at_peak: 0 },
-    { start: "2026-06-16T12:00:00Z", end: "2026-06-16T15:00:00Z", max_agents: 0, agent_minutes: 0, output_tokens: 0, cost: 0, interactive_at_peak: 0, automated_at_peak: 0 },
+    {
+      start: "2026-06-16T00:00:00Z",
+      end: "2026-06-16T03:00:00Z",
+      max_agents: 0,
+      agent_minutes: 0,
+      output_tokens: 0,
+      cost: 0,
+      interactive_at_peak: 0,
+      automated_at_peak: 0,
+    },
+    {
+      start: "2026-06-16T03:00:00Z",
+      end: "2026-06-16T06:00:00Z",
+      max_agents: 2,
+      agent_minutes: 12,
+      output_tokens: 4000,
+      cost: 0.4,
+      interactive_at_peak: 1,
+      automated_at_peak: 1,
+    },
+    {
+      start: "2026-06-16T06:00:00Z",
+      end: "2026-06-16T09:00:00Z",
+      max_agents: 3,
+      agent_minutes: 30,
+      output_tokens: 9000,
+      cost: 0.9,
+      interactive_at_peak: 2,
+      automated_at_peak: 1,
+    },
+    {
+      start: "2026-06-16T09:00:00Z",
+      end: "2026-06-16T12:00:00Z",
+      max_agents: 1,
+      agent_minutes: 8,
+      output_tokens: 2000,
+      cost: 0.2,
+      interactive_at_peak: 1,
+      automated_at_peak: 0,
+    },
+    {
+      start: "2026-06-16T12:00:00Z",
+      end: "2026-06-16T15:00:00Z",
+      max_agents: 0,
+      agent_minutes: 0,
+      output_tokens: 0,
+      cost: 0,
+      interactive_at_peak: 0,
+      automated_at_peak: 0,
+    },
   ];
   const report = {
     peak: { agents: 3, at: "2026-06-16T06:00:00Z" },
@@ -71,15 +116,44 @@ function popoverReport(): Report {
     bucket_count: 2,
     elapsed_bucket_count: 1,
     buckets: [
-      { start: "2026-06-16T10:00:00Z", end: "2026-06-16T10:05:00Z", max_agents: 2, agent_minutes: 4, output_tokens: 0, cost: 0 },
+      {
+        start: "2026-06-16T10:00:00Z",
+        end: "2026-06-16T10:05:00Z",
+        max_agents: 2,
+        agent_minutes: 4,
+        output_tokens: 0,
+        cost: 0,
+      },
     ],
     by_session: [
-      { session_id: "a", title: "Alpha", project: "p", agent: "claude", primary_model: "m",
-        models: ["m"], agent_minutes: 2, cost: 0, output_tokens: 0,
-        first_active: "2026-06-16T10:00:00Z", last_active: "2026-06-16T10:02:00Z", timing_quality: "timed" },
-      { session_id: "b", title: "Beta", project: "p", agent: "claude", primary_model: "m",
-        models: ["m"], agent_minutes: 2, cost: 0, output_tokens: 0,
-        first_active: "2026-06-16T10:01:00Z", last_active: "2026-06-16T10:03:00Z", timing_quality: "timed" },
+      {
+        session_id: "a",
+        title: "Alpha",
+        project: "p",
+        agent: "claude",
+        primary_model: "m",
+        models: ["m"],
+        agent_minutes: 2,
+        cost: 0,
+        output_tokens: 0,
+        first_active: "2026-06-16T10:00:00Z",
+        last_active: "2026-06-16T10:02:00Z",
+        timing_quality: "timed",
+      },
+      {
+        session_id: "b",
+        title: "Beta",
+        project: "p",
+        agent: "claude",
+        primary_model: "m",
+        models: ["m"],
+        agent_minutes: 2,
+        cost: 0,
+        output_tokens: 0,
+        first_active: "2026-06-16T10:01:00Z",
+        last_active: "2026-06-16T10:03:00Z",
+        timing_quality: "timed",
+      },
     ] as Report["by_session"],
     intervals: [
       { session_id: "a", start: "2026-06-16T10:00:00Z", end: "2026-06-16T10:01:00Z" },
@@ -100,12 +174,47 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
     elapsed_bucket_count: 3,
     effective_end: "2026-06-16T00:15:00Z",
     buckets: [
-      { start: "2026-06-16T00:00:00Z", end: "2026-06-16T00:05:00Z", max_agents: 1, agent_minutes: 5, output_tokens: 10, cost: 0 },
-      { start: "2026-06-16T00:05:00Z", end: "2026-06-16T00:10:00Z", max_agents: 2, agent_minutes: 5, output_tokens: 20, cost: 0 },
-      { start: "2026-06-16T00:10:00Z", end: "2026-06-16T00:15:00Z", max_agents: 1, agent_minutes: 5, output_tokens: 5, cost: 0 },
+      {
+        start: "2026-06-16T00:00:00Z",
+        end: "2026-06-16T00:05:00Z",
+        max_agents: 1,
+        agent_minutes: 5,
+        output_tokens: 10,
+        cost: 0,
+      },
+      {
+        start: "2026-06-16T00:05:00Z",
+        end: "2026-06-16T00:10:00Z",
+        max_agents: 2,
+        agent_minutes: 5,
+        output_tokens: 20,
+        cost: 0,
+      },
+      {
+        start: "2026-06-16T00:10:00Z",
+        end: "2026-06-16T00:15:00Z",
+        max_agents: 1,
+        agent_minutes: 5,
+        output_tokens: 5,
+        cost: 0,
+      },
     ] as Report["buckets"],
     ...overrides,
   });
+}
+
+async function chooseOverlayMetric(target: HTMLElement, label: string) {
+  const trigger = target.querySelector<HTMLButtonElement>(".overlay-toggle .typeahead-trigger");
+  expect(trigger).toBeTruthy();
+  await fireEvent.click(trigger!);
+  await tick();
+
+  const option = Array.from(
+    target.querySelectorAll<HTMLElement>(".overlay-toggle .typeahead-option"),
+  ).find((el) => el.textContent?.trim() === label);
+  expect(option).toBeTruthy();
+  await fireEvent.mouseDown(option!);
+  await tick();
 }
 
 describe("ConcurrencyTimeline", () => {
@@ -157,9 +266,7 @@ describe("ConcurrencyTimeline", () => {
     const interactive = document.querySelectorAll(
       ".concurrency-seg.interactive",
     )[2] as SVGRectElement;
-    const automated = document.querySelectorAll(
-      ".concurrency-seg.automated",
-    )[2] as SVGRectElement;
+    const automated = document.querySelectorAll(".concurrency-seg.automated")[2] as SVGRectElement;
     const h = (el: SVGRectElement) => Number(el.getAttribute("height"));
     const y = (el: SVGRectElement) => Number(el.getAttribute("y"));
     // The automated cap has real height and sits above (smaller y) the taller
@@ -297,8 +404,9 @@ describe("ConcurrencyTimeline", () => {
       props: { report: popoverReport(), onSelectBucket },
     });
     await tick();
-    (target.querySelector(".slot-hit") as SVGRectElement)
-      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    (target.querySelector(".slot-hit") as SVGRectElement).dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     await tick();
     // 3 intervals, "a" deduped to one row, sorted by earliest overlap then id.
     expect(onSelectBucket).toHaveBeenCalledWith(
@@ -315,8 +423,22 @@ describe("ConcurrencyTimeline", () => {
       bucket_count: 3,
       elapsed_bucket_count: 2,
       buckets: [
-        { start: "2026-06-16T10:00:00Z", end: "2026-06-16T10:05:00Z", max_agents: 1, agent_minutes: 1, output_tokens: 0, cost: 0 },
-        { start: "2026-06-16T10:05:00Z", end: "2026-06-16T10:10:00Z", max_agents: 0, agent_minutes: 0, output_tokens: 0, cost: 0 },
+        {
+          start: "2026-06-16T10:00:00Z",
+          end: "2026-06-16T10:05:00Z",
+          max_agents: 1,
+          agent_minutes: 1,
+          output_tokens: 0,
+          cost: 0,
+        },
+        {
+          start: "2026-06-16T10:05:00Z",
+          end: "2026-06-16T10:10:00Z",
+          max_agents: 0,
+          agent_minutes: 0,
+          output_tokens: 0,
+          cost: 0,
+        },
       ],
       by_session: [] as Report["by_session"],
       intervals: [] as Report["intervals"],
@@ -350,8 +472,9 @@ describe("ConcurrencyTimeline", () => {
       props: { report: popoverReport(), selectedBucket: 0, onSelectBucket },
     });
     await tick();
-    (target.querySelector(".slot-hit") as SVGRectElement)
-      .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    (target.querySelector(".slot-hit") as SVGRectElement).dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     await tick();
     expect(onSelectBucket).toHaveBeenCalledWith(null);
     unmount(c);
@@ -370,9 +493,7 @@ describe("ConcurrencyTimeline", () => {
     const hit = target.querySelector(".slot-hit") as SVGRectElement;
     hit.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await tick();
-    expect(onSelectBucket).toHaveBeenCalledWith(
-      expect.objectContaining({ idx: 0 }),
-    );
+    expect(onSelectBucket).toHaveBeenCalledWith(expect.objectContaining({ idx: 0 }));
     unmount(c);
     target.remove();
   });
@@ -419,8 +540,22 @@ describe("ConcurrencyTimeline", () => {
       elapsed_bucket_count: 2,
       effective_end: "2026-06-17T00:00:00Z",
       buckets: [
-        { start: "2026-06-15T00:00:00Z", end: "2026-06-16T00:00:00Z", max_agents: 1, agent_minutes: 10, output_tokens: 1, cost: 0 },
-        { start: "2026-06-16T00:00:00Z", end: "2026-06-17T00:00:00Z", max_agents: 1, agent_minutes: 10, output_tokens: 1, cost: 0 },
+        {
+          start: "2026-06-15T00:00:00Z",
+          end: "2026-06-16T00:00:00Z",
+          max_agents: 1,
+          agent_minutes: 10,
+          output_tokens: 1,
+          cost: 0,
+        },
+        {
+          start: "2026-06-16T00:00:00Z",
+          end: "2026-06-17T00:00:00Z",
+          max_agents: 1,
+          agent_minutes: 10,
+          output_tokens: 1,
+          cost: 0,
+        },
       ] as Report["buckets"],
     });
     render(ConcurrencyTimeline, { report: r });
@@ -440,7 +575,14 @@ describe("ConcurrencyTimeline", () => {
       elapsed_bucket_count: 1,
       effective_end: "2026-06-22T00:00:00Z",
       buckets: [
-        { start: "2026-06-15T00:00:00Z", end: "2026-06-22T00:00:00Z", max_agents: 2, agent_minutes: 20, output_tokens: 100, cost: 0 },
+        {
+          start: "2026-06-15T00:00:00Z",
+          end: "2026-06-22T00:00:00Z",
+          max_agents: 2,
+          agent_minutes: 20,
+          output_tokens: 100,
+          cost: 0,
+        },
       ] as Report["buckets"],
     });
     const target = document.createElement("div");
@@ -461,9 +603,9 @@ describe("ConcurrencyTimeline", () => {
 
   it("labels minute-unit ticks with real local times", () => {
     render(ConcurrencyTimeline, { report: minuteReport() });
-    const labels = Array.from(
-      document.querySelectorAll("text.x-label"),
-    ).map((el) => el.textContent?.trim() ?? "");
+    const labels = Array.from(document.querySelectorAll("text.x-label")).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
     expect(labels.length).toBeGreaterThan(0);
     // Every label is HH:MM, and a sub-hour range yields non-:00 minutes
     // rather than the old hardcoded 00/06/12/18/24 hour marks.
@@ -478,13 +620,7 @@ describe("ConcurrencyTimeline", () => {
     await tick();
     // Default metric is "none": no overlay line.
     expect(target.querySelector(".overlay-line")).toBeNull();
-    const select = target.querySelector(
-      ".overlay-toggle select",
-    ) as HTMLSelectElement;
-    expect(select).toBeTruthy();
-    select.value = "cost";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
+    await chooseOverlayMetric(target, "Cost");
     expect(target.querySelector(".overlay-line")).toBeTruthy();
     unmount(c);
     target.remove();
@@ -496,26 +632,19 @@ describe("ConcurrencyTimeline", () => {
     const c = mount(ConcurrencyTimeline, { target, props: { report: makeReport() } });
     await tick();
 
-    const select = target.querySelector(
-      ".overlay-toggle select",
-    ) as HTMLSelectElement;
-    select.value = "cost";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
+    await chooseOverlayMetric(target, "Cost");
 
-    const labels = Array.from(
-      target.querySelectorAll("text.overlay-y-label"),
-    ).map((el) => el.textContent?.trim() ?? "");
+    const labels = Array.from(target.querySelectorAll("text.overlay-y-label")).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
     expect(labels).toContain("$0.90");
     expect(labels).toContain("$0.00");
 
-    select.value = "tokens";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    await tick();
+    await chooseOverlayMetric(target, "Tokens");
 
-    const tokenLabels = Array.from(
-      target.querySelectorAll("text.overlay-y-label"),
-    ).map((el) => el.textContent?.trim() ?? "");
+    const tokenLabels = Array.from(target.querySelectorAll("text.overlay-y-label")).map(
+      (el) => el.textContent?.trim() ?? "",
+    );
     expect(tokenLabels).toContain("9k");
 
     unmount(c);

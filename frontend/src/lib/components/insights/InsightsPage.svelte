@@ -1274,17 +1274,6 @@
     max-width: 720px;
   }
 
-  .agent-select {
-    height: 28px;
-    min-width: 112px;
-    border: 1px solid var(--border-muted);
-    background: var(--bg-inset);
-    border-radius: var(--radius-sm);
-    color: var(--text-secondary);
-    padding: 0 6px;
-    font-size: 12px;
-  }
-
   .toolbar-scope {
     display: flex;
     align-items: center;

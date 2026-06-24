@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 import { tick } from "svelte";
 
@@ -29,8 +29,10 @@ vi.mock("../../stores/sync.svelte.js", () => ({
 }));
 vi.mock("../../stores/insights.svelte.js", () => ({
   insights: {
-    setType: mocks.setType, setDateFrom: mocks.setDateFrom,
-    setDateTo: mocks.setDateTo, setProject: mocks.setProject,
+    setType: mocks.setType,
+    setDateFrom: mocks.setDateFrom,
+    setDateTo: mocks.setDateTo,
+    setProject: mocks.setProject,
     setAgent: mocks.setAgent,
     get agent() {
       return mocks.agent;
@@ -62,15 +64,28 @@ describe("ActivityInsight", () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
     expect(mocks.getInsights).toHaveBeenCalledWith({
-      type: "daily_activity", dateFrom: "2026-06-15", dateTo: "2026-06-21",
+      type: "daily_activity",
+      dateFrom: "2026-06-15",
+      dateTo: "2026-06-21",
     });
   });
 
   it("ignores project-scoped insights and shows the empty state", async () => {
     mocks.getInsights.mockResolvedValue({
-      insights: [{ id: 1, project: "p1", content: "scoped", type: "daily_activity",
-        date_from: "2026-06-15", date_to: "2026-06-21", agent: "claude",
-        model: null, prompt: null, created_at: "2026-06-21T00:00:00Z" }],
+      insights: [
+        {
+          id: 1,
+          project: "p1",
+          content: "scoped",
+          type: "daily_activity",
+          date_from: "2026-06-15",
+          date_to: "2026-06-21",
+          agent: "claude",
+          model: null,
+          prompt: null,
+          created_at: "2026-06-21T00:00:00Z",
+        },
+      ],
     });
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
@@ -84,7 +99,10 @@ describe("ActivityInsight", () => {
     await fireEvent.click(screen.getByRole("button", { name: /generate/i }));
     expect(mocks.generateInsight).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: "daily_activity", date_from: "2026-06-15", date_to: "2026-06-21", agent: "claude",
+        type: "daily_activity",
+        date_from: "2026-06-15",
+        date_to: "2026-06-21",
+        agent: "claude",
       }),
       expect.any(Function),
     );
@@ -93,9 +111,10 @@ describe("ActivityInsight", () => {
   it("lets the user choose the insight agent", async () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
-    const select = screen.getByLabelText(/insight agent/i) as HTMLSelectElement;
-    expect(select.value).toBe("claude");
-    await fireEvent.change(select, { target: { value: "codex" } });
+    const trigger = screen.getByLabelText(/insight agent/i);
+    expect(trigger.textContent).toContain("Claude");
+    await fireEvent.click(trigger);
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "Codex" }));
     expect(mocks.setAgent).toHaveBeenCalledWith("codex");
   });
 
@@ -124,7 +143,8 @@ describe("ActivityInsight", () => {
       }),
     });
     const { rerender } = render(ActivityInsight, {
-      dateFrom: "2026-06-15", dateTo: "2026-06-21",
+      dateFrom: "2026-06-15",
+      dateTo: "2026-06-21",
     });
     await settle();
 
@@ -139,9 +159,16 @@ describe("ActivityInsight", () => {
 
     // The aborted generation settles late; its result must not reach the panel.
     resolveStale({
-      id: 99, project: null, content: "STALE RESULT", type: "daily_activity",
-      date_from: "2026-06-15", date_to: "2026-06-21", agent: "claude",
-      model: null, prompt: null, created_at: "2026-06-21T00:00:00Z",
+      id: 99,
+      project: null,
+      content: "STALE RESULT",
+      type: "daily_activity",
+      date_from: "2026-06-15",
+      date_to: "2026-06-21",
+      agent: "claude",
+      model: null,
+      prompt: null,
+      created_at: "2026-06-21T00:00:00Z",
     });
     await settle();
 
@@ -172,14 +199,28 @@ describe("ActivityInsight", () => {
     mocks.getInsights.mockResolvedValue({
       insights: [
         {
-          id: 3, project: null, content: "SINGLE DAY", type: "daily_activity",
-          date_from: "2026-06-15", date_to: "2026-06-15", agent: "claude",
-          model: null, prompt: null, created_at: "2026-06-22T00:00:00Z",
+          id: 3,
+          project: null,
+          content: "SINGLE DAY",
+          type: "daily_activity",
+          date_from: "2026-06-15",
+          date_to: "2026-06-15",
+          agent: "claude",
+          model: null,
+          prompt: null,
+          created_at: "2026-06-22T00:00:00Z",
         },
         {
-          id: 2, project: null, content: "WEEKLY ROLLUP", type: "daily_activity",
-          date_from: "2026-06-15", date_to: "2026-06-21", agent: "claude",
-          model: null, prompt: null, created_at: "2026-06-21T00:00:00Z",
+          id: 2,
+          project: null,
+          content: "WEEKLY ROLLUP",
+          type: "daily_activity",
+          date_from: "2026-06-15",
+          date_to: "2026-06-21",
+          agent: "claude",
+          model: null,
+          prompt: null,
+          created_at: "2026-06-21T00:00:00Z",
         },
       ],
     });
@@ -194,9 +235,15 @@ describe("ActivityInsight", () => {
     mocks.getInsights.mockResolvedValue({
       insights: [
         {
-          id: 5, project: null, content: "summary", type: "daily_activity",
-          date_from: "2026-06-15", date_to: "2026-06-21", agent: "claude",
-          model: "claude-sonnet-4.5", prompt: null,
+          id: 5,
+          project: null,
+          content: "summary",
+          type: "daily_activity",
+          date_from: "2026-06-15",
+          date_to: "2026-06-21",
+          agent: "claude",
+          model: "claude-sonnet-4.5",
+          prompt: null,
           created_at: "2026-06-21T00:00:00Z",
         },
       ],
@@ -211,15 +258,23 @@ describe("ActivityInsight", () => {
       .mockResolvedValueOnce({
         insights: [
           {
-            id: 9, project: null, content: "A", type: "daily_activity",
-            date_from: "2026-06-01", date_to: "2026-06-07", agent: "claude",
-            model: "model-A", prompt: null, created_at: "2026-06-07T00:00:00Z",
+            id: 9,
+            project: null,
+            content: "A",
+            type: "daily_activity",
+            date_from: "2026-06-01",
+            date_to: "2026-06-07",
+            agent: "claude",
+            model: "model-A",
+            prompt: null,
+            created_at: "2026-06-07T00:00:00Z",
           },
         ],
       })
       .mockReturnValueOnce(new Promise(() => {})); // second range stays pending
     const { rerender } = render(ActivityInsight, {
-      dateFrom: "2026-06-01", dateTo: "2026-06-07",
+      dateFrom: "2026-06-01",
+      dateTo: "2026-06-07",
     });
     await settle();
     expect(document.body.textContent).toContain("model-A");

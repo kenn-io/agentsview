@@ -12,6 +12,9 @@
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { Insight, InsightsResponse, AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
+  import OptionTypeahead, {
+    type TypeaheadOption,
+  } from "../layout/OptionTypeahead.svelte";
 
   let {
     dateFrom,
@@ -62,6 +65,13 @@
         ? "Waiting for server version"
         : "Generate insight",
   );
+  const agentOptions: TypeaheadOption[] = [
+    { name: "claude", label: "Claude", displayLabel: "Claude" },
+    { name: "codex", label: "Codex", displayLabel: "Codex" },
+    { name: "copilot", label: "Copilot", displayLabel: "Copilot" },
+    { name: "gemini", label: "Gemini", displayLabel: "Gemini" },
+    { name: "kiro", label: "Kiro", displayLabel: "Kiro" },
+  ];
 
   function abortGeneration() {
     handle?.abort();
@@ -111,8 +121,8 @@
 
   // The agent choice is shared with the standalone Insights page via the
   // insights store, so picking one here and there stays in sync.
-  function onAgentChange(e: Event) {
-    insights.setAgent((e.currentTarget as HTMLSelectElement).value as AgentName);
+  function onAgentChange(value: string) {
+    insights.setAgent(value as AgentName);
   }
 
   function handleGenerate() {
@@ -175,20 +185,18 @@
   </header>
 
   {#snippet agentPicker()}
-    <select
-      class="agent-select"
-      value={insights.agent}
-      onchange={onAgentChange}
-      disabled={generationUnavailable}
-      title="Agent CLI used to generate the insight"
-      aria-label="Insight agent"
-    >
-      <option value="claude">Claude</option>
-      <option value="codex">Codex</option>
-      <option value="copilot">Copilot</option>
-      <option value="gemini">Gemini</option>
-      <option value="kiro">Kiro</option>
-    </select>
+    <div class="agent-typeahead">
+      <OptionTypeahead
+        options={agentOptions}
+        value={insights.agent}
+        disabled={generationUnavailable}
+        title="Agent CLI used to generate the insight"
+        fallbackLabel={insights.agent}
+        placeholder="Insight agent"
+        emptyLabel="No matching agents"
+        onselect={onAgentChange}
+      />
+    </div>
   {/snippet}
 
   {#if loading}
@@ -331,26 +339,11 @@
     gap: 8px;
   }
 
-  .agent-select {
-    height: 28px;
-    padding: 0 6px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: border-color 0.15s;
-  }
-
-  .agent-select:focus {
-    outline: none;
-    border-color: var(--accent-blue);
-  }
-
-  .agent-select:disabled {
-    opacity: 0.45;
-    cursor: default;
+  .agent-typeahead {
+    --typeahead-min-width: 96px;
+    --typeahead-max-width: 112px;
+    --typeahead-control-height: 28px;
+    --typeahead-control-padding: 0 6px;
   }
 
   .generate-btn {

@@ -1,6 +1,9 @@
 <script lang="ts">
   import type { Report } from "../../api/types.js";
   import { activeSessionsInSlot } from "./activeSessions.js";
+  import OptionTypeahead, {
+    type TypeaheadOption,
+  } from "../layout/OptionTypeahead.svelte";
   import type {
     ActivityBucket,
     ActivityReportInterval,
@@ -173,6 +176,11 @@
   // cost. Each metric scales to its own max so the line reads as a shape over
   // the concurrency bars, not an absolute count on the agent axis.
   let overlayMetric = $state<"none" | "tokens" | "cost">("none");
+  const overlayOptions: TypeaheadOption[] = [
+    { name: "none", label: "None", displayLabel: "None" },
+    { name: "tokens", label: "Tokens", displayLabel: "Tokens" },
+    { name: "cost", label: "Cost", displayLabel: "Cost" },
+  ];
 
   function bucketOverlayValue(b: ActivityBucket): number {
     return overlayMetric === "cost" ? b.cost : b.output_tokens;
@@ -432,6 +440,10 @@
   const svgW = $derived(plotWidth + Y_LABEL_W + rightAxisW);
   const svgH = $derived(CHART_H + STRIP_GAP + STRIP_H + X_LABEL_H);
   const stripY = $derived(CHART_H + STRIP_GAP);
+
+  function setOverlayMetric(value: string) {
+    overlayMetric = value as "none" | "tokens" | "cost";
+  }
 </script>
 
 <div class="timeline">
@@ -446,14 +458,18 @@
           <span class="swatch automated"></span>Automated
         </span>
       </div>
-      <label class="overlay-toggle">
+      <div class="overlay-toggle">
         <span>Overlay</span>
-        <select bind:value={overlayMetric} aria-label="Concurrency overlay metric">
-          <option value="none">None</option>
-          <option value="tokens">Tokens</option>
-          <option value="cost">Cost</option>
-        </select>
-      </label>
+        <OptionTypeahead
+          options={overlayOptions}
+          value={overlayMetric}
+          fallbackLabel="None"
+          placeholder="Overlay metric"
+          title="Concurrency overlay metric"
+          emptyLabel="No metrics"
+          onselect={setOverlayMetric}
+        />
+      </div>
     </div>
   </div>
 
@@ -674,18 +690,14 @@
     gap: 4px;
     font-size: 10px;
     color: var(--text-muted);
-    cursor: pointer;
   }
 
-  .overlay-toggle select {
-    height: 20px;
-    padding: 0 4px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    font-size: 10px;
-    color: var(--text-secondary);
-    cursor: pointer;
+  .overlay-toggle :global(.typeahead) {
+    --typeahead-min-width: 86px;
+    --typeahead-max-width: 96px;
+    --typeahead-control-height: 22px;
+    --typeahead-control-padding: 0 6px;
+    --typeahead-control-font-size: 10px;
   }
 
   .timeline-body {

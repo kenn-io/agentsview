@@ -15,6 +15,7 @@
     placeholder: string;
     title: string;
     emptyLabel: string;
+    disabled?: boolean;
     onselect: (value: string) => void;
   }
 
@@ -25,6 +26,7 @@
     placeholder,
     title,
     emptyLabel,
+    disabled = false,
     onselect,
   }: Props = $props();
 
@@ -49,6 +51,7 @@
   );
 
   async function openDropdown() {
+    if (disabled) return;
     query = "";
     open = true;
     highlightIndex = 0;
@@ -135,6 +138,7 @@
       onkeydown={handleKeydown}
       onblur={handleBlur}
       {placeholder}
+      {disabled}
       aria-label={placeholder}
       autocomplete="off"
     />
@@ -158,7 +162,13 @@
       {/each}
     </ul>
   {:else}
-    <button class="typeahead-trigger" onclick={openDropdown} {title}>
+    <button
+      class="typeahead-trigger"
+      onclick={openDropdown}
+      {title}
+      {disabled}
+      aria-label={placeholder}
+    >
       <span class="typeahead-value">{displayValue}</span>
       <svg
         class="typeahead-chevron"
@@ -182,16 +192,16 @@
   }
 
   .typeahead-trigger {
-    height: 26px;
+    height: var(--typeahead-control-height, 26px);
     width: 100%;
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 0 8px;
+    padding: var(--typeahead-control-padding, 0 8px);
     background: var(--bg-inset);
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-sm);
-    font-size: 11px;
+    font-size: var(--typeahead-control-font-size, 11px);
     color: var(--text-secondary);
     cursor: pointer;
     transition: border-color 0.15s;
@@ -207,6 +217,11 @@
     border-color: var(--accent-blue);
   }
 
+  .typeahead-trigger:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
   .typeahead-value {
     flex: 1;
     overflow: hidden;
@@ -220,13 +235,13 @@
   }
 
   .typeahead-input {
-    height: 26px;
+    height: var(--typeahead-control-height, 26px);
     width: 100%;
-    padding: 0 8px;
+    padding: var(--typeahead-control-padding, 0 8px);
     background: var(--bg-inset);
     border: 1px solid var(--accent-blue);
     border-radius: var(--radius-sm);
-    font-size: 11px;
+    font-size: var(--typeahead-control-font-size, 11px);
     color: var(--text-primary);
     outline: none;
     box-sizing: border-box;
