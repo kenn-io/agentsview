@@ -155,6 +155,29 @@ func TestParseDaemonSyncSSEReportsErrorEventPayload(t *testing.T) {
 	assert.Contains(t, err.Error(), "remote sync failed\npermission denied")
 }
 
+func TestParseDaemonSyncSSEReportsProgressEvents(t *testing.T) {
+	want := agentsync.SyncStats{
+		TotalSessions: 12,
+		Synced:        3,
+	}
+	var progress []agentsync.Progress
+
+	got, err := parseDaemonSyncSSE(strings.NewReader(
+		"event: progress\n"+
+			"data: {\"phase\":\"rebuilding_search\",\"detail\":\"Rebuilding search index\",\"resync\":true}\n\n"+
+			sseString(t, doneSSE(t, want, true)),
+	), func(p agentsync.Progress) {
+		progress = append(progress, p)
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, want.Synced, got.Synced)
+	require.Len(t, progress, 1)
+	assert.Equal(t, agentsync.PhaseRebuildingSearch, progress[0].Phase)
+	assert.Equal(t, "Rebuilding search index", progress[0].Detail)
+	assert.True(t, progress[0].Resync)
+}
+
 func TestPrintSyncProgressClearsShorterOverwrites(t *testing.T) {
 	out := captureStdout(t, func() {
 		printSyncProgress(agentsync.Progress{
@@ -284,14 +307,24 @@ func TestDoSyncFullUsesDaemonResyncRoute(t *testing.T) {
 		require.Equal(t, "/api/v1/resync", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
 		resyncCalled = true
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, err := io.WriteString(w,
+			"event: progress\n"+
+				"data: {\"phase\":\"rebuilding_search\",\"detail\":\"Rebuilding search index\",\"resync\":true}\n\n",
+		)
+		require.NoError(t, err)
 		writeDoneSSE(t, w, agentsync.SyncStats{Synced: 9})
 	})
 
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
 
-	hadFailures := doSync(SyncConfig{Full: true})
+	var hadFailures bool
+	out := captureStdout(t, func() {
+		hadFailures = doSync(SyncConfig{Full: true})
+	})
 	require.False(t, hadFailures)
 	assert.True(t, resyncCalled)
+	assert.Contains(t, out, "Rebuilding search index")
 	env.assertNoLocalDB(t)
 }
 
@@ -309,6 +342,7 @@ func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 		transport{URL: ts.URL + "/"},
 		"",
 		false,
+		nil,
 	)
 	require.NoError(t, err)
 	assert.True(t, syncCalled)
@@ -445,6 +479,13 @@ func doneSSE(t *testing.T, stats agentsync.SyncStats, terminated bool) io.Reader
 		suffix = "\n"
 	}
 	return strings.NewReader("event: done\ndata: " + string(payload) + suffix)
+}
+
+func sseString(t *testing.T, r io.Reader) string {
+	t.Helper()
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	return string(data)
 }
 
 // writeDoneSSE writes a terminated daemon sync "done" SSE event to w.

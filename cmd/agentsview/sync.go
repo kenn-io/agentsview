@@ -102,9 +102,23 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			}
 			if useDaemon {
 				start := time.Now()
+				var onProgress sync.ProgressFunc
+				var progress *resyncProgressPrinter
+				if cfg.Full {
+					fmt.Println("Running full resync via daemon...")
+					progress = newResyncProgressPrinter(os.Stdout, time.Now)
+					onProgress = progress.Print
+				} else {
+					fmt.Println("Running sync via daemon...")
+					onProgress = printSyncProgress
+				}
 				stats, err := runDaemonSync(
 					context.Background(), tr, appCfg.AuthToken, cfg.Full,
+					onProgress,
 				)
+				if progress != nil {
+					progress.Finish()
+				}
 				if err != nil {
 					fatal("daemon sync: %v", err)
 				}
@@ -306,6 +320,7 @@ func runDaemonSync(
 	tr transport,
 	authToken string,
 	full bool,
+	onProgress sync.ProgressFunc,
 ) (sync.SyncStats, error) {
 	endpoint := "/api/v1/sync"
 	if full {
@@ -342,7 +357,7 @@ func runDaemonSync(
 		}
 		return stats, nil
 	}
-	return parseDaemonSyncSSE(resp.Body)
+	return parseDaemonSyncSSE(resp.Body, onProgress)
 }
 
 func runDaemonRemoteSync(
@@ -409,16 +424,34 @@ func runDaemonRemoteSync(
 	return failures, nil
 }
 
-func parseDaemonSyncSSE(r io.Reader) (sync.SyncStats, error) {
+func parseDaemonSyncSSE(
+	r io.Reader, progressFns ...sync.ProgressFunc,
+) (sync.SyncStats, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	var event string
 	var data strings.Builder
 	var lastNonDoneData string
+	var onProgress sync.ProgressFunc
+	if len(progressFns) > 0 {
+		onProgress = progressFns[0]
+	}
+	reportProgress := func(raw string) error {
+		if onProgress == nil {
+			return nil
+		}
+		var p sync.Progress
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			return fmt.Errorf("decoding daemon sync progress: %w", err)
+		}
+		onProgress(p)
+		return nil
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
-			if event == "done" {
+			switch event {
+			case "done":
 				var stats sync.SyncStats
 				if err := json.Unmarshal(
 					[]byte(data.String()), &stats,
@@ -426,8 +459,18 @@ func parseDaemonSyncSSE(r io.Reader) (sync.SyncStats, error) {
 					return sync.SyncStats{}, err
 				}
 				return stats, nil
+			case "progress":
+				if data.Len() > 0 {
+					if err := reportProgress(data.String()); err != nil {
+						return sync.SyncStats{}, err
+					}
+				}
+			default:
+				if data.Len() > 0 {
+					lastNonDoneData = data.String()
+				}
 			}
-			if data.Len() > 0 {
+			if event == "error" && data.Len() > 0 {
 				lastNonDoneData = data.String()
 			}
 			event = ""
@@ -448,7 +491,11 @@ func parseDaemonSyncSSE(r io.Reader) (sync.SyncStats, error) {
 	if err := scanner.Err(); err != nil {
 		return sync.SyncStats{}, err
 	}
-	if event != "done" && data.Len() > 0 {
+	if event == "progress" && data.Len() > 0 {
+		if err := reportProgress(data.String()); err != nil {
+			return sync.SyncStats{}, err
+		}
+	} else if event != "done" && data.Len() > 0 {
 		lastNonDoneData = data.String()
 	}
 	if event == "done" && data.Len() > 0 {
