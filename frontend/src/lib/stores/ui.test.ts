@@ -159,6 +159,60 @@ describe("UIStore", () => {
     });
   });
 
+  describe("desktop zoom bridge", () => {
+    it("calls the native webview zoom bridge without changing the step ladder", async () => {
+      const tauriWindow = window as Window & {
+        __TAURI__?: unknown;
+      };
+      const originalUrl = window.location.href;
+      const hadTauri = Object.prototype.hasOwnProperty.call(
+        tauriWindow,
+        "__TAURI__",
+      );
+      const originalTauri = tauriWindow.__TAURI__;
+      const setZoom = vi.fn(() => Promise.resolve());
+      const getCurrentWebviewWindow = vi.fn(() => ({
+        setZoom,
+      }));
+
+      Object.defineProperty(tauriWindow, "__TAURI__", {
+        value: {
+          webviewWindow: {
+            getCurrentWebviewWindow,
+          },
+        },
+        writable: true,
+        configurable: true,
+      });
+      window.history.replaceState({}, "", "?desktop");
+
+      try {
+        // @ts-expect-error -- cache bust for fresh UIStore
+        const mod = await import("./ui.svelte.js?desktopZoomBridge");
+        await tick();
+        setZoom.mockClear();
+
+        mod.ui.zoomIn();
+        await tick();
+
+        expect(mod.ui.zoomLevel).toBe(110);
+        expect(getCurrentWebviewWindow).toHaveBeenCalled();
+        expect(setZoom).toHaveBeenLastCalledWith(1.1);
+      } finally {
+        window.history.replaceState({}, "", originalUrl);
+        if (hadTauri) {
+          Object.defineProperty(tauriWindow, "__TAURI__", {
+            value: originalTauri,
+            writable: true,
+            configurable: true,
+          });
+        } else {
+          delete tauriWindow.__TAURI__;
+        }
+      }
+    });
+  });
+
   describe("theme initialization", () => {
     it("should fall back to light when stored theme is absent", () => {
       expect(ui.theme).toBeDefined();

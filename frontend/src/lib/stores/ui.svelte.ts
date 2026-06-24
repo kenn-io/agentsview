@@ -80,6 +80,29 @@ const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
 export const FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
 const FONT_SCALE_DEFAULT = 100;
 
+type DesktopTauriWebviewWindow = {
+  setZoom(scaleFactor: number): Promise<void>;
+};
+
+type DesktopTauriBridge = {
+  webviewWindow?: {
+    getCurrentWebviewWindow?: () => DesktopTauriWebviewWindow;
+  };
+};
+
+function syncDesktopZoom(scaleFactor: number) {
+  if (!IS_DESKTOP || typeof window === "undefined") return;
+  const tauri =
+    (window as Window & { __TAURI__?: DesktopTauriBridge })
+      .__TAURI__;
+  const webview =
+    tauri?.webviewWindow?.getCurrentWebviewWindow?.();
+  if (!webview) return;
+  void webview.setZoom(scaleFactor).catch(() => {
+    // ignore
+  });
+}
+
 function readStoredZoom(): number {
   if (!IS_DESKTOP) return ZOOM_DEFAULT;
   try {
@@ -262,27 +285,28 @@ class UIStore {
         }
       });
 
-      // Apply the composed root zoom: font scale (web and desktop)
-      // multiplied by the desktop window zoom (desktop only). "zoom"
-      // is non-standard but supported in WebKit/Chromium.
+      // Apply the root font scale in the document; desktop zoom
+      // itself is handled by the native webview bridge.
       $effect(() => {
-        const desktopZoom = IS_DESKTOP ? this.zoomLevel / 100 : 1;
         const scale = this.fontScale / 100;
-        const effective =
-          Math.round(desktopZoom * scale * 10000) / 10000;
         (
           document.documentElement.style as unknown as
             Record<string, string>
-        ).zoom = String(effective);
+        ).zoom = String(scale);
       });
 
       // Persist the desktop window zoom (desktop only).
       $effect(() => {
-        if (!IS_DESKTOP) return;
-        try {
-          localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
-        } catch {
-          // ignore
+        if (IS_DESKTOP) {
+          syncDesktopZoom(this.zoomLevel / 100);
+          try {
+            localStorage?.setItem(
+              ZOOM_KEY,
+              String(this.zoomLevel),
+            );
+          } catch {
+            // ignore
+          }
         }
       });
 
