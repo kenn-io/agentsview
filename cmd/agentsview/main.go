@@ -667,6 +667,7 @@ func (p *resyncProgressPrinter) Print(progress sync.Progress) {
 		return
 	}
 	if progress.Phase == sync.PhaseDone {
+		p.printFinalInPlaceProgress(progress)
 		p.finishCurrent()
 		return
 	}
@@ -697,6 +698,16 @@ func (p *resyncProgressPrinter) Print(progress sync.Progress) {
 		p.w, "  %s...\n",
 		strings.TrimSuffix(resyncProgressDisplayLabel(progress), "."),
 	)
+}
+
+func (p *resyncProgressPrinter) printFinalInPlaceProgress(progress sync.Progress) {
+	if !p.inPlace || p.label == "" || progress.SessionsTotal == 0 {
+		return
+	}
+	if progress.Detail == "" {
+		progress.Detail = p.label
+	}
+	fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
 }
 
 func (p *resyncProgressPrinter) Finish() {

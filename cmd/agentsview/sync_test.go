@@ -248,6 +248,36 @@ func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
 		"non-session resync phases must not be overwritten in place")
 }
 
+func TestResyncProgressPrinterRendersDoneProgressBeforeCompletion(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	var out bytes.Buffer
+	printer := newResyncProgressPrinter(&out, clock)
+
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseSyncing,
+		Detail:          "Syncing sessions into rebuilt database",
+		SessionsTotal:   1,
+		SessionsDone:    1,
+		MessagesIndexed: 0,
+		Resync:          true,
+	})
+	now = now.Add(time.Second)
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseDone,
+		SessionsTotal:   1,
+		SessionsDone:    1,
+		MessagesIndexed: 42,
+		Resync:          true,
+	})
+
+	got := out.String()
+	assert.Contains(t, got,
+		"\r  Syncing sessions into rebuilt database: 1/1 sessions (100%) · 42 messages\x1b[K")
+	assert.Contains(t, got,
+		"\n  Syncing sessions into rebuilt database completed in 1s\n")
+}
+
 func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "sessions.db")
@@ -390,9 +420,43 @@ func TestRunDaemonRemoteSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 		[]config.RemoteHost{{Host: "devbox"}},
 		false,
 		false,
+		nil,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, failures)
+}
+
+func TestRunDaemonRemoteSyncReportsProgressEvents(t *testing.T) {
+	ts := remoteSyncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/sync/remotes", r.URL.Path)
+		assert.Contains(t, r.Header.Get("Accept"), "text/event-stream")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, err := io.WriteString(w,
+			"event: progress\n"+
+				"data: {\"phase\":\"rebuilding_search\",\"detail\":\"Rebuilding search index\",\"resync\":true}\n\n"+
+				"event: done\n"+
+				"data: {\"failures\":[]}\n\n",
+		)
+		require.NoError(t, err)
+	})
+	var progress []agentsync.Progress
+
+	failures, err := runDaemonRemoteSync(
+		context.Background(),
+		transport{URL: ts.URL},
+		"",
+		[]config.RemoteHost{{Host: "devbox"}},
+		false,
+		true,
+		func(p agentsync.Progress) {
+			progress = append(progress, p)
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+	require.Len(t, progress, 1)
+	assert.Equal(t, agentsync.PhaseRebuildingSearch, progress[0].Phase)
 }
 
 func TestDoSyncConfiguredRemoteHostsUsesDaemonRouteWithLocalSync(

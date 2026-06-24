@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -220,7 +221,23 @@ func (s *Server) humaSyncRemotes(
 	req.Hosts = hosts
 
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
-		writeHumaJSON(hctx, http.StatusOK, s.runRemoteSyncRequest(ctx, local, engine, req))
+		if strings.Contains(hctx.Header("Accept"), "text/event-stream") {
+			stream, ok := newHumaSSEStream(hctx)
+			if ok {
+				response := s.runRemoteSyncRequest(
+					ctx, local, engine, req,
+					func(progress syncpkg.Progress) {
+						stream.SendJSON("progress", progress)
+					},
+				)
+				stream.SendJSON("done", response)
+				return
+			}
+		}
+		writeHumaJSON(
+			hctx, http.StatusOK,
+			s.runRemoteSyncRequest(ctx, local, engine, req, nil),
+		)
 	}}, nil
 }
 
@@ -258,6 +275,7 @@ func (s *Server) runRemoteSyncRequest(
 	local *db.DB,
 	engine *syncpkg.Engine,
 	req remoteSyncRequest,
+	progress func(syncpkg.Progress),
 ) remoteSyncResponse {
 	var localStats *syncpkg.SyncStats
 	failures := make([]remoteSyncFailure, 0)
@@ -268,7 +286,7 @@ func (s *Server) runRemoteSyncRequest(
 		)
 	}
 	if req.IncludeLocal {
-		stats, _ := engine.SyncThenRun(ctx, req.Full, nil,
+		stats, _ := engine.SyncThenRun(ctx, req.Full, progress,
 			func(forceFull bool) error {
 				run(forceFull)
 				return nil

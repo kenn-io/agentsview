@@ -138,6 +138,10 @@ func withRemoteAddr(addr string) syncRouteRequestOption {
 	return func(req *http.Request) { req.RemoteAddr = addr }
 }
 
+func withAccept(value string) syncRouteRequestOption {
+	return func(req *http.Request) { req.Header.Set("Accept", value) }
+}
+
 func serveJSON(
 	t *testing.T,
 	h http.Handler,
@@ -385,6 +389,7 @@ func TestRunRemoteSyncRequestEmitsAfterRemoteOnlyWrites(t *testing.T) {
 		remoteSyncRequest{
 			Hosts: []config.RemoteHost{{Host: "alpha"}},
 		},
+		nil,
 	)
 
 	assert.Empty(t, response.Failures)
@@ -394,6 +399,34 @@ func TestRunRemoteSyncRequestEmitsAfterRemoteOnlyWrites(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "remote sync did not emit")
 	}
+}
+
+func TestHumaSyncRemotesStreamsLocalProgress(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	f.writeClaudeSession(t, "remote-progress.jsonl", "remote progress")
+	stubRunRemoteSync(t, func(
+		context.Context,
+		*ssh.RemoteSync,
+	) (ssh.SyncStats, error) {
+		return ssh.SyncStats{}, nil
+	})
+
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync/remotes",
+		remoteSyncRequest{
+			Full:         true,
+			IncludeLocal: true,
+			Hosts:        []config.RemoteHost{{Host: "alpha"}},
+		},
+		withAccept("text/event-stream"),
+	)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
+	body := w.Body.String()
+	assert.Contains(t, body, "event: progress")
+	assert.Contains(t, body, `"resync":true`)
+	assert.Contains(t, body, "event: done")
+	assert.Contains(t, body, `"local_stats"`)
 }
 
 func TestRunRemoteSyncRequestSerializesNoSyncRemoteWrites(t *testing.T) {
@@ -421,6 +454,7 @@ func TestRunRemoteSyncRequestSerializesNoSyncRemoteWrites(t *testing.T) {
 			remoteSyncRequest{
 				Hosts: []config.RemoteHost{{Host: "alpha"}},
 			},
+			nil,
 		)
 	}()
 
