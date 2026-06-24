@@ -152,12 +152,15 @@ func extractProjectFromCwdWithBranch(
 // manager directory conventions. projectPart is the zero-based
 // component after marker that contains the owning project name.
 type worktreeLayout struct {
-	marker      string
-	projectPart int
-	minParts    int
+	marker              string
+	projectPart         int
+	minParts            int
+	roborevCIBareLayout bool
 }
 
 var worktreeLayouts []worktreeLayout
+
+const roborevCIBareProject = "roborev_ci"
 
 func init() {
 	sep := string(filepath.Separator)
@@ -176,7 +179,10 @@ func init() {
 		// .roborev data dir (like the tool-anchored siblings above) so an
 		// unrelated path that merely contains a "ci-worktrees" directory is not
 		// matched.
-		{marker: sep + ".roborev" + sep + "ci-worktrees" + sep, projectPart: 0, minParts: 2},
+		{
+			marker:      sep + ".roborev" + sep + "ci-worktrees" + sep,
+			projectPart: 0, minParts: 2, roborevCIBareLayout: true,
+		},
 	}
 }
 
@@ -190,6 +196,9 @@ func projectFromWorktreeLayout(path string) string {
 			continue
 		}
 		parts := strings.Split(rest, string(filepath.Separator))
+		if layout.roborevCIBareLayout && isRoborevCIWorktreeLeaf(parts[0]) {
+			return roborevCIBareProject
+		}
 		if len(parts) < layout.minParts {
 			continue
 		}
@@ -200,6 +209,27 @@ func projectFromWorktreeLayout(path string) string {
 		return project
 	}
 	return ""
+}
+
+func isRoborevCIWorktreeLeaf(name string) bool {
+	rest, ok := strings.CutPrefix(name, "roborev-ci-")
+	if !ok {
+		return false
+	}
+	job, id, ok := strings.Cut(rest, "-")
+	if !ok || job == "" || id == "" {
+		return false
+	}
+	return allASCIIDigits(job) && allASCIIDigits(id)
+}
+
+func allASCIIDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // autofsMountSource is indirected so tests can supply fixture

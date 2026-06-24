@@ -640,6 +640,14 @@ func TestExtractProjectFromCwdWithBranch(t *testing.T) {
 			want:   "widget",
 		},
 		{
+			name: "RoborevCIWorktreeBareGeneratedLeaf",
+			cwd: filepath.FromSlash(
+				"/data/.roborev/ci-worktrees/roborev-ci-101-1001",
+			),
+			branch: "",
+			want:   "roborev_ci",
+		},
+		{
 			name: "RoborevCIWorktreeDashRepoNormalized",
 			cwd: filepath.FromSlash(
 				"/data/.roborev/ci-worktrees/data-pipeline/roborev-ci-102-1002",
