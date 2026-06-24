@@ -23,7 +23,11 @@
   } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
-  import { agentColor, agentLabel } from "../../utils/agents.js";
+  import {
+    agentColor,
+    agentForeground,
+    agentLabel,
+  } from "../../utils/agents.js";
   import { formatCost, formatTokenUsage } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { getGradeStyle, getGradeLabel } from "../../utils/grade.js";
@@ -549,6 +553,7 @@
       <span
         class="agent-badge"
         style:background={agentColor(session.agent)}
+        style:color={agentForeground(session.agent)}
       >{agentLabel(session.agent)}</span>
       {#if session.started_at}
         <span class="session-time">

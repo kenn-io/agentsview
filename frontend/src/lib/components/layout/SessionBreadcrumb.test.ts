@@ -281,6 +281,9 @@ describe("SessionBreadcrumb", () => {
     expect(badge?.getAttribute("style")).toContain(
       "var(--accent-blue)",
     );
+    expect(badge?.getAttribute("style")).toContain(
+      "var(--accent-blue-foreground)",
+    );
 
     unmount(component);
   });

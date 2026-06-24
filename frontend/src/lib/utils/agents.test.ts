@@ -2,6 +2,7 @@ import { describe, it, expect } from "vite-plus/test";
 import {
   KNOWN_AGENTS,
   agentColor,
+  agentForeground,
   agentLabel,
 } from "./agents.js";
 
@@ -116,6 +117,28 @@ describe("agentColor", () => {
       "var(--accent-blue)",
     );
     expect(agentColor("")).toBe("var(--accent-blue)");
+  });
+});
+
+describe("agentForeground", () => {
+  it("uses the accent foreground for blue-filled agents", () => {
+    expect(agentForeground("claude")).toBe(
+      "var(--accent-blue-foreground)",
+    );
+    expect(agentForeground("visualstudio-copilot")).toBe(
+      "var(--accent-blue-foreground)",
+    );
+  });
+
+  it("uses the accent foreground for unknown fallback agents", () => {
+    expect(agentForeground("unknown")).toBe(
+      "var(--accent-blue-foreground)",
+    );
+    expect(agentForeground("")).toBe("var(--accent-blue-foreground)");
+  });
+
+  it("keeps white foregrounds for non-blue agent fills", () => {
+    expect(agentForeground("codex")).toBe("#ffffff");
   });
 });
 

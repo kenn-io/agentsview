@@ -103,6 +103,9 @@ describe("MessageContent", () => {
     expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
       "用户",
     );
+    expect(document.querySelector(".role-icon")?.getAttribute("style")).toContain(
+      "var(--accent-blue-foreground)",
+    );
     const copyButton = document.querySelector<HTMLButtonElement>(
       "button.copy-btn",
     );

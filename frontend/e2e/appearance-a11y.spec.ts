@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Locator } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
 function readZoom(page: import("@playwright/test").Page): Promise<string> {
@@ -32,6 +32,28 @@ function parseRgb(value: string): [number, number, number] {
     throw new Error(`Expected rgb() color, got ${value}`);
   }
   return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+async function elementColors(locator: Locator): Promise<{
+  background: string;
+  foreground: string;
+}> {
+  return locator.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    return {
+      background: styles.backgroundColor,
+      foreground: styles.color,
+    };
+  });
+}
+
+function expectReadableContrast(colors: {
+  background: string;
+  foreground: string;
+}) {
+  expect(
+    contrastRatio(parseRgb(colors.foreground), parseRgb(colors.background)),
+  ).toBeGreaterThanOrEqual(4.5);
 }
 
 test.describe("Appearance accessibility", () => {
@@ -126,7 +148,7 @@ test.describe("Appearance accessibility", () => {
     const sp = new SessionsPage(page);
     await sp.goto();
 
-    const colors = await page.evaluate(() => {
+    const primaryButtonColors = await page.evaluate(() => {
       const panel = document.createElement("div");
       panel.className = "modal-panel";
       panel.innerHTML = '<button class="modal-btn modal-btn-primary">Save</button>';
@@ -140,9 +162,15 @@ test.describe("Appearance accessibility", () => {
       panel.remove();
       return result;
     });
+    expectReadableContrast(primaryButtonColors);
 
-    expect(
-      contrastRatio(parseRgb(colors.foreground), parseRgb(colors.background)),
-    ).toBeGreaterThanOrEqual(4.5);
+    await sp.selectFirstSession();
+    const agentBadge = page.locator(".agent-badge").first();
+    await expect(agentBadge).toBeVisible();
+    expectReadableContrast(await elementColors(agentBadge));
+
+    const userRoleIcon = page.locator(".role-icon", { hasText: "U" }).first();
+    await expect(userRoleIcon).toBeVisible();
+    expectReadableContrast(await elementColors(userRoleIcon));
   });
 });

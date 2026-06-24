@@ -70,8 +70,18 @@ const agentColorMap = new Map(
   KNOWN_AGENTS.map((a) => [a.name, a.color]),
 );
 
+const blueFillColor = "var(--accent-blue)";
+const blueFillForeground = "var(--accent-blue-foreground)";
+const defaultFillForeground = "#ffffff";
+
 export function agentColor(agent: string): string {
-  return agentColorMap.get(agent) ?? "var(--accent-blue)";
+  return agentColorMap.get(agent) ?? blueFillColor;
+}
+
+export function agentForeground(agent: string): string {
+  return agentColor(agent) === blueFillColor
+    ? blueFillForeground
+    : defaultFillForeground;
 }
 
 export function agentLabel(agent: string): string {

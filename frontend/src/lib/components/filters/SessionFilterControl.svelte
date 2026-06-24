@@ -7,6 +7,7 @@
   import { starred } from "../../stores/starred.svelte.js";
   import {
     agentColor,
+    agentForeground,
     agentLabel,
   } from "../../utils/agents.js";
   import type { GroupMode } from "../sidebar/session-list-utils.js";
@@ -283,6 +284,7 @@
           class="agent-select-row"
           class:selected={!sessions.filters.agent}
           style:--agent-color={"var(--accent-blue)"}
+          style:--agent-foreground={"var(--accent-blue-foreground)"}
           onclick={() => sessions.setAgentFilter("")}
         >
           <span
@@ -302,6 +304,7 @@
             class="agent-select-row"
             class:selected
             style:--agent-color={agentColor(agent.name)}
+            style:--agent-foreground={agentForeground(agent.name)}
             onclick={() =>
               sessions.toggleAgentFilter(agent.name)}
           >
@@ -350,6 +353,7 @@
               class="agent-select-row"
               class:selected
               style:--agent-color={"var(--accent-blue)"}
+              style:--agent-foreground={"var(--accent-blue-foreground)"}
               onclick={() =>
                 sessions.toggleMachineFilter(machine)}
             >
@@ -601,6 +605,7 @@
   .agent-check.on {
     background: var(--agent-color, var(--accent-blue));
     border-color: var(--agent-color, var(--accent-blue));
+    color: var(--agent-foreground, #ffffff);
   }
 
   .agent-dot-mini {

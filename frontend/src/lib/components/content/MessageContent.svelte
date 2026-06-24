@@ -161,6 +161,9 @@
   let accentColor = $derived(
     isUser ? "var(--accent-blue)" : "var(--accent-purple)",
   );
+  let accentForeground = $derived(
+    isUser ? "var(--accent-blue-foreground)" : "#ffffff",
+  );
 
   let roleBg = $derived(
     isUser ? "var(--user-bg)" : "var(--assistant-bg)",
@@ -300,6 +303,7 @@
     <span
       class="role-icon"
       style:background={accentColor}
+      style:color={accentForeground}
     >
       {roleIcon}
     </span>
