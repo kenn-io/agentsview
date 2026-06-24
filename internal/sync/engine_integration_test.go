@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -7551,6 +7552,57 @@ func TestIncrementalSync_CodexStoresEffectiveMtime(t *testing.T) {
 		"incremental Codex write stores the index-folded effective mtime")
 	assert.Greater(t, *sess.FileMtime, rollInfo.ModTime().UnixNano(),
 		"effective mtime exceeds the plain rollout mtime")
+}
+
+func TestIncrementalSync_CodexHashMatchesConsumedPrefix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e4"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "world", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append complete message")
+	_, err = f.WriteString(`{"timestamp":"2024-01-01T10:00:10Z"`)
+	require.NoError(t, err, "append partial trailing JSON")
+	require.NoError(t, f.Close(), "close after append")
+
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, sess, "session present")
+	require.NotNil(t, sess.FileSize, "file_size stored")
+	require.NotNil(t, sess.FileHash, "file_hash stored")
+
+	live, err := os.ReadFile(path)
+	require.NoError(t, err, "read live transcript")
+	require.Less(t, *sess.FileSize, int64(len(live)),
+		"partial trailing JSON should remain outside the consumed prefix")
+	prefix := live[:*sess.FileSize]
+	sum := sha256.Sum256(prefix)
+	wantHash := fmt.Sprintf("%x", sum[:])
+	assert.Equal(t, wantHash, *sess.FileHash,
+		"incremental Codex hash must match the consumed file_size prefix")
 }
 
 func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {

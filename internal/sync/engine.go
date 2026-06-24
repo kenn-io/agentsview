@@ -4815,7 +4815,7 @@ func (e *Engine) tryIncrementalJSONL(
 	newOffset := inc.FileSize + consumed
 	var incHash string
 	if agent == parser.AgentCodex {
-		if hash, err := ComputeFileHash(file.Path); err == nil {
+		if hash, err := ComputeFileHashPrefix(file.Path, newOffset); err == nil {
 			incHash = hash
 		}
 	}
