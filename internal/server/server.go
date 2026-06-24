@@ -147,7 +147,11 @@ func insightAgentConfig(
 	}
 	agents := make(map[string]insight.AgentConfig, len(cfg))
 	for name, agentCfg := range cfg {
-		agents[name] = insight.AgentConfig{Binary: agentCfg.Binary}
+		agents[name] = insight.AgentConfig{
+			Binary:      agentCfg.Binary,
+			Sandbox:     agentCfg.Sandbox,
+			AllowUnsafe: agentCfg.AllowUnsafe,
+		}
 	}
 	return agents
 }

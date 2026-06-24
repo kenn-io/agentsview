@@ -111,7 +111,9 @@ type AutomatedConfig struct {
 
 // AgentConfig holds per-agent runtime overrides.
 type AgentConfig struct {
-	Binary string `json:"binary,omitempty" toml:"binary"`
+	Binary      string `json:"binary,omitempty" toml:"binary"`
+	Sandbox     string `json:"sandbox,omitempty" toml:"sandbox"`
+	AllowUnsafe bool   `json:"allow_unsafe,omitempty" toml:"allow_unsafe"`
 }
 
 type CustomModelRate struct {

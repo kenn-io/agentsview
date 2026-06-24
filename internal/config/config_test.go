@@ -229,12 +229,16 @@ binary = "/opt/agents/claude"
 
 [agent.gemini]
 binary = "/usr/local/bin/gemini"
+sandbox = "sandbox-exec"
+allow_unsafe = true
 `)
 
 	cfg := f.LoadMinimal(t)
 
 	assert.Equal(t, "/opt/agents/claude", cfg.Agent["claude"].Binary)
 	assert.Equal(t, "/usr/local/bin/gemini", cfg.Agent["gemini"].Binary)
+	assert.Equal(t, "sandbox-exec", cfg.Agent["gemini"].Sandbox)
+	assert.True(t, cfg.Agent["gemini"].AllowUnsafe)
 }
 
 func TestLoadReadOnlyReadsLegacyJSONWithoutMigrating(t *testing.T) {
