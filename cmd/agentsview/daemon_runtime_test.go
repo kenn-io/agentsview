@@ -147,6 +147,12 @@ func withRuntimeNoSync(noSync bool) runtimeRecordOption {
 	}
 }
 
+func withRuntimeReadOnly(readOnly bool) runtimeRecordOption {
+	return func(rec *daemon.RuntimeRecord) {
+		rec.Metadata[runtimeReadOnly] = strconv.FormatBool(readOnly)
+	}
+}
+
 func withRuntimeRequireAuth(requireAuth bool) runtimeRecordOption {
 	return func(rec *daemon.RuntimeRecord) {
 		rec.Metadata[runtimeRequireAuth] = strconv.FormatBool(requireAuth)

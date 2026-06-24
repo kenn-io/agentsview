@@ -147,7 +147,7 @@ func runServeBackground(cfg config.Config, args []string) {
 			return
 		}
 	}
-	if rt, err := FindIncompatibleDaemonRuntime(
+	if rt, err := findIncompatibleWritableDaemonRuntime(
 		cfg.DataDir, cfg.AuthToken,
 	); err != nil {
 		if shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
@@ -254,7 +254,7 @@ func ensureBackgroundServe(
 			!rt.ReadOnly {
 			return rt, nil
 		}
-		if _, err := FindIncompatibleDaemonRuntime(
+		if _, err := findIncompatibleWritableDaemonRuntime(
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
 			return nil, fmt.Errorf(
@@ -297,7 +297,7 @@ func ensureBackgroundServe(
 		!rt.ReadOnly {
 		return rt, nil
 	}
-	if rt, err := FindIncompatibleDaemonRuntime(
+	if rt, err := findIncompatibleWritableDaemonRuntime(
 		cfg.DataDir, cfg.AuthToken,
 	); err != nil {
 		if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
@@ -328,7 +328,7 @@ func ensureBackgroundServe(
 			return rt, nil
 		}
 		stoppedUpgradeable := false
-		if rt, err := FindIncompatibleDaemonRuntime(
+		if rt, err := findIncompatibleWritableDaemonRuntime(
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
 			if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {

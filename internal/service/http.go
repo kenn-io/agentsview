@@ -27,10 +27,11 @@ import (
 var errHTTPNotFound = errors.New("http: not found")
 
 type httpBackend struct {
-	baseURL  string
-	client   *http.Client
-	readOnly bool
-	token    string
+	baseURL           string
+	client            *http.Client
+	longRunningClient *http.Client
+	readOnly          bool
+	token             string
 }
 
 // NewHTTPBackend constructs a SessionService that proxies to a
@@ -41,10 +42,11 @@ type httpBackend struct {
 // with require_auth=true.
 func NewHTTPBackend(baseURL, token string, readOnly bool) SessionService {
 	return &httpBackend{
-		baseURL:  strings.TrimSuffix(baseURL, "/"),
-		client:   &http.Client{Timeout: 30 * time.Second},
-		readOnly: readOnly,
-		token:    token,
+		baseURL:           strings.TrimSuffix(baseURL, "/"),
+		client:            &http.Client{Timeout: 30 * time.Second},
+		longRunningClient: &http.Client{Timeout: 0},
+		readOnly:          readOnly,
+		token:             token,
 	}
 }
 
@@ -199,7 +201,7 @@ func (b *httpBackend) Sync(
 	// browser origin.
 	req.Header.Set("Origin", b.baseURL)
 	b.addAuth(req)
-	resp, err := b.client.Do(req)
+	resp, err := b.longRunningClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -239,8 +241,7 @@ func (b *httpBackend) Watch(
 	b.addAuth(req)
 	// Use a separate no-timeout client so long-lived streams do not
 	// hit the 30s default on b.client.
-	streamingClient := &http.Client{Timeout: 0}
-	resp, err := streamingClient.Do(req)
+	resp, err := b.longRunningClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

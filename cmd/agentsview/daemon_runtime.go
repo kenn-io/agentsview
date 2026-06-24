@@ -193,6 +193,16 @@ func FindIncompatibleDaemonRuntime(
 	return rt, daemonRuntimeCompatibilityError(rt)
 }
 
+func findIncompatibleWritableDaemonRuntime(
+	dataDir string, authToken ...string,
+) (*DaemonRuntime, error) {
+	rt, err := FindIncompatibleDaemonRuntime(dataDir, authToken...)
+	if rt != nil && rt.ReadOnly {
+		return nil, nil
+	}
+	return rt, err
+}
+
 func findIncompatibleDaemonRuntime(
 	dataDir string, token string,
 ) *DaemonRuntime {

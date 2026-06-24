@@ -166,6 +166,46 @@ func TestEnsureBackgroundServeIncompatibleDaemonReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "serve stop")
 }
 
+func TestEnsureBackgroundServeIgnoresIncompatibleReadOnlyDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeReadOnly(true),
+		withRuntimeAPIVersion(0),
+	))
+
+	newHost, newPort := testPingServer(t)
+	oldStartProcess := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		_ config.Config, _ []string,
+	) (*exec.Cmd, string, error) {
+		if _, err := WriteDaemonRuntime(
+			dir, newHost, newPort, "test", false,
+		); err != nil {
+			return nil, "", err
+		}
+		cmd := exec.Command("sleep", "2")
+		if err := cmd.Start(); err != nil {
+			return nil, "", err
+		}
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForEnsure = oldStartProcess
+		RemoveDaemonRuntime(dir)
+	})
+
+	cfg := config.Config{DataDir: dir}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	assert.False(t, rt.ReadOnly)
+	assert.Equal(t, newHost, rt.Host)
+	assert.Equal(t, newPort, rt.Port)
+}
+
 func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 	t *testing.T,
 ) {
