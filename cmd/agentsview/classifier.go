@@ -88,9 +88,12 @@ func guardClassifierRebuild(tr transport) error {
 		)
 	}
 	if tr.Mode == transportDirect && tr.DirectReadOnly {
+		reason := tr.DirectReason
+		if reason == "" {
+			reason = "local daemon owns the SQLite archive but is not responding"
+		}
 		return errors.New(
-			"local daemon owns the SQLite archive but is not responding; " +
-				"refusing to rebuild to avoid competing for write ownership; " +
+			reason + "; refusing to rebuild to avoid competing for write ownership; " +
 				"stop the daemon first",
 		)
 	}
@@ -112,6 +115,16 @@ func runClassifierRebuild(
 	for _, p := range prefixes {
 		fmt.Fprintf(out, "  - %s\n", p)
 	}
+
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return fmt.Errorf("checking SQLite write ownership: %w", err)
+	}
+
+	writeLock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
+	if err != nil {
+		return fmt.Errorf("acquiring SQLite write-owner lock: %w", err)
+	}
+	defer func() { _ = writeLock.Close() }()
 
 	if err := clearSQLiteClassifierHash(cfg.DBPath); err != nil {
 		return fmt.Errorf("clearing SQLite hash: %w", err)

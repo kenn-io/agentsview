@@ -8,11 +8,12 @@ surface for reading and writing session data. It is designed for
 shell scripts, automation agents, and CI jobs that need structured
 output rather than the web UI.
 
-When an AgentsView server is running, the CLI proxies all supported
-operations to it over HTTP. When no server is running, it opens the
-local SQLite archive directly and calls the same service functions
-the HTTP handler would have called — so results match regardless of
-transport.
+When an AgentsView daemon is running, the CLI proxies supported
+operations to it over HTTP. On a cold archive, read-only commands
+open local SQLite directly in read-only mode, while commands that
+need fresh data or need to write start or reuse the detached local
+daemon. This keeps one-off reads fast and keeps SQLite writes owned
+by one process.
 
 ## Quick examples
 
@@ -46,8 +47,10 @@ underlying SSE events.
 
 ## Transport
 
-Detection uses the existing per-port state file
-`$AGENTSVIEW_DATA_DIR/server.<port>.json`.
+Detection uses kit daemon runtime records in `AGENTSVIEW_DATA_DIR`
+and the daemon ping endpoint. Runtime records include service and
+API metadata so incompatible or read-only daemons are not mistaken
+for a writable local archive owner.
 
 - If `--server <url>` is set, supported commands proxy to that
   daemon over HTTP. `--server` and `--pg` are mutually exclusive.
@@ -63,8 +66,19 @@ Detection uses the existing per-port state file
   advertise the same data directory, the writable one wins so
   sync/write operations don't silently land on a read-only
   target.
-- If no daemon is running, the CLI opens the local archive
-  directly.
+- If no daemon is running, read-only commands open the local
+  archive directly in read-only mode.
+- If a command requires fresh data or needs to write and no daemon
+  is running, the CLI starts `agentsview serve --background`, waits
+  for readiness, and proxies the operation to that daemon.
+- If `AGENTSVIEW_NO_DAEMON=1` is set, the CLI never auto-starts a
+  daemon. Read commands use direct read-only SQLite. Write commands
+  run directly only after acquiring the per-data-dir write-owner
+  lock.
+- If a writable daemon is known to own the local archive but is not
+  reachable, write commands refuse instead of opening SQLite as a
+  second writer. Read commands may still fall back to direct
+  read-only SQLite.
 - `session export` always runs locally regardless of daemon
   state, and rejects `--server`, `--pg`, and `--format` because it
   streams raw source bytes.
@@ -352,11 +366,14 @@ specific session you want; the `<id>` form resolves the file path
 from the archive, so it only works for sessions already present
 there.
 
-- If a local daemon is running, syncs proxy to
-  `POST /api/v1/sessions/sync` to avoid racing signal computation.
+- `session sync` uses a writable local daemon when one is running,
+  or starts a detached daemon when no compatible daemon is running.
+  It then proxies to `POST /api/v1/sessions/sync` so parsing and
+  signal computation remain daemon-owned.
 - If a [`pg serve`](/pg-sync/#agentsview-pg-serve) daemon is
   running (read-only), sync refuses with a clear error.
-- If no daemon is running, the CLI runs the sync in-process.
+- If `AGENTSVIEW_NO_DAEMON=1` is set, the CLI runs the sync
+  in-process only after acquiring the local write-owner lock.
 
 ---
 
@@ -539,9 +556,13 @@ Unexpected usage-query failures return `500` with
 | `2`  | Session not found in the local archive        |
 | `3`  | Session exists but has neither token data nor cost |
 
-The command uses the local SQLite archive plus an on-demand
-sync when no daemon is running (with a 30-second wait if a
-startup lock is held). With `--server`, it calls
+The command uses a writable local daemon when one is running, or
+starts a detached daemon when fresh local data is needed and no
+compatible daemon is running. With `AGENTSVIEW_NO_DAEMON=1`, it
+falls back to direct local SQLite after acquiring the write-owner
+lock for any required refresh. Configured PostgreSQL does not
+change this command's default local behavior; pass `--pg` to read
+usage from the shared PostgreSQL store. With `--server`, it calls
 `GET /api/v1/sessions/{id}/usage` on the explicit daemon. With
 `--pg`, it reads usage from the shared PostgreSQL store.
 

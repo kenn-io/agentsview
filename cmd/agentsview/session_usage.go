@@ -71,6 +71,11 @@ func runSessionUsage(cmd *cobra.Command, sessionID, format string) {
 func sessionUsageDataForCommand(
 	cmd *cobra.Command, sessionID string,
 ) (*sessionUsageOutput, int, error) {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
@@ -82,22 +87,42 @@ func sessionUsageDataForCommand(
 		if err != nil {
 			return nil, tokenUseExitErr, err
 		}
-		return httpSessionUsageData(
-			cmd.Context(), remote, token, sessionID,
-		)
+		return httpSessionUsageData(ctx, remote, token, sessionID)
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
 	}
-	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
+	if pgReadRequested(cmd) {
+		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
+		if err != nil {
+			return nil, tokenUseExitErr, err
+		}
+		return pgSessionUsageData(cfg, pgCfg, sessionID)
+	}
+	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
+		ctx,
+		cfg,
+		archiveQueryPolicy{
+			AutoStart:            true,
+			ReadOnlyDaemon:       archiveQueryRejectReadOnlyDaemon,
+			DirectReadOnlyAction: "refresh session usage directly",
+		},
+	)
 	if err != nil {
 		return nil, tokenUseExitErr, err
 	}
-	if !usePG {
-		return sessionUsageData(sessionID)
-	}
-	return pgSessionUsageData(cfg, pgCfg, sessionID)
+	defer closeArchiveQueryBackend(cleanup)
+	return backend.SessionUsage(ctx, sessionID)
+}
+
+func readOnlySessionUsageDaemonError(url string) error {
+	return fmt.Errorf(
+		"daemon at %s is read-only; use --pg to query "+
+			"PostgreSQL usage, or stop it to refresh local "+
+			"session usage",
+		url,
+	)
 }
 
 func httpSessionUsageData(

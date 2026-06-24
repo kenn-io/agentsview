@@ -132,6 +132,9 @@ func sqlitePricingInsertMissingStatement(
 func (db *DB) UpsertModelPricing(
 	prices []ModelPricing,
 ) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
 	if len(prices) == 0 {
 		return nil
 	}

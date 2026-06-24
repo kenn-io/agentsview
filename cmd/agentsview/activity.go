@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -30,18 +35,30 @@ type ActivityReportConfig struct {
 
 // runActivityReport syncs, resolves the range, runs the report, and prints it.
 func runActivityReport(cfg ActivityReportConfig) {
-	database, appCfg := openUsageDB()
-	defer database.Close()
+	ctx := context.Background()
+	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Offline:              cfg.Offline,
+		NoSync:               cfg.NoSync,
+		ReadOnlyDaemon:       archiveQueryUseReadOnlyDaemon,
+		DirectReadOnlyAction: "query activity directly",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeArchiveQueryBackend(cleanup)
 
-	ensureFreshData(appCfg, database, cfg.NoSync)
-
-	r, err := resolveActivityReportPriced(cfg, database)
+	r, err := backend.ActivityReport(ctx, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	if cfg.JSON {
+	writeActivityReport(r, cfg.JSON)
+}
+
+func writeActivityReport(r activity.Report, jsonOutput bool) {
+	if jsonOutput {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(r); err != nil {
@@ -54,13 +71,61 @@ func runActivityReport(cfg ActivityReportConfig) {
 	printActivityReport(r)
 }
 
+func fetchHTTPActivityReport(
+	ctx context.Context, tr transport, authToken string, cfg ActivityReportConfig,
+) (activity.Report, error) {
+	q := url.Values{}
+	setIfNotEmpty := func(k, v string) {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	setIfNotEmpty("preset", cfg.Preset)
+	setIfNotEmpty("date", cfg.Date)
+	setIfNotEmpty("from", cfg.From)
+	setIfNotEmpty("to", cfg.To)
+	setIfNotEmpty("timezone", cfg.Timezone)
+	setIfNotEmpty("bucket", cfg.Bucket)
+	setIfNotEmpty("project", cfg.Project)
+	setIfNotEmpty("agent", cfg.Agent)
+	setIfNotEmpty("machine", cfg.Machine)
+
+	endpoint := strings.TrimSuffix(tr.URL, "/") +
+		"/api/v1/activity/report?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return activity.Report{}, err
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return activity.Report{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return activity.Report{}, fmt.Errorf(
+			"activity report: HTTP %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(body)),
+		)
+	}
+	var r activity.Report
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return activity.Report{}, err
+	}
+	return r, nil
+}
+
 // resolveActivityReportPriced seeds fallback pricing so fresh-DB token usage is
 // costed, then resolves the report. runActivityReport and the pricing test
 // share this seam so the test exercises the same seeding the command performs.
 func resolveActivityReportPriced(
 	cfg ActivityReportConfig, database *db.DB,
+	customPricing map[string]config.CustomModelRate,
 ) (activity.Report, error) {
-	ensurePricing(database, cfg.Offline)
+	ensureUsagePricing(database, cfg.Offline, customPricing)
 	return resolveActivityReport(cfg, database)
 }
 

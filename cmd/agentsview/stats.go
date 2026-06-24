@@ -139,13 +139,10 @@ func registerStatsFlags(
 		"Include GitHub PR outcome stats via gh (implies --include-git-outcomes)")
 }
 
-// openStatsService opens a SessionService scoped to the local SQLite
+// openStatsService opens a read-only SessionService scoped to the local SQLite
 // archive. The stats command deliberately bypasses resolveService
 // (and the HTTP daemon transport) because the daemon does not yet
-// expose a /stats endpoint, and resolveService prefers HTTP when one
-// is running. Reading SQLite directly is also write-safe:
-// GetSessionStats only reads, so a writable daemon owning the
-// database is not disturbed.
+// expose a /stats endpoint.
 func openStatsService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
@@ -153,8 +150,7 @@ func openStatsService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	applyClassifierConfig(cfg)
-	d, err := openDB(cfg)
+	d, err := openReadOnlyDB(cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening db: %w", err)
 	}

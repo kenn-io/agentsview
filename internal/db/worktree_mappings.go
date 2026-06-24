@@ -104,7 +104,7 @@ func scanWorktreeMapping(rows *sql.Rows) (WorktreeProjectMapping, error) {
 	return m, nil
 }
 
-func scanWorktreeMappingRow(row *sql.Row) (WorktreeProjectMapping, error) {
+func scanWorktreeMappingRow(row rowScanner) (WorktreeProjectMapping, error) {
 	var m WorktreeProjectMapping
 	var enabled int
 	if err := row.Scan(
@@ -699,6 +699,9 @@ func (db *DB) applyWorktreeProjectMappingToSession(
 	currentProject string,
 	bumpLocalModifiedAt bool,
 ) (bool, error) {
+	if err := db.requireWritable(); err != nil {
+		return false, err
+	}
 	machine = strings.TrimSpace(machine)
 	sessionID = strings.TrimSpace(sessionID)
 	if machine == "" || sessionID == "" || strings.TrimSpace(cwd) == "" {
@@ -785,6 +788,9 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 	filePath string,
 	bumpLocalModifiedAt bool,
 ) (ApplyWorktreeProjectMappingsResult, error) {
+	if err := db.requireWritable(); err != nil {
+		return ApplyWorktreeProjectMappingsResult{}, err
+	}
 	if filePath == "" {
 		return ApplyWorktreeProjectMappingsResult{}, nil
 	}

@@ -78,13 +78,47 @@ process, URL, version, uptime, and read-only mode when available.
 `serve stop` gracefully terminates the managed process and cleans
 up its runtime record.
 
+Background servers also act as the shared local daemon for the
+desktop app and CLI. The daemon owns local SQLite writes for its
+data directory, so common write and freshness-sensitive commands
+proxy to it instead of opening the archive as a second writer. A
+background daemon self-exits after the idle timeout when no
+external request or daemon-owned job is active. Periodic sync and
+file-watcher work prevent exit while they run, but do not keep the
+daemon alive forever by themselves.
+
+#### CLI daemon behavior
+
+Most read-only CLI commands do not auto-start the daemon on a cold
+archive. They attach to a compatible local daemon when one is
+already running; otherwise they open SQLite directly in read-only
+mode and return the latest indexed data. This keeps commands such
+as `session list`, `session get`, `session messages`, and offline
+usage reports fast in scripts.
+
+Commands that need fresh data or need to write auto-start the
+detached daemon when no compatible daemon is running. That includes
+local `sync`, `session sync`, `token-use`, normal `usage` refresh
+paths, `pg push`/`pg push --watch`, and `duckdb push`. If a writable
+daemon is known to own the archive but is not reachable, these
+commands refuse instead of writing directly.
+
+Set `AGENTSVIEW_NO_DAEMON=1` to disable daemon auto-start. With
+that escape hatch, read commands use direct read-only SQLite and
+write commands acquire the local write-owner lock before opening
+SQLite. If another process owns that lock, the command refuses and
+asks you to stop the daemon, wait for idle shutdown, or retry after
+the offline operation finishes.
+
 ---
 
 ### `agentsview sync`
 
-Run the sync engine to populate the database, then exit without
-starting the HTTP server. Useful for scripting, CI, or refreshing
-data after config changes.
+Refresh the local archive. For local sync, the CLI uses the
+running daemon or starts a detached daemon so SQLite writes stay
+owned by one process. Set `AGENTSVIEW_NO_DAEMON=1` to force a
+direct offline sync that acquires the local write-owner lock and
+exits when done.
 
 ```bash
 agentsview sync [flags]
@@ -662,8 +696,8 @@ and local-only raw source export continue to use the local archive.
 
 Use [`agentsview health`](#agentsview-health) for a human-first
 signal view and [Session API](/session-api/) for the full
-programmatic contract, including transport behavior and markdown
-export details.
+programmatic contract, including daemon-first transport behavior
+and markdown export details.
 
 `agentsview session list` renders a resume-oriented human table by
 default, including a recently-active marker, session ID, age, agent,
@@ -778,6 +812,8 @@ agentsview help
 | `AGENTSVIEW_DUCKDB_MACHINE` | | Machine name for DuckDB push |
 | `AGENTSVIEW_GITHUB_TOKEN` | | GitHub token used by `agentsview stats` for PR aggregation |
 | `AGENTSVIEW_DISABLE_UPDATE_CHECK` | | Set to `1` to disable the update check |
+| `AGENTSVIEW_NO_DAEMON` | | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start |
+| `AGENTSVIEW_DAEMON_IDLE_TIMEOUT` | `20m` | Override idle self-shutdown duration for detached background daemons |
 | `AGENTSVIEW_TELEMETRY_ENABLED` | | Set to `0` to disable [anonymous daemon telemetry](/configuration/#anonymous-daemon-telemetry) |
 
 Environment variables override the built-in defaults. Set them

@@ -386,6 +386,9 @@ const slowOpThreshold = 100 * time.Millisecond
 
 // InsertMessages batch-inserts messages for a session.
 func (db *DB) InsertMessages(msgs []Message) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
 	if len(msgs) == 0 {
 		return nil
 	}

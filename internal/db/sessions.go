@@ -1139,6 +1139,9 @@ func (db *DB) PurgeExcludedSessions() error {
 // in excluded_sessions. If the source file later becomes a real
 // conversation, sync may import it again.
 func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
 	if len(ids) == 0 {
 		return 0, nil
 	}
@@ -2500,6 +2503,9 @@ func (db *DB) EmptyTrash() (int, error) {
 // excluded_sessions so the sync engine does not re-import
 // them. Returns count of deleted rows.
 func (db *DB) DeleteSessions(ids []string) (int, error) {
+	if err := db.requireWritable(); err != nil {
+		return 0, err
+	}
 	if len(ids) == 0 {
 		return 0, nil
 	}

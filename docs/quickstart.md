@@ -147,8 +147,13 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 
 ## Run
 
-The desktop app handles startup automatically — just open the app. CLI users
-start the server manually:
+The desktop app handles startup automatically: it attaches to an existing local
+daemon or starts one in the background, then opens the discovered URL. The
+daemon is shared with CLI commands and may outlive the desktop window, but it
+self-exits after an idle period when no client request or daemon-owned job is
+active.
+
+CLI users can start the web UI explicitly:
 
 ```bash
 agentsview serve
@@ -171,6 +176,13 @@ agentsview serve --background
 agentsview serve status
 agentsview serve stop
 ```
+
+You do not need to keep a server running for every CLI command. Read-only
+commands attach to the daemon when it is warm, otherwise they read the local
+archive directly in read-only mode. Commands that need fresh data or need to
+write, including `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`,
+auto-start the detached daemon when needed. Set `AGENTSVIEW_NO_DAEMON=1` for
+scripts or CI jobs that must never start a lingering background process.
 
 ## Customize
 

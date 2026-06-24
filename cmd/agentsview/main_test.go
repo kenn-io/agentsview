@@ -108,15 +108,21 @@ func captureStdout(t *testing.T, fn func()) string {
 		os.Stdout = orig
 	})
 
+	var buf bytes.Buffer
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&buf, r)
+		readDone <- err
+	}()
+
 	fn()
 
 	require.NoError(t, w.Close(), "close stdout pipe writer")
 	os.Stdout = orig
 
-	data, err := io.ReadAll(r)
-	require.NoError(t, err, "read stdout pipe")
+	require.NoError(t, <-readDone, "read stdout pipe")
 	require.NoError(t, r.Close(), "close stdout pipe reader")
-	return string(data)
+	return buf.String()
 }
 
 func TestSetupLogFile(t *testing.T) {

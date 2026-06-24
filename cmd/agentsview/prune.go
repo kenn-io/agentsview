@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -246,12 +247,11 @@ func runPrune(cfg PruneConfig) {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
+	database, writeLock, err := openWriteDB(context.Background(), appCfg)
 	if err != nil {
 		log.Fatalf("opening database: %v", err)
 	}
-	defer database.Close()
+	defer closeWriteDB(database, writeLock)
 
 	pruner := &Pruner{
 		DB:  database,

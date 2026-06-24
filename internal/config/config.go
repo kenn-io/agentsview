@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gofrs/flock"
 	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -199,6 +200,16 @@ func (c Config) ValidateRemoteHosts() error {
 			problems = append(problems,
 				fmt.Sprintf("entry %d: host is required", i+1))
 		}
+		if trimmed := strings.TrimSpace(h.Host); isSSHOptionShaped(h.Host) {
+			problems = append(problems,
+				fmt.Sprintf("entry %d: host must not begin with '-' (got %q)",
+					i+1, trimmed))
+		}
+		if trimmed := strings.TrimSpace(h.User); isSSHOptionShaped(h.User) {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%q): user must not begin with '-' (got %q)",
+					i+1, h.Host, trimmed))
+		}
 		if h.Port < 0 || h.Port > 65535 {
 			problems = append(problems,
 				fmt.Sprintf("entry %d (%q): invalid port %d",
@@ -223,6 +234,10 @@ func (c Config) ValidateRemoteHosts() error {
 			strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func isSSHOptionShaped(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), "-")
 }
 
 // Default returns a Config with default values.
@@ -416,36 +431,38 @@ func (c *Config) jsonConfigPath() string {
 // config.json exists and config.toml does not. The original
 // JSON file is renamed to config.json.bak.
 func (c *Config) migrateJSONToTOML() error {
-	jsonPath := c.jsonConfigPath()
-	tomlPath := c.configPath()
+	return c.withConfigLock(func() error {
+		jsonPath := c.jsonConfigPath()
+		tomlPath := c.configPath()
 
-	if _, err := os.Stat(tomlPath); err == nil {
-		return nil // TOML already exists
-	}
-	data, err := os.ReadFile(jsonPath)
-	if os.IsNotExist(err) {
-		return nil // no JSON to migrate
-	}
-	if err != nil {
-		return fmt.Errorf("reading config.json for migration: %w", err)
-	}
+		if _, err := os.Stat(tomlPath); err == nil {
+			return nil // TOML already exists
+		}
+		data, err := os.ReadFile(jsonPath)
+		if os.IsNotExist(err) {
+			return nil // no JSON to migrate
+		}
+		if err != nil {
+			return fmt.Errorf("reading config.json for migration: %w", err)
+		}
 
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return fmt.Errorf("parsing config.json for migration: %w", err)
-	}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return fmt.Errorf("parsing config.json for migration: %w", err)
+		}
 
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
-		return fmt.Errorf("encoding config.toml: %w", err)
-	}
-	if err := os.WriteFile(tomlPath, buf.Bytes(), 0o600); err != nil {
-		return fmt.Errorf("writing config.toml: %w", err)
-	}
-	if err := os.Rename(jsonPath, jsonPath+".bak"); err != nil {
-		return fmt.Errorf("renaming config.json to .bak: %w", err)
-	}
-	return nil
+		var buf bytes.Buffer
+		if err := toml.NewEncoder(&buf).Encode(m); err != nil {
+			return fmt.Errorf("encoding config.toml: %w", err)
+		}
+		if err := os.WriteFile(tomlPath, buf.Bytes(), 0o600); err != nil {
+			return fmt.Errorf("writing config.toml: %w", err)
+		}
+		if err := os.Rename(jsonPath, jsonPath+".bak"); err != nil {
+			return fmt.Errorf("renaming config.json to .bak: %w", err)
+		}
+		return nil
+	})
 }
 
 func (c *Config) loadFile() error {
@@ -690,24 +707,28 @@ func (c *Config) ensureCursorSecret() error {
 		return nil
 	}
 
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Errorf("generating secret: %w", err)
-	}
-	secret := base64.StdEncoding.EncodeToString(b)
-	c.CursorSecret = secret
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if secret, ok := existing["cursor_secret"].(string); ok && secret != "" {
+			c.CursorSecret = secret
+			return nil
+		}
 
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
-
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return err
-	}
-
-	existing["cursor_secret"] = secret
-	return c.writeConfigMap(existing)
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return fmt.Errorf("generating secret: %w", err)
+		}
+		secret := base64.StdEncoding.EncodeToString(b)
+		existing["cursor_secret"] = secret
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.CursorSecret = secret
+		return nil
+	})
 }
 
 // readConfigMap reads the TOML config file into a map. Returns
@@ -737,6 +758,20 @@ func (c *Config) writeConfigMap(m map[string]any) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	return nil
+}
+
+func (c *Config) withConfigLock(fn func() error) error {
+	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
+		return fmt.Errorf("creating data dir: %w", err)
+	}
+	lock := flock.New(c.configPath() + ".lock")
+	if err := lock.Lock(); err != nil {
+		return fmt.Errorf("locking config: %w", err)
+	}
+	defer func() {
+		_ = lock.Unlock()
+	}()
+	return fn()
 }
 
 // dataDirFromEnv returns the data directory from the environment, preferring
@@ -1421,80 +1456,76 @@ func expandBracedEnv(s string) (string, error) {
 
 // SaveTerminalConfig persists terminal settings to the config file.
 func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return fmt.Errorf("reading config file: %w", err)
+		}
 
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
-	}
-
-	existing["terminal"] = tc
-	if err := c.writeConfigMap(existing); err != nil {
-		return err
-	}
-	c.Terminal = tc
-	return nil
+		existing["terminal"] = tc
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.Terminal = tc
+		return nil
+	})
 }
 
 // SaveSettings persists a partial settings update to the config file.
 // The patch map contains config keys mapped to their new values. Only
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return fmt.Errorf("reading config file: %w", err)
+		}
 
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
-	}
+		maps.Copy(existing, patch)
 
-	maps.Copy(existing, patch)
+		// When require_auth is written, remove the legacy
+		// remote_access key so it cannot override on next load.
+		if _, ok := patch["require_auth"]; ok {
+			delete(existing, "remote_access")
+		}
 
-	// When require_auth is written, remove the legacy
-	// remote_access key so it cannot override on next load.
-	if _, ok := patch["require_auth"]; ok {
-		delete(existing, "remote_access")
-	}
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
 
-	if err := c.writeConfigMap(existing); err != nil {
-		return err
-	}
-
-	// Update in-memory config for known keys.
-	if v, ok := patch["terminal"]; ok {
-		if tc, ok := v.(TerminalConfig); ok {
-			c.Terminal = tc
-		} else if m, ok := v.(map[string]any); ok {
-			if s, ok := m["mode"].(string); ok {
-				c.Terminal.Mode = s
-			}
-			if s, ok := m["custom_bin"].(string); ok {
-				c.Terminal.CustomBin = s
-			}
-			if s, ok := m["custom_args"].(string); ok {
-				c.Terminal.CustomArgs = s
+		// Update in-memory config for known keys.
+		if v, ok := patch["terminal"]; ok {
+			if tc, ok := v.(TerminalConfig); ok {
+				c.Terminal = tc
+			} else if m, ok := v.(map[string]any); ok {
+				if s, ok := m["mode"].(string); ok {
+					c.Terminal.Mode = s
+				}
+				if s, ok := m["custom_bin"].(string); ok {
+					c.Terminal.CustomBin = s
+				}
+				if s, ok := m["custom_args"].(string); ok {
+					c.Terminal.CustomArgs = s
+				}
 			}
 		}
-	}
-	if v, ok := patch["github_token"]; ok {
-		if s, ok := v.(string); ok {
-			c.GithubToken = s
+		if v, ok := patch["github_token"]; ok {
+			if s, ok := v.(string); ok {
+				c.GithubToken = s
+			}
 		}
-	}
-	if v, ok := patch["auth_token"]; ok {
-		if s, ok := v.(string); ok {
-			c.AuthToken = s
+		if v, ok := patch["auth_token"]; ok {
+			if s, ok := v.(string); ok {
+				c.AuthToken = s
+			}
 		}
-	}
-	if v, ok := patch["require_auth"]; ok {
-		if b, ok := v.(bool); ok {
-			c.RequireAuth = b
+		if v, ok := patch["require_auth"]; ok {
+			if b, ok := v.(bool); ok {
+				c.RequireAuth = b
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // EnsureAuthToken generates and persists an auth token if one does
@@ -1503,42 +1534,43 @@ func (c *Config) EnsureAuthToken() error {
 	if c.AuthToken != "" {
 		return nil
 	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if token, ok := existing["auth_token"].(string); ok && token != "" {
+			c.AuthToken = token
+			return nil
+		}
 
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Errorf("generating auth token: %w", err)
-	}
-	token := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(b)
-	c.AuthToken = token
-
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
-
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return err
-	}
-
-	existing["auth_token"] = token
-	return c.writeConfigMap(existing)
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return fmt.Errorf("generating auth token: %w", err)
+		}
+		token := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(b)
+		existing["auth_token"] = token
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.AuthToken = token
+		return nil
+	})
 }
 
 // SaveGithubToken persists the GitHub token to the config file.
 func (c *Config) SaveGithubToken(token string) error {
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return fmt.Errorf("reading config file: %w", err)
+		}
 
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
-	}
-
-	existing["github_token"] = token
-	if err := c.writeConfigMap(existing); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-	c.GithubToken = token
-	return nil
+		existing["github_token"] = token
+		if err := c.writeConfigMap(existing); err != nil {
+			return fmt.Errorf("writing config: %w", err)
+		}
+		c.GithubToken = token
+		return nil
+	})
 }

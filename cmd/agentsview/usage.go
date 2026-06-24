@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -62,12 +66,6 @@ type UsageDailyConfig struct {
 }
 
 func runUsageDaily(cfg UsageDailyConfig) {
-	database, appCfg := openUsageDB()
-	defer database.Close()
-
-	ensureFreshData(appCfg, database, cfg.NoSync)
-	ensurePricing(database, cfg.Offline)
-
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
@@ -84,9 +82,24 @@ func runUsageDaily(cfg UsageDailyConfig) {
 		Timezone: tz,
 	}
 
-	result, err := database.GetDailyUsage(
-		context.Background(), filter,
-	)
+	ctx := context.Background()
+	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Offline:              cfg.Offline,
+		NoSync:               cfg.NoSync,
+		AutoStart:            true,
+		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
+		DirectReadOnlyAction: "refresh usage directly",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeArchiveQueryBackend(cleanup)
+
+	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
+		Filter:         filter,
+		NoDefaultRange: cfg.All || filter.From != "" || filter.To != "",
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -112,12 +125,6 @@ type UsageStatuslineConfig struct {
 }
 
 func runUsageStatusline(cfg UsageStatuslineConfig) {
-	database, appCfg := openUsageDB()
-	defer database.Close()
-
-	ensureFreshData(appCfg, database, cfg.NoSync)
-	ensurePricing(database, cfg.Offline)
-
 	today := time.Now().Format("2006-01-02")
 	filter := db.UsageFilter{
 		From:     today,
@@ -126,17 +133,36 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		Timezone: localTimezone(),
 	}
 
-	result, err := database.GetDailyUsage(
-		context.Background(), filter,
-	)
+	ctx := context.Background()
+	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Offline:              cfg.Offline,
+		NoSync:               cfg.NoSync,
+		AutoStart:            true,
+		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
+		DirectReadOnlyAction: "refresh usage directly",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeArchiveQueryBackend(cleanup)
+
+	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
+		Filter:         filter,
+		NoDefaultRange: true,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	if cfg.Agent != "" {
+	printUsageStatusline(result, cfg.Agent)
+}
+
+func printUsageStatusline(result db.DailyUsageResult, agent string) {
+	if agent != "" {
 		fmt.Printf("%s today (%s)\n",
-			fmtCost(result.Totals.TotalCost), cfg.Agent)
+			fmtCost(result.Totals.TotalCost), agent)
 	} else {
 		fmt.Printf("%s today\n",
 			fmtCost(result.Totals.TotalCost))
@@ -148,22 +174,6 @@ func applyCustomPricing(database *db.DB, cfg config.Config) {
 		return
 	}
 	database.SetCustomPricing(cfg.CustomModelPricing)
-}
-
-func openUsageDB() (*db.DB, config.Config) {
-	cfg, err := config.LoadMinimal()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	database, err := openDB(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"error opening database: %v\n", err)
-		os.Exit(1)
-	}
-	return database, cfg
 }
 
 // ensureFreshData makes sure the database reflects recent
@@ -182,13 +192,14 @@ func openUsageDB() (*db.DB, config.Config) {
 // Callers that need stale data (e.g. offline benchmarks) can
 // bypass via skip=true.
 func ensureFreshData(
-	appCfg config.Config, database *db.DB, skip bool,
+	ctx context.Context, appCfg config.Config, database *db.DB, skip bool,
 ) {
 	if skip {
 		return
 	}
-
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Silence engine worker log.Printf lines (e.g. "db:
 	// InsertMessages (N msgs)") for both branches so --json and
@@ -383,6 +394,37 @@ func ensurePricing(database *db.DB, offline bool) {
 	}
 }
 
+func ensureUsagePricing(
+	database *db.DB, offline bool,
+	custom map[string]config.CustomModelRate,
+) {
+	if offline && database.ReadOnly() {
+		applyFallbackPricing(database, custom)
+		return
+	}
+	ensurePricing(database, offline)
+}
+
+func applyFallbackPricing(
+	database *db.DB, custom map[string]config.CustomModelRate,
+) {
+	rates := make(map[string]config.CustomModelRate)
+	for _, p := range pricing.FallbackPricing() {
+		// These keys are the same concrete model-pattern keys that the
+		// model_pricing table stores. SQLite usage lookups run the merged map
+		// through pricing.Resolve, so normalized/canonical aliases still match
+		// when this read-only path cannot seed model_pricing rows.
+		rates[p.ModelPattern] = config.CustomModelRate{
+			Input:         p.InputPerMTok,
+			Output:        p.OutputPerMTok,
+			CacheCreation: p.CacheCreationPerMTok,
+			CacheRead:     p.CacheReadPerMTok,
+		}
+	}
+	maps.Copy(rates, custom)
+	database.SetCustomPricing(rates)
+}
+
 func ensurePricingWithFetcher(
 	database *db.DB, offline bool,
 	fetch func() ([]pricing.ModelPricing, error),
@@ -399,6 +441,74 @@ func ensurePricingWithFetcher(
 	return refreshPricingIfStale(
 		database, fetch, pricingRefreshCooldown, now,
 	)
+}
+
+func fetchHTTPDailyUsage(
+	ctx context.Context,
+	tr transport,
+	authToken string,
+	query dailyUsageQuery,
+) (db.DailyUsageResult, error) {
+	filter := query.Filter
+	q := url.Values{}
+	q.Set("no_default_range", strconv.FormatBool(query.NoDefaultRange))
+	setIfNotEmpty := func(k, v string) {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	setIfNotEmpty("from", filter.From)
+	setIfNotEmpty("to", filter.To)
+	setIfNotEmpty("timezone", filter.Timezone)
+	setIfNotEmpty("agent", filter.Agent)
+	setIfNotEmpty("project", filter.Project)
+	setIfNotEmpty("machine", filter.Machine)
+	setIfNotEmpty("exclude_project", filter.ExcludeProject)
+	setIfNotEmpty("exclude_agent", filter.ExcludeAgent)
+	setIfNotEmpty("exclude_model", filter.ExcludeModel)
+	setIfNotEmpty("model", filter.Model)
+	setIfNotEmpty("active_since", filter.ActiveSince)
+	setIfNotEmpty("termination", filter.Termination)
+	if filter.MinUserMessages > 0 {
+		q.Set("min_user_messages", fmt.Sprint(filter.MinUserMessages))
+	}
+	q.Set("include_one_shot", strconv.FormatBool(!filter.ExcludeOneShot))
+	q.Set("include_automated", strconv.FormatBool(!filter.ExcludeAutomated))
+
+	endpoint := strings.TrimSuffix(tr.URL, "/") +
+		"/api/v1/usage/summary?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return db.DailyUsageResult{}, fmt.Errorf(
+			"usage summary: HTTP %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(body)),
+		)
+	}
+	var out struct {
+		Totals        db.UsageTotals        `json:"totals"`
+		Daily         []db.DailyUsageEntry  `json:"daily"`
+		SessionCounts db.UsageSessionCounts `json:"sessionCounts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	return db.DailyUsageResult{
+		Daily:         out.Daily,
+		Totals:        out.Totals,
+		SessionCounts: out.SessionCounts,
+	}, nil
 }
 
 // upsertPricing copies pricing rows into the db.ModelPricing
@@ -419,26 +529,6 @@ func upsertPricing(
 		}
 	}
 	return database.UpsertModelPricing(dbPrices)
-}
-
-// insertMissingPricing inserts fallback rows for models not already
-// priced, without overwriting existing rows. Used by the direct
-// usage path so a CLI-only data dir still prices fallback-catalog
-// models, while never clobbering richer LiteLLM rows.
-func insertMissingPricing(
-	database *db.DB, prices []pricing.ModelPricing,
-) error {
-	dbPrices := make([]db.ModelPricing, len(prices))
-	for i, p := range prices {
-		dbPrices[i] = db.ModelPricing{
-			ModelPattern:         p.ModelPattern,
-			InputPerMTok:         p.InputPerMTok,
-			OutputPerMTok:        p.OutputPerMTok,
-			CacheCreationPerMTok: p.CacheCreationPerMTok,
-			CacheReadPerMTok:     p.CacheReadPerMTok,
-		}
-	}
-	return database.InsertMissingModelPricing(dbPrices)
 }
 
 func printDailyTable(

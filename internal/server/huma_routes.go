@@ -227,6 +227,13 @@ func post[I, O any](
 	registerRoute(group, http.MethodPost, path, summary, handler, s.humaTimeout())
 }
 
+func postLong[I, O any](
+	_ *Server, group routeGroup, path, summary string,
+	handler func(context.Context, *I) (*O, error),
+) {
+	registerRoute(group, http.MethodPost, path, summary, handler)
+}
+
 func put[I, O any](
 	s *Server, group routeGroup, path, summary string,
 	handler func(context.Context, *I) (*O, error),

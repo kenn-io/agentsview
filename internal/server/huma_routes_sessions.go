@@ -788,7 +788,7 @@ func (s *Server) humaEvents(
 	_ context.Context,
 	_ *emptyInput,
 ) (*huma.StreamResponse, error) {
-	if s.engine == nil || s.broadcaster == nil {
+	if s.broadcaster == nil {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusServiceUnavailable, "events not available in this mode"),
 			http.Header{"Retry-After": []string{"300"}},

@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 )
 
 func TestResolveDuckDBPushProjects(t *testing.T) {
@@ -65,6 +71,87 @@ func TestResolveDuckDBPushProjects(t *testing.T) {
 			assert.Equal(t, tt.wantExclude, exc)
 		})
 	}
+}
+
+func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
+	var gotAuth string
+	absPath := filepath.Join(t.TempDir(), "agentsview.duckdb")
+	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		gotAuth = r.Header.Get("Authorization")
+		var req daemonPushRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.True(t, req.Full)
+		assert.Equal(t, []string{"a"}, req.Projects)
+		assert.Equal(t, []string{"b"}, req.ExcludeProjects)
+		require.NotNil(t, req.DuckDB)
+		assert.Equal(t, absPath, req.DuckDB.Path)
+		assert.Equal(t, "workstation", req.DuckDB.MachineName)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(duckdbsync.PushResult{
+			SessionsPushed: 2,
+			MessagesPushed: 3,
+			Duration:       time.Second,
+		}))
+	})
+
+	backend := daemonArchiveWriteBackend{
+		appCfg: config.Config{AuthToken: "secret"},
+		tr: transport{
+			Mode: transportHTTP,
+			URL:  ts.URL,
+		},
+	}
+	result, err := backend.DuckDBPush(
+		context.Background(),
+		config.DuckDBConfig{
+			Path:        absPath,
+			MachineName: "workstation",
+		},
+		DuckDBPushConfig{Full: true},
+		[]string{"a"},
+		[]string{"b"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer secret", gotAuth)
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
+}
+
+func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T) {
+	var gotPath string
+	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		var req daemonPushRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.NotNil(t, req.DuckDB)
+		gotPath = req.DuckDB.Path
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(duckdbsync.PushResult{}))
+	})
+
+	backend := daemonArchiveWriteBackend{
+		tr: transport{
+			Mode: transportHTTP,
+			URL:  ts.URL,
+		},
+	}
+	_, err := backend.DuckDBPush(
+		context.Background(),
+		config.DuckDBConfig{Path: "relative.duckdb"},
+		DuckDBPushConfig{},
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+
+	want, err := filepath.Abs("relative.duckdb")
+	require.NoError(t, err)
+	assert.Equal(t, want, gotPath)
 }
 
 func TestResolveQuackServeToken(t *testing.T) {

@@ -8,15 +8,96 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/daemon"
 )
+
+// requirePOSIXSignals skips the test on platforms without POSIX signal
+// semantics, where graceful SIGTERM termination and zombie-based liveness
+// checks do not apply.
+func requirePOSIXSignals(t *testing.T, reason string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip(reason)
+	}
+}
+
+// startSleepProcess starts a long-lived child process and reaps it during
+// cleanup. The returned PID is alive for the duration of the test, and once
+// signalled the child becomes a zombie that daemon.ProcessAlive still reports
+// as alive until cleanup reaps it.
+func startSleepProcess(t *testing.T) int {
+	t.Helper()
+	return startProcessKilledOnCleanup(t, exec.Command("sleep", "60"))
+}
+
+// startTERMIgnoringProcess starts a child that ignores SIGTERM, so it survives
+// a graceful stop and drives the force-kill escalation path.
+func startTERMIgnoringProcess(t *testing.T) int {
+	t.Helper()
+	return startProcessKilledOnCleanup(
+		t, exec.Command("sh", "-c", "trap '' TERM; sleep 60"),
+	)
+}
+
+func startProcessKilledOnCleanup(t *testing.T, cmd *exec.Cmd) int {
+	t.Helper()
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	return cmd.Process.Pid
+}
+
+// startReapedSleepProcess starts a long-lived child and reaps it concurrently,
+// so once the process is signalled it leaves the zombie state and
+// daemon.ProcessAlive reports it as dead. The returned channel closes when the
+// child has been reaped.
+func startReapedSleepProcess(t *testing.T) (int, <-chan struct{}) {
+	t.Helper()
+	cmd := exec.Command("sleep", "60")
+	require.NoError(t, cmd.Start())
+	reaped := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(reaped)
+	}()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+	return cmd.Process.Pid, reaped
+}
+
+// startReapedProcess starts and fully reaps a short-lived process, returning a
+// PID that is guaranteed dead.
+func startReapedProcess(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", "exit")
+	}
+	require.NoError(t, cmd.Start())
+	pid := cmd.Process.Pid
+	require.NoError(t, cmd.Wait())
+	return pid
+}
+
+// onlyLiveRuntimeRecord asserts exactly one live runtime record exists in dir
+// and returns it.
+func onlyLiveRuntimeRecord(t *testing.T, dir string) daemon.RuntimeRecord {
+	t.Helper()
+	records := liveDaemonRecords(dir)
+	require.Len(t, records, 1)
+	return records[0]
+}
 
 func writeRuntimeRecordForTest(
 	dataDir string, rec daemon.RuntimeRecord,
@@ -109,7 +190,9 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 
-	path, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
+	path, err := WriteDaemonRuntimeWithAuthAndNoSync(
+		dir, host, port, "1.0.0", false, true, true,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, runtimePathForTest(dir, os.Getpid()), path)
 
@@ -123,6 +206,15 @@ func TestWriteAndRemoveDaemonRuntime(t *testing.T) {
 	assert.Equal(t, os.Getpid(), rec.PID)
 	assert.Equal(t, daemon.NetworkTCP, rec.Network)
 	assert.Equal(t, net.JoinHostPort(host, strconv.Itoa(port)), rec.Address)
+	assert.Equal(t, "true", rec.Metadata[runtimeRequireAuth])
+	assert.Equal(t, "true", rec.Metadata[runtimeNoSync])
+	assert.Equal(t, strconv.Itoa(daemonAPIVersion), rec.Metadata[runtimeAPIVersion])
+	assert.Equal(t, strconv.Itoa(db.CurrentDataVersion()), rec.Metadata[runtimeDataVersion])
+
+	rt := daemonRuntimeFromRecord(rec)
+	assert.True(t, rt.RequireAuth)
+	assert.True(t, rt.RequireAuthKnown)
+	assert.True(t, rt.NoSync)
 
 	RemoveDaemonRuntime(dir)
 	_, statErr := os.Stat(path)
@@ -187,6 +279,35 @@ func TestFindDaemonRuntime_LiveProcess(t *testing.T) {
 	assert.Equal(t, port, result.Port)
 	assert.Equal(t, os.Getpid(), result.Record.PID)
 	assert.False(t, result.ReadOnly)
+}
+
+func TestFindDaemonRuntime_IgnoresIncompatibleRuntime(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   net.JoinHostPort(host, strconv.Itoa(port)),
+		Service:   daemonService,
+		Version:   "old",
+		StartedAt: time.Now(),
+		Metadata: map[string]string{
+			runtimeHost:        host,
+			runtimePort:        strconv.Itoa(port),
+			runtimeReadOnly:    "false",
+			runtimeAPIVersion:  "0",
+			runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+		},
+	})
+	require.NoError(t, err)
+
+	assert.Nil(t, FindDaemonRuntime(dir))
+	rt, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	require.Error(t, compatErr)
+	assert.Contains(t, compatErr.Error(), "API version")
+	assert.True(t, IsLocalDaemonActive(dir),
+		"incompatible writable daemon still owns the local archive")
 }
 
 func TestFindDaemonRuntime_ReadOnly(t *testing.T) {
@@ -286,12 +407,15 @@ func TestFindDaemonRuntime_MigratesLegacyWritableStateFile(t *testing.T) {
 	})
 
 	result := FindDaemonRuntime(dir)
-	require.NotNil(t, result, "expected legacy state to migrate")
-	assert.Equal(t, os.Getpid(), result.Record.PID)
-	assert.Equal(t, host, result.Host)
-	assert.Equal(t, port, result.Port)
-	assert.Equal(t, "legacy", result.Record.Version)
-	assert.False(t, result.ReadOnly)
+	require.Nil(t, result, "legacy state without compatibility metadata is incompatible")
+	incompatible, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, incompatible, "expected legacy state to migrate")
+	require.Error(t, compatErr)
+	assert.Equal(t, os.Getpid(), incompatible.Record.PID)
+	assert.Equal(t, host, incompatible.Host)
+	assert.Equal(t, port, incompatible.Port)
+	assert.Equal(t, "legacy", incompatible.Record.Version)
+	assert.False(t, incompatible.ReadOnly)
 	assert.True(t, IsDaemonActive(dir))
 	assert.True(t, IsLocalDaemonActive(dir))
 
@@ -314,8 +438,11 @@ func TestFindDaemonRuntime_MigratesLegacyReadOnlyStateFile(t *testing.T) {
 	})
 
 	result := FindDaemonRuntime(dir)
-	require.NotNil(t, result, "expected read-only legacy state to migrate")
-	assert.True(t, result.ReadOnly)
+	require.Nil(t, result, "read-only legacy state without compatibility metadata is incompatible")
+	incompatible, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, incompatible, "expected read-only legacy state to migrate")
+	require.Error(t, compatErr)
+	assert.True(t, incompatible.ReadOnly)
 	assert.False(t, IsLocalDaemonActive(dir))
 	assert.True(t, IsDaemonActive(dir))
 	_, legacyStatErr := os.Stat(legacyPath)
@@ -341,8 +468,9 @@ func TestFindDaemonRuntime_LegacyStateFileUsesPortFromName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(legacyPath, data, 0o644))
 
-	result := FindDaemonRuntime(dir)
+	result, compatErr := FindIncompatibleDaemonRuntime(dir)
 	require.NotNil(t, result, "expected legacy port from file name to migrate")
+	require.Error(t, compatErr)
 	assert.Equal(t, port, result.Port)
 }
 
@@ -392,6 +520,30 @@ func TestIsDaemonStarting_LegacyStartupLock(t *testing.T) {
 
 	assert.True(t, IsDaemonStarting(dir))
 	assert.True(t, IsLocalDaemonActive(dir))
+}
+
+func TestLiveWritableRuntimeWithMismatchedCreateTimeIsRemoved(t *testing.T) {
+	dir := runtimeTestDir(t)
+	liveCreateTime, ok := processCreateTimeMillis(os.Getpid())
+	if !ok {
+		t.Skip("process create time is unavailable on this platform")
+	}
+	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:     os.Getpid(),
+		Network: daemon.NetworkTCP,
+		Address: net.JoinHostPort("127.0.0.1", "9"),
+		Metadata: map[string]string{
+			runtimeReadOnly:   "false",
+			runtimeCreateTime: strconv.FormatInt(liveCreateTime+1, 10),
+		},
+	})
+	require.NoError(t, err)
+
+	assert.False(t, hasLiveWritableDaemonRuntime(dir))
+	assert.False(t, IsLocalDaemonActive(dir))
+	_, statErr := os.Stat(runtimePathForTest(dir, os.Getpid()))
+	assert.True(t, os.IsNotExist(statErr),
+		"mismatched create-time runtime record should be removed")
 }
 
 func TestStartLock_OwnProcess(t *testing.T) {

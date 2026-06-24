@@ -180,7 +180,7 @@ func runServiceStatus() {
 	}
 	// Show the last successful push time from local sync state.
 	appCfg := loadServiceConfig()
-	database, derr := openDB(appCfg)
+	database, derr := openReadOnlyDB(appCfg)
 	if derr != nil {
 		return
 	}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -42,9 +41,13 @@ func newSessionExportCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			applyClassifierConfig(cfg)
-			d, err := db.Open(cfg.DBPath)
+			d, err := openReadOnlyDB(cfg)
 			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"session not in local archive: %s", args[0],
+					)
+				}
 				return fmt.Errorf("open local archive: %w", err)
 			}
 			defer d.Close()

@@ -1409,7 +1409,12 @@ func (db *DB) computeOutcomeStats(
 	}
 	since := from.UTC().Format(time.RFC3339)
 	until := to.UTC().Format(time.RFC3339)
-	cache := git.NewCache(db.getWriter())
+	var cache *git.Cache
+	if db.ReadOnly() {
+		cache = git.NewReadOnlyCache(db.rawReader())
+	} else {
+		cache = git.NewCache(db.rawWriter())
+	}
 	out := &StatsOutcomeStats{}
 	contributed := false
 	for _, repo := range repos {

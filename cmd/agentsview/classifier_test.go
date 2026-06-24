@@ -144,6 +144,21 @@ func TestClassifierRebuildAllowsDirectWritable(t *testing.T) {
 	assert.NoError(t, guardClassifierRebuild(tr))
 }
 
+func TestClassifierRebuildRefusesBackgroundLaunchLock(t *testing.T) {
+	dir := classifierTestEnv(t, nil)
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err, "load")
+	cfg.DBPath = filepath.Join(dir, "sessions.db")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, launchLock.Unlock()) })
+
+	err = runClassifierRebuild(context.Background(), cfg, &bytes.Buffer{}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daemon launch is in progress")
+}
+
 // TestClassifierRebuildSkipsConfiguredPGByDefault confirms that
 // configured sync PG is not touched by the local recovery command
 // unless the caller explicitly opts in.

@@ -90,7 +90,7 @@ func resolveService(
 	if usePG {
 		return newPGReadService(cfg, pgCfg)
 	}
-	tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
+	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -104,6 +104,18 @@ func resolveService(
 // cleanup. Read-only commands should use resolveService instead.
 func resolveWritableService(
 	cmd *cobra.Command,
+) (service.SessionService, func(), error) {
+	return resolveWritableServiceWithIntent(cmd, false)
+}
+
+func resolveFreshWritableService(
+	cmd *cobra.Command,
+) (service.SessionService, func(), error) {
+	return resolveWritableServiceWithIntent(cmd, true)
+}
+
+func resolveWritableServiceWithIntent(
+	cmd *cobra.Command, fresh bool,
 ) (service.SessionService, func(), error) {
 	if remote, _ := cmd.Flags().GetString("server"); remote != "" {
 		if pgReadRequested(cmd) {
@@ -127,7 +139,12 @@ func resolveWritableService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	tr, err := detectTransport(cfg.DataDir, cfg.AuthToken, 0)
+	var tr transport
+	if fresh {
+		tr, err = ensureTransport(&cfg, transportIntentArchiveWrite, 0)
+	} else {
+		tr, err = detectTransport(cfg.DataDir, cfg.AuthToken, 0)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,10 +156,13 @@ func resolveWritableService(
 		)
 	}
 	if tr.Mode == transportDirect && tr.DirectReadOnly {
+		reason := tr.DirectReason
+		if reason == "" {
+			reason = "local daemon owns the SQLite archive but is not responding"
+		}
 		return nil, nil, errors.New(
-			"local daemon owns the SQLite archive but is not responding; " +
-				"refusing to write directly. Retry once the daemon is " +
-				"reachable, or stop it to write locally",
+			reason + "; refusing to write directly. Retry once the daemon " +
+				"is reachable and compatible, or stop it to write locally",
 		)
 	}
 	return syncService(cfg, tr)

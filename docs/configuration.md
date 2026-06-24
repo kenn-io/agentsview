@@ -16,10 +16,20 @@ defaulting to `~/.agentsview/`. Override with the
 
 ```
 ~/.agentsview/
-├── sessions.db     # SQLite database (WAL mode)
-├── config.toml     # Configuration file
-└── uploads/        # Uploaded session files
+├── sessions.db      # SQLite database (WAL mode)
+├── config.toml      # Configuration file
+├── config.toml.lock # Serializes concurrent config writers
+├── db.write.lock    # Per-data-dir SQLite write-owner lock
+├── serve.log        # Detached daemon log
+└── uploads/         # Uploaded session files
 ```
+
+The desktop app and CLI share a detached local daemon for fresh reads and
+writes. A running daemon owns local SQLite writes for this data directory and
+self-exits after an idle period. Read-only CLI commands can still open
+`sessions.db` directly in read-only mode when no daemon is running. Set
+`AGENTSVIEW_NO_DAEMON=1` for scripts or CI jobs that must never auto-start a
+daemon.
 
 ## Config File
 

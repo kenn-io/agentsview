@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/mattn/go-sqlite3"
 )
 
 // Cache is a small TTL-backed key-value store for git aggregation results.
@@ -17,12 +20,20 @@ import (
 // to have created the `git_cache` table (see internal/db/schema.sql) before
 // using the cache; Cache itself never issues DDL.
 type Cache struct {
-	db *sql.DB
+	db    *sql.DB
+	write bool
 }
 
 // NewCache wraps db as a git TTL cache. db must be a handle on a SQLite
 // database that already contains the `git_cache` table.
 func NewCache(db *sql.DB) *Cache {
+	return &Cache{db: db, write: true}
+}
+
+// NewReadOnlyCache wraps db as a TTL cache that reads existing rows but does
+// not attempt to persist freshly computed values. It is used by commands that
+// intentionally open SQLite read-only.
+func NewReadOnlyCache(db *sql.DB) *Cache {
 	return &Cache{db: db}
 }
 
@@ -67,6 +78,9 @@ func (c *Cache) GetOrCompute(
 ) ([]byte, error) {
 	payload, ok, err := c.lookup(ctx, key, ttl)
 	if err != nil {
+		if !c.write && isMissingCacheTable(err) {
+			return compute()
+		}
 		return nil, err
 	}
 	if ok {
@@ -77,10 +91,21 @@ func (c *Cache) GetOrCompute(
 	if err != nil {
 		return nil, err
 	}
+	if !c.write {
+		return fresh, nil
+	}
 	if err := c.store(ctx, key, kind, fresh); err != nil {
 		return nil, fmt.Errorf("git_cache store: %w", err)
 	}
 	return fresh, nil
+}
+
+func isMissingCacheTable(err error) bool {
+	var sqliteErr sqlite3.Error
+	if !errors.As(err, &sqliteErr) || sqliteErr.Code != sqlite3.ErrError {
+		return false
+	}
+	return strings.Contains(err.Error(), "no such table: git_cache")
 }
 
 // lookup returns (payload, true, nil) when a fresh row exists, (nil, false,

@@ -2,7 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/kit/daemon"
 )
 
 func TestNewActivityCommand_RegistersReport(t *testing.T) {
@@ -60,6 +65,66 @@ func TestResolveActivityReport_JSONShape(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "minute", r.BucketUnit)
 	assert.Equal(t, "2026-06-16T00:00:00Z", r.RangeStart)
+}
+
+func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
+		Service: daemonService,
+		Version: "test",
+	})
+	var gotQuery string
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		switch r.URL.Path {
+		case "/api/ping":
+			ping.ServeHTTP(w, r)
+		case "/api/v1/activity/report":
+			gotQuery = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"timezone":"UTC",
+				"range_start":"2026-06-16T00:00:00Z",
+				"range_end":"2026-06-17T00:00:00Z",
+				"bucket_unit":"1h",
+				"bucket_seconds":3600,
+				"bucket_count":24,
+				"effective_end":"2026-06-17T00:00:00Z",
+				"elapsed_bucket_count":24,
+				"buckets":[],
+				"peak":{"agents":0},
+				"totals":{"sessions":3},
+				"by_project":[],
+				"by_model":[],
+				"by_agent":[],
+				"by_session":[],
+				"intervals":[]
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	out := captureStdout(t, func() {
+		runActivityReport(ActivityReportConfig{
+			JSON: true, Preset: "day",
+			Date: "2026-06-16", Timezone: "UTC",
+		})
+	})
+	assert.Contains(t, gotQuery, "preset=day")
+	assert.Contains(t, gotQuery, "date=2026-06-16")
+	assert.Contains(t, gotQuery, "timezone=UTC")
+
+	var payload activity.Report
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	assert.Equal(t, "UTC", payload.Timezone)
+	assert.Equal(t, 3, payload.Totals.Sessions)
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
 func TestFmtRangeBound_RendersInTimezone(t *testing.T) {
@@ -162,9 +227,29 @@ func TestResolveActivityReport_PricesFreshDBUsage(t *testing.T) {
 	// exactly as runActivityReport does, so removing that seeding fails here.
 	r, err := resolveActivityReportPriced(ActivityReportConfig{
 		Preset: "day", Date: "2026-06-15", Timezone: "UTC", Offline: true,
-	}, d)
+	}, d, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	assert.Greater(t, r.Totals.Cost, 0.0,
 		"resolveActivityReportPriced must seed fallback pricing for fresh-DB usage")
+}
+
+func TestRunActivityReportOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
+	dataDir := setupGoldenStatsDataDir(t)
+
+	lock, err := acquireWriteOwnerLock(context.Background(), dataDir)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, lock.Close()) }()
+
+	out := captureStdout(t, func() {
+		runActivityReport(ActivityReportConfig{
+			Preset:   "day",
+			Date:     "2026-04-04",
+			Timezone: "UTC",
+			Offline:  true,
+		})
+	})
+
+	assert.Contains(t, out, "Activity 2026-04-04 to 2026-04-05")
+	assert.Contains(t, out, "Sessions")
 }

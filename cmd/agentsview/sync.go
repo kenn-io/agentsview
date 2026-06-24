@@ -3,11 +3,18 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
-	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -56,40 +63,101 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	defer stopProfile()
 
 	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
+	var remoteHosts []config.RemoteHost
+	includeLocal := cfg.Host == ""
+	if cfg.Host == "" {
+		remoteHosts = append(remoteHosts, appCfg.RemoteHosts...)
+	} else {
+		remoteHosts = append(remoteHosts, config.RemoteHost{
+			Host: cfg.Host,
+			User: cfg.User,
+			Port: cfg.Port,
+		})
+	}
+	if len(remoteHosts) > 0 {
+		if err := (config.Config{RemoteHosts: remoteHosts}).ValidateRemoteHosts(); err != nil {
+			fatal("invalid remote host: %v", err)
+		}
+	}
+
+	if includeLocal || len(remoteHosts) > 0 {
+		tr, err := ensureTransport(
+			&appCfg, transportIntentArchiveWrite, 0,
+		)
+		if err != nil {
+			fatal("detecting daemon: %v", err)
+		}
+		if tr.Mode == transportHTTP {
+			useDaemon := useDaemonForSync(tr)
+			if useDaemon && len(remoteHosts) > 0 {
+				failures, err := runDaemonRemoteSync(
+					context.Background(), tr, appCfg.AuthToken,
+					remoteHosts, cfg.Full, includeLocal,
+				)
+				if err != nil {
+					fatal("daemon remote sync: %v", err)
+				}
+				reportRemoteFailures(failures)
+				return len(failures) > 0
+			}
+			if useDaemon {
+				start := time.Now()
+				stats, err := runDaemonSync(
+					context.Background(), tr, appCfg.AuthToken, cfg.Full,
+				)
+				if err != nil {
+					fatal("daemon sync: %v", err)
+				}
+				printSyncSummary(stats, start)
+				return false
+			}
+			// Read-only mirror daemons do not own the local SQLite
+			// archive. Remote sync can still proceed through the direct
+			// path below, which will take the write-owner lock before
+			// writing imported remote sessions.
+		}
+		if tr.DirectReadOnly {
+			fatal(
+				"local daemon owns the SQLite archive but is not " +
+					"responding; refusing to sync directly",
+			)
+		}
+	}
+
+	database, writeLock, err := openWriteDB(context.Background(), appCfg)
 	if err != nil {
 		fatal("opening database: %v", err)
 	}
-	defer database.Close()
-
-	if appCfg.CursorSecret != "" {
-		secret, decErr := base64.StdEncoding.DecodeString(
-			appCfg.CursorSecret,
-		)
-		if decErr != nil {
-			fatal("invalid cursor secret: %v", decErr)
-		}
-		database.SetCursorSecret(secret)
-	}
+	defer closeWriteDB(database, writeLock)
 
 	if cfg.Host != "" {
 		runRemoteSync(appCfg, database, cfg)
 		return false
 	}
 
-	if err := appCfg.ValidateRemoteHosts(); err != nil {
-		fatal("invalid remote_hosts config: %v", err)
-	}
-
 	failures := syncLocalAndRemotes(
 		appCfg.RemoteHosts, cfg.Full,
-		func() bool { return runLocalSync(appCfg, database, cfg.Full) },
+		func() bool {
+			return runLocalSync(
+				context.Background(), appCfg, database, cfg.Full,
+			)
+		},
 		func(rh config.RemoteHost, full bool) error {
 			return runRemoteSyncOnce(appCfg, database, rh, full)
 		},
 	)
 	reportRemoteFailures(failures)
 	return len(failures) > 0
+}
+
+func useDaemonForSync(tr transport) bool {
+	if tr.Mode != transportHTTP {
+		return false
+	}
+	if tr.ReadOnly {
+		return false
+	}
+	return true
 }
 
 // syncLocalAndRemotes runs the local sync, then the configured
@@ -192,7 +260,7 @@ func reportRemoteFailures(failures []remoteHostFailure) {
 // can use to force a full PG push (watermarks become stale after
 // a local resync).
 func runLocalSync(
-	appCfg config.Config, database *db.DB, full bool,
+	ctx context.Context, appCfg config.Config, database *db.DB, full bool,
 ) bool {
 	for _, def := range parser.Registry {
 		if !appCfg.IsUserConfigured(def.Type) {
@@ -213,7 +281,6 @@ func runLocalSync(
 	})
 
 	didResync := full || database.NeedsResync()
-	ctx := context.Background()
 	if didResync {
 		runInitialResync(ctx, engine)
 	} else {
@@ -223,7 +290,7 @@ func runLocalSync(
 
 	fmt.Println()
 	stats, err := database.GetStats(
-		context.Background(), false, false,
+		ctx, false, false,
 	)
 	if err == nil {
 		fmt.Printf(
@@ -232,6 +299,171 @@ func runLocalSync(
 		)
 	}
 	return didResync
+}
+
+func runDaemonSync(
+	ctx context.Context,
+	tr transport,
+	authToken string,
+	full bool,
+) (sync.SyncStats, error) {
+	endpoint := "/api/v1/sync"
+	if full {
+		endpoint = "/api/v1/resync"
+	}
+	baseURL := strings.TrimSuffix(tr.URL, "/")
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, baseURL+endpoint, nil,
+	)
+	if err != nil {
+		return sync.SyncStats{}, err
+	}
+	req.Header.Set("Origin", baseURL)
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return sync.SyncStats{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return sync.SyncStats{}, fmt.Errorf(
+			"HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)),
+		)
+	}
+	if strings.HasPrefix(
+		resp.Header.Get("Content-Type"), "application/json",
+	) {
+		var stats sync.SyncStats
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			return sync.SyncStats{}, err
+		}
+		return stats, nil
+	}
+	return parseDaemonSyncSSE(resp.Body)
+}
+
+func runDaemonRemoteSync(
+	ctx context.Context,
+	tr transport,
+	authToken string,
+	hosts []config.RemoteHost,
+	full bool,
+	includeLocal bool,
+) ([]remoteHostFailure, error) {
+	body, err := json.Marshal(struct {
+		Full         bool                `json:"full"`
+		IncludeLocal bool                `json:"include_local"`
+		Hosts        []config.RemoteHost `json:"hosts"`
+	}{
+		Full:         full,
+		IncludeLocal: includeLocal,
+		Hosts:        hosts,
+	})
+	if err != nil {
+		return nil, err
+	}
+	baseURL := strings.TrimSuffix(tr.URL, "/")
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		baseURL+"/api/v1/sync/remotes",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", baseURL)
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf(
+			"HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)),
+		)
+	}
+	var out struct {
+		Failures []struct {
+			Host config.RemoteHost `json:"host"`
+			Err  string            `json:"error"`
+		} `json:"failures"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	failures := make([]remoteHostFailure, 0, len(out.Failures))
+	for _, f := range out.Failures {
+		failures = append(failures, remoteHostFailure{
+			Host: f.Host,
+			Err:  errors.New(f.Err),
+		})
+	}
+	return failures, nil
+}
+
+func parseDaemonSyncSSE(r io.Reader) (sync.SyncStats, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	var event string
+	var data strings.Builder
+	var lastNonDoneData string
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if event == "done" {
+				var stats sync.SyncStats
+				if err := json.Unmarshal(
+					[]byte(data.String()), &stats,
+				); err != nil {
+					return sync.SyncStats{}, err
+				}
+				return stats, nil
+			}
+			if data.Len() > 0 {
+				lastNonDoneData = data.String()
+			}
+			event = ""
+			data.Reset()
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "event: "); ok {
+			event = value
+			continue
+		}
+		if value, ok := strings.CutPrefix(line, "data: "); ok {
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
+			data.WriteString(value)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return sync.SyncStats{}, err
+	}
+	if event != "done" && data.Len() > 0 {
+		lastNonDoneData = data.String()
+	}
+	if event == "done" && data.Len() > 0 {
+		var stats sync.SyncStats
+		if err := json.Unmarshal([]byte(data.String()), &stats); err != nil {
+			return sync.SyncStats{}, err
+		}
+		return stats, nil
+	}
+	if lastNonDoneData != "" {
+		return sync.SyncStats{}, fmt.Errorf(
+			"daemon sync error: %s", lastNonDoneData,
+		)
+	}
+	return sync.SyncStats{}, fmt.Errorf("daemon sync response missing done event")
 }
 
 func valueOrNever(s string) string {

@@ -40,6 +40,7 @@ agentsview serve               # start foreground server
 agentsview serve --background  # start server and return to the shell
 agentsview serve status        # show whether a server is running
 agentsview serve stop          # stop the running server
+agentsview session list        # read from the daemon if warm, otherwise SQLite
 agentsview usage daily         # print daily cost summary
 ```
 
@@ -47,10 +48,17 @@ On first run, agentsview discovers sessions from every supported agent on your
 machine, syncs them into a local SQLite database, and serves a web UI at
 `http://127.0.0.1:8080`.
 
-Use `agentsview serve --background` when you want the dashboard to keep running
-after your terminal prompt returns. The command prints the server URL, process
-ID, and log path (`~/.agentsview/serve.log`). Check on it with
-`agentsview serve status` and shut it down with `agentsview serve stop`.
+The desktop app and freshness-sensitive CLI commands share a detached local
+daemon. Read-only CLI commands attach to it when it is already running, but fall
+back to direct read-only SQLite on a cold archive so one-off scripts stay fast.
+Commands that need fresh data or need to write, such as `sync`, `usage`,
+`token-use`, `pg push`, and `duckdb push`, auto-start the daemon when needed.
+
+Use `agentsview serve --background` when you want to start the daemon
+explicitly. The command prints the server URL, process ID, and log path
+(`~/.agentsview/serve.log`). Check on it with `agentsview serve status` and shut
+it down with `agentsview serve stop`. Background daemons self-exit after an idle
+period unless a client request or daemon-owned job is active.
 
 ## Remote / forwarded access
 

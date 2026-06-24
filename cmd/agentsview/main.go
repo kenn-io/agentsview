@@ -33,6 +33,7 @@ var (
 
 const (
 	periodicSyncInterval  = 15 * time.Minute
+	daemonIdleTimeout     = 20 * time.Minute
 	telemetryPingInterval = 24 * time.Hour
 	unwatchedPollInterval = 2 * time.Minute
 	watcherDebounce       = 500 * time.Millisecond
@@ -107,9 +108,14 @@ func runServe(cfg config.Config) {
 	MarkDaemonStarting(cfg.DataDir)
 	defer UnmarkDaemonStarting(cfg.DataDir)
 
-	applyClassifierConfig(cfg)
-	database := mustOpenDB(cfg)
-	defer database.Close()
+	database, writeLock := mustOpenWriteDB(context.Background(), cfg)
+	runtimeRecordDataDir := ""
+	defer func() {
+		closeWriteDB(database, writeLock)
+		if runtimeRecordDataDir != "" {
+			RemoveDaemonRuntime(runtimeRecordDataDir)
+		}
+	}()
 
 	if n := len(db.UserAutomationPrefixes()); n > 0 {
 		log.Printf("loaded %d user automation prefix(es) from config", n)
@@ -132,6 +138,7 @@ func runServe(cfg config.Config) {
 		context.Background(), os.Interrupt, syscall.SIGTERM,
 	)
 	defer stop()
+	idleTracker := newDaemonIdleTracker(stop)
 
 	telemetryReporter := telemetry.NewReporterOrDisabled(telemetry.Options{
 		DataDir: cfg.DataDir,
@@ -190,7 +197,7 @@ func runServe(cfg config.Config) {
 		// listening for minutes. Backfill is idempotent and
 		// guarded by a one-shot marker, so concurrent writes
 		// from the file watcher and periodic sync are safe.
-		go func() {
+		go idleTracker.Do(func() {
 			if err := database.BackfillSignals(
 				ctx,
 				func(bCtx context.Context, id string) error {
@@ -199,9 +206,9 @@ func runServe(cfg config.Config) {
 			); err != nil && ctx.Err() == nil {
 				log.Printf("signals backfill: %v", err)
 			}
-		}()
+		})
 
-		go startPeriodicSync(engine, database)
+		go startPeriodicSync(engine, database, idleTracker)
 	}
 
 	// Seed model_pricing after any resync swap so the new DB
@@ -231,6 +238,7 @@ func runServe(cfg config.Config) {
 		server.WithDataDir(cfg.DataDir),
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
+		server.WithIdleTracker(idleTracker),
 	)
 
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)
@@ -246,8 +254,9 @@ func runServe(cfg config.Config) {
 	// write fails, keep the start lock as a fallback "server
 	// is active" marker so token-use doesn't start a competing
 	// on-demand sync against our live DB.
-	if _, sfErr := WriteDaemonRuntime(
+	if _, sfErr := WriteDaemonRuntimeWithAuthAndNoSync(
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, false,
+		rt.Cfg.RequireAuth, rt.Cfg.NoSync,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
 		log.Printf(
@@ -256,8 +265,12 @@ func runServe(cfg config.Config) {
 			sfErr,
 		)
 	} else {
-		defer RemoveDaemonRuntime(rt.Cfg.DataDir)
+		runtimeRecordDataDir = rt.Cfg.DataDir
 		UnmarkDaemonStarting(rt.Cfg.DataDir)
+	}
+	if idleTracker != nil {
+		idleTracker.Touch()
+		go idleTracker.Run(ctx)
 	}
 
 	if rt.PublicURL == rt.LocalURL {
@@ -280,18 +293,45 @@ func runServe(cfg config.Config) {
 	if engine != nil {
 		stopWatcher, unwatchedDirs := startFileWatcher(
 			cfg, engine, func(paths []string) {
-				engine.SyncPaths(paths)
+				idleTracker.Do(func() {
+					engine.SyncPaths(paths)
+				})
 			},
 		)
 		defer stopWatcher()
 		if len(unwatchedDirs) > 0 {
-			go startUnwatchedPoll(engine, unwatchedDirs)
+			go startUnwatchedPoll(engine, unwatchedDirs, idleTracker)
 		}
 	}
 
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
 	}
+}
+
+func newDaemonIdleTracker(stop context.CancelFunc) *server.IdleTracker {
+	if !runningAsBackgroundChild() {
+		return nil
+	}
+	timeout := daemonIdleTimeout
+	if raw := os.Getenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			log.Printf(
+				"invalid AGENTSVIEW_DAEMON_IDLE_TIMEOUT %q: %v",
+				raw, err,
+			)
+		} else {
+			timeout = parsed
+		}
+	}
+	if timeout <= 0 {
+		return nil
+	}
+	return server.NewIdleTracker(timeout, func() {
+		log.Printf("idle timeout elapsed; shutting down daemon")
+		stop()
+	})
 }
 
 func startTelemetryPings(ctx context.Context, reporter *telemetry.Reporter) {
@@ -378,21 +418,128 @@ func openDB(cfg config.Config) (*db.DB, error) {
 	return database, nil
 }
 
-func mustOpenDB(cfg config.Config) *db.DB {
+func openReadOnlyDB(cfg config.Config) (*db.DB, error) {
+	applyClassifierConfig(cfg)
+	database, err := db.OpenReadOnly(cfg.DBPath)
+	if err != nil {
+		return nil, err
+	}
+	applyCustomPricing(database, cfg)
+	if err := applyCursorSecret(database, cfg); err != nil {
+		database.Close()
+		return nil, err
+	}
+	return database, nil
+}
+
+func openWriteDB(
+	ctx context.Context,
+	cfg config.Config,
+) (*db.DB, *writeOwnerLock, error) {
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return nil, nil, err
+	}
+	lock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
+	if err != nil {
+		return nil, nil, err
+	}
 	database, err := openDB(cfg)
 	if err != nil {
-		fatal("opening database: %v", err)
+		_ = lock.Close()
+		return nil, nil, err
 	}
+	if err := applyCursorSecret(database, cfg); err != nil {
+		database.Close()
+		_ = lock.Close()
+		return nil, nil, err
+	}
+	return database, lock, nil
+}
 
+func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
+	dataDir := writeLockDataDir(cfg)
+	if isExternalDaemonStarting(dataDir) || isLegacyDaemonStarting(dataDir) {
+		return fmt.Errorf(
+			"local daemon is starting and owns the SQLite archive; " +
+				"refusing to write directly. Retry once it is ready " +
+				"or run `agentsview serve stop` first",
+		)
+	}
+	if isBackgroundLaunchActive(dataDir) && !runningAsBackgroundChild() {
+		return fmt.Errorf(
+			"local daemon launch is in progress and owns the SQLite archive; " +
+				"refusing to write directly. Retry once it is ready " +
+				"or run `agentsview serve stop` first",
+		)
+	}
+	if !hasLiveWritableDaemonRuntime(dataDir, cfg.AuthToken) {
+		return nil
+	}
+	// hasLiveWritableDaemonRuntime intentionally ignores API/data
+	// compatibility so direct writers still refuse when any live local
+	// writable daemon owns the archive. FindDaemonRuntime returns only
+	// compatible daemons; incompatible ones fall through to the detailed
+	// error below.
+	if rt := FindDaemonRuntime(dataDir, cfg.AuthToken); rt != nil && !rt.ReadOnly {
+		return fmt.Errorf(
+			"local daemon at %s owns the SQLite archive; refusing "+
+				"to write directly. Retry through the daemon or run "+
+				"`agentsview serve stop` first",
+			urlFromDaemonRuntime(rt),
+		)
+	}
+	reason := errLocalDaemonUnreachable.Error()
+	if _, err := FindIncompatibleDaemonRuntime(dataDir, cfg.AuthToken); err != nil {
+		reason = err.Error()
+	}
+	return fmt.Errorf(
+		"%s; refusing to write directly. Retry through the daemon or "+
+			"run `agentsview serve stop` first",
+		reason,
+	)
+}
+
+func writeLockDataDir(cfg config.Config) string {
+	if cfg.DataDir != "" {
+		return cfg.DataDir
+	}
+	if cfg.DBPath != "" {
+		return filepath.Dir(cfg.DBPath)
+	}
+	return "."
+}
+
+func closeWriteDB(database *db.DB, lock *writeOwnerLock) {
+	if database != nil {
+		database.Close()
+	}
+	if lock != nil {
+		if err := lock.Close(); err != nil {
+			log.Printf("release sqlite write-owner lock: %v", err)
+		}
+	}
+}
+
+func mustOpenWriteDB(
+	ctx context.Context,
+	cfg config.Config,
+) (*db.DB, *writeOwnerLock) {
+	database, lock, err := openWriteDB(ctx, cfg)
+	if err != nil {
+		fatal("opening writable database: %v", err)
+	}
+	return database, lock
+}
+
+func applyCursorSecret(database *db.DB, cfg config.Config) error {
 	if cfg.CursorSecret != "" {
 		secret, err := base64.StdEncoding.DecodeString(cfg.CursorSecret)
 		if err != nil {
-			fatal("invalid cursor secret: %v", err)
+			return fmt.Errorf("invalid cursor secret: %w", err)
 		}
 		database.SetCursorSecret(secret)
 	}
-
-	return database
+	return nil
 }
 
 // fatal prints a formatted error to stderr and exits.
@@ -650,14 +797,16 @@ func collectWatchRoots(cfg config.Config) (roots []watchRoot, unwatchedDirs []st
 }
 
 func startPeriodicSync(
-	engine *sync.Engine, database *db.DB,
+	engine *sync.Engine, database *db.DB, idleTracker *server.IdleTracker,
 ) {
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Running scheduled sync...")
-		engine.SyncAll(context.Background(), nil)
-		recomputePendingSessions(engine, database)
+		idleTracker.Do(func() {
+			engine.SyncAll(context.Background(), nil)
+			recomputePendingSessions(engine, database)
+		})
 	}
 }
 
@@ -694,12 +843,18 @@ type unwatchedPollSyncer interface {
 	) sync.SyncStats
 }
 
-func startUnwatchedPoll(engine unwatchedPollSyncer, roots []string) {
+func startUnwatchedPoll(
+	engine unwatchedPollSyncer,
+	roots []string,
+	idleTracker *server.IdleTracker,
+) {
 	ticker := time.NewTicker(unwatchedPollInterval)
 	defer ticker.Stop()
 	for range ticker.C {
 		log.Println("Polling unwatched directories...")
-		pollUnwatchedRootsOnce(engine, roots)
+		idleTracker.Do(func() {
+			pollUnwatchedRootsOnce(engine, roots)
+		})
 	}
 }
 

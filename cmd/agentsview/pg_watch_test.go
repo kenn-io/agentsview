@@ -3,14 +3,20 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/kit/daemon"
 )
 
 func pgConfigForTest(projects, exclude []string) config.PGConfig {
@@ -86,6 +92,158 @@ func TestResolvePushProjects(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
+	var gotAuth string
+	ts := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		gotAuth = r.Header.Get("Authorization")
+		var req daemonPushRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.True(t, req.Full)
+		assert.Equal(t, []string{"a"}, req.Projects)
+		assert.Equal(t, []string{"b"}, req.ExcludeProjects)
+		require.NotNil(t, req.PG)
+		assert.Equal(t, "postgres://user:pass@host/db", req.PG.URL)
+		assert.Equal(t, "mirror", req.PG.Schema)
+		assert.Equal(t, "laptop", req.PG.MachineName)
+		assert.True(t, req.PG.AllowInsecure)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(postgres.PushResult{
+			SessionsPushed: 2,
+			MessagesPushed: 3,
+			Duration:       time.Second,
+		}))
+	})
+
+	backend := daemonArchiveWriteBackend{
+		appCfg: config.Config{AuthToken: "secret"},
+		tr: transport{
+			Mode: transportHTTP,
+			URL:  ts.URL,
+		},
+	}
+	result, err := backend.PGPush(
+		context.Background(),
+		config.PGConfig{
+			URL:           "postgres://user:pass@host/db",
+			Schema:        "mirror",
+			MachineName:   "laptop",
+			AllowInsecure: true,
+		},
+		PGPushConfig{Full: true},
+		[]string{"a"},
+		[]string{"b"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer secret", gotAuth)
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
+}
+
+func TestResolveArchiveWriteBackendSkipsReadOnlyDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	called := false
+	ts := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		called = true
+		http.Error(w, "unexpected push", http.StatusInternalServerError)
+	})
+	registerTestRuntime(t, dataDir, ts.URL, true)
+
+	backend, cleanup, err := resolveArchiveWriteBackend(
+		context.Background(),
+		config.Config{
+			DataDir: dataDir,
+			DBPath:  filepath.Join(dataDir, "sessions.db"),
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	assert.IsType(t, &localArchiveWriteBackend{}, backend)
+	assert.False(t, called)
+}
+
+func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	var startupPushes int
+	startup := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		startupPushes++
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(postgres.PushResult{
+			SessionsPushed: 1,
+		}))
+	})
+	var resolvedPushes int
+	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		resolvedPushes++
+		cancel()
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(postgres.PushResult{
+			SessionsPushed: 1,
+		}))
+	})
+	registerTestRuntime(t, dataDir, resolved.URL, false)
+
+	backend := daemonArchiveWriteBackend{
+		appCfg: config.Config{DataDir: dataDir},
+		tr: transport{
+			Mode: transportHTTP,
+			URL:  startup.URL,
+		},
+	}
+	err := backend.PGPushWatch(
+		ctx,
+		config.PGConfig{URL: "postgres://user:pass@host/db"},
+		PGPushConfig{},
+		nil,
+		nil,
+		time.Millisecond,
+		time.Millisecond,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, startupPushes)
+	assert.GreaterOrEqual(t, resolvedPushes, 1)
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
+}
+
+func pushRuntimeServer(
+	t *testing.T,
+	pushPath string,
+	pushHandler http.HandlerFunc,
+) *httptest.Server {
+	t.Helper()
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
+		Service: daemonService,
+		Version: "test",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		switch r.URL.Path {
+		case "/api/ping":
+			ping.ServeHTTP(w, r)
+		case pushPath:
+			pushHandler(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts
 }
 
 func equalStrings(a, b []string) bool {

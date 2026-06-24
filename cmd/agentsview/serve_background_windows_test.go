@@ -3,23 +3,27 @@
 package main
 
 import (
-	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const testDetachedProcess = 0x00000008
 
-func TestConfigureServeBackgroundCommandUsesHiddenConsole(t *testing.T) {
-	cmd := exec.Command("agentsview", "serve", "--background")
+func TestConfigureServeBackgroundCommandWindowsHidesConsole(t *testing.T) {
+	attr := requireConfiguredServeBackgroundSysProcAttr(t)
+	assertWindowsCreationFlags(
+		t,
+		attr.CreationFlags,
+		createNoWindow|createNewProcessGroup,
+		testDetachedProcess,
+	)
+}
 
-	configureServeBackgroundCommand(cmd)
-
-	require.NotNil(t, cmd.SysProcAttr)
-	flags := cmd.SysProcAttr.CreationFlags
-	assert.NotZero(t, flags&createNoWindow)
-	assert.NotZero(t, flags&createNewProcessGroup)
-	assert.Zero(t, flags&testDetachedProcess)
+// assertWindowsCreationFlags checks that every bit in wantSet is present in
+// flags and that no bit in wantClear is set.
+func assertWindowsCreationFlags(t *testing.T, flags, wantSet, wantClear uint32) {
+	t.Helper()
+	assert.Equal(t, wantSet, flags&wantSet)
+	assert.Zero(t, flags&wantClear)
 }

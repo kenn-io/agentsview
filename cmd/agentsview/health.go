@@ -30,8 +30,7 @@ func runHealth(args []string, cfg HealthConfig) {
 	if err != nil {
 		fatal("loading config: %v", err)
 	}
-	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
+	database, err := openReadOnlyDB(appCfg)
 	if err != nil {
 		fatal("opening database: %v", err)
 	}

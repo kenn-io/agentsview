@@ -42,6 +42,9 @@ func (db *DB) WriteSessionBatch(
 	writes []SessionBatchWrite,
 ) (SessionBatchResult, error) {
 	var result SessionBatchResult
+	if err := db.requireWritable(); err != nil {
+		return result, err
+	}
 	if len(writes) == 0 {
 		return result, nil
 	}
@@ -107,6 +110,9 @@ func (db *DB) WriteSessionBatchAtomic(
 	beforeCommit ...func() error,
 ) (SessionBatchResult, error) {
 	var result SessionBatchResult
+	if err := db.requireWritable(); err != nil {
+		return result, err
+	}
 	if len(writes) == 0 {
 		return result, nil
 	}

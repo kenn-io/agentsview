@@ -15,6 +15,86 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// renderStatsHuman renders stats through printStatsHuman and returns the
+// captured output, asserting the render itself does not error.
+func renderStatsHuman(t *testing.T, stats *db.SessionStats) string {
+	t.Helper()
+	var buf bytes.Buffer
+	require.NoError(t, printStatsHuman(&buf, stats), "printStatsHuman")
+	return buf.String()
+}
+
+// assertContainsAll asserts every want substring is present in out.
+func assertContainsAll(t *testing.T, out string, wants ...string) {
+	t.Helper()
+	for _, w := range wants {
+		assert.Contains(t, out, w, "missing %q in output", w)
+	}
+}
+
+// assertContainsNone asserts none of the banned substrings appear in out.
+func assertContainsNone(t *testing.T, out string, banned ...string) {
+	t.Helper()
+	for _, b := range banned {
+		assert.NotContains(t, out, b, "unexpected %q in output", b)
+	}
+}
+
+// setupGoldenStatsDataDir creates a temp data dir, points
+// AGENTSVIEW_DATA_DIR at it, pins TZ to UTC for deterministic time
+// formatting, seeds the golden fixture DB, and returns the data dir.
+// Shared by the stats, usage, and activity command tests that exercise
+// the offline/read-only archive query path.
+func setupGoldenStatsDataDir(t *testing.T) string {
+	t.Helper()
+	dataDir := newAgentDataDir(t)
+	// TZ is normally pinned by --timezone=UTC, but the environment can
+	// still leak into date parsing on some platforms; pin it too.
+	t.Setenv("TZ", "UTC")
+	buildGoldenFixtureDB(t, sessionsDBPath(dataDir))
+	return dataDir
+}
+
+// runDefaultStatsJSON runs the `stats --format json` CLI path over the
+// golden fixture window and returns the raw JSON output. Callers
+// unmarshal into whichever shape they need.
+func runDefaultStatsJSON(t *testing.T) string {
+	t.Helper()
+	out, err := executeCommand(newRootCommand(),
+		"stats",
+		"--format", "json",
+		"--since", "2026-04-01",
+		"--until", "2026-04-15",
+		"--timezone", "UTC",
+	)
+	require.NoError(t, err, "stats output:\n%s", out)
+	return out
+}
+
+// writeCustomModelPricingConfig writes a config.toml under dataDir that sets
+// custom per-million-token pricing well above the built-in defaults, so tests
+// can assert that custom pricing is applied.
+func writeCustomModelPricingConfig(t *testing.T, dataDir string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte(`
+[custom_model_pricing."claude-sonnet-4-20250514"]
+input = 300.0
+output = 1500.0
+cache_creation = 375.0
+cache_read = 30.0
+
+[custom_model_pricing."claude-opus-4-20250514"]
+input = 1500.0
+output = 7500.0
+cache_creation = 1875.0
+cache_read = 150.0
+`),
+		0o600,
+	))
+}
+
 // TestPrintStatsHuman_Populated exercises the happy path with
 // every optional section present. It does not pin exact text — the
 // golden-file test in Task 20 owns that — but it guards the sections
@@ -138,14 +218,12 @@ func TestPrintStatsHuman_Populated(t *testing.T) {
 		GeneratedAt: "2026-04-18T00:00:00Z",
 	}
 
-	var buf bytes.Buffer
-	require.NoError(t, printStatsHuman(&buf, stats), "printStatsHuman")
-	out := buf.String()
+	out := renderStatsHuman(t, stats)
 	require.GreaterOrEqual(t, len(out), 200,
 		"output suspiciously short (%d bytes):\n%s", len(out), out)
 
 	// Guard every major section header so accidental drops are caught.
-	wants := []string{
+	assertContainsAll(t, out,
 		"Session window:",
 		"Totals",
 		"Archetypes",
@@ -159,11 +237,7 @@ func TestPrintStatsHuman_Populated(t *testing.T) {
 		"Temporal",
 		"Outcome stats",
 		"Outcomes",
-	}
-	for _, w := range wants {
-		assert.Contains(t, out, w,
-			"missing section heading %q in output", w)
-	}
+	)
 
 	// Thousands separators must be applied to large counts.
 	assert.Contains(t, out, "11,905",
@@ -187,18 +261,12 @@ func TestPrintStatsHuman_Empty(t *testing.T) {
 		},
 	}
 
-	var buf bytes.Buffer
-	require.NoError(t, printStatsHuman(&buf, stats), "printStatsHuman")
-	out := buf.String()
+	out := renderStatsHuman(t, stats)
 	assert.Contains(t, out, "no sessions",
 		"expected zero-session placeholder in output")
 	// No optional section headers should appear.
-	for _, banned := range []string{
-		"Archetypes", "Velocity", "Cache economics", "Outcomes",
-	} {
-		assert.NotContains(t, out, banned,
-			"section %q must not appear for empty window", banned)
-	}
+	assertContainsNone(t, out,
+		"Archetypes", "Velocity", "Cache economics", "Outcomes")
 }
 
 // TestFmtInt64 covers the thousands-separator helper.
@@ -260,21 +328,9 @@ var updateGolden = flag.Bool(
 //
 //	go test ./cmd/agentsview -run TestStatsGolden -update
 func TestStatsGolden(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-	// TZ is stripped by --timezone=UTC but the environment can
-	// still leak into date parsing on some platforms; pin it too.
-	t.Setenv("TZ", "UTC")
-	buildGoldenFixtureDB(t, filepath.Join(dataDir, "sessions.db"))
+	setupGoldenStatsDataDir(t)
 
-	out, err := executeCommand(newRootCommand(),
-		"stats",
-		"--format", "json",
-		"--since", "2026-04-01",
-		"--until", "2026-04-15",
-		"--timezone", "UTC",
-	)
-	require.NoError(t, err, "stats output:\n%s", out)
+	out := runDefaultStatsJSON(t)
 
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got),
@@ -315,6 +371,18 @@ func TestStatsGolden(t *testing.T) {
 			gotBuf, wantBuf,
 		)
 	}
+}
+
+func TestStatsReadOnlyOpenAppliesCustomPricing(t *testing.T) {
+	dataDir := setupGoldenStatsDataDir(t)
+	writeCustomModelPricingConfig(t, dataDir)
+
+	out := runDefaultStatsJSON(t)
+	var got db.SessionStats
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.NotNil(t, got.CacheEconomics)
+	assert.Greater(t, got.CacheEconomics.DollarsSpent, 600.0,
+		"custom pricing should be applied to the read-only stats DB handle")
 }
 
 // buildGoldenFixtureDB seeds a deterministic session set into a fresh
@@ -370,15 +438,15 @@ type goldenSessionSpec struct {
 	id           string
 	project      string
 	agent        string
-	model        string // empty → no assistant model/token_usage seeded
+	model        string // empty -> no assistant model/token_usage seeded
 	startedAt    string // RFC3339 UTC
 	durationMin  int    // minutes; adds to startedAt to compute ended_at
 	userMsgs     int    // user-message rows seeded under this session
-	peakContext  int    // peak_context_tokens (0 → not set)
+	peakContext  int    // peak_context_tokens (0 -> not set)
 	outcome      string // sessions.outcome column
 	healthGrade  string // sessions.health_grade column
-	toolCategory string // tool_calls.category (empty → no tool calls)
-	toolName     string // tool_calls.tool_name (empty → "Read")
+	toolCategory string // tool_calls.category (empty -> no tool calls)
+	toolName     string // tool_calls.tool_name (empty -> "Read")
 	toolCount    int    // number of tool_calls rows to insert
 	skillName    string // populated for Skill tool_calls
 	retryCount   int    // sessions.tool_retry_count
@@ -472,6 +540,14 @@ var goldenFixtureSessions = []goldenSessionSpec{
 	},
 }
 
+// goldenOutputTokens returns the assistant output_tokens for the i-th
+// (zero-based) user/assistant turn in a fixture session. seedGoldenSession
+// and buildGoldenMessages both call this so the precomputed session total
+// and the per-message token_usage never drift apart.
+func goldenOutputTokens(i int) int {
+	return 200 + 30*i
+}
+
 // seedGoldenSession persists one goldenSessionSpec: the session row,
 // N user messages + N assistant messages at 1-minute spacing, optional
 // token_usage on assistant messages, and optional tool_calls rows.
@@ -486,12 +562,12 @@ func seedGoldenSession(
 	endedAt := addMinutes(startedAt, spec.durationMin)
 	// Pre-compute total_output_tokens by summing the per-assistant
 	// output_tokens the message builder will stamp. Kept in sync with
-	// buildGoldenMessages so agent_portfolio.by_tokens has meaningful
-	// non-zero values.
+	// buildGoldenMessages via goldenOutputTokens so agent_portfolio.by_tokens
+	// has meaningful non-zero values.
 	totalOutput := 0
 	if spec.model != "" {
 		for i := 0; i < spec.userMsgs; i++ {
-			totalOutput += 200 + 30*i
+			totalOutput += goldenOutputTokens(i)
 		}
 	}
 	session := db.Session{
@@ -502,7 +578,7 @@ func seedGoldenSession(
 		StartedAt:        &startedAt,
 		EndedAt:          &endedAt,
 		UserMessageCount: spec.userMsgs,
-		// UserMsgs × 2 gives one assistant per user; ensures
+		// UserMsgs x 2 gives one assistant per user; ensures
 		// message_count > 0 even for 1-user "automation" rows.
 		MessageCount:         spec.userMsgs * 2,
 		PeakContextTokens:    spec.peakContext,
@@ -576,7 +652,7 @@ func buildGoldenMessages(spec goldenSessionSpec) []db.Message {
 			// are deterministic. Vary per-message by ordinal so
 			// different sessions accumulate differently.
 			input := 400 + 50*i
-			output := 200 + 30*i
+			output := goldenOutputTokens(i)
 			cacheCr := 100 + 20*i
 			cacheRd := 600 + 100*i
 			asst.TokenUsage = fmt.Appendf(nil,

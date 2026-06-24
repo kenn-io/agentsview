@@ -118,10 +118,8 @@ func TestDirectBackend_List_HidesStaleSecretIndicators(t *testing.T) {
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	for _, id := range []string{"current", "stale"} {
-		dbtest.SeedSession(t, env.db, id, "proj", func(s *db.Session) {
-			s.MessageCount = 2
-			s.UserMessageCount = 2
-		})
+		dbtest.SeedSession(t, env.db, id, "proj",
+			dbtest.WithMessageCounts(2, 2))
 	}
 	require.NoError(t, env.db.ReplaceSessionSecretFindings(
 		"current", nil, 2, secrets.RulesVersion()))
@@ -687,11 +685,7 @@ func TestDirectBackend_Messages_DescOmittedFrom(t *testing.T) {
 	sid := env.InsertSession(t)
 
 	// Seed 5 user messages, ordinals 0..4.
-	msgs := make([]db.Message, 0, 5)
-	for i := range 5 {
-		msgs = append(msgs, dbtest.UserMsg(sid, i, fmt.Sprintf("m%d", i)))
-	}
-	dbtest.SeedMessages(t, env.db, msgs...)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
 		Direction: "desc",
@@ -717,11 +711,7 @@ func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
 
-	msgs := make([]db.Message, 0, 5)
-	for i := range 5 {
-		msgs = append(msgs, dbtest.UserMsg(sid, i, fmt.Sprintf("m%d", i)))
-	}
-	dbtest.SeedMessages(t, env.db, msgs...)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	zero := 0
 	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{

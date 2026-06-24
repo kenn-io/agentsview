@@ -28,7 +28,7 @@ type UsageEvent struct {
 	DedupKey                 string
 }
 
-func (db *DB) ensureUsageEventsSchemaLocked(w *sql.DB) error {
+func (db *DB) ensureUsageEventsSchemaLocked(w *writerHandle) error {
 	if _, err := w.Exec(`
 		CREATE TABLE IF NOT EXISTS usage_events (
 			id INTEGER PRIMARY KEY,

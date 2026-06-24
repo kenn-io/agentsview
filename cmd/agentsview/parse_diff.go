@@ -120,8 +120,8 @@ func doParseDiff(cfg ParseDiffConfig) (failed bool) {
 		fatal("creating data dir: %v", err)
 	}
 
-	database := mustOpenDB(appCfg)
-	defer database.Close()
+	database, writeLock := mustOpenWriteDB(context.Background(), appCfg)
+	defer closeWriteDB(database, writeLock)
 
 	engine := sync.NewDiffEngine(database, sync.EngineConfig{
 		AgentDirs:               appCfg.AgentDirs,

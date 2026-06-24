@@ -1961,6 +1961,12 @@ func (e *Engine) ResyncAll(
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 
+	return e.resyncAllLocked(ctx, onProgress)
+}
+
+func (e *Engine) resyncAllLocked(
+	ctx context.Context, onProgress ProgressFunc,
+) (stats SyncStats) {
 	reportResyncProgress := func(p Progress) {
 		p.Resync = true
 		if p.Phase == PhaseSyncing && p.Detail == "" {
@@ -2405,11 +2411,14 @@ func (e *Engine) ResyncAll(
 		stats.Warnings = append(stats.Warnings,
 			"reopen after resync failed: "+err.Error(),
 		)
-	} else if err := origDB.CheckpointWALTruncateWithRetry(ctx); err != nil {
-		if errors.Is(err, db.ErrWALCheckpointBusy) {
-			log.Printf("resync: wal checkpoint busy")
-		} else {
-			log.Printf("resync: wal checkpoint: %v", err)
+	} else {
+		origDB.MarkDataCurrent()
+		if err := origDB.CheckpointWALTruncateWithRetry(ctx); err != nil {
+			if errors.Is(err, db.ErrWALCheckpointBusy) {
+				log.Printf("resync: wal checkpoint busy")
+			} else {
+				log.Printf("resync: wal checkpoint: %v", err)
+			}
 		}
 	}
 
@@ -2496,6 +2505,59 @@ func (e *Engine) LastSyncStartedAt() time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// SyncThenRun runs the local sync/resync decision and invokes work while
+// syncMu is still held. Daemon-owned mirror pushes use this to keep local sync,
+// row scanning, and watermark writes serialized against watcher and periodic
+// sync passes.
+func (e *Engine) SyncThenRun(
+	ctx context.Context,
+	full bool,
+	onProgress ProgressFunc,
+	work func(forceFull bool) error,
+) (stats SyncStats, err error) {
+	e.syncMu.Lock()
+	// Defers run LIFO: Unlock runs before emit.
+	defer func() {
+		if stats.Synced > 0 {
+			e.emit("sync")
+		}
+	}()
+	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
+
+	didResync := full || e.db.NeedsResync()
+	if didResync {
+		stats = e.resyncAllLocked(ctx, onProgress)
+		if stats.Aborted && ctx.Err() == nil {
+			stats = e.syncAllLocked(
+				ctx, onProgress, time.Time{}, nil,
+				syncWriteDefault, true,
+			)
+		}
+	} else {
+		stats = e.syncAllLocked(
+			ctx, onProgress, time.Time{}, nil,
+			syncWriteDefault, true,
+		)
+	}
+	if ctx.Err() != nil {
+		return stats, ctx.Err()
+	}
+	if err := work(full || didResync); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+// RunExclusive runs DB-writing work while holding the same mutex used by local
+// sync and resync operations. Use this for daemon-owned maintenance operations
+// that must serialize with sync but should not force a local sync first.
+func (e *Engine) RunExclusive(work func() error) error {
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+	return work()
 }
 
 // SyncAll discovers and syncs all session files from all agents.

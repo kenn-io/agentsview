@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -54,69 +52,20 @@ func runPGPush(cfg PGPushConfig) {
 	}
 
 	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
-	if err != nil {
-		fatal("opening database: %v", err)
-	}
-	defer database.Close()
-
-	if appCfg.CursorSecret != "" {
-		secret, decErr := base64.StdEncoding.DecodeString(
-			appCfg.CursorSecret,
-		)
-		if decErr != nil {
-			fatal("invalid cursor secret: %v", decErr)
-		}
-		database.SetCursorSecret(secret)
-	}
-
-	// Run local sync first so newly discovered sessions
-	// are available for push. If a full resync was performed
-	// (e.g. due to data version change), force a full PG push
-	// since watermarks become stale after a local rebuild.
-	didResync := runLocalSync(appCfg, database, cfg.Full)
-	forceFull := cfg.Full || didResync
-
-	fmt.Println("Connecting to PostgreSQL...")
-	connectStart := time.Now()
-	ps, err := postgres.New(
-		pgCfg.URL, pgCfg.Schema, database,
-		pgCfg.MachineName, pgCfg.AllowInsecure,
-		postgres.SyncOptions{
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-		},
-	)
-	if err != nil {
-		fatal("pg push: %v", err)
-	}
-	defer ps.Close()
-	fmt.Printf(
-		"Connected to PostgreSQL in %s\n",
-		time.Since(connectStart).Round(time.Millisecond),
-	)
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt,
 	)
 	defer stop()
 
-	fmt.Println("Preparing PostgreSQL schema...")
-	schemaStart := time.Now()
-	if err := ps.EnsureSchema(ctx); err != nil {
-		fatal("pg push schema: %v", err)
+	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
+	if err != nil {
+		fatal("opening writer: %v", err)
 	}
-	fmt.Printf(
-		"PostgreSQL schema ready in %s\n",
-		time.Since(schemaStart).Round(time.Millisecond),
+	defer cleanup()
+
+	result, err := backend.PGPush(
+		ctx, pgCfg, cfg, projects, excludeProjects,
 	)
-	fmt.Println("Starting PostgreSQL push...")
-	result, err := ps.Push(ctx, forceFull,
-		func(p postgres.PushProgress) {
-			printPGPushProgress(p)
-		},
-	)
-	fmt.Print("\r\033[K") // clear progress line
 	if err != nil {
 		fatal("pg push: %v", err)
 	}
@@ -180,7 +129,7 @@ func runPGStatus() {
 	setupLogFile(appCfg.DataDir)
 
 	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
+	database, err := openReadOnlyDB(appCfg)
 	if err != nil {
 		fatal("opening database: %v", err)
 	}
@@ -342,8 +291,9 @@ func runPGServe(appCfg config.Config, basePath string) {
 	// Write the kit runtime record so CLI commands can discover this
 	// daemon. ReadOnly=true marks it as pg serve (read-only)
 	// so clients can select an appropriate transport.
-	if _, sfErr := WriteDaemonRuntime(
+	if _, sfErr := WriteDaemonRuntimeWithAuth(
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
+		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
 		log.Printf(

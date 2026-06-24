@@ -29,27 +29,30 @@ import (
 
 // VersionInfo holds build-time version metadata.
 type VersionInfo struct {
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
-	BuildDate string `json:"build_date"`
-	ReadOnly  bool   `json:"read_only,omitempty"`
+	Version     string `json:"version"`
+	Commit      string `json:"commit"`
+	BuildDate   string `json:"build_date"`
+	ReadOnly    bool   `json:"read_only,omitempty"`
+	APIVersion  int    `json:"api_version"`
+	DataVersion int    `json:"data_version"`
 }
 
 const daemonService = "agentsview"
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
-	mu          gosync.RWMutex
-	cfg         config.Config
-	db          db.Store
-	engine      *sync.Engine
-	sessions    service.SessionService
-	broadcaster *Broadcaster
-	mux         *http.ServeMux
-	api         huma.API
-	httpSrv     *http.Server
-	version     VersionInfo
-	dataDir     string
+	mu             gosync.RWMutex
+	cfg            config.Config
+	db             db.Store
+	engine         *sync.Engine
+	onDemandEngine *sync.Engine
+	sessions       service.SessionService
+	broadcaster    *Broadcaster
+	mux            *http.ServeMux
+	api            huma.API
+	httpSrv        *http.Server
+	version        VersionInfo
+	dataDir        string
 
 	// baseCtx, when set, is used as the base context for all
 	// incoming requests. Cancelling it causes SSE handlers to
@@ -75,6 +78,7 @@ type Server struct {
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
 	basePath string
+	idle     *IdleTracker
 }
 
 // New creates a new Server.
@@ -122,6 +126,12 @@ func New(
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.version.APIVersion == 0 {
+		s.version.APIVersion = 1
+	}
+	if s.version.DataVersion == 0 {
+		s.version.DataVersion = db.CurrentDataVersion()
+	}
 	s.routes()
 	return s
 }
@@ -142,9 +152,12 @@ func insightAgentConfig(
 	return agents
 }
 
-// WithVersion sets the build-time version metadata.
+// WithVersion sets the build-time version metadata. Zero-valued fields are
+// filled with defaults in New after all options have been applied.
 func WithVersion(v VersionInfo) Option {
-	return func(s *Server) { s.version = v }
+	return func(s *Server) {
+		s.version = v
+	}
 }
 
 // WithDataDir sets the data directory used for update caching.
@@ -206,6 +219,10 @@ func WithGenerateStreamFunc(f insight.GenerateStreamFunc) Option {
 			s.generateStreamFunc = f
 		}
 	}
+}
+
+func WithIdleTracker(t *IdleTracker) Option {
+	return func(s *Server) { s.idle = t }
 }
 
 func (s *Server) humaConfig() huma.Config {
@@ -382,6 +399,7 @@ func (s *Server) Handler() http.Handler {
 				ServeHTTP(w, r)
 		})
 	}
+	h = s.idle.Wrap(h)
 	return h
 }
 
