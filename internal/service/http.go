@@ -26,6 +26,11 @@ import (
 // explicitly below.
 var errHTTPNotFound = errors.New("http: not found")
 
+// errHTTPNotImplemented is returned by getJSON for 501 responses so
+// callers can map a capability-absent daemon (e.g. search with no FTS
+// index) to a typed sentinel instead of string-matching the status.
+var errHTTPNotImplemented = errors.New("http: not implemented")
+
 type httpBackend struct {
 	baseURL           string
 	client            *http.Client
@@ -281,6 +286,43 @@ func (b *httpBackend) Stats(
 	return nil, errors.New("stats over HTTP backend: not yet implemented")
 }
 
+func (b *httpBackend) Search(
+	ctx context.Context, req SearchRequest,
+) (*SessionSearchResult, error) {
+	q := url.Values{}
+	q.Set("q", req.Query)
+	if req.Project != "" {
+		q.Set("project", req.Project)
+	}
+	if req.Sort != "" {
+		q.Set("sort", req.Sort)
+	}
+	if req.Cursor > 0 {
+		q.Set("cursor", strconv.Itoa(req.Cursor))
+	}
+	if req.Limit > 0 {
+		q.Set("limit", strconv.Itoa(req.Limit))
+	}
+	// GET /api/v1/search responds with {query, results, count, next};
+	// "next" is the int pagination cursor. Decode into a local shape and
+	// map it onto SessionSearchResult so the wire format stays internal.
+	var out struct {
+		Results []db.SearchResult `json:"results"`
+		Next    int               `json:"next"`
+	}
+	if err := b.getJSON(ctx, "/api/v1/search?"+q.Encode(), &out); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, ErrSearchUnavailable
+		}
+		return nil, err
+	}
+	results := out.Results
+	if results == nil {
+		results = []db.SearchResult{}
+	}
+	return &SessionSearchResult{Results: results, NextCursor: out.Next}, nil
+}
+
 func (b *httpBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
@@ -329,6 +371,62 @@ func (b *httpBackend) SearchContent(
 	}
 	var out ContentSearchResult
 	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (b *httpBackend) UsageSummary(
+	ctx context.Context, req UsageRequest,
+) (*UsageSummaryResult, error) {
+	q := url.Values{}
+	for k, v := range map[string]string{
+		"from":            req.From,
+		"to":              req.To,
+		"timezone":        req.Timezone,
+		"agent":           req.Agent,
+		"project":         req.Project,
+		"machine":         req.Machine,
+		"exclude_project": req.ExcludeProject,
+		"exclude_agent":   req.ExcludeAgent,
+		"exclude_model":   req.ExcludeModel,
+		"model":           req.Model,
+		"active_since":    req.ActiveSince,
+		"termination":     req.Termination,
+	} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if req.MinUserMessages > 0 {
+		q.Set("min_user_messages", strconv.Itoa(req.MinUserMessages))
+	}
+	if req.NoDefaultRange {
+		q.Set("no_default_range", "true")
+	}
+	if req.Breakdowns != nil {
+		q.Set("breakdowns", strconv.FormatBool(*req.Breakdowns))
+	}
+	if req.SessionCounts != nil {
+		q.Set("session_counts", strconv.FormatBool(*req.SessionCounts))
+	}
+	// include_one_shot defaults to true on the server, so it must be sent
+	// explicitly to transmit a false value; include_automated defaults to
+	// false. Send both explicitly so the round-trip matches the direct
+	// backend regardless of the daemon's defaults.
+	q.Set("include_one_shot", strconv.FormatBool(req.IncludeOneShot))
+	q.Set("include_automated", strconv.FormatBool(req.IncludeAutomated))
+
+	var out UsageSummaryResult
+	err := b.getJSON(ctx, "/api/v1/usage/summary?"+q.Encode(), &out)
+	if errors.Is(err, errHTTPNotImplemented) {
+		// A read-only daemon (pg serve) returns 501 for usage; surface
+		// the shared sentinel so callers can errors.Is it.
+		return nil, fmt.Errorf(
+			"usage summary: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+		)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -507,6 +605,9 @@ func (b *httpBackend) getJSON(
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return errHTTPNotFound
+	}
+	if resp.StatusCode == http.StatusNotImplemented {
+		return errHTTPNotImplemented
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)

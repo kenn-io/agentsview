@@ -498,6 +498,71 @@ func (b *directBackend) Watch(
 	return out, nil
 }
 
+// Search runs a full-text session search, mirroring the logic in
+// internal/server.humaSearch so both transports return identical
+// results: the raw query is normalized via db.PrepareFTSQuery, the
+// limit is clamped to [1, db.MaxSearchLimit] (defaulting to
+// db.DefaultSearchLimit), and a store without an FTS index yields
+// ErrSearchUnavailable rather than an opaque failure.
+func (b *directBackend) Search(
+	ctx context.Context, req SearchRequest,
+) (*SessionSearchResult, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return nil, &db.SearchInputError{Msg: "search: query required"}
+	}
+	if !b.db.HasFTS() {
+		return nil, ErrSearchUnavailable
+	}
+	// Match the HTTP handler's clampLimit semantics: <=0 -> default,
+	// over-max -> max. (db.Search would otherwise snap an over-max
+	// value to the default; pre-clamping keeps parity with the REST
+	// path, which clamps before calling the store.)
+	limit := req.Limit
+	if limit <= 0 {
+		limit = db.DefaultSearchLimit
+	} else if limit > db.MaxSearchLimit {
+		limit = db.MaxSearchLimit
+	}
+	page, err := b.db.Search(ctx, db.SearchFilter{
+		Query:   db.PrepareFTSQuery(query),
+		Project: req.Project,
+		Sort:    req.Sort,
+		Cursor:  req.Cursor,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := page.Results
+	if results == nil {
+		results = []db.SearchResult{}
+	}
+	return &SessionSearchResult{
+		Results:    results,
+		NextCursor: page.NextCursor,
+	}, nil
+}
+
+// UsageSummary validates the request, runs the daily-usage query
+// through the store, and folds the per-day breakdowns into range-wide
+// totals. It works over SQLite and the PG read store because
+// db.GetDailyUsage is on db.Store; a read store that cannot serve usage
+// returns db.ErrReadOnly, which callers surface as 501.
+func (b *directBackend) UsageSummary(
+	ctx context.Context, req UsageRequest,
+) (*UsageSummaryResult, error) {
+	f, err := BuildUsageFilter(req)
+	if err != nil {
+		return nil, err
+	}
+	result, err := b.db.GetDailyUsage(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	return buildUsageSummary(f, result), nil
+}
+
 // SearchContent maps the transport-neutral request to a
 // db.ContentSearchFilter, calls the store, and redacts secret-shaped
 // spans from each snippet unless Reveal is set.

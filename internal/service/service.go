@@ -6,10 +6,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+// ErrSearchUnavailable is returned by Search when the backing store has
+// no full-text search index. Both transports surface it: the HTTP
+// backend maps a 501 response to it, and callers can errors.Is it
+// regardless of transport (the REST handler maps it back to HTTP 501).
+var ErrSearchUnavailable = errors.New("search not available")
 
 // SessionService is the canonical per-session operation interface.
 // Two implementations: directBackend (wraps *db.DB) and httpBackend
@@ -22,7 +29,9 @@ type SessionService interface {
 	Sync(ctx context.Context, in SyncInput) (*SessionDetail, error)
 	Watch(ctx context.Context, id string) (<-chan Event, error)
 	Stats(ctx context.Context, f StatsFilter) (*SessionStats, error)
+	Search(ctx context.Context, req SearchRequest) (*SessionSearchResult, error)
 	SearchContent(ctx context.Context, req ContentSearchRequest) (*ContentSearchResult, error)
+	UsageSummary(ctx context.Context, req UsageRequest) (*UsageSummaryResult, error)
 	ListSecrets(ctx context.Context, f SecretListFilter) (*SecretFindingList, error)
 	ScanSecrets(ctx context.Context, in SecretScanInput,
 		progress func(SecretScanProgress)) (*SecretScanSummary, error)
@@ -71,6 +80,24 @@ type SecretListFilter struct {
 type SecretFindingList struct {
 	Findings   []db.SecretFindingRow `json:"findings"`
 	NextCursor int                   `json:"next_cursor,omitempty"`
+}
+
+// SearchRequest is the transport-neutral session-search (FTS) input.
+// It mirrors the GET /api/v1/search query parameters so both transports
+// produce identical results.
+type SearchRequest struct {
+	Query   string `json:"query"`
+	Project string `json:"project,omitempty"`
+	Sort    string `json:"sort,omitempty"` // "relevance" (default) or "recency"
+	Cursor  int    `json:"cursor,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+}
+
+// SessionSearchResult mirrors db.SearchPage for transport: ranked
+// session hits plus the next pagination cursor.
+type SessionSearchResult struct {
+	Results    []db.SearchResult `json:"results"`
+	NextCursor int               `json:"next_cursor,omitempty"`
 }
 
 // ContentSearchRequest is the transport-neutral content-search input.

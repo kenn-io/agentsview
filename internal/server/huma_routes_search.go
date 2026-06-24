@@ -58,30 +58,29 @@ func (s *Server) humaSearch(
 	if query == "" {
 		return nil, apiError(http.StatusBadRequest, "query required")
 	}
-	if !s.db.HasFTS() {
-		return nil, apiError(http.StatusNotImplemented, "search not available")
-	}
-	limit := clampLimit(in.Limit, db.DefaultSearchLimit, db.MaxSearchLimit)
-	page, err := s.db.Search(ctx, db.SearchFilter{
-		Query:   prepareFTSQuery(query),
+	res, err := s.sessions.Search(ctx, service.SearchRequest{
+		Query:   query,
 		Project: in.Project,
 		Sort:    string(in.Sort),
 		Cursor:  in.Cursor,
-		Limit:   limit,
+		Limit:   in.Limit,
 	})
 	if err != nil {
+		if errors.Is(err, service.ErrSearchUnavailable) {
+			return nil, apiError(http.StatusNotImplemented, "search not available")
+		}
+		var inputErr *db.SearchInputError
+		if errors.As(err, &inputErr) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
 		return nil, serverError(err)
-	}
-	results := page.Results
-	if results == nil {
-		results = []db.SearchResult{}
 	}
 	return &jsonOutput[searchResponse]{
 		Body: searchResponse{
 			Query:   query,
-			Results: results,
-			Count:   len(results),
-			Next:    page.NextCursor,
+			Results: res.Results,
+			Count:   len(res.Results),
+			Next:    res.NextCursor,
 		},
 	}, nil
 }

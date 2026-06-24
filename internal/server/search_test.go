@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestPrepareFTSQuery(t *testing.T) {
@@ -71,9 +72,10 @@ func TestHandleSearchSortParam(t *testing.T) {
 			t.Parallel()
 			spy := &searchSpy{}
 			srv := &Server{
-				cfg: config.Config{Host: "127.0.0.1"},
-				db:  spy,
-				mux: http.NewServeMux(),
+				cfg:      config.Config{Host: "127.0.0.1"},
+				db:       spy,
+				sessions: service.NewReadOnlyBackend(spy),
+				mux:      http.NewServeMux(),
 			}
 			srv.routes()
 			req := httptest.NewRequest(

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 // tokenUsageJSON is a valid token_usage blob for test messages.
@@ -27,7 +27,7 @@ func TestParseUsageFilterDefaults(t *testing.T) {
 	w := te.get(t, "/api/v1/usage/summary")
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	assert.NotEmpty(t, resp.From, "expected defaulted From")
 	assert.NotEmpty(t, resp.To, "expected defaulted To")
 	// from should be ~30 days before to.
@@ -48,7 +48,7 @@ func TestParseUsageFilterExplicit(t *testing.T) {
 		}))
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	assert.Equal(t, "2024-06-01", resp.From)
 	assert.Equal(t, "2024-06-15", resp.To)
 }
@@ -82,7 +82,7 @@ func TestParseUsageFilterDefaultsIncludeOneShot(t *testing.T) {
 		}))
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	require.Equal(t, 1, resp.SessionCounts.Total)
 }
 
@@ -155,7 +155,7 @@ func TestHandleUsageSummaryJSONShape(t *testing.T) {
 		assert.Contains(t, raw, key, "missing key in response")
 	}
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	assert.NotEmpty(t, resp.Daily)
 	assert.NotEmpty(t, resp.ProjectTotals)
 	assert.NotEmpty(t, resp.ModelTotals)

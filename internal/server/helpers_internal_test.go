@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -126,9 +127,10 @@ func newRoutedTestServerWithStore(
 ) *Server {
 	t.Helper()
 	s := &Server{
-		cfg: config.Config{Host: "127.0.0.1"},
-		db:  store,
-		mux: http.NewServeMux(),
+		cfg:      config.Config{Host: "127.0.0.1"},
+		db:       store,
+		sessions: service.NewReadOnlyBackend(store),
+		mux:      http.NewServeMux(),
 	}
 	s.routes()
 	return s

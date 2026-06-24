@@ -1,0 +1,62 @@
+package service
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"go.kenn.io/agentsview/internal/db"
+)
+
+func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
+	// SavingsVsUncached is computed per-model in the DB layer;
+	// computeCacheStats just forwards totals.CacheSavings. Verify the
+	// pass-through at the positive, negative, and zero boundaries so a
+	// future refactor that drops the field trips a test.
+	cases := []struct {
+		name string
+		in   float64
+	}{
+		{"positive", 4.65},
+		{"negative", -0.75},
+		{"zero", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := computeCacheStats(db.UsageTotals{CacheSavings: tc.in})
+			assert.InDelta(t, tc.in, cs.SavingsVsUncached, 1e-9)
+		})
+	}
+}
+
+func TestComputeCacheStats_ZeroTotalsIsZero(t *testing.T) {
+	cs := computeCacheStats(db.UsageTotals{})
+	assert.Zero(t, cs.SavingsVsUncached)
+	assert.Zero(t, cs.HitRate)
+}
+
+func TestComputeCacheStats_HitRate(t *testing.T) {
+	// 800 cache reads, 200 uncached inputs -> 0.80 hit rate. The
+	// HitRate denominator is cacheRead + input where input is already
+	// the uncached portion.
+	cs := computeCacheStats(db.UsageTotals{
+		InputTokens:     200,
+		CacheReadTokens: 800,
+	})
+	assert.InDelta(t, 0.80, cs.HitRate, 1e-9)
+}
+
+func TestComputeCacheStats_UncachedPassesInputThrough(t *testing.T) {
+	// Anthropic's input_tokens field is the NON-cached portion of the
+	// input; cache_read and cache_creation are tracked separately.
+	// UncachedInputTokens must equal InputTokens directly, not input
+	// minus the cache buckets (which would double-subtract).
+	cs := computeCacheStats(db.UsageTotals{
+		InputTokens:         100,
+		CacheReadTokens:     200,
+		CacheCreationTokens: 50,
+	})
+	assert.Equal(t, 100, cs.UncachedInputTokens)
+	assert.Equal(t, 200, cs.CacheReadTokens)
+	assert.Equal(t, 50, cs.CacheCreationTokens)
+}

@@ -2,11 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func (s *Server) registerUsageRoutes() {
@@ -48,62 +49,56 @@ type usageComparisonInput struct {
 	CurrentCost float64 `query:"current_cost" required:"true" doc:"Current period total cost"`
 }
 
+// usageRequestFromInput maps the HTTP query-param struct to the
+// transport-neutral service.UsageRequest.
+func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
+	return service.UsageRequest{
+		From:             in.From,
+		To:               in.To,
+		Timezone:         in.Timezone,
+		Agent:            in.Agent,
+		Project:          in.Project,
+		Machine:          in.Machine,
+		ExcludeProject:   in.ExcludeProject,
+		ExcludeAgent:     in.ExcludeAgent,
+		ExcludeModel:     in.ExcludeModel,
+		Model:            in.Model,
+		MinUserMessages:  in.MinUserMessages,
+		ActiveSince:      in.ActiveSince,
+		Termination:      in.Termination,
+		IncludeOneShot:   in.IncludeOneShot,
+		IncludeAutomated: in.IncludeAutomated,
+		NoDefaultRange:   in.NoDefaultRange,
+		Breakdowns:       &in.Breakdowns,
+		SessionCounts:    &in.SessionCounts,
+	}
+}
+
+// usageFilterFromInput validates and builds a db.UsageFilter via the
+// shared service validator (the single source of truth, also used by the
+// usage-summary seam method), mapping a validation failure to HTTP 400.
 func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
-	tz := in.Timezone
-	if tz == "" {
-		tz = "UTC"
+	f, err := service.BuildUsageFilter(usageRequestFromInput(in))
+	if err != nil {
+		var ue *service.UsageInputError
+		if errors.As(err, &ue) {
+			return db.UsageFilter{}, apiError(http.StatusBadRequest, ue.Msg)
+		}
+		return db.UsageFilter{}, err
 	}
-	if _, err := time.LoadLocation(tz); err != nil {
-		return db.UsageFilter{}, apiError(http.StatusBadRequest, "invalid timezone: "+tz)
-	}
-	from, to := in.From, in.To
-	if !in.NoDefaultRange {
-		from, to = defaultDateRange(in.From, in.To)
-	}
-	if (from != "" && !timeutil.IsValidDate(from)) ||
-		(to != "" && !timeutil.IsValidDate(to)) {
-		return db.UsageFilter{}, apiError(
-			http.StatusBadRequest,
-			"invalid date format: use YYYY-MM-DD",
-		)
-	}
-	if from != "" && to != "" && from > to {
-		return db.UsageFilter{}, apiError(http.StatusBadRequest, "from must not be after to")
-	}
-	if in.ActiveSince != "" && !timeutil.IsValidTimestamp(in.ActiveSince) {
-		return db.UsageFilter{}, apiError(http.StatusBadRequest, "invalid active_since: use RFC3339 timestamp")
-	}
-	return db.UsageFilter{
-		From:              from,
-		To:                to,
-		Agent:             in.Agent,
-		Project:           in.Project,
-		Machine:           in.Machine,
-		ExcludeProject:    in.ExcludeProject,
-		ExcludeAgent:      in.ExcludeAgent,
-		ExcludeModel:      in.ExcludeModel,
-		Model:             in.Model,
-		Timezone:          tz,
-		MinUserMessages:   in.MinUserMessages,
-		ExcludeOneShot:    !in.IncludeOneShot,
-		ExcludeAutomated:  !in.IncludeAutomated,
-		ActiveSince:       in.ActiveSince,
-		Termination:       in.Termination,
-		Breakdowns:        in.Breakdowns,
-		SkipSessionCounts: !in.SessionCounts,
-	}, nil
+	return f, nil
 }
 
 func (s *Server) humaUsageSummary(
 	ctx context.Context,
 	in *UsageFilterInput,
-) (*jsonOutput[UsageSummaryResponse], error) {
-	f, err := usageFilterFromInput(*in)
+) (*jsonOutput[*service.UsageSummaryResult], error) {
+	res, err := s.sessions.UsageSummary(ctx, usageRequestFromInput(*in))
 	if err != nil {
-		return nil, err
-	}
-	result, err := s.db.GetDailyUsage(ctx, f)
-	if err != nil {
+		var ue *service.UsageInputError
+		if errors.As(err, &ue) {
+			return nil, apiError(http.StatusBadRequest, ue.Msg)
+		}
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
 		}
@@ -112,24 +107,7 @@ func (s *Server) humaUsageSummary(
 		}
 		return nil, internalError("usage summary error", err)
 	}
-	resp := UsageSummaryResponse{
-		From:          f.From,
-		To:            f.To,
-		Totals:        result.Totals,
-		Daily:         result.Daily,
-		SessionCounts: result.SessionCounts,
-		CacheStats:    computeCacheStats(result.Totals),
-	}
-	if f.Breakdowns {
-		resp.ProjectTotals = foldProjectTotals(result.Daily)
-		resp.ModelTotals = foldModelTotals(result.Daily)
-		resp.AgentTotals = foldAgentTotals(result.Daily)
-	} else {
-		resp.ProjectTotals = []ProjectTotal{}
-		resp.ModelTotals = []ModelTotal{}
-		resp.AgentTotals = []AgentTotal{}
-	}
-	return &jsonOutput[UsageSummaryResponse]{Body: resp}, nil
+	return &jsonOutput[*service.UsageSummaryResult]{Body: res}, nil
 }
 
 func (s *Server) humaUsageComparison(
