@@ -1617,6 +1617,39 @@ func TestDailyUsageActiveSinceUsesSessionActivity(t *testing.T) {
 	assert.Equal(t, 2, got.Totals.OutputTokens)
 }
 
+func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	sessionID := "duck-usage-blank-ts"
+	session := syncSession(sessionID, "alpha", "blank timestamp usage", "", 1)
+	session.StartedAt = nil
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{{
+			SessionID:  sessionID,
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  "",
+			Model:      "claude-test",
+			TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":50}`),
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "usage-blank-ts.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Equal(t, 100, got.Totals.InputTokens)
+	assert.Equal(t, 50, got.Totals.OutputTokens)
+}
+
 func hourOfWeekMessages(cells []db.HourOfWeekCell, dow, hour int) int {
 	for _, cell := range cells {
 		if cell.DayOfWeek == dow && cell.Hour == hour {

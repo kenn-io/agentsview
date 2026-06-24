@@ -2247,7 +2247,7 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 
 func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 	if f.Timezone != "" {
-		return "strftime(timezone(?, timezone('UTC', ts)), '%Y-%m-%d')", f.Timezone
+		return "COALESCE(strftime(timezone(?, timezone('UTC', ts)), '%Y-%m-%d'), '')", f.Timezone
 	}
 	ref := time.Now().UTC()
 	if f.From != "" {
@@ -2256,7 +2256,7 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 		}
 	}
 	_, offset := ref.In(time.Local).Zone()
-	return "strftime(ts + (? * INTERVAL 1 SECOND), '%Y-%m-%d')", offset
+	return "COALESCE(strftime(ts + (? * INTERVAL 1 SECOND), '%Y-%m-%d'), '')", offset
 }
 
 func duckUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
