@@ -4,7 +4,7 @@ set -euo pipefail
 
 tag="${1:-}"
 repo="${GITHUB_REPOSITORY:-kenn-io/agentsview}"
-workflow_conclusion="${DESKTOP_RELEASE_HEALTH_WORKFLOW_CONCLUSION:-success}"
+workflow_conclusion="${DESKTOP_RELEASE_HEALTH_WORKFLOW_CONCLUSION-success}"
 manifest_file="${DESKTOP_RELEASE_HEALTH_MANIFEST_FILE:-}"
 
 error() {
@@ -19,7 +19,7 @@ fi
 version="${tag#v}"
 
 if [ "$workflow_conclusion" != "success" ]; then
-    error "Desktop Release workflow concluded ${workflow_conclusion} for ${tag}"
+    error "Desktop Release workflow concluded ${workflow_conclusion:-<empty>} for ${tag}"
     exit 1
 fi
 

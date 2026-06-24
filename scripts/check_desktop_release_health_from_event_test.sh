@@ -101,6 +101,27 @@ assert_failure_contains \
     "Desktop Release workflow concluded failure for v0.34.5" \
     run_wrapper "$tmp" "workflow_run" "$tmp/failed.json"
 
+cat >"$tmp/missing-conclusion.json" <<'EOF'
+{"workflow_run":{"event":"push","head_branch":"v0.34.5"}}
+EOF
+assert_failure_contains \
+    "missing workflow_run conclusion fails closed" \
+    "Desktop Release workflow concluded <empty> for v0.34.5" \
+    run_wrapper "$tmp" "workflow_run" "$tmp/missing-conclusion.json"
+
+cat >"$tmp/unsupported.json" <<'EOF'
+{"inputs":{"tag":"v0.34.5"}}
+EOF
+assert_failure_contains \
+    "unsupported event fails" \
+    "unsupported event for desktop release health: schedule" \
+    run_wrapper "$tmp" "schedule" "$tmp/unsupported.json"
+
+assert_failure_contains \
+    "missing event path fails" \
+    "GITHUB_EVENT_PATH is not set or does not exist" \
+    run_wrapper "$tmp" "workflow_dispatch" "$tmp/missing.json"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -42,7 +42,7 @@ assert_failure_contains() {
 }
 
 write_fixture() {
-    local dir="$1" version="$2" manifest_version="$3"
+    local dir="$1" manifest_version="$2"
     cat >"$dir/latest.json" <<EOF
 {"version":"${manifest_version}"}
 EOF
@@ -59,11 +59,11 @@ echo "=== desktop release health ==="
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp" /tmp/check-desktop-release-health-test.out' EXIT
-write_fixture "$tmp" "0.34.5" "0.34.5"
+write_fixture "$tmp" "0.34.5"
 
 assert_success "healthy desktop release passes" run_checker "$tmp" "v0.34.5"
 
-write_fixture "$tmp" "0.0.1-staging.1" "0.0.1-staging.1"
+write_fixture "$tmp" "0.0.1-staging.1"
 assert_success \
     "semver prerelease desktop release passes" \
     run_checker "$tmp" "v0.0.1-staging.1"
@@ -73,7 +73,7 @@ assert_failure_contains \
     "Desktop Release workflow concluded failure for v0.34.5" \
     run_checker "$tmp" "v0.34.5" "failure"
 
-write_fixture "$tmp" "0.34.5" "0.34.4"
+write_fixture "$tmp" "0.34.4"
 assert_failure_contains \
     "stale updater manifest fails" \
     "updater manifest version 0.34.4 does not match expected 0.34.5" \
