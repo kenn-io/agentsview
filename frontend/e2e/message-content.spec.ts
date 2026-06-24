@@ -78,6 +78,8 @@ async function expectSessionLoaded(
 }
 
 test.describe("Mixed content rendering", () => {
+  test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
+
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(
@@ -88,7 +90,6 @@ test.describe("Mixed content rendering", () => {
   test("tool group renders for consecutive tool-only messages", async ({
     page,
   }) => {
-    test.setTimeout(COLD_WEBKIT_TEST_TIMEOUT_MS);
     const { project, count, displayRows } = BETA_7;
     const sid = await selectSession(page, project, count);
     await expectSessionLoaded(page, sid, displayRows);

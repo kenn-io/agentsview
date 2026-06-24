@@ -31,6 +31,8 @@ const cannedInsight = {
 };
 
 test.describe("Insights quality rollout", () => {
+  test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
+
   test.beforeEach(async ({ page }) => {
     await page.route("**/api/v1/projects*", (route) =>
       route.fulfill({ json: { projects: [] } }),
@@ -81,7 +83,6 @@ test.describe("Insights quality rollout", () => {
   test("renders saved deterministic quality recommendation metadata", async ({
     page,
   }) => {
-    test.setTimeout(COLD_WEBKIT_TEST_TIMEOUT_MS);
     await page.addInitScript(() => {
       Object.defineProperty(navigator, "clipboard", {
         value: {

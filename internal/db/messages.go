@@ -565,6 +565,9 @@ type savedPin struct {
 func (db *DB) ReplaceSessionMessages(
 	sessionID string, msgs []Message,
 ) error {
+	msgs = append([]Message(nil), msgs...)
+	_ = ValidateAndSanitize(nil, msgs, nil)
+
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
