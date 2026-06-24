@@ -268,7 +268,12 @@ type scopedEmitter struct {
 	scopes chan string
 }
 
-func (e *scopedEmitter) Emit(scope string) { e.scopes <- scope }
+func (e *scopedEmitter) Emit(scope string) {
+	select {
+	case e.scopes <- scope:
+	default:
+	}
+}
 
 func TestStartRemoteHostSync_EmitsSessionsScopeAfterSuccess(t *testing.T) {
 	em := &scopedEmitter{scopes: make(chan string, 1)}
