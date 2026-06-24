@@ -215,6 +215,38 @@ func TestPGUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t 
 	}, got)
 }
 
+func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
+	rawInput := db.MaxPlausibleTokens + 250_000
+	rawOutput := db.MaxPlausibleTokens + 500_000
+	rates := map[string]modelRates{
+		"gpt-5.4": {input: 1.0, output: 2.0},
+	}
+
+	inTok, outTok, _, _, cost, _ := pgDailyUsageAmounts(
+		pgDailyUsageScanRow{
+			usageSource:  "session",
+			model:        "gpt-5.4",
+			inputTokens:  rawInput,
+			outputTokens: rawOutput,
+		},
+		newModelRateResolver(rates),
+	)
+	assert.Equal(t, rawInput, inTok, "daily input")
+	assert.Equal(t, rawOutput, outTok, "daily output")
+	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
+	assert.InDelta(t, wantCost, cost, 1e-9, "daily cost")
+
+	cost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
+		usageSource:  "session",
+		model:        "gpt-5.4",
+		inputTokens:  rawInput,
+		outputTokens: rawOutput,
+	}, rates)
+	require.True(t, priced, "priced")
+	require.True(t, contributes, "contributes")
+	assert.InDelta(t, wantCost, cost, 1e-9, "session cost")
+}
+
 func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	pb := &paramBuilder{}
 	query := pgUsageRowQuery(pb, db.UsageFilter{

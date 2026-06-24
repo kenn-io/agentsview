@@ -740,6 +740,29 @@ func pgClampedUsageRowTokens(
 		db.ClampPlausibleTokens(int64(cacheReadInputTokens))
 }
 
+func pgUsageEventRowTokens(
+	source string,
+	inputTokens, outputTokens, cacheCreationInputTokens,
+	cacheReadInputTokens int,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	if source == "session" {
+		return pgFloorNegativeTokens(inputTokens),
+			pgFloorNegativeTokens(outputTokens),
+			pgFloorNegativeTokens(cacheCreationInputTokens),
+			pgFloorNegativeTokens(cacheReadInputTokens)
+	}
+	return pgClampedUsageRowTokens(
+		inputTokens, outputTokens,
+		cacheCreationInputTokens, cacheReadInputTokens)
+}
+
+func pgFloorNegativeTokens(v int) int {
+	if v < 0 {
+		return 0
+	}
+	return v
+}
+
 func pgDailyUsageAmounts(
 	r pgDailyUsageScanRow, pricing *modelRateResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
@@ -752,7 +775,8 @@ func pgDailyUsageAmounts(
 		cacheRdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
 	} else {
 		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			pgClampedUsageRowTokens(
+			pgUsageEventRowTokens(
+				r.usageSource,
 				r.inputTokens, r.outputTokens,
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}
@@ -814,7 +838,8 @@ func pgSessionRowCost(
 		crTok = pgTokenJSONCount(usage, "cache_creation_input_tokens")
 		rdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
 	} else {
-		inTok, outTok, crTok, rdTok = pgClampedUsageRowTokens(
+		inTok, outTok, crTok, rdTok = pgUsageEventRowTokens(
+			r.usageSource,
 			r.inputTokens, r.outputTokens,
 			r.cacheCreationInputTokens, r.cacheReadInputTokens)
 	}

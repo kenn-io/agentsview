@@ -544,6 +544,60 @@ func TestPostgresUsageQueriesUnionUsageEvents(t *testing.T) {
 	assert.Equal(t, 2, counts.ByProject["proj-b"])
 }
 
+func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_summary_event_test")
+
+	ctx := context.Background()
+	rawInput := db.MaxPlausibleTokens + 250_000
+	rawOutput := db.MaxPlausibleTokens + 500_000
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES ('gpt-5.4', 1, 2, 0, 0, 'seed')`)
+	require.NoError(t, err, "insert pricing")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count,
+			total_output_tokens, peak_context_tokens,
+			has_total_output_tokens, has_peak_context_tokens
+		) VALUES (
+			'hermes-summary', 'test-machine', 'proj', 'hermes',
+			'2026-05-14T10:00:00Z'::timestamptz, 1, 1,
+			$1, $2, true, true
+		)`, rawOutput, rawInput)
+	require.NoError(t, err, "insert session")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO usage_events (
+			session_id, source, model, input_tokens, output_tokens,
+			occurred_at, dedup_key
+		) VALUES (
+			'hermes-summary', 'session', 'gpt-5.4', $1, $2,
+			'2026-05-14T10:05:00Z'::timestamptz, 'session:hermes-summary'
+		)`, rawInput, rawOutput)
+	require.NoError(t, err, "insert usage event")
+
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:     "2026-05-14",
+		To:       "2026-05-14",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	require.Len(t, daily.Daily, 1, "daily entries")
+	assert.Equal(t, rawInput, daily.Totals.InputTokens, "daily input")
+	assert.Equal(t, rawOutput, daily.Totals.OutputTokens, "daily output")
+
+	usage, err := store.GetSessionUsage(ctx, "hermes-summary")
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, usage, "session usage")
+	assert.Equal(t, rawOutput, usage.TotalOutputTokens)
+	assert.Equal(t, rawInput, usage.PeakContextTokens)
+	require.True(t, usage.HasCost, "HasCost")
+	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
+	assert.InDelta(t, wantCost, usage.CostUSD, 1e-9, "session cost")
+}
+
 func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
