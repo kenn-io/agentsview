@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,29 +17,22 @@ import (
 )
 
 func TestResolveDuckDBPushProjects(t *testing.T) {
-	tests := []struct {
-		name        string
-		duck        config.DuckDBConfig
-		cfg         DuckDBPushConfig
-		wantInclude []string
-		wantExclude []string
-		wantErr     bool
-	}{
+	tests := []projectResolutionCase[DuckDBPushConfig]{
 		{
 			name:        "config include used when no flags",
-			duck:        config.DuckDBConfig{Projects: []string{"a", "b"}},
+			projects:    []string{"a", "b"},
 			wantInclude: []string{"a", "b"},
 		},
 		{
 			name:        "flag include overrides config exclude",
-			duck:        config.DuckDBConfig{ExcludeProjects: []string{"x"}},
+			exclude:     []string{"x"},
 			cfg:         DuckDBPushConfig{ProjectsFlag: "a,b"},
 			wantInclude: []string{"a", "b"},
 		},
 		{
-			name: "all-projects clears both",
-			duck: config.DuckDBConfig{Projects: []string{"a"}},
-			cfg:  DuckDBPushConfig{AllProjects: true},
+			name:     "all-projects clears both",
+			projects: []string{"a"},
+			cfg:      DuckDBPushConfig{AllProjects: true},
 		},
 		{
 			name:    "both flags is an error",
@@ -51,59 +45,45 @@ func TestResolveDuckDBPushProjects(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "config has both projects and exclude is an error",
-			duck: config.DuckDBConfig{
-				Projects:        []string{"a"},
-				ExcludeProjects: []string{"x"},
-			},
+			name:     "config has both projects and exclude is an error",
+			projects: []string{"a"},
+			exclude:  []string{"x"},
+			wantErr:  true,
+		},
+		{
+			name:    "all-projects with exclude is an error",
+			cfg:     DuckDBPushConfig{AllProjects: true, ExcludeProjects: "x"},
 			wantErr: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			inc, exc, err := resolveDuckDBPushProjects(tt.duck, tt.cfg)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantInclude, inc)
-			assert.Equal(t, tt.wantExclude, exc)
-		})
-	}
+	runProjectResolutionCases(t, tests,
+		func(projects, exclude []string, cfg DuckDBPushConfig) ([]string, []string, error) {
+			return resolveDuckDBPushProjects(config.DuckDBConfig{
+				Projects:        projects,
+				ExcludeProjects: exclude,
+			}, cfg)
+		},
+	)
 }
 
 func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
-	var gotAuth string
 	absPath := filepath.Join(t.TempDir(), "agentsview.duckdb")
-	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
-		w http.ResponseWriter,
-		r *http.Request,
-	) {
-		gotAuth = r.Header.Get("Authorization")
-		var req daemonPushRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		assert.True(t, req.Full)
-		assert.Equal(t, []string{"a"}, req.Projects)
-		assert.Equal(t, []string{"b"}, req.ExcludeProjects)
-		require.NotNil(t, req.DuckDB)
-		assert.Equal(t, absPath, req.DuckDB.Path)
-		assert.Equal(t, "workstation", req.DuckDB.MachineName)
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(duckdbsync.PushResult{
-			SessionsPushed: 2,
-			MessagesPushed: 3,
-			Duration:       time.Second,
-		}))
+	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
+		auth:            "Bearer secret",
+		full:            true,
+		projects:        []string{"a"},
+		excludeProjects: []string{"b"},
+		path:            absPath,
+		machineName:     "workstation",
+	}, duckdbsync.PushResult{
+		SessionsPushed: 2,
+		MessagesPushed: 3,
+		Duration:       time.Second,
 	})
 
-	backend := daemonArchiveWriteBackend{
-		appCfg: config.Config{AuthToken: "secret"},
-		tr: transport{
-			Mode: transportHTTP,
-			URL:  ts.URL,
-		},
-	}
+	backend := newDaemonArchiveWriteBackendForTest(
+		config.Config{AuthToken: "secret"}, ts.URL,
+	)
 	result, err := backend.DuckDBPush(
 		context.Background(),
 		config.DuckDBConfig{
@@ -115,32 +95,19 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 		[]string{"b"},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer secret", gotAuth)
 	assert.Equal(t, 2, result.SessionsPushed)
 	assert.Equal(t, 3, result.MessagesPushed)
 }
 
 func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T) {
-	var gotPath string
-	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
-		w http.ResponseWriter,
-		r *http.Request,
-	) {
-		var req daemonPushRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		require.NotNil(t, req.DuckDB)
-		gotPath = req.DuckDB.Path
-		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(duckdbsync.PushResult{}))
-	})
+	wantPath, err := filepath.Abs("relative.duckdb")
+	require.NoError(t, err)
+	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
+		path: wantPath,
+	}, duckdbsync.PushResult{})
 
-	backend := daemonArchiveWriteBackend{
-		tr: transport{
-			Mode: transportHTTP,
-			URL:  ts.URL,
-		},
-	}
-	_, err := backend.DuckDBPush(
+	backend := newDaemonArchiveWriteBackendForTest(config.Config{}, ts.URL)
+	_, err = backend.DuckDBPush(
 		context.Background(),
 		config.DuckDBConfig{Path: "relative.duckdb"},
 		DuckDBPushConfig{},
@@ -148,10 +115,41 @@ func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T
 		nil,
 	)
 	require.NoError(t, err)
+}
 
-	want, err := filepath.Abs("relative.duckdb")
-	require.NoError(t, err)
-	assert.Equal(t, want, gotPath)
+// wantDuckDBDaemonPush is the expected shape of a DuckDB daemon push request.
+type wantDuckDBDaemonPush struct {
+	auth            string
+	full            bool
+	projects        []string
+	excludeProjects []string
+	path            string
+	machineName     string
+}
+
+// duckDBPushDaemonServer starts a daemon test server on the DuckDB push route
+// that asserts the decoded request matches want and replies with result.
+func duckDBPushDaemonServer(
+	t *testing.T,
+	want wantDuckDBDaemonPush,
+	result duckdbsync.PushResult,
+) *httptest.Server {
+	t.Helper()
+	return pushRuntimeServer(t, "/api/v1/push/duckdb", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		assert.Equal(t, want.auth, r.Header.Get("Authorization"))
+		var req daemonPushRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.Equal(t, want.full, req.Full)
+		assert.Equal(t, want.projects, req.Projects)
+		assert.Equal(t, want.excludeProjects, req.ExcludeProjects)
+		require.NotNil(t, req.DuckDB)
+		assert.Equal(t, want.path, req.DuckDB.Path)
+		assert.Equal(t, want.machineName, req.DuckDB.MachineName)
+		writeTestJSON(t, w, result)
+	})
 }
 
 func TestResolveQuackServeToken(t *testing.T) {

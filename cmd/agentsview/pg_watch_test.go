@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -17,30 +16,22 @@ import (
 )
 
 func TestResolvePushProjects(t *testing.T) {
-	tests := []struct {
-		name        string
-		pgProjects  []string
-		pgExclude   []string
-		cfg         PGPushConfig
-		wantInclude []string
-		wantExclude []string
-		wantErr     bool
-	}{
+	tests := []projectResolutionCase[PGPushConfig]{
 		{
 			name:        "config include used when no flags",
-			pgProjects:  []string{"a", "b"},
+			projects:    []string{"a", "b"},
 			wantInclude: []string{"a", "b"},
 		},
 		{
 			name:        "flag include overrides config exclude",
-			pgExclude:   []string{"x"},
+			exclude:     []string{"x"},
 			cfg:         PGPushConfig{ProjectsFlag: "a,b"},
 			wantInclude: []string{"a", "b"},
 		},
 		{
-			name:       "all-projects clears both",
-			pgProjects: []string{"a"},
-			cfg:        PGPushConfig{AllProjects: true},
+			name:     "all-projects clears both",
+			projects: []string{"a"},
+			cfg:      PGPushConfig{AllProjects: true},
 		},
 		{
 			name:    "both flags is an error",
@@ -53,10 +44,10 @@ func TestResolvePushProjects(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:       "config has both projects and exclude is an error",
-			pgProjects: []string{"a"},
-			pgExclude:  []string{"x"},
-			wantErr:    true,
+			name:     "config has both projects and exclude is an error",
+			projects: []string{"a"},
+			exclude:  []string{"x"},
+			wantErr:  true,
 		},
 		{
 			name:    "all-projects with exclude is an error",
@@ -64,22 +55,14 @@ func TestResolvePushProjects(t *testing.T) {
 			wantErr: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pg := config.PGConfig{
-				Projects:        tt.pgProjects,
-				ExcludeProjects: tt.pgExclude,
-			}
-			inc, exc, err := resolvePushProjects(pg, tt.cfg)
-			if tt.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantInclude, inc)
-			assert.Equal(t, tt.wantExclude, exc)
-		})
-	}
+	runProjectResolutionCases(t, tests,
+		func(projects, exclude []string, cfg PGPushConfig) ([]string, []string, error) {
+			return resolvePushProjects(config.PGConfig{
+				Projects:        projects,
+				ExcludeProjects: exclude,
+			}, cfg)
+		},
+	)
 }
 
 func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
@@ -99,7 +82,7 @@ func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
 		assert.Equal(t, "mirror", req.PG.Schema)
 		assert.Equal(t, "laptop", req.PG.MachineName)
 		assert.True(t, req.PG.AllowInsecure)
-		writeJSONPushResult(t, w, postgres.PushResult{
+		writeTestJSON(t, w, postgres.PushResult{
 			SessionsPushed: 2,
 			MessagesPushed: 3,
 			Duration:       time.Second,
@@ -161,7 +144,7 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 		r *http.Request,
 	) {
 		startupPushes++
-		writeJSONPushResult(t, w, postgres.PushResult{SessionsPushed: 1})
+		writeTestJSON(t, w, postgres.PushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
 	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
@@ -170,7 +153,7 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	) {
 		resolvedPushes++
 		cancel()
-		writeJSONPushResult(t, w, postgres.PushResult{SessionsPushed: 1})
+		writeTestJSON(t, w, postgres.PushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
 
@@ -190,42 +173,6 @@ func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
 	assert.Equal(t, 1, startupPushes)
 	assert.GreaterOrEqual(t, resolvedPushes, 1)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
-}
-
-// pushRuntimeServer starts a daemon test server that serves a single push route
-// at pushPath in addition to the standard daemon ping probe.
-func pushRuntimeServer(
-	t *testing.T,
-	pushPath string,
-	pushHandler http.HandlerFunc,
-) *httptest.Server {
-	t.Helper()
-	return daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		pushPath: pushHandler,
-	})
-}
-
-// writeJSONPushResult encodes result as the JSON daemon push response.
-func writeJSONPushResult(
-	t *testing.T,
-	w http.ResponseWriter,
-	result postgres.PushResult,
-) {
-	t.Helper()
-	w.Header().Set("Content-Type", "application/json")
-	require.NoError(t, json.NewEncoder(w).Encode(result))
-}
-
-// newDaemonArchiveWriteBackendForTest builds a daemon-backed archive write
-// backend that talks HTTP to url.
-func newDaemonArchiveWriteBackendForTest(
-	appCfg config.Config,
-	url string,
-) daemonArchiveWriteBackend {
-	return daemonArchiveWriteBackend{
-		appCfg: appCfg,
-		tr:     transport{Mode: transportHTTP, URL: url},
-	}
 }
 
 // fakeTarget is a test double for pgTarget.
