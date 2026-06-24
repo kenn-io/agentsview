@@ -403,13 +403,14 @@ func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
 		`{"type":"message","id":"u2","parentId":"cmp-1","timestamp":"2025-01-01T10:00:05Z","message":{"role":"user","content":"after compaction"}}`,
 		`{"type":"message","id":"a2","parentId":"u2","timestamp":"2025-01-01T10:00:06Z","message":{"role":"assistant","content":"reply"}}`,
 		`{"type":"message","id":"t1","parentId":"a2","timestamp":"2025-01-01T10:00:07Z","message":{"role":"toolResult","toolCallId":"toolu_42","content":"tool output"}}`,
+		`{"type":"message","id":"a3","parentId":"t1","timestamp":"2025-01-01T10:00:08Z","message":{"role":"assistant","content":"after tool result"}}`,
 		"",
 	}, "\n")
 
 	sess, msgs := runPiParserTest(t, content)
 
 	assert.Equal(t, "Checkpoint", sess.SessionName)
-	require.Len(t, msgs, 4)
+	require.Len(t, msgs, 5)
 
 	assert.Equal(t, "u1", msgs[0].SourceUUID)
 	assert.Empty(t, msgs[0].SourceParentUUID)
@@ -428,6 +429,10 @@ func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
 	assert.Equal(t, "toolResult", msgs[3].SourceType)
 	require.Len(t, msgs[3].ToolResults, 1)
 	assert.Equal(t, "toolu_42", msgs[3].ToolResults[0].ToolUseID)
+
+	assert.Equal(t, "a3", msgs[4].SourceUUID)
+	assert.Equal(t, "a2", msgs[4].SourceParentUUID)
+	assert.Equal(t, "assistant", msgs[4].SourceType)
 }
 
 // TestParsePiSession_IOError verifies that I/O errors encountered after the

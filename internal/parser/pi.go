@@ -190,7 +190,7 @@ func parsePiLikeSession(
 				}
 				messages = append(messages, *msg)
 				if entryID != "" {
-					visibleAncestorByID[entryID] = entryID
+					visibleAncestorByID[entryID] = sourceParentUUID
 				}
 				ordinal++
 
