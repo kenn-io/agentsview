@@ -160,7 +160,7 @@ describe("UIStore", () => {
   });
 
   describe("desktop zoom bridge", () => {
-    it("calls the native webview zoom bridge without changing the step ladder", async () => {
+    it("routes desktop zoom steps through the native webview bridge", async () => {
       const tauriWindow = window as Window & {
         __TAURI__?: unknown;
       };
@@ -198,6 +198,20 @@ describe("UIStore", () => {
         expect(mod.ui.zoomLevel).toBe(110);
         expect(getCurrentWebviewWindow).toHaveBeenCalled();
         expect(setZoom).toHaveBeenLastCalledWith(1.1);
+
+        mod.ui.zoomOut();
+        await tick();
+
+        expect(mod.ui.zoomLevel).toBe(100);
+        expect(setZoom).toHaveBeenLastCalledWith(1);
+
+        mod.ui.zoomIn();
+        await tick();
+        mod.ui.resetZoom();
+        await tick();
+
+        expect(mod.ui.zoomLevel).toBe(100);
+        expect(setZoom).toHaveBeenLastCalledWith(1);
       } finally {
         window.history.replaceState({}, "", originalUrl);
         if (hadTauri) {
