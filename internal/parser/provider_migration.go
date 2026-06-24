@@ -10,7 +10,6 @@ import (
 type ProviderMigrationMode string
 
 const (
-	ProviderMigrationLegacyOnly            ProviderMigrationMode = "legacy-only"
 	ProviderMigrationShadowCompare         ProviderMigrationMode = "shadow-compare"
 	ProviderMigrationProviderAuthoritative ProviderMigrationMode = "provider-authoritative"
 	ProviderMigrationImportOnly            ProviderMigrationMode = "import-only"
@@ -39,8 +38,8 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentOpenClaw:       ProviderMigrationProviderAuthoritative,
 	AgentQClaw:          ProviderMigrationProviderAuthoritative,
 	AgentKimi:           ProviderMigrationProviderAuthoritative,
-	AgentClaudeAI:       ProviderMigrationLegacyOnly,
-	AgentChatGPT:        ProviderMigrationLegacyOnly,
+	AgentClaudeAI:       ProviderMigrationImportOnly,
+	AgentChatGPT:        ProviderMigrationImportOnly,
 	AgentKiro:           ProviderMigrationProviderAuthoritative,
 	AgentKiroIDE:        ProviderMigrationProviderAuthoritative,
 	AgentCortex:         ProviderMigrationProviderAuthoritative,
@@ -57,9 +56,9 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentQwenPaw:        ProviderMigrationProviderAuthoritative,
 	AgentGptme:          ProviderMigrationProviderAuthoritative,
 	AgentShelley:        ProviderMigrationProviderAuthoritative,
-	AgentAider:          ProviderMigrationLegacyOnly,
+	AgentAider:          ProviderMigrationProviderAuthoritative,
 	AgentOMP:            ProviderMigrationProviderAuthoritative,
-	AgentReasonix:       ProviderMigrationLegacyOnly,
+	AgentReasonix:       ProviderMigrationProviderAuthoritative,
 }
 
 // ProviderMigrationModes returns the current provider migration manifest.
@@ -102,24 +101,19 @@ func validateProviderMigrationMode(
 	mode ProviderMigrationMode,
 ) error {
 	def := factory.Definition()
-	legacy := isLegacyProviderFactory(factory)
 	switch mode {
-	case ProviderMigrationLegacyOnly:
-		if !legacy {
+	case ProviderMigrationShadowCompare, ProviderMigrationProviderAuthoritative:
+		caps := factory.Capabilities().Source
+		if caps.DiscoverSources != CapabilitySupported {
 			return fmt.Errorf(
-				"%s: concrete provider must opt into %s before leaving %s",
-				def.Type,
-				ProviderMigrationShadowCompare,
-				ProviderMigrationLegacyOnly,
+				"%s: %s requires provider source discovery",
+				def.Type, mode,
 			)
 		}
-	case ProviderMigrationShadowCompare, ProviderMigrationProviderAuthoritative:
-		if legacy {
+		if caps.FindSource != CapabilitySupported {
 			return fmt.Errorf(
-				"%s: %s requires a concrete provider; keep %s while using the legacy adapter",
-				def.Type,
-				mode,
-				ProviderMigrationLegacyOnly,
+				"%s: %s requires provider source lookup",
+				def.Type, mode,
 			)
 		}
 	case ProviderMigrationImportOnly:
@@ -130,23 +124,10 @@ func validateProviderMigrationMode(
 				ProviderMigrationImportOnly,
 			)
 		}
-		if legacy {
-			return fmt.Errorf(
-				"%s: %s requires a concrete import-only provider; keep %s while using the legacy adapter",
-				def.Type,
-				ProviderMigrationImportOnly,
-				ProviderMigrationLegacyOnly,
-			)
-		}
 	default:
 		return fmt.Errorf("%s: invalid provider migration mode %q", def.Type, mode)
 	}
 	return nil
-}
-
-func isLegacyProviderFactory(factory ProviderFactory) bool {
-	_, ok := factory.(legacyProviderFactory)
-	return ok
 }
 
 func isImportOnlyAgentType(agent AgentType) bool {

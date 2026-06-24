@@ -38,6 +38,19 @@ func TestBuildResolveScript(t *testing.T) {
 		assert.Contains(t, script, marker,
 			"file-based agent %s missing from script", def.Type)
 	}
+
+	// Provider-authoritative agents may have dropped DiscoverFunc but still
+	// have on-disk source roots that SSH sync must transfer.
+	for _, def := range parser.Registry {
+		if !def.FileBased || def.DiscoverFunc != nil ||
+			parser.ProviderMigrationModes()[def.Type] !=
+				parser.ProviderMigrationProviderAuthoritative {
+			continue
+		}
+		marker := "\"" + string(def.Type) + ":"
+		assert.Contains(t, script, marker,
+			"provider-authoritative agent %s missing from script", def.Type)
+	}
 }
 
 func TestResolveScriptExitsZero(t *testing.T) {

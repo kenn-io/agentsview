@@ -78,11 +78,18 @@ func buildResolveScript() string {
 		if !resolveAgentHasOnDiskSource(def) {
 			continue
 		}
+		// Aider has no central store and no safe default root: it writes
+		// one .aider.chat.history.md per repository, so after the opt-in
+		// change it carries no DefaultDirs and the DefaultDirs loop below
+		// never runs for it. Handle it independently so an explicitly
+		// configured remote AIDER_DIR still resolves history files. Remote
+		// sync emits only discovered .aider.chat.history.md files as tar
+		// targets, never the configured code root or the remote $HOME. The
+		// shell guard in buildAiderResolveSnippet also drops AIDER_DIR set
+		// to literal "$HOME" (or "$HOME/"), so an unscoped override cannot
+		// reintroduce a whole-home scan or tar. Local sync is unaffected:
+		// it discovers via DiscoverFunc, not this script.
 		if def.Type == parser.AgentAider {
-			// Aider has no safe default root: it writes one history file per
-			// repository. Remote sync still supports an explicit AIDER_DIR by
-			// emitting only discovered history files as tar targets instead of
-			// the configured code root or the remote home directory.
 			if def.EnvVar != "" {
 				b.WriteString(buildAiderResolveSnippet(def.EnvVar))
 			}
@@ -134,8 +141,7 @@ func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 		return true
 	}
 	switch parser.ProviderMigrationModes()[def.Type] {
-	case parser.ProviderMigrationShadowCompare,
-		parser.ProviderMigrationProviderAuthoritative:
+	case parser.ProviderMigrationProviderAuthoritative:
 		_, ok := parser.ProviderFactoryByType(def.Type)
 		return ok
 	default:

@@ -1123,9 +1123,10 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	assert.Contains(t, reasonixDef.WatchSubdirs, "sessions")
 	assert.Contains(t, reasonixDef.WatchSubdirs, "archive")
 
-	// Verify function pointers are set
-	assert.NotNil(t, reasonixDef.DiscoverFunc, "DiscoverFunc must be set")
-	assert.NotNil(t, reasonixDef.FindSourceFunc, "FindSourceFunc must be set")
+	// Provider-authoritative agents must not route runtime discovery or lookup
+	// through legacy AgentDef hooks.
+	assert.Nil(t, reasonixDef.DiscoverFunc)
+	assert.Nil(t, reasonixDef.FindSourceFunc)
 
 	// Verify default dirs contain .reasonix and Windows path
 	assert.True(t, len(reasonixDef.DefaultDirs) > 0)

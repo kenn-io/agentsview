@@ -555,35 +555,34 @@ var Registry = []AgentDef{
 		// Aider has no central session store. It writes one Markdown
 		// chat log per repo at <repo>/.aider.chat.history.md. There is
 		// no safe canonical root: an always-on $HOME walk is prone to
-		// macOS privacy prompts and surprising background work. Users
-		// must opt in by setting AIDER_DIR or the aider_dirs config key
-		// to a code root they want scanned.
+		// macOS privacy prompts (Documents/Downloads/Music/Photos) during
+		// passive background refreshes, and to surprising work. Users must
+		// opt in by setting AIDER_DIR or the aider_dirs config key to a
+		// code root they want scanned. A configured broad root such as
+		// $HOME still gets the bounded, symlink-safe, depth-capped,
+		// time-budgeted walk with protected-folder pruning.
 		//
 		// ShallowWatch is true because users can still opt into broad
-		// roots. Watch those roots shallowly and rely on the 15-minute
-		// periodic sync to pick up new repos' history files; aider history
+		// roots; watch those roots shallowly and rely on the 15-minute
+		// periodic sync to pick up new repos' history files. Aider history
 		// is append-mostly, so this is an acceptable latency tradeoff.
-		Type:           AgentAider,
-		DisplayName:    "Aider",
-		EnvVar:         "AIDER_DIR",
-		ConfigKey:      "aider_dirs",
-		IDPrefix:       "aider:",
-		FileBased:      true,
-		ShallowWatch:   true,
-		DiscoverFunc:   DiscoverAiderSessions,
-		FindSourceFunc: FindAiderSourceFile,
+		Type:         AgentAider,
+		DisplayName:  "Aider",
+		EnvVar:       "AIDER_DIR",
+		ConfigKey:    "aider_dirs",
+		IDPrefix:     "aider:",
+		FileBased:    true,
+		ShallowWatch: true,
 	},
 	{
-		Type:           AgentReasonix,
-		DisplayName:    "Reasonix",
-		EnvVar:         "REASONIX_DIR",
-		ConfigKey:      "reasonix_dirs",
-		DefaultDirs:    []string{".reasonix", "AppData/Roaming/reasonix"},
-		IDPrefix:       "reasonix:",
-		WatchSubdirs:   []string{"sessions", "archive", "projects"},
-		FileBased:      true,
-		DiscoverFunc:   DiscoverReasonixSessions,
-		FindSourceFunc: FindReasonixSourceFile,
+		Type:         AgentReasonix,
+		DisplayName:  "Reasonix",
+		EnvVar:       "REASONIX_DIR",
+		ConfigKey:    "reasonix_dirs",
+		DefaultDirs:  []string{".reasonix", "AppData/Roaming/reasonix"},
+		IDPrefix:     "reasonix:",
+		WatchSubdirs: []string{"sessions", "archive", "projects"},
+		FileBased:    true,
 	},
 }
 

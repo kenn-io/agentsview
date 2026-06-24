@@ -1923,8 +1923,7 @@ func TestShouldSkipByPathWithRewriter(t *testing.T) {
 
 // writeAiderHistory writes a two-content-run plus one header-only-run
 // history file under a fresh repo dir and returns its path. The header-only
-// trailing run produces no session, exercising the HasMessages path of
-// aiderFileUnchanged.
+// trailing run produces no session, so a fan-out parse yields two sessions.
 func writeAiderHistory(t *testing.T) string {
 	t.Helper()
 	repo := filepath.Join(t.TempDir(), "myrepo")
@@ -1939,183 +1938,242 @@ func writeAiderHistory(t *testing.T) string {
 	return path
 }
 
-// insertAiderRunRow stores a session row for one aider virtual run path at
-// the given size, mtime, and data version, mirroring what a real fan-out write
-// produces. data_version is stamped separately because UpsertSession does
-// not persist it. The stored size must match the history file's reported size
-// for aiderFileUnchanged to treat the run as current.
-func insertAiderRunRow(
-	t *testing.T, database *db.DB,
-	virtualPath string, size, mtime int64, dataVersion int,
+func newAiderProviderTestEngine(
+	database *db.DB,
+	path string,
+	forceParse bool,
+) *Engine {
+	root := filepath.Dir(filepath.Dir(path))
+	return &Engine{
+		db:         database,
+		machine:    "local",
+		forceParse: forceParse,
+		skipCache:  make(map[string]int64),
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentAider: {root},
+		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentAider: parser.ProviderMigrationProviderAuthoritative,
+		},
+	}
+}
+
+func persistAiderProviderResults(
+	t *testing.T,
+	database *db.DB,
+	results []parser.ParseResult,
+	mutate func(index int, session *db.Session, dataVersion *int),
 ) {
 	t.Helper()
-	id := "aider:" + virtualPath
-	require.NoError(t, database.UpsertSession(db.Session{
-		ID:        id,
-		Project:   "myrepo",
-		Machine:   "local",
-		Agent:     string(parser.AgentAider),
-		FilePath:  strPtr(virtualPath),
-		FileSize:  int64Ptr(size),
-		FileMtime: int64Ptr(mtime),
-	}))
-	require.NoError(t, database.SetSessionDataVersion(id, dataVersion))
-}
-
-// TestAiderFileUnchangedRequiresAllRuns is the MEDIUM-2 regression test:
-// aiderFileUnchanged must skip a file only when EVERY content-bearing run
-// row is current. Skipping on the first matching row (the old behavior)
-// would strand runs that a partial batch never wrote or that went stale
-// after a data-version bump, so they would never be repaired.
-func TestAiderFileUnchangedRequiresAllRuns(t *testing.T) {
-	const mtime = int64(1_700_000_000_000_000_000)
-	const size = int64(4096)
-	cur := db.CurrentDataVersion()
-
-	metasFor := func(t *testing.T, path string) []parser.AiderRunMeta {
-		t.Helper()
-		metas, err := parser.ListAiderRunMetas(path)
-		require.NoError(t, err)
-		// Two content-bearing runs plus one header-only run.
-		require.Len(t, metas, 3)
-		require.True(t, metas[0].HasMessages)
-		require.True(t, metas[1].HasMessages)
-		require.False(t, metas[2].HasMessages)
-		return metas
-	}
-
-	t.Run("all runs current -> skip", func(t *testing.T) {
-		database := openTestDB(t)
-		path := writeAiderHistory(t)
-		metas := metasFor(t, path)
-		// Both content runs have a current row. The header-only run has none,
-		// and must not block the skip.
-		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
-		insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime, cur)
-
-		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
-		assert.True(t, got, "file with all run rows current must be skipped")
-	})
-
-	t.Run("rewritten remote run rows current -> skip", func(t *testing.T) {
-		database := openTestDB(t)
-		path := writeAiderHistory(t)
-		metas := metasFor(t, path)
-		rewriter := func(p string) string {
-			return "host:" + p
+	for i, r := range results {
+		dataVersion := db.CurrentDataVersion()
+		row := db.Session{
+			ID:        r.Session.ID,
+			Project:   r.Session.Project,
+			Machine:   "local",
+			Agent:     string(parser.AgentAider),
+			FilePath:  strPtr(r.Session.File.Path),
+			FileSize:  int64Ptr(r.Session.File.Size),
+			FileMtime: int64Ptr(r.Session.File.Mtime),
+			FileHash:  strPtr(r.Session.File.Hash),
 		}
-		// Remote sync stores the rewritten virtual run path, not the temp
-		// extraction path returned by ListAiderRunMetas.
-		insertAiderRunRow(t, database,
-			rewriter(metas[0].VirtualPath), size, mtime, cur)
-		insertAiderRunRow(t, database,
-			rewriter(metas[1].VirtualPath), size, mtime, cur)
-
-		e := &Engine{db: database, pathRewriter: rewriter}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
-		assert.True(t, got,
-			"remote file with all rewritten run rows current must be skipped")
-	})
-
-	t.Run("one run row missing -> do not skip", func(t *testing.T) {
-		database := openTestDB(t)
-		path := writeAiderHistory(t)
-		metas := metasFor(t, path)
-		// Only the FIRST content run was written (a partial batch). Under the
-		// old any-match logic this stranded the second run forever.
-		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
-
-		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
-		assert.False(t, got,
-			"a missing run row must force a re-parse to repair it")
-	})
-
-	t.Run("one run row stale data version -> do not skip", func(t *testing.T) {
-		database := openTestDB(t)
-		path := writeAiderHistory(t)
-		metas := metasFor(t, path)
-		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
-		// The second run was resynced under an OLDER data version while the
-		// first is current. The file must still re-parse.
-		insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime, cur-1)
-
-		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
-		assert.False(t, got,
-			"a stale data-version run row must force a re-parse")
-	})
-
-	t.Run("one run row stale mtime -> do not skip", func(t *testing.T) {
-		database := openTestDB(t)
-		path := writeAiderHistory(t)
-		metas := metasFor(t, path)
-		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
-		insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime-1, cur)
-
-		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
-		assert.False(t, got,
-			"a run row with a different mtime must force a re-parse")
-	})
-
-	t.Run("one run row stale size -> do not skip", func(t *testing.T) {
-		database := openTestDB(t)
-		path := writeAiderHistory(t)
-		metas := metasFor(t, path)
-		insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
-		// The second run row has the SAME mtime but a different stored size,
-		// modeling a same-mtime append/truncate. Ignoring size would wrongly
-		// skip the file and strand the appended/removed runs.
-		insertAiderRunRow(t, database, metas[1].VirtualPath, size-1, mtime, cur)
-
-		e := &Engine{db: database}
-		got := e.aiderFileUnchanged(path, fakeFileInfo{size: size, mtime: mtime})
-		assert.False(t, got,
-			"a run row with a different size must force a re-parse")
-	})
+		if mutate != nil {
+			mutate(i, &row, &dataVersion)
+		}
+		require.NoError(t, database.UpsertSession(row))
+		require.NoError(t, database.SetSessionDataVersion(row.ID, dataVersion))
+	}
 }
 
-// TestProcessAiderForceParseReparsesUnchangedFile is the forced-reparse
-// regression test: under forceParse (parse-diff), processAider must NOT take
-// the aiderFileUnchanged skip even when every run row is current, so a forced
-// run re-reads already-synced aider files instead of stranding them.
-func TestProcessAiderForceParseReparsesUnchangedFile(t *testing.T) {
+// TestProcessFileAiderProviderFanOut verifies the migrated Aider provider, run
+// through processFile, fans one history file out into one session per
+// content-bearing run under stable "<history>#<idx>" virtual paths and
+// force-replaces on parse. An unchanged re-sync drops every already-current run
+// (the per-run skip that the legacy aiderFileUnchanged provided, now handled by
+// dropUnchangedSharedSQLiteResults), while a forced parse re-emits them all.
+func TestProcessFileAiderProviderFanOut(t *testing.T) {
 	database := openTestDB(t)
 	path := writeAiderHistory(t)
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	// processAider stats the real file, so the stored rows must carry the
-	// file's actual size and mtime for the unchanged-skip to fire.
-	size := info.Size()
-	mtime := info.ModTime().UnixNano()
-	cur := db.CurrentDataVersion()
+	file := parser.DiscoveredFile{Agent: parser.AgentAider, Path: path}
 
-	metas, err := parser.ListAiderRunMetas(path)
-	require.NoError(t, err)
-	require.Len(t, metas, 3)
-	// Mark every content-bearing run as current so the non-forced path skips.
-	insertAiderRunRow(t, database, metas[0].VirtualPath, size, mtime, cur)
-	insertAiderRunRow(t, database, metas[1].VirtualPath, size, mtime, cur)
+	res := newAiderProviderTestEngine(database, path, false).
+		processFile(context.Background(), file)
+	require.NoError(t, res.err)
+	require.True(t, res.forceReplace,
+		"aider fan-out must force-replace stored runs")
+	require.Len(t, res.results, 2,
+		"two content-bearing runs must each produce a session")
+	for _, r := range res.results {
+		historyPath, _, ok := parser.ParseAiderVirtualPath(r.Session.File.Path)
+		require.True(t, ok, "each run is stored under a virtual run path")
+		assert.Equal(t, path, historyPath)
+		assert.Equal(t, parser.AgentAider, r.Session.Agent)
+	}
 
-	file := parser.DiscoveredFile{Path: path, Agent: parser.AgentAider}
+	// Persist the parsed runs as current so the unchanged re-sync can drop them.
+	persistAiderProviderResults(t, database, res.results, nil)
 
-	// Sanity: without forceParse the unchanged file is skipped.
-	normal := &Engine{db: database, machine: "local"}
-	skipRes := normal.processAider(file, info)
-	require.True(t, skipRes.skip,
-		"without forceParse an unchanged aider file must be skipped")
-	require.Empty(t, skipRes.results)
+	again := newAiderProviderTestEngine(database, path, false).
+		processFile(context.Background(), file)
+	require.NoError(t, again.err)
+	assert.Empty(t, again.results,
+		"an unchanged aider history must drop every already-current run")
 
-	// With forceParse the file must be reparsed, not skipped.
-	forced := &Engine{db: database, machine: "local", forceParse: true}
-	forcedRes := forced.processAider(file, info)
-	require.NoError(t, forcedRes.err)
-	assert.False(t, forcedRes.skip,
-		"forceParse must reparse an unchanged aider file, not skip it")
-	assert.Len(t, forcedRes.results, 2,
-		"forced reparse must fan out one result per content-bearing run")
+	forced := newAiderProviderTestEngine(database, path, true).
+		processFile(context.Background(), file)
+	require.NoError(t, forced.err)
+	assert.Len(t, forced.results, 2,
+		"a forced parse must re-emit every content-bearing run")
+}
+
+func TestProcessFileAiderProviderSameMtimeContentChangeIgnoresSkipCache(t *testing.T) {
+	database := openTestDB(t)
+	path := writeAiderHistory(t)
+	file := parser.DiscoveredFile{Agent: parser.AgentAider, Path: path}
+
+	initial := newAiderProviderTestEngine(database, path, false).
+		processFile(context.Background(), file)
+	require.NoError(t, initial.err)
+	require.Len(t, initial.results, 2)
+	persistAiderProviderResults(t, database, initial.results, nil)
+
+	mtime := time.Unix(0, initial.mtime)
+	updated := "# aider chat started at 2026-06-09 14:01:00\n" +
+		"#### first prompt\nanswer one changed\n" +
+		"# aider chat started at 2026-06-09 15:30:00\n" +
+		"#### second prompt\nanswer two changed\n"
+	require.NoError(t, os.WriteFile(path, []byte(updated), 0o644))
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+
+	engine := newAiderProviderTestEngine(database, path, false)
+	engine.cacheSkip(path, initial.mtime)
+	after := engine.processFile(context.Background(), file)
+	require.NoError(t, after.err)
+	assert.False(t, after.skip,
+		"a stale mtime-only skip cache entry must not bypass Aider hashing")
+	assert.Len(t, after.results, 2,
+		"same-mtime content changes must re-emit every Aider run")
+}
+
+func TestProcessFileAiderProviderSkipCacheDoesNotHidePartialOrStaleRows(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(index int, session *db.Session, dataVersion *int)
+		storeRows func([]parser.ParseResult) []parser.ParseResult
+	}{
+		{
+			name: "missing run row",
+			storeRows: func(results []parser.ParseResult) []parser.ParseResult {
+				require.Len(t, results, 2)
+				return results[:1]
+			},
+		},
+		{
+			name: "stale data version",
+			mutate: func(_ int, _ *db.Session, dataVersion *int) {
+				*dataVersion = db.CurrentDataVersion() - 1
+			},
+		},
+		{
+			name: "stale hash",
+			mutate: func(_ int, session *db.Session, _ *int) {
+				session.FileHash = strPtr("stale-hash")
+			},
+		},
+		{
+			name: "stale mtime",
+			mutate: func(_ int, session *db.Session, _ *int) {
+				session.FileMtime = int64Ptr(1)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			path := writeAiderHistory(t)
+			file := parser.DiscoveredFile{Agent: parser.AgentAider, Path: path}
+			initial := newAiderProviderTestEngine(database, path, false).
+				processFile(context.Background(), file)
+			require.NoError(t, initial.err)
+			require.Len(t, initial.results, 2)
+
+			rows := initial.results
+			if tt.storeRows != nil {
+				rows = tt.storeRows(rows)
+			}
+			persistAiderProviderResults(t, database, rows, tt.mutate)
+
+			engine := newAiderProviderTestEngine(database, path, false)
+			engine.cacheSkip(path, initial.mtime)
+			after := engine.processFile(context.Background(), file)
+			require.NoError(t, after.err)
+			assert.False(t, after.skip,
+				"a generic skip cache entry must not hide %s", tt.name)
+			assert.NotEmpty(t, after.results)
+		})
+	}
+}
+
+func TestFindSourceFileProviderAuthoritativePrefersProviderOverStoredPath(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	stalePath := filepath.Join(root, "stale.jsonl")
+	currentPath := filepath.Join(root, "current.jsonl")
+	require.NoError(t, os.WriteFile(stalePath, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(currentPath, []byte("{}\n"), 0o644))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:       "cowork:lookup",
+		Project:  "project",
+		Machine:  "local",
+		Agent:    string(parser.AgentCowork),
+		FilePath: strPtr(stalePath),
+	}))
+
+	provider := &lookupSourceProvider{
+		ProviderBase: parser.ProviderBase{
+			Def: parser.AgentDef{
+				Type:        parser.AgentCowork,
+				DisplayName: "Cowork",
+				IDPrefix:    "cowork:",
+				FileBased:   true,
+			},
+			Caps: parser.Capabilities{
+				Source: parser.SourceCapabilities{
+					FindSource: parser.CapabilitySupported,
+				},
+			},
+		},
+		source: parser.SourceRef{
+			Provider:       parser.AgentCowork,
+			Key:            currentPath,
+			DisplayPath:    currentPath,
+			FingerprintKey: currentPath,
+		},
+	}
+	engine := &Engine{
+		db: database,
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentCowork: {root},
+		},
+		providerFactories: providerFactoryMap([]parser.ProviderFactory{
+			lookupSourceFactory{provider: provider},
+		}),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+		},
+	}
+
+	got := engine.FindSourceFile("cowork:lookup")
+
+	assert.Equal(t, currentPath, got)
+	require.Len(t, provider.findRequests, 1)
+	assert.Equal(t, "lookup", provider.findRequests[0].RawSessionID)
+	assert.Equal(t, "cowork:lookup", provider.findRequests[0].FullSessionID)
+	assert.Equal(t, stalePath, provider.findRequests[0].StoredFilePath)
+	assert.Equal(t, stalePath, provider.findRequests[0].FingerprintKey)
+	assert.True(t, provider.findRequests[0].RequireFreshSource)
 }
 
 // TestStripVirtualSourceSuffixAider verifies that an aider
@@ -2127,6 +2185,43 @@ func TestStripVirtualSourceSuffixAider(t *testing.T) {
 	virtual := parser.AiderVirtualPath(historyPath, 3)
 	assert.Equal(t, historyPath, stripVirtualSourceSuffix(virtual),
 		"the run-index suffix must strip to the physical history path")
+}
+
+type lookupSourceFactory struct {
+	provider *lookupSourceProvider
+}
+
+func (f lookupSourceFactory) Definition() parser.AgentDef {
+	return f.provider.Definition()
+}
+
+func (f lookupSourceFactory) Capabilities() parser.Capabilities {
+	return f.provider.Capabilities()
+}
+
+func (f lookupSourceFactory) NewProvider(parser.ProviderConfig) parser.Provider {
+	return f.provider
+}
+
+type lookupSourceProvider struct {
+	parser.ProviderBase
+	source       parser.SourceRef
+	findRequests []parser.FindSourceRequest
+}
+
+func (p *lookupSourceProvider) FindSource(
+	_ context.Context,
+	req parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	p.findRequests = append(p.findRequests, req)
+	return p.source, true, nil
+}
+
+func (p *lookupSourceProvider) Parse(
+	context.Context,
+	parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	return parser.ParseOutcome{}, nil
 }
 
 func TestToDBSessionStoresSessionName(t *testing.T) {
@@ -3647,11 +3742,11 @@ func TestEngine_ClassifyOnePathReasonixProjectBareMeta(t *testing.T) {
 	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
 	dbtest.WriteTestFile(t, metaPath, []byte(`{"model":"claude"}`))
 
-	got, ok := engine.classifyOnePath(metaPath)
-	require.True(t, ok, "expected Reasonix sidecar to classify")
-	assert.Equal(t, sessionPath, got.Path)
-	assert.Equal(t, "proj", got.Project)
-	assert.Equal(t, parser.AgentReasonix, got.Agent)
+	files := engine.classifyPaths([]string{metaPath})
+	require.Len(t, files, 1, "expected Reasonix sidecar to classify")
+	assert.Equal(t, sessionPath, files[0].Path)
+	assert.Equal(t, "proj", files[0].Project)
+	assert.Equal(t, parser.AgentReasonix, files[0].Agent)
 }
 
 func TestEngine_ClassifyOnePathReasonixDeletedMeta(t *testing.T) {
@@ -3670,11 +3765,11 @@ func TestEngine_ClassifyOnePathReasonixDeletedMeta(t *testing.T) {
 	metaPath := sessionPath + ".meta"
 	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
 
-	got, ok := engine.classifyOnePath(metaPath)
-	require.True(t, ok, "expected deleted Reasonix sidecar to classify")
-	assert.Equal(t, sessionPath, got.Path)
-	assert.Equal(t, "proj", got.Project)
-	assert.Equal(t, parser.AgentReasonix, got.Agent)
+	files := engine.classifyPaths([]string{metaPath})
+	require.Len(t, files, 1, "expected deleted Reasonix sidecar to classify")
+	assert.Equal(t, sessionPath, files[0].Path)
+	assert.Equal(t, "proj", files[0].Project)
+	assert.Equal(t, parser.AgentReasonix, files[0].Agent)
 }
 
 func TestEngine_ClassifyOnePathReasonixDeletedTranscriptIgnored(t *testing.T) {
@@ -3691,8 +3786,8 @@ func TestEngine_ClassifyOnePathReasonixDeletedTranscriptIgnored(t *testing.T) {
 		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
 	)
 
-	_, ok := engine.classifyOnePath(sessionPath)
-	assert.False(t, ok, "expected deleted Reasonix transcript to be ignored")
+	files := engine.classifyPaths([]string{sessionPath})
+	assert.Empty(t, files, "expected deleted Reasonix transcript to be ignored")
 }
 
 func TestEngine_SyncPathsReasonixMetadataOnlySessionFieldUpdate(t *testing.T) {

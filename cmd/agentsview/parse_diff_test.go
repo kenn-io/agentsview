@@ -163,6 +163,31 @@ func TestParseDiffAgentTypes(t *testing.T) {
 	}
 }
 
+func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.T) {
+	supported := parseDiffSupportedAgents()
+	for _, agent := range []parser.AgentType{
+		parser.AgentGptme,
+		parser.AgentPi,
+		parser.AgentOMP,
+		parser.AgentWorkBuddy,
+		parser.AgentCortex,
+		parser.AgentKimi,
+		parser.AgentQwenPaw,
+		parser.AgentOpenHands,
+		parser.AgentCursor,
+		parser.AgentVibe,
+		parser.AgentClaude,
+		parser.AgentCowork,
+		parser.AgentHermes,
+	} {
+		def, ok := parser.AgentByType(agent)
+		require.True(t, ok, "agent %s", agent)
+		assert.True(t, parseDiffAgentSupported(def),
+			"parse-diff support must include provider-authoritative %s", agent)
+		assert.Contains(t, supported, string(agent))
+	}
+}
+
 func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {
 	isolateParseDiffEnv(t)
 

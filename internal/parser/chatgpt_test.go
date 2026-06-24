@@ -92,7 +92,7 @@ func TestParseChatGPTExport(t *testing.T) {
 ]`)
 
 	var results []ParseResult
-	err := ParseChatGPTExport(dir, nil, func(r ParseResult) error {
+	err := parseChatGPTExport(dir, nil, func(r ParseResult) error {
 		results = append(results, r)
 		return nil
 	})
@@ -214,7 +214,7 @@ func TestParseChatGPTExport_ToolCalls(t *testing.T) {
 ]`)
 
 	var results []ParseResult
-	err := ParseChatGPTExport(dir, nil, func(r ParseResult) error {
+	err := parseChatGPTExport(dir, nil, func(r ParseResult) error {
 		results = append(results, r)
 		return nil
 	})
@@ -294,7 +294,7 @@ func TestParseChatGPTExport_Thinking(t *testing.T) {
 ]`)
 
 	var results []ParseResult
-	err := ParseChatGPTExport(dir, nil, func(r ParseResult) error {
+	err := parseChatGPTExport(dir, nil, func(r ParseResult) error {
 		results = append(results, r)
 		return nil
 	})
@@ -384,7 +384,7 @@ func TestParseChatGPTExport_SystemMessage(t *testing.T) {
 ]`)
 
 	var results []ParseResult
-	err := ParseChatGPTExport(dir, nil, func(r ParseResult) error {
+	err := parseChatGPTExport(dir, nil, func(r ParseResult) error {
 		results = append(results, r)
 		return nil
 	})
@@ -408,7 +408,7 @@ func TestParseChatGPTExport_SystemMessage(t *testing.T) {
 func TestParseChatGPTExport_EmptyDir(t *testing.T) {
 	dir := t.TempDir()
 
-	err := ParseChatGPTExport(dir, nil, func(r ParseResult) error {
+	err := parseChatGPTExport(dir, nil, func(r ParseResult) error {
 		return nil
 	})
 	require.Error(t, err)
@@ -459,7 +459,7 @@ func TestParseChatGPTExport_MultipleShards(t *testing.T) {
 		shard("conv-b", "Second"))
 
 	var results []ParseResult
-	err := ParseChatGPTExport(dir, nil, func(r ParseResult) error {
+	err := parseChatGPTExport(dir, nil, func(r ParseResult) error {
 		results = append(results, r)
 		return nil
 	})
@@ -724,7 +724,7 @@ func TestParseChatGPTExport_WebSearch(t *testing.T) {
 ]`)
 
 	var results []ParseResult
-	err := ParseChatGPTExport(dir, nil, func(r ParseResult) error {
+	err := parseChatGPTExport(dir, nil, func(r ParseResult) error {
 		results = append(results, r)
 		return nil
 	})

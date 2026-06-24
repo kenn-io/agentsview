@@ -43,10 +43,9 @@ const (
 //     multiple suffix matches exist without an exact row, the
 //     most recent wins and an ambiguity warning is emitted.
 //  3. Canonical disk probe: when input begins with a registered
-//     agent prefix, strip the prefix and call that agent's
-//     FindSourceFunc so a truly canonical-but-unsynced ID on disk
-//     still resolves.
-//  4. Raw disk probe: call every file-based agent's FindSourceFunc
+//     agent prefix, strip the prefix and ask that agent's disk source
+//     lookup so a truly canonical-but-unsynced ID on disk still resolves.
+//  4. Raw disk probe: ask every file-based agent's disk source lookup
 //     with the raw input; the first hit yields "<prefix><input>".
 //  5. No match anywhere: returned unchanged with known=false.
 //

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,122 +147,25 @@ func TestProviderRegistryMirrorsAgentRegistry(t *testing.T) {
 	}
 }
 
-func TestLegacyProviderCapabilitiesMatchBaseDefaults(t *testing.T) {
-	legacyAgent := legacyProviderTestAgent(t)
-	def, ok := AgentByType(legacyAgent)
+func TestProviderFactoryLookupRejectsMissingAgent(t *testing.T) {
+	require.NotEmpty(t, Registry)
+	agent := Registry[0].Type
+
+	factory, ok := ProviderFactoryByType(agent)
 	require.True(t, ok)
-	provider, ok := NewProvider(legacyAgent, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
+	assert.Equal(t, agent, factory.Definition().Type)
 
-	assert.Equal(t, Capabilities{}, provider.Capabilities())
-
-	ctx := context.Background()
-	discovered, err := provider.Discover(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, discovered)
-
-	plan, err := provider.WatchPlan(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, plan.Roots)
-
-	changed, err := provider.SourcesForChangedPath(ctx, ChangedPathRequest{
-		Path:      "/tmp/session.jsonl",
-		EventKind: "write",
-		WatchRoot: "/tmp",
-	})
-	require.NoError(t, err)
-	assert.Empty(t, changed)
-
-	source, found, err := provider.FindSource(ctx, FindSourceRequest{
-		RawSessionID:   "session",
-		FullSessionID:  def.IDPrefix + "session",
-		StoredFilePath: "/tmp/session.jsonl",
-		FingerprintKey: "/tmp/session.jsonl",
-	})
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Empty(t, source)
-
-	_, err = provider.Fingerprint(ctx, SourceRef{
-		Provider:       legacyAgent,
-		Key:            "session",
-		DisplayPath:    "/tmp/session.jsonl",
-		FingerprintKey: "/tmp/session.jsonl",
-	})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
-
-	incremental, status, err := provider.ParseIncremental(ctx, IncrementalRequest{
-		Source:       SourceRef{Provider: legacyAgent, Key: "session"},
-		Fingerprint:  SourceFingerprint{Key: "/tmp/session.jsonl"},
-		SessionID:    def.IDPrefix + "session",
-		StartOrdinal: 1,
-		Machine:      "devbox",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, IncrementalUnsupported, status)
-	assert.Empty(t, incremental)
-}
-
-func TestProviderFactoryLookupAndConfigSnapshot(t *testing.T) {
-	cfg := ProviderConfig{
+	provider, ok := NewProvider(agent, ProviderConfig{
 		Roots:   []string{"/tmp/one", "/tmp/two"},
 		Machine: "devbox",
-	}
-	legacyAgent := legacyProviderTestAgent(t)
-
-	factory, ok := ProviderFactoryByType(legacyAgent)
-	require.True(t, ok)
-	assert.Equal(t, legacyAgent, factory.Definition().Type)
-
-	provider, ok := NewProvider(legacyAgent, cfg)
+	})
 	require.True(t, ok)
 	require.NotNil(t, provider)
-
-	cfg.Roots[0] = "/tmp/mutated"
-	legacy, ok := provider.(*legacyProvider)
-	require.True(t, ok)
-	assert.Equal(t, []string{"/tmp/one", "/tmp/two"}, legacy.Config.Roots)
-	assert.Equal(t, "devbox", legacy.Config.Machine)
 
 	_, ok = ProviderFactoryByType("missing")
 	assert.False(t, ok)
-	_, ok = NewProvider("missing", cfg)
+	_, ok = NewProvider("missing", ProviderConfig{})
 	assert.False(t, ok)
-}
-
-func TestLegacyProviderParseReturnsUnsupported(t *testing.T) {
-	legacyAgent := legacyProviderTestAgent(t)
-	provider, ok := NewProvider(legacyAgent, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
-		Source: SourceRef{
-			Provider:       legacyAgent,
-			Key:            "source",
-			DisplayPath:    "/tmp/source.jsonl",
-			FingerprintKey: "/tmp/source.jsonl",
-		},
-		Fingerprint: SourceFingerprint{
-			Key:     "/tmp/source.jsonl",
-			MTimeNS: time.Now().UnixNano(),
-		},
-		Machine: "devbox",
-	})
-	require.Error(t, err)
-	assert.Empty(t, outcome)
-	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
-	var unsupported UnsupportedProviderFeatureError
-	require.ErrorAs(t, err, &unsupported)
-	assert.Equal(t, legacyAgent, unsupported.Provider)
-	assert.Equal(t, ProviderFeatureParse, unsupported.Feature)
 }
 
 func TestProviderMigrationModesCoverRegistry(t *testing.T) {
@@ -274,38 +176,20 @@ func TestProviderMigrationModesCoverRegistry(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestProviderMigrationModesRejectConcreteProviderLeftLegacyOnly(t *testing.T) {
-	factory := testProviderFactory{
-		def: AgentDef{
-			Type:        AgentCodex,
-			DisplayName: "Codex",
-		},
+func TestProviderMigrationModesUseOnlyFinalModes(t *testing.T) {
+	for agent, mode := range ProviderMigrationModes() {
+		switch mode {
+		case ProviderMigrationProviderAuthoritative, ProviderMigrationImportOnly:
+		default:
+			assert.Failf(
+				t,
+				"unexpected migration mode",
+				"%s uses non-final provider migration mode %q",
+				agent,
+				mode,
+			)
+		}
 	}
-	modes := map[AgentType]ProviderMigrationMode{
-		AgentCodex: ProviderMigrationLegacyOnly,
-	}
-
-	err := ValidateProviderMigrationModes([]ProviderFactory{factory}, modes)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), string(AgentCodex))
-	assert.Contains(t, err.Error(), string(ProviderMigrationShadowCompare))
-}
-
-func TestProviderMigrationModesRejectConcreteModeForLegacyFactory(t *testing.T) {
-	factory := legacyProviderFactory{
-		def: AgentDef{
-			Type:        AgentCodex,
-			DisplayName: "Codex",
-		},
-	}
-	modes := map[AgentType]ProviderMigrationMode{
-		AgentCodex: ProviderMigrationShadowCompare,
-	}
-
-	err := ValidateProviderMigrationModes([]ProviderFactory{factory}, modes)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), string(AgentCodex))
-	assert.Contains(t, err.Error(), string(ProviderMigrationLegacyOnly))
 }
 
 func TestProviderMigrationModesRestrictImportOnlyMode(t *testing.T) {
@@ -352,18 +236,6 @@ type testProvider struct {
 
 func (p *testProvider) Parse(context.Context, ParseRequest) (ParseOutcome, error) {
 	return ParseOutcome{}, nil
-}
-
-func legacyProviderTestAgent(t *testing.T) AgentType {
-	t.Helper()
-	for _, def := range Registry {
-		factory := providerFactoryForDef(def)
-		if _, ok := factory.(legacyProviderFactory); ok {
-			return def.Type
-		}
-	}
-	t.Fatal("expected at least one legacy provider for fallback tests")
-	return ""
 }
 
 func assertAgentDefMetadataEqual(t *testing.T, want, got AgentDef) {
