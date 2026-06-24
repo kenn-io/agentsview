@@ -217,7 +217,9 @@ func ensureFreshData(
 		fmt.Fprintln(os.Stderr,
 			"Data version changed, running full resync...")
 		t := time.Now()
-		stats := engine.ResyncAll(ctx, printSyncProgressStderr)
+		progress := newResyncProgressPrinter(os.Stderr, time.Now)
+		stats := engine.ResyncAll(ctx, progress.Print)
+		progress.Finish()
 		printSyncSummaryStderr(stats, t)
 		return
 	}
@@ -243,21 +245,8 @@ func ensureFreshData(
 	engine.SyncAllSince(ctx, since, func(sync.Progress) {})
 }
 
-// printSyncProgressStderr mirrors printSyncProgress but writes
-// to stderr so it does not pollute stdout-bound JSON or
-// statusline output from the usage commands.
-func printSyncProgressStderr(p sync.Progress) {
-	if p.SessionsTotal > 0 {
-		fmt.Fprintf(os.Stderr,
-			"\r  %d/%d sessions (%.0f%%) · %d messages\x1b[K",
-			p.SessionsDone, p.SessionsTotal,
-			p.Percent(), p.MessagesIndexed,
-		)
-	}
-}
-
 // printSyncSummaryStderr mirrors printSyncSummary but writes to
-// stderr, for the same reason as printSyncProgressStderr.
+// stderr so it does not pollute stdout-bound JSON or statusline output.
 func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 	summary := fmt.Sprintf(
 		"\nSync complete: %d sessions synced",

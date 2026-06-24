@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,6 +169,60 @@ func TestPrintSyncProgressClearsShorterOverwrites(t *testing.T) {
 	require.GreaterOrEqual(t, strings.Count(out, "\x1b[K"), 2,
 		"each carriage-return progress line must clear stale text")
 	assert.Contains(t, out, "\r  Swapping rebuilt database into place\x1b[K")
+}
+
+func TestResyncProgressPrinterWritesPhaseTimingsOnNewLines(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	var out bytes.Buffer
+	printer := newResyncProgressPrinter(&out, clock)
+
+	printer.Print(agentsync.Progress{
+		Phase:  agentsync.PhasePreparingResync,
+		Detail: "Preparing full resync",
+		Resync: true,
+	})
+	now = now.Add(150 * time.Millisecond)
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseSyncing,
+		Detail:          "Syncing sessions into rebuilt database",
+		SessionsTotal:   10,
+		SessionsDone:    4,
+		MessagesIndexed: 40,
+		Resync:          true,
+	})
+	now = now.Add(2 * time.Second)
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseSyncing,
+		Detail:          "Syncing sessions into rebuilt database",
+		SessionsTotal:   10,
+		SessionsDone:    10,
+		MessagesIndexed: 100,
+		Resync:          true,
+	})
+	now = now.Add(350 * time.Millisecond)
+	printer.Print(agentsync.Progress{
+		Phase:  agentsync.PhaseRebuildingSearch,
+		Detail: "Rebuilding search index",
+		Hint:   "Rebuilding the search index may take a while on large archives.",
+		Resync: true,
+	})
+	now = now.Add(3 * time.Second)
+	printer.Print(agentsync.Progress{
+		Phase:  agentsync.PhaseSwappingDatabase,
+		Detail: "Swapping rebuilt database into place",
+		Resync: true,
+	})
+
+	got := out.String()
+	assert.Contains(t, got, "  Preparing full resync...\n")
+	assert.Contains(t, got, "  Preparing full resync completed in 150ms\n")
+	assert.Contains(t, got, "\r  Syncing sessions into rebuilt database: 10/10 sessions (100%) · 100 messages\x1b[K")
+	assert.Contains(t, got, "\n  Syncing sessions into rebuilt database completed in 2.35s\n")
+	assert.Contains(t, got, "  Rebuilding search index - Rebuilding the search index may take a while on large archives...\n")
+	assert.Contains(t, got, "  Rebuilding search index completed in 3s\n")
+	assert.NotContains(t, got, "\r  Rebuilding search index",
+		"non-session resync phases must not be overwritten in place")
 }
 
 func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {

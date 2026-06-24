@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata"
@@ -165,23 +167,7 @@ func runServe(cfg config.Config) {
 		if database.NeedsResync() {
 			signalsCovered := runInitialResync(ctx, engine)
 			if ctx.Err() == nil {
-				if err := database.Vacuum(); err != nil {
-					log.Printf("vacuum after resync: %v", err)
-				}
-				// Only short-circuit BackfillSignals when resync
-				// rewrote every session through the inline signal
-				// path. Aborted resyncs fall back to incremental
-				// sync (existing rows untouched) and orphans are
-				// copied as-is from the previous DB without
-				// recompute -- both leave sessions that still
-				// need backfill.
-				if signalsCovered {
-					if err := database.MarkSignalsBackfillDone(); err != nil {
-						log.Printf(
-							"mark signals backfill done: %v", err,
-						)
-					}
-				}
+				finishInitialResync(database, signalsCovered)
 			}
 		} else {
 			runInitialSync(ctx, engine)
@@ -577,7 +563,9 @@ func runInitialResync(
 ) bool {
 	fmt.Println("Data version changed, running full resync...")
 	t := time.Now()
-	stats := engine.ResyncAll(ctx, printSyncProgress)
+	progress := newResyncProgressPrinter(os.Stdout, time.Now)
+	stats := engine.ResyncAll(ctx, progress.Print)
+	progress.Finish()
 	printSyncSummary(stats, t)
 
 	fellBack := false
@@ -593,6 +581,26 @@ func runInitialResync(
 		return false
 	}
 	return resyncCoversSignals(stats, fellBack)
+}
+
+type signalsBackfillMarker interface {
+	MarkSignalsBackfillDone() error
+}
+
+func finishInitialResync(
+	marker signalsBackfillMarker, signalsCovered bool,
+) {
+	// Only short-circuit BackfillSignals when resync rewrote every
+	// session through the inline signal path. Aborted resyncs fall
+	// back to incremental sync (existing rows untouched) and orphans
+	// are copied as-is from the previous DB without recompute -- both
+	// leave sessions that still need backfill.
+	if !signalsCovered {
+		return
+	}
+	if err := marker.MarkSignalsBackfillDone(); err != nil {
+		log.Printf("mark signals backfill done: %v", err)
+	}
 }
 
 // resyncCoversSignals returns true only when every session in
@@ -639,7 +647,99 @@ func printSyncSummary(stats sync.SyncStats, t time.Time) {
 	}
 }
 
+type resyncProgressPrinter struct {
+	w        io.Writer
+	now      func() time.Time
+	label    string
+	started  time.Time
+	inPlace  bool
+	finished bool
+}
+
+func newResyncProgressPrinter(
+	w io.Writer, now func() time.Time,
+) *resyncProgressPrinter {
+	return &resyncProgressPrinter{w: w, now: now}
+}
+
+func (p *resyncProgressPrinter) Print(progress sync.Progress) {
+	if p.finished {
+		return
+	}
+	if progress.Phase == sync.PhaseDone {
+		p.finishCurrent()
+		return
+	}
+	label := resyncProgressLabel(progress)
+	if label == "" {
+		return
+	}
+
+	if progress.Phase == sync.PhaseSyncing && progress.SessionsTotal > 0 {
+		if p.label != progress.Detail {
+			p.finishCurrent()
+			p.label = progress.Detail
+			p.started = p.now()
+		}
+		p.inPlace = true
+		fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		return
+	}
+
+	if p.label == label {
+		return
+	}
+	p.finishCurrent()
+	p.label = label
+	p.started = p.now()
+	p.inPlace = false
+	fmt.Fprintf(
+		p.w, "  %s...\n",
+		strings.TrimSuffix(resyncProgressDisplayLabel(progress), "."),
+	)
+}
+
+func (p *resyncProgressPrinter) Finish() {
+	p.finished = true
+	p.finishCurrent()
+}
+
+func (p *resyncProgressPrinter) finishCurrent() {
+	if p.label == "" {
+		return
+	}
+	if p.inPlace {
+		fmt.Fprint(p.w, "\n")
+	}
+	elapsed := p.now().Sub(p.started).Round(time.Millisecond)
+	fmt.Fprintf(p.w, "  %s completed in %s\n", p.label, elapsed)
+	p.label = ""
+	p.started = time.Time{}
+	p.inPlace = false
+}
+
+func resyncProgressLabel(p sync.Progress) string {
+	return p.Detail
+}
+
+func resyncProgressDisplayLabel(p sync.Progress) string {
+	if p.Detail == "" {
+		return ""
+	}
+	if p.Hint == "" {
+		return p.Detail
+	}
+	return p.Detail + " - " + p.Hint
+}
+
 func printSyncProgress(p sync.Progress) {
+	if detail := formatSyncProgress(p); detail != "" {
+		fmt.Printf("\r  %s\x1b[K", detail)
+		return
+	}
+}
+
+func formatSyncProgress(p sync.Progress) string {
 	if p.Detail != "" {
 		detail := p.Detail
 		if p.SessionsTotal > 0 {
@@ -652,16 +752,16 @@ func printSyncProgress(p sync.Progress) {
 		if p.Hint != "" {
 			detail += " - " + p.Hint
 		}
-		fmt.Printf("\r  %s\x1b[K", detail)
-		return
+		return detail
 	}
 	if p.SessionsTotal > 0 {
-		fmt.Printf(
-			"\r  %d/%d sessions (%.0f%%) · %d messages\x1b[K",
+		return fmt.Sprintf(
+			"%d/%d sessions (%.0f%%) · %d messages",
 			p.SessionsDone, p.SessionsTotal,
 			p.Percent(), p.MessagesIndexed,
 		)
 	}
+	return ""
 }
 
 func startFileWatcher(

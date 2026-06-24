@@ -278,3 +278,29 @@ func TestResyncCoversSignals(t *testing.T) {
 		})
 	}
 }
+
+type fakeSignalsBackfillMarker struct {
+	calls int
+	err   error
+}
+
+func (f *fakeSignalsBackfillMarker) MarkSignalsBackfillDone() error {
+	f.calls++
+	return f.err
+}
+
+func TestFinishInitialResyncMarksCoveredSignals(t *testing.T) {
+	marker := &fakeSignalsBackfillMarker{}
+
+	finishInitialResync(marker, true)
+
+	assert.Equal(t, 1, marker.calls)
+}
+
+func TestFinishInitialResyncSkipsMarkerWhenSignalsNeedBackfill(t *testing.T) {
+	marker := &fakeSignalsBackfillMarker{}
+
+	finishInitialResync(marker, false)
+
+	assert.Equal(t, 0, marker.calls)
+}
