@@ -92,7 +92,7 @@ func runPGPush(
 
 	var failures []string
 	for i, target := range targets {
-		if len(targets) > 1 {
+		if len(targets) > 1 || target.Name != "" {
 			if i > 0 {
 				fmt.Println()
 			}

@@ -5,7 +5,18 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
 )
+
+func testDB(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.Open(t.TempDir() + "/test.db")
+	require.NoError(t, err, "opening test db")
+	t.Cleanup(func() { d.Close() })
+	return d
+}
 
 func TestIsUndefinedTable(t *testing.T) {
 	tests := []struct {
@@ -45,4 +56,88 @@ func TestIsUndefinedTable(t *testing.T) {
 			assert.Equal(t, tt.want, isUndefinedTable(tt.err))
 		})
 	}
+}
+
+func TestScopedSyncStateStoreMigratesLegacyState(t *testing.T) {
+	local := testDB(t)
+
+	require.NoError(t, local.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123Z",
+	))
+	require.NoError(t, local.SetSyncState(
+		lastPushBoundaryStateKey,
+		`{"cutoff":"2026-03-11T12:34:56.123Z"}`,
+	))
+	require.NoError(t, local.SetSyncState(
+		lastPushTargetFingerprintKey,
+		"fingerprint-a",
+	))
+	require.NoError(t, local.SetSyncState(
+		pushMarkerIDStateKey,
+		"marker-a",
+	))
+
+	store := newScopedSyncStateStore(local, "work", true)
+
+	lastPush, err := store.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", lastPush)
+
+	for _, key := range []string{
+		"last_push_at",
+		lastPushBoundaryStateKey,
+		lastPushTargetFingerprintKey,
+	} {
+		legacyValue, err := local.GetSyncState(key)
+		require.NoError(t, err)
+		assert.Empty(t, legacyValue)
+
+		scopedValue, err := local.GetSyncState(key + ":work")
+		require.NoError(t, err)
+		assert.NotEmpty(t, scopedValue)
+	}
+
+	legacyMarker, err := local.GetSyncState(pushMarkerIDStateKey)
+	require.NoError(t, err)
+	assert.Equal(t, "marker-a", legacyMarker)
+
+	scopedMarker, err := local.GetSyncState(
+		pushMarkerIDStateKey + ":work",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, scopedMarker)
+}
+
+func TestScopedSyncStateStoreNonDefaultTargetDoesNotMigrateLegacyState(t *testing.T) {
+	local := testDB(t)
+
+	require.NoError(t, local.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123Z",
+	))
+
+	store := newScopedSyncStateStore(local, "archive", false)
+
+	got, err := store.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	legacyValue, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", legacyValue)
+}
+
+func TestScopedSyncStateStoreLegacyModeUsesUnscopedKeys(t *testing.T) {
+	local := testDB(t)
+	store := newScopedSyncStateStore(local, "", false)
+
+	require.NoError(t, store.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123Z",
+	))
+
+	got, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
 }

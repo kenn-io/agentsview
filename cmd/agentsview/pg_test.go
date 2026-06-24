@@ -157,11 +157,15 @@ machine_name = "workbox"
 url = "postgres://archive"
 `)
 
-	err := runPGPush(PGPushConfig{}, "archive")
+	var err error
+	out := captureStdout(t, func() {
+		err = runPGPush(PGPushConfig{}, "archive")
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
 	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
 	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
+	assert.Contains(t, out, "Target: archive")
 }
 
 func TestRunPGStatus_IgnoresBrokenUnselectedTarget(t *testing.T) {
