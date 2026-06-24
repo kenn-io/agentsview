@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,7 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/kit/daemon"
 )
 
 func TestNewActivityCommand_RegistersReport(t *testing.T) {
@@ -70,21 +69,11 @@ func TestResolveActivityReport_JSONShape(t *testing.T) {
 func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 	dataDir := testDataDir(t)
 
-	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
-		Service: daemonService,
-		Version: "test",
-	})
-	var gotQuery string
-	ts := httptest.NewServer(http.HandlerFunc(func(
-		w http.ResponseWriter, r *http.Request,
-	) {
-		switch r.URL.Path {
-		case "/api/ping":
-			ping.ServeHTTP(w, r)
-		case "/api/v1/activity/report":
-			gotQuery = r.URL.RawQuery
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{
+	var gotQuery url.Values
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/activity/report": func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			writeJSONResponse(w, `{
 				"timezone":"UTC",
 				"range_start":"2026-06-16T00:00:00Z",
 				"range_end":"2026-06-17T00:00:00Z",
@@ -101,12 +90,9 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 				"by_agent":[],
 				"by_session":[],
 				"intervals":[]
-			}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(ts.Close)
+			}`)
+		},
+	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out := captureStdout(t, func() {
@@ -115,9 +101,9 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 			Date: "2026-06-16", Timezone: "UTC",
 		})
 	})
-	assert.Contains(t, gotQuery, "preset=day")
-	assert.Contains(t, gotQuery, "date=2026-06-16")
-	assert.Contains(t, gotQuery, "timezone=UTC")
+	assert.Equal(t, "day", gotQuery.Get("preset"))
+	assert.Equal(t, "2026-06-16", gotQuery.Get("date"))
+	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
 
 	var payload activity.Report
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -126,9 +112,16 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
-func TestFmtRangeBound_RendersInTimezone(t *testing.T) {
-	chicago, err := time.LoadLocation("America/Chicago")
+// mustLocation loads a named time zone, failing the test if it is unavailable.
+func mustLocation(t *testing.T, name string) *time.Location {
+	t.Helper()
+	loc, err := time.LoadLocation(name)
 	require.NoError(t, err)
+	return loc
+}
+
+func TestFmtRangeBound_RendersInTimezone(t *testing.T) {
+	chicago := mustLocation(t, "America/Chicago")
 	// 05:00Z is local midnight in Chicago (CDT, UTC-5) in June.
 	assert.Equal(t, "2026-06-16", fmtRangeBound("2026-06-16T05:00:00Z", chicago))
 	// UTC midnight renders date-only in UTC.
@@ -139,8 +132,7 @@ func TestFmtRangeBound_RendersInTimezone(t *testing.T) {
 
 func TestFmtInstant_NilAndTimezone(t *testing.T) {
 	assert.Equal(t, "—", fmtInstant(nil, time.UTC))
-	chicago, err := time.LoadLocation("America/Chicago")
-	require.NoError(t, err)
+	chicago := mustLocation(t, "America/Chicago")
 	ts := "2026-06-16T05:30:00Z" // 00:30 CDT
 	assert.Equal(t, "2026-06-16 00:30", fmtInstant(&ts, chicago))
 }
