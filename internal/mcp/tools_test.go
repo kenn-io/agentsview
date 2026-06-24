@@ -377,7 +377,7 @@ func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 	// asc anchored at ordinal 2 -> starts at 2, ascending.
 	from := 2
 	_, asc, err := ts.getMessages(context.Background(), nil, getMessagesIn{
-		SessionID: "s1", Direction: "asc", From: from,
+		SessionID: "s1", Direction: "asc", From: &from,
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, asc.Messages)
@@ -385,6 +385,32 @@ func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 	for i := 1; i < len(asc.Messages); i++ {
 		assert.Less(t, asc.Messages[i-1].Ordinal, asc.Messages[i].Ordinal)
 	}
+}
+
+// Ordinal 0 is a valid anchor (search_sessions can return match_ordinal 0),
+// so from:0 must be honored, not treated as "omitted". With desc it anchors
+// at ordinal 0 -- returning only that message -- rather than falling back to
+// newest-first.
+func TestGetMessages_FromZeroAnchors(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		dbtest.AsstMsg("s1", 1, "m1"),
+		dbtest.UserMsg("s1", 2, "m2"),
+	}))
+
+	zero := 0
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Direction: "desc", From: &zero,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 1)
+	assert.Equal(t, 0, out.Messages[0].Ordinal,
+		"from:0 anchors at ordinal 0, not newest-first")
 }
 
 // TestServer_EndToEnd connects a real MCP client to the server over an

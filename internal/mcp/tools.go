@@ -258,7 +258,7 @@ func (t *toolset) sessionOverview(
 
 type getMessagesIn struct {
 	SessionID          string   `json:"session_id" jsonschema:"The session to read."`
-	From               int      `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions)."`
+	From               *int     `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message)."`
 	Direction          string   `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first)."`
 	Limit              int      `json:"limit,omitempty" jsonschema:"Max messages, default 20, max 100."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
@@ -284,16 +284,12 @@ type getMessagesOut struct {
 func (t *toolset) getMessages(
 	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
 ) (*mcp.CallToolResult, getMessagesOut, error) {
-	// Only pin an anchor when the caller supplied one. From is a plain
-	// int, so 0 is indistinguishable from "omitted"; leaving it nil lets
-	// the service default desc to newest-first and asc to oldest-first.
-	var from *int
-	if in.From > 0 {
-		f := in.From
-		from = &f
-	}
+	// From is a *int so an explicit ordinal 0 (a valid match_ordinal)
+	// anchors at the first message rather than being mistaken for
+	// "omitted". A nil From lets the service default: desc to
+	// newest-first, asc to oldest-first.
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
-		From:      from,
+		From:      in.From,
 		Direction: in.Direction,
 		Limit:     clampLimit(in.Limit, defaultMessageLimit, maxMessageLimit),
 	})
