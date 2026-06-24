@@ -498,6 +498,45 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 	assert.Contains(t, spec.Paths["/api/v1/settings"], "put")
 }
 
+func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/openapi.json")
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	type openAPISchema struct {
+		Ref        string                   `json:"$ref"`
+		Properties map[string]openAPISchema `json:"properties"`
+	}
+	type openAPIResponse struct {
+		Content map[string]struct {
+			Schema openAPISchema `json:"schema"`
+		} `json:"content"`
+	}
+	type openAPIOperation struct {
+		Responses map[string]openAPIResponse `json:"responses"`
+	}
+	var spec struct {
+		Paths      map[string]map[string]openAPIOperation `json:"paths"`
+		Components struct {
+			Schemas map[string]openAPISchema `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	op := spec.Paths["/api/v1/usage/summary"]["get"]
+	response := op.Responses["200"]
+	jsonContent, ok := response.Content["application/json"]
+	require.True(t, ok, "usage summary 200 response missing application/json")
+	assert.Equal(t,
+		"#/components/schemas/UsageSummaryResponse",
+		jsonContent.Schema.Ref)
+
+	schema, ok := spec.Components.Schemas["UsageSummaryResponse"]
+	require.True(t, ok, "UsageSummaryResponse schema missing")
+	assert.Contains(t, schema.Properties, "comparison")
+}
+
 func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	te := setup(t)
 

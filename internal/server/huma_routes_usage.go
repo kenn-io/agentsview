@@ -92,7 +92,7 @@ func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
 func (s *Server) humaUsageSummary(
 	ctx context.Context,
 	in *UsageFilterInput,
-) (*jsonOutput[*service.UsageSummaryResult], error) {
+) (*jsonOutput[UsageSummaryResponse], error) {
 	res, err := s.sessions.UsageSummary(ctx, usageRequestFromInput(*in))
 	if err != nil {
 		var ue *service.UsageInputError
@@ -107,7 +107,9 @@ func (s *Server) humaUsageSummary(
 		}
 		return nil, internalError("usage summary error", err)
 	}
-	return &jsonOutput[*service.UsageSummaryResult]{Body: res}, nil
+	return &jsonOutput[UsageSummaryResponse]{
+		Body: usageSummaryResponseFromService(res),
+	}, nil
 }
 
 func (s *Server) humaUsageComparison(
