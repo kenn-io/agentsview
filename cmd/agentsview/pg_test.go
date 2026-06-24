@@ -394,3 +394,74 @@ func TestWritePGPushSummaryIncludesSkippedConflicts(t *testing.T) {
 	assert.Contains(t, got,
 		"Warning: skipped 2 session(s) owned by another PostgreSQL push marker")
 }
+
+func TestWritePGPushSummaryReportsErrorCount(t *testing.T) {
+	tests := []struct {
+		name        string
+		result      postgres.PushResult
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "conflicts with errors",
+			result: postgres.PushResult{
+				SessionsPushed:   3,
+				MessagesPushed:   9,
+				SkippedConflicts: 2,
+				Errors:           4,
+				Duration:         1500 * time.Millisecond,
+			},
+			wantContain: []string{
+				"Pushed 3 sessions, 9 messages, skipped 2 ownership conflict(s), 4 error(s) in 1.5s",
+				"Warning: skipped 2 session(s) owned by another PostgreSQL push marker",
+			},
+		},
+		{
+			name: "conflicts without errors omits error count",
+			result: postgres.PushResult{
+				SessionsPushed:   3,
+				MessagesPushed:   9,
+				SkippedConflicts: 2,
+				Duration:         1500 * time.Millisecond,
+			},
+			wantContain: []string{
+				"Pushed 3 sessions, 9 messages, skipped 2 ownership conflict(s) in 1.5s",
+			},
+			wantAbsent: []string{"error(s)"},
+		},
+		{
+			name: "errors without conflicts",
+			result: postgres.PushResult{
+				SessionsPushed: 5,
+				MessagesPushed: 12,
+				Errors:         1,
+				Duration:       2 * time.Second,
+			},
+			wantContain: []string{"Pushed 5 sessions, 12 messages, 1 error(s) in 2s"},
+			wantAbsent:  []string{"ownership conflict"},
+		},
+		{
+			name: "clean run omits error count",
+			result: postgres.PushResult{
+				SessionsPushed: 5,
+				MessagesPushed: 12,
+				Duration:       2 * time.Second,
+			},
+			wantContain: []string{"Pushed 5 sessions, 12 messages in 2s"},
+			wantAbsent:  []string{"error(s)", "ownership conflict"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			writePGPushSummary(&out, tt.result)
+			got := out.String()
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+			for _, absent := range tt.wantAbsent {
+				assert.NotContains(t, got, absent)
+			}
+		})
+	}
+}

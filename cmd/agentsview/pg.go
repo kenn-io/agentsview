@@ -177,14 +177,20 @@ func printPGPushProgress(p postgres.PushProgress) {
 }
 
 func writePGPushSummary(w io.Writer, result postgres.PushResult) {
+	dur := result.Duration.Round(time.Millisecond)
+	errSuffix := ""
+	if result.Errors > 0 {
+		errSuffix = fmt.Sprintf(", %d error(s)", result.Errors)
+	}
 	if result.SkippedConflicts > 0 {
 		fmt.Fprintf(
 			w,
-			"Pushed %d sessions, %d messages, skipped %d ownership conflict(s) in %s\n",
+			"Pushed %d sessions, %d messages, skipped %d ownership conflict(s)%s in %s\n",
 			result.SessionsPushed,
 			result.MessagesPushed,
 			result.SkippedConflicts,
-			result.Duration.Round(time.Millisecond),
+			errSuffix,
+			dur,
 		)
 		fmt.Fprintf(
 			w,
@@ -195,10 +201,11 @@ func writePGPushSummary(w io.Writer, result postgres.PushResult) {
 	}
 	fmt.Fprintf(
 		w,
-		"Pushed %d sessions, %d messages in %s\n",
+		"Pushed %d sessions, %d messages%s in %s\n",
 		result.SessionsPushed,
 		result.MessagesPushed,
-		result.Duration.Round(time.Millisecond),
+		errSuffix,
+		dur,
 	)
 }
 
