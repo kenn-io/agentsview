@@ -576,7 +576,6 @@ func generateGemini(
 		ctx, path,
 		"--model", geminiInsightModel,
 		"--output-format", "stream-json",
-		"--sandbox",
 	)
 	cmd.Env = agentEnv()
 	cmd.Stdin = strings.NewReader(prompt)

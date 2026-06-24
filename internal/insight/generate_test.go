@@ -491,7 +491,6 @@ func TestGenerateGemini_ModelFlag(t *testing.T) {
 	wantArgs := []string{
 		"--model", geminiInsightModel,
 		"--output-format", "stream-json",
-		"--sandbox",
 	}
 	assert.Equal(t, wantArgs, args)
 }
