@@ -12,6 +12,7 @@
     UserRoundIcon,
     UsersRoundIcon,
   } from "../../icons.js";
+  import { TrashIcon, CheckIcon } from "../../icons.js";
   import { formatNumber } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import {
@@ -313,6 +314,39 @@
     }
   });
 
+  let batchDeleting = $state(false);
+
+  let allVisibleSessionIds = $derived(
+    groups.flatMap((g) => g.sessions.map((s) => s.id)),
+  );
+
+  let allSelected = $derived(
+    allVisibleSessionIds.length > 0 &&
+    allVisibleSessionIds.every((id) => sessions.selectedIds.has(id)),
+  );
+
+  async function handleBatchDelete() {
+    if (batchDeleting) return;
+    const ids = [...sessions.selectedIds];
+    if (ids.length === 0) return;
+    batchDeleting = true;
+    try {
+      await sessions.batchDeleteSessions(ids);
+    } catch {
+      // silently fail
+    } finally {
+      batchDeleting = false;
+    }
+  }
+
+  function handleSelectAllVisible() {
+    if (allSelected) {
+      sessions.clearSelection();
+    } else {
+      sessions.selectAll(allVisibleSessionIds);
+    }
+  }
+
   function handleScroll() {
     if (!containerRef) return;
     if (scrollRaf !== null) return;
@@ -428,6 +462,15 @@
     {#if sessions.loading}
       <span class="loading-indicator">{m.sidebar_loading()}</span>
     {/if}
+    <button
+      class="select-toggle-btn"
+      class:active={sessions.selectMode}
+      onclick={() => sessions.toggleSelectMode()}
+      title={sessions.selectMode ? "Exit multi-select" : "Multi-select"}
+      aria-label={sessions.selectMode ? "Exit multi-select" : "Multi-select"}
+    >
+      <CheckIcon size="12" strokeWidth="2" aria-hidden="true" />
+    </button>
     <SessionFilterControl
       {groupMode}
       onToggleGroupByAgent={toggleGroupByAgent}
@@ -470,6 +513,37 @@
     {/snippet}
   </div>
 </div>
+
+{#if sessions.selectMode}
+  <div class="batch-toolbar">
+    <button
+      class="batch-select-all-btn"
+      onclick={handleSelectAllVisible}
+      title={allSelected ? "Clear selection" : "Select all visible"}
+    >
+      {allSelected ? "Clear" : "All"}
+    </button>
+    <span class="batch-count">
+      {sessions.selectedIds.size} selected
+    </span>
+    <button
+      class="batch-delete-btn"
+      onclick={handleBatchDelete}
+      disabled={sessions.selectedIds.size === 0 || batchDeleting}
+      title="Move selected sessions to trash"
+    >
+      <TrashIcon size="11" strokeWidth="2" aria-hidden="true" />
+      {batchDeleting ? "Deleting..." : "Delete"}
+    </button>
+    <button
+      class="batch-cancel-btn"
+      onclick={() => sessions.toggleSelectMode()}
+      title="Exit multi-select"
+    >
+      Cancel
+    </button>
+  </div>
+{/if}
 
 <div
   class="session-list-scroll"
@@ -553,6 +627,8 @@
             compact
             depth={item.depth ?? 1}
             isLastChild={item.isLastChild ?? false}
+            selectMode={sessions.selectMode}
+            selected={sessions.selectedIds.has(item.session.id)}
           />
         {:else if item.group}
           {@const primary = item.group.sessions.find(
@@ -580,6 +656,8 @@
               depth={0}
               hasSubagents={groupHasSubagents}
               hasTeammates={groupHasTeammates}
+              selectMode={sessions.selectMode}
+              selected={primary ? sessions.selectedIds.has(primary.id) : false}
             />
           {/if}
         {/if}
@@ -815,6 +893,101 @@
     font-size: 9px;
     color: var(--text-muted);
     font-weight: 500;
+  }
+
+  .select-toggle-btn {
+    all: unset;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.1s, background 0.1s;
+  }
+
+  .select-toggle-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+  }
+
+  .select-toggle-btn.active {
+    color: var(--accent-blue);
+    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  }
+
+  .batch-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-muted);
+    background: color-mix(in srgb, var(--accent-blue) 5%, var(--bg-inset));
+    flex-shrink: 0;
+  }
+
+  .batch-select-all-btn {
+    all: unset;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .batch-select-all-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .batch-count {
+    flex: 1;
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .batch-delete-btn {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: white;
+    background: var(--accent-red, #d32f2f);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .batch-delete-btn:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .batch-delete-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .batch-cancel-btn {
+    all: unset;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  .batch-cancel-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
   }
 
 </style>

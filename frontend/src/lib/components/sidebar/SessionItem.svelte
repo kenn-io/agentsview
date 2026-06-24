@@ -49,6 +49,10 @@
     hasSubagents?: boolean;
     /** Whether the group contains teammate children. */
     hasTeammates?: boolean;
+    /** Whether multi-select mode is active in the sidebar. */
+    selectMode?: boolean;
+    /** Whether this item is currently selected in multi-select mode. */
+    selected?: boolean;
   }
 
   let {
@@ -65,6 +69,8 @@
     isLastChild = false,
     hasSubagents = false,
     hasTeammates = false,
+    selectMode = false,
+    selected = false,
   }: Props = $props();
 
   let isActive = $derived.by(() => {
@@ -253,7 +259,17 @@
     if (target.closest("a, button, input")) {
       return;
     }
-    sessions.selectSession(session.id);
+    if (selectMode) {
+      sessions.toggleSelection(session.id);
+    } else {
+      sessions.selectSession(session.id);
+    }
+  }
+
+  function handleSelectClick(e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    sessions.toggleSelection(session.id);
   }
 
   $effect(() => {
@@ -306,7 +322,11 @@
     }
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      sessions.selectSession(session.id);
+      if (selectMode) {
+        sessions.toggleSelection(session.id);
+      } else {
+        sessions.selectSession(session.id);
+      }
     }
   }}
   oncontextmenu={handleContextMenu}
@@ -330,6 +350,23 @@
     <span class="tree-dash"></span>
   {:else}
     <span class="tree-spacer"></span>
+  {/if}
+
+  {#if selectMode}
+    <button
+      type="button"
+      class="select-checkbox"
+      class:checked={selected}
+      onclick={handleSelectClick}
+      tabindex="-1"
+      aria-label={selected ? "Deselect session" : "Select session"}
+    >
+      {#if selected}
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M2.5 6L5 8.5L9.5 3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      {/if}
+    </button>
   {/if}
 
   <StatusDot {session} {groupSessions} size={6} />
@@ -744,5 +781,29 @@
 
   :global(.context-menu .context-menu-item.danger:hover) {
     background: color-mix(in srgb, var(--accent-red, #e55) 10%, transparent);
+  }
+
+  .select-checkbox {
+    all: unset;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    border: 1.5px solid var(--border-default);
+    border-radius: 3px;
+    cursor: pointer;
+    color: white;
+    transition: background 0.1s, border-color 0.1s;
+  }
+
+  .select-checkbox:hover {
+    border-color: var(--accent-blue);
+  }
+
+  .select-checkbox.checked {
+    background: var(--accent-blue);
+    border-color: var(--accent-blue);
   }
 </style>

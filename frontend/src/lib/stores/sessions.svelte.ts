@@ -1039,6 +1039,35 @@ class SessionsStore {
   recentlyDeleted: { id: string; timer: ReturnType<typeof setTimeout> }[] =
     $state([]);
 
+  /** Multi-select state for batch operations. */
+  selectedIds: Set<string> = $state(new Set());
+  selectMode: boolean = $state(false);
+
+  toggleSelectMode() {
+    this.selectMode = !this.selectMode;
+    if (!this.selectMode) {
+      this.selectedIds = new Set();
+    }
+  }
+
+  toggleSelection(id: string) {
+    const next = new Set(this.selectedIds);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    this.selectedIds = next;
+  }
+
+  selectAll(ids: string[]) {
+    this.selectedIds = new Set(ids);
+  }
+
+  clearSelection() {
+    this.selectedIds = new Set();
+  }
+
   async deleteSession(id: string) {
     configureGeneratedClient();
     await SessionsService.deleteApiV1SessionsId({ id });
@@ -1057,6 +1086,35 @@ class SessionsStore {
       );
     }, 10_000);
     this.recentlyDeleted = [...this.recentlyDeleted, { id, timer }];
+    this.invalidateFilterCaches();
+  }
+
+  async batchDeleteSessions(ids: string[]) {
+    if (ids.length === 0) return;
+    configureGeneratedClient();
+    await SessionsService.postApiV1SessionsBatchDelete({
+      requestBody: { session_ids: ids },
+    });
+    const idSet = new Set(ids);
+    const before = this.sessions.length;
+    this.sessions = this.sessions.filter((s) => !idSet.has(s.id));
+    const removed = before - this.sessions.length;
+    if (removed > 0) {
+      this.total = Math.max(0, this.total - removed);
+    }
+    if (this.activeSessionId && idSet.has(this.activeSessionId)) {
+      this.setActiveSession(null);
+    }
+    for (const id of ids) {
+      const timer = setTimeout(() => {
+        this.recentlyDeleted = this.recentlyDeleted.filter(
+          (d) => d.id !== id,
+        );
+      }, 10_000);
+      this.recentlyDeleted = [...this.recentlyDeleted, { id, timer }];
+    }
+    this.selectedIds = new Set();
+    this.selectMode = false;
     this.invalidateFilterCaches();
   }
 
