@@ -719,4 +719,183 @@ describe("UIStore", () => {
       }
     });
   });
+
+  describe("fontScale", () => {
+    beforeEach(() => {
+      ui.setFontScale(100);
+    });
+
+    it("defaults to 100", () => {
+      expect(ui.fontScale).toBe(100);
+    });
+
+    it("sets a valid step", () => {
+      ui.setFontScale(130);
+      expect(ui.fontScale).toBe(130);
+    });
+
+    it("ignores values outside the allowed steps", () => {
+      ui.setFontScale(120);
+      ui.setFontScale(145);
+      expect(ui.fontScale).toBe(120);
+      ui.setFontScale(0);
+      expect(ui.fontScale).toBe(120);
+    });
+
+    it("applies font scale as root zoom on web", async () => {
+      const original = globalThis.localStorage;
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem: vi.fn(() => null), setItem: vi.fn() },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?webFontScale");
+        mod.ui.setFontScale(110);
+        await tick();
+        expect(
+          document.documentElement.style.getPropertyValue("zoom"),
+        ).toBe("1.1");
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("composes desktop window zoom with font scale", async () => {
+      const original = globalThis.localStorage;
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem: vi.fn(() => null), setItem: vi.fn() },
+        writable: true,
+        configurable: true,
+      });
+      window.history.replaceState({}, "", "/?desktop");
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?desktopCompose");
+        mod.ui.zoomLevel = 200;
+        mod.ui.setFontScale(110);
+        await tick();
+        expect(
+          document.documentElement.style.getPropertyValue("zoom"),
+        ).toBe("2.2");
+      } finally {
+        window.history.replaceState({}, "", "/");
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("persists font scale changes", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem: vi.fn(() => null), setItem },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?persistFontScale");
+        setItem.mockClear();
+        mod.ui.setFontScale(120);
+        await tick();
+        expect(setItem).toHaveBeenCalledWith(
+          "agentsview-font-scale",
+          "120",
+        );
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+
+    it("falls back to 100 for an invalid stored font scale", async () => {
+      const original = globalThis.localStorage;
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) =>
+            key === "agentsview-font-scale" ? "145" : null,
+          ),
+          setItem: vi.fn(),
+        },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?badFontScale");
+        expect(mod.ui.fontScale).toBe(100);
+      } finally {
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
+
+  describe("highContrast", () => {
+    beforeEach(() => {
+      if (ui.highContrast) ui.toggleHighContrast();
+    });
+
+    it("defaults to false", () => {
+      expect(ui.highContrast).toBe(false);
+    });
+
+    it("toggles the value", () => {
+      ui.toggleHighContrast();
+      expect(ui.highContrast).toBe(true);
+      ui.toggleHighContrast();
+      expect(ui.highContrast).toBe(false);
+    });
+
+    it("toggles the root class and persists", async () => {
+      const original = globalThis.localStorage;
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: { getItem: vi.fn(() => null), setItem },
+        writable: true,
+        configurable: true,
+      });
+      try {
+        // @ts-expect-error -- query string busts module cache
+        const mod = await import("./ui.svelte.js?highContrastToggle");
+        setItem.mockClear();
+        mod.ui.toggleHighContrast();
+        await tick();
+        expect(
+          document.documentElement.classList.contains("high-contrast"),
+        ).toBe(true);
+        expect(setItem).toHaveBeenCalledWith(
+          "agentsview-high-contrast",
+          "true",
+        );
+        mod.ui.toggleHighContrast();
+        await tick();
+        expect(
+          document.documentElement.classList.contains("high-contrast"),
+        ).toBe(false);
+      } finally {
+        document.documentElement.classList.remove("high-contrast");
+        Object.defineProperty(globalThis, "localStorage", {
+          value: original,
+          writable: true,
+          configurable: true,
+        });
+      }
+    });
+  });
 });

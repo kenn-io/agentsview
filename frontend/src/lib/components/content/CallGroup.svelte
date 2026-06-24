@@ -155,4 +155,11 @@
     opacity: 0.3;
     transition: opacity 0.18s;
   }
+  :global(.high-contrast) .cgroup .cg-h-label,
+  :global(.high-contrast) .cgroup .cg-h-dur {
+    color: var(--text-secondary);
+  }
+  :global(.high-contrast) .cgroup .cg-rail::before {
+    background: var(--border-default);
+  }
 </style>

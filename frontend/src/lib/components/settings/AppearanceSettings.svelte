@@ -3,6 +3,7 @@
   import {
     ui,
     ALL_BLOCK_TYPES,
+    FONT_SCALE_STEPS,
     type BlockType,
     type MessageLayout,
   } from "../../stores/ui.svelte.js";
@@ -35,6 +36,13 @@
   </div>
 
   <div class="setting-row">
+    <span class="setting-label">High contrast</span>
+    <button class="setting-toggle" onclick={() => ui.toggleHighContrast()}>
+      {ui.highContrast ? "On" : "Off"}
+    </button>
+  </div>
+
+  <div class="setting-row">
     <span class="setting-label">Message layout</span>
     <div class="setting-options">
       {#each LAYOUT_OPTIONS as opt}
@@ -44,6 +52,21 @@
           onclick={() => ui.setLayout(opt.value)}
         >
           {opt.label}
+        </button>
+      {/each}
+    </div>
+  </div>
+
+  <div class="setting-row">
+    <span class="setting-label">Text size</span>
+    <div class="setting-options">
+      {#each FONT_SCALE_STEPS as step}
+        <button
+          class="option-btn"
+          class:active={ui.fontScale === step}
+          onclick={() => ui.setFontScale(step)}
+        >
+          {step}%
         </button>
       {/each}
     </div>

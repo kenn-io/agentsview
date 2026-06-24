@@ -233,4 +233,12 @@
       transform: scaleX(1);
     }
   }
+  :global(.high-contrast) .call .ca,
+  :global(.high-contrast) .call .cd.muted,
+  :global(.high-contrast) .call .chev {
+    color: var(--text-secondary);
+  }
+  :global(.high-contrast) .call.expanded .chev {
+    color: var(--text-primary);
+  }
 </style>

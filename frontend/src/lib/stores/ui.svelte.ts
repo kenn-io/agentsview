@@ -75,6 +75,10 @@ const ZOOM_STEPS = [
   67, 75, 80, 90, 100, 110, 125, 150, 175, 200,
 ];
 const ZOOM_DEFAULT = 100;
+const FONT_SCALE_KEY = "agentsview-font-scale";
+const HIGH_CONTRAST_KEY = "agentsview-high-contrast";
+export const FONT_SCALE_STEPS = [90, 100, 110, 120, 130];
+const FONT_SCALE_DEFAULT = 100;
 
 function readStoredZoom(): number {
   if (!IS_DESKTOP) return ZOOM_DEFAULT;
@@ -89,6 +93,20 @@ function readStoredZoom(): number {
   }
   return ZOOM_DEFAULT;
 }
+
+function readStoredFontScale(): number {
+  try {
+    const raw = localStorage?.getItem(FONT_SCALE_KEY);
+    if (raw) {
+      const val = Number(raw);
+      if (FONT_SCALE_STEPS.includes(val)) return val;
+    }
+  } catch {
+    // ignore
+  }
+  return FONT_SCALE_DEFAULT;
+}
+
 const VALID_LAYOUTS: MessageLayout[] = [
   "default",
   "compact",
@@ -172,6 +190,10 @@ class UIStore {
   pendingScrollSession: string | null = $state(null);
 
   zoomLevel: number = $state(readStoredZoom());
+  fontScale: number = $state(readStoredFontScale());
+  highContrast: boolean = $state(
+    readStoredBool(HIGH_CONTRAST_KEY, false),
+  );
 
   sidebarOpen: boolean = $state(true);
   isMobileViewport: boolean = $state(false);
@@ -240,17 +262,52 @@ class UIStore {
         }
       });
 
+      // Apply the composed root zoom: font scale (web and desktop)
+      // multiplied by the desktop window zoom (desktop only). "zoom"
+      // is non-standard but supported in WebKit/Chromium.
       $effect(() => {
-        if (!IS_DESKTOP) return;
-        // "zoom" is non-standard but supported in WebKit/Chromium
+        const desktopZoom = IS_DESKTOP ? this.zoomLevel / 100 : 1;
+        const scale = this.fontScale / 100;
+        const effective =
+          Math.round(desktopZoom * scale * 10000) / 10000;
         (
           document.documentElement.style as unknown as
             Record<string, string>
-        ).zoom = String(this.zoomLevel / 100);
+        ).zoom = String(effective);
+      });
+
+      // Persist the desktop window zoom (desktop only).
+      $effect(() => {
+        if (!IS_DESKTOP) return;
+        try {
+          localStorage?.setItem(ZOOM_KEY, String(this.zoomLevel));
+        } catch {
+          // ignore
+        }
+      });
+
+      // Persist the font scale (web and desktop).
+      $effect(() => {
         try {
           localStorage?.setItem(
-            ZOOM_KEY,
-            String(this.zoomLevel),
+            FONT_SCALE_KEY,
+            String(this.fontScale),
+          );
+        } catch {
+          // ignore
+        }
+      });
+
+      // Apply and persist high contrast.
+      $effect(() => {
+        document.documentElement.classList.toggle(
+          "high-contrast",
+          this.highContrast,
+        );
+        try {
+          localStorage?.setItem(
+            HIGH_CONTRAST_KEY,
+            String(this.highContrast),
           );
         } catch {
           // ignore
@@ -448,6 +505,16 @@ class UIStore {
 
   resetZoom() {
     this.zoomLevel = ZOOM_DEFAULT;
+  }
+
+  setFontScale(scale: number) {
+    if (FONT_SCALE_STEPS.includes(scale)) {
+      this.fontScale = scale;
+    }
+  }
+
+  toggleHighContrast() {
+    this.highContrast = !this.highContrast;
   }
 
   toggleSidebar() {

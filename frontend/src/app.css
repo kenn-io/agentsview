@@ -123,6 +123,34 @@
   color-scheme: dark;
 }
 
+/* High contrast — overrides neutral text/border tokens (and
+   --accent-blue, which also colors links and the focus ring) to
+   clear WCAG AA. Semantic/identity tokens (--cat-*, --slow-*,
+   --running-*, --status-waiting, --user-bg, data-viz palettes) are
+   intentionally left unchanged so meaning is preserved. */
+:root.high-contrast {
+  --text-primary: #000000;
+  --text-secondary: #2a2f3a;
+  --text-muted: #44495a;
+  --border-default: #6b7080;
+  --border-muted: #7d8290;
+  --accent-blue: #0a47c2;
+}
+
+:root.dark.high-contrast {
+  --text-primary: #ffffff;
+  --text-secondary: #d4d8e0;
+  --text-muted: #b8bdc9;
+  --border-default: #8a8f9e;
+  --border-muted: #6e7282;
+  --accent-blue: #8ab8ff;
+}
+
+:root.high-contrast :focus-visible {
+  outline-width: 3px;
+  outline-offset: 2px;
+}
+
 html,
 body {
   height: 100%;
