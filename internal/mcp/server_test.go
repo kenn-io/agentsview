@@ -2,10 +2,14 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -53,4 +57,55 @@ func TestNewServer_RegistersSixReadOnlyTools(t *testing.T) {
 	}
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())
+}
+
+func TestIsCleanStdioShutdown(t *testing.T) {
+	t.Parallel()
+	assert.True(t, isCleanStdioShutdown(nil))
+	assert.True(t, isCleanStdioShutdown(context.Canceled))
+	assert.True(t, isCleanStdioShutdown(io.EOF))
+	assert.True(t, isCleanStdioShutdown(fmt.Errorf("wrap: %w", io.EOF)))
+	assert.True(t, isCleanStdioShutdown(errors.New("server is closing: EOF")))
+	assert.True(t, isCleanStdioShutdown(errors.New("connection closed")))
+	assert.False(t, isCleanStdioShutdown(errors.New("boom")))
+	assert.False(t, isCleanStdioShutdown(errors.New("open db: permission denied")))
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+// TestServeStdio_ClientDisconnectIsClean drives a full session over an
+// IOTransport and then closes the input pipe (an abrupt stdin EOF, as
+// when a client process exits). Whatever Run returns - nil or the SDK's
+// "server is closing" error, which races on timing - must be classified
+// as a clean shutdown. This guards against an SDK message change silently
+// turning client disconnects into fatal exits.
+func TestServeStdio_ClientDisconnectIsClean(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	msgs := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+`
+	// Retry to exercise both the nil and the "server is closing" race
+	// outcomes; both must be recognized as clean.
+	for i := 0; i < 30; i++ {
+		srv := newServer(ServeOptions{
+			Service: service.NewDirectBackend(d, nil),
+			Now:     func() time.Time { return fixedNow },
+		})
+		pr, pw := io.Pipe()
+		tr := &mcp.IOTransport{Reader: pr, Writer: nopWriteCloser{io.Discard}}
+		done := make(chan error, 1)
+		go func() { done <- srv.Run(context.Background(), tr) }()
+		_, _ = io.WriteString(pw, msgs)
+		require.NoError(t, pw.Close())
+		select {
+		case err := <-done:
+			assert.True(t, isCleanStdioShutdown(err),
+				"client disconnect must be clean, got %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("server did not return after client disconnect")
+		}
+	}
 }

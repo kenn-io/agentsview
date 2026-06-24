@@ -6,8 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -107,12 +109,34 @@ func newServer(opts ServeOptions) *mcp.Server {
 }
 
 // ServeStdio runs the MCP server over stdio. It blocks until stdin is
-// closed or ctx is cancelled.
+// closed (the client disconnected) or ctx is cancelled, both of which are
+// the normal end of life for a stdio server and return nil. Only an
+// unexpected transport failure is surfaced as an error.
 func ServeStdio(ctx context.Context, opts ServeOptions) error {
-	if err := newServer(opts).Run(ctx, &mcp.StdioTransport{}); err != nil {
-		return fmt.Errorf("serve MCP over stdio: %w", err)
+	err := newServer(opts).Run(ctx, &mcp.StdioTransport{})
+	if isCleanStdioShutdown(err) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("serve MCP over stdio: %w", err)
+}
+
+// isCleanStdioShutdown reports whether a Run error represents the normal
+// end of a stdio session (client disconnect or signal) rather than a
+// failure. When stdin closes while requests are in flight, the SDK
+// surfaces the internal jsonrpc2 "server is closing" wire error, which it
+// neither exports nor wraps in an errors.Is-traversable way - so that one
+// case is matched on its stable message. A stdio MCP server that loses
+// its client has simply finished its job.
+func isCleanStdioShutdown(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "server is closing") ||
+		strings.Contains(msg, "connection closed")
 }
 
 // ServeHTTP runs the MCP server over StreamableHTTP on addr. When ctx is
