@@ -278,6 +278,58 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
+// search_content's self-reference guard must exclude matches from sessions
+// that are active now, even when the matching message itself is old. A
+// long-running current session can match on a stale line; excluding by the
+// match timestamp alone would leak it. Exclusion is by session activity,
+// like search_sessions.
+func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
+	ts, d := newTestToolset(t)
+	// Active session: ended one minute before now, but its matching message
+	// is two hours old.
+	dbtest.SeedSession(t, d, "active", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+		ended := "2024-06-15T11:59:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{{
+		SessionID: "active", Ordinal: 0, Role: "user",
+		Content: "old needle here", ContentLength: len("old needle here"),
+		Timestamp: "2024-06-15T10:00:00Z",
+	}}))
+	// Idle session: ended two hours before now.
+	dbtest.SeedSession(t, d, "idle", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{{
+		SessionID: "idle", Ordinal: 0, Role: "user",
+		Content: "idle needle here", ContentLength: len("idle needle here"),
+		Timestamp: "2024-06-15T10:00:00Z",
+	}}))
+
+	// Default (include_active=false): the active session is excluded despite
+	// its old match; only the idle session is returned.
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "needle", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, "idle", out.Matches[0].SessionID)
+	assert.Equal(t, 1, out.ExcludedActive)
+
+	// include_active=true returns both, excluding nothing.
+	_, all, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "needle", Mode: "substring", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, all.Matches, 2)
+	assert.Equal(t, 0, all.ExcludedActive)
+}
+
 func TestUsageSummary_EmptyRange(t *testing.T) {
 	ts, _ := newTestToolset(t)
 	_, out, err := ts.usageSummary(context.Background(), nil, usageSummaryIn{

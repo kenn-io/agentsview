@@ -35,6 +35,16 @@ func strval(p *string) string {
 	return *p
 }
 
+// sessionActivity returns a session's most-recent activity timestamp,
+// preferring ended_at and falling back to started_at -- the same notion
+// search results expose as SessionEndedAt. Empty when neither is set.
+func sessionActivity(s db.Session) string {
+	if ts := strval(s.EndedAt); ts != "" {
+		return ts
+	}
+	return strval(s.StartedAt)
+}
+
 // --- search_sessions ---
 
 type searchSessionsIn struct {
@@ -333,7 +343,7 @@ type searchContentIn struct {
 	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 30."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include matches from the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
 }
 
 type contentMatch struct {
@@ -370,11 +380,31 @@ func (t *toolset) searchContent(
 		return nil, searchContentOut{}, err
 	}
 	now := t.clock()
+	// The self-reference guard excludes matches from sessions active in the
+	// last 10 minutes. A match carries only its own timestamp, but a
+	// long-running session can match on an old message while still being
+	// active now, so exclude by the session's activity (ended_at, falling
+	// back to started_at) like search_sessions does -- not by the match
+	// timestamp. Activity is looked up once per session and cached.
+	activity := make(map[string]string, len(res.Matches))
 	out := searchContentOut{Matches: make([]contentMatch, 0, len(res.Matches))}
 	for _, m := range res.Matches {
-		if !in.IncludeActive && isActiveSince(m.Timestamp, now) {
-			out.ExcludedActive++
-			continue
+		if !in.IncludeActive {
+			ts, ok := activity[m.SessionID]
+			if !ok {
+				if d, gerr := t.svc.Get(ctx, m.SessionID); gerr == nil && d != nil {
+					ts = sessionActivity(d.Session)
+					activity[m.SessionID] = ts
+				} else {
+					// Lookup failed: fall back to the match timestamp so the
+					// guard degrades to its prior behavior rather than erroring.
+					ts = m.Timestamp
+				}
+			}
+			if isActiveSince(ts, now) {
+				out.ExcludedActive++
+				continue
+			}
 		}
 		out.Matches = append(out.Matches, contentMatch{
 			SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
