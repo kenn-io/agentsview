@@ -1202,6 +1202,7 @@ func TestLoadFile_RemoteHosts(t *testing.T) {
 host = "devbox1"
 user = "jesse"
 port = 22
+interval = "5m"
 
 [[remote_hosts]]
 host = "  laptop2  "
@@ -1210,7 +1211,9 @@ host = "  laptop2  "
 	cfg := f.LoadMinimal(t)
 
 	require.Len(t, cfg.RemoteHosts, 2)
-	assert.Equal(t, RemoteHost{Host: "devbox1", User: "jesse", Port: 22}, cfg.RemoteHosts[0])
+	assert.Equal(t, RemoteHost{Host: "devbox1", User: "jesse", Port: 22, Interval: 5 * time.Minute}, cfg.RemoteHosts[0])
+	assert.Equal(t, 5*time.Minute, cfg.RemoteHosts[0].Interval)
+	assert.Equal(t, time.Duration(0), cfg.RemoteHosts[1].Interval)
 	// host is trimmed at load so validation and SSH see the same value
 	assert.Equal(t, RemoteHost{Host: "laptop2"}, cfg.RemoteHosts[1])
 }
@@ -1238,6 +1241,8 @@ func TestValidateRemoteHosts(t *testing.T) {
 		{"option shaped host", []RemoteHost{{Host: "-oProxyCommand=sh"}}, []string{"host must not begin with '-'"}},
 		{"option shaped user", []RemoteHost{{Host: "box", User: "-lroot"}}, []string{"user must not begin with '-'"}},
 		{"none configured", nil, nil},
+		{"negative interval", []RemoteHost{{Host: "a", Interval: -1}}, []string{"invalid interval"}},
+		{"zero interval ok", []RemoteHost{{Host: "a", Interval: 0}}, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/sync"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
 func TestMustLoadConfig(t *testing.T) {
@@ -192,14 +194,14 @@ type fakeUnwatchedPollSyncer struct {
 
 func (f *fakeUnwatchedPollSyncer) SyncRootsSince(
 	ctx context.Context, roots []string, since time.Time,
-	onProgress sync.ProgressFunc,
-) sync.SyncStats {
+	onProgress agentsync.ProgressFunc,
+) agentsync.SyncStats {
 	f.calls++
 	f.roots = append([]string(nil), roots...)
 	f.since = since
 	f.callRoots = append(f.callRoots, append([]string(nil), roots...))
 	f.callSince = append(f.callSince, since)
-	return sync.SyncStats{}
+	return agentsync.SyncStats{}
 }
 
 func TestPollUnwatchedRootsOnceUsesScopedFullSync(t *testing.T) {
@@ -236,21 +238,101 @@ func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 	assert.ElementsMatch(t, []string{sessionsDir, archivedDir}, roots[0].dirs)
 }
 
+// fakeEmitter records Emit calls; safe for concurrent use.
+type fakeEmitter struct {
+	count atomic.Int64
+}
+
+func (f *fakeEmitter) Emit(_ string) { f.count.Add(1) }
+
+func TestStartRemoteHostSync_EmitsAfterSuccess(t *testing.T) {
+	em := &fakeEmitter{}
+	syncFn := func() (int, error) { return 3, nil }
+
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	interval := 10 * time.Millisecond
+	go func() {
+		runRemoteHostSyncLoop("test-host", interval, syncFn, em, done)
+		close(exited)
+	}()
+
+	time.Sleep(3 * interval)
+	close(done)
+	<-exited
+
+	assert.Positive(t, em.count.Load(), "emitter should have been called at least once")
+}
+
+func TestStartRemoteHostSync_NoEmitOnZeroSynced(t *testing.T) {
+	em := &fakeEmitter{}
+	syncFn := func() (int, error) { return 0, nil }
+
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	interval := 10 * time.Millisecond
+	go func() {
+		runRemoteHostSyncLoop("test-host", interval, syncFn, em, done)
+		close(exited)
+	}()
+
+	time.Sleep(3 * interval)
+	close(done)
+	<-exited
+
+	assert.Zero(t, em.count.Load(), "emitter should not fire when no sessions synced")
+}
+
+func TestStartRemoteHostSync_NoEmitOnError(t *testing.T) {
+	em := &fakeEmitter{}
+	syncFn := func() (int, error) { return 0, errors.New("ssh failure") }
+
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	interval := 10 * time.Millisecond
+	go func() {
+		runRemoteHostSyncLoop("test-host", interval, syncFn, em, done)
+		close(exited)
+	}()
+
+	time.Sleep(3 * interval)
+	close(done)
+	<-exited
+
+	assert.Zero(t, em.count.Load(), "emitter should not fire when sync fails")
+}
+
+func TestStartRemoteHostSync_NilEmitterSafe(t *testing.T) {
+	syncFn := func() (int, error) { return 1, nil }
+
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	interval := 10 * time.Millisecond
+	go func() {
+		runRemoteHostSyncLoop("test-host", interval, syncFn, nil, done)
+		close(exited)
+	}()
+
+	time.Sleep(2 * interval)
+	close(done)
+	<-exited
+}
+
 func TestResyncCoversSignals(t *testing.T) {
 	tests := []struct {
 		name     string
-		stats    sync.SyncStats
+		stats    agentsync.SyncStats
 		fellBack bool
 		want     bool
 	}{
 		{
 			name:  "clean resync no orphans covers signals",
-			stats: sync.SyncStats{Synced: 5},
+			stats: agentsync.SyncStats{Synced: 5},
 			want:  true,
 		},
 		{
 			name: "fell back to incremental sync needs backfill",
-			stats: sync.SyncStats{
+			stats: agentsync.SyncStats{
 				Synced: 2, Aborted: true,
 			},
 			fellBack: true,
@@ -258,14 +340,14 @@ func TestResyncCoversSignals(t *testing.T) {
 		},
 		{
 			name: "orphans copied need backfill",
-			stats: sync.SyncStats{
+			stats: agentsync.SyncStats{
 				Synced: 5, OrphanedCopied: 3,
 			},
 			want: false,
 		},
 		{
 			name: "orphans copied even with fallback false",
-			stats: sync.SyncStats{
+			stats: agentsync.SyncStats{
 				Synced: 0, OrphanedCopied: 1,
 			},
 			want: false,

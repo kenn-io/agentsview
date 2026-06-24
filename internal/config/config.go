@@ -98,12 +98,14 @@ type CustomModelRate struct {
 }
 
 // RemoteHost describes one SSH target for config-driven
-// `agentsview sync` fan-out. Host is required; User and Port are
-// optional (Port 0 means the ssh default of 22).
+// `agentsview sync` fan-out. Host is required; User, Port, and
+// Interval are optional (Port 0 means the ssh default of 22;
+// zero/empty Interval disables periodic remote sync for this host).
 type RemoteHost struct {
-	Host string `toml:"host" json:"host"`
-	User string `toml:"user,omitempty" json:"user,omitempty"`
-	Port int    `toml:"port,omitempty" json:"port,omitempty"`
+	Host     string        `toml:"host" json:"host"`
+	User     string        `toml:"user,omitempty" json:"user,omitempty"`
+	Port     int           `toml:"port,omitempty" json:"port,omitempty"`
+	Interval time.Duration `toml:"interval,omitempty" json:"interval,omitempty"`
 }
 
 // Config holds all application configuration.
@@ -214,6 +216,11 @@ func (c Config) ValidateRemoteHosts() error {
 			problems = append(problems,
 				fmt.Sprintf("entry %d (%q): invalid port %d",
 					i+1, h.Host, h.Port))
+		}
+		if h.Interval < 0 {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%q): invalid interval %s",
+					i+1, h.Host, h.Interval))
 		}
 		// Remote sync namespaces sessions and the skip cache by
 		// host alone (see ssh.RemoteSync), so two entries sharing a
@@ -648,9 +655,10 @@ func (c *Config) applyConfigTOML(data string) error {
 		hosts := make([]RemoteHost, len(file.RemoteHosts))
 		for i, h := range file.RemoteHosts {
 			hosts[i] = RemoteHost{
-				Host: strings.TrimSpace(h.Host),
-				User: strings.TrimSpace(h.User),
-				Port: h.Port,
+				Host:     strings.TrimSpace(h.Host),
+				User:     strings.TrimSpace(h.User),
+				Port:     h.Port,
+				Interval: h.Interval,
 			}
 		}
 		c.RemoteHosts = hosts

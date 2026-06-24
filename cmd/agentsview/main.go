@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/ssh"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/telemetry"
 )
@@ -208,7 +209,12 @@ func runServe(cfg config.Config) {
 			}
 		})
 
-		go startPeriodicSync(engine, database, idleTracker)
+		validRemotes := true
+		if err := cfg.ValidateRemoteHosts(); err != nil {
+			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
+			validRemotes = false
+		}
+		go startPeriodicSync(cfg, engine, database, idleTracker, validRemotes, broadcaster)
 	}
 
 	// Seed model_pricing after any resync swap so the new DB
@@ -797,8 +803,20 @@ func collectWatchRoots(cfg config.Config) (roots []watchRoot, unwatchedDirs []st
 }
 
 func startPeriodicSync(
-	engine *sync.Engine, database *db.DB, idleTracker *server.IdleTracker,
+	cfg config.Config,
+	engine *sync.Engine,
+	database *db.DB,
+	idleTracker *server.IdleTracker,
+	validRemotes bool,
+	emitter sync.Emitter,
 ) {
+	if validRemotes {
+		for _, rh := range cfg.RemoteHosts {
+			if rh.Interval > 0 {
+				go startRemoteHostSync(cfg, database, rh, emitter)
+			}
+		}
+	}
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -807,6 +825,46 @@ func startPeriodicSync(
 			engine.SyncAll(context.Background(), nil)
 			recomputePendingSessions(engine, database)
 		})
+	}
+}
+
+func startRemoteHostSync(cfg config.Config, database *db.DB, rh config.RemoteHost, emitter sync.Emitter) {
+	syncFn := func() (int, error) {
+		rs := &ssh.RemoteSync{
+			Host:                    rh.Host,
+			User:                    rh.User,
+			Port:                    rh.Port,
+			Full:                    false,
+			DB:                      database,
+			BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		}
+		stats, err := rs.Run(context.Background())
+		return stats.SessionsSynced, err
+	}
+	runRemoteHostSyncLoop(rh.Host, rh.Interval, syncFn, emitter, nil)
+}
+
+// runRemoteHostSyncLoop drives the per-host sync ticker. syncFn returns
+// the number of sessions synced so we only emit when data changed.
+// When done is non-nil, closing it stops the loop.
+func runRemoteHostSyncLoop(host string, interval time.Duration, syncFn func() (int, error), emitter sync.Emitter, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+		}
+		log.Printf("Running scheduled remote sync for %s...", host)
+		synced, err := syncFn()
+		if err != nil {
+			log.Printf("scheduled remote sync %s: %v", host, err)
+			continue
+		}
+		if synced > 0 && emitter != nil {
+			emitter.Emit("remote")
+		}
 	}
 }
 
