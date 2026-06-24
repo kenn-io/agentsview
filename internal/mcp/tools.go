@@ -36,13 +36,19 @@ func strval(p *string) string {
 }
 
 // sessionActivity returns a session's most-recent activity timestamp,
-// preferring ended_at and falling back to started_at -- the same notion
-// search results expose as SessionEndedAt. Empty when neither is set.
+// mirroring the DB's canonical activity expression: prefer ended_at, then
+// started_at (each only when non-empty), then created_at. created_at is
+// always set, so a freshly created/synced session with no parsed start/end
+// is still treated as active rather than slipping past the self-reference
+// guard.
 func sessionActivity(s db.Session) string {
 	if ts := strval(s.EndedAt); ts != "" {
 		return ts
 	}
-	return strval(s.StartedAt)
+	if ts := strval(s.StartedAt); ts != "" {
+		return ts
+	}
+	return s.CreatedAt
 }
 
 // --- search_sessions ---

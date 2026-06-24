@@ -260,9 +260,12 @@ func TestGetMessages_ExplicitSystemRoleStillFiltered(t *testing.T) {
 func TestSearchContent_SubstringMatch(t *testing.T) {
 	ts, d := newTestToolset(t)
 	// Not a one-shot: content search excludes one-shot sessions by default.
+	// An explicit old ended_at keeps it out of the active-session guard.
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
 	})
 	require.NoError(t, d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "error code DEADBEEF here"),
@@ -330,6 +333,40 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 	assert.Equal(t, 0, all.ExcludedActive)
 }
 
+// A freshly created/synced session can have no parsed ended_at or started_at
+// yet, only created_at. Its activity must fall back to created_at so a
+// current timestampless session is still excluded by the default guard,
+// rather than resolving to an empty timestamp and leaking through. Uses a
+// real clock because created_at is set to now by the DB at insert.
+func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	ts := &toolset{svc: service.NewDirectBackend(d, nil), now: time.Now}
+	// StartedAt and EndedAt are left nil on purpose; created_at defaults to
+	// now in the schema, so the session is active.
+	dbtest.SeedSession(t, d, "fresh", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("fresh", 0, "needle in a fresh session"),
+	}))
+
+	// Default guard excludes the still-active session despite no start/end.
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "needle", Mode: "substring",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, out.Matches)
+	assert.Equal(t, 1, out.ExcludedActive)
+
+	// include_active=true surfaces it.
+	_, all, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "needle", Mode: "substring", IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Len(t, all.Matches, 1)
+}
+
 func TestUsageSummary_EmptyRange(t *testing.T) {
 	ts, _ := newTestToolset(t)
 	_, out, err := ts.usageSummary(context.Background(), nil, usageSummaryIn{
@@ -386,10 +423,12 @@ func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 	require.NoError(t, d.InsertMessages([]db.Message{
 		dbtest.UserMsg("one", 0, "marker ZEBRA42"),
 	}))
-	// Multi-turn with the same marker.
+	// Multi-turn with the same marker; old ended_at keeps it inactive.
 	dbtest.SeedSession(t, d, "multi", "proj", func(s *db.Session) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
 	})
 	require.NoError(t, d.InsertMessages([]db.Message{
 		dbtest.UserMsg("multi", 0, "marker ZEBRA42"),
