@@ -316,9 +316,17 @@
 
   let batchDeleting = $state(false);
 
-  let allVisibleSessionIds = $derived(
-    groups.flatMap((g) => g.sessions.map((s) => s.id)),
-  );
+  let allVisibleSessionIds = $derived.by(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const item of renderDisplayItems) {
+      const session = sessionForItem(item);
+      if (!session || seen.has(session.id)) continue;
+      seen.add(session.id);
+      ids.push(session.id);
+    }
+    return ids;
+  });
 
   let allSelected = $derived(
     allVisibleSessionIds.length > 0 &&

@@ -81,6 +81,8 @@ describe("SessionList filter dropdown", () => {
     sessions.activeSessionId = null;
     sessions.nextCursor = null;
     sessions.loading = false;
+    sessions.selectedIds = new Set();
+    sessions.selectMode = false;
     sessions.sidebarIndexVersion++;
     sessions.hydratedSessionsByVersion = new Map([
       [sessions.sidebarIndexVersion, new Map()],
@@ -225,6 +227,8 @@ describe("SessionList visible hydration", () => {
     sessions.activeSessionId = null;
     sessions.nextCursor = null;
     sessions.loading = false;
+    sessions.selectedIds = new Set();
+    sessions.selectMode = false;
     sessions.sidebarIndexVersion++;
     sessions.hydratedSessionsByVersion = new Map([
       [sessions.sidebarIndexVersion, new Map()],
@@ -645,6 +649,53 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     expect(document.querySelectorAll(".group-hint-icon")).toHaveLength(1);
+  });
+
+  it("selects only rendered session rows when selecting all visible", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "parent",
+        display_name: "Parent session",
+        started_at: "2024-01-01T00:00:00Z",
+        ended_at: "2024-01-01T00:01:00Z",
+        is_index_only: false,
+      }),
+      makeSession({
+        id: "child",
+        parent_session_id: "parent",
+        display_name: "Visible continuation",
+        started_at: "2024-01-01T00:02:00Z",
+        ended_at: "2024-01-01T00:03:00Z",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector<HTMLElement>('[data-session-id="child"]'),
+    ).not.toBeNull();
+    expect(
+      document.querySelector<HTMLElement>('[data-session-id="parent"]'),
+    ).toBeNull();
+
+    const selectModeButton = document.querySelector<HTMLButtonElement>(
+      ".select-toggle-btn",
+    );
+    expect(selectModeButton).not.toBeNull();
+    selectModeButton!.click();
+    await tick();
+
+    const selectAllButton = document.querySelector<HTMLButtonElement>(
+      ".batch-select-all-btn",
+    );
+    expect(selectAllButton).not.toBeNull();
+    selectAllButton!.click();
+    await tick();
+
+    expect([...sessions.selectedIds]).toEqual(["child"]);
   });
 
   it("does not auto-page when saved grouping starts collapsed", async () => {
