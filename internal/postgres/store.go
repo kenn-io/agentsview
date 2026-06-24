@@ -124,6 +124,11 @@ func (s *Store) SoftDeleteSession(_ string) error {
 	return db.ErrReadOnly
 }
 
+// SoftDeleteSessions is not supported in read-only mode.
+func (s *Store) SoftDeleteSessions(_ []string) (int, error) {
+	return 0, db.ErrReadOnly
+}
+
 // RestoreSession is not supported in read-only mode.
 func (s *Store) RestoreSession(_ string) (int64, error) {
 	return 0, db.ErrReadOnly

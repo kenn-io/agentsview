@@ -2382,6 +2382,55 @@ func (db *DB) SoftDeleteSession(id string) error {
 	return err
 }
 
+// SoftDeleteSessions marks multiple sessions as deleted by setting
+// deleted_at. Sessions that are already soft-deleted are skipped.
+// Returns the count of newly deleted rows.
+func (db *DB) SoftDeleteSessions(ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return 0, fmt.Errorf("beginning soft-delete tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	total := 0
+	const batchSize = 500
+	for i := 0; i < len(ids); i += batchSize {
+		end := min(i+batchSize, len(ids))
+		batch := ids[i:end]
+
+		args := make([]any, len(batch))
+		for j, id := range batch {
+			args[j] = id
+		}
+		placeholders := strings.Repeat(",?", len(batch))[1:]
+
+		res, err := tx.Exec(
+			`UPDATE sessions
+			 SET deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+			     local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			 WHERE id IN (`+placeholders+`) AND deleted_at IS NULL`,
+			args...,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("soft-deleting batch: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing soft-delete tx: %w", err)
+	}
+	return total, nil
+}
+
 // RestoreSession clears deleted_at, making the session visible again.
 // Returns the number of rows affected (0 if session doesn't exist
 // or is not in trash).

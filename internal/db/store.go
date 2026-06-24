@@ -100,6 +100,7 @@ type Store interface {
 	// Session management (local-only; PG returns ErrReadOnly).
 	RenameSession(id string, displayName *string) error
 	SoftDeleteSession(id string) error
+	SoftDeleteSessions(ids []string) (int, error)
 	RestoreSession(id string) (int64, error)
 	DeleteSessionIfTrashed(id string) (int64, error)
 	ListTrashedSessions(ctx context.Context) ([]Session, error)

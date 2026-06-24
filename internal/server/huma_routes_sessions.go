@@ -44,6 +44,7 @@ func (s *Server) registerSessionRoutes() {
 	post(s, group, "/sessions/{id}/open", "Open session directory", s.humaOpenSession)
 	post(s, group, "/sessions/upload", "Upload a session export", s.humaUploadSession)
 	patch(s, group, "/sessions/{id}/rename", "Rename session", s.humaRenameSession)
+	post(s, group, "/sessions/batch-delete", "Batch delete sessions", s.humaBatchDeleteSessions)
 	deleteRoute(s, group, "/sessions/{id}", "Delete session", s.humaDeleteSession)
 	post(s, group, "/sessions/{id}/restore", "Restore session", s.humaRestoreSession)
 	deleteRoute(s, group, "/sessions/{id}/permanent", "Permanently delete session", s.humaPermanentDeleteSession)
@@ -592,6 +593,28 @@ func (s *Server) humaDeleteSession(
 			return nil, handled
 		}
 		return nil, internalError("soft delete session", err)
+	}
+	return &noContentOutput{Status: http.StatusNoContent}, nil
+}
+
+type batchDeleteInput struct {
+	Body struct {
+		SessionIDs []string `json:"session_ids" required:"true" doc:"Session IDs to soft-delete"`
+	}
+}
+
+func (s *Server) humaBatchDeleteSessions(
+	_ context.Context,
+	in *batchDeleteInput,
+) (*noContentOutput, error) {
+	if len(in.Body.SessionIDs) == 0 {
+		return &noContentOutput{Status: http.StatusNoContent}, nil
+	}
+	if _, err := s.db.SoftDeleteSessions(in.Body.SessionIDs); err != nil {
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("batch delete sessions", err)
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }

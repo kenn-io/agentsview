@@ -4733,6 +4733,34 @@ func TestDeleteSessionIfTrashed(t *testing.T) {
 	assert.Equal(t, int64(0), n, "nonexistent: rows=")
 }
 
+func TestSoftDeleteSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "proj")
+	insertSession(t, d, "s2", "proj")
+	insertSession(t, d, "s3", "proj")
+
+	// Pre-trash s3 so we can verify it's not double-counted.
+	require.NoError(t, d.SoftDeleteSession("s3"), "pre-trash s3")
+
+	n, err := d.SoftDeleteSessions([]string{"s1", "s2", "s3", "nonexistent"})
+	require.NoError(t, err, "SoftDeleteSessions")
+	assert.Equal(t, 2, n, "should soft-delete 2 new sessions")
+
+	// All three should now be trashed.
+	for _, id := range []string{"s1", "s2", "s3"} {
+		s, err := d.GetSession(ctx, id)
+		require.NoError(t, err, "GetSession", id)
+		assert.Nil(t, s, "trashed session should not be visible:", id)
+	}
+
+	// Empty input is a no-op.
+	n, err = d.SoftDeleteSessions(nil)
+	require.NoError(t, err, "SoftDeleteSessions nil")
+	assert.Equal(t, 0, n, "empty: rows=")
+}
+
 func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

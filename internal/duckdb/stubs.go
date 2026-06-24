@@ -17,6 +17,7 @@ func (s *Store) GetCachedInsight(_ context.Context, _ string) (*db.Insight, erro
 }
 func (s *Store) RenameSession(_ string, _ *string) error        { return db.ErrReadOnly }
 func (s *Store) SoftDeleteSession(_ string) error               { return db.ErrReadOnly }
+func (s *Store) SoftDeleteSessions(_ []string) (int, error)     { return 0, db.ErrReadOnly }
 func (s *Store) RestoreSession(_ string) (int64, error)         { return 0, db.ErrReadOnly }
 func (s *Store) DeleteSessionIfTrashed(_ string) (int64, error) { return 0, db.ErrReadOnly }
 func (s *Store) ListTrashedSessions(_ context.Context) ([]db.Session, error) {
