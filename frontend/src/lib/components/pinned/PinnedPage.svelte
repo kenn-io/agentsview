@@ -293,7 +293,7 @@
     justify-content: center;
     font-size: 9px;
     font-weight: 700;
-    color: white;
+    color: var(--accent-purple-foreground);
     flex-shrink: 0;
     line-height: 1;
     background: var(--accent-purple);

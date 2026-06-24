@@ -263,6 +263,9 @@ describe("SessionBreadcrumb", () => {
     expect(badge?.getAttribute("style")).toContain(
       "var(--accent-rose)",
     );
+    expect(badge?.getAttribute("style")).toContain(
+      "var(--accent-rose-foreground)",
+    );
 
     unmount(component);
   });

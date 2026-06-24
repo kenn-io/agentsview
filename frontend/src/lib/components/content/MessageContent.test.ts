@@ -143,6 +143,23 @@ describe("MessageContent", () => {
     unmount(component);
   });
 
+  it("uses the assistant accent foreground for assistant role icons", async () => {
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({ role: "assistant" }),
+      },
+    });
+
+    await tick();
+
+    expect(document.querySelector(".role-icon")?.getAttribute("style")).toContain(
+      "var(--accent-purple-foreground)",
+    );
+
+    unmount(component);
+  });
+
   it("renders an explicit missing token placeholder when context tokens are absent", async () => {
     const component = mount(MessageContent, {
       target: document.body,

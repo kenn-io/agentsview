@@ -121,13 +121,15 @@ describe("agentColor", () => {
 });
 
 describe("agentForeground", () => {
-  it("uses the accent foreground for blue-filled agents", () => {
-    expect(agentForeground("claude")).toBe(
-      "var(--accent-blue-foreground)",
-    );
-    expect(agentForeground("visualstudio-copilot")).toBe(
-      "var(--accent-blue-foreground)",
-    );
+  it("returns the matching foreground token for every known agent fill", () => {
+    for (const agent of KNOWN_AGENTS) {
+      const color = agentColor(agent.name);
+      const token = color.match(/^var\(--accent-([a-z]+)\)$/)?.[1];
+      expect(token, `${agent.name} color token`).toBeTruthy();
+      expect(agentForeground(agent.name)).toBe(
+        `var(--accent-${token}-foreground)`,
+      );
+    }
   });
 
   it("uses the accent foreground for unknown fallback agents", () => {
@@ -137,8 +139,11 @@ describe("agentForeground", () => {
     expect(agentForeground("")).toBe("var(--accent-blue-foreground)");
   });
 
-  it("keeps white foregrounds for non-blue agent fills", () => {
-    expect(agentForeground("codex")).toBe("#ffffff");
+  it("uses non-blue accent foregrounds for non-blue agent fills", () => {
+    expect(agentForeground("codex")).toBe("var(--accent-green-foreground)");
+    expect(agentForeground("opencode")).toBe(
+      "var(--accent-purple-foreground)",
+    );
   });
 });
 

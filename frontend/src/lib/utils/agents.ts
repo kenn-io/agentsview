@@ -70,18 +70,36 @@ const agentColorMap = new Map(
   KNOWN_AGENTS.map((a) => [a.name, a.color]),
 );
 
-const blueFillColor = "var(--accent-blue)";
-const blueFillForeground = "var(--accent-blue-foreground)";
-const defaultFillForeground = "#ffffff";
+const defaultFillColor = "var(--accent-blue)";
+const accentForegroundMap = new Map([
+  ["var(--accent-blue)", "var(--accent-blue-foreground)"],
+  ["var(--accent-rose)", "var(--accent-rose-foreground)"],
+  ["var(--accent-purple)", "var(--accent-purple-foreground)"],
+  ["var(--accent-amber)", "var(--accent-amber-foreground)"],
+  ["var(--accent-green)", "var(--accent-green-foreground)"],
+  ["var(--accent-coral)", "var(--accent-coral-foreground)"],
+  ["var(--accent-black)", "var(--accent-black-foreground)"],
+  ["var(--accent-teal)", "var(--accent-teal-foreground)"],
+  ["var(--accent-red)", "var(--accent-red-foreground)"],
+  ["var(--accent-indigo)", "var(--accent-indigo-foreground)"],
+  ["var(--accent-orange)", "var(--accent-orange-foreground)"],
+  ["var(--accent-sky)", "var(--accent-sky-foreground)"],
+  ["var(--accent-pink)", "var(--accent-pink-foreground)"],
+  ["var(--accent-lime)", "var(--accent-lime-foreground)"],
+  ["var(--accent-cyan)", "var(--accent-cyan-foreground)"],
+  ["var(--accent-violet)", "var(--accent-violet-foreground)"],
+]);
 
 export function agentColor(agent: string): string {
-  return agentColorMap.get(agent) ?? blueFillColor;
+  return agentColorMap.get(agent) ?? defaultFillColor;
+}
+
+export function accentForeground(color: string): string {
+  return accentForegroundMap.get(color) ?? "var(--accent-blue-foreground)";
 }
 
 export function agentForeground(agent: string): string {
-  return agentColor(agent) === blueFillColor
-    ? blueFillForeground
-    : defaultFillForeground;
+  return accentForeground(agentColor(agent));
 }
 
 export function agentLabel(agent: string): string {

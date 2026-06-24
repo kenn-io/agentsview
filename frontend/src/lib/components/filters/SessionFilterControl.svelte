@@ -596,7 +596,7 @@
     border: 1.5px solid var(--border-default);
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
-    color: white;
+    color: var(--agent-foreground, var(--accent-blue-foreground));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -605,7 +605,7 @@
   .agent-check.on {
     background: var(--agent-color, var(--accent-blue));
     border-color: var(--agent-color, var(--accent-blue));
-    color: var(--agent-foreground, #ffffff);
+    color: var(--agent-foreground, var(--accent-blue-foreground));
   }
 
   .agent-dot-mini {

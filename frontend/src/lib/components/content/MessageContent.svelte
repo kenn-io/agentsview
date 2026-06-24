@@ -162,7 +162,7 @@
     isUser ? "var(--accent-blue)" : "var(--accent-purple)",
   );
   let accentForeground = $derived(
-    isUser ? "var(--accent-blue-foreground)" : "#ffffff",
+    isUser ? "var(--accent-blue-foreground)" : "var(--accent-purple-foreground)",
   );
 
   let roleBg = $derived(

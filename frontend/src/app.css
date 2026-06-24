@@ -19,7 +19,6 @@
   --text-secondary: #555b6e;
   --text-muted: #878ea0;
   --accent-blue: #2563eb;
-  --accent-blue-foreground: #ffffff;
   --accent-rose: #e11d48;
   --accent-purple: #7c3aed;
   --accent-amber: #d97706;
@@ -35,6 +34,23 @@
   --accent-pink: #ec4899;
   --accent-lime: #65a30d;
   --accent-cyan: #0891b2;
+  --accent-violet: #7c3aed;
+  --accent-blue-foreground: #ffffff;
+  --accent-rose-foreground: #ffffff;
+  --accent-purple-foreground: #ffffff;
+  --accent-amber-foreground: #07111f;
+  --accent-green-foreground: #07111f;
+  --accent-coral-foreground: #07111f;
+  --accent-black-foreground: #ffffff;
+  --accent-teal-foreground: #07111f;
+  --accent-red-foreground: #ffffff;
+  --accent-indigo-foreground: #000000;
+  --accent-orange-foreground: #07111f;
+  --accent-sky-foreground: #07111f;
+  --accent-pink-foreground: #07111f;
+  --accent-lime-foreground: #07111f;
+  --accent-cyan-foreground: #07111f;
+  --accent-violet-foreground: #ffffff;
   /* Tool-category color map (see internal/parser/taxonomy.go for normalized values) */
   --cat-read:  #4a7ba8; /* Read, Grep, Glob */
   --cat-edit:  #5a8b3a; /* Edit, Write */
@@ -90,7 +106,6 @@
   --text-secondary: #9ea5b4;
   --text-muted: #6c7385;
   --accent-blue: #60a5fa;
-  --accent-blue-foreground: #07111f;
   --accent-rose: #fb7185;
   --accent-purple: #a78bfa;
   --accent-amber: #fbbf24;
@@ -106,6 +121,23 @@
   --accent-pink: #f472b6;
   --accent-lime: #a3e635;
   --accent-cyan: #22d3ee;
+  --accent-violet: #a78bfa;
+  --accent-blue-foreground: #07111f;
+  --accent-rose-foreground: #07111f;
+  --accent-purple-foreground: #07111f;
+  --accent-amber-foreground: #07111f;
+  --accent-green-foreground: #07111f;
+  --accent-coral-foreground: #07111f;
+  --accent-black-foreground: #07111f;
+  --accent-teal-foreground: #07111f;
+  --accent-red-foreground: #07111f;
+  --accent-indigo-foreground: #07111f;
+  --accent-orange-foreground: #07111f;
+  --accent-sky-foreground: #07111f;
+  --accent-pink-foreground: #07111f;
+  --accent-lime-foreground: #07111f;
+  --accent-cyan-foreground: #07111f;
+  --accent-violet-foreground: #07111f;
   /* Lighter champagne for dark mode — keeps the same warm-gold
      identity without disappearing into the dark surface. */
   --status-waiting: #d4b878;

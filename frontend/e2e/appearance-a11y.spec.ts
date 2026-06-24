@@ -169,8 +169,29 @@ test.describe("Appearance accessibility", () => {
     await expect(agentBadge).toBeVisible();
     expectReadableContrast(await elementColors(agentBadge));
 
+    const nonBlueAgentBadgeColors = await page.evaluate(() => {
+      const badge = document.createElement("span");
+      badge.className = "agent-badge";
+      badge.style.background = "var(--accent-green)";
+      badge.style.color = "var(--accent-green-foreground)";
+      badge.textContent = "Codex";
+      document.body.append(badge);
+      const styles = getComputedStyle(badge);
+      const result = {
+        background: styles.backgroundColor,
+        foreground: styles.color,
+      };
+      badge.remove();
+      return result;
+    });
+    expectReadableContrast(nonBlueAgentBadgeColors);
+
     const userRoleIcon = page.locator(".role-icon", { hasText: "U" }).first();
     await expect(userRoleIcon).toBeVisible();
     expectReadableContrast(await elementColors(userRoleIcon));
+
+    const assistantRoleIcon = page.locator(".role-icon", { hasText: "A" }).first();
+    await expect(assistantRoleIcon).toBeVisible();
+    expectReadableContrast(await elementColors(assistantRoleIcon));
   });
 });
