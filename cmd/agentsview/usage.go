@@ -98,6 +98,7 @@ func runUsageDaily(cfg UsageDailyConfig) {
 		Filter:         filter,
 		NoDefaultRange: noDefaultRange,
 		Breakdowns:     cfg.Breakdown,
+		SessionCounts:  cfg.JSON,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -452,6 +453,7 @@ func fetchHTTPDailyUsage(
 	q := url.Values{}
 	q.Set("no_default_range", strconv.FormatBool(query.NoDefaultRange))
 	q.Set("breakdowns", strconv.FormatBool(query.Breakdowns))
+	q.Set("session_counts", strconv.FormatBool(query.SessionCounts))
 	setIfNotEmpty := func(k, v string) {
 		if v != "" {
 			q.Set(k, v)

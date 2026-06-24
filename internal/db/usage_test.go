@@ -649,6 +649,26 @@ func TestGetDailyUsageTruncatedTokenJSON(t *testing.T) {
 	assert.Equal(t, 4742, day.OutputTokens, "OutputTokens")
 }
 
+func TestParseUsageTokenCounters(t *testing.T) {
+	in, out, cacheCreate, cacheRead := parseUsageTokenCounters(
+		`{"input_tokens":100,"output_tokens":50,` +
+			`"cache_creation_input_tokens":20,` +
+			`"cache_read_input_tokens":300}`,
+	)
+	assert.Equal(t, 100, in)
+	assert.Equal(t, 50, out)
+	assert.Equal(t, 20, cacheCreate)
+	assert.Equal(t, 300, cacheRead)
+
+	in, out, cacheCreate, cacheRead = parseUsageTokenCounters(
+		`{"input_tokens":9999,"output_tokens":4242,"ca`,
+	)
+	assert.Equal(t, 9999, in)
+	assert.Equal(t, 4242, out)
+	assert.Zero(t, cacheCreate)
+	assert.Zero(t, cacheRead)
+}
+
 func TestGetDailyUsage_DedupesByClaudeMessageAndRequestID(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
@@ -1610,6 +1630,18 @@ func TestGetUsageSessionCounts(t *testing.T) {
 	})
 	requireNoError(t, err, "GetDailyUsage")
 	assert.Equal(t, counts, daily.SessionCounts)
+
+	dailyNoCounts, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:              "2024-06-01",
+		To:                "2024-06-30",
+		SkipSessionCounts: true,
+	})
+	requireNoError(t, err, "GetDailyUsage skip counts")
+	assert.Equal(t, daily.Daily, dailyNoCounts.Daily)
+	assert.Equal(t, daily.Totals, dailyNoCounts.Totals)
+	assert.Zero(t, dailyNoCounts.SessionCounts.Total)
+	assert.Nil(t, dailyNoCounts.SessionCounts.ByProject)
+	assert.Nil(t, dailyNoCounts.SessionCounts.ByAgent)
 }
 
 func TestNewUsageSessionCounts(t *testing.T) {

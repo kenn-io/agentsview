@@ -35,6 +35,7 @@ type UsageFilterInput struct {
 	IncludeAutomated bool   `query:"include_automated" doc:"Include automated sessions"`
 	NoDefaultRange   bool   `query:"no_default_range" doc:"Preserve omitted from/to without applying default range"`
 	Breakdowns       bool   `query:"breakdowns" default:"true" doc:"Include per-model, per-project, and per-agent breakdowns"`
+	SessionCounts    bool   `query:"session_counts" default:"true" doc:"Include distinct session counts"`
 }
 
 type usageTopSessionsInput struct {
@@ -73,22 +74,23 @@ func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
 		return db.UsageFilter{}, apiError(http.StatusBadRequest, "invalid active_since: use RFC3339 timestamp")
 	}
 	return db.UsageFilter{
-		From:             from,
-		To:               to,
-		Agent:            in.Agent,
-		Project:          in.Project,
-		Machine:          in.Machine,
-		ExcludeProject:   in.ExcludeProject,
-		ExcludeAgent:     in.ExcludeAgent,
-		ExcludeModel:     in.ExcludeModel,
-		Model:            in.Model,
-		Timezone:         tz,
-		MinUserMessages:  in.MinUserMessages,
-		ExcludeOneShot:   !in.IncludeOneShot,
-		ExcludeAutomated: !in.IncludeAutomated,
-		ActiveSince:      in.ActiveSince,
-		Termination:      in.Termination,
-		Breakdowns:       in.Breakdowns,
+		From:              from,
+		To:                to,
+		Agent:             in.Agent,
+		Project:           in.Project,
+		Machine:           in.Machine,
+		ExcludeProject:    in.ExcludeProject,
+		ExcludeAgent:      in.ExcludeAgent,
+		ExcludeModel:      in.ExcludeModel,
+		Model:             in.Model,
+		Timezone:          tz,
+		MinUserMessages:   in.MinUserMessages,
+		ExcludeOneShot:    !in.IncludeOneShot,
+		ExcludeAutomated:  !in.IncludeAutomated,
+		ActiveSince:       in.ActiveSince,
+		Termination:       in.Termination,
+		Breakdowns:        in.Breakdowns,
+		SkipSessionCounts: !in.SessionCounts,
 	}, nil
 }
 

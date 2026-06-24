@@ -93,6 +93,29 @@ func TestUsageSummaryCanSkipBreakdowns(t *testing.T) {
 	assert.False(t, spy.filters[0].Breakdowns)
 }
 
+func TestUsageSummaryDefaultsToSessionCounts(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s, "/api/v1/usage/summary?"+oneDayUsageRange)
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.False(t, spy.filters[0].SkipSessionCounts)
+}
+
+func TestUsageSummaryCanSkipSessionCounts(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/summary?"+oneDayUsageRange+"&session_counts=false")
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.True(t, spy.filters[0].SkipSessionCounts)
+}
+
 func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)

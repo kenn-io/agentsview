@@ -100,6 +100,7 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 		assert.Equal(t, "codex", r.URL.Query().Get("agent"))
 		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
 		assert.Equal(t, "false", r.URL.Query().Get("breakdowns"))
+		assert.Equal(t, "false", r.URL.Query().Get("session_counts"))
 		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
 		assert.Equal(t, "true", r.URL.Query().Get("include_automated"))
 		gotAuth = r.Header.Get("Authorization")
@@ -220,6 +221,7 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 		assert.Equal(t, "2026-06-02", r.URL.Query().Get("to"))
 		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
 		assert.Equal(t, "false", r.URL.Query().Get("breakdowns"))
+		assert.Equal(t, "true", r.URL.Query().Get("session_counts"))
 		writeJSONResponse(w, sampleDailyUsageJSON)
 	})
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
@@ -235,6 +237,25 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 
 	assert.Equal(t, "/api/v1/usage/summary", gotPath)
 	assert.Contains(t, out, `"totalCost": 0.42`)
+	assertNoLocalSessionsDB(t, dataDir)
+}
+
+func TestRunUsageDailyTableSkipsDaemonSessionCounts(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	var gotSessionCounts string
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotSessionCounts = r.URL.Query().Get("session_counts")
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	out := captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{Timezone: "UTC"})
+	})
+
+	assert.Equal(t, "false", gotSessionCounts)
+	assert.Contains(t, out, "TOTAL")
 	assertNoLocalSessionsDB(t, dataDir)
 }
 

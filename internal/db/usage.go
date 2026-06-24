@@ -57,23 +57,24 @@ func (r *modelRateResolver) lookup(model string) (modelRates, bool) {
 // UsageFilter controls the date range, agent, and timezone
 // for daily usage aggregation queries.
 type UsageFilter struct {
-	From             string // YYYY-MM-DD, inclusive
-	To               string // YYYY-MM-DD, inclusive
-	Agent            string // "" for all; supports comma-separated
-	Project          string // "" for all; supports comma-separated
-	Machine          string // "" for all; supports comma-separated
-	Model            string // "" for all; supports comma-separated
-	ExcludeProject   string // comma-separated projects to exclude
-	ExcludeAgent     string // comma-separated agents to exclude
-	ExcludeModel     string // comma-separated models to exclude
-	Timezone         string // IANA timezone, "" for UTC
-	MinUserMessages  int    // user_message_count >= N
-	ExcludeOneShot   bool   // user_message_count > 1
-	ExcludeAutomated bool   // is_automated = false
-	AutomatedScope   string // "", "human", "all", or "automated"
-	ActiveSince      string // RFC3339 session recency cutoff
-	Termination      string // "", "clean", "unclean", "active", or "stale"
-	Breakdowns       bool   // populate Project/AgentBreakdowns per day
+	From              string // YYYY-MM-DD, inclusive
+	To                string // YYYY-MM-DD, inclusive
+	Agent             string // "" for all; supports comma-separated
+	Project           string // "" for all; supports comma-separated
+	Machine           string // "" for all; supports comma-separated
+	Model             string // "" for all; supports comma-separated
+	ExcludeProject    string // comma-separated projects to exclude
+	ExcludeAgent      string // comma-separated agents to exclude
+	ExcludeModel      string // comma-separated models to exclude
+	Timezone          string // IANA timezone, "" for UTC
+	MinUserMessages   int    // user_message_count >= N
+	ExcludeOneShot    bool   // user_message_count > 1
+	ExcludeAutomated  bool   // is_automated = false
+	AutomatedScope    string // "", "human", "all", or "automated"
+	ActiveSince       string // RFC3339 session recency cutoff
+	Termination       string // "", "clean", "unclean", "active", or "stale"
+	Breakdowns        bool   // populate Project/AgentBreakdowns per day
+	SkipSessionCounts bool   // skip distinct session counts when callers do not need them
 }
 
 func (f UsageFilter) appendUsageBranchFilterClauses(
@@ -840,17 +841,87 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 	return r, err
 }
 
+func parseUsageTokenCounters(
+	tokenJSON string,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	for i := 0; i < len(tokenJSON); {
+		keyStartRel := strings.IndexByte(tokenJSON[i:], '"')
+		if keyStartRel < 0 {
+			break
+		}
+		keyStart := i + keyStartRel + 1
+		keyEndRel := strings.IndexByte(tokenJSON[keyStart:], '"')
+		if keyEndRel < 0 {
+			break
+		}
+		keyEnd := keyStart + keyEndRel
+		key := tokenJSON[keyStart:keyEnd]
+		valueStart, ok := usageTokenValueStart(tokenJSON, keyEnd+1)
+		if !ok {
+			i = keyEnd + 1
+			continue
+		}
+		value, next := parseUsageTokenInt(tokenJSON, valueStart)
+		switch key {
+		case "input_tokens":
+			inputTok = value
+		case "output_tokens":
+			outputTok = value
+		case "cache_creation_input_tokens":
+			cacheCrTok = value
+		case "cache_read_input_tokens":
+			cacheRdTok = value
+		}
+		i = next
+	}
+	return
+}
+
+func usageTokenValueStart(tokenJSON string, i int) (int, bool) {
+	for i < len(tokenJSON) && isJSONSpace(tokenJSON[i]) {
+		i++
+	}
+	if i >= len(tokenJSON) || tokenJSON[i] != ':' {
+		return 0, false
+	}
+	i++
+	for i < len(tokenJSON) && isJSONSpace(tokenJSON[i]) {
+		i++
+	}
+	return i, i < len(tokenJSON)
+}
+
+func parseUsageTokenInt(tokenJSON string, i int) (int, int) {
+	if i < len(tokenJSON) && tokenJSON[i] == '"' {
+		i++
+	}
+	sign := 1
+	if i < len(tokenJSON) && tokenJSON[i] == '-' {
+		sign = -1
+		i++
+	}
+	start := i
+	var value int
+	for i < len(tokenJSON) && tokenJSON[i] >= '0' && tokenJSON[i] <= '9' {
+		value = value*10 + int(tokenJSON[i]-'0')
+		i++
+	}
+	if i == start {
+		return 0, i
+	}
+	return sign * value, i
+}
+
+func isJSONSpace(b byte) bool {
+	return b == ' ' || b == '\n' || b == '\r' || b == '\t'
+}
+
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *modelRateResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
 	if r.usageSource == "message" {
-		usage := gjson.Parse(r.tokenJSON)
-		inputTok = int(usage.Get("input_tokens").Int())
-		outputTok = int(usage.Get("output_tokens").Int())
-		cacheCrTok = int(
-			usage.Get("cache_creation_input_tokens").Int())
-		cacheRdTok = int(
-			usage.Get("cache_read_input_tokens").Int())
+		inputTok, outputTok, cacheCrTok, cacheRdTok =
+			parseUsageTokenCounters(r.tokenJSON)
 	} else {
 		inputTok = r.inputTokens
 		outputTok = r.outputTokens
@@ -1141,7 +1212,10 @@ func (db *DB) GetDailyUsage(
 	accum := make(map[accumKey]*bucket)
 
 	seen := make(map[usageDedupToken]struct{})
-	seenSessions := make(map[string]UsageSessionInfo)
+	var seenSessions map[string]UsageSessionInfo
+	if !f.SkipSessionCounts {
+		seenSessions = make(map[string]UsageSessionInfo)
+	}
 
 	// totalSavings is the running sum of per-message cache
 	// savings using each row's actual per-model rates. We sum
@@ -1178,10 +1252,12 @@ func (db *DB) GetDailyUsage(
 			seen[key] = struct{}{}
 		}
 
-		if _, ok := seenSessions[r.sessionID]; !ok {
-			seenSessions[r.sessionID] = UsageSessionInfo{
-				Project: r.project,
-				Agent:   r.agent,
+		if seenSessions != nil {
+			if _, ok := seenSessions[r.sessionID]; !ok {
+				seenSessions[r.sessionID] = UsageSessionInfo{
+					Project: r.project,
+					Agent:   r.agent,
+				}
 			}
 		}
 
@@ -1338,7 +1414,10 @@ func (db *DB) GetDailyUsage(
 		if copilotCost > 0 {
 			totals.CopilotAICredits = copilotCost / 0.01
 		}
-		sessionCounts := NewUsageSessionCounts(seenSessions)
+		var sessionCounts UsageSessionCounts
+		if seenSessions != nil {
+			sessionCounts = NewUsageSessionCounts(seenSessions)
+		}
 		return DailyUsageResult{
 			Daily:         daily,
 			Totals:        totals,
@@ -1513,7 +1592,10 @@ func (db *DB) GetDailyUsage(
 		totals.CopilotAICredits = copilotCost / 0.01
 	}
 
-	sessionCounts := NewUsageSessionCounts(seenSessions)
+	var sessionCounts UsageSessionCounts
+	if seenSessions != nil {
+		sessionCounts = NewUsageSessionCounts(seenSessions)
+	}
 	return DailyUsageResult{
 		Daily:         daily,
 		Totals:        totals,
