@@ -90,17 +90,33 @@ type DesktopTauriBridge = {
   };
 };
 
-function syncDesktopZoom(scaleFactor: number) {
+function currentDesktopWebviewWindow():
+  | DesktopTauriWebviewWindow
+  | undefined {
   if (!IS_DESKTOP || typeof window === "undefined") return;
   const tauri =
     (window as Window & { __TAURI__?: DesktopTauriBridge })
       .__TAURI__;
-  const webview =
-    tauri?.webviewWindow?.getCurrentWebviewWindow?.();
-  if (!webview) return;
+  return tauri?.webviewWindow?.getCurrentWebviewWindow?.();
+}
+
+function syncDesktopZoom(scaleFactor: number): boolean {
+  const webview = currentDesktopWebviewWindow();
+  if (!webview) return false;
   void webview.setZoom(scaleFactor).catch(() => {
     // ignore
   });
+  return true;
+}
+
+function composedRootZoom(
+  fontScale: number, zoomLevel: number,
+): string {
+  let scale = fontScale / 100;
+  if (IS_DESKTOP && !currentDesktopWebviewWindow()) {
+    scale *= zoomLevel / 100;
+  }
+  return String(scale);
 }
 
 function readStoredZoom(): number {
@@ -286,13 +302,15 @@ class UIStore {
       });
 
       // Apply the root font scale in the document; desktop zoom
-      // itself is handled by the native webview bridge.
+      // falls back to CSS when the native webview bridge is absent.
       $effect(() => {
-        const scale = this.fontScale / 100;
         (
           document.documentElement.style as unknown as
             Record<string, string>
-        ).zoom = String(scale);
+        ).zoom = composedRootZoom(
+          this.fontScale,
+          this.zoomLevel,
+        );
       });
 
       // Persist the desktop window zoom (desktop only).

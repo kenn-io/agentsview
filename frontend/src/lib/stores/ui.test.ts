@@ -225,6 +225,41 @@ describe("UIStore", () => {
         }
       }
     });
+
+    it("falls back to CSS zoom on desktop pages without the Tauri bridge", async () => {
+      const tauriWindow = window as Window & {
+        __TAURI__?: unknown;
+      };
+      const originalUrl = window.location.href;
+      const hadTauri = Object.prototype.hasOwnProperty.call(
+        tauriWindow,
+        "__TAURI__",
+      );
+      const originalTauri = tauriWindow.__TAURI__;
+      delete tauriWindow.__TAURI__;
+      window.history.replaceState({}, "", "?desktop");
+
+      try {
+        // @ts-expect-error -- cache bust for fresh UIStore
+        const mod = await import("./ui.svelte.js?desktopCssFallback");
+        mod.ui.zoomLevel = 200;
+        mod.ui.setFontScale(110);
+        await tick();
+
+        expect(
+          document.documentElement.style.getPropertyValue("zoom"),
+        ).toBe("2.2");
+      } finally {
+        window.history.replaceState({}, "", originalUrl);
+        if (hadTauri) {
+          Object.defineProperty(tauriWindow, "__TAURI__", {
+            value: originalTauri,
+            writable: true,
+            configurable: true,
+          });
+        }
+      }
+    });
   });
 
   describe("theme initialization", () => {
