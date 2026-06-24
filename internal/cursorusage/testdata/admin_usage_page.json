@@ -1,0 +1,41 @@
+{
+  "totalUsageEventsCount": 2,
+  "usageEventsDisplay": [
+    {
+      "timestamp": "1748700000000",
+      "model": "claude-4.6-opus-high-thinking",
+      "kind": "USAGE_EVENT_KIND_USAGE_BASED",
+      "tokenUsage": {
+        "inputTokens": 1234,
+        "outputTokens": 567,
+        "cacheWriteTokens": 0,
+        "cacheReadTokens": 8901,
+        "totalCents": 12.34
+      },
+      "userId": "152683922",
+      "userEmail": "member@example.com",
+      "isHeadless": false,
+      "cursorTokenFee": 3.32,
+      "isChargeable": true,
+      "chargedCents": 15.66
+    },
+    {
+      "timestamp": "1748703600000",
+      "model": "gpt-5.5-high",
+      "kind": "USAGE_EVENT_KIND_INCLUDED_IN_BUSINESS",
+      "tokenUsage": {
+        "inputTokens": 42,
+        "outputTokens": 18,
+        "cacheWriteTokens": 4,
+        "cacheReadTokens": 8,
+        "totalCents": 0
+      },
+      "userId": "152683922",
+      "userEmail": "member@example.com",
+      "isHeadless": true,
+      "cursorTokenFee": 0,
+      "isChargeable": false,
+      "chargedCents": 0
+    }
+  ]
+}

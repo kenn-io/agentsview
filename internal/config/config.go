@@ -143,6 +143,9 @@ type Config struct {
 	Proxy                ProxyConfig            `json:"proxy,omitempty" toml:"proxy"`
 	WatchExcludePatterns []string               `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
 	CursorSecret         string                 `json:"cursor_secret" toml:"cursor_secret"`
+	CursorAdminAPIKey    string                 `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
+	CursorAdminEmail     string                 `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
+	CursorAdminUserID    string                 `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
 	GithubToken          string                 `json:"github_token,omitempty" toml:"github_token"`
 	Terminal             TerminalConfig         `json:"terminal,omitempty" toml:"terminal"`
 	AuthToken            string                 `json:"auth_token,omitempty" toml:"auth_token"`
@@ -557,6 +560,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	var file struct {
 		GithubToken                    string                     `toml:"github_token"`
 		CursorSecret                   string                     `toml:"cursor_secret"`
+		CursorAdminAPIKey              string                     `toml:"cursor_admin_api_key"`
+		CursorAdminEmail               string                     `toml:"cursor_admin_email"`
+		CursorAdminUserID              string                     `toml:"cursor_admin_user_id"`
 		PublicURL                      string                     `toml:"public_url"`
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
@@ -589,6 +595,15 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.CursorSecret != "" {
 		c.CursorSecret = file.CursorSecret
+	}
+	if file.CursorAdminAPIKey != "" {
+		c.CursorAdminAPIKey = file.CursorAdminAPIKey
+	}
+	if file.CursorAdminEmail != "" {
+		c.CursorAdminEmail = file.CursorAdminEmail
+	}
+	if file.CursorAdminUserID != "" {
+		c.CursorAdminUserID = file.CursorAdminUserID
 	}
 	if file.PublicURL != "" {
 		c.PublicURL = file.PublicURL
@@ -850,6 +865,15 @@ func (c *Config) loadEnv() {
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
 		c.pgEnvOverrides.MachineName = v
+	}
+	if v := os.Getenv("CURSOR_ADMIN_API_KEY"); v != "" {
+		c.CursorAdminAPIKey = v
+	}
+	if v := os.Getenv("CURSOR_ADMIN_EMAIL"); v != "" {
+		c.CursorAdminEmail = v
+	}
+	if v := os.Getenv("CURSOR_ADMIN_USER_ID"); v != "" {
+		c.CursorAdminUserID = v
 	}
 	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
 		c.DuckDB.Path = v

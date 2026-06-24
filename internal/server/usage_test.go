@@ -162,6 +162,39 @@ func TestHandleUsageSummaryJSONShape(t *testing.T) {
 	assert.NotEmpty(t, resp.AgentTotals)
 }
 
+func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
+	te := setup(t)
+
+	require.NoError(t, te.db.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 0,
+		CacheReadTokens:  8901,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}))
+
+	w := te.get(t, buildPathURL("/api/v1/usage/summary",
+		map[string]string{
+			"from":     "2026-05-14",
+			"to":       "2026-05-14",
+			"timezone": "UTC",
+		}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[server.UsageSummaryResponse](t, w)
+	require.Len(t, resp.Daily, 1)
+	assert.InDelta(t, 0.1566, resp.Totals.TotalCost, 1e-9)
+	require.NotEmpty(t, resp.AgentTotals)
+	assert.Equal(t, "cursor", resp.AgentTotals[0].Agent)
+}
+
 func TestHandleUsageTopSessionsEmpty(t *testing.T) {
 	te := setup(t)
 
