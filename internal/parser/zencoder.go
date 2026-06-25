@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 
@@ -445,10 +444,7 @@ func zencoderToolResultContentLength(
 	return total
 }
 
-// ParseZencoderSession parses a Zencoder JSONL session file.
-// Returns (nil, nil, nil) if the file doesn't exist or
-// contains no user/assistant messages.
-func ParseZencoderSession(
+func parseZencoderSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -566,54 +562,4 @@ func ParseZencoderSession(
 // the Zencoder session file pattern (*.jsonl).
 func IsZencoderSessionFileName(name string) bool {
 	return strings.HasSuffix(name, ".jsonl")
-}
-
-// DiscoverZencoderSessions finds all JSONL files under
-// the Zencoder sessions directory (~/.zencoder/sessions/*.jsonl).
-func DiscoverZencoderSessions(
-	sessionsDir string,
-) []DiscoveredFile {
-	if sessionsDir == "" {
-		return nil
-	}
-
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !IsZencoderSessionFileName(name) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(sessionsDir, name),
-			Agent: AgentZencoder,
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindZencoderSourceFile locates a Zencoder session file by
-// its raw session ID (without the "zencoder:" prefix).
-func FindZencoderSourceFile(
-	sessionsDir, rawID string,
-) string {
-	if sessionsDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-	candidate := filepath.Join(sessionsDir, rawID+".jsonl")
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
-	return ""
 }

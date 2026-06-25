@@ -347,6 +347,8 @@ func ProviderFactories() []ProviderFactory {
 func providerFactoryForDef(def AgentDef) ProviderFactory {
 	def = cloneAgentDef(def)
 	switch def.Type {
+	case AgentAmp:
+		return newAmpProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
 	case AgentDeepSeekTUI:
@@ -355,6 +357,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newIflowProviderFactory(def)
 	case AgentGptme:
 		return newGptmeProviderFactory(def)
+	case AgentZencoder:
+		return newZencoderProviderFactory(def)
 	default:
 		return legacyProviderFactory{def: def}
 	}
