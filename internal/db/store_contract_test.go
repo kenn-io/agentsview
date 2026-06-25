@@ -386,6 +386,24 @@ func contractAnalyticsTrendsAndUsage(
 	require.NoError(t, err)
 	require.Equal(t, 5, noAutomation.TotalSessions)
 
+	// With one-shot exclusion on (the summary endpoint default), the
+	// one-shot subagent child must still be counted (workflow subagents
+	// are inherently one-shot) while one-shot root sessions drop. This
+	// exercises OneShotExclusionSQL on every backend, including PG.
+	oneShotExcluded, err := store.GetAnalyticsSummary(ctx, AnalyticsFilter{
+		From:           "2026-01-09",
+		To:             "2026-01-12",
+		Timezone:       "UTC",
+		ExcludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Contains(t, oneShotExcluded.Agents, "claude")
+	// The one-shot subagent child keeps its 70 output tokens in the
+	// total even though one-shot roots are excluded.
+	require.GreaterOrEqual(t, oneShotExcluded.TotalOutputTokens, 70)
+	require.Less(t, oneShotExcluded.TotalSessions, summary.TotalSessions,
+		"one-shot roots drop but the subagent child stays")
+
 	// Distribution surfaces stay root-only: the subagent child must NOT
 	// be counted in session-shape, so its short duration cannot skew the
 	// distributions. It is one fewer session than the summary aggregate.
