@@ -351,6 +351,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCommandCodeProviderFactory(def)
 	case AgentIflow:
 		return newIflowProviderFactory(def)
+	case AgentGptme:
+		return newGptmeProviderFactory(def)
 	default:
 		return legacyProviderFactory{def: def}
 	}

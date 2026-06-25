@@ -582,15 +582,13 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindQwenPawSourceFile,
 	},
 	{
-		Type:           AgentGptme,
-		DisplayName:    "gptme",
-		EnvVar:         "GPTME_DIR",
-		ConfigKey:      "gptme_dirs",
-		DefaultDirs:    []string{".local/share/gptme/logs"},
-		IDPrefix:       "gptme:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverGptmeSessions,
-		FindSourceFunc: FindGptmeSourceFile,
+		Type:        AgentGptme,
+		DisplayName: "gptme",
+		EnvVar:      "GPTME_DIR",
+		ConfigKey:   "gptme_dirs",
+		DefaultDirs: []string{".local/share/gptme/logs"},
+		IDPrefix:    "gptme:",
+		FileBased:   true,
 	},
 	{
 		// Shelley (exe.dev) stores all conversations in a single
