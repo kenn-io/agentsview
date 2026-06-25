@@ -713,7 +713,6 @@ var readOnlyRequiredTables = []string{
 	"messages",
 	"stats",
 	"usage_events",
-	"cursor_usage_events",
 	"tool_calls",
 	"tool_result_events",
 	"insights",
@@ -832,6 +831,14 @@ func checkReadOnlySchemaCompatibility(conn *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+func (db *DB) hasCursorUsageTable() bool {
+	var n int
+	err := db.getReader().QueryRow(
+		"SELECT 1 FROM sqlite_master WHERE type='table' AND name='cursor_usage_events'",
+	).Scan(&n)
+	return err == nil && n == 1
 }
 
 // CheckDataVersion verifies that the database file, when present, was not

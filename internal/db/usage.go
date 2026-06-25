@@ -846,9 +846,12 @@ func cursorUsageRowsSQLForBounds(
 }
 
 func dailyUsageRowsSQLForBounds(
-	f UsageFilter, b usageBounds,
+	f UsageFilter, b usageBounds, hasCursorTable bool,
 ) (string, []any) {
 	sessionRowsSQL, sessionArgs := usageRowsSQLForBounds(f, b)
+	if !hasCursorTable {
+		return sessionRowsSQL, sessionArgs
+	}
 	cursorRowsSQL, cursorArgs, ok := cursorUsageRowsSQLForBounds(f, b)
 	if !ok {
 		return sessionRowsSQL, sessionArgs
@@ -1493,7 +1496,7 @@ func (db *DB) GetDailyUsage(
 	// long-lived sessions that span date boundaries are included.
 	// Pad by +/-14h to cover all timezone offsets; the actual
 	// date filtering happens post-query via localDate.
-	query, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f))
+	query, args := dailyUsageRowsSQLForBounds(f, usageBoundsForFilter(f), db.hasCursorUsageTable())
 	query = dailyUsageRowSelectFromRows(query)
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`

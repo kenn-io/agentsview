@@ -142,6 +142,9 @@ func cursorUsageEventDedupKey(ev CursorUsageEvent) string {
 func (db *DB) GetCursorUsageEvents(
 	ctx context.Context,
 ) ([]CursorUsageEvent, error) {
+	if !db.hasCursorUsageTable() {
+		return nil, nil
+	}
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, occurred_at, model, kind,
 			input_tokens, output_tokens,
@@ -178,6 +181,9 @@ func (db *DB) GetCursorUsageEvents(
 }
 
 func (db *DB) CursorUsageEventFingerprint() (string, error) {
+	if !db.hasCursorUsageTable() {
+		return "", nil
+	}
 	rows, err := db.getReader().Query(`
 		SELECT occurred_at, model, kind,
 			input_tokens, output_tokens,
