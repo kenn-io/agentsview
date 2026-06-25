@@ -109,10 +109,10 @@ func TestAnomalyAccumulator_Aggregate(t *testing.T) {
 
 	// Two sessions of one agent, one of another, plus sanitize fixes
 	// from messages and usage events across the run.
-	acc.recordMalformedLines("claude", 4)
-	acc.recordMalformedLines("codex", 1)
-	acc.recordMalformedLines("claude", 2)
-	acc.recordMalformedLines("gemini", 0) // ignored
+	acc.recordMalformedLines("claude", "a.jsonl", 4)
+	acc.recordMalformedLines("codex", "b.jsonl", 1)
+	acc.recordMalformedLines("claude", "c.jsonl", 2)
+	acc.recordMalformedLines("gemini", "d.jsonl", 0) // ignored
 
 	acc.recordSanitize(validationStats{ControlCharsStripped: 3, RoleCoerced: 1})
 	acc.recordSanitize(validationStats{ModelClamped: 2, TokensClamped: 5})
@@ -134,9 +134,35 @@ func TestAnomalyAccumulator_Aggregate(t *testing.T) {
 	assert.False(t, stats.Anomalies.IsZero())
 }
 
+// TestAnomalyAccumulator_DedupesMalformedLinesPerSourceFile verifies a source
+// file that forks into several sessions counts its malformed lines once, while
+// distinct files and empty-path (DB-backed) sessions still accumulate.
+func TestAnomalyAccumulator_DedupesMalformedLinesPerSourceFile(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.reset()
+
+	// Three forked sessions of one Claude file all carry the same count.
+	acc.recordMalformedLines("claude", "fork.jsonl", 2)
+	acc.recordMalformedLines("claude", "fork.jsonl", 2)
+	acc.recordMalformedLines("claude", "fork.jsonl", 2)
+	// A different source file counts independently.
+	acc.recordMalformedLines("claude", "other.jsonl", 5)
+	// Empty path (DB-backed agent) is not deduped.
+	acc.recordMalformedLines("warp", "", 1)
+	acc.recordMalformedLines("warp", "", 1)
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+	assert.Equal(t, 2+5, stats.Anomalies.MalformedLinesByAgent["claude"],
+		"forked file counted once; distinct file added")
+	assert.Equal(t, 2, stats.Anomalies.MalformedLinesByAgent["warp"],
+		"empty-path sessions are not deduped")
+	assert.Equal(t, 9, stats.Anomalies.MalformedLinesTotal)
+}
+
 func TestAnomalyAccumulator_ResetClears(t *testing.T) {
 	var acc anomalyAccumulator
-	acc.recordMalformedLines("claude", 9)
+	acc.recordMalformedLines("claude", "x.jsonl", 9)
 	acc.recordSanitize(validationStats{TimestampsBlanked: 1})
 	acc.reset()
 

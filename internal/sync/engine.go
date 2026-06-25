@@ -7402,7 +7402,9 @@ func (e *Engine) prepareSessionWrite(
 	// agent for the sync summary's anomaly section.
 	vs := validateAndSanitize(&s, msgs, nil)
 	e.anomalies.recordSanitize(vs)
-	e.anomalies.recordMalformedLines(s.Agent, s.ParserMalformedLines)
+	e.anomalies.recordMalformedLines(
+		s.Agent, pw.sess.File.Path, s.ParserMalformedLines,
+	)
 
 	// A per-row token clamp must not leave an inflated value stranded in a
 	// row-derived session total while the row that produced it was clamped.

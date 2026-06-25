@@ -164,23 +164,44 @@ func (a *AnomalyStats) merge(o AnomalyStats) {
 type anomalyAccumulator struct {
 	mu    gosync.Mutex
 	stats AnomalyStats
+	// malformedFiles tracks source paths whose malformed-line count has
+	// already been recorded this run, so a file that forks into several
+	// sessions counts its malformed lines once. Reset each run.
+	malformedFiles map[string]bool
 }
 
 // reset clears the accumulator at the start of a sync run.
 func (a *anomalyAccumulator) reset() {
 	a.mu.Lock()
 	a.stats = AnomalyStats{}
+	a.malformedFiles = nil
 	a.mu.Unlock()
 }
 
-// recordMalformedLines accumulates parser malformed lines for an agent.
-func (a *anomalyAccumulator) recordMalformedLines(agent string, n int) {
+// recordMalformedLines accumulates an agent's parser malformed-line count for
+// one source file. A single source file can fork into several sessions (e.g.
+// Claude subagents) that each carry the same source-level count, so the count
+// is recorded once per non-empty source path to avoid multiplying a single
+// malformed line across the fork. Sessions with no source path (DB-backed
+// agents) are recorded as-is.
+func (a *anomalyAccumulator) recordMalformedLines(
+	agent, sourcePath string, n int,
+) {
 	if n <= 0 {
 		return
 	}
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if sourcePath != "" {
+		if a.malformedFiles[sourcePath] {
+			return
+		}
+		if a.malformedFiles == nil {
+			a.malformedFiles = make(map[string]bool)
+		}
+		a.malformedFiles[sourcePath] = true
+	}
 	a.stats.RecordMalformedLines(agent, n)
-	a.mu.Unlock()
 }
 
 // recordSanitize accumulates one validateAndSanitize pass's fix counts.
