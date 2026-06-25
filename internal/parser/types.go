@@ -335,9 +335,7 @@ var Registry = []AgentDef{
 		// Sessions live under <projectsDir>/<encoded-project>/chats/<id>.jsonl,
 		// so the projects root must be watched recursively — pinning the
 		// watch to a "chats" subdir of the root catches no events.
-		FileBased:      true,
-		DiscoverFunc:   DiscoverQwenSessions,
-		FindSourceFunc: FindQwenSourceFile,
+		FileBased: true,
 	},
 	{
 		Type:        AgentCommandCode,
