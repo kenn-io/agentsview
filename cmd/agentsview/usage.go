@@ -264,6 +264,7 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 	summary += fmt.Sprintf(
 		" in %s\n", time.Since(t).Round(time.Millisecond),
 	)
+	summary += formatAnomalySummary(stats.Anomalies)
 	fmt.Fprint(os.Stderr, summary)
 	for _, w := range stats.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)

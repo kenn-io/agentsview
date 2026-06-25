@@ -48,6 +48,128 @@ func TestSyncStats_RecordSynced(t *testing.T) {
 	}
 }
 
+func TestAnomalyStats_RecordMalformedLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		records []struct {
+			agent string
+			n     int
+		}
+		wantByAgent map[string]int
+		wantTotal   int
+	}{
+		{
+			name:        "clean run records nothing",
+			wantByAgent: nil,
+			wantTotal:   0,
+		},
+		{
+			name: "zero and negative counts are ignored",
+			records: []struct {
+				agent string
+				n     int
+			}{
+				{"claude", 0},
+				{"codex", -3},
+			},
+			wantByAgent: nil,
+			wantTotal:   0,
+		},
+		{
+			name: "per-agent breakdown plus grand total",
+			records: []struct {
+				agent string
+				n     int
+			}{
+				{"claude", 2},
+				{"codex", 5},
+				{"claude", 3},
+			},
+			wantByAgent: map[string]int{"claude": 5, "codex": 5},
+			wantTotal:   10,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var a AnomalyStats
+			for _, r := range tt.records {
+				a.RecordMalformedLines(r.agent, r.n)
+			}
+			assert.Equal(t, tt.wantByAgent, a.MalformedLinesByAgent)
+			assert.Equal(t, tt.wantTotal, a.MalformedLinesTotal)
+		})
+	}
+}
+
+func TestAnomalyAccumulator_Aggregate(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.reset()
+
+	// Two sessions of one agent, one of another, plus sanitize fixes
+	// from messages and usage events across the run.
+	acc.recordMalformedLines("claude", 4)
+	acc.recordMalformedLines("codex", 1)
+	acc.recordMalformedLines("claude", 2)
+	acc.recordMalformedLines("gemini", 0) // ignored
+
+	acc.recordSanitize(validationStats{ControlCharsStripped: 3, RoleCoerced: 1})
+	acc.recordSanitize(validationStats{ModelClamped: 2, TokensClamped: 5})
+	acc.recordSanitize(validationStats{}) // no-op
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+
+	assert.Equal(t, 7, stats.Anomalies.MalformedLinesTotal)
+	assert.Equal(t, map[string]int{"claude": 6, "codex": 1},
+		stats.Anomalies.MalformedLinesByAgent)
+	assert.Equal(t, SanitizeStats{
+		ControlCharsStripped: 3,
+		ModelClamped:         2,
+		TokensClamped:        5,
+		RoleCoerced:          1,
+	}, stats.Anomalies.Sanitize)
+	assert.Equal(t, 11, stats.Anomalies.Sanitize.Total())
+	assert.False(t, stats.Anomalies.IsZero())
+}
+
+func TestAnomalyAccumulator_ResetClears(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.recordMalformedLines("claude", 9)
+	acc.recordSanitize(validationStats{TimestampsBlanked: 1})
+	acc.reset()
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+	assert.True(t, stats.Anomalies.IsZero())
+	assert.Zero(t, stats.Anomalies.MalformedLinesTotal)
+	assert.Nil(t, stats.Anomalies.MalformedLinesByAgent)
+}
+
+func TestAnomalyStats_IsZero(t *testing.T) {
+	tests := []struct {
+		name string
+		a    AnomalyStats
+		want bool
+	}{
+		{"empty", AnomalyStats{}, true},
+		{
+			name: "malformed only",
+			a:    AnomalyStats{MalformedLinesTotal: 1},
+			want: false,
+		},
+		{
+			name: "sanitize only",
+			a:    AnomalyStats{Sanitize: SanitizeStats{ModelClamped: 1}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.a.IsZero())
+		})
+	}
+}
+
 func TestProgress_Percent(t *testing.T) {
 	tests := []struct {
 		name string

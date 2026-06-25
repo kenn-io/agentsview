@@ -1142,7 +1142,7 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 
 	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
 	require.True(t, ok)
-	events := toDBUsageEvents(prepared.ID, pw.usageEvents)
+	events, _ := toDBUsageEvents(prepared.ID, pw.usageEvents)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(

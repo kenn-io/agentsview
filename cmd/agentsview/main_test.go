@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -636,4 +637,123 @@ func TestFinishInitialResyncSkipsMarkerWhenSignalsNeedBackfill(t *testing.T) {
 	finishInitialResync(marker, false)
 
 	assert.Equal(t, 0, marker.calls)
+}
+
+func TestFormatAnomalySummary(t *testing.T) {
+	tests := []struct {
+		name        string
+		anomalies   agentsync.AnomalyStats
+		wantEmpty   bool
+		wantContain []string
+		wantOmit    []string
+	}{
+		{
+			name:      "clean run omits the section",
+			anomalies: agentsync.AnomalyStats{},
+			wantEmpty: true,
+		},
+		{
+			name: "malformed lines only",
+			anomalies: agentsync.AnomalyStats{
+				MalformedLinesByAgent: map[string]int{
+					"claude": 3, "codex": 1,
+				},
+				MalformedLinesTotal: 4,
+			},
+			wantContain: []string{
+				"Parser anomalies (this run):",
+				"malformed lines: 4 total",
+				"claude: 3",
+				"codex: 1",
+			},
+			wantOmit: []string{"sanitized fields"},
+		},
+		{
+			name: "sanitize fixes only, zero categories omitted",
+			anomalies: agentsync.AnomalyStats{
+				Sanitize: agentsync.SanitizeStats{
+					ControlCharsStripped: 2,
+					ModelClamped:         1,
+				},
+			},
+			wantContain: []string{
+				"sanitized fields: 3 total",
+				"control chars stripped: 2",
+				"model clamped: 1",
+			},
+			wantOmit: []string{
+				"malformed lines",
+				"tokens clamped",
+				"role coerced",
+				"timestamps blanked",
+			},
+		},
+		{
+			name: "both sections present",
+			anomalies: agentsync.AnomalyStats{
+				MalformedLinesByAgent: map[string]int{"gemini": 7},
+				MalformedLinesTotal:   7,
+				Sanitize: agentsync.SanitizeStats{
+					TokensClamped:     4,
+					TimestampsBlanked: 1,
+				},
+			},
+			wantContain: []string{
+				"malformed lines: 7 total",
+				"gemini: 7",
+				"sanitized fields: 5 total",
+				"tokens clamped: 4",
+				"timestamps blanked: 1",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatAnomalySummary(tc.anomalies)
+			if tc.wantEmpty {
+				assert.Empty(t, got)
+				return
+			}
+			for _, want := range tc.wantContain {
+				assert.Contains(t, got, want)
+			}
+			for _, omit := range tc.wantOmit {
+				assert.NotContains(t, got, omit)
+			}
+		})
+	}
+}
+
+func TestPrintSyncSummaryAnomalySection(t *testing.T) {
+	t.Run("clean run omits anomaly section", func(t *testing.T) {
+		out := captureStdout(t, func() {
+			printSyncSummary(agentsync.SyncStats{Synced: 3}, time.Now())
+		})
+		assert.Contains(t, out, "Sync complete: 3 sessions synced")
+		assert.NotContains(t, out, "Parser anomalies")
+	})
+
+	t.Run("non-zero anomalies print the section", func(t *testing.T) {
+		stats := agentsync.SyncStats{
+			Synced: 2,
+			Anomalies: agentsync.AnomalyStats{
+				MalformedLinesByAgent: map[string]int{"claude": 5},
+				MalformedLinesTotal:   5,
+				Sanitize: agentsync.SanitizeStats{
+					ControlCharsStripped: 2,
+				},
+			},
+		}
+		out := captureStdout(t, func() {
+			printSyncSummary(stats, time.Now())
+		})
+		assert.Contains(t, out, "Parser anomalies (this run):")
+		assert.Contains(t, out, "malformed lines: 5 total")
+		assert.Contains(t, out, "claude: 5")
+		assert.Contains(t, out, "control chars stripped: 2")
+		// Anomaly section follows the one-line summary.
+		idx := strings.Index(out, "Sync complete")
+		anomalyIdx := strings.Index(out, "Parser anomalies")
+		assert.Less(t, idx, anomalyIdx)
+	})
 }

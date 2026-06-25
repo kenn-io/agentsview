@@ -1,5 +1,7 @@
 package sync
 
+import gosync "sync"
+
 // Phase describes the current sync phase.
 type Phase string
 
@@ -55,11 +57,147 @@ type SyncStats struct {
 	Warnings       []string `json:"warnings,omitempty"`
 	Aborted        bool     `json:"aborted,omitempty"`
 
+	// Anomalies aggregates per-run parser/sanitizer anomaly signals
+	// surfaced in the CLI sync summary. These are live per-run counters
+	// (reset each sync), not persisted state. A zero value means a clean
+	// run and is omitted from the summary.
+	Anomalies AnomalyStats `json:"anomalies,omitempty"`
+
 	filesOK             int // unexported: file-level success counter
 	filesDiscovered     int // file-based total, excludes DB-backed agents
 	messagesIndexed     int // unexported: progress message counter
 	parserExcludedFiles int // file-level intentional parser exclusions
 	parserExcludedIDs   []string
+}
+
+// AnomalyStats aggregates parser-output anomaly signals observed during a
+// single sync run. It surfaces numbers that already exist or are already
+// computed but were previously discarded: per-agent parser malformed-line
+// counts (parser_malformed_lines) and the per-category counts returned by
+// the central validateAndSanitize pass. It is a per-run summary only; no
+// new persisted columns back it.
+type AnomalyStats struct {
+	// MalformedLinesByAgent maps an agent type to the total number of
+	// parser malformed lines reported by sessions of that agent in this
+	// run. Only non-zero agents are present.
+	MalformedLinesByAgent map[string]int `json:"malformed_lines_by_agent,omitempty"`
+	// MalformedLinesTotal is the grand total across all agents.
+	MalformedLinesTotal int `json:"malformed_lines_total,omitempty"`
+
+	// Sanitize aggregates the central validation/sanitization fix counts
+	// across every session, message, and usage event written this run.
+	Sanitize SanitizeStats `json:"sanitize,omitempty"`
+}
+
+// SanitizeStats mirrors the per-category fix counts produced by the central
+// validateAndSanitize pass, accumulated across a full sync run. It is the
+// exported, summary-facing form of the internal validationStats so the CLI
+// summary can render it.
+type SanitizeStats struct {
+	ControlCharsStripped int `json:"control_chars_stripped,omitempty"`
+	ModelClamped         int `json:"model_clamped,omitempty"`
+	TokensClamped        int `json:"tokens_clamped,omitempty"`
+	RoleCoerced          int `json:"role_coerced,omitempty"`
+	TimestampsBlanked    int `json:"timestamps_blanked,omitempty"`
+}
+
+// Total returns the sum of all sanitize fix counts.
+func (s SanitizeStats) Total() int {
+	return s.ControlCharsStripped + s.ModelClamped + s.TokensClamped +
+		s.RoleCoerced + s.TimestampsBlanked
+}
+
+// IsZero reports whether no sanitize fixes were recorded.
+func (s SanitizeStats) IsZero() bool {
+	return s.Total() == 0
+}
+
+// IsZero reports whether the run observed no anomalies at all, so the CLI
+// summary can omit the anomaly section entirely on clean runs.
+func (a AnomalyStats) IsZero() bool {
+	return a.MalformedLinesTotal == 0 && a.Sanitize.IsZero()
+}
+
+// RecordMalformedLines attributes n parser malformed lines to the given
+// agent and updates the grand total. A zero count is ignored so clean
+// agents do not appear in the per-agent breakdown.
+func (a *AnomalyStats) RecordMalformedLines(agent string, n int) {
+	if n <= 0 {
+		return
+	}
+	if a.MalformedLinesByAgent == nil {
+		a.MalformedLinesByAgent = make(map[string]int)
+	}
+	a.MalformedLinesByAgent[agent] += n
+	a.MalformedLinesTotal += n
+}
+
+// addSanitize accumulates the per-category counts from one
+// validateAndSanitize pass into the aggregate.
+func (a *AnomalyStats) addSanitize(v validationStats) {
+	a.Sanitize.ControlCharsStripped += v.ControlCharsStripped
+	a.Sanitize.ModelClamped += v.ModelClamped
+	a.Sanitize.TokensClamped += v.TokensClamped
+	a.Sanitize.RoleCoerced += v.RoleCoerced
+	a.Sanitize.TimestampsBlanked += v.TimestampsBlanked
+}
+
+// merge folds another AnomalyStats into the receiver.
+func (a *AnomalyStats) merge(o AnomalyStats) {
+	for agent, n := range o.MalformedLinesByAgent {
+		a.RecordMalformedLines(agent, n)
+	}
+	a.Sanitize.ControlCharsStripped += o.Sanitize.ControlCharsStripped
+	a.Sanitize.ModelClamped += o.Sanitize.ModelClamped
+	a.Sanitize.TokensClamped += o.Sanitize.TokensClamped
+	a.Sanitize.RoleCoerced += o.Sanitize.RoleCoerced
+	a.Sanitize.TimestampsBlanked += o.Sanitize.TimestampsBlanked
+}
+
+// anomalyAccumulator is the engine's per-run, concurrency-safe sink for
+// anomaly signals recorded at the write seam (prepareSessionWrite,
+// writeIncremental, and the usage-event conversion path). It mirrors the
+// phaseStats accumulator pattern: reset at the start of a sync run and
+// folded into the returned SyncStats before the run completes. Although the
+// write path is serialized under syncMu today, the mutex keeps recording
+// safe if a future caller writes from multiple goroutines.
+type anomalyAccumulator struct {
+	mu    gosync.Mutex
+	stats AnomalyStats
+}
+
+// reset clears the accumulator at the start of a sync run.
+func (a *anomalyAccumulator) reset() {
+	a.mu.Lock()
+	a.stats = AnomalyStats{}
+	a.mu.Unlock()
+}
+
+// recordMalformedLines accumulates parser malformed lines for an agent.
+func (a *anomalyAccumulator) recordMalformedLines(agent string, n int) {
+	if n <= 0 {
+		return
+	}
+	a.mu.Lock()
+	a.stats.RecordMalformedLines(agent, n)
+	a.mu.Unlock()
+}
+
+// recordSanitize accumulates one validateAndSanitize pass's fix counts.
+func (a *anomalyAccumulator) recordSanitize(v validationStats) {
+	if (v == validationStats{}) {
+		return
+	}
+	a.mu.Lock()
+	a.stats.addSanitize(v)
+	a.mu.Unlock()
+}
+
+// applyTo folds the accumulated anomalies into the given SyncStats.
+func (a *anomalyAccumulator) applyTo(s *SyncStats) {
+	a.mu.Lock()
+	s.Anomalies.merge(a.stats)
+	a.mu.Unlock()
 }
 
 // RecordSkip increments the skipped session counter.

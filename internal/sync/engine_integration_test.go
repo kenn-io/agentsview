@@ -1514,8 +1514,17 @@ func TestSyncEngineSkipCache(t *testing.T) {
 		"not json at all\x00\x01",
 	)
 
+	// The deliberately malformed content yields one parser malformed
+	// line, which the sync summary now surfaces per agent.
+	malformed := sync.AnomalyStats{
+		MalformedLinesByAgent: map[string]int{"claude": 1},
+		MalformedLinesTotal:   1,
+	}
+
 	// First sync — file parsed (empty session stored)
-	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1, Skipped: 0, Anomalies: malformed,
+	})
 
 	// Second sync — unchanged mtime, should be skipped
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0 + 1, Synced: 0, Skipped: 1})
@@ -1525,7 +1534,9 @@ func TestSyncEngineSkipCache(t *testing.T) {
 	os.Chtimes(path, time.Now(), time.Now())
 
 	// Third sync — mtime changed → re-synced (harmless)
-	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1 + 0, Synced: 1, Skipped: 0})
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1 + 0, Synced: 1, Skipped: 0, Anomalies: malformed,
+	})
 }
 
 func TestSyncEngineFileAppend(t *testing.T) {

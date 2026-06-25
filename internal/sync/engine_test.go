@@ -892,7 +892,7 @@ func TestToDBUsageEventsStampsFinalSessionID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := toDBUsageEvents(tt.sessionID, tt.events)
+			got, _ := toDBUsageEvents(tt.sessionID, tt.events)
 			require.Len(t, got, len(tt.wantIDs))
 			for i, ev := range got {
 				assert.Equal(t, tt.wantIDs[i], ev.SessionID)
@@ -904,7 +904,7 @@ func TestToDBUsageEventsStampsFinalSessionID(t *testing.T) {
 func TestToDBUsageEventsPreservesSessionSummaryTokenUpperBounds(t *testing.T) {
 	rawInput := maxPlausibleTokens + 250_000
 	rawOutput := maxPlausibleTokens + 500_000
-	got := toDBUsageEvents("hermes:summary", []parser.ParsedUsageEvent{
+	got, _ := toDBUsageEvents("hermes:summary", []parser.ParsedUsageEvent{
 		{
 			Source:                   "session",
 			Model:                    "gpt-5.4",

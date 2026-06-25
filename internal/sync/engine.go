@@ -118,6 +118,12 @@ type Engine struct {
 	// write path. Exposed via PhaseStats() so a CLI driver can log the
 	// totals after a sync pass completes.
 	phaseStats PhaseStats
+
+	// anomalies accumulates per-run parser/sanitizer anomaly signals
+	// recorded at the write seam (prepareSessionWrite, writeIncremental,
+	// toDBUsageEvents). Reset at the start of each sync run and folded
+	// into the returned SyncStats before the run completes.
+	anomalies anomalyAccumulator
 }
 
 // PhaseStats returns the engine's phase counter. The values reflect only
@@ -445,11 +451,13 @@ func (e *Engine) SyncPaths(paths []string) {
 	defer e.clearCurrentProgress()
 	e.resetS3CodexIndexCache()
 
+	e.anomalies.reset()
 	results := e.startWorkers(context.Background(), files)
 	stats = e.collectAndBatch(
 		context.Background(), results, len(files), len(files), nil,
 		syncWriteDefault,
 	)
+	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 
 	e.mu.Lock()
@@ -2757,7 +2765,7 @@ func samePathOrDescendant(path, root string) bool {
 func (e *Engine) syncAllLocked(
 	ctx context.Context, onProgress ProgressFunc, since time.Time,
 	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
-) SyncStats {
+) (stats SyncStats) {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
@@ -2767,6 +2775,10 @@ func (e *Engine) syncAllLocked(
 	}
 	e.phaseStats.Reset()
 	e.resetS3CodexIndexCache()
+	e.anomalies.reset()
+	// Fold the per-run anomaly accumulator into the returned stats on
+	// every exit path so the CLI sync summary can surface them.
+	defer func() { e.anomalies.applyTo(&stats) }()
 
 	t0 := time.Now()
 
@@ -2829,7 +2841,7 @@ func (e *Engine) syncAllLocked(
 
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
-	stats := e.collectAndBatch(
+	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
 	if verbose {
@@ -3171,9 +3183,15 @@ func (e *Engine) syncAllLocked(
 		MessagesIndexed: stats.messagesIndexed,
 	})
 
+	// Store the anomaly-folded stats so LastSyncStats (UI) matches the
+	// value returned to the CLI summary. The deferred applyTo only reads
+	// the accumulator, so folding a separate copy here does not
+	// double-count.
+	persisted := stats
+	e.anomalies.applyTo(&persisted)
 	e.mu.Lock()
 	e.lastSync = time.Now()
-	e.lastSyncStats = stats
+	e.lastSyncStats = persisted
 	e.mu.Unlock()
 
 	if recordSyncState {
@@ -7284,7 +7302,7 @@ func (e *Engine) writeBatch(
 			continue
 		}
 		if err := e.db.ReplaceSessionUsageEvents(
-			s.ID, toDBUsageEvents(s.ID, pw.usageEvents),
+			s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
 		); err != nil {
 			log.Printf(
 				"write usage events for %s: %v",
@@ -7379,9 +7397,12 @@ func (e *Engine) prepareSessionWrite(
 		s.PeakContextTokens == evtPeak
 
 	// Central validation/sanitization pass: every session write flows
-	// through here so all agents are covered uniformly. Stats are discarded
-	// for now; a later anomaly-counter task will surface them.
-	_ = validateAndSanitize(&s, msgs, nil)
+	// through here so all agents are covered uniformly. The returned fix
+	// counts and the parser malformed-line count are accumulated per
+	// agent for the sync summary's anomaly section.
+	vs := validateAndSanitize(&s, msgs, nil)
+	e.anomalies.recordSanitize(vs)
+	e.anomalies.recordMalformedLines(s.Agent, s.ParserMalformedLines)
 
 	// A per-row token clamp must not leave an inflated value stranded in a
 	// row-derived session total while the row that produced it was clamped.
@@ -8097,7 +8118,7 @@ func (e *Engine) writeBatchBulk(
 		writes = append(writes, db.SessionBatchWrite{
 			Session:         s,
 			Messages:        msgs,
-			UsageEvents:     toDBUsageEvents(s.ID, pw.usageEvents),
+			UsageEvents:     e.usageEventsForWrite(s.ID, pw.usageEvents),
 			Signals:         update,
 			Findings:        findings,
 			DataVersion:     dataVersionForWrite(pw),
@@ -8175,8 +8196,9 @@ func (e *Engine) writeIncremental(
 	)
 	// The incremental append path bypasses prepareSessionWrite, so run
 	// the central validation/sanitization pass on the new message rows
-	// here to keep coverage uniform across write paths.
-	_ = validateAndSanitize(nil, dbMsgs, nil)
+	// here to keep coverage uniform across write paths. The fix counts
+	// feed the sync summary's anomaly section.
+	e.anomalies.recordSanitize(validateAndSanitize(nil, dbMsgs, nil))
 
 	// Adjust counts for blocked-category filtering.
 	newTotal, newUser := postFilterCounts(dbMsgs)
@@ -8333,7 +8355,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		return err
 	}
 	if err := e.db.ReplaceSessionUsageEvents(
-		s.ID, toDBUsageEvents(s.ID, pw.usageEvents),
+		s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
 	); err != nil {
 		log.Printf(
 			"replace usage events for %s: %v",
@@ -8805,10 +8827,12 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 
 // toDBUsageEvents converts parser usage events for one session.
 // sessionID is the final ID after remote rewrites; parser-stamped
-// event session IDs predate the idPrefix and are ignored.
+// event session IDs predate the idPrefix and are ignored. It returns the
+// fix counts from the central validation/sanitization pass so write paths
+// can surface them in the sync summary; diagnostic callers may discard.
 func toDBUsageEvents(
 	sessionID string, events []parser.ParsedUsageEvent,
-) []db.UsageEvent {
+) ([]db.UsageEvent, validationStats) {
 	out := make([]db.UsageEvent, 0, len(events))
 	for _, ev := range events {
 		out = append(out, db.UsageEvent{
@@ -8830,8 +8854,18 @@ func toDBUsageEvents(
 	}
 	// Route usage events through the central validation/sanitization
 	// pass so they get the same treatment as messages and sessions at
-	// every call site. Stats are discarded for now.
-	_ = validateAndSanitize(nil, nil, out)
+	// every call site.
+	return out, validateAndSanitize(nil, nil, out)
+}
+
+// usageEventsForWrite converts usage events for a session about to be
+// written and records the central-validation fix counts in the per-run
+// anomaly accumulator for the sync summary.
+func (e *Engine) usageEventsForWrite(
+	sessionID string, events []parser.ParsedUsageEvent,
+) []db.UsageEvent {
+	out, vs := toDBUsageEvents(sessionID, events)
+	e.anomalies.recordSanitize(vs)
 	return out
 }
 

@@ -585,7 +585,7 @@ func (e *Engine) parseDiffCollectFile(
 		compare := ok && !pw.needsRetry &&
 			stored != nil && stored.DeletedAt == nil
 		if compare {
-			events := toDBUsageEvents(id, pw.usageEvents)
+			events, _ := toDBUsageEvents(id, pw.usageEvents)
 			var err error
 			fields, err = e.compareStoredSession(
 				ctx, stored, prepared, msgs, events,
