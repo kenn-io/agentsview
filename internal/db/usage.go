@@ -810,9 +810,10 @@ WHERE %s`
 func cursorUsageRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
 ) (string, []any, bool) {
+	termPred, _ := buildUsageTerminationPredSQLite(f.Termination)
 	if f.Project != "" || f.ExcludeProject != "" ||
 		f.Machine != "" || f.MinUserMessages > 0 ||
-		f.ExcludeOneShot || f.Termination != "" ||
+		f.ExcludeOneShot || termPred != "" ||
 		f.ActiveSince != "" {
 		return "", nil, false
 	}

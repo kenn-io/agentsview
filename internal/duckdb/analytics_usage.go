@@ -2277,9 +2277,10 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 func duckCursorUsageRowsSQLForBounds(
 	f db.UsageFilter, b duckUsageBounds,
 ) (string, []any, bool) {
+	hasTermFilter := f.Termination != "" && f.Termination != "all"
 	if f.Project != "" || f.ExcludeProject != "" ||
 		f.Machine != "" || f.MinUserMessages > 0 ||
-		f.ExcludeOneShot || f.Termination != "" ||
+		f.ExcludeOneShot || hasTermFilter ||
 		f.ActiveSince != "" {
 		return "", nil, false
 	}

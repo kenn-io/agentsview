@@ -691,9 +691,10 @@ WHERE %s`
 func pgCursorUsageRowsSQLForBounds(
 	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
 ) (string, bool) {
+	hasTermFilter := f.Termination != "" && f.Termination != "all"
 	if f.Project != "" || f.ExcludeProject != "" ||
 		f.Machine != "" || f.MinUserMessages > 0 ||
-		f.ExcludeOneShot || f.Termination != "" || f.ActiveSince != "" {
+		f.ExcludeOneShot || hasTermFilter || f.ActiveSince != "" {
 		return "", false
 	}
 	if f.Agent != "" {
