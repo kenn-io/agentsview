@@ -5,6 +5,7 @@ import {
   LOCALE_STORAGE_KEY,
   SUPPORTED_LOCALES,
   chooseInitialLocale,
+  formatDateTime,
   normalizeLocale,
   setLocale,
 } from "./index.js";
@@ -107,6 +108,23 @@ describe("i18n locale selection", () => {
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 次 tool call");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 次 tool call");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 条消息");
+  });
+
+  it("formats dates with the active Paraglide locale", () => {
+    const dateTimeFormat = vi
+      .spyOn(Intl, "DateTimeFormat")
+      .mockImplementation(function DateTimeFormatMock(locale, options) {
+        return {
+          format: () => `${locale}:${options?.timeZone ?? "local"}`,
+        } as Intl.DateTimeFormat;
+      } as typeof Intl.DateTimeFormat);
+
+    runtime.setLocale("zh-CN", { reload: false });
+
+    expect(formatDateTime(0, { timeZone: "UTC" })).toBe("zh-CN:UTC");
+    expect(dateTimeFormat).toHaveBeenCalledWith("zh-CN", {
+      timeZone: "UTC",
+    });
   });
 
   it("sets the Paraglide runtime locale with its default reload behavior", () => {

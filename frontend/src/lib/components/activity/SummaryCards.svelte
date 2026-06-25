@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
 
   let { report }: { report: Report } = $props();
@@ -45,7 +45,7 @@
     if (!ts) return "";
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleTimeString([], {
+    return formatDateTime(d, {
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23",

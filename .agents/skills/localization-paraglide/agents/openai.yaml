@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paraglide Localization"
+  short_description: "Use Paraglide localization correctly"
+  default_prompt: "Use $localization-paraglide to localize this agentsview UI change with Paraglide."

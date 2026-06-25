@@ -1,4 +1,7 @@
-import { setLocale as setParaglideLocale } from "../paraglide/runtime.js";
+import {
+  getLocale,
+  setLocale as setParaglideLocale,
+} from "../paraglide/runtime.js";
 
 export { m } from "../paraglide/messages.js";
 
@@ -58,6 +61,13 @@ export function setLocale(value: SupportedLocale) {
   } catch {
     // Ignore storage failures; the active in-memory locale still changes.
   }
+}
+
+export function formatDateTime(
+  value: Date | number | string,
+  options: Intl.DateTimeFormatOptions = {},
+): string {
+  return new Intl.DateTimeFormat(getLocale(), options).format(new Date(value));
 }
 
 export function initI18n() {

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import { squarify } from "../../utils/treemap.js";
-  import { m } from "../../i18n/index.js";
 
   interface TreemapItem {
     id: string;

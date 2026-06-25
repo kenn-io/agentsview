@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { activeSessionsInSlot } from "./activeSessions.js";
   import OptionTypeahead, {
@@ -47,7 +47,7 @@
   // UTC instants of local calendar boundaries, so rendering them in the report
   // timezone keeps a "day" bucket on its intended calendar date.
   function timeLabel(ms: number): string {
-    return new Date(ms).toLocaleTimeString([], {
+    return formatDateTime(ms, {
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23",
@@ -56,14 +56,14 @@
   }
 
   function weekdayLabel(ms: number): string {
-    return new Date(ms).toLocaleDateString([], {
+    return formatDateTime(ms, {
       weekday: "short",
       timeZone: report.timezone,
     });
   }
 
   function dateLabel(ms: number): string {
-    return new Date(ms).toLocaleDateString([], {
+    return formatDateTime(ms, {
       month: "short",
       day: "numeric",
       timeZone: report.timezone,
