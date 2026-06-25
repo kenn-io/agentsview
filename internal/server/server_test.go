@@ -14,8 +14,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	stdlibsync "sync"
@@ -2878,11 +2878,20 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 
 func useGitHubCLIAuthTokenStub(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("sh"); err != nil {
-		t.Skipf("sh not available on PATH: %v", err)
-	}
 	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
 	binDir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		ghPath := filepath.Join(binDir, "gh.cmd")
+		require.NoError(t, os.WriteFile(ghPath, []byte(`@echo off
+if "%1"=="auth" if "%2"=="token" (
+  echo gh-token-from-cli
+  exit /b 0
+)
+exit /b 1
+`), 0o644))
+		t.Setenv("PATH", binDir)
+		return
+	}
 	ghPath := filepath.Join(binDir, "gh")
 	require.NoError(t, os.WriteFile(ghPath, []byte(`#!/bin/sh
 if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
