@@ -1774,19 +1774,6 @@ func (e *Engine) syncAllLocked(
 
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
-	for _, def := range parser.Registry {
-		if !def.FileBased || def.DiscoverFunc == nil {
-			continue
-		}
-		for _, d := range e.agentDirs[def.Type] {
-			if !scope.includes(d) {
-				continue
-			}
-			found := def.DiscoverFunc(d)
-			counts[def.Type] += len(found)
-			all = append(all, found...)
-		}
-	}
 	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
 	for _, file := range providerFound {
 		counts[file.Agent]++
@@ -1990,11 +1977,8 @@ func (e *Engine) syncAllLocked(
 }
 
 // discoverProviderSources runs full-sync discovery through the provider facade
-// for every concrete provider that is authoritative. It is the provider-shape
-// counterpart to the legacy AgentDef.DiscoverFunc loop, so a provider can drop
-// its DiscoverFunc and still be discovered once it owns live processing. Shadow
-// mode remains observational and never appends provider-only work to the live
-// sync list.
+// for every concrete provider that is authoritative. It is the sole on-disk
+// discovery path: every file-based agent owns discovery through its provider.
 func (e *Engine) discoverProviderSources(
 	ctx context.Context,
 	scope *rootSyncScope,
@@ -7153,7 +7137,8 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 			// inserted or removed earlier run shifts the index onto a
 			// different session. Only trust the stored path when run idx
 			// still recomputes to the requested raw ID; otherwise fall
-			// through to FindSourceFunc, which re-resolves by raw ID.
+			// through. The provider facade, tried first above, owns raw-ID
+			// re-resolution.
 			if got, ok := parser.AiderRawIDAt(historyPath, idx); ok && got == bareID {
 				return fp
 			}
@@ -7162,13 +7147,6 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		}
 	}
 
-	if def.FindSourceFunc != nil {
-		for _, d := range e.agentDirs[def.Type] {
-			if f := def.FindSourceFunc(d, bareID); f != "" {
-				return f
-			}
-		}
-	}
 	return ""
 }
 
@@ -7180,11 +7158,9 @@ func (e *Engine) isProviderAuthoritative(agent parser.AgentType) bool {
 }
 
 // findProviderSourceFile resolves a single session's source file through the
-// provider facade for authoritative concrete providers. It is the
-// provider-shape counterpart to AgentDef.FindSourceFunc, so a provider can drop
-// its FindSourceFunc hook and stay locatable for diagnostics, export, and
-// parse-diff lookups once it owns live processing. Shadow mode remains
-// observational and must not satisfy lookups that legacy lookup would miss.
+// provider facade for authoritative concrete providers. It is the sole
+// source-lookup path, keeping sessions locatable for diagnostics, export, and
+// parse-diff lookups.
 func (e *Engine) findProviderSourceFile(
 	ctx context.Context,
 	def parser.AgentDef,

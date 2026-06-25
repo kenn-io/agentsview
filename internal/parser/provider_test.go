@@ -250,8 +250,6 @@ func assertAgentDefMetadataEqual(t *testing.T, want, got AgentDef) {
 	assert.Equal(t, want.WatchSubdirs, got.WatchSubdirs)
 	assert.Equal(t, want.ShallowWatch, got.ShallowWatch)
 	assert.Equal(t, want.FileBased, got.FileBased)
-	assert.Equal(t, want.DiscoverFunc == nil, got.DiscoverFunc == nil)
-	assert.Equal(t, want.FindSourceFunc == nil, got.FindSourceFunc == nil)
 	assert.Equal(t, want.WatchRootsFunc == nil, got.WatchRootsFunc == nil)
 	assert.Equal(t, want.ShallowWatchRootsFunc == nil, got.ShallowWatchRootsFunc == nil)
 }
