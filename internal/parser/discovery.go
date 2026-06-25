@@ -2320,49 +2320,6 @@ func FindQClawSourceFile(agentsDir, rawID string) string {
 	return ""
 }
 
-// DiscoverIflowProjects finds all project directories under the
-// iFlow projects dir and returns their JSONL session files.
-// iFlow stores sessions in .iflow/projects/<project>/session-<uuid>.jsonl
-func DiscoverIflowProjects(projectsDir string) []DiscoveredFile {
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-
-		projDir := filepath.Join(projectsDir, entry.Name())
-		sessionFiles, err := os.ReadDir(projDir)
-		if err != nil {
-			continue
-		}
-
-		for _, sf := range sessionFiles {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !strings.HasPrefix(name, "session-") || !strings.HasSuffix(name, ".jsonl") {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(projDir, name),
-				Project: entry.Name(),
-				Agent:   AgentIflow,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // extractIflowBaseSessionID extracts the base session ID from an iFlow
 // session ID. Fork IDs are formatted as <baseUUID>-<childUUID>, so we
 // remove the child UUID suffix to get the base session ID for file lookup.
@@ -2388,39 +2345,6 @@ func extractIflowBaseSessionID(sessionID string) string {
 
 	// If we didn't find 5 hyphens, this is not a fork ID
 	return sessionID
-}
-
-// FindIflowSourceFile finds the original JSONL file for an iFlow
-// session ID by searching all project directories.
-func FindIflowSourceFile(
-	projectsDir, sessionID string,
-) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	// For fork IDs, extract the base session ID to find the source file
-	baseID := extractIflowBaseSessionID(sessionID)
-
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-
-	target := "session-" + strings.TrimPrefix(baseID, "iflow:") + ".jsonl"
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-		candidate := filepath.Join(
-			projectsDir, entry.Name(), target,
-		)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	return ""
 }
 
 // DiscoverVibeSessions finds all Vibe session files under the given root directory.

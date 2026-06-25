@@ -1211,27 +1211,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// iFlow: <iflowDir>/<project>/session-<uuid>.jsonl
-	for _, iflowDir := range e.agentDirs[parser.AgentIflow] {
-		if iflowDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(iflowDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 {
-				continue
-			}
-			if !strings.HasPrefix(parts[1], "session-") || !strings.HasSuffix(parts[1], ".jsonl") {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parts[0],
-				Agent:   parser.AgentIflow,
-			}, true
-		}
-	}
-
 	// Kimi: <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
 	//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
 	// Components that cannot round-trip through the ':'-delimited
@@ -1513,46 +1492,6 @@ func (e *Engine) classifyOnePath(
 
 	if df, ok := e.classifyAiderPath(path); ok {
 		return df, true
-	}
-
-	// Command Code: <projectsDir>/<slugified-cwd>/<session>.jsonl
-	for _, commandCodeDir := range e.agentDirs[parser.AgentCommandCode] {
-		if commandCodeDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(commandCodeDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 {
-				continue
-			}
-			if sessionID, ok := strings.CutSuffix(parts[1], ".meta.json"); ok {
-				if !parser.IsValidSessionID(sessionID) {
-					continue
-				}
-				jsonlPath := filepath.Join(commandCodeDir, parts[0], sessionID+".jsonl")
-				if _, err := os.Stat(jsonlPath); err != nil {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    jsonlPath,
-					Project: parser.NormalizeName(parts[0]),
-					Agent:   parser.AgentCommandCode,
-				}, true
-			}
-			if strings.HasSuffix(parts[1], ".checkpoints.jsonl") ||
-				strings.HasSuffix(parts[1], ".prompts.jsonl") {
-				continue
-			}
-			sessionID, ok := strings.CutSuffix(parts[1], ".jsonl")
-			if !ok || !parser.IsValidSessionID(sessionID) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parser.NormalizeName(parts[0]),
-				Agent:   parser.AgentCommandCode,
-			}, true
-		}
 	}
 
 	// OpenClaw: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl
@@ -4797,8 +4736,6 @@ func (e *Engine) processFile(
 		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
-	case parser.AgentIflow:
-		res = e.processIflow(ctx, file, info)
 	case parser.AgentAmp:
 		res = e.processAmp(file, info)
 	case parser.AgentDeepSeekTUI:
@@ -4813,8 +4750,6 @@ func (e *Engine) processFile(
 		res = e.processPi(file, info)
 	case parser.AgentQwen:
 		res = e.processQwen(file, info)
-	case parser.AgentCommandCode:
-		res = e.processCommandCode(file, info)
 	case parser.AgentOpenClaw:
 		res = e.processOpenClaw(file, info)
 	case parser.AgentQClaw:
@@ -7633,39 +7568,6 @@ func (e *Engine) processQwen(
 	}
 }
 
-func (e *Engine) processCommandCode(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	effectiveInfo := commandCodeEffectiveInfo(file.Path, info)
-	if e.shouldSkipByPath(file.Path, effectiveInfo) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseCommandCodeSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-	sess.File.Size = effectiveInfo.Size()
-	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
-
-	return processResult{
-		results: []parser.ParseResult{{
-			Session:  *sess,
-			Messages: msgs,
-		}},
-	}
-}
-
 func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
@@ -7702,56 +7604,6 @@ func validateCursorContainment(
 		)
 	}
 	return nil
-}
-
-func (e *Engine) processIflow(
-	ctx context.Context,
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Extract session ID from filename: session-<uuid>.jsonl
-	sessionID := "iflow:" + strings.TrimPrefix(strings.TrimSuffix(info.Name(), ".jsonl"), "session-")
-
-	if e.shouldSkipFile(sessionID, info) {
-		sess, _ := e.db.GetSession(
-			ctx, e.idPrefix+sessionID,
-		)
-		if sess != nil &&
-			sess.Project != "" &&
-			!parser.NeedsProjectReparse(sess.Project) {
-			return processResult{skip: true}
-		}
-	}
-
-	// Determine project name from cwd if possible
-	project := parser.GetProjectName(file.Project)
-	cwd, gitBranch := parser.ExtractIflowProjectHints(
-		file.Path,
-	)
-	if cwd != "" {
-		if p := parser.ExtractProjectFromCwdWithBranchContext(
-			ctx, cwd, gitBranch,
-		); p != "" {
-			project = p
-		}
-	}
-
-	results, err := parser.ParseIflowSession(
-		file.Path, project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		for i := range results {
-			results[i].Session.File.Hash = hash
-		}
-	}
-
-	parser.InferRelationshipTypes(results)
-
-	return processResult{results: results}
 }
 
 // computeFinalStreak counts trailing consecutive failures
