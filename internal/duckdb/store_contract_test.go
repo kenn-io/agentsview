@@ -190,7 +190,8 @@ func duckContractReadOnlyCuration(
 	ok, err := store.StarSession(fixture.betaID)
 	require.ErrorIs(t, err, db.ErrReadOnly)
 	require.False(t, ok)
-	require.ErrorIs(t, store.UnstarSession(fixture.alphaID), db.ErrReadOnly)
+	_, err = store.UnstarSession(fixture.alphaID)
+	require.ErrorIs(t, err, db.ErrReadOnly)
 	_, bulkErr := store.BulkStarSessions([]string{fixture.betaID})
 	require.ErrorIs(t, bulkErr, db.ErrReadOnly)
 

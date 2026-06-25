@@ -353,7 +353,12 @@ func contractStarsAndPins(
 	require.NoError(t, err)
 	require.ElementsMatch(t, []string{fixture.alphaID, fixture.gammaID}, stars)
 
-	require.NoError(t, store.UnstarSession(fixture.gammaID))
+	removed, err := store.UnstarSession(fixture.gammaID)
+	require.NoError(t, err)
+	require.True(t, removed)
+	removed, err = store.UnstarSession(fixture.gammaID)
+	require.NoError(t, err)
+	require.False(t, removed)
 	stars, err = store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{fixture.alphaID}, stars)

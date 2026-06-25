@@ -40,18 +40,22 @@ func (db *DB) StarSession(sessionID string) (bool, error) {
 	return true, nil // already starred
 }
 
-// UnstarSession removes a session's star.
-func (db *DB) UnstarSession(sessionID string) error {
+// UnstarSession removes a session's star and reports whether a row was removed.
+func (db *DB) UnstarSession(sessionID string) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	res, err := db.getWriter().Exec(
 		"DELETE FROM starred_sessions WHERE session_id = ?",
 		sessionID,
 	)
 	if err != nil {
-		return fmt.Errorf("unstarring session %s: %w", sessionID, err)
+		return false, fmt.Errorf("unstarring session %s: %w", sessionID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking unstar result for %s: %w", sessionID, err)
+	}
+	return n > 0, nil
 }
 
 // ListStarredSessionIDs returns all starred session IDs.

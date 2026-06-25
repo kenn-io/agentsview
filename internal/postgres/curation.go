@@ -44,15 +44,20 @@ func (s *Store) StarSession(sessionID string) (bool, error) {
 }
 
 // UnstarSession removes a session star from the shared PG dashboard
-// metadata.
-func (s *Store) UnstarSession(sessionID string) error {
-	if _, err := s.pg.Exec(
+// metadata and reports whether a row was removed.
+func (s *Store) UnstarSession(sessionID string) (bool, error) {
+	res, err := s.pg.Exec(
 		`DELETE FROM starred_sessions WHERE session_id = $1`,
 		sessionID,
-	); err != nil {
-		return fmt.Errorf("unstarring session %s: %w", sessionID, err)
+	)
+	if err != nil {
+		return false, fmt.Errorf("unstarring session %s: %w", sessionID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("checking unstar result for %s: %w", sessionID, err)
+	}
+	return n > 0, nil
 }
 
 // ListStarredSessionIDs returns shared PG-starred session IDs.

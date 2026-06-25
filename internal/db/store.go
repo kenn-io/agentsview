@@ -85,7 +85,7 @@ type Store interface {
 
 	// Stars.
 	StarSession(sessionID string) (bool, error)
-	UnstarSession(sessionID string) error
+	UnstarSession(sessionID string) (bool, error)
 	ListStarredSessionIDs(ctx context.Context) ([]string, error)
 	BulkStarSessions(sessionIDs []string) ([]string, error)
 

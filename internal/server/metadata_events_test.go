@@ -176,6 +176,28 @@ func TestMetadataEventsBatchDeleteRetriesAlreadyDeletedSessions(t *testing.T) {
 	}, []string{events[0].SessionGID, events[1].SessionGID})
 }
 
+func TestMetadataEventsUnstarOnlyRecordsRemovedStars(t *testing.T) {
+	te := setup(t, withArtifactOrigin("desk-a1b2c3"))
+	te.seedSession(t, "s1", "alpha", 2)
+
+	w := te.del(t, "/api/v1/sessions/missing/star")
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	w = te.del(t, "/api/v1/sessions/s1/star")
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	assert.Empty(t, readMetadataEvents(t, te))
+
+	ok, err := te.db.StarSession("s1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	w = te.del(t, "/api/v1/sessions/s1/star")
+	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+
+	events := readMetadataEvents(t, te)
+	require.Len(t, events, 1)
+	assert.Equal(t, artifact.MetadataOpUnstar, events[0].Op)
+	assert.Equal(t, "desk-a1b2c3~s1", events[0].SessionGID)
+}
+
 func TestMetadataEventsSuppressedDuringReplay(t *testing.T) {
 	te := setup(t, withArtifactOrigin("desk-a1b2c3"))
 	te.seedSession(t, "s1", "alpha", 2)

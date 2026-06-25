@@ -86,7 +86,12 @@ func TestStoreStarsAndPins(t *testing.T) {
 	for _, id := range ids {
 		assert.True(t, wantStars[id], "unexpected starred id %q in %v", id, ids)
 	}
-	require.NoError(t, store.UnstarSession("cur-star-1"), "UnstarSession")
+	removed, err := store.UnstarSession("cur-star-1")
+	require.NoError(t, err, "UnstarSession")
+	require.True(t, removed, "UnstarSession")
+	removed, err = store.UnstarSession("cur-star-1")
+	require.NoError(t, err, "UnstarSession no-op")
+	require.False(t, removed, "UnstarSession no-op")
 	ids, err = store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs after unstar")
 	require.Len(t, ids, 1)

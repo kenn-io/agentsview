@@ -12,8 +12,8 @@ func (s *Store) StarSession(sessionID string) (bool, error) {
 	return false, db.ErrReadOnly
 }
 
-func (s *Store) UnstarSession(sessionID string) error {
-	return db.ErrReadOnly
+func (s *Store) UnstarSession(sessionID string) (bool, error) {
+	return false, db.ErrReadOnly
 }
 
 func (s *Store) ListStarredSessionIDs(ctx context.Context) ([]string, error) {

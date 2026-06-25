@@ -67,11 +67,15 @@ func (s *Server) humaUnstarSession(
 	ctx context.Context,
 	in *idPathInput,
 ) (*noContentOutput, error) {
-	if err := s.db.UnstarSession(in.ID); err != nil {
+	removed, err := s.db.UnstarSession(in.ID)
+	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
 		return nil, internalError("unstar session", err)
+	}
+	if !removed {
+		return &noContentOutput{Status: http.StatusNoContent}, nil
 	}
 	if err := s.appendMetadataEvent(ctx, artifact.MetadataEventInput{
 		SessionID: in.ID,

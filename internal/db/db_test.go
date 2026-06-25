@@ -4242,11 +4242,16 @@ func TestStarSession(t *testing.T) {
 	assert.Equal(t, []string{"s1"}, ids, "listed = %v, want [s1]", ids)
 
 	// Unstar.
-	err = d.UnstarSession("s1")
+	removed, err := d.UnstarSession("s1")
 	require.NoError(t, err, "UnstarSession")
+	assert.True(t, removed, "UnstarSession should report removed star")
 	ids, err = d.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs after unstar")
 	assert.Empty(t, ids, "listed after unstar = %v, want []", ids)
+
+	removed, err = d.UnstarSession("s1")
+	require.NoError(t, err, "UnstarSession no-op")
+	assert.False(t, removed, "UnstarSession should report no-op")
 
 	// Star non-existent session returns false (no FK error).
 	ok, err = d.StarSession("nonexistent")
