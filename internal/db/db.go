@@ -241,6 +241,10 @@ import (
 // classification, so historical skill usage is backfilled on
 // re-parse.)
 //
+// (54: Antigravity .db sessions record a schema-fingerprint
+// source_version. Re-parsing populates source_version on existing
+// Antigravity IDE and CLI rows so "which agy release produced this
+// session" is queryable instead of blank.)
 // (53: Recent Edits tool-call file_path extraction. Re-parsing
 // populates tool_calls.file_path for edit/write calls -- including
 // Kiro raw-diff inputs the JSON-only SQL backfill cannot recover --
@@ -250,7 +254,7 @@ import (
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 53
+const dataVersion = 54
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

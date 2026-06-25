@@ -696,8 +696,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionSanitizedMessageShape(t *testing.T) {
-	assert.Equal(t, 53, CurrentDataVersion(),
-		"Recent Edits tool-call file_path extraction requires a data version bump")
+	assert.Equal(t, 54, CurrentDataVersion(),
+		"Antigravity source_version backfill requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
