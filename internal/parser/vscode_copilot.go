@@ -115,10 +115,10 @@ type vscodeCopilotWorkspace struct {
 	Workspace string `json:"workspace"`
 }
 
-// ParseVSCodeCopilotSession parses a VSCode Copilot chat
-// session file (.json or .jsonl). Returns (nil, nil, nil)
-// if the file is empty or contains no meaningful content.
-func ParseVSCodeCopilotSession(
+// parseSession parses a VSCode Copilot chat session file (.json or .jsonl).
+// Returns (nil, nil, nil) if the file is empty or contains no meaningful
+// content.
+func (p *vscodeCopilotProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

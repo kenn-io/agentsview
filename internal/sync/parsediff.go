@@ -445,7 +445,7 @@ func isOpenCodeFamilyProviderVirtualSource(path string) bool {
 // shared trace file, and the "#runIdx" suffix aider appends to its shared
 // history file.
 func stripVirtualSourceSuffix(path string) string {
-	if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(path); ok {
+	if tracePath, _, ok := parser.SplitVisualStudioCopilotVirtualPath(path); ok {
 		return tracePath
 	}
 	if historyPath, _, ok := parser.ParseAiderVirtualPath(path); ok {

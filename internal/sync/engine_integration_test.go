@@ -7115,6 +7115,143 @@ func TestSyncPathsVSCodeCopilotJSONLPriority(t *testing.T) {
 	assert.Equal(t, 0, len(page.Sessions), "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
 }
 
+func TestSyncPathsVSCodeCopilotWorkspaceMetadataRefreshesProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	vscDir := filepath.Join(dir, "vscode")
+	hashDir := filepath.Join(vscDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+	workspacePath := filepath.Join(hashDir, "workspace.json")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCodeCopilot: {vscDir},
+		},
+		Machine: "local",
+	})
+
+	writeWorkspace := func(name string) {
+		t.Helper()
+		dbtest.WriteTestFile(t, workspacePath, fmt.Appendf(nil,
+			`{"folder":"file:///Users/alice/code/%s"}`,
+			name,
+		))
+	}
+
+	uuid := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+
+	writeWorkspace("one")
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncPaths([]string{jsonlPath})
+	assertSessionState(
+		t, database, "vscode-copilot:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	info, err := os.Stat(jsonlPath)
+	require.NoError(t, err, "stat vscode copilot session")
+	engine.InjectSkipCache(map[string]int64{
+		jsonlPath: info.ModTime().UnixNano(),
+	})
+
+	writeWorkspace("two")
+	engine.SyncPaths([]string{workspacePath})
+	assertSessionState(
+		t, database, "vscode-copilot:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
+
+	writeWorkspace("three")
+	engine.SyncPaths([]string{jsonlPath, workspacePath})
+	assertSessionState(
+		t, database, "vscode-copilot:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "three", sess.Project)
+		},
+	)
+}
+
+func TestSyncPathsVSCodeCopilotPersistsUsageEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	vscDir := filepath.Join(dir, "vscode")
+	chatDir := filepath.Join(
+		vscDir, "workspaceStorage", "abc123",
+		"chatSessions",
+	)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCodeCopilot: {vscDir},
+		},
+		Machine: "local",
+	})
+
+	uuid := "cccccccc-dddd-eeee-ffff-000000000000"
+	session := fmt.Sprintf(
+		`{"version":3,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000,`+
+			`"modelId":"copilot/claude-opus-4.8",`+
+			`"result":{"metadata":{`+
+			`"promptTokens":12,`+
+			`"outputTokens":3,`+
+			`"resolvedModel":"claude-opus-4-8"}}}]}`,
+		uuid,
+	)
+	jsonPath := filepath.Join(chatDir, uuid+".json")
+	dbtest.WriteTestFile(t, jsonPath, []byte(session))
+
+	engine.SyncPaths([]string{jsonPath})
+
+	ctx := context.Background()
+	sessionID := "vscode-copilot:" + uuid
+	events, err := database.GetUsageEvents(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "vscode-copilot", events[0].Source)
+	assert.Equal(t, "claude-opus-4-8", events[0].Model)
+	assert.Equal(t, 12, events[0].InputTokens)
+	assert.Equal(t, 3, events[0].OutputTokens)
+
+	require.NoError(t, engine.SyncSingleSession(sessionID))
+	events, err = database.GetUsageEvents(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "claude-opus-4-8", events[0].Model)
+}
+
 func TestPiSessionIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
