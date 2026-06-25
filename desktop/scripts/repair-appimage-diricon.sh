@@ -16,6 +16,7 @@ require_cmd() {
 require_cmd grep
 require_cmd head
 require_cmd mksquashfs
+require_cmd tar
 require_cmd unsquashfs
 
 find_squashfs_offset() {
@@ -37,12 +38,15 @@ refresh_updater_archive() {
   local appimage="$1"
   local archive="${appimage}.tar.gz"
   local signature="${archive}.sig"
+  local appimage_dir appimage_name
 
   if [ ! -f "$archive" ]; then
     return 0
   fi
 
-  gzip -n -c "$appimage" > "$archive"
+  appimage_dir="$(dirname "$appimage")"
+  appimage_name="$(basename "$appimage")"
+  tar -C "$appimage_dir" -czf "$archive" "$appimage_name"
 
   if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
     npx tauri signer sign "$archive" > "$signature"
