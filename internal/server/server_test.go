@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -1091,6 +1092,10 @@ type syncStatusResponse struct {
 
 type githubConfigResponse struct {
 	Configured bool `json:"configured"`
+}
+
+type settingsConfigResponse struct {
+	GithubConfigured bool `json:"github_configured"`
 }
 
 type uploadResponse struct {
@@ -2669,6 +2674,8 @@ func TestAuthRequiredProtectsPing(t *testing.T) {
 }
 
 func TestGetGithubConfig(t *testing.T) {
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+	t.Setenv("PATH", t.TempDir())
 	te := setup(t)
 
 	w := te.get(t, "/api/v1/config/github")
@@ -2839,11 +2846,52 @@ func TestMarkdownSessionExport_DepthAllRecurses(t *testing.T) {
 }
 
 func TestPublishSession_NoToken(t *testing.T) {
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+	t.Setenv("PATH", t.TempDir())
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 3)
 
 	w := te.post(t, "/api/v1/sessions/s1/publish", "{}")
 	assertStatus(t, w, http.StatusUnauthorized)
+}
+
+func TestGetGithubConfig_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/config/github")
+
+	assertStatus(t, w, http.StatusOK)
+	assert.JSONEq(t, `{"configured":true}`, w.Body.String())
+}
+
+func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/settings")
+
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[settingsConfigResponse](t, w)
+	assert.True(t, resp.GithubConfigured)
+}
+
+func useGitHubCLIAuthTokenStub(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skipf("sh not available on PATH: %v", err)
+	}
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+	binDir := t.TempDir()
+	ghPath := filepath.Join(binDir, "gh")
+	require.NoError(t, os.WriteFile(ghPath, []byte(`#!/bin/sh
+if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
+  printf 'gh-token-from-cli\n'
+  exit 0
+fi
+exit 1
+`), 0o755))
+	t.Setenv("PATH", binDir)
 }
 
 func TestSetGithubConfig_InvalidInput(t *testing.T) {

@@ -346,11 +346,12 @@ func (s *Server) SetGithubToken(token string) {
 	s.cfg.GithubToken = token
 }
 
-// githubToken returns the current GitHub token (thread-safe).
-func (s *Server) githubToken() string {
+// githubToken returns the configured GitHub token or a fallback token
+// from the process environment / GitHub CLI (thread-safe).
+func (s *Server) githubToken(ctx context.Context) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.cfg.GithubToken
+	return resolveGitHubToken(ctx, s.cfg.GithubToken)
 }
 
 // Handler returns the http.Handler with middleware applied.

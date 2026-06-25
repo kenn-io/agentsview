@@ -8,6 +8,8 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"time"
@@ -24,6 +26,12 @@ type gistResponse struct {
 	Owner   struct {
 		Login string `json:"login"`
 	} `json:"owner"`
+}
+
+var ghAuthTokenOutput = func(ctx context.Context) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token")
+	cmd.Stderr = io.Discard
+	return cmd.Output()
 }
 
 func githubHTTPClient(timeout time.Duration) *http.Client {
@@ -97,6 +105,23 @@ func createGistWithURL(
 		return nil, fmt.Errorf("parsing github response: %w", err)
 	}
 	return &result, nil
+}
+
+func resolveGitHubToken(ctx context.Context, configured string) string {
+	if token := strings.TrimSpace(configured); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(os.Getenv("AGENTSVIEW_GITHUB_TOKEN")); token != "" {
+		return token
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := ghAuthTokenOutput(cctx)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func validateGithubToken(ctx context.Context, token string) (string, error) {

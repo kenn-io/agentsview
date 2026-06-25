@@ -504,7 +504,7 @@ func (s *Server) humaPublishSession(
 	ctx context.Context,
 	in *publishSessionInput,
 ) (*jsonOutput[publishResponse], error) {
-	token := s.githubToken()
+	token := s.githubToken(ctx)
 	if token == "" {
 		return nil, apiError(http.StatusUnauthorized, "GitHub token not configured")
 	}

@@ -73,11 +73,11 @@ func (b terminalConfigBody) config() config.TerminalConfig {
 }
 
 func (s *Server) humaGetGithubConfig(
-	_ context.Context,
+	ctx context.Context,
 	_ *emptyInput,
 ) (*jsonOutput[githubConfigResponse], error) {
 	return &jsonOutput[githubConfigResponse]{
-		Body: githubConfigResponse{Configured: s.githubToken() != ""},
+		Body: githubConfigResponse{Configured: s.githubToken(ctx) != ""},
 	}, nil
 }
 

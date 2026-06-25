@@ -43,7 +43,6 @@ on first run. It stores persistent settings that survive restarts.
 
 ```toml
 cursor_secret = "base64-encoded-secret"
-github_token = "ghp_xxxxx"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
 ```
@@ -54,7 +53,7 @@ cursor_admin_api_key = "key_xxxxx"
 | `cursor_admin_api_key` | Cursor Admin API key used by `agentsview usage cursor` |
 | `cursor_admin_email` | Optional default Cursor Admin usage filter by member email |
 | `cursor_admin_user_id` | Optional default Cursor Admin usage filter by member user ID |
-| `github_token` | GitHub personal access token for Gist publishing |
+| `github_token` | Optional saved GitHub token for Gist publishing |
 | `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`) |
 | `require_auth` | Require bearer-token authentication for API access |
 | `auth_token` | Auto-generated 256-bit bearer token for remote access |
@@ -69,10 +68,14 @@ cursor_admin_api_key = "key_xxxxx"
 | `[custom_model_pricing]` | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing) |
 
 The `cursor_secret` is generated automatically on first run.
-The `github_token` can be set via the web UI Settings page or
-the API endpoint `POST /api/v1/config/github`. Remote access
-fields can be configured via the Settings page or CLI flags —
-see [Remote Access](/remote-access/) for details.
+For Gist publishing, AgentsView first uses a saved `github_token`,
+then `AGENTSVIEW_GITHUB_TOKEN`, then `gh auth token` from the
+GitHub CLI. Local users usually only need to run `gh auth login`.
+The saved `github_token` can still be set via the web UI Settings
+page or the API endpoint `POST /api/v1/config/github` when you
+want AgentsView to use a specific token. Remote access fields can
+be configured via the Settings page or CLI flags — see
+[Remote Access](/remote-access/) for details.
 
 !!! note
     Older configs may still contain `remote_access = true`. AgentsView

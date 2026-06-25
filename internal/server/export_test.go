@@ -1231,6 +1231,60 @@ func TestCreateGistVisibility(t *testing.T) {
 	}
 }
 
+func TestResolveGitHubToken(t *testing.T) {
+	originalGhAuthTokenOutput := ghAuthTokenOutput
+	t.Cleanup(func() { ghAuthTokenOutput = originalGhAuthTokenOutput })
+
+	tests := []struct {
+		name       string
+		configured string
+		env        string
+		ghOutput   string
+		ghErr      error
+		want       string
+	}{
+		{
+			name:       "ConfiguredTokenWins",
+			configured: " saved-token ",
+			env:        "env-token",
+			ghOutput:   "gh-token\n",
+			want:       "saved-token",
+		},
+		{
+			name:     "EnvFallback",
+			env:      " env-token ",
+			ghOutput: "gh-token\n",
+			want:     "env-token",
+		},
+		{
+			name:     "GitHubCLIFallback",
+			ghOutput: "gh-token\n",
+			want:     "gh-token",
+		},
+		{
+			name:  "MissingSources",
+			ghErr: errors.New("gh missing"),
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENTSVIEW_GITHUB_TOKEN", tt.env)
+			ghAuthTokenOutput = func(context.Context) ([]byte, error) {
+				if tt.ghErr != nil {
+					return nil, tt.ghErr
+				}
+				return []byte(tt.ghOutput), nil
+			}
+
+			got := resolveGitHubToken(context.Background(), tt.configured)
+
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestValidateGithubToken(t *testing.T) {
 	t.Parallel()
 
