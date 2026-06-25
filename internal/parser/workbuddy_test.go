@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,47 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func parseWorkBuddyTestSession(
+	t testing.TB,
+	path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	return parseWorkBuddySession(path, project, machine)
+}
+
+func discoverWorkBuddyTestSessions(t testing.TB, root string) []DiscoveredFile {
+	t.Helper()
+	provider, ok := NewProvider(AgentWorkBuddy, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+
+	files := make([]DiscoveredFile, 0, len(sources))
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{
+			Path:    source.DisplayPath,
+			Project: source.ProjectHint,
+			Agent:   source.Provider,
+		})
+	}
+	return files
+}
+
+func findWorkBuddyTestSourceFile(t testing.TB, root, rawID string) string {
+	t.Helper()
+	provider, ok := NewProvider(AgentWorkBuddy, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(
+		context.Background(),
+		FindSourceRequest{RawSessionID: rawID},
+	)
+	require.NoError(t, err)
+	if !found {
+		return ""
+	}
+	return source.DisplayPath
+}
 
 func TestDiscoverWorkBuddySessions(t *testing.T) {
 	root := t.TempDir()
@@ -21,7 +63,7 @@ func TestDiscoverWorkBuddySessions(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644), "WriteFile(%q)", path)
 	}
 
-	files := DiscoverWorkBuddySessions(root)
+	files := discoverWorkBuddyTestSessions(t, root)
 	require.Len(t, files, 2)
 	assert.Equal(t, mainPath, files[0].Path)
 	assert.Equal(t, "proj", files[0].Project)
@@ -44,7 +86,7 @@ func TestParseWorkBuddySession(t *testing.T) {
 `, cwd, cwd)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, msgs, err := ParseWorkBuddySession(path, "proj", "local")
+	sess, msgs, err := parseWorkBuddyTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess, "session nil")
 	assert.Equal(t, "workbuddy:11111111-1111-4111-8111-111111111111", sess.ID)
@@ -76,7 +118,7 @@ func TestParseWorkBuddySessionDoesNotDoubleCountOpenAICachedTokens(t *testing.T)
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, msgs, err := ParseWorkBuddySession(path, "proj", "local")
+	sess, msgs, err := parseWorkBuddyTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess, "session nil")
 	require.Len(t, msgs, 1)
@@ -101,7 +143,7 @@ func TestParseWorkBuddySessionUsesCwdProjectAndFileSessionID(t *testing.T) {
 `, cwd)
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, _, err := ParseWorkBuddySession(path, "stored-project", "local")
+	sess, _, err := parseWorkBuddyTestSession(t, path, "stored-project", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "workbuddy:22222222-2222-4222-8222-222222222222", sess.ID)
 	assert.Equal(t, "cwd_project", sess.Project)
@@ -114,7 +156,7 @@ func TestParseWorkBuddySessionNormalizesWindowsCwdProject(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, _, err := ParseWorkBuddySession(path, "stored", "local")
+	sess, _, err := parseWorkBuddyTestSession(t, path, "stored", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "report_builder", sess.Project)
 }
@@ -126,7 +168,7 @@ func TestParseWorkBuddySessionFallsBackToDiscoveredProjectWhenCwdHasNoProject(t 
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, _, err := ParseWorkBuddySession(path, "discovered-proj", "local")
+	sess, _, err := parseWorkBuddyTestSession(t, path, "discovered-proj", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "discovered-proj", sess.Project)
 }
@@ -138,7 +180,7 @@ func TestParseWorkBuddySessionOmitsAbsentTokenUsageKeys(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	_, msgs, err := ParseWorkBuddySession(path, "proj", "local")
+	_, msgs, err := parseWorkBuddyTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	m := msgs[0]
@@ -160,7 +202,7 @@ func TestParseWorkBuddySubagentSession(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, _, err := ParseWorkBuddySession(path, "proj", "local")
+	sess, _, err := parseWorkBuddyTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "workbuddy:11111111-1111-4111-8111-111111111111:subagent:agent-123", sess.ID)
 	assert.Equal(t, "workbuddy:11111111-1111-4111-8111-111111111111", sess.ParentSessionID)
@@ -172,7 +214,7 @@ func TestFindWorkBuddySourceFile(t *testing.T) {
 	path := filepath.Join(root, "proj", "11111111-1111-4111-8111-111111111111.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
-	got := FindWorkBuddySourceFile(root, "workbuddy:11111111-1111-4111-8111-111111111111")
+	got := findWorkBuddyTestSourceFile(t, root, "workbuddy:11111111-1111-4111-8111-111111111111")
 	assert.Equal(t, path, got)
 }
 
@@ -182,7 +224,7 @@ func TestFindWorkBuddySourceFileRejectsInvalidSubagentID(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 
-	got := FindWorkBuddySourceFile(root, "workbuddy:11111111-1111-4111-8111-111111111111:subagent:../agent-123")
+	got := findWorkBuddyTestSourceFile(t, root, "workbuddy:11111111-1111-4111-8111-111111111111:subagent:../agent-123")
 	assert.Empty(t, got, "want empty path")
 }
 
@@ -193,7 +235,7 @@ func TestParseWorkBuddyProjectNamedSubagentsIsNotSubagent(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, _, err := ParseWorkBuddySession(path, "subagents", "local")
+	sess, _, err := parseWorkBuddyTestSession(t, path, "subagents", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "workbuddy:11111111-1111-4111-8111-111111111111", sess.ID)
 	assert.Empty(t, sess.ParentSessionID)
@@ -207,7 +249,7 @@ func TestParseWorkBuddySessionDecodesObjectToolResultText(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	_, msgs, err := ParseWorkBuddySession(path, "proj", "local")
+	_, msgs, err := parseWorkBuddyTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	require.Len(t, msgs[0].ToolResults, 1)

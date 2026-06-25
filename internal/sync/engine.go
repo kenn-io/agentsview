@@ -1288,38 +1288,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// WorkBuddy: <workbuddyDir>/<project>/<session>.jsonl
-	//     or: <workbuddyDir>/<project>/<session>/subagents/*.jsonl
-	for _, workBuddyDir := range e.agentDirs[parser.AgentWorkBuddy] {
-		if workBuddyDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(workBuddyDir, path); ok {
-			if !strings.HasSuffix(path, ".jsonl") {
-				continue
-			}
-			parts := strings.Split(rel, sep)
-			if len(parts) == 2 {
-				stem := strings.TrimSuffix(parts[1], ".jsonl")
-				if !parser.IsValidSessionID(stem) {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentWorkBuddy,
-				}, true
-			}
-			if len(parts) == 4 && parts[2] == "subagents" {
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentWorkBuddy,
-				}, true
-			}
-		}
-	}
-
 	// VSCode Copilot: <vscodeUserDir>/workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
 	//            or: <vscodeUserDir>/globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
 	for _, vscDir := range e.agentDirs[parser.AgentVSCodeCopilot] {
@@ -4694,8 +4662,6 @@ func (e *Engine) processFile(
 		res = e.processCortex(file, info)
 	case parser.AgentHermes:
 		res = e.processHermes(file, info)
-	case parser.AgentWorkBuddy:
-		res = e.processWorkBuddy(file, info)
 	case parser.AgentVibe:
 		res = e.processVibe(file, info)
 	case parser.AgentPositron:
@@ -6845,35 +6811,6 @@ func (e *Engine) processHermes(
 	}
 
 	sess, msgs, err := parser.ParseHermesSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processWorkBuddy(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseWorkBuddySession(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
@@ -9866,18 +9803,6 @@ func (e *Engine) SyncSingleSessionContext(
 		file.Project = parser.GetProjectName(
 			filepath.Base(filepath.Dir(filepath.Dir(path))),
 		)
-	case parser.AgentWorkBuddy:
-		for _, workBuddyDir := range e.agentDirs[parser.AgentWorkBuddy] {
-			rel, ok := isUnder(workBuddyDir, path)
-			if !ok {
-				continue
-			}
-			parts := strings.Split(rel, string(filepath.Separator))
-			if len(parts) == 2 || len(parts) == 4 && parts[2] == "subagents" {
-				file.Project = parts[0]
-				break
-			}
-		}
 	}
 
 	res := e.processFile(ctx, file)
