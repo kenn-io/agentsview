@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,62 +11,36 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-func TestDiscoverZedSessions(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, zedThreadsDBRelPath)
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		t.Fatal(err)
+// parseZedAll parses every top-level thread in a Zed threads.db using the same
+// per-thread primitives the provider uses (ListZedThreadMetas +
+// parseZedThreadFromDB), reproducing the deleted ParseZedSessions
+// whole-database free function for the retained parse tests.
+func parseZedAll(dbPath, machine string) ([]ParseResult, error) {
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", dbPath, err)
 	}
-	if err := os.WriteFile(dbPath, []byte("sqlite"), 0o644); err != nil {
-		t.Fatal(err)
+	conn, err := OpenZedDB(dbPath)
+	if err != nil {
+		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	defer conn.Close()
 
-	files := DiscoverZedSessions(root)
-	if len(files) != 1 {
-		t.Fatalf("len(files) = %d, want 1", len(files))
+	metas, err := ListZedThreadMetas(conn, dbPath)
+	if err != nil {
+		return nil, err
 	}
-	if files[0].Path != dbPath || files[0].Agent != AgentZed {
-		t.Fatalf("file = %+v, want %s / %s", files[0], dbPath, AgentZed)
+	var out []ParseResult
+	for _, m := range metas {
+		result, err := parseZedThreadFromDB(conn, dbPath, m.RawID, machine, info)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			out = append(out, *result)
+		}
 	}
-
-	if files := DiscoverZedSessions(""); files != nil {
-		t.Fatalf("DiscoverZedSessions(empty) = %v, want nil", files)
-	}
-	if files := DiscoverZedSessions(filepath.Join(root, "missing")); files != nil {
-		t.Fatalf("DiscoverZedSessions(missing) = %v, want nil", files)
-	}
-}
-
-func TestFindZedSourceFile(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, zedThreadsDBRelPath)
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	threadID := "10431c84-c47b-4e6c-b2df-f9f3b9ad025b"
-	createZedThreadsDBAt(t, dbPath, []zedTestThread{{
-		id:       threadID,
-		dataType: "json",
-		data:     []byte(`{"messages":[]}`),
-	}})
-
-	got := FindZedSourceFile(root, threadID)
-	want := ZedSQLiteVirtualPath(dbPath, threadID)
-	if got != want {
-		t.Fatalf("FindZedSourceFile() = %q, want %q", got, want)
-	}
-	if got := FindZedSourceFile(root, "../bad"); got != "" {
-		t.Fatalf("FindZedSourceFile(invalid) = %q, want empty", got)
-	}
-	if got := FindZedSourceFile(root, "missing"); got != "" {
-		t.Fatalf("FindZedSourceFile(missing) = %q, want empty", got)
-	}
-	if got := FindZedSourceFile(filepath.Join(root, "missing"), threadID); got != "" {
-		t.Fatalf("FindZedSourceFile(missing root) = %q, want empty", got)
-	}
+	return out, nil
 }
 
 func TestParseZedSessions_JSON(t *testing.T) {
@@ -93,7 +68,7 @@ func TestParseZedSessions_JSON(t *testing.T) {
 		}`),
 	}})
 
-	results, err := ParseZedSessions(dbPath, "local")
+	results, err := parseZedAll(dbPath, "local")
 	if err != nil {
 		t.Fatalf("ParseZedSessions: %v", err)
 	}
@@ -257,7 +232,7 @@ func TestParseZedSessions_ZstdAndFiltersChildren(t *testing.T) {
 		},
 	})
 
-	results, err := ParseZedSessions(dbPath, "local")
+	results, err := parseZedAll(dbPath, "local")
 	if err != nil {
 		t.Fatalf("ParseZedSessions: %v", err)
 	}
@@ -275,7 +250,7 @@ func TestParseZedSessions_SkipsUnsupportedDataType(t *testing.T) {
 		dataType: "brotli",
 		data:     []byte("x"),
 	}})
-	results, err := ParseZedSessions(dbPath, "local")
+	results, err := parseZedAll(dbPath, "local")
 	if err != nil {
 		t.Fatalf("ParseZedSessions: %v", err)
 	}
@@ -284,15 +259,15 @@ func TestParseZedSessions_SkipsUnsupportedDataType(t *testing.T) {
 	}
 }
 
-func TestParseZedSQLiteVirtualPath(t *testing.T) {
+func TestParseZedVirtualPath(t *testing.T) {
 	dbPath := filepath.Join("/tmp", "with#hash", "threads.db")
 	virtual := ZedSQLiteVirtualPath(dbPath, "sess-1")
-	gotDB, gotID, ok := ParseZedSQLiteVirtualPath(virtual)
+	gotDB, gotID, ok := parseZedVirtualPath(virtual)
 	if !ok || gotDB != dbPath || gotID != "sess-1" {
-		t.Fatalf("ParseZedSQLiteVirtualPath = (%q, %q, %v)", gotDB, gotID, ok)
+		t.Fatalf("parseZedVirtualPath = (%q, %q, %v)", gotDB, gotID, ok)
 	}
-	if _, _, ok := ParseZedSQLiteVirtualPath("/tmp/not-db#sess-1"); ok {
-		t.Fatal("ParseZedSQLiteVirtualPath accepted non-threads DB")
+	if _, _, ok := parseZedVirtualPath("/tmp/not-db#sess-1"); ok {
+		t.Fatal("parseZedVirtualPath accepted non-threads DB")
 	}
 }
 

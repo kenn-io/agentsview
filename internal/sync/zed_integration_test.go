@@ -59,6 +59,71 @@ func TestSyncSingleSessionZedUsesVirtualSourcePath(t *testing.T) {
 	assert.Nil(t, other)
 }
 
+func TestSyncSingleSessionZedForceRewritesUnchangedSession(t *testing.T) {
+	zedDir := t.TempDir()
+	dbPath := filepath.Join(zedDir, "threads", "threads.db")
+	createZedThreadsDB(t, dbPath, []zedThreadFixture{{
+		id:        "exists",
+		summary:   "Existing thread",
+		updatedAt: "2026-06-09T02:30:00Z",
+		dataType:  "json",
+		data:      []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`),
+	}})
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentZed: {zedDir},
+		},
+		Machine: "local",
+	})
+	require.NoError(t, engine.SyncSingleSession("zed:exists"))
+	sess, err := database.GetSession(t.Context(), "zed:exists")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Equal(t, 1, sess.MessageCount)
+
+	sess.MessageCount = 0
+	require.NoError(t, database.UpsertSession(*sess))
+
+	require.NoError(t, engine.SyncSingleSession("zed:exists"))
+
+	sess, err = database.GetSession(t.Context(), "zed:exists")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, 1, sess.MessageCount)
+	assert.Equal(t, dbPath+"#exists", database.GetSessionFilePath("zed:exists"))
+}
+
+func TestSyncPathsZedDeletedPhysicalDBRemovesSessions(t *testing.T) {
+	zedDir := t.TempDir()
+	dbPath := filepath.Join(zedDir, "threads", "threads.db")
+	createZedThreadsDB(t, dbPath, []zedThreadFixture{{
+		id:        "exists",
+		summary:   "Existing thread",
+		updatedAt: "2026-06-09T02:30:00Z",
+		dataType:  "json",
+		data:      []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`),
+	}})
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentZed: {zedDir},
+		},
+		Machine: "local",
+	})
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, stats.Synced)
+	require.NoError(t, os.Remove(dbPath))
+
+	engine.SyncPaths([]string{dbPath})
+
+	sess, err := database.GetSession(t.Context(), "zed:exists")
+	require.NoError(t, err)
+	assert.Nil(t, sess)
+}
+
 func TestSyncSingleSessionZedMissingThreadReturnsNotFound(t *testing.T) {
 	zedDir := t.TempDir()
 	createZedThreadsDB(t, filepath.Join(zedDir, "threads", "threads.db"), []zedThreadFixture{{

@@ -480,24 +480,28 @@ func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
 
 func TestZedRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentZed)
-	if !ok {
-		t.Fatalf("AgentZed missing from Registry")
-	}
-	if !def.FileBased {
-		t.Fatalf("Zed FileBased = false, want true")
-	}
-	if def.EnvVar != "ZED_DIR" {
-		t.Fatalf("Zed EnvVar = %q", def.EnvVar)
-	}
-	if def.ConfigKey != "zed_dirs" {
-		t.Fatalf("Zed ConfigKey = %q", def.ConfigKey)
-	}
-	if def.IDPrefix != "zed:" {
-		t.Fatalf("Zed IDPrefix = %q", def.IDPrefix)
-	}
-	if def.DiscoverFunc == nil || def.FindSourceFunc == nil {
-		t.Fatalf("Zed discover/source funcs must be set")
-	}
+	require.True(t, ok, "AgentZed missing from Registry")
+	require.True(t, def.FileBased, "Zed FileBased")
+	assert.Equal(t, "ZED_DIR", def.EnvVar)
+	assert.Equal(t, "zed_dirs", def.ConfigKey)
+	assert.Equal(t, "zed:", def.IDPrefix)
+	// Zed is a migrated, provider-authoritative agent: source discovery and
+	// lookup live on the concrete provider, not on legacy AgentDef hooks.
+	require.Nil(t, def.DiscoverFunc, "Zed DiscoverFunc")
+	require.Nil(t, def.FindSourceFunc, "Zed FindSourceFunc")
+}
+
+func TestShelleyRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentShelley)
+	require.True(t, ok, "AgentShelley missing from Registry")
+	require.True(t, def.FileBased, "Shelley FileBased")
+	assert.Equal(t, "SHELLEY_DIR", def.EnvVar)
+	assert.Equal(t, "shelley_dirs", def.ConfigKey)
+	assert.Equal(t, "shelley:", def.IDPrefix)
+	// Shelley is a migrated, provider-authoritative agent: source discovery
+	// and lookup live on the concrete provider, not on legacy AgentDef hooks.
+	require.Nil(t, def.DiscoverFunc, "Shelley DiscoverFunc")
+	require.Nil(t, def.FindSourceFunc, "Shelley FindSourceFunc")
 }
 
 func TestOpenCodeRegistryEntry(t *testing.T) {

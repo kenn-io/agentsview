@@ -454,7 +454,7 @@ func stripVirtualSourceSuffix(path string) string {
 	if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "threads.db"); ok {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "opencode.db"); ok {
@@ -466,7 +466,7 @@ func stripVirtualSourceSuffix(path string) string {
 	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "mimocode.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseShelleyVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, shelleyDBFile); ok {
 		return dbPath
 	}
 	return path
