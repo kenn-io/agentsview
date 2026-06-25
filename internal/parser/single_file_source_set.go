@@ -7,10 +7,12 @@ import (
 )
 
 // single_file_source_set.go provides a reusable SourceSet for providers whose
-// physical source is a single file that parses into exactly one session: no
-// virtual member paths and no fan-out. Reasonix (transcript + .jsonl.meta
-// sidecar) is the first provider built on it; the other sidecar-fingerprint
-// providers (vibe, commandcode, ...) can follow.
+// physical source is a single file. That file parses into one or more sessions
+// (Cowork fans a single file into multiple sessions) but exposes no virtual
+// member paths: lookup and fingerprinting address the physical file, and any
+// fan-out happens inside the provider's parse closure. Reasonix (transcript +
+// .jsonl.meta sidecar) is the first provider built on it; the other
+// sidecar-fingerprint providers (vibe, commandcode, ...) can follow.
 //
 // Like multiSessionContainerSourceSet, all agent-specific behavior is supplied
 // through functional options (withFile*()), and the type implements SourceSet
