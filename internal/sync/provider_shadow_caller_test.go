@@ -649,6 +649,55 @@ func TestProcessFileProviderAuthoritativeSkipsFreshCoworkBeforeFingerprint(t *te
 	assert.Empty(t, provider.calls)
 }
 
+func TestProcessFileProviderAuthoritativeSkipsFreshGeminiBeforeFingerprint(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(
+		root, "tmp", "alias", "chats", "session-001.json",
+	)
+	sourceMtime := writeFreshProviderDBSession(
+		t, sourcePath, nil,
+	)
+	provider := &shadowCallerProvider{
+		shadowTestProvider: shadowTestProvider{
+			ProviderBase: parser.ProviderBase{
+				Def: parser.AgentDef{
+					Type:        parser.AgentGemini,
+					DisplayName: "Gemini CLI",
+				},
+			},
+		},
+		source: parser.SourceRef{
+			Provider:       parser.AgentGemini,
+			Key:            sourcePath,
+			DisplayPath:    sourcePath,
+			FingerprintKey: sourcePath,
+		},
+	}
+	engine := NewEngine(dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGemini: {root},
+		},
+		Machine: "devbox",
+		ProviderFactories: []parser.ProviderFactory{
+			shadowCallerFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentGemini: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	requireFreshProviderSession(t, engine.db, parser.AgentGemini, sourcePath, sourceMtime)
+
+	result := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentGemini,
+	})
+
+	require.NoError(t, result.err)
+	assert.True(t, result.skip)
+	assert.Equal(t, sourceMtime, result.mtime)
+	assert.Empty(t, provider.calls)
+}
+
 func TestProcessFileProviderAuthoritativeForceParseBypassesFreshCoworkSkip(t *testing.T) {
 	root := t.TempDir()
 	database := dbtest.OpenTestDB(t)
@@ -701,6 +750,56 @@ func TestProcessFileProviderAuthoritativeForceParseBypassesFreshCoworkSkip(t *te
 	assert.False(t, result.skip)
 	assert.Equal(t, []string{"fingerprint", "parse"}, provider.calls)
 	assert.True(t, provider.parseRequest.ForceParse)
+}
+
+func TestProcessFileProviderAuthoritativeSkipsFreshCopilotBeforeFingerprint(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(
+		root, "session-state", "copilot-fresh", "events.jsonl",
+	)
+	workspacePath := filepath.Join(filepath.Dir(sourcePath), "workspace.yaml")
+	sourceMtime := writeFreshProviderDBSession(
+		t, sourcePath, &workspacePath,
+	)
+	provider := &shadowCallerProvider{
+		shadowTestProvider: shadowTestProvider{
+			ProviderBase: parser.ProviderBase{
+				Def: parser.AgentDef{
+					Type:        parser.AgentCopilot,
+					DisplayName: "Copilot CLI",
+				},
+			},
+		},
+		source: parser.SourceRef{
+			Provider:       parser.AgentCopilot,
+			Key:            sourcePath,
+			DisplayPath:    sourcePath,
+			FingerprintKey: sourcePath,
+		},
+	}
+	engine := NewEngine(dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCopilot: {root},
+		},
+		Machine: "devbox",
+		ProviderFactories: []parser.ProviderFactory{
+			shadowCallerFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCopilot: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	requireFreshProviderSession(t, engine.db, parser.AgentCopilot, sourcePath, sourceMtime)
+
+	result := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCopilot,
+	})
+
+	require.NoError(t, result.err)
+	assert.True(t, result.skip)
+	assert.Equal(t, sourceMtime, result.mtime)
+	assert.Empty(t, provider.calls)
 }
 
 func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) {
@@ -1292,4 +1391,53 @@ func writeFreshCoworkProviderSource(
 	))
 
 	return sourcePath, sourceMtime
+}
+
+func writeFreshProviderDBSession(
+	t *testing.T,
+	sourcePath string,
+	mtimeSidecar *string,
+) int64 {
+	t.Helper()
+
+	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o644))
+	sourceTime := time.Unix(1_781_475_210, 0)
+	require.NoError(t, os.Chtimes(sourcePath, sourceTime, sourceTime))
+	mtime := sourceTime.UnixNano()
+	if mtimeSidecar != nil {
+		sidecarTime := sourceTime.Add(time.Second)
+		require.NoError(t, os.WriteFile(*mtimeSidecar, []byte("name: Fresh\n"), 0o644))
+		require.NoError(t, os.Chtimes(*mtimeSidecar, sidecarTime, sidecarTime))
+		mtime = sidecarTime.UnixNano()
+	}
+
+	return mtime
+}
+
+func requireFreshProviderSession(
+	t *testing.T,
+	database *db.DB,
+	agent parser.AgentType,
+	sourcePath string,
+	sourceMtime int64,
+) {
+	t.Helper()
+
+	info, err := os.Stat(sourcePath)
+	require.NoError(t, err)
+	sourceSize := info.Size()
+	fullSessionID := string(agent) + ":fresh"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        fullSessionID,
+		Project:   "provider-project",
+		Machine:   "devbox",
+		Agent:     string(agent),
+		FilePath:  &sourcePath,
+		FileSize:  &sourceSize,
+		FileMtime: &sourceMtime,
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		fullSessionID, db.CurrentDataVersion(),
+	))
 }

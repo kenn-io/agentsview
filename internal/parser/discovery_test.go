@@ -11,11 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	copilotStateDir = "session-state"
-	geminiChatsDir  = "chats"
-)
-
 // setupFileSystem creates a temporary directory and populates
 // it with the given relative file paths and contents.
 func setupFileSystem(t *testing.T, dir string, files map[string]string) {
@@ -583,7 +578,7 @@ func TestDiscoverGeminiSessions(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 
-			files := DiscoverGeminiSessions(dir)
+			files := discoverGeminiTestSessions(t, dir)
 
 			require.Len(t, files, len(tt.wantFiles), "files count")
 
@@ -603,17 +598,17 @@ func TestDiscoverGeminiSessions(t *testing.T) {
 	t.Run("EmptyChatDir", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "tmp", "hash1", geminiChatsDir), 0o755), "mkdir")
-		files := DiscoverGeminiSessions(dir)
+		files := discoverGeminiTestSessions(t, dir)
 		assert.Nil(t, files, "expected nil")
 	})
 
 	t.Run("Nonexistent", func(t *testing.T) {
-		files := DiscoverGeminiSessions(filepath.Join(t.TempDir(), "does-not-exist"))
+		files := discoverGeminiTestSessions(t, filepath.Join(t.TempDir(), "does-not-exist"))
 		assert.Nil(t, files, "expected nil")
 	})
 
 	t.Run("EmptyDir", func(t *testing.T) {
-		files := DiscoverGeminiSessions("")
+		files := discoverGeminiTestSessions(t, "")
 		assert.Nil(t, files, "expected nil")
 	})
 }
@@ -656,7 +651,7 @@ func TestFindGeminiSourceFile(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 
-			got := FindGeminiSourceFile(dir, tt.targetID)
+			got := findGeminiTestSourceFile(t, dir, tt.targetID)
 			want := ""
 			if tt.wantFile != "" {
 				want = filepath.Join(dir, tt.wantFile)
@@ -669,13 +664,13 @@ func TestFindGeminiSourceFile(t *testing.T) {
 	t.Run("ShortID", func(t *testing.T) {
 		dir := t.TempDir()
 		for _, id := range []string{"", "a", "abc", "1234567"} {
-			got := FindGeminiSourceFile(dir, id)
+			got := findGeminiTestSourceFile(t, dir, id)
 			assert.Emptyf(t, got, "FindGeminiSourceFile(%q)", id)
 		}
 	})
 
 	t.Run("EmptyDir", func(t *testing.T) {
-		got := FindGeminiSourceFile("", "b0a4eadd-cb99-4165-94d9-64cad5a66d24")
+		got := findGeminiTestSourceFile(t, "", "b0a4eadd-cb99-4165-94d9-64cad5a66d24")
 		assert.Empty(t, got, "expected empty")
 	})
 }
@@ -893,7 +888,7 @@ func TestDiscoverCopilotSessions(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 
-			files := DiscoverCopilotSessions(dir)
+			files := discoverCopilotTestSessions(t, dir)
 
 			require.Len(t, files, len(tt.wantFiles), "files count")
 
@@ -911,12 +906,12 @@ func TestDiscoverCopilotSessions(t *testing.T) {
 	}
 
 	t.Run("EmptyDir", func(t *testing.T) {
-		files := DiscoverCopilotSessions("")
+		files := discoverCopilotTestSessions(t, "")
 		assert.Nil(t, files, "expected nil")
 	})
 
 	t.Run("Nonexistent", func(t *testing.T) {
-		files := DiscoverCopilotSessions(filepath.Join(t.TempDir(), "does-not-exist"))
+		files := discoverCopilotTestSessions(t, filepath.Join(t.TempDir(), "does-not-exist"))
 		assert.Nil(t, files, "expected nil")
 	})
 }
@@ -962,7 +957,7 @@ func TestFindCopilotSourceFile(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 
-			got := FindCopilotSourceFile(dir, tt.targetID)
+			got := findCopilotTestSourceFile(t, dir, tt.targetID)
 			want := ""
 			if tt.wantFile != "" {
 				want = filepath.Join(dir, tt.wantFile)
@@ -975,13 +970,13 @@ func TestFindCopilotSourceFile(t *testing.T) {
 	t.Run("InvalidID", func(t *testing.T) {
 		dir := t.TempDir()
 		for _, id := range []string{"", "../etc/passwd", "a/b", "a b"} {
-			got := FindCopilotSourceFile(dir, id)
+			got := findCopilotTestSourceFile(t, dir, id)
 			assert.Emptyf(t, got, "FindCopilotSourceFile(%q)", id)
 		}
 	})
 
 	t.Run("EmptyDir", func(t *testing.T) {
-		got := FindCopilotSourceFile("", "abc-123")
+		got := findCopilotTestSourceFile(t, "", "abc-123")
 		assert.Empty(t, got, "expected empty")
 	})
 }

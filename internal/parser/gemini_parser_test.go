@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -11,10 +12,65 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+// newGeminiTestProvider builds a concrete geminiProvider for the given roots so
+// package tests can exercise the folded parse, discovery, and source-lookup
+// behavior directly through provider methods, replacing the removed
+// package-level entrypoints.
+func newGeminiTestProvider(t *testing.T, roots ...string) *geminiProvider {
+	t.Helper()
+	provider, ok := NewProvider(AgentGemini, ProviderConfig{
+		Roots:   roots,
+		Machine: "local",
+	})
+	require.True(t, ok)
+	gp, ok := provider.(*geminiProvider)
+	require.True(t, ok)
+	return gp
+}
+
+// parseGeminiTestSession parses a Gemini session file at path through the
+// provider-owned parse method, replacing the removed package-level
+// ParseGeminiSession entrypoint.
+func parseGeminiTestSession(
+	t *testing.T, path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	return newGeminiTestProvider(t).parseSession(path, project, machine)
+}
+
+// discoverGeminiTestSessions discovers Gemini sessions under root through the
+// provider, returning the legacy DiscoveredFile shape (path + project) the
+// tests assert against.
+func discoverGeminiTestSessions(t *testing.T, root string) []DiscoveredFile {
+	t.Helper()
+	provider := newGeminiTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	if len(sources) == 0 {
+		return nil
+	}
+	files := make([]DiscoveredFile, 0, len(sources))
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{
+			Path:    source.DisplayPath,
+			Project: source.ProjectHint,
+			Agent:   AgentGemini,
+		})
+	}
+	return files
+}
+
+// findGeminiTestSourceFile resolves a Gemini session ID to a session file path
+// through the provider, replacing the removed FindGeminiSourceFile.
+func findGeminiTestSourceFile(t *testing.T, root, sessionID string) string {
+	t.Helper()
+	return newGeminiTestProvider(t, root).sources.findSourceFile(root, sessionID)
+}
+
 func runGeminiParserTest(t *testing.T, content string) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
 	path := createTestFile(t, "session.json", content)
-	sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+	sess, msgs, err := parseGeminiTestSession(t, path, "my_project", "local")
 	require.NoError(t, err)
 	return sess, msgs
 }
@@ -45,7 +101,7 @@ func TestParseGeminiSession_JSONLStream(t *testing.T) {
 		`{"$set":{"lastUpdated":"2026-04-23T16:12:50.158Z"}}`,
 	}, "\n")
 	path := createTestFile(t, "session.jsonl", content)
-	sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+	sess, msgs, err := parseGeminiTestSession(t, path, "my_project", "local")
 	require.NoError(t, err)
 
 	require.NotNil(t, sess)
@@ -74,7 +130,7 @@ func TestParseGeminiSession_JSONLStreamLargeRecord(t *testing.T) {
 		`{"id":"u1","timestamp":"2026-04-23T16:12:43.085Z","type":"user","content":[{"text":"` + largeContent + `"}]}`,
 	}, "\n")
 	path := createTestFile(t, "large-session.jsonl", content)
-	sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+	sess, msgs, err := parseGeminiTestSession(t, path, "my_project", "local")
 	require.NoError(t, err)
 
 	require.NotNil(t, sess)
@@ -91,7 +147,7 @@ func TestParseGeminiSession_JSONLStreamTolerantOfPartialLines(t *testing.T) {
 			`{"id":"a1","timestamp":"2026-04-23T16:12:50.158Z","type":"gemini","content":"reply"`,
 		}, "\n")
 		path := createTestFile(t, "session.jsonl", content)
-		sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+		sess, msgs, err := parseGeminiTestSession(t, path, "my_project", "local")
 		require.NoError(t, err)
 
 		require.NotNil(t, sess)
@@ -108,7 +164,7 @@ func TestParseGeminiSession_JSONLStreamTolerantOfPartialLines(t *testing.T) {
 			"",
 		}, "\n")
 		path := createTestFile(t, "session.jsonl", content)
-		sess, msgs, err := ParseGeminiSession(path, "my_project", "local")
+		sess, msgs, err := parseGeminiTestSession(t, path, "my_project", "local")
 		require.NoError(t, err)
 
 		require.NotNil(t, sess)
@@ -452,12 +508,12 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 
 	t.Run("malformed JSON", func(t *testing.T) {
 		path := createTestFile(t, "session.json", "not valid json {{{")
-		_, _, err := ParseGeminiSession(path, "my_project", "local")
+		_, _, err := parseGeminiTestSession(t, path, "my_project", "local")
 		assert.Error(t, err)
 	})
 
 	t.Run("missing file", func(t *testing.T) {
-		_, _, err := ParseGeminiSession("/nonexistent.json", "my_project", "local")
+		_, _, err := parseGeminiTestSession(t, "/nonexistent.json", "my_project", "local")
 		assert.Error(t, err)
 	})
 
@@ -500,7 +556,7 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 	t.Run("missing sessionId", func(t *testing.T) {
 		content := `{"projectHash":"abc","startTime":"2024-01-01T00:00:00Z","lastUpdated":"2024-01-01T00:00:00Z","messages":[]}`
 		path := createTestFile(t, "session.json", content)
-		_, _, err := ParseGeminiSession(path, "my_project", "local")
+		_, _, err := parseGeminiTestSession(t, path, "my_project", "local")
 		assert.Error(t, err)
 	})
 }

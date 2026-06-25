@@ -149,7 +149,10 @@ func TestProviderRegistryMirrorsAgentRegistry(t *testing.T) {
 }
 
 func TestLegacyProviderCapabilitiesMatchBaseDefaults(t *testing.T) {
-	provider, ok := NewProvider(AgentGemini, ProviderConfig{
+	legacyAgent := legacyProviderTestAgent(t)
+	def, ok := AgentByType(legacyAgent)
+	require.True(t, ok)
+	provider, ok := NewProvider(legacyAgent, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
@@ -177,7 +180,7 @@ func TestLegacyProviderCapabilitiesMatchBaseDefaults(t *testing.T) {
 
 	source, found, err := provider.FindSource(ctx, FindSourceRequest{
 		RawSessionID:   "session",
-		FullSessionID:  "gemini:session",
+		FullSessionID:  def.IDPrefix + "session",
 		StoredFilePath: "/tmp/session.jsonl",
 		FingerprintKey: "/tmp/session.jsonl",
 	})
@@ -186,7 +189,7 @@ func TestLegacyProviderCapabilitiesMatchBaseDefaults(t *testing.T) {
 	assert.Empty(t, source)
 
 	_, err = provider.Fingerprint(ctx, SourceRef{
-		Provider:       AgentGemini,
+		Provider:       legacyAgent,
 		Key:            "session",
 		DisplayPath:    "/tmp/session.jsonl",
 		FingerprintKey: "/tmp/session.jsonl",
@@ -195,9 +198,9 @@ func TestLegacyProviderCapabilitiesMatchBaseDefaults(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
 
 	incremental, status, err := provider.ParseIncremental(ctx, IncrementalRequest{
-		Source:       SourceRef{Provider: AgentGemini, Key: "session"},
+		Source:       SourceRef{Provider: legacyAgent, Key: "session"},
 		Fingerprint:  SourceFingerprint{Key: "/tmp/session.jsonl"},
-		SessionID:    "gemini:session",
+		SessionID:    def.IDPrefix + "session",
 		StartOrdinal: 1,
 		Machine:      "devbox",
 	})
@@ -211,12 +214,13 @@ func TestProviderFactoryLookupAndConfigSnapshot(t *testing.T) {
 		Roots:   []string{"/tmp/one", "/tmp/two"},
 		Machine: "devbox",
 	}
+	legacyAgent := legacyProviderTestAgent(t)
 
-	factory, ok := ProviderFactoryByType(AgentGemini)
+	factory, ok := ProviderFactoryByType(legacyAgent)
 	require.True(t, ok)
-	assert.Equal(t, AgentGemini, factory.Definition().Type)
+	assert.Equal(t, legacyAgent, factory.Definition().Type)
 
-	provider, ok := NewProvider(AgentGemini, cfg)
+	provider, ok := NewProvider(legacyAgent, cfg)
 	require.True(t, ok)
 	require.NotNil(t, provider)
 
@@ -233,7 +237,8 @@ func TestProviderFactoryLookupAndConfigSnapshot(t *testing.T) {
 }
 
 func TestLegacyProviderParseReturnsUnsupported(t *testing.T) {
-	provider, ok := NewProvider(AgentGemini, ProviderConfig{
+	legacyAgent := legacyProviderTestAgent(t)
+	provider, ok := NewProvider(legacyAgent, ProviderConfig{
 		Roots:   []string{t.TempDir()},
 		Machine: "devbox",
 	})
@@ -241,7 +246,7 @@ func TestLegacyProviderParseReturnsUnsupported(t *testing.T) {
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{
 		Source: SourceRef{
-			Provider:       AgentGemini,
+			Provider:       legacyAgent,
 			Key:            "source",
 			DisplayPath:    "/tmp/source.jsonl",
 			FingerprintKey: "/tmp/source.jsonl",
@@ -257,7 +262,7 @@ func TestLegacyProviderParseReturnsUnsupported(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
 	var unsupported UnsupportedProviderFeatureError
 	require.ErrorAs(t, err, &unsupported)
-	assert.Equal(t, AgentGemini, unsupported.Provider)
+	assert.Equal(t, legacyAgent, unsupported.Provider)
 	assert.Equal(t, ProviderFeatureParse, unsupported.Feature)
 }
 
@@ -347,6 +352,18 @@ type testProvider struct {
 
 func (p *testProvider) Parse(context.Context, ParseRequest) (ParseOutcome, error) {
 	return ParseOutcome{}, nil
+}
+
+func legacyProviderTestAgent(t *testing.T) AgentType {
+	t.Helper()
+	for _, def := range Registry {
+		factory := providerFactoryForDef(def)
+		if _, ok := factory.(legacyProviderFactory); ok {
+			return def.Type
+		}
+	}
+	t.Fatal("expected at least one legacy provider for fallback tests")
+	return ""
 }
 
 func assertAgentDefMetadataEqual(t *testing.T, want, got AgentDef) {

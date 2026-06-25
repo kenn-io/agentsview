@@ -53,10 +53,12 @@ func normalizedGeminiTokenUsage(tok geminiTokens) json.RawMessage {
 	return raw
 }
 
-// ParseGeminiSession parses a Gemini CLI session JSON file.
-// Unlike Claude/Codex JSONL, each Gemini file is a single JSON
-// document containing all messages.
-func ParseGeminiSession(
+// parseSession parses a Gemini CLI session JSON file into the session and
+// messages the provider consumes. Unlike Claude/Codex JSONL, each Gemini file
+// is a single JSON document containing all messages. This is the provider-owned
+// parse entrypoint; the package-level free function was folded onto the
+// provider.
+func (p *geminiProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
