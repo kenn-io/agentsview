@@ -47,8 +47,6 @@ var providerNeutralEntrypoints = map[string]bool{
 // tip (the zero-legacy gate) asserts this list is empty, so a provider cannot
 // remain a permanent shim.
 var pendingShimProviderFiles = map[string]bool{
-	"antigravity_cli_provider.go":      true,
-	"antigravity_provider.go":          true,
 	"claude_provider.go":               true,
 	"codex_provider.go":                true,
 	"copilot_provider.go":              true,
