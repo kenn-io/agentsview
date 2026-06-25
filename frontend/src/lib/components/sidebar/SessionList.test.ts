@@ -738,6 +738,58 @@ describe("SessionList visible hydration", () => {
     expect([...sessions.selectedIds]).toEqual(["child"]);
   });
 
+  it("deletes only selected rows that are still rendered", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "visible",
+        display_name: "Visible session",
+        is_index_only: false,
+      }),
+      makeSession({
+        id: "hidden",
+        display_name: "Hidden session",
+        is_index_only: false,
+      }),
+    ];
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+    const batchDelete = vi
+      .spyOn(sessions, "batchDeleteSessions")
+      .mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const selectModeButton = document.querySelector<HTMLButtonElement>(
+      ".select-toggle-btn",
+    );
+    expect(selectModeButton).not.toBeNull();
+    selectModeButton!.click();
+    await tick();
+
+    const selectAllButton = document.querySelector<HTMLButtonElement>(
+      ".batch-select-all-btn",
+    );
+    expect(selectAllButton).not.toBeNull();
+    selectAllButton!.click();
+    await tick();
+    expect([...sessions.selectedIds]).toEqual(["visible", "hidden"]);
+
+    sessions.sessions = sessions.sessions.filter((s) => s.id !== "hidden");
+    await tick();
+
+    expect(document.querySelector('[data-session-id="hidden"]')).toBeNull();
+    expect(document.body.textContent).toContain("1 selected");
+
+    const deleteButton = document.querySelector<HTMLButtonElement>(
+      ".batch-delete-btn",
+    );
+    expect(deleteButton).not.toBeNull();
+    deleteButton!.click();
+    await tick();
+
+    expect(batchDelete).toHaveBeenCalledWith(["visible"]);
+  });
+
   it("does not auto-page when saved grouping starts collapsed", async () => {
     localStorage.setItem(STORAGE_KEY_GROUP, "agent");
     sessions.sessions = Array.from({ length: 30 }, (_, i) =>

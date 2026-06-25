@@ -332,10 +332,13 @@
     allVisibleSessionIds.length > 0 &&
     allVisibleSessionIds.every((id) => sessions.selectedIds.has(id)),
   );
+  let visibleSelectedSessionIds = $derived(
+    allVisibleSessionIds.filter((id) => sessions.selectedIds.has(id)),
+  );
 
   async function handleBatchDelete() {
     if (batchDeleting) return;
-    const ids = [...sessions.selectedIds];
+    const ids = visibleSelectedSessionIds;
     if (ids.length === 0) return;
     batchDeleting = true;
     try {
@@ -532,12 +535,12 @@
       {allSelected ? "Clear" : "All"}
     </button>
     <span class="batch-count">
-      {sessions.selectedIds.size} selected
+      {visibleSelectedSessionIds.length} selected
     </span>
     <button
       class="batch-delete-btn"
       onclick={handleBatchDelete}
-      disabled={sessions.selectedIds.size === 0 || batchDeleting}
+      disabled={visibleSelectedSessionIds.length === 0 || batchDeleting}
       title="Move selected sessions to trash"
     >
       <TrashIcon size="11" strokeWidth="2" aria-hidden="true" />
@@ -967,7 +970,7 @@
     gap: 4px;
     font-size: 10px;
     font-weight: 600;
-    color: white;
+    color: var(--bg-surface);
     background: var(--accent-red, #d32f2f);
     padding: 3px 8px;
     border-radius: var(--radius-sm);
