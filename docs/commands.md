@@ -714,7 +714,8 @@ to choose a wider or narrower window.
 Run a read-only Model Context Protocol server for assistant clients
 that can call MCP tools. The server exposes session search, listing,
 overview, message retrieval, content search, and usage-summary tools
-over the same service layer used by the CLI and HTTP API.
+over the same service layer used by the CLI and HTTP API. See
+[MCP Server](/mcp/) for setup examples and operational guidance.
 
 ```bash
 agentsview mcp
