@@ -375,6 +375,10 @@ var mirrorTables = []tableSpec{
 			"CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)",
 			"CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id)",
 			"CREATE INDEX IF NOT EXISTS idx_tool_calls_category ON tool_calls(category)",
+			// DuckDB has no partial indexes, so this mirrors SQLite's
+			// idx_tool_calls_file_path without the WHERE file_path IS NOT NULL
+			// clause; it backs the cross-session Recent Edits feed.
+			"CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path ON tool_calls(file_path)",
 		},
 	},
 	{

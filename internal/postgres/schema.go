@@ -731,6 +731,11 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		   AND model != '<synthetic>'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		// idx_tool_calls_file_path backs the cross-session Recent Edits feed.
+		// Created here, after the file_path column migration, mirroring the
+		// SQLite partial index so legacy schemas migrate cleanly.
+		`CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path
+		 ON tool_calls(file_path) WHERE file_path IS NOT NULL`,
 	}
 	for _, ddl := range indexes {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {

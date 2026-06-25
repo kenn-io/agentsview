@@ -248,6 +248,25 @@ func TestSchemaDocumentsDuckDBDifferences(t *testing.T) {
 	}
 }
 
+// TestEnsureSchemaCreatesToolCallsFilePathIndex verifies the DuckDB mirror
+// builds idx_tool_calls_file_path, the parity counterpart to SQLite's
+// Recent Edits index. DuckDB has no partial indexes, so it omits the
+// WHERE file_path IS NOT NULL clause but indexes the same column.
+func TestEnsureSchemaCreatesToolCallsFilePathIndex(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+
+	var count int
+	require.NoError(t, db.QueryRowContext(ctx, `
+		SELECT count(*) FROM duckdb_indexes()
+		WHERE table_name = 'tool_calls'
+		  AND index_name = 'idx_tool_calls_file_path'`).Scan(&count),
+		"query duckdb_indexes")
+	assert.Equal(t, 1, count,
+		"idx_tool_calls_file_path must exist for Recent Edits parity")
+}
+
 func openTestDuckDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := Open(filepath.Join(t.TempDir(), "agentsview.duckdb"))
