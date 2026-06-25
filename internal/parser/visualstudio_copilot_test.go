@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,6 +85,42 @@ func TestDiscoverVisualStudioCopilotSessions_DeduplicatesConversationTraceFiles(
 
 	require.Len(t, files, 1)
 	assert.Equal(t, newTrace+"#"+conversationID, files[0].Path)
+}
+
+func TestVisualStudioCopilotLookupMatchesDiscoveryWhenMtimeAndPathDisagree(t *testing.T) {
+	root := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	// The lexicographically greater filename ("zzzz") is the OLDER file, so a
+	// path-only "last wins" selection would diverge from discovery's
+	// newest-mtime selection. Both discovery and single-session lookup must
+	// agree on the same canonical trace.
+	newerLowerPath := filepath.Join(
+		root, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
+	)
+	olderHigherPath := filepath.Join(
+		root, "20260612T145205_zzzz9999_VSGitHubCopilot_traces.jsonl",
+	)
+	data := vsCopilotTraceLineJSON(conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Update the XAML."}]}]`,
+		}) + "\n"
+	require.NoError(t, os.WriteFile(newerLowerPath, []byte(data), 0o644))
+	require.NoError(t, os.WriteFile(olderHigherPath, []byte(data), 0o644))
+
+	older := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(olderHigherPath, older, older))
+	require.NoError(t, os.Chtimes(newerLowerPath, newer, newer))
+
+	files := discoverVisualStudioCopilotTestSessions(t, root)
+	require.Len(t, files, 1)
+	assert.Equal(t, newerLowerPath+"#"+conversationID, files[0].Path)
+
+	found := findVisualStudioCopilotTraceSourceFile(root, conversationID)
+	assert.Equal(t, files[0].Path, found,
+		"lookup must resolve to the same canonical trace as discovery")
 }
 
 func TestParseVisualStudioCopilotSession_MalformedTraceLineReturnsError(t *testing.T) {

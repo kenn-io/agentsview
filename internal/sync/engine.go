@@ -3046,10 +3046,12 @@ func (e *Engine) collectAndBatch(
 			}
 			// A Kiro SQLite store is discovered as one container source
 			// but fans out into one session per row, so `total` counted it
-			// as a single file. Add the extra sessions it produced to keep
-			// TotalSessions a session count, matching the per-session tally
-			// the legacy syncKiroSQLite phase reported.
-			if len(r.results) > 1 &&
+			// as a single file. Replace that single-file count with the
+			// actual session count to keep TotalSessions a session count,
+			// matching the per-session tally the legacy syncKiroSQLite phase
+			// reported. This also corrects the zero-session case, where the
+			// container produced no sessions and should not be counted.
+			if len(r.results) != 1 &&
 				filepath.Base(r.path) == kiroSQLiteDBName {
 				stats.TotalSessions += len(r.results) - 1
 			}
