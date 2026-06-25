@@ -48,6 +48,12 @@ On first run, agentsview discovers sessions from every supported agent on your
 machine, syncs them into a local SQLite database, and serves a web UI at
 `http://127.0.0.1:8080`.
 
+Claude and Codex sources can also be configured as `s3://` roots, so a central
+AgentsView instance can read sessions that other machines push to S3-compatible
+object storage. Add those roots to `claude_project_dirs` or
+`codex_sessions_dirs`; AgentsView lists object metadata and only downloads
+changed sessions during sync.
+
 The desktop app and freshness-sensitive CLI commands share a detached local
 daemon. Read-only CLI commands attach to it when it is already running, but fall
 back to direct read-only SQLite on a cold archive so one-off scripts stay fast.

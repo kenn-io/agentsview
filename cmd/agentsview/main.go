@@ -63,6 +63,9 @@ func main() {
 // inaccessible.
 func warnMissingDirs(dirs []string, label string) {
 	for _, d := range dirs {
+		if strings.HasPrefix(d, "s3://") {
+			continue // remote source has no local path
+		}
 		_, err := os.Stat(d)
 		if err == nil {
 			continue

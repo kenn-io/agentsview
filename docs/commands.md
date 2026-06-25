@@ -148,6 +148,15 @@ it resolves the supported agent session directories on the remote
 machine, transfers the source session data locally, and indexes it
 into your local archive.
 
+Local sync can also read configured Claude and Codex roots from
+S3-compatible object storage. Add `s3://` entries to
+`claude_project_dirs` or `codex_sessions_dirs` in
+`~/.agentsview/config.toml`, then run `agentsview sync` normally.
+This is not SSH remote sync: object storage is treated as a read-only
+session source, using object size and `LastModified` metadata to skip
+unchanged sessions and downloading only objects that need parsing. See
+[Configuration — S3-Compatible Session Sources](/configuration/#s3-compatible-session-sources).
+
 #### Configured Remote Hosts
 
 As of 0.33.0, remote hosts can also be declared in
