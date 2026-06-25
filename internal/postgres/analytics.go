@@ -2229,13 +2229,13 @@ func (s *Store) GetAnalyticsTopSessions(
 				END), 0) / 60000.0
 			FROM (
 				SELECT CAST(
-					(round(EXTRACT(EPOCH FROM (
+					round(EXTRACT(EPOCH FROM (
 						COALESCE(
 							LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal),
 							sessions.ended_at
 						) - m2.timestamp
-					)) * 1000) AS BIGINT
-				) AS delta_ms,
+					)) * 1000
+				AS BIGINT) AS delta_ms,
 				m2.has_tool_use
 				FROM messages m2
 				WHERE m2.session_id = sessions.id
