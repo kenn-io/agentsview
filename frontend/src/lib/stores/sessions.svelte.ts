@@ -1116,12 +1116,6 @@ class SessionsStore {
       requestBody: { session_ids: ids },
     });
     const idSet = new Set(ids);
-    const before = this.sessions.length;
-    this.sessions = this.sessions.filter((s) => !idSet.has(s.id));
-    const removed = before - this.sessions.length;
-    if (removed > 0) {
-      this.total = Math.max(0, this.total - removed);
-    }
     if (this.activeSessionId && idSet.has(this.activeSessionId)) {
       this.setActiveSession(null);
     }
@@ -1129,6 +1123,7 @@ class SessionsStore {
     this.selectedIds = new Set();
     this.selectMode = false;
     this.invalidateFilterCaches();
+    await this.load();
   }
 
   async restoreSession(id: string) {

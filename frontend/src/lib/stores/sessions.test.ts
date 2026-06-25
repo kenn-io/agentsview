@@ -772,11 +772,21 @@ describe("SessionsStore", () => {
     });
 
     it("batch delete creates one undo entry for the whole batch", async () => {
-      mockSidebarIndex([
-        makeSkinnyRow({ id: "remove-a" }),
-        makeSkinnyRow({ id: "remove-b" }),
-        makeSkinnyRow({ id: "keep-me" }),
-      ]);
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockResolvedValueOnce({
+          sessions: [
+            makeSkinnyRow({ id: "remove-a" }),
+            makeSkinnyRow({ id: "remove-b" }),
+            makeSkinnyRow({ id: "keep-me" }),
+          ],
+          total: 3,
+          next_cursor: null,
+        })
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "keep-me" })],
+          total: 1,
+          next_cursor: null,
+        });
       vi.mocked(api.batchDeleteSessions).mockResolvedValue(undefined);
       vi.mocked(api.getProjects).mockResolvedValue({ projects: [] });
       vi.mocked(api.getAgents).mockResolvedValue({ agents: [] });
@@ -796,6 +806,38 @@ describe("SessionsStore", () => {
         "remove-a",
         "remove-b",
       ]);
+    });
+
+    it("reloads sidebar totals after deleting child rows", async () => {
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockResolvedValueOnce({
+          sessions: [
+            makeSkinnyRow({ id: "parent" }),
+            makeSkinnyRow({
+              id: "child",
+              parent_session_id: "parent",
+            }),
+          ],
+          total: 1,
+          next_cursor: null,
+        })
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "parent" })],
+          total: 1,
+          next_cursor: null,
+        });
+      vi.mocked(api.batchDeleteSessions).mockResolvedValue(undefined);
+      vi.mocked(api.getProjects).mockResolvedValue({ projects: [] });
+      vi.mocked(api.getAgents).mockResolvedValue({ agents: [] });
+      vi.mocked((api as any).getMachines).mockResolvedValue({ machines: [] });
+
+      await sessions.load();
+      await sessions.batchDeleteSessions(["child"]);
+
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["parent"]);
+      expect(sessions.total).toBe(1);
+      expect(sessions.recentlyDeleted[0]!.ids).toEqual(["child"]);
     });
 
     it("restore reloads the sidebar index", async () => {
