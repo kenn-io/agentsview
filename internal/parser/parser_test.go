@@ -1224,10 +1224,10 @@ func TestGeminiUserMessageCount(t *testing.T) {
 	)
 
 	path := createTestFile(t, "gemini-umc.json", content)
-	sess, msgs, err := ParseGeminiSession(
-		path, "my_project", "local",
+	sess, msgs, err := parseGeminiTestSession(
+		t, path, "my_project", "local",
 	)
-	require.NoError(t, err, "ParseGeminiSession")
+	require.NoError(t, err, "parseGeminiTestSession")
 	require.NotNil(t, sess, "session")
 	require.Len(t, msgs, 4, "messages")
 	assert.Equal(t, 2, sess.UserMessageCount, "UserMessageCount")

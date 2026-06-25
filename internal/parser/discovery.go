@@ -23,6 +23,11 @@ var uuidRe = regexp.MustCompile(
 		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
 
+const (
+	copilotStateDir = "session-state"
+	geminiChatsDir  = "chats"
+)
+
 // isDirOrSymlink reports whether the entry is a directory or a
 // symlink that resolves to a directory. parentDir is needed to
 // build the full path for symlink resolution.
@@ -795,117 +800,6 @@ func isGeminiSessionFilename(name string) bool {
 			strings.HasSuffix(name, ".jsonl"))
 }
 
-// DiscoverGeminiSessions finds all Gemini session files under
-// the Gemini directory (~/.gemini/tmp/*/chats/session-*).
-func DiscoverGeminiSessions(
-	geminiDir string,
-) []DiscoveredFile {
-	if geminiDir == "" {
-		return nil
-	}
-
-	tmpDir := filepath.Join(geminiDir, "tmp")
-	hashDirs, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return nil
-	}
-
-	projectMap := BuildGeminiProjectMap(geminiDir)
-
-	var files []DiscoveredFile
-	for _, hd := range hashDirs {
-		if !isDirOrSymlink(hd, tmpDir) {
-			continue
-		}
-		hash := hd.Name()
-		chatsDir := filepath.Join(tmpDir, hash, "chats")
-		entries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-
-		project := ResolveGeminiProject(hash, projectMap)
-
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !isGeminiSessionFilename(name) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(chatsDir, name),
-				Project: project,
-				Agent:   AgentGemini,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindGeminiSourceFile locates a Gemini session file by its
-// session UUID. Searches all project hash directories.
-func FindGeminiSourceFile(
-	geminiDir, sessionID string,
-) string {
-	if geminiDir == "" || !IsValidSessionID(sessionID) ||
-		len(sessionID) < 8 {
-		return ""
-	}
-
-	tmpDir := filepath.Join(geminiDir, "tmp")
-	hashDirs, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return ""
-	}
-
-	for _, hd := range hashDirs {
-		if !isDirOrSymlink(hd, tmpDir) {
-			continue
-		}
-		chatsDir := filepath.Join(tmpDir, hd.Name(), "chats")
-		entries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !isGeminiSessionFilename(name) {
-				continue
-			}
-			if strings.Contains(name, sessionID[:8]) {
-				path := filepath.Join(chatsDir, name)
-				if confirmGeminiSessionID(
-					path, sessionID,
-				) {
-					return path
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// confirmGeminiSessionID reads the sessionId field from a
-// Gemini file to confirm it matches the expected ID.
-func confirmGeminiSessionID(
-	path, sessionID string,
-) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return GeminiSessionID(data) == sessionID
-}
-
 // geminiProjectsFile holds the structure of
 // ~/.gemini/projects.json.
 type geminiProjectsFile struct {
@@ -1019,92 +913,6 @@ func ResolveGeminiProject(
 		return "unknown"
 	}
 	return NormalizeName(dirName)
-}
-
-// DiscoverCopilotSessions finds all JSONL files under
-// <copilotDir>/session-state/. Supports both bare format
-// (<uuid>.jsonl) and directory format (<uuid>/events.jsonl).
-func DiscoverCopilotSessions(
-	copilotDir string,
-) []DiscoveredFile {
-	if copilotDir == "" {
-		return nil
-	}
-
-	stateDir := filepath.Join(copilotDir, "session-state")
-	entries, err := os.ReadDir(stateDir)
-	if err != nil {
-		return nil
-	}
-
-	dirs := make(map[string]struct{})
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		eventsPath := filepath.Join(
-			stateDir, entry.Name(), "events.jsonl",
-		)
-		if _, err := os.Stat(eventsPath); err == nil {
-			dirs[entry.Name()] = struct{}{}
-		}
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() {
-			candidate := filepath.Join(
-				stateDir, name, "events.jsonl",
-			)
-			if _, err := os.Stat(candidate); err == nil {
-				files = append(files, DiscoveredFile{
-					Path:  candidate,
-					Agent: AgentCopilot,
-				})
-			}
-			continue
-		}
-		if stem, ok := strings.CutSuffix(name, ".jsonl"); ok {
-			if _, dup := dirs[stem]; dup {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(stateDir, name),
-				Agent: AgentCopilot,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindCopilotSourceFile locates a Copilot session file by
-// UUID. Checks both bare (<uuid>.jsonl) and directory
-// (<uuid>/events.jsonl) layouts.
-func FindCopilotSourceFile(
-	copilotDir, rawID string,
-) string {
-	if copilotDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	stateDir := filepath.Join(copilotDir, "session-state")
-
-	dirFmt := filepath.Join(stateDir, rawID, "events.jsonl")
-	if _, err := os.Stat(dirFmt); err == nil {
-		return dirFmt
-	}
-
-	bare := filepath.Join(stateDir, rawID+".jsonl")
-	if _, err := os.Stat(bare); err == nil {
-		return bare
-	}
-
-	return ""
 }
 
 // IsPiSessionFile reads the first non-blank line of path and returns true

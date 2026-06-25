@@ -2128,6 +2128,97 @@ func TestSyncPathsGeminiJSONL(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
 }
 
+func TestSyncPathsGeminiProjectMetadataEventRefreshesProject(t *testing.T) {
+	env := setupTestEnv(t)
+
+	sessionID := "gem-project-refresh"
+	projectsPath := filepath.Join(env.geminiDir, "projects.json")
+	writeProject := func(name string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(
+			projectsPath,
+			fmt.Appendf(nil,
+				`{"projects":{"/Users/alice/code/%s":"alias"}}`,
+				name,
+			),
+			0o644,
+		), "write projects")
+	}
+	writeProject("one")
+	path := env.writeGeminiSession(
+		t,
+		filepath.Join(
+			"tmp", "alias", "chats",
+			"session-001.json",
+		),
+		testjsonl.GeminiSessionJSON(
+			sessionID, "alias", tsEarly, tsEarlyS5,
+			[]map[string]any{
+				testjsonl.GeminiUserMsg(
+					"m1", tsEarly, "Hello Gemini",
+				),
+				testjsonl.GeminiAssistantMsg(
+					"m2", tsEarlyS5, "Hi there!", nil,
+				),
+			},
+		),
+	)
+
+	env.engine.SyncPaths([]string{path})
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat gemini session")
+	env.engine.InjectSkipCache(map[string]int64{
+		path: info.ModTime().UnixNano(),
+	})
+
+	writeProject("two")
+	env.engine.SyncPaths([]string{projectsPath})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
+
+	writeProject("three")
+	env.engine.SyncPaths([]string{path, projectsPath})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "three", sess.Project)
+		},
+	)
+
+	writeProject("four")
+	env.engine.SyncPaths([]string{projectsPath, path})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "four", sess.Project)
+		},
+	)
+
+	require.NoError(t, os.Remove(projectsPath), "remove projects")
+	env.engine.SyncPaths([]string{projectsPath})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "alias", sess.Project)
+		},
+	)
+}
+
 func TestSyncPathsCodexAcceptsFlatArchived(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -5799,18 +5890,15 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	})
 	require.NoError(t, err, "update message content")
 
-	// Normal SyncAll should skip (file unchanged on disk).
-	stats := env.engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Skipped, "expected 1 skip, got %d", stats.Skipped)
-	msgs = fetchMessages(t, env.db, fullID)
-	require.True(t, strings.Contains(msgs[1].Content, "stale content"), "SyncAll should not have replaced content")
-
 	// Capture FTS state before resync so a regression that
 	// breaks FTS isn't masked by HasFTS() returning false
 	// post-resync.
 	hadFTS := env.db.HasFTS()
 
-	// ResyncAll should re-parse and replace message content.
+	// ResyncAll should re-parse and replace message content. Gemini is
+	// provider-authoritative, so it has no DB-backed mtime skip; a plain
+	// SyncAll would also re-parse the unchanged file. ResyncAll additionally
+	// drops and rebuilds the FTS index, which is what this test guards.
 	env.engine.ResyncAll(context.Background(), nil)
 	msgs = fetchMessages(t, env.db, fullID)
 	require.Equal(t, 2, len(msgs), "got %d messages after resync, want 2", len(msgs))

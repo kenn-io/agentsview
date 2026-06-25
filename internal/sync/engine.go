@@ -523,7 +523,6 @@ func (e *Engine) SyncPaths(paths []string) {
 func (e *Engine) classifyPaths(
 	paths []string,
 ) []parser.DiscoveredFile {
-	geminiProjectsByDir := make(map[string]map[string]string)
 	seen := make(map[string]int, len(paths))
 	files := make([]parser.DiscoveredFile, 0, len(paths))
 	for _, p := range paths {
@@ -535,9 +534,7 @@ func (e *Engine) classifyPaths(
 			dfs = e.classifyCodexIndexPath(p)
 		}
 		if len(dfs) == 0 {
-			if df, ok := e.classifyOnePath(
-				p, geminiProjectsByDir,
-			); ok {
+			if df, ok := e.classifyOnePath(p); ok {
 				dfs = []parser.DiscoveredFile{df}
 			}
 		}
@@ -973,7 +970,6 @@ func (e *Engine) classifyContainerPath(
 
 func (e *Engine) classifyOnePath(
 	path string,
-	geminiProjectsByDir map[string]map[string]string,
 ) (parser.DiscoveredFile, bool) {
 	sep := string(filepath.Separator)
 	pathExists := true
@@ -1007,97 +1003,6 @@ func (e *Engine) classifyOnePath(
 	// <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
 	// shapes, so the legacy block was removed when Claude was folded
 	// onto its provider.
-
-	// Copilot: <copilotDir>/session-state/<uuid>.jsonl
-	//      or: <copilotDir>/session-state/<uuid>/events.jsonl
-	for _, copilotDir := range e.agentDirs[parser.AgentCopilot] {
-		if copilotDir == "" {
-			continue
-		}
-		stateDir := filepath.Join(
-			copilotDir, "session-state",
-		)
-		if rel, ok := isUnder(stateDir, path); ok {
-			parts := strings.Split(rel, sep)
-			switch len(parts) {
-			case 1:
-				stem, ok := strings.CutSuffix(
-					parts[0], ".jsonl",
-				)
-				if !ok {
-					continue
-				}
-				dirEvents := filepath.Join(
-					stateDir, stem, "events.jsonl",
-				)
-				if _, err := os.Stat(dirEvents); err == nil {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentCopilot,
-				}, true
-			case 2:
-				if parts[1] == "events.jsonl" {
-					return parser.DiscoveredFile{
-						Path:  path,
-						Agent: parser.AgentCopilot,
-					}, true
-				}
-				// workspace.yaml changes should trigger a re-parse
-				// of the sibling events.jsonl.
-				if parts[1] == "workspace.yaml" {
-					eventsPath := filepath.Join(
-						stateDir, parts[0], "events.jsonl",
-					)
-					if _, err := os.Stat(eventsPath); err == nil {
-						return parser.DiscoveredFile{
-							Path:  eventsPath,
-							Agent: parser.AgentCopilot,
-						}, true
-					}
-				}
-				continue
-			default:
-				continue
-			}
-		}
-	}
-
-	// Gemini: <geminiDir>/tmp/<dir>/chats/session-*.json(.l)
-	// <dir> is either a SHA-256 hash (old) or project name (new).
-	for _, geminiDir := range e.agentDirs[parser.AgentGemini] {
-		if geminiDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(geminiDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 4 ||
-				parts[0] != "tmp" ||
-				parts[2] != "chats" {
-				continue
-			}
-			name := parts[3]
-			if !strings.HasPrefix(name, "session-") ||
-				(!strings.HasSuffix(name, ".json") &&
-					!strings.HasSuffix(name, ".jsonl")) {
-				continue
-			}
-			dirName := parts[1]
-			if _, ok := geminiProjectsByDir[geminiDir]; !ok {
-				geminiProjectsByDir[geminiDir] =
-					parser.BuildGeminiProjectMap(geminiDir)
-			}
-			project := parser.ResolveGeminiProject(
-				dirName, geminiProjectsByDir[geminiDir],
-			)
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: project,
-				Agent:   parser.AgentGemini,
-			}, true
-		}
-	}
 
 	// VSCode Copilot: <vscodeUserDir>/workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
 	//            or: <vscodeUserDir>/globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
@@ -4021,12 +3926,8 @@ func (e *Engine) processFile(
 		// processProviderFile; only s3:// Codex sources fall through to the
 		// legacy dispatch, via the S3 sync path.
 		res = e.processS3Session(ctx, file, info)
-	case parser.AgentCopilot:
-		res = e.processCopilot(file, info)
 	case parser.AgentReasonix:
 		res = e.processReasonix(file, info)
-	case parser.AgentGemini:
-		res = e.processGemini(file, info)
 	case parser.AgentVSCodeCopilot:
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
@@ -4177,7 +4078,7 @@ func (e *Engine) processProviderFile(
 			mtime: mtime,
 		}, true
 	}
-	if freshMtime, fresh := e.providerCoworkSourceFresh(source, file); fresh {
+	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(source, file); fresh {
 		return processResult{
 			skip:  true,
 			mtime: freshMtime,
@@ -4949,11 +4850,11 @@ func (e *Engine) providerSingleSessionFresh(
 		!parser.NeedsProjectReparse(sess.Project)
 }
 
-func (e *Engine) providerCoworkSourceFresh(
+func (e *Engine) providerSourceFreshBeforeFingerprint(
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
 ) (int64, bool) {
-	if e.forceParse || file.ForceParse || file.Agent != parser.AgentCowork {
+	if e.forceParse || file.ForceParse {
 		return 0, false
 	}
 	path := providerDiscoveredPath(source)
@@ -4971,15 +4872,31 @@ func (e *Engine) providerCoworkSourceFresh(
 			return 0, false
 		}
 	}
-	mtime := parser.CoworkSessionMtime(path, info.ModTime().UnixNano())
-	effectiveInfo := fakeSnapshotInfo{
-		fSize:  info.Size(),
-		fMtime: mtime,
+	switch file.Agent {
+	case parser.AgentCowork:
+		mtime := parser.CoworkSessionMtime(path, info.ModTime().UnixNano())
+		effectiveInfo := fakeSnapshotInfo{
+			fSize:  info.Size(),
+			fMtime: mtime,
+		}
+		if e.shouldSkipByPath(path, effectiveInfo) {
+			return mtime, true
+		}
+	case parser.AgentGemini:
+		if e.shouldSkipByPath(path, info) {
+			return info.ModTime().UnixNano(), true
+		}
+	case parser.AgentCopilot:
+		mtime := copilotEffectiveMtime(path, info)
+		effectiveInfo := fakeSnapshotInfo{
+			fSize:  info.Size(),
+			fMtime: mtime,
+		}
+		if e.shouldSkipByPath(path, effectiveInfo) {
+			return mtime, true
+		}
 	}
-	if !e.shouldSkipByPath(path, effectiveInfo) {
-		return 0, false
-	}
-	return mtime, true
+	return 0, false
 }
 
 // stampProviderFileIdentity copies the source file's inode and device onto
@@ -5745,44 +5662,6 @@ func (e *Engine) processCodex(
 	}
 }
 
-func (e *Engine) processCopilot(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Use effective mtime = max(events.jsonl, workspace.yaml) so
-	// that a new or updated workspace.yaml triggers a re-parse and
-	// the stored mtime stays consistent with what we compare against
-	// on subsequent syncs (preventing oscillation).
-	effectiveMtime := copilotEffectiveMtime(file.Path, info)
-	if e.shouldSkipCopilot(file.Path, info, effectiveMtime) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, usageEvents, err := parser.ParseCopilotSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	if effectiveMtime > sess.File.Mtime {
-		sess.File.Mtime = effectiveMtime
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
-		},
-	}
-}
-
 // copilotEffectiveMtime returns max(events.jsonl mtime,
 // workspace.yaml mtime). For flat .jsonl sessions (no
 // workspace.yaml sibling) it returns the events.jsonl mtime.
@@ -5933,64 +5812,6 @@ func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-// shouldSkipCopilot is like shouldSkipByPath but uses the
-// pre-computed effectiveMtime (max of events.jsonl and
-// workspace.yaml) for the mtime comparison, keeping the stored
-// value consistent with what we compare against on next sync.
-func (e *Engine) shouldSkipCopilot(
-	path string, info os.FileInfo, effectiveMtime int64,
-) bool {
-	if e.forceParse { // parse-diff: always re-parse
-		return false
-	}
-	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-	if !ok {
-		return false
-	}
-	if storedSize != info.Size() || storedMtime != effectiveMtime {
-		return false
-	}
-	if e.db.GetDataVersionByPath(lookupPath) <
-		db.CurrentDataVersion() {
-		return false
-	}
-	return true
-}
-
-func (e *Engine) processGemini(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Fast path: skip by file_path + mtime before parsing.
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseGeminiSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
 }
 
 func (e *Engine) processVSCodeCopilot(

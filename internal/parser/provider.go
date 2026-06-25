@@ -360,6 +360,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCommandCodeProviderFactory(def)
 	case AgentCodex:
 		return newCodexProviderFactory(def)
+	case AgentCopilot:
+		return newCopilotProviderFactory(def)
 	case AgentCowork:
 		return newCoworkProviderFactory(def)
 	case AgentCortex:
@@ -374,6 +376,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newIflowProviderFactory(def)
 	case AgentGptme:
 		return newGptmeProviderFactory(def)
+	case AgentGemini:
+		return newGeminiProviderFactory(def)
 	case AgentKimi:
 		return newKimiProviderFactory(def)
 	case AgentKilo:

@@ -1684,6 +1684,7 @@ func TestProcessCodexAppendedStaleProjectDoesFullReparse(t *testing.T) {
 	) + "\n")
 	require.NoError(t, err, "append codex fixture")
 	require.NoError(t, f.Close(), "close codex fixture")
+
 	e := &Engine{
 		db:       database,
 		idPrefix: "host~",
@@ -1778,6 +1779,7 @@ func TestProcessCodexAppendedStaleProjectCarriesForceReplace(t *testing.T) {
 	) + "\n")
 	require.NoError(t, err, "append codex fixture")
 	require.NoError(t, f.Close(), "close codex fixture")
+
 	e := &Engine{
 		db:       database,
 		idPrefix: "host~",
@@ -3523,7 +3525,7 @@ func TestEngine_ClassifyOnePathReasonixProjectBareMeta(t *testing.T) {
 	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
 	dbtest.WriteTestFile(t, metaPath, []byte(`{"model":"claude"}`))
 
-	got, ok := engine.classifyOnePath(metaPath, nil)
+	got, ok := engine.classifyOnePath(metaPath)
 	require.True(t, ok, "expected Reasonix sidecar to classify")
 	assert.Equal(t, sessionPath, got.Path)
 	assert.Equal(t, "proj", got.Project)
@@ -3546,7 +3548,7 @@ func TestEngine_ClassifyOnePathReasonixDeletedMeta(t *testing.T) {
 	metaPath := sessionPath + ".meta"
 	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
 
-	got, ok := engine.classifyOnePath(metaPath, nil)
+	got, ok := engine.classifyOnePath(metaPath)
 	require.True(t, ok, "expected deleted Reasonix sidecar to classify")
 	assert.Equal(t, sessionPath, got.Path)
 	assert.Equal(t, "proj", got.Project)
@@ -3567,7 +3569,7 @@ func TestEngine_ClassifyOnePathReasonixDeletedTranscriptIgnored(t *testing.T) {
 		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
 	)
 
-	_, ok := engine.classifyOnePath(sessionPath, nil)
+	_, ok := engine.classifyOnePath(sessionPath)
 	assert.False(t, ok, "expected deleted Reasonix transcript to be ignored")
 }
 
@@ -4353,4 +4355,56 @@ func TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip(t *testing.T) {
 
 	assert.False(t, f.e.shouldSkipCodex(f.path, f.info),
 		"title-only rename at or below stored watermark must not skip")
+}
+
+func TestEngine_ClassifyPathsProviderRemoveSkipsMissingGeminiSource(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	geminiDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGemini: {geminiDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		geminiDir, "tmp", "alias", "chats", "session-001.json",
+	)
+	dbtest.WriteTestFile(t, sessionPath, []byte("{}"))
+	require.NoError(t, os.Remove(sessionPath), "Remove(%q)", sessionPath)
+
+	files := engine.classifyPaths([]string{sessionPath})
+	assert.Empty(t, files)
+}
+
+func TestEngine_ClassifyPathsProviderSidecarKeepsExistingGeminiSources(
+	t *testing.T,
+) {
+	db := openTestDB(t)
+	geminiDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGemini: {geminiDir},
+		},
+		Machine: "local",
+	})
+
+	projectsPath := filepath.Join(geminiDir, "projects.json")
+	dbtest.WriteTestFile(
+		t,
+		projectsPath,
+		[]byte(`{"projects":{"/Users/alice/code/sample":"alias"}}`),
+	)
+	sessionPath := filepath.Join(
+		geminiDir, "tmp", "alias", "chats", "session-001.json",
+	)
+	dbtest.WriteTestFile(t, sessionPath, []byte("{}"))
+
+	files := engine.classifyPaths([]string{projectsPath})
+	require.Len(t, files, 1)
+	assert.Equal(t, sessionPath, files[0].Path)
+	assert.Equal(t, parser.AgentGemini, files[0].Agent)
+	assert.True(t, files[0].ForceParse)
 }
