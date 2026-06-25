@@ -362,10 +362,8 @@ var Registry = []AgentDef{
 			".codewhale/sessions",
 			".deepseek/sessions",
 		},
-		IDPrefix:       "deepseek-tui:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverDeepSeekTUISessions,
-		FindSourceFunc: FindDeepSeekTUISourceFile,
+		IDPrefix:  "deepseek-tui:",
+		FileBased: true,
 	},
 	{
 		Type:        AgentOpenClaw,

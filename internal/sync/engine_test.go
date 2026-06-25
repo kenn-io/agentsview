@@ -3108,6 +3108,9 @@ func TestEngine_ClassifyPathsDeepSeekTUISession(t *testing.T) {
 	require.Len(t, files, 1, "len(files) = %d, want 1 (%v)", len(files), files)
 	assert.Equal(t, sessionPath, files[0].Path)
 	assert.Equal(t, parser.AgentDeepSeekTUI, files[0].Agent)
+	assert.True(t, files[0].ProviderProcess)
+	require.NotNil(t, files[0].ProviderSource)
+	assert.Equal(t, sessionPath, files[0].ProviderSource.DisplayPath)
 
 	bogus := []string{
 		filepath.Join(deepSeekDir, "stray.jsonl"),
