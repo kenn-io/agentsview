@@ -128,8 +128,6 @@ var Registry = []AgentDef{
 		},
 		IDPrefix:              "codex:",
 		FileBased:             true,
-		DiscoverFunc:          DiscoverCodexSessions,
-		FindSourceFunc:        FindCodexSourceFile,
 		ShallowWatchRootsFunc: ResolveCodexShallowWatchRoots,
 	},
 	{

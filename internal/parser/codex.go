@@ -1305,11 +1305,30 @@ func IsCodexExecSessionFile(path string) bool {
 	return false
 }
 
-// ParseCodexSession parses a Codex JSONL session file.
-// The includeExec parameter is retained for backward
-// compatibility; exec-originated sessions are now always
-// parsed and imported.
+// ParseCodexSession and ParseCodexSessionFrom are the exported seam used by the
+// S3 sync path (internal/sync), which buffers an s3:// Codex object to a temp
+// file and parses it through the legacy processCodex. The Codex provider owns
+// these bodies as receiver methods that use no receiver state, so the wrappers
+// invoke them on a zero-value provider. They are removed once S3 support folds
+// into the JSONL source sets.
 func ParseCodexSession(
+	path, machine string, includeExec bool,
+) (*ParsedSession, []ParsedMessage, error) {
+	return (&codexProvider{}).parseSession(path, machine, includeExec)
+}
+
+func ParseCodexSessionFrom(
+	path string, offset int64, startOrdinal int, includeExec bool,
+) ([]ParsedMessage, time.Time, int64, error) {
+	return (&codexProvider{}).parseSessionFrom(path, offset, startOrdinal, includeExec)
+}
+
+// parseSession parses a Codex JSONL session file into a session and its
+// messages. The includeExec parameter is retained for backward compatibility;
+// exec-originated sessions are now always parsed and imported. This is the
+// provider-owned parse entrypoint; the package-level free function was folded
+// onto the provider.
+func (p *codexProvider) parseSession(
 	path, machine string, includeExec bool,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -1675,12 +1694,13 @@ func CodexTranscriptConsumedSize(path string) (int64, error) {
 	return readJSONLFrom(path, 0, func(line string) {})
 }
 
-// ParseCodexSessionFrom parses only new lines from a Codex
-// JSONL file starting at the given byte offset. Returns only
-// the newly parsed messages (with ordinals starting at
-// startOrdinal) and the latest timestamp seen. Used for
-// incremental re-parsing of large append-only session files.
-func ParseCodexSessionFrom(
+// parseSessionFrom parses only new lines from a Codex JSONL file starting at
+// the given byte offset. Returns only the newly parsed messages (with ordinals
+// starting at startOrdinal) and the latest timestamp seen. Used for incremental
+// re-parsing of large append-only session files. This is the provider-owned
+// incremental parse entrypoint; the package-level free function was folded onto
+// the provider.
+func (p *codexProvider) parseSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,

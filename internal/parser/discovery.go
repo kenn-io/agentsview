@@ -524,6 +524,10 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 
 // DiscoverCodexSessions finds all Codex JSONL session files under
 // either the standard year/month/day layout or a flat archived dir.
+//
+// Local Codex discovery is owned by the Codex provider source set; this entry
+// is retained as the s3:// discovery path (via discoverCodexS3), which the
+// legacy S3 sync path consumes until S3 support folds into the source sets.
 func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
 	if strings.HasPrefix(sessionsDir, "s3://") {
 		return discoverCodexS3(sessionsDir)
@@ -643,62 +647,6 @@ func claudeFindSourceFile(
 	}
 
 	return ""
-}
-
-// FindCodexSourceFile finds a Codex session file by UUID.
-// Prefers the standard year/month/day live path when present,
-// then falls back to a flat archived dir entry.
-func FindCodexSourceFile(sessionsDir, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	var archived string
-	entries, err := os.ReadDir(sessionsDir)
-	if err == nil {
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				archived = filepath.Join(sessionsDir, name)
-				break
-			}
-		}
-	}
-
-	var live string
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if live != "" {
-			return false
-		}
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				live = filepath.Join(dayPath, name)
-				return false
-			}
-		}
-		return true
-	})
-	if live != "" {
-		return live
-	}
-	return archived
 }
 
 func isCodexSessionFilename(name string) bool {
