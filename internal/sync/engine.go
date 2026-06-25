@@ -526,13 +526,12 @@ func (e *Engine) classifyPaths(
 	seen := make(map[string]int, len(paths))
 	files := make([]parser.DiscoveredFile, 0, len(paths))
 	for _, p := range paths {
-		// Antigravity sidecar events map to potentially several
-		// session sources and must classify even when the event
-		// path was deleted, so they bypass classifyOnePath.
-		dfs := e.classifyAntigravitySidecarPath(p)
-		if len(dfs) == 0 {
-			dfs = e.classifyCodexIndexPath(p)
-		}
+		// Codex resolved-index events map to potentially several session
+		// sources and must classify even when the event path was deleted,
+		// so they bypass classifyOnePath. Antigravity's analogous sidecar
+		// fan-out (annotations, brain, history.jsonl) is owned by the
+		// provider-authoritative SourcesForChangedPath path below.
+		dfs := e.classifyCodexIndexPath(p)
 		if len(dfs) == 0 {
 			if df, ok := e.classifyOnePath(p); ok {
 				dfs = []parser.DiscoveredFile{df}
@@ -971,7 +970,6 @@ func (e *Engine) classifyContainerPath(
 func (e *Engine) classifyOnePath(
 	path string,
 ) (parser.DiscoveredFile, bool) {
-	sep := string(filepath.Separator)
 	pathExists := true
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
@@ -1008,88 +1006,11 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm).
-	// annotations/<uuid>.pbtxt and brain/<uuid>/* sidecar events are
-	// handled in classifyPaths via classifyAntigravitySidecarPath,
-	// which runs without the path-existence requirement above.
-	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
-		if agDir == "" {
-			continue
-		}
-		rel, ok := isUnder(agDir, path)
-		if !ok {
-			continue
-		}
-		parts := strings.Split(rel, sep)
-		if len(parts) != 2 || parts[0] != "conversations" {
-			continue
-		}
-		name := strings.TrimSuffix(parts[1], "-wal")
-		name = strings.TrimSuffix(name, "-shm")
-		if !strings.HasSuffix(name, ".db") {
-			continue
-		}
-		id := strings.TrimSuffix(name, ".db")
-		if !parser.IsValidSessionID(id) {
-			continue
-		}
-		return parser.DiscoveredFile{
-			Path:  filepath.Join(agDir, "conversations", id+".db"),
-			Agent: parser.AgentAntigravity,
-		}, true
-	}
-
-	// Antigravity CLI: <root>/conversations/<uuid>.db or
-	// <root>/conversations|implicit/<uuid>.pb (+ trajectory.json sidecars)
-	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
-		if agDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(agDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 ||
-				(parts[0] != "conversations" &&
-					parts[0] != "implicit") {
-				continue
-			}
-			name := parts[1]
-			var sourcePath string
-			var id string
-			if strings.HasSuffix(name, ".pb") {
-				sourcePath = path
-				id = strings.TrimSuffix(name, ".pb")
-			} else if strings.HasSuffix(name, ".db") ||
-				strings.HasSuffix(name, ".db-wal") ||
-				strings.HasSuffix(name, ".db-shm") {
-				name = strings.TrimSuffix(name, "-wal")
-				name = strings.TrimSuffix(name, "-shm")
-				sourcePath = filepath.Join(agDir, parts[0], name)
-				id = strings.TrimSuffix(name, ".db")
-			} else if strings.HasSuffix(name, ".trajectory.json") {
-				sourcePath = strings.TrimSuffix(path, ".trajectory.json") + ".pb"
-				id = strings.TrimSuffix(name, ".trajectory.json")
-			} else {
-				continue
-			}
-			if !parser.IsValidSessionID(id) {
-				continue
-			}
-			if parts[0] == "conversations" &&
-				strings.HasSuffix(sourcePath, ".pb") {
-				dbPath := filepath.Join(agDir, parts[0], id+".db")
-				if _, err := os.Stat(dbPath); err == nil {
-					sourcePath = dbPath
-				}
-			}
-			if _, err := os.Stat(sourcePath); err != nil {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  sourcePath,
-				Agent: parser.AgentAntigravityCLI,
-			}, true
-		}
-	}
+	// Antigravity IDE and CLI source/sidecar paths (conversations/<uuid>.db,
+	// conversations|implicit/<uuid>.pb, their WAL/SHM and trajectory.json
+	// sidecars, and annotations/brain/history.jsonl) are owned by the
+	// provider-authoritative SourcesForChangedPath path in
+	// classifyProviderChangedPath.
 
 	return parser.DiscoveredFile{}, false
 }
@@ -1117,111 +1038,6 @@ func (e *Engine) classifyAiderPath(
 		}
 	}
 	return parser.DiscoveredFile{}, false
-}
-
-// classifyAntigravitySidecarPath maps Antigravity sidecar events --
-// IDE annotations/<id>.pbtxt plus IDE and CLI brain/<id>/* artifacts
-// -- to every session source file that renders them. A CLI storage
-// UUID can hold both a conversation and an implicit session, so one
-// brain event can affect two sources. The sidecar path itself may no
-// longer exist (deletes must reparse the session too), so only the
-// mapped source files are required to exist.
-func (e *Engine) classifyAntigravitySidecarPath(
-	path string,
-) []parser.DiscoveredFile {
-	if df, ok := e.classifyAntigravityIDESidecar(path); ok {
-		return []parser.DiscoveredFile{df}
-	}
-	return e.classifyAntigravityCLIBrainPath(path)
-}
-
-func (e *Engine) classifyAntigravityIDESidecar(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	sep := string(filepath.Separator)
-	for _, agDir := range e.agentDirs[parser.AgentAntigravity] {
-		if agDir == "" {
-			continue
-		}
-		rel, ok := isUnder(agDir, path)
-		if !ok {
-			continue
-		}
-		parts := strings.Split(rel, sep)
-		var id string
-		switch {
-		case len(parts) == 2 && parts[0] == "annotations" &&
-			strings.HasSuffix(parts[1], ".pbtxt"):
-			id = strings.TrimSuffix(parts[1], ".pbtxt")
-		case len(parts) == 3 && parts[0] == "brain":
-			id = parts[1]
-		default:
-			continue
-		}
-		if !parser.IsValidSessionID(id) {
-			continue
-		}
-		dbPath := filepath.Join(agDir, "conversations", id+".db")
-		if _, err := os.Stat(dbPath); err != nil {
-			continue
-		}
-		return parser.DiscoveredFile{
-			Path:  dbPath,
-			Agent: parser.AgentAntigravity,
-		}, true
-	}
-	return parser.DiscoveredFile{}, false
-}
-
-func (e *Engine) classifyAntigravityCLIBrainPath(
-	path string,
-) []parser.DiscoveredFile {
-	sep := string(filepath.Separator)
-	for _, agDir := range e.agentDirs[parser.AgentAntigravityCLI] {
-		if agDir == "" {
-			continue
-		}
-		rel, ok := isUnder(agDir, path)
-		if !ok {
-			continue
-		}
-		parts := strings.Split(rel, sep)
-		if len(parts) != 3 || parts[0] != "brain" {
-			continue
-		}
-		id := parts[1]
-		if !parser.IsValidSessionID(id) {
-			continue
-		}
-		var out []parser.DiscoveredFile
-		// Conversation session: prefer the SQLite source when both
-		// old and new files exist, matching discovery.
-		for _, src := range []string{
-			filepath.Join(agDir, "conversations", id+".db"),
-			filepath.Join(agDir, "conversations", id+".pb"),
-		} {
-			if _, err := os.Stat(src); err == nil {
-				out = append(out, parser.DiscoveredFile{
-					Path:  src,
-					Agent: parser.AgentAntigravityCLI,
-				})
-				break
-			}
-		}
-		// The implicit session is distinct from the conversation
-		// session and renders the same brain artifacts.
-		implicit := filepath.Join(agDir, "implicit", id+".pb")
-		if _, err := os.Stat(implicit); err == nil {
-			out = append(out, parser.DiscoveredFile{
-				Path:  implicit,
-				Agent: parser.AgentAntigravityCLI,
-			})
-		}
-		if len(out) > 0 {
-			return out
-		}
-	}
-	return nil
 }
 
 // shelleyDBFile is the shared Shelley conversation database basename. Zed and
@@ -3375,31 +3191,22 @@ func (e *Engine) processFile(
 
 	var info os.FileInfo
 	var err error
-	switch file.Agent {
-	case parser.AgentAntigravityCLI:
-		info, err = parser.AntigravityCLIFileInfo(file.Path)
-	case parser.AgentAntigravity:
-		// WAL-only commits and annotation updates do not touch
-		// the main .db, so skip checks need the composite stat.
-		info, err = parser.AntigravityFileInfo(file.Path)
-	default:
-		if strings.HasPrefix(file.Path, "s3://") {
-			if file.SourceMtime == 0 {
-				obj, err := statS3SourceObject(file)
-				if err != nil {
-					return processResult{
-						err: fmt.Errorf(
-							"stat %s: %w", file.Path, err,
-						),
-					}
+	if strings.HasPrefix(file.Path, "s3://") {
+		if file.SourceMtime == 0 {
+			obj, err := statS3SourceObject(file)
+			if err != nil {
+				return processResult{
+					err: fmt.Errorf(
+						"stat %s: %w", file.Path, err,
+					),
 				}
-				file.SourceSize = obj.Size
-				file.SourceMtime = obj.LastModified.UnixNano()
-				file.SourceFingerprint = obj.Fingerprint
 			}
-			info, err = s3SourceFileInfo(file)
-			break
+			file.SourceSize = obj.Size
+			file.SourceMtime = obj.LastModified.UnixNano()
+			file.SourceFingerprint = obj.Fingerprint
 		}
+		info, err = s3SourceFileInfo(file)
+	} else {
 		statPath := file.Path
 		if dbPath, _, ok := parseKiroSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
@@ -3485,10 +3292,6 @@ func (e *Engine) processFile(
 		res = e.processS3Session(ctx, file, info)
 	case parser.AgentReasonix:
 		res = e.processReasonix(file, info)
-	case parser.AgentAntigravity:
-		res = e.processAntigravity(file, info)
-	case parser.AgentAntigravityCLI:
-		res = e.processAntigravityCLI(file, info)
 	case parser.AgentAider:
 		res = e.processAider(file, info)
 	default:
@@ -3707,6 +3510,24 @@ func (e *Engine) processProviderFile(
 			cacheSkip:   cacheSkip,
 			cacheKey:    cacheKey,
 			noCacheSkip: true,
+		}, true
+	}
+
+	// DB-stored-file-info skip: a session whose persisted file_size/file_mtime
+	// already match the source fingerprint (and whose data_version is current)
+	// is unchanged and need not be reparsed. This reproduces the legacy
+	// shouldSkipByPath behavior the per-agent process methods provided, so a
+	// repeat full sync of an untouched provider-authoritative session skips
+	// instead of rewriting. It only skips on an exact size+mtime match, so a
+	// provider whose fingerprint mtime differs from the stored value simply
+	// reparses, matching the prior behavior.
+	if !e.forceParse && !file.ForceParse &&
+		e.providerSourceUnchangedInDB(source, fingerprint) {
+		return processResult{
+			skip:      true,
+			mtime:     fingerprint.MTimeNS,
+			cacheSkip: cacheSkip,
+			cacheKey:  cacheKey,
 		}, true
 	}
 
@@ -4328,6 +4149,45 @@ func (e *Engine) shouldSkipFile(
 	sessionID string, info os.FileInfo,
 ) bool {
 	return e.shouldSkipFileWithPrefix(e.idPrefix, sessionID, info)
+}
+
+// providerSourceUnchangedInDB reports whether a provider source's persisted
+// file metadata already matches its current fingerprint, so a reparse would be
+// a no-op. It compares the DB-stored file_size/file_mtime for the source's
+// path against the fingerprint and requires a current data_version, mirroring
+// shouldSkipByPath for the provider-authoritative runtime. A source with no
+// stored row, an empty key, or a non-fingerprint identity (no size, e.g. a
+// tombstone) never matches and therefore reparses.
+func (e *Engine) providerSourceUnchangedInDB(
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+) bool {
+	if fingerprint.MTimeNS == 0 && fingerprint.Size == 0 {
+		return false
+	}
+	lookupPath := providerDiscoveredPath(source)
+	if lookupPath == "" {
+		return false
+	}
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	if storedSize != fingerprint.Size || storedMtime != fingerprint.MTimeNS {
+		return false
+	}
+	// A stale stored project (e.g. a generated roborev CI worktree name)
+	// must defeat the unchanged-source skip so the corrected project is
+	// reparsed, mirroring shouldSkipCodexFingerprint and the in-memory
+	// skip-cache bypass in processProviderFile.
+	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
+		parser.NeedsProjectReparse(project) {
+		return false
+	}
+	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
 }
 
 // shouldSkipByPath checks file size and mtime against what is
@@ -5618,73 +5478,6 @@ func (e *Engine) processAider(
 	return processResult{
 		results:      results,
 		forceReplace: true,
-	}
-}
-
-func (e *Engine) processAntigravity(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, usageEvents, err := parser.ParseAntigravitySession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
-		},
-	}
-}
-
-func (e *Engine) processAntigravityCLI(
-	file parser.DiscoveredFile, effectiveInfo os.FileInfo,
-) processResult {
-	// processFile supplies AntigravityCLIFileInfo here, so .db WAL/SHM
-	// sidecars and .pb trajectory sidecars participate in skip checks.
-	if e.shouldSkipByPath(file.Path, effectiveInfo) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, usageEvents, parseStatus, err := parser.ParseAntigravityCLISessionWithStatus(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-	sess.File.Size = effectiveInfo.Size()
-	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		needsRetry: parseStatus.NeedsRetry,
-		results: []parser.ParseResult{
-			{
-				Session:     *sess,
-				Messages:    msgs,
-				UsageEvents: usageEvents,
-			},
-		},
 	}
 }
 

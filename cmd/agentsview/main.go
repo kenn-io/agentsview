@@ -935,43 +935,132 @@ func collectWatchRoots(cfg config.Config) (roots []watchRoot, unwatchedDirs []st
 			continue
 		}
 		for _, d := range cfg.ResolveDirs(def.Type) {
-			if def.ShallowWatchRootsFunc != nil {
-				for _, watchDir := range def.ShallowWatchRootsFunc(d) {
-					if _, err := os.Stat(watchDir); err == nil {
-						addRoot(d, watchDir, true)
-					}
-				}
-			}
-			if def.WatchRootsFunc != nil {
-				watchDirs := def.WatchRootsFunc(d)
-				if len(watchDirs) == 0 {
-					unwatchedDirs = append(unwatchedDirs, d)
-					continue
-				}
-				for _, watchDir := range watchDirs {
-					if _, err := os.Stat(watchDir); err == nil {
-						addRoot(d, watchDir, def.ShallowWatch)
-						continue
-					}
-					unwatchedDirs = append(unwatchedDirs, d)
-				}
+			if providerWatched, providerUnwatched := collectProviderWatchRoots(def, d, addRoot); providerWatched {
+				unwatchedDirs = append(unwatchedDirs, providerUnwatched...)
 				continue
 			}
-			if len(def.WatchSubdirs) == 0 {
-				if _, err := os.Stat(d); err == nil {
-					addRoot(d, d, def.ShallowWatch)
-				}
-				continue
-			}
-			for _, sub := range def.WatchSubdirs {
-				watchDir := filepath.Join(d, sub)
-				if _, err := os.Stat(watchDir); err == nil {
-					addRoot(d, watchDir, def.ShallowWatch)
-				}
-			}
+			fallbackUnwatched := collectLegacyWatchRoots(def, d, addRoot)
+			unwatchedDirs = append(unwatchedDirs, fallbackUnwatched...)
 		}
 	}
 	return roots, unwatchedDirs
+}
+
+func collectProviderWatchRoots(
+	def parser.AgentDef,
+	dir string,
+	addRoot func(dir, root string, shallow bool),
+) (bool, []string) {
+	factory, ok := parser.ProviderFactoryByType(def.Type)
+	if !ok {
+		return false, nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots: []string{dir},
+	})
+	plan, err := provider.WatchPlan(context.Background())
+	if err != nil || len(plan.Roots) == 0 {
+		if err != nil && !errors.Is(err, parser.ErrUnsupportedProviderFeature) {
+			log.Printf("%s provider watch plan: %v", def.Type, err)
+		}
+		return false, nil
+	}
+	added := false
+	var addedRoots []watchRoot
+	var missingRoots []string
+	for _, providerRoot := range plan.Roots {
+		root := filepath.Clean(providerRoot.Path)
+		if root == "" || root == "." {
+			continue
+		}
+		if _, err := os.Stat(root); err == nil {
+			addRoot(dir, root, !providerRoot.Recursive)
+			added = true
+			addedRoots = append(addedRoots, watchRoot{
+				root:    root,
+				shallow: !providerRoot.Recursive,
+			})
+			continue
+		}
+		missingRoots = append(missingRoots, root)
+	}
+	if !added {
+		return false, nil
+	}
+	// A watch target that does not exist yet but lives under an already-watched
+	// root needs no separate polling only when the ancestor is recursive or
+	// when a shallow root can observe creation of the missing root itself. A
+	// shallow ancestor sees only immediate child creation, so it cannot cover a
+	// missing nested provider root.
+	for _, missing := range missingRoots {
+		if !pathCoveredByAnyWatchRootCreation(missing, addedRoots) {
+			return true, []string{dir}
+		}
+	}
+	return true, nil
+}
+
+// pathCoveredByAnyWatchRootCreation reports whether path is covered by an
+// existing watch root strongly enough to observe creation of the missing root.
+// Recursive roots cover the whole subtree. Shallow roots only cover direct
+// children because fsnotify can report that immediate directory creation, after
+// which the next watcher setup can add the provider's deeper watch root.
+func pathCoveredByAnyWatchRootCreation(path string, roots []watchRoot) bool {
+	for _, root := range roots {
+		if root.shallow {
+			if filepath.Dir(path) == root.root {
+				return true
+			}
+			continue
+		}
+		if path == root.root ||
+			strings.HasPrefix(path, root.root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func collectLegacyWatchRoots(
+	def parser.AgentDef,
+	dir string,
+	addRoot func(dir, root string, shallow bool),
+) []string {
+	var unwatchedDirs []string
+	if def.ShallowWatchRootsFunc != nil {
+		for _, watchDir := range def.ShallowWatchRootsFunc(dir) {
+			if _, err := os.Stat(watchDir); err == nil {
+				addRoot(dir, watchDir, true)
+			}
+		}
+	}
+	if def.WatchRootsFunc != nil {
+		watchDirs := def.WatchRootsFunc(dir)
+		if len(watchDirs) == 0 {
+			return append(unwatchedDirs, dir)
+		}
+		for _, watchDir := range watchDirs {
+			if _, err := os.Stat(watchDir); err == nil {
+				addRoot(dir, watchDir, def.ShallowWatch)
+				continue
+			}
+			unwatchedDirs = append(unwatchedDirs, dir)
+		}
+		return unwatchedDirs
+	}
+	if len(def.WatchSubdirs) == 0 {
+		if _, err := os.Stat(dir); err == nil {
+			addRoot(dir, dir, def.ShallowWatch)
+		}
+		return unwatchedDirs
+	}
+	for _, sub := range def.WatchSubdirs {
+		watchDir := filepath.Join(dir, sub)
+		if _, err := os.Stat(watchDir); err == nil {
+			addRoot(dir, watchDir, def.ShallowWatch)
+		}
+	}
+	return unwatchedDirs
 }
 
 func startPeriodicSync(
