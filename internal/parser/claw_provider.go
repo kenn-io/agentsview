@@ -73,7 +73,7 @@ func (p *openClawProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
 ) (SourceRef, bool, error) {
-	req = providerFindRequestWithRawSessionID(p.Def, req)
+	req = ProviderFindRequestWithRawSessionID(p.Def, req)
 	return p.sources.FindSource(ctx, req)
 }
 
@@ -152,7 +152,7 @@ func (p *qClawProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
 ) (SourceRef, bool, error) {
-	req = providerFindRequestWithRawSessionID(p.Def, req)
+	req = ProviderFindRequestWithRawSessionID(p.Def, req)
 	return p.sources.FindSource(ctx, req)
 }
 
