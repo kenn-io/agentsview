@@ -4,10 +4,13 @@ package duckdb
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // TestGetAllMessagesSkipsNegativeCallIndex guards against a panic when the
@@ -50,4 +53,47 @@ func TestGetAllMessagesSkipsNegativeCallIndex(t *testing.T) {
 	assert.Equal(t, "search", msgs[1].ToolCalls[0].ToolName)
 	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, "duck result", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+}
+
+// TestDuckMessageHydratesToolCallFilePathAndCallIndex mirrors the SQLite
+// round-trip coverage (db.TestResolveToolCallsDerivesPositionalCallIndex):
+// the DuckDB message hydrator must populate db.ToolCall.FilePath and
+// CallIndex so GetMessages/GetAllMessages consumers see them at parity with
+// SQLite.
+func TestDuckMessageHydratesToolCallFilePathAndCallIndex(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "tc", Project: "p", Machine: "local", Agent: "claude",
+		MessageCount: 1, CreatedAt: "2026-01-01T00:00:00Z",
+	}), "upsert session")
+	// One assistant message with three tool calls; the write path numbers
+	// them positionally (0,1,2) and each carries a distinct file_path.
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: "tc", Ordinal: 0, Role: "assistant", Content: "tools",
+		HasToolUse: true,
+		ToolCalls: []db.ToolCall{
+			{ToolName: "Read", Category: "Read", FilePath: "a.go"},
+			{ToolName: "Edit", Category: "Edit", FilePath: "b.go"},
+			{ToolName: "Write", Category: "Write", FilePath: "c.go"},
+		},
+	}}), "insert messages")
+
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "mirror.duckdb"), local, SyncOptions{})
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "push to duckdb mirror")
+	store := NewStoreFromDB(syncer.DB())
+
+	msgs, err := store.GetAllMessages(ctx, "tc")
+	require.NoError(t, err, "get all messages")
+	require.Len(t, msgs, 1)
+	calls := msgs[0].ToolCalls
+	require.Len(t, calls, 3)
+	for i, tc := range calls {
+		assert.Equal(t, i, tc.CallIndex, "call %d index", i)
+	}
+	assert.Equal(t, "a.go", calls[0].FilePath)
+	assert.Equal(t, "b.go", calls[1].FilePath)
+	assert.Equal(t, "c.go", calls[2].FilePath)
 }
