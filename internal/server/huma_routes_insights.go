@@ -136,7 +136,7 @@ func (s *Server) humaPublishInsight(
 	ctx context.Context,
 	in *publishInsightInput,
 ) (*jsonOutput[publishResponse], error) {
-	token := s.githubToken()
+	token := s.githubToken(ctx)
 	if token == "" {
 		return nil, apiError(http.StatusUnauthorized, "GitHub token not configured")
 	}

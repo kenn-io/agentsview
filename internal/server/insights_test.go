@@ -277,6 +277,8 @@ func TestInsightPublish(t *testing.T) {
 	})
 
 	t.Run("NoToken", func(t *testing.T) {
+		t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "")
+		t.Setenv("PATH", t.TempDir())
 		te := setup(t)
 		id := te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
 
