@@ -709,6 +709,47 @@ to choose a wider or narrower window.
 
 ---
 
+### `agentsview mcp`
+
+Run a read-only Model Context Protocol server for assistant clients
+that can call MCP tools. The server exposes session search, listing,
+overview, message retrieval, content search, and usage-summary tools
+over the same service layer used by the CLI and HTTP API.
+
+```bash
+agentsview mcp
+agentsview mcp --http 127.0.0.1:8085
+agentsview mcp --server http://127.0.0.1:8080
+```
+
+By default, `agentsview mcp` speaks stdio, which is the expected
+transport for local MCP clients such as Claude Desktop, Claude Code,
+and Codex. `--http <addr>` serves StreamableHTTP instead. Bare ports
+and `:PORT` values bind to `127.0.0.1`; non-loopback binds require
+`--http-allow-insecure` plus a configured bearer token.
+
+Local MCP mode is daemon-backed. Each tool call resolves the local
+AgentsView daemon and starts it when needed, so a long-lived MCP
+server can keep working after the daemon exits due to idleness. The
+MCP server does not fall back to opening the local SQLite archive
+directly.
+
+Use `--server <url>` to point at an explicit running daemon. When the
+daemon requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
+`--server-token-file <path>`. To serve PostgreSQL-backed data, run
+[`agentsview pg serve`](/pg-sync/#agentsview-pg-serve) and pass its
+URL with `--server`; `--pg` is not supported by `agentsview mcp`
+because it bypasses the daemon policy.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--http <addr>` | | Serve StreamableHTTP instead of stdio |
+| `--http-allow-insecure` | `false` | Allow non-loopback HTTP binds; requires bearer auth |
+| `--server <url>` | | Explicit daemon URL for MCP tool calls |
+| `--server-token-file <path>` | | Bearer token file for an explicit daemon URL |
+
+---
+
 ### `agentsview secrets`
 
 Scan for and list detected secret leaks across sessions, with
