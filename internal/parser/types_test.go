@@ -485,10 +485,6 @@ func TestZedRegistryEntry(t *testing.T) {
 	assert.Equal(t, "ZED_DIR", def.EnvVar)
 	assert.Equal(t, "zed_dirs", def.ConfigKey)
 	assert.Equal(t, "zed:", def.IDPrefix)
-	// Zed is a migrated, provider-authoritative agent: source discovery and
-	// lookup live on the concrete provider, not on legacy AgentDef hooks.
-	require.Nil(t, def.DiscoverFunc, "Zed DiscoverFunc")
-	require.Nil(t, def.FindSourceFunc, "Zed FindSourceFunc")
 }
 
 func TestShelleyRegistryEntry(t *testing.T) {
@@ -498,21 +494,12 @@ func TestShelleyRegistryEntry(t *testing.T) {
 	assert.Equal(t, "SHELLEY_DIR", def.EnvVar)
 	assert.Equal(t, "shelley_dirs", def.ConfigKey)
 	assert.Equal(t, "shelley:", def.IDPrefix)
-	// Shelley is a migrated, provider-authoritative agent: source discovery
-	// and lookup live on the concrete provider, not on legacy AgentDef hooks.
-	require.Nil(t, def.DiscoverFunc, "Shelley DiscoverFunc")
-	require.Nil(t, def.FindSourceFunc, "Shelley FindSourceFunc")
 }
 
 func TestOpenCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentOpenCode)
 	require.True(t, ok, "AgentOpenCode missing from Registry")
 	require.True(t, def.FileBased, "OpenCode FileBased")
-	// OpenCode is a migrated, provider-authoritative agent: source
-	// discovery and lookup live on the concrete provider, not on legacy
-	// AgentDef hooks.
-	require.Nil(t, def.DiscoverFunc, "OpenCode DiscoverFunc")
-	require.Nil(t, def.FindSourceFunc, "OpenCode FindSourceFunc")
 	want := []string{
 		"storage/session",
 		"storage/message",
@@ -526,10 +513,6 @@ func TestCoworkRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentCowork)
 	require.True(t, ok, "AgentCowork missing from Registry")
 	require.True(t, def.FileBased, "Cowork FileBased")
-	// Cowork is a migrated, provider-authoritative agent: source discovery
-	// and lookup live on the concrete provider, not on legacy AgentDef hooks.
-	require.Nil(t, def.DiscoverFunc, "Cowork DiscoverFunc")
-	require.Nil(t, def.FindSourceFunc, "Cowork FindSourceFunc")
 	assert.Equal(t, "COWORK_DIR", def.EnvVar)
 	assert.Equal(t, "cowork_dirs", def.ConfigKey)
 	assert.Equal(t, "cowork:", def.IDPrefix)
@@ -548,11 +531,6 @@ func TestMiMoCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentMiMoCode)
 	require.True(t, ok, "AgentMiMoCode missing from Registry")
 	require.True(t, def.FileBased, "MiMoCode FileBased")
-	// MiMoCode is a migrated, provider-authoritative agent: source
-	// discovery and lookup live on the concrete provider, not on legacy
-	// AgentDef hooks.
-	require.Nil(t, def.DiscoverFunc, "MiMoCode DiscoverFunc")
-	require.Nil(t, def.FindSourceFunc, "MiMoCode FindSourceFunc")
 	assert.Equal(t, "MIMOCODE_DIR", def.EnvVar)
 	assert.Equal(t, "mimocode_dirs", def.ConfigKey)
 	assert.Equal(t, []string{".local/share/mimocode"}, def.DefaultDirs)
@@ -570,11 +548,6 @@ func TestCommandCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentCommandCode)
 	require.True(t, ok, "AgentCommandCode missing from Registry")
 	require.True(t, def.FileBased, "Command Code FileBased")
-	// Command Code is a migrated, provider-authoritative agent: source
-	// discovery and lookup live on the concrete provider, not on legacy
-	// AgentDef hooks.
-	require.Nil(t, def.DiscoverFunc, "Command Code DiscoverFunc")
-	require.Nil(t, def.FindSourceFunc, "Command Code FindSourceFunc")
 	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
 	assert.Equal(t, "commandcode:", def.IDPrefix)
 }
@@ -583,8 +556,6 @@ func TestDeepSeekTUIRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentDeepSeekTUI)
 	require.True(t, ok, "AgentDeepSeekTUI missing from Registry")
 	require.True(t, def.FileBased, "DeepSeek TUI FileBased")
-	assert.Nil(t, def.DiscoverFunc, "DeepSeek TUI DiscoverFunc")
-	assert.Nil(t, def.FindSourceFunc, "DeepSeek TUI FindSourceFunc")
 	assert.Equal(t, "DeepSeek TUI", def.DisplayName)
 	assert.Equal(t, "DEEPSEEK_TUI_SESSIONS_DIR", def.EnvVar)
 	assert.Equal(t, "deepseek_tui_sessions_dirs", def.ConfigKey)
@@ -1122,11 +1093,6 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	// Verify watch subdirs
 	assert.Contains(t, reasonixDef.WatchSubdirs, "sessions")
 	assert.Contains(t, reasonixDef.WatchSubdirs, "archive")
-
-	// Provider-authoritative agents must not route runtime discovery or lookup
-	// through legacy AgentDef hooks.
-	assert.Nil(t, reasonixDef.DiscoverFunc)
-	assert.Nil(t, reasonixDef.FindSourceFunc)
 
 	// Verify default dirs contain .reasonix and Windows path
 	assert.True(t, len(reasonixDef.DefaultDirs) > 0)

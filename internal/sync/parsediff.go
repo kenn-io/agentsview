@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -16,8 +15,9 @@ import (
 // ParseDiffOptions configures a report-only re-parse comparison.
 type ParseDiffOptions struct {
 	// Agents restricts the run; empty means every file-based agent with
-	// a DiscoverFunc. Agents without an on-disk source to re-parse
-	// (database-backed or import-only) are rejected with an error.
+	// a provider-discoverable on-disk source. Agents without an on-disk
+	// source to re-parse (database-backed or import-only) are rejected
+	// with an error.
 	Agents []parser.AgentType
 	// Limit caps the number of source files parsed, newest mtime first
 	// across all agents. 0 means no limit.
@@ -67,30 +67,19 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		report.Agents = append(report.Agents, string(def.Type))
 	}
 
-	// Discovery mirrors syncAllLocked's file phase: per-agent
-	// DiscoverFunc over the configured dirs, or provider discovery for
-	// agents that have dropped legacy discovery, then dedupe and the
-	// legacy-Kiro shadow filter.
+	// Discovery mirrors syncAllLocked's file phase: provider discovery over
+	// the configured dirs per agent, then dedupe and the legacy-Kiro shadow
+	// filter. Provider discovery already enumerates shared-SQLite sources
+	// (Kiro's data.sqlite3, db-mode OpenCode's opencode.db) per session, so
+	// no separate db-source synthesis is needed.
 	var files []parser.DiscoveredFile
 	for _, def := range resolved {
-		if def.DiscoverFunc != nil {
-			for _, d := range e.agentDirs[def.Type] {
-				files = append(files, def.DiscoverFunc(d)...)
-			}
-			continue
-		}
 		providerFiles, err := e.parseDiffProviderSources(ctx, def.Type)
 		if err != nil {
 			return nil, err
 		}
 		files = append(files, providerFiles...)
 	}
-	// DiscoverFunc does not emit the shared-SQLite source for Kiro
-	// (data.sqlite3) or db-mode OpenCode (opencode.db) — normal sync
-	// reaches those through dedicated phases. Synthesize them here so
-	// their sessions are actually re-parsed; processKiro/processOpenCode
-	// fan one db path out to every contained session under forceParse.
-	files = append(files, e.parseDiffDatabaseSources(resolved)...)
 	files = dedupeDiscoveredFiles(files)
 	files = e.filterShadowedLegacyKiroFiles(files)
 
@@ -214,10 +203,8 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 }
 
 // parseDiffProviderSources discovers an agent's on-disk sources through
-// the provider facade for agents that have dropped their DiscoverFunc
-// and run provider-authoritatively. It is the provider-shape counterpart
-// to the per-agent DiscoverFunc loop and is scoped to a single agent type
-// so parse-diff respects the requested agent set.
+// the provider facade. It is scoped to a single agent type so parse-diff
+// respects the requested agent set.
 func (e *Engine) parseDiffProviderSources(
 	ctx context.Context,
 	agentType parser.AgentType,
@@ -267,9 +254,6 @@ func (e *Engine) parseDiffProviderSources(
 func (e *Engine) parseDiffAgentDiscoverable(def parser.AgentDef) bool {
 	if !def.FileBased {
 		return false
-	}
-	if def.DiscoverFunc != nil {
-		return true
 	}
 	switch e.providerMigrationModes[def.Type] {
 	case parser.ProviderMigrationProviderAuthoritative:
@@ -324,59 +308,6 @@ func (e *Engine) resolveParseDiffAgents(
 		}
 	}
 	return out, nil
-}
-
-// parseDiffDatabaseSources synthesizes DiscoveredFile entries for the
-// shared-SQLite agent stores that DiscoverFunc does not emit: Kiro's
-// data.sqlite3, OpenCode's opencode.db, and Kilo's kilo.db. The
-// corresponding process functions recognize those base filenames and fan
-// one db path out to every contained session, so routing them through the
-// normal worker loop re-parses every CLI Kiro / DB-backed OpenCode /
-// DB-backed Kilo session.
-// Without this, those sessions fall to the "not discovered" sweep and
-// an --agent kiro / --agent opencode run would pass while comparing
-// nothing.
-//
-// The OpenCode db is added whenever it exists, regardless of which
-// source mode ResolveOpenCodeSource picks: normal sync reads
-// opencode.db in storage-mode roots too (openCodePendingSessionIDs),
-// because a migrated root can still hold DB-only legacy sessions. Kilo
-// uses the same hybrid storage model. The storage-ID filtering in each
-// process function keeps file-backed sessions from being compared twice.
-func (e *Engine) parseDiffDatabaseSources(
-	resolved []parser.AgentDef,
-) []parser.DiscoveredFile {
-	var extra []parser.DiscoveredFile
-	for _, def := range resolved {
-		// Provider-authoritative agents (no DiscoverFunc) already have
-		// their shared-SQLite sessions enumerated by
-		// parseDiffProviderSources, which applies the provider's
-		// storage-ID filter so a file-backed storage session is not also
-		// re-parsed from its stale db row. Synthesizing the raw db here
-		// would re-add those sessions through the legacy fan-out, double
-		// counting and bypassing the filter.
-		if def.DiscoverFunc == nil {
-			continue
-		}
-		switch def.Type {
-		case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode:
-			for _, dir := range e.agentDirs[def.Type] {
-				if dir == "" {
-					continue
-				}
-				dbPath := filepath.Join(
-					dir, openCodeFormatDBName(def.Type),
-				)
-				if info, err := os.Stat(dbPath); err == nil &&
-					!info.IsDir() {
-					extra = append(extra, parser.DiscoveredFile{
-						Path: dbPath, Agent: def.Type,
-					})
-				}
-			}
-		}
-	}
-	return extra
 }
 
 // sortAndLimitParseDiffFiles orders files newest-first by source

@@ -21,7 +21,7 @@ func TestBuildResolveScript(t *testing.T) {
 
 	// Non-file-based agents must not appear.
 	for _, def := range parser.Registry {
-		if def.FileBased || def.DiscoverFunc != nil {
+		if def.FileBased {
 			continue
 		}
 		marker := "\"" + string(def.Type) + ":"
@@ -29,20 +29,10 @@ func TestBuildResolveScript(t *testing.T) {
 			"non-file-based agent %s in script", def.Type)
 	}
 
-	// Every file-based agent with DiscoverFunc must appear.
+	// Every file-based, provider-authoritative agent has on-disk source
+	// roots that SSH sync must transfer, so it must appear in the script.
 	for _, def := range parser.Registry {
-		if !def.FileBased || def.DiscoverFunc == nil {
-			continue
-		}
-		marker := "\"" + string(def.Type) + ":"
-		assert.Contains(t, script, marker,
-			"file-based agent %s missing from script", def.Type)
-	}
-
-	// Provider-authoritative agents may have dropped DiscoverFunc but still
-	// have on-disk source roots that SSH sync must transfer.
-	for _, def := range parser.Registry {
-		if !def.FileBased || def.DiscoverFunc != nil ||
+		if !def.FileBased ||
 			parser.ProviderMigrationModes()[def.Type] !=
 				parser.ProviderMigrationProviderAuthoritative {
 			continue

@@ -67,11 +67,10 @@ func buildAiderResolveSnippet(envVar string) string {
 // "agentType:path\n" per agent target, plus "@file:path\n" lines for sibling
 // metadata files such as Codex's session_index.jsonl.
 //
-// Only includes file-based agents that have on-disk sources to
-// resolve: either a legacy DiscoverFunc or a provider facade that has
-// left legacy-only mode. For each agent with an EnvVar, the script
-// checks the env var first and falls back to the default dir. Dirs (and
-// files) that don't exist on the remote are skipped.
+// Only includes file-based agents that have on-disk sources to resolve via
+// their provider facade. For each agent with an EnvVar, the script checks the
+// env var first and falls back to the default dir. Dirs (and files) that don't
+// exist on the remote are skipped.
 func buildResolveScript() string {
 	var b strings.Builder
 	for _, def := range parser.Registry {
@@ -88,7 +87,7 @@ func buildResolveScript() string {
 		// shell guard in buildAiderResolveSnippet also drops AIDER_DIR set
 		// to literal "$HOME" (or "$HOME/"), so an unscoped override cannot
 		// reintroduce a whole-home scan or tar. Local sync is unaffected:
-		// it discovers via DiscoverFunc, not this script.
+		// it discovers via its provider facade, not this script.
 		if def.Type == parser.AgentAider {
 			if def.EnvVar != "" {
 				b.WriteString(buildAiderResolveSnippet(def.EnvVar))
@@ -129,16 +128,12 @@ func buildResolveScript() string {
 }
 
 // resolveAgentHasOnDiskSource reports whether a file-based agent has
-// on-disk sources the resolve script should probe: either a legacy
-// DiscoverFunc or a provider facade that has left legacy-only mode.
-// Provider-migrated agents drop their DiscoverFunc but still have a
-// configurable directory, so they must stay in the remote resolve set.
+// on-disk sources the resolve script should probe via its provider facade.
+// Provider-authoritative agents have a configurable directory, so they must
+// stay in the remote resolve set.
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 	if !def.FileBased {
 		return false
-	}
-	if def.DiscoverFunc != nil {
-		return true
 	}
 	switch parser.ProviderMigrationModes()[def.Type] {
 	case parser.ProviderMigrationProviderAuthoritative:

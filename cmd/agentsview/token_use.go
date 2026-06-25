@@ -123,13 +123,9 @@ func resolveRawSessionID(
 }
 
 // agentHasDiskSourceLookup reports whether a session source can be located on
-// disk by raw ID for the agent: via the legacy AgentDef FindSourceFunc hook, or
-// via a provider-authoritative provider's FindSource for agents whose lookup was
-// folded onto the provider (e.g. Codex).
+// disk by raw ID for the agent, via its provider-authoritative provider's
+// FindSource.
 func agentHasDiskSourceLookup(def parser.AgentDef) bool {
-	if def.FindSourceFunc != nil {
-		return true
-	}
 	if parser.ProviderMigrationModes()[def.Type] !=
 		parser.ProviderMigrationProviderAuthoritative {
 		return false
@@ -139,13 +135,9 @@ func agentHasDiskSourceLookup(def parser.AgentDef) bool {
 }
 
 // findAgentSourceFile resolves a raw agent session ID to an on-disk source path
-// under dir, using the legacy FindSourceFunc when present and otherwise the
-// provider's FindSource (RawSessionID lookup). Returns "" when no source
-// resolves or the agent has no on-disk lookup.
+// under dir via the provider's FindSource (RawSessionID lookup). Returns ""
+// when no source resolves or the agent has no on-disk lookup.
 func findAgentSourceFile(def parser.AgentDef, dir, rawID string) string {
-	if def.FindSourceFunc != nil {
-		return def.FindSourceFunc(dir, rawID)
-	}
 	factory, ok := parser.ProviderFactoryByType(def.Type)
 	if !ok {
 		return ""

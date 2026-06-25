@@ -68,15 +68,6 @@ type AgentDef struct {
 	ShallowWatch bool     // true = watch root only, rely on periodic sync for subdirs
 	FileBased    bool     // false for DB-backed agents
 
-	// DiscoverFunc finds session files under a root directory.
-	// Nil for non-file-based agents.
-	DiscoverFunc func(string) []DiscoveredFile
-
-	// FindSourceFunc locates a single session's source file
-	// given a root directory and the raw session ID (prefix
-	// already stripped). Nil for non-file-based agents.
-	FindSourceFunc func(string, string) string
-
 	// WatchRootsFunc resolves the directories to watch for live
 	// updates under a configured root, for agents whose watch
 	// targets depend on the on-disk layout rather than a static
