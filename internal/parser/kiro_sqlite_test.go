@@ -64,10 +64,10 @@ func TestParseKiroSQLiteSession(t *testing.T) {
 		1779012000000, 1779012030000,
 	)
 
-	sess, msgs, err := ParseKiroSQLiteSession(
+	sess, msgs, err := parseKiroSQLiteSession(
 		dbPath, "sqlite-session", "test-machine",
 	)
-	require.NoError(t, err, "ParseKiroSQLiteSession")
+	require.NoError(t, err, "parseKiroSQLiteSession")
 	require.NotNil(t, sess, "expected session")
 	assert.Equal(t, "kiro:sqlite-session", sess.ID, "ID")
 	assert.Equal(t, AgentKiro, sess.Agent, "Agent")
@@ -122,7 +122,7 @@ func TestKiroSQLiteSourceMtime(t *testing.T) {
 	assert.Equal(t, int64(7_000_000), mtime, "mtime")
 }
 
-func TestParseKiroSQLiteVirtualPath(t *testing.T) {
+func TestKiroSQLiteVirtualPathParts(t *testing.T) {
 	tests := []struct {
 		name      string
 		dbPath    string
@@ -142,7 +142,7 @@ func TestParseKiroSQLiteVirtualPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotDB, gotID, ok := ParseKiroSQLiteVirtualPath(
+			gotDB, gotID, ok := kiroSQLiteVirtualPathParts(
 				KiroSQLiteVirtualPath(tt.dbPath, tt.sessionID),
 			)
 			require.True(t, ok, "expected virtual path to parse")
@@ -159,7 +159,7 @@ func TestParseKiroSQLiteSessionRejectsMalformedPayload(t *testing.T) {
 		readKiroFixture(t, "malformed_payload.txt"),
 		1, 2,
 	)
-	_, _, err := ParseKiroSQLiteSession(
+	_, _, err := parseKiroSQLiteSession(
 		dbPath, "broken-session", "test-machine",
 	)
 	require.Error(t, err, "expected malformed payload error")
