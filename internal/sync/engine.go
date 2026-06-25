@@ -907,20 +907,6 @@ func isUnder(dir, path string) (string, bool) {
 	return rel, true
 }
 
-// findContainingDir returns the first dir from dirs that is a
-// parent of path, or "" if none match.
-func findContainingDir(dirs []string, path string) string {
-	for _, d := range dirs {
-		if d == "" {
-			continue
-		}
-		if _, ok := isUnder(d, path); ok {
-			return d
-		}
-	}
-	return ""
-}
-
 // classifyContainerPath runs the container- and SQLite-style classifiers that
 // resolve a path whether or not it currently exists on disk (Kiro, Zed,
 // Shelley, and Vibe). Split out of classifyOnePath to keep that function
@@ -1135,30 +1121,6 @@ func (e *Engine) classifyOnePath(
 				Path:    path,
 				Project: project,
 				Agent:   parser.AgentGemini,
-			}, true
-		}
-	}
-
-	// Cursor:
-	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
-	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
-	for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
-		if cursorDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(cursorDir, path); ok {
-			projectDir, ok := parser.ParseCursorTranscriptRelPath(rel)
-			if !ok {
-				continue
-			}
-			project := parser.DecodeCursorProjectDir(projectDir)
-			if project == "" {
-				project = "unknown"
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: project,
-				Agent:   parser.AgentCursor,
 			}, true
 		}
 	}
@@ -4072,8 +4034,6 @@ func (e *Engine) processFile(
 		res = e.processReasonix(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
-	case parser.AgentCursor:
-		res = e.processCursor(file, info)
 	case parser.AgentVSCodeCopilot:
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
@@ -6291,61 +6251,6 @@ func (e *Engine) processAntigravityCLI(
 	}
 }
 
-func (e *Engine) processCursor(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Skip .txt if a sibling .jsonl exists — .jsonl is the
-	// richer format and takes precedence.
-	if stem, ok := strings.CutSuffix(file.Path, ".txt"); ok {
-		if parser.IsRegularFile(stem + ".jsonl") {
-			return processResult{skip: true}
-		}
-	}
-
-	sessionID := parser.CursorSessionID(file.Path)
-
-	if e.shouldSkipFile(sessionID, info) {
-		return processResult{skip: true}
-	}
-
-	// Re-validate containment immediately before parsing to
-	// close the TOCTOU window between discovery and read.
-	// The parser opens with O_NOFOLLOW (rejecting symlinked
-	// final components), and this check catches parent
-	// directory swaps.
-	if root := findContainingDir(
-		e.agentDirs[parser.AgentCursor], file.Path,
-	); root != "" {
-		if err := validateCursorContainment(
-			root, file.Path,
-		); err != nil {
-			return processResult{
-				err: fmt.Errorf(
-					"containment check: %w", err,
-				),
-			}
-		}
-	}
-
-	sess, msgs, err := parser.ParseCursorSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	// Hash is computed inside ParseCursorSession from the
-	// already-read data to avoid re-opening the file by path.
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
@@ -6357,31 +6262,6 @@ func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-// validateCursorContainment re-resolves both root and path
-// to verify the file still resides within the cursor projects
-// directory. Returns an error if containment fails.
-func validateCursorContainment(
-	cursorDir, path string,
-) error {
-	resolvedRoot, err := filepath.EvalSymlinks(cursorDir)
-	if err != nil {
-		return fmt.Errorf("resolve root: %w", err)
-	}
-	resolvedPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return fmt.Errorf("resolve path: %w", err)
-	}
-	rel, err := filepath.Rel(resolvedRoot, resolvedPath)
-	sep := string(filepath.Separator)
-	if err != nil || rel == ".." ||
-		strings.HasPrefix(rel, ".."+sep) {
-		return fmt.Errorf(
-			"%s escapes %s", path, cursorDir,
-		)
-	}
-	return nil
 }
 
 // computeFinalStreak counts trailing consecutive failures

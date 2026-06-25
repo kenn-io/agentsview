@@ -29,6 +29,11 @@ var legacyEntrypointVerb = regexp.MustCompile(`^(Discover|Find|Parse|Process|Cla
 var providerNeutralEntrypoints = map[string]bool{
 	"ParseVirtualSourcePath":        true,
 	"ParseVirtualSourcePathForBase": true,
+	// ParseCursorTranscriptRelPath is a pure rel-path shape validator with no
+	// filesystem or provider state. It is shared by the engine's path
+	// classification/enrichment and the Cursor provider's source set, so it
+	// stays a free helper rather than moving onto the provider.
+	"ParseCursorTranscriptRelPath": true,
 }
 
 // pendingShimProviderFiles are provider files whose behavior has not yet been
@@ -48,7 +53,6 @@ var pendingShimProviderFiles = map[string]bool{
 	"codex_provider.go":                true,
 	"copilot_provider.go":              true,
 	"cowork_provider.go":               true,
-	"cursor_provider.go":               true,
 	"db_backed_provider.go":            true,
 	"gemini_provider.go":               true,
 	"hermes_provider.go":               true,

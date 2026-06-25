@@ -1152,11 +1152,9 @@ func TestDiscoverCursorSessions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
-			files := DiscoverCursorSessions(dir)
-			require.Len(t, files, tt.wantCount, "files count")
-			for _, f := range files {
-				assert.Equal(t, AgentCursor, f.Agent, "agent")
-			}
+			set := newCursorSourceSet([]string{dir})
+			paths := set.discoverTranscriptPaths(dir)
+			require.Len(t, paths, tt.wantCount, "paths count")
 		})
 	}
 }
@@ -1225,11 +1223,9 @@ func TestDiscoverCursorSessions_NestedLayout(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
-			files := DiscoverCursorSessions(dir)
-			require.Len(t, files, tt.wantCount, "files count")
-			for _, f := range files {
-				assert.Equal(t, AgentCursor, f.Agent, "agent")
-			}
+			set := newCursorSourceSet([]string{dir})
+			paths := set.discoverTranscriptPaths(dir)
+			require.Len(t, paths, tt.wantCount, "paths count")
 		})
 	}
 }
@@ -1243,10 +1239,11 @@ func TestDiscoverCursorSessions_DedupPrefersJsonl(t *testing.T) {
 		filepath.Join(transcripts, "sess.txt"):   "user:\nhi",
 		filepath.Join(transcripts, "sess.jsonl"): `{"role":"user"}`,
 	})
-	files := DiscoverCursorSessions(dir)
-	require.Len(t, files, 1, "files count")
-	assert.True(t, strings.HasSuffix(files[0].Path, ".jsonl"),
-		"expected .jsonl path, got %q", files[0].Path)
+	set := newCursorSourceSet([]string{dir})
+	paths := set.discoverTranscriptPaths(dir)
+	require.Len(t, paths, 1, "paths count")
+	assert.True(t, strings.HasSuffix(paths[0], ".jsonl"),
+		"expected .jsonl path, got %q", paths[0])
 }
 
 func TestParseCursorTranscriptRelPath(t *testing.T) {
@@ -1321,7 +1318,7 @@ func TestFindCursorSourceFile(t *testing.T) {
 		setupFileSystem(t, dir, map[string]string{
 			filepath.Join(cursorTranscripts, "sess1.txt"): "data",
 		})
-		got := FindCursorSourceFile(dir, "sess1")
+		got := cursorFindSourceFile(dir, "sess1")
 		assert.NotEmpty(t, got, "expected to find .txt file")
 	})
 
@@ -1330,7 +1327,7 @@ func TestFindCursorSourceFile(t *testing.T) {
 		setupFileSystem(t, dir, map[string]string{
 			filepath.Join(cursorTranscripts, "sess2.jsonl"): "{}",
 		})
-		got := FindCursorSourceFile(dir, "sess2")
+		got := cursorFindSourceFile(dir, "sess2")
 		assert.NotEmpty(t, got, "expected to find .jsonl file")
 	})
 
@@ -1343,7 +1340,7 @@ func TestFindCursorSourceFile(t *testing.T) {
 		jsonlPath := filepath.Join(
 			dir, cursorTranscripts, "sess3.jsonl",
 		)
-		got := FindCursorSourceFile(dir, "sess3")
+		got := cursorFindSourceFile(dir, "sess3")
 		assert.Equal(t, jsonlPath, got, "(.jsonl preferred)")
 	})
 
@@ -1352,7 +1349,7 @@ func TestFindCursorSourceFile(t *testing.T) {
 		setupFileSystem(t, dir, map[string]string{
 			filepath.Join(cursorTranscripts, "sess4", "sess4.jsonl"): "{}",
 		})
-		got := FindCursorSourceFile(dir, "sess4")
+		got := cursorFindSourceFile(dir, "sess4")
 		require.NotEmpty(t, got, "expected to find nested .jsonl file")
 		assert.True(t, strings.HasSuffix(got, filepath.Join("sess4", "sess4.jsonl")),
 			"unexpected path %q", got)
@@ -1364,14 +1361,14 @@ func TestFindCursorSourceFile(t *testing.T) {
 			filepath.Join(cursorTranscripts, "sess5", "sess5.txt"):   "old",
 			filepath.Join(cursorTranscripts, "sess5", "sess5.jsonl"): "new",
 		})
-		got := FindCursorSourceFile(dir, "sess5")
+		got := cursorFindSourceFile(dir, "sess5")
 		assert.True(t, strings.HasSuffix(got, "sess5.jsonl"),
 			"expected .jsonl path, got %q", got)
 	})
 
 	t.Run("NotFound", func(t *testing.T) {
 		dir := t.TempDir()
-		got := FindCursorSourceFile(dir, "nonexistent")
+		got := cursorFindSourceFile(dir, "nonexistent")
 		assert.Empty(t, got, "expected empty")
 	})
 }

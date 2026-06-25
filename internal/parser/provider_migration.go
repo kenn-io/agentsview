@@ -23,7 +23,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentCopilot:        ProviderMigrationLegacyOnly,
 	AgentGemini:         ProviderMigrationLegacyOnly,
 	AgentOpenHands:      ProviderMigrationProviderAuthoritative,
-	AgentCursor:         ProviderMigrationLegacyOnly,
+	AgentCursor:         ProviderMigrationProviderAuthoritative,
 	AgentMiMoCode:       ProviderMigrationProviderAuthoritative,
 	AgentOpenCode:       ProviderMigrationProviderAuthoritative,
 	AgentKilo:           ProviderMigrationProviderAuthoritative,
