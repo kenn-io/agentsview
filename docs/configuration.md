@@ -424,9 +424,11 @@ export AWS_S3_ENDPOINT=https://s3.amazonaws.com
 ```
 
 `AWS_S3_ENDPOINT` is optional for AWS S3. Set it for S3-compatible
-services such as MinIO, Aliyun OSS, or Cloudflare R2. An `http://`
-endpoint is allowed and selects insecure transport, which should only
-be used for trusted local development services.
+services such as MinIO, Aliyun OSS, or Cloudflare R2. `http://`
+endpoints are accepted only for loopback hosts such as `localhost` or
+`127.0.0.1`. For a non-loopback HTTP endpoint, set
+`AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT=true`; use that override only for
+trusted private networks because session transcripts travel without TLS.
 
 Expected object layouts:
 
@@ -442,10 +444,11 @@ machine label. Codex discovery only imports rollout files under the
 configured root plus a trailing slash, so sibling prefixes such as
 `raw/codex-backup` are ignored.
 
-S3 object `Size` and `LastModified` metadata are stored in the
-session row and used for unchanged-object skip checks. A later sync
-therefore lists object metadata first and downloads only objects whose
-source metadata changed or whose stored parser data is stale.
+S3 object `Size`, `LastModified`, and available object fingerprints
+(`ETag`, version ID, and checksum headers) are stored in the session row
+and used for unchanged-object skip checks. A later sync therefore lists
+object metadata first and downloads only objects whose source metadata
+changed or whose stored parser data is stale.
 
 S3 roots are not watched with fsnotify. They are picked up by initial
 sync, manual sync, and the periodic directory scan.
@@ -553,9 +556,10 @@ Change detection uses file size, mtime, inode, and device
 tracking to validate incremental parses more reliably. A pool of
 8 workers processes files in parallel during sync.
 
-For `s3://` Claude and Codex roots, change detection uses object size
-and `LastModified` metadata from listing or stat calls. Object content
-is downloaded only after that metadata shows a parse may be needed.
+For `s3://` Claude and Codex roots, change detection uses object size,
+`LastModified`, and available object fingerprints such as ETag, version
+ID, and checksums from listing or stat calls. Object content is
+downloaded only after that metadata shows a parse may be needed.
 
 Files that fail to parse or contain no interactive content
 are cached in the `skipped_files` table and skipped on

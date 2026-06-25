@@ -53,6 +53,40 @@ func TestS3CredentialsIncludeSessionToken(t *testing.T) {
 	assert.Equal(t, "session-token", got.SessionToken)
 }
 
+func TestS3ClientRejectsNonLoopbackHTTPEndpoint(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
+	t.Setenv("AWS_S3_ENDPOINT", "http://example.com:9000")
+	t.Setenv("AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT", "")
+
+	_, err := s3Client()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "insecure S3 endpoint")
+}
+
+func TestS3ClientAllowsLoopbackHTTPEndpoint(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
+	t.Setenv("AWS_S3_ENDPOINT", "http://127.0.0.1:9000")
+	t.Setenv("AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT", "")
+
+	_, err := s3Client()
+
+	require.NoError(t, err)
+}
+
+func TestS3ClientAllowsExplicitUnsafeHTTPEndpoint(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret-key")
+	t.Setenv("AWS_S3_ENDPOINT", "http://example.com:9000")
+	t.Setenv("AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT", "true")
+
+	_, err := s3Client()
+
+	require.NoError(t, err)
+}
+
 func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
@@ -106,6 +140,7 @@ func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
 			URI:          rolloutURI,
 			Size:         11,
 			LastModified: rolloutMtime,
+			Fingerprint:  "s3-meta:rollout",
 		}}, nil
 	}
 	statS3Object = func(got string) (S3Object, error) {
@@ -114,6 +149,7 @@ func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
 			URI:          indexURI,
 			Size:         22,
 			LastModified: indexMtime,
+			Fingerprint:  "s3-meta:index",
 		}, nil
 	}
 
@@ -123,6 +159,8 @@ func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
 	assert.Equal(t, rolloutURI, got[0].Path)
 	assert.Equal(t, int64(33), got[0].SourceSize)
 	assert.Equal(t, indexMtime.UnixNano(), got[0].SourceMtime)
+	assert.Contains(t, got[0].SourceFingerprint, "rollout")
+	assert.Contains(t, got[0].SourceFingerprint, "index")
 }
 
 func TestCodexS3SessionIndexURIPrefersRawCodexLayout(t *testing.T) {
@@ -153,12 +191,14 @@ func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 					"proj/session.jsonl",
 				Size:         11,
 				LastModified: sessionMtime,
+				Fingerprint:  "s3-meta:session",
 			},
 			{
 				URI: "s3://bucket/laptop/raw/claude/" +
 					"proj/session/tool-results/out.txt",
 				Size:         22,
 				LastModified: sidecarMtime,
+				Fingerprint:  "s3-meta:sidecar",
 			},
 		}, nil
 	}
@@ -172,6 +212,8 @@ func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 	)
 	assert.Equal(t, int64(33), got[0].SourceSize)
 	assert.Equal(t, sidecarMtime.UnixNano(), got[0].SourceMtime)
+	assert.Contains(t, got[0].SourceFingerprint, "session")
+	assert.Contains(t, got[0].SourceFingerprint, "sidecar")
 }
 
 func TestDiscoverClaudeS3RequiresSubagentsUnderParentSession(t *testing.T) {

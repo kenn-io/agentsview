@@ -179,11 +179,14 @@ func (e *Engine) processS3Session(
 	ctx context.Context, file parser.DiscoveredFile, sourceInfo os.FileInfo,
 ) processResult {
 	idPrefix := s3SessionIDPrefix(file.Machine)
+	sourceFingerprint := s3SourceFingerprint(file)
 	switch file.Agent {
 	case parser.AgentClaude:
 		sessionID := strings.TrimSuffix(sourceInfo.Name(), ".jsonl")
 		fullID := applyIDPrefixToID(idPrefix, sessionID)
-		if e.shouldSkipFileWithPrefix(idPrefix, sessionID, sourceInfo) &&
+		if e.shouldSkipFileWithPrefix(
+			idPrefix, sessionID, sourceInfo, sourceFingerprint,
+		) &&
 			e.db.GetSessionFilePath(fullID) == file.Path {
 			sess, _ := e.db.GetSession(ctx, fullID)
 			if sess != nil &&
@@ -198,7 +201,9 @@ func (e *Engine) processS3Session(
 		); uuid != "" {
 			sessionID := "codex:" + uuid
 			fullID := applyIDPrefixToID(idPrefix, sessionID)
-			if e.shouldSkipFileWithPrefix(idPrefix, sessionID, sourceInfo) &&
+			if e.shouldSkipFileWithPrefix(
+				idPrefix, sessionID, sourceInfo, sourceFingerprint,
+			) &&
 				e.db.GetSessionFilePath(fullID) == file.Path {
 				sess, _ := e.db.GetSession(ctx, fullID)
 				if sess != nil &&
@@ -279,6 +284,9 @@ func (e *Engine) processS3Session(
 		res.results[i].Session.File.Path = file.Path
 		res.results[i].Session.File.Size = sourceInfo.Size()
 		res.results[i].Session.File.Mtime = sourceInfo.ModTime().UnixNano()
+		if sourceFingerprint != "" {
+			res.results[i].Session.File.Hash = sourceFingerprint
+		}
 	}
 	if hydratedToolResults || sawPersistedToolResults {
 		res.forceReplace = true

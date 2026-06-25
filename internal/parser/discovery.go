@@ -52,6 +52,8 @@ type DiscoveredFile struct {
 	Machine     string    // source machine (set for s3:// sources; empty = host machine)
 	SourceSize  int64     // source object size for s3:// sources
 	SourceMtime int64     // source object mtime for s3:// sources, UnixNano
+	// SourceFingerprint is a durable object fingerprint for s3:// sources.
+	SourceFingerprint string
 }
 
 // OpenCodeSourceMode identifies the usable OpenCode storage

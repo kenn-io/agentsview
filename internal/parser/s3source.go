@@ -4,9 +4,12 @@ package parser
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +22,7 @@ type S3Object struct {
 	URI          string
 	Size         int64
 	LastModified time.Time
+	Fingerprint  string
 }
 
 var (
@@ -32,26 +36,74 @@ var (
 //	AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 //	AWS_S3_ENDPOINT  — host of an S3-compatible endpoint (e.g.
 //	                   "oss-cn-shenzhen.aliyuncs.com"); empty = AWS S3.
-//	                   An "http://" prefix selects insecure transport.
+//	                   An "http://" prefix selects insecure transport for
+//	                   loopback endpoints, or with explicit unsafe opt-in.
 //
 // Returning an error here means an s3:// source simply yields nothing,
 // so a misconfigured store never aborts the local sync.
 func s3Client() (*minio.Client, error) {
-	endpoint := os.Getenv("AWS_S3_ENDPOINT")
-	secure := true
-	switch {
-	case endpoint == "":
-		endpoint = "s3.amazonaws.com"
-	case strings.HasPrefix(endpoint, "http://"):
-		secure, endpoint = false, strings.TrimPrefix(endpoint, "http://")
-	case strings.HasPrefix(endpoint, "https://"):
-		endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint, secure, err := s3EndpointConfig(os.Getenv("AWS_S3_ENDPOINT"))
+	if err != nil {
+		return nil, err
 	}
 	return minio.New(endpoint, &minio.Options{
 		Creds:  s3Credentials(),
 		Secure: secure,
 		Region: os.Getenv("AWS_REGION"),
 	})
+}
+
+func s3EndpointConfig(raw string) (endpoint string, secure bool, err error) {
+	endpoint = strings.TrimSpace(raw)
+	secure = true
+	switch {
+	case endpoint == "":
+		return "s3.amazonaws.com", true, nil
+	case strings.HasPrefix(endpoint, "http://"):
+		secure, endpoint = false, strings.TrimPrefix(endpoint, "http://")
+	case strings.HasPrefix(endpoint, "https://"):
+		endpoint = strings.TrimPrefix(endpoint, "https://")
+	case strings.Contains(endpoint, "://"):
+		return "", false, fmt.Errorf("unsupported S3 endpoint scheme: %q", raw)
+	}
+
+	if !secure && !isLoopbackS3Endpoint(endpoint) &&
+		!allowUnsafeS3Endpoint() {
+		return "", false, fmt.Errorf(
+			"insecure S3 endpoint %q is only allowed for loopback hosts; "+
+				"set AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT=true to override",
+			raw,
+		)
+	}
+	return endpoint, secure, nil
+}
+
+func allowUnsafeS3Endpoint() bool {
+	switch strings.ToLower(os.Getenv("AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT")) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+func isLoopbackS3Endpoint(endpoint string) bool {
+	host := endpoint
+	if before, _, ok := strings.Cut(host, "/"); ok {
+		host = before
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.ToLower(host), "[]")
+	if host == "localhost" {
+		return true
+	}
+	if before, _, ok := strings.Cut(host, "%"); ok {
+		host = before
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func s3Credentials() *credentials.Credentials {
@@ -94,6 +146,7 @@ func listS3(uri string) ([]S3Object, error) {
 			URI:          "s3://" + bucket + "/" + o.Key,
 			Size:         o.Size,
 			LastModified: o.LastModified,
+			Fingerprint:  s3ObjectFingerprint("s3://"+bucket+"/"+o.Key, o),
 		})
 	}
 	return out, nil
@@ -170,6 +223,7 @@ func statS3ObjectDefault(uri string) (S3Object, error) {
 		URI:          uri,
 		Size:         info.Size,
 		LastModified: info.LastModified,
+		Fingerprint:  s3ObjectFingerprint(uri, info),
 	}, nil
 }
 
@@ -205,10 +259,7 @@ func foldClaudeS3SidecarMetadata(
 ) S3Object {
 	for _, root := range claudeS3SidecarRoots(obj.URI) {
 		for _, sidecar := range list(root) {
-			obj.Size += sidecar.Size
-			if sidecar.LastModified.After(obj.LastModified) {
-				obj.LastModified = sidecar.LastModified
-			}
+			obj = foldS3ObjectMetadata(obj, sidecar)
 		}
 	}
 	return obj
@@ -240,7 +291,61 @@ func foldS3ObjectMetadata(obj, extra S3Object) S3Object {
 	if extra.LastModified.After(obj.LastModified) {
 		obj.LastModified = extra.LastModified
 	}
+	obj.Fingerprint = combineS3Fingerprints(
+		obj.Fingerprint, extra.Fingerprint,
+	)
 	return obj
+}
+
+func s3ObjectFingerprint(uri string, info minio.ObjectInfo) string {
+	parts := []string{
+		"etag=" + strings.Trim(info.ETag, `"`),
+		"version=" + info.VersionID,
+		"crc32=" + info.ChecksumCRC32,
+		"crc32c=" + info.ChecksumCRC32C,
+		"sha1=" + info.ChecksumSHA1,
+		"sha256=" + info.ChecksumSHA256,
+		"crc64nvme=" + info.ChecksumCRC64NVME,
+		"md5=" + info.ChecksumMD5,
+		"sha512=" + info.ChecksumSHA512,
+		"xxhash64=" + info.ChecksumXXHash64,
+		"xxhash3=" + info.ChecksumXXHash3,
+		"xxhash128=" + info.ChecksumXXHash128,
+	}
+	nonEmpty := parts[:0]
+	for _, part := range parts {
+		if !strings.HasSuffix(part, "=") {
+			nonEmpty = append(nonEmpty, part)
+		}
+	}
+	if len(nonEmpty) == 0 {
+		return ""
+	}
+	sort.Strings(nonEmpty)
+	return combineS3Fingerprints(uri + "\x00" + strings.Join(nonEmpty, "\x00"))
+}
+
+func combineS3Fingerprints(values ...string) string {
+	const prefix = "s3-meta:"
+	const sep = "\x1e"
+	var entries []string
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		value = strings.TrimPrefix(value, prefix)
+		for entry := range strings.SplitSeq(value, sep) {
+			if entry != "" {
+				entries = append(entries, entry)
+			}
+		}
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+	sort.Strings(entries)
+	entries = slices.Compact(entries)
+	return prefix + strings.Join(entries, sep)
 }
 
 // discoverClaudeS3 lists Claude session JSONL under an s3:// projects root,
@@ -289,12 +394,13 @@ func discoverClaudeS3(root string) []DiscoveredFile {
 			},
 		)
 		out = append(out, DiscoveredFile{
-			Path:        obj.URI,
-			Project:     project,
-			Agent:       AgentClaude,
-			Machine:     machine,
-			SourceSize:  source.Size,
-			SourceMtime: source.LastModified.UnixNano(),
+			Path:              obj.URI,
+			Project:           project,
+			Agent:             AgentClaude,
+			Machine:           machine,
+			SourceSize:        source.Size,
+			SourceMtime:       source.LastModified.UnixNano(),
+			SourceFingerprint: source.Fingerprint,
 		})
 	}
 	return out
@@ -322,11 +428,12 @@ func discoverCodexS3(root string) []DiscoveredFile {
 		}
 		source := foldCodexS3IndexMetadata(obj, indexCache)
 		out = append(out, DiscoveredFile{
-			Path:        obj.URI,
-			Agent:       AgentCodex,
-			Machine:     machine,
-			SourceSize:  source.Size,
-			SourceMtime: source.LastModified.UnixNano(),
+			Path:              obj.URI,
+			Agent:             AgentCodex,
+			Machine:           machine,
+			SourceSize:        source.Size,
+			SourceMtime:       source.LastModified.UnixNano(),
+			SourceFingerprint: source.Fingerprint,
 		})
 	}
 	return out

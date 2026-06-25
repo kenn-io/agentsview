@@ -59,6 +59,87 @@ func TestProcessFileS3UsesObjectMetadataToSkipBeforeFetch(t *testing.T) {
 	assert.False(t, fetched, "unchanged S3 object should not be fetched")
 }
 
+func TestProcessFileS3SameMetadataDifferentFingerprintFetches(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	sess := db.Session{
+		ID:        "laptop~fingerprint",
+		Project:   "test-proj",
+		Machine:   "laptop",
+		Agent:     "claude",
+		FilePath:  strPtr(path),
+		FileSize:  int64Ptr(int64(len(content))),
+		FileMtime: int64Ptr(mtime),
+		FileHash:  strPtr("s3:fingerprint:old"),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	var fetched bool
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, path, got)
+		fetched = true
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	e := &Engine{db: database}
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:             parser.AgentClaude,
+		Path:              path,
+		Project:           "test-proj",
+		Machine:           "laptop",
+		SourceSize:        int64(len(content)),
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:new",
+	})
+
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.True(t, fetched)
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "s3:fingerprint:new", res.results[0].Session.File.Hash)
+}
+
+func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint.jsonl"
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        "laptop~fingerprint",
+		Project:   "test-proj",
+		Machine:   "laptop",
+		Agent:     "claude",
+		FilePath:  strPtr(path),
+		FileSize:  int64Ptr(512),
+		FileMtime: int64Ptr(mtime),
+		FileHash:  strPtr("s3:fingerprint:old"),
+	}))
+
+	e := &Engine{db: database}
+	got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+		Agent:             parser.AgentClaude,
+		Path:              path,
+		Project:           "test-proj",
+		Machine:           "laptop",
+		SourceSize:        512,
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:new",
+	}}, time.Unix(0, mtime).Add(time.Nanosecond))
+
+	require.Len(t, got, 1)
+	assert.Equal(t, path, got[0].Path)
+}
+
 func TestProcessFileS3CodexReparsesStaleProjectBeforeSkip(t *testing.T) {
 	database := openTestDB(t)
 	const uuid = "11111111-1111-4111-8111-111111111111"

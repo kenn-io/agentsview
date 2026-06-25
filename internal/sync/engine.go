@@ -3223,6 +3223,10 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
+		if isS3SourcePath(f.Path) && e.s3SourceFingerprintChanged(f) {
+			out = append(out, f)
+			continue
+		}
 		if f.Agent != parser.AgentCodex || !e.codexIndexNeedsRefreshSince(f.Path, cutoffNs) {
 			continue
 		}
@@ -3481,6 +3485,12 @@ func (e *Engine) claudeSourceMatchesStored(
 	}
 	if storedSize != size || storedMtime != mtime {
 		return false
+	}
+	if file.SourceFingerprint != "" {
+		storedHash, ok := e.db.GetSessionFileHash(sessionID)
+		if !ok || storedHash != file.SourceFingerprint {
+			return false
+		}
 	}
 	return e.db.GetSessionDataVersion(sessionID) >= db.CurrentDataVersion()
 }
@@ -4565,8 +4575,8 @@ func (e *Engine) persistSkipCache() int {
 // match what is already stored in the database (by session ID).
 // This relies on mtime changing on any write, which holds for
 // append-only session files under normal filesystem behavior.
-// The file hash is still computed and stored on successful sync
-// for integrity; mtime is purely a skip-check optimization.
+// S3 callers pass an object fingerprint to guard same-size,
+// same-timestamp rewrites on object stores with coarse mtimes.
 func (e *Engine) shouldSkipFile(
 	sessionID string, info os.FileInfo,
 ) bool {

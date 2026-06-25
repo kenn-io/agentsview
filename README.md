@@ -52,7 +52,8 @@ Claude and Codex sources can also be configured as `s3://` roots, so a central
 AgentsView instance can read sessions that other machines push to S3-compatible
 object storage. Add those roots to `claude_project_dirs` or
 `codex_sessions_dirs`; AgentsView lists object metadata and only downloads
-changed sessions during sync.
+changed sessions during sync. S3 change detection uses size, modified time, and
+available object fingerprints such as ETag, version ID, or checksums.
 
 The desktop app and freshness-sensitive CLI commands share a detached local
 daemon. Read-only CLI commands attach to it when it is already running, but fall

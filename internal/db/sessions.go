@@ -1370,6 +1370,20 @@ func (db *DB) GetSessionFileInfo(
 	return s.Int64, m.Int64, true
 }
 
+// GetSessionFileHash returns file_hash for a session. The bool is false when
+// the session does not exist or the column is NULL.
+func (db *DB) GetSessionFileHash(id string) (hash string, ok bool) {
+	var h sql.NullString
+	err := db.getReader().QueryRow(
+		"SELECT file_hash FROM sessions WHERE id = ?",
+		id,
+	).Scan(&h)
+	if err != nil || !h.Valid {
+		return "", false
+	}
+	return h.String, true
+}
+
 // GetSessionFilePath returns the stored file_path for a session,
 // or empty string if not found or NULL.
 func (db *DB) GetSessionFilePath(id string) string {
