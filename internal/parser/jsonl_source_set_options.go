@@ -137,3 +137,14 @@ func withParseFile(fn jsonlParseFileFunc) jsonlOption {
 func withForceReplace() jsonlOption {
 	return func(o *JSONLSourceSetOptions) { o.ForceReplace = true }
 }
+
+// --- companions ---
+
+// withCompanionFiles registers a sidecar hook that returns the companion files
+// belonging to a transcript, given the transcript's path. The base folds the
+// companions into the watch plan globs, the SourceFingerprint, and changed-path
+// mapping, so a companion change re-parses its transcript. It reuses the
+// sibling-metadata plumbing rather than adding an independent mechanism.
+func withCompanionFiles(fn func(transcriptPath string) []string) jsonlOption {
+	return func(o *JSONLSourceSetOptions) { o.CompanionFiles = fn }
+}
