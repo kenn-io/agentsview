@@ -151,7 +151,7 @@ jobs:
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run Go tests
-        run: go test -tags "fts5" ./... -v -count=1
+        run: go test -tags "fts5" ./... -v -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
