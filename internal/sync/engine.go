@@ -75,6 +75,15 @@ type EngineConfig struct {
 	// that wrote data. Safe to leave nil (e.g., in PG serve mode
 	// where the engine is not run).
 	Emitter Emitter
+	// ProviderFactories and ProviderMigrationModes let stacked provider
+	// migration branches opt concrete providers into side-effect-free
+	// caller-level shadow observation before provider writes become
+	// authoritative. Nil uses the parser package registry/manifest.
+	ProviderFactories      []parser.ProviderFactory
+	ProviderMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
+	// ProviderShadowRecorder receives serialized shadow observations.
+	// Nil logs only provider errors or mismatches.
+	ProviderShadowRecorder func(ProviderShadowComparison)
 }
 
 // Engine orchestrates session file discovery and sync.
@@ -99,10 +108,14 @@ type Engine struct {
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
-	ephemeral    bool
-	idPrefix     string
-	pathRewriter func(string) string
-	emitter      Emitter
+	ephemeral              bool
+	idPrefix               string
+	pathRewriter           func(string) string
+	emitter                Emitter
+	providerFactories      map[parser.AgentType]parser.ProviderFactory
+	providerMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
+	providerShadowMu       gosync.Mutex
+	providerShadowRecorder func(ProviderShadowComparison)
 
 	// forceParse disables every stored-state skip (skip cache,
 	// size/mtime/data_version checks, incremental JSONL deltas) so
@@ -181,6 +194,14 @@ func NewEngine(
 	for k, v := range cfg.AgentDirs {
 		dirs[k] = append([]string(nil), v...)
 	}
+	providerFactories := parser.ProviderFactories()
+	if cfg.ProviderFactories != nil {
+		providerFactories = cfg.ProviderFactories
+	}
+	providerModes := parser.ProviderMigrationModes()
+	if cfg.ProviderMigrationModes != nil {
+		maps.Copy(providerModes, cfg.ProviderMigrationModes)
+	}
 
 	return &Engine{
 		db:                      database,
@@ -192,7 +213,21 @@ func NewEngine(
 		idPrefix:                cfg.IDPrefix,
 		pathRewriter:            cfg.PathRewriter,
 		emitter:                 cfg.Emitter,
+		providerFactories:       providerFactoryMap(providerFactories),
+		providerMigrationModes:  providerModes,
+		providerShadowRecorder:  cfg.ProviderShadowRecorder,
 	}
+}
+
+func providerFactoryMap(
+	factories []parser.ProviderFactory,
+) map[parser.AgentType]parser.ProviderFactory {
+	out := make(map[parser.AgentType]parser.ProviderFactory, len(factories))
+	for _, factory := range factories {
+		def := factory.Definition()
+		out[def.Type] = factory
+	}
+	return out
 }
 
 // migrateLegacyCodexExecSkips removes skip cache entries
@@ -411,6 +446,17 @@ type syncJob struct {
 	path string
 }
 
+func (j syncJob) skipCacheKey() string {
+	return j.processResult.skipCacheKey(j.path)
+}
+
+func (r processResult) skipCacheKey(path string) string {
+	if r.cacheKey != "" {
+		return r.cacheKey
+	}
+	return path
+}
+
 // SyncPaths syncs only the specified changed file paths
 // instead of discovering and hashing all session files.
 // Paths that don't match known session file patterns are
@@ -464,8 +510,8 @@ func (e *Engine) classifyPaths(
 	paths []string,
 ) []parser.DiscoveredFile {
 	geminiProjectsByDir := make(map[string]map[string]string)
-	seen := make(map[string]struct{}, len(paths))
-	var files []parser.DiscoveredFile
+	seen := make(map[string]int, len(paths))
+	files := make([]parser.DiscoveredFile, 0, len(paths))
 	for _, p := range paths {
 		// Antigravity sidecar events map to potentially several
 		// session sources and must classify even when the event
@@ -481,18 +527,238 @@ func (e *Engine) classifyPaths(
 				dfs = []parser.DiscoveredFile{df}
 			}
 		}
+		dfs = append(dfs, e.classifyProviderChangedPath(p)...)
 		for _, df := range dfs {
 			key := string(df.Agent) + "\x00" + df.Path
-			if _, ok := seen[key]; ok {
+			if idx, ok := seen[key]; ok {
+				files[idx] = mergeChangedPathDiscoveredFile(files[idx], df)
 				continue
 			}
-			seen[key] = struct{}{}
+			seen[key] = len(files)
 			files = append(files, df)
 		}
 	}
 	files = e.expandClaudeDuplicateCandidates(files)
 	files = dedupeDiscoveredFiles(files)
 	return e.dedupeClaudeDiscoveredFiles(files)
+}
+
+func mergeChangedPathDiscoveredFile(
+	current parser.DiscoveredFile,
+	next parser.DiscoveredFile,
+) parser.DiscoveredFile {
+	current.ForceParse = current.ForceParse || next.ForceParse
+	current.ProviderProcess = current.ProviderProcess || next.ProviderProcess
+	if current.Project == "" {
+		current.Project = next.Project
+	}
+	if current.ProviderSource == nil && next.ProviderSource != nil {
+		current.ProviderSource = next.ProviderSource
+	}
+	return current
+}
+
+func (e *Engine) classifyProviderChangedPath(
+	path string,
+) []parser.DiscoveredFile {
+	ctx := context.Background()
+	eventKind := providerChangedPathEventKind(path)
+	var files []parser.DiscoveredFile
+	seen := map[string]struct{}{}
+
+	agents := make([]parser.AgentType, 0, len(e.providerFactories))
+	for agent := range e.providerFactories {
+		agents = append(agents, agent)
+	}
+	slices.SortFunc(agents, func(a, b parser.AgentType) int {
+		return strings.Compare(string(a), string(b))
+	})
+
+	for _, agentType := range agents {
+		mode := e.providerMigrationModes[agentType]
+		switch mode {
+		case parser.ProviderMigrationShadowCompare,
+			parser.ProviderMigrationProviderAuthoritative:
+		default:
+			continue
+		}
+		roots := e.agentDirs[agentType]
+		if len(roots) == 0 {
+			continue
+		}
+		factory, ok := e.providerFactories[agentType]
+		if !ok || factory == nil {
+			continue
+		}
+		provider := factory.NewProvider(parser.ProviderConfig{
+			Roots:   roots,
+			Machine: e.machine,
+		})
+		def := provider.Definition()
+		watchRoots := providerChangedPathWatchRoots(ctx, provider, roots)
+		for _, watchRoot := range watchRoots {
+			storedSourcePaths, err := e.db.ListStoredSourcePathHints(
+				string(def.Type),
+				[]string{watchRoot},
+			)
+			if err != nil {
+				log.Printf(
+					"%s provider changed-path stored hints: %v",
+					def.Type, err,
+				)
+			}
+			sources, err := provider.SourcesForChangedPath(
+				ctx,
+				parser.ChangedPathRequest{
+					Path:              path,
+					EventKind:         eventKind,
+					WatchRoot:         watchRoot,
+					StoredSourcePaths: storedSourcePaths,
+				},
+			)
+			if err != nil {
+				if !errors.Is(err, parser.ErrUnsupportedProviderFeature) {
+					log.Printf(
+						"%s provider changed-path classification: %v",
+						def.Type, err,
+					)
+				}
+				continue
+			}
+			for _, source := range sources {
+				sourcePath := providerDiscoveredPath(source)
+				if sourcePath == "" {
+					continue
+				}
+				agent := source.Provider
+				if agent == "" {
+					agent = def.Type
+				}
+				key := string(agent) + "\x00" + sourcePath
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				if eventKind == "remove" &&
+					filepath.Clean(sourcePath) == filepath.Clean(path) &&
+					!parser.IsRegularFile(sourcePath) &&
+					!providerDeletedPhysicalSQLiteSource(agent, sourcePath) {
+					continue
+				}
+				seen[key] = struct{}{}
+				sourceCopy := source
+				files = append(files, parser.DiscoveredFile{
+					Path:            sourcePath,
+					Project:         source.ProjectHint,
+					Agent:           agent,
+					ForceParse:      providerChangedPathForceParse(agent, sourcePath, path, eventKind, mode),
+					ProviderSource:  &sourceCopy,
+					ProviderProcess: mode == parser.ProviderMigrationProviderAuthoritative,
+				})
+			}
+		}
+	}
+	return files
+}
+
+func providerChangedPathWatchRoots(
+	ctx context.Context,
+	provider parser.Provider,
+	roots []string,
+) []string {
+	plan, err := provider.WatchPlan(ctx)
+	if err == nil && len(plan.Roots) > 0 {
+		watchRoots := make([]string, 0, len(plan.Roots))
+		seen := make(map[string]struct{}, len(plan.Roots))
+		for _, root := range plan.Roots {
+			path := filepath.Clean(root.Path)
+			if path == "" || path == "." {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			watchRoots = append(watchRoots, path)
+		}
+		if len(watchRoots) > 0 {
+			return watchRoots
+		}
+	}
+	watchRoots := make([]string, 0, len(roots))
+	for _, root := range roots {
+		root = filepath.Clean(root)
+		if root == "" || root == "." {
+			continue
+		}
+		watchRoots = append(watchRoots, root)
+	}
+	return watchRoots
+}
+
+func providerChangedPathForceParse(
+	agent parser.AgentType,
+	sourcePath string,
+	eventPath string,
+	eventKind string,
+	mode parser.ProviderMigrationMode,
+) bool {
+	if mode != parser.ProviderMigrationProviderAuthoritative {
+		return true
+	}
+	if filepath.Clean(sourcePath) != filepath.Clean(eventPath) &&
+		!providerVirtualSourceBackedByEvent(sourcePath, eventPath) {
+		return true
+	}
+	return eventKind == "remove" &&
+		providerDeletedPhysicalSQLiteSource(agent, sourcePath)
+}
+
+func providerVirtualSourceBackedByEvent(sourcePath, eventPath string) bool {
+	idx := strings.LastIndex(sourcePath, "#")
+	if idx < 0 {
+		return false
+	}
+	dbPath := filepath.Clean(sourcePath[:idx])
+	eventPath = filepath.Clean(eventPath)
+	return eventPath == dbPath ||
+		eventPath == dbPath+"-wal" ||
+		eventPath == dbPath+"-shm"
+}
+
+func providerChangedPathEventKind(path string) string {
+	if path == "" {
+		return ""
+	}
+	if _, err := os.Lstat(path); err != nil && os.IsNotExist(err) {
+		return "remove"
+	}
+	return "write"
+}
+
+func providerDiscoveredPath(source parser.SourceRef) string {
+	for _, path := range []string{
+		source.DisplayPath,
+		source.FingerprintKey,
+		source.Key,
+	} {
+		if path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func providerDeletedPhysicalSQLiteSource(
+	agent parser.AgentType, path string,
+) bool {
+	switch agent {
+	case parser.AgentZed:
+		return filepath.Base(path) == "threads.db"
+	case parser.AgentShelley:
+		return filepath.Base(path) == shelleyDBFile
+	default:
+		return false
+	}
 }
 
 func dedupeDiscoveredFiles(
@@ -2769,6 +3035,11 @@ func (e *Engine) syncAllLocked(
 			all = append(all, found...)
 		}
 	}
+	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
+	for _, file := range providerFound {
+		counts[file.Agent]++
+	}
+	all = append(all, providerFound...)
 
 	if !since.IsZero() {
 		all = e.dedupeClaudeDiscoveredFiles(all)
@@ -2816,6 +3087,9 @@ func (e *Engine) syncAllLocked(
 	stats := e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
+	for range providerFailures {
+		stats.RecordFailed()
+	}
 	if verbose {
 		log.Printf(
 			"file sync: %d synced, %d skipped in %s",
@@ -3160,12 +3434,88 @@ func (e *Engine) syncAllLocked(
 	e.lastSyncStats = stats
 	e.mu.Unlock()
 
-	if recordSyncState {
+	if recordSyncState && providerFailures == 0 {
 		e.recordSyncFinished()
 	}
 	// Emission happens in SyncAll / SyncAllSince after syncMu is
 	// released; syncAllLocked runs under the caller's lock.
 	return stats
+}
+
+// discoverProviderSources runs full-sync discovery through the provider facade
+// for every concrete provider that is authoritative. It is the provider-shape
+// counterpart to the legacy AgentDef.DiscoverFunc loop, so a provider can drop
+// its DiscoverFunc and still be discovered once it owns live processing. Shadow
+// mode remains observational and never appends provider-only work to the live
+// sync list.
+func (e *Engine) discoverProviderSources(
+	ctx context.Context,
+	scope *rootSyncScope,
+) ([]parser.DiscoveredFile, int) {
+	var files []parser.DiscoveredFile
+	var failures int
+
+	agents := make([]parser.AgentType, 0, len(e.providerFactories))
+	for agent := range e.providerFactories {
+		agents = append(agents, agent)
+	}
+	slices.SortFunc(agents, func(a, b parser.AgentType) int {
+		return strings.Compare(string(a), string(b))
+	})
+
+	for _, agentType := range agents {
+		mode := e.providerMigrationModes[agentType]
+		if mode != parser.ProviderMigrationProviderAuthoritative {
+			continue
+		}
+		roots := e.agentDirs[agentType]
+		if len(roots) == 0 {
+			continue
+		}
+		filteredRoots := make([]string, 0, len(roots))
+		for _, root := range roots {
+			if scope.includes(root) {
+				filteredRoots = append(filteredRoots, root)
+			}
+		}
+		if len(filteredRoots) == 0 {
+			continue
+		}
+		factory, ok := e.providerFactories[agentType]
+		if !ok || factory == nil {
+			continue
+		}
+		provider := factory.NewProvider(parser.ProviderConfig{
+			Roots:   filteredRoots,
+			Machine: e.machine,
+		})
+		sources, err := provider.Discover(ctx)
+		if err != nil {
+			log.Printf("%s provider discovery: %v", agentType, err)
+			failures++
+			continue
+		}
+		def := provider.Definition()
+		for _, source := range sources {
+			sourcePath := providerDiscoveredPath(source)
+			if sourcePath == "" {
+				continue
+			}
+			agent := source.Provider
+			if agent == "" {
+				agent = def.Type
+			}
+			sourceCopy := source
+			files = append(files, parser.DiscoveredFile{
+				Path:            sourcePath,
+				Project:         source.ProjectHint,
+				Agent:           agent,
+				ProviderSource:  &sourceCopy,
+				ProviderProcess: true,
+			})
+		}
+	}
+	return files, failures
 }
 
 // recordSyncStarted persists the start time of a sync run
@@ -3998,12 +4348,15 @@ func (e *Engine) collectAndBatch(
 			}
 			stats.RecordFailed()
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
-				e.cacheSkip(r.path, r.mtime)
+				e.cacheSkip(r.skipCacheKey(), r.mtime)
 			}
 			log.Printf("sync error: %v", r.err)
 			continue
 		}
 		if r.skip {
+			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
+				e.cacheSkip(r.skipCacheKey(), r.mtime)
+			}
 			stats.RecordSkip()
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
@@ -4030,15 +4383,15 @@ func (e *Engine) collectAndBatch(
 				stats.filesOK++
 				stats.parserExcludedFiles++
 			}
-			if r.cacheSkip {
-				e.cacheSkip(r.path, r.mtime)
+			if r.cacheSkip && !r.noCacheSkip {
+				e.cacheSkip(r.skipCacheKey(), r.mtime)
 			}
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
 			continue
 		}
 		if r.cacheSkip {
-			e.clearSkip(r.path)
+			e.clearSkip(r.skipCacheKey())
 		}
 		stats.filesOK++
 
@@ -4059,7 +4412,7 @@ func (e *Engine) collectAndBatch(
 					sess:         pr.Session,
 					msgs:         pr.Messages,
 					usageEvents:  pr.UsageEvents,
-					needsRetry:   r.needsRetry,
+					needsRetry:   r.needsRetryForSession(pr.Session.ID),
 					forceReplace: r.forceReplace,
 				})
 			}
@@ -4171,12 +4524,33 @@ type processResult struct {
 	// reuse the existing ordinals, so the default append-only
 	// writeMessages would silently drop the rewrite.
 	forceReplace bool
+	cacheKey     string
+	// retrySessionIDs carries provider per-result data-version state.
+	// Legacy parsers use needsRetry as a source-wide fallback.
+	retrySessionIDs map[string]bool
+	// suppressPresenceSweep marks an incomplete source result where
+	// missing stored sessions are expected rather than parser drift.
+	suppressPresenceSweep bool
+}
+
+func (r processResult) needsRetryForSession(sessionID string) bool {
+	if r.retrySessionIDs != nil {
+		return r.retrySessionIDs[sessionID]
+	}
+	return r.needsRetry
+}
+
+func (r processResult) suppressesPresenceSweepForRetry() bool {
+	return r.retrySessionIDs == nil && r.needsRetry
 }
 
 func (e *Engine) processFile(
 	ctx context.Context,
 	file parser.DiscoveredFile,
 ) processResult {
+	if res, ok := e.processProviderFile(ctx, file); ok {
+		return res
+	}
 
 	var info os.FileInfo
 	var err error
@@ -4247,7 +4621,7 @@ func (e *Engine) processFile(
 	// migrateLegacyCodexExecSkips, so this check can treat
 	// the skip cache as authoritative without per-file
 	// re-validation.
-	if cacheSkip && !e.forceParse { // parse-diff: ignore the skip cache
+	if cacheSkip && !e.forceParse && !file.ForceParse { // parse-diff: ignore the skip cache
 		e.skipMu.RLock()
 		cachedMtime, cached := e.skipCache[file.Path]
 		e.skipMu.RUnlock()
@@ -4255,11 +4629,13 @@ func (e *Engine) processFile(
 			if e.pathNeedsProjectReparse(file.Path) {
 				e.clearSkip(file.Path)
 			} else {
-				return processResult{
+				res := processResult{
 					skip:      true,
 					mtime:     mtime,
 					cacheSkip: true,
 				}
+				e.observeProviderShadow(ctx, file, res)
+				return res
 			}
 		}
 	}
@@ -4345,6 +4721,7 @@ func (e *Engine) processFile(
 	}
 	res.cacheSkip = cacheSkip
 	res.mtime = mtime
+	e.observeProviderShadow(ctx, file, res)
 	return res
 }
 
@@ -4358,6 +4735,296 @@ func (e *Engine) pathNeedsProjectReparse(path string) bool {
 	}
 	project, ok := e.db.GetProjectByPath(lookupPath)
 	return ok && parser.NeedsProjectReparse(project)
+}
+
+func (e *Engine) processProviderFile(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+) (processResult, bool) {
+	mode := e.providerMigrationModes[file.Agent]
+	if mode != parser.ProviderMigrationProviderAuthoritative {
+		return processResult{}, false
+	}
+	if file.ProviderSource != nil && !file.ProviderProcess {
+		return processResult{}, false
+	}
+
+	factory, ok := e.providerFactories[file.Agent]
+	if !ok {
+		return processResult{
+			err: fmt.Errorf("provider not found for agent type: %s", file.Agent),
+		}, true
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[file.Agent],
+		Machine: e.machine,
+	})
+
+	source, found, err := e.providerSourceForDiscoveredFile(ctx, provider, file)
+	if err != nil {
+		return processResult{err: err}, true
+	}
+	if !found {
+		return processResult{
+			err: fmt.Errorf(
+				"%s provider source not found for %s",
+				file.Agent,
+				file.Path,
+			),
+		}, true
+	}
+
+	fingerprint, err := provider.Fingerprint(ctx, source)
+	if err != nil {
+		return processResult{err: err}, true
+	}
+	cacheKey := providerProcessCacheKey(file, source, fingerprint)
+	cacheSkip := e.shouldCacheSkip(file)
+	if cacheSkip && !e.forceParse && !file.ForceParse {
+		e.skipMu.RLock()
+		cachedMtime, cached := e.skipCache[cacheKey]
+		e.skipMu.RUnlock()
+		if cached && cachedMtime == fingerprint.MTimeNS {
+			return processResult{
+				skip:      true,
+				mtime:     fingerprint.MTimeNS,
+				cacheSkip: true,
+				cacheKey:  cacheKey,
+			}, true
+		}
+	}
+
+	outcome, err := provider.Parse(ctx, parser.ParseRequest{
+		Source:      source,
+		Fingerprint: fingerprint,
+		Machine:     e.machine,
+		ForceParse:  e.forceParse || file.ForceParse,
+	})
+	if err != nil {
+		return processResult{
+			err:         err,
+			mtime:       fingerprint.MTimeNS,
+			cacheSkip:   cacheSkip,
+			cacheKey:    cacheKey,
+			noCacheSkip: true,
+		}, true
+	}
+	if err := validateProviderOutcome(
+		provider.Definition(),
+		source,
+		fingerprint,
+		outcome,
+	); err != nil {
+		return processResult{
+			err:         err,
+			mtime:       fingerprint.MTimeNS,
+			cacheSkip:   cacheSkip,
+			cacheKey:    cacheKey,
+			noCacheSkip: true,
+		}, true
+	}
+	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome)
+	if outcome.SkipReason != parser.SkipNone {
+		return processResult{
+			skip:        true,
+			mtime:       fingerprint.MTimeNS,
+			cacheSkip:   cacheSkip,
+			cacheKey:    cacheKey,
+			noCacheSkip: !cleanCache,
+		}, true
+	}
+
+	res := processResult{
+		results:               parseOutcomeResults(outcome.Results),
+		excludedSessionIDs:    append([]string(nil), outcome.ExcludedSessionIDs...),
+		mtime:                 fingerprint.MTimeNS,
+		cacheSkip:             cacheSkip,
+		cacheKey:              cacheKey,
+		noCacheSkip:           !cleanCache,
+		forceReplace:          outcome.ForceReplace,
+		suppressPresenceSweep: !outcome.ResultSetComplete,
+	}
+	for _, result := range outcome.Results {
+		if result.DataVersion == parser.DataVersionNeedsRetry {
+			if res.retrySessionIDs == nil {
+				res.retrySessionIDs = make(map[string]bool)
+			}
+			res.retrySessionIDs[result.Result.Session.ID] = true
+		}
+	}
+	if e.forceParse || file.ForceParse {
+		for _, sourceErr := range outcome.SourceErrors {
+			res.sessionErrs = append(res.sessionErrs, sessionParseError{
+				sessionID:   sourceErr.SessionID,
+				virtualPath: sourceErr.SourceKey,
+				err:         sourceErr.Err,
+			})
+		}
+	}
+	return res, true
+}
+
+func providerOutcomeAllowsCleanSkipCache(outcome parser.ParseOutcome) bool {
+	if !outcome.ResultSetComplete {
+		return false
+	}
+	if len(outcome.SourceErrors) > 0 {
+		return false
+	}
+	for _, result := range outcome.Results {
+		if result.DataVersion == parser.DataVersionNeedsRetry {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *Engine) providerSourceForDiscoveredFile(
+	ctx context.Context,
+	provider parser.Provider,
+	file parser.DiscoveredFile,
+) (parser.SourceRef, bool, error) {
+	if file.ProviderSource != nil {
+		source := *file.ProviderSource
+		if source.Provider != file.Agent {
+			return parser.SourceRef{}, false, fmt.Errorf(
+				"provider source mismatch for %s: %s",
+				file.Agent,
+				source.Provider,
+			)
+		}
+		return source, true, nil
+	}
+
+	return provider.FindSource(ctx, parser.FindSourceRequest{
+		StoredFilePath:     file.Path,
+		FingerprintKey:     file.Path,
+		RequireFreshSource: !e.forceParse && !file.ForceParse,
+	})
+}
+
+func providerProcessCacheKey(
+	file parser.DiscoveredFile,
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+) string {
+	if key := plannedSkipKey(source, fingerprint); key != "" {
+		return key
+	}
+	return file.Path
+}
+
+func (e *Engine) observeProviderShadow(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+	legacy processResult,
+) {
+	mode := e.providerMigrationModes[file.Agent]
+	if mode != parser.ProviderMigrationShadowCompare {
+		return
+	}
+	comparison := ProviderShadowComparison{File: file, Mode: mode}
+	if reason := providerShadowNotComparableReason(legacy); reason != "" {
+		comparison.NotComparableReason = reason
+		e.recordProviderShadowComparison(comparison)
+		return
+	}
+	factory, ok := e.providerFactories[file.Agent]
+	if !ok {
+		return
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[file.Agent],
+		Machine: e.machine,
+	})
+	source, found, err := e.providerSourceForDiscoveredFile(ctx, provider, file)
+	comparison.Err = err
+	if err == nil && found {
+		comparison.Source = source
+		comparison.Observation, comparison.Err = ObserveProviderSource(
+			ctx,
+			provider,
+			ProviderObserveRequest{
+				Source:     source,
+				Machine:    e.machine,
+				ForceParse: e.forceParse || file.ForceParse,
+			},
+		)
+		if comparison.Err == nil {
+			comparison.Mismatches = compareProviderObservationToProcessResult(
+				comparison.Observation,
+				legacy,
+				file,
+			)
+		}
+	}
+	if err == nil && !found {
+		comparison.Err = fmt.Errorf(
+			"%s provider shadow source not found for %s",
+			file.Agent,
+			file.Path,
+		)
+	}
+	e.recordProviderShadowComparison(comparison)
+}
+
+func providerShadowNotComparableReason(legacy processResult) string {
+	switch {
+	case legacy.err != nil:
+		return "legacy error"
+	case legacy.incremental != nil:
+		return "legacy incremental"
+	case legacy.skip:
+		return "legacy skip"
+	default:
+		return ""
+	}
+}
+
+func (e *Engine) recordProviderShadowComparison(
+	comparison ProviderShadowComparison,
+) {
+	if e.providerShadowRecorder != nil {
+		e.providerShadowMu.Lock()
+		defer e.providerShadowMu.Unlock()
+		e.providerShadowRecorder(comparison)
+		return
+	}
+	if comparison.NotComparableReason != "" {
+		return
+	}
+	sourceKey := comparison.Source.Key
+	if sourceKey == "" {
+		sourceKey = comparison.Source.FingerprintKey
+	}
+	fingerprintKey := comparison.Observation.Fingerprint.Key
+	if fingerprintKey == "" {
+		fingerprintKey = comparison.Source.FingerprintKey
+	}
+	if comparison.Err != nil {
+		log.Printf(
+			"%s provider shadow %s mode=%s source=%q fingerprint=%q: %v",
+			comparison.File.Agent,
+			comparison.File.Path,
+			comparison.Mode,
+			sourceKey,
+			fingerprintKey,
+			comparison.Err,
+		)
+		return
+	}
+	if len(comparison.Mismatches) == 0 {
+		return
+	}
+	log.Printf(
+		"%s provider shadow %s mode=%s source=%q fingerprint=%q mismatches: %s",
+		comparison.File.Agent,
+		comparison.File.Path,
+		comparison.Mode,
+		sourceKey,
+		fingerprintKey,
+		strings.Join(comparison.Mismatches, "; "),
+	)
 }
 
 func (e *Engine) shouldCacheSkip(
@@ -8744,12 +9411,13 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 				}
 			}
 		}
+		if f := e.findProviderSourceFile(
+			context.Background(), def, sessionID, rawSessionID,
+		); f != "" {
+			return f
+		}
 		return ""
 	}
-	if def.FindSourceFunc == nil {
-		return ""
-	}
-
 	if def.Type == parser.AgentKiro {
 		for _, dir := range e.agentDirs[parser.AgentKiro] {
 			dbPath := parser.FindKiroSQLiteDBPath(dir)
@@ -8788,12 +9456,57 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 		}
 	}
 
-	for _, d := range e.agentDirs[def.Type] {
-		if f := def.FindSourceFunc(d, bareID); f != "" {
-			return f
+	if def.FindSourceFunc != nil {
+		for _, d := range e.agentDirs[def.Type] {
+			if f := def.FindSourceFunc(d, bareID); f != "" {
+				return f
+			}
 		}
 	}
+	if f := e.findProviderSourceFile(
+		context.Background(), def, sessionID, bareID,
+	); f != "" {
+		return f
+	}
 	return ""
+}
+
+// findProviderSourceFile resolves a single session's source file through the
+// provider facade for authoritative concrete providers. It is the
+// provider-shape counterpart to AgentDef.FindSourceFunc, so a provider can drop
+// its FindSourceFunc hook and stay locatable for diagnostics, export, and
+// parse-diff lookups once it owns live processing. Shadow mode remains
+// observational and must not satisfy lookups that legacy lookup would miss.
+func (e *Engine) findProviderSourceFile(
+	ctx context.Context,
+	def parser.AgentDef,
+	sessionID string,
+	rawSessionID string,
+) string {
+	mode := e.providerMigrationModes[def.Type]
+	if mode != parser.ProviderMigrationProviderAuthoritative {
+		return ""
+	}
+	factory, ok := e.providerFactories[def.Type]
+	if !ok || factory == nil {
+		return ""
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[def.Type],
+		Machine: e.machine,
+	})
+	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+		RawSessionID:  rawSessionID,
+		FullSessionID: sessionID,
+	})
+	if err != nil {
+		log.Printf("%s provider source lookup: %v", def.Type, err)
+		return ""
+	}
+	if !found {
+		return ""
+	}
+	return providerDiscoveredPath(source)
 }
 
 // SourceMtime returns the current source-backed mtime for a
@@ -9097,8 +9810,9 @@ func (e *Engine) SyncSingleSessionContext(
 	// the file, even if it was cached as non-interactive
 	// during a bulk SyncAll.
 	file := parser.DiscoveredFile{
-		Path:  path,
-		Agent: agent,
+		Path:       path,
+		Agent:      agent,
+		ForceParse: true,
 	}
 	if e.shouldCacheSkip(file) {
 		e.clearSkip(path)
@@ -9245,12 +9959,15 @@ func (e *Engine) SyncSingleSessionContext(
 	res := e.processFile(ctx, file)
 	if res.err != nil {
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
-			e.cacheSkip(path, res.mtime)
+			e.cacheSkip(res.skipCacheKey(path), res.mtime)
 		}
 		return res.err
 	}
 	if res.skip {
 		return nil
+	}
+	if res.cacheSkip {
+		e.clearSkip(res.skipCacheKey(path))
 	}
 
 	// Delete parser-excluded sessions before writing the parsed
@@ -9290,7 +10007,7 @@ func (e *Engine) SyncSingleSessionContext(
 				sess:        pr.Session,
 				msgs:        pr.Messages,
 				usageEvents: pr.UsageEvents,
-				needsRetry:  res.needsRetry,
+				needsRetry:  res.needsRetryForSession(pr.Session.ID),
 			},
 		); err != nil &&
 			!isIntentionalSessionSkip(err) &&

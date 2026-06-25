@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/danielgtaylor/huma/v2 v2.38.0
+	github.com/dmarkham/enumer v1.6.3
 	github.com/duckdb/duckdb-go/v2 v2.10504.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gofrs/flock v0.13.0
@@ -81,6 +82,7 @@ require (
 	github.com/moby/term v0.5.2 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
+	github.com/pascaldekloe/name v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/posthog/posthog-go v1.12.6 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect

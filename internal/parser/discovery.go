@@ -46,9 +46,12 @@ func isDirOrSymlink(
 
 // DiscoveredFile holds a discovered session file.
 type DiscoveredFile struct {
-	Path    string
-	Project string    // pre-extracted project name
-	Agent   AgentType // which agent this file belongs to
+	Path            string
+	Project         string     // pre-extracted project name
+	Agent           AgentType  // which agent this file belongs to
+	ForceParse      bool       // caller requires a full source reparse
+	ProviderSource  *SourceRef // provider-owned source identity, when known
+	ProviderProcess bool       // true when this caller may parse via ProviderSource
 }
 
 // OpenCodeSourceMode identifies the usable OpenCode storage

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -1738,6 +1739,153 @@ func TestParseDiffSourceReliableForRaced(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
+	sourcePath := "/tmp/provider-source.jsonl"
+	filePath := sourcePath
+	current := &db.Session{
+		ID:          "provider-current",
+		Agent:       string(parser.AgentClaude),
+		Machine:     "devbox",
+		Project:     "provider-project",
+		FilePath:    &filePath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	retry := &db.Session{
+		ID:          "provider-retry",
+		Agent:       string(parser.AgentClaude),
+		Machine:     "devbox",
+		Project:     "provider-project",
+		FilePath:    &filePath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	missing := &db.Session{
+		ID:          "provider-missing",
+		Agent:       string(parser.AgentClaude),
+		Machine:     "devbox",
+		Project:     "provider-project",
+		FilePath:    &filePath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	storedByID := map[string]*db.Session{
+		current.ID: current,
+		retry.ID:   retry,
+		missing.ID: missing,
+	}
+	storedByPath := map[string][]*db.Session{
+		sourcePath: {current, retry, missing},
+	}
+	job := syncJob{
+		path: sourcePath,
+		processResult: processResult{
+			results: []parser.ParseResult{
+				{Session: parser.ParsedSession{
+					ID:      current.ID,
+					Agent:   parser.AgentClaude,
+					Machine: "devbox",
+					Project: "provider-project",
+					File: parser.FileInfo{
+						Path: sourcePath,
+					},
+				}},
+				{Session: parser.ParsedSession{
+					ID:      retry.ID,
+					Agent:   parser.AgentClaude,
+					Machine: "devbox",
+					Project: "provider-project",
+					File: parser.FileInfo{
+						Path: sourcePath,
+					},
+				}},
+			},
+			retrySessionIDs: map[string]bool{
+				retry.ID: true,
+			},
+		},
+	}
+	engine := &Engine{db: dbtest.OpenTestDB(t)}
+	report := &ParseDiffReport{FieldCounts: map[string]int{}}
+	visited := map[string]bool{}
+	var presencePaths []string
+
+	err := engine.parseDiffCollectFile(
+		context.Background(),
+		report,
+		job,
+		map[string]parser.AgentType{sourcePath: parser.AgentClaude},
+		storedByID,
+		storedByPath,
+		visited,
+		engine.loadWorktreeProjectResolver(),
+		&presencePaths,
+	)
+	require.NoError(t, err)
+	engine.parseDiffPresenceSweep(
+		report,
+		presencePaths,
+		storedByPath,
+		visited,
+	)
+
+	assert.Equal(t, 1, report.Totals.NeedsRetry)
+	assert.Equal(t, 1, report.Totals.Changed)
+	byID := map[string]SessionDiff{}
+	for _, session := range report.Sessions {
+		byID[session.SessionID] = session
+	}
+	assert.Equal(t, DiffNeedsRetry, byID[retry.ID].Class)
+	assert.Equal(t, DiffChanged, byID[missing.ID].Class)
+	require.NotEmpty(t, byID[missing.ID].Fields)
+	assert.Equal(t, FieldPresence, byID[missing.ID].Fields[0].Field)
+}
+
+func TestParseDiffPresenceSweepSkipsIncompleteProviderResults(t *testing.T) {
+	sourcePath := "/tmp/incomplete-provider-source.jsonl"
+	filePath := sourcePath
+	missing := &db.Session{
+		ID:          "provider-missing",
+		Agent:       string(parser.AgentClaude),
+		Machine:     "devbox",
+		Project:     "provider-project",
+		FilePath:    &filePath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	storedByPath := map[string][]*db.Session{
+		sourcePath: {missing},
+	}
+	job := syncJob{
+		path: sourcePath,
+		processResult: processResult{
+			suppressPresenceSweep: true,
+		},
+	}
+	engine := &Engine{db: dbtest.OpenTestDB(t)}
+	report := &ParseDiffReport{FieldCounts: map[string]int{}}
+	visited := map[string]bool{}
+	var presencePaths []string
+
+	err := engine.parseDiffCollectFile(
+		context.Background(),
+		report,
+		job,
+		map[string]parser.AgentType{sourcePath: parser.AgentClaude},
+		map[string]*db.Session{missing.ID: missing},
+		storedByPath,
+		visited,
+		engine.loadWorktreeProjectResolver(),
+		&presencePaths,
+	)
+	require.NoError(t, err)
+	engine.parseDiffPresenceSweep(
+		report,
+		presencePaths,
+		storedByPath,
+		visited,
+	)
+
+	assert.Equal(t, 0, report.Totals.Changed)
+	assert.Empty(t, report.Sessions)
 }
 
 func TestParseDiffReportHasFailures(t *testing.T) {

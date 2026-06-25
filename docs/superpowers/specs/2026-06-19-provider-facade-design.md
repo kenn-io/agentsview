@@ -21,8 +21,8 @@ fingerprints, and `ParseResult` values.
   stays authoritative while provider parsing is shadow-compared provider by
   provider.
 - Make every provider PR an actual migration step: adding a provider
-  implementation must also opt that provider into the shared migration manifest
-  and provider-vs-legacy parity tests.
+  implementation must also opt that provider into the shared migration
+  manifest and provider-vs-legacy parity tests.
 - Keep `ParsedSession`, `ParsedMessage`, `ParsedToolCall`, `ParsedToolResult`,
   `ParsedUsageEvent`, and `ParseResult` as the normalized output contract.
 - Remove the provider-by-provider `sync.Engine.processFile` dispatch switch only
@@ -51,8 +51,8 @@ fingerprints, and `ParseResult` values.
 The provider facade must respect these constraints:
 
 - Source shape belongs to the provider. The engine must not know whether a
-  source is a JSONL file, SQLite row, sidecar, trace folder, import archive, or
-  multiple files.
+  source is a JSONL file, SQLite row, sidecar, trace folder, import archive,
+  or multiple files.
 - Providers embed a base facade with zero-value no-op implementations for
   optional source behavior.
 - Providers must implement `Parse`; the base facade must not provide a fake
@@ -65,9 +65,9 @@ The provider facade must respect these constraints:
 - All existing providers migrate to the new layer before the old sync dispatch
   is considered removed.
 - During the stacked migration, legacy dispatch remains the writer. Provider
-  dispatch is run through the same root-level harness for opted-in providers and
-  compared against legacy output, but it must not mutate persisted session state
-  until the stack tip switches authority.
+  dispatch is run through the same root-level harness for opted-in providers
+  and compared against legacy output, but it must not mutate persisted session
+  state until the stack tip switches authority.
 - A provider branch is incomplete if it only adds provider code. It must also
   move the provider's migration status out of legacy-only mode and include the
   dual-run test coverage that proves the new shape is exercised.
@@ -373,7 +373,13 @@ Rules:
 
 - `Key` is stable within the provider and suitable for logs and dedupe.
 - `DisplayPath` is human-readable and may be a virtual path.
-- `FingerprintKey` is the DB lookup key used for skip/data-version checks.
+- `FingerprintKey` is the DB lookup key used for skip/data-version checks. With
+  the no-schema-change migration, this is the authoritative persisted source
+  identity and is written through `ParsedSession.File.Path` /
+  `sessions.file_path`. `SourceFingerprint.Key` must either equal the selected
+  persisted identity or be empty so the engine falls back to
+  `SourceRef.FingerprintKey` and `SourceRef.Key`; there is no separate
+  fingerprint-key column.
 - `ProjectHint` is advisory and can be empty.
 - `Opaque` is internal provider state. The engine treats it as an opaque token.
 - `Opaque` is never persisted or logged, must be immutable for engine callers,
@@ -383,9 +389,9 @@ Rules:
 Backwards compatibility:
 
 - Migrated providers should keep `FingerprintKey` compatible with the source key
-  or stored `file_path` values already written by the legacy sync path whenever
-  practical. Existing fingerprint and data-version metadata should continue to
-  short-circuit unchanged sources after the facade migration.
+  or stored `file_path` values already written by the legacy sync path
+  whenever practical. Existing fingerprint and data-version metadata should
+  continue to short-circuit unchanged sources after the facade migration.
 - If a provider must change its lookup key or fingerprint identity, that
   provider migration must explicitly document the expected full resync or
   metadata transition. The facade migration itself must not silently force all
@@ -411,9 +417,10 @@ type WatchRoot struct {
 }
 
 type ChangedPathRequest struct {
-	Path      string
-	EventKind string
-	WatchRoot string
+	Path              string
+	EventKind         string
+	WatchRoot         string
+	StoredSourcePaths []string
 }
 ```
 
@@ -423,7 +430,10 @@ provider filters that allow broad OS watch roots without parsing every changed
 file. `DebounceKey` groups related paths such as sibling metadata files and a
 transcript. `ChangedPathRequest.WatchRoot` is the matched watch root, so the
 provider can classify changes relative to the configured root that produced
-them.
+them. `StoredSourcePaths` is the persisted `sessions.file_path` hint set scoped
+to the matched watch root and provider. Providers with virtual, database-backed,
+or multi-file sources use it to classify deletion and tombstone events that no
+longer have a regular source file on disk.
 
 The provider owns the final changed-path decision. The engine may use
 `IncludeGlobs` and `ExcludeGlobs` as coarse prefilters because the provider
@@ -502,8 +512,8 @@ concrete pass criteria:
 - database fan-out fingerprints reuse database-level metadata plus row/session
   identifiers instead of scanning unrelated rows;
 - any provider that requires a full content hash documents why mtime, size,
-  inode/device, row metadata, or sidecar metadata are insufficient and includes
-  a benchmark budget for that provider.
+  inode/device, row metadata, or sidecar metadata are insufficient and
+  includes a benchmark budget for that provider.
 
 ## Parse Requests And Outcomes
 
@@ -565,9 +575,9 @@ Runtime behavior:
   can still be ingested.
 - All session IDs in parse outcomes use the persisted normalized/full session ID
   namespace. That includes `ParseResultOutcome.Result.Session.ID`,
-  `ExcludedSessionIDs`, and `SourceError.SessionID`. Raw upstream IDs may appear
-  in provider internals, diagnostics, or lookup requests, but the engine
-  compares outcome IDs only against persisted full session IDs.
+  `ExcludedSessionIDs`, and `SourceError.SessionID`. Raw upstream IDs may
+  appear in provider internals, diagnostics, or lookup requests, but the
+  engine compares outcome IDs only against persisted full session IDs.
 - `SourceError.SessionID` is required for per-session failures from
   multi-session providers. `SourceKey` and `DisplayPath` are diagnostic source
   identifiers, not substitutes for persisted session identity. If the provider
@@ -584,35 +594,47 @@ Runtime behavior:
   `RetryReason` records why, for example an Antigravity-style lower-resolution
   fallback.
 - `DataVersionUnspecified` is allowed only during migration adapters; provider
-  harness tests should require new providers to set either `DataVersionCurrent`
-  or `DataVersionNeedsRetry` for every returned result.
+  harness tests should require new providers to set either
+  `DataVersionCurrent` or `DataVersionNeedsRetry` for every returned result.
 - Mixed data-version states are valid for multi-session sources. One result can
   be current while another result from the same source needs retry, and a
   retryable `SourceError` affects only the failed session unless the provider
   reports a whole-source `error`.
-- Data-version writes are per result, but clean skip-cache persistence remains
-  source/fingerprint scoped. `ResultSetComplete` means the provider has
-  accounted for the complete logical session set represented by the
-  `SourceRef`/`FingerprintKey`: returned results, explicit exclusions, and clean
-  replacements cover every retained session for that source. The engine may
-  write a clean skip-cache entry only when `ResultSetComplete` is true, every
-  returned result is `DataVersionCurrent`, there are no `SourceErrors`, and any
-  previously persisted rows for that `FingerprintKey` are either returned,
-  listed in `ExcludedSessionIDs`, or covered by a clean `ForceReplace`.
+- Data-version writes are per result, and successful unchanged-source freshness
+  remains DB metadata driven through source identity, file size, effective
+  mtime, and parser data version. `skipped_files` must not become a clean
+  successful-parse cache unless it also stores data-version-aware freshness
+  state; with the current no-schema-change migration it remains a
+  retry/failure and explicit skip cache.
+- `ResultSetComplete` means the provider has accounted for the complete logical
+  session set represented by the `SourceRef`/`FingerprintKey`: returned
+  results, explicit exclusions, and clean replacements cover every retained
+  session for that source. The engine may use that proof to avoid stale rows
+  and to clear retry/failure cache entries, but not to persist a
+  data-version-blind clean source skip.
 - Any `DataVersionNeedsRetry` result, retryable per-session error, non-retryable
-  per-session error, or incomplete result set suppresses the clean skip-cache
-  entry for the whole `FingerprintKey`. Non-retryable errors may be recorded as
-  diagnostics or failure-cache entries, but they do not prove the source is
-  clean because a future parser version or source change may still need to
-  revisit the same logical session set.
+  per-session error, or incomplete result set prevents the provider outcome
+  from being treated as a clean complete source. Non-retryable errors may be
+  recorded as diagnostics or failure-cache entries, but they do not prove the
+  source is clean because a future parser version or source change may still
+  need to revisit the same logical session set.
 - During a partial multi-session parse, existing persisted rows that are absent
   from `Results` are retained unless their IDs are listed in
   `ExcludedSessionIDs` or the provider completes a clean `ForceReplace` parse
-  for the owning logical source. A retryable `SourceError` leaves that session's
-  existing row stale and eligible for a future retry instead of deleting it or
-  marking it current.
+  for the owning logical source. A retryable `SourceError` leaves that
+  session's existing row stale and eligible for a future retry instead of
+  deleting it or marking it current.
 - `SkipReason` replaces implicit "nil session means skip" behavior. Skips are
   explicit outcomes and should not be conflated with retryable parse failures.
+- Provider cache identity and `ResultSetComplete` semantics are root hook
+  invariants, not per-provider policy. Provider branches may add source-family
+  coverage, but they must not redefine cache keys, omission/deletion behavior,
+  or retry-state persistence.
+- When a migrated provider's fingerprint key differs from the legacy
+  `file.Path`, the provider path reads, writes, and clears only the provider
+  fingerprint key. Old legacy skip-cache entries may remain in the persisted
+  archive as inert compatibility leftovers; they must not be consulted for a
+  provider-authoritative source once its provider key is known.
 - Providers do not write to the DB.
 - Providers do not mutate, delete, or repair source files.
 
@@ -769,6 +791,15 @@ Capability semantics are intentionally strict:
 - `CapabilityNotApplicable` means the upstream source format cannot represent
   the feature. It is not a placeholder for unfinished implementation work.
 
+Capability conformance uses meaningful presence predicates rather than raw Go
+zero-value checks. Unsupported string fields such as cwd, git branch, model,
+stop reason, and session name must remain empty; unsupported counts such as
+malformed lines must remain zero; unsupported booleans such as truncation must
+remain false; unsupported repeated data such as relationships, subagents, tool
+calls, tool results, and usage events must remain empty. A zero value is
+therefore absence unless the provider declares support for the corresponding
+feature and fixtures prove a source can intentionally emit it.
+
 Generated enum tooling should be reproducible:
 
 - keep a `tools.go` file with a `tools` build tag and a blank import for
@@ -863,10 +894,18 @@ entries for related providers, but tests must expand the family to every
 concrete `AgentType`; a family-level entry is not enough to mark an individual
 parse-capable provider migrated.
 
-- legacy-only: only the existing sync path runs;
-- shadow-compare: legacy runs and writes, provider runs through the new generic
-  path, and tests compare normalized outcomes;
-- provider-authoritative: provider dispatch writes and the old path is absent.
+- legacy-only: only the existing sync path runs and writes. This is the normal
+  mode for legacy adapter providers. A concrete provider may move back to this
+  mode only as a documented rollback with an open follow-up task.
+- shadow-compare: legacy runs and writes; provider runs through the new generic
+  path and produces normalized in-memory planned effects. Tests compare those
+  effects against the legacy outcome. Runtime mismatches are developer
+  diagnostics only; they must not persist user-visible parse diagnostics or
+  change SSE-visible state.
+- provider-authoritative: provider dispatch writes, returns the caller result,
+  and the old provider-specific legacy path is absent. This is reserved for
+  the stack-tip cleanup after every parse-capable provider has passed shadow
+  comparison.
 - import-only: the provider exists for non-filesystem import/export metadata and
   is intentionally excluded from parse shadow comparison.
 
@@ -901,8 +940,8 @@ Changed-path live sync becomes:
 1. The watcher reports a changed path.
 1. The engine finds providers whose `WatchPlan` roots match the changed path.
 1. Each matched provider classifies it through `SourcesForChangedPath` with a
-   `ChangedPathRequest` that includes the changed path, event kind, and matched
-   watch root.
+   `ChangedPathRequest` that includes the changed path, event kind, and
+   matched watch root.
 1. The engine processes the returned `SourceRef` values generically.
 
 Source lookup becomes:
@@ -925,9 +964,9 @@ source errors, and exclusions still use persisted full session IDs.
 The root harness has two comparison surfaces:
 
 - source-level parity, available as soon as the root harness lands, compares one
-  legacy-discovered source or fixture set against the provider runner. Provider
-  implementation PRs must use this surface before they can move their manifest
-  entry to shadow-compare.
+  legacy-discovered source or fixture set against the provider runner.
+  Provider implementation PRs must use this surface before they can move their
+  manifest entry to shadow-compare.
 - caller-level dual-run, added by the later sync, lookup/watch, and diagnostics
   tasks, wraps production callers such as full sync, changed-path sync,
   `SyncSingleSession`, source lookup, source mtime, and parse-diff.
@@ -944,24 +983,99 @@ helpers but keep side effects isolated:
    metadata, SSE emissions, and diagnostics.
 1. Run the provider caller for the same agent through the generic provider
    helper. Depending on the caller, this may come from provider discovery,
-   `SourcesForChangedPath`, or `FindSource`; the comparison layer must not teach
-   the engine provider-specific path formats.
-1. Normalize both outputs into the same comparison shape: full session IDs,
-   parsed message/tool/usage content, excluded IDs, skip reasons, retry state,
-   data-version state, source metadata, and per-session errors.
+   `SourcesForChangedPath`, or `FindSource`; the comparison layer must not
+   teach the engine provider-specific path formats.
+1. Normalize both outputs into the same comparison shape for the surface being
+   exercised. The root `processFile` comparison covers full session IDs,
+   parsed message/tool/usage content, excluded IDs, retry state, data-version
+   state, source metadata, and per-session errors. Source-level provider tests
+   and later caller tasks own `SkipReason` parity until the legacy side
+   exposes a comparable skip-reason projection.
 1. Represent provider-side effects as in-memory planned effects, not live DB
    mutations. Planned effects include source metadata writes, data-version
-   writes, skip-cache updates, diagnostics, and SSE topics. Integration tests
-   may additionally run against disposable stores, but shadow mode never
-   receives the live writer.
+   writes, skip-cache updates, and diagnostics. Integration tests may
+   additionally run against disposable stores, but shadow mode never receives
+   the live writer. SSE/event scope parity is deferred until the
+   provider-authoritative caller owns live event emission.
 1. Report mismatches as test failures in the migration harness. Runtime
    diagnostics are opt-in developer diagnostics only; they must not create
    user-visible parse diagnostics or SSE-visible state. The provider side must
    not mutate persisted session state while in shadow-compare mode.
 
+`ProviderPlannedEffects` must match the legacy engine's observable write model,
+not an abstract parser-local model:
+
+- source metadata keys use the provider fingerprint key when present, then
+  `SourceRef.FingerprintKey`, then `SourceRef.Key`;
+- skip-cache keys follow the same key order the legacy engine uses before a
+  persisted skip decision;
+- data-version entries represent process-result-level write intent for the
+  concrete session rows the engine would stamp after successful writes,
+  including current versus `DataVersionNeedsRetry` state; retry-reason text is
+  provider-local until the legacy process result exposes equivalent detail;
+- diagnostics mirror the legacy parse diagnostic fields, including display path,
+  source key, session ID, error, and retryability, but are never written to
+  the live diagnostics table in shadow mode;
+- legacy skip, incremental, and whole-source error states are recorded as
+  non-comparable in the root `processFile` hook. Provider `SkipReason` parity
+  is handled by provider-local/source-level tests until a later caller task
+  defines a legacy skip-reason projection.
+
+Provider output must be namespaced before it can produce planned effects and
+before any remote machine prefix is applied. `ParseResult.Session.Agent` must
+equal the provider `AgentType`. Persisted session IDs in the result graph must
+use the provider's `AgentDef.IDPrefix` when one exists; this includes result
+IDs, parent IDs, usage-event session IDs, subagent links, exclusions, and
+diagnostic session IDs. `ParsedSession.SourceSessionID` is excluded from this
+check because current parsers use it for upstream/raw source IDs, not persisted
+session IDs. Diagnostic `SourceError.SourceKey` values are required and must be
+one of the observed source identities or a derived virtual key: the provider
+fingerprint key, `SourceRef.FingerprintKey`, `SourceRef.Key`, or one of those
+values followed by `#`, `::`, or `|`. Cross-provider sessions are not legal in
+shadow mode because they make parity false positives indistinguishable from real
+legacy behavior.
+
+Fingerprint failures and parse failures are compared separately. A fingerprint
+failure means no provider parse was attempted and the mismatch report records a
+fingerprint failure. A parse failure after a successful fingerprint records the
+fingerprint key and parse error. Neither failure may block the legacy write path
+while the mode is `shadow-compare`.
+
+Mismatch reports must include provider, migration mode, source key, fingerprint
+key, comparison field path, a bounded legacy summary, a bounded provider
+summary, and whether the mismatch came from discovery, fingerprint, parse
+output, planned effects, or runtime failure. Runtime reporting is developer-only
+logging or debug output until a later task defines persistence.
+
+Shadow comparison can double-parse large sources while a provider migrates.
+Provider PRs that touch large roots, shared SQLite sources, or composite sources
+need fixture coverage or benchmarks that show fingerprinting and shadow parse
+overhead are acceptable before promotion. The rollback rule is to move the
+manifest entry back to `legacy-only`, leave the legacy path authoritative, and
+keep the blocking kata/review item open.
+
 Provider branches must exercise this transition with shared tests rather than
 only provider-local unit tests. The branch is considered migrated only when the
-manifest entry and parity tests are present.
+manifest entry and parity tests are present. Deferred parity items such as
+provider-only retry-reason text, SSE scopes, and caller-specific skip-reason
+mapping are promotion gates for provider-authoritative mode; they cannot remain
+open at the stack tip where legacy dispatch is removed.
+
+Before any concrete provider changes to `provider-authoritative`, that branch
+must prove the generic hook contract for its source shape:
+
+- `FindSource` honors global and file-scoped force-parse by allowing stale
+  stored source hints when requested.
+- provider not-found in authoritative mode is an explicit error, not an implicit
+  legacy fallback.
+- multi-result sources preserve `ParseResultOutcome.DataVersion` per session, so
+  retry-needed fallback rows do not mark unrelated current rows stale.
+- skip-cache lookup and persistence use the provider fingerprint key selected
+  for the source, with tests for virtual or composite paths where `file.Path`
+  differs from `SourceRef.FingerprintKey`.
+- `ResultSetComplete`, excluded IDs, diagnostics, and source errors have parity
+  tests for the provider's source family before the old legacy dispatch for
+  that provider is removed.
 
 If a provider that moved to shadow-compare proves flaky, its manifest entry can
 return to legacy-only with a reason and an open kata task or review note. The
@@ -1002,30 +1116,32 @@ sequence:
 1. Add the root-level dual-run migration harness before migrating provider
    branches. It must contain the shared provider execution helper, comparison
    normalizer, source-level parity surface, planned-effect comparison model,
-   explicit per-`AgentType` migration manifest, and tests that fail when a
-   concrete parse-capable provider exists without a migration-mode entry.
+   caller-level `processFile` shadow comparison for full sync, explicit
+   per-`AgentType` migration manifest, and tests that fail when a concrete
+   parse-capable provider exists without a migration-mode entry.
 1. Add JSONL source-set helpers and tests for simple file-backed JSONL
    providers.
 1. Use `git-spice` to restack the provider branches on the root harness branch
-   after that lower branch changes. The stack must be verified with
-   `gs log short`, conflicts resolved provider by provider, and updates
-   submitted with git-spice so every PR includes both provider implementation
-   and migration wiring.
+   after that lower branch changes when the user has explicitly authorized
+   branch changes for the session. The stack must be verified with
+   `gs log short` and conflicts resolved provider by provider. Pushing,
+   submitting, or updating PRs is a separate network operation and requires
+   separate explicit authorization.
 1. Migrate simple JSONL providers with acceptance tests for discovery,
    fingerprint, parse output, skip-cache metadata, and data-version behavior.
    Each provider PR must move its affected concrete `AgentType` entries from
    legacy-only to shadow-compare and run the shared source-level
    provider-vs-legacy parity harness. Legacy sync remains authoritative.
 1. Add and migrate sibling/composite source providers with acceptance tests for
-   watch planning, composite fingerprints, sidecar/title refreshes, and changed
-   path classification. Each PR must opt its provider into shadow-compare and
-   pass the shared source-level parity harness while legacy sync remains
-   authoritative.
+   watch planning, composite fingerprints, sidecar/title refreshes, and
+   changed path classification. Each PR must opt its provider into
+   shadow-compare and pass the shared source-level parity harness while legacy
+   sync remains authoritative.
 1. Add and migrate virtual-path and SQLite fan-out providers with acceptance
-   tests for stored advisory paths, tombstone recovery via `StoredSourcePaths`,
-   logical session lookup, per-session errors, and source mtime behavior. Each
-   PR must opt its provider into shadow-compare and pass the shared parity
-   harness while legacy sync remains authoritative.
+   tests for stored advisory paths, tombstone recovery via
+   `StoredSourcePaths`, logical session lookup, per-session errors, and source
+   mtime behavior. Each PR must opt its provider into shadow-compare and pass
+   the shared parity harness while legacy sync remains authoritative.
 1. Add and migrate non-file import/database providers with acceptance tests for
    `FindSource`, fingerprinting, and unsupported source mechanics. Import-only
    providers are explicitly marked import-only rather than shadow-compared.
@@ -1033,21 +1149,24 @@ sequence:
    changed-path shadow comparison depends on providers. It must query by
    provider and watched root, use the `(agent, file_path)` index shape, return
    stable de-duplicated paths, and include tests for provider/root filtering,
-   path normalization, sibling-prefix false positives such as `/root/db` versus
-   `/root/db2`, dedupe, batching/no-truncation behavior, and large unrelated
-   session tables.
+   path normalization, sibling-prefix false positives such as `/root/db`
+   versus `/root/db2`, dedupe, batching/no-truncation behavior, and large
+   unrelated session tables.
 1. Add provider compatibility tests for stored hint interpretation before
-   changed-path shadow comparison depends on providers. SQLite fan-out providers
-   must cover malformed or obsolete virtual paths, debug-only diagnostics, DB
-   row deletion, DB file deletion, and stale hints that belong to a different
-   physical DB under the same watch root.
-1. Move source-processing callers into the caller-level dual-run harness: full
-   sync, changed-path sync, and `SyncSingleSession`. During migration these
-   callers compare provider output against legacy for parsed output, skip-cache,
-   data-version, source metadata, diagnostics, excluded IDs, and retry state;
-   only the legacy result writes. Changed-path comparison must populate
-   `StoredSourcePaths` from scoped persisted session metadata and include DB row
-   deletion and DB file deletion integration tests.
+   changed-path shadow comparison depends on providers. SQLite fan-out
+   providers must cover malformed or obsolete virtual paths, debug-only
+   diagnostics, DB row deletion, DB file deletion, and stale hints that belong
+   to a different physical DB under the same watch root.
+1. Move the remaining source-processing caller semantics into the caller-level
+   dual-run harness: changed-path sync and `SyncSingleSession`. The root
+   harness already shadows the shared `processFile` path, so these tasks must
+   add caller-specific source selection, stored-source hints, and acceptance
+   coverage rather than adding a second shadow hook. During migration these
+   callers compare provider output against legacy for parsed output,
+   skip-cache, data-version, source metadata, diagnostics, excluded IDs, and
+   retry state; only the legacy result writes. Changed-path comparison must
+   populate `StoredSourcePaths` from scoped persisted session metadata and
+   include DB row deletion and DB file deletion integration tests.
 1. Move lookup/watch callers into the caller-level dual-run harness: session
    watch flows, export/source lookup, source mtime, and token-usage raw source
    probing. During migration these callers compare lookup freshness, virtual
@@ -1057,8 +1176,8 @@ sequence:
    compare report shape and source-error behavior against legacy.
 1. At the tip of the stack only, switch all shadow-compared providers to
    provider-authoritative dispatch, remove the provider-by-provider
-   `processFile` switch, and remove or deprecate old `AgentDef` source callback
-   fields after all callers stop using them.
+   `processFile` switch, and remove or deprecate old `AgentDef` source
+   callback fields after all callers stop using them.
 
 Migration should keep existing parser unit tests. Provider-level tests become
 the required integration surface for future providers.
@@ -1128,8 +1247,8 @@ Required tests:
 - Provider harness tests for discovery, fingerprint, parse, source lookup, and
   optional incremental parsing.
 - Incremental parsing tests for `IncrementalUnsupported`,
-  `IncrementalNoNewData`, `IncrementalApplied`, `IncrementalNeedsFullParse`, and
-  real incremental errors.
+  `IncrementalNoNewData`, `IncrementalApplied`, `IncrementalNeedsFullParse`,
+  and real incremental errors.
 - Parse diagnostic tests proving stable source fields are reported and opaque
   payloads are not serialized or logged.
 - Source-level migration parity tests comparing provider output to current
@@ -1149,8 +1268,8 @@ Required tests:
 - Dual-run isolation tests proving provider shadow comparison cannot write
   sessions, messages, source metadata, data-version rows, skip-cache entries,
   diagnostics, or SSE-visible state while legacy remains authoritative. These
-  tests compare in-memory planned effects or disposable-store observations, not
-  live production mutations.
+  tests compare in-memory planned effects or disposable-store observations,
+  not live production mutations.
 - Sync integration tests for incremental Claude/Codex, multi-session sources,
   parse-diff, source mtime, source lookup, skip cache, usage events, sidecars,
   virtual paths, and title/metadata refreshes.
@@ -1173,7 +1292,7 @@ decisions from those structures:
 - retryable failure: do not cache skip by unchanged mtime and do not mark the
   affected source/session current for the parser data version;
 - non-retryable per-session failure: eligible for failure-cache persistence, but
-  not for a clean source skip-cache entry;
+  not for a data-version-blind clean source skip;
 - full parse fallback from incremental: `IncrementalNeedsFullParse`;
 - unsupported optional provider feature: `ErrUnsupportedProviderFeature`;
 - successful lower-resolution fallback: per-result `DataVersionNeedsRetry` plus

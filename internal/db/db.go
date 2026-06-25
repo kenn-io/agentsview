@@ -1375,6 +1375,9 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		   AND model != '<synthetic>'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_agent_file_path_active
+		 ON sessions(agent, file_path)
+		 WHERE file_path IS NOT NULL AND deleted_at IS NULL`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ddl); err != nil {
