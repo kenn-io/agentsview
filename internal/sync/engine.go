@@ -950,19 +950,13 @@ func isUnder(dir, path string) (string, bool) {
 }
 
 // classifyContainerPath runs the container- and SQLite-style classifiers that
-// resolve a path whether or not it currently exists on disk (Kiro, Zed,
-// Shelley, and Vibe). Split out of classifyOnePath to keep that function
-// within NilAway's per-function CFG-block limit.
+// resolve a path whether or not it currently exists on disk (Kiro and Vibe).
+// Split out of classifyOnePath to keep that function within NilAway's
+// per-function CFG-block limit.
 func (e *Engine) classifyContainerPath(
 	path string, pathExists bool,
 ) (parser.DiscoveredFile, bool) {
 	if df, ok := e.classifyKiroSQLitePath(path); ok {
-		return df, true
-	}
-	if df, ok := e.classifyZedSQLitePath(path); ok {
-		return df, true
-	}
-	if df, ok := e.classifyShelleySQLitePath(path); ok {
 		return df, true
 	}
 	return parser.DiscoveredFile{}, false
@@ -1276,94 +1270,11 @@ func (e *Engine) classifyKiroSQLitePath(
 	return parser.DiscoveredFile{}, false
 }
 
-func (e *Engine) classifyZedSQLitePath(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	// Virtual path: threads.db#<sessionID>
-	if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
-		for _, zedDir := range e.agentDirs[parser.AgentZed] {
-			if _, under := isUnder(zedDir, dbPath); under {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentZed,
-				}, true
-			}
-		}
-	}
-	// Real path: threads/threads.db or WAL/SHM siblings.
-	// Handled here (before the !pathExists guard) so that delete
-	// and rename events on threads.db-wal / threads.db-shm are
-	// not dropped when the sibling no longer exists on disk.
-	zedDBRel := filepath.Join("threads", "threads.db")
-	for _, zedDir := range e.agentDirs[parser.AgentZed] {
-		if zedDir == "" {
-			continue
-		}
-		rel, ok := isUnder(zedDir, path)
-		if !ok {
-			continue
-		}
-		base := filepath.Base(rel)
-		if rel != zedDBRel && !strings.HasPrefix(base, "threads.db-") {
-			continue
-		}
-		dbPath := filepath.Join(zedDir, zedDBRel)
-		if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
-			return parser.DiscoveredFile{
-				Path:  dbPath,
-				Agent: parser.AgentZed,
-			}, true
-		}
-	}
-	return parser.DiscoveredFile{}, false
-}
-
+// shelleyDBFile is the shared Shelley conversation database basename. Zed and
+// Shelley are provider-authoritative, so their changed-path classification and
+// parse run through the provider facade; this constant remains for the
+// provider-neutral physical-DB deletion and skip-cache checks in the engine.
 const shelleyDBFile = "shelley.db"
-
-// classifyShelleySQLitePath classifies a Shelley source path. Shelley
-// stores every conversation in a single shelley.db under its config
-// directory, so paths are either a virtual conversation path
-// (shelley.db#<id>) or the real DB file and its WAL/SHM siblings.
-func (e *Engine) classifyShelleySQLitePath(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	// Virtual path: shelley.db#<conversationID>
-	if dbPath, _, ok := parser.ParseShelleyVirtualPath(path); ok {
-		for _, dir := range e.agentDirs[parser.AgentShelley] {
-			if _, under := isUnder(dir, dbPath); under {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentShelley,
-				}, true
-			}
-		}
-	}
-	// Real path: shelley.db or its WAL/SHM siblings. Handled here
-	// (before the !pathExists guard) so that delete and rename events
-	// on shelley.db-wal / shelley.db-shm are not dropped when the
-	// sibling no longer exists on disk.
-	for _, dir := range e.agentDirs[parser.AgentShelley] {
-		if dir == "" {
-			continue
-		}
-		rel, ok := isUnder(dir, path)
-		if !ok {
-			continue
-		}
-		base := filepath.Base(rel)
-		if rel != shelleyDBFile && !strings.HasPrefix(base, shelleyDBFile+"-") {
-			continue
-		}
-		dbPath := filepath.Join(dir, shelleyDBFile)
-		if fi, err := os.Stat(dbPath); err == nil && !fi.IsDir() {
-			return parser.DiscoveredFile{
-				Path:  dbPath,
-				Agent: parser.AgentShelley,
-			}, true
-		}
-	}
-	return parser.DiscoveredFile{}, false
-}
 
 // resyncTempSuffix is appended to the original DB path to
 // form the temp database path during resync.
@@ -2958,14 +2869,14 @@ func discoveredFileMtime(
 	}
 	if file.Agent == parser.AgentZed {
 		dbPath := file.Path
-		if p, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
+		if p, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
 			dbPath = p
 		}
 		return zedDBCompositeMtime(dbPath)
 	}
 	if file.Agent == parser.AgentShelley {
 		dbPath := file.Path
-		if p, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
+		if p, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, shelleyDBFile); ok {
 			dbPath = p
 		}
 		return shelleyDBCompositeMtime(dbPath)
@@ -3798,9 +3709,9 @@ func (e *Engine) processFile(
 		statPath := file.Path
 		if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
-		} else if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
+		} else if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
 			statPath = dbPath
-		} else if dbPath, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
+		} else if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, shelleyDBFile); ok {
 			statPath = dbPath
 		} else if historyPath, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
 			// aider stores "<historyFile>#<runIdx>"; stat the physical file
@@ -3810,6 +3721,11 @@ func (e *Engine) processFile(
 		info, err = os.Stat(statPath)
 	}
 	if err != nil {
+		if os.IsNotExist(err) &&
+			file.ForceParse &&
+			providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) {
+			return processResult{forceReplace: true}
+		}
 		return processResult{
 			err: fmt.Errorf("stat %s: %w", file.Path, err),
 		}
@@ -3879,10 +3795,6 @@ func (e *Engine) processFile(
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
-	case parser.AgentZed:
-		res = e.processZed(file, info)
-	case parser.AgentShelley:
-		res = e.processShelley(file, info)
 	case parser.AgentAntigravity:
 		res = e.processAntigravity(file, info)
 	case parser.AgentAntigravityCLI:
@@ -3987,6 +3899,15 @@ func (e *Engine) processProviderFile(
 		return processResult{err: err}, true
 	}
 	if !found {
+		// A forced parse on a deleted shared SQLite database (Zed, Shelley)
+		// resolves to no source because the physical file is gone. Mirror the
+		// legacy deleted-source handling: complete the source as an empty
+		// force-replace so the engine retires every session that lived in the
+		// removed database instead of failing the sync.
+		if file.ForceParse &&
+			providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) {
+			return processResult{forceReplace: true}, true
+		}
 		return processResult{
 			err: fmt.Errorf(
 				"%s provider source not found for %s",
@@ -4028,6 +3949,17 @@ func (e *Engine) processProviderFile(
 
 	fingerprint, err := provider.Fingerprint(ctx, source)
 	if err != nil {
+		if file.ForceParse &&
+			providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) &&
+			errors.Is(err, os.ErrNotExist) {
+			return processResult{
+				excludedSessionIDs: e.providerSourceSessionIDsForForceReplace(
+					file.Agent,
+					source,
+				),
+				forceReplace: true,
+			}, true
+		}
 		return processResult{err: err}, true
 	}
 	cacheKey := providerProcessCacheKey(file, source, fingerprint)
@@ -4139,17 +4071,26 @@ func (e *Engine) processProviderFile(
 	}
 	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome)
 	if outcome.SkipReason != parser.SkipNone {
+		excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
+		if outcome.ForceReplace && outcome.ResultSetComplete {
+			excludedSessionIDs = append(
+				excludedSessionIDs,
+				e.providerSourceSessionIDsForForceReplace(file.Agent, source)...,
+			)
+		}
 		return processResult{
-			skip:        true,
-			mtime:       fingerprint.MTimeNS,
-			cacheSkip:   cacheSkip,
-			cacheKey:    cacheKey,
-			noCacheSkip: !cleanCache,
+			skip:               !outcome.ForceReplace,
+			excludedSessionIDs: excludedSessionIDs,
+			mtime:              fingerprint.MTimeNS,
+			cacheSkip:          cacheSkip,
+			cacheKey:           cacheKey,
+			noCacheSkip:        !cleanCache,
+			forceReplace:       outcome.ForceReplace,
 		}, true
 	}
 
 	res := processResult{
-		results:               parseOutcomeResults(outcome.Results),
+		results:               e.dropUnchangedSharedSQLiteResults(file, parseOutcomeResults(outcome.Results)),
 		excludedSessionIDs:    append([]string(nil), outcome.ExcludedSessionIDs...),
 		mtime:                 fingerprint.MTimeNS,
 		cacheSkip:             cacheSkip,
@@ -4183,6 +4124,104 @@ func (e *Engine) processProviderFile(
 	}
 	e.applyProviderFilePathPolicies(provider, file.Agent, &res)
 	return res, true
+}
+
+// dropUnchangedSharedSQLiteResults reproduces the legacy per-session skip the
+// folded processZed/processShelley loops performed. Zed and Shelley keep every
+// session in one shared SQLite database, so the provider re-parses every
+// session on any database change. Without a per-session filter the engine would
+// rewrite and recount unchanged sessions. This drops results whose stored
+// file_mtime (and, for Shelley's second-precision timestamps, the content
+// fingerprint stored in file_hash) and data_version already match, using the
+// path rewriter so remote stored paths resolve. Force-parse runs (parse-diff,
+// single-session resync) keep every result so they always re-emit.
+func (e *Engine) dropUnchangedSharedSQLiteResults(
+	file parser.DiscoveredFile,
+	results []parser.ParseResult,
+) []parser.ParseResult {
+	if e.forceParse || file.ForceParse || len(results) == 0 {
+		return results
+	}
+	compareHash := false
+	switch file.Agent {
+	case parser.AgentShelley:
+		compareHash = true
+	case parser.AgentZed:
+	default:
+		return results
+	}
+
+	kept := results[:0]
+	for _, r := range results {
+		path := r.Session.File.Path
+		if path == "" {
+			kept = append(kept, r)
+			continue
+		}
+		lookupPath := path
+		if e.pathRewriter != nil {
+			lookupPath = e.pathRewriter(path)
+		}
+		_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+		if !ok || storedMtime != r.Session.File.Mtime {
+			kept = append(kept, r)
+			continue
+		}
+		if compareHash {
+			storedHash, _ := e.db.GetFileHashByPath(lookupPath)
+			if storedHash != r.Session.File.Hash {
+				kept = append(kept, r)
+				continue
+			}
+		}
+		if e.db.GetDataVersionByPath(lookupPath) < db.CurrentDataVersion() {
+			kept = append(kept, r)
+			continue
+		}
+		// Unchanged: drop so the write batch neither rewrites nor recounts it.
+	}
+	return kept
+}
+
+func (e *Engine) providerSourceSessionIDsForForceReplace(
+	agent parser.AgentType,
+	source parser.SourceRef,
+) []string {
+	root := ""
+	for _, candidate := range []string{source.DisplayPath, source.FingerprintKey, source.Key} {
+		if candidate != "" {
+			root = candidate
+			break
+		}
+	}
+	if root == "" {
+		return nil
+	}
+	if e.pathRewriter != nil {
+		root = e.pathRewriter(root)
+	}
+	sourcePaths, err := e.db.ListStoredSourcePathHints(string(agent), []string{root})
+	if err != nil {
+		log.Printf("list provider force-replace source hints: %v", err)
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var ids []string
+	for _, sourcePath := range sourcePaths {
+		pathIDs, err := e.db.ListSessionIDsByFilePath(sourcePath, string(agent))
+		if err != nil {
+			log.Printf("list provider force-replace sessions: %v", err)
+			continue
+		}
+		for _, id := range pathIDs {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // applyProviderFilePathPolicies reproduces the DB-aware, file-path-scoped
@@ -4479,7 +4518,7 @@ func (e *Engine) shouldCacheSkip(
 		if filepath.Base(file.Path) == "threads.db" {
 			return false
 		}
-		if _, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
 			return false
 		}
 	}
@@ -4487,7 +4526,7 @@ func (e *Engine) shouldCacheSkip(
 		if filepath.Base(file.Path) == shelleyDBFile {
 			return false
 		}
-		if _, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, shelleyDBFile); ok {
 			return false
 		}
 	}
@@ -5814,158 +5853,6 @@ func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-func (e *Engine) processZed(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if dbPath, sessionID, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
-		result, err := parser.ParseZedThreadDirect(
-			dbPath, sessionID, e.machine, info,
-		)
-		if err != nil {
-			return processResult{err: err}
-		}
-		if result == nil {
-			return processResult{}
-		}
-		if hash, err := ComputeFileHash(dbPath); err == nil {
-			result.Session.File.Hash = hash
-		}
-		return processResult{
-			results:      []parser.ParseResult{*result},
-			forceReplace: true,
-		}
-	}
-	conn, err := parser.OpenZedDB(file.Path)
-	if err != nil {
-		return processResult{err: err}
-	}
-	defer conn.Close()
-
-	metas, err := parser.ListZedThreadMetas(conn, file.Path)
-	if err != nil {
-		return processResult{err: err}
-	}
-
-	hash, _ := ComputeFileHash(file.Path)
-
-	var results []parser.ParseResult
-	var sessionErrs []sessionParseError
-	for _, meta := range metas {
-		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
-		// parse-diff: !e.forceParse disables the stored-state skip.
-		if !e.forceParse && ok && storedMtime == meta.FileMtime &&
-			e.db.GetDataVersionByPath(meta.VirtualPath) >=
-				db.CurrentDataVersion() {
-			continue
-		}
-		result, err := parser.ParseZedThreadFromDB(
-			conn, file.Path, meta.RawID, e.machine, info,
-		)
-		if err != nil {
-			if e.forceParse {
-				sessionErrs = append(sessionErrs, sessionParseError{
-					sessionID:   meta.RawID,
-					virtualPath: meta.VirtualPath,
-					err:         err,
-				})
-			} else {
-				log.Printf("zed thread %s: %v", meta.RawID, err)
-			}
-			continue
-		}
-		if result == nil {
-			continue
-		}
-		if hash != "" {
-			result.Session.File.Hash = hash
-		}
-		results = append(results, *result)
-	}
-	return processResult{
-		results:      results,
-		sessionErrs:  sessionErrs,
-		forceReplace: true,
-	}
-}
-
-func (e *Engine) processShelley(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if dbPath, sessionID, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
-		result, err := parser.ParseShelleyConversationDirect(
-			dbPath, sessionID, e.machine, info,
-		)
-		if err != nil {
-			return processResult{err: err}
-		}
-		if result == nil {
-			return processResult{}
-		}
-		// File.Hash is the parser's per-conversation content fingerprint;
-		// the whole-db hash would be identical across conversations and is
-		// not used for Shelley change detection.
-		return processResult{
-			results:      []parser.ParseResult{*result},
-			forceReplace: true,
-		}
-	}
-	conn, err := parser.OpenShelleyDB(file.Path)
-	if err != nil {
-		return processResult{err: err}
-	}
-	defer conn.Close()
-
-	metas, err := parser.ListShelleyConversationMetas(conn, file.Path)
-	if err != nil {
-		return processResult{err: err}
-	}
-
-	var results []parser.ParseResult
-	var sessionErrs []sessionParseError
-	for _, meta := range metas {
-		lookupPath := meta.VirtualPath
-		if e.pathRewriter != nil {
-			lookupPath = e.pathRewriter(lookupPath)
-		}
-		_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-		storedHash, _ := e.db.GetFileHashByPath(lookupPath)
-		// parse-diff: !e.forceParse disables the stored-state skip.
-		// FileMtime alone has second precision, so the content fingerprint
-		// (stored in file_hash) catches same-second appends and in-place
-		// rewrites; see shelleyChangeMtime in the parser.
-		if !e.forceParse && ok && storedMtime == meta.FileMtime &&
-			storedHash == meta.Fingerprint &&
-			e.db.GetDataVersionByPath(lookupPath) >=
-				db.CurrentDataVersion() {
-			continue
-		}
-		result, err := parser.ParseShelleyConversationFromDB(
-			conn, file.Path, meta.RawID, e.machine, info,
-		)
-		if err != nil {
-			if e.forceParse {
-				sessionErrs = append(sessionErrs, sessionParseError{
-					sessionID:   meta.RawID,
-					virtualPath: meta.VirtualPath,
-					err:         err,
-				})
-			} else {
-				log.Printf("shelley conversation %s: %v", meta.RawID, err)
-			}
-			continue
-		}
-		if result == nil {
-			continue
-		}
-		results = append(results, *result)
-	}
-	return processResult{
-		results:      results,
-		sessionErrs:  sessionErrs,
-		forceReplace: true,
-	}
 }
 
 func (e *Engine) processKiro(
@@ -8392,7 +8279,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		}
 	}
 	if def.Type == parser.AgentZed {
-		if _, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, "threads.db"); ok {
 			mtime, err := parser.ZedSQLiteSourceMtime(path)
 			if err != nil {
 				return 0
@@ -8401,7 +8288,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		}
 	}
 	if def.Type == parser.AgentShelley {
-		if _, _, ok := parser.ParseShelleyVirtualPath(path); ok {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, shelleyDBFile); ok {
 			mtime, err := parser.ShelleySourceMtime(path)
 			if err != nil {
 				return 0
@@ -8526,15 +8413,6 @@ func (e *Engine) SyncSingleSessionContext(
 				sessionID, def.Type,
 			)
 		}
-	}
-
-	if def.Type == parser.AgentZed {
-		err = e.syncSingleZed(sessionID)
-		if errors.Is(err, errSessionPreserved) {
-			preserved = true
-			return nil
-		}
-		return err
 	}
 
 	path := e.FindSourceFile(sessionID)
@@ -8821,56 +8699,6 @@ func (e *Engine) syncSingleKiroSQLite(
 		)
 	}
 	return fmt.Errorf("kiro sqlite session %s not found", sessionID)
-}
-
-func (e *Engine) syncSingleZed(sessionID string) error {
-	rawID := strings.TrimPrefix(sessionID, "zed:")
-
-	var lastErr error
-	for _, dir := range e.agentDirs[parser.AgentZed] {
-		dbPath := filepath.Join(dir, parser.ZedThreadsDBRelPath)
-		if !parser.IsRegularFile(dbPath) {
-			continue
-		}
-		info, err := os.Stat(dbPath)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		result, err := parser.ParseZedThreadDirect(dbPath, rawID, e.machine, info)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if result == nil {
-			continue
-		}
-		if hash, err := ComputeFileHash(dbPath); err == nil {
-			result.Session.File.Hash = hash
-		}
-		pw := pendingWrite{
-			sess:         result.Session,
-			msgs:         result.Messages,
-			usageEvents:  result.UsageEvents,
-			forceReplace: true,
-		}
-		if err := e.writeSessionFull(pw); err != nil &&
-			!isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
-			return fmt.Errorf("write session %s: %w", result.Session.ID, err)
-		} else if errors.Is(err, errSessionPreserved) {
-			return err
-		}
-		return nil
-	}
-
-	if len(e.agentDirs[parser.AgentZed]) == 0 {
-		return fmt.Errorf("zed dir not configured")
-	}
-	if lastErr != nil {
-		return fmt.Errorf("zed session %s: %w", sessionID, lastErr)
-	}
-	return fmt.Errorf("zed session %s not found", sessionID)
 }
 
 func isKiroSQLiteVirtualPath(path string) bool {

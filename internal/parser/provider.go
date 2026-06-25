@@ -402,6 +402,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newQwenProviderFactory(def)
 	case AgentQwenPaw:
 		return newQwenPawProviderFactory(def)
+	case AgentShelley:
+		return newShelleyProviderFactory(def)
 	case AgentVSCopilot:
 		return newVisualStudioCopilotProviderFactory(def)
 	case AgentVSCodeCopilot:
@@ -412,6 +414,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newWorkBuddyProviderFactory(def)
 	case AgentZencoder:
 		return newZencoderProviderFactory(def)
+	case AgentZed:
+		return newZedProviderFactory(def)
 	default:
 		return legacyProviderFactory{def: def}
 	}

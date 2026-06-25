@@ -2,7 +2,6 @@ package parser
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -208,17 +207,4 @@ func zedRelationshipType(parentID string) RelationshipType {
 // Zed threads.db file.
 func ZedSQLiteVirtualPath(dbPath, sessionID string) string {
 	return dbPath + "#" + sessionID
-}
-
-// ParseZedSQLiteVirtualPath splits a Zed virtual source path.
-func ParseZedSQLiteVirtualPath(path string) (string, string, bool) {
-	idx := strings.LastIndex(path, "#")
-	if idx <= 0 || idx == len(path)-1 {
-		return "", "", false
-	}
-	dbPath, sessionID := path[:idx], path[idx+1:]
-	if filepath.Base(dbPath) != "threads.db" || !IsValidSessionID(sessionID) {
-		return "", "", false
-	}
-	return dbPath, sessionID, true
 }

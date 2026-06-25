@@ -3185,6 +3185,101 @@ func TestEngine_ClassifyPathsOpenCodeFamilyRemovedSessionFile(
 	}
 }
 
+func TestEngine_ClassifyPathsProviderRemoveKeepsDeletedSQLiteSources(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		agent parser.AgentType
+		path  func(string) string
+	}{
+		{
+			name:  "zed",
+			agent: parser.AgentZed,
+			path: func(root string) string {
+				return filepath.Join(root, "threads", "threads.db")
+			},
+		},
+		{
+			name:  "shelley",
+			agent: parser.AgentShelley,
+			path: func(root string) string {
+				return filepath.Join(root, shelleyDBFile)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			root := t.TempDir()
+			engine := NewEngine(db, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					tt.agent: {root},
+				},
+				Machine: "local",
+			})
+			dbPath := tt.path(root)
+			require.NoFileExists(t, dbPath)
+
+			files := engine.classifyPaths([]string{dbPath})
+			require.Len(t, files, 1)
+			assert.Equal(t, dbPath, files[0].Path)
+			assert.Equal(t, tt.agent, files[0].Agent)
+			assert.True(t, files[0].ForceParse)
+		})
+	}
+}
+
+func TestEngine_ProcessFileProviderDeletedSQLiteSourcesDoNotFail(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		agent parser.AgentType
+		path  func(string) string
+	}{
+		{
+			name:  "zed",
+			agent: parser.AgentZed,
+			path: func(root string) string {
+				return filepath.Join(root, "threads", "threads.db")
+			},
+		},
+		{
+			name:  "shelley",
+			agent: parser.AgentShelley,
+			path: func(root string) string {
+				return filepath.Join(root, shelleyDBFile)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			root := t.TempDir()
+			engine := NewEngine(db, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					tt.agent: {root},
+				},
+				Machine: "local",
+			})
+			dbPath := tt.path(root)
+			require.NoFileExists(t, dbPath)
+
+			res := engine.processFile(context.Background(), parser.DiscoveredFile{
+				Path:       dbPath,
+				Agent:      tt.agent,
+				ForceParse: true,
+			})
+			require.NoError(t, res.err)
+			assert.Empty(t, res.results)
+			assert.True(t, res.forceReplace)
+		})
+	}
+}
+
 func TestEngine_ClassifyPathsOpenCodeRemovedPartDir(
 	t *testing.T,
 ) {

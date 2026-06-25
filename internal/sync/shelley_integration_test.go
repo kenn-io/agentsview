@@ -3,6 +3,7 @@ package sync_test
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -163,6 +164,52 @@ func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
 	assert.Equal(t, "app", sess.Project, "project")
 	assert.Equal(t, dbPath+"#cMAIN1",
 		database.GetSessionFilePath("shelley:cMAIN1"), "stored file path")
+}
+
+func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+
+	engine, database := newShelleyEngine(t, dir)
+	require.NoError(t, engine.SyncSingleSession("shelley:cMAIN1"))
+	sess, err := database.GetSession(context.Background(), "shelley:cMAIN1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Equal(t, 2, sess.MessageCount)
+
+	sess.MessageCount = 0
+	require.NoError(t, database.UpsertSession(*sess))
+
+	require.NoError(t, engine.SyncSingleSession("shelley:cMAIN1"))
+
+	sess, err = database.GetSession(context.Background(), "shelley:cMAIN1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(t, dbPath+"#cMAIN1",
+		database.GetSessionFilePath("shelley:cMAIN1"), "stored file path")
+}
+
+func TestSyncPathsShelleyDeletedPhysicalDBRemovesSessions(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := createShelleyDB(t, dir)
+	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+
+	engine, database := newShelleyEngine(t, dir)
+	stats := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, stats.Synced)
+	require.NoError(t, os.Remove(dbPath))
+
+	engine.SyncPaths([]string{dbPath})
+
+	sess, err := database.GetSession(context.Background(), "shelley:cMAIN1")
+	require.NoError(t, err)
+	assert.Nil(t, sess)
 }
 
 // TestSourceMtimeShelleyResolvesVirtualPath guards the live per-session
