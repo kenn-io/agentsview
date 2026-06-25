@@ -2234,7 +2234,7 @@ func (s *Store) GetAnalyticsTopSessions(
 							LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal),
 							sessions.ended_at
 						) - m2.timestamp
-					)) * 1000
+					)) * 1000)
 				AS BIGINT) AS delta_ms,
 				m2.has_tool_use
 				FROM messages m2
