@@ -45,11 +45,15 @@ on first run. It stores persistent settings that survive restarts.
 cursor_secret = "base64-encoded-secret"
 github_token = "ghp_xxxxx"
 require_auth = true
+cursor_admin_api_key = "key_xxxxx"
 ```
 
 | Field | Description |
 |-------|-------------|
 | `cursor_secret` | Auto-generated HMAC key for pagination cursor signing |
+| `cursor_admin_api_key` | Cursor Admin API key used by `agentsview usage cursor` |
+| `cursor_admin_email` | Optional default Cursor Admin usage filter by member email |
+| `cursor_admin_user_id` | Optional default Cursor Admin usage filter by member user ID |
 | `github_token` | GitHub personal access token for Gist publishing |
 | `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`) |
 | `require_auth` | Require bearer-token authentication for API access |
@@ -74,6 +78,33 @@ see [Remote Access](/remote-access/) for details.
     Older configs may still contain `remote_access = true`. AgentsView
     still reads that legacy key for backward compatibility, but new
     setups should use `require_auth = true`.
+
+## Cursor Admin Usage API
+
+`agentsview usage cursor` imports Cursor Admin API usage events into
+the local archive so Cursor's billed usage can appear in the Usage
+dashboard and `agentsview usage daily` reports. Set the API key in
+`~/.agentsview/config.toml`:
+
+```toml
+cursor_admin_api_key = "key_xxxxx"
+cursor_admin_email = "you@example.com" # optional
+cursor_admin_user_id = "152683922"     # optional
+```
+
+Environment variables take precedence over the config file:
+
+```bash
+export AGENTSVIEW_CURSOR_ADMIN_API_KEY=key_xxxxx
+export AGENTSVIEW_CURSOR_ADMIN_EMAIL=you@example.com
+export AGENTSVIEW_CURSOR_ADMIN_USER_ID=152683922
+```
+
+The legacy unprefixed names `CURSOR_ADMIN_API_KEY`,
+`CURSOR_ADMIN_EMAIL`, and `CURSOR_ADMIN_USER_ID` are also accepted
+when the matching `AGENTSVIEW_` variable is unset. The email and user
+ID values are default filters; pass `--email` or `--user-id` to
+`agentsview usage cursor` to override them for one import.
 
 ## Session Discovery
 

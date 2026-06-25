@@ -294,6 +294,37 @@ for integration examples (Starship, tmux).
 
 ---
 
+### `agentsview usage cursor`
+
+Fetch Cursor Admin API usage events and store them in the local
+archive so they contribute to the Usage dashboard and daily reports.
+
+```bash
+agentsview usage cursor [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--since` | `30 days ago` | Start date (`YYYY-MM-DD`), inclusive |
+| `--until` | today | End date (`YYYY-MM-DD`), inclusive |
+| `--all` | `false` | Include all history |
+| `--page-size` | `100` | Events requested per Cursor API page |
+| `--email` | config | Filter by Cursor team member email |
+| `--user-id` | config | Filter by Cursor team member user ID |
+
+**Examples:**
+
+```bash
+agentsview usage cursor
+agentsview usage cursor --since 2026-05-01 --until 2026-05-31
+agentsview usage cursor --all --email you@example.com
+```
+
+See [Cursor Admin Usage Events](/token-usage/#cursor-admin-usage-events)
+for setup and reporting behavior.
+
+---
+
 ### `agentsview activity report`
 
 Report active time, concurrency, cost, token, breakdown, and session

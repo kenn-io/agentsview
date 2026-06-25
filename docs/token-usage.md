@@ -49,6 +49,53 @@ invocation, it's also dramatically faster on large histories
     do not expose token usage. Warp records session-level totals, but
     those totals are not yet folded into the per-message cost report.
 
+### Cursor Admin Usage Events
+
+Cursor has two usage sources in AgentsView:
+
+- local Cursor transcripts, when `~/.cursor/projects` contains
+  usable token metadata
+- Cursor Admin API usage events, imported on demand with
+  `agentsview usage cursor`
+
+The admin import is useful when you want billable team usage from
+Cursor itself, including headless/background events that may not map
+cleanly to a local transcript. Configure an API key in
+`~/.agentsview/config.toml` or the environment, then run:
+
+```toml
+cursor_admin_api_key = "key_xxxxx"
+cursor_admin_email = "you@example.com" # optional default filter
+cursor_admin_user_id = "152683922"     # optional default filter
+```
+
+```bash
+# Import the last 30 days
+agentsview usage cursor
+
+# Import a specific inclusive local-date window
+agentsview usage cursor --since 2026-05-01 --until 2026-05-31
+
+# Import everything Cursor returns for this admin key/filter
+agentsview usage cursor --all
+```
+
+The command calls Cursor's filtered usage-events endpoint, follows
+pagination, stores the returned rows in the local archive, and
+deduplicates rows by a stable event fingerprint. It is safe to rerun
+the same window after new events arrive.
+
+Imported admin rows are folded into the Usage dashboard,
+`agentsview usage daily`, DuckDB mirrors, and PostgreSQL after the
+usual push/sync path. They appear as `agent = cursor`; because Cursor
+Admin events are account-level billing rows rather than session
+transcripts, project, machine, session-count, and top-session filters
+do not apply to those rows. Model and date filters do apply.
+
+Costs for admin rows come from Cursor's `chargedCents` field instead
+of AgentsView's model-pricing table, so they can report spend even for
+models that do not have a LiteLLM price entry.
+
 ## Usage Dashboard
 
 AgentsView includes a dedicated **Usage** page in the web UI,
@@ -501,6 +548,30 @@ $6.42 today (claude)
 The command always scopes to the current local-time day. Use
 `agentsview usage daily --since $(date +%Y-%m-%d)` if you want
 the full row instead.
+
+## `agentsview usage cursor`
+
+Import Cursor Admin API usage events into the local archive so they
+contribute to the Usage dashboard and daily reports.
+
+```bash
+agentsview usage cursor [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--since` | `30 days ago` | Start date (`YYYY-MM-DD`), inclusive |
+| `--until` | today | End date (`YYYY-MM-DD`), inclusive |
+| `--all` | `false` | Include all history; overrides the default 30-day window |
+| `--page-size` | `100` | Cursor Admin API events requested per page |
+| `--email` | config | Filter by Cursor team member email |
+| `--user-id` | config | Filter by Cursor team member user ID |
+
+The API key is required and can be supplied as
+`cursor_admin_api_key` in `~/.agentsview/config.toml` or as
+`AGENTSVIEW_CURSOR_ADMIN_API_KEY`. Optional default member filters
+can be supplied with `cursor_admin_email` / `cursor_admin_user_id`
+or their matching environment variables.
 
 ### Example: Starship Prompt Module
 
