@@ -93,9 +93,11 @@ type Engine struct {
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
 	// non-interactive sessions (nil result). The file is
-	// retried when its mtime changes.
-	skipMu    gosync.RWMutex
-	skipCache map[string]int64
+	// retried when its mtime changes. S3 entries also keep an
+	// in-memory source fingerprint when one is available.
+	skipMu           gosync.RWMutex
+	skipCache        map[string]int64
+	skipFingerprints map[string]string
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -188,6 +190,7 @@ func NewEngine(
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		skipCache:               skipCache,
+		skipFingerprints:        make(map[string]string),
 		ephemeral:               cfg.Ephemeral,
 		idPrefix:                cfg.IDPrefix,
 		pathRewriter:            cfg.PathRewriter,
@@ -4066,7 +4069,9 @@ func (e *Engine) collectAndBatch(
 			}
 			stats.RecordFailed()
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
-				e.cacheSkip(r.path, r.mtime)
+				e.cacheSkip(
+					r.path, r.mtime, r.sourceFingerprint,
+				)
 			}
 			log.Printf("sync error: %v", r.err)
 			continue
@@ -4099,7 +4104,9 @@ func (e *Engine) collectAndBatch(
 				stats.parserExcludedFiles++
 			}
 			if r.cacheSkip {
-				e.cacheSkip(r.path, r.mtime)
+				e.cacheSkip(
+					r.path, r.mtime, r.sourceFingerprint,
+				)
 			}
 			progress.SessionsDone++
 			e.reportProgress(onProgress, progress)
@@ -4224,6 +4231,10 @@ type processResult struct {
 	err         error
 	incremental *incrementalUpdate
 	cacheSkip   bool
+	// sourceFingerprint carries S3 object fingerprints into
+	// skip-cache writes so same-mtime object rewrites do not stay
+	// hidden behind a cached parse failure or non-interactive result.
+	sourceFingerprint string
 	// noCacheSkip suppresses skip-cache recording for an errored
 	// result even when cacheSkip is set for the agent. Read/scan
 	// failures are transient: a permission or readability fix may
@@ -4256,6 +4267,19 @@ func (e *Engine) processFile(
 		info, err = parser.AntigravityFileInfo(file.Path)
 	default:
 		if strings.HasPrefix(file.Path, "s3://") {
+			if file.SourceMtime == 0 {
+				obj, err := statS3SourceObject(file)
+				if err != nil {
+					return processResult{
+						err: fmt.Errorf(
+							"stat %s: %w", file.Path, err,
+						),
+					}
+				}
+				file.SourceSize = obj.Size
+				file.SourceMtime = obj.LastModified.UnixNano()
+				file.SourceFingerprint = obj.Fingerprint
+			}
 			info, err = s3SourceFileInfo(file)
 			break
 		}
@@ -4310,6 +4334,10 @@ func (e *Engine) processFile(
 		mtime = reasonixEffectiveInfo(file.Path, info).ModTime().UnixNano()
 	}
 	cacheSkip := e.shouldCacheSkip(file)
+	sourceFingerprint := ""
+	if isS3SourcePath(file.Path) {
+		sourceFingerprint = s3SourceFingerprint(file)
+	}
 
 	// Skip files cached from a previous sync (parse errors
 	// or non-interactive sessions) whose mtime is unchanged.
@@ -4319,10 +4347,7 @@ func (e *Engine) processFile(
 	// the skip cache as authoritative without per-file
 	// re-validation.
 	if cacheSkip && !e.forceParse { // parse-diff: ignore the skip cache
-		e.skipMu.RLock()
-		cachedMtime, cached := e.skipCache[file.Path]
-		e.skipMu.RUnlock()
-		if cached && cachedMtime == mtime {
+		if e.shouldUseCachedSkip(file, mtime, sourceFingerprint) {
 			if e.pathNeedsProjectReparse(file.Path) {
 				e.clearSkip(file.Path)
 			} else {
@@ -4424,7 +4449,27 @@ func (e *Engine) processFile(
 	}
 	res.cacheSkip = cacheSkip
 	res.mtime = mtime
+	res.sourceFingerprint = sourceFingerprint
 	return res
+}
+
+func (e *Engine) shouldUseCachedSkip(
+	file parser.DiscoveredFile, mtime int64, sourceFingerprint string,
+) bool {
+	e.skipMu.RLock()
+	cachedMtime, cached := e.skipCache[file.Path]
+	cachedFingerprint := ""
+	if e.skipFingerprints != nil {
+		cachedFingerprint = e.skipFingerprints[file.Path]
+	}
+	e.skipMu.RUnlock()
+	if !cached || cachedMtime != mtime {
+		return false
+	}
+	if isS3SourcePath(file.Path) && sourceFingerprint != "" {
+		return cachedFingerprint == sourceFingerprint
+	}
+	return true
 }
 
 func (e *Engine) pathNeedsProjectReparse(path string) bool {
@@ -4519,9 +4564,21 @@ func (e *Engine) shouldCacheSkip(
 
 // cacheSkip records a file so it won't be retried until
 // its mtime changes.
-func (e *Engine) cacheSkip(path string, mtime int64) {
+func (e *Engine) cacheSkip(path string, mtime int64, sourceFingerprint ...string) {
 	e.skipMu.Lock()
 	e.skipCache[path] = mtime
+	fingerprint := ""
+	if len(sourceFingerprint) > 0 {
+		fingerprint = sourceFingerprint[0]
+	}
+	if fingerprint != "" {
+		if e.skipFingerprints == nil {
+			e.skipFingerprints = make(map[string]string)
+		}
+		e.skipFingerprints[path] = fingerprint
+	} else if e.skipFingerprints != nil {
+		delete(e.skipFingerprints, path)
+	}
 	e.skipMu.Unlock()
 }
 
@@ -4530,6 +4587,7 @@ func (e *Engine) cacheSkip(path string, mtime int64) {
 func (e *Engine) clearSkip(path string) {
 	e.skipMu.Lock()
 	delete(e.skipCache, path)
+	delete(e.skipFingerprints, path)
 	e.skipMu.Unlock()
 	_ = e.db.DeleteSkippedFile(path)
 }
@@ -7147,6 +7205,7 @@ func (e *Engine) writeBatch(
 					e.cacheSkip(
 						pw.sess.File.Path,
 						pw.sess.File.Mtime,
+						pw.sess.File.Hash,
 					)
 				}
 				continue
@@ -7960,8 +8019,9 @@ func countToolResultContentLength(calls []db.ToolCall) int {
 }
 
 type batchSourceFile struct {
-	path  string
-	mtime int64
+	path        string
+	mtime       int64
+	fingerprint string
 }
 
 func (e *Engine) writeBatchBulk(
@@ -7997,8 +8057,9 @@ func (e *Engine) writeBatchBulk(
 		})
 		if pw.sess.File.Path != "" {
 			sources[s.ID] = batchSourceFile{
-				path:  pw.sess.File.Path,
-				mtime: pw.sess.File.Mtime,
+				path:        pw.sess.File.Path,
+				mtime:       pw.sess.File.Mtime,
+				fingerprint: pw.sess.File.Hash,
 			}
 		}
 	}
@@ -8018,7 +8079,9 @@ func (e *Engine) writeBatchBulk(
 	}
 	for _, id := range result.ExcludedIDs {
 		if source, ok := sources[id]; ok && source.path != "" {
-			e.cacheSkip(source.path, source.mtime)
+			e.cacheSkip(
+				source.path, source.mtime, source.fingerprint,
+			)
 		}
 	}
 	for _, err := range result.Errors {
@@ -8202,7 +8265,11 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err := e.db.UpsertSession(s); err != nil {
 		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {
-				e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
+				e.cacheSkip(
+					pw.sess.File.Path,
+					pw.sess.File.Mtime,
+					pw.sess.File.Hash,
+				)
 			}
 			return err
 		}
@@ -9364,7 +9431,7 @@ func (e *Engine) SyncSingleSessionContext(
 	res := e.processFile(ctx, file)
 	if res.err != nil {
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
-			e.cacheSkip(path, res.mtime)
+			e.cacheSkip(path, res.mtime, res.sourceFingerprint)
 		}
 		return res.err
 	}

@@ -183,6 +183,44 @@ func TestProcessFileS3ChangedFingerprintReplacesStoredMessages(t *testing.T) {
 	assert.Equal(t, "REPLY", msgs[1].Content)
 }
 
+func TestProcessFileS3ChangedFingerprintBypassesMtimeSkipCache(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/claude/test-proj/cached.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Hi.").
+		String()
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	var fetched bool
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, path, got)
+		fetched = true
+		return io.NopCloser(strings.NewReader(content)), nil
+	}
+
+	e := &Engine{
+		db:        database,
+		skipCache: map[string]int64{path: mtime},
+	}
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:             parser.AgentClaude,
+		Path:              path,
+		Project:           "test-proj",
+		Machine:           "laptop",
+		SourceSize:        int64(len(content)),
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:new",
+	})
+
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.True(t, fetched)
+	require.Len(t, res.results, 1)
+}
+
 func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint.jsonl"

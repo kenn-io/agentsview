@@ -21,14 +21,7 @@ func s3SourceFileInfo(file parser.DiscoveredFile) (os.FileInfo, error) {
 	size := file.SourceSize
 	mtime := file.SourceMtime
 	if mtime == 0 {
-		stat := statS3Object
-		switch file.Agent {
-		case parser.AgentClaude:
-			stat = statClaudeS3Session
-		case parser.AgentCodex:
-			stat = statCodexS3Session
-		}
-		obj, err := stat(file.Path)
+		obj, err := statS3SourceObject(file)
 		if err != nil {
 			return nil, err
 		}
@@ -49,6 +42,14 @@ func s3SourceFingerprint(file parser.DiscoveredFile) string {
 	if file.SourceMtime != 0 {
 		return ""
 	}
+	obj, err := statS3SourceObject(file)
+	if err != nil {
+		return ""
+	}
+	return obj.Fingerprint
+}
+
+func statS3SourceObject(file parser.DiscoveredFile) (parser.S3Object, error) {
 	stat := statS3Object
 	switch file.Agent {
 	case parser.AgentClaude:
@@ -56,11 +57,7 @@ func s3SourceFingerprint(file parser.DiscoveredFile) string {
 	case parser.AgentCodex:
 		stat = statCodexS3Session
 	}
-	obj, err := stat(file.Path)
-	if err != nil {
-		return ""
-	}
-	return obj.Fingerprint
+	return stat(file.Path)
 }
 
 func s3DiscoveredSessionID(file parser.DiscoveredFile) string {
