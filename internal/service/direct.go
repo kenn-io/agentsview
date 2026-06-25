@@ -311,7 +311,7 @@ func (b *directBackend) Sync(
 		// conversation lives on in a sibling. The single-session path keeps the
 		// conversation scope and follows it across sibling trace files.
 		if _, _, ok :=
-			parser.ParseVisualStudioCopilotVirtualPath(storedPath); ok {
+			parser.SplitVisualStudioCopilotVirtualPath(storedPath); ok {
 			if err := b.engine.SyncSingleSessionContext(
 				ctx, in.ID,
 			); err != nil {

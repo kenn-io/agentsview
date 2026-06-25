@@ -262,9 +262,7 @@ var Registry = []AgentDef{
 			"workspaceStorage",
 			"globalStorage",
 		},
-		FileBased:      true,
-		DiscoverFunc:   DiscoverVSCodeCopilotSessions,
-		FindSourceFunc: FindVSCodeCopilotSourceFile,
+		FileBased: true,
 	},
 	{
 		Type:        AgentVSCopilot,
@@ -279,10 +277,8 @@ var Registry = []AgentDef{
 			// Linux
 			".cache/VSGitHubCopilotLogs/traces",
 		},
-		IDPrefix:       "visualstudio-copilot:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverVisualStudioCopilotSessions,
-		FindSourceFunc: FindVisualStudioCopilotSourceFile,
+		IDPrefix:  "visualstudio-copilot:",
+		FileBased: true,
 	},
 	{
 		Type:        AgentPi,

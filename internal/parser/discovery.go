@@ -969,82 +969,11 @@ func isContainedIn(child, root string) bool {
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// DiscoverVSCodeCopilotSessions traverses the VSCode
-// workspaceStorage directory to find chatSessions/*.json
-// and *.jsonl files. When both formats exist for the same
-// session UUID, the .jsonl file takes priority.
-// It also checks globalStorage/emptyWindowChatSessions.
-// The vscodeUserDir should point to e.g.
-//
-//	~/Library/Application Support/Code/User (macOS)
-//	~/.config/Code/User (Linux)
-func DiscoverVSCodeCopilotSessions(
-	vscodeUserDir string,
-) []DiscoveredFile {
-	if vscodeUserDir == "" {
-		return nil
-	}
-
-	var files []DiscoveredFile
-
-	// 1. Scan workspaceStorage/<hash>/chatSessions/*.{json,jsonl}
-	wsDir := filepath.Join(vscodeUserDir, "workspaceStorage")
-	hashDirs, err := os.ReadDir(wsDir)
-	if err == nil {
-		for _, entry := range hashDirs {
-			if !entry.IsDir() {
-				continue
-			}
-
-			hashPath := filepath.Join(wsDir, entry.Name())
-			chatDir := filepath.Join(hashPath, "chatSessions")
-			sessionFiles, err := os.ReadDir(chatDir)
-			if err != nil {
-				continue
-			}
-
-			// Read workspace.json to get project name
-			project := ReadVSCodeWorkspaceManifest(hashPath)
-			if project == "" {
-				project = "unknown"
-			}
-
-			files = append(files,
-				discoverVSCodeSessionFiles(
-					chatDir, sessionFiles, project,
-				)...,
-			)
-		}
-	}
-
-	// 2. Scan globalStorage/emptyWindowChatSessions/*.{json,jsonl}
-	for _, subdir := range []string{
-		"globalStorage/emptyWindowChatSessions",
-		"globalStorage/transferredChatSessions",
-	} {
-		globalDir := filepath.Join(vscodeUserDir, subdir)
-		globalFiles, err := os.ReadDir(globalDir)
-		if err != nil {
-			continue
-		}
-		files = append(files,
-			discoverVSCodeSessionFiles(
-				globalDir, globalFiles, "empty-window",
-			)...,
-		)
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // discoverVSCodeSessionFiles collects .json and .jsonl
 // session files from a directory, preferring .jsonl when
 // both exist for the same UUID.
 func discoverVSCodeSessionFiles(
-	dir string, entries []os.DirEntry, project string,
+	dir string, entries []os.DirEntry, project string, agent AgentType,
 ) []DiscoveredFile {
 	// Collect UUIDs that have .jsonl files
 	hasJSONL := make(map[string]bool)
@@ -1084,70 +1013,6 @@ func discoverVSCodeSessionFiles(
 			})
 		}
 	}
-	return files
-}
-
-// FindVSCodeCopilotSourceFile locates a VSCode Copilot
-// session file by UUID (.jsonl preferred over .json).
-func FindVSCodeCopilotSourceFile(
-	vscodeUserDir, rawID string,
-) string {
-	if vscodeUserDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	// Search through workspaceStorage
-	wsDir := filepath.Join(vscodeUserDir, "workspaceStorage")
-	hashDirs, err := os.ReadDir(wsDir)
-	if err == nil {
-		for _, entry := range hashDirs {
-			if !entry.IsDir() {
-				continue
-			}
-			base := filepath.Join(
-				wsDir, entry.Name(), "chatSessions",
-			)
-			// Prefer .jsonl
-			for _, ext := range []string{".jsonl", ".json"} {
-				candidate := filepath.Join(
-					base, rawID+ext,
-				)
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate
-				}
-			}
-		}
-	}
-
-	// Check global dirs
-	for _, subdir := range []string{
-		"globalStorage/emptyWindowChatSessions",
-		"globalStorage/transferredChatSessions",
-	} {
-		base := filepath.Join(vscodeUserDir, subdir)
-		for _, ext := range []string{".jsonl", ".json"} {
-			candidate := filepath.Join(base, rawID+ext)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-		}
-	}
-
-	return ""
-}
-
-// DiscoverVisualStudioCopilotSessions finds Visual Studio Copilot
-// trace files under the configured traces directory.
-func DiscoverVisualStudioCopilotSessions(vsRoot string) []DiscoveredFile {
-	if vsRoot == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(vsRoot)
-	if err != nil {
-		return nil
-	}
-	files := discoverVisualStudioCopilotSessionFiles(vsRoot, entries)
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }
 
@@ -1208,15 +1073,6 @@ func discoverVisualStudioCopilotSessionFiles(
 	}
 	files = append(files, unreadable...)
 	return files
-}
-
-// FindVisualStudioCopilotSourceFile locates a Visual Studio Copilot
-// trace file by conversation UUID.
-func FindVisualStudioCopilotSourceFile(vsRoot, rawID string) string {
-	if vsRoot == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-	return findVisualStudioCopilotTraceSourceFile(vsRoot, rawID)
 }
 
 func findVisualStudioCopilotTraceSourceFile(

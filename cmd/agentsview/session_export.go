@@ -114,7 +114,7 @@ func newSessionExportCommand() *cobra.Command {
 			// conversations, so streaming the whole file would disclose
 			// unrelated conversations. Filter to the requested conversation.
 			if tracePath, conversationID, ok :=
-				parser.ParseVisualStudioCopilotVirtualPath(storedPath); ok {
+				parser.SplitVisualStudioCopilotVirtualPath(storedPath); ok {
 				err := parser.WriteVisualStudioCopilotConversationJSONL(
 					cmd.OutOrStdout(), tracePath, conversationID,
 				)

@@ -380,7 +380,7 @@ func IsVisualStudioCopilotSkipPath(path string) bool {
 	if parser.IsVisualStudioCopilotTraceFile(path) {
 		return true
 	}
-	_, _, ok := parser.ParseVisualStudioCopilotVirtualPath(path)
+	_, _, ok := parser.SplitVisualStudioCopilotVirtualPath(path)
 	return ok
 }
 
@@ -1004,60 +1004,6 @@ func (e *Engine) classifyOnePath(
 	// shapes, so the legacy block was removed when Claude was folded
 	// onto its provider.
 
-	// VSCode Copilot: <vscodeUserDir>/workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
-	//            or: <vscodeUserDir>/globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
-	for _, vscDir := range e.agentDirs[parser.AgentVSCodeCopilot] {
-		if vscDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(vscDir, path); ok {
-			parts := strings.Split(rel, sep)
-			// workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
-			if len(parts) == 4 &&
-				parts[0] == "workspaceStorage" &&
-				parts[2] == "chatSessions" &&
-				(strings.HasSuffix(parts[3], ".json") ||
-					strings.HasSuffix(parts[3], ".jsonl")) {
-				if vscodeJSONLSiblingExists(path) {
-					continue
-				}
-				hashDir := filepath.Join(
-					vscDir, "workspaceStorage", parts[1],
-				)
-				project := parser.ReadVSCodeWorkspaceManifest(hashDir)
-				if project == "" {
-					project = "unknown"
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: project,
-					Agent:   parser.AgentVSCodeCopilot,
-				}, true
-			}
-			// globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
-			// globalStorage/transferredChatSessions/<uuid>.{json,jsonl}
-			if len(parts) == 3 &&
-				parts[0] == "globalStorage" &&
-				(parts[1] == "emptyWindowChatSessions" || parts[1] == "transferredChatSessions") &&
-				(strings.HasSuffix(parts[2], ".json") ||
-					strings.HasSuffix(parts[2], ".jsonl")) {
-				if vscodeJSONLSiblingExists(path) {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: "empty-window",
-					Agent:   parser.AgentVSCodeCopilot,
-				}, true
-			}
-		}
-	}
-
-	// Visual Studio Copilot: <traces>/*_VSGitHubCopilot_traces.jsonl
-	if df, ok := e.classifyVisualStudioCopilotPath(path, sep); ok {
-		return df, true
-	}
-
 	if df, ok := e.classifyAiderPath(path); ok {
 		return df, true
 	}
@@ -1161,37 +1107,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	return parser.DiscoveredFile{}, false
-}
-
-// classifyVisualStudioCopilotPath matches a top-level Visual Studio Copilot
-// trace file (<traces>/*_VSGitHubCopilot_traces.jsonl) under a configured
-// trace directory. Trace files live directly in the directory, so nested
-// paths are rejected. Split out of classifyOnePath to keep that function
-// within NilAway's per-function size limit.
-func (e *Engine) classifyVisualStudioCopilotPath(
-	path, sep string,
-) (parser.DiscoveredFile, bool) {
-	if !parser.IsVisualStudioCopilotTraceFile(path) {
-		return parser.DiscoveredFile{}, false
-	}
-	for _, vsDir := range e.agentDirs[parser.AgentVSCopilot] {
-		if vsDir == "" {
-			continue
-		}
-		rel, ok := isUnder(vsDir, path)
-		if !ok {
-			continue
-		}
-		if strings.Contains(rel, sep) {
-			continue
-		}
-		return parser.DiscoveredFile{
-			Path:    path,
-			Project: "visualstudio",
-			Agent:   parser.AgentVSCopilot,
-		}, true
-	}
 	return parser.DiscoveredFile{}, false
 }
 
@@ -1448,18 +1363,6 @@ func (e *Engine) classifyShelleySQLitePath(
 		}
 	}
 	return parser.DiscoveredFile{}, false
-}
-
-// vscodeJSONLSiblingExists returns true when path is a .json
-// file and a .jsonl sibling exists for the same UUID. This
-// mirrors the dedup logic in DiscoverVSCodeCopilotSessions.
-func vscodeJSONLSiblingExists(path string) bool {
-	base, ok := strings.CutSuffix(path, ".json")
-	if !ok {
-		return false
-	}
-	_, err := os.Stat(base + ".jsonl")
-	return err == nil
 }
 
 // resyncTempSuffix is appended to the original DB path to
@@ -3853,8 +3756,6 @@ func (e *Engine) processFile(
 			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
 			statPath = dbPath
-		} else if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
-			statPath = tracePath
 		} else if historyPath, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
 			// aider stores "<historyFile>#<runIdx>"; stat the physical file
 			// so SyncSingleSession (live watcher / on-demand re-sync) works.
@@ -3928,10 +3829,6 @@ func (e *Engine) processFile(
 		res = e.processS3Session(ctx, file, info)
 	case parser.AgentReasonix:
 		res = e.processReasonix(file, info)
-	case parser.AgentVSCodeCopilot:
-		res = e.processVSCodeCopilot(file, info)
-	case parser.AgentVSCopilot:
-		res = e.processVisualStudioCopilot(file, info)
 	case parser.AgentKiro:
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
@@ -4540,7 +4437,7 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok :=
-			parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
+			parser.SplitVisualStudioCopilotVirtualPath(file.Path); ok {
 			return false
 		}
 	}
@@ -5812,112 +5709,6 @@ func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-func (e *Engine) processVSCodeCopilot(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseVSCodeCopilotSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{
-				Session:     *sess,
-				Messages:    msgs,
-				UsageEvents: sess.UsageEvents,
-			},
-		},
-	}
-}
-
-func (e *Engine) processVisualStudioCopilot(
-	file parser.DiscoveredFile, _ os.FileInfo,
-) processResult {
-	// Resolve the physical trace path first. Discovery emits one
-	// <traceFile>#<conversationID> work item per conversation; a watcher event
-	// or single-session resync may instead pass a real trace file, which can
-	// hold spans for several conversations.
-	tracePath := file.Path
-	var conversationIDs []string
-	if resolved, conversationID, ok :=
-		parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
-		tracePath = resolved
-		conversationIDs = []string{conversationID}
-	}
-
-	// Skip on a fingerprint spanning every sibling trace file: a
-	// conversation's transcript is rebuilt from all of them, so a change to any
-	// sibling must defeat the skip even when the representative trace file is
-	// unchanged. The primary-file stat alone would let a single-session resync
-	// or watch fallback leave a session stale.
-	size, mtime, err := parser.VisualStudioCopilotTraceFingerprintStrict(
-		tracePath,
-	)
-	if err != nil {
-		return processResult{err: err, noCacheSkip: true}
-	}
-	if e.shouldSkipByPath(
-		file.Path, fakeSnapshotInfo{fSize: size, fMtime: mtime},
-	) {
-		return processResult{skip: true}
-	}
-
-	// A real trace file can hold spans for several conversations, so enumerate
-	// them and emit each independently.
-	if conversationIDs == nil {
-		ids, err := parser.VisualStudioCopilotFileConversationIDs(file.Path)
-		if err != nil {
-			return processResult{err: err, noCacheSkip: true}
-		}
-		conversationIDs = ids
-	}
-
-	hash, hashErr := ComputeFileHash(tracePath)
-
-	var results []parser.ParseResult
-	for _, conversationID := range conversationIDs {
-		sess, msgs, err := parser.ParseVisualStudioCopilotConversation(
-			tracePath, conversationID, file.Project, e.machine,
-		)
-		if err != nil {
-			return processResult{err: err, noCacheSkip: true}
-		}
-		if sess == nil {
-			continue
-		}
-		if hashErr == nil {
-			sess.File.Hash = hash
-		}
-		results = append(results, parser.ParseResult{
-			Session: *sess, Messages: msgs,
-		})
-	}
-
-	// forceReplace mirrors the other multi-session-per-source agents
-	// (Zed, Kiro): each conversation's messages are fully re-derived from
-	// all of its spans on every parse, so existing rows must be replaced
-	// rather than appended.
-	return processResult{
-		results:      results,
-		forceReplace: true,
-	}
 }
 
 func (e *Engine) processZed(
