@@ -405,6 +405,35 @@ func TestDoSyncRemoteHostUsesDaemonRouteWhenWritableDaemonRunning(t *testing.T) 
 	env.assertNoLocalDB(t)
 }
 
+func TestDoSyncRemoteHostPrintsDaemonProgress(t *testing.T) {
+	env := newSyncCLIEnv(t)
+
+	ts := remoteSyncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/sync/remotes", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, err := io.WriteString(w,
+			"event: progress\n"+
+				"data: {\"detail\":\"Resolving agent directories on devbox\"}\n\n"+
+				"event: done\n"+
+				"data: {\"failures\":[]}\n\n",
+		)
+		require.NoError(t, err)
+	})
+	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
+
+	var hadFailures bool
+	out := captureStdout(t, func() {
+		hadFailures = doSync(SyncConfig{Host: "devbox"})
+	})
+
+	require.False(t, hadFailures)
+	assert.Contains(t, out, "Running sync with remotes via daemon...")
+	assert.Contains(t, out, "Resolving agent directories on devbox")
+	assert.True(t, strings.HasSuffix(out, "\n"), "progress output should finish on a newline")
+	env.assertNoLocalDB(t)
+}
+
 func TestRunDaemonRemoteSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 	ts := remoteSyncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/v1/sync/remotes", r.URL.Path)

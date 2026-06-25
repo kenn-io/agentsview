@@ -429,6 +429,34 @@ func TestHumaSyncRemotesStreamsLocalProgress(t *testing.T) {
 	assert.Contains(t, body, `"local_stats"`)
 }
 
+func TestHumaSyncRemotesStreamsRemoteProgress(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	stubRunRemoteSync(t, func(
+		_ context.Context,
+		rs *ssh.RemoteSync,
+	) (ssh.SyncStats, error) {
+		require.NotNil(t, rs.Progress)
+		rs.Progress(syncpkg.Progress{
+			Detail: "Resolving agent directories on alpha",
+		})
+		return ssh.SyncStats{SessionsSynced: 1, SessionsTotal: 1}, nil
+	})
+
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync/remotes",
+		remoteSyncRequest{
+			Hosts: []config.RemoteHost{{Host: "alpha"}},
+		},
+		withAccept("text/event-stream"),
+	)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
+	body := w.Body.String()
+	assert.Contains(t, body, "event: progress")
+	assert.Contains(t, body, "Resolving agent directories on alpha")
+	assert.Contains(t, body, "event: done")
+}
+
 func TestRunRemoteSyncRequestSerializesNoSyncRemoteWrites(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	engine := f.srv.syncEngineForLocal(f.db)

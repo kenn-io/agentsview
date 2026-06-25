@@ -179,8 +179,13 @@ func useDaemonForSync(tr transport) bool {
 
 func daemonProgressPrinter() (sync.ProgressFunc, func()) {
 	var resyncProgress *resyncProgressPrinter
+	var printedInline bool
 	onProgress := func(p sync.Progress) {
 		if p.Resync {
+			if printedInline {
+				fmt.Println()
+				printedInline = false
+			}
 			if resyncProgress == nil {
 				resyncProgress = newResyncProgressPrinter(os.Stdout, time.Now)
 			}
@@ -191,12 +196,19 @@ func daemonProgressPrinter() (sync.ProgressFunc, func()) {
 			resyncProgress.Finish()
 			resyncProgress = nil
 		}
+		if formatSyncProgress(p) != "" {
+			printedInline = true
+		}
 		printSyncProgress(p)
 	}
 	finish := func() {
 		if resyncProgress != nil {
 			resyncProgress.Finish()
 			resyncProgress = nil
+		}
+		if printedInline {
+			fmt.Println()
+			printedInline = false
 		}
 	}
 	return onProgress, finish

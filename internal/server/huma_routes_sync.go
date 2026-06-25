@@ -296,7 +296,7 @@ func (s *Server) runRemoteSyncRequest(
 	var remoteStats ssh.SyncStats
 	run := func(full bool) {
 		failures, remoteStats = s.runRemoteSyncHosts(
-			ctx, local, req.Hosts, full,
+			ctx, local, req.Hosts, full, progress,
 		)
 	}
 	if req.IncludeLocal {
@@ -325,6 +325,7 @@ func (s *Server) runRemoteSyncHosts(
 	local *db.DB,
 	hosts []config.RemoteHost,
 	full bool,
+	progress func(syncpkg.Progress),
 ) ([]remoteSyncFailure, ssh.SyncStats) {
 	failures := make([]remoteSyncFailure, 0)
 	var totals ssh.SyncStats
@@ -336,6 +337,7 @@ func (s *Server) runRemoteSyncHosts(
 			Full:                    full,
 			DB:                      local,
 			BlockedResultCategories: s.cfg.ResultContentBlockedCategories,
+			Progress:                progress,
 		}
 		stats, err := runRemoteSync(ctx, rs)
 		totals.SessionsSynced += stats.SessionsSynced
