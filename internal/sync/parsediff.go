@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,7 +49,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 
-	resolved, err := resolveParseDiffAgents(opts.Agents)
+	resolved, err := e.resolveParseDiffAgents(opts.Agents)
 	if err != nil {
 		return nil, err
 	}
@@ -68,13 +69,18 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	}
 
 	// Discovery mirrors syncAllLocked's file phase: per-agent
-	// DiscoverFunc over the configured dirs, then dedupe and the
+	// DiscoverFunc over the configured dirs, or provider discovery for
+	// agents that have dropped legacy discovery, then dedupe and the
 	// legacy-Kiro shadow filter.
 	var files []parser.DiscoveredFile
 	for _, def := range resolved {
-		for _, d := range e.agentDirs[def.Type] {
-			files = append(files, def.DiscoverFunc(d)...)
+		if def.DiscoverFunc != nil {
+			for _, d := range e.agentDirs[def.Type] {
+				files = append(files, def.DiscoverFunc(d)...)
+			}
+			continue
 		}
+		files = append(files, e.parseDiffProviderSources(ctx, def.Type)...)
 	}
 	// DiscoverFunc does not emit the shared-SQLite source for Kiro
 	// (data.sqlite3) or db-mode OpenCode (opencode.db) — normal sync
@@ -204,18 +210,79 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	return report, nil
 }
 
+// parseDiffProviderSources discovers an agent's on-disk sources through
+// the provider facade for agents that have dropped their DiscoverFunc.
+func (e *Engine) parseDiffProviderSources(
+	ctx context.Context,
+	agentType parser.AgentType,
+) []parser.DiscoveredFile {
+	factory, ok := e.providerFactories[agentType]
+	if !ok || factory == nil {
+		return nil
+	}
+	roots := e.agentDirs[agentType]
+	if len(roots) == 0 {
+		return nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   roots,
+		Machine: e.machine,
+	})
+	sources, err := provider.Discover(ctx)
+	if err != nil {
+		log.Printf("parse-diff %s provider discovery: %v", agentType, err)
+		return nil
+	}
+	def := provider.Definition()
+	var files []parser.DiscoveredFile
+	for _, source := range sources {
+		sourcePath := providerDiscoveredPath(source)
+		if sourcePath == "" {
+			continue
+		}
+		agent := source.Provider
+		if agent == "" {
+			agent = def.Type
+		}
+		sourceCopy := source
+		files = append(files, parser.DiscoveredFile{
+			Path:            sourcePath,
+			Project:         source.ProjectHint,
+			Agent:           agent,
+			ProviderSource:  &sourceCopy,
+			ProviderProcess: true,
+		})
+	}
+	return files
+}
+
+func (e *Engine) parseDiffAgentDiscoverable(def parser.AgentDef) bool {
+	if !def.FileBased {
+		return false
+	}
+	if def.DiscoverFunc != nil {
+		return true
+	}
+	switch e.providerMigrationModes[def.Type] {
+	case parser.ProviderMigrationProviderAuthoritative:
+		factory, ok := e.providerFactories[def.Type]
+		return ok && factory != nil
+	default:
+		return false
+	}
+}
+
 // resolveParseDiffAgents validates the requested agent set against
 // the registry and returns the matching defs in registry order. Only
-// file-based agents with a DiscoverFunc have an on-disk source to
-// re-parse.
-func resolveParseDiffAgents(
+// file-based agents with an on-disk source can be re-parsed.
+func (e *Engine) resolveParseDiffAgents(
 	requested []parser.AgentType,
 ) ([]parser.AgentDef, error) {
 	var allowed []parser.AgentDef
 	allowedSet := make(map[parser.AgentType]bool)
 	var names []string
 	for _, def := range parser.Registry {
-		if def.FileBased && def.DiscoverFunc != nil {
+		if e.parseDiffAgentDiscoverable(def) {
 			allowed = append(allowed, def)
 			allowedSet[def.Type] = true
 			names = append(names, string(def.Type))

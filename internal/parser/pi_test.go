@@ -1,9 +1,9 @@
 package parser
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,19 +19,54 @@ import (
 func runPiParserTest(t *testing.T, content string) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
 	path := createTestFile(t, "pi-session.jsonl", content)
-	sess, msgs, err := ParsePiSession(path, "my_project", "local")
+	sess, msgs, err := parsePiTestSession(t, path, "my_project", "local")
 	require.NoError(t, err)
 	return sess, msgs
 }
 
-// TestParsePiSession_SessionHeader verifies that the session-level fields are
+func parsePiTestSession(
+	t *testing.T,
+	path string,
+	project string,
+	machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+
+	provider, ok := NewProvider(AgentPi, ProviderConfig{
+		Roots:   []string{filepath.Dir(filepath.Dir(path))},
+		Machine: machine,
+	})
+	require.True(t, ok)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: SourceRef{
+			Provider:       AgentPi,
+			Key:            path,
+			DisplayPath:    path,
+			FingerprintKey: path,
+			ProjectHint:    project,
+			Opaque: JSONLSource{
+				Root: filepath.Dir(filepath.Dir(path)),
+				Path: path,
+			},
+		},
+		Machine: machine,
+	})
+	if err != nil || len(outcome.Results) == 0 {
+		return nil, nil, err
+	}
+	result := outcome.Results[0].Result
+	return &result.Session, result.Messages, nil
+}
+
+// TestPiProviderParsesSessionHeader verifies that the session-level fields are
 // populated correctly from the pi fixture header (PRSR-01, PRSR-11, PRSR-10).
-func TestParsePiSession_SessionHeader(t *testing.T) {
+func TestPiProviderParsesSessionHeader(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-test-session-uuid.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	sess, msgs, err := ParsePiSession(fixturePath, "", "local")
+	sess, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	assert.Equal(t, "pi:pi-test-session-uuid", sess.ID, "PRSR-01: session ID")
@@ -57,54 +92,7 @@ func TestParsePiSession_SessionHeader(t *testing.T) {
 	_ = msgs // not the focus of this sub-test
 }
 
-func TestOMPRegistryMetadata(t *testing.T) {
-	def, ok := AgentByType(AgentOMP)
-	require.True(t, ok)
-
-	assert.Equal(t, AgentOMP, def.Type)
-	assert.Equal(t, "OhMyPi", def.DisplayName)
-	assert.Equal(t, "OMP_DIR", def.EnvVar)
-	assert.Equal(t, "omp_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".omp/agent/sessions"}, def.DefaultDirs)
-	assert.Equal(t, "omp:", def.IDPrefix)
-	assert.True(t, def.FileBased)
-	require.NotNil(t, def.DiscoverFunc)
-	require.NotNil(t, def.FindSourceFunc)
-}
-
-func TestParseOMPSession_SessionIdentity(t *testing.T) {
-	fixturePath := createTestFile(
-		t, "omp-test-session-uuid.jsonl",
-		loadFixture(t, "pi/session.jsonl"),
-	)
-	sess, msgs, err := ParseOMPSession(fixturePath, "", "local")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-
-	assert.Equal(t, "omp:pi-test-session-uuid", sess.ID)
-	assert.Equal(t, AgentOMP, sess.Agent)
-	assert.Equal(t, "omp:2025-01-01T09-00-00-000Z_parent-uuid", sess.ParentSessionID)
-	assert.Equal(t, "/Users/alice/code/my-project", sess.Cwd)
-	assert.Equal(t, "my_project", sess.Project)
-	require.NotEmpty(t, msgs)
-}
-
-func TestDiscoverOMPSessions(t *testing.T) {
-	root := t.TempDir()
-	projectDir := filepath.Join(root, "-Users-alice-code-my-project")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755))
-	path := filepath.Join(projectDir, "omp-test-session-uuid.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(loadFixture(t, "pi/session.jsonl")), 0o644))
-
-	files := DiscoverOMPSessions(root)
-	require.Len(t, files, 1)
-	assert.Equal(t, path, files[0].Path)
-	assert.Equal(t, AgentOMP, files[0].Agent)
-	assert.Empty(t, files[0].Project)
-	assert.Equal(t, path, FindOMPSourceFile(root, "omp-test-session-uuid"))
-}
-
-func TestParsePiSession_SessionInfoName(t *testing.T) {
+func TestPiProviderParsesSessionInfoName(t *testing.T) {
 	content := strings.Join([]string{
 		`{"type":"session","version":3,"id":"named-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
 		`{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","name":"Original name"}`,
@@ -122,7 +110,7 @@ func TestParsePiSession_SessionInfoName(t *testing.T) {
 	assert.Equal(t, RoleUser, msgs[0].Role)
 }
 
-func TestParsePiSession_SessionInfoLastNameWins(t *testing.T) {
+func TestPiProviderParsesSessionInfoLastNameWins(t *testing.T) {
 	content := strings.Join([]string{
 		`{"type":"session","version":3,"id":"renamed-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
 		`{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","name":"Initial name"}`,
@@ -137,14 +125,14 @@ func TestParsePiSession_SessionInfoLastNameWins(t *testing.T) {
 	assert.Equal(t, "Final name", sess.SessionName)
 }
 
-// TestParsePiSession_UserMessages verifies user message content and ordinals
+// TestPiProviderParsesUserMessages verifies user message content and ordinals
 // (PRSR-02, PRSR-01).
-func TestParsePiSession_UserMessages(t *testing.T) {
+func TestPiProviderParsesUserMessages(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	sess, msgs, err := ParsePiSession(fixturePath, "", "local")
+	sess, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	// First non-toolResult user message at index 0.
@@ -156,14 +144,14 @@ func TestParsePiSession_UserMessages(t *testing.T) {
 	assert.Contains(t, sess.FirstMessage, "Fix the login bug", "PRSR-01: FirstMessage")
 }
 
-// TestParsePiSession_AssistantMessages verifies the assistant message with
+// TestPiProviderParsesAssistantMessages verifies the assistant message with
 // thinking, text, and tool call (PRSR-03, PRSR-04, PRSR-06).
-func TestParsePiSession_AssistantMessages(t *testing.T) {
+func TestPiProviderParsesAssistantMessages(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	_, msgs, err := ParsePiSession(fixturePath, "", "local")
+	_, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	// entry-2 is the second entry overall (index 1 in messages).
@@ -195,14 +183,14 @@ func TestParsePiSession_AssistantMessages(t *testing.T) {
 	assert.Contains(t, assistantMsg.Content, "[Read: auth.go]", "tool use marker in Content")
 }
 
-// TestParsePiSession_ToolResults verifies tool result entries are parsed
+// TestPiProviderParsesToolResults verifies tool result entries are parsed
 // correctly (PRSR-05).
-func TestParsePiSession_ToolResults(t *testing.T) {
+func TestPiProviderParsesToolResults(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	_, msgs, err := ParsePiSession(fixturePath, "", "local")
+	_, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	var toolResultMsg *ParsedMessage
@@ -223,7 +211,7 @@ func TestParsePiSession_ToolResults(t *testing.T) {
 	assert.Contains(t, decoded, "package auth", "ContentRaw must decode to tool output text")
 }
 
-func TestParsePiSession_StringContent(t *testing.T) {
+func TestPiProviderParsesStringContent(t *testing.T) {
 	header := `{"type":"session","id":"str-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 
 	t.Run("assistant string content", func(t *testing.T) {
@@ -250,14 +238,14 @@ func TestParsePiSession_StringContent(t *testing.T) {
 	})
 }
 
-// TestParsePiSession_ThinkingBlocks verifies both explicit and redacted
+// TestPiProviderParsesThinkingBlocks verifies both explicit and redacted
 // thinking blocks (PRSR-06).
-func TestParsePiSession_ThinkingBlocks(t *testing.T) {
+func TestPiProviderParsesThinkingBlocks(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	_, msgs, err := ParsePiSession(fixturePath, "", "local")
+	_, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	t.Run("explicit thinking", func(t *testing.T) {
@@ -291,14 +279,14 @@ func TestParsePiSession_ThinkingBlocks(t *testing.T) {
 	})
 }
 
-// TestParsePiSession_UserMessageCount verifies that metadata entries do
-// not inflate user counts even when compactions persist as system rows.
-func TestParsePiSession_UserMessageCount(t *testing.T) {
+// TestPiProviderParsesUserMessageCount verifies that model_change and
+// compaction entries are skipped entirely and do not inflate user counts.
+func TestPiProviderParsesUserMessageCount(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	sess, _, err := ParsePiSession(fixturePath, "", "local")
+	sess, _, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	// The fixture has 2 real user messages. Metadata rows must not count
@@ -307,9 +295,9 @@ func TestParsePiSession_UserMessageCount(t *testing.T) {
 		"UserMessageCount must only count real user messages")
 }
 
-// TestParsePiSession_UserMessageCountEmptyContent verifies that user messages
+// TestPiProviderParsesUserMessageCountEmptyContent verifies that user messages
 // with non-text or empty payloads are still counted.
-func TestParsePiSession_UserMessageCountEmptyContent(t *testing.T) {
+func TestPiProviderParsesUserMessageCountEmptyContent(t *testing.T) {
 	fixture := `{"type":"session","id":"sess-1","cwd":"/tmp","timestamp":"2025-01-01T10:00:00Z"}
 {"type":"message","timestamp":"2025-01-01T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]},"id":"1"}
 {"type":"message","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"image","source":{"data":"abc"}}]},"id":"2"}
@@ -317,7 +305,7 @@ func TestParsePiSession_UserMessageCountEmptyContent(t *testing.T) {
 {"type":"message","timestamp":"2025-01-01T10:00:03Z","message":{"role":"assistant","content":[{"type":"text","text":"response"}]},"id":"4"}`
 
 	fixturePath := createTestFile(t, "pi-empty-content.jsonl", fixture)
-	sess, _, err := ParsePiSession(fixturePath, "", "local")
+	sess, _, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	// All 3 user messages should be counted, even those without text content.
@@ -325,21 +313,21 @@ func TestParsePiSession_UserMessageCountEmptyContent(t *testing.T) {
 		"UserMessageCount must count user messages with empty or non-text content")
 }
 
-// TestParsePiSession_SilentSkips verifies that the parser silently ignores
+// TestPiProviderParsesSilentSkips verifies that the parser silently ignores
 // malformed JSON, thinking_level_change entries, and unknown future entry types
 // without returning an error.
-func TestParsePiSession_SilentSkips(t *testing.T) {
+func TestPiProviderParsesSilentSkips(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	_, _, err := ParsePiSession(fixturePath, "", "local")
+	_, _, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err, "parser must succeed despite malformed/unknown lines")
 }
 
-// TestParsePiSession_V1Session verifies that a session without an id field
+// TestPiProviderParsesV1Session verifies that a session without an id field
 // derives its session ID from the filename (PRSR-09).
-func TestParsePiSession_V1Session(t *testing.T) {
+func TestPiProviderParsesV1Session(t *testing.T) {
 	v1Content := strings.Join([]string{
 		`{"type":"session","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/v1-project"}`,
 		`{"type":"message","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
@@ -347,7 +335,7 @@ func TestParsePiSession_V1Session(t *testing.T) {
 	}, "\n")
 
 	path := createTestFile(t, "v1-session.jsonl", v1Content)
-	sess, _, err := ParsePiSession(path, "v1_project", "local")
+	sess, _, err := parsePiTestSession(t, path, "v1_project", "local")
 	require.NoError(t, err)
 
 	assert.Equal(t, "pi:v1-session", sess.ID, "PRSR-09: V1 session ID from filename")
@@ -362,7 +350,7 @@ func TestParsePiSession_V1MessageLineageStaysEmpty(t *testing.T) {
 	}, "\n")
 
 	path := createTestFile(t, "v1-lineage.jsonl", content)
-	sess, msgs, err := ParsePiSession(path, "v1_project", "local")
+	sess, msgs, err := parsePiTestSession(t, path, "v1_project", "local")
 	require.NoError(t, err)
 
 	assert.Equal(t, "pi:v1-lineage", sess.ID)
@@ -373,14 +361,14 @@ func TestParsePiSession_V1MessageLineageStaysEmpty(t *testing.T) {
 	}
 }
 
-// TestParsePiSession_BranchedFrom verifies the exact ParentSessionID value
+// TestPiProviderParsesBranchedFrom verifies the exact ParentSessionID value
 // extracted from the branchedFrom field (PRSR-10).
-func TestParsePiSession_BranchedFrom(t *testing.T) {
+func TestPiProviderParsesBranchedFrom(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	sess, _, err := ParsePiSession(fixturePath, "", "local")
+	sess, _, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	t.Run("parent session ID from branchedFrom", func(t *testing.T) {
@@ -443,9 +431,9 @@ func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
 	assert.Equal(t, "assistant", msgs[5].SourceType)
 }
 
-// TestParsePiSession_IOError verifies that I/O errors encountered after the
+// TestPiProviderParsesIOError verifies that I/O errors encountered after the
 // session header are surfaced and that the error string contains "reading pi".
-func TestParsePiSession_IOError(t *testing.T) {
+func TestPiProviderParsesIOError(t *testing.T) {
 	t.Run("error message format contains reading pi", func(t *testing.T) {
 		ioErr := errors.New("disk read failed")
 		err := fmt.Errorf("reading pi %s: %w", "/some/path/session.jsonl", ioErr)
@@ -458,7 +446,7 @@ func TestParsePiSession_IOError(t *testing.T) {
 		msg := `{"type":"message","id":"entry-1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}` + "\n"
 
 		path := createTestFile(t, "pi-clean-read.jsonl", header+msg)
-		sess, msgs, parseErr := ParsePiSession(path, "my_project", "local")
+		sess, msgs, parseErr := parsePiTestSession(t, path, "my_project", "local")
 
 		require.NoError(t, parseErr, "clean read must not produce an error")
 		require.NotNil(t, sess)
@@ -591,7 +579,7 @@ func TestParsePiAssistantMessage_IntentInToolMarker(t *testing.T) {
 		"agent__intent must be normalized to description for tool marker")
 }
 
-// TestParsePiSession_ErrorCases verifies error handling for missing, empty,
+// TestPiProviderParsesErrorCases verifies error handling for missing, empty,
 // and invalid session files.
 func TestNormalizePiIntent(t *testing.T) {
 	tests := []struct {
@@ -652,22 +640,22 @@ func TestNormalizePiIntent(t *testing.T) {
 	}
 }
 
-func TestParsePiSession_ErrorCases(t *testing.T) {
+func TestPiProviderParsesErrorCases(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
-		_, _, err := ParsePiSession("/nonexistent/path/session.jsonl", "proj", "local")
+		_, _, err := parsePiTestSession(t, "/nonexistent/path/session.jsonl", "proj", "local")
 		assert.Error(t, err, "missing file must return error")
 	})
 
 	t.Run("empty file", func(t *testing.T) {
 		path := createTestFile(t, "empty.jsonl", "")
-		_, _, err := ParsePiSession(path, "proj", "local")
+		_, _, err := parsePiTestSession(t, path, "proj", "local")
 		assert.Error(t, err, "empty file (no session header) must return error")
 	})
 
 	t.Run("not a pi session", func(t *testing.T) {
 		content := `{"type":"message","id":"entry-1","timestamp":"2025-01-01T10:00:00Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}` + "\n"
 		path := createTestFile(t, "not-pi.jsonl", content)
-		_, _, err := ParsePiSession(path, "proj", "local")
+		_, _, err := parsePiTestSession(t, path, "proj", "local")
 		assert.Error(t, err, "file without session header must return error")
 	})
 
@@ -678,23 +666,23 @@ func TestParsePiSession_ErrorCases(t *testing.T) {
 		msg := `{"type":"message","id":"m1","timestamp":"2025-06-01T10:01:00Z","message":{"role":"user","content":"hello"}}`
 		content := "   \n\t\n" + header + "\n" + msg + "\n"
 		path := createTestFile(t, "ws-leading.jsonl", content)
-		sess, msgs, err := ParsePiSession(path, "proj", "local")
+		sess, msgs, err := parsePiTestSession(t, path, "proj", "local")
 		require.NoError(t, err, "whitespace-only leading lines must not cause parse failure")
 		assert.Equal(t, "pi:ws-sess", sess.ID)
 		assert.Len(t, msgs, 1)
 	})
 }
 
-// TestParsePiSession_TokenUsageFromFixture verifies that assistant
+// TestPiProviderParsesTokenUsageFromFixture verifies that assistant
 // messages in the standard pi fixture get Model and TokenUsage
 // populated from the inline message.model and message.usage fields.
 // Without this, the usage dashboard reports $0 for pi sessions.
-func TestParsePiSession_TokenUsageFromFixture(t *testing.T) {
+func TestPiProviderParsesTokenUsageFromFixture(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
 		loadFixture(t, "pi/session.jsonl"),
 	)
-	sess, msgs, err := ParsePiSession(fixturePath, "", "local")
+	sess, msgs, err := parsePiTestSession(t, fixturePath, "", "local")
 	require.NoError(t, err)
 
 	var assistants []ParsedMessage
@@ -736,10 +724,10 @@ func TestParsePiSession_TokenUsageFromFixture(t *testing.T) {
 		"session PeakContextTokens = max(100, 200)")
 }
 
-// TestParsePiSession_ModelFromModelChange verifies that when an
+// TestPiProviderParsesModelFromModelChange verifies that when an
 // assistant message has no inline model field, the parser falls
 // back to the most recent model_change entry's modelId.
-func TestParsePiSession_ModelFromModelChange(t *testing.T) {
+func TestPiProviderParsesModelFromModelChange(t *testing.T) {
 	header := `{"type":"session","id":"mc-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 	mc := `{"type":"model_change","id":"mc1","timestamp":"2025-01-01T10:00:00.5Z","provider":"openai","modelId":"gpt-5.4"}` + "\n"
 	user := `{"type":"message","id":"u1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"hi"}}` + "\n"
@@ -762,12 +750,12 @@ func TestParsePiSession_ModelFromModelChange(t *testing.T) {
 		"token usage extracted from message.usage")
 }
 
-// TestParsePiSession_UnknownUsageShape verifies that a present
+// TestPiProviderParsesUnknownUsageShape verifies that a present
 // but unrecognized usage object (empty {} or a foreign schema
 // with none of the keys we know about) leaves TokenUsage empty
 // so the usage query filter skips the row, rather than
 // fabricating a zero-valued record.
-func TestParsePiSession_UnknownUsageShape(t *testing.T) {
+func TestPiProviderParsesUnknownUsageShape(t *testing.T) {
 	header := `{"type":"session","id":"uu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 
 	cases := []struct {
@@ -795,14 +783,14 @@ func TestParsePiSession_UnknownUsageShape(t *testing.T) {
 	}
 }
 
-// TestParsePiSession_ZeroUsage verifies that an explicit usage
+// TestPiProviderParsesZeroUsage verifies that an explicit usage
 // block with every counter at zero is preserved as "known
 // zero" rather than collapsed to "unknown". The normalized
 // token_usage is still written and coverage flags follow field
 // presence, matching the claude parser contract and letting
 // downstream rollups distinguish an errored request from a
 // missing usage blob.
-func TestParsePiSession_ZeroUsage(t *testing.T) {
+func TestPiProviderParsesZeroUsage(t *testing.T) {
 	header := `{"type":"session","id":"zu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 	asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"oops","model":"gpt-5.4","usage":{"input":0,"output":0}}}`
 
@@ -827,10 +815,10 @@ func TestParsePiSession_ZeroUsage(t *testing.T) {
 	assert.Equal(t, 0, m.ContextTokens)
 }
 
-// TestParsePiSession_NoUsageNoTokenUsage verifies that messages
+// TestPiProviderParsesNoUsageNoTokenUsage verifies that messages
 // without a usage block do not write an empty token_usage row,
 // since the eligibility filter requires token_usage != ”.
-func TestParsePiSession_NoUsageNoTokenUsage(t *testing.T) {
+func TestPiProviderParsesNoUsageNoTokenUsage(t *testing.T) {
 	header := `{"type":"session","id":"nu-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/tmp"}` + "\n"
 	asst := `{"type":"message","id":"a1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","content":"hello","model":"claude-opus-4-5"}}`
 

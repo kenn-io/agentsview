@@ -1374,32 +1374,6 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Pi/OMP: <sessionsDir>/<encoded-cwd>/<session>.jsonl
-	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMP} {
-		for _, piDir := range e.agentDirs[agent] {
-			if piDir == "" {
-				continue
-			}
-			if rel, ok := isUnder(piDir, path); ok {
-				parts := strings.Split(rel, sep)
-				if len(parts) != 2 {
-					continue
-				}
-				if !strings.HasSuffix(parts[1], ".jsonl") {
-					continue
-				}
-				if !parser.IsPiSessionFile(path) {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: agent,
-					// Project left empty; parser derives from header cwd.
-				}, true
-			}
-		}
-	}
-
 	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
 	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
 		if qwenDir == "" {
@@ -4704,8 +4678,6 @@ func (e *Engine) processFile(
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
 		res = e.processVisualStudioCopilot(file, info)
-	case parser.AgentPi, parser.AgentOMP:
-		res = e.processPi(file, info)
 	case parser.AgentQwen:
 		res = e.processQwen(file, info)
 	case parser.AgentOpenClaw:
@@ -7332,45 +7304,6 @@ func (e *Engine) processCursor(
 		results: []parser.ParseResult{
 			{Session: *sess, Messages: msgs},
 		},
-	}
-}
-
-// processPi parses a pi session file and returns the result
-// for batching. Modeled on processClaude.
-func (e *Engine) processPi(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	var (
-		sess *parser.ParsedSession
-		msgs []parser.ParsedMessage
-		err  error
-	)
-	if file.Agent == parser.AgentOMP {
-		sess, msgs, err = parser.ParseOMPSession(file.Path, file.Project, e.machine)
-	} else {
-		sess, msgs, err = parser.ParsePiSession(file.Path, file.Project, e.machine)
-	}
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{{
-			Session:  *sess,
-			Messages: msgs,
-		}},
 	}
 }
 
