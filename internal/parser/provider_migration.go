@@ -43,7 +43,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentChatGPT:        ProviderMigrationLegacyOnly,
 	AgentKiro:           ProviderMigrationLegacyOnly,
 	AgentKiroIDE:        ProviderMigrationLegacyOnly,
-	AgentCortex:         ProviderMigrationLegacyOnly,
+	AgentCortex:         ProviderMigrationProviderAuthoritative,
 	AgentHermes:         ProviderMigrationLegacyOnly,
 	AgentWorkBuddy:      ProviderMigrationProviderAuthoritative,
 	AgentForge:          ProviderMigrationLegacyOnly,

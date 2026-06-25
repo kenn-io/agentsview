@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -335,11 +334,11 @@ func parseCortexTimestamps(_ string) map[string]time.Time {
 	return make(map[string]time.Time)
 }
 
-// ParseCortexSession parses a Cortex session from its .json metadata
-// file. If the file contains an embedded "history" array, it is used
-// directly. If no history is embedded (the split-file format), the
-// companion .history.jsonl file is read instead.
-func ParseCortexSession(
+// parseSession parses a Cortex session from its .json metadata file. If the
+// file contains an embedded "history" array, it is used directly. If no history
+// is embedded (the split-file format), the companion .history.jsonl file is
+// read instead.
+func (p *cortexProvider) parseSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -510,60 +509,4 @@ func IsCortexSessionFile(name string) bool {
 	}
 	stem := strings.TrimSuffix(name, ".json")
 	return IsValidSessionID(stem)
-}
-
-// DiscoverCortexSessions finds all primary session metadata files
-// in the Cortex conversations directory (~/.snowflake/cortex/conversations).
-// Backup files (*.back.*.json) are silently skipped. Both embedded-history
-// sessions (<uuid>.json with a "history" key) and split sessions
-// (<uuid>.json + <uuid>.history.jsonl) are returned as a single entry
-// pointing to the .json metadata file.
-func DiscoverCortexSessions(
-	conversationsDir string,
-) []DiscoveredFile {
-	if conversationsDir == "" {
-		return nil
-	}
-
-	entries, err := os.ReadDir(conversationsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !IsCortexSessionFile(name) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(conversationsDir, name),
-			Agent: AgentCortex,
-		})
-	}
-
-	return files
-}
-
-// FindCortexSourceFile locates a Cortex session file by UUID. Accepts
-// both the raw UUID and the prefixed "cortex:<uuid>" form. Returns the
-// path to the .json metadata file if found, otherwise "".
-func FindCortexSourceFile(
-	conversationsDir, sessionID string,
-) string {
-	// Strip "cortex:" prefix before validation — callers may
-	// pass the full prefixed ID.
-	sessionID = strings.TrimPrefix(sessionID, "cortex:")
-	if conversationsDir == "" || !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	candidate := filepath.Join(conversationsDir, sessionID+".json")
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
-	return ""
 }
