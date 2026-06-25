@@ -111,6 +111,16 @@ func TestParseDiffAgentTypes(t *testing.T) {
 			want: []string{"claude"},
 		},
 		{
+			name: "provider authoritative agent",
+			in:   []string{"pi"},
+			want: []string{"pi"},
+		},
+		{
+			name: "provider authoritative shared provider family agent",
+			in:   []string{"omp"},
+			want: []string{"omp"},
+		},
+		{
 			name: "trims and lowercases",
 			in:   []string{" Claude "},
 			want: []string{"claude"},

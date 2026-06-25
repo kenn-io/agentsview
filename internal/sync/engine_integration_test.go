@@ -37,6 +37,7 @@ type testEnv struct {
 	iflowDir          string
 	ampDir            string
 	piDir             string
+	ompDir            string
 	kiroDir           string
 	shelleyDir        string
 	antigravityCLIDir string
@@ -117,6 +118,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		iflowDir:          t.TempDir(),
 		ampDir:            t.TempDir(),
 		piDir:             t.TempDir(),
+		ompDir:            t.TempDir(),
 		shelleyDir:        t.TempDir(),
 		antigravityCLIDir: t.TempDir(),
 		db:                dbtest.OpenTestDB(t),
@@ -184,6 +186,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentIflow:          {env.iflowDir},
 			parser.AgentAmp:            {env.ampDir},
 			parser.AgentPi:             {env.piDir},
+			parser.AgentOMP:            {env.ompDir},
 			parser.AgentKiro:           kiroDirs,
 			parser.AgentShelley:        {env.shelleyDir},
 			parser.AgentAntigravityCLI: {env.antigravityCLIDir},
@@ -6961,6 +6964,42 @@ func TestPiSessionIntegration(t *testing.T) {
 			assert.Equal(t, "pi", sess.Agent, "after SyncSingleSession: agent = %q, want %q", sess.Agent, "pi")
 		},
 	)
+}
+
+func TestOMPSyncAllAndChangedPathUseProvider(t *testing.T) {
+	env := setupTestEnv(t)
+	path := env.writeSession(
+		t,
+		env.ompDir,
+		filepath.Join("encoded-cwd", "omp-sync.jsonl"),
+		piLikeProviderFixture("omp-sync", "/Users/alice/code/omp-app"),
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	assertSessionState(t, env.db, "omp:omp-sync", func(sess *db.Session) {
+		assert.Equal(t, "omp", sess.Agent)
+		assert.Equal(t, "omp_app", sess.Project)
+	})
+	assert.Equal(t, path, env.engine.FindSourceFile("omp:omp-sync"))
+
+	updated := piLikeProviderFixture("omp-sync", "/Users/alice/code/omp-renamed")
+	dbtest.WriteTestFile(t, path, []byte(updated))
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionState(t, env.db, "omp:omp-sync", func(sess *db.Session) {
+		assert.Equal(t, "omp", sess.Agent)
+		assert.Equal(t, "omp_renamed", sess.Project)
+	})
+}
+
+func piLikeProviderFixture(sessionID, cwd string) string {
+	return strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"2025-01-01T10:00:00Z","cwd":"` + cwd + `"}`,
+		`{"type":"message","id":"msg-1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"Inspect the source."}}`,
+		`{"type":"message","id":"msg-2","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":"Ready.","model":"claude-opus-4-5"}}`,
+	}, "\n")
 }
 
 func TestIncrementalSync_ClaudeAppend(t *testing.T) {
