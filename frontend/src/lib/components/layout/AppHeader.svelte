@@ -133,7 +133,10 @@
   }
 
   function openPublish(secret: boolean) {
+    const id = sessions.activeSessionId;
+    if (!id) return;
     ui.publishSecret = secret;
+    ui.setPublishTarget({ kind: "session", id });
     ui.activeModal = "publish";
     showPublishMenu = false;
     showOverflow = false;

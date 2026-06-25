@@ -174,8 +174,10 @@ export function registerShortcuts(
         }
       },
       p: () => {
-        if (sessions.activeSessionId) {
+        const id = sessions.activeSessionId;
+        if (id) {
           ui.publishSecret = false;
+          ui.setPublishTarget({ kind: "session", id });
           ui.activeModal = "publish";
         }
       },

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { m } from "../../i18n/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -17,17 +18,28 @@
   let tokenInput: string = $state("");
   let errorMessage: string = $state("");
   let result: PublishResponse | null = $state(null);
+  let closed = false;
 
-  function publishTargetLabel() {
-    return ui.publishTarget?.kind === "insight"
-      ? "insight"
-      : "session";
+  const target = ui.publishTarget ??
+    (sessions.activeSessionId
+      ? { kind: "session" as const, id: sessions.activeSessionId }
+      : null);
+  const publishSecret = ui.publishSecret;
+
+  function isClosed() {
+    return closed || ui.activeModal !== "publish";
+  }
+
+  function closeModal() {
+    closed = true;
+    ui.activeModal = null;
   }
 
   async function init() {
     try {
       configureGeneratedClient();
       const config = await ConfigService.getApiV1ConfigGithub();
+      if (isClosed()) return;
       if (config.configured) {
         await doPublish();
       } else {
@@ -48,8 +60,10 @@
       await ConfigService.postApiV1ConfigGithub({
         requestBody: { token },
       });
+      if (isClosed()) return;
       await doPublish();
     } catch (err) {
+      if (isClosed()) return;
       errorMessage =
         err instanceof Error ? err.message : "Failed to save token";
       view = "error";
@@ -57,29 +71,30 @@
   }
 
   async function doPublish() {
-    const target = ui.publishTarget;
-    if (target?.kind === "insight") {
+    if (isClosed()) return;
+    if (!target) {
+      errorMessage = "No session selected";
+      view = "error";
+      return;
+    }
+
+    if (target.kind === "insight") {
       view = "progress";
       try {
         configureGeneratedClient();
         result =
           await InsightsService.postApiV1InsightsIdPublish({
             id: target.id,
-            secret: ui.publishSecret,
+            secret: publishSecret,
           }) as unknown as PublishResponse;
+        if (isClosed()) return;
         view = "success";
       } catch (err) {
+        if (isClosed()) return;
         errorMessage =
           err instanceof Error ? err.message : "Publish failed";
         view = "error";
       }
-      return;
-    }
-
-    const sessionId = sessions.activeSessionId;
-    if (!sessionId) {
-      errorMessage = "No session selected";
-      view = "error";
       return;
     }
 
@@ -88,11 +103,13 @@
       configureGeneratedClient();
       result =
         await SessionsService.postApiV1SessionsIdPublish({
-          id: sessionId,
-          secret: ui.publishSecret,
+          id: target.id,
+          secret: publishSecret,
         }) as unknown as PublishResponse;
+      if (isClosed()) return;
       view = "success";
     } catch (err) {
+      if (isClosed()) return;
       errorMessage =
         err instanceof Error ? err.message : "Publish failed";
       view = "error";
@@ -109,9 +126,13 @@
         "modal-overlay",
       )
     ) {
-      ui.activeModal = null;
+      closeModal();
     }
   }
+
+  onDestroy(() => {
+    closed = true;
+  });
 
   init();
 </script>
@@ -121,17 +142,17 @@
   class="modal-overlay"
   onclick={handleOverlayClick}
   onkeydown={(e) => {
-    if (e.key === "Escape") ui.activeModal = null;
+    if (e.key === "Escape") closeModal();
   }}
 >
   <div class="modal-panel publish-panel">
     <div class="modal-header">
       <h3 class="modal-title">
-        {ui.publishSecret ? m.publish_title_secret() : m.publish_title_public()}
+        {publishSecret ? m.publish_title_secret() : m.publish_title_public()}
       </h3>
       <button
         class="modal-close"
-        onclick={() => ui.activeModal = null}
+        onclick={closeModal}
         title={m.publish_close()}
         aria-label={m.publish_close()}
       >
@@ -175,7 +196,7 @@
         <div class="progress-view">
           <div class="modal-spinner"></div>
           <p>
-            {ui.publishSecret ? m.publish_creating_secret() : m.publish_creating_public()}
+            {publishSecret ? m.publish_creating_secret() : m.publish_creating_public()}
           </p>
         </div>
 
@@ -230,7 +251,7 @@
             </button>
             <button
               class="modal-btn"
-              onclick={() => ui.activeModal = null}
+              onclick={closeModal}
             >
               {m.publish_close_btn()}
             </button>
@@ -249,7 +270,7 @@
             </button>
             <button
               class="modal-btn"
-              onclick={() => ui.activeModal = null}
+              onclick={closeModal}
             >
               {m.publish_close_btn()}
             </button>

@@ -60,6 +60,14 @@ describe("UIStore", () => {
       });
     });
 
+    it("stores a selected session publish target", () => {
+      ui.setPublishTarget({ kind: "session", id: "sess-123" });
+      expect(ui.publishTarget).toEqual({
+        kind: "session",
+        id: "sess-123",
+      });
+    });
+
     it("clears the publish target when publish modal closes", async () => {
       ui.setPublishTarget({ kind: "insight", id: 42 });
       ui.activeModal = "publish";

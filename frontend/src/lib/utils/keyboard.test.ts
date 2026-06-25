@@ -107,6 +107,21 @@ describe("registerShortcuts", () => {
     });
   });
 
+  describe("Publish shortcut", () => {
+    it("opens publish modal with the active session target", () => {
+      sessions.activeSessionId = "sess-123";
+
+      fireKey("p");
+
+      expect(ui.activeModal).toBe("publish");
+      expect(ui.publishSecret).toBe(false);
+      expect(ui.publishTarget).toEqual({
+        kind: "session",
+        id: "sess-123",
+      });
+    });
+  });
+
   describe("modal blocks other shortcuts", () => {
     it("should block navigation when modal is open", () => {
       ui.activeModal = "commandPalette";
