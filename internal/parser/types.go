@@ -499,9 +499,7 @@ var Registry = []AgentDef{
 			"brain",
 			"annotations",
 		},
-		FileBased:      true,
-		DiscoverFunc:   DiscoverAntigravitySessions,
-		FindSourceFunc: FindAntigravitySourceFile,
+		FileBased: true,
 	},
 	{
 		Type:        AgentAntigravityCLI,
@@ -515,9 +513,7 @@ var Registry = []AgentDef{
 			"implicit",
 			"brain",
 		},
-		FileBased:      true,
-		DiscoverFunc:   DiscoverAntigravityCLISessions,
-		FindSourceFunc: FindAntigravityCLISourceFile,
+		FileBased: true,
 	},
 	{
 		Type:        AgentQwenPaw,

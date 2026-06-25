@@ -227,7 +227,7 @@ func TestAntigravityIDESourceVersionBaseline(t *testing.T) {
 	dbPath := filepath.Join(root, "conversations", id+".db")
 	createAntigravityBaselineSchemaDB(t, dbPath)
 
-	sess, _, _, err := ParseAntigravitySession(dbPath, "/tmp/proj", "m")
+	sess, _, _, err := parseAntigravityTestSession(t, dbPath, "/tmp/proj", "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "1.0.7-1.0.10", sess.SourceVersion)
@@ -243,7 +243,7 @@ func TestAntigravityCLISourceVersionBaseline(t *testing.T) {
 	dbPath := filepath.Join(root, "conversations", id+".db")
 	createAntigravityBaselineSchemaDB(t, dbPath)
 
-	sess, _, err := ParseAntigravityCLISession(dbPath, "/tmp/proj", "m")
+	sess, _, err := parseAntigravityCLITestSession(t,dbPath, "/tmp/proj", "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "1.0.7-1.0.10", sess.SourceVersion)
@@ -260,7 +260,7 @@ func TestAntigravityIDESourceVersionUnknownSchema(t *testing.T) {
 	dbPath := filepath.Join(root, "conversations", id+".db")
 	createAntigravityTestDB(t, dbPath)
 
-	sess, _, _, err := ParseAntigravitySession(dbPath, "/tmp/proj", "m")
+	sess, _, _, err := parseAntigravityTestSession(t, dbPath, "/tmp/proj", "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.True(t,
@@ -307,7 +307,7 @@ func TestAntigravityCLIPBSourceVersionEmpty(t *testing.T) {
 		[]byte(`{"display":"pb prompt","timestamp":1779000000000,`+
 			`"workspace":"/tmp/pb-proj","conversationId":"`+id+`"}`))
 
-	sess, _, err := ParseAntigravityCLISession(pbPath, "/tmp/pb-proj", "m")
+	sess, _, err := parseAntigravityCLITestSession(t,pbPath, "/tmp/pb-proj", "m")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, sess.SourceVersion,

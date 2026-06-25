@@ -30,53 +30,6 @@ var antigravityUUIDLikeRE = regexp.MustCompile(
 	`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`,
 )
 
-// DiscoverAntigravitySessions returns one DiscoveredFile per
-// conversations/<uuid>.db under the IDE root.
-func DiscoverAntigravitySessions(root string) []DiscoveredFile {
-	if root == "" {
-		return nil
-	}
-	dir := filepath.Join(root, "conversations")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var files []DiscoveredFile
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ".db") {
-			continue
-		}
-		id := strings.TrimSuffix(name, ".db")
-		if !IsValidSessionID(id) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(dir, name),
-			Agent: AgentAntigravity,
-		})
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindAntigravitySourceFile locates a session DB by id.
-func FindAntigravitySourceFile(root, id string) string {
-	if root == "" || !IsValidSessionID(id) {
-		return ""
-	}
-	p := filepath.Join(root, "conversations", id+".db")
-	if _, err := os.Stat(p); err == nil {
-		return p
-	}
-	return ""
-}
-
 // AntigravityFileInfo returns the effective file info for an IDE
 // session .db, combining the main file with its -wal/-shm sidecars,
 // the annotations/<id>.pbtxt sidecar, and the brain/<id> artifacts
@@ -89,6 +42,13 @@ func AntigravityFileInfo(path string) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	return antigravityCLICombinedFileInfo(
+		info,
+		antigravityIDECompanionPaths(path)...,
+	), nil
+}
+
+func antigravityIDECompanionPaths(path string) []string {
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	root := filepath.Dir(filepath.Dir(path))
 	companions := []string{
@@ -96,14 +56,15 @@ func AntigravityFileInfo(path string) (os.FileInfo, error) {
 		path + "-shm",
 		filepath.Join(root, "annotations", id+".pbtxt"),
 	}
-	companions = append(companions, antigravityBrainCompanions(
+	return append(companions, antigravityBrainCompanions(
 		filepath.Join(root, "brain", id),
 	)...)
-	return antigravityCLICombinedFileInfo(info, companions...), nil
 }
 
-// ParseAntigravitySession parses one IDE session DB.
-func ParseAntigravitySession(
+// parseSession parses one IDE session DB. It is owned by the
+// antigravityProvider; the package-level ParseAntigravitySession
+// entrypoint was folded onto the provider.
+func (p *antigravityProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)

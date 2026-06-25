@@ -593,6 +593,31 @@ func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
 	assert.Equal(t, []string{sessionsDir}, roots[1].dirs)
 }
 
+func TestCollectWatchRootsUsesProviderWatchPlan(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"brain", "conversations", "implicit"} {
+		require.NoError(t, os.Mkdir(filepath.Join(root, dir), 0o755), "mkdir %s", dir)
+	}
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {root},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs, "unwatched dirs before watcher setup")
+	require.Len(t, roots, 4)
+	assert.Equal(t, filepath.Join(root, "brain"), roots[0].root)
+	assert.False(t, roots[0].shallow)
+	assert.Equal(t, filepath.Join(root, "conversations"), roots[1].root)
+	assert.True(t, roots[1].shallow)
+	assert.Equal(t, root, roots[2].root)
+	assert.True(t, roots[2].shallow, "history.jsonl root should be watched shallowly")
+	assert.Equal(t, filepath.Join(root, "implicit"), roots[3].root)
+	assert.True(t, roots[3].shallow)
+}
+
 func TestResyncCoversSignals(t *testing.T) {
 	tests := []struct {
 		name     string
