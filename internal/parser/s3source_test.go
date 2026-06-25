@@ -125,6 +125,20 @@ func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
 	assert.Equal(t, indexMtime.UnixNano(), got[0].SourceMtime)
 }
 
+func TestCodexS3SessionIndexURIPrefersRawCodexLayout(t *testing.T) {
+	got, ok := CodexS3SessionIndexURI(
+		"s3://bucket/backups/sessions/laptop/raw/codex/2026/06/24/" +
+			"rollout-2026-06-24T00-00-00-11111111-1111-4111-8111-111111111111.jsonl",
+	)
+
+	require.True(t, ok)
+	assert.Equal(
+		t,
+		"s3://bucket/backups/sessions/laptop/raw/session_index.jsonl",
+		got,
+	)
+}
+
 func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })

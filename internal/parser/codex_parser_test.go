@@ -141,6 +141,27 @@ func TestParseCodexSession_MtimeIncludesSessionIndex(t *testing.T) {
 	assert.Equal(t, "Renamed", sess2.SessionName)
 }
 
+func TestEvictCodexSessionIndexCache(t *testing.T) {
+	root := t.TempDir()
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	index := `{"id":"abc-123","thread_name":"Cached title","updated_at":"2026-06-11T17:34:20Z"}` + "\n"
+	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
+
+	titles := CodexSessionIndexTitles(indexPath)
+	require.Equal(t, "Cached title", titles["abc-123"])
+	codexSessionIndexCache.mu.Lock()
+	_, cached := codexSessionIndexCache.entries[indexPath]
+	codexSessionIndexCache.mu.Unlock()
+	require.True(t, cached, "session index should be cached after read")
+
+	EvictCodexSessionIndex(indexPath)
+
+	codexSessionIndexCache.mu.Lock()
+	_, cached = codexSessionIndexCache.entries[indexPath]
+	codexSessionIndexCache.mu.Unlock()
+	assert.False(t, cached, "session index cache entry should be evicted")
+}
+
 func TestParseCodexSession_PreservesAssistantBlockquotes(t *testing.T) {
 	content := loadFixture(t, "codex/blockquotes_session.jsonl")
 	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)

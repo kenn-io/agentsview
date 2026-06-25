@@ -363,7 +363,19 @@ func CodexS3SessionIndexURI(sessionURI string) (string, bool) {
 		return "", false
 	}
 
-	for i := 1; i < len(parts)-1; i++ {
+	for i := len(parts) - 3; i >= 1; i-- {
+		if parts[i] == "raw" && parts[i+1] == "codex" {
+			rootEnd := i + 2
+			if rootEnd < len(parts)-1 &&
+				(parts[rootEnd] == "sessions" ||
+					parts[rootEnd] == "archived_sessions") {
+				return s3URIWithLast(parts[:rootEnd], CodexSessionIndexFilename), true
+			}
+			return s3URIWithLast(parts[:i+1], CodexSessionIndexFilename), true
+		}
+	}
+
+	for i := len(parts) - 2; i >= 1; i-- {
 		if parts[i] == "sessions" || parts[i] == "archived_sessions" {
 			return s3URIWithLast(parts[:i], CodexSessionIndexFilename), true
 		}

@@ -114,42 +114,42 @@ func codexS3TempRelParts(parts []string) []string {
 	return append([]string{"sessions"}, parts...)
 }
 
-func hydrateS3CodexSessionIndex(sessionPath, sessionURI string) error {
+func hydrateS3CodexSessionIndex(sessionPath, sessionURI string) (string, error) {
 	indexURI, ok := parser.CodexS3SessionIndexURI(sessionURI)
 	if !ok {
-		return nil
+		return "", nil
 	}
 	local := localCodexSessionIndexPath(sessionPath)
 	if local == "" {
-		return nil
+		return "", nil
 	}
 	rc, err := fetchS3Object(indexURI)
 	if err != nil {
 		if isMissingS3Object(err) {
-			return nil
+			return "", nil
 		}
-		return err
+		return "", err
 	}
 	defer rc.Close()
 	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
-		return err
+		return "", err
 	}
 	f, err := os.Create(local)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := io.Copy(f, rc); err != nil {
 		f.Close()
 		_ = os.Remove(local)
 		if isMissingS3Object(err) {
-			return nil
+			return "", nil
 		}
-		return err
+		return "", err
 	}
 	if err := f.Close(); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return local, nil
 }
 
 func localCodexSessionIndexPath(sessionPath string) string {
@@ -252,8 +252,12 @@ func (e *Engine) processS3Session(
 		hydratedToolResults = rewrote
 		sawPersistedToolResults = sawPersisted
 	case parser.AgentCodex:
-		if err := hydrateS3CodexSessionIndex(tmp, file.Path); err != nil {
+		indexPath, err := hydrateS3CodexSessionIndex(tmp, file.Path)
+		if err != nil {
 			return processResult{err: err, noCacheSkip: true}
+		}
+		if indexPath != "" {
+			defer parser.EvictCodexSessionIndex(indexPath)
 		}
 	}
 	local := file

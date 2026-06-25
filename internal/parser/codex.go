@@ -1407,6 +1407,15 @@ func CodexSessionIndexTitles(indexPath string) map[string]string {
 	return titles
 }
 
+// EvictCodexSessionIndex removes one cached session_index.jsonl entry. S3
+// sync uses transient temp files for hydrated indexes, so those cache entries
+// should not live beyond the parse that needed them.
+func EvictCodexSessionIndex(indexPath string) {
+	codexSessionIndexCache.mu.Lock()
+	delete(codexSessionIndexCache.entries, indexPath)
+	codexSessionIndexCache.mu.Unlock()
+}
+
 // LookupCodexThreadName returns the current Codex thread name for a session
 // from the session_index.jsonl file next to the session root.
 func LookupCodexThreadName(sessionPath, sessionID string) string {
