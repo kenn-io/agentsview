@@ -1283,7 +1283,7 @@ func (s *Store) GetAnalyticsSessionShape(
 	}
 
 	query := `SELECT ` + pgDateCol + `,
-		EXTRACT(EPOCH FROM ended_at - started_at)
+		COALESCE(EXTRACT(EPOCH FROM ended_at - started_at), 0)
 			AS duration_sec,
 		message_count, id FROM sessions WHERE ` + where
 

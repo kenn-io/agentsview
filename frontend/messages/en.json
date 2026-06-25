@@ -391,6 +391,8 @@
   "analytics_top_sessions_by_messages": "By Messages",
   "analytics_top_sessions_by_duration": "By Duration",
   "analytics_top_sessions_by_output_tokens": "By Output Tokens",
+  "analytics_top_sessions_active_duration": "Active duration",
+  "analytics_top_sessions_total_duration": "{duration} total",
   "analytics_projects_title": "Projects",
   "analytics_project_messages": [
     {

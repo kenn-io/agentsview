@@ -1922,6 +1922,66 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 		assert.Equal(t, 1.0, resp.Sessions[1].ActiveDurationMin, "idle active duration")
 	})
 
+	t.Run("ByDurationRanksByActiveDurationInGoFallback", func(t *testing.T) {
+		for i := range 201 {
+			id := fmt.Sprintf("dst-wall-%03d", i)
+			insertSession(t, d, id, "project-dst", func(s *Session) {
+				s.StartedAt = Ptr("2026-03-10T09:00:00Z")
+				s.EndedAt = Ptr("2026-03-10T11:00:00Z")
+				s.MessageCount = 3
+			})
+			insertMessages(
+				t,
+				d,
+				userMsgAt(id, 0, "noop", "2026-03-10T09:00:00Z"),
+				func() Message {
+					m := asstMsgAt(
+						id,
+						1,
+						"idle wait",
+						"2026-03-10T10:59:00Z",
+					)
+					m.HasToolUse = true
+					return m
+				}(),
+				userMsgAt(id, 2, "done", "2026-03-10T11:00:00Z"),
+			)
+		}
+
+		insertSession(t, d, "dst-actively-working", "project-dst", func(s *Session) {
+			s.StartedAt = Ptr("2026-03-10T09:30:00Z")
+			s.EndedAt = Ptr("2026-03-10T09:50:00Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("dst-actively-working", 0, "start", "2026-03-10T09:30:00Z"),
+			func() Message {
+				m := asstMsgAt(
+					"dst-actively-working",
+					1,
+					"tooling",
+					"2026-03-10T09:35:00Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("dst-actively-working", 2, "finish", "2026-03-10T09:50:00Z"),
+		)
+
+		resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
+			Project:  "project-dst",
+			From:     "2026-03-01",
+			To:       "2026-03-31",
+			Timezone: "America/New_York",
+		}, "duration")
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		require.NotEmpty(t, resp.Sessions, "sessions")
+		assert.Equal(t, "dst-actively-working", resp.Sessions[0].ID, "top session by active duration in fallback")
+		assert.Equal(t, 15.0, resp.Sessions[0].ActiveDurationMin, "fallback active duration")
+	})
+
 	t.Run("DefaultMetric", func(t *testing.T) {
 		resp, err := d.GetAnalyticsTopSessions(
 			ctx, baseFilter(), "",

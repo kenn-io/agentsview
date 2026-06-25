@@ -4481,13 +4481,18 @@ func (db *DB) getAnalyticsTopSessionsGo(
 		orderExpr = "message_count DESC, id ASC"
 	}
 
+	limitClause := " LIMIT 200"
+	if f.HasTimeFilter() || needsGoSort {
+		limitClause = ""
+	}
+
 	query := `SELECT id, ` + dateCol + `, project,
 		first_message,
 		COALESCE(display_name, session_name) AS display_name,
 		message_count, total_output_tokens,
 		started_at, ended_at, termination_status
 		FROM sessions WHERE ` + where +
-		` ORDER BY ` + orderExpr + ` LIMIT 200`
+		` ORDER BY ` + orderExpr + limitClause
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {

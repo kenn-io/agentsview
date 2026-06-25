@@ -39,8 +39,9 @@
     activeMin: number,
     totalMin: number,
   ): string {
-    const totalText = ` (${formatDuration(totalMin)} total)`;
-    return `${formatDuration(activeMin)}${totalText}`;
+    return `${formatDuration(activeMin)} (${m.analytics_top_sessions_total_duration({
+      duration: formatDuration(totalMin),
+    })})`;
   }
 
   function handleSessionClick(id: string) {
@@ -164,7 +165,7 @@
             {#if analytics.topMetric === "duration"}
               <span
                 class="session-metric-primary"
-                title="Active duration"
+                title={m.analytics_top_sessions_active_duration()}
               >
                 {formatDurationWithTotal(
                   session.active_duration_min,

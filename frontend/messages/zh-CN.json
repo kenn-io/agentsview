@@ -385,6 +385,8 @@
   "analytics_top_sessions_by_messages": "按消息数",
   "analytics_top_sessions_by_duration": "按时长",
   "analytics_top_sessions_by_output_tokens": "按输出 token",
+  "analytics_top_sessions_active_duration": "活跃时长",
+  "analytics_top_sessions_total_duration": "总计 {duration}",
   "analytics_projects_title": "项目",
   "analytics_project_messages": [
     {
