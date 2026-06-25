@@ -50,6 +50,10 @@ control.
   content, or exported data formats.
 - Prefer parameterized locale messages for dynamic sentences instead of
   assembling user-visible strings from translated fragments.
+- Count-based user-facing messages must use Paraglide plural variants instead
+  of hard-coded strings such as `{count} sessions` or `{count} calls`. Pass a
+  numeric `count` for plural selection, and pass a separate formatted label
+  such as `countLabel` when the displayed value needs locale formatting.
 - Locale selection is preference-first, not URL-as-source. Paraglide is
   configured with `["localStorage", "preferredLanguage", "baseLocale"]` because
   the frontend is an embedded SPA without localized routes.
