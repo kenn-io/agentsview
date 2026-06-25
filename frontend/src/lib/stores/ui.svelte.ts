@@ -8,7 +8,6 @@ type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream" | "skim";
 export type TranscriptMode = "normal" | "focused";
 export type PublishTarget =
-  | { kind: "session"; id: string }
   | { kind: "insight"; id: number }
   | null;
 type ModalType =
