@@ -1859,6 +1859,69 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 		}
 	})
 
+	t.Run("ByDurationRanksByActiveDuration", func(t *testing.T) {
+		insertSession(t, d, "wall-dominant", "project-gamma", func(s *Session) {
+			s.StartedAt = Ptr("2024-06-02T09:00:00Z")
+			s.EndedAt = Ptr("2024-06-02T11:00:00Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("wall-dominant", 0, "noop", "2024-06-02T09:00:00Z"),
+			func() Message {
+				m := asstMsgAt(
+					"wall-dominant",
+					1,
+					"idle wait",
+					"2024-06-02T10:59:00Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt(
+				"wall-dominant",
+				2,
+				"done",
+				"2024-06-02T11:00:00Z",
+			),
+		)
+
+		insertSession(t, d, "actively-working", "project-gamma", func(s *Session) {
+			s.StartedAt = Ptr("2024-06-02T09:30:00Z")
+			s.EndedAt = Ptr("2024-06-02T09:50:00Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("actively-working", 0, "start", "2024-06-02T09:30:00Z"),
+			func() Message {
+				m := asstMsgAt(
+					"actively-working",
+					1,
+					"tooling",
+					"2024-06-02T09:35:00Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("actively-working", 2, "finish", "2024-06-02T09:50:00Z"),
+		)
+
+		resp, err := d.GetAnalyticsTopSessions(
+			ctx, baseFilter(), "duration",
+		)
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		assert.Equal(t, "duration", resp.Metric, "Metric")
+		require.NotEmpty(t, resp.Sessions, "sessions")
+		assert.Equal(t, "actively-working", resp.Sessions[0].ID, "top session by active duration")
+		assert.Equal(t, 20.0, resp.Sessions[0].DurationMin, "active total duration")
+		assert.Equal(t, 15.0, resp.Sessions[0].ActiveDurationMin, "active duration")
+		assert.Equal(t, 120.0, resp.Sessions[1].DurationMin, "wall-only duration")
+		assert.Equal(t, 1.0, resp.Sessions[1].ActiveDurationMin, "idle active duration")
+	})
+
 	t.Run("DefaultMetric", func(t *testing.T) {
 		resp, err := d.GetAnalyticsTopSessions(
 			ctx, baseFilter(), "",

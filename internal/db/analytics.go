@@ -4333,13 +4333,14 @@ func round1(v float64) float64 {
 
 // TopSession holds summary info for a ranked session.
 type TopSession struct {
-	ID           string  `json:"id"`
-	Project      string  `json:"project"`
-	FirstMessage *string `json:"first_message"`
-	DisplayName  *string `json:"display_name,omitempty"`
-	MessageCount int     `json:"message_count"`
-	OutputTokens int     `json:"output_tokens"`
-	DurationMin  float64 `json:"duration_min"`
+	ID                string  `json:"id"`
+	Project           string  `json:"project"`
+	FirstMessage      *string `json:"first_message"`
+	DisplayName       *string `json:"display_name,omitempty"`
+	MessageCount      int     `json:"message_count"`
+	OutputTokens      int     `json:"output_tokens"`
+	DurationMin       float64 `json:"duration_min"`
+	ActiveDurationMin float64 `json:"active_duration_min"`
 	// StartedAt and EndedAt are included so the frontend can
 	// derive a recency-based status tier — the StatusDot in the
 	// Top Sessions column needs the same time window inputs as
@@ -4372,14 +4373,34 @@ func (db *DB) GetAnalyticsTopSessions(
 
 	durationExpr := `ROUND((julianday(ended_at) -
 		julianday(started_at)) * 1440, 1)`
+	activeDurationExpr := `
+		ROUND((
+			SELECT COALESCE(SUM(
+				CASE
+					WHEN inner2.has_tool_use = 0 OR inner2.delta_ms <= 0 THEN NULL
+					ELSE inner2.delta_ms
+				END), 0) / 60000.0
+			FROM (
+				SELECT CAST(
+				  ROUND(
+					(julianday(COALESCE(LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal),
+					  sessions.ended_at)) - julianday(m2.timestamp)) * 86400000
+					) AS INTEGER
+				) AS delta_ms,
+				m2.has_tool_use
+			FROM messages m2
+				WHERE m2.session_id = sessions.id
+			) inner2), 1)`
 	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
+	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
+	needsGoSort := metric == "duration"
 	var orderExpr string
 	switch metric {
 	case "output_tokens":
 		where += " AND has_total_output_tokens = TRUE"
 		orderExpr = "total_output_tokens DESC, id ASC"
 	case "duration":
-		orderExpr = durationExpr + " DESC, id ASC"
+		orderExpr = activeDurationSelectExpr + " DESC, id ASC"
 		where += " AND NULLIF(started_at, '') IS NOT NULL" +
 			" AND NULLIF(ended_at, '') IS NOT NULL" +
 			" AND julianday(ended_at) >= julianday(started_at)"
@@ -4391,6 +4412,7 @@ func (db *DB) GetAnalyticsTopSessions(
 	query := `SELECT id, project, first_message,
 		COALESCE(display_name, session_name) AS display_name,
 		message_count, total_output_tokens, ` + durationSelectExpr + `,
+		` + activeDurationSelectExpr + `,
 		started_at, ended_at, termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + ` LIMIT 10`
@@ -4409,6 +4431,7 @@ func (db *DB) GetAnalyticsTopSessions(
 			&row.ID, &row.Project, &row.FirstMessage,
 			&row.DisplayName, &row.MessageCount,
 			&row.OutputTokens, &row.DurationMin,
+			&row.ActiveDurationMin,
 			&row.StartedAt, &row.EndedAt,
 			&row.TerminationStatus,
 		); err != nil {
@@ -4421,6 +4444,8 @@ func (db *DB) GetAnalyticsTopSessions(
 		return TopSessionsResponse{},
 			fmt.Errorf("iterating top sessions: %w", err)
 	}
+	sessions := rankTopSessions(resp.Sessions, needsGoSort)
+	resp.Sessions = sessions
 	return resp, nil
 }
 
@@ -4441,6 +4466,7 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	}
 
 	var orderExpr string
+	needsGoSort := metric == "duration"
 	switch metric {
 	case "output_tokens":
 		where += " AND has_total_output_tokens = TRUE"
@@ -4484,6 +4510,17 @@ func (db *DB) getAnalyticsTopSessionsGo(
 			return TopSessionsResponse{},
 				fmt.Errorf("scanning top session: %w", err)
 		}
+		var activeDurationMin float64
+		if metric == "duration" {
+			var err error
+			activeDurationMin, err = db.activeDurationMinForSession(
+				ctx, id,
+			)
+			if err != nil {
+				return TopSessionsResponse{},
+					fmt.Errorf("querying top session active duration: %w", err)
+			}
+		}
 		date := localDate(ts, loc)
 		if !inDateRange(date, f.From, f.To) {
 			continue
@@ -4508,6 +4545,7 @@ func (db *DB) getAnalyticsTopSessionsGo(
 			MessageCount:      mc,
 			OutputTokens:      outputTokens,
 			DurationMin:       durMin,
+			ActiveDurationMin: activeDurationMin,
 			StartedAt:         startedAt,
 			EndedAt:           endedAt,
 			TerminationStatus: termStatus,
@@ -4521,6 +4559,7 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	if sessions == nil {
 		sessions = []TopSession{}
 	}
+	sessions = rankTopSessions(sessions, needsGoSort)
 	if len(sessions) > 10 {
 		sessions = sessions[:10]
 	}
@@ -4529,4 +4568,24 @@ func (db *DB) getAnalyticsTopSessionsGo(
 		Metric:   metric,
 		Sessions: sessions,
 	}, nil
+}
+
+func rankTopSessions(sessions []TopSession, needsGoSort bool) []TopSession {
+	if sessions == nil {
+		return []TopSession{}
+	}
+	if needsGoSort && len(sessions) > 1 {
+		sort.SliceStable(sessions, func(i, j int) bool {
+			if sessions[i].ActiveDurationMin != sessions[j].ActiveDurationMin {
+				return sessions[i].ActiveDurationMin >
+					sessions[j].ActiveDurationMin
+			}
+			return sessions[i].ID < sessions[j].ID
+		})
+	}
+	for i := range sessions {
+		sessions[i].DurationMin = round1(sessions[i].DurationMin)
+		sessions[i].ActiveDurationMin = round1(sessions[i].ActiveDurationMin)
+	}
+	return sessions
 }

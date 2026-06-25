@@ -2219,6 +2219,28 @@ func (s *Store) GetAnalyticsTopSessions(
 		message_count, total_output_tokens,
 		EXTRACT(EPOCH FROM ended_at - started_at)
 			AS duration_sec,
+		COALESCE(
+		  (
+			SELECT COALESCE(SUM(
+				CASE
+					WHEN inner2.has_tool_use AND inner2.delta_ms > 0
+						THEN inner2.delta_ms
+					ELSE NULL
+				END), 0) / 60.0
+			FROM (
+				SELECT CAST(
+					(round(EXTRACT(EPOCH FROM (
+						COALESCE(
+							LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal),
+							sessions.ended_at
+						) - m2.timestamp
+					)) * 1000) AS BIGINT
+				) AS delta_ms,
+				m2.has_tool_use
+				FROM messages m2
+				WHERE m2.session_id = sessions.id
+			) inner2
+		), 0) AS active_duration_min,
 		started_at, ended_at,
 		termination_status
 		FROM sessions WHERE ` + where +
@@ -2242,11 +2264,11 @@ func (s *Store) GetAnalyticsTopSessions(
 		var startedAt, endedAt *time.Time
 		var firstMsg, displayName, termStatus *string
 		var mc, outputTokens int
-		var durationSec *float64
+		var durationSec, activeDurationMin float64
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
 			&displayName, &mc, &outputTokens,
-			&durationSec, &startedAt, &endedAt,
+			&durationSec, &activeDurationMin, &startedAt, &endedAt,
 			&termStatus,
 		); err != nil {
 			return db.TopSessionsResponse{},
@@ -2261,12 +2283,7 @@ func (s *Store) GetAnalyticsTopSessions(
 		if timeIDs != nil && !timeIDs[id] {
 			continue
 		}
-		durMin := 0.0
-		if durationSec != nil {
-			durMin = *durationSec / 60.0
-		} else if needsGoSort {
-			continue
-		}
+		durMin := durationSec / 60.0
 		var startedStr, endedStr *string
 		if startedAt != nil {
 			s := FormatISO8601(*startedAt)
@@ -2284,6 +2301,7 @@ func (s *Store) GetAnalyticsTopSessions(
 			MessageCount:      mc,
 			OutputTokens:      outputTokens,
 			DurationMin:       durMin,
+			ActiveDurationMin: activeDurationMin,
 			StartedAt:         startedStr,
 			EndedAt:           endedStr,
 			TerminationStatus: termStatus,
@@ -2629,8 +2647,8 @@ func (s *Store) populateFrustrationMarkers(
 	})
 }
 
-// rankTopSessions sorts sessions by duration (if
-// needsGoSort), truncates to top 10, and rounds DurationMin.
+// rankTopSessions sorts sessions by active duration (if
+// needsGoSort), truncates to top 10, and rounds duration fields.
 func rankTopSessions(
 	sessions []db.TopSession, needsGoSort bool,
 ) []db.TopSession {
@@ -2639,10 +2657,10 @@ func rankTopSessions(
 	}
 	if needsGoSort && len(sessions) > 1 {
 		sort.SliceStable(sessions, func(i, j int) bool {
-			if sessions[i].DurationMin !=
-				sessions[j].DurationMin {
-				return sessions[i].DurationMin >
-					sessions[j].DurationMin
+			if sessions[i].ActiveDurationMin !=
+				sessions[j].ActiveDurationMin {
+				return sessions[i].ActiveDurationMin >
+					sessions[j].ActiveDurationMin
 			}
 			return sessions[i].ID < sessions[j].ID
 		})
@@ -2653,6 +2671,8 @@ func rankTopSessions(
 	for i := range sessions {
 		sessions[i].DurationMin = math.Round(
 			sessions[i].DurationMin*10) / 10
+		sessions[i].ActiveDurationMin = math.Round(
+			sessions[i].ActiveDurationMin*10) / 10
 	}
 	return sessions
 }

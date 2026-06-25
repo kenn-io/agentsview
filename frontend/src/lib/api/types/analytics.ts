@@ -139,6 +139,7 @@ export interface TopSession {
   message_count: number;
   output_tokens: number;
   duration_min: number;
+  active_duration_min: number;
   /** ISO timestamps used by the StatusDot component to compute
    * the active/stale/unclean tier — the column needs the same
    * recency inputs as the sidebar list. */

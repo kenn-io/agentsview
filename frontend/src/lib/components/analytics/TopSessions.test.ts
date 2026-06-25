@@ -67,6 +67,7 @@ describe("TopSessions", () => {
           message_count: 10,
           output_tokens: 0,
           duration_min: 5,
+          active_duration_min: 5,
         },
       ],
     };
@@ -184,6 +185,7 @@ describe("TopSessions", () => {
           message_count: 10,
           output_tokens: 0,
           duration_min: 5,
+          active_duration_min: 5,
         },
       ],
     };
@@ -208,6 +210,44 @@ describe("TopSessions", () => {
     unmount(component);
   });
 
+  it("shows active duration as primary with total duration context", async () => {
+    // @ts-ignore — topMetric is a reactive store field
+    analytics.topMetric = "duration";
+    analytics.topSessions = {
+      metric: "duration",
+      sessions: [
+        {
+          id: "sess-1",
+          project: "proj",
+          first_message: "hello",
+          message_count: 10,
+          output_tokens: 0,
+          duration_min: 120,
+          active_duration_min: 2.5,
+        },
+      ],
+    };
+    // @ts-ignore — loading is reactive state
+    analytics.loading = {
+      ...analytics.loading,
+      topSessions: false,
+    };
+    // @ts-ignore
+    analytics.errors = {
+      ...analytics.errors,
+      topSessions: null,
+    };
+
+    const component = mount(TopSessions, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector(".session-metric")?.textContent?.trim(),
+    ).toBe("3m (2h total)");
+
+    unmount(component);
+  });
+
   describe("status column", () => {
     function mountWithFourStates() {
       analytics.topSessions = {
@@ -220,6 +260,7 @@ describe("TopSessions", () => {
             message_count: 1,
             output_tokens: 0,
             duration_min: 0,
+            active_duration_min: 0,
             termination_status: "clean",
           },
           {
@@ -229,6 +270,7 @@ describe("TopSessions", () => {
             message_count: 1,
             output_tokens: 0,
             duration_min: 0,
+            active_duration_min: 0,
             termination_status: "tool_call_pending",
           },
           {
@@ -238,6 +280,7 @@ describe("TopSessions", () => {
             message_count: 1,
             output_tokens: 0,
             duration_min: 0,
+            active_duration_min: 0,
             termination_status: "truncated",
           },
           {
@@ -247,6 +290,7 @@ describe("TopSessions", () => {
             message_count: 1,
             output_tokens: 0,
             duration_min: 0,
+            active_duration_min: 0,
             termination_status: null,
           },
         ],
@@ -323,6 +367,7 @@ describe("TopSessions", () => {
             message_count: 1,
             output_tokens: 0,
             duration_min: 0,
+            active_duration_min: 0,
             termination_status: "clean",
           },
         ],

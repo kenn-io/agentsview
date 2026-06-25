@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -228,6 +229,27 @@ func (db *DB) queryCallRows(
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+func activeDurationMinFromTurns(turns []TurnRow) float64 {
+	var totalMs int64
+	for _, t := range turns {
+		if !t.HasToolUse || t.DurationMs == nil || *t.DurationMs <= 0 {
+			continue
+		}
+		totalMs += *t.DurationMs
+	}
+	return math.Round(float64(totalMs)/6000) / 10
+}
+
+func (db *DB) activeDurationMinForSession(
+	ctx context.Context, sessionID string,
+) (float64, error) {
+	turns, err := db.queryTurnRows(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return activeDurationMinFromTurns(turns), nil
 }
 
 // AssembleTiming stitches scanned per-turn and per-call rows plus
