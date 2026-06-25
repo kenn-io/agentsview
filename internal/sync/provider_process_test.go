@@ -246,6 +246,7 @@ func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
 	assert.True(t, res.forceReplace)
 	assert.Equal(t, fingerprint.MTimeNS, res.mtime)
 	assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+	require.Len(t, provider.findRequests, 1)
 	assert.True(t, provider.findRequests[0].RequireFreshSource)
 	assert.Equal(t, sourcePath, provider.findRequests[0].StoredFilePath)
 	assert.Equal(t, parser.AgentCowork, res.results[0].Session.Agent)
