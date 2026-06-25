@@ -453,6 +453,36 @@ func TestHermesProviderFindSourceDoesNotReturnStateDBForMissingRawID(t *testing.
 	assert.Empty(t, source)
 }
 
+func TestHermesProviderFindSourceFallsBackToTranscriptWhenStateDBUnreadable(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+
+	// A present-but-unreadable state.db: hermesStateDBHasSession opens it
+	// lazily, then errors on the first query because the bytes are not a
+	// SQLite database. parseArchive logs and falls back to transcripts in this
+	// case, so FindSource must do the same rather than aborting the lookup.
+	stateDB := filepath.Join(root, "state.db")
+	writeSourceFile(t, stateDB, "not a sqlite database")
+
+	transcriptPath := filepath.Join(sessionsDir, "freshchild.jsonl")
+	writeSourceFile(t, transcriptPath, hermesProviderJSONLFixture("transcript question"))
+
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "freshchild",
+	})
+
+	require.NoError(t, err, "unreadable state.db must not abort transcript lookup")
+	require.True(t, ok, "valid transcript next to a bad state.db must be found")
+	assert.Equal(t, transcriptPath, source.DisplayPath)
+}
+
 func hermesProviderJSONLFixture(firstMessage string) string {
 	return `{"role":"session_meta","platform":"cli","timestamp":"2026-05-14T10:00:00.000000"}` + "\n" +
 		`{"role":"user","content":"` + firstMessage + `","timestamp":"2026-05-14T10:01:00.000000"}` + "\n" +
