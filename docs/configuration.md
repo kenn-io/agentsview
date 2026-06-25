@@ -109,12 +109,14 @@ ID values are default filters; pass `--email` or `--user-id` to
 ## Session Discovery
 
 AgentsView auto-discovers session files from the following agent
-sources:
+sources. Amp support is deprecated because current Amp releases may keep full
+threads server-side and leave only local stubs; historical local Amp thread
+JSON files can still be parsed.
 
 | Agent | Default Directory | File Format |
 |-------|-------------------|-------------|
 | Aider | No default; opt in with `AIDER_DIR` or `aider_dirs` | `.aider.chat.history.md` Markdown history files |
-| Amp | `~/.local/share/amp/threads/` | JSON per thread |
+| Amp (deprecated) | `~/.local/share/amp/threads/` | Historical local JSON thread files |
 | Antigravity (IDE) | `~/.gemini/antigravity/` | SQLite database per session |
 | Antigravity CLI | `~/.gemini/antigravity-cli/` | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl` |
 | Claude Code | `~/.claude/projects/` | JSONL per session |
@@ -307,7 +309,7 @@ default discovery root:
 
 ```bash
 export AIDER_DIR=~/code
-export AMP_DIR=~/custom/amp
+export AMP_DIR=~/custom/amp # historical local Amp threads only
 export ANTIGRAVITY_DIR=~/custom/antigravity
 export ANTIGRAVITY_CLI_DIR=~/custom/antigravity-cli
 export CLAUDE_PROJECTS_DIR=~/custom/claude

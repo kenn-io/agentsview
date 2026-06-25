@@ -211,7 +211,7 @@ default discovery root, so set `AIDER_DIR` to opt into scanning Aider logs:
 
 ```bash
 export AIDER_DIR=~/code
-export AMP_DIR=~/custom/amp/threads
+export AMP_DIR=~/custom/amp/threads # historical local Amp threads only
 export ANTIGRAVITY_DIR=~/custom/antigravity
 export ANTIGRAVITY_CLI_DIR=~/custom/antigravity-cli
 export CLAUDE_PROJECTS_DIR=~/custom/claude/projects

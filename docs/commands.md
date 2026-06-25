@@ -845,7 +845,7 @@ agentsview help
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AIDER_DIR` | unset | Aider discovery root; set this to opt into scanning a code root |
-| `AMP_DIR` | `~/.local/share/amp/threads` | Amp threads directory |
+| `AMP_DIR` | `~/.local/share/amp/threads` | Deprecated; historical local Amp thread JSON files only |
 | `ANTIGRAVITY_DIR` | `~/.gemini/antigravity` | Google Antigravity IDE sessions directory |
 | `ANTIGRAVITY_CLI_DIR` | `~/.gemini/antigravity-cli` | Google Antigravity CLI sessions directory |
 | `ANTIGRAVITY_KEY` | | Optional key for decrypting Antigravity CLI `.pb` transcripts (defaults to summary mode without it) |

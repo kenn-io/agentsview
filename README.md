@@ -285,12 +285,15 @@ agentsview stats --include-git-outcomes
 ## Supported Agents
 
 agentsview discovers sessions from all of these. Aider is opt-in because it has
-no central session directory; set `AIDER_DIR` or `aider_dirs` to enable it.
+no central session directory; set `AIDER_DIR` or `aider_dirs` to enable it. Amp
+support is deprecated because current Amp releases may store threads server-side
+and leave only local stubs; agentsview can still parse historical local Amp
+thread JSON files.
 
 | Agent                 | Session Directory                                                                                                                                                       |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Aider                 | `<repo>/.aider.chat.history.md` (per repo; opt in with `AIDER_DIR` or `aider_dirs`)                                                                                     |
-| Amp                   | `~/.local/share/amp/threads/`                                                                                                                                           |
+| Amp (deprecated)      | `~/.local/share/amp/threads/` (historical local thread JSON only)                                                                                                       |
 | Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                           |
 | Claude Code           | `~/.claude/projects/`                                                                                                                                                   |
