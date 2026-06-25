@@ -531,7 +531,7 @@ func jsonlMissingPathFallbackAllowed(req ChangedPathRequest) bool {
 
 func (s JSONLSourceSet) pathAllowedByRoot(root, path string) bool {
 	if s.options.Recursive {
-		return pathIsUnderRoot(path, root)
+		return pathUnderRoot(root, path)
 	}
 	return samePath(filepath.Dir(path), root)
 }
@@ -757,12 +757,6 @@ func callPathFunc(fn func(root, path string) string, root, path string) string {
 		return ""
 	}
 	return fn(root, path)
-}
-
-func pathIsUnderRoot(path, root string) bool {
-	rel, err := filepath.Rel(root, path)
-	return err == nil && rel != "." && rel != ".." &&
-		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func samePath(a, b string) bool {
