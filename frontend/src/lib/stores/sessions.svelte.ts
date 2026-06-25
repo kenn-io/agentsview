@@ -33,6 +33,7 @@ const SESSION_PAGE_SIZE = 500;
 const SIDEBAR_HYDRATION_CONCURRENCY = 6;
 const LIVE_REFRESH_DEBOUNCE_MS = 300;
 const SAFETY_NET_REFRESH_MS = 5 * 60 * 1000;
+const RECENTLY_DELETED_TTL_MS = 10_000;
 
 export interface SessionGroupInput {
   id: string;
@@ -1045,14 +1046,18 @@ class SessionsStore {
   recentlyDeleted: RecentlyDeletedSessions[] = $state([]);
   private recentlyDeletedNextKey = 0;
 
-  private addRecentlyDeleted(ids: string[]) {
-    if (ids.length === 0) return;
-    const key = this.recentlyDeletedNextKey++;
-    const timer = setTimeout(() => {
+  private newRecentlyDeletedTimer(key: number) {
+    return setTimeout(() => {
       this.recentlyDeleted = this.recentlyDeleted.filter(
         (d) => d.key !== key,
       );
-    }, 10_000);
+    }, RECENTLY_DELETED_TTL_MS);
+  }
+
+  private addRecentlyDeleted(ids: string[]) {
+    if (ids.length === 0) return;
+    const key = this.recentlyDeletedNextKey++;
+    const timer = this.newRecentlyDeletedTimer(key);
     this.recentlyDeleted = [
       ...this.recentlyDeleted,
       { key, ids: [...ids], timer },
@@ -1138,6 +1143,7 @@ class SessionsStore {
     const ids = [...deleted.ids];
     if (ids.length === 0) return;
     configureGeneratedClient();
+    clearTimeout(deleted.timer);
     const failed: string[] = [];
     for (const id of ids) {
       try {
@@ -1206,7 +1212,13 @@ class SessionsStore {
         clearTimeout(d.timer);
         return [];
       }
-      return [{ ...d, ids: [...ids] }];
+      return [
+        {
+          ...d,
+          ids: [...ids],
+          timer: this.newRecentlyDeletedTimer(d.key),
+        },
+      ];
     });
   }
 

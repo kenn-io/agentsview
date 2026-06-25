@@ -887,6 +887,42 @@ describe("SessionsStore", () => {
 
       sessions.clearRecentlyDeleted();
     });
+
+    it("keeps failed ids retryable if the original timer expires during batch undo", async () => {
+      vi.useFakeTimers();
+      try {
+        const timer = setTimeout(() => {
+          sessions.recentlyDeleted = sessions.recentlyDeleted.filter(
+            (d) => d.key !== 1,
+          );
+        }, 10_000);
+        sessions.recentlyDeleted = [
+          { key: 1, ids: ["restore-a"], timer },
+        ];
+        vi.mocked((api as any).restoreSession).mockImplementation(
+          async () => {
+            vi.advanceTimersByTime(10_000);
+            throw new Error("restore failed");
+          },
+        );
+        mockSidebarIndex([makeSkinnyRow({ id: "restore-a" })]);
+
+        await expect(
+          sessions.restoreRecentlyDeleted(sessions.recentlyDeleted[0]!),
+        ).rejects.toThrow("Failed to restore 1 session");
+
+        expect(sessions.recentlyDeleted).toHaveLength(1);
+        expect(sessions.recentlyDeleted[0]!.ids).toEqual(["restore-a"]);
+
+        vi.advanceTimersByTime(9_999);
+        expect(sessions.recentlyDeleted).toHaveLength(1);
+
+        vi.advanceTimersByTime(1);
+        expect(sessions.recentlyDeleted).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("parseFiltersFromParams", () => {
