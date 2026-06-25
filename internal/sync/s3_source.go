@@ -120,6 +120,7 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(
 type s3CodexIndexSnapshot struct {
 	mtime        int64
 	statOK       bool
+	missing      bool
 	titles       map[string]string
 	titlesLoaded bool
 }
@@ -143,6 +144,13 @@ func (e *Engine) s3CodexIndexSnapshot(
 	if !ok {
 		obj, err := statS3Object(indexURI)
 		if err != nil {
+			if isMissingS3Object(err) {
+				snapshot = s3CodexIndexSnapshot{
+					statOK:       true,
+					missing:      true,
+					titlesLoaded: true,
+				}
+			}
 			e.s3CodexIndexCache[indexURI] = snapshot
 			return snapshot
 		}
@@ -153,11 +161,16 @@ func (e *Engine) s3CodexIndexSnapshot(
 		e.s3CodexIndexCache[indexURI] = snapshot
 	}
 
-	if needTitles && snapshot.statOK && !snapshot.titlesLoaded {
+	if needTitles && snapshot.statOK && !snapshot.missing &&
+		!snapshot.titlesLoaded {
 		titles, err := fetchS3CodexSessionIndexTitles(indexURI)
 		snapshot.titlesLoaded = err == nil
 		if err == nil {
 			snapshot.titles = titles
+		} else if isMissingS3Object(err) {
+			snapshot.missing = true
+			snapshot.titlesLoaded = true
+			snapshot.titles = nil
 		}
 		e.s3CodexIndexCache[indexURI] = snapshot
 	}
@@ -177,10 +190,25 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 	if !ok {
 		return false
 	}
-	snapshot := e.s3CodexIndexSnapshot(indexURI, true)
-	if !snapshot.statOK || !snapshot.titlesLoaded || snapshot.mtime < cutoffNs {
+	snapshot := e.s3CodexIndexSnapshot(indexURI, false)
+	if !snapshot.statOK {
 		return false
 	}
+	if snapshot.missing {
+		return e.s3CodexStoredNameDiffers(file, uuid, "")
+	}
+	if snapshot.mtime < cutoffNs {
+		return false
+	}
+
+	snapshot = e.s3CodexIndexSnapshot(indexURI, true)
+	if snapshot.missing {
+		return e.s3CodexStoredNameDiffers(file, uuid, "")
+	}
+	if !snapshot.titlesLoaded {
+		return false
+	}
+
 	title := snapshot.titles[uuid]
 	return e.s3CodexStoredNameDiffers(file, uuid, title)
 }
@@ -193,6 +221,9 @@ func (e *Engine) s3CodexIndexSessionNameChanged(
 		return false
 	}
 	snapshot := e.s3CodexIndexSnapshot(indexURI, true)
+	if snapshot.missing {
+		return e.s3CodexStoredNameDiffers(file, uuid, "")
+	}
 	if !snapshot.statOK || !snapshot.titlesLoaded {
 		return false
 	}
