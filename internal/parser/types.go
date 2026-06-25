@@ -441,10 +441,8 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{
 			".snowflake/cortex/conversations",
 		},
-		IDPrefix:       "cortex:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverCortexSessions,
-		FindSourceFunc: FindCortexSourceFile,
+		IDPrefix:  "cortex:",
+		FileBased: true,
 	},
 	{
 		Type:           AgentHermes,
