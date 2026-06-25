@@ -11,12 +11,14 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"go.kenn.io/agentsview/internal/config"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func newMCPCommand() *cobra.Command {
@@ -32,9 +34,10 @@ recorded agent sessions: search_sessions, list_sessions,
 get_session_overview, get_messages, search_content, and
 get_usage_summary.
 
-The server reads through the same path as the CLI: it talks to a running
-agentsview daemon over HTTP when one is discoverable (or --server/--pg),
-and otherwise opens the local SQLite archive read-only.
+The server reads through the daemon path. By default each tool call talks to
+the local agentsview daemon, starting it when needed so a long-lived MCP server
+can recover after the daemon exits due to idleness. Use --server to target an
+explicit daemon URL.
 
 Add to your MCP client config (e.g. Claude Desktop):
   {
@@ -49,7 +52,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			svc, cleanup, err := resolveService(cmd)
+			svc, cleanup, err := resolveMCPService(cmd)
 			if err != nil {
 				return err
 			}
@@ -115,15 +118,204 @@ Add to your MCP client config (e.g. Claude Desktop):
 			"every request. Only expose it on trusted networks (Tailscale, "+
 			"VPN-only) or behind an authenticating reverse proxy.")
 
-	// Transport-selection flags, mirroring the `session` command, so the
-	// MCP server can target a remote daemon or PostgreSQL read store.
+	// Transport-selection flags, mirroring the `session` command where
+	// applicable. MCP requires a daemon-backed service, so --pg is
+	// retained only to produce a specific error instead of silently
+	// opening PostgreSQL directly.
 	cmd.Flags().String("server", "", "Remote daemon URL")
 	cmd.Flags().String("server-token-file", "",
 		"File containing bearer token for explicit --server requests")
 	cmd.Flags().Bool("pg", false,
-		"Read session data from configured PostgreSQL")
+		"Unsupported for MCP; run pg serve and use --server instead")
 
 	return cmd
+}
+
+// resolveMCPService constructs the SessionService used by the long-lived
+// MCP server. The implicit local path is intentionally daemon-only and
+// lazy: every operation re-resolves the daemon transport so a tool call can
+// wake the daemon after it exits due to idleness.
+func resolveMCPService(
+	cmd *cobra.Command,
+) (service.SessionService, func(), error) {
+	remote, _ := cmd.Flags().GetString("server")
+	if remote != "" {
+		if pgReadRequested(cmd) {
+			return nil, nil, errors.New(
+				"--server and --pg are mutually exclusive",
+			)
+		}
+		token, err := explicitServerToken(cmd)
+		if err != nil {
+			return nil, nil, err
+		}
+		return service.NewHTTPBackend(remote, token, false),
+			func() {}, nil
+	}
+	if pgReadRequested(cmd) {
+		return nil, nil, errors.New(
+			"agentsview mcp requires a daemon; --pg opens PostgreSQL " +
+				"directly. Run 'agentsview pg serve' and pass --server, " +
+				"or omit --pg to use the local daemon",
+		)
+	}
+	cfg, err := config.LoadPFlags(cmd.Flags())
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading config: %w", err)
+	}
+	return newMCPDaemonService(cfg), func() {}, nil
+}
+
+type mcpDaemonService struct {
+	mu  sync.Mutex
+	cfg config.Config
+}
+
+func newMCPDaemonService(cfg config.Config) service.SessionService {
+	return &mcpDaemonService{cfg: cfg}
+}
+
+func (s *mcpDaemonService) daemonService(
+	ctx context.Context,
+) (service.SessionService, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cfg := s.cfg
+	tr, err := ensureTransportContext(
+		ctx, &cfg, transportIntentArchiveWrite, 0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if tr.Mode != transportHTTP {
+		return nil, errors.New(
+			"agentsview mcp requires a daemon; refusing direct archive access",
+		)
+	}
+	s.cfg.AuthToken = cfg.AuthToken
+	return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly), nil
+}
+
+func (s *mcpDaemonService) Get(
+	ctx context.Context, id string,
+) (*service.SessionDetail, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.Get(ctx, id)
+}
+
+func (s *mcpDaemonService) List(
+	ctx context.Context, f service.ListFilter,
+) (*service.SessionList, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.List(ctx, f)
+}
+
+func (s *mcpDaemonService) Messages(
+	ctx context.Context, id string, f service.MessageFilter,
+) (*service.MessageList, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.Messages(ctx, id, f)
+}
+
+func (s *mcpDaemonService) ToolCalls(
+	ctx context.Context, id string,
+) (*service.ToolCallList, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ToolCalls(ctx, id)
+}
+
+func (s *mcpDaemonService) Sync(
+	ctx context.Context, in service.SyncInput,
+) (*service.SessionDetail, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.Sync(ctx, in)
+}
+
+func (s *mcpDaemonService) Watch(
+	ctx context.Context, id string,
+) (<-chan service.Event, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.Watch(ctx, id)
+}
+
+func (s *mcpDaemonService) Stats(
+	ctx context.Context, f service.StatsFilter,
+) (*service.SessionStats, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.Stats(ctx, f)
+}
+
+func (s *mcpDaemonService) Search(
+	ctx context.Context, req service.SearchRequest,
+) (*service.SessionSearchResult, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.Search(ctx, req)
+}
+
+func (s *mcpDaemonService) SearchContent(
+	ctx context.Context, req service.ContentSearchRequest,
+) (*service.ContentSearchResult, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.SearchContent(ctx, req)
+}
+
+func (s *mcpDaemonService) UsageSummary(
+	ctx context.Context, req service.UsageRequest,
+) (*service.UsageSummaryResult, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.UsageSummary(ctx, req)
+}
+
+func (s *mcpDaemonService) ListSecrets(
+	ctx context.Context, f service.SecretListFilter,
+) (*service.SecretFindingList, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ListSecrets(ctx, f)
+}
+
+func (s *mcpDaemonService) ScanSecrets(
+	ctx context.Context, in service.SecretScanInput,
+	progress func(service.SecretScanProgress),
+) (*service.SecretScanSummary, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ScanSecrets(ctx, in, progress)
 }
 
 // mcpListenerAuth decides the bearer token the MCP HTTP listener must

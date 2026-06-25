@@ -1,10 +1,22 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestNormalizeMCPHTTPAddr(t *testing.T) {
@@ -103,4 +115,64 @@ func TestRootCommand_RegistersMCP(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "root command should register the mcp subcommand")
+}
+
+func TestResolveMCPServiceRejectsPG(t *testing.T) {
+	t.Parallel()
+	cmd := newMCPCommand()
+	cmd.SetArgs([]string{"--pg"})
+	require.NoError(t, cmd.ParseFlags([]string{"--pg"}))
+
+	svc, cleanup, err := resolveMCPService(cmd)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--pg")
+	assert.Nil(t, svc)
+	assert.Nil(t, cleanup)
+}
+
+func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{
+		DataDir: dataDir,
+		DBPath:  filepath.Join(dataDir, "sessions.db"),
+	}
+	var starts int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/sessions", r.URL.Path)
+		assert.Equal(t, "7", r.URL.Query().Get("limit"))
+		_ = json.NewEncoder(w).Encode(service.SessionList{
+			Sessions: []db.Session{{ID: "from-daemon", Agent: "codex"}},
+			Total:    1,
+		})
+	}))
+	t.Cleanup(ts.Close)
+	host, port := splitTestServerURL(t, ts.URL)
+	stubStartBackgroundServeForTransport(t, func(
+		context.Context, *config.Config, time.Duration,
+	) (*DaemonRuntime, error) {
+		starts++
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+
+	svc := newMCPDaemonService(cfg)
+	for range 2 {
+		res, err := svc.List(context.Background(), service.ListFilter{Limit: 7})
+		require.NoError(t, err)
+		require.Len(t, res.Sessions, 1)
+		assert.Equal(t, "from-daemon", res.Sessions[0].ID)
+	}
+	assert.Equal(t, 2, starts)
+	assert.NoFileExists(t, cfg.DBPath)
+}
+
+func splitTestServerURL(t *testing.T, raw string) (string, int) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, raw, nil)
+	require.NoError(t, err)
+	host, portText, err := net.SplitHostPort(req.URL.Host)
+	require.NoError(t, err)
+	var port int
+	_, err = fmt.Sscanf(portText, "%d", &port)
+	require.NoError(t, err)
+	return host, port
 }
