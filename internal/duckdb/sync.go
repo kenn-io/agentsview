@@ -524,16 +524,25 @@ func (s *Sync) sessionFingerprints(
 		if err != nil {
 			return nil, fmt.Errorf("pin fingerprint %s: %w", sess.ID, err)
 		}
+		// file_path and call_index are json:"-" on ToolCall, so the
+		// marshaled Messages do not cover them. Fold in the tool-call
+		// fingerprint so a file_path-only backfill invalidates the mirror.
+		toolCalls, err := s.local.ToolCallFingerprint(sess.ID)
+		if err != nil {
+			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
+		}
 		payload := struct {
 			SessionFields  []any
 			Messages       []db.Message
 			Usage          string
+			ToolCalls      string
 			SecretFindings []db.SecretFinding
 			Pins           []db.PinnedMessage
 		}{
 			SessionFields:  duckSessionFingerprintFields(sess, s.machine),
 			Messages:       msgs,
 			Usage:          usage[sess.ID],
+			ToolCalls:      toolCalls,
 			SecretFindings: findings,
 			Pins:           pins,
 		}

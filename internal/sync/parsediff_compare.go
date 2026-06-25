@@ -566,9 +566,10 @@ func toolCallParseDiffFingerprintTwin(msgs []db.Message) string {
 			tu := db.SanitizeUTF8(tc.ToolUseID)
 			skill := db.SanitizeUTF8(tc.SkillName)
 			sub := db.SanitizeUTF8(tc.SubagentSessionID)
+			fp := db.SanitizeUTF8(tc.FilePath)
 			sum := sha256.Sum256([]byte(db.SanitizeUTF8(tc.InputJSON)))
 			fmt.Fprintf(&b,
-				"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d;",
+				"%d|%d:%s|%d:%s|%d:%s|%x|%d:%s|%d:%s|%d|%d:%s;",
 				m.Ordinal,
 				len(toolName), toolName,
 				len(category), category,
@@ -577,6 +578,7 @@ func toolCallParseDiffFingerprintTwin(msgs []db.Message) string {
 				len(skill), skill,
 				len(sub), sub,
 				tc.ResultContentLength,
+				len(fp), fp,
 			)
 		}
 	}
@@ -901,6 +903,11 @@ func toolCallDiff(stored, parsed db.ToolCall) string {
 		return fmt.Sprintf(
 			"result_content_length %d -> %d",
 			stored.ResultContentLength, parsed.ResultContentLength,
+		)
+	case db.SanitizeUTF8(stored.FilePath) !=
+		db.SanitizeUTF8(parsed.FilePath):
+		return fmt.Sprintf(
+			"file_path %q -> %q", stored.FilePath, parsed.FilePath,
 		)
 	default:
 		return ""

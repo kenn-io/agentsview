@@ -3950,3 +3950,22 @@ func TestWriteIncrementalKeepsPlausibleEndedAt(t *testing.T) {
 		"plausible appended ended_at must update the column: got %q want %s",
 		*after.EndedAt, newEnd.Format(time.RFC3339Nano))
 }
+
+func TestConvertToolCallsFilePathAndCallIndex(t *testing.T) {
+	parsed := []parser.ParsedToolCall{
+		{ToolName: "Edit", Category: "Edit", ToolUseID: "a",
+			InputJSON: `{"file_path":"/x.go"}`}, // resolved from JSON
+		{ToolName: "Write", Category: "Write", ToolUseID: "b",
+			InputJSON: "raw diff not json", FilePath: "/native.go"}, // native wins
+		{ToolName: "Bash", Category: "Bash", ToolUseID: "c",
+			InputJSON: `{"command":"ls"}`}, // no path
+	}
+	got := convertToolCalls("sess-1", parsed)
+	require.Len(t, got, 3)
+	assert.Equal(t, "/x.go", got[0].FilePath)
+	assert.Equal(t, 0, got[0].CallIndex)
+	assert.Equal(t, "/native.go", got[1].FilePath)
+	assert.Equal(t, 1, got[1].CallIndex)
+	assert.Equal(t, "", got[2].FilePath)
+	assert.Equal(t, 2, got[2].CallIndex)
+}

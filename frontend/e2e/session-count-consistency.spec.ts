@@ -1,10 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 
-// The test fixture seeds 9 root sessions with messages (including
-// the duration UX showcase), plus subagent, fork, and empty sessions
-// that must be excluded.
-const EXPECTED_ROOT_SESSIONS = 9;
+// The test fixture seeds 10 root sessions with messages (including
+// the duration UX showcase and recent-edits fixture), plus subagent,
+// fork, and empty sessions that must be excluded.
+const EXPECTED_ROOT_SESSIONS = 10;
 
 test.describe("Session count consistency", () => {
   let sp: SessionsPage;

@@ -30,6 +30,9 @@ export class UsageService {
     termination,
     includeOneShot = true,
     includeAutomated,
+    noDefaultRange,
+    breakdowns = true,
+    sessionCounts = true,
   }: {
     /**
      * Current period total cost
@@ -95,6 +98,18 @@ export class UsageService {
      * Include automated sessions
      */
     includeAutomated?: boolean,
+    /**
+     * Preserve omitted from/to without applying default range
+     */
+    noDefaultRange?: boolean,
+    /**
+     * Include per-model, per-project, and per-agent breakdowns
+     */
+    breakdowns?: boolean,
+    /**
+     * Include distinct session counts
+     */
+    sessionCounts?: boolean,
   }): CancelablePromise<Comparison> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -115,6 +130,9 @@ export class UsageService {
         'termination': termination,
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
+        'no_default_range': noDefaultRange,
+        'breakdowns': breakdowns,
+        'session_counts': sessionCounts,
         'current_cost': currentCost,
       },
       errors: {
@@ -153,6 +171,9 @@ export class UsageService {
     termination,
     includeOneShot = true,
     includeAutomated,
+    noDefaultRange,
+    breakdowns = true,
+    sessionCounts = true,
   }: {
     /**
      * Range start date
@@ -214,6 +235,18 @@ export class UsageService {
      * Include automated sessions
      */
     includeAutomated?: boolean,
+    /**
+     * Preserve omitted from/to without applying default range
+     */
+    noDefaultRange?: boolean,
+    /**
+     * Include per-model, per-project, and per-agent breakdowns
+     */
+    breakdowns?: boolean,
+    /**
+     * Include distinct session counts
+     */
+    sessionCounts?: boolean,
   }): CancelablePromise<UsageSummaryResponse> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -234,6 +267,9 @@ export class UsageService {
         'termination': termination,
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
+        'no_default_range': noDefaultRange,
+        'breakdowns': breakdowns,
+        'session_counts': sessionCounts,
       },
       errors: {
         400: `Bad Request`,
@@ -271,6 +307,9 @@ export class UsageService {
     termination,
     includeOneShot = true,
     includeAutomated,
+    noDefaultRange,
+    breakdowns = true,
+    sessionCounts = true,
     limit = 20,
   }: {
     /**
@@ -334,6 +373,18 @@ export class UsageService {
      */
     includeAutomated?: boolean,
     /**
+     * Preserve omitted from/to without applying default range
+     */
+    noDefaultRange?: boolean,
+    /**
+     * Include per-model, per-project, and per-agent breakdowns
+     */
+    breakdowns?: boolean,
+    /**
+     * Include distinct session counts
+     */
+    sessionCounts?: boolean,
+    /**
      * Maximum number of sessions
      */
     limit?: number,
@@ -357,6 +408,9 @@ export class UsageService {
         'termination': termination,
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
+        'no_default_range': noDefaultRange,
+        'breakdowns': breakdowns,
+        'session_counts': sessionCounts,
         'limit': limit,
       },
       errors: {

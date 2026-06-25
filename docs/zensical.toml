@@ -15,6 +15,7 @@ nav = [
   {"Quick Start" = "quickstart.md"},
   {"Usage Guide" = "usage.md"},
   {"Activity" = "activity.md"},
+  {"Recent Edits" = "recent-edits.md"},
   {"Session Intelligence" = "session-intelligence.md"},
   {"Token Usage & Costs" = "token-usage.md"},
   {"Chat Import" = "chat-import.md"},

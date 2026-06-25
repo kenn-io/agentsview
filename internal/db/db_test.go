@@ -696,8 +696,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionSanitizedMessageShape(t *testing.T) {
-	assert.Equal(t, 52, CurrentDataVersion(),
-		"current parser data version must stay bumped past the Pi lineage reparse")
+	assert.Equal(t, 53, CurrentDataVersion(),
+		"Recent Edits tool-call file_path extraction requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -5708,6 +5708,104 @@ func TestToolCallFingerprintHandlesEmptyToolUseID(t *testing.T) {
 	assert.Contains(t, fp, "Edit")
 }
 
+func TestToolCallFingerprintIncludesFilePath(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"fp-nofile", "fp-file"} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "p", Machine: "local", Agent: "cursor",
+		}), "upsert %s", id)
+	}
+	base := ToolCall{ToolName: "Edit", Category: "Edit", ToolUseID: "toolu_1"}
+	withFile := base
+	withFile.FilePath = "internal/db/messages.go"
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "fp-nofile", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{base},
+		},
+		{
+			SessionID: "fp-file", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{withFile},
+		},
+	}), "insert")
+
+	noFileFP, err := d.ToolCallFingerprint("fp-nofile")
+	require.NoError(t, err, "no-file fingerprint")
+	fileFP, err := d.ToolCallFingerprint("fp-file")
+	require.NoError(t, err, "file fingerprint")
+
+	// A file_path-only difference must change the fingerprint so the PG/DuckDB
+	// push fast paths re-push a file_path backfill instead of skipping it.
+	assert.NotEqual(t, noFileFP, fileFP)
+	assert.Contains(t, fileFP, "internal/db/messages.go")
+}
+
+func TestResolveToolCallsDerivesPositionalCallIndex(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "ci", Project: "p", Machine: "local", Agent: "cursor",
+	}), "upsert")
+	// Three tool calls in one message with no explicit CallIndex, mirroring
+	// the importer write path. resolveToolCalls must number them by position.
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "ci", Ordinal: 0, Role: "assistant", Content: "tools",
+			HasToolUse: true,
+			ToolCalls: []ToolCall{
+				{ToolName: "Read", Category: "Read", FilePath: "a.go"},
+				{ToolName: "Edit", Category: "Edit", FilePath: "b.go"},
+				{ToolName: "Write", Category: "Write", FilePath: "c.go"},
+			},
+		},
+	}), "insert")
+
+	msgs, err := d.GetAllMessages(ctx, "ci")
+	require.NoError(t, err, "get all messages")
+	require.Len(t, msgs, 1)
+	calls := msgs[0].ToolCalls
+	require.Len(t, calls, 3)
+	for i, tc := range calls {
+		assert.Equal(t, i, tc.CallIndex, "call %d index", i)
+	}
+	// FilePath must survive the write path too (sync + importer parity).
+	assert.Equal(t, "a.go", calls[0].FilePath)
+	assert.Equal(t, "b.go", calls[1].FilePath)
+	assert.Equal(t, "c.go", calls[2].FilePath)
+}
+
+func TestToolCallParseDiffFingerprintIncludesFilePath(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"pd-nofile", "pd-file"} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "p", Machine: "local", Agent: "cursor",
+		}), "upsert %s", id)
+	}
+	base := ToolCall{ToolName: "Edit", Category: "Edit", ToolUseID: "t1"}
+	withFile := base
+	withFile.FilePath = "internal/db/messages.go"
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "pd-nofile", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{base},
+		},
+		{
+			SessionID: "pd-file", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{withFile},
+		},
+	}), "insert")
+
+	noFileFP, err := d.ToolCallParseDiffFingerprint("pd-nofile")
+	require.NoError(t, err, "no-file parse-diff fingerprint")
+	fileFP, err := d.ToolCallParseDiffFingerprint("pd-file")
+	require.NoError(t, err, "file parse-diff fingerprint")
+
+	// A file_path-only difference must move the parse-diff fingerprint so a
+	// parser change that only alters extracted paths triggers a reparse.
+	assert.NotEqual(t, noFileFP, fileFP)
+	assert.Contains(t, fileFP, "internal/db/messages.go")
+}
+
 func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -6074,4 +6172,178 @@ func TestUpsertWithDisplayNameInsteadOfSessionNameDropsName(t *testing.T) {
 	// display_name was passed in but upsert never writes it — should be nil.
 	assert.Nil(t, s.DisplayName,
 		"upsert must not write display_name; only RenameSession should")
+}
+
+// seedSessionWithMessage inserts a session and one user message (ordinal 0)
+// into d. The inserted message gets the next auto-assigned integer id.
+func seedSessionWithMessage(t *testing.T, d *DB, sessionID string) {
+	t.Helper()
+	insertSession(t, d, sessionID, "proj")
+	insertMessages(t, d, userMsg(sessionID, 0, "hello"))
+}
+
+func TestCopyOrphanedDataFrom_PreservesFilePathAndCallIndex(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source DB: session s1 with a tool_call that has file_path + call_index.
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err, "open src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		userMsg("s1", 0, "hello"),
+		asstMsg("s1", 1, "used a tool"),
+	)
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category,
+			 tool_use_id, input_json, file_path, call_index)
+		SELECT id, session_id, 'Edit', 'Edit',
+			'tu_fp1', '{"file_path":"/repo/main.go"}', '/repo/main.go', 0
+		FROM messages
+		WHERE session_id = 's1' AND ordinal = 1`)
+	require.NoError(t, err, "insert src tool_call")
+	srcDB.Close()
+
+	// Destination DB: empty.
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "open dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "orphaned session count")
+
+	var fp sql.NullString
+	var ci int
+	require.NoError(t, dstDB.getReader().QueryRow(`
+		SELECT file_path, call_index FROM tool_calls
+		WHERE session_id = 's1'`,
+	).Scan(&fp, &ci))
+	assert.True(t, fp.Valid, "file_path should be non-NULL after copy")
+	assert.Equal(t, "/repo/main.go", fp.String, "file_path value")
+	assert.Equal(t, 0, ci, "call_index value")
+}
+
+// clearToolCallFieldBackfillSentinel removes the one-time backfill marker so a
+// test can drive backfillToolCallFieldsLocked as a first run against rows it
+// inserts after Open.
+func clearToolCallFieldBackfillSentinel(t *testing.T, d *DB) {
+	t.Helper()
+	_, err := d.getWriter().Exec(
+		`DELETE FROM stats WHERE key = ?`, toolCallFieldBackfillStatsKey)
+	require.NoError(t, err, "clear tool_call backfill sentinel")
+}
+
+func TestBackfillToolCallFields(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedSessionWithMessage(t, d, "sess-bf") // message id = 1
+
+	var msgID int64
+	require.NoError(t, d.getReader().QueryRowContext(ctx,
+		`SELECT id FROM messages WHERE session_id = 'sess-bf' AND ordinal = 0`,
+	).Scan(&msgID))
+
+	w := d.getWriter()
+	_, err := w.Exec(`INSERT INTO tool_calls
+		(message_id, session_id, tool_name, category, tool_use_id, input_json,
+		 file_path, call_index)
+		VALUES
+		(?,?,?,?,?,?,NULL,NULL),
+		(?,?,?,?,?,?,NULL,NULL),
+		(?,?,?,?,?,?,NULL,NULL)`,
+		msgID, "sess-bf", "Edit", "Edit", "a", `{"file_path":"/x.go"}`,
+		msgID, "sess-bf", "Edit", "Edit", "b", "a raw diff not json",
+		msgID, "sess-bf", "Write", "Write", "c", `{"file":"/y.go"}`,
+	)
+	require.NoError(t, err, "insert legacy tool_calls")
+
+	// Open already ran the one-time backfill on the empty table during
+	// testDB setup; clear the sentinel so it runs against these legacy rows
+	// the way it would when columns are first added to a populated database.
+	clearToolCallFieldBackfillSentinel(t, d)
+	require.NoError(t, d.backfillToolCallFieldsLocked(w), "backfill")
+
+	type row struct {
+		fp sql.NullString
+		ci int
+	}
+	rows := map[string]row{}
+	r, err := w.QueryContext(ctx,
+		`SELECT tool_use_id, file_path, call_index FROM tool_calls`)
+	require.NoError(t, err)
+	defer r.Close()
+	for r.Next() {
+		var id string
+		var fp sql.NullString
+		var ci int
+		require.NoError(t, r.Scan(&id, &fp, &ci))
+		rows[id] = row{fp, ci}
+	}
+	require.NoError(t, r.Err())
+	assert.Equal(t, "/x.go", rows["a"].fp.String, "a file_path")
+	assert.False(t, rows["b"].fp.Valid, "b file_path should be NULL (raw diff)")
+	assert.Equal(t, "/y.go", rows["c"].fp.String, "c file_path")
+	assert.Equal(t, 0, rows["a"].ci, "a call_index")
+	assert.Equal(t, 1, rows["b"].ci, "b call_index")
+	assert.Equal(t, 2, rows["c"].ci, "c call_index")
+}
+
+func TestBackfillToolCallFieldsRunsOnce(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedSessionWithMessage(t, d, "sess-once")
+
+	var msgID int64
+	require.NoError(t, d.getReader().QueryRowContext(ctx,
+		`SELECT id FROM messages WHERE session_id = 'sess-once' AND ordinal = 0`,
+	).Scan(&msgID))
+
+	w := d.getWriter()
+	insertNullEdit := func(toolUseID, inputJSON string) {
+		t.Helper()
+		_, err := w.Exec(`INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category, tool_use_id,
+			 input_json, file_path, call_index)
+			VALUES (?,?,?,?,?,?,NULL,NULL)`,
+			msgID, "sess-once", "Edit", "Edit", toolUseID, inputJSON)
+		require.NoError(t, err, "insert %s", toolUseID)
+	}
+
+	// Open already ran (and sentineled) the backfill on the empty table;
+	// clear it so this first manual run does real work, as it would when
+	// columns are first added to a populated database.
+	clearToolCallFieldBackfillSentinel(t, d)
+
+	// First run backfills the legacy row and records the sentinel.
+	insertNullEdit("first", `{"file_path":"/first.go"}`)
+	require.NoError(t, d.backfillToolCallFieldsLocked(w), "first backfill")
+
+	should, err := d.shouldRunToolCallFieldBackfillLocked(w)
+	require.NoError(t, err, "probe sentinel")
+	assert.False(t, should, "sentinel should be set after first backfill")
+
+	// A row inserted after the sentinel is set must be left untouched: the
+	// gate skips the rerun instead of rescanning tool_calls. This is what
+	// distinguishes one-time gating from plain per-Open idempotency.
+	insertNullEdit("second", `{"file_path":"/second.go"}`)
+	require.NoError(t, d.backfillToolCallFieldsLocked(w), "second backfill")
+
+	fp := map[string]sql.NullString{}
+	r, err := w.QueryContext(ctx,
+		`SELECT tool_use_id, file_path FROM tool_calls`)
+	require.NoError(t, err)
+	defer r.Close()
+	for r.Next() {
+		var id string
+		var p sql.NullString
+		require.NoError(t, r.Scan(&id, &p))
+		fp[id] = p
+	}
+	require.NoError(t, r.Err())
+	assert.Equal(t, "/first.go", fp["first"].String, "first row backfilled")
+	assert.False(t, fp["second"].Valid,
+		"second row left NULL: one-time gate skipped the rerun")
 }

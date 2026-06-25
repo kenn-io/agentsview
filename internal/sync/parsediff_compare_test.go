@@ -1380,6 +1380,19 @@ func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
 		"tool-call twin must match db.ToolCallParseDiffFingerprint exactly")
 }
 
+func TestToolCallDiffDetectsFilePath(t *testing.T) {
+	base := db.ToolCall{
+		ToolName: "Edit", Category: "Edit", ToolUseID: "t1",
+		InputJSON: `{"x":1}`, FilePath: "a.go",
+	}
+	assert.Empty(t, toolCallDiff(base, base), "identical calls do not diff")
+	moved := base
+	moved.FilePath = "b.go"
+	// A file_path-only parser change must be detected so the resync rewrites
+	// the row and the mirrors pick up the corrected path.
+	assert.Contains(t, toolCallDiff(base, moved), "file_path")
+}
+
 // TestCompareStoredSessionRoundTripToolCalls is the false-diff acid test
 // for the new fields: a session with tool calls, a thinking block, and a
 // system message must compare identical against itself.

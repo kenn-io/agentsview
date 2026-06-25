@@ -687,6 +687,7 @@ func kiroIDEResolveAssistant(
 					ToolName:  "Edit",
 					Category:  "Edit",
 					InputJSON: diff,
+					FilePath:  a.Input.File,
 				})
 			}
 		case "create":
@@ -701,6 +702,7 @@ func kiroIDEResolveAssistant(
 					ToolName:  "Write",
 					Category:  "Write",
 					InputJSON: string(inputJSON),
+					FilePath:  a.Input.File,
 				})
 			}
 		case "readCode":

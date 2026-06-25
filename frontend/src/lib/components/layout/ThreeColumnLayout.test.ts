@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   createRawSnippet,
   mount,
@@ -8,6 +8,8 @@ import {
 } from "svelte";
 // @ts-ignore
 import ThreeColumnLayout from "./ThreeColumnLayout.svelte";
+import { m } from "../../i18n/index.js";
+import { router } from "../../stores/router.svelte.js";
 import {
   SIDEBAR_DESKTOP_BREAKPOINT,
   SIDEBAR_WIDTH_DEFAULT,
@@ -212,6 +214,30 @@ afterEach(() => {
 });
 
 describe("ThreeColumnLayout", () => {
+  it("exposes Recent Edits in the mobile nav, reachable below the header breakpoint", async () => {
+    renderLayout();
+    await tick();
+
+    const navButtons = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(
+        ".mobile-nav .mobile-nav-btn",
+      ),
+    );
+    const recentEdits = navButtons.find(
+      (btn) => btn.textContent?.trim() === m.nav_recent_edits(),
+    );
+    expect(recentEdits).not.toBeUndefined();
+
+    // The header More menu that also hosts Recent Edits is display:none under
+    // 768px, so the mobile nav button is the only way mobile users reach it.
+    const navigate = vi
+      .spyOn(router, "navigate")
+      .mockImplementation(() => true);
+    recentEdits!.click();
+    expect(navigate).toHaveBeenCalledWith("recent-edits");
+    navigate.mockRestore();
+  });
+
   it("renders the resize handle at the 768px layout breakpoint", async () => {
     const expectedWidth = getClampedSidebarWidthForLayout(
       320,

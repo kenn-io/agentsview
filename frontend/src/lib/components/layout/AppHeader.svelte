@@ -344,7 +344,7 @@
     <div class="more-wrap">
       <button
         class="nav-btn"
-        class:active={router.route === "trends" || router.route === "pinned" || router.route === "insights" || router.route === "trash" || moreOpen}
+        class:active={router.route === "trends" || router.route === "pinned" || router.route === "insights" || router.route === "trash" || router.route === "recent-edits" || moreOpen}
         bind:this={moreBtnRef}
         onclick={() => { moreOpen = !moreOpen; }}
         title={m.nav_more_navigation()}
@@ -375,6 +375,11 @@
             class:active={router.route === "trash"}
             onclick={() => { router.navigate("trash"); moreOpen = false; }}>
             {m.nav_trash()}
+          </button>
+          <button class="more-item" role="menuitem"
+            class:active={router.route === "recent-edits"}
+            onclick={() => { router.navigate("recent-edits"); moreOpen = false; }}>
+            {m.nav_recent_edits()}
           </button>
         </div>
       {/if}

@@ -10016,12 +10016,18 @@ func convertToolCalls(
 	}
 	calls := make([]db.ToolCall, len(parsed))
 	for i, tc := range parsed {
+		filePath := tc.FilePath
+		if filePath == "" {
+			filePath = parser.ResolveFilePathFromJSON(tc.InputJSON)
+		}
 		calls[i] = db.ToolCall{
 			SessionID:         sessionID,
 			ToolName:          tc.ToolName,
 			Category:          tc.Category,
 			ToolUseID:         tc.ToolUseID,
 			InputJSON:         tc.InputJSON,
+			FilePath:          filePath,
+			CallIndex:         i,
 			SkillName:         tc.SkillName,
 			SubagentSessionID: tc.SubagentSessionID,
 			ResultEvents:      convertToolResultEvents(tc.ResultEvents),

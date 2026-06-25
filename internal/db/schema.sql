@@ -196,7 +196,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     skill_name  TEXT,
     result_content_length INTEGER,
     result_content        TEXT,
-    subagent_session_id TEXT
+    subagent_session_id TEXT,
+    file_path  TEXT,
+    call_index INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session

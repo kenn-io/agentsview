@@ -678,6 +678,20 @@ func copySessionDataForIDs(
 	}
 	toolCallCols = append(toolCallCols, "subagent_session_id")
 	toolCallSelect = append(toolCallSelect, "otc.subagent_session_id")
+	if oldDBHasColumn(ctx, tx, "tool_calls", "file_path") {
+		toolCallCols = append(toolCallCols, "file_path")
+		toolCallSelect = append(toolCallSelect, "otc.file_path")
+	} else {
+		toolCallCols = append(toolCallCols, "file_path")
+		toolCallSelect = append(toolCallSelect, "NULL")
+	}
+	if oldDBHasColumn(ctx, tx, "tool_calls", "call_index") {
+		toolCallCols = append(toolCallCols, "call_index")
+		toolCallSelect = append(toolCallSelect, "otc.call_index")
+	} else {
+		toolCallCols = append(toolCallCols, "call_index")
+		toolCallSelect = append(toolCallSelect, "NULL")
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO tool_calls
 			(`+strings.Join(toolCallCols, ", ")+`)

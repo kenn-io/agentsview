@@ -72,6 +72,7 @@ type Store interface {
 	GetAnalyticsSignalSessions(ctx context.Context, f AnalyticsFilter, signal string, limit int) (SignalSessionsResponse, error)
 	GetTrendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendTermInput, granularity string) (TrendsTermsResponse, error)
 	GetActivityReport(ctx context.Context, f AnalyticsFilter, q activity.Query) (activity.Report, error)
+	RecentEdits(ctx context.Context, p RecentEditsParams) (RecentEditsResult, error)
 
 	// Usage (token cost).
 	GetDailyUsage(ctx context.Context, f UsageFilter) (DailyUsageResult, error)

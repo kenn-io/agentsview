@@ -425,12 +425,13 @@ func upsertToolCalls(ctx context.Context, tx *sql.Tx, msgs []db.Message) ([]duck
 					tool_name = ?, category = ?, tool_use_id = ?,
 					input_json = ?, skill_name = ?,
 					result_content_length = ?, result_content = ?,
-					subagent_session_id = ?
+					subagent_session_id = ?, file_path = ?
 				WHERE session_id = ? AND message_id = ? AND call_index = ?`,
 				tc.ToolName, tc.Category, tc.ToolUseID,
 				nilEmpty(tc.InputJSON), nilEmpty(tc.SkillName),
 				nilZero(tc.ResultContentLength), nilEmpty(tc.ResultContent),
-				nilEmpty(tc.SubagentSessionID), m.SessionID, m.ID, i,
+				nilEmpty(tc.SubagentSessionID), nilEmpty(tc.FilePath),
+				m.SessionID, m.ID, i,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("updating duckdb tool_call %s/%d/%d: %w",
@@ -445,12 +446,13 @@ func upsertToolCalls(ctx context.Context, tx *sql.Tx, msgs []db.Message) ([]duck
 					message_id, session_id, tool_name, category,
 					call_index, tool_use_id, input_json, skill_name,
 					result_content_length, result_content,
-					subagent_session_id
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					subagent_session_id, file_path
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
 				nilEmpty(tc.ResultContent), nilEmpty(tc.SubagentSessionID),
+				nilEmpty(tc.FilePath),
 			); err != nil {
 				return nil, fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",
 					m.SessionID, m.Ordinal, i, err)

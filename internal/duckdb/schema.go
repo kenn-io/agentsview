@@ -352,7 +352,8 @@ var mirrorTables = []tableSpec{
 			skill_name TEXT,
 			result_content_length INTEGER,
 			result_content TEXT,
-			subagent_session_id TEXT
+			subagent_session_id TEXT,
+			file_path TEXT
 		)`,
 		columns: []columnSpec{
 			{"id", "id BIGINT"},
@@ -367,6 +368,7 @@ var mirrorTables = []tableSpec{
 			{"result_content_length", "result_content_length INTEGER"},
 			{"result_content", "result_content TEXT"},
 			{"subagent_session_id", "subagent_session_id TEXT"},
+			{"file_path", "file_path TEXT"},
 		},
 		indexes: []string{
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_calls_dedup ON tool_calls(session_id, message_id, call_index)",

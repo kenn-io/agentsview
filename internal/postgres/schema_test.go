@@ -378,7 +378,7 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 			"source_subtype", "source_uuid",
 		},
 		"tool_calls": {
-			"call_index",
+			"call_index", "file_path",
 		},
 	})
 
@@ -386,6 +386,8 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 
 	// Two tables have missing columns (sessions: termination_status;
 	// messages: source_parent_uuid, is_sidechain, is_compact_boundary,
-	// thinking_text). Per-table batching means one ALTER each.
+	// thinking_text). Per-table batching means one ALTER each. tool_calls
+	// lists all its migration columns (call_index, file_path) as present, so
+	// it contributes no ALTER.
 	assert.Equal(t, 2, state.alterTableExecCount(), "ALTER TABLE execs")
 }

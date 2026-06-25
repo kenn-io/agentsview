@@ -457,7 +457,8 @@ func loadPushToolCallFingerprints(
 			tool_use_id, COALESCE(input_json, ''),
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
-			COALESCE(result_content, '')
+			COALESCE(result_content, ''),
+			COALESCE(file_path, '')
 		 FROM tool_calls
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, message_ordinal ASC, call_index ASC
@@ -472,12 +473,12 @@ func loadPushToolCallFingerprints(
 		var sessionID string
 		var messageOrdinal, callIndex, resultContentLength int
 		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent string
+		var skillName, subagentSessionID, resultContent, filePath string
 		if err := rows.Scan(
 			&sessionID, &messageOrdinal, &callIndex, &toolName,
 			&category, &toolUseID, &inputJSON,
 			&skillName, &subagentSessionID, &resultContentLength,
-			&resultContent,
+			&resultContent, &filePath,
 		); err != nil {
 			return err
 		}
@@ -488,7 +489,7 @@ func loadPushToolCallFingerprints(
 		}
 		fmt.Fprintf(
 			b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s;",
+			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
 			messageOrdinal, callIndex,
 			len(toolName), toolName,
 			len(category), category,
@@ -498,6 +499,7 @@ func loadPushToolCallFingerprints(
 			len(subagentSessionID), subagentSessionID,
 			resultContentLength,
 			len(resultContent), resultContent,
+			len(filePath), filePath,
 		)
 	}
 	if err := rows.Err(); err != nil {

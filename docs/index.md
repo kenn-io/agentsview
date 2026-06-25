@@ -202,6 +202,13 @@ to a shared database for team or multi-machine setups.
     one conversation where you discussed a specific function,
     error message, or design decision — even months later.
 
+-   **Recent Edits**
+
+    A cross-session feed of the files your agents changed most
+    recently, grouped by project and path. Expand any file to see
+    its edits and jump straight to the message that made each
+    change, on the [Recent Edits](/recent-edits/) page.
+
 -   **Analyze Your Usage**
 
     Activity heatmaps, tool usage breakdowns, velocity

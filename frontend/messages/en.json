@@ -301,5 +301,14 @@
   "settings_language_label": "Interface language",
   "settings_language_english": "English",
   "settings_language_simplified_chinese": "Simplified Chinese",
-  "settings_language_no_results": "No languages found"
+  "settings_language_no_results": "No languages found",
+  "nav_recent_edits": "Recent Edits",
+  "recent_edits_title": "Recent Edits",
+  "recent_edits_empty": "No file edits found yet.",
+  "recent_edits_loading": "Loading recent edits...",
+  "recent_edits_count": "{count} edits",
+  "recent_edits_truncated": "showing latest {shown} of {total}",
+  "recent_edits_load_more": "Load more",
+  "recent_edits_refresh": "Refresh",
+  "recent_edits_search_placeholder": "Filter by file path"
 }

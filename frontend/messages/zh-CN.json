@@ -296,5 +296,14 @@
   "settings_language_label": "界面语言",
   "settings_language_english": "English",
   "settings_language_simplified_chinese": "简体中文",
-  "settings_language_no_results": "未找到语言"
+  "settings_language_no_results": "未找到语言",
+  "nav_recent_edits": "最近编辑",
+  "recent_edits_title": "最近编辑",
+  "recent_edits_empty": "暂无文件编辑记录。",
+  "recent_edits_loading": "正在加载最近编辑...",
+  "recent_edits_count": "{count} 次编辑",
+  "recent_edits_truncated": "显示最新 {shown}（共 {total} 条）",
+  "recent_edits_load_more": "加载更多",
+  "recent_edits_refresh": "刷新",
+  "recent_edits_search_placeholder": "按文件路径筛选"
 }

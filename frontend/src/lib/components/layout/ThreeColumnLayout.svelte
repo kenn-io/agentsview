@@ -19,6 +19,7 @@
     Grid2x2Icon,
     LayoutGridIcon,
     LogsIcon,
+    PencilIcon,
     PinIcon,
     TrashIcon,
   } from "../../icons.js";
@@ -358,6 +359,14 @@
       >
         <TrashIcon size="12" strokeWidth="2" aria-hidden="true" />
         {m.nav_trash()}
+      </button>
+      <button
+        class="mobile-nav-btn"
+        class:active={router.route === "recent-edits"}
+        onclick={() => mobileNav("recent-edits")}
+      >
+        <PencilIcon size="12" strokeWidth="2" aria-hidden="true" />
+        {m.nav_recent_edits()}
       </button>
     </nav>
     {@render sidebar()}

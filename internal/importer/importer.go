@@ -418,12 +418,17 @@ func convertToolCalls(
 	}
 	calls := make([]db.ToolCall, len(parsed))
 	for i, tc := range parsed {
+		filePath := tc.FilePath
+		if filePath == "" {
+			filePath = parser.ResolveFilePathFromJSON(tc.InputJSON)
+		}
 		calls[i] = db.ToolCall{
 			SessionID: sessionID,
 			ToolName:  tc.ToolName,
 			Category:  tc.Category,
 			ToolUseID: tc.ToolUseID,
 			InputJSON: tc.InputJSON,
+			FilePath:  filePath,
 			SkillName: tc.SkillName,
 		}
 		// Map execution output from ResultEvents to

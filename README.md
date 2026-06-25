@@ -267,6 +267,9 @@ agentsview stats --include-git-outcomes
   breakdowns, daily spend charts, all in the web UI
 - **Analytics dashboard** -- activity heatmaps, tool usage, velocity metrics,
   project breakdowns
+- **Recent Edits feed** -- the files your agents changed most recently across
+  every session, grouped by project and path, each linking to the message that
+  made the change
 - **Live updates** via SSE as active sessions receive new messages
 - **Keyboard-first** navigation (`j`/`k`/`[`/`]`, `Cmd+K` search, `?` for all
   shortcuts)

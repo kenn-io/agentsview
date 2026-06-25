@@ -12,3 +12,4 @@ export type DbQualitySignals = {
   unstructured_start: boolean;
   version: number;
 };
+

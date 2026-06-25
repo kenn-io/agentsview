@@ -169,11 +169,11 @@ export class SessionsService {
      */
     starred?: boolean,
     /**
-     * Sort field
+     * Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id.
      */
-    orderBy?: 'recent' | 'started' | 'messages' | 'user-messages' | 'output-tokens' | 'peak-context' | 'failures' | 'retries' | 'edit-churn' | 'compactions' | 'context-pressure' | 'health' | 'secrets' | 'id',
+    orderBy?: string,
     /**
-     * Sort descending; overrides the sort field's default direction
+     * Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
      */
     descending?: boolean,
   }): CancelablePromise<ServiceSessionList> {
@@ -341,11 +341,11 @@ export class SessionsService {
      */
     starred?: boolean,
     /**
-     * Sort field
+     * Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id.
      */
-    orderBy?: 'recent' | 'started' | 'messages' | 'user-messages' | 'output-tokens' | 'peak-context' | 'failures' | 'retries' | 'edit-churn' | 'compactions' | 'context-pressure' | 'health' | 'secrets' | 'id',
+    orderBy?: string,
     /**
-     * Sort descending; overrides the sort field's default direction
+     * Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
      */
     descending?: boolean,
   }): CancelablePromise<DbSidebarSessionIndex> {
