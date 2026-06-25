@@ -1424,7 +1424,7 @@ func inferTokenCoverage(
 func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
 	var n int
 	err := db.QueryRowContext(ctx,
-		"SELECT 1 FROM information_schema.tables WHERE table_name = $1",
+		"SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
 		name,
 	).Scan(&n)
 	return err == nil && n == 1
