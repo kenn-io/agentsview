@@ -3,28 +3,8 @@ package parser
 import "strings"
 
 // Kilo uses OpenCode's storage format, but sessions are exposed as a
-// distinct agent with the kilo: ID prefix.
-func ParseKiloFile(
-	sessionPath, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := ParseOpenCodeFile(sessionPath, machine)
-	if err != nil || sess == nil {
-		return sess, msgs, err
-	}
-	relabelOpenCodeSessionAsKilo(sess)
-	return sess, msgs, nil
-}
-
-func ParseKiloSession(
-	dbPath, sessionID, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := ParseOpenCodeSession(dbPath, sessionID, machine)
-	if err != nil || sess == nil {
-		return sess, msgs, err
-	}
-	relabelOpenCodeSessionAsKilo(sess)
-	return sess, msgs, nil
-}
+// distinct agent with the kilo: ID prefix. The OpenCode-format provider
+// owns parsing and relabels results through relabelOpenCodeSessionAsKilo.
 
 func ListKiloSessionMeta(dbPath string) ([]OpenCodeSessionMeta, error) {
 	metas, err := ListOpenCodeSessionMeta(dbPath)
@@ -43,7 +23,9 @@ func KiloSourceMtime(sourcePath string) (int64, error) {
 	if sourcePath == "" {
 		return 0, nil
 	}
-	if dbPath, sessionID, ok := ParseKiloSQLiteVirtualPath(sourcePath); ok {
+	if dbPath, sessionID, ok := parseOpenCodeFormatVirtualPath(
+		kiloFmt.dbName, sourcePath,
+	); ok {
 		return openCodeSQLiteSessionMtime(dbPath, sessionID)
 	}
 	return openCodeStorageSessionMtime(sourcePath)

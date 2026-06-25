@@ -114,7 +114,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		s := &storedSessions[i]
 		storedByID[s.ID] = s
 		if s.FilePath != nil && *s.FilePath != "" {
-			base := stripVirtualSourceSuffix(*s.FilePath)
+			base := parseDiffSourceKey(*s.FilePath)
 			storedByPath[base] = append(storedByPath[base], s)
 		}
 	}
@@ -340,6 +340,16 @@ func (e *Engine) parseDiffDatabaseSources(
 ) []parser.DiscoveredFile {
 	var extra []parser.DiscoveredFile
 	for _, def := range resolved {
+		// Provider-authoritative agents (no DiscoverFunc) already have
+		// their shared-SQLite sessions enumerated by
+		// parseDiffProviderSources, which applies the provider's
+		// storage-ID filter so a file-backed storage session is not also
+		// re-parsed from its stale db row. Synthesizing the raw db here
+		// would re-add those sessions through the legacy fan-out, double
+		// counting and bypassing the filter.
+		if def.DiscoverFunc == nil {
+			continue
+		}
 		switch def.Type {
 		case parser.AgentKiro:
 			for _, dir := range e.agentDirs[def.Type] {
@@ -400,11 +410,27 @@ func sortAndLimitParseDiffFiles(
 	if limit > 0 && len(files) > limit {
 		limited = true
 		for _, f := range files[limit:] {
-			cutPaths[stripVirtualSourceSuffix(f.Path)] = true
+			cutPaths[parseDiffSourceKey(f.Path)] = true
 		}
 		files = files[:limit]
 	}
 	return files, cutPaths, limited
+}
+
+func parseDiffSourceKey(path string) string {
+	if isOpenCodeFamilyProviderVirtualSource(path) {
+		return path
+	}
+	return stripVirtualSourceSuffix(path)
+}
+
+func isOpenCodeFamilyProviderVirtualSource(path string) bool {
+	for _, base := range []string{"opencode.db", "kilo.db", "mimocode.db"} {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, base); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // stripVirtualSourceSuffix maps a stored file_path to its on-disk base
@@ -426,13 +452,13 @@ func stripVirtualSourceSuffix(path string) string {
 	if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "opencode.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseKiloSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "kilo.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseMiMoCodeSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "mimocode.db"); ok {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseShelleyVirtualPath(path); ok {
@@ -587,7 +613,7 @@ func (e *Engine) parseDiffCollectFile(
 	resolver worktreeProjectResolver,
 	presencePaths *[]string,
 ) error {
-	base := stripVirtualSourceSuffix(job.path)
+	base := parseDiffSourceKey(job.path)
 
 	if job.err != nil {
 		storedHere := storedByPath[base]
@@ -935,11 +961,12 @@ func parseDiffSweepStored(
 		case s.FilePath == nil || *s.FilePath == "":
 			reason = "source missing"
 		default:
-			base := stripVirtualSourceSuffix(*s.FilePath)
+			sourceKey := parseDiffSourceKey(*s.FilePath)
+			sourcePath := stripVirtualSourceSuffix(*s.FilePath)
 			switch {
-			case cutPaths[base]:
+			case cutPaths[sourceKey]:
 				reason = "not sampled (--limit)"
-			case !statExists(base):
+			case !statExists(sourcePath):
 				reason = "source missing"
 			default:
 				reason = "not discovered"

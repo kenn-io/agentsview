@@ -4,28 +4,8 @@ import "strings"
 
 // MiMoCode uses OpenCode's storage format, but stores sessions under
 // storage/session_diff and is exposed as a distinct agent with the
-// mimocode: ID prefix.
-func ParseMiMoCodeFile(
-	sessionPath, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := ParseOpenCodeFile(sessionPath, machine)
-	if err != nil || sess == nil {
-		return sess, msgs, err
-	}
-	relabelOpenCodeSessionAsMiMoCode(sess)
-	return sess, msgs, nil
-}
-
-func ParseMiMoCodeSession(
-	dbPath, sessionID, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := ParseOpenCodeSession(dbPath, sessionID, machine)
-	if err != nil || sess == nil {
-		return sess, msgs, err
-	}
-	relabelOpenCodeSessionAsMiMoCode(sess)
-	return sess, msgs, nil
-}
+// mimocode: ID prefix. The OpenCode-format provider owns parsing and
+// relabels results through relabelOpenCodeSessionAsMiMoCode.
 
 func ListMiMoCodeSessionMeta(dbPath string) ([]OpenCodeSessionMeta, error) {
 	metas, err := ListOpenCodeSessionMeta(dbPath)
@@ -44,7 +24,9 @@ func MiMoCodeSourceMtime(sourcePath string) (int64, error) {
 	if sourcePath == "" {
 		return 0, nil
 	}
-	if dbPath, sessionID, ok := ParseMiMoCodeSQLiteVirtualPath(sourcePath); ok {
+	if dbPath, sessionID, ok := parseOpenCodeFormatVirtualPath(
+		mimoFmt.dbName, sourcePath,
+	); ok {
 		return openCodeSQLiteSessionMtime(dbPath, sessionID)
 	}
 	return openCodeStorageSessionMtime(sourcePath)
