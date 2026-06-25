@@ -28,6 +28,9 @@ type MetadataParams = Parameters<
 type ClearSessionFiltersOptions = {
   clearDateYoke?: boolean;
 };
+type LoadOptions = {
+  force?: boolean;
+};
 
 const SESSION_PAGE_SIZE = 500;
 const SIDEBAR_HYDRATION_CONCURRENCY = 6;
@@ -355,7 +358,7 @@ class SessionsStore {
     this.setActiveSession(null);
   }
 
-  async load() {
+  async load(options: LoadOptions = {}) {
     saveFilters(this.filters);
 
     const params = {
@@ -364,6 +367,7 @@ class SessionsStore {
     };
     const signature = JSON.stringify(params);
     if (
+      !options.force &&
       this.sidebarLoadPromise !== null &&
       this.sidebarLoadSignature === signature
     ) {
@@ -1123,7 +1127,7 @@ class SessionsStore {
     this.selectedIds = new Set();
     this.selectMode = false;
     this.invalidateFilterCaches();
-    await this.load();
+    await this.load({ force: true });
   }
 
   async restoreSession(id: string) {

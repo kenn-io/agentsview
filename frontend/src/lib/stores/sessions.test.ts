@@ -840,6 +840,49 @@ describe("SessionsStore", () => {
       expect(sessions.recentlyDeleted[0]!.ids).toEqual(["child"]);
     });
 
+    it("does not reuse a pre-delete in-flight sidebar load after batch delete", async () => {
+      let resolveStaleLoad!: (value: {
+        sessions: SkinnySessionRow[];
+        total: number;
+        next_cursor?: string | null;
+      }) => void;
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockReturnValueOnce(new Promise((resolve) => {
+          resolveStaleLoad = resolve;
+        }))
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "keep-me" })],
+          total: 1,
+          next_cursor: null,
+        });
+      vi.mocked(api.batchDeleteSessions).mockResolvedValue(undefined);
+      vi.mocked(api.getProjects).mockResolvedValue({ projects: [] });
+      vi.mocked(api.getAgents).mockResolvedValue({ agents: [] });
+      vi.mocked((api as any).getMachines).mockResolvedValue({ machines: [] });
+
+      const staleLoad = sessions.load();
+      await Promise.resolve();
+
+      const deletePromise = sessions.batchDeleteSessions(["remove-me"]);
+
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      });
+
+      resolveStaleLoad({
+        sessions: [
+          makeSkinnyRow({ id: "remove-me" }),
+          makeSkinnyRow({ id: "keep-me" }),
+        ],
+        total: 2,
+        next_cursor: null,
+      });
+      await Promise.all([staleLoad, deletePromise]);
+
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["keep-me"]);
+      expect(sessions.total).toBe(1);
+    });
+
     it("restore reloads the sidebar index", async () => {
       mockSidebarIndex([makeSkinnyRow({ id: "before" })]);
       vi.mocked((api as any).restoreSession).mockResolvedValue(undefined);
