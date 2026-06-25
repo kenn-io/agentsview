@@ -358,6 +358,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newClaudeProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
+	case AgentCodex:
+		return newCodexProviderFactory(def)
 	case AgentCowork:
 		return newCoworkProviderFactory(def)
 	case AgentCortex:

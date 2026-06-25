@@ -478,54 +478,6 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	return files
 }
 
-// DiscoverCodexSessions finds all Codex JSONL session files under
-// either the standard year/month/day layout or a flat archived dir.
-func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
-	var files []DiscoveredFile
-
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if !isCodexSessionFilename(entry.Name()) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(sessionsDir, entry.Name()),
-			Agent: AgentCodex,
-		})
-	}
-
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			if !isCodexSessionFilename(sf.Name()) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(dayPath, sf.Name()),
-				Agent: AgentCodex,
-			})
-		}
-		return true
-	})
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // claudeFindSourceFile finds the original JSONL file for a Claude
 // session ID by searching all project directories. It is the
 // provider-owned lookup body used by the Claude provider source set's
@@ -596,62 +548,6 @@ func claudeFindSourceFile(
 	}
 
 	return ""
-}
-
-// FindCodexSourceFile finds a Codex session file by UUID.
-// Prefers the standard year/month/day live path when present,
-// then falls back to a flat archived dir entry.
-func FindCodexSourceFile(sessionsDir, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	var archived string
-	entries, err := os.ReadDir(sessionsDir)
-	if err == nil {
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				archived = filepath.Join(sessionsDir, name)
-				break
-			}
-		}
-	}
-
-	var live string
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if live != "" {
-			return false
-		}
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				live = filepath.Join(dayPath, name)
-				return false
-			}
-		}
-		return true
-	})
-	if live != "" {
-		return live
-	}
-	return archived
 }
 
 func isCodexSessionFilename(name string) bool {

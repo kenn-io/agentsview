@@ -2652,6 +2652,104 @@ func TestSyncPathsCodexIndexEventRefreshesStoredDuplicate(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
 
+func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+
+	uuid := "f7a8b9ca-7890-1234-ef01-456789012346"
+	staleLiveContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
+		String()
+	archivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		String()
+	updatedArchivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		AddCodexMessage(tsEarlyS5, "assistant", "Updated archived reply").
+		String()
+
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		staleLiveContent,
+	)
+	archivedPath := env.writeSession(
+		t, archivedDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		archivedContent,
+	)
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
+
+	env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("codex:"+uuid))
+
+	newTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.WriteFile(archivedPath, []byte(updatedArchivedContent), 0o644))
+	require.NoError(t, os.Chtimes(archivedPath, newTime, newTime), "chtimes archived update")
+
+	env.engine.SyncPaths([]string{archivedPath})
+
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"archived transcript event must parse the changed file, not the stale live duplicate")
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+}
+
+func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+
+	uuid := "f7a8b9ca-7890-1234-ef01-456789012347"
+	archivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		AddCodexMessage(tsEarlyS5, "assistant", "Archived reply").
+		String()
+	staleLiveContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
+		String()
+
+	archivedPath := env.writeSession(
+		t, archivedDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		archivedContent,
+	)
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
+
+	env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"DB must track the archived copy before a stale live duplicate appears")
+
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		staleLiveContent,
+	)
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
+
+	require.NoError(t, env.engine.SyncSingleSession("codex:"+uuid))
+
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"single-session resync must preserve the stored archived source")
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+}
+
 func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {
 	env := setupTestEnv(t)
 

@@ -581,6 +581,17 @@ func (e *Engine) classifyProviderChangedPath(
 		default:
 			continue
 		}
+		// Codex index (session_index.jsonl) events are owned by the engine's
+		// DB-aware classifyCodexIndexPath, which fans out only to sessions whose
+		// stored title changed and resolves a UUID's live/archived duplicate to
+		// the path the DB already tracks. The provider's broad index fan-out
+		// would re-add every sibling and prefer the live-over-archived layout,
+		// resurrecting a stale duplicate over the stored copy, so suppress it
+		// here and let the engine method classify the index event.
+		if agentType == parser.AgentCodex &&
+			filepath.Base(path) == parser.CodexSessionIndexFilename {
+			continue
+		}
 		roots := e.agentDirs[agentType]
 		if len(roots) == 0 {
 			continue
@@ -763,6 +774,19 @@ func providerDeletedPhysicalSQLiteSource(
 func dedupeDiscoveredFiles(
 	files []parser.DiscoveredFile,
 ) []parser.DiscoveredFile {
+	return dedupeDiscoveredFilesByPreference(files, preferDiscoveredFile)
+}
+
+func dedupeDiscoveredFilesPreferNewestCodex(
+	files []parser.DiscoveredFile,
+) []parser.DiscoveredFile {
+	return dedupeDiscoveredFilesByPreference(files, preferNewestCodexDiscoveredFile)
+}
+
+func dedupeDiscoveredFilesByPreference(
+	files []parser.DiscoveredFile,
+	prefer func(candidate, current parser.DiscoveredFile) bool,
+) []parser.DiscoveredFile {
 	if len(files) < 2 {
 		return files
 	}
@@ -771,7 +795,7 @@ func dedupeDiscoveredFiles(
 	for _, file := range files {
 		key := discoveredFileKey(file)
 		if current, ok := bestByKey[key]; ok {
-			if preferDiscoveredFile(file, current) {
+			if prefer(file, current) {
 				bestByKey[key] = file
 			}
 			continue
@@ -812,6 +836,27 @@ func preferDiscoveredFile(
 		}
 	}
 	return false
+}
+
+func preferNewestCodexDiscoveredFile(
+	candidate, current parser.DiscoveredFile,
+) bool {
+	if candidate.Agent == parser.AgentCodex && current.Agent == parser.AgentCodex {
+		candMTime, candOK := discoveredFileMTime(candidate.Path)
+		currMTime, currOK := discoveredFileMTime(current.Path)
+		if candOK && currOK && candMTime != currMTime {
+			return candMTime > currMTime
+		}
+	}
+	return preferDiscoveredFile(candidate, current)
+}
+
+func discoveredFileMTime(path string) (int64, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	return info.ModTime().UnixNano(), true
 }
 
 func (e *Engine) expandClaudeDuplicateCandidates(
@@ -939,20 +984,6 @@ func (e *Engine) classifyOnePath(
 	// <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
 	// shapes, so the legacy block was removed when Claude was folded
 	// onto its provider.
-
-	// Codex: either <codexDir>/<year>/<month>/<day>/<file>.jsonl
-	// or <codexDir>/<file>.jsonl for archived sessions.
-	for _, codexDir := range e.agentDirs[parser.AgentCodex] {
-		if codexDir == "" {
-			continue
-		}
-		if _, _, ok := parser.CodexSessionPathInfo(codexDir, path); ok {
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentCodex,
-			}, true
-		}
-	}
 
 	// Copilot: <copilotDir>/session-state/<uuid>.jsonl
 	//      or: <copilotDir>/session-state/<uuid>/events.jsonl
@@ -2316,12 +2347,27 @@ func (e *Engine) syncAllLocked(
 	}
 	all = append(all, providerFound...)
 
-	if !since.IsZero() {
+	quickSyncCutoff := !since.IsZero()
+	if quickSyncCutoff {
 		all = e.dedupeClaudeDiscoveredFiles(all)
+		// A Codex UUID can exist as both a live dated transcript and a flat
+		// archived copy. The provider's discovery deduplicates them to the
+		// preferred (live) layout, but the mtime cutoff filter runs before the
+		// engine's own dedup, so a changed archived copy that is newer than the
+		// cutoff would be lost behind an older live copy that the cutoff drops.
+		// Re-expand to every on-disk duplicate before filtering so the cutoff
+		// sees each copy's real mtime; the quick-sync dedupe below then keeps
+		// the newest surviving duplicate before falling back to normal layout
+		// preference.
+		all = e.expandCodexProviderDuplicates(all, scope)
 		all = e.filterFilesByMtime(ctx, all, since)
 	}
 
-	all = dedupeDiscoveredFiles(all)
+	if quickSyncCutoff {
+		all = dedupeDiscoveredFilesPreferNewestCodex(all)
+	} else {
+		all = dedupeDiscoveredFiles(all)
+	}
 	all = e.dedupeClaudeDiscoveredFiles(all)
 	all = e.filterShadowedLegacyKiroFiles(all)
 
@@ -2772,6 +2818,85 @@ func (e *Engine) discoverProviderSources(
 		}
 	}
 	return files, failures
+}
+
+// expandCodexProviderDuplicates re-adds the on-disk duplicate paths of each
+// discovered Codex source. The provider deduplicates a UUID's live and archived
+// copies to the preferred layout at discovery time; this restores the dropped
+// duplicates (scoped to the configured roots) so an mtime cutoff filter can
+// judge each copy on its own mtime, matching the legacy discover-then-filter
+// order. Non-Codex files and Codex files without a UUID-shaped name pass through
+// unchanged. Duplicates are keyed by path so nothing is added twice.
+func (e *Engine) expandCodexProviderDuplicates(
+	files []parser.DiscoveredFile, scope *rootSyncScope,
+) []parser.DiscoveredFile {
+	pather := e.codexUUIDPathLister(scope)
+	if pather == nil {
+		return files
+	}
+	seen := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
+	}
+	out := files
+	for _, f := range files {
+		if f.Agent != parser.AgentCodex {
+			continue
+		}
+		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
+		if uuid == "" {
+			continue
+		}
+		for _, dup := range pather(uuid) {
+			key := string(parser.AgentCodex) + "\x00" + filepath.Clean(dup)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, parser.DiscoveredFile{
+				Path:            dup,
+				Agent:           parser.AgentCodex,
+				ProviderProcess: true,
+				ProviderSource:  e.codexPinnedProviderSource(dup),
+			})
+		}
+	}
+	return out
+}
+
+// codexUUIDPathLister returns a function that lists every on-disk Codex
+// transcript path for a UUID under the in-scope roots, or nil when the Codex
+// provider is unavailable. It scopes a single provider to the in-scope roots so
+// the returned paths cover both the live dated and flat archived copies of a
+// duplicated UUID, including duplicates that share one root.
+func (e *Engine) codexUUIDPathLister(
+	scope *rootSyncScope,
+) func(string) []string {
+	factory, ok := e.providerFactories[parser.AgentCodex]
+	if !ok || factory == nil {
+		return nil
+	}
+	roots := make([]string, 0, len(e.agentDirs[parser.AgentCodex]))
+	for _, root := range e.agentDirs[parser.AgentCodex] {
+		if root == "" || !scope.includes(root) {
+			continue
+		}
+		roots = append(roots, root)
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   roots,
+		Machine: e.machine,
+	})
+	lister, ok := provider.(interface {
+		AllSourcePathsForUUID(string) []string
+	})
+	if !ok {
+		return nil
+	}
+	return lister.AllSourcePathsForUUID
 }
 
 // recordSyncStarted persists the start time of a sync run
@@ -3741,7 +3866,7 @@ func (e *Engine) processFile(
 		cachedMtime, cached := e.skipCache[file.Path]
 		e.skipMu.RUnlock()
 		if cached && cachedMtime == mtime {
-			if e.pathNeedsProjectReparse(file.Path) {
+			if e.pathNeedsCachedSkipBypass(file.Path) {
 				e.clearSkip(file.Path)
 			} else {
 				res := processResult{
@@ -3757,8 +3882,6 @@ func (e *Engine) processFile(
 
 	var res processResult
 	switch file.Agent {
-	case parser.AgentCodex:
-		res = e.processCodex(file, info)
 	case parser.AgentCopilot:
 		res = e.processCopilot(file, info)
 	case parser.AgentReasonix:
@@ -3808,6 +3931,25 @@ func (e *Engine) pathNeedsProjectReparse(path string) bool {
 	}
 	project, ok := e.db.GetProjectByPath(lookupPath)
 	return ok && parser.NeedsProjectReparse(project)
+}
+
+func (e *Engine) pathNeedsCachedSkipBypass(path string) bool {
+	return e.pathNeedsProjectReparse(path) ||
+		e.pathNeedsDataVersionReparse(path)
+}
+
+func (e *Engine) pathNeedsDataVersionReparse(path string) bool {
+	if e == nil || e.db == nil {
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	if _, _, ok := e.db.GetFileInfoByPath(lookupPath); !ok {
+		return false
+	}
+	return e.db.GetDataVersionByPath(lookupPath) < db.CurrentDataVersion()
 }
 
 func (e *Engine) processProviderFile(
@@ -3888,12 +4030,20 @@ func (e *Engine) processProviderFile(
 		cachedMtime, cached := e.skipCache[cacheKey]
 		e.skipMu.RUnlock()
 		if cached && cachedMtime == fingerprint.MTimeNS {
-			return processResult{
-				skip:      true,
-				mtime:     fingerprint.MTimeNS,
-				cacheSkip: true,
-				cacheKey:  cacheKey,
-			}, true
+			// A cached skip must not hide a session whose stored row needs
+			// self-healing (e.g. a parser data-version bump or generated
+			// roborev CI worktree project): clear the entry and fall through
+			// to a full reparse, mirroring the legacy process arm.
+			if e.pathNeedsCachedSkipBypass(file.Path) {
+				e.clearSkip(cacheKey)
+			} else {
+				return processResult{
+					skip:      true,
+					mtime:     fingerprint.MTimeNS,
+					cacheSkip: true,
+					cacheKey:  cacheKey,
+				}, true
+			}
 		}
 	}
 
@@ -3911,6 +4061,25 @@ func (e *Engine) processProviderFile(
 		return incRes, true
 	}
 	incForceReplace := incRes.forceReplace
+
+	// DB-stored fingerprint skip. The provider has no database handle, so the
+	// engine reproduces the legacy DB-aware skip that single-session JSONL
+	// providers relied on: an unchanged source whose stored size and effective
+	// mtime already match is not reparsed, even when the in-memory skip cache
+	// was cleared (e.g. by SyncSingleSession) or never populated (a fresh
+	// engine). For Codex this also folds in the session_index.jsonl sidecar:
+	// a shared index mtime bump that did not change this session's title must
+	// not trigger a reparse.
+	if !e.forceParse && !file.ForceParse &&
+		e.shouldSkipProviderSourceByDB(file, fingerprint) {
+		return processResult{
+			skip:        true,
+			mtime:       fingerprint.MTimeNS,
+			cacheSkip:   cacheSkip,
+			cacheKey:    cacheKey,
+			noCacheSkip: true,
+		}, true
+	}
 
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
 		Source:      source,
@@ -4935,18 +5104,41 @@ func (e *Engine) tryIncrementalJSONL(
 	}, true
 }
 
-func (e *Engine) shouldSkipCodex(
-	path string, info os.FileInfo,
+// shouldSkipProviderSourceByDB reports whether a provider-dispatched source is
+// already stored at the parsed fingerprint and can be skipped without a reparse.
+// It is the engine-side replacement for the DB-aware skip the legacy
+// single-session JSONL processors performed, since a provider has no database
+// handle. It is scoped to Codex: Codex's effective mtime folds in the shared
+// session_index.jsonl sidecar, so a size-and-effective-mtime match plus a
+// per-session title check preserves the legacy "skip when only the global index
+// advanced but this session's name did not" semantics. Other providers keep
+// their existing in-memory skip-cache behavior unchanged.
+func (e *Engine) shouldSkipProviderSourceByDB(
+	file parser.DiscoveredFile, fingerprint parser.SourceFingerprint,
 ) bool {
-	if e.forceParse { // parse-diff: always re-parse
+	if file.Agent != parser.AgentCodex {
 		return false
 	}
+	return e.shouldSkipCodexFingerprint(file.Path, fingerprint)
+}
+
+// shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
+// terms of a provider SourceFingerprint. The fingerprint MTimeNS already folds
+// in session_index.jsonl via CodexEffectiveMtime, so:
+//   - a stored size mismatch or stale data version forces a reparse;
+//   - an exact effective-mtime match skips;
+//   - an effective mtime ahead of the stored mtime driven only by the index
+//     (the raw transcript mtime is still at or below the stored mtime) skips
+//     unless this session's stored title differs from the current index title.
+func (e *Engine) shouldSkipCodexFingerprint(
+	path string, fingerprint parser.SourceFingerprint,
+) bool {
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
 	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-	if !ok || storedSize != info.Size() {
+	if !ok || storedSize != fingerprint.Size {
 		return false
 	}
 	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
@@ -4957,10 +5149,13 @@ func (e *Engine) shouldSkipCodex(
 		db.CurrentDataVersion() {
 		return false
 	}
-	fileMtime := info.ModTime().UnixNano()
-	effectiveMtime := parser.CodexEffectiveMtime(path, fileMtime)
+	effectiveMtime := fingerprint.MTimeNS
 	if storedMtime == effectiveMtime {
 		return true
+	}
+	fileMtime := effectiveMtime
+	if info, err := os.Stat(path); err == nil {
+		fileMtime = info.ModTime().UnixNano()
 	}
 	return effectiveMtime > storedMtime &&
 		fileMtime <= storedMtime &&
@@ -5044,7 +5239,7 @@ func (e *Engine) classifyCodexIndexPath(
 		}
 		var candidates []parser.DiscoveredFile
 		for _, root := range sessionRoots {
-			if src := parser.FindCodexSourceFile(root, uuid); src != "" {
+			if src := e.codexSourceFileForUUID(root, uuid); src != "" {
 				candidates = append(candidates, parser.DiscoveredFile{
 					Path:  src,
 					Agent: parser.AgentCodex,
@@ -5057,9 +5252,70 @@ func (e *Engine) classifyCodexIndexPath(
 		// A UUID can exist in both sessions/ and archived_sessions/.
 		// Prefer the path the DB already tracks so a title rename does
 		// not reparse a stale duplicate over the stored copy.
-		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
+		chosen := pickPreferredCodexDiscoveredFile(e.db, candidates)
+		// Pin the provider source to the chosen path and route it through the
+		// provider so processProviderFile parses exactly this copy instead of
+		// re-canonicalizing the UUID to the preferred dated layout, which would
+		// undo the DB-aware selection above.
+		chosen.ProviderProcess = true
+		chosen.ProviderSource = e.codexPinnedProviderSource(chosen.Path)
+		out = append(out, chosen)
 	}
 	return out
+}
+
+// codexSourceFileForUUID resolves a Codex session UUID to its on-disk
+// transcript path under a single sessions root, preferring the live dated
+// layout over a flat archived entry. It scopes a Codex provider to that one
+// root so the provider's cross-root live-over-archived canonicalization does
+// not collapse a per-root duplicate; classifyCodexIndexPath then applies its
+// own DB-aware preference across the per-root candidates. Returns "" when the
+// provider, source lookup, or path resolution fails.
+func (e *Engine) codexSourceFileForUUID(root, uuid string) string {
+	factory, ok := e.providerFactories[parser.AgentCodex]
+	if !ok || factory == nil {
+		return ""
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   []string{root},
+		Machine: e.machine,
+	})
+	source, found, err := provider.FindSource(
+		context.Background(),
+		parser.FindSourceRequest{RawSessionID: uuid},
+	)
+	if err != nil || !found {
+		return ""
+	}
+	return providerDiscoveredPath(source)
+}
+
+// codexPinnedProviderSource builds a Codex provider SourceRef pinned to the
+// exact path, bypassing the provider's live-over-archived canonicalization. It
+// is used when the engine's DB-aware or mtime-aware logic has already chosen
+// which on-disk copy of a duplicated UUID to parse, so processProviderFile
+// parses that copy instead of the provider's preferred dated layout. Returns
+// nil when the Codex provider or the path's source shape is unavailable.
+func (e *Engine) codexPinnedProviderSource(path string) *parser.SourceRef {
+	factory, ok := e.providerFactories[parser.AgentCodex]
+	if !ok || factory == nil {
+		return nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[parser.AgentCodex],
+		Machine: e.machine,
+	})
+	pinner, ok := provider.(interface {
+		SourceRefForPath(string) (parser.SourceRef, bool)
+	})
+	if !ok {
+		return nil
+	}
+	source, ok := pinner.SourceRefForPath(path)
+	if !ok {
+		return nil
+	}
+	return &source
 }
 
 // codexStoredNameDiffers reports whether the stored session_name for a Codex
@@ -5105,75 +5361,6 @@ func pickPreferredCodexDiscoveredFile(
 		}
 	}
 	return chosen
-}
-
-func (e *Engine) processCodex(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-
-	// Fast path: skip by file_path + effective mtime (includes session_index.jsonl).
-	if e.shouldSkipCodex(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	projectNeedsReparse := e.pathNeedsProjectReparse(file.Path)
-	forceReplace := false
-
-	codexParseFn := func(
-		path string, offset int64, startOrd int, _ string,
-	) ([]parser.ParsedMessage, time.Time, int64, error) {
-		return parser.ParseCodexSessionFrom(
-			path, offset, startOrd, false,
-		)
-	}
-	if res, ok := e.tryIncrementalJSONL(
-		file, info, parser.AgentCodex, codexParseFn,
-	); ok {
-		if !projectNeedsReparse {
-			// Force a full parse whenever the index title differs from the
-			// stored session_name. A mtime gate (indexMtime > storedMtime) is
-			// not enough here: the incremental write folds the index mtime into
-			// the stored file_mtime, so a later rename whose index mtime is <=
-			// that stored value slips past the gate. shouldSkipCodex's
-			// storedMtime==effectiveMtime fast path would then skip the refresh
-			// forever, stranding the stale title. Comparing the name directly
-			// closes that window.
-			if !e.codexIndexSessionNameChanged(file.Path) {
-				return res
-			}
-			// The index title changed, so a full parse still needs to refresh
-			// session metadata. Keep any fallback signal discovered while probing
-			// appended bytes so existing rows rewritten by the full parse are not
-			// dropped by the append-only write path.
-			forceReplace = res.forceReplace
-		}
-	} else {
-		forceReplace = res.forceReplace
-	}
-
-	sess, msgs, err := parser.ParseCodexSession(
-		file.Path, e.machine, false,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{skip: true}
-	}
-
-	sess.File.Inode, sess.File.Device = getFileIdentity(info)
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil && sess.File.Hash == "" {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-		forceReplace: forceReplace,
-	}
 }
 
 func (e *Engine) processCopilot(

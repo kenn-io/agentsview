@@ -86,11 +86,11 @@ func resolveRawSessionID(
 
 	// Canonical disk probe: if the input starts with a known
 	// agent prefix, trust that interpretation first and strip
-	// before calling FindSourceFunc (which rejects IDs with
+	// before resolving the source (which rejects IDs with
 	// colons via IsValidSessionID).
 	for _, def := range parser.Registry {
 		if def.IDPrefix == "" || !def.FileBased ||
-			def.FindSourceFunc == nil {
+			!agentHasDiskSourceLookup(def) {
 			continue
 		}
 		if !strings.HasPrefix(input, def.IDPrefix) {
@@ -98,7 +98,7 @@ func resolveRawSessionID(
 		}
 		bareID := strings.TrimPrefix(input, def.IDPrefix)
 		for _, dir := range agentDirs[def.Type] {
-			if def.FindSourceFunc(dir, bareID) != "" {
+			if findAgentSourceFile(def, dir, bareID) != "" {
 				return input, true
 			}
 		}
@@ -110,17 +110,74 @@ func resolveRawSessionID(
 	// colon-bearing raw IDs (Kimi, OpenClaw, Kiro IDE) may
 	// match.
 	for _, def := range parser.Registry {
-		if !def.FileBased || def.FindSourceFunc == nil {
+		if !def.FileBased || !agentHasDiskSourceLookup(def) {
 			continue
 		}
 		for _, dir := range agentDirs[def.Type] {
-			if def.FindSourceFunc(dir, input) != "" {
+			if findAgentSourceFile(def, dir, input) != "" {
 				return def.IDPrefix + input, true
 			}
 		}
 	}
 
 	return input, false
+}
+
+// agentHasDiskSourceLookup reports whether a session source can be located on
+// disk by raw ID for the agent: via the legacy AgentDef FindSourceFunc hook, or
+// via a provider-authoritative provider's FindSource for agents whose lookup was
+// folded onto the provider (e.g. Codex).
+func agentHasDiskSourceLookup(def parser.AgentDef) bool {
+	if def.FindSourceFunc != nil {
+		return true
+	}
+	if parser.ProviderMigrationModes()[def.Type] !=
+		parser.ProviderMigrationProviderAuthoritative {
+		return false
+	}
+	_, ok := parser.ProviderFactoryByType(def.Type)
+	return ok
+}
+
+// findAgentSourceFile resolves a raw agent session ID to an on-disk source path
+// under dir, using the legacy FindSourceFunc when present and otherwise the
+// provider's FindSource (RawSessionID lookup). Returns "" when no source
+// resolves or the agent has no on-disk lookup.
+func findAgentSourceFile(def parser.AgentDef, dir, rawID string) string {
+	if def.FindSourceFunc != nil {
+		return def.FindSourceFunc(dir, rawID)
+	}
+	factory, ok := parser.ProviderFactoryByType(def.Type)
+	if !ok {
+		return ""
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{Roots: []string{dir}})
+	source, found, err := provider.FindSource(
+		context.Background(),
+		parser.FindSourceRequest{RawSessionID: rawID},
+	)
+	if err != nil || !found {
+		return ""
+	}
+	if path, ok := providerSourcePath(source); ok {
+		return path
+	}
+	return ""
+}
+
+// providerSourcePath extracts the on-disk path a provider SourceRef points to,
+// preferring the display path and falling back to the fingerprint key or key.
+func providerSourcePath(source parser.SourceRef) (string, bool) {
+	for _, candidate := range []string{
+		source.DisplayPath,
+		source.FingerprintKey,
+		source.Key,
+	} {
+		if candidate != "" {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 // usageExitCode classifies a SessionUsage into an exit code: 2 when

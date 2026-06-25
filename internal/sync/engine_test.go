@@ -1420,8 +1420,10 @@ func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
 		},
 	}
 
-	assert.False(t, e.shouldSkipCodex(path, info),
-		"stale generated roborev CI projects must be reparsed")
+	assert.False(t, e.shouldSkipCodexFingerprint(path, parser.SourceFingerprint{
+		Size:    info.Size(),
+		MTimeNS: info.ModTime().UnixNano(),
+	}), "stale generated roborev CI projects must be reparsed")
 }
 
 func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
@@ -1459,6 +1461,13 @@ func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
 		db:        database,
 		idPrefix:  "host~",
 		skipCache: map[string]int64{path: info.ModTime().UnixNano()},
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+		},
 		pathRewriter: func(path string) string {
 			return "host:" + path
 		},
@@ -1473,6 +1482,156 @@ func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
 		"remote skip cache must not hide stale generated roborev CI projects")
 	require.Len(t, res.results, 1)
 	assert.Equal(t, "agentsview", res.results[0].Session.Project)
+}
+
+func TestProcessFileSkipCacheReparsesStaleCodexDataVersion(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"abc",
+			"/home/user/code/agentsview",
+			"user",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+
+	sess := db.Session{
+		ID:        "host~codex:abc",
+		Project:   "agentsview",
+		Machine:   "host",
+		Agent:     "codex",
+		FilePath:  strPtr("host:" + path),
+		FileSize:  int64Ptr(info.Size()),
+		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion()-1,
+	))
+
+	e := &Engine{
+		db:        database,
+		idPrefix:  "host~",
+		skipCache: map[string]int64{path: info.ModTime().UnixNano()},
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+		},
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  path,
+	})
+	require.NoError(t, res.err)
+	require.False(t, res.skip,
+		"skip cache must not hide stale parser data versions")
+	require.Len(t, res.results, 1)
+}
+
+func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"abc",
+			"/home/user/code/agentsview",
+			"user",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+
+	sess := db.Session{
+		ID:        "host~codex:abc",
+		Project:   "agentsview",
+		Machine:   "host",
+		Agent:     "codex",
+		FilePath:  strPtr("host:" + path),
+		FileSize:  int64Ptr(info.Size()),
+		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	e := &Engine{
+		db:        database,
+		idPrefix:  "host~",
+		skipCache: map[string]int64{},
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+		},
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  path,
+	})
+	require.NoError(t, res.err)
+	require.True(t, res.skip)
+	assert.True(t, res.noCacheSkip)
+	assert.Empty(t, e.SnapshotSkipCache())
+}
+
+func TestClassifyCodexIndexPathSkipsMissingTranscript(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e7"
+	missingPath := filepath.Join(
+		codexDir,
+		"2026", "06", "11",
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+	)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:          "codex:" + uuid,
+		Project:     "agentsview",
+		Machine:     "local",
+		Agent:       string(parser.AgentCodex),
+		SessionName: strPtr("Old title"),
+		FilePath:    &missingPath,
+	}))
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"New title",`+
+			`"updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+	), 0o644))
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine: "local",
+	})
+
+	files := engine.classifyCodexIndexPath(indexPath)
+
+	assert.Empty(t, files)
 }
 
 func TestProcessCodexAppendedStaleProjectDoesFullReparse(t *testing.T) {
@@ -1525,21 +1684,25 @@ func TestProcessCodexAppendedStaleProjectDoesFullReparse(t *testing.T) {
 	) + "\n")
 	require.NoError(t, err, "append codex fixture")
 	require.NoError(t, f.Close(), "close codex fixture")
-	info, err = os.Stat(path)
-	require.NoError(t, err, "stat appended codex fixture")
-
 	e := &Engine{
 		db:       database,
 		idPrefix: "host~",
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+		},
 		pathRewriter: func(path string) string {
 			return "host:" + path
 		},
 	}
 
-	res := e.processCodex(parser.DiscoveredFile{
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
 		Agent: parser.AgentCodex,
 		Path:  path,
-	}, info)
+	})
 	require.NoError(t, res.err)
 	require.Nil(t, res.incremental,
 		"stale project metadata must force full parse even when file appended")
@@ -1615,21 +1778,25 @@ func TestProcessCodexAppendedStaleProjectCarriesForceReplace(t *testing.T) {
 	) + "\n")
 	require.NoError(t, err, "append codex fixture")
 	require.NoError(t, f.Close(), "close codex fixture")
-	info, err = os.Stat(path)
-	require.NoError(t, err, "stat appended codex fixture")
-
 	e := &Engine{
 		db:       database,
 		idPrefix: "host~",
+		agentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+		},
 		pathRewriter: func(path string) string {
 			return "host:" + path
 		},
 	}
 
-	res := e.processCodex(parser.DiscoveredFile{
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
 		Agent: parser.AgentCodex,
 		Path:  path,
-	}, info)
+	})
 	require.NoError(t, res.err)
 	require.Nil(t, res.incremental,
 		"stale project metadata must force full parse even when file appended")
