@@ -716,6 +716,10 @@ func pgCursorUsageRowsSQLForBounds(
 	}
 
 	where := "cu.model != ''"
+	scope := normalizePGAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := pgAutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+		where += "\n\tAND " + pred
+	}
 	where = appendPGUsageSourceFilterClauses(
 		where, pb, f, "cu.model",
 	)

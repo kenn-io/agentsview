@@ -2194,7 +2194,7 @@ SELECT
 	'cursor' AS agent,
 	'' AS machine,
 	0 AS user_message_count,
-	FALSE AS is_automated,
+	cu.is_headless AS is_automated,
 	'' AS display_name,
 	NULL AS started_at,
 	cu.occurred_at AS activity_at
@@ -2304,6 +2304,10 @@ func duckCursorUsageRowsSQLForBounds(
 
 	where := "cu.model != ''"
 	var args []any
+	scope := duckNormalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	if pred := duckAutomatedScopePredicate(scope, "cu.is_headless"); pred != "" {
+		where += "\n\tAND " + pred
+	}
 	where, args = appendDuckUsageSourceFilterClauses(
 		where, args, "cu.model", f,
 	)
