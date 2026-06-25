@@ -8,7 +8,9 @@ export type DaemonPushRequest = {
   duckdb?: ConfigDuckDBConfig;
   exclude_projects?: any[] | null;
   full: boolean;
+  migrate_legacy_sync_state?: boolean;
   pg?: ConfigPGConfig;
   projects?: any[] | null;
+  sync_state_target?: string;
 };
 

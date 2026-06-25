@@ -4,6 +4,7 @@
 /* eslint-disable */
 export type ConfigRemoteHost = {
   host: string;
+  interval?: number;
   port?: number;
   user?: string;
 };
