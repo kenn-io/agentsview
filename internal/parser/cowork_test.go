@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -12,6 +13,54 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// coworkProviderForRoot constructs a cowork provider rooted at root.
+func coworkProviderForRoot(t *testing.T, root, machine string) Provider {
+	t.Helper()
+	provider, ok := NewProvider(AgentCowork, ProviderConfig{
+		Roots:   []string{root},
+		Machine: machine,
+	})
+	require.True(t, ok)
+	return provider
+}
+
+// coworkDiscoveredPaths returns the transcript paths the provider discovers
+// under root.
+func coworkDiscoveredPaths(t *testing.T, root string) []string {
+	t.Helper()
+	sources, err := coworkProviderForRoot(t, root, "").Discover(context.Background())
+	require.NoError(t, err)
+	paths := make([]string, len(sources))
+	for i, source := range sources {
+		paths[i] = source.DisplayPath
+	}
+	return paths
+}
+
+// coworkParseTranscript finds and parses a single cowork transcript through
+// the provider, returning the parse results and any excluded session IDs.
+func coworkParseTranscript(
+	t *testing.T, root, transcript, machine string,
+) ([]ParseResult, []string) {
+	t.Helper()
+	provider := coworkProviderForRoot(t, root, machine)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: transcript,
+	})
+	require.NoError(t, err)
+	require.True(t, ok, "find source for %s", transcript)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:  source,
+		Machine: machine,
+	})
+	require.NoError(t, err)
+	results := make([]ParseResult, len(outcome.Results))
+	for i, out := range outcome.Results {
+		results[i] = out.Result
+	}
+	return results, outcome.ExcludedSessionIDs
+}
 
 // All identifiers, titles, and content below are synthetic fixtures.
 
@@ -91,7 +140,7 @@ func coworkTranscriptLines(cli string) []string {
 	}
 }
 
-func TestDiscoverCoworkSessions(t *testing.T) {
+func TestCoworkProviderDiscoversSessions(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000001"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -104,13 +153,12 @@ func TestDiscoverCoworkSessions(t *testing.T) {
 		transcriptLines: coworkTranscriptLines(cli),
 	})
 
-	got := DiscoverCoworkSessions(root)
-	require.Len(t, got, 1, "discovered files")
-	assert.Equal(t, transcript, got[0].Path, "Path")
-	assert.Equal(t, AgentCowork, got[0].Agent, "Agent")
+	got := coworkDiscoveredPaths(t, root)
+	require.Len(t, got, 1, "discovered sources")
+	assert.Equal(t, transcript, got[0], "DisplayPath")
 }
 
-func TestDiscoverCoworkSessionsIgnoresNoise(t *testing.T) {
+func TestCoworkProviderDiscoverIgnoresNoise(t *testing.T) {
 	root := t.TempDir()
 	wsDir := filepath.Join(root, "org", "ws")
 	require.NoError(t, os.MkdirAll(wsDir, 0o755), "mkdir ws")
@@ -145,10 +193,10 @@ func TestDiscoverCoworkSessionsIgnoresNoise(t *testing.T) {
 		"write transcript-less meta",
 	)
 
-	assert.Empty(t, DiscoverCoworkSessions(root))
+	assert.Empty(t, coworkDiscoveredPaths(t, root))
 }
 
-func TestParseCoworkSession(t *testing.T) {
+func TestCoworkProviderParsesSession(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000002"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -163,8 +211,7 @@ func TestParseCoworkSession(t *testing.T) {
 		transcriptLines: coworkTranscriptLines(cli),
 	})
 
-	results, excluded, err := ParseCoworkSession(transcript, "host-1")
-	require.NoError(t, err, "parse")
+	results, excluded := coworkParseTranscript(t, root, transcript, "host-1")
 	require.Empty(t, excluded, "excluded")
 	require.Len(t, results, 1, "results")
 
@@ -185,7 +232,7 @@ func TestParseCoworkSession(t *testing.T) {
 	assert.Equal(t, 12, sess.PeakContextTokens, "PeakContextTokens (input+cacheRead)")
 }
 
-func TestParseCoworkSessionTitleFallsBackToAITitle(t *testing.T) {
+func TestCoworkProviderParseTitleFallsBackToAITitle(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000003"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -198,14 +245,13 @@ func TestParseCoworkSessionTitleFallsBackToAITitle(t *testing.T) {
 		transcriptLines: coworkTranscriptLines(cli),
 	})
 
-	results, _, err := ParseCoworkSession(transcript, "host-1")
-	require.NoError(t, err, "parse")
+	results, _ := coworkParseTranscript(t, root, transcript, "host-1")
 	require.Len(t, results, 1, "results")
 	assert.Equal(t, "Auto title", results[0].Session.SessionName,
 		"falls back to ai-title event")
 }
 
-func TestParseCoworkSessionProjectFromSelectedFolder(t *testing.T) {
+func TestCoworkProviderParseProjectFromSelectedFolder(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000004"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -219,14 +265,13 @@ func TestParseCoworkSessionProjectFromSelectedFolder(t *testing.T) {
 		transcriptLines: coworkTranscriptLines(cli),
 	})
 
-	results, _, err := ParseCoworkSession(transcript, "host-1")
-	require.NoError(t, err, "parse")
+	results, _ := coworkParseTranscript(t, root, transcript, "host-1")
 	require.Len(t, results, 1, "results")
 	assert.Equal(t, "my_app", results[0].Session.Project,
 		"project derived from userSelectedFolders")
 }
 
-func TestFindCoworkSourceFile(t *testing.T) {
+func TestCoworkProviderFindsSourceFile(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000005"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -239,11 +284,22 @@ func TestFindCoworkSourceFile(t *testing.T) {
 		transcriptLines: coworkTranscriptLines(cli),
 	})
 
-	assert.Equal(t, transcript, FindCoworkSourceFile(root, cli), "found")
-	assert.Empty(t, FindCoworkSourceFile(root, "nonexistent-id"), "missing")
+	provider := coworkProviderForRoot(t, root, "")
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: cli,
+	})
+	require.NoError(t, err)
+	require.True(t, ok, "found")
+	assert.Equal(t, transcript, found.DisplayPath)
+
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "nonexistent-id",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok, "missing")
 }
 
-func TestClassifyCoworkPath(t *testing.T) {
+func TestCoworkProviderClassifiesChangedPath(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000006"
 	metaPath, transcript := writeCoworkSession(t, root, coworkFixture{
@@ -256,20 +312,34 @@ func TestClassifyCoworkPath(t *testing.T) {
 		transcriptLines: coworkTranscriptLines(cli),
 	})
 
+	provider := coworkProviderForRoot(t, root, "")
+	classify := func(path string) (string, bool) {
+		sources, err := provider.SourcesForChangedPath(
+			context.Background(),
+			ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: root},
+		)
+		require.NoError(t, err)
+		if len(sources) == 0 {
+			return "", false
+		}
+		require.Len(t, sources, 1)
+		return sources[0].DisplayPath, true
+	}
+
 	// A transcript change classifies to itself.
-	got, ok := ClassifyCoworkPath(root, transcript)
+	got, ok := classify(transcript)
 	require.True(t, ok, "transcript classified")
 	assert.Equal(t, transcript, got, "transcript path")
 
 	// A metadata change resolves to the session's transcript.
-	got, ok = ClassifyCoworkPath(root, metaPath)
+	got, ok = classify(metaPath)
 	require.True(t, ok, "metadata classified")
 	assert.Equal(t, transcript, got, "metadata resolves to transcript")
 
 	// Unrelated and outside-root paths are ignored.
-	_, ok = ClassifyCoworkPath(root, filepath.Join(root, "org", "ws", "artifacts.json"))
+	_, ok = classify(filepath.Join(root, "org", "ws", "artifacts.json"))
 	assert.False(t, ok, "cache file ignored")
-	_, ok = ClassifyCoworkPath(root, "/some/other/place.jsonl")
+	_, ok = classify("/some/other/place.jsonl")
 	assert.False(t, ok, "outside root ignored")
 }
 
@@ -310,7 +380,7 @@ func TestCoworkSessionMtime(t *testing.T) {
 		"transcript mtime when metadata missing")
 }
 
-func TestDiscoverCoworkSessionsIncludesSubagents(t *testing.T) {
+func TestCoworkProviderDiscoverIncludesSubagents(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000008"
 	enc := "-sessions-demo"
@@ -344,29 +414,27 @@ func TestDiscoverCoworkSessionsIncludesSubagents(t *testing.T) {
 		"write subagent",
 	)
 
-	got := DiscoverCoworkSessions(root)
-	paths := make([]string, len(got))
-	for i, f := range got {
-		paths[i] = f.Path
-		assert.Equal(t, AgentCowork, f.Agent, "Agent")
-	}
+	paths := coworkDiscoveredPaths(t, root)
 	assert.Contains(t, paths, transcript, "main transcript discovered")
 	assert.Contains(t, paths, subPath, "subagent transcript discovered")
 
 	// The subagent parses into a cowork-namespaced subagent session whose
 	// parent is the main session.
-	results, _, err := ParseCoworkSession(subPath, "host-1")
-	require.NoError(t, err, "parse subagent")
+	results, _ := coworkParseTranscript(t, root, subPath, "host-1")
 	require.Len(t, results, 1, "results")
 	sub := results[0].Session
 	assert.Equal(t, "cowork:agent-0000000000000001", sub.ID, "subagent ID")
 	assert.Equal(t, "cowork:"+cli, sub.ParentSessionID, "parent prefixed")
 	assert.Equal(t, RelSubagent, sub.RelationshipType, "RelSubagent")
 
-	// FindCoworkSourceFile resolves the subagent by its raw ID too.
-	assert.Equal(t, subPath,
-		FindCoworkSourceFile(root, "agent-0000000000000001"),
-		"find subagent source")
+	// The provider resolves the subagent by its raw ID too.
+	provider := coworkProviderForRoot(t, root, "")
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "agent-0000000000000001",
+	})
+	require.NoError(t, err)
+	require.True(t, ok, "find subagent source")
+	assert.Equal(t, subPath, found.DisplayPath)
 }
 
 func TestResolveCoworkSessionRejectsSymlinkEscape(t *testing.T) {

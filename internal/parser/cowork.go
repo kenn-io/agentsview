@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -246,89 +245,6 @@ func walkCoworkSessions(root string, fn func(transcriptPath string)) {
 	)
 }
 
-// DiscoverCoworkSessions finds all cowork session transcripts under root,
-// including subagent transcripts.
-func DiscoverCoworkSessions(root string) []DiscoveredFile {
-	var files []DiscoveredFile
-	walkCoworkSessions(root, func(transcript string) {
-		files = append(files, DiscoveredFile{
-			Path:  transcript,
-			Agent: AgentCowork,
-		})
-	})
-	return files
-}
-
-// FindCoworkSourceFile locates a cowork transcript by its raw session ID
-// (the cliSessionId or "agent-<id>" subagent id, with the "cowork:" prefix
-// already stripped).
-func FindCoworkSourceFile(root, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-	target := sessionID + ".jsonl"
-	var found string
-	walkCoworkSessions(root, func(transcript string) {
-		if found == "" && filepath.Base(transcript) == target {
-			found = transcript
-		}
-	})
-	return found
-}
-
-// ClassifyCoworkPath reports whether a changed path under a cowork root is
-// a cowork session transcript (main or subagent) or its sibling metadata
-// file, and returns the transcript file that should be (re)parsed.
-// Metadata changes (e.g. a title rename) resolve to the session's main
-// transcript so the rename is picked up.
-func ClassifyCoworkPath(root, path string) (string, bool) {
-	rel, ok := relUnder(root, path)
-	if !ok {
-		return "", false
-	}
-	sep := string(filepath.Separator)
-	parts := strings.Split(rel, sep)
-	n := len(parts)
-	base := parts[n-1]
-
-	if strings.HasSuffix(base, ".jsonl") {
-		// Must live under a .claude/projects/ subtree.
-		marker := sep + ".claude" + sep + "projects" + sep
-		if !strings.Contains(sep+rel, marker) {
-			return "", false
-		}
-		stem := strings.TrimSuffix(base, ".jsonl")
-		if strings.HasPrefix(stem, "agent-") {
-			// Subagent transcript: <enc>/<cli>/subagents/**/agent-*.jsonl.
-			if slices.Contains(parts, "subagents") {
-				return path, true
-			}
-			return "", false
-		}
-		// Main transcript: <enc>/<cliSessionId>.jsonl directly under projects.
-		if n >= 5 && parts[n-4] == ".claude" && parts[n-3] == "projects" &&
-			IsValidSessionID(stem) {
-			return path, true
-		}
-		return "", false
-	}
-
-	// Metadata: <orgId>/<workspaceId>/local_<uuid>.json
-	if isCoworkMetaFileName(base) {
-		meta := readCoworkMeta(path)
-		if meta.CliSessionID == "" {
-			return "", false
-		}
-		sessionDir := strings.TrimSuffix(path, ".json")
-		if main, _ := resolveCoworkSession(
-			sessionDir, meta.CliSessionID,
-		); main != "" {
-			return main, true
-		}
-	}
-	return "", false
-}
-
 // relUnder returns the path of child relative to dir when child is
 // strictly contained within dir, mirroring the engine's isUnder helper so
 // the parser can classify paths without importing sync internals.
@@ -377,13 +293,13 @@ func extractCoworkAITitle(transcriptPath string) string {
 	return title
 }
 
-// ParseCoworkSession parses a cowork session transcript. It reuses the
-// Claude Code parser on the transcript and then rewrites the results into
-// the cowork namespace: agent type, "cowork:"-prefixed IDs, the session
-// title, and metadata-derived timestamps for transcripts that carry none.
-// Returns parsed results plus session IDs the parser intentionally
-// excluded (prefixed), matching the Claude transcript parser.
-func ParseCoworkSession(
+// parseSession parses a cowork session transcript. It reuses the Claude
+// Code parser on the transcript and then rewrites the results into the
+// cowork namespace: agent type, "cowork:"-prefixed IDs, the session title,
+// and metadata-derived timestamps for transcripts that carry none. Returns
+// parsed results plus session IDs the parser intentionally excluded
+// (prefixed), matching ParseClaudeSessionWithExclusions.
+func parseCoworkSession(
 	transcriptPath, machine string,
 ) ([]ParseResult, []string, error) {
 	metaPath := coworkMetaPathForTranscript(transcriptPath)
