@@ -117,17 +117,35 @@ func TestRootCommand_RegistersMCP(t *testing.T) {
 	assert.True(t, found, "root command should register the mcp subcommand")
 }
 
-func TestResolveMCPServiceRejectsPG(t *testing.T) {
-	t.Parallel()
+func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	remoteDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
+	t.Setenv("AGENTSVIEW_PG_SCHEMA", "custom_schema")
+	seedSession(t, dataDir, "local-session", "local")
+	seedSession(t, remoteDir, "pg-session", "remote")
+
+	remoteDB, err := db.Open(filepath.Join(remoteDir, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = remoteDB.Close() })
+	stub := stubPGReadStore(t, remoteDB)
+	forbidStartBackgroundServeForTransport(t,
+		"agentsview mcp --pg must use the PG read store, not the daemon")
+
 	cmd := newMCPCommand()
 	cmd.SetArgs([]string{"--pg"})
 	require.NoError(t, cmd.ParseFlags([]string{"--pg"}))
 
 	svc, cleanup, err := resolveMCPService(cmd)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--pg")
-	assert.Nil(t, svc)
-	assert.Nil(t, cleanup)
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	res, err := svc.List(context.Background(), service.ListFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, res.Sessions, 1)
+	assert.Equal(t, "pg-session", res.Sessions[0].ID)
+	assert.Equal(t, "postgres://example.test/agentsview", stub.PG.URL)
+	assert.Equal(t, "custom_schema", stub.PG.Schema)
 }
 
 func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {

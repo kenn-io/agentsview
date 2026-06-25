@@ -737,10 +737,10 @@ directly.
 
 Use `--server <url>` to point at an explicit running daemon. When the
 daemon requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
-`--server-token-file <path>`. To serve PostgreSQL-backed data, run
+`--server-token-file <path>`. Use `--pg` to read from configured
+PostgreSQL directly, or run
 [`agentsview pg serve`](/pg-sync/#agentsview-pg-serve) and pass its
-URL with `--server`; `--pg` is not supported by `agentsview mcp`
-because it bypasses the daemon policy.
+URL with `--server`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -748,6 +748,7 @@ because it bypasses the daemon policy.
 | `--http-allow-insecure` | `false` | Allow non-loopback HTTP binds; requires bearer auth |
 | `--server <url>` | | Explicit daemon URL for MCP tool calls |
 | `--server-token-file <path>` | | Bearer token file for an explicit daemon URL |
+| `--pg` | `false` | Read from configured PostgreSQL |
 
 ---
 

@@ -103,11 +103,25 @@ prevents accidentally leaking a local daemon token to another host.
 
 ## PostgreSQL-Backed MCP
 
-`agentsview mcp --pg` is not supported. The MCP server requires a daemon-backed
-service, and `--pg` would open PostgreSQL directly.
+If `[pg]` or `AGENTSVIEW_PG_URL` is configured, pass `--pg` to read from
+PostgreSQL directly:
 
-To expose PostgreSQL-backed session history over MCP, run a read-only PostgreSQL
-daemon and point MCP at it:
+```json
+{
+  "mcpServers": {
+    "agentsview": {
+      "command": "agentsview",
+      "args": ["mcp", "--pg"]
+    }
+  }
+}
+```
+
+This is useful when the MCP server should read the shared PostgreSQL archive
+without relying on a local SQLite daemon.
+
+You can also expose PostgreSQL-backed session history through a read-only
+PostgreSQL daemon and point MCP at it:
 
 ```bash
 agentsview pg serve --port 8085

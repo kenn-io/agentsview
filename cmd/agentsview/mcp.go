@@ -118,15 +118,14 @@ Add to your MCP client config (e.g. Claude Desktop):
 			"every request. Only expose it on trusted networks (Tailscale, "+
 			"VPN-only) or behind an authenticating reverse proxy.")
 
-	// Transport-selection flags, mirroring the `session` command where
-	// applicable. MCP requires a daemon-backed service, so --pg is
-	// retained only to produce a specific error instead of silently
-	// opening PostgreSQL directly.
+	// Transport-selection flags, mirroring the `session` command.
+	// Implicit local SQLite reads are daemon-backed; explicit --server
+	// and --pg select their requested remote/read-store backends.
 	cmd.Flags().String("server", "", "Remote daemon URL")
 	cmd.Flags().String("server-token-file", "",
 		"File containing bearer token for explicit --server requests")
 	cmd.Flags().Bool("pg", false,
-		"Unsupported for MCP; run pg serve and use --server instead")
+		"Read session data from configured PostgreSQL")
 
 	return cmd
 }
@@ -152,16 +151,16 @@ func resolveMCPService(
 		return service.NewHTTPBackend(remote, token, false),
 			func() {}, nil
 	}
-	if pgReadRequested(cmd) {
-		return nil, nil, errors.New(
-			"agentsview mcp requires a daemon; --pg opens PostgreSQL " +
-				"directly. Run 'agentsview pg serve' and pass --server, " +
-				"or omit --pg to use the local daemon",
-		)
-	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
+	}
+	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if usePG {
+		return newPGReadService(cfg, pgCfg)
 	}
 	return newMCPDaemonService(cfg), func() {}, nil
 }
