@@ -95,9 +95,11 @@ type Engine struct {
 	// non-interactive sessions (nil result). The file is
 	// retried when its mtime changes. S3 entries also keep an
 	// in-memory source fingerprint when one is available.
-	skipMu           gosync.RWMutex
-	skipCache        map[string]int64
-	skipFingerprints map[string]string
+	skipMu            gosync.RWMutex
+	skipCache         map[string]int64
+	skipFingerprints  map[string]string
+	s3CodexIndexMu    gosync.Mutex
+	s3CodexIndexCache map[string]s3CodexIndexSnapshot
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -191,6 +193,7 @@ func NewEngine(
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		skipCache:               skipCache,
 		skipFingerprints:        make(map[string]string),
+		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
 		idPrefix:                cfg.IDPrefix,
 		pathRewriter:            cfg.PathRewriter,
@@ -440,6 +443,7 @@ func (e *Engine) SyncPaths(paths []string) {
 	}()
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
+	e.resetS3CodexIndexCache()
 
 	results := e.startWorkers(context.Background(), files)
 	stats = e.collectAndBatch(
@@ -2762,6 +2766,7 @@ func (e *Engine) syncAllLocked(
 		e.recordSyncStarted()
 	}
 	e.phaseStats.Reset()
+	e.resetS3CodexIndexCache()
 
 	t0 := time.Now()
 
@@ -3216,7 +3221,6 @@ func (e *Engine) filterFilesByMtime(
 	cutoffNs := cutoff.UnixNano()
 	out := files[:0]
 	codexIndexRefresh := make(map[string][]parser.DiscoveredFile)
-	s3CodexIndexes := make(map[string]s3CodexIndexSnapshot)
 	for _, f := range files {
 		mtime, err := discoveredFileMtime(f)
 		if err != nil {
@@ -3237,7 +3241,7 @@ func (e *Engine) filterFilesByMtime(
 		indexNeedsRefresh := false
 		if isS3SourcePath(f.Path) {
 			indexNeedsRefresh = e.s3CodexIndexNeedsRefreshSince(
-				f, cutoffNs, s3CodexIndexes,
+				f, cutoffNs,
 			)
 		} else {
 			indexNeedsRefresh = e.codexIndexNeedsRefreshSince(
@@ -9219,6 +9223,7 @@ func (e *Engine) SyncSingleSessionContext(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	e.resetS3CodexIndexCache()
 
 	host, _ := parser.StripHostPrefix(sessionID)
 	if host != "" && !isS3SourcePath(e.db.GetSessionFilePath(sessionID)) {

@@ -118,14 +118,56 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(
 }
 
 type s3CodexIndexSnapshot struct {
-	mtime  int64
-	titles map[string]string
+	mtime        int64
+	statOK       bool
+	titles       map[string]string
+	titlesLoaded bool
+}
+
+func (e *Engine) resetS3CodexIndexCache() {
+	e.s3CodexIndexMu.Lock()
+	e.s3CodexIndexCache = make(map[string]s3CodexIndexSnapshot)
+	e.s3CodexIndexMu.Unlock()
+}
+
+func (e *Engine) s3CodexIndexSnapshot(
+	indexURI string, needTitles bool,
+) s3CodexIndexSnapshot {
+	e.s3CodexIndexMu.Lock()
+	defer e.s3CodexIndexMu.Unlock()
+	if e.s3CodexIndexCache == nil {
+		e.s3CodexIndexCache = make(map[string]s3CodexIndexSnapshot)
+	}
+
+	snapshot, ok := e.s3CodexIndexCache[indexURI]
+	if !ok {
+		obj, err := statS3Object(indexURI)
+		if err != nil {
+			e.s3CodexIndexCache[indexURI] = snapshot
+			return snapshot
+		}
+		snapshot = s3CodexIndexSnapshot{
+			mtime:  obj.LastModified.UnixNano(),
+			statOK: true,
+		}
+		e.s3CodexIndexCache[indexURI] = snapshot
+	}
+
+	if needTitles && snapshot.statOK && !snapshot.titlesLoaded {
+		titles, err := fetchS3CodexSessionIndexTitles(indexURI)
+		snapshot.titlesLoaded = err == nil
+		if err == nil {
+			snapshot.titles = titles
+		}
+		e.s3CodexIndexCache[indexURI] = snapshot
+	}
+
+	return snapshot
 }
 
 func (e *Engine) s3CodexIndexNeedsRefreshSince(
 	file parser.DiscoveredFile,
 	cutoffNs int64,
-	cache map[string]s3CodexIndexSnapshot,
 ) bool {
 	uuid := parser.CodexSessionUUIDFromFilename(path.Base(file.Path))
 	if uuid == "" {
@@ -135,29 +177,11 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 	if !ok {
 		return false
 	}
-	snapshot, ok := cache[indexURI]
-	if !ok {
-		obj, err := statS3Object(indexURI)
-		if err != nil {
-			cache[indexURI] = snapshot
-			return false
-		}
-		snapshot.mtime = obj.LastModified.UnixNano()
-		if snapshot.mtime >= cutoffNs {
-			titles, err := fetchS3CodexSessionIndexTitles(indexURI)
-			if err == nil {
-				snapshot.titles = titles
-			}
-		}
-		cache[indexURI] = snapshot
-	}
-	if snapshot.mtime < cutoffNs {
+	snapshot := e.s3CodexIndexSnapshot(indexURI, true)
+	if !snapshot.statOK || !snapshot.titlesLoaded || snapshot.mtime < cutoffNs {
 		return false
 	}
-	title, ok := snapshot.titles[uuid]
-	if !ok {
-		return false
-	}
+	title := snapshot.titles[uuid]
 	return e.s3CodexStoredNameDiffers(file, uuid, title)
 }
 
@@ -168,17 +192,11 @@ func (e *Engine) s3CodexIndexSessionNameChanged(
 	if !ok {
 		return false
 	}
-	if _, err := statS3Object(indexURI); err != nil {
+	snapshot := e.s3CodexIndexSnapshot(indexURI, true)
+	if !snapshot.statOK || !snapshot.titlesLoaded {
 		return false
 	}
-	titles, err := fetchS3CodexSessionIndexTitles(indexURI)
-	if err != nil {
-		return false
-	}
-	title, ok := titles[uuid]
-	if !ok {
-		return false
-	}
+	title := snapshot.titles[uuid]
 	return e.s3CodexStoredNameDiffers(file, uuid, title)
 }
 

@@ -378,6 +378,80 @@ func TestFilterFilesByMtimeKeepsOnlyS3CodexChangedIndexTitle(t *testing.T) {
 	assert.Equal(t, 1, fetchCalls)
 }
 
+func TestFilterFilesByMtimeKeepsS3CodexClearedIndexTitle(t *testing.T) {
+	database := openTestDB(t)
+	const uuid = "11111111-1111-4111-8111-111111111111"
+	root := "s3://bucket/laptop/raw/codex"
+	path := root + "/2026/06/24/rollout-2026-06-24T00-00-00-" +
+		uuid + ".jsonl"
+	indexPath := "s3://bucket/laptop/raw/session_index.jsonl"
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+	indexMtime := time.Date(2026, 6, 24, 12, 30, 0, 0, time.UTC)
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:          "laptop~codex:" + uuid,
+		Project:     "repo",
+		Machine:     "laptop",
+		Agent:       "codex",
+		FilePath:    strPtr(path),
+		FileSize:    int64Ptr(101),
+		FileMtime:   int64Ptr(mtime),
+		FileHash:    strPtr("s3:fingerprint:rollout"),
+		SessionName: strPtr("Old title"),
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		"laptop~codex:"+uuid, db.CurrentDataVersion(),
+	))
+
+	for _, tc := range []struct {
+		name, index string
+	}{
+		{
+			name:  "blank title",
+			index: `{"id":"` + uuid + `","thread_name":"","updated_at":"2026-06-24T12:30:00Z"}` + "\n",
+		},
+		{
+			name:  "missing title row",
+			index: `{"id":"22222222-2222-4222-8222-222222222222","thread_name":"Other","updated_at":"2026-06-24T12:30:00Z"}` + "\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldStat := statS3Object
+			oldFetch := fetchS3Object
+			t.Cleanup(func() {
+				statS3Object = oldStat
+				fetchS3Object = oldFetch
+			})
+			statS3Object = func(got string) (parser.S3Object, error) {
+				require.Equal(t, indexPath, got)
+				return parser.S3Object{
+					URI:          indexPath,
+					Size:         int64(len(tc.index)),
+					LastModified: indexMtime,
+					Fingerprint:  "s3:fingerprint:index",
+				}, nil
+			}
+			fetchS3Object = func(got string) (io.ReadCloser, error) {
+				require.Equal(t, indexPath, got)
+				return io.NopCloser(strings.NewReader(tc.index)), nil
+			}
+
+			e := &Engine{db: database}
+			got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+				Agent:             parser.AgentCodex,
+				Path:              path,
+				Machine:           "laptop",
+				SourceSize:        101,
+				SourceMtime:       mtime,
+				SourceFingerprint: "s3:fingerprint:rollout",
+			}}, indexMtime.Add(-time.Minute))
+
+			require.Len(t, got, 1)
+			assert.Equal(t, path, got[0].Path)
+		})
+	}
+}
+
 func TestProcessFileS3CodexReparsesStaleProjectBeforeSkip(t *testing.T) {
 	database := openTestDB(t)
 	const uuid = "11111111-1111-4111-8111-111111111111"
