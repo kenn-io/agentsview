@@ -55,7 +55,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentVibe:           ProviderMigrationLegacyOnly,
 	AgentZed:            ProviderMigrationLegacyOnly,
 	AgentQwenPaw:        ProviderMigrationLegacyOnly,
-	AgentGptme:          ProviderMigrationLegacyOnly,
+	AgentGptme:          ProviderMigrationProviderAuthoritative,
 	AgentShelley:        ProviderMigrationLegacyOnly,
 	AgentAider:          ProviderMigrationLegacyOnly,
 	AgentOMP:            ProviderMigrationLegacyOnly,

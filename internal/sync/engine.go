@@ -1478,23 +1478,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// gptme: <logsDir>/<session-dir>/conversation.jsonl
-	for _, gptmeDir := range e.agentDirs[parser.AgentGptme] {
-		if gptmeDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(gptmeDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 || parts[1] != "conversation.jsonl" {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentGptme,
-			}, true
-		}
-	}
-
 	if df, ok := e.classifyAiderPath(path); ok {
 		return df, true
 	}
@@ -4817,8 +4800,6 @@ func (e *Engine) processFile(
 		res = e.processAntigravityCLI(file, info)
 	case parser.AgentQwenPaw:
 		res = e.processQwenPaw(file, info)
-	case parser.AgentGptme:
-		res = e.processGptme(file, info)
 	case parser.AgentAider:
 		res = e.processAider(file, info)
 	default:
@@ -7215,35 +7196,6 @@ func (e *Engine) processPositron(
 
 	sess, msgs, err := parser.ParsePositronSession(
 		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processGptme(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseGptmeSession(
-		file.Path, e.machine,
 	)
 	if err != nil {
 		return processResult{err: err}
