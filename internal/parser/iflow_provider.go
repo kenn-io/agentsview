@@ -13,7 +13,7 @@ import (
 // SourceSet so it rides the generic factory; RawSessionIDForLookup strips the
 // subagent suffix from stored IDs so FindSource still matches the base file.
 func newIflowProviderFactory(def AgentDef) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def,
 		iflowProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet { return newIflowSourceSet(cfg.Roots) },
@@ -21,13 +21,13 @@ func newIflowProviderFactory(def AgentDef) ProviderFactory {
 }
 
 func newIflowSourceSet(roots []string) DirectoryJSONLSourceSet {
-	return newDirectoryJSONLSourceSet(AgentIflow, roots,
-		withContentHashing(),
-		withSymlinkFollowing(),
-		withIncludePath(isIflowSourcePath),
-		withSessionIDFromPath(iflowSessionIDFromPath),
-		withRawSessionIDForLookup(extractIflowBaseSessionID),
-		withParseFile(iflowParseFile),
+	return NewDirectoryJSONLSourceSet(AgentIflow, roots,
+		WithContentHashing(),
+		WithSymlinkFollowing(),
+		WithIncludePath(isIflowSourcePath),
+		WithSessionIDFromPath(iflowSessionIDFromPath),
+		WithRawSessionIDForLookup(extractIflowBaseSessionID),
+		WithParseFile(iflowParseFile),
 	)
 }
 
@@ -63,7 +63,7 @@ func iflowResolveProject(
 ) string {
 	dirName := firstNonEmptyJSONLString(
 		source.ProjectHint,
-		directoryJSONLProjectFromPath(path),
+		DirectoryJSONLProjectFromPath(path),
 	)
 	project := GetProjectName(dirName)
 

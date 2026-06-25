@@ -245,21 +245,21 @@ func (p *gptmeProvider) isSource(source SourceRef) bool {
 }
 
 func newGptmeSourceSet(roots []string) JSONLSourceSet {
-	return newJSONLSourceSet(AgentGptme, roots,
-		withRecursive(),
-		withContentHashing(),
-		withSymlinkFollowing(),
-		withInclude(func(path string, info os.FileInfo) bool {
+	return NewJSONLSourceSet(AgentGptme, roots,
+		WithRecursive(),
+		WithContentHashing(),
+		WithSymlinkFollowing(),
+		WithInclude(func(path string, info os.FileInfo) bool {
 			return !info.IsDir() && filepath.Base(path) == "conversation.jsonl"
 		}),
-		withProjectHint(func(root, path string) string {
+		WithProjectHint(func(root, path string) string {
 			sessionID := gptmeSessionIDFromPath(root, path)
 			if sessionID == "" {
 				return ""
 			}
 			return gptmeProjectFromSessionName(sessionID)
 		}),
-		withSessionIDFromPath(gptmeSessionIDFromPath),
+		WithSessionIDFromPath(gptmeSessionIDFromPath),
 	)
 }
 

@@ -10,7 +10,7 @@ import (
 // lookup, and fingerprinting come from JSONLSourceSet, and the ParseFile option
 // makes that source set a full SourceSet so it rides the generic factory.
 func newDeepSeekTUIProviderFactory(def AgentDef) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def,
 		deepSeekTUIProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet { return newDeepSeekTUISourceSet(cfg.Roots) },
@@ -18,15 +18,15 @@ func newDeepSeekTUIProviderFactory(def AgentDef) ProviderFactory {
 }
 
 func newDeepSeekTUISourceSet(roots []string) JSONLSourceSet {
-	return newJSONLSourceSet(AgentDeepSeekTUI, roots,
-		withExtensions(".json"),
-		withFollowSymlinkFiles(),
-		withContentHashing(),
-		withIncludePath(isDeepSeekTUISourcePath),
-		withSessionIDFromPath(func(root, path string) string {
+	return NewJSONLSourceSet(AgentDeepSeekTUI, roots,
+		WithExtensions(".json"),
+		WithFollowSymlinkFiles(),
+		WithContentHashing(),
+		WithIncludePath(isDeepSeekTUISourcePath),
+		WithSessionIDFromPath(func(root, path string) string {
 			return deepSeekTUISessionIDFromPath(path)
 		}),
-		withParseFile(deepSeekTUIParseFile),
+		WithParseFile(deepSeekTUIParseFile),
 	)
 }
 

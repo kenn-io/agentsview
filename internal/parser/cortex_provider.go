@@ -82,7 +82,7 @@ func (p *cortexProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
 ) (SourceRef, bool, error) {
-	return p.sources.FindSource(ctx, providerFindRequestWithRawSessionID(p.Def, req))
+	return p.sources.FindSource(ctx, ProviderFindRequestWithRawSessionID(p.Def, req))
 }
 
 func (p *cortexProvider) Fingerprint(
@@ -178,12 +178,12 @@ func (p *cortexProvider) Parse(
 }
 
 func newCortexSourceSet(roots []string) JSONLSourceSet {
-	return newJSONLSourceSet(AgentCortex, roots,
-		withExtensions(".json"),
-		withFollowSymlinkFiles(),
-		withIncludePath(isCortexSourcePath),
-		withSessionIDFromPath(cortexSessionIDFromPath),
-		withProjectHint(func(root, path string) string { return "" }),
+	return NewJSONLSourceSet(AgentCortex, roots,
+		WithExtensions(".json"),
+		WithFollowSymlinkFiles(),
+		WithIncludePath(isCortexSourcePath),
+		WithSessionIDFromPath(cortexSessionIDFromPath),
+		WithProjectHint(func(root, path string) string { return "" }),
 	)
 }
 
