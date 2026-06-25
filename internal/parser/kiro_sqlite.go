@@ -75,22 +75,13 @@ func FindKiroSQLiteDBPath(dir string) string {
 // KiroSQLiteVirtualPath gives each conversation inside the shared
 // Kiro DB a stable source identity for the AgentsView archive.
 func KiroSQLiteVirtualPath(dbPath, sessionID string) string {
-	return dbPath + "#" + sessionID
+	return VirtualSourcePath(dbPath, sessionID)
 }
 
 // ParseKiroSQLiteVirtualPath splits a virtual Kiro SQLite source
 // path back into its database path and raw session ID.
 func ParseKiroSQLiteVirtualPath(path string) (string, string, bool) {
-	idx := strings.LastIndex(path, "#")
-	if idx < 0 {
-		return "", "", false
-	}
-	dbPath, sessionID := path[:idx], path[idx+1:]
-	if filepath.Base(dbPath) != kiroSQLiteDBName ||
-		sessionID == "" {
-		return "", "", false
-	}
-	return dbPath, sessionID, true
+	return ParseVirtualSourcePathForBase(path, kiroSQLiteDBName)
 }
 
 // KiroSQLiteSessionExists reports whether the current Kiro DB has
