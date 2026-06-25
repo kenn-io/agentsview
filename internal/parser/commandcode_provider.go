@@ -82,7 +82,7 @@ func (p *commandCodeProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
 ) (SourceRef, bool, error) {
-	return p.sources.FindSource(ctx, providerFindRequestWithRawSessionID(p.Def, req))
+	return p.sources.FindSource(ctx, ProviderFindRequestWithRawSessionID(p.Def, req))
 }
 
 func (p *commandCodeProvider) Fingerprint(
@@ -184,11 +184,11 @@ func (p *commandCodeProvider) Parse(
 }
 
 func newCommandCodeSourceSet(roots []string) DirectoryJSONLSourceSet {
-	return newDirectoryJSONLSourceSet(AgentCommandCode, roots,
-		withSymlinkFollowing(),
-		withIncludePath(isCommandCodeSourcePath),
-		withProjectHint(func(root, path string) string { return "" }),
-		withSessionIDFromPath(commandCodeSessionIDFromPath),
+	return NewDirectoryJSONLSourceSet(AgentCommandCode, roots,
+		WithSymlinkFollowing(),
+		WithIncludePath(isCommandCodeSourcePath),
+		WithProjectHint(func(root, path string) string { return "" }),
+		WithSessionIDFromPath(commandCodeSessionIDFromPath),
 	)
 }
 

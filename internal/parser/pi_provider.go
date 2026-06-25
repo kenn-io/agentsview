@@ -76,7 +76,7 @@ func (p *piProvider) FindSource(
 	if err := ctx.Err(); err != nil {
 		return SourceRef{}, false, err
 	}
-	req = providerFindRequestWithRawSessionID(p.Def, req)
+	req = ProviderFindRequestWithRawSessionID(p.Def, req)
 	for _, path := range []string{
 		req.StoredFilePath,
 		req.FingerprintKey,
@@ -191,11 +191,11 @@ func (p *piProvider) filterDiscoveredSources(sources []SourceRef) []SourceRef {
 }
 
 func newPiSourceSet(agent AgentType, roots []string) DirectoryJSONLSourceSet {
-	return newDirectoryJSONLSourceSet(agent, roots,
-		withSymlinkFollowing(),
-		withIncludePath(isPiSourcePath),
-		withProjectHint(func(root, path string) string { return "" }),
-		withSessionIDFromPath(piSessionIDFromPath),
+	return NewDirectoryJSONLSourceSet(agent, roots,
+		WithSymlinkFollowing(),
+		WithIncludePath(isPiSourcePath),
+		WithProjectHint(func(root, path string) string { return "" }),
+		WithSessionIDFromPath(piSessionIDFromPath),
 	)
 }
 

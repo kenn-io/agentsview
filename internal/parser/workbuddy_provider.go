@@ -12,7 +12,7 @@ import (
 // lookup, and fingerprinting come from JSONLSourceSet, and the ParseFile option
 // makes that source set a full SourceSet so it rides the generic factory.
 func newWorkBuddyProviderFactory(def AgentDef) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def,
 		workBuddyProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet { return newWorkBuddySourceSet(cfg.Roots) },
@@ -20,15 +20,15 @@ func newWorkBuddyProviderFactory(def AgentDef) ProviderFactory {
 }
 
 func newWorkBuddySourceSet(roots []string) JSONLSourceSet {
-	return newJSONLSourceSet(AgentWorkBuddy, roots,
-		withRecursive(),
-		withSymlinkFollowing(),
-		withContentHashing(),
-		withIncludePath(isWorkBuddySourcePath),
-		withProjectHint(workBuddyProjectHintFromPath),
-		withSessionIDFromPath(workBuddySessionIDFromPath),
-		withLookupIDValid(isWorkBuddyLookupID),
-		withParseFile(workBuddyParseFile),
+	return NewJSONLSourceSet(AgentWorkBuddy, roots,
+		WithRecursive(),
+		WithSymlinkFollowing(),
+		WithContentHashing(),
+		WithIncludePath(isWorkBuddySourcePath),
+		WithProjectHint(workBuddyProjectHintFromPath),
+		WithSessionIDFromPath(workBuddySessionIDFromPath),
+		WithLookupIDValid(isWorkBuddyLookupID),
+		WithParseFile(workBuddyParseFile),
 	)
 }
 

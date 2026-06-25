@@ -10,7 +10,7 @@ import (
 // lookup, and fingerprinting come from JSONLSourceSet, and the ParseFile option
 // makes that source set a full SourceSet so it rides the generic factory.
 func newAmpProviderFactory(def AgentDef) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def,
 		ampProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet { return newAmpSourceSet(cfg.Roots) },
@@ -18,15 +18,15 @@ func newAmpProviderFactory(def AgentDef) ProviderFactory {
 }
 
 func newAmpSourceSet(roots []string) JSONLSourceSet {
-	return newJSONLSourceSet(AgentAmp, roots,
-		withExtensions(".json"),
-		withFollowSymlinkFiles(),
-		withContentHashing(),
-		withIncludePath(isAmpSourcePath),
-		withSessionIDFromPath(func(root, path string) string {
+	return NewJSONLSourceSet(AgentAmp, roots,
+		WithExtensions(".json"),
+		WithFollowSymlinkFiles(),
+		WithContentHashing(),
+		WithIncludePath(isAmpSourcePath),
+		WithSessionIDFromPath(func(root, path string) string {
 			return ampThreadIDFromPath(path)
 		}),
-		withParseFile(ampParseFile),
+		WithParseFile(ampParseFile),
 	)
 }
 

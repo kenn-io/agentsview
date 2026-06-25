@@ -14,7 +14,7 @@ import (
 // factory; RawSessionIDSourceFiles reconstructs the wire.jsonl path from a
 // colon-joined raw ID, which the standard filename-stem lookup cannot match.
 func newKimiProviderFactory(def AgentDef) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def,
 		kimiProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet { return newKimiSourceSet(cfg.Roots) },
@@ -22,19 +22,19 @@ func newKimiProviderFactory(def AgentDef) ProviderFactory {
 }
 
 func newKimiSourceSet(roots []string) JSONLSourceSet {
-	return newJSONLSourceSet(AgentKimi, roots,
-		withRecursive(),
-		withSymlinkFollowing(),
-		withIncludePath(isKimiSourcePath),
-		withProjectHint(kimiProjectHintFromPath),
-		withSessionIDFromPath(func(root, path string) string {
+	return NewJSONLSourceSet(AgentKimi, roots,
+		WithRecursive(),
+		WithSymlinkFollowing(),
+		WithIncludePath(isKimiSourcePath),
+		WithProjectHint(kimiProjectHintFromPath),
+		WithSessionIDFromPath(func(root, path string) string {
 			if !isKimiSourcePath(root, path) {
 				return ""
 			}
 			return kimiSessionIDFromPath(path)
 		}),
-		withRawSessionIDSourceFiles(kimiRawSessionIDSourceFiles),
-		withParseFile(kimiParseFile),
+		WithRawSessionIDSourceFiles(kimiRawSessionIDSourceFiles),
+		WithParseFile(kimiParseFile),
 	)
 }
 
