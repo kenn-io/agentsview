@@ -5,108 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
 
-func DiscoverWorkBuddySessions(projectsDir string) []DiscoveredFile {
-	if projectsDir == "" {
-		return nil
-	}
-
-	projects, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, projEntry := range projects {
-		if !isDirOrSymlink(projEntry, projectsDir) {
-			continue
-		}
-		project := projEntry.Name()
-		projectDir := filepath.Join(projectsDir, project)
-		entries, err := os.ReadDir(projectDir)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			name := entry.Name()
-			if !entry.IsDir() && strings.HasSuffix(name, ".jsonl") {
-				stem := strings.TrimSuffix(name, ".jsonl")
-				if IsValidSessionID(stem) {
-					files = append(files, DiscoveredFile{
-						Path:    filepath.Join(projectDir, name),
-						Project: project,
-						Agent:   AgentWorkBuddy,
-					})
-				}
-				continue
-			}
-			if !isDirOrSymlink(entry, projectDir) || !IsValidSessionID(name) {
-				continue
-			}
-			subagentsDir := filepath.Join(projectDir, name, "subagents")
-			subagents, err := os.ReadDir(subagentsDir)
-			if err != nil {
-				continue
-			}
-			for _, sub := range subagents {
-				if sub.IsDir() || !strings.HasSuffix(sub.Name(), ".jsonl") {
-					continue
-				}
-				files = append(files, DiscoveredFile{
-					Path:    filepath.Join(subagentsDir, sub.Name()),
-					Project: project,
-					Agent:   AgentWorkBuddy,
-				})
-			}
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-func FindWorkBuddySourceFile(projectsDir, rawID string) string {
-	if projectsDir == "" {
-		return ""
-	}
-	rawID = strings.TrimPrefix(rawID, "workbuddy:")
-	sessionID, subagentID, hasSubagent := strings.Cut(rawID, ":subagent:")
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-	if hasSubagent && !IsValidSessionID(subagentID) {
-		return ""
-	}
-
-	projects, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-	for _, projEntry := range projects {
-		if !isDirOrSymlink(projEntry, projectsDir) {
-			continue
-		}
-		projectDir := filepath.Join(projectsDir, projEntry.Name())
-		candidate := filepath.Join(projectDir, sessionID+".jsonl")
-		if hasSubagent {
-			candidate = filepath.Join(projectDir, sessionID, "subagents", subagentID+".jsonl")
-		}
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
-}
-
-func ParseWorkBuddySession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
+func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("stat %s: %w", path, err)

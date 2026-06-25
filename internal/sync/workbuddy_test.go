@@ -34,20 +34,22 @@ func TestEngineClassifyWorkBuddyPaths(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 	}
 
-	got, ok := engine.classifyOnePath(mainPath, nil)
-	require.True(t, ok, "main path did not classify")
+	files := engine.classifyPaths([]string{mainPath})
+	require.Len(t, files, 1, "main path did not classify")
+	got := files[0]
 	assert.Equal(t, mainPath, got.Path)
 	assert.Equal(t, "proj", got.Project)
 	assert.Equal(t, parser.AgentWorkBuddy, got.Agent)
 
-	got, ok = engine.classifyOnePath(subPath, nil)
-	require.True(t, ok, "subagent path did not classify")
+	files = engine.classifyPaths([]string{subPath})
+	require.Len(t, files, 1, "subagent path did not classify")
+	got = files[0]
 	assert.Equal(t, subPath, got.Path)
 	assert.Equal(t, "proj", got.Project)
 	assert.Equal(t, parser.AgentWorkBuddy, got.Agent)
 
-	got, ok = engine.classifyOnePath(toolPath, nil)
-	assert.False(t, ok, "tool result classified as %+v", got)
+	files = engine.classifyPaths([]string{toolPath})
+	assert.Empty(t, files, "tool result classified as %+v", files)
 }
 
 func TestEngineClassifyWorkBuddyProjectNamedSubagentsAsMainSession(t *testing.T) {
@@ -64,8 +66,9 @@ func TestEngineClassifyWorkBuddyProjectNamedSubagentsAsMainSession(t *testing.T)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 
-	got, ok := engine.classifyOnePath(path, nil)
-	require.True(t, ok, "path did not classify")
+	files := engine.classifyPaths([]string{path})
+	require.Len(t, files, 1, "path did not classify")
+	got := files[0]
 	assert.Equal(t, path, got.Path)
 	assert.Equal(t, "subagents", got.Project)
 	assert.Equal(t, parser.AgentWorkBuddy, got.Agent)
