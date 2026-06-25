@@ -17,7 +17,7 @@ import (
 // StoredPathFallbackRoot; ForceReplace mirrors the wholesale-rewrite parse
 // outcome.
 func newQwenPawProviderFactory(def AgentDef) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def,
 		qwenPawProviderCapabilities(),
 		func(cfg ProviderConfig) SourceSet { return newQwenPawSourceSet(cfg.Roots) },
@@ -25,19 +25,19 @@ func newQwenPawProviderFactory(def AgentDef) ProviderFactory {
 }
 
 func newQwenPawSourceSet(roots []string) JSONLSourceSet {
-	return newJSONLSourceSet(AgentQwenPaw, roots,
-		withRecursive(),
-		withExtensions(".json"),
-		withContentHashing(),
-		withSymlinkFollowing(),
-		withDescendPath(qwenPawDescendPath),
-		withIncludePath(isQwenPawSourcePath),
-		withProjectHint(qwenPawProjectHintFromPath),
-		withSessionIDFromPath(qwenPawSessionIDFromPath),
-		withRawSessionIDSourceFiles(qwenPawRawSessionIDSourceFiles),
-		withStoredPathFallbackRoot(qwenPawStoredPathRoot),
-		withParseFile(qwenPawParseFile),
-		withForceReplace(),
+	return NewJSONLSourceSet(AgentQwenPaw, roots,
+		WithRecursive(),
+		WithExtensions(".json"),
+		WithContentHashing(),
+		WithSymlinkFollowing(),
+		WithDescendPath(qwenPawDescendPath),
+		WithIncludePath(isQwenPawSourcePath),
+		WithProjectHint(qwenPawProjectHintFromPath),
+		WithSessionIDFromPath(qwenPawSessionIDFromPath),
+		WithRawSessionIDSourceFiles(qwenPawRawSessionIDSourceFiles),
+		WithStoredPathFallbackRoot(qwenPawStoredPathRoot),
+		WithParseFile(qwenPawParseFile),
+		WithForceReplace(),
 	)
 }
 
