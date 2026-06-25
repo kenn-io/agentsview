@@ -2226,7 +2226,7 @@ func (s *Store) GetAnalyticsTopSessions(
 					WHEN inner2.has_tool_use AND inner2.delta_ms > 0
 						THEN inner2.delta_ms
 					ELSE NULL
-				END), 0) / 60.0
+				END), 0) / 60000.0
 			FROM (
 				SELECT CAST(
 					(round(EXTRACT(EPOCH FROM (

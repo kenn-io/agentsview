@@ -706,6 +706,94 @@ func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {
 	assert.Equal(t, "messages", unknown.Metric)
 }
 
+func TestAnalyticsTopSessionsDurationUsesActiveDuration(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	wallSession := syncSession(
+		"duck-wall-dominant", "alpha", "wall session",
+		"2026-01-20T09:00:00.000Z", 3,
+	)
+	wallEndedAt := "2026-01-20T11:00:00.000Z"
+	wallSession.EndedAt = &wallEndedAt
+	activeSession := syncSession(
+		"duck-actively-working", "alpha", "active session",
+		"2026-01-20T09:30:00.000Z", 3,
+	)
+	activeEndedAt := "2026-01-20T09:50:00.000Z"
+	activeSession.EndedAt = &activeEndedAt
+	writes := []db.SessionBatchWrite{
+		{
+			Session: wallSession,
+			Messages: []db.Message{
+				syncMessage(
+					"duck-wall-dominant", 0, "user", "wall start",
+					"2026-01-20T09:00:00.000Z",
+				),
+				syncMessage(
+					"duck-wall-dominant", 1, "assistant", "wall tool",
+					"2026-01-20T10:59:00.000Z",
+					db.ToolCall{
+						ToolName:  "Read",
+						Category:  "Read",
+						ToolUseID: "duck-wall-tool",
+						InputJSON: `{"file_path":"README.md"}`,
+					},
+				),
+				syncMessage(
+					"duck-wall-dominant", 2, "user", "wall finish",
+					"2026-01-20T11:00:00.000Z",
+				),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: activeSession,
+			Messages: []db.Message{
+				syncMessage(
+					"duck-actively-working", 0, "user", "active start",
+					"2026-01-20T09:30:00.000Z",
+				),
+				syncMessage(
+					"duck-actively-working", 1, "assistant", "active tool",
+					"2026-01-20T09:35:00.000Z",
+					db.ToolCall{
+						ToolName:  "Edit",
+						Category:  "Write",
+						ToolUseID: "duck-active-tool",
+						InputJSON: `{"file_path":"main.go"}`,
+					},
+				),
+				syncMessage(
+					"duck-actively-working", 2, "user", "active finish",
+					"2026-01-20T09:50:00.000Z",
+				),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "top-active.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.AnalyticsFilter{From: "2026-01-20", To: "2026-01-20"}
+	resp, err := store.GetAnalyticsTopSessions(ctx, filter, "duration")
+	require.NoError(t, err)
+	require.Len(t, resp.Sessions, 2)
+
+	assert.Equal(t, "duck-actively-working", resp.Sessions[0].ID)
+	assert.Equal(t, 20.0, resp.Sessions[0].DurationMin)
+	assert.Equal(t, 15.0, resp.Sessions[0].ActiveDurationMin)
+	assert.Equal(t, "duck-wall-dominant", resp.Sessions[1].ID)
+	assert.Equal(t, 120.0, resp.Sessions[1].DurationMin)
+	assert.Equal(t, 1.0, resp.Sessions[1].ActiveDurationMin)
+}
+
 func TestAnalyticsProjectsPopulateDailyTrendAndSortByMessages(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
