@@ -10,6 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// parseIflowSessionForTest exercises the iFlow provider's transcript parsing
+// in isolation, passing the project directly so tests can assert parse
+// behavior without project-resolution enrichment.
+func parseIflowSessionForTest(
+	t *testing.T, path, project, machine string,
+) ([]ParseResult, error) {
+	t.Helper()
+	return parseIflowSession(path, project, machine)
+}
+
 func TestParseIflowSession(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -29,7 +39,8 @@ func TestParseIflowSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := ParseIflowSession(
+			results, err := parseIflowSessionForTest(
+				t,
 				tt.filename,
 				"test-project",
 				"local",
@@ -68,7 +79,8 @@ func TestExtractIflowProjectHints(t *testing.T) {
 }
 
 func TestIflowSystemMessageFiltering(t *testing.T) {
-	results, err := ParseIflowSession(
+	results, err := parseIflowSessionForTest(
+		t,
 		"testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
 		"test-project",
 		"local",
@@ -90,7 +102,8 @@ func TestIflowSystemMessageFiltering(t *testing.T) {
 }
 
 func TestIflowToolCallParsing(t *testing.T) {
-	results, err := ParseIflowSession(
+	results, err := parseIflowSessionForTest(
+		t,
 		"testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
 		"test-project",
 		"local",
@@ -121,7 +134,8 @@ func TestIflowToolCallParsing(t *testing.T) {
 }
 
 func TestIflowBurstMerge(t *testing.T) {
-	results, err := ParseIflowSession(
+	results, err := parseIflowSessionForTest(
+		t,
 		"testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
 		"test-project",
 		"local",
@@ -283,7 +297,8 @@ func TestIflowBurstBoundary(t *testing.T) {
 }
 
 func TestIflowTimestampParsing(t *testing.T) {
-	results, err := ParseIflowSession(
+	results, err := parseIflowSessionForTest(
+		t,
 		"testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
 		"test-project",
 		"local",

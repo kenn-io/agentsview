@@ -3144,7 +3144,11 @@ func TestEngine_ClassifyPathsCommandCodeSession(t *testing.T) {
 	require.Len(t, files, 1, "len(files) = %d, want 1 (%v)", len(files), files)
 	assert.Equal(t, sessionPath, files[0].Path)
 	assert.Equal(t, parser.AgentCommandCode, files[0].Agent)
-	assert.Equal(t, "users_alice_code_sample_project", files[0].Project)
+	// Command Code is provider-authoritative: classification attaches a
+	// provider source and recomputes the project during parse, so the
+	// classification carries no informational project hint.
+	assert.Empty(t, files[0].Project)
+	require.NotNil(t, files[0].ProviderSource)
 
 	bogus := []string{
 		filepath.Join(commandCodeDir, "stray.jsonl"),

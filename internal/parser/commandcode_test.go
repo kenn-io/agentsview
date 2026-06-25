@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDiscoverCommandCodeSessions(t *testing.T) {
+func TestCommandCodeProviderDiscoversSessions(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -22,13 +23,17 @@ func TestDiscoverCommandCodeSessions(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "sess_a.prompts.jsonl"), []byte("{}\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(projectDir, "notes.txt"), []byte("ignore"), 0o644))
 
-	files := DiscoverCommandCodeSessions(root)
-	require.Len(t, files, 1)
-	assert.Equal(t, AgentCommandCode, files[0].Agent)
-	assert.Equal(t, filepath.Join(projectDir, "sess_a.jsonl"), files[0].Path)
+	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, AgentCommandCode, sources[0].Provider)
+	assert.Equal(t, filepath.Join(projectDir, "sess_a.jsonl"), sources[0].DisplayPath)
 }
 
-func TestFindCommandCodeSourceFile(t *testing.T) {
+func TestCommandCodeProviderFindsSourceFile(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -37,11 +42,24 @@ func TestFindCommandCodeSourceFile(t *testing.T) {
 	path := filepath.Join(projectDir, "sess_123.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
 
-	assert.Equal(t, path, FindCommandCodeSourceFile(root, "sess_123"))
-	assert.Empty(t, FindCommandCodeSourceFile(root, "sess_missing"))
+	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "sess_123",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.DisplayPath)
+
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "sess_missing",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
-func TestParseCommandCodeSession(t *testing.T) {
+func TestCommandCodeProviderParsesSession(t *testing.T) {
 	t.Parallel()
 
 	content := `{"id":"m1","timestamp":"2026-06-01T10:00:00Z","sessionId":"sess_123","role":"user","content":[{"type":"text","text":"Inspect server logs"}],"gitBranch":"feature/command-code","metadata":{"version":2,"cwd":"/Users/alice/code/sample-project"}}
@@ -49,13 +67,31 @@ func TestParseCommandCodeSession(t *testing.T) {
 {"id":"m3","timestamp":"2026-06-01T10:00:02Z","sessionId":"sess_123","role":"tool","content":[{"type":"tool-result","toolCallId":"tc1","toolName":"Read","output":{"type":"text","value":"error: boom"}}],"gitBranch":"feature/command-code","metadata":{"version":2}}
 {"id":"m4","timestamp":"2026-06-01T10:00:03Z","sessionId":"sess_123","role":"assistant","content":[{"type":"text","text":"The error is in the startup path."}],"gitBranch":"feature/command-code","metadata":{"version":2}}`
 
-	path := createTestFile(t, "commandcode.jsonl", content)
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "sess_123.jsonl")
+	writeSourceFile(t, path, content)
 	metaPath := strings.TrimSuffix(path, ".jsonl") + ".meta.json"
 	require.NoError(t, os.WriteFile(metaPath, []byte(`{"title":"Startup investigation"}`), 0o644))
 
-	sess, msgs, err := ParseCommandCodeSession(path, "local")
+	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "sess_123",
+	})
 	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.True(t, found)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:  source,
+		Machine: "local",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	sess := outcome.Results[0].Result.Session
+	msgs := outcome.Results[0].Result.Messages
 	require.Len(t, msgs, 4)
 
 	assert.Equal(t, "commandcode:sess_123", sess.ID)

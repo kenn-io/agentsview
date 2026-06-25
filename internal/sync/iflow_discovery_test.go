@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestDiscoverIflowProjects(t *testing.T) {
+func TestIflowProviderDiscoversProjects(t *testing.T) {
 	// Create a temporary directory structure for testing
 	tmpDir := t.TempDir()
 
@@ -40,16 +41,19 @@ func TestDiscoverIflowProjects(t *testing.T) {
 	subDir := filepath.Join(proj1, "subdir")
 	require.NoError(t, os.MkdirAll(subDir, 0o755))
 
-	// Run discovery
-	files := parser.DiscoverIflowProjects(tmpDir)
+	provider, ok := parser.NewProvider(parser.AgentIflow, parser.ProviderConfig{
+		Roots: []string{tmpDir},
+	})
+	require.True(t, ok)
 
-	// Verify results
-	assert.Len(t, files, 3)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, sources, 3)
 
-	// Verify file paths
+	// Verify source paths
 	paths := make(map[string]bool)
-	for _, f := range files {
-		paths[f.Path] = true
+	for _, s := range sources {
+		paths[s.DisplayPath] = true
 	}
 
 	assert.True(t, paths[session1], "session1 not found in results")
@@ -57,22 +61,22 @@ func TestDiscoverIflowProjects(t *testing.T) {
 	assert.True(t, paths[session3], "session3 not found in results")
 	assert.False(t, paths[otherFile], "other.txt should not be in results")
 
-	// Verify project names
+	// Verify project hints
 	projects := make(map[string]bool)
-	for _, f := range files {
-		projects[f.Project] = true
+	for _, s := range sources {
+		projects[s.ProjectHint] = true
 	}
 
 	assert.True(t, projects["project1"], "project1 not found in projects")
 	assert.True(t, projects["project2"], "project2 not found in projects")
 
-	// Verify agent type
-	for _, f := range files {
-		assert.Equal(t, parser.AgentType("iflow"), f.Agent)
+	// Verify provider type
+	for _, s := range sources {
+		assert.Equal(t, parser.AgentIflow, s.Provider)
 	}
 }
 
-func TestFindIflowSourceFile(t *testing.T) {
+func TestIflowProviderFindsSourceFile(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create a project directory
@@ -84,23 +88,39 @@ func TestFindIflowSourceFile(t *testing.T) {
 	sessionFile := filepath.Join(proj, "session-"+sessionID+".jsonl")
 	require.NoError(t, os.WriteFile(sessionFile, []byte(`{"test":"data"}`), 0o644))
 
+	provider, ok := parser.NewProvider(parser.AgentIflow, parser.ProviderConfig{
+		Roots: []string{tmpDir},
+	})
+	require.True(t, ok)
+
 	// Test finding the file
-	found := parser.FindIflowSourceFile(tmpDir, sessionID)
-	assert.Equal(t, sessionFile, found)
+	found, ok, err := provider.FindSource(context.Background(), parser.FindSourceRequest{
+		RawSessionID: sessionID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sessionFile, found.DisplayPath)
 
 	// Test finding a non-existent file
-	notFound := parser.FindIflowSourceFile(tmpDir, "nonexistent")
-	assert.Empty(t, notFound)
+	_, ok, err = provider.FindSource(context.Background(), parser.FindSourceRequest{
+		RawSessionID: "nonexistent",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
 
 	// Test finding a fork ID (should extract base session ID)
 	// Fork IDs have format: <baseUUID>-<childUUID>
-	// The file lookup should use only the base UUID
+	// The source lookup should use only the base UUID
 	baseSessionID := "96e6d875-92eb-40b9-b193-a9ba99f0f709"
 	forkSessionID := baseSessionID + "-12345678-1234-5678-9abc-def012345678"
 	forkSessionFile := filepath.Join(proj, "session-"+baseSessionID+".jsonl")
 	require.NoError(t, os.WriteFile(forkSessionFile, []byte(`{"test":"fork"}`), 0o644))
 
 	// Test finding the fork session - should find the base file
-	foundFork := parser.FindIflowSourceFile(tmpDir, forkSessionID)
-	assert.Equal(t, forkSessionFile, foundFork, "for fork ID %s", forkSessionID)
+	foundFork, ok, err := provider.FindSource(context.Background(), parser.FindSourceRequest{
+		RawSessionID: forkSessionID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, forkSessionFile, foundFork.DisplayPath, "for fork ID %s", forkSessionID)
 }

@@ -24,12 +24,12 @@ type dagEntryIflow struct {
 	timestamp  time.Time
 }
 
-// ParseIflowSession parses an iFlow JSONL session file.
+// parseSession parses an iFlow JSONL session file.
 // Returns a single ParseResult. Unlike Claude, iFlow's
 // uuid/parentUuid DAG represents streaming incremental updates
 // (sliding-window snapshots), not conversation forks, so fork
 // splitting is intentionally not applied.
-func ParseIflowSession(
+func parseIflowSession(
 	path, project, machine string,
 ) ([]ParseResult, error) {
 	info, err := os.Stat(path)
