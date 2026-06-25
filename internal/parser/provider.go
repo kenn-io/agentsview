@@ -199,6 +199,7 @@ type FindSourceRequest struct {
 	StoredFilePath     string
 	FingerprintKey     string
 	RequireFreshSource bool
+	PreferStoredSource bool
 }
 
 // SourceFingerprint is the provider-normalized source freshness identity.
