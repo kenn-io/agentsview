@@ -105,6 +105,15 @@ type JSONLSourceSetOptions struct {
 	// replacement of the source's existing sessions, for providers whose
 	// transcripts are rewritten wholesale rather than appended.
 	ForceReplace bool
+	// CompanionFiles returns the sidecar files that belong to a transcript
+	// source, given the transcript's path. The base folds each existing
+	// companion's basename into the watch plan globs, its size/mtime (and hash
+	// when Hash is set) into the SourceFingerprint, and maps a changed companion
+	// path back to its owning transcript in SourcesForChangedPath. It reuses the
+	// sibling-metadata helpers rather than introducing a separate mechanism, so
+	// providers describe companions once as transcript->companions and the base
+	// drives watch, freshness, and changed-path mapping from that single hook.
+	CompanionFiles func(transcriptPath string) []string
 }
 
 // JSONLSourceSet discovers, watches, locates, and fingerprints JSONL-like
@@ -170,19 +179,61 @@ func (s JSONLSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	return sources, nil
 }
 
-// WatchPlan returns one watch root for each configured JSONL root.
-func (s JSONLSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
+// WatchPlan returns one watch root for each configured JSONL root. When a
+// CompanionFiles hook is configured, each discovered transcript's companion
+// basenames are added to every root's include globs so sidecar events are not
+// filtered out before SourcesForChangedPath can map them back.
+func (s JSONLSourceSet) WatchPlan(ctx context.Context) (WatchPlan, error) {
 	roots := make([]WatchRoot, 0, len(s.roots))
 	globs := s.includeGlobs()
+	companionGlobs, err := s.companionGlobs(ctx)
+	if err != nil {
+		return WatchPlan{}, err
+	}
 	for _, root := range s.roots {
+		includeGlobs := append([]string(nil), globs...)
+		includeGlobs = append(includeGlobs, companionGlobs...)
 		roots = append(roots, WatchRoot{
 			Path:         root,
 			Recursive:    s.options.Recursive,
-			IncludeGlobs: append([]string(nil), globs...),
+			IncludeGlobs: includeGlobs,
 			DebounceKey:  string(s.provider) + ":jsonl:" + root,
 		})
 	}
 	return WatchPlan{Roots: roots}, nil
+}
+
+// companionGlobs enumerates the distinct sidecar basenames across all
+// discovered transcripts so they can be added to every root's include globs.
+func (s JSONLSourceSet) companionGlobs(ctx context.Context) ([]string, error) {
+	if s.options.CompanionFiles == nil {
+		return nil, nil
+	}
+	sources, err := s.Discover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	var globs []string
+	for _, source := range sources {
+		src, ok := source.Opaque.(JSONLSource)
+		if !ok {
+			continue
+		}
+		for _, companion := range s.options.CompanionFiles(src.Path) {
+			base := filepath.Base(companion)
+			if base == "" || base == "." {
+				continue
+			}
+			if _, ok := seen[base]; ok {
+				continue
+			}
+			seen[base] = struct{}{}
+			globs = append(globs, base)
+		}
+	}
+	sort.Strings(globs)
+	return globs, nil
 }
 
 // SourcesForChangedPath maps a filesystem event path back to JSONL sources.
@@ -198,15 +249,25 @@ func (s JSONLSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	if !ok {
-		if !jsonlMissingPathFallbackAllowed(req) {
-			return nil, nil
-		}
-		source, ok, err = s.sourceForMissingPath(ctx, req.Path)
+		// The changed path is not itself a source. A configured CompanionFiles
+		// hook lets an existing sidecar map back to its owning transcript; this
+		// runs before the missing-path fallback because a present companion file
+		// is not eligible for the tombstone path.
+		source, ok, err = s.sourceForCompanionPath(ctx, req.Path)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return nil, nil
+			if !jsonlMissingPathFallbackAllowed(req) {
+				return nil, nil
+			}
+			source, ok, err = s.sourceForMissingPath(ctx, req.Path)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				return nil, nil
+			}
 		}
 	}
 	if req.WatchRoot != "" {
@@ -328,7 +389,65 @@ func (s JSONLSourceSet) Fingerprint(
 		}
 		fingerprint.Hash = hash
 	}
+	if err := s.foldCompanionFingerprint(path, &fingerprint); err != nil {
+		return SourceFingerprint{}, err
+	}
 	return fingerprint, nil
+}
+
+// foldCompanionFingerprint folds each existing companion file's size and mtime
+// into the transcript fingerprint, and when content hashing is enabled mixes the
+// companion contents into the hash. It reuses the sibling-metadata helpers so a
+// companion change is reflected in the source's freshness identity. Missing
+// companions are ignored, matching sibling-metadata behavior.
+func (s JSONLSourceSet) foldCompanionFingerprint(
+	transcriptPath string,
+	fingerprint *SourceFingerprint,
+) error {
+	if s.options.CompanionFiles == nil {
+		return nil
+	}
+	companions := s.options.CompanionFiles(transcriptPath)
+	if len(companions) == 0 {
+		return nil
+	}
+	var hasher interface {
+		Write([]byte) (int, error)
+		Sum([]byte) []byte
+	}
+	if s.options.Hash {
+		h := sha256.New()
+		// Seed with the transcript's existing content hash so companion mixing
+		// stays anchored to the transcript while preserving its contribution.
+		_, _ = io.WriteString(h, fingerprint.Hash)
+		hasher = h
+	}
+	folded := false
+	for _, companion := range companions {
+		info, err := siblingMetadataFileInfo(companion)
+		if err != nil {
+			return err
+		}
+		if info == nil {
+			continue
+		}
+		fingerprint.Size += info.Size()
+		if mtime := info.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
+			fingerprint.MTimeNS = mtime
+		}
+		if hasher != nil {
+			if err := addSiblingMetadataFingerprintPart(
+				hasher, "companion", companion, info,
+			); err != nil {
+				return err
+			}
+		}
+		folded = true
+	}
+	if hasher != nil && folded {
+		fingerprint.Hash = fmt.Sprintf("%x", hasher.Sum(nil))
+	}
+	return nil
 }
 
 // Parse resolves the request's source to a file and parses it via the ParseFile
@@ -508,6 +627,36 @@ func (s JSONLSourceSet) sourceForMissingPath(
 			return SourceRef{}, false, nil
 		}
 		return s.discoveredSourceForCandidate(ctx, source)
+	}
+	return SourceRef{}, false, nil
+}
+
+// sourceForCompanionPath resolves a changed sidecar path back to the transcript
+// source that owns it. It scans discovered transcripts and returns the one whose
+// CompanionFiles list contains the changed path, so a companion write triggers a
+// re-parse of its transcript.
+func (s JSONLSourceSet) sourceForCompanionPath(
+	ctx context.Context,
+	path string,
+) (SourceRef, bool, error) {
+	if s.options.CompanionFiles == nil {
+		return SourceRef{}, false, nil
+	}
+	path = filepath.Clean(path)
+	sources, err := s.Discover(ctx)
+	if err != nil {
+		return SourceRef{}, false, err
+	}
+	for _, source := range sources {
+		src, ok := source.Opaque.(JSONLSource)
+		if !ok {
+			continue
+		}
+		for _, companion := range s.options.CompanionFiles(src.Path) {
+			if samePath(companion, path) {
+				return source, true, nil
+			}
+		}
 	}
 	return SourceRef{}, false, nil
 }
