@@ -1,6 +1,7 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { m } from "../../i18n/index.js";
 
   interface AgentRow {
     name: string;
@@ -85,7 +86,7 @@
 </script>
 
 <div class="agent-comparison">
-  <h3 class="chart-title">Agent Comparison</h3>
+  <h3 class="chart-title">{m.analytics_agent_comparison_title()}</h3>
 
   {#if analytics.errors.velocity || analytics.errors.summary || analytics.errors.tools}
     <div class="error">
@@ -98,24 +99,24 @@
           analytics.fetchTools();
         }}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if agents.length < 2}
     <div class="empty">
-      No comparison data (need 2+ agents)
+      {m.analytics_agent_comparison_empty()}
     </div>
   {:else}
     <div class="comparison-table">
       <div class="table-header">
-        <span class="col-agent">Agent</span>
-        <span class="col-num">Sessions</span>
-        <span class="col-num">Messages</span>
-        <span class="col-num">Cycle p50</span>
-        <span class="col-num">Msgs/min</span>
-        <span class="col-num">Tools/min</span>
-        <span class="col-num">Tool Calls</span>
-        <span class="col-cats">Top Categories</span>
+        <span class="col-agent">{m.analytics_col_agent()}</span>
+        <span class="col-num">{m.analytics_col_sessions()}</span>
+        <span class="col-num">{m.analytics_col_messages()}</span>
+        <span class="col-num">{m.analytics_col_cycle_p50()}</span>
+        <span class="col-num">{m.analytics_col_msgs_min()}</span>
+        <span class="col-num">{m.analytics_col_tools_min()}</span>
+        <span class="col-num">{m.analytics_col_tool_calls()}</span>
+        <span class="col-cats">{m.analytics_col_top_categories()}</span>
       </div>
       {#each agents as agent}
         <!-- svelte-ignore a11y_click_events_have_key_events -->

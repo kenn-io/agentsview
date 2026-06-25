@@ -8,6 +8,7 @@
   import { formatTokenCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import StatusDot from "../common/StatusDot.svelte";
+  import { m } from "../../i18n/index.js";
 
   function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
@@ -80,15 +81,15 @@
 
 <div class="top-sessions-container">
   <div class="top-header">
-    <h3 class="chart-title">Top Sessions</h3>
+    <h3 class="chart-title">{m.analytics_top_sessions_title()}</h3>
     <div class="header-controls">
       {#if uncleanCount > 0}
         <button
           class="status-count-pill"
           onclick={() => sessions.setTerminationFilter("unclean")}
-          title="Filter to unclean sessions"
+          title={m.analytics_top_sessions_filter_unclean()}
         >
-          {uncleanCount} unclean
+          {m.analytics_top_sessions_unclean_count({ count: uncleanCount })}
         </button>
       {/if}
       <div class="metric-toggle">
@@ -97,14 +98,14 @@
           class:active={analytics.topMetric === "messages"}
           onclick={() => analytics.setTopMetric("messages")}
         >
-          By Messages
+          {m.analytics_top_sessions_by_messages()}
         </button>
         <button
           class="toggle-btn"
           class:active={analytics.topMetric === "duration"}
           onclick={() => analytics.setTopMetric("duration")}
         >
-          By Duration
+          {m.analytics_top_sessions_by_duration()}
         </button>
         {#if supportsOutputTokens}
           <button
@@ -112,7 +113,7 @@
             class:active={analytics.topMetric === "output_tokens"}
             onclick={() => analytics.setTopMetric("output_tokens")}
           >
-            By Output Tokens
+            {m.analytics_top_sessions_by_output_tokens()}
           </button>
         {/if}
       </div>
@@ -126,7 +127,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchTopSessions()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if analytics.topSessions && analytics.topSessions.sessions.length > 0}
@@ -162,7 +163,7 @@
       {/each}
     </div>
   {:else}
-    <div class="empty">No sessions in range</div>
+    <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>
 

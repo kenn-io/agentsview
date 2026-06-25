@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { CheckIcon, ChevronDownIcon } from "../../icons.js";
+  import { m } from "../../i18n/index.js";
 
   interface FilterItem {
     name: string;
@@ -44,10 +45,10 @@
   );
 
   const buttonLabel = $derived.by(() => {
-    if (filteredCount === 0) return `${label}: All`;
+    if (filteredCount === 0) return m.usage_filter_all({ label });
     if (mode === "include") {
       if (filteredCount === 1) return `${label}: ${excludedCsv}`;
-      return `${label}: ${filteredCount} selected`;
+      return m.usage_filter_selected({ label, count: filteredCount });
     }
     if (visibleCount === 1) {
       const visible = items.find(
@@ -61,8 +62,8 @@
         return `${label}: ${visible.name}`;
       }
     }
-    if (visibleCount === 0) return `${label}: None`;
-    return `${label}: ${filteredCount} hidden`;
+    if (visibleCount === 0) return m.usage_filter_none({ label });
+    return m.usage_filter_hidden({ label, count: filteredCount });
   });
 
   const showSearch = $derived(items.length > 8);
@@ -127,7 +128,7 @@
         <input
           class="dropdown-search"
           type="text"
-          placeholder="Search..."
+          placeholder={m.usage_filter_search()}
           bind:value={search}
         />
       {/if}
@@ -136,11 +137,11 @@
           <button
             class="bulk-btn"
             onclick={() => onSelectAll?.()}
-          >Select all</button>
+          >{m.usage_filter_select_all()}</button>
           <button
             class="bulk-btn"
             onclick={() => onDeselectAll?.()}
-          >Deselect all</button>
+          >{m.usage_filter_deselect_all()}</button>
         </div>
       {/if}
       <div class="dropdown-list">
@@ -159,7 +160,7 @@
                 <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
               {/if}
             </span>
-            <span class="item-name">All {label.toLowerCase()}s</span>
+            <span class="item-name">{m.usage_filter_all_items({ label: label.toLowerCase() })}</span>
           </button>
         {/if}
         {#each filtered as item (item.name)}
@@ -195,7 +196,7 @@
           </button>
         {/each}
         {#if filtered.length === 0}
-          <div class="dropdown-empty">No matches</div>
+          <div class="dropdown-empty">{m.sidebar_filters_no_match()}</div>
         {/if}
       </div>
     </div>

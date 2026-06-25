@@ -1,6 +1,7 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { ToolCategoryCount } from "../../api/types.js";
+  import { m } from "../../i18n/index.js";
 
   const CATEGORY_COLORS: Record<string, string> = {
     Read: "#3b82f6",
@@ -97,7 +98,11 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${entry.date} | ${total} total | ${parts.join(", ")}`,
+      text: m.analytics_tool_usage_trend_tooltip({
+        date: entry.date,
+        total,
+        parts: parts.join(", "),
+      }),
     };
   }
 
@@ -108,10 +113,12 @@
 
 <div class="tool-container">
   <div class="tool-header">
-    <h3 class="chart-title">Tool Usage</h3>
+    <h3 class="chart-title">{m.analytics_tool_usage_title()}</h3>
     {#if analytics.tools}
       <span class="count">
-        {analytics.tools.total_calls.toLocaleString()} calls
+        {m.analytics_tool_usage_call_count({
+          count: analytics.tools.total_calls.toLocaleString(),
+        })}
       </span>
     {/if}
   </div>
@@ -123,13 +130,13 @@
         class="retry-btn"
         onclick={() => analytics.fetchTools()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if categories.length > 0}
     <div class="sections">
       <div class="section">
-        <h4 class="section-title">By Category</h4>
+        <h4 class="section-title">{m.analytics_by_category()}</h4>
         <div class="bar-list">
           {#each categories as cat}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -157,7 +164,7 @@
 
       {#if trendEntries.length > 1}
         <div class="section">
-          <h4 class="section-title">Weekly Trend</h4>
+          <h4 class="section-title">{m.analytics_weekly_trend()}</h4>
           <div class="trend-chart">
             {#each trendEntries as entry}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -189,7 +196,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No tool usage data</div>
+    <div class="empty">{m.analytics_tool_usage_empty()}</div>
   {/if}
 </div>
 

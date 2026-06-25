@@ -1,6 +1,7 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
+  import { m } from "../../i18n/index.js";
 
   const CELL_SIZE = 16;
   const CELL_GAP = 2;
@@ -43,11 +44,11 @@
   function metricLabel(metric: HeatmapMetric): string {
     switch (metric) {
       case "sessions":
-        return "Sessions";
+        return m.analytics_metric_sessions();
       case "output_tokens":
-        return "Output Tokens";
+        return m.analytics_metric_output_tokens();
       default:
-        return "Messages";
+        return m.analytics_metric_messages();
     }
   }
 
@@ -141,21 +142,21 @@
 
 <div class="heatmap-container">
   <div class="heatmap-header">
-    <h3 class="chart-title">Activity</h3>
+    <h3 class="chart-title">{m.analytics_activity_title()}</h3>
     <div class="metric-toggle">
       <button
         class="toggle-btn"
         class:active={analytics.metric === "messages"}
         onclick={() => analytics.setMetric("messages")}
       >
-        Messages
+        {m.analytics_metric_messages()}
       </button>
       <button
         class="toggle-btn"
         class:active={analytics.metric === "sessions"}
         onclick={() => analytics.setMetric("sessions")}
       >
-        Sessions
+        {m.analytics_metric_sessions()}
       </button>
       {#if supportsOutputTokens}
         <button
@@ -163,7 +164,7 @@
           class:active={analytics.metric === "output_tokens"}
           onclick={() => analytics.setMetric("output_tokens")}
         >
-          Output Tokens
+          {m.analytics_metric_output_tokens()}
         </button>
       {/if}
     </div>
@@ -176,12 +177,12 @@
         class="retry-btn"
         onclick={() => analytics.fetchHeatmap()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if grid.cols.length > 0}
     {#if analytics.heatmap?.entries_from && analytics.heatmap.entries_from > analytics.from}
-      <div class="clamp-note">Showing most recent year</div>
+      <div class="clamp-note">{m.analytics_heatmap_showing_recent_year()}</div>
     {/if}
     <div class="heatmap-scroll">
       <svg
@@ -251,7 +252,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{m.shared_no_data_for_period()}</div>
   {/if}
 </div>
 

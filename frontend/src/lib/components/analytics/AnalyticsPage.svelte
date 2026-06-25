@@ -40,6 +40,7 @@
   import { rollingRange } from "../../utils/dates.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import { m } from "../../i18n/index.js";
 
   const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";
 
@@ -485,10 +486,10 @@
       lastUpdatedAt={analytics.lastUpdatedAt}
       busy={analytics.isQuerying}
       onRefresh={refreshAnalytics}
-      label="Refresh analytics"
+      label={m.analytics_refresh()}
     />
     <button class="export-btn" onclick={handleExportCSV}>
-      Export CSV
+      {m.analytics_export_csv()}
     </button>
   </div>
 
@@ -513,7 +514,7 @@
       <div class="chart-panel">
         <div class="chart-header">
           <h3 class="chart-title">
-            Activity by Day and Hour
+            {m.analytics_activity_by_day_hour()}
             <span class="tz-label">
               {shortTz(analytics.timezone)}
             </span>

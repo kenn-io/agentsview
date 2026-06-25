@@ -1,6 +1,7 @@
 <script lang="ts">
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
   import { projectColor } from "../../utils/projectColor.js";
+  import { m } from "../../i18n/index.js";
 
   const CHART_H = 180;
   const X_LABEL_H = 20;
@@ -335,34 +336,34 @@
 
 <div class="chart-container">
   <div class="chart-header">
-    <h3 class="chart-title">Cost Over Time</h3>
+    <h3 class="chart-title">{m.usage_cost_over_time_title()}</h3>
     <div class="segment-toggle">
       <button
         class="toggle-btn"
         class:active={groupBy === "project"}
         onclick={() => handleGroupByChange("project")}
       >
-        Project
+        {m.analytics_col_project()}
       </button>
       <button
         class="toggle-btn"
         class:active={groupBy === "model"}
         onclick={() => handleGroupByChange("model")}
       >
-        Model
+        {m.usage_model()}
       </button>
       <button
         class="toggle-btn"
         class:active={groupBy === "agent"}
         onclick={() => handleGroupByChange("agent")}
       >
-        Agent
+        {m.analytics_col_agent()}
       </button>
     </div>
   </div>
 
   {#if seriesData.points.length === 0}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
     <div class="chart-scroll" bind:this={containerEl}>
       <svg
@@ -415,7 +416,7 @@
               class="legend-dot"
               style="background: {key === '__other__' ? 'var(--text-muted)' : projectColor(key)}"
             ></span>
-            {key === "__other__" ? "Other" : key}
+            {key === "__other__" ? m.shared_other() : key}
           </span>
         {/each}
       </div>

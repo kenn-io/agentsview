@@ -1,5 +1,6 @@
 <script lang="ts">
   import { squarify } from "../../utils/treemap.js";
+  import { m } from "../../i18n/index.js";
 
   interface TreemapItem {
     id: string;
@@ -108,12 +109,12 @@
       class="tile"
       tabindex="0"
       role="button"
-      aria-label="Hide {tile.label} from chart"
+      aria-label={m.usage_hide_from_chart({ label: tile.label })}
       onclick={() => onSelect?.(tile.id)}
       onkeydown={(e) => handleKey(e, tile.id)}
       clip-path="url(#{clipId})"
     >
-      <title>Click to hide {tile.label}</title>
+      <title>{m.usage_click_to_hide({ label: tile.label })}</title>
       <rect
         x={tile.x}
         y={tile.y}

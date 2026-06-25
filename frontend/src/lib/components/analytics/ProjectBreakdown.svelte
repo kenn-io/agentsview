@@ -1,6 +1,7 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
   import type { ProjectAnalytics } from "../../api/types.js";
+  import { m } from "../../i18n/index.js";
 
   const MAX_PROJECTS = 15;
   const BAR_HEIGHT = 20;
@@ -70,9 +71,11 @@
       .sort(([, a], [, b]) => b - a)
       .map(([name, count]) => `${name}: ${count}`)
       .join(", ");
-    const parts = [
-      `${project.messages.toLocaleString()} messages`,
-      `${project.sessions} sessions`,
+    const parts: string[] = [
+      m.analytics_project_messages({
+        count: project.messages.toLocaleString(),
+      }),
+      m.analytics_project_sessions({ count: project.sessions }),
     ];
     if (agents) parts.push(agents);
     tooltip = {
@@ -89,9 +92,11 @@
 
 <div class="breakdown-container">
   <div class="breakdown-header">
-    <h3 class="chart-title">Projects</h3>
+    <h3 class="chart-title">{m.analytics_projects_title()}</h3>
     {#if rows.length > 0}
-      <span class="count">{analytics.projects?.projects.length ?? 0} total</span>
+      <span class="count">
+        {m.analytics_total_count({ count: analytics.projects?.projects.length ?? 0 })}
+      </span>
     {/if}
   </div>
 
@@ -102,7 +107,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchProjects()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if rows.length > 0}
@@ -144,7 +149,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No project data</div>
+    <div class="empty">{m.analytics_projects_empty()}</div>
   {/if}
 </div>
 

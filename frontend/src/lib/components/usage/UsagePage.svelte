@@ -35,6 +35,7 @@
     panelDateState,
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
+  import { m } from "../../i18n/index.js";
 
   let mounted = false;
   let unsubEvents: (() => void) | undefined;
@@ -380,7 +381,7 @@
       />
 
       <FilterDropdown
-        label="Project"
+        label={m.analytics_col_project()}
         items={projectItems}
         excludedCsv={usage.excludedProjects}
         onToggle={(name) => usage.toggleProject(name)}
@@ -390,7 +391,7 @@
       />
 
       <FilterDropdown
-        label="Model"
+        label={m.usage_model()}
         items={modelItems}
         excludedCsv={usage.selectedModels}
         mode="include"
@@ -404,8 +405,8 @@
         lastUpdatedAt={usage.lastUpdatedAt}
         busy={usage.isQuerying}
         onRefresh={() => usage.fetchAll()}
-        label="Refresh usage data"
-        title="Refresh"
+        label={m.usage_refresh()}
+        title={m.shared_refresh()}
       />
 
     </div>

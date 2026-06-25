@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { SignalsTrendBucket } from "../../api/types/analytics.js";
   import { getGradeStyle, scoreToGrade } from "../../utils/grade.js";
+  import { m } from "../../i18n/index.js";
 
   interface Props {
     trend: SignalsTrendBucket[];
@@ -12,7 +13,7 @@
 </script>
 
 <div class="health-trend">
-  <div class="chart-title">Health Trend</div>
+  <div class="chart-title">{m.analytics_health_trend_title()}</div>
   {#if trend.length > 0}
     <div class="chart-area">
       <div class="y-axis">
@@ -35,7 +36,7 @@
             style:background={style.bg}
             title="{bucket.date}: {score != null
               ? Math.round(score)
-              : 'no scored sessions'} ({bucket.session_count} sessions)"
+              : m.analytics_health_trend_no_scored_sessions()} ({m.analytics_session_shape_session_count({ count: bucket.session_count })})"
           ></div>
         {/each}
       </div>
@@ -49,10 +50,10 @@
       {/if}
     </div>
     <div class="chart-caption">
-      Daily average health score &middot; bar color = grade
+      {m.analytics_health_trend_caption()}
     </div>
   {:else}
-    <div class="empty">No trend data</div>
+    <div class="empty">{m.analytics_no_trend_data()}</div>
   {/if}
 </div>
 

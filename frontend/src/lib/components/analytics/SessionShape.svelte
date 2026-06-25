@@ -2,15 +2,21 @@
   import { analytics } from "../../stores/analytics.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import type { DistributionBucket } from "../../api/types.js";
+  import { m } from "../../i18n/index.js";
 
   type View = "length" | "duration" | "autonomy";
   let activeView: View = $state("length");
 
-  const viewLabels: Record<View, string> = {
-    length: "Messages",
-    duration: "Duration",
-    autonomy: "Autonomy",
-  };
+  function viewLabel(view: View): string {
+    switch (view) {
+      case "duration":
+        return m.analytics_session_shape_duration();
+      case "autonomy":
+        return m.analytics_session_shape_autonomy();
+      default:
+        return m.analytics_metric_messages();
+    }
+  }
 
   const activeBuckets = $derived.by(() => {
     const shape = analytics.sessionShape;
@@ -61,7 +67,7 @@
 
 <div class="shape-container">
   <div class="shape-header">
-    <h3 class="chart-title">Session Shape</h3>
+    <h3 class="chart-title">{m.analytics_session_shape_title()}</h3>
     <div class="view-toggle">
       {#each (["length", "duration", "autonomy"] as const) as v}
         <button
@@ -69,7 +75,7 @@
           class:active={activeView === v}
           onclick={() => (activeView = v)}
         >
-          {viewLabels[v]}
+          {viewLabel(v)}
         </button>
       {/each}
     </div>
@@ -82,7 +88,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchSessionShape()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if activeBuckets.length > 0}
@@ -108,11 +114,11 @@
     </div>
     {#if analytics.sessionShape}
       <div class="shape-footer">
-        {analytics.sessionShape.count} sessions
+        {m.analytics_session_shape_session_count({ count: analytics.sessionShape.count })}
       </div>
     {/if}
   {:else}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{m.shared_no_data_for_period()}</div>
   {/if}
 </div>
 

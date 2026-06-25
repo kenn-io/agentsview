@@ -5,6 +5,7 @@
     SkillProjectBreakdown,
     SkillUsage,
   } from "../../api/types.js";
+  import { m } from "../../i18n/index.js";
 
   const skills = $derived(analytics.skills?.by_skill ?? []);
   const trendEntries = $derived(analytics.skills?.trend ?? []);
@@ -49,7 +50,7 @@
   }
 
   function formatLastUsed(value: string): string {
-    if (!value) return "Never";
+    if (!value) return m.analytics_top_skills_never();
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return value;
     return d.toLocaleDateString(undefined, {
@@ -62,7 +63,7 @@
     items: SkillProjectBreakdown[] | null,
   ): string {
     const top = (items ?? []).slice(0, 2);
-    if (top.length === 0) return "None";
+    if (top.length === 0) return m.shared_none();
     return top
       .map((item) => {
         return `${item.project}: ${item.count}`;
@@ -96,7 +97,11 @@
   function handleSkillHover(e: MouseEvent, skill: SkillUsage) {
     showTooltip(
       e,
-      `${skill.skill_name}: ${skill.call_count.toLocaleString()} calls (${skill.pct}%)`,
+      m.analytics_top_skills_tooltip({
+        skill: skill.skill_name,
+        count: skill.call_count.toLocaleString(),
+        pct: skill.pct,
+      }),
     );
   }
 
@@ -111,7 +116,11 @@
       .map(([skill, count]) => `${skill}: ${count}`);
     showTooltip(
       e,
-      `${entry.date} | ${total} total | ${parts.join(", ")}`,
+      m.analytics_tool_usage_trend_tooltip({
+        date: entry.date,
+        total,
+        parts: parts.join(", "),
+      }),
     );
   }
 
@@ -122,11 +131,13 @@
 
 <div class="skills-container">
   <div class="skills-header">
-    <h3 class="chart-title">Top Skills</h3>
+    <h3 class="chart-title">{m.analytics_top_skills_title()}</h3>
     {#if analytics.skills}
       <span class="count">
-        {analytics.skills.total_skill_calls.toLocaleString()} calls ·
-        {analytics.skills.distinct_skills.toLocaleString()} skills
+        {m.analytics_top_skills_count({
+          calls: analytics.skills.total_skill_calls.toLocaleString(),
+          skills: analytics.skills.distinct_skills.toLocaleString(),
+        })}
       </span>
     {/if}
   </div>
@@ -138,7 +149,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchSkills()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if skills.length > 0}
@@ -163,15 +174,15 @@
                 {skill.call_count.toLocaleString()}
               </span>
               <span class="session-value">
-                {skill.session_count.toLocaleString()} sessions
+                {m.analytics_session_shape_session_count({ count: skill.session_count.toLocaleString() })}
               </span>
               <span class="last-used">
                 {formatLastUsed(skill.last_used_at)}
               </span>
             </div>
             <div class="breakdowns">
-              <div class="agent-breakdown" aria-label="Agent breakdown">
-                <span class="breakdown-label">Agents</span>
+              <div class="agent-breakdown" aria-label={m.analytics_top_skills_agent_breakdown()}>
+                <span class="breakdown-label">{m.analytics_top_skills_agents()}</span>
                 {#if skill.agent_breakdown?.length}
                   {#each skill.agent_breakdown as agent}
                     <span class="agent-chip">
@@ -183,11 +194,13 @@
                     </span>
                   {/each}
                 {:else}
-                  <span class="muted">None</span>
+                  <span class="muted">{m.shared_none()}</span>
                 {/if}
               </div>
               <span class="project-breakdown">
-                Projects: {projectBreakdownLabel(skill.project_breakdown)}
+                {m.analytics_top_skills_projects({
+                  projects: projectBreakdownLabel(skill.project_breakdown),
+                })}
               </span>
             </div>
           {/each}
@@ -196,7 +209,7 @@
 
       {#if trendEntries.length > 1}
         <div class="section">
-          <h4 class="section-title">Weekly Trend</h4>
+          <h4 class="section-title">{m.analytics_weekly_trend()}</h4>
           <div class="trend-chart">
             {#each trendEntries as entry}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -228,7 +241,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No skill usage data</div>
+    <div class="empty">{m.analytics_top_skills_empty()}</div>
   {/if}
 </div>
 
