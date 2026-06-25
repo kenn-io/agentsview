@@ -523,8 +523,10 @@ func TestCoworkRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentCowork)
 	require.True(t, ok, "AgentCowork missing from Registry")
 	require.True(t, def.FileBased, "Cowork FileBased")
-	require.NotNil(t, def.DiscoverFunc, "Cowork DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "Cowork FindSourceFunc")
+	// Cowork is a migrated, provider-authoritative agent: source discovery
+	// and lookup live on the concrete provider, not on legacy AgentDef hooks.
+	require.Nil(t, def.DiscoverFunc, "Cowork DiscoverFunc")
+	require.Nil(t, def.FindSourceFunc, "Cowork FindSourceFunc")
 	assert.Equal(t, "COWORK_DIR", def.EnvVar)
 	assert.Equal(t, "cowork_dirs", def.ConfigKey)
 	assert.Equal(t, "cowork:", def.IDPrefix)

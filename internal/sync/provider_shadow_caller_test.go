@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,107 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
-
-// The generic shadow-compare/legacy-coexistence mechanism is exercised through
-// the Cowork agent, which remains legacy-only and reuses the Claude transcript
-// format. Claude itself is now provider-authoritative, so it no longer has a
-// legacy processFile arm to observe in shadow.
-func TestProcessFileShadowObservesProviderWithoutReplacingLegacy(t *testing.T) {
-	root := t.TempDir()
-	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "shadow-caller.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
-	require.NoError(t, os.WriteFile(
-		sourcePath,
-		[]byte(testjsonl.JoinJSONL(
-			testjsonl.ClaudeUserJSON(
-				"compare through the caller",
-				"2026-06-01T10:00:00Z",
-				"/Users/dev/code/demo",
-			),
-			testjsonl.ClaudeAssistantJSON(
-				"provider stayed shadow-only",
-				"2026-06-01T10:01:00Z",
-			),
-		)),
-		0o644,
-	))
-
-	legacyResults, legacyExcluded, err := parser.ParseCoworkSession(
-		sourcePath, "devbox",
-	)
-	require.NoError(t, err)
-	require.Len(t, legacyResults, 1)
-	require.Empty(t, legacyExcluded)
-	info, err := os.Stat(sourcePath)
-	require.NoError(t, err)
-	providerResult := legacyResults[0]
-	providerResult.Session.File.Inode, providerResult.Session.File.Device = getFileIdentity(info)
-	hash, err := ComputeFileHash(sourcePath)
-	require.NoError(t, err)
-	providerResult.Session.File.Hash = hash
-
-	source := parser.SourceRef{
-		Provider:       parser.AgentCowork,
-		Key:            sourcePath,
-		DisplayPath:    sourcePath,
-		FingerprintKey: sourcePath,
-		ProjectHint:    "demo",
-	}
-	provider := &shadowCallerProvider{
-		shadowTestProvider: shadowTestProvider{
-			ProviderBase: parser.ProviderBase{
-				Def: parser.AgentDef{
-					Type:        parser.AgentCowork,
-					DisplayName: "Claude Cowork",
-				},
-			},
-			fingerprint: parser.SourceFingerprint{
-				Key:     sourcePath,
-				Size:    info.Size(),
-				MTimeNS: info.ModTime().UnixNano(),
-			},
-			outcome: parser.ParseOutcome{
-				Results: []parser.ParseResultOutcome{{
-					Result:      providerResult,
-					DataVersion: parser.DataVersionCurrent,
-				}},
-				ResultSetComplete: true,
-			},
-		},
-		source: source,
-	}
-	var comparisons []ProviderShadowComparison
-	engine := NewEngine(dbtest.OpenTestDB(t), EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCowork: {root},
-		},
-		Machine: "devbox",
-		ProviderFactories: []parser.ProviderFactory{
-			shadowCallerFactory{provider: provider},
-		},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCowork: parser.ProviderMigrationShadowCompare,
-		},
-		ProviderShadowRecorder: func(comparison ProviderShadowComparison) {
-			comparisons = append(comparisons, comparison)
-		},
-	})
-
-	result := engine.processFile(context.Background(), parser.DiscoveredFile{
-		Path:  sourcePath,
-		Agent: parser.AgentCowork,
-	})
-
-	require.NoError(t, result.err)
-	require.Len(t, result.results, 1)
-	assert.Equal(t, "cowork:shadow-caller", result.results[0].Session.ID)
-	assert.Equal(t, parser.AgentCowork, result.results[0].Session.Agent)
-	require.Len(t, comparisons, 1)
-	assert.NoError(t, comparisons[0].Err)
-	assert.Empty(t, comparisons[0].Mismatches)
-	assert.Equal(t, sourcePath, comparisons[0].File.Path)
-	assert.Equal(t, []string{"fingerprint", "parse"}, provider.calls)
-}
 
 func TestClassifyProviderChangedPathPassesStoredHintsToShadowProvider(
 	t *testing.T,
@@ -239,105 +139,6 @@ func TestClassifyProviderChangedPathRunsAlongsideLegacyClassifier(
 	assert.False(t, files[0].ProviderProcess)
 	require.NotNil(t, files[0].ProviderSource)
 	assert.Equal(t, sourcePath, files[0].ProviderSource.DisplayPath)
-}
-
-func TestProcessFileShadowUsesChangedPathProviderSource(t *testing.T) {
-	root := t.TempDir()
-	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "shadow-provider-source.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
-	require.NoError(t, os.WriteFile(
-		sourcePath,
-		[]byte(testjsonl.JoinJSONL(
-			testjsonl.ClaudeUserJSON(
-				"provider source should win",
-				"2026-06-01T10:00:00Z",
-				"/Users/dev/code/demo",
-			),
-			testjsonl.ClaudeAssistantJSON(
-				"force parse should propagate",
-				"2026-06-01T10:01:00Z",
-			),
-		)),
-		0o644,
-	))
-
-	legacyResults, legacyExcluded, err := parser.ParseCoworkSession(
-		sourcePath, "devbox",
-	)
-	require.NoError(t, err)
-	require.Len(t, legacyResults, 1)
-	require.Empty(t, legacyExcluded)
-	info, err := os.Stat(sourcePath)
-	require.NoError(t, err)
-	providerResult := legacyResults[0]
-	providerResult.Session.File.Inode, providerResult.Session.File.Device = getFileIdentity(info)
-	hash, err := ComputeFileHash(sourcePath)
-	require.NoError(t, err)
-	providerResult.Session.File.Hash = hash
-
-	changedSource := parser.SourceRef{
-		Provider:       parser.AgentCowork,
-		Key:            "changed-path-source",
-		DisplayPath:    sourcePath,
-		FingerprintKey: sourcePath,
-		ProjectHint:    "demo",
-	}
-	findFound := false
-	provider := &shadowCallerProvider{
-		shadowTestProvider: shadowTestProvider{
-			ProviderBase: parser.ProviderBase{
-				Def: parser.AgentDef{
-					Type:        parser.AgentCowork,
-					DisplayName: "Claude Cowork",
-				},
-			},
-			fingerprint: parser.SourceFingerprint{
-				Key:     sourcePath,
-				Size:    info.Size(),
-				MTimeNS: info.ModTime().UnixNano(),
-			},
-			outcome: parser.ParseOutcome{
-				Results: []parser.ParseResultOutcome{{
-					Result:      providerResult,
-					DataVersion: parser.DataVersionCurrent,
-				}},
-				ResultSetComplete: true,
-			},
-		},
-		findFound: &findFound,
-	}
-	var comparisons []ProviderShadowComparison
-	engine := NewEngine(dbtest.OpenTestDB(t), EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentCowork: {root},
-		},
-		Machine: "devbox",
-		ProviderFactories: []parser.ProviderFactory{
-			shadowCallerFactory{provider: provider},
-		},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentCowork: parser.ProviderMigrationShadowCompare,
-		},
-		ProviderShadowRecorder: func(comparison ProviderShadowComparison) {
-			comparisons = append(comparisons, comparison)
-		},
-	})
-
-	result := engine.processFile(context.Background(), parser.DiscoveredFile{
-		Path:           sourcePath,
-		Agent:          parser.AgentCowork,
-		ForceParse:     true,
-		ProviderSource: &changedSource,
-	})
-
-	require.NoError(t, result.err)
-	require.Len(t, comparisons, 1)
-	assert.NoError(t, comparisons[0].Err)
-	assert.Empty(t, comparisons[0].Mismatches)
-	assert.Equal(t, changedSource, comparisons[0].Source)
-	assert.Equal(t, changedSource, provider.parseRequest.Source)
-	assert.True(t, provider.parseRequest.ForceParse)
-	assert.Empty(t, provider.findRequest)
 }
 
 func TestClassifyProviderChangedPathMarksAuthoritativeProviderProcess(
@@ -710,6 +511,7 @@ func TestProcessFileProviderAuthoritativeSkipsFreshClaudeBeforeFingerprint(t *te
 		FingerprintKey: sourcePath,
 		ProjectHint:    "demo",
 	}
+
 	provider := &shadowCallerProvider{
 		shadowTestProvider: shadowTestProvider{
 			ProviderBase: parser.ProviderBase{
@@ -763,6 +565,106 @@ func TestProcessFileProviderAuthoritativeSkipsFreshClaudeBeforeFingerprint(t *te
 	assert.Equal(t, fileMtime, result.mtime)
 	assert.Empty(t, provider.calls)
 	assert.Equal(t, sourcePath, provider.findRequest.StoredFilePath)
+}
+
+func TestProcessFileProviderAuthoritativeSkipsFreshCoworkBeforeFingerprint(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	sourcePath, sourceMtime := writeFreshCoworkProviderSource(
+		t, root, database, "fresh-session",
+	)
+	provider := &shadowCallerProvider{
+		shadowTestProvider: shadowTestProvider{
+			ProviderBase: parser.ProviderBase{
+				Def: parser.AgentDef{
+					Type:        parser.AgentCowork,
+					DisplayName: "Claude Cowork",
+				},
+			},
+		},
+		source: parser.SourceRef{
+			Provider:       parser.AgentCowork,
+			Key:            sourcePath,
+			DisplayPath:    sourcePath,
+			FingerprintKey: sourcePath,
+		},
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCowork: {root},
+		},
+		Machine: "devbox",
+		ProviderFactories: []parser.ProviderFactory{
+			shadowCallerFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+
+	result := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentCowork,
+	})
+
+	require.NoError(t, result.err)
+	assert.True(t, result.skip)
+	assert.Equal(t, sourceMtime, result.mtime)
+	assert.Empty(t, provider.calls)
+}
+
+func TestProcessFileProviderAuthoritativeForceParseBypassesFreshCoworkSkip(t *testing.T) {
+	root := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	sourcePath, sourceMtime := writeFreshCoworkProviderSource(
+		t, root, database, "force-session",
+	)
+	provider := &shadowCallerProvider{
+		shadowTestProvider: shadowTestProvider{
+			ProviderBase: parser.ProviderBase{
+				Def: parser.AgentDef{
+					Type:        parser.AgentCowork,
+					DisplayName: "Claude Cowork",
+				},
+			},
+			fingerprint: parser.SourceFingerprint{
+				Key:     sourcePath,
+				MTimeNS: sourceMtime,
+			},
+			outcome: parser.ParseOutcome{
+				ResultSetComplete: true,
+			},
+		},
+		source: parser.SourceRef{
+			Provider:       parser.AgentCowork,
+			Key:            sourcePath,
+			DisplayPath:    sourcePath,
+			FingerprintKey: sourcePath,
+		},
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCowork: {root},
+		},
+		Machine: "devbox",
+		ProviderFactories: []parser.ProviderFactory{
+			shadowCallerFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+
+	result := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:       sourcePath,
+		Agent:      parser.AgentCowork,
+		ForceParse: true,
+	})
+
+	require.NoError(t, result.err)
+	assert.False(t, result.skip)
+	assert.Equal(t, []string{"fingerprint", "parse"}, provider.calls)
+	assert.True(t, provider.parseRequest.ForceParse)
 }
 
 func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) {
@@ -1311,4 +1213,47 @@ func (f shadowCallerFactory) Capabilities() parser.Capabilities {
 
 func (f shadowCallerFactory) NewProvider(parser.ProviderConfig) parser.Provider {
 	return f.provider
+}
+
+func writeFreshCoworkProviderSource(
+	t *testing.T,
+	root string,
+	database *db.DB,
+	rawSessionID string,
+) (string, int64) {
+	t.Helper()
+
+	sessionDir := filepath.Join(root, "org", "workspace", "local_fresh")
+	projectDir := filepath.Join(sessionDir, ".claude", "projects", "-demo")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	metaPath := sessionDir + ".json"
+	sourcePath := filepath.Join(projectDir, rawSessionID+".jsonl")
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"title":"Fresh"}`), 0o644))
+	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o644))
+
+	transcriptTime := time.Unix(1_781_475_210, 0)
+	metaTime := transcriptTime.Add(time.Second)
+	require.NoError(t, os.Chtimes(sourcePath, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
+	info, err := os.Stat(sourcePath)
+	require.NoError(t, err)
+	sourceSize := info.Size()
+	sourceMtime := parser.CoworkSessionMtime(sourcePath, info.ModTime().UnixNano())
+	require.Equal(t, metaTime.UnixNano(), sourceMtime)
+
+	fullSessionID := "cowork:" + rawSessionID
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        fullSessionID,
+		Project:   "cowork-project",
+		Machine:   "devbox",
+		Agent:     string(parser.AgentCowork),
+		FilePath:  &sourcePath,
+		FileSize:  &sourceSize,
+		FileMtime: &sourceMtime,
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		fullSessionID, db.CurrentDataVersion(),
+	))
+
+	return sourcePath, sourceMtime
 }

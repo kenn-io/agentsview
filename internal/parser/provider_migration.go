@@ -18,7 +18,7 @@ const (
 
 var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentClaude:         ProviderMigrationProviderAuthoritative,
-	AgentCowork:         ProviderMigrationLegacyOnly,
+	AgentCowork:         ProviderMigrationProviderAuthoritative,
 	AgentCodex:          ProviderMigrationLegacyOnly,
 	AgentCopilot:        ProviderMigrationLegacyOnly,
 	AgentGemini:         ProviderMigrationLegacyOnly,
