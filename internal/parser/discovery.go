@@ -436,9 +436,13 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 	return []string{parent}
 }
 
-// DiscoverClaudeProjects finds all project directories under the
-// Claude projects dir and returns their JSONL session files.
-func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {
+// ClaudeProjectSessionFiles finds all project directories under the
+// Claude projects dir and returns their JSONL session files. It is the
+// provider-owned enumeration body shared by the Claude provider source
+// set (full-sync discovery) and the engine's duplicate-candidate
+// expansion. The name carries no legacy entrypoint verb so the
+// provider can call it without shimming a Discover* free function.
+func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	if strings.HasPrefix(projectsDir, "s3://") {
 		return discoverClaudeS3(projectsDir)
 	}
@@ -569,9 +573,12 @@ func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
 	return files
 }
 
-// FindClaudeSourceFile finds the original JSONL file for a Claude
-// session ID by searching all project directories.
-func FindClaudeSourceFile(
+// claudeFindSourceFile finds the original JSONL file for a Claude
+// session ID by searching all project directories. It is the
+// provider-owned lookup body used by the Claude provider source set's
+// FindSource. The name carries no legacy entrypoint verb so the
+// provider can call it without shimming a Find* free function.
+func claudeFindSourceFile(
 	projectsDir, sessionID string,
 ) string {
 	if !IsValidSessionID(sessionID) {
@@ -600,7 +607,7 @@ func FindClaudeSourceFile(
 	// <project>/<session>/subagents/**/agent-<id>.jsonl
 	if strings.HasPrefix(sessionID, "agent-") {
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			if !isDirOrSymlink(entry, projectsDir) {
 				continue
 			}
 			projDir := filepath.Join(

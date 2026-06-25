@@ -238,7 +238,7 @@ func TestParseClaudeSession_Metadata(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			results, err := ParseClaudeSession(
+			results, err := parseClaudeSession(
 				path, "proj", "local",
 			)
 			require.NoError(t, err)
@@ -309,7 +309,7 @@ func TestParseClaudeSession_MetadataOnForkSessions(
 	err := os.WriteFile(path, []byte(content.String()), 0o644)
 	require.NoError(t, err)
 
-	results, err := ParseClaudeSession(path, "proj", "local")
+	results, err := parseClaudeSession(path, "proj", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 2, "expected main + fork result")
 
@@ -357,7 +357,7 @@ func TestParseClaudeSession_LinearMetadata(t *testing.T) {
 	err := os.WriteFile(path, []byte(content), 0o644)
 	require.NoError(t, err)
 
-	results, err := ParseClaudeSession(path, "proj", "local")
+	results, err := parseClaudeSession(path, "proj", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 
@@ -470,7 +470,7 @@ func TestClaudeRenameSetsDisplayName(t *testing.T) {
 			err := os.WriteFile(path, []byte(sb.String()), 0o644)
 			require.NoError(t, err)
 
-			results, err := ParseClaudeSession(path, "proj", "local")
+			results, err := parseClaudeSession(path, "proj", "local")
 			require.NoError(t, err)
 			require.Len(t, results, 1)
 			assert.Equal(t, tc.wantDisplay, results[0].Session.SessionName)

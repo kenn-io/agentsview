@@ -106,8 +106,6 @@ var Registry = []AgentDef{
 		DefaultDirs:       []string{".claude/projects"},
 		IDPrefix:          "",
 		FileBased:         true,
-		DiscoverFunc:      DiscoverClaudeProjects,
-		FindSourceFunc:    FindClaudeSourceFile,
 	},
 	{
 		Type:           AgentCowork,

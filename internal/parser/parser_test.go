@@ -790,7 +790,7 @@ func TestClaudeSessionTimestampSemantics(t *testing.T) {
 		buf := captureLog(t)
 
 		path := createTestFile(t, "ts-long-invalid.jsonl", content)
-		_, err := ParseClaudeSession(
+		_, err := parseClaudeSession(
 			path, "proj", "local",
 		)
 		require.NoError(t, err, "ParseClaudeSession")
@@ -1303,7 +1303,7 @@ func TestClaudeUserMessageCount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := createTestFile(t, "test.jsonl", tt.content)
-			results, err := ParseClaudeSession(
+			results, err := parseClaudeSession(
 				path, "test-proj", "local",
 			)
 			require.NoError(t, err, "ParseClaudeSession")
@@ -1324,7 +1324,7 @@ func TestParseClaudeToolResults(t *testing.T) {
 	content := strings.Join(lines, "\n") + "\n"
 	path := createTestFile(t, "tool-results.jsonl", content)
 
-	results, err := ParseClaudeSession(path, "test-project", "local")
+	results, err := parseClaudeSession(path, "test-project", "local")
 	require.NoError(t, err, "ParseClaudeSession")
 	require.NotEmpty(t, results, "ParseClaudeSession returned no results")
 	msgs := results[0].Messages

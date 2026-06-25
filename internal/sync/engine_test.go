@@ -2770,10 +2770,14 @@ func TestEngine_ClassifyOnePathClaudeStatPermissionErrorStillClassifies(
 		_ = os.Chmod(projectDir, 0o755)
 	}()
 
-	got, ok := engine.classifyOnePath(path, nil)
-	require.True(t, ok, "expected path to classify despite stat permission error")
-	assert.Equal(t, path, got.Path)
-	assert.Equal(t, parser.AgentClaude, got.Agent)
+	// Claude is provider-authoritative, so classification flows through
+	// the provider's changed-path handling rather than the legacy
+	// classifyOnePath Claude block. A transient stat-permission error
+	// must still classify the path by shape so the change is not dropped.
+	files := engine.classifyPaths([]string{path})
+	require.Len(t, files, 1, "expected path to classify despite stat permission error")
+	assert.Equal(t, path, files[0].Path)
+	assert.Equal(t, parser.AgentClaude, files[0].Agent)
 }
 
 func TestEngine_ClassifyPathsDedupesOpenCodeChildPaths(t *testing.T) {
