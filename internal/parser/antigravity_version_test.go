@@ -269,6 +269,31 @@ func TestAntigravityIDESourceVersionUnknownSchema(t *testing.T) {
 		sess.SourceVersion)
 }
 
+// TestAntigravityCLIDBStepsCarriesSourceVersionOnStepError verifies that a CLI
+// .db whose schema is readable but whose steps query fails still returns the
+// schema-fingerprint label. Without this the parser falls back to the
+// trajectory sidecar and persists a session with an empty SourceVersion,
+// silently losing the agy-schema marker for an unrecognized (newer) schema.
+func TestAntigravityCLIDBStepsCarriesSourceVersionOnStepError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nosteps.db")
+	// A readable schema with NO steps table: the fingerprint query over
+	// sqlite_master succeeds, but loadAntigravityStepsWithRawCount's
+	// `SELECT ... FROM steps` fails. The lone table also makes the schema
+	// non-baseline, so the expected label is an agy-schema:<prefix> marker.
+	db := openSchemaDB(t, path, 1,
+		"CREATE TABLE `trajectory_meta` (`trajectory_id` text,"+
+			"PRIMARY KEY (`trajectory_id`))")
+	require.NoError(t, db.Close())
+
+	result, err := loadAntigravityCLIDBSteps(path)
+	require.Error(t, err, "missing steps table must fail the step query")
+	assert.True(t,
+		strings.HasPrefix(result.sourceVersion, antigravitySchemaUnknownPrefix),
+		"readable schema must still yield an agy-schema marker, got %q",
+		result.sourceVersion)
+}
+
 // TestAntigravityCLIPBSourceVersionEmpty verifies that a legacy .pb session
 // (no .db schema available) leaves SourceVersion empty rather than fabricating.
 func TestAntigravityCLIPBSourceVersionEmpty(t *testing.T) {

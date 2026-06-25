@@ -401,13 +401,18 @@ func loadAntigravityCLIDBSteps(
 		)
 	}
 	defer db.Close()
+	// Schema-fingerprint label for the producing agy build, derived from the
+	// same shared helper the IDE path uses so both classify identically.
+	// Computed before step loading so a readable schema still carries the
+	// agy-schema marker even when the step query fails and the parser falls
+	// back to the trajectory sidecar (antigravitySourceVersion returns "" when
+	// the schema itself is unreadable, so an undecodable .db is never labeled).
+	sourceVersion := antigravitySourceVersion(db)
 	result, err := loadAntigravityStepsWithRawCount(db)
+	result.sourceVersion = sourceVersion
 	if err != nil {
 		return result, err
 	}
-	// Schema-fingerprint label for the producing agy build, derived from the
-	// same shared helper the IDE path uses so both classify identically.
-	result.sourceVersion = antigravitySourceVersion(db)
 	return result, nil
 }
 
