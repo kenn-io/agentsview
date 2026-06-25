@@ -4956,14 +4956,26 @@ func (e *Engine) shouldSkipCodex(
 		db.CurrentDataVersion() {
 		return false
 	}
-	fileMtime := info.ModTime().UnixNano()
-	effectiveMtime := parser.CodexEffectiveMtime(path, fileMtime)
-	if storedMtime == effectiveMtime {
-		return true
+	// A Codex title lives in session_index.jsonl, not the transcript, so a
+	// title-only rename can change the title with no transcript signal. Detect
+	// it directly rather than inferring it from an mtime inequality: the index
+	// mtime is folded into the stored watermark, so a later rename whose index
+	// mtime lands at or below that watermark is invisible to a mtime compare,
+	// and the old storedMtime==effectiveMtime fast path skipped without ever
+	// consulting the title. codexIndexSessionNameChanged reads the live title
+	// (cached per index file) and the stored name; a cheaper stored-name lookup
+	// to keep this fully off the hot skip path is a deferred follow-up.
+	if e.codexIndexSessionNameChanged(path) {
+		return false // title changed -> re-parse to refresh metadata
 	}
-	return effectiveMtime > storedMtime &&
-		fileMtime <= storedMtime &&
-		!e.codexIndexSessionNameChanged(path)
+	// Title verified unchanged: skip when the transcript itself is unchanged.
+	// Compare the bare file mtime, not the index-folded effective mtime -- the
+	// stored watermark may already include a folded index mtime, and a later
+	// bump of the shared session_index.jsonl (e.g. another session's rename)
+	// lifts every session's effective mtime; with the title confirmed
+	// unchanged, that rise must not force a needless reparse.
+	fileMtime := info.ModTime().UnixNano()
+	return fileMtime <= storedMtime
 }
 
 // codexIndexNeedsRefreshSince reports whether a Codex session whose transcript

@@ -3969,3 +3969,116 @@ func TestConvertToolCallsFilePathAndCallIndex(t *testing.T) {
 	assert.Equal(t, "", got[2].FilePath)
 	assert.Equal(t, 2, got[2].CallIndex)
 }
+
+// codexRenameFixture is a seeded Codex session whose stored file_mtime is the
+// folded index-mtime watermark, used to exercise title-rename detection in
+// shouldSkipCodex.
+type codexRenameFixture struct {
+	e              *Engine
+	path           string
+	info           os.FileInfo
+	effectiveMtime int64
+	root           string
+	uuid           string
+}
+
+// writeCodexIndexForTest writes the session_index.jsonl mapping uuid -> title
+// at indexMtime, the file shouldSkipCodex's title check reads.
+func writeCodexIndexForTest(
+	t *testing.T, root, uuid, title string, indexMtime time.Time,
+) string {
+	t.Helper()
+	idxPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	line := `{"id":"` + uuid + `","thread_name":"` + title + `"}` + "\n"
+	require.NoError(t, os.WriteFile(idxPath, []byte(line), 0o600))
+	require.NoError(t, os.Chtimes(idxPath, indexMtime, indexMtime))
+	return idxPath
+}
+
+// seedCodexRenameCase stores a Codex session whose file_mtime watermark is the
+// folded index mtime (the index is newer than the transcript). That is the
+// exact shape where a later title-only rename whose index mtime lands at or
+// below the watermark is invisible to an mtime comparison.
+func seedCodexRenameCase(t *testing.T, database *db.DB) codexRenameFixture {
+	t.Helper()
+	root := t.TempDir()
+	const uuid = "11111111-2222-3333-4444-555555555555"
+	sessDir := filepath.Join(root, "sessions", "2026", "06", "21")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+	path := filepath.Join(sessDir, "rollout-2026-06-21T18-59-38-"+uuid+".jsonl")
+
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/api", "user", "2026-06-21T18:59:38Z",
+		),
+		testjsonl.CodexMsgJSON("user", "review this", "2026-06-21T18:59:39Z"),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	transcriptMtime := time.Unix(1_700_000_000, 0)
+	require.NoError(t, os.Chtimes(path, transcriptMtime, transcriptMtime))
+	origIndexMtime := transcriptMtime.Add(time.Hour)
+	writeCodexIndexForTest(t, root, uuid, "Original Title", origIndexMtime)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+	effectiveMtime := parser.CodexEffectiveMtime(path, info.ModTime().UnixNano())
+	require.Equal(t, origIndexMtime.UnixNano(), effectiveMtime,
+		"folded watermark should be the index mtime")
+
+	sess := db.Session{
+		ID:          "host~codex:" + uuid,
+		Project:     "api",
+		Machine:     "host",
+		Agent:       "codex",
+		SessionName: strPtr("Original Title"),
+		FilePath:    strPtr("host:" + path),
+		FileSize:    int64Ptr(info.Size()),
+		FileMtime:   int64Ptr(effectiveMtime),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+		pathRewriter: func(p string) string {
+			return "host:" + p
+		},
+	}
+	return codexRenameFixture{
+		e: e, path: path, info: info,
+		effectiveMtime: effectiveMtime, root: root, uuid: uuid,
+	}
+}
+
+// TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip pins the masking
+// fix: a title-only rename whose folded index mtime is at or below the stored
+// watermark used to be skipped by shouldSkipCodex's storedMtime==effectiveMtime
+// fast path, which never consulted the title. The direct title check must now
+// force a reparse while an unchanged session still hits the skip path.
+func TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip(t *testing.T) {
+	database := openTestDB(t)
+	f := seedCodexRenameCase(t, database)
+
+	// Control: nothing changed -> hot path still skips.
+	assert.True(t, f.e.shouldSkipCodex(f.path, f.info),
+		"unchanged transcript and title must still skip")
+
+	// Title-only rename whose index mtime lands at or below the stored
+	// watermark. The transcript bytes are untouched, so the old mtime gate
+	// would skip; the mtime-independent title check must catch it.
+	writeCodexIndexForTest(t, f.root, f.uuid, "Renamed Title",
+		time.Unix(0, f.effectiveMtime))
+	renamedEff := parser.CodexEffectiveMtime(f.path, f.info.ModTime().UnixNano())
+	require.LessOrEqual(t, renamedEff, f.effectiveMtime,
+		"renamed index mtime must be at or below the stored watermark")
+	require.Equal(t, "Renamed Title",
+		parser.LookupCodexThreadName(f.path, f.uuid),
+		"live index must report the renamed title")
+
+	assert.False(t, f.e.shouldSkipCodex(f.path, f.info),
+		"title-only rename at or below stored watermark must not skip")
+}
