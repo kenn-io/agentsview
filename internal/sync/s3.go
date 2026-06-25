@@ -180,6 +180,12 @@ func (e *Engine) processS3Session(
 ) processResult {
 	idPrefix := s3SessionIDPrefix(file.Machine)
 	sourceFingerprint := s3SourceFingerprint(file)
+	sourceChanged := e.s3SourceMetadataChangedFromInfo(
+		file,
+		sourceInfo.Size(),
+		sourceInfo.ModTime().UnixNano(),
+		sourceFingerprint,
+	)
 	switch file.Agent {
 	case parser.AgentClaude:
 		sessionID := strings.TrimSuffix(sourceInfo.Name(), ".jsonl")
@@ -288,7 +294,7 @@ func (e *Engine) processS3Session(
 			res.results[i].Session.File.Hash = sourceFingerprint
 		}
 	}
-	if hydratedToolResults || sawPersistedToolResults {
+	if sourceChanged || hydratedToolResults || sawPersistedToolResults {
 		res.forceReplace = true
 	}
 	res.excludedSessionIDs = applyIDPrefixToIDs(

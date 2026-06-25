@@ -110,6 +110,79 @@ func TestProcessFileS3SameMetadataDifferentFingerprintFetches(t *testing.T) {
 	assert.Equal(t, "s3:fingerprint:new", res.results[0].Session.File.Hash)
 }
 
+func TestProcessFileS3ChangedFingerprintReplacesStoredMessages(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint-rewrite.jsonl"
+	first := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "Hello").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "Reply").
+		String()
+	second := testjsonl.NewSessionBuilder().
+		AddClaudeUser("2024-01-01T00:00:00Z", "HELLO").
+		AddClaudeAssistant("2024-01-01T00:00:05Z", "REPLY").
+		String()
+	require.Len(t, second, len(first), "test fixture must keep size stable")
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+
+	var content atomic.Value
+	content.Store(first)
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, path, got)
+		return io.NopCloser(strings.NewReader(content.Load().(string))), nil
+	}
+
+	e := &Engine{db: database}
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:             parser.AgentClaude,
+		Path:              path,
+		Project:           "test-proj",
+		Machine:           "laptop",
+		SourceSize:        int64(len(first)),
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:first",
+	})
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	written, _, failed := e.writeBatch([]pendingWrite{{
+		sess:         res.results[0].Session,
+		msgs:         res.results[0].Messages,
+		forceReplace: res.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Equal(t, 0, failed)
+
+	content.Store(second)
+	res = e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:             parser.AgentClaude,
+		Path:              path,
+		Project:           "test-proj",
+		Machine:           "laptop",
+		SourceSize:        int64(len(second)),
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:second",
+	})
+	require.NoError(t, res.err)
+	require.False(t, res.skip)
+	require.Len(t, res.results, 1)
+	written, _, failed = e.writeBatch([]pendingWrite{{
+		sess:         res.results[0].Session,
+		msgs:         res.results[0].Messages,
+		forceReplace: res.forceReplace,
+	}}, syncWriteDefault, false)
+	require.Equal(t, 1, written)
+	require.Equal(t, 0, failed)
+
+	msgs, err := database.GetAllMessages(
+		context.Background(), "laptop~fingerprint-rewrite",
+	)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "HELLO", msgs[0].Content)
+	assert.Equal(t, "REPLY", msgs[1].Content)
+}
+
 func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/fingerprint.jsonl"
@@ -134,6 +207,34 @@ func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 		SourceSize:        512,
 		SourceMtime:       mtime,
 		SourceFingerprint: "s3:fingerprint:new",
+	}}, time.Unix(0, mtime).Add(time.Nanosecond))
+
+	require.Len(t, got, 1)
+	assert.Equal(t, path, got[0].Path)
+}
+
+func TestFilterFilesByMtimeKeepsS3ChangedSize(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/claude/test-proj/size.jsonl"
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        "laptop~size",
+		Project:   "test-proj",
+		Machine:   "laptop",
+		Agent:     "claude",
+		FilePath:  strPtr(path),
+		FileSize:  int64Ptr(512),
+		FileMtime: int64Ptr(mtime),
+	}))
+
+	e := &Engine{db: database}
+	got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+		Agent:       parser.AgentClaude,
+		Path:        path,
+		Project:     "test-proj",
+		Machine:     "laptop",
+		SourceSize:  1024,
+		SourceMtime: mtime,
 	}}, time.Unix(0, mtime).Add(time.Nanosecond))
 
 	require.Len(t, got, 1)

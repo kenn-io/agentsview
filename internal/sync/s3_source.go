@@ -84,16 +84,40 @@ func s3DiscoveredSessionID(file parser.DiscoveredFile) string {
 	}
 }
 
-func (e *Engine) s3SourceFingerprintChanged(file parser.DiscoveredFile) bool {
-	if file.SourceFingerprint == "" {
+func (e *Engine) s3SourceMetadataChanged(file parser.DiscoveredFile) bool {
+	if file.SourceMtime == 0 {
 		return false
 	}
+	return e.s3SourceMetadataChangedFromInfo(
+		file, file.SourceSize, file.SourceMtime, file.SourceFingerprint,
+	)
+}
+
+func (e *Engine) s3SourceMetadataChangedFromInfo(
+	file parser.DiscoveredFile, size, mtime int64, sourceFingerprint string,
+) bool {
 	sessionID := s3DiscoveredSessionID(file)
-	if sessionID == "" || e.db.GetSessionFilePath(sessionID) != file.Path {
+	if sessionID == "" {
 		return false
 	}
-	storedHash, ok := e.db.GetSessionFileHash(sessionID)
-	return !ok || storedHash != file.SourceFingerprint
+	storedPath := e.db.GetSessionFilePath(sessionID)
+	if storedPath == "" || storedPath != file.Path {
+		return true
+	}
+	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(sessionID)
+	if !ok {
+		return true
+	}
+	if storedSize != size || storedMtime != mtime {
+		return true
+	}
+	if sourceFingerprint != "" {
+		storedHash, ok := e.db.GetSessionFileHash(sessionID)
+		if !ok || storedHash != sourceFingerprint {
+			return true
+		}
+	}
+	return false
 }
 
 func isS3SourcePath(path string) bool {

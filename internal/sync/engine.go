@@ -3223,7 +3223,7 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
-		if isS3SourcePath(f.Path) && e.s3SourceFingerprintChanged(f) {
+		if isS3SourcePath(f.Path) && e.s3SourceMetadataChanged(f) {
 			out = append(out, f)
 			continue
 		}
