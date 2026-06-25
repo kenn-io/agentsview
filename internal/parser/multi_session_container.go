@@ -76,70 +76,70 @@ type multiSessionConfig struct {
 	stampContainerHash bool
 }
 
-type multiSessionOption func(*multiSessionConfig)
+type MultiSessionOption func(*multiSessionConfig)
 
-func withContainerDiscovery(fn func(root string) []string) multiSessionOption {
+func WithContainerDiscovery(fn func(root string) []string) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.discoverContainers = fn }
 }
 
-func withSourceDiscovery(
+func WithSourceDiscovery(
 	fn func(root string) []multiSessionMatch,
-) multiSessionOption {
+) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.discoverSources = fn }
 }
 
-func withWatchRoots(fn func(roots []string) []WatchRoot) multiSessionOption {
+func WithWatchRoots(fn func(roots []string) []WatchRoot) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.watchRoots = fn }
 }
 
-func withChangedPathClassifier(
+func WithChangedPathClassifier(
 	fn func(root, path string, allowMissing bool) (multiSessionMatch, bool),
-) multiSessionOption {
+) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.classifyPath = fn }
 }
 
-func withMemberLookup(
+func WithMemberLookup(
 	fn func(root, rawID string) (multiSessionMatch, bool),
-) multiSessionOption {
+) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.findMember = fn }
 }
 
-func withStoredPathFallback(
+func WithStoredPathFallback(
 	fn func(root, path string) (multiSessionMatch, bool),
-) multiSessionOption {
+) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.storedPathFallback = fn }
 }
 
-func withFingerprint(
+func WithFingerprint(
 	fn func(src multiSessionSource) (SourceFingerprint, error),
-) multiSessionOption {
+) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.fingerprint = fn }
 }
 
-func withContainerParse(
+func WithContainerParse(
 	fn func(src multiSessionSource, req ParseRequest) ([]ParseResult, error),
-) multiSessionOption {
+) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.parseContainer = fn }
 }
 
-func withMemberParse(
+func WithMemberParse(
 	fn func(src multiSessionSource, req ParseRequest) (*ParseResult, error),
-) multiSessionOption {
+) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.parseMember = fn }
 }
 
-func withMemberPresence(fn func(src multiSessionSource) bool) multiSessionOption {
+func WithMemberPresence(fn func(src multiSessionSource) bool) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.memberPresent = fn }
 }
 
-func withContainerHashStamping() multiSessionOption {
+func WithContainerHashStamping() MultiSessionOption {
 	return func(c *multiSessionConfig) { c.stampContainerHash = true }
 }
 
-func newMultiSessionContainerSourceSet(
+func NewMultiSessionContainerSourceSet(
 	agent AgentType,
 	roots []string,
-	opts ...multiSessionOption,
+	opts ...MultiSessionOption,
 ) multiSessionContainerSourceSet {
 	cfg := multiSessionConfig{}
 	for _, opt := range opts {
@@ -147,19 +147,19 @@ func newMultiSessionContainerSourceSet(
 	}
 	switch {
 	case cfg.discoverContainers == nil && cfg.discoverSources == nil:
-		panic("multi-session container: missing withContainerDiscovery or withSourceDiscovery")
+		panic("multi-session container: missing WithContainerDiscovery or WithSourceDiscovery")
 	case cfg.watchRoots == nil:
-		panic("multi-session container: missing withWatchRoots")
+		panic("multi-session container: missing WithWatchRoots")
 	case cfg.classifyPath == nil:
-		panic("multi-session container: missing withChangedPathClassifier")
+		panic("multi-session container: missing WithChangedPathClassifier")
 	case cfg.findMember == nil:
-		panic("multi-session container: missing withMemberLookup")
+		panic("multi-session container: missing WithMemberLookup")
 	case cfg.fingerprint == nil:
-		panic("multi-session container: missing withFingerprint")
+		panic("multi-session container: missing WithFingerprint")
 	case cfg.parseContainer == nil:
-		panic("multi-session container: missing withContainerParse")
+		panic("multi-session container: missing WithContainerParse")
 	case cfg.parseMember == nil:
-		panic("multi-session container: missing withMemberParse")
+		panic("multi-session container: missing WithMemberParse")
 	}
 	return multiSessionContainerSourceSet{
 		agent: agent,
@@ -195,8 +195,8 @@ func (s multiSessionContainerSourceSet) Discover(
 }
 
 // discoverMatches yields the discovery matches for one root: either the
-// member-level matches from withSourceDiscovery, or one whole-container match
-// per path from withContainerDiscovery.
+// member-level matches from WithSourceDiscovery, or one whole-container match
+// per path from WithContainerDiscovery.
 func (s multiSessionContainerSourceSet) discoverMatches(
 	root string,
 ) []multiSessionMatch {
@@ -416,7 +416,7 @@ var _ SourceSet = multiSessionContainerSourceSet{}
 
 // Parse resolves the request's source and parses it: a member source yields one
 // result, a container source fans out every member. It satisfies the SourceSet
-// interface; sourceSetProvider applies the request/config machine fallback
+// interface; SourceSetProvider applies the request/config machine fallback
 // before calling in, so req.Machine is already resolved here.
 func (s multiSessionContainerSourceSet) Parse(
 	ctx context.Context,
@@ -432,15 +432,15 @@ func (s multiSessionContainerSourceSet) Parse(
 	return s.parse(src, req)
 }
 
-// newMultiSessionProviderFactory builds a ProviderFactory for a multi-session
-// container provider. It is a thin adapter over the generic sourceSetFactory;
+// NewMultiSessionProviderFactory builds a ProviderFactory for a multi-session
+// container provider. It is a thin adapter over the generic SourceSetFactory;
 // the build closure constructs the agent's configured source set.
-func newMultiSessionProviderFactory(
+func NewMultiSessionProviderFactory(
 	def AgentDef,
 	caps Capabilities,
 	build func(cfg ProviderConfig) multiSessionContainerSourceSet,
 ) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def, caps,
 		func(cfg ProviderConfig) SourceSet { return build(cfg) },
 	)
