@@ -8200,6 +8200,22 @@ func (e *Engine) writeIncremental(
 	// the central validation/sanitization pass on the new message rows
 	// here to keep coverage uniform across write paths. The fix counts
 	// feed the sync summary's anomaly section.
+	//
+	// Deliberately only sanitize fixes are recorded here, not malformed-line
+	// counts. A malformed JSONL line appended to an actively-syncing file is
+	// skipped by the incremental reader, and incrementalParseFunc carries no
+	// malformed-line count, so surfacing it on this path would require
+	// threading a new return value through the incremental parser API across
+	// every append-only agent. That is intentionally out of scope for this
+	// best-effort, only-when-nonzero diagnostic: the value is still parsed and
+	// persisted, and the next full sync (the periodic pass, or any
+	// parser-version bump that forces a full resync) re-derives the
+	// malformed-line count for the file. The incremental path therefore
+	// under-reports a brand-new summary signal by at most one full-sync
+	// interval; it never loses stored data and is not a regression on any
+	// prior behavior (no malformed-line count was surfaced anywhere before
+	// this feature). Full malformed-line coverage on the incremental path is a
+	// deferred follow-up.
 	e.anomalies.recordSanitize(validateAndSanitize(nil, dbMsgs, nil))
 
 	// Adjust counts for blocked-category filtering.
