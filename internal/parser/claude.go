@@ -56,24 +56,17 @@ type claudeQueuedCommand struct {
 	timestamp time.Time
 }
 
-// ParseClaudeSession parses a Claude Code JSONL session file.
-// Returns one or more ParseResult structs (multiple when forks
-// are detected in the uuid/parentUuid DAG).
-func ParseClaudeSession(
-	path, project, machine string,
-) ([]ParseResult, error) {
-	results, _, err := ParseClaudeSessionWithExclusions(
-		path, project, machine,
-	)
-	return results, err
-}
-
-// ParseClaudeSessionWithExclusions parses a Claude Code JSONL
-// session file and also returns session IDs intentionally excluded
-// from the archive, such as content-free /usage probes. Sync uses
-// those IDs during full resync so orphan preservation does not
-// restore rows the current parser deliberately dropped.
-func ParseClaudeSessionWithExclusions(
+// claudeParseWithExclusions parses a Claude Code JSONL session file
+// and also returns session IDs intentionally excluded from the
+// archive, such as content-free /usage probes. Sync uses those IDs
+// during full resync so orphan preservation does not restore rows the
+// current parser deliberately dropped. This is the provider-owned
+// parse body shared by the Claude provider (both its discovered-session
+// Parse path and its ParseUploadedTranscript entry) and the Cowork
+// parser (which reuses the Claude transcript format); it carries no
+// legacy entrypoint naming so the provider can call it without shimming
+// a Parse* free function.
+func claudeParseWithExclusions(
 	path, project, machine string,
 ) ([]ParseResult, []string, error) {
 	info, err := os.Stat(path)
@@ -366,15 +359,17 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 	return ""
 }
 
-// ParseClaudeSessionFrom parses only new lines from a Claude
-// JSONL file starting at the given byte offset. Returns only
-// the newly parsed messages (with ordinals starting at
-// startOrdinal) and the latest timestamp. Fork detection is
-// skipped — new entries are processed linearly. Used for
-// incremental re-parsing of append-only session files.
-// ErrDAGDetected is returned by ParseClaudeSessionFrom when
-// appended lines contain uuid fields that require DAG-aware
-// fork detection, which incremental parsing cannot handle.
+// claudeParseSessionFrom parses only new lines from a Claude JSONL
+// file starting at the given byte offset. Returns only the newly
+// parsed messages (with ordinals starting at startOrdinal) and the
+// latest timestamp. Fork detection is skipped — new entries are
+// processed linearly. Used by the Claude provider for incremental
+// re-parsing of append-only session files. ErrDAGDetected is returned
+// when appended lines contain uuid fields that require DAG-aware fork
+// detection, which incremental parsing cannot handle. This is the
+// provider-owned incremental body; it carries no legacy entrypoint
+// naming so the provider can call it without shimming a Parse* free
+// function.
 var ErrDAGDetected = fmt.Errorf(
 	"incremental parse: DAG uuid detected",
 )
@@ -387,7 +382,29 @@ var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
 	"incremental parse: appended Claude lines require full parse",
 )
 
+// ParseClaudeSessionWithExclusions and ParseClaudeSessionFrom are the exported
+// seam used by the S3 sync path (internal/sync), which buffers an s3:// object
+// to a temp file and parses it through the legacy per-agent processor. The
+// Claude provider calls the unexported claudeParse* bodies directly; these thin
+// wrappers exist only so the cross-package S3 consumer can reach the same logic
+// without a provider file shimming a Parse* free function. They are removed once
+// S3 support folds into the JSONL source sets.
+func ParseClaudeSessionWithExclusions(
+	path, project, machine string,
+) ([]ParseResult, []string, error) {
+	return claudeParseWithExclusions(path, project, machine)
+}
+
 func ParseClaudeSessionFrom(
+	path string,
+	offset int64,
+	startOrdinal int,
+	lastEntryUUID string,
+) ([]ParsedMessage, time.Time, int64, error) {
+	return claudeParseSessionFrom(path, offset, startOrdinal, lastEntryUUID)
+}
+
+func claudeParseSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,
@@ -726,7 +743,7 @@ func extractMessagesFrom(
 		}
 
 		if e.entryType == "user" {
-			if subtype := ClassifyClaudeSystemMessage(text); subtype != "" {
+			if subtype := classifyClaudeSystemMessage(text); subtype != "" {
 				// Preserve Role=user so analytics that compute
 				// turn-cycle/throughput on role alone (see
 				// internal/db/analytics.go) don't count these as
@@ -1666,7 +1683,7 @@ func extractMessages(entries []dagEntry) (
 		// stays "user" so role-keyed analytics continue to treat
 		// these as inputs, not assistant replies.
 		if e.entryType == "user" {
-			if subtype := ClassifyClaudeSystemMessage(text); subtype != "" {
+			if subtype := classifyClaudeSystemMessage(text); subtype != "" {
 				messages = append(messages, ParsedMessage{
 					Ordinal:          ordinal,
 					Role:             RoleUser,
@@ -2079,14 +2096,14 @@ func extractCompactSummary(line string) string {
 	return content.Str
 }
 
-// ClassifyClaudeSystemMessage inspects a user-entry content string and
+// classifyClaudeSystemMessage inspects a user-entry content string and
 // returns the matched system subtype (e.g. "continuation", "resume"),
 // or "" if the content is an ordinary user message.
 //
 // Non-caveat <local-command-*> envelopes (stdout/stderr surrounds for
 // local command output) are treated as regular noise and return "";
 // only the caveat variant is a semantic "resume" marker.
-func ClassifyClaudeSystemMessage(content string) string {
+func classifyClaudeSystemMessage(content string) string {
 	trimmed := strings.TrimLeftFunc(content, func(r rune) bool {
 		return r == '\uFEFF' || unicode.IsSpace(r)
 	})

@@ -859,7 +859,7 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 
 	out := files
 	for _, claudeDir := range e.agentDirs[parser.AgentClaude] {
-		for _, candidate := range parser.DiscoverClaudeProjects(claudeDir) {
+		for _, candidate := range parser.ClaudeProjectSessionFiles(claudeDir) {
 			sessionID := claudeSessionIDFromPath(candidate.Path)
 			if _, ok := sessionIDs[sessionID]; !ok {
 				continue
@@ -956,49 +956,12 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Claude: <claudeDir>/<project>/<session>.jsonl
-	//     or: <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
-	for _, claudeDir := range e.agentDirs[parser.AgentClaude] {
-		if claudeDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(claudeDir, path); ok {
-			if !strings.HasSuffix(path, ".jsonl") {
-				continue
-			}
-			parts := strings.Split(rel, sep)
-
-			// Standard session: project/session.jsonl
-			if len(parts) == 2 {
-				stem := strings.TrimSuffix(
-					filepath.Base(path), ".jsonl",
-				)
-				if strings.HasPrefix(stem, "agent-") {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentClaude,
-				}, true
-			}
-
-			// Subagent: project/session/subagents/**/agent-*.jsonl
-			if len(parts) >= 4 && parts[2] == "subagents" {
-				stem := strings.TrimSuffix(
-					parts[len(parts)-1], ".jsonl",
-				)
-				if !strings.HasPrefix(stem, "agent-") {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentClaude,
-				}, true
-			}
-		}
-	}
+	// Claude change-path classification is provider-authoritative; the
+	// Claude provider's SourcesForChangedPath reproduces the
+	// <claudeDir>/<project>/<session>.jsonl and
+	// <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
+	// shapes, so the legacy block was removed when Claude was folded
+	// onto its provider.
 
 	// Cowork: <coworkDir>/<orgId>/<workspaceId>/local_<uuid>/.claude/
 	//   projects/<enc>/<cliSessionId>.jsonl (transcript), or the sibling
@@ -3941,11 +3904,10 @@ func (e *Engine) processFile(
 	var res processResult
 	switch file.Agent {
 	case parser.AgentClaude:
-		if strings.HasPrefix(file.Path, "s3://") {
-			res = e.processS3Session(ctx, file, info)
-		} else {
-			res = e.processClaude(ctx, file, info)
-		}
+		// Non-S3 Claude is provider-authoritative and handled earlier by
+		// processProviderFile; only s3:// Claude sources fall through to the
+		// legacy dispatch, via the S3 sync path.
+		res = e.processS3Session(ctx, file, info)
 	case parser.AgentCowork:
 		res = e.processCowork(file, info)
 	case parser.AgentCodex:
@@ -4033,6 +3995,12 @@ func (e *Engine) processProviderFile(
 	if mode != parser.ProviderMigrationProviderAuthoritative {
 		return processResult{}, false
 	}
+	// S3 sources are not provider-owned: the provider source sets read local
+	// files, so s3:// paths use the legacy S3 sync path (processS3Session),
+	// which handles object fetch, fingerprinting, and per-agent skip logic.
+	if strings.HasPrefix(file.Path, "s3://") {
+		return processResult{}, false
+	}
 	if file.ProviderSource != nil && !file.ProviderProcess {
 		return processResult{}, false
 	}
@@ -4062,6 +4030,30 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 
+	// SyncSingleSession resolves a single session by ID and carries the
+	// caller-preferred project (typically the DB-preserved value, so a
+	// user override is not reverted) on file.Project without an explicit
+	// ProviderSource. Provider FindSource re-derives ProjectHint from the
+	// path, so honor the caller's project as the hint in that case. Full
+	// discovery and changed-path classification always supply
+	// file.ProviderSource, whose ProjectHint stays authoritative.
+	if file.ProviderSource == nil && file.Project != "" {
+		source.ProjectHint = file.Project
+	}
+
+	// DB-freshness skip for single-session JSONL providers (Claude):
+	// when the stored session's size, mtime, and data version already
+	// match the source and its project does not need reparse, skip the
+	// parse entirely. This reproduces the legacy process arm's
+	// shouldSkipFile gate so an unchanged session is not re-parsed on
+	// every full sync.
+	if mtime, fresh := e.providerSingleSessionFresh(ctx, provider, source, file); fresh {
+		return processResult{
+			skip:  true,
+			mtime: mtime,
+		}, true
+	}
+
 	fingerprint, err := provider.Fingerprint(ctx, source)
 	if err != nil {
 		return processResult{err: err}, true
@@ -4081,6 +4073,21 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 	}
+
+	// Append-only incremental parse for already-synced JSONL files.
+	// When the incremental path declines but signals forceReplace,
+	// carry the flag onto the full parse so the write path replaces
+	// stored messages instead of appending on top of stale rows.
+	incRes, incOK := e.tryProviderIncrementalAppend(
+		ctx, provider, source, file, fingerprint,
+	)
+	if incOK {
+		incRes.mtime = fingerprint.MTimeNS
+		incRes.cacheSkip = cacheSkip
+		incRes.cacheKey = cacheKey
+		return incRes, true
+	}
+	incForceReplace := incRes.forceReplace
 
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
 		Source:      source,
@@ -4129,9 +4136,15 @@ func (e *Engine) processProviderFile(
 		cacheSkip:             cacheSkip,
 		cacheKey:              cacheKey,
 		noCacheSkip:           !cleanCache,
-		forceReplace:          outcome.ForceReplace,
+		forceReplace:          outcome.ForceReplace || incForceReplace,
 		suppressPresenceSweep: !outcome.ResultSetComplete,
 	}
+	// Incremental-append providers (Claude) need the stored file
+	// identity so a later sync can detect an atomic file replacement
+	// (new inode/device) and fall back to a full parse instead of
+	// appending on top of stale state. Match the legacy process arm,
+	// which stamped inode/device from the source file stat.
+	e.stampProviderFileIdentity(provider, source, res.results)
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			if res.retrySessionIDs == nil {
@@ -4637,13 +4650,10 @@ func (f fakeSnapshotInfo) ModTime() time.Time {
 func (f fakeSnapshotInfo) IsDir() bool { return false }
 func (f fakeSnapshotInfo) Sys() any    { return nil }
 
-func (e *Engine) processClaude(
-	ctx context.Context,
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	return e.processClaudeWithStoredSkip(ctx, file, info, true)
-}
-
+// processClaudeWithStoredSkip parses a Claude Code JSONL session from a local
+// file. Non-S3 Claude sources are provider-authoritative and never reach here;
+// this remains the parse path for s3:// Claude sources, which the S3 sync path
+// fetches to a local file and feeds in with allowStoredSkip=false.
 func (e *Engine) processClaudeWithStoredSkip(
 	ctx context.Context,
 	file parser.DiscoveredFile, info os.FileInfo,
@@ -4766,6 +4776,173 @@ func (e *Engine) processCowork(
 	}
 }
 
+// providerSingleSessionFresh reports whether a single-session JSONL
+// provider's source (Claude) maps to a stored session that is already
+// up to date: the source size and mtime match what is stored, the row
+// is at the current parser data version, and its project does not need
+// reparse. It reproduces the legacy Claude process arm's shouldSkipFile
+// gate so an unchanged session is skipped instead of re-parsed every
+// full sync. Providers without incremental append, multi-session
+// sources, or sources that are not a single physical file are never
+// considered fresh here and always fall through to the full parse.
+func (e *Engine) providerSingleSessionFresh(
+	ctx context.Context,
+	provider parser.Provider,
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+) (int64, bool) {
+	// Match the legacy shouldSkipFile gate, which keyed off the
+	// engine-wide forceParse (parse-diff) flag only. A per-file
+	// ForceParse (set by SyncSingleSession to bypass the error skip
+	// cache) must not defeat the DB-freshness skip: an unchanged session
+	// is still skipped so a single-session resync does not, for example,
+	// reapply a worktree project mapping to a file that has not changed.
+	if e.forceParse {
+		return 0, false
+	}
+	// Claude is the single-physical-file provider that takes the
+	// append-only incremental path. Its source stem is the session ID,
+	// so DB freshness can be checked by that ID even though a DAG fork
+	// can later split the file into several sessions.
+	if provider.Capabilities().Source.IncrementalAppend !=
+		parser.CapabilitySupported {
+		return 0, false
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		return 0, false
+	}
+	sessionID := claudeSessionIDFromPath(path)
+	if sessionID == "" {
+		return 0, false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	info, err := os.Stat(lookupPath)
+	if err != nil {
+		info, err = os.Stat(path)
+		if err != nil {
+			return 0, false
+		}
+	}
+	if !e.shouldSkipFile(sessionID, info) {
+		return 0, false
+	}
+	sess, _ := e.db.GetSession(ctx, e.idPrefix+sessionID)
+	return info.ModTime().UnixNano(), sess != nil &&
+		sess.Project != "" &&
+		!parser.NeedsProjectReparse(sess.Project)
+}
+
+// stampProviderFileIdentity copies the source file's inode and device onto
+// every parsed result for an incremental-append provider (Claude). The
+// legacy process arm stamped this identity from the source stat so the
+// incremental path can later detect an atomic file replacement and fall
+// back to a full parse. Providers whose source is not a single physical
+// file, or that do not support incremental append, are left untouched.
+func (e *Engine) stampProviderFileIdentity(
+	provider parser.Provider,
+	source parser.SourceRef,
+	results []parser.ParseResult,
+) {
+	if provider.Capabilities().Source.IncrementalAppend !=
+		parser.CapabilitySupported {
+		return
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	inode, device := getFileIdentity(info)
+	for i := range results {
+		results[i].Session.File.Inode = inode
+		results[i].Session.File.Device = device
+	}
+}
+
+// tryProviderIncrementalAppend reproduces the legacy incremental-append
+// sync path for a provider-authoritative agent that supports append-only
+// incremental parsing (Claude). The provider owns the byte-offset parse
+// via ParseIncremental, but the engine still owns the DB-aware
+// bookkeeping (session lookup, data-version and identity guards, ordinal
+// resume, cross-sync split detection, and cumulative counters), so this
+// drives the shared tryIncrementalJSONL with an adapter that calls the
+// provider. Returns (result, true) when the incremental path produced a
+// terminal result, or (result, false) to fall through to the full
+// provider parse (carrying any forceReplace signal).
+func (e *Engine) tryProviderIncrementalAppend(
+	ctx context.Context,
+	provider parser.Provider,
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+	fingerprint parser.SourceFingerprint,
+) (processResult, bool) {
+	// Match the legacy tryIncrementalJSONL gate, which suppressed append
+	// deltas only under the engine-wide forceParse (parse-diff) flag. A
+	// per-file ForceParse does not disable incremental append.
+	if e.forceParse {
+		return processResult{}, false
+	}
+	if provider.Capabilities().Source.IncrementalAppend !=
+		parser.CapabilitySupported {
+		return processResult{}, false
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		return processResult{}, false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return processResult{}, false
+	}
+
+	parseFn := func(
+		_ string, offset int64, startOrdinal int, lastEntryUUID string,
+	) ([]parser.ParsedMessage, time.Time, int64, error) {
+		outcome, status, perr := provider.ParseIncremental(
+			ctx,
+			parser.IncrementalRequest{
+				Source:        source,
+				Fingerprint:   fingerprint,
+				SessionID:     e.idPrefix + claudeSessionIDFromPath(path),
+				Offset:        offset,
+				StartOrdinal:  startOrdinal,
+				Machine:       e.machine,
+				LastEntryUUID: lastEntryUUID,
+			},
+		)
+		if perr != nil {
+			return nil, time.Time{}, 0, perr
+		}
+		switch status {
+		case parser.IncrementalNeedsFullParse:
+			if outcome.ForceReplace {
+				// Signal the shared helper to fall back to a
+				// full parse that replaces stored messages.
+				return nil, time.Time{}, 0,
+					parser.ErrClaudeIncrementalNeedsFullParse
+			}
+			// A plain full-parse fallback (e.g. DAG detected):
+			// return a non-fallback error so the helper runs a
+			// normal full parse without forceReplace.
+			return nil, time.Time{}, 0, parser.ErrDAGDetected
+		case parser.IncrementalNoNewData:
+			return nil, time.Time{}, 0, nil
+		default:
+			return outcome.Messages, outcome.EndedAt,
+				outcome.ConsumedBytes, nil
+		}
+	}
+
+	return e.tryIncrementalJSONL(file, info, file.Agent, parseFn)
+}
+
 // incrementalParseFunc reads new JSONL lines from a file
 // starting at the given byte offset with the given starting
 // ordinal. Returns parsed messages, the latest timestamp
@@ -4824,9 +5001,6 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	currentSize := info.Size()
-	if currentSize <= inc.FileSize {
-		return processResult{}, false
-	}
 
 	// A prior sync that stored no message rows has no safe append
 	// boundary. Rewritten files can grow in place and keep the same
@@ -4853,8 +5027,22 @@ func (e *Engine) tryIncrementalJSONL(
 				inc.FileInode, curInode,
 				inc.FileDevice, curDevice,
 			)
-			return processResult{}, false
+			return processResult{forceReplace: true}, false
 		}
+	}
+	if currentSize < inc.FileSize {
+		log.Printf(
+			"incremental %s %s: file truncated from %d to %d, full parse",
+			agent, file.Path, inc.FileSize, currentSize,
+		)
+		return processResult{forceReplace: true}, false
+	}
+	if currentSize == inc.FileSize {
+		log.Printf(
+			"incremental %s %s: file size unchanged at %d but changed since last sync, full parse",
+			agent, file.Path, currentSize,
+		)
+		return processResult{forceReplace: true}, false
 	}
 
 	// Persist the same effective file_mtime a full parse would store. For

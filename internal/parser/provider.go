@@ -279,6 +279,11 @@ type IncrementalRequest struct {
 	Offset       int64
 	StartOrdinal int
 	Machine      string
+	// LastEntryUUID is the UUID of the last entry stored for this
+	// session, used by DAG-aware parsers (Claude) to detect when an
+	// appended tail forks away from the stored tip and must trigger a
+	// full reparse instead of a naive append.
+	LastEntryUUID string
 }
 
 // IncrementalOutcome is the append-only parse output.
@@ -349,6 +354,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 	switch def.Type {
 	case AgentAmp:
 		return newAmpProviderFactory(def)
+	case AgentClaude:
+		return newClaudeProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
 	case AgentCortex:

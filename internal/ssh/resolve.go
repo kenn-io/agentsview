@@ -67,14 +67,15 @@ func buildAiderResolveSnippet(envVar string) string {
 // "agentType:path\n" per agent target, plus "@file:path\n" lines for sibling
 // metadata files such as Codex's session_index.jsonl.
 //
-// Only includes agents where FileBased is true and DiscoverFunc
-// is non-nil. For each agent with an EnvVar, the script checks
-// the env var first and falls back to the default dir. Dirs (and
+// Only includes file-based agents that have on-disk sources to
+// resolve: either a legacy DiscoverFunc or a provider facade that has
+// left legacy-only mode. For each agent with an EnvVar, the script
+// checks the env var first and falls back to the default dir. Dirs (and
 // files) that don't exist on the remote are skipped.
 func buildResolveScript() string {
 	var b strings.Builder
 	for _, def := range parser.Registry {
-		if !def.FileBased || def.DiscoverFunc == nil {
+		if !resolveAgentHasOnDiskSource(def) {
 			continue
 		}
 		if def.Type == parser.AgentAider {
@@ -118,6 +119,28 @@ func buildResolveScript() string {
 	// path doesn't exist, which would make sh exit non-zero.
 	b.WriteString("true\n")
 	return b.String()
+}
+
+// resolveAgentHasOnDiskSource reports whether a file-based agent has
+// on-disk sources the resolve script should probe: either a legacy
+// DiscoverFunc or a provider facade that has left legacy-only mode.
+// Provider-migrated agents drop their DiscoverFunc but still have a
+// configurable directory, so they must stay in the remote resolve set.
+func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
+	if !def.FileBased {
+		return false
+	}
+	if def.DiscoverFunc != nil {
+		return true
+	}
+	switch parser.ProviderMigrationModes()[def.Type] {
+	case parser.ProviderMigrationShadowCompare,
+		parser.ProviderMigrationProviderAuthoritative:
+		_, ok := parser.ProviderFactoryByType(def.Type)
+		return ok
+	default:
+		return false
+	}
 }
 
 // parseResolvedDirs parses script output into a map of agent type to transfer

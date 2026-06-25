@@ -15,7 +15,7 @@ func parseAndGetToolCalls(t *testing.T, filename string, lines []string) []Parse
 	t.Helper()
 	content := strings.Join(lines, "\n")
 	path := createTestFile(t, filename, content)
-	results, err := ParseClaudeSession(path, "proj", "local")
+	results, err := parseClaudeSession(path, "proj", "local")
 	require.NoError(t, err, "ParseClaudeSession")
 	require.NotEmpty(t, results, "no results")
 

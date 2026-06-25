@@ -382,7 +382,7 @@ func extractCoworkAITitle(transcriptPath string) string {
 // the cowork namespace: agent type, "cowork:"-prefixed IDs, the session
 // title, and metadata-derived timestamps for transcripts that carry none.
 // Returns parsed results plus session IDs the parser intentionally
-// excluded (prefixed), matching ParseClaudeSessionWithExclusions.
+// excluded (prefixed), matching the Claude transcript parser.
 func ParseCoworkSession(
 	transcriptPath, machine string,
 ) ([]ParseResult, []string, error) {
@@ -390,7 +390,7 @@ func ParseCoworkSession(
 	meta := readCoworkMeta(metaPath)
 	project := coworkProjectName(meta)
 
-	results, excluded, err := ParseClaudeSessionWithExclusions(
+	results, excluded, err := claudeParseWithExclusions(
 		transcriptPath, project, machine,
 	)
 	if err != nil {

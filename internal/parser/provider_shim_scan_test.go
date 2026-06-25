@@ -49,7 +49,6 @@ var providerNeutralEntrypoints = map[string]bool{
 var pendingShimProviderFiles = map[string]bool{
 	"antigravity_cli_provider.go":      true,
 	"antigravity_provider.go":          true,
-	"claude_provider.go":               true,
 	"codex_provider.go":                true,
 	"copilot_provider.go":              true,
 	"cowork_provider.go":               true,
@@ -57,8 +56,6 @@ var pendingShimProviderFiles = map[string]bool{
 	"gemini_provider.go":               true,
 	"kiro_ide_provider.go":             true,
 	"kiro_provider.go":                 true,
-	"openhands_provider.go":            true,
-	"opencode_provider.go":             true,
 	"positron_provider.go":             true,
 	"shelley_provider.go":              true,
 	"visualstudio_copilot_provider.go": true,

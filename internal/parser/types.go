@@ -96,15 +96,13 @@ type AgentDef struct {
 // used for iteration in config, sync, and watcher setup.
 var Registry = []AgentDef{
 	{
-		Type:           AgentClaude,
-		DisplayName:    "Claude Code",
-		EnvVar:         "CLAUDE_PROJECTS_DIR",
-		ConfigKey:      "claude_project_dirs",
-		DefaultDirs:    []string{".claude/projects"},
-		IDPrefix:       "",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverClaudeProjects,
-		FindSourceFunc: FindClaudeSourceFile,
+		Type:        AgentClaude,
+		DisplayName: "Claude Code",
+		EnvVar:      "CLAUDE_PROJECTS_DIR",
+		ConfigKey:   "claude_project_dirs",
+		DefaultDirs: []string{".claude/projects"},
+		IDPrefix:    "",
+		FileBased:   true,
 	},
 	{
 		Type:           AgentCowork,

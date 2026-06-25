@@ -141,7 +141,7 @@ func TestDiscoverClaudeProjects(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
-			files := DiscoverClaudeProjects(dir)
+			files := ClaudeProjectSessionFiles(dir)
 
 			assertDiscoveredFiles(t, files, tt.wantFiles, AgentClaude)
 
@@ -156,7 +156,7 @@ func TestDiscoverClaudeProjects(t *testing.T) {
 
 	t.Run("Nonexistent", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "does-not-exist")
-		files := DiscoverClaudeProjects(dir)
+		files := ClaudeProjectSessionFiles(dir)
 		assert.Nil(t, files, "expected nil")
 	})
 }
@@ -307,7 +307,7 @@ func TestFindClaudeSourceFile(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 
-			got := FindClaudeSourceFile(dir, tt.targetID)
+			got := claudeFindSourceFile(dir, tt.targetID)
 			want := ""
 			if tt.wantFile != "" {
 				want = filepath.Join(dir, tt.wantFile)
@@ -321,8 +321,8 @@ func TestFindClaudeSourceFile(t *testing.T) {
 		dir := t.TempDir()
 		tests := []string{"", "../etc/passwd", "a/b", "a b"}
 		for _, id := range tests {
-			got := FindClaudeSourceFile(dir, id)
-			assert.Emptyf(t, got, "FindClaudeSourceFile(%q)", id)
+			got := claudeFindSourceFile(dir, id)
+			assert.Emptyf(t, got, "claudeFindSourceFile(%q)", id)
 		}
 	})
 }
@@ -1048,7 +1048,7 @@ func TestFindClaudeSourceFile_Symlink(t *testing.T) {
 		t.Skipf("symlink not supported: %v", err)
 	}
 
-	got := FindClaudeSourceFile(searchDir, "sess-abc")
+	got := claudeFindSourceFile(searchDir, "sess-abc")
 	require.NotEmpty(t, got, "expected to find session via symlink")
 	assert.Equal(t, linkDir, filepath.Dir(got),
 		"expected path through symlink")
