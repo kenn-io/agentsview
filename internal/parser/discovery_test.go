@@ -199,7 +199,7 @@ func TestDiscoverCodexSessions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
-			files := DiscoverCodexSessions(dir)
+			files := discoverCodexTestSessions(t, dir)
 			assertDiscoveredFiles(t, files, tt.wantFiles, AgentCodex)
 		})
 	}
@@ -439,7 +439,7 @@ func TestFindCodexSourceFile(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
 
-			got := FindCodexSourceFile(dir, tt.targetID)
+			got := findCodexTestSourceFile(t, dir, tt.targetID)
 			want := ""
 			if tt.wantFile != "" {
 				want = filepath.Join(dir, tt.wantFile)

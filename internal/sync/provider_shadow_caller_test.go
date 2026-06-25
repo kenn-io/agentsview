@@ -349,6 +349,42 @@ func TestProviderVirtualSourceBackedByEventPreservesHashInDBPath(t *testing.T) {
 	assert.False(t, providerVirtualSourceBackedByEvent(sourcePath, filepath.Dir(dbPath)))
 }
 
+func TestParseDiffProviderDiscoveryErrorFails(t *testing.T) {
+	root := t.TempDir()
+	discoverErr := errors.New("discover failed")
+	provider := &shadowCallerProvider{
+		shadowTestProvider: shadowTestProvider{
+			ProviderBase: parser.ProviderBase{
+				Def: parser.AgentDef{
+					Type:        parser.AgentCodex,
+					DisplayName: "Codex",
+				},
+			},
+		},
+		discoverErr: discoverErr,
+	}
+	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {root},
+		},
+		ProviderFactories: []parser.ProviderFactory{
+			shadowCallerFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCodex: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+
+	report, err := engine.ParseDiff(context.Background(), ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, report)
+	assert.ErrorContains(t, err, "parse-diff codex provider discovery")
+	assert.ErrorIs(t, err, discoverErr)
+}
+
 func TestProcessFileShadowRecordsCachedSkipAsNotComparable(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "shadow-skip.jsonl")
