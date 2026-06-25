@@ -189,6 +189,47 @@ func TestCodexProviderFindSourcePinsExactArchivedDuplicate(t *testing.T) {
 	assert.Equal(t, livePath, found.DisplayPath)
 }
 
+func TestCodexProviderFindSourcePreferStoredSourceKeepsArchivedDuplicate(t *testing.T) {
+	base := t.TempDir()
+	liveRoot := filepath.Join(base, "sessions")
+	archivedRoot := filepath.Join(base, "archived_sessions")
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e6"
+	livePath := writeCodexProviderSession(t, liveRoot, uuid, "live")
+	archivedPath := writeCodexProviderArchivedSession(
+		t, archivedRoot, uuid, "archived",
+	)
+
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{
+		Roots: []string{archivedRoot, liveRoot},
+	})
+	require.True(t, ok)
+
+	// PreferStoredSource pins the stored archived duplicate even when a fresh
+	// source is required, instead of canonicalizing to the live duplicate.
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath:     archivedPath,
+		FullSessionID:      "codex:" + uuid,
+		RequireFreshSource: true,
+		PreferStoredSource: true,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, archivedPath, found.DisplayPath,
+		"PreferStoredSource must preserve the stored archived path")
+
+	// Without the hint, RequireFreshSource canonicalizes to the live duplicate,
+	// which is exactly the behavior PreferStoredSource opts out of.
+	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath:     archivedPath,
+		FullSessionID:      "codex:" + uuid,
+		RequireFreshSource: true,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, livePath, found.DisplayPath,
+		"RequireFreshSource without PreferStoredSource canonicalizes to live")
+}
+
 func TestCodexProviderFindSourceAcceptsLegacyShapedStoredPath(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "test-uuid"
