@@ -17,12 +17,14 @@ import (
 var newCursorUsageClient = cursorusage.NewClient
 
 type UsageCursorConfig struct {
-	Since    string
-	Until    string
-	All      bool
-	PageSize int
-	Email    string
-	UserID   string
+	Since         string
+	Until         string
+	All           bool
+	PageSize      int
+	Email         string
+	UserID        string
+	EmailChanged  bool
+	UserIDChanged bool
 }
 
 func newUsageCursorCommand() *cobra.Command {
@@ -33,6 +35,8 @@ func newUsageCursorCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg.EmailChanged = cmd.Flags().Changed("email")
+			cfg.UserIDChanged = cmd.Flags().Changed("user-id")
 			return runUsageCursor(cfg)
 		},
 	}
@@ -65,12 +69,17 @@ func runUsageCursor(cfg UsageCursorConfig) error {
 	}
 
 	email := strings.TrimSpace(cfg.Email)
-	if email == "" {
-		email = strings.TrimSpace(appCfg.CursorAdminEmail)
-	}
 	userID := strings.TrimSpace(cfg.UserID)
-	if userID == "" {
+	if !cfg.EmailChanged && !cfg.UserIDChanged {
+		email = strings.TrimSpace(appCfg.CursorAdminEmail)
 		userID = strings.TrimSpace(appCfg.CursorAdminUserID)
+	} else {
+		if !cfg.EmailChanged {
+			email = ""
+		}
+		if !cfg.UserIDChanged {
+			userID = ""
+		}
 	}
 
 	loc, err := time.LoadLocation(localTimezone())
@@ -138,9 +147,7 @@ func resolveCursorUsageWindow(
 
 	startDate := strings.TrimSpace(cfg.Since)
 	endDate := strings.TrimSpace(cfg.Until)
-	if startDate == "" && endDate == "" {
-		startDate, _ = defaultUsageDateRange("", "", now)
-	}
+	startDate, endDate = defaultUsageDateRange(startDate, endDate, now)
 
 	var start time.Time
 	var end time.Time
@@ -167,6 +174,12 @@ func resolveCursorUsageWindow(
 		end = end.AddDate(0, 0, 1).Add(-time.Millisecond)
 	} else {
 		end = now
+	}
+
+	if start.After(end) {
+		return time.Time{}, time.Time{}, fmt.Errorf(
+			"since date %q is after until date %q", startDate, endDate,
+		)
 	}
 
 	return start.UTC(), end.UTC(), nil

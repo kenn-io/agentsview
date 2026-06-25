@@ -746,6 +746,108 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 	assert.Equal(t, 1, got[1].isHeadless)
 }
 
+func TestResolveCursorUsageWindowUntilOnlyUsesDefaultLookback(t *testing.T) {
+	loc := time.UTC
+
+	start, end, err := resolveCursorUsageWindow(UsageCursorConfig{
+		Until: "2026-05-31",
+	}, loc)
+
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC), start)
+	assert.Equal(t,
+		time.Date(2026, 5, 31, 23, 59, 59, int(999*time.Millisecond), time.UTC),
+		end,
+	)
+}
+
+func TestResolveCursorUsageWindowRejectsInvertedRange(t *testing.T) {
+	_, _, err := resolveCursorUsageWindow(UsageCursorConfig{
+		Since: "2026-06-01",
+		Until: "2026-05-31",
+	}, time.UTC)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "after until")
+}
+
+func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		wantEmail any
+		wantUser  any
+	}{
+		{
+			name:      "explicit email replaces both configured filters",
+			args:      []string{"--email", "other@example.com"},
+			wantEmail: "other@example.com",
+			wantUser:  nil,
+		},
+		{
+			name:      "explicit empty email clears both configured filters",
+			args:      []string{"--email="},
+			wantEmail: nil,
+			wantUser:  nil,
+		},
+		{
+			name:      "explicit user id replaces both configured filters",
+			args:      []string{"--user-id", "987654321"},
+			wantEmail: nil,
+			wantUser:  float64(987654321),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dataDir, "config.toml"),
+				[]byte(
+					"cursor_admin_api_key = 'config-key'\n"+
+						"cursor_admin_email = 'config@example.com'\n"+
+						"cursor_admin_user_id = '152683922'\n",
+				),
+				0o600,
+			), "write config")
+
+			var request map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&request),
+					"decode request")
+				_, _ = w.Write([]byte(`{
+					"totalUsageEventsCount": 0,
+					"usageEvents": []
+				}`))
+			}))
+			t.Cleanup(server.Close)
+
+			origNewCursorUsageClient := newCursorUsageClient
+			newCursorUsageClient = func(apiKey string) *cursorusage.Client {
+				return cursorusage.NewClientWithBaseURL(server.URL, apiKey)
+			}
+			t.Cleanup(func() {
+				newCursorUsageClient = origNewCursorUsageClient
+			})
+
+			args := []string{
+				"--since", "2026-05-14",
+				"--until", "2026-05-14",
+			}
+			args = append(args, tc.args...)
+
+			cmd := newUsageCursorCommand()
+			cmd.SetArgs(args)
+			require.NoError(t, cmd.Execute(), "Execute")
+
+			require.NotNil(t, request, "request")
+			assert.Equal(t, tc.wantEmail, request["email"])
+			assert.Equal(t, tc.wantUser, request["userId"])
+		})
+	}
+}
+
 func TestRefreshPricingIfStale_FreshAttemptSkipsFetch(t *testing.T) {
 	d := newTestDB(t)
 	now := pricingTestNow()
