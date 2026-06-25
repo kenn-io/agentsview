@@ -5,6 +5,7 @@
 import type { DbInsight } from '../models/DbInsight';
 import type { GenerateInsightRequest } from '../models/GenerateInsightRequest';
 import type { InsightsResponse } from '../models/InsightsResponse';
+import type { PublishResponse } from '../models/PublishResponse';
 import type { CancelablePromise } from '../core/CancelablePromise';
 import { OpenAPI } from '../core/OpenAPI';
 import { request as __request } from '../core/request';
@@ -143,6 +144,116 @@ export class InsightsService {
       url: '/api/v1/insights/{id}',
       path: {
         'id': id,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Export insight as HTML
+   * @returns string OK
+   * @throws ApiError
+   */
+  public static getApiV1InsightsIdExport({
+    id,
+  }: {
+    /**
+     * Numeric ID
+     */
+    id: number,
+  }): CancelablePromise<string> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/insights/{id}/export',
+      path: {
+        'id': id,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Export insight as Markdown
+   * @returns string OK
+   * @throws ApiError
+   */
+  public static getApiV1InsightsIdMd({
+    id,
+  }: {
+    /**
+     * Numeric ID
+     */
+    id: number,
+  }): CancelablePromise<string> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/insights/{id}/md',
+      path: {
+        'id': id,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Publish insight
+   * @returns PublishResponse OK
+   * @throws ApiError
+   */
+  public static postApiV1InsightsIdPublish({
+    id,
+    secret,
+  }: {
+    /**
+     * Insight ID
+     */
+    id: number,
+    /**
+     * Create a secret gist instead of a public one
+     */
+    secret?: boolean,
+  }): CancelablePromise<PublishResponse> {
+    return __request(OpenAPI, {
+      method: 'POST',
+      url: '/api/v1/insights/{id}/publish',
+      path: {
+        'id': id,
+      },
+      query: {
+        'secret': secret,
       },
       errors: {
         400: `Bad Request`,

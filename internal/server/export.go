@@ -158,8 +158,22 @@ type exportMessage struct {
 	FocusedHidden bool
 }
 
+type insightExportData struct {
+	Title       string
+	Type        string
+	Project     string
+	DateRange   string
+	Agent       string
+	Model       string
+	CreatedAt   string
+	ContentHTML template.HTML
+}
+
 var exportTmpl = template.Must(
 	template.New("export").Parse(exportTemplateStr))
+
+var insightExportTmpl = template.Must(
+	template.New("insight-export").Parse(insightExportTemplateStr))
 
 const exportTemplateStr = `<!DOCTYPE html>
 <html lang="en">
@@ -419,16 +433,173 @@ footer a:hover { text-decoration: underline; }
 <footer>Exported from <a href="https://github.com/kenn-io/agentsview">agentsview</a></footer>
 </body></html>`
 
+const insightExportTemplateStr = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{.Title}}</title>
+<style>
+:root {
+  --bg-primary: #f7f7fa;
+  --bg-surface: #ffffff;
+  --bg-inset: #edeef3;
+  --border-default: #dfe1e8;
+  --border-muted: #e8eaf0;
+  --text-primary: #1a1d26;
+  --text-secondary: #5a6070;
+  --text-muted: #8b92a0;
+  --accent-blue: #2563eb;
+  --accent-purple: #7c3aed;
+  --accent-amber: #d97706;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code",
+    "Fira Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+header {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  margin-bottom: 20px;
+}
+h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.chip {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--bg-inset);
+}
+.content {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 24px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.content h1,
+.content h2,
+.content h3,
+.content h4,
+.content p,
+.content ul,
+.content ol,
+.content blockquote,
+.content pre {
+  margin-bottom: 12px;
+}
+.content code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-inset);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  padding: 0.15em 0.4em;
+}
+.content pre {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  overflow-x: auto;
+}
+.content pre code {
+  background: none;
+  border: none;
+  color: inherit;
+  padding: 0;
+}
+.thinking-block {
+  border-left: 2px solid var(--accent-purple);
+  background: #f5f3ff;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 8px 14px 12px;
+  margin: 8px 0;
+  font-style: italic;
+  color: var(--text-secondary);
+}
+.thinking-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-purple);
+  margin-bottom: 4px;
+  font-style: normal;
+}
+.tool-block {
+  border-left: 2px solid var(--accent-amber);
+  background: #fffbf0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 6px 10px;
+  margin: 8px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+footer {
+  max-width: 860px;
+  margin: 0 auto 32px;
+  padding: 0 20px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+footer a {
+  color: var(--accent-blue);
+  text-decoration: none;
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>{{.Title}}</h1>
+    <div class="meta">
+      <span class="chip">{{.Type}}</span>
+      <span class="chip">{{.Project}}</span>
+      <span class="chip">{{.DateRange}}</span>
+      <span class="chip">{{.Agent}}</span>
+      {{if .Model}}<span class="chip">{{.Model}}</span>{{end}}
+      {{if .CreatedAt}}<span class="chip">{{.CreatedAt}}</span>{{end}}
+    </div>
+  </header>
+  <article class="content">{{.ContentHTML}}</article>
+</main>
+<footer>Exported from <a href="https://github.com/kenn-io/agentsview">agentsview</a></footer>
+</body>
+</html>`
+
 func generateExportHTML(
 	session *db.Session, msgs []db.Message,
 ) string {
-	agentDisplay := string(session.Agent)
-	if def, ok := parser.AgentByType(
-		parser.AgentType(session.Agent),
-	); ok {
-		agentDisplay = def.DisplayName
-	}
-
 	startedAt := ""
 	if session.StartedAt != nil {
 		startedAt = formatTimestamp(*session.StartedAt)
@@ -436,7 +607,7 @@ func generateExportHTML(
 
 	data := exportData{
 		Project:      session.Project,
-		Agent:        agentDisplay,
+		Agent:        agentDisplayName(session.Agent),
 		MessageCount: session.MessageCount,
 		StartedAt:    startedAt,
 		Messages:     make([]exportMessage, len(msgs)),
@@ -469,6 +640,32 @@ func generateExportHTML(
 		return fmt.Sprintf("template error: %s", err)
 	}
 	return b.String()
+}
+
+func generateInsightExportHTML(insight *db.Insight) string {
+	data := insightExportData{
+		Title:       insightExportTitle(insight),
+		Type:        insightTypeLabel(insight.Type),
+		Project:     insightProjectLabel(insight.Project),
+		DateRange:   insightDateRangeLabel(insight.DateFrom, insight.DateTo),
+		Agent:       agentDisplayName(insight.Agent),
+		Model:       strings.TrimSpace(derefString(insight.Model)),
+		CreatedAt:   formatTimestamp(insight.CreatedAt),
+		ContentHTML: template.HTML(formatContentForExport(insight.Content)),
+	}
+
+	var b strings.Builder
+	if err := insightExportTmpl.Execute(&b, data); err != nil {
+		return fmt.Sprintf("template error: %s", err)
+	}
+	return b.String()
+}
+
+func agentDisplayName(agent string) string {
+	if def, ok := parser.AgentByType(parser.AgentType(agent)); ok {
+		return def.DisplayName
+	}
+	return agent
 }
 
 var (
@@ -609,6 +806,101 @@ func formatDateShort(ts *string) string {
 func sanitizeFilename(name string) string {
 	re := regexp.MustCompile(`[^\w.\-]`)
 	return re.ReplaceAllString(name, "_")
+}
+
+func insightExportStem(insight *db.Insight) string {
+	dateRange := strings.ReplaceAll(insight.DateFrom, "-", "")
+	if insight.DateTo != "" && insight.DateTo != insight.DateFrom {
+		dateRange += "-" + strings.ReplaceAll(insight.DateTo, "-", "")
+	}
+	return sanitizeFilename(fmt.Sprintf(
+		"insight-%s-%s-%s",
+		insight.Type,
+		insightProjectLabel(insight.Project),
+		dateRange,
+	))
+}
+
+func insightExportHTMLFilename(insight *db.Insight) string {
+	return insightExportStem(insight) + ".html"
+}
+
+func insightExportMarkdownFilename(insight *db.Insight) string {
+	return insightExportStem(insight) + ".md"
+}
+
+func insightExportTitle(insight *db.Insight) string {
+	return fmt.Sprintf(
+		"%s Insight",
+		insightTypeLabel(insight.Type),
+	)
+}
+
+func insightPublishDescription(insight *db.Insight) string {
+	return fmt.Sprintf(
+		"Insight: %s - %s - %s",
+		insightTypeLabel(insight.Type),
+		insightProjectLabel(insight.Project),
+		insightDateRangeLabel(insight.DateFrom, insight.DateTo),
+	)
+}
+
+func insightTypeLabel(insightType string) string {
+	switch insightType {
+	case "daily_activity":
+		return "Daily Activity"
+	case "agent_analysis":
+		return "Agent Analysis"
+	default:
+		return strings.ReplaceAll(insightType, "_", " ")
+	}
+}
+
+func insightProjectLabel(project *string) string {
+	value := strings.TrimSpace(derefString(project))
+	if value == "" {
+		return "global"
+	}
+	return value
+}
+
+func insightDateRangeLabel(dateFrom, dateTo string) string {
+	if dateTo == "" || dateTo == dateFrom {
+		return dateFrom
+	}
+	return dateFrom + " to " + dateTo
+}
+
+func publishExportHTML(
+	ctx context.Context,
+	token, filename, description, htmlContent string,
+	public bool,
+) (*publishResponse, error) {
+	gist, err := createGist(ctx, token, filename, description, htmlContent, public)
+	if err != nil {
+		return nil, err
+	}
+	if gist.ID == "" || gist.HTMLURL == "" {
+		return nil, fmt.Errorf("GitHub API returned incomplete gist data")
+	}
+	encoded := urlPathEscape(filename)
+	rawURL := fmt.Sprintf(
+		"https://gist.githubusercontent.com/%s/%s/raw/%s",
+		gist.Owner.Login, gist.ID, encoded,
+	)
+	return &publishResponse{
+		GistID:  gist.ID,
+		GistURL: gist.HTMLURL,
+		ViewURL: "https://htmlpreview.github.io/?" + rawURL,
+		RawURL:  rawURL,
+	}, nil
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func truncateStr(s string, max int) string {

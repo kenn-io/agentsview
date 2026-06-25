@@ -8,6 +8,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { events } from "../../stores/events.svelte.js";
+  import { downloadInsightExport } from "../../api/client.js";
   import { copyToClipboard } from "../../utils/clipboard.js";
   import {
     yokedDates,
@@ -615,6 +616,25 @@
     return "";
   }
 
+  async function handleInsightExport() {
+    if (!insights.selectedItem) return;
+    try {
+      await downloadInsightExport(insights.selectedItem.id);
+    } catch (error) {
+      console.error("Insight export failed:", error);
+    }
+  }
+
+  function openInsightPublish(secret: boolean) {
+    if (!insights.selectedItem) return;
+    ui.publishSecret = secret;
+    ui.setPublishTarget({
+      kind: "insight",
+      id: insights.selectedItem.id,
+    });
+    ui.activeModal = "publish";
+  }
+
   onMount(() => {
     seedInsightsYoke();
     sessions.loadProjects();
@@ -1192,6 +1212,27 @@
                   {/if}
                 </div>
                 <div class="generated-actions">
+                  <button
+                    class="header-action"
+                    type="button"
+                    onclick={handleInsightExport}
+                  >
+                    Export
+                  </button>
+                  <button
+                    class="header-action"
+                    type="button"
+                    onclick={() => openInsightPublish(false)}
+                  >
+                    Publish
+                  </button>
+                  <button
+                    class="header-action subtle"
+                    type="button"
+                    onclick={() => openInsightPublish(true)}
+                  >
+                    Secret
+                  </button>
                   <CopyButton
                     class="insight-link-copy"
                     copied={copiedInsightLinkId === insights.selectedItem.id}
@@ -1863,18 +1904,42 @@
     text-transform: uppercase;
   }
 
-  .generated-focus {
-    width: 100%;
-    border: 1px solid var(--border-muted);
-    background: var(--bg-inset);
+  .badge-blue {
+    background: var(--accent-blue);
+  }
+
+  .badge-purple {
+    background: var(--accent-purple);
+  }
+
+  .badge-red {
+    background: var(--accent-red);
+  }
+
+  .header-date {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  .delete-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     border-radius: var(--radius-sm);
     color: var(--text-primary);
     font-size: 12px;
   }
 
   .generated-focus {
+    width: 100%;
     min-height: 30px;
     max-height: 76px;
+    border: 1px solid var(--border-muted);
+    background: var(--bg-inset);
     padding: 7px 8px;
     resize: vertical;
     line-height: 1.35;
@@ -1944,6 +2009,44 @@
   }
 
   .generated-list button.error-task span {
+    color: var(--accent-red);
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .header-action {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--bg-inset);
+    border: 1px solid var(--border-muted);
+    transition: background 0.12s, color 0.12s,
+      border-color 0.12s;
+  }
+
+  .header-action:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+
+  .header-action.subtle {
+    color: var(--text-muted);
+  }
+
+  .delete-btn:hover {
+    background: color-mix(
+      in srgb,
+      var(--accent-red) 10%,
+      transparent
+    );
     color: var(--accent-red);
   }
 

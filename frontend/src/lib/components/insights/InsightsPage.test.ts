@@ -1,4 +1,16 @@
-import { describe, expect, it } from "vite-plus/test";
+// @vitest-environment jsdom
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
+import { mount, tick, unmount } from "svelte";
+import { ui } from "../../stores/ui.svelte.js";
+// @ts-ignore
+import InsightsPage from "./InsightsPage.svelte";
 import source from "./InsightsPage.svelte?raw";
 
 describe("InsightsPage sidebar filter sync", () => {
@@ -94,5 +106,167 @@ describe("InsightsPage date yoke controls", () => {
 
     expect(handlerBlock).toContain("fetchInsightSignals()");
     expect(handlerBlock).not.toContain("analytics.setAutomatedScope");
+  });
+});
+
+const mocks = vi.hoisted(() => ({
+  downloadInsightExport: vi.fn().mockResolvedValue(undefined),
+  deleteItem: vi.fn(),
+  loadInsights: vi.fn(),
+  loadProjects: vi.fn(),
+}));
+
+const state = vi.hoisted(() => {
+  const selectedInsight = {
+    id: 42,
+    type: "daily_activity",
+    date_from: "2026-06-24",
+    date_to: "2026-06-24",
+    project: "agentsview",
+    agent: "claude",
+    model: "sonnet",
+    content: "# Insight\n\n- Shipped change",
+    created_at: "2026-06-24T12:00:00Z",
+  };
+
+  return {
+    selectedInsight,
+    insightsStore: {
+      type: "daily_activity",
+      dateFrom: "2026-06-24",
+      dateTo: "2026-06-24",
+      project: "",
+      agent: "claude",
+      promptText: "",
+      tasks: [],
+      items: [selectedInsight],
+      selectedId: 42,
+      selectedTaskId: null,
+      selectedTask: undefined,
+      selectedItem: selectedInsight,
+      loading: false,
+      generatingCount: 0,
+      load: mocks.loadInsights,
+      setType: vi.fn(),
+      setDateFrom: vi.fn(),
+      setDateTo: vi.fn(),
+      setProject: vi.fn(),
+      setAgent: vi.fn(),
+      generate: vi.fn(),
+      select: vi.fn(),
+      selectTask: vi.fn(),
+      cancelAll: vi.fn(),
+      cancelTask: vi.fn(),
+      dismissTask: vi.fn(),
+      deleteItem: mocks.deleteItem,
+    },
+  };
+});
+
+vi.mock("../../api/client.js", () => ({
+  downloadInsightExport: mocks.downloadInsightExport,
+}));
+
+vi.mock("../../stores/insights.svelte.js", () => ({
+  insights: state.insightsStore,
+}));
+
+vi.mock("../../stores/sessions.svelte.js", () => ({
+  sessions: {
+    projects: [],
+    loadProjects: mocks.loadProjects,
+  },
+}));
+
+vi.mock("../../stores/sync.svelte.js", () => ({
+  sync: {
+    serverVersion: { read_only: false },
+  },
+}));
+
+vi.mock("../../utils/markdown.js", () => ({
+  renderMarkdown: (content: string) => content,
+}));
+
+vi.mock("../../utils/highlight-fences.js", () => ({
+  highlightCodeFences: () => ({
+    destroy() {},
+  }),
+}));
+
+describe("InsightsPage selected insight actions", () => {
+  let component: ReturnType<typeof mount> | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ui.activeModal = null;
+    ui.publishSecret = false;
+    ui.clearPublishTarget();
+    state.insightsStore.selectedItem = state.selectedInsight;
+    state.insightsStore.selectedId = state.selectedInsight.id;
+    state.insightsStore.items = [state.selectedInsight];
+  });
+
+  afterEach(() => {
+    if (component) {
+      unmount(component);
+      component = undefined;
+    }
+    document.body.innerHTML = "";
+  });
+
+  it("exports the selected insight", async () => {
+    component = mount(InsightsPage, { target: document.body });
+    await tick();
+
+    const exportButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Export");
+    expect(exportButton).toBeDefined();
+
+    exportButton!.click();
+    await tick();
+
+    expect(mocks.downloadInsightExport).toHaveBeenCalledWith(42);
+  });
+
+  it("opens the shared publish modal for the selected insight", async () => {
+    component = mount(InsightsPage, { target: document.body });
+    await tick();
+
+    const publishButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Publish");
+    expect(publishButton).toBeDefined();
+
+    publishButton!.click();
+    await tick();
+
+    expect(ui.activeModal).toBe("publish");
+    expect(ui.publishSecret).toBe(false);
+    expect(ui.publishTarget).toEqual({
+      kind: "insight",
+      id: 42,
+    });
+  });
+
+  it("can target a secret insight publish", async () => {
+    component = mount(InsightsPage, { target: document.body });
+    await tick();
+
+    const secretButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.trim() === "Secret");
+    expect(secretButton).toBeDefined();
+
+    secretButton!.click();
+    await tick();
+
+    expect(ui.activeModal).toBe("publish");
+    expect(ui.publishSecret).toBe(true);
+    expect(ui.publishTarget).toEqual({
+      kind: "insight",
+      id: 42,
+    });
   });
 });

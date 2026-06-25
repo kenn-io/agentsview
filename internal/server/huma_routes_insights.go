@@ -21,6 +21,9 @@ func (s *Server) registerInsightsRoutes() {
 
 	get(s, group, "", "List insights", s.humaListInsights)
 	get(s, group, "/{id}", "Get insight", s.humaGetInsight)
+	raw(s, group, http.MethodGet, "/{id}/export", "Export insight as HTML", s.humaExportInsight)
+	raw(s, group, http.MethodGet, "/{id}/md", "Export insight as Markdown", s.humaMarkdownInsight)
+	post(s, group, "/{id}/publish", "Publish insight", s.humaPublishInsight)
 	deleteRoute(s, group, "/{id}", "Delete insight", s.humaDeleteInsight)
 	stream(s, group, http.MethodPost, "/generate", "Generate insight", s.humaGenerateInsight)
 }
@@ -40,6 +43,11 @@ type insightsResponse struct {
 
 type generateInsightInput struct {
 	Body generateInsightRequest
+}
+
+type publishInsightInput struct {
+	ID     int64 `path:"id" required:"true" doc:"Insight ID"`
+	Secret bool  `query:"secret" doc:"Create a secret gist instead of a public one"`
 }
 
 func (s *Server) humaListInsights(
@@ -80,16 +88,82 @@ func (s *Server) humaGetInsight(
 	return &jsonOutput[*db.Insight]{Body: result}, nil
 }
 
+func (s *Server) insightByID(
+	ctx context.Context,
+	id int64,
+) (*db.Insight, error) {
+	result, err := s.db.GetInsight(ctx, id)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	if result == nil {
+		return nil, apiError(http.StatusNotFound, "insight not found")
+	}
+	return result, nil
+}
+
+func (s *Server) humaExportInsight(
+	ctx context.Context,
+	in *intIDPathInput,
+) (*bytesOutput, error) {
+	insight, err := s.insightByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &bytesOutput{
+		ContentType:        "text/html; charset=utf-8",
+		ContentDisposition: fmt.Sprintf(`attachment; filename="%s"`, insightExportHTMLFilename(insight)),
+		Body:               []byte(generateInsightExportHTML(insight)),
+	}, nil
+}
+
+func (s *Server) humaMarkdownInsight(
+	ctx context.Context,
+	in *intIDPathInput,
+) (*bytesOutput, error) {
+	insight, err := s.insightByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &bytesOutput{
+		ContentType:        "text/markdown; charset=utf-8",
+		ContentDisposition: fmt.Sprintf(`inline; filename="%s"`, insightExportMarkdownFilename(insight)),
+		Body:               []byte(insight.Content),
+	}, nil
+}
+
+func (s *Server) humaPublishInsight(
+	ctx context.Context,
+	in *publishInsightInput,
+) (*jsonOutput[publishResponse], error) {
+	token := s.githubToken()
+	if token == "" {
+		return nil, apiError(http.StatusUnauthorized, "GitHub token not configured")
+	}
+	insight, err := s.insightByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := publishExportHTML(
+		ctx,
+		token,
+		insightExportHTMLFilename(insight),
+		insightPublishDescription(insight),
+		generateInsightExportHTML(insight),
+		!in.Secret,
+	)
+	if err != nil {
+		return nil, apiError(http.StatusBadGateway, err.Error())
+	}
+	return &jsonOutput[publishResponse]{Body: *resp}, nil
+}
+
 func (s *Server) humaDeleteInsight(
 	ctx context.Context,
 	in *intIDPathInput,
 ) (*noContentOutput, error) {
-	existing, err := s.db.GetInsight(ctx, in.ID)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	if existing == nil {
-		return nil, apiError(http.StatusNotFound, "insight not found")
+	if _, err := s.insightByID(ctx, in.ID); err != nil {
+		return nil, err
 	}
 	if err := s.db.DeleteInsight(in.ID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {

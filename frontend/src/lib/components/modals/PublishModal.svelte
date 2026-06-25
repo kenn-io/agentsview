@@ -4,6 +4,7 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import {
     ConfigService,
+    InsightsService,
     SessionsService,
   } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
@@ -16,6 +17,12 @@
   let tokenInput: string = $state("");
   let errorMessage: string = $state("");
   let result: PublishResponse | null = $state(null);
+
+  function publishTargetLabel() {
+    return ui.publishTarget?.kind === "insight"
+      ? "insight"
+      : "session";
+  }
 
   async function init() {
     try {
@@ -50,8 +57,27 @@
   }
 
   async function doPublish() {
-    const id = sessions.activeSessionId;
-    if (!id) {
+    const target = ui.publishTarget;
+    if (target?.kind === "insight") {
+      view = "progress";
+      try {
+        configureGeneratedClient();
+        result =
+          await InsightsService.postApiV1InsightsIdPublish({
+            id: target.id,
+            secret: ui.publishSecret,
+          }) as unknown as PublishResponse;
+        view = "success";
+      } catch (err) {
+        errorMessage =
+          err instanceof Error ? err.message : "Publish failed";
+        view = "error";
+      }
+      return;
+    }
+
+    const sessionId = sessions.activeSessionId;
+    if (!sessionId) {
       errorMessage = "No session selected";
       view = "error";
       return;
@@ -62,7 +88,7 @@
       configureGeneratedClient();
       result =
         await SessionsService.postApiV1SessionsIdPublish({
-          id,
+          id: sessionId,
           secret: ui.publishSecret,
         }) as unknown as PublishResponse;
       view = "success";

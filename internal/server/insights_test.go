@@ -34,6 +34,14 @@ type failFirstWriteRecorder struct {
 	flushed bool
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(
+	req *http.Request,
+) (*http.Response, error) {
+	return f(req)
+}
+
 func newFailFirstWriteRecorder() *failFirstWriteRecorder {
 	return &failFirstWriteRecorder{
 		header: make(http.Header),
@@ -165,6 +173,124 @@ func TestGetInsight_Found(t *testing.T) {
 	r := decode[db.Insight](t, w)
 	require.Equal(t, id, r.ID)
 	assert.Equal(t, "daily_activity", r.Type)
+}
+
+func TestInsightExportHTML(t *testing.T) {
+	te := setup(t)
+	id := te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"),
+		func(insight *db.Insight) {
+			insight.Content = "# Insight\n\n- published finding"
+		},
+	)
+
+	w := te.get(t, fmt.Sprintf("/api/v1/insights/%d/export", id))
+	assertStatus(t, w, http.StatusOK)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "attachment")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), ".html")
+	assertBodyContains(t, w, "Daily Activity Insight")
+	assertBodyContains(t, w, "# Insight")
+	assertBodyContains(t, w, "my-app")
+}
+
+func TestInsightMarkdownExport(t *testing.T) {
+	te := setup(t)
+	content := "# Insight\n\n- stored markdown"
+	id := te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"),
+		func(insight *db.Insight) {
+			insight.Content = content
+		},
+	)
+
+	w := te.get(t, fmt.Sprintf("/api/v1/insights/%d/md", id))
+	assertStatus(t, w, http.StatusOK)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/markdown")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), "inline")
+	assert.Contains(t, w.Header().Get("Content-Disposition"), ".md")
+	assert.Equal(t, content, w.Body.String())
+}
+
+func TestInsightPublish(t *testing.T) {
+	t.Run("Success", func(t *testing.T) {
+		te := setup(t)
+		te.srv.SetGithubToken("fake-token")
+		id := te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"),
+			func(insight *db.Insight) {
+				insight.Content = "# Insight\n\n- publish me"
+			},
+		)
+
+		originalTransport := http.DefaultTransport
+		http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			require.Equal(t, http.MethodPost, req.Method)
+			require.Equal(t, "https://api.github.com/gists", req.URL.String())
+			require.Equal(t, "token fake-token", req.Header.Get("Authorization"))
+
+			var payload struct {
+				Description string `json:"description"`
+				Public      bool   `json:"public"`
+				Files       map[string]struct {
+					Content string `json:"content"`
+				} `json:"files"`
+			}
+			body, err := io.ReadAll(req.Body)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(body, &payload))
+			assert.Equal(t, "Insight: Daily Activity - my-app - 2025-01-15", payload.Description)
+			assert.False(t, payload.Public)
+			require.Contains(t, payload.Files, "insight-daily_activity-my-app-20250115.html")
+			assert.Contains(t,
+				payload.Files["insight-daily_activity-my-app-20250115.html"].Content,
+				"Daily Activity Insight",
+			)
+			assert.Contains(t,
+				payload.Files["insight-daily_activity-my-app-20250115.html"].Content,
+				"# Insight",
+			)
+
+			return &http.Response{
+				StatusCode: http.StatusCreated,
+				Header:     make(http.Header),
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"gist123","html_url":"https://gist.github.com/octocat/gist123","owner":{"login":"octocat"}}`,
+				)),
+			}, nil
+		})
+		t.Cleanup(func() {
+			http.DefaultTransport = originalTransport
+		})
+
+		w := te.post(t, fmt.Sprintf("/api/v1/insights/%d/publish?secret=true", id), "{}")
+		assertStatus(t, w, http.StatusOK)
+
+		resp := decode[map[string]string](t, w)
+		assert.Equal(t, "gist123", resp["gist_id"])
+		assert.Equal(t, "https://gist.github.com/octocat/gist123", resp["gist_url"])
+		assert.Equal(t,
+			"https://gist.githubusercontent.com/octocat/gist123/raw/insight-daily_activity-my-app-20250115.html",
+			resp["raw_url"],
+		)
+		assert.Equal(t,
+			"https://htmlpreview.github.io/?https://gist.githubusercontent.com/octocat/gist123/raw/insight-daily_activity-my-app-20250115.html",
+			resp["view_url"],
+		)
+	})
+
+	t.Run("NoToken", func(t *testing.T) {
+		te := setup(t)
+		id := te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
+
+		w := te.post(t, fmt.Sprintf("/api/v1/insights/%d/publish", id), "{}")
+		assertStatus(t, w, http.StatusUnauthorized)
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		te := setup(t)
+		te.srv.SetGithubToken("fake-token")
+
+		w := te.post(t, "/api/v1/insights/99999/publish", "{}")
+		assertStatus(t, w, http.StatusNotFound)
+	})
 }
 
 func TestGenerateInsight_Validation(t *testing.T) {
@@ -1576,16 +1702,21 @@ func (te *testEnv) seedInsight(
 	t *testing.T,
 	typ, date string,
 	project *string,
+	opts ...func(*db.Insight),
 ) int64 {
 	t.Helper()
-	id, err := te.db.InsertInsight(db.Insight{
+	insight := db.Insight{
 		Type:     typ,
 		DateFrom: date,
 		DateTo:   date,
 		Project:  project,
 		Agent:    "claude",
 		Content:  "Test insight content",
-	})
+	}
+	for _, opt := range opts {
+		opt(&insight)
+	}
+	id, err := te.db.InsertInsight(insight)
 	require.NoError(t, err)
 	return id
 }

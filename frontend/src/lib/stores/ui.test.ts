@@ -17,6 +17,8 @@ import { ui } from "./ui.svelte.js";
 describe("UIStore", () => {
   beforeEach(() => {
     ui.activeModal = null;
+    ui.clearPublishTarget();
+    ui.publishSecret = false;
     ui.selectedOrdinal = null;
     ui.pendingScrollOrdinal = null;
     ui.followLatest = false;
@@ -42,6 +44,31 @@ describe("UIStore", () => {
 
       ui.activeModal = "publish";
       expect(ui.activeModal).toBe("publish");
+    });
+  });
+
+  describe("publishTarget", () => {
+    it("defaults to null", () => {
+      expect(ui.publishTarget).toBeNull();
+    });
+
+    it("stores the selected publish target", () => {
+      ui.setPublishTarget({ kind: "insight", id: 42 });
+      expect(ui.publishTarget).toEqual({
+        kind: "insight",
+        id: 42,
+      });
+    });
+
+    it("clears the publish target when publish modal closes", async () => {
+      ui.setPublishTarget({ kind: "insight", id: 42 });
+      ui.activeModal = "publish";
+      await tick();
+
+      ui.activeModal = null;
+      await tick();
+
+      expect(ui.publishTarget).toBeNull();
     });
   });
 

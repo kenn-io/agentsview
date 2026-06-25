@@ -7,6 +7,10 @@ import {
 type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream" | "skim";
 export type TranscriptMode = "normal" | "focused";
+export type PublishTarget =
+  | { kind: "session"; id: string }
+  | { kind: "insight"; id: number }
+  | null;
 type ModalType =
   | "about"
   | "commandPalette"
@@ -224,6 +228,7 @@ class UIStore {
   activeModal: ModalType = $state(null);
   /** Whether the next gist publish should be secret instead of public. */
   publishSecret: boolean = $state(false);
+  publishTarget: PublishTarget = $state(null);
   selectedOrdinal: number | null = $state(null);
   pendingScrollOrdinal: number | null = $state(null);
   pendingScrollSession: string | null = $state(null);
@@ -389,6 +394,12 @@ class UIStore {
         }
       });
 
+      $effect(() => {
+        if (this.activeModal !== "publish") {
+          this.publishTarget = null;
+        }
+      });
+
       // Initialize sidebar based on viewport width
       if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
         const mq = window.matchMedia("(min-width: 768px)");
@@ -494,6 +505,14 @@ class UIStore {
 
   setSidebarWidth(width: number) {
     this.sidebarWidth = clampStoredSidebarWidth(width);
+  }
+
+  setPublishTarget(target: Exclude<PublishTarget, null>) {
+    this.publishTarget = target;
+  }
+
+  clearPublishTarget() {
+    this.publishTarget = null;
   }
 
   selectOrdinal(ordinal: number) {

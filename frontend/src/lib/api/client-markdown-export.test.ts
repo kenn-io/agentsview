@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
-import { getMarkdownExportUrl } from "./client.js";
+import {
+  getInsightMarkdownExportUrl,
+  getMarkdownExportUrl,
+} from "./client.js";
 
 const storage = {
   getItem: vi.fn().mockReturnValue(""),
@@ -29,6 +32,12 @@ describe("markdown export URLs", () => {
     );
     expect(getMarkdownExportUrl("sess-123", 1)).toBe(
       "/api/v1/sessions/sess-123/md?depth=1",
+    );
+  });
+
+  it("builds markdown export URL for an insight", () => {
+    expect(getInsightMarkdownExportUrl(42)).toBe(
+      "/api/v1/insights/42/md",
     );
   });
 });
