@@ -14,6 +14,7 @@ var (
 	fetchS3Object       = parser.FetchS3Object
 	statS3Object        = parser.StatS3Object
 	statClaudeS3Session = parser.StatClaudeS3Session
+	statCodexS3Session  = parser.StatCodexS3Session
 )
 
 func s3SourceFileInfo(file parser.DiscoveredFile) (os.FileInfo, error) {
@@ -21,8 +22,11 @@ func s3SourceFileInfo(file parser.DiscoveredFile) (os.FileInfo, error) {
 	mtime := file.SourceMtime
 	if mtime == 0 {
 		stat := statS3Object
-		if file.Agent == parser.AgentClaude {
+		switch file.Agent {
+		case parser.AgentClaude:
 			stat = statClaudeS3Session
+		case parser.AgentCodex:
+			stat = statCodexS3Session
 		}
 		obj, err := stat(file.Path)
 		if err != nil {
@@ -125,8 +129,11 @@ func (e *Engine) hydrateS3DiscoveredFile(
 	}
 	if file.SourceMtime == 0 {
 		stat := statS3Object
-		if file.Agent == parser.AgentClaude {
+		switch file.Agent {
+		case parser.AgentClaude:
 			stat = statClaudeS3Session
+		case parser.AgentCodex:
+			stat = statCodexS3Session
 		}
 		if obj, err := stat(file.Path); err == nil {
 			file.SourceSize = obj.Size

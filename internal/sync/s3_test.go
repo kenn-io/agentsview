@@ -24,7 +24,9 @@ func TestProcessS3SessionNamespacesIDsBySourceMachine(t *testing.T) {
 	oldFetch := fetchS3Object
 	t.Cleanup(func() { fetchS3Object = oldFetch })
 	fetchS3Object = func(got string) (io.ReadCloser, error) {
-		require.Equal(t, path, got)
+		if got != path {
+			return nil, missingS3ObjectError()
+		}
 		return io.NopCloser(strings.NewReader(content)), nil
 	}
 
@@ -69,7 +71,9 @@ func TestProcessS3CodexNamespacesIDsBySourceMachine(t *testing.T) {
 	oldFetch := fetchS3Object
 	t.Cleanup(func() { fetchS3Object = oldFetch })
 	fetchS3Object = func(got string) (io.ReadCloser, error) {
-		require.Equal(t, path, got)
+		if got != path {
+			return nil, missingS3ObjectError()
+		}
 		return io.NopCloser(strings.NewReader(content)), nil
 	}
 
@@ -99,6 +103,46 @@ func TestProcessS3CodexNamespacesIDsBySourceMachine(t *testing.T) {
 	raw, err := database.GetSessionFull(context.Background(), "codex:abc")
 	require.NoError(t, err)
 	assert.Nil(t, raw)
+}
+
+func TestProcessS3CodexUsesSessionIndex(t *testing.T) {
+	database := openTestDB(t)
+	const uuid = "11111111-1111-4111-8111-111111111111"
+	path := "s3://bucket/laptop/raw/codex/2026/06/24/" +
+		"rollout-2026-06-24T00-00-00-" + uuid + ".jsonl"
+	indexPath := "s3://bucket/laptop/raw/session_index.jsonl"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta("2024-01-01T00:00:00Z", uuid, "/repo", "codex").
+		AddCodexMessage("2024-01-01T00:00:01Z", "user", "Hello").
+		AddCodexMessage("2024-01-01T00:00:02Z", "assistant", "Hi.").
+		String()
+	index := `{"id":"` + uuid + `","thread_name":"S3 title","updated_at":"2026-06-24T00:00:00Z"}` + "\n"
+
+	oldFetch := fetchS3Object
+	t.Cleanup(func() { fetchS3Object = oldFetch })
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		switch got {
+		case path:
+			return io.NopCloser(strings.NewReader(content)), nil
+		case indexPath:
+			return io.NopCloser(strings.NewReader(index)), nil
+		default:
+			return nil, missingS3ObjectError()
+		}
+	}
+
+	e := &Engine{db: database, machine: "central"}
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent:       parser.AgentCodex,
+		Path:        path,
+		Machine:     "laptop",
+		SourceSize:  int64(len(content) + len(index)),
+		SourceMtime: time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano(),
+	})
+
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "S3 title", res.results[0].Session.SessionName)
 }
 
 func TestProcessS3ClaudeSubagentPreservesParentLayout(t *testing.T) {

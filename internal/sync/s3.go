@@ -88,6 +88,7 @@ func safeS3TempRelPath(file parser.DiscoveredFile) (string, error) {
 				break
 			}
 		}
+		relParts = codexS3TempRelParts(relParts)
 	}
 	if len(relParts) == 0 {
 		return "", fmt.Errorf("unsafe s3 object name: %q", file.Path)
@@ -99,6 +100,74 @@ func safeS3TempRelPath(file parser.DiscoveredFile) (string, error) {
 		}
 	}
 	return filepath.Join(relParts...), nil
+}
+
+func codexS3TempRelParts(parts []string) []string {
+	for i, part := range parts {
+		if part == "sessions" || part == "archived_sessions" {
+			return parts[i:]
+		}
+	}
+	if len(parts) == 0 {
+		return parts
+	}
+	return append([]string{"sessions"}, parts...)
+}
+
+func hydrateS3CodexSessionIndex(sessionPath, sessionURI string) error {
+	indexURI, ok := parser.CodexS3SessionIndexURI(sessionURI)
+	if !ok {
+		return nil
+	}
+	local := localCodexSessionIndexPath(sessionPath)
+	if local == "" {
+		return nil
+	}
+	rc, err := fetchS3Object(indexURI)
+	if err != nil {
+		if isMissingS3Object(err) {
+			return nil
+		}
+		return err
+	}
+	defer rc.Close()
+	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+		return err
+	}
+	f, err := os.Create(local)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, rc); err != nil {
+		f.Close()
+		_ = os.Remove(local)
+		if isMissingS3Object(err) {
+			return nil
+		}
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func localCodexSessionIndexPath(sessionPath string) string {
+	dir := filepath.Dir(sessionPath)
+	for dir != "" {
+		base := filepath.Base(dir)
+		if base == "sessions" || base == "archived_sessions" {
+			return filepath.Join(
+				filepath.Dir(dir), parser.CodexSessionIndexFilename,
+			)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
 }
 
 // processS3Session reads a Claude/Codex session JSONL directly from object
@@ -131,7 +200,12 @@ func (e *Engine) processS3Session(
 			fullID := applyIDPrefixToID(idPrefix, sessionID)
 			if e.shouldSkipFileWithPrefix(idPrefix, sessionID, sourceInfo) &&
 				e.db.GetSessionFilePath(fullID) == file.Path {
-				return processResult{skip: true}
+				sess, _ := e.db.GetSession(ctx, fullID)
+				if sess != nil &&
+					sess.Project != "" &&
+					!parser.NeedsProjectReparse(sess.Project) {
+					return processResult{skip: true}
+				}
 			}
 		}
 	}
@@ -169,13 +243,18 @@ func (e *Engine) processS3Session(
 	}
 	hydratedToolResults := false
 	sawPersistedToolResults := false
-	if file.Agent == parser.AgentClaude {
+	switch file.Agent {
+	case parser.AgentClaude:
 		rewrote, sawPersisted, err := hydrateS3ClaudeToolResults(tmp, file.Path)
 		if err != nil {
 			return processResult{err: err, noCacheSkip: true}
 		}
 		hydratedToolResults = rewrote
 		sawPersistedToolResults = sawPersisted
+	case parser.AgentCodex:
+		if err := hydrateS3CodexSessionIndex(tmp, file.Path); err != nil {
+			return processResult{err: err, noCacheSkip: true}
+		}
 	}
 	local := file
 	local.Path = tmp

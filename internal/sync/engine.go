@@ -3253,7 +3253,14 @@ func discoveredFileMtime(
 		if file.SourceMtime != 0 {
 			return file.SourceMtime, nil
 		}
-		obj, err := statS3Object(file.Path)
+		stat := statS3Object
+		switch file.Agent {
+		case parser.AgentClaude:
+			stat = statClaudeS3Session
+		case parser.AgentCodex:
+			stat = statCodexS3Session
+		}
+		obj, err := stat(file.Path)
 		if err != nil {
 			return 0, err
 		}
@@ -8871,12 +8878,18 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 			if def, ok := parser.AgentByPrefix(sessionID); ok &&
 				def.Type == parser.AgentClaude {
 				stat = statClaudeS3Session
+			} else if ok && def.Type == parser.AgentCodex {
+				stat = statCodexS3Session
 			}
 			if sess, err := e.db.GetSession(
 				context.Background(), sessionID,
-			); err == nil && sess != nil &&
-				sess.Agent == string(parser.AgentClaude) {
-				stat = statClaudeS3Session
+			); err == nil && sess != nil {
+				switch sess.Agent {
+				case string(parser.AgentClaude):
+					stat = statClaudeS3Session
+				case string(parser.AgentCodex):
+					stat = statCodexS3Session
+				}
 			}
 			obj, err := stat(fp)
 			if err != nil {
@@ -8967,8 +8980,11 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	if isS3SourcePath(path) {
 		stat := statS3Object
-		if def.Type == parser.AgentClaude {
+		switch def.Type {
+		case parser.AgentClaude:
 			stat = statClaudeS3Session
+		case parser.AgentCodex:
+			stat = statCodexS3Session
 		}
 		obj, err := stat(path)
 		if err != nil {

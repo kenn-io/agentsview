@@ -136,6 +136,24 @@ func StatClaudeS3Session(uri string) (S3Object, error) {
 	}), nil
 }
 
+// StatCodexS3Session returns metadata for a Codex rollout plus the adjacent
+// session_index.jsonl title index when it exists.
+func StatCodexS3Session(uri string) (S3Object, error) {
+	obj, err := statS3Object(uri)
+	if err != nil {
+		return S3Object{}, err
+	}
+	indexURI, ok := CodexS3SessionIndexURI(uri)
+	if !ok {
+		return obj, nil
+	}
+	index, err := statS3Object(indexURI)
+	if err != nil {
+		return obj, nil
+	}
+	return foldS3ObjectMetadata(obj, index), nil
+}
+
 func statS3ObjectDefault(uri string) (S3Object, error) {
 	cl, err := s3Client()
 	if err != nil {
@@ -217,6 +235,14 @@ func pathBase(p string) string {
 	return p
 }
 
+func foldS3ObjectMetadata(obj, extra S3Object) S3Object {
+	obj.Size += extra.Size
+	if extra.LastModified.After(obj.LastModified) {
+		obj.LastModified = extra.LastModified
+	}
+	return obj
+}
+
 // discoverClaudeS3 lists Claude session JSONL under an s3:// projects root,
 // mirroring DiscoverClaudeProjects' selection rules:
 //   - top-level <project>/<uuid>.jsonl   (skip names starting "agent-")
@@ -241,12 +267,13 @@ func discoverClaudeS3(root string) []DiscoveredFile {
 		}
 		project := segs[0]
 		base := segs[len(segs)-1]
-		isSubagent := slices.Contains(segs, "subagents")
+		isSubagent := len(segs) >= 4 && segs[2] == "subagents"
 		if isSubagent {
 			if !strings.HasPrefix(base, "agent-") {
 				continue
 			}
-		} else if len(segs) != 2 || strings.HasPrefix(base, "agent-") {
+		} else if len(segs) != 2 || strings.HasPrefix(base, "agent-") ||
+			slices.Contains(segs, "subagents") {
 			continue
 		}
 		source := foldClaudeS3SidecarMetadata(
@@ -283,6 +310,7 @@ func discoverCodexS3(root string) []DiscoveredFile {
 	}
 	machine := s3MachineFromRoot(root)
 	var out []DiscoveredFile
+	indexCache := make(map[string]S3Object)
 	for _, obj := range objects {
 		rel, ok := s3RelativePath(root, obj.URI)
 		if !ok {
@@ -292,13 +320,75 @@ func discoverCodexS3(root string) []DiscoveredFile {
 		if !isCodexSessionFilename(base) {
 			continue
 		}
+		source := foldCodexS3IndexMetadata(obj, indexCache)
 		out = append(out, DiscoveredFile{
 			Path:        obj.URI,
 			Agent:       AgentCodex,
 			Machine:     machine,
-			SourceSize:  obj.Size,
-			SourceMtime: obj.LastModified.UnixNano(),
+			SourceSize:  source.Size,
+			SourceMtime: source.LastModified.UnixNano(),
 		})
 	}
 	return out
+}
+
+func foldCodexS3IndexMetadata(
+	obj S3Object, indexCache map[string]S3Object,
+) S3Object {
+	indexURI, ok := CodexS3SessionIndexURI(obj.URI)
+	if !ok {
+		return obj
+	}
+	index, ok := indexCache[indexURI]
+	if !ok {
+		var err error
+		index, err = statS3Object(indexURI)
+		if err != nil {
+			return obj
+		}
+		indexCache[indexURI] = index
+	}
+	return foldS3ObjectMetadata(obj, index)
+}
+
+// CodexS3SessionIndexURI returns the session_index.jsonl URI adjacent to the
+// configured Codex sessions root represented by a rollout URI.
+func CodexS3SessionIndexURI(sessionURI string) (string, bool) {
+	if !strings.HasPrefix(sessionURI, "s3://") {
+		return "", false
+	}
+	trimmed := strings.TrimPrefix(sessionURI, "s3://")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) < 2 || !isCodexSessionFilename(parts[len(parts)-1]) {
+		return "", false
+	}
+
+	for i := 1; i < len(parts)-1; i++ {
+		if parts[i] == "sessions" || parts[i] == "archived_sessions" {
+			return s3URIWithLast(parts[:i], CodexSessionIndexFilename), true
+		}
+	}
+
+	sessionRootEnd := len(parts) - 1
+	if len(parts) >= 5 &&
+		IsDigits(parts[len(parts)-4]) &&
+		IsDigits(parts[len(parts)-3]) &&
+		IsDigits(parts[len(parts)-2]) {
+		sessionRootEnd = len(parts) - 4
+	}
+	if sessionRootEnd <= 0 {
+		return "", false
+	}
+	parent := parts[:sessionRootEnd]
+	if len(parent) > 1 {
+		parent = parent[:len(parent)-1]
+	}
+	return s3URIWithLast(parent, CodexSessionIndexFilename), true
+}
+
+func s3URIWithLast(parts []string, last string) string {
+	out := make([]string, 0, len(parts)+1)
+	out = append(out, parts...)
+	out = append(out, last)
+	return "s3://" + strings.Join(out, "/")
 }

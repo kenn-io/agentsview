@@ -86,6 +86,45 @@ func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
 	assert.Equal(t, mtime.UnixNano(), got[0].SourceMtime)
 }
 
+func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
+	oldList := listS3Objects
+	oldStat := statS3Object
+	t.Cleanup(func() {
+		listS3Objects = oldList
+		statS3Object = oldStat
+	})
+
+	root := "s3://bucket/laptop/raw/codex"
+	rolloutURI := root + "/2026/06/24/rollout-2026-06-24T00-00-00-" +
+		"11111111-1111-4111-8111-111111111111.jsonl"
+	indexURI := "s3://bucket/laptop/raw/session_index.jsonl"
+	rolloutMtime := time.Unix(100, 0)
+	indexMtime := time.Unix(200, 0)
+	listS3Objects = func(got string) ([]S3Object, error) {
+		require.Equal(t, root, got)
+		return []S3Object{{
+			URI:          rolloutURI,
+			Size:         11,
+			LastModified: rolloutMtime,
+		}}, nil
+	}
+	statS3Object = func(got string) (S3Object, error) {
+		require.Equal(t, indexURI, got)
+		return S3Object{
+			URI:          indexURI,
+			Size:         22,
+			LastModified: indexMtime,
+		}, nil
+	}
+
+	got := discoverCodexS3(root)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, rolloutURI, got[0].Path)
+	assert.Equal(t, int64(33), got[0].SourceSize)
+	assert.Equal(t, indexMtime.UnixNano(), got[0].SourceMtime)
+}
+
 func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
@@ -119,4 +158,38 @@ func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 	)
 	assert.Equal(t, int64(33), got[0].SourceSize)
 	assert.Equal(t, sidecarMtime.UnixNano(), got[0].SourceMtime)
+}
+
+func TestDiscoverClaudeS3RequiresSubagentsUnderParentSession(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	mtime := time.Unix(100, 0)
+	listS3Objects = func(root string) ([]S3Object, error) {
+		require.Equal(t, "s3://bucket/laptop/raw/claude", root)
+		return []S3Object{
+			{
+				URI: "s3://bucket/laptop/raw/claude/" +
+					"proj/subagents/agent-orphan.jsonl",
+				Size:         11,
+				LastModified: mtime,
+			},
+			{
+				URI: "s3://bucket/laptop/raw/claude/" +
+					"proj/parent-session/subagents/workflows/wf-1/agent-good.jsonl",
+				Size:         22,
+				LastModified: mtime,
+			},
+		}, nil
+	}
+
+	got := discoverClaudeS3("s3://bucket/laptop/raw/claude")
+
+	require.Len(t, got, 1)
+	assert.Equal(
+		t,
+		"s3://bucket/laptop/raw/claude/"+
+			"proj/parent-session/subagents/workflows/wf-1/agent-good.jsonl",
+		got[0].Path,
+	)
 }
