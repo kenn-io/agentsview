@@ -1153,7 +1153,7 @@ class SessionsStore {
     }
     this.updateRecentlyDeletedBatch(deleted, failed);
     this.invalidateFilterCaches();
-    await this.load();
+    await this.load({ force: true });
     if (failed.length > 0) {
       const noun = failed.length === 1 ? "session" : "sessions";
       throw new Error(`Failed to restore ${failed.length} ${noun}`);

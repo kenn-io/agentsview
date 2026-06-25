@@ -935,6 +935,52 @@ describe("SessionsStore", () => {
       expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
     });
 
+    it("does not reuse a post-delete in-flight sidebar load after batch undo", async () => {
+      let resolveDeleteReload!: (value: {
+        sessions: SkinnySessionRow[];
+        total: number;
+        next_cursor?: string | null;
+      }) => void;
+      vi.mocked(api.getSidebarSessionIndex)
+        .mockReturnValueOnce(new Promise((resolve) => {
+          resolveDeleteReload = resolve;
+        }))
+        .mockResolvedValueOnce({
+          sessions: [makeSkinnyRow({ id: "restore-me" })],
+          total: 1,
+          next_cursor: null,
+        });
+      vi.mocked(api.batchDeleteSessions).mockResolvedValue(undefined);
+      vi.mocked((api as any).restoreSession).mockResolvedValue(undefined);
+      vi.mocked(api.getProjects).mockResolvedValue({ projects: [] });
+      vi.mocked(api.getAgents).mockResolvedValue({ agents: [] });
+      vi.mocked((api as any).getMachines).mockResolvedValue({ machines: [] });
+
+      const deletePromise = sessions.batchDeleteSessions(["restore-me"]);
+      await vi.waitFor(() => {
+        expect(sessions.recentlyDeleted).toHaveLength(1);
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      });
+
+      const restorePromise = sessions.restoreRecentlyDeleted(
+        sessions.recentlyDeleted[0]!,
+      );
+
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+      });
+
+      resolveDeleteReload({
+        sessions: [],
+        total: 0,
+        next_cursor: null,
+      });
+      await Promise.all([deletePromise, restorePromise]);
+
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["restore-me"]);
+      expect(sessions.total).toBe(1);
+    });
+
     it("keeps only failed ids when batch undo partially fails", async () => {
       const timer = setTimeout(() => {}, 10_000);
       sessions.recentlyDeleted = [
