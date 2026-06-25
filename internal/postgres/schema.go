@@ -1421,6 +1421,15 @@ func inferTokenCoverage(
 }
 
 // CheckSchemaCompat verifies that the PG schema has all columns
+func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	err := db.QueryRowContext(ctx,
+		"SELECT 1 FROM information_schema.tables WHERE table_name = $1",
+		name,
+	).Scan(&n)
+	return err == nil && n == 1
+}
+
 // required by query paths. This is a read-only probe that works
 // against any PG role. Returns nil if compatible, or an error
 // describing what is missing.
@@ -1528,20 +1537,22 @@ func CheckSchemaCompat(
 	}
 	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
-		`SELECT id, occurred_at, model, kind,
-			input_tokens, output_tokens,
-			cache_write_tokens, cache_read_tokens,
-			charged_cents, cursor_token_fee,
-			user_id, user_email, is_headless, dedup_key
-		 FROM cursor_usage_events LIMIT 0`)
-	if err != nil {
-		return fmt.Errorf(
-			"cursor_usage_events table missing required columns: %w",
-			err,
-		)
+	if pgHasTable(ctx, db, "cursor_usage_events") {
+		rows, err = db.QueryContext(ctx,
+			`SELECT id, occurred_at, model, kind,
+				input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens,
+				charged_cents, cursor_token_fee,
+				user_id, user_email, is_headless, dedup_key
+			 FROM cursor_usage_events LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf(
+				"cursor_usage_events table missing required columns: %w",
+				err,
+			)
+		}
+		rows.Close()
 	}
-	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
 		`SELECT id, session_id, rule_name, confidence, location_kind,

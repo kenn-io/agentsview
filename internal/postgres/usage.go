@@ -725,12 +725,14 @@ func pgCursorUsageRowsSQLForBounds(
 	return fmt.Sprintf(pgDailyCursorUsageRowsSQLTemplate, where), true
 }
 
-func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
+func pgDailyUsageRowQuery(pb *paramBuilder, f db.UsageFilter, hasCursorTable bool) string {
 	bounds := pgUsageBoundsForFilter(pb, f)
 	rowsSQL := pgDailyUsageRowsSQLForBounds(pb, f, bounds)
-	cursorRowsSQL, ok := pgCursorUsageRowsSQLForBounds(pb, f, bounds)
-	if ok {
-		rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
+	if hasCursorTable {
+		cursorRowsSQL, ok := pgCursorUsageRowsSQLForBounds(pb, f, bounds)
+		if ok {
+			rowsSQL += "\n\nUNION ALL\n\n" + cursorRowsSQL
+		}
 	}
 	return pgDailyUsageRowSelectFromRows(rowsSQL)
 }
@@ -1112,7 +1114,7 @@ func (s *Store) GetDailyUsage(
 	rateResolver := newModelRateResolver(pricing)
 
 	pb := &paramBuilder{}
-	query := pgDailyUsageRowQuery(pb, f)
+	query := pgDailyUsageRowQuery(pb, f, pgHasTable(ctx, s.pg, "cursor_usage_events"))
 	query += ` ORDER BY u.ts ASC, u.session_id ASC,
 		COALESCE(u.message_ordinal, -1) ASC`
 
