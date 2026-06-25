@@ -873,7 +873,10 @@ func TestSessionCountConsistency(t *testing.T) {
 		te.seedMessages(t, id, 10)
 	}
 
-	// Seed sub-agent sessions (should NOT be counted).
+	// Seed sub-agent sessions. These are excluded from the session
+	// list and db-wide stats (navigation surfaces) but counted in the
+	// analytics summary (a token/session aggregate), so the two counts
+	// intentionally differ.
 	for i := range 3 {
 		id := fmt.Sprintf("subagent-%d", i)
 		te.seedSession(t, id, "proj-a", 8,
@@ -935,7 +938,11 @@ func TestSessionCountConsistency(t *testing.T) {
 	)
 	te.seedMessages(t, "cont-0", 5)
 
-	wantCount := 6 // 5 root + 1 continuation
+	// Navigation surfaces (list, stats) exclude subagents: 5 root + 1
+	// continuation. The analytics summary additionally counts the 3
+	// subagents, since their messages and tokens are real spend.
+	wantNavCount := 6
+	wantAnalyticsCount := 9
 
 	// 1. Session list
 	w := te.get(t, "/api/v1/sessions")
@@ -954,17 +961,17 @@ func TestSessionCountConsistency(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	summaryResp := decode[db.AnalyticsSummary](t, w)
 
-	assert.Equal(t, wantCount, listResp.Total, "session list total")
-	assert.Equal(t, wantCount, statsResp.SessionCount, "stats session_count")
-	assert.Equal(t, wantCount, summaryResp.TotalSessions, "analytics total_sessions")
+	assert.Equal(t, wantNavCount, listResp.Total, "session list total")
+	assert.Equal(t, wantNavCount, statsResp.SessionCount, "stats session_count")
+	assert.Equal(t, wantAnalyticsCount, summaryResp.TotalSessions,
+		"analytics total_sessions counts subagents")
 
-	// All three must be equal.
-	require.True(t,
-		listResp.Total == statsResp.SessionCount &&
-			statsResp.SessionCount == summaryResp.TotalSessions,
-		"session counts disagree: list=%d stats=%d analytics=%d",
-		listResp.Total,
-		statsResp.SessionCount,
-		summaryResp.TotalSessions,
-	)
+	// List and stats (navigation) agree; analytics counts subagents on
+	// top, so it is intentionally higher.
+	require.Equal(t, listResp.Total, statsResp.SessionCount,
+		"navigation session counts disagree: list=%d stats=%d",
+		listResp.Total, statsResp.SessionCount)
+	require.Greater(t, summaryResp.TotalSessions, listResp.Total,
+		"analytics should count more than navigation: analytics=%d list=%d",
+		summaryResp.TotalSessions, listResp.Total)
 }

@@ -119,7 +119,9 @@ func buildAnalyticsWhereWithDate(
 ) string {
 	preds := []string{
 		"message_count > 0",
-		"relationship_type NOT IN ('subagent', 'fork')",
+		// Mirror the SQLite analytics filter: count subagents only on
+		// opt-in sum/count surfaces; fork rows stay excluded always.
+		f.RelationshipExclusionSQL(),
 		"deleted_at IS NULL",
 	}
 	if includeDate {
@@ -161,9 +163,11 @@ func buildAnalyticsWhereWithDate(
 	if f.ExcludeOneShot {
 		if !f.ExcludeAutomated {
 			preds = append(preds,
-				"(user_message_count > 1 OR is_automated = TRUE)")
+				f.OneShotExclusionSQL(
+					"(user_message_count > 1 OR is_automated = TRUE)"))
 		} else {
-			preds = append(preds, "user_message_count > 1")
+			preds = append(preds,
+				f.OneShotExclusionSQL("user_message_count > 1"))
 		}
 	}
 	if f.ExcludeAutomated {
@@ -380,6 +384,8 @@ func scanDateCol(t *time.Time) string {
 func (s *Store) GetAnalyticsSummary(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.AnalyticsSummary, error) {
+	// Sum/count aggregate: count subagent sessions (mirrors SQLite).
+	f.IncludeSubagents = true
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhere(f, pgDateCol, pb)
@@ -923,6 +929,8 @@ func (s *Store) GetAnalyticsHeatmap(
 func (s *Store) GetAnalyticsProjects(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ProjectsAnalyticsResponse, error) {
+	// Per-project aggregate: count subagent sessions (mirrors SQLite).
+	f.IncludeSubagents = true
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhere(f, pgDateCol, pb)

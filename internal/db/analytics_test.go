@@ -204,6 +204,59 @@ func TestGetAnalyticsSummary(t *testing.T) {
 	})
 }
 
+// TestAnalyticsSubagentScope verifies the two-bucket rule for subagent
+// sessions (e.g. workflow subagents):
+//   - Sum/count surfaces (summary) COUNT subagents: their output tokens
+//     and messages are real, independent spend in separate transcripts.
+//   - Distribution surfaces (session-shape) stay ROOT-ONLY so the many
+//     short subagent sessions do not skew length/duration distributions.
+//
+// Fork rows stay excluded on both surfaces because their tokens overlap
+// their root session and would double-count.
+func TestAnalyticsSubagentScope(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	withTokens := func(rel string, msgs, userMsgs, tokens int) func(*Session) {
+		return func(s *Session) {
+			s.StartedAt = new("2024-06-02T10:00:00Z")
+			s.EndedAt = new("2024-06-02T11:00:00Z")
+			s.MessageCount = msgs
+			s.UserMessageCount = userMsgs
+			s.RelationshipType = rel
+			s.TotalOutputTokens = tokens
+			s.HasTotalOutputTokens = true
+		}
+	}
+
+	// Root session: 10 msgs, multi-turn, 1000 output tokens.
+	insertSession(t, d, "root", "project-alpha", withTokens("", 10, 3, 1000))
+	// Subagent: ONE-SHOT (1 user msg), 400 tokens. Workflow subagents
+	// are always one-shot; it must still be counted in aggregates.
+	insertSession(t, d, "agent-x", "project-alpha",
+		withTokens("subagent", 4, 1, 400))
+	// Fork: shares the root conversation — excluded everywhere.
+	insertSession(t, d, "root-fork", "project-alpha",
+		withTokens("fork", 6, 1, 600))
+
+	// Default filter excludes one-shot sessions, matching the summary
+	// endpoint default. The one-shot subagent must survive this.
+	f := baseFilter()
+	f.ExcludeOneShot = true
+	s := mustSummary(t, d, ctx, f)
+
+	// Summary counts the one-shot subagent; fork stays excluded.
+	assert.Equal(t, 1400, s.TotalOutputTokens, "TotalOutputTokens")
+	assert.Equal(t, 2, s.TotalSessions, "TotalSessions")
+	assert.Equal(t, 14, s.TotalMessages, "TotalMessages")
+
+	// Session-shape is a distribution surface: root only. The subagent
+	// is excluded, so the count is 1 (just the root; fork also excluded).
+	shape, err := d.GetAnalyticsSessionShape(ctx, f)
+	require.NoError(t, err, "GetAnalyticsSessionShape")
+	assert.Equal(t, 1, shape.Count, "session-shape stays root-only")
+}
+
 func TestAnalyticsFilterMachineMultiSelect(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
