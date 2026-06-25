@@ -1487,8 +1487,27 @@ func loadCodexSessionIndex(indexPath string) (map[string]string, error) {
 	}
 	defer f.Close()
 
+	titles, err := ParseCodexSessionIndexTitles(f)
+	if err != nil {
+		return nil, err
+	}
+
+	codexSessionIndexCache.mu.Lock()
+	codexSessionIndexCache.entries[indexPath] = codexSessionIndexEntry{
+		mtime:  mtime,
+		size:   size,
+		titles: titles,
+	}
+	codexSessionIndexCache.mu.Unlock()
+
+	return titles, nil
+}
+
+// ParseCodexSessionIndexTitles reads a Codex session_index.jsonl stream and
+// returns session UUIDs mapped to non-empty thread titles.
+func ParseCodexSessionIndexTitles(r io.Reader) (map[string]string, error) {
 	titles := make(map[string]string)
-	s := bufio.NewScanner(f)
+	s := bufio.NewScanner(r)
 	s.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	for s.Scan() {
 		line := s.Text()
@@ -1505,15 +1524,6 @@ func loadCodexSessionIndex(indexPath string) (map[string]string, error) {
 	if err := s.Err(); err != nil {
 		return nil, err
 	}
-
-	codexSessionIndexCache.mu.Lock()
-	codexSessionIndexCache.entries[indexPath] = codexSessionIndexEntry{
-		mtime:  mtime,
-		size:   size,
-		titles: titles,
-	}
-	codexSessionIndexCache.mu.Unlock()
-
 	return titles, nil
 }
 

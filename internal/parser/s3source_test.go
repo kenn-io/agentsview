@@ -120,7 +120,7 @@ func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
 	assert.Equal(t, mtime.UnixNano(), got[0].SourceMtime)
 }
 
-func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
+func TestDiscoverCodexS3KeepsSessionIndexMetadataSeparate(t *testing.T) {
 	oldList := listS3Objects
 	oldStat := statS3Object
 	t.Cleanup(func() {
@@ -131,9 +131,7 @@ func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
 	root := "s3://bucket/laptop/raw/codex"
 	rolloutURI := root + "/2026/06/24/rollout-2026-06-24T00-00-00-" +
 		"11111111-1111-4111-8111-111111111111.jsonl"
-	indexURI := "s3://bucket/laptop/raw/session_index.jsonl"
 	rolloutMtime := time.Unix(100, 0)
-	indexMtime := time.Unix(200, 0)
 	listS3Objects = func(got string) ([]S3Object, error) {
 		require.Equal(t, root, got)
 		return []S3Object{{
@@ -144,23 +142,18 @@ func TestDiscoverCodexS3FoldsSessionIndexMetadata(t *testing.T) {
 		}}, nil
 	}
 	statS3Object = func(got string) (S3Object, error) {
-		require.Equal(t, indexURI, got)
-		return S3Object{
-			URI:          indexURI,
-			Size:         22,
-			LastModified: indexMtime,
-			Fingerprint:  "s3-meta:index",
-		}, nil
+		require.Failf(t, "unexpected index stat", "stat %s", got)
+		return S3Object{}, nil
 	}
 
 	got := discoverCodexS3(root)
 
 	require.Len(t, got, 1)
 	assert.Equal(t, rolloutURI, got[0].Path)
-	assert.Equal(t, int64(33), got[0].SourceSize)
-	assert.Equal(t, indexMtime.UnixNano(), got[0].SourceMtime)
+	assert.Equal(t, int64(11), got[0].SourceSize)
+	assert.Equal(t, rolloutMtime.UnixNano(), got[0].SourceMtime)
 	assert.Contains(t, got[0].SourceFingerprint, "rollout")
-	assert.Contains(t, got[0].SourceFingerprint, "index")
+	assert.NotContains(t, got[0].SourceFingerprint, "index")
 }
 
 func TestCodexS3SessionIndexURIPrefersRawCodexLayout(t *testing.T) {

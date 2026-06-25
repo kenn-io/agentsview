@@ -279,6 +279,105 @@ func TestFilterFilesByMtimeKeepsS3ChangedSize(t *testing.T) {
 	assert.Equal(t, path, got[0].Path)
 }
 
+func TestFilterFilesByMtimeKeepsOnlyS3CodexChangedIndexTitle(t *testing.T) {
+	database := openTestDB(t)
+	renamedUUID := "11111111-1111-4111-8111-111111111111"
+	unchangedUUID := "22222222-2222-4222-8222-222222222222"
+	root := "s3://bucket/laptop/raw/codex"
+	renamedPath := root + "/2026/06/24/rollout-2026-06-24T00-00-00-" +
+		renamedUUID + ".jsonl"
+	unchangedPath := root + "/2026/06/24/rollout-2026-06-24T00-01-00-" +
+		unchangedUUID + ".jsonl"
+	indexPath := "s3://bucket/laptop/raw/session_index.jsonl"
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+	indexMtime := time.Date(2026, 6, 24, 12, 30, 0, 0, time.UTC)
+	index := `{"id":"` + renamedUUID + `","thread_name":"Renamed title","updated_at":"2026-06-24T12:30:00Z"}` + "\n" +
+		`{"id":"` + unchangedUUID + `","thread_name":"Unchanged title","updated_at":"2026-06-24T12:30:00Z"}` + "\n"
+
+	for _, seed := range []struct {
+		id, path, title, hash string
+		size                  int64
+	}{
+		{
+			id:    "laptop~codex:" + renamedUUID,
+			path:  renamedPath,
+			title: "Original title",
+			hash:  "s3:fingerprint:renamed-rollout",
+			size:  101,
+		},
+		{
+			id:    "laptop~codex:" + unchangedUUID,
+			path:  unchangedPath,
+			title: "Unchanged title",
+			hash:  "s3:fingerprint:unchanged-rollout",
+			size:  202,
+		},
+	} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID:          seed.id,
+			Project:     "repo",
+			Machine:     "laptop",
+			Agent:       "codex",
+			FilePath:    strPtr(seed.path),
+			FileSize:    int64Ptr(seed.size),
+			FileMtime:   int64Ptr(mtime),
+			FileHash:    strPtr(seed.hash),
+			SessionName: strPtr(seed.title),
+		}))
+		require.NoError(t, database.SetSessionDataVersion(
+			seed.id, db.CurrentDataVersion(),
+		))
+	}
+
+	oldStat := statS3Object
+	oldFetch := fetchS3Object
+	t.Cleanup(func() {
+		statS3Object = oldStat
+		fetchS3Object = oldFetch
+	})
+	var statCalls, fetchCalls int
+	statS3Object = func(got string) (parser.S3Object, error) {
+		require.Equal(t, indexPath, got)
+		statCalls++
+		return parser.S3Object{
+			URI:          indexPath,
+			Size:         int64(len(index)),
+			LastModified: indexMtime,
+			Fingerprint:  "s3:fingerprint:index",
+		}, nil
+	}
+	fetchS3Object = func(got string) (io.ReadCloser, error) {
+		require.Equal(t, indexPath, got)
+		fetchCalls++
+		return io.NopCloser(strings.NewReader(index)), nil
+	}
+
+	e := &Engine{db: database}
+	got := e.filterFilesByMtime([]parser.DiscoveredFile{
+		{
+			Agent:             parser.AgentCodex,
+			Path:              renamedPath,
+			Machine:           "laptop",
+			SourceSize:        101,
+			SourceMtime:       mtime,
+			SourceFingerprint: "s3:fingerprint:renamed-rollout",
+		},
+		{
+			Agent:             parser.AgentCodex,
+			Path:              unchangedPath,
+			Machine:           "laptop",
+			SourceSize:        202,
+			SourceMtime:       mtime,
+			SourceFingerprint: "s3:fingerprint:unchanged-rollout",
+		},
+	}, indexMtime.Add(-time.Minute))
+
+	require.Len(t, got, 1)
+	assert.Equal(t, renamedPath, got[0].Path)
+	assert.Equal(t, 1, statCalls)
+	assert.Equal(t, 1, fetchCalls)
+}
+
 func TestProcessFileS3CodexReparsesStaleProjectBeforeSkip(t *testing.T) {
 	database := openTestDB(t)
 	const uuid = "11111111-1111-4111-8111-111111111111"

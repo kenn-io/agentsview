@@ -3216,6 +3216,7 @@ func (e *Engine) filterFilesByMtime(
 	cutoffNs := cutoff.UnixNano()
 	out := files[:0]
 	codexIndexRefresh := make(map[string][]parser.DiscoveredFile)
+	s3CodexIndexes := make(map[string]s3CodexIndexSnapshot)
 	for _, f := range files {
 		mtime, err := discoveredFileMtime(f)
 		if err != nil {
@@ -3230,7 +3231,20 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
-		if f.Agent != parser.AgentCodex || !e.codexIndexNeedsRefreshSince(f.Path, cutoffNs) {
+		if f.Agent != parser.AgentCodex {
+			continue
+		}
+		indexNeedsRefresh := false
+		if isS3SourcePath(f.Path) {
+			indexNeedsRefresh = e.s3CodexIndexNeedsRefreshSince(
+				f, cutoffNs, s3CodexIndexes,
+			)
+		} else {
+			indexNeedsRefresh = e.codexIndexNeedsRefreshSince(
+				f.Path, cutoffNs,
+			)
+		}
+		if !indexNeedsRefresh {
 			continue
 		}
 		key := discoveredFileKey(f)
@@ -5133,11 +5147,9 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 	if err != nil || stored == nil {
 		return true
 	}
-	storedName := ""
-	if stored.SessionName != nil {
-		storedName = strings.TrimSpace(*stored.SessionName)
-	}
-	return currentName != storedName
+	return e.codexStoredNameDiffersBySession(
+		stored, currentName,
+	)
 }
 
 // classifyCodexIndexPath maps a Codex session_index.jsonl change to the
@@ -5197,12 +5209,25 @@ func (e *Engine) classifyCodexIndexPath(
 // a brand-new session is synced through its own transcript event, not the
 // index, so the index path only refreshes renames of already-synced sessions.
 func (e *Engine) codexStoredNameDiffers(uuid, indexTitle string) bool {
-	stored, err := e.db.GetSessionFull(
-		context.Background(), e.idPrefix+"codex:"+uuid,
+	return e.codexStoredNameDiffersBySessionID(
+		e.idPrefix+"codex:"+uuid, indexTitle, false,
 	)
+}
+
+func (e *Engine) codexStoredNameDiffersBySessionID(
+	sessionID, indexTitle string,
+	missingDiffers bool,
+) bool {
+	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
 	if err != nil || stored == nil {
-		return false
+		return missingDiffers
 	}
+	return e.codexStoredNameDiffersBySession(stored, indexTitle)
+}
+
+func (e *Engine) codexStoredNameDiffersBySession(
+	stored *db.Session, indexTitle string,
+) bool {
 	storedName := ""
 	if stored.SessionName != nil {
 		storedName = strings.TrimSpace(*stored.SessionName)

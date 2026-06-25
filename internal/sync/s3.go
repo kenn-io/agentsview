@@ -214,7 +214,8 @@ func (e *Engine) processS3Session(
 				sess, _ := e.db.GetSession(ctx, fullID)
 				if sess != nil &&
 					sess.Project != "" &&
-					!parser.NeedsProjectReparse(sess.Project) {
+					!parser.NeedsProjectReparse(sess.Project) &&
+					!e.s3CodexIndexSessionNameChanged(file, uuid) {
 					return processResult{skip: true}
 				}
 			}

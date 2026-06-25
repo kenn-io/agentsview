@@ -117,6 +117,93 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(
 	return false
 }
 
+type s3CodexIndexSnapshot struct {
+	mtime  int64
+	titles map[string]string
+}
+
+func (e *Engine) s3CodexIndexNeedsRefreshSince(
+	file parser.DiscoveredFile,
+	cutoffNs int64,
+	cache map[string]s3CodexIndexSnapshot,
+) bool {
+	uuid := parser.CodexSessionUUIDFromFilename(path.Base(file.Path))
+	if uuid == "" {
+		return false
+	}
+	indexURI, ok := parser.CodexS3SessionIndexURI(file.Path)
+	if !ok {
+		return false
+	}
+	snapshot, ok := cache[indexURI]
+	if !ok {
+		obj, err := statS3Object(indexURI)
+		if err != nil {
+			cache[indexURI] = snapshot
+			return false
+		}
+		snapshot.mtime = obj.LastModified.UnixNano()
+		if snapshot.mtime >= cutoffNs {
+			titles, err := fetchS3CodexSessionIndexTitles(indexURI)
+			if err == nil {
+				snapshot.titles = titles
+			}
+		}
+		cache[indexURI] = snapshot
+	}
+	if snapshot.mtime < cutoffNs {
+		return false
+	}
+	title, ok := snapshot.titles[uuid]
+	if !ok {
+		return false
+	}
+	return e.s3CodexStoredNameDiffers(file, uuid, title)
+}
+
+func (e *Engine) s3CodexIndexSessionNameChanged(
+	file parser.DiscoveredFile, uuid string,
+) bool {
+	indexURI, ok := parser.CodexS3SessionIndexURI(file.Path)
+	if !ok {
+		return false
+	}
+	if _, err := statS3Object(indexURI); err != nil {
+		return false
+	}
+	titles, err := fetchS3CodexSessionIndexTitles(indexURI)
+	if err != nil {
+		return false
+	}
+	title, ok := titles[uuid]
+	if !ok {
+		return false
+	}
+	return e.s3CodexStoredNameDiffers(file, uuid, title)
+}
+
+func (e *Engine) s3CodexStoredNameDiffers(
+	file parser.DiscoveredFile, uuid, indexTitle string,
+) bool {
+	sessionID := applyIDPrefixToID(
+		s3SessionIDPrefix(file.Machine), "codex:"+uuid,
+	)
+	return e.codexStoredNameDiffersBySessionID(
+		sessionID, indexTitle, false,
+	)
+}
+
+func fetchS3CodexSessionIndexTitles(
+	indexURI string,
+) (map[string]string, error) {
+	rc, err := fetchS3Object(indexURI)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return parser.ParseCodexSessionIndexTitles(rc)
+}
+
 func isS3SourcePath(path string) bool {
 	return strings.HasPrefix(path, "s3://")
 }

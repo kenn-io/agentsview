@@ -189,22 +189,9 @@ func StatClaudeS3Session(uri string) (S3Object, error) {
 	}), nil
 }
 
-// StatCodexS3Session returns metadata for a Codex rollout plus the adjacent
-// session_index.jsonl title index when it exists.
+// StatCodexS3Session returns metadata for a Codex rollout object.
 func StatCodexS3Session(uri string) (S3Object, error) {
-	obj, err := statS3Object(uri)
-	if err != nil {
-		return S3Object{}, err
-	}
-	indexURI, ok := CodexS3SessionIndexURI(uri)
-	if !ok {
-		return obj, nil
-	}
-	index, err := statS3Object(indexURI)
-	if err != nil {
-		return obj, nil
-	}
-	return foldS3ObjectMetadata(obj, index), nil
+	return statS3Object(uri)
 }
 
 func statS3ObjectDefault(uri string) (S3Object, error) {
@@ -416,7 +403,6 @@ func discoverCodexS3(root string) []DiscoveredFile {
 	}
 	machine := s3MachineFromRoot(root)
 	var out []DiscoveredFile
-	indexCache := make(map[string]S3Object)
 	for _, obj := range objects {
 		rel, ok := s3RelativePath(root, obj.URI)
 		if !ok {
@@ -426,36 +412,16 @@ func discoverCodexS3(root string) []DiscoveredFile {
 		if !isCodexSessionFilename(base) {
 			continue
 		}
-		source := foldCodexS3IndexMetadata(obj, indexCache)
 		out = append(out, DiscoveredFile{
 			Path:              obj.URI,
 			Agent:             AgentCodex,
 			Machine:           machine,
-			SourceSize:        source.Size,
-			SourceMtime:       source.LastModified.UnixNano(),
-			SourceFingerprint: source.Fingerprint,
+			SourceSize:        obj.Size,
+			SourceMtime:       obj.LastModified.UnixNano(),
+			SourceFingerprint: obj.Fingerprint,
 		})
 	}
 	return out
-}
-
-func foldCodexS3IndexMetadata(
-	obj S3Object, indexCache map[string]S3Object,
-) S3Object {
-	indexURI, ok := CodexS3SessionIndexURI(obj.URI)
-	if !ok {
-		return obj
-	}
-	index, ok := indexCache[indexURI]
-	if !ok {
-		var err error
-		index, err = statS3Object(indexURI)
-		if err != nil {
-			return obj
-		}
-		indexCache[indexURI] = index
-	}
-	return foldS3ObjectMetadata(obj, index)
 }
 
 // CodexS3SessionIndexURI returns the session_index.jsonl URI adjacent to the
