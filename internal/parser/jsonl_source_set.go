@@ -78,7 +78,7 @@ type JSONLSourceSetOptions struct {
 	// discovery comparison. Providers whose stored IDs carry a suffix the
 	// discovered filename stem lacks (for example iFlow subagent IDs) reduce it
 	// to the base ID here so the comparison still matches. It runs after
-	// providerFindRequestWithRawSessionID and before the LookupIDValid gate.
+	// ProviderFindRequestWithRawSessionID and before the LookupIDValid gate.
 	RawSessionIDForLookup func(rawID string) string
 	// RawSessionIDSourceFiles reconstructs candidate file paths from a raw
 	// session ID for providers whose IDs encode the on-disk layout rather than
@@ -99,7 +99,7 @@ type JSONLSourceSetOptions struct {
 	// plus the IDs of any sessions to exclude. Empty results with no exclusions
 	// is a clean no-session. It is what makes JSONLSourceSet a full SourceSet
 	// (its Parse method); leave it nil for discovery-only embedders that supply
-	// their own Parse. ctx and req.Machine are supplied by sourceSetProvider.
+	// their own Parse. ctx and req.Machine are supplied by SourceSetProvider.
 	ParseFile jsonlParseFileFunc
 	// ForceReplace marks every non-empty parse outcome from ParseFile as a full
 	// replacement of the source's existing sessions, for providers whose
@@ -129,13 +129,13 @@ type JSONLSourceSet struct {
 	extensions []string
 }
 
-// newJSONLSourceSet builds a JSONL source set for a provider's roots from
+// NewJSONLSourceSet builds a JSONL source set for a provider's roots from
 // functional options. Every option has a zero-value default, so callers state
 // only what differs.
-func newJSONLSourceSet(
+func NewJSONLSourceSet(
 	provider AgentType,
 	roots []string,
-	opts ...jsonlOption,
+	opts ...JSONLOption,
 ) JSONLSourceSet {
 	var options JSONLSourceSetOptions
 	for _, opt := range opts {
@@ -144,8 +144,8 @@ func newJSONLSourceSet(
 	return jsonlSourceSetFromOptions(provider, roots, options)
 }
 
-// jsonlSourceSetFromOptions is the shared constructor used by newJSONLSourceSet
-// and newDirectoryJSONLSourceSet once options have been resolved.
+// jsonlSourceSetFromOptions is the shared constructor used by NewJSONLSourceSet
+// and NewDirectoryJSONLSourceSet once options have been resolved.
 func jsonlSourceSetFromOptions(
 	provider AgentType,
 	roots []string,
@@ -453,7 +453,7 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 // Parse resolves the request's source to a file and parses it via the ParseFile
 // option, making JSONLSourceSet a full SourceSet. It mirrors the single-file
 // base's parse semantics: empty results with no exclusions is a clean
-// no-session skip. sourceSetProvider resolves req.Machine before calling in.
+// no-session skip. SourceSetProvider resolves req.Machine before calling in.
 func (s JSONLSourceSet) Parse(
 	ctx context.Context,
 	req ParseRequest,

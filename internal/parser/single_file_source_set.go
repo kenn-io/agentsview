@@ -14,8 +14,8 @@ import (
 //
 // Like multiSessionContainerSourceSet, all agent-specific behavior is supplied
 // through functional options (withFile*()), and the type implements SourceSet
-// so it plugs into newSourceSetFactory. The composite/sidecar fingerprint
-// variance lives entirely inside each provider's withFileFingerprint closure,
+// so it plugs into NewSourceSetFactory. The composite/sidecar fingerprint
+// variance lives entirely inside each provider's WithFileFingerprint closure,
 // so the base stays agnostic about sidecars until a shared helper is warranted.
 
 // singleFileSource is the engine-visible Opaque payload for a single-file
@@ -61,55 +61,55 @@ type singleFileConfig struct {
 	alwaysComplete bool
 }
 
-type singleFileOption func(*singleFileConfig)
+type SingleFileOption func(*singleFileConfig)
 
-func withFileDiscovery(
+func WithFileDiscovery(
 	fn func(root string) []singleFileMatch,
-) singleFileOption {
+) SingleFileOption {
 	return func(c *singleFileConfig) { c.discoverFiles = fn }
 }
 
-func withFileWatchRoots(
+func WithFileWatchRoots(
 	fn func(roots []string) []WatchRoot,
-) singleFileOption {
+) SingleFileOption {
 	return func(c *singleFileConfig) { c.watchRoots = fn }
 }
 
-func withFileChangedPathClassifier(
+func WithFileChangedPathClassifier(
 	fn func(root, path string, allowMissing bool) (singleFileMatch, bool),
-) singleFileOption {
+) SingleFileOption {
 	return func(c *singleFileConfig) { c.classifyPath = fn }
 }
 
-func withFileLookup(
+func WithFileLookup(
 	fn func(root, rawID string) (singleFileMatch, bool),
-) singleFileOption {
+) SingleFileOption {
 	return func(c *singleFileConfig) { c.findFile = fn }
 }
 
-func withFileFingerprint(
+func WithFileFingerprint(
 	fn func(src singleFileSource) (SourceFingerprint, error),
-) singleFileOption {
+) SingleFileOption {
 	return func(c *singleFileConfig) { c.fingerprint = fn }
 }
 
-func withFileParse(
+func WithFileParse(
 	fn func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error),
-) singleFileOption {
+) SingleFileOption {
 	return func(c *singleFileConfig) { c.parseFile = fn }
 }
 
-// withAlwaysCompleteResultSet reports the result set as complete even when a
+// WithAlwaysCompleteResultSet reports the result set as complete even when a
 // parse yields no sessions, instead of skipping. Used by providers whose parse
 // removes sessions via exclusions.
-func withAlwaysCompleteResultSet() singleFileOption {
+func WithAlwaysCompleteResultSet() SingleFileOption {
 	return func(c *singleFileConfig) { c.alwaysComplete = true }
 }
 
-func newSingleFileSourceSet(
+func NewSingleFileSourceSet(
 	agent AgentType,
 	roots []string,
-	opts ...singleFileOption,
+	opts ...SingleFileOption,
 ) singleFileSourceSet {
 	cfg := singleFileConfig{}
 	for _, opt := range opts {
@@ -117,17 +117,17 @@ func newSingleFileSourceSet(
 	}
 	switch {
 	case cfg.discoverFiles == nil:
-		panic("single-file source set: missing withFileDiscovery")
+		panic("single-file source set: missing WithFileDiscovery")
 	case cfg.watchRoots == nil:
-		panic("single-file source set: missing withFileWatchRoots")
+		panic("single-file source set: missing WithFileWatchRoots")
 	case cfg.classifyPath == nil:
-		panic("single-file source set: missing withFileChangedPathClassifier")
+		panic("single-file source set: missing WithFileChangedPathClassifier")
 	case cfg.findFile == nil:
-		panic("single-file source set: missing withFileLookup")
+		panic("single-file source set: missing WithFileLookup")
 	case cfg.fingerprint == nil:
-		panic("single-file source set: missing withFileFingerprint")
+		panic("single-file source set: missing WithFileFingerprint")
 	case cfg.parseFile == nil:
-		panic("single-file source set: missing withFileParse")
+		panic("single-file source set: missing WithFileParse")
 	}
 	return singleFileSourceSet{
 		agent: agent,
@@ -257,7 +257,7 @@ func (s singleFileSourceSet) Fingerprint(
 }
 
 // Parse resolves the request's source and parses its single file into one
-// session. It satisfies the SourceSet interface; sourceSetProvider applies the
+// session. It satisfies the SourceSet interface; SourceSetProvider applies the
 // request/config machine fallback before calling in, so req.Machine is already
 // resolved here.
 func (s singleFileSourceSet) Parse(
@@ -334,15 +334,15 @@ func (s singleFileSourceSet) sourceFromRef(
 	return singleFileSource{}, false
 }
 
-// newSingleFileProviderFactory builds a ProviderFactory for a single-file
-// provider. It is a thin adapter over the generic sourceSetFactory; the build
+// NewSingleFileProviderFactory builds a ProviderFactory for a single-file
+// provider. It is a thin adapter over the generic SourceSetFactory; the build
 // closure constructs the agent's configured source set.
-func newSingleFileProviderFactory(
+func NewSingleFileProviderFactory(
 	def AgentDef,
 	caps Capabilities,
 	build func(cfg ProviderConfig) singleFileSourceSet,
 ) ProviderFactory {
-	return newSourceSetFactory(
+	return NewSourceSetFactory(
 		def, caps,
 		func(cfg ProviderConfig) SourceSet { return build(cfg) },
 	)

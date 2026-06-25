@@ -2,19 +2,19 @@ package parser
 
 import "strings"
 
-func providerFindRequestWithRawSessionID(
+func ProviderFindRequestWithRawSessionID(
 	def AgentDef,
 	req FindSourceRequest,
 ) FindSourceRequest {
 	if req.RawSessionID != "" {
-		req.RawSessionID = providerNormalizeRawSessionID(def, req.RawSessionID)
+		req.RawSessionID = ProviderNormalizeRawSessionID(def, req.RawSessionID)
 		return req
 	}
-	req.RawSessionID = providerRawSessionIDFromFull(def, req.FullSessionID)
+	req.RawSessionID = ProviderRawSessionIDFromFull(def, req.FullSessionID)
 	return req
 }
 
-func providerNormalizeRawSessionID(def AgentDef, id string) string {
+func ProviderNormalizeRawSessionID(def AgentDef, id string) string {
 	_, id = StripHostPrefix(id)
 	if def.IDPrefix != "" && strings.HasPrefix(id, def.IDPrefix) {
 		return strings.TrimPrefix(id, def.IDPrefix)
@@ -22,7 +22,7 @@ func providerNormalizeRawSessionID(def AgentDef, id string) string {
 	return id
 }
 
-func providerRawSessionIDFromFull(def AgentDef, id string) string {
+func ProviderRawSessionIDFromFull(def AgentDef, id string) string {
 	if id == "" {
 		return ""
 	}

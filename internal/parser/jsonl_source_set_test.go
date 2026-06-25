@@ -22,12 +22,12 @@ func TestJSONLSourceSetDiscoverRecursiveStableSources(t *testing.T) {
 	writeSourceFile(t, filepath.Join(root, "nested", "upper.JSONL"), "{}\n")
 
 	roots := []string{root}
-	sources := newJSONLSourceSet(AgentCodex, roots,
-		withRecursive(),
-		withKey(func(root, path string) string {
+	sources := NewJSONLSourceSet(AgentCodex, roots,
+		WithRecursive(),
+		WithKey(func(root, path string) string {
 			return mustRelSlash(t, root, path)
 		}),
-		withProjectHint(func(root, path string) string {
+		WithProjectHint(func(root, path string) string {
 			rel := mustRelSlash(t, root, filepath.Dir(path))
 			if rel == "." {
 				return ""
@@ -62,9 +62,9 @@ func TestJSONLSourceSetShallowDiscoveryAndFilters(t *testing.T) {
 	writeSourceFile(t, filepath.Join(root, "drop.jsonl"), "{}\n")
 	writeSourceFile(t, filepath.Join(root, "nested", "skip.jsonl"), "{}\n")
 
-	sources := newJSONLSourceSet(AgentGptme, []string{root},
-		withExtensions(".jsonl", ".ndjson"),
-		withInclude(func(path string, _ os.FileInfo) bool {
+	sources := NewJSONLSourceSet(AgentGptme, []string{root},
+		WithExtensions(".jsonl", ".ndjson"),
+		WithInclude(func(path string, _ os.FileInfo) bool {
 			return filepath.Base(path) != "drop.jsonl"
 		}),
 	)
@@ -85,9 +85,9 @@ func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
 	writeSourceFile(t, path, content)
 	writeSourceFile(t, filepath.Join(root, "nested", "notes.txt"), "{}\n")
 
-	sources := newJSONLSourceSet(AgentCodex, []string{root},
-		withRecursive(),
-		withContentHashing(),
+	sources := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithRecursive(),
+		WithContentHashing(),
 	)
 
 	plan, err := sources.WatchPlan(context.Background())
@@ -162,8 +162,8 @@ func TestJSONLSourceSetFindSourceUsesFingerprintKey(t *testing.T) {
 	path := filepath.Join(root, "nested", "session-1.jsonl")
 	writeSourceFile(t, path, "{}\n")
 
-	defaultSources := newJSONLSourceSet(
-		AgentCodex, []string{root}, withRecursive(),
+	defaultSources := NewJSONLSourceSet(
+		AgentCodex, []string{root}, WithRecursive(),
 	)
 	found, ok, err := defaultSources.FindSource(
 		context.Background(),
@@ -173,9 +173,9 @@ func TestJSONLSourceSetFindSourceUsesFingerprintKey(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, path, found.DisplayPath)
 
-	customSources := newJSONLSourceSet(AgentCodex, []string{root},
-		withRecursive(),
-		withFingerprintKey(func(root, path string) string {
+	customSources := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithRecursive(),
+		WithFingerprintKey(func(root, path string) string {
 			return "fingerprint:" + mustRelSlash(t, root, path)
 		}),
 	)
@@ -192,8 +192,8 @@ func TestJSONLSourceSetFindSourceUsesFingerprintKey(t *testing.T) {
 func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "nested", "deleted.jsonl")
-	sources := newJSONLSourceSet(AgentCodex, []string{root},
-		withRecursive(),
+	sources := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithRecursive(),
 	)
 
 	changed, err := sources.SourcesForChangedPath(
@@ -208,7 +208,7 @@ func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
 	assert.Equal(t, "nested/deleted.jsonl", changed[0].Opaque.(JSONLSource).RelPath)
 
 	shallowPath := filepath.Join(root, "nested", "ignored.jsonl")
-	shallowSources := newJSONLSourceSet(AgentCodex, []string{root})
+	shallowSources := NewJSONLSourceSet(AgentCodex, []string{root})
 	changed, err = shallowSources.SourcesForChangedPath(
 		context.Background(),
 		ChangedPathRequest{Path: shallowPath, EventKind: "remove", WatchRoot: root},
@@ -222,8 +222,8 @@ func TestJSONLSourceSetChangedPathRejectsExistingNonRegularPath(t *testing.T) {
 	path := filepath.Join(root, "nested", "not-a-source.jsonl")
 	require.NoError(t, os.MkdirAll(path, 0o755))
 
-	sources := newJSONLSourceSet(AgentCodex, []string{root},
-		withRecursive(),
+	sources := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithRecursive(),
 	)
 
 	changed, err := sources.SourcesForChangedPath(
@@ -236,9 +236,9 @@ func TestJSONLSourceSetChangedPathRejectsExistingNonRegularPath(t *testing.T) {
 
 func TestJSONLSourceSetChangedPathUsesPathOnlyFilterForDeletedFiles(t *testing.T) {
 	root := t.TempDir()
-	sources := newJSONLSourceSet(AgentCodex, []string{root},
-		withRecursive(),
-		withIncludePath(func(root, path string) bool {
+	sources := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithRecursive(),
+		WithIncludePath(func(root, path string) bool {
 			return filepath.Base(path) == "events.jsonl"
 		}),
 	)
@@ -274,9 +274,9 @@ func TestJSONLSourceSetDescendPathPrunesSources(t *testing.T) {
 	writeSourceFile(t, keepPath, "{}\n")
 	writeSourceFile(t, skipPath, "{}\n")
 
-	sources := newJSONLSourceSet(AgentCodex, []string{root},
-		withRecursive(),
-		withDescendPath(func(root, path string) bool {
+	sources := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithRecursive(),
+		WithDescendPath(func(root, path string) bool {
 			return filepath.Base(path) != "skip"
 		}),
 	)
@@ -313,8 +313,8 @@ func TestJSONLSourceSetDuplicateKeysKeepFirstConfiguredRoot(t *testing.T) {
 	writeSourceFile(t, firstPath, "{}\n")
 	writeSourceFile(t, secondPath, "{}\n")
 
-	sources := newJSONLSourceSet(AgentCodex, []string{firstRoot, secondRoot},
-		withKey(func(_, path string) string {
+	sources := NewJSONLSourceSet(AgentCodex, []string{firstRoot, secondRoot},
+		WithKey(func(_, path string) string {
 			return filepath.Base(path)
 		}),
 	)
@@ -358,11 +358,11 @@ func TestJSONLSourceSetFindSourceNormalizesRawSessionID(t *testing.T) {
 		return rawID != "" && !strings.HasPrefix(rawID, "raw:")
 	}
 
-	normalizing := newJSONLSourceSet(AgentCodex, []string{root},
-		withRawSessionIDForLookup(func(rawID string) string {
+	normalizing := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithRawSessionIDForLookup(func(rawID string) string {
 			return strings.TrimPrefix(rawID, "raw:")
 		}),
-		withLookupIDValid(rejectsRaw),
+		WithLookupIDValid(rejectsRaw),
 	)
 
 	found, ok, err := normalizing.FindSource(
@@ -376,8 +376,8 @@ func TestJSONLSourceSetFindSourceNormalizesRawSessionID(t *testing.T) {
 	// Without the normalizer the identical request is gated out: the raw form
 	// fails LookupIDValid and never matches the on-disk session ID. This locks
 	// in that the normalization step is what enables both checks.
-	unnormalized := newJSONLSourceSet(AgentCodex, []string{root},
-		withLookupIDValid(rejectsRaw),
+	unnormalized := NewJSONLSourceSet(AgentCodex, []string{root},
+		WithLookupIDValid(rejectsRaw),
 	)
 
 	_, ok, err = unnormalized.FindSource(
@@ -390,7 +390,7 @@ func TestJSONLSourceSetFindSourceNormalizesRawSessionID(t *testing.T) {
 
 func TestJSONLSourceSetMissingRootAndInvalidLookupAreNoops(t *testing.T) {
 	root := t.TempDir()
-	sources := newJSONLSourceSet(AgentCodex, []string{
+	sources := NewJSONLSourceSet(AgentCodex, []string{
 		filepath.Join(root, "missing"),
 	})
 

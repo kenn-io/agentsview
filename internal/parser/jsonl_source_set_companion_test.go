@@ -11,7 +11,7 @@ import (
 )
 
 // companionFor maps a transcript path to its sibling ".meta" companion. It is
-// the shape a provider passes to withCompanionFiles.
+// the shape a provider passes to WithCompanionFiles.
 func companionFor(transcriptPath string) []string {
 	return []string{transcriptPath + ".meta"}
 }
@@ -29,10 +29,10 @@ func TestJSONLSourceSetCompanionFingerprintReflectsCompanionChange(t *testing.T)
 	writeFile(t, transcript, `{"line":1}`+"\n")
 	writeFile(t, companion, "v1")
 
-	set := newJSONLSourceSet(
+	set := NewJSONLSourceSet(
 		AgentClaude,
 		[]string{root},
-		withCompanionFiles(companionFor),
+		WithCompanionFiles(companionFor),
 	)
 
 	sources, err := set.Discover(ctx)
@@ -63,11 +63,11 @@ func TestJSONLSourceSetCompanionFingerprintHashChanges(t *testing.T) {
 	writeFile(t, transcript, `{"line":1}`+"\n")
 	writeFile(t, companion, "v1")
 
-	set := newJSONLSourceSet(
+	set := NewJSONLSourceSet(
 		AgentClaude,
 		[]string{root},
-		withContentHashing(),
-		withCompanionFiles(companionFor),
+		WithContentHashing(),
+		WithCompanionFiles(companionFor),
 	)
 	sources, err := set.Discover(ctx)
 	require.NoError(t, err)
@@ -94,10 +94,10 @@ func TestJSONLSourceSetCompanionChangedPathMapsToTranscript(t *testing.T) {
 	writeFile(t, transcript, `{"line":1}`+"\n")
 	writeFile(t, companion, "meta")
 
-	set := newJSONLSourceSet(
+	set := NewJSONLSourceSet(
 		AgentClaude,
 		[]string{root},
-		withCompanionFiles(companionFor),
+		WithCompanionFiles(companionFor),
 	)
 
 	changed, err := set.SourcesForChangedPath(ctx, ChangedPathRequest{
@@ -121,10 +121,10 @@ func TestJSONLSourceSetCompanionWatchPlanIncludesCompanionGlob(t *testing.T) {
 	writeFile(t, transcript, `{"line":1}`+"\n")
 	writeFile(t, transcript+".meta", "meta")
 
-	set := newJSONLSourceSet(
+	set := NewJSONLSourceSet(
 		AgentClaude,
 		[]string{root},
-		withCompanionFiles(companionFor),
+		WithCompanionFiles(companionFor),
 	)
 
 	plan, err := set.WatchPlan(ctx)
@@ -140,7 +140,7 @@ func TestJSONLSourceSetWithoutCompanionsUnaffected(t *testing.T) {
 	transcript := filepath.Join(root, "session.jsonl")
 	writeFile(t, transcript, `{"line":1}`+"\n")
 
-	set := newJSONLSourceSet(AgentClaude, []string{root})
+	set := NewJSONLSourceSet(AgentClaude, []string{root})
 	sources, err := set.Discover(ctx)
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
