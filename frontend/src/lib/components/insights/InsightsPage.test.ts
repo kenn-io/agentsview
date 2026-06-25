@@ -112,6 +112,7 @@ describe("InsightsPage date yoke controls", () => {
 const mocks = vi.hoisted(() => ({
   downloadInsightExport: vi.fn().mockResolvedValue(undefined),
   deleteItem: vi.fn(),
+  loadAgents: vi.fn(),
   loadInsights: vi.fn(),
   loadProjects: vi.fn(),
 }));
@@ -173,7 +174,19 @@ vi.mock("../../stores/insights.svelte.js", () => ({
 
 vi.mock("../../stores/sessions.svelte.js", () => ({
   sessions: {
+    agents: [],
+    filters: {
+      project: "",
+      machine: "",
+      agent: "",
+      termination: "",
+      recentlyActive: false,
+      minUserMessages: 0,
+      includeOneShot: false,
+      includeAutomated: true,
+    },
     projects: [],
+    loadAgents: mocks.loadAgents,
     loadProjects: mocks.loadProjects,
   },
 }));
@@ -183,6 +196,16 @@ vi.mock("../../stores/sync.svelte.js", () => ({
     serverVersion: { read_only: false },
   },
 }));
+
+vi.mock("../../paraglide/messages.js", () => {
+  const stub = new Proxy({}, {
+    get(_target, prop) {
+      if (prop === "m") return stub;
+      return () => String(prop);
+    },
+  });
+  return stub;
+});
 
 vi.mock("../../utils/markdown.js", () => ({
   renderMarkdown: (content: string) => content,
