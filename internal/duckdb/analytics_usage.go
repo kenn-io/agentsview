@@ -1679,7 +1679,7 @@ func (s *Store) GetAnalyticsTopSessions(
 	durationExpr := "(epoch(s.ended_at) - epoch(s.started_at)) / 60.0"
 	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
 	activeDurationExpr := `
-		ROUND((
+		(
 			SELECT COALESCE(SUM(
 				CASE
 					WHEN inner2.has_tool_use AND inner2.delta_ms > 0
@@ -1699,7 +1699,7 @@ func (s *Store) GetAnalyticsTopSessions(
 				FROM messages m2
 				WHERE m2.session_id = s.id
 			) inner2
-		), 1)`
+		)`
 	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
 	orderExpr := "s.message_count DESC, s.id ASC"
 	switch metric {
@@ -1741,6 +1741,8 @@ func (s *Store) GetAnalyticsTopSessions(
 		endedAt := formatDBTime(endedRaw)
 		row.StartedAt = &startedAt
 		row.EndedAt = &endedAt
+		row.DurationMin = round1(row.DurationMin)
+		row.ActiveDurationMin = round1(row.ActiveDurationMin)
 		out.Sessions = append(out.Sessions, row)
 	}
 	if err := rows.Err(); err != nil {

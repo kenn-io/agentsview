@@ -1922,6 +1922,63 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 		assert.Equal(t, 1.0, resp.Sessions[1].ActiveDurationMin, "idle active duration")
 	})
 
+	t.Run("ByDurationKeepsNearTieOrderBeforeDisplayRounding", func(t *testing.T) {
+		insertSession(t, d, "near-tie-longer", "project-precision", func(s *Session) {
+			s.StartedAt = Ptr("2024-06-03T09:00:00Z")
+			s.EndedAt = Ptr("2024-06-03T09:10:02.400Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("near-tie-longer", 0, "start", "2024-06-03T09:00:00Z"),
+			func() Message {
+				m := asstMsgAt(
+					"near-tie-longer",
+					1,
+					"tooling",
+					"2024-06-03T09:00:00Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("near-tie-longer", 2, "finish", "2024-06-03T09:10:02.400Z"),
+		)
+
+		insertSession(t, d, "near-tie-shorter", "project-precision", func(s *Session) {
+			s.StartedAt = Ptr("2024-06-03T09:00:00Z")
+			s.EndedAt = Ptr("2024-06-03T09:10:01.800Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("near-tie-shorter", 0, "start", "2024-06-03T09:00:00Z"),
+			func() Message {
+				m := asstMsgAt(
+					"near-tie-shorter",
+					1,
+					"tooling",
+					"2024-06-03T09:00:00Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("near-tie-shorter", 2, "finish", "2024-06-03T09:10:01.800Z"),
+		)
+
+		resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
+			Project: "project-precision",
+			From:    "2024-06-03",
+			To:      "2024-06-03",
+		}, "duration")
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		require.Len(t, resp.Sessions, 2, "precision sessions")
+		assert.Equal(t, "near-tie-longer", resp.Sessions[0].ID, "raw active duration should decide the rank")
+		assert.Equal(t, 10.0, resp.Sessions[0].ActiveDurationMin, "display rounding")
+		assert.Equal(t, 10.0, resp.Sessions[1].ActiveDurationMin, "display rounding")
+	})
+
 	t.Run("ByDurationRanksByActiveDurationInGoFallback", func(t *testing.T) {
 		for i := range 201 {
 			id := fmt.Sprintf("dst-wall-%03d", i)
@@ -1980,6 +2037,175 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 		require.NotEmpty(t, resp.Sessions, "sessions")
 		assert.Equal(t, "dst-actively-working", resp.Sessions[0].ID, "top session by active duration in fallback")
 		assert.Equal(t, 15.0, resp.Sessions[0].ActiveDurationMin, "fallback active duration")
+	})
+
+	t.Run("ByDurationKeepsNearTieOrderInGoFallback", func(t *testing.T) {
+		insertSession(t, d, "dst-near-tie-longer", "project-dst-precision", func(s *Session) {
+			s.StartedAt = Ptr("2026-03-10T09:00:00Z")
+			s.EndedAt = Ptr("2026-03-10T09:10:02.400Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("dst-near-tie-longer", 0, "start", "2026-03-10T09:00:00Z"),
+			func() Message {
+				m := asstMsgAt(
+					"dst-near-tie-longer",
+					1,
+					"tooling",
+					"2026-03-10T09:00:00Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("dst-near-tie-longer", 2, "finish", "2026-03-10T09:10:02.400Z"),
+		)
+
+		insertSession(t, d, "dst-near-tie-shorter", "project-dst-precision", func(s *Session) {
+			s.StartedAt = Ptr("2026-03-10T09:00:00Z")
+			s.EndedAt = Ptr("2026-03-10T09:10:01.800Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("dst-near-tie-shorter", 0, "start", "2026-03-10T09:00:00Z"),
+			func() Message {
+				m := asstMsgAt(
+					"dst-near-tie-shorter",
+					1,
+					"tooling",
+					"2026-03-10T09:00:00Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("dst-near-tie-shorter", 2, "finish", "2026-03-10T09:10:01.800Z"),
+		)
+
+		resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
+			Project:  "project-dst-precision",
+			From:     "2026-03-01",
+			To:       "2026-03-31",
+			Timezone: "America/New_York",
+		}, "duration")
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		require.Len(t, resp.Sessions, 2, "fallback precision sessions")
+		assert.Equal(t, "dst-near-tie-longer", resp.Sessions[0].ID, "fallback should keep raw active ordering")
+		assert.Equal(t, 10.0, resp.Sessions[0].ActiveDurationMin, "fallback display rounding")
+		assert.Equal(t, 10.0, resp.Sessions[1].ActiveDurationMin, "fallback display rounding")
+	})
+
+	t.Run("ByDurationSortsBeforeRoundingInSQLiteSQL", func(t *testing.T) {
+		insertSession(t, d, "sql-round-a", "project-round-sql", func(s *Session) {
+			s.StartedAt = Ptr("2026-04-05T09:59:00.000Z")
+			s.EndedAt = Ptr("2026-04-05T10:10:02.400Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("sql-round-a", 0, "start", "2026-04-05T09:59:00.000Z"),
+			func() Message {
+				m := asstMsgAt(
+					"sql-round-a",
+					1,
+					"tool",
+					"2026-04-05T10:00:00.000Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("sql-round-a", 2, "finish", "2026-04-05T10:10:02.400Z"),
+		)
+		insertSession(t, d, "sql-round-b", "project-round-sql", func(s *Session) {
+			s.StartedAt = Ptr("2026-04-05T09:59:00.000Z")
+			s.EndedAt = Ptr("2026-04-05T10:10:03.600Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("sql-round-b", 0, "start", "2026-04-05T09:59:00.000Z"),
+			func() Message {
+				m := asstMsgAt(
+					"sql-round-b",
+					1,
+					"tool",
+					"2026-04-05T10:00:00.000Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("sql-round-b", 2, "finish", "2026-04-05T10:10:03.600Z"),
+		)
+
+		resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
+			Project: "project-round-sql",
+		}, "duration")
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		require.Len(t, resp.Sessions, 2)
+		assert.Equal(t, "sql-round-b", resp.Sessions[0].ID, "10.06 must rank ahead of 10.04 before rounding")
+		assert.Equal(t, 10.1, resp.Sessions[0].ActiveDurationMin)
+		assert.Equal(t, 10.0, resp.Sessions[1].ActiveDurationMin)
+	})
+
+	t.Run("ByDurationSortsBeforeRoundingInGoFallback", func(t *testing.T) {
+		insertSession(t, d, "dst-round-a", "project-round-fallback", func(s *Session) {
+			s.StartedAt = Ptr("2026-03-10T09:59:00.000Z")
+			s.EndedAt = Ptr("2026-03-10T10:10:02.400Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("dst-round-a", 0, "start", "2026-03-10T09:59:00.000Z"),
+			func() Message {
+				m := asstMsgAt(
+					"dst-round-a",
+					1,
+					"tool",
+					"2026-03-10T10:00:00.000Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("dst-round-a", 2, "finish", "2026-03-10T10:10:02.400Z"),
+		)
+		insertSession(t, d, "dst-round-b", "project-round-fallback", func(s *Session) {
+			s.StartedAt = Ptr("2026-03-10T09:59:00.000Z")
+			s.EndedAt = Ptr("2026-03-10T10:10:03.600Z")
+			s.MessageCount = 3
+		})
+		insertMessages(
+			t,
+			d,
+			userMsgAt("dst-round-b", 0, "start", "2026-03-10T09:59:00.000Z"),
+			func() Message {
+				m := asstMsgAt(
+					"dst-round-b",
+					1,
+					"tool",
+					"2026-03-10T10:00:00.000Z",
+				)
+				m.HasToolUse = true
+				return m
+			}(),
+			userMsgAt("dst-round-b", 2, "finish", "2026-03-10T10:10:03.600Z"),
+		)
+
+		resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
+			Project:  "project-round-fallback",
+			From:     "2026-03-01",
+			To:       "2026-03-31",
+			Timezone: "America/New_York",
+		}, "duration")
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		require.Len(t, resp.Sessions, 2)
+		assert.Equal(t, "dst-round-b", resp.Sessions[0].ID, "fallback must rank 10.06 ahead of 10.04 before rounding")
+		assert.Equal(t, 10.1, resp.Sessions[0].ActiveDurationMin)
+		assert.Equal(t, 10.0, resp.Sessions[1].ActiveDurationMin)
 	})
 
 	t.Run("DefaultMetric", func(t *testing.T) {

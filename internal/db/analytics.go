@@ -4374,7 +4374,7 @@ func (db *DB) GetAnalyticsTopSessions(
 	durationExpr := `ROUND((julianday(ended_at) -
 		julianday(started_at)) * 1440, 1)`
 	activeDurationExpr := `
-		ROUND((
+		(
 			SELECT COALESCE(SUM(
 				CASE
 					WHEN inner2.has_tool_use = 0 OR inner2.delta_ms <= 0 THEN NULL
@@ -4390,7 +4390,7 @@ func (db *DB) GetAnalyticsTopSessions(
 				m2.has_tool_use
 			FROM messages m2
 				WHERE m2.session_id = sessions.id
-			) inner2), 1)`
+			) inner2)`
 	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
 	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
 	needsGoSort := metric == "duration"

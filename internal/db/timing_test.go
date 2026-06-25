@@ -116,6 +116,20 @@ func TestGetSessionTiming_NoToolUseHasNoTurnDuration(t *testing.T) {
 	assert.Equal(t, 0, got.TurnCount, "TurnCount")
 }
 
+func TestActiveDurationMinFromTurnsKeepsRawMinutePrecision(t *testing.T) {
+	tenMinutesTwoPointFourSeconds := int64(602_400)
+	ignoredNegative := int64(-1_000)
+	turns := []TurnRow{
+		{HasToolUse: true, DurationMs: &tenMinutesTwoPointFourSeconds},
+		{HasToolUse: true, DurationMs: &ignoredNegative},
+		{HasToolUse: false, DurationMs: &tenMinutesTwoPointFourSeconds},
+	}
+
+	got := activeDurationMinFromTurns(turns)
+
+	assert.InDelta(t, 10.04, got, 0.000001)
+}
+
 func TestGetSessionTiming_MarshalsEmptyCollectionsAsArrays(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

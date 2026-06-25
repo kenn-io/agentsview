@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -239,7 +238,7 @@ func activeDurationMinFromTurns(turns []TurnRow) float64 {
 		}
 		totalMs += *t.DurationMs
 	}
-	return math.Round(float64(totalMs)/6000) / 10
+	return float64(totalMs) / 60000
 }
 
 func (db *DB) activeDurationMinForSession(
