@@ -1,9 +1,11 @@
 package sync
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSyncStats_RecordSkip(t *testing.T) {
@@ -203,4 +205,28 @@ func TestProgress_Percent(t *testing.T) {
 			assert.InDelta(t, tt.want, got, 1e-4)
 		})
 	}
+}
+
+// TestSyncStatsJSONOmitsZeroAnomalies verifies the anomaly JSON fields use
+// omitzero semantics: a clean run emits no "anomalies" object at all, and a
+// run with only malformed-line counts omits the empty nested "sanitize"
+// object. Plain omitempty cannot do this for struct-valued fields.
+func TestSyncStatsJSONOmitsZeroAnomalies(t *testing.T) {
+	clean, err := json.Marshal(SyncStats{Synced: 3})
+	require.NoError(t, err)
+	assert.NotContains(t, string(clean), "anomalies",
+		"a clean run must not emit an empty anomalies object")
+
+	malformedOnly, err := json.Marshal(SyncStats{
+		Anomalies: AnomalyStats{
+			MalformedLinesByAgent: map[string]int{"claude": 2},
+			MalformedLinesTotal:   2,
+		},
+	})
+	require.NoError(t, err)
+	got := string(malformedOnly)
+	assert.Contains(t, got, "malformed_lines_total",
+		"malformed counts must still serialize")
+	assert.NotContains(t, got, "sanitize",
+		"malformed-only run must not emit an empty sanitize object")
 }

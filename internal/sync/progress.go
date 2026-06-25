@@ -61,7 +61,7 @@ type SyncStats struct {
 	// surfaced in the CLI sync summary. These are live per-run counters
 	// (reset each sync), not persisted state. A zero value means a clean
 	// run and is omitted from the summary.
-	Anomalies AnomalyStats `json:"anomalies,omitempty"`
+	Anomalies AnomalyStats `json:"anomalies,omitzero"`
 
 	filesOK             int // unexported: file-level success counter
 	filesDiscovered     int // file-based total, excludes DB-backed agents
@@ -86,7 +86,7 @@ type AnomalyStats struct {
 
 	// Sanitize aggregates the central validation/sanitization fix counts
 	// across every session, message, and usage event written this run.
-	Sanitize SanitizeStats `json:"sanitize,omitempty"`
+	Sanitize SanitizeStats `json:"sanitize,omitzero"`
 }
 
 // SanitizeStats mirrors the per-category fix counts produced by the central
