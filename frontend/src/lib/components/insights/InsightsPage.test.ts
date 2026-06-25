@@ -115,6 +115,7 @@ const mocks = vi.hoisted(() => ({
   loadAgents: vi.fn(),
   loadInsights: vi.fn(),
   loadProjects: vi.fn(),
+  watchEvents: vi.fn(() => ({ close() {} })),
 }));
 
 const state = vi.hoisted(() => {
@@ -166,6 +167,7 @@ const state = vi.hoisted(() => {
 
 vi.mock("../../api/client.js", () => ({
   downloadInsightExport: mocks.downloadInsightExport,
+  watchEvents: mocks.watchEvents,
 }));
 
 vi.mock("../../stores/insights.svelte.js", () => ({
