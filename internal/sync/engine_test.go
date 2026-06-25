@@ -1106,14 +1106,10 @@ func TestWriteBatchQwenPawReplacesMessages(t *testing.T) {
 // case where a QwenPaw session's stored DB file_path points outside
 // any currently configured QWENPAW_DIR (e.g. the root was removed or
 // the session was synced from a custom path). FindSourceFile still
-// returns the stored path, but the workspace derivation loop in
-// SyncSingleSessionContext finds no matching configured root, leaves
-// file.Project empty, and ParseQwenPawSession then emits a brand-new
-// qwenpaw::<stem> session — orphaning the requested
-// qwenpaw:<workspace>:<stem> row.
-//
-// The fix falls back to the DB-stored Project (consistent with the
-// Claude / Iflow / Hermes resync paths).
+// returns the stored path, and the provider must resolve the workspace
+// from that path's implicit <root>/<workspace>/sessions/ layout rather
+// than emitting a brand-new qwenpaw::<stem> session that orphans the
+// requested qwenpaw:<workspace>:<stem> row.
 func TestSyncSingleSession_QwenPawPreservesWorkspaceFromDB(t *testing.T) {
 	database := openTestDB(t)
 

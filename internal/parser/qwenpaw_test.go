@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,68 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newQwenPawTestProvider builds a concrete qwenPawProvider for the given
+// roots so package tests can exercise the folded parse, discovery, and
+// source-lookup behavior directly through provider methods.
+func newQwenPawTestProvider(t *testing.T, roots ...string) Provider {
+	t.Helper()
+	provider, ok := NewProvider(AgentQwenPaw, ProviderConfig{
+		Roots:   roots,
+		Machine: "local",
+	})
+	require.True(t, ok)
+	return provider
+}
+
+// parseQwenPawTestSession parses a QwenPaw session JSON file at path with
+// the given workspace project, replacing the removed package-level
+// ParseQwenPawSession entrypoint with the provider-owned parse method.
+func parseQwenPawTestSession(
+	t *testing.T, path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	return parseQwenPawSession(path, project, machine)
+}
+
+// discoverQwenPawTestSessions discovers QwenPaw sessions under root through
+// the provider, returning the legacy DiscoveredFile shape (path + project)
+// the tests assert against.
+func discoverQwenPawTestSessions(
+	t *testing.T, root string,
+) []DiscoveredFile {
+	t.Helper()
+	if root == "" {
+		return nil
+	}
+	provider := newQwenPawTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	if len(sources) == 0 {
+		return nil
+	}
+	files := make([]DiscoveredFile, 0, len(sources))
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{
+			Path:    source.DisplayPath,
+			Project: source.ProjectHint,
+			Agent:   AgentQwenPaw,
+		})
+	}
+	return files
+}
+
+// findQwenPawTestSourceFile resolves a raw QwenPaw ID to a session file
+// through the provider, replacing the removed FindQwenPawSourceFile.
+func findQwenPawTestSourceFile(
+	t *testing.T, root, rawID string,
+) string {
+	t.Helper()
+	if root == "" {
+		return ""
+	}
+	return qwenPawSourceFileForRawID(root, rawID)
+}
 
 // skipColonFilenamesOnWindows skips tests that must create files or
 // directories whose names contain ":". That character is illegal in
@@ -90,7 +153,7 @@ func TestParseQwenPawSession_BasicUserAssistant(t *testing.T) {
 			`{"id":"abc1","name":"Friday","role":"assistant","content":[{"type":"text","text":"你好，有什么可以帮你的？"}],"metadata":{},"timestamp":"2026-04-19 22:37:35.123"}`,
 		},
 	)
-	sess, msgs, err := ParseQwenPawSession(path, "default", "local")
+	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -124,7 +187,7 @@ func TestParseQwenPawSession_ThinkingExtracted(t *testing.T) {
 			`{"id":"a1","name":"Friday","role":"assistant","content":[{"type":"thinking","thinking":"我应该先思考一下"},{"type":"text","text":"答案"}],"metadata":{},"timestamp":"2026-04-19 22:37:35.000"}`,
 		},
 	)
-	_, msgs, err := ParseQwenPawSession(path, "default", "local")
+	_, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.Equal(t, 2, len(msgs))
 
@@ -142,7 +205,7 @@ func TestParseQwenPawSession_ToolUseAndResult(t *testing.T) {
 			`{"id":"a2","name":"Friday","role":"assistant","content":[{"type":"text","text":"文件内容是 file contents here"}],"metadata":{},"timestamp":"2026-04-19 22:37:37.000"}`,
 		},
 	)
-	sess, msgs, err := ParseQwenPawSession(path, "default", "local")
+	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Equal(t, 4, len(msgs))
@@ -171,7 +234,7 @@ func TestParseQwenPawSession_MultipleToolUsesInOneMessage(t *testing.T) {
 			`{"id":"a1","name":"Friday","role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"read_file","input":{"file_path":"a"}},{"type":"tool_use","id":"call_2","name":"read_file","input":{"file_path":"b"}}],"metadata":{},"timestamp":"2026-04-19 22:37:35.000"}`,
 		},
 	)
-	_, msgs, err := ParseQwenPawSession(path, "default", "local")
+	_, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.Equal(t, 1, len(msgs))
 	require.Equal(t, 2, len(msgs[0].ToolCalls))
@@ -185,7 +248,7 @@ func TestParseQwenPawSession_EmptyContentArray(t *testing.T) {
 			`{"id":"a1","name":"Friday","role":"assistant","content":[],"metadata":{},"timestamp":"2026-04-19 22:37:35.000"}`,
 		},
 	)
-	sess, msgs, err := ParseQwenPawSession(path, "default", "local")
+	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assertMessageCount(t, sess.MessageCount, 1)
@@ -199,7 +262,7 @@ func TestParseQwenPawSession_MissingTimestamp(t *testing.T) {
 			`{"id":"u1","name":"user","role":"user","content":[{"type":"text","text":"hi"}],"metadata":{}}`,
 		},
 	)
-	sess, msgs, err := ParseQwenPawSession(path, "default", "local")
+	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assertZeroTimestamp(t, sess.StartedAt, "StartedAt")
@@ -209,7 +272,7 @@ func TestParseQwenPawSession_MissingTimestamp(t *testing.T) {
 }
 
 func TestParseQwenPawSession_NonexistentFile(t *testing.T) {
-	_, _, err := ParseQwenPawSession(
+	_, _, err := parseQwenPawTestSession(t,
 		"/nonexistent/default/sessions/foo.json",
 		"default", "local",
 	)
@@ -224,7 +287,7 @@ func TestParseQwenPawSession_FileMtimeIsNanoseconds(t *testing.T) {
 	)
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	sess, _, err := ParseQwenPawSession(path, "default", "local")
+	sess, _, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, info.ModTime().UnixNano(), sess.File.Mtime,
@@ -238,7 +301,7 @@ func TestParseQwenPawSession_SystemTextMessage(t *testing.T) {
 			`{"id":"s1","name":"system","role":"system","content":[{"type":"text","text":"system notice"}],"metadata":{},"timestamp":"2026-04-19 22:37:35.000"}`,
 		},
 	)
-	sess, msgs, err := ParseQwenPawSession(path, "default", "local")
+	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Equal(t, 2, len(msgs))
@@ -255,7 +318,7 @@ func TestParseQwenPawSession_MalformedJsonReturnsError(t *testing.T) {
 	require.NoError(t, os.WriteFile(path,
 		[]byte("{not valid json"), 0o644))
 
-	_, _, err := ParseQwenPawSession(path, "default", "local")
+	_, _, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "malformed JSON",
 		"error must come from the ValidBytes guard, not content-missing")
@@ -272,7 +335,7 @@ func TestParseQwenPawSession_RejectsColonInIDParts(t *testing.T) {
 		path := filepath.Join(dir, "ok.json")
 		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-		_, _, err := ParseQwenPawSession(path, "ws:bad", "local")
+		_, _, err := parseQwenPawTestSession(t, path, "ws:bad", "local")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid workspace")
 	})
@@ -285,7 +348,7 @@ func TestParseQwenPawSession_RejectsColonInIDParts(t *testing.T) {
 		path := filepath.Join(dir, "ok.json")
 		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-		_, _, err := ParseQwenPawSession(path, "default", "local")
+		_, _, err := parseQwenPawTestSession(t, path, "default", "local")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid subdir")
 	})
@@ -298,7 +361,7 @@ func TestParseQwenPawSession_EmptyContentArrayTopLevel(t *testing.T) {
 	require.NoError(t, os.WriteFile(path,
 		[]byte(`{"agent":{"memory":{"content":[]}}}`), 0o644))
 
-	sess, msgs, err := ParseQwenPawSession(path, "default", "local")
+	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assertMessageCount(t, sess.MessageCount, 0)
@@ -316,7 +379,7 @@ func TestParseQwenPawSession_SkipsNonMessageEntries(t *testing.T) {
 	path := filepath.Join(dir, "mixed.json")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	sess, msgs, err := ParseQwenPawSession(path, "default", "local")
+	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, 1, sess.MalformedLines)
@@ -341,7 +404,7 @@ func TestDiscoverQwenPawSessions(t *testing.T) {
 		[]byte(`{"agent":{"memory":{"content":[]}}}`), 0o644,
 	))
 
-	files := DiscoverQwenPawSessions(root)
+	files := discoverQwenPawTestSessions(t, root)
 	require.Equal(t, 3, len(files))
 	for _, f := range files {
 		assert.Equal(t, AgentQwenPaw, f.Agent)
@@ -363,7 +426,7 @@ func TestDiscoverQwenPawSessions_IncludesConsoleSubdir(t *testing.T) {
 		[]byte(`{"agent":{"memory":{"content":[]}}}`), 0o644,
 	))
 
-	files := DiscoverQwenPawSessions(root)
+	files := discoverQwenPawTestSessions(t, root)
 	require.Equal(t, 1, len(files))
 	assert.Equal(t, "default", files[0].Project)
 }
@@ -377,7 +440,7 @@ func TestDiscoverQwenPawSessions_SkipsHiddenSubdirs(t *testing.T) {
 		[]byte(`{"agent":{"memory":{"content":[]}}}`), 0o644,
 	))
 
-	files := DiscoverQwenPawSessions(root)
+	files := discoverQwenPawTestSessions(t, root)
 	assert.Nil(t, files)
 }
 
@@ -404,13 +467,13 @@ func TestDiscoverQwenPawSessions_FiltersNonSessionFiles(t *testing.T) {
 		[]byte("{}\n"), 0o644,
 	))
 
-	files := DiscoverQwenPawSessions(root)
+	files := discoverQwenPawTestSessions(t, root)
 	require.Equal(t, 1, len(files))
 }
 
 func TestDiscoverQwenPawSessions_EmptyAndMissing(t *testing.T) {
-	assert.Nil(t, DiscoverQwenPawSessions(""))
-	assert.Nil(t, DiscoverQwenPawSessions("/nonexistent"))
+	assert.Nil(t, discoverQwenPawTestSessions(t, ""))
+	assert.Nil(t, discoverQwenPawTestSessions(t, "/nonexistent"))
 }
 
 func TestDiscoverQwenPawSessions_SkipsFilesAtRoot(t *testing.T) {
@@ -419,7 +482,7 @@ func TestDiscoverQwenPawSessions_SkipsFilesAtRoot(t *testing.T) {
 		filepath.Join(root, "loose.json"),
 		[]byte("{}\n"), 0o644,
 	))
-	files := DiscoverQwenPawSessions(root)
+	files := discoverQwenPawTestSessions(t, root)
 	assert.Nil(t, files)
 }
 
@@ -448,11 +511,11 @@ func TestDiscoverQwenPawSessions_RejectsColliding(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(colonSubDir, "ok.json"), content, 0o644))
 
-	files := DiscoverQwenPawSessions(root)
+	files := discoverQwenPawTestSessions(t, root)
 	require.Len(t, files, 1)
 	assert.Equal(t, subFile, files[0].Path)
 
-	sess, _, err := ParseQwenPawSession(
+	sess, _, err := parseQwenPawTestSession(t,
 		files[0].Path, files[0].Project, "local")
 	require.NoError(t, err)
 	assert.Equal(t, "qwenpaw:default:foo:bar", sess.ID)
@@ -467,17 +530,17 @@ func TestFindQwenPawSourceFile(t *testing.T) {
 		[]byte(`{"agent":{"memory":{"content":[]}}}`), 0o644))
 
 	assert.Equal(t, path,
-		FindQwenPawSourceFile(root, "default:default_1776607601691"))
+		findQwenPawTestSourceFile(t, root, "default:default_1776607601691"))
 	assert.Equal(t, "",
-		FindQwenPawSourceFile(root, "default:does_not_exist"))
+		findQwenPawTestSourceFile(t, root, "default:does_not_exist"))
 	assert.Equal(t, "",
-		FindQwenPawSourceFile(root, "ghost:default_1"))
+		findQwenPawTestSourceFile(t, root, "ghost:default_1"))
 	assert.Equal(t, "",
-		FindQwenPawSourceFile(root, "invalid"))
+		findQwenPawTestSourceFile(t, root, "invalid"))
 	assert.Equal(t, "",
-		FindQwenPawSourceFile(root, "bad/workspace:default_1"))
+		findQwenPawTestSourceFile(t, root, "bad/workspace:default_1"))
 	assert.Equal(t, "",
-		FindQwenPawSourceFile("", "default:default_1"))
+		findQwenPawTestSourceFile(t, "", "default:default_1"))
 }
 
 func TestFindQwenPawSourceFile_ConsoleSubdir(t *testing.T) {
@@ -490,7 +553,7 @@ func TestFindQwenPawSourceFile_ConsoleSubdir(t *testing.T) {
 
 	// Subdir is encoded in the raw ID so the lookup is unambiguous.
 	assert.Equal(t, path,
-		FindQwenPawSourceFile(root,
+		findQwenPawTestSourceFile(t, root,
 			"default:console:default_1781268804068"))
 }
 
@@ -513,9 +576,9 @@ func TestParseQwenPawSession_IDsDifferBySubdir(t *testing.T) {
 				`,[]]]}}}`), 0o644))
 	}
 
-	rootSess, _, err := ParseQwenPawSession(rootPath, "default", "local")
+	rootSess, _, err := parseQwenPawTestSession(t, rootPath, "default", "local")
 	require.NoError(t, err)
-	consoleSess, _, err := ParseQwenPawSession(consolePath, "default", "local")
+	consoleSess, _, err := parseQwenPawTestSession(t, consolePath, "default", "local")
 	require.NoError(t, err)
 
 	assert.Equal(t, "qwenpaw:default:foo", rootSess.ID,
@@ -539,9 +602,9 @@ func TestFindQwenPawSourceFile_RootAndConsoleResolveIndependently(t *testing.T) 
 	// Each lookup returns the unique file that matches the encoded
 	// layout — no precedence ambiguity, no silent overwrite.
 	assert.Equal(t, rootPath,
-		FindQwenPawSourceFile(root, "default:same"))
+		findQwenPawTestSourceFile(t, root, "default:same"))
 	assert.Equal(t, consolePath,
-		FindQwenPawSourceFile(root, "default:console:same"))
+		findQwenPawTestSourceFile(t, root, "default:console:same"))
 }
 
 func TestIsValidQwenPawIDPart(t *testing.T) {
@@ -576,7 +639,7 @@ func TestFindQwenPawSourceFile_AcceptsWeirdFilenames(t *testing.T) {
 		[]byte(`{"agent":{"memory":{"content":[]}}}`), 0o644))
 
 	assert.Equal(t, path,
-		FindQwenPawSourceFile(root, "default:"+weird))
+		findQwenPawTestSourceFile(t, root, "default:"+weird))
 }
 
 func TestFindQwenPawSourceFile_RejectsTraversal(t *testing.T) {
@@ -596,7 +659,7 @@ func TestFindQwenPawSourceFile_RejectsTraversal(t *testing.T) {
 		".:default_1",
 		"default:.",
 	} {
-		assert.Equal(t, "", FindQwenPawSourceFile(root, rawID),
+		assert.Equal(t, "", findQwenPawTestSourceFile(t, root, rawID),
 			"rawID %q must not resolve", rawID)
 	}
 	for _, bad := range []string{".", ".."} {
@@ -624,7 +687,7 @@ func TestFindQwenPawSourceFile_RejectsColonInStem(t *testing.T) {
 	// The shared raw ID resolves to the subdir file, not the rejected
 	// root-level foo:bar.json.
 	assert.Equal(t, subFile,
-		FindQwenPawSourceFile(root, "default:foo:bar"))
+		findQwenPawTestSourceFile(t, root, "default:foo:bar"))
 }
 
 // TestQwenPawFixtures exercises the checked-in testdata/qwenpaw tree
@@ -632,14 +695,14 @@ func TestFindQwenPawSourceFile_RejectsColonInStem(t *testing.T) {
 // produce its expected canonical ID. This guards against malformed or
 // drifting fixtures that would otherwise pass CI unnoticed.
 func TestQwenPawFixtures(t *testing.T) {
-	files := DiscoverQwenPawSessions(filepath.Join("testdata", "qwenpaw"))
+	files := discoverQwenPawTestSessions(t, filepath.Join("testdata", "qwenpaw"))
 	require.Len(t, files, 5)
 
 	sessByID := make(map[string]*ParsedSession, len(files))
 	msgsByID := make(map[string][]ParsedMessage, len(files))
 	for _, f := range files {
 		assert.Equal(t, AgentQwenPaw, f.Agent)
-		sess, msgs, err := ParseQwenPawSession(f.Path, f.Project, "local")
+		sess, msgs, err := parseQwenPawTestSession(t, f.Path, f.Project, "local")
 		require.NoErrorf(t, err, "parse %s", f.Path)
 		require.NotNil(t, sess)
 		sessByID[sess.ID] = sess
