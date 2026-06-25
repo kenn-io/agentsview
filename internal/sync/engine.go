@@ -5248,8 +5248,15 @@ func pickPreferredCodexDiscoveredFile(
 	if id := parser.CodexSessionUUIDFromFilename(
 		filepath.Base(candidates[0].Path),
 	); id != "" {
-		storedPath := filepath.Clean(database.GetSessionFilePath("codex:" + id))
-		if storedPath != "" {
+		sessionID := "codex:" + id
+		for _, candidate := range candidates {
+			storedPath := database.GetSessionFilePath(applyIDPrefixToID(
+				discoveredFileIDPrefix(candidate), sessionID,
+			))
+			if storedPath == "" {
+				continue
+			}
+			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
 				if filepath.Clean(candidate.Path) == storedPath {
 					return candidate

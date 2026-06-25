@@ -212,10 +212,24 @@ func (e *Engine) processS3Session(
 			) &&
 				e.db.GetSessionFilePath(fullID) == file.Path {
 				sess, _ := e.db.GetSession(ctx, fullID)
+				indexNameChanged := false
+				if sess != nil &&
+					sess.Project != "" &&
+					!parser.NeedsProjectReparse(sess.Project) {
+					var indexErr error
+					indexNameChanged, indexErr =
+						e.s3CodexIndexSessionNameChanged(file, uuid)
+					if indexErr != nil {
+						return processResult{
+							err:         indexErr,
+							noCacheSkip: true,
+						}
+					}
+				}
 				if sess != nil &&
 					sess.Project != "" &&
 					!parser.NeedsProjectReparse(sess.Project) &&
-					!e.s3CodexIndexSessionNameChanged(file, uuid) {
+					!indexNameChanged {
 					return processResult{skip: true}
 				}
 			}

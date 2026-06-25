@@ -121,6 +121,7 @@ type s3CodexIndexSnapshot struct {
 	mtime        int64
 	statOK       bool
 	missing      bool
+	err          error
 	titles       map[string]string
 	titlesLoaded bool
 }
@@ -150,6 +151,8 @@ func (e *Engine) s3CodexIndexSnapshot(
 					missing:      true,
 					titlesLoaded: true,
 				}
+			} else {
+				snapshot.err = err
 			}
 			e.s3CodexIndexCache[indexURI] = snapshot
 			return snapshot
@@ -162,7 +165,7 @@ func (e *Engine) s3CodexIndexSnapshot(
 	}
 
 	if needTitles && snapshot.statOK && !snapshot.missing &&
-		!snapshot.titlesLoaded {
+		!snapshot.titlesLoaded && snapshot.err == nil {
 		titles, err := fetchS3CodexSessionIndexTitles(indexURI)
 		snapshot.titlesLoaded = err == nil
 		if err == nil {
@@ -171,6 +174,8 @@ func (e *Engine) s3CodexIndexSnapshot(
 			snapshot.missing = true
 			snapshot.titlesLoaded = true
 			snapshot.titles = nil
+		} else {
+			snapshot.err = err
 		}
 		e.s3CodexIndexCache[indexURI] = snapshot
 	}
@@ -191,6 +196,9 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 		return false
 	}
 	snapshot := e.s3CodexIndexSnapshot(indexURI, false)
+	if snapshot.err != nil {
+		return true
+	}
 	if !snapshot.statOK {
 		return false
 	}
@@ -202,6 +210,9 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 	}
 
 	snapshot = e.s3CodexIndexSnapshot(indexURI, true)
+	if snapshot.err != nil {
+		return true
+	}
 	if snapshot.missing {
 		return e.s3CodexStoredNameDiffers(file, uuid, "")
 	}
@@ -215,20 +226,23 @@ func (e *Engine) s3CodexIndexNeedsRefreshSince(
 
 func (e *Engine) s3CodexIndexSessionNameChanged(
 	file parser.DiscoveredFile, uuid string,
-) bool {
+) (bool, error) {
 	indexURI, ok := parser.CodexS3SessionIndexURI(file.Path)
 	if !ok {
-		return false
+		return false, nil
 	}
 	snapshot := e.s3CodexIndexSnapshot(indexURI, true)
+	if snapshot.err != nil {
+		return false, snapshot.err
+	}
 	if snapshot.missing {
-		return e.s3CodexStoredNameDiffers(file, uuid, "")
+		return e.s3CodexStoredNameDiffers(file, uuid, ""), nil
 	}
 	if !snapshot.statOK || !snapshot.titlesLoaded {
-		return false
+		return false, nil
 	}
 	title := snapshot.titles[uuid]
-	return e.s3CodexStoredNameDiffers(file, uuid, title)
+	return e.s3CodexStoredNameDiffers(file, uuid, title), nil
 }
 
 func (e *Engine) s3CodexStoredNameDiffers(
