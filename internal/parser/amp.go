@@ -12,9 +12,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// ParseAmpSession parses an Amp thread JSON file.
-// Each thread is a single JSON document at ~/.local/share/amp/threads/T-*.json.
-func ParseAmpSession(
+func parseAmpSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

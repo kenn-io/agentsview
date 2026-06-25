@@ -1315,38 +1315,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Amp: <ampDir>/T-*.json
-	for _, ampDir := range e.agentDirs[parser.AgentAmp] {
-		if ampDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(ampDir, path); ok {
-			if strings.Count(rel, sep) == 0 &&
-				parser.IsAmpThreadFileName(filepath.Base(rel)) {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentAmp,
-				}, true
-			}
-		}
-	}
-
-	// Zencoder: <zencoderDir>/<uuid>.jsonl
-	for _, zenDir := range e.agentDirs[parser.AgentZencoder] {
-		if zenDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(zenDir, path); ok {
-			if strings.Count(rel, sep) == 0 &&
-				parser.IsZencoderSessionFileName(filepath.Base(rel)) {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentZencoder,
-				}, true
-			}
-		}
-	}
-
 	// VSCode Copilot: <vscodeUserDir>/workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
 	//            or: <vscodeUserDir>/globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
 	for _, vscDir := range e.agentDirs[parser.AgentVSCodeCopilot] {
@@ -4695,10 +4663,6 @@ func (e *Engine) processFile(
 		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
-	case parser.AgentAmp:
-		res = e.processAmp(file, info)
-	case parser.AgentZencoder:
-		res = e.processZencoder(file, info)
 	case parser.AgentVSCodeCopilot:
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
@@ -6291,65 +6255,6 @@ func (e *Engine) processGemini(
 
 	sess, msgs, err := parser.ParseGeminiSession(
 		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processAmp(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Fast path: skip by file_path + mtime before parsing.
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseAmpSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processZencoder(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseZencoderSession(
-		file.Path, e.machine,
 	)
 	if err != nil {
 		return processResult{err: err}

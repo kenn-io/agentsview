@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +53,31 @@ func assertDiscoveredFiles(t *testing.T, got []DiscoveredFile, wantFilenames []s
 	}
 
 	// Check for unexpected files
+	for file := range gotMap {
+		assert.Truef(t, want[file], "got unexpected file: %q", file)
+	}
+}
+
+func assertSourceRefs(t *testing.T, got []SourceRef, wantFilenames []string, wantAgent AgentType) {
+	t.Helper()
+
+	want := make(map[string]bool)
+	for _, f := range wantFilenames {
+		want[f] = true
+	}
+
+	gotMap := make(map[string]bool)
+	for _, f := range got {
+		base := filepath.Base(f.DisplayPath)
+		gotMap[base] = true
+		assert.Equalf(t, wantAgent, f.Provider, "file %q: provider", base)
+	}
+
+	assert.Equal(t, len(want), len(got), "files total")
+
+	for file := range want {
+		assert.Truef(t, gotMap[file], "missing expected file: %q", file)
+	}
 	for file := range gotMap {
 		assert.Truef(t, want[file], "got unexpected file: %q", file)
 	}
@@ -179,7 +205,7 @@ func TestDiscoverCodexSessions(t *testing.T) {
 	}
 }
 
-func TestDiscoverAmpSessions(t *testing.T) {
+func TestAmpProviderDiscoversSessions(t *testing.T) {
 	tests := []struct {
 		name      string
 		files     map[string]string
@@ -211,17 +237,27 @@ func TestDiscoverAmpSessions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			setupFileSystem(t, dir, tt.files)
-			files := DiscoverAmpSessions(dir)
-			assertDiscoveredFiles(
-				t, files, tt.wantFiles, AgentAmp,
-			)
+			provider, ok := NewProvider(AgentAmp, ProviderConfig{
+				Roots:   []string{dir},
+				Machine: "local",
+			})
+			require.True(t, ok)
+			files, err := provider.Discover(context.Background())
+			require.NoError(t, err)
+			assertSourceRefs(t, files, tt.wantFiles, AgentAmp)
 		})
 	}
 
 	t.Run("Nonexistent", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "does-not-exist")
-		files := DiscoverAmpSessions(dir)
-		assert.Nil(t, files, "expected nil")
+		provider, ok := NewProvider(AgentAmp, ProviderConfig{
+			Roots:   []string{dir},
+			Machine: "local",
+		})
+		require.True(t, ok)
+		files, err := provider.Discover(context.Background())
+		require.NoError(t, err)
+		assert.Empty(t, files, "expected empty")
 	})
 }
 
@@ -291,30 +327,54 @@ func TestFindClaudeSourceFile(t *testing.T) {
 	})
 }
 
-func TestFindAmpSourceFile(t *testing.T) {
+func TestAmpProviderFindsSourceFile(t *testing.T) {
 	t.Run("Found", func(t *testing.T) {
 		dir := t.TempDir()
 		rel := "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd.json"
 		setupFileSystem(t, dir, map[string]string{
 			rel: "{}",
 		})
-		got := FindAmpSourceFile(
-			dir, "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+		provider, ok := NewProvider(AgentAmp, ProviderConfig{
+			Roots:   []string{dir},
+			Machine: "local",
+		})
+		require.True(t, ok)
+		got, ok, err := provider.FindSource(
+			context.Background(),
+			FindSourceRequest{
+				RawSessionID: "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+			},
 		)
+		require.NoError(t, err)
+		require.True(t, ok)
 		want := filepath.Join(dir, rel)
-		assert.Equal(t, want, got)
+		assert.Equal(t, want, got.DisplayPath)
 	})
 
 	t.Run("Nonexistent", func(t *testing.T) {
 		dir := t.TempDir()
-		got := FindAmpSourceFile(
-			dir, "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+		provider, ok := NewProvider(AgentAmp, ProviderConfig{
+			Roots:   []string{dir},
+			Machine: "local",
+		})
+		require.True(t, ok)
+		_, ok, err := provider.FindSource(
+			context.Background(),
+			FindSourceRequest{
+				RawSessionID: "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+			},
 		)
-		assert.Empty(t, got, "expected empty")
+		require.NoError(t, err)
+		assert.False(t, ok, "expected empty")
 	})
 
 	t.Run("Validation", func(t *testing.T) {
 		dir := t.TempDir()
+		provider, ok := NewProvider(AgentAmp, ProviderConfig{
+			Roots:   []string{dir},
+			Machine: "local",
+		})
+		require.True(t, ok)
 		tests := []string{
 			"",
 			"../bad",
@@ -323,8 +383,12 @@ func TestFindAmpSourceFile(t *testing.T) {
 			"T-",
 		}
 		for _, id := range tests {
-			got := FindAmpSourceFile(dir, id)
-			assert.Emptyf(t, got, "FindAmpSourceFile(%q)", id)
+			_, ok, err := provider.FindSource(
+				context.Background(),
+				FindSourceRequest{RawSessionID: id},
+			)
+			require.NoError(t, err)
+			assert.Falsef(t, ok, "Amp provider FindSource(%q)", id)
 		}
 	})
 }
