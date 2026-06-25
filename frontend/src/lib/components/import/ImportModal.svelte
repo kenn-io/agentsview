@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { untrack } from "svelte";
   import {
     importClaudeAI,
@@ -172,7 +173,7 @@
       error =
         e instanceof Error
           ? e.message
-          : "Import failed";
+          : m.import_failed();
     } finally {
       importing = false;
     }
@@ -217,16 +218,16 @@
       class="modal-panel import-panel"
       role="dialog"
       aria-modal="true"
-      aria-label="Import conversations"
+      aria-label={m.import_title()}
     >
       <div class="modal-header">
-        <h3 class="modal-title">Import Conversations</h3>
+        <h3 class="modal-title">{m.import_title()}</h3>
         <button
           class="modal-close"
           onclick={handleClose}
           disabled={importing}
-          title="Close import dialog"
-          aria-label="Close"
+          title={m.import_close()}
+          aria-label={m.import_close_aria()}
         >
           <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
         </button>
@@ -241,11 +242,7 @@
             </div>
 
             <p class="result-heading">
-              {totalProcessed}
-              conversation{totalProcessed !== 1
-                ? "s"
-                : ""}
-              processed
+              {m.import_processed({ count: totalProcessed })}
             </p>
 
             <div class="result-stats">
@@ -253,20 +250,20 @@
                 <span class="stat-num new">
                   {result.imported}
                 </span>
-                <span class="stat-lbl">new</span>
+                <span class="stat-lbl">{m.import_new()}</span>
               </div>
               <div class="stat">
                 <span class="stat-num updated">
                   {result.updated}
                 </span>
-                <span class="stat-lbl">updated</span>
+                <span class="stat-lbl">{m.import_updated()}</span>
               </div>
               {#if result.skipped > 0}
                 <div class="stat">
                   <span class="stat-num skipped">
                     {result.skipped}
                   </span>
-                  <span class="stat-lbl">unchanged</span>
+                  <span class="stat-lbl">{m.import_unchanged()}</span>
                 </div>
               {/if}
               {#if result.errors > 0}
@@ -274,7 +271,7 @@
                   <span class="stat-num errors">
                     {result.errors}
                   </span>
-                  <span class="stat-lbl">errors</span>
+                  <span class="stat-lbl">{m.import_errors()}</span>
                 </div>
               {/if}
             </div>
@@ -284,13 +281,13 @@
                 class="modal-btn"
                 onclick={handleReset}
               >
-                Import more
+                {m.import_import_more()}
               </button>
               <button
                 class="modal-btn modal-btn-primary"
                 onclick={handleClose}
               >
-                Done
+                {m.import_done()}
               </button>
             </div>
           </div>
@@ -319,12 +316,9 @@
 
           <p class="hint">
             {#if provider === "claude-ai"}
-              Upload <code>conversations.json</code> or
-              the <code>.zip</code> from a Claude.ai data
-              export.
+              {m.import_hint_claude({ json: "conversations.json", zip: ".zip" })}
             {:else}
-              Upload the <code>.zip</code> from a ChatGPT
-              data export.
+              {m.import_hint_chatgpt({ zip: ".zip" })}
             {/if}
           </p>
 
@@ -334,7 +328,7 @@
               <div class="modal-spinner"></div>
               {#if phase === "indexing"}
                 <span class="importing-label">
-                  Rebuilding search index...
+                  {m.import_rebuilding_index()}
                 </span>
               {:else if progressStats}
                 {@const n =
@@ -343,12 +337,11 @@
                   progressStats.skipped +
                   progressStats.errors}
                 <span class="importing-label">
-                  {n} conversation{n !== 1 ? "s" : ""}
-                  processed...
+                  {m.import_processing_progress({ count: n })}
                 </span>
               {:else}
                 <span class="importing-label">
-                  Importing conversations...
+                  {m.import_importing()}
                 </span>
               {/if}
             </div>
@@ -367,8 +360,8 @@
                 <button
                   class="file-clear"
                   onclick={clearFile}
-                  title="Remove file"
-                  aria-label="Remove file"
+                  title={m.import_remove_file()}
+                  aria-label={m.import_remove_file()}
                 >
                   <FileXIcon size="14" strokeWidth="1.8" aria-hidden="true" />
                 </button>
@@ -397,10 +390,10 @@
             >
               <UploadIcon class="upload-icon" size="28" strokeWidth="1.5" aria-hidden="true" />
               <span class="drop-label">
-                Drop your file here
+                {m.import_drop_here()}
               </span>
               <span class="drop-sub">
-                or click to browse
+                {m.import_or_browse()}
               </span>
             </div>
           {/if}
@@ -426,14 +419,14 @@
               onclick={handleClose}
               disabled={importing}
             >
-              Cancel
+              {m.import_cancel()}
             </button>
             <button
               class="modal-btn modal-btn-primary"
               onclick={handleImport}
               disabled={!selectedFile || importing}
             >
-              Import
+              {m.import_import()}
             </button>
           </div>
         {/if}
@@ -519,7 +512,7 @@
     line-height: 1.5;
   }
 
-  .hint code {
+  .hint :global(code) {
     font-family: var(--font-mono);
     font-size: 11px;
     background: var(--bg-inset);

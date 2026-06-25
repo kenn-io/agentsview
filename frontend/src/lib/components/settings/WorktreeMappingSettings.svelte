@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import {
     SettingsService,
@@ -50,7 +51,7 @@
       machine = res.machine;
       mappings = res.mappings;
     } catch (err) {
-      error = err instanceof Error ? err.message : "Failed to load mappings";
+      error = err instanceof Error ? err.message : m.worktree_failed_load();
     } finally {
       loading = false;
     }
@@ -101,7 +102,7 @@
       resetForm();
       await loadMappings();
     } catch (err) {
-      error = err instanceof Error ? err.message : "Failed to save mapping";
+      error = err instanceof Error ? err.message : m.worktree_failed_save();
     } finally {
       saving = false;
     }
@@ -120,7 +121,7 @@
       if (editingId === id) resetForm();
       await loadMappings();
     } catch (err) {
-      error = err instanceof Error ? err.message : "Failed to delete mapping";
+      error = err instanceof Error ? err.message : m.worktree_failed_delete();
     } finally {
       saving = false;
     }
@@ -135,9 +136,9 @@
         await callGenerated(() =>
           SettingsService.postApiV1SettingsWorktreeMappingsApply(),
         ) as ApplyWorktreeMappingsResponse;
-      applyMessage = `${res.updated_sessions} updated, ${res.matched_sessions} matched`;
+      applyMessage = m.worktree_apply_result({ updated: res.updated_sessions, matched: res.matched_sessions });
     } catch (err) {
-      error = err instanceof Error ? err.message : "Failed to apply mappings";
+      error = err instanceof Error ? err.message : m.worktree_failed_apply();
     } finally {
       applying = false;
     }
@@ -147,24 +148,24 @@
 </script>
 
 <SettingsSection
-  title="Worktree mappings"
-  description="Map worktree path prefixes to canonical projects on this machine."
+  title={m.worktree_title()}
+  description={m.worktree_description()}
 >
   {#if readOnly}
-    <div class="muted">Worktree mappings are available in local mode only.</div>
+    <div class="muted">{m.worktree_local_only()}</div>
   {:else if loading}
-    <div class="muted">Loading mappings...</div>
+    <div class="muted">{m.worktree_loading()}</div>
   {:else if error && mappings.length === 0}
     <div class="error-text">{error}</div>
   {:else}
     <div class="machine-row">
-      <span class="label">Machine</span>
+      <span class="label">{m.worktree_machine()}</span>
       <code>{machine || "local"}</code>
     </div>
 
     <div class="mapping-list">
       {#if mappings.length === 0}
-        <div class="empty">No worktree mappings configured.</div>
+        <div class="empty">{m.worktree_no_mappings()}</div>
       {:else}
         {#each mappings as mapping (mapping.id)}
           <div class="mapping-row" class:disabled={!mapping.enabled}>
@@ -173,12 +174,12 @@
               <div class="mapping-path">{mapping.path_prefix}</div>
             </div>
             <div class="mapping-actions">
-              <span class="status">{mapping.enabled ? "On" : "Off"}</span>
+              <span class="status">{mapping.enabled ? m.worktree_on() : m.worktree_off()}</span>
               <button class="small-btn" onclick={() => editMapping(mapping)}>
-                Edit
+                {m.worktree_edit()}
               </button>
               <button class="small-btn danger" onclick={() => removeMapping(mapping.id)}>
-                Delete
+                {m.worktree_delete()}
               </button>
             </div>
           </div>
@@ -188,7 +189,7 @@
 
     <div class="form-grid">
       <label class="field">
-        <span>Path prefix</span>
+        <span>{m.worktree_path_prefix()}</span>
         <input
           type="text"
           bind:value={pathPrefix}
@@ -196,12 +197,12 @@
         />
       </label>
       <label class="field">
-        <span>Project</span>
+        <span>{m.worktree_project()}</span>
         <input type="text" bind:value={project} placeholder="project-name" />
       </label>
       <label class="enabled-toggle">
         <input type="checkbox" bind:checked={enabled} />
-        Enabled
+        {m.worktree_enabled()}
       </label>
     </div>
 
@@ -218,17 +219,17 @@
         disabled={!canSave || saving}
         onclick={saveMapping}
       >
-        {saving ? "Saving..." : editingId == null ? "Add mapping" : "Save mapping"}
+        {saving ? m.worktree_saving() : editingId == null ? m.worktree_add_mapping() : m.worktree_save_mapping()}
       </button>
       {#if editingId != null}
-        <button class="secondary-btn" onclick={resetForm}>Cancel</button>
+        <button class="secondary-btn" onclick={resetForm}>{m.worktree_cancel()}</button>
       {/if}
       <button
         class="secondary-btn"
         disabled={applying || mappings.length === 0}
         onclick={applyMappings}
       >
-        {applying ? "Applying..." : "Apply mappings"}
+        {applying ? m.worktree_applying() : m.worktree_apply_mappings()}
       </button>
     </div>
   {/if}

@@ -39,6 +39,7 @@
 <SettingsSection
   title={m.settings_language_title()}
   description={m.settings_language_description()}
+  allowOverflow
 >
   <div class="setting-row">
     <span class="setting-label">{m.settings_language_label()}</span>

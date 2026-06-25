@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { activeSessionsInSlot } from "./activeSessions.js";
   import OptionTypeahead, {
@@ -105,15 +106,15 @@
     const rect = (e.currentTarget as Element).getBoundingClientRect();
     const peakSplit =
       b.automated_at_peak > 0
-        ? ` (${b.interactive_at_peak} int / ${b.automated_at_peak} auto)`
+        ? ` (${m.activity_int_auto_short({ int: b.interactive_at_peak, auto: b.automated_at_peak })})`
         : "";
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
       text:
-        `${fmtBucketRange(b)} · peak ${b.max_agents}${peakSplit} · ` +
-        `${b.agent_minutes.toFixed(1)} agent-min · ` +
-        `${b.output_tokens.toLocaleString()} output tokens · ` +
+        `${fmtBucketRange(b)} · ${m.activity_peak_label({ count: b.max_agents })}${peakSplit} · ` +
+        `${m.activity_agent_min_value({ value: b.agent_minutes.toFixed(1) })} · ` +
+        `${m.activity_output_tokens_value({ count: b.output_tokens.toLocaleString() })} · ` +
         `$${b.cost.toFixed(2)}`,
     };
   }
@@ -176,11 +177,11 @@
   // cost. Each metric scales to its own max so the line reads as a shape over
   // the concurrency bars, not an absolute count on the agent axis.
   let overlayMetric = $state<"none" | "tokens" | "cost">("none");
-  const overlayOptions: TypeaheadOption[] = [
-    { name: "none", label: "None", displayLabel: "None" },
-    { name: "tokens", label: "Tokens", displayLabel: "Tokens" },
-    { name: "cost", label: "Cost", displayLabel: "Cost" },
-  ];
+  const overlayOptions: TypeaheadOption[] = $derived([
+    { name: "none", label: m.activity_overlay_none(), displayLabel: m.activity_overlay_none() },
+    { name: "tokens", label: m.activity_tokens(), displayLabel: m.activity_tokens() },
+    { name: "cost", label: m.activity_cost(), displayLabel: m.activity_cost() },
+  ]);
 
   function bucketOverlayValue(b: ActivityBucket): number {
     return overlayMetric === "cost" ? b.cost : b.output_tokens;
@@ -448,25 +449,25 @@
 
 <div class="timeline">
   <div class="timeline-header">
-    <h3 class="timeline-title">Concurrency</h3>
+    <h3 class="timeline-title">{m.activity_concurrency()}</h3>
     <div class="header-right">
       <div class="legend" aria-hidden="true">
         <span class="legend-item">
-          <span class="swatch interactive"></span>Interactive
+          <span class="swatch interactive"></span>{m.activity_interactive()}
         </span>
         <span class="legend-item">
-          <span class="swatch automated"></span>Automated
+          <span class="swatch automated"></span>{m.activity_automated()}
         </span>
       </div>
       <div class="overlay-toggle">
-        <span>Overlay</span>
+        <span>{m.activity_overlay()}</span>
         <OptionTypeahead
           options={overlayOptions}
           value={overlayMetric}
-          fallbackLabel="None"
-          placeholder="Overlay metric"
-          title="Concurrency overlay metric"
-          emptyLabel="No metrics"
+          fallbackLabel={m.activity_overlay_none()}
+          placeholder={m.activity_overlay_placeholder()}
+          title={m.activity_overlay_metric()}
+          emptyLabel={m.activity_no_metrics()}
           onselect={setOverlayMetric}
         />
       </div>
@@ -614,7 +615,7 @@
           role="button"
           tabindex="0"
           aria-pressed={selectedBucket === bar.idx}
-          aria-label="Filter sessions active in this time slot"
+          aria-label={m.activity_filter_active_in_slot()}
           onmouseenter={(e) => b && showSlotTip(e, b)}
           onmouseleave={hideTip}
           onclick={() => selectSlot(bar.idx)}

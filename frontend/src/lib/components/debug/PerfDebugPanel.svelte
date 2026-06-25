@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { perf } from "../../stores/perf.svelte.js";
   import { XIcon } from "../../icons.js";
 
@@ -30,12 +31,12 @@
 {#if perf.panelOpen}
   <section
     class="perf-panel"
-    aria-label="Performance debug"
+    aria-label={m.perf_aria_label()}
   >
     <header class="perf-header">
       <div>
-        <div class="title">Performance</div>
-        <div class="subtitle">{perf.entries.length} samples</div>
+        <div class="title">{m.perf_title()}</div>
+        <div class="subtitle">{m.perf_samples({ count: perf.entries.length })}</div>
       </div>
       <div class="header-actions">
         <button
@@ -43,13 +44,13 @@
           onclick={() => perf.clear()}
           disabled={perf.entries.length === 0}
         >
-          Clear
+          {m.perf_clear()}
         </button>
         <button
           class="icon-btn"
           onclick={() => (perf.panelOpen = false)}
-          title="Close"
-          aria-label="Close performance debug"
+          title={m.perf_close()}
+          aria-label={m.perf_close_aria()}
         >
           <XIcon size="14" strokeWidth="2" aria-hidden="true" />
         </button>
@@ -69,11 +70,11 @@
 
     <div class="entry-table" role="table">
       <div class="entry-row entry-heading" role="row">
-        <span>Time</span>
-        <span>Route</span>
-        <span>Name</span>
-        <span>Duration</span>
-        <span>Status</span>
+        <span>{m.perf_col_time()}</span>
+        <span>{m.perf_col_route()}</span>
+        <span>{m.perf_col_name()}</span>
+        <span>{m.perf_col_duration()}</span>
+        <span>{m.perf_col_status()}</span>
       </div>
       {#each entries as entry (entry.id)}
         <div class="entry-row" role="row">

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import {
     ui,
@@ -8,42 +9,42 @@
     type MessageLayout,
   } from "../../stores/ui.svelte.js";
 
-  const LAYOUT_OPTIONS: { value: MessageLayout; label: string }[] = [
-    { value: "default", label: "Default" },
-    { value: "compact", label: "Compact" },
-    { value: "stream", label: "Stream" },
-    { value: "skim", label: "Skim" },
-  ];
+  const LAYOUT_OPTIONS: { value: MessageLayout; label: string }[] = $derived([
+    { value: "default", label: m.appearance_layout_default() },
+    { value: "compact", label: m.appearance_layout_compact() },
+    { value: "stream", label: m.appearance_layout_stream() },
+    { value: "skim", label: m.appearance_layout_skim() },
+  ]);
 
-  const BLOCK_LABELS: Record<BlockType, string> = {
-    user: "User messages",
-    assistant: "Assistant text",
-    thinking: "Thinking blocks",
-    tool: "Tool calls",
-    code: "Code blocks",
-  };
+  const BLOCK_LABELS: Record<BlockType, string> = $derived({
+    user: m.header_transcript_blocks_user(),
+    assistant: m.header_transcript_blocks_assistant(),
+    thinking: m.header_transcript_blocks_thinking(),
+    tool: m.header_transcript_blocks_tool(),
+    code: m.header_transcript_blocks_code(),
+  });
 </script>
 
 <SettingsSection
-  title="Appearance"
-  description="Theme, layout, and block visibility preferences."
+  title={m.appearance_title()}
+  description={m.appearance_description()}
 >
   <div class="setting-row">
-    <span class="setting-label">Theme</span>
+    <span class="setting-label">{m.appearance_theme()}</span>
     <button class="setting-toggle" onclick={() => ui.toggleTheme()}>
-      {ui.theme === "light" ? "Light" : "Dark"}
+      {ui.theme === "light" ? m.appearance_light() : m.appearance_dark()}
     </button>
   </div>
 
   <div class="setting-row">
-    <span class="setting-label">High contrast</span>
+    <span class="setting-label">{m.appearance_high_contrast()}</span>
     <button class="setting-toggle" onclick={() => ui.toggleHighContrast()}>
-      {ui.highContrast ? "On" : "Off"}
+      {ui.highContrast ? m.appearance_on() : m.appearance_off()}
     </button>
   </div>
 
   <div class="setting-row">
-    <span class="setting-label">Message layout</span>
+    <span class="setting-label">{m.appearance_message_layout()}</span>
     <div class="setting-options">
       {#each LAYOUT_OPTIONS as opt}
         <button
@@ -58,7 +59,7 @@
   </div>
 
   <div class="setting-row">
-    <span class="setting-label">Text size</span>
+    <span class="setting-label">{m.appearance_text_size()}</span>
     <div class="setting-options">
       {#each FONT_SCALE_STEPS as step}
         <button
@@ -73,7 +74,7 @@
   </div>
 
   <div class="setting-row column">
-    <span class="setting-label">Block visibility</span>
+    <span class="setting-label">{m.appearance_block_visibility()}</span>
     <div class="block-toggles">
       {#each ALL_BLOCK_TYPES as bt}
         <label class="block-toggle">

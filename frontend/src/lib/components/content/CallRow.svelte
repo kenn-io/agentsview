@@ -1,5 +1,6 @@
 <!-- ABOUTME: One row inside the Calls section — call name, args preview, timing bar, duration label. -->
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import type { CallTiming } from "../../api/types/timing.js";
   import { formatDuration } from "../../utils/duration.js";
   import { categoryToken } from "../../utils/categoryToken.js";
@@ -82,7 +83,7 @@
     <button
       type="button"
       class="chev"
-      aria-label="Toggle sub-agent calls"
+      aria-label={m.call_row_toggle_subagent_calls()}
       aria-expanded={isSubagentExpanded}
       onclick={handleChevronClick}
     >▸</button>

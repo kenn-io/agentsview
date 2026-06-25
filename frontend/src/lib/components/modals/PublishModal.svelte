@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import {
@@ -100,13 +101,13 @@
   <div class="modal-panel publish-panel">
     <div class="modal-header">
       <h3 class="modal-title">
-        Publish to {ui.publishSecret ? "secret" : "public"} GitHub Gist
+        {ui.publishSecret ? m.publish_title_secret() : m.publish_title_public()}
       </h3>
       <button
         class="modal-close"
         onclick={() => ui.activeModal = null}
-        title="Close publish dialog"
-        aria-label="Close publish dialog"
+        title={m.publish_close()}
+        aria-label={m.publish_close()}
       >
         <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
@@ -115,8 +116,7 @@
     <div class="modal-body">
       {#if view === "setup"}
         <p class="setup-text">
-          Enter a GitHub personal access token with the
-          <code>gist</code> scope.
+          {m.publish_setup_text({ scope: "gist" })}
         </p>
         <input
           class="token-input"
@@ -134,14 +134,14 @@
             target="_blank"
             rel="noopener noreferrer"
           >
-            Create token on GitHub
+            {m.publish_create_token()}
           </a>
           <button
             class="modal-btn modal-btn-primary"
             onclick={handleSaveToken}
             disabled={!tokenInput.trim()}
           >
-            Save & Publish
+            {m.publish_save_and_publish()}
           </button>
         </div>
 
@@ -149,7 +149,7 @@
         <div class="progress-view">
           <div class="modal-spinner"></div>
           <p>
-            Creating {ui.publishSecret ? "secret" : "public"} GitHub Gist...
+            {ui.publishSecret ? m.publish_creating_secret() : m.publish_creating_public()}
           </p>
         </div>
 
@@ -157,7 +157,7 @@
         <div class="success-view">
           <div class="url-field">
             <label class="url-label" for="publish-view-url">
-              View URL
+              {m.publish_view_url()}
             </label>
             <div class="url-row">
               <input
@@ -171,13 +171,13 @@
                 class="modal-btn btn-copy"
                 onclick={() => copyToClipboard(result!.view_url)}
               >
-                Copy
+                {m.publish_copy()}
               </button>
             </div>
           </div>
           <div class="url-field">
             <label class="url-label" for="publish-gist-url">
-              Gist URL
+              {m.publish_gist_url()}
             </label>
             <div class="url-row">
               <input
@@ -191,7 +191,7 @@
                 class="modal-btn btn-copy"
                 onclick={() => copyToClipboard(result!.gist_url)}
               >
-                Copy
+                {m.publish_copy()}
               </button>
             </div>
           </div>
@@ -200,13 +200,13 @@
               class="modal-btn modal-btn-primary"
               onclick={() => window.open(result!.view_url, "_blank")}
             >
-              Open in Browser
+              {m.publish_open_in_browser()}
             </button>
             <button
               class="modal-btn"
               onclick={() => ui.activeModal = null}
             >
-              Close
+              {m.publish_close_btn()}
             </button>
           </div>
         </div>
@@ -219,13 +219,13 @@
               class="modal-btn modal-btn-primary"
               onclick={doPublish}
             >
-              Retry
+              {m.publish_retry()}
             </button>
             <button
               class="modal-btn"
               onclick={() => ui.activeModal = null}
             >
-              Close
+              {m.publish_close_btn()}
             </button>
           </div>
         </div>
@@ -245,7 +245,7 @@
     margin-bottom: 12px;
   }
 
-  .setup-text code {
+  .setup-text :global(code) {
     font-family: var(--font-mono);
     background: var(--bg-inset);
     padding: 1px 4px;

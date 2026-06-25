@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
   import { settings } from "../../stores/settings.svelte.js";
   import {
@@ -35,15 +36,15 @@
         const data = await res.json();
         testResult = {
           ok: true,
-          message: `Connected (v${data.version || "unknown"})`,
+          message: m.settings_remote_connected_version({ version: data.version || m.settings_remote_unknown() }),
         };
       } else {
-        testResult = { ok: false, message: `Server returned ${res.status}` };
+        testResult = { ok: false, message: m.settings_remote_server_returned({ status: res.status }) };
       }
     } catch (e) {
       testResult = {
         ok: false,
-        message: e instanceof Error ? e.message : "Connection failed",
+        message: e instanceof Error ? e.message : m.settings_remote_connection_failed(),
       };
     } finally {
       testing = false;
@@ -55,7 +56,7 @@
     const url = serverUrl.replace(/\/+$/, "");
     setServerUrl(url);
     setAuthToken(tokenInput.trim());
-    saveMsg = "Connected. Reloading...";
+    saveMsg = m.settings_remote_connected_reloading();
     setTimeout(() => window.location.reload(), 500);
   }
 
@@ -64,7 +65,7 @@
     // scoped key resolves to the remote server's token.
     setAuthToken("");
     setServerUrl("");
-    saveMsg = "Disconnected. Reloading...";
+    saveMsg = m.settings_remote_disconnected_reloading();
     setTimeout(() => window.location.reload(), 500);
   }
 
@@ -86,50 +87,47 @@
 </script>
 
 <SettingsSection
-  title="Remote Access"
-  description="Connect to a remote agentsview server or enable remote access for this instance."
+  title={m.settings_remote_title()}
+  description={m.settings_remote_description()}
 >
   {#if !isRemote}
     <div class="subsection">
       <div class="toggle-row">
-        <span class="toggle-label">Require auth token</span>
+        <span class="toggle-label">{m.settings_remote_require_auth()}</span>
         <button
           class="toggle-btn"
           class:active={settings.requireAuth}
           disabled={remoteToggling}
           onclick={handleToggleRemote}
         >
-          {settings.requireAuth ? "Enabled" : "Disabled"}
+          {settings.requireAuth ? m.settings_remote_enabled() : m.settings_remote_disabled()}
         </button>
       </div>
 
       <p class="restart-note">
-        Note: Toggling auth requires a server restart to take effect.
+        {m.settings_remote_restart_note()}
       </p>
 
       {#if settings.requireAuth && settings.authToken}
         <div class="security-warning">
-          Warning: Remote connections use unencrypted HTTP. Use a secure
-          tunnel (Tailscale, SSH tunnel, or a reverse proxy with TLS) to
-          protect your data in transit.
+          {m.settings_remote_security_warning()}
         </div>
 
         <div class="token-display">
-          <span class="field-label">Auth Token</span>
+          <span class="field-label">{m.settings_remote_auth_token()}</span>
           <div class="token-row">
             <code class="token-value">{settings.authToken}</code>
             <button class="copy-btn" onclick={handleCopyToken}>
-              {copied ? "Copied" : "Copy"}
+              {copied ? m.settings_remote_copied() : m.settings_remote_copy()}
             </button>
           </div>
         </div>
 
         <div class="server-info">
-          <span class="field-label">Server</span>
+          <span class="field-label">{m.settings_remote_server()}</span>
           {#if settings.host === "0.0.0.0" || settings.host === "::"}
             <span class="info-value">
-              Listening on all interfaces (port {settings.port}).
-              Connect using your machine's IP address or hostname.
+              {m.settings_remote_listening_all({ port: settings.port })}
             </span>
           {:else}
             <code class="info-value"
@@ -145,20 +143,20 @@
 
   <div class="subsection">
     <span class="subsection-title">
-      {isRemote ? "Remote Connection" : "Connect to Remote Server"}
+      {isRemote ? m.settings_remote_remote_connection() : m.settings_remote_connect_to_remote()}
     </span>
 
     {#if isRemote}
       <div class="connected-info">
-        <span class="field-label">Connected to</span>
+        <span class="field-label">{m.settings_remote_connected_to()}</span>
         <code class="info-value">{getServerUrl()}</code>
       </div>
       <button class="disconnect-btn" onclick={handleDisconnect}>
-        Disconnect
+        {m.settings_remote_disconnect()}
       </button>
     {:else}
       <div class="field">
-        <label class="field-label" for="remote-url">Server URL</label>
+        <label class="field-label" for="remote-url">{m.settings_remote_server_url()}</label>
         <input
           id="remote-url"
           class="setting-input"
@@ -169,12 +167,12 @@
       </div>
 
       <div class="field">
-        <label class="field-label" for="remote-token">Auth Token</label>
+        <label class="field-label" for="remote-token">{m.settings_remote_auth_token()}</label>
         <input
           id="remote-token"
           class="setting-input"
           type="password"
-          placeholder="Paste auth token from server"
+          placeholder={m.settings_remote_paste_token_from_server()}
           bind:value={tokenInput}
         />
       </div>
@@ -185,14 +183,14 @@
           disabled={testing || !serverUrl.trim()}
           onclick={handleTestConnection}
         >
-          {testing ? "Testing..." : "Test Connection"}
+          {testing ? m.settings_remote_testing() : m.settings_remote_test_connection()}
         </button>
         <button
           class="connect-btn"
           disabled={saving || !serverUrl.trim()}
           onclick={handleConnect}
         >
-          Connect
+          {m.settings_remote_connect()}
         </button>
       </div>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import type { Session } from "../../api/types/core.js";
   import {
     getGradeStyle,
@@ -55,14 +56,14 @@
 <div class="signal-panel">
   {#if !hasUsefulData}
     <div class="empty-state">
-      Not enough activity to analyze this session.
+      {m.signal_panel_not_enough_activity()}
     </div>
   {:else}
     <div class="signal-row">
       <span
         class="grade-large"
         style:color={gradeStyle.text}
-        title={`Health grade ${getGradeLabel(session.health_grade)}`}
+        title={m.signal_panel_health_grade({ grade: getGradeLabel(session.health_grade) })}
       >
         {getGradeLabel(session.health_grade)}
       </span>
@@ -74,7 +75,7 @@
         class="outcome"
         style:color={getOutcomeColor(outcome)}
         title={confidence
-          ? `${outcomeLabel} (${confidence} confidence)`
+          ? m.signal_panel_outcome_confidence({ outcome: outcomeLabel, confidence })
           : outcomeLabel}
         aria-label={outcomeLabel}
       >
@@ -93,11 +94,11 @@
 
       {#if basis.length > 0}
         <span class="basis-tags">
-          <span class="basis-heading">Based on:</span>
+          <span class="basis-heading">{m.signal_panel_based_on()}</span>
           {#each basis as b}
             <span
               class="basis-tag"
-              title={`${getBasisLabel(b)} factored into the score`}
+              title={m.signal_panel_basis_title({ factor: getBasisLabel(b) })}
             >
               {getBasisLabel(b)}
             </span>
@@ -110,29 +111,28 @@
           class="compaction-chip"
           class:mid-task={midTaskCompactions > 0}
           title={midTaskCompactions > 0
-            ? `${midTaskCompactions} of ${compactions} interrupted active work`
-            : "Context compactions in this session"}
+            ? m.signal_panel_compaction_interrupted({ mid: midTaskCompactions, total: compactions })
+            : m.signal_panel_compaction_title()}
         >
-          {compactions}
-          {compactions === 1 ? "compaction" : "compactions"}
+          {m.signal_panel_compaction_count({ count: compactions })}
           {#if midTaskCompactions > 0}
-            &middot; {midTaskCompactions} mid-task
+            &middot; {m.signal_panel_mid_task({ count: midTaskCompactions })}
           {/if}
         </span>
       {/if}
 
       {#if !hasPenalties}
-        <span class="no-penalties">No penalties</span>
+        <span class="no-penalties">{m.signal_panel_no_penalties()}</span>
       {/if}
     </div>
 
     {#if hasPenalties && penalties}
       <div class="penalties-row">
-        <span class="penalties-heading">Penalties:</span>
+        <span class="penalties-heading">{m.signal_panel_penalties()}</span>
         {#each Object.entries(penalties) as [key, value]}
           <div
             class="penalty"
-            title={`${getPenaltyLabel(key)} subtracted ${value} from the score`}
+            title={m.signal_panel_penalty_title({ label: getPenaltyLabel(key), value })}
           >
             <span class="penalty-value">-{value}</span>
             <span class="penalty-label">

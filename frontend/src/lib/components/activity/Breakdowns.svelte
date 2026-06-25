@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import type { ActivityKeyMinutes } from "../../api/generated/index";
 
@@ -49,9 +50,9 @@
   }
 
   const panels = $derived.by((): Panel[] => [
-    { title: "Project", rows: byProject },
-    { title: "Model", rows: byModel },
-    { title: "Agent", rows: byAgent },
+    { title: m.activity_project(), rows: byProject },
+    { title: m.activity_model(), rows: byModel },
+    { title: m.activity_agent(), rows: byAgent },
   ]);
 
   function maxValue(rows: ActivityKeyMinutes[]): number {
@@ -98,10 +99,8 @@
   function showTip(e: MouseEvent, row: ActivityKeyMinutes, total: number) {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const pct = total > 0 ? Math.round((rowValue(row) / total) * 100) : 0;
-    const unit = metric === "cost" ? "" : " min";
-    const split = `int ${fmtSeg(interactiveValue(row))} / auto ${fmtSeg(
-      automatedValue(row),
-    )}`;
+    const unit = metric === "cost" ? "" : m.activity_min_unit();
+    const split = m.activity_int_auto_split({ int: fmtSeg(interactiveValue(row)), auto: fmtSeg(automatedValue(row)) });
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
@@ -116,17 +115,17 @@
 
 <div class="breakdowns">
   <div class="breakdowns-header">
-    <h3 class="breakdowns-title">Breakdown</h3>
+    <h3 class="breakdowns-title">{m.activity_breakdown()}</h3>
     <div class="header-right">
       <div class="legend" aria-hidden="true">
         <span class="legend-item">
-          <span class="swatch interactive"></span>Interactive
+          <span class="swatch interactive"></span>{m.activity_interactive()}
         </span>
         <span class="legend-item">
-          <span class="swatch automated"></span>Automated
+          <span class="swatch automated"></span>{m.activity_automated()}
         </span>
       </div>
-      <div class="metric-toggle" role="group" aria-label="Breakdown metric">
+      <div class="metric-toggle" role="group" aria-label={m.activity_breakdown_metric()}>
       <button
         type="button"
         class="metric-btn"
@@ -134,7 +133,7 @@
         aria-pressed={metric === "minutes"}
         onclick={() => (metric = "minutes")}
       >
-        Agent-min
+        {m.activity_agent_min()}
       </button>
       <button
         type="button"
@@ -143,7 +142,7 @@
         aria-pressed={metric === "cost"}
         onclick={() => (metric = "cost")}
       >
-        Cost
+        {m.activity_cost()}
       </button>
       </div>
     </div>
@@ -184,7 +183,7 @@
             {/each}
           </div>
         {:else}
-          <div class="empty">none</div>
+          <div class="empty">{m.activity_none_lower()}</div>
         {/if}
       </div>
     {/each}

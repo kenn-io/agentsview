@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { onMount } from "svelte";
   import { trends } from "../../stores/trends.svelte.js";
   import { getBasePath } from "../../stores/router.svelte.js";
@@ -242,13 +243,13 @@
 <section class="trends-page">
   <div class="page-head">
     <div>
-      <h1>Trends</h1>
-      <p>{trends.response?.from ?? trends.from} to {trends.response?.to ?? trends.to}</p>
+      <h1>{m.trends_title()}</h1>
+      <p>{m.trends_date_range({ from: trends.response?.from ?? trends.from, to: trends.response?.to ?? trends.to })}</p>
     </div>
     <div class="head-actions">
-      <button class="secondary" onclick={resetTerms}>Reset</button>
+      <button class="secondary" onclick={resetTerms}>{m.trends_reset()}</button>
       <button class="primary" onclick={refresh} disabled={trends.loading.terms}>
-        {trends.loading.terms ? "Refreshing" : "Refresh"}
+        {trends.loading.terms ? m.trends_refreshing() : m.trends_refresh()}
       </button>
     </div>
   </div>
@@ -265,8 +266,8 @@
   <div class="content-grid">
     <div class="query-panel">
       <label class="terms-label" for="trend-terms">
-        <span>Terms</span>
-        <span class="terms-hint">one per line</span>
+        <span>{m.trends_terms()}</span>
+        <span class="terms-hint">{m.trends_one_per_line()}</span>
       </label>
       <textarea
         id="trend-terms"
@@ -289,7 +290,7 @@
             aria-expanded={groupByOpen}
           >
             <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
-            Group by <span class="gval">{trends.granularity}</span>
+            {m.trends_group_by()} <span class="gval">{trends.granularity}</span>
             <ChevronDownIcon
               class={groupByOpen ? "g-chev open" : "g-chev"}
               size="11"
@@ -319,7 +320,7 @@
             bind:checked={trends.normalized}
             onchange={setNormalized}
           />
-          <span>Normalize by number of messages</span>
+          <span>{m.trends_normalize()}</span>
         </label>
       </div>
       <TrendsLineChart
@@ -333,7 +334,7 @@
       {#if trends.loading.terms}
         <div class="loading-overlay" role="status" aria-live="polite">
           <span class="loading-spinner" aria-hidden="true"></span>
-          <span>Computing trends...</span>
+          <span>{m.trends_computing()}</span>
         </div>
       {/if}
     </div>

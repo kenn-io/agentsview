@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { onMount, untrack } from "svelte";
   import {
     activity,
@@ -76,8 +77,8 @@
   const agentOptions = $derived.by((): TypeaheadOption[] => [
     {
       name: "",
-      label: "All Agents",
-      displayLabel: "All Agents",
+      label: m.activity_all_agents(),
+      displayLabel: m.activity_all_agents(),
     },
     ...activity.agents.map((agent) => ({
       name: agent.name,
@@ -89,8 +90,8 @@
   const machineOptions = $derived.by((): TypeaheadOption[] => [
     {
       name: "",
-      label: "All Machines",
-      displayLabel: "All Machines",
+      label: m.activity_all_machines(),
+      displayLabel: m.activity_all_machines(),
     },
     ...activity.machines.map((machine) => ({
       name: machine,
@@ -98,23 +99,23 @@
       displayLabel: machine,
     })),
   ]);
-  const automationOptions: TypeaheadOption[] = [
+  const automationOptions: TypeaheadOption[] = $derived([
     {
       name: "all",
-      label: "All Sessions",
-      displayLabel: "All Sessions",
+      label: m.activity_all_sessions(),
+      displayLabel: m.activity_all_sessions(),
     },
     {
       name: "interactive",
-      label: "Interactive",
-      displayLabel: "Interactive",
+      label: m.activity_interactive(),
+      displayLabel: m.activity_interactive(),
     },
     {
       name: "automated",
-      label: "Automated",
-      displayLabel: "Automated",
+      label: m.activity_automated(),
+      displayLabel: m.activity_automated(),
     },
-  ];
+  ]);
 
   // The activity store is the source of truth: day/week/month map to a calendar
   // period anchored on `date`; custom maps to from/to. Relative windows have no
@@ -316,10 +317,10 @@
       <OptionTypeahead
         options={agentOptions}
         value={activity.agent}
-        fallbackLabel="All Agents"
-        placeholder="Filter agents"
-        title="Filter by agent"
-        emptyLabel="No matching agents"
+        fallbackLabel={m.activity_all_agents()}
+        placeholder={m.activity_filter_agents_placeholder()}
+        title={m.activity_filter_by_agent()}
+        emptyLabel={m.activity_no_matching_agents()}
         onselect={onAgentChange}
       />
     </div>
@@ -328,10 +329,10 @@
       <OptionTypeahead
         options={machineOptions}
         value={activity.machine}
-        fallbackLabel="All Machines"
-        placeholder="Filter machines"
-        title="Filter by machine"
-        emptyLabel="No matching machines"
+        fallbackLabel={m.activity_all_machines()}
+        placeholder={m.activity_filter_machines_placeholder()}
+        title={m.activity_filter_by_machine()}
+        emptyLabel={m.activity_no_matching_machines()}
         onselect={onMachineChange}
       />
     </div>
@@ -340,10 +341,10 @@
       <OptionTypeahead
         options={automationOptions}
         value={activity.automation}
-        fallbackLabel="All Sessions"
-        placeholder="Filter automation"
-        title="Filter by automation"
-        emptyLabel="No automation filters"
+        fallbackLabel={m.activity_all_sessions()}
+        placeholder={m.activity_filter_automation_placeholder()}
+        title={m.activity_filter_by_automation()}
+        emptyLabel={m.activity_no_automation_filters()}
         onselect={onAutomationChange}
       />
     </div>
@@ -352,7 +353,7 @@
       lastUpdatedAt={activity.lastUpdatedAt}
       busy={activity.loading}
       onRefresh={() => activity.load({ background: true })}
-      label="Refresh activity"
+      label={m.activity_refresh()}
     />
   </div>
 
@@ -383,7 +384,7 @@
         <Breakdowns report={activity.report} />
       </div>
     {:else if activity.loading}
-      <div class="status">Loading activity report...</div>
+      <div class="status">{m.activity_loading_report()}</div>
     {:else if activity.error}
       <div class="status error">
         <span>{activity.error}</span>
