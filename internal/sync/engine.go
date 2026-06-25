@@ -1346,28 +1346,6 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
-	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
-		if qwenDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(qwenDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 3 || parts[1] != "chats" {
-				continue
-			}
-			sessionID, ok := strings.CutSuffix(parts[2], ".jsonl")
-			if !ok || !parser.IsValidSessionID(sessionID) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parser.GetProjectName(parts[0]),
-				Agent:   parser.AgentQwen,
-			}, true
-		}
-	}
-
 	if df, ok := e.classifyAiderPath(path); ok {
 		return df, true
 	}
@@ -4504,8 +4482,6 @@ func (e *Engine) processFile(
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
 		res = e.processVisualStudioCopilot(file, info)
-	case parser.AgentQwen:
-		res = e.processQwen(file, info)
 	case parser.AgentOpenClaw:
 		res = e.processOpenClaw(file, info)
 	case parser.AgentQClaw:
@@ -7072,36 +7048,6 @@ func (e *Engine) processCursor(
 	}
 }
 
-func (e *Engine) processQwen(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseQwenSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{{
-			Session:  *sess,
-			Messages: msgs,
-		}},
-	}
-}
-
 func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
@@ -9521,11 +9467,6 @@ func (e *Engine) SyncSingleSessionContext(
 				file.Project = sess.Project
 			}
 		}
-	case parser.AgentQwen:
-		// path is <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
-		file.Project = parser.GetProjectName(
-			filepath.Base(filepath.Dir(filepath.Dir(path))),
-		)
 	case parser.AgentWorkBuddy:
 		for _, workBuddyDir := range e.agentDirs[parser.AgentWorkBuddy] {
 			rel, ok := isUnder(workBuddyDir, path)

@@ -359,6 +359,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newGptmeProviderFactory(def)
 	case AgentOMP, AgentPi:
 		return newPiProviderFactory(def)
+	case AgentQwen:
+		return newQwenProviderFactory(def)
 	case AgentZencoder:
 		return newZencoderProviderFactory(def)
 	default:
