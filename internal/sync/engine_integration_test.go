@@ -316,8 +316,12 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 	})
 	assertSessionProject(t, env.db, "kiro:overlap-session", "current_kiro")
 
+	// Kiro is provider-authoritative: the current-store database is
+	// rediscovered and re-parsed on every full sync (force-replace), so an
+	// idempotent resync re-counts and re-writes the SQLite-backed session
+	// rather than skipping it. The legacy file stays shadowed throughout.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 0, Synced: 0, Skipped: 0,
+		TotalSessions: 1, Synced: 1, Skipped: 0,
 	})
 	sess, err := env.db.GetSessionFull(
 		context.Background(), "kiro:overlap-session",
@@ -392,8 +396,12 @@ func TestSyncEngineKiroSQLiteMalformedUpdatePreservesArchive(t *testing.T) {
 		readKiroSQLiteFixture(t, "malformed_payload.txt"),
 		1779012040000,
 	)
+	// Kiro is provider-authoritative: the database is rediscovered and
+	// re-parsed (TotalSessions counts the source), but the malformed payload
+	// yields no parseable session, so nothing is written and the previously
+	// archived session is preserved.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 0, Synced: 0, Skipped: 0,
+		TotalSessions: 1, Synced: 0, Skipped: 0,
 	})
 	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 4)
 }

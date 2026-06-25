@@ -751,7 +751,15 @@ func providerChangedPathEventKind(path string) string {
 	if path == "" {
 		return ""
 	}
-	if _, err := os.Lstat(path); err != nil && os.IsNotExist(err) {
+	// A virtual source path (e.g. a SQLite per-session path
+	// "<db>#<sessionID>") is never a real file. Resolve it to its physical
+	// container so an existence check reflects whether the backing store is
+	// present rather than always reporting the synthetic path as removed.
+	statPath := path
+	if container, _, ok := parser.ParseVirtualSourcePath(path); ok {
+		statPath = container
+	}
+	if _, err := os.Lstat(statPath); err != nil && os.IsNotExist(err) {
 		return "remove"
 	}
 	return "write"
@@ -949,16 +957,14 @@ func isUnder(dir, path string) (string, bool) {
 	return rel, true
 }
 
-// classifyContainerPath runs the container- and SQLite-style classifiers that
-// resolve a path whether or not it currently exists on disk (Kiro and Vibe).
-// Split out of classifyOnePath to keep that function within NilAway's
-// per-function CFG-block limit.
+// classifyContainerPath previously ran the container- and SQLite-style
+// classifiers that resolve a path whether or not it currently exists on disk.
+// Every such provider (OpenCode-format stores, Kiro, Zed, Shelley, Vibe) is now
+// provider-authoritative and classifies through the provider facade, so no
+// legacy classifier remains here.
 func (e *Engine) classifyContainerPath(
 	path string, pathExists bool,
 ) (parser.DiscoveredFile, bool) {
-	if df, ok := e.classifyKiroSQLitePath(path); ok {
-		return df, true
-	}
 	return parser.DiscoveredFile{}, false
 }
 
@@ -1000,22 +1006,6 @@ func (e *Engine) classifyOnePath(
 
 	if df, ok := e.classifyAiderPath(path); ok {
 		return df, true
-	}
-
-	// Kiro CLI legacy: <kiroDir>/<uuid>.jsonl
-	for _, kiroDir := range e.agentDirs[parser.AgentKiro] {
-		if kiroDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(kiroDir, path); ok {
-			if strings.Count(rel, sep) == 0 &&
-				strings.HasSuffix(rel, ".jsonl") {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentKiro,
-				}, true
-			}
-		}
 	}
 
 	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm).
@@ -1234,42 +1224,6 @@ func (e *Engine) classifyAntigravityCLIBrainPath(
 	return nil
 }
 
-func (e *Engine) classifyKiroSQLitePath(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
-		for _, kiroDir := range e.agentDirs[parser.AgentKiro] {
-			if _, under := isUnder(kiroDir, dbPath); under {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentKiro,
-				}, true
-			}
-		}
-	}
-	for _, kiroDir := range e.agentDirs[parser.AgentKiro] {
-		if kiroDir == "" {
-			continue
-		}
-		rel, ok := isUnder(kiroDir, path)
-		if !ok {
-			continue
-		}
-		base := filepath.Base(rel)
-		if rel != "data.sqlite3" &&
-			!strings.HasPrefix(base, "data.sqlite3-") {
-			continue
-		}
-		if dbPath := parser.FindKiroSQLiteDBPath(kiroDir); dbPath != "" {
-			return parser.DiscoveredFile{
-				Path:  dbPath,
-				Agent: parser.AgentKiro,
-			}, true
-		}
-	}
-	return parser.DiscoveredFile{}, false
-}
-
 // shelleyDBFile is the shared Shelley conversation database basename. Zed and
 // Shelley are provider-authoritative, so their changed-path classification and
 // parse run through the provider facade; this constant remains for the
@@ -1347,7 +1301,6 @@ func (e *Engine) resyncAllLocked(
 		oldFileSessions -= e.countRootOpenCodeFormatSessions(
 			origDB, parser.AgentOpenCode,
 		)
-		oldFileSessions -= e.countRootKiroSQLiteSessions(origDB)
 		oldFileSessions -= e.countRootOpenCodeFormatSessions(
 			origDB, parser.AgentKilo,
 		)
@@ -1811,24 +1764,6 @@ func (e *Engine) countRootOpenCodeFormatSessions(
 	return count
 }
 
-func (e *Engine) countRootKiroSQLiteSessions(
-	database *db.DB,
-) int {
-	var count int
-	err := database.Reader().QueryRow(`
-		SELECT COUNT(*) FROM sessions
-		WHERE agent = ?
-		  AND file_path LIKE ?
-		  AND message_count > 0
-		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL
-	`, string(parser.AgentKiro), "%data.sqlite3#%").Scan(&count)
-	if err != nil {
-		log.Printf("count root kiro sqlite sessions: %v", err)
-	}
-	return count
-}
-
 // Sync state keys persisted in pg_sync_state.
 const (
 	syncStateStartedAt  = "last_sync_started_at"
@@ -2203,62 +2138,6 @@ func (e *Engine) syncAllLocked(
 		stats.messagesIndexed = dbProgress.MessagesIndexed
 		e.reportProgress(onProgress, dbProgress)
 	}
-
-	// Sync current Kiro CLI sessions (SQLite-backed).
-	tKiro := time.Now()
-	var kiroPending []pendingWrite
-	if scope.includesAny(e.agentDirs[parser.AgentKiro]) {
-		kiroPending = e.syncKiroSQLite(ctx, scope)
-	}
-	if len(kiroPending) > 0 {
-		stats.TotalSessions += len(kiroPending)
-		tWrite := time.Now()
-		var kiroWritten int
-		if writeMode == syncWriteBulk {
-			var failedWrites int
-			kiroWritten, _, failedWrites = e.writeBatch(
-				kiroPending, writeMode, true,
-			)
-			for range failedWrites {
-				stats.RecordFailed()
-			}
-		} else {
-			resolveWorktreeProject := e.loadWorktreeProjectResolver()
-			for _, pw := range kiroPending {
-				if ctx.Err() != nil {
-					break
-				}
-				switch err := e.writeSessionFullWithResolver(
-					pw, resolveWorktreeProject,
-				); {
-				case err == nil:
-					kiroWritten++
-				case isIntentionalSessionSkip(err),
-					errors.Is(err, errSessionPreserved):
-				default:
-					stats.RecordFailed()
-				}
-			}
-		}
-		stats.RecordSynced(kiroWritten)
-		if verbose {
-			log.Printf(
-				"kiro sqlite write: %d sessions in %s",
-				len(kiroPending),
-				time.Since(tWrite).Round(time.Millisecond),
-			)
-		}
-	}
-	if verbose {
-		log.Printf(
-			"kiro sqlite sync: %s",
-			time.Since(tKiro).Round(time.Millisecond),
-		)
-	}
-	advanceDBProgress(
-		e.countDBBackedProgressTotal(parser.AgentKiro, scope),
-		kiroPending,
-	)
 
 	if ctx.Err() != nil {
 		stats.Aborted = true
@@ -2833,7 +2712,7 @@ func discoveredFileMtime(
 		return obj.LastModified.UnixNano(), nil
 	}
 	if file.Agent == parser.AgentKiro {
-		if _, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
+		if _, _, ok := parseKiroSQLiteVirtualPath(file.Path); ok {
 			return parser.KiroSQLiteSourceMtime(file.Path)
 		}
 	}
@@ -3167,8 +3046,6 @@ func (e *Engine) countDBBackedProgressTotal(
 			continue
 		}
 		switch agent {
-		case parser.AgentKiro:
-			total += e.countOneKiroSQLiteSessions(dir)
 		case parser.AgentWarp:
 			total += e.countOneWarpSessions(dir)
 		case parser.AgentForge:
@@ -3188,7 +3065,6 @@ func (e *Engine) countDBBackedSessions(
 	}
 	total := 0
 	for _, agent := range []parser.AgentType{
-		parser.AgentKiro,
 		parser.AgentWarp,
 		parser.AgentForge,
 		parser.AgentPiebald,
@@ -3196,166 +3072,6 @@ func (e *Engine) countDBBackedSessions(
 		total += e.countDBBackedProgressTotal(agent, scope)
 	}
 	return total
-}
-
-func (e *Engine) filterShadowedLegacyKiroFiles(
-	files []parser.DiscoveredFile,
-) []parser.DiscoveredFile {
-	if !hasLegacyKiroCandidates(files) {
-		return files
-	}
-
-	currentIDs := make(map[string]struct{})
-	for _, dir := range e.agentDirs[parser.AgentKiro] {
-		for id := range parser.KiroSQLiteSessionIDs(dir) {
-			currentIDs[id] = struct{}{}
-		}
-	}
-	if len(currentIDs) == 0 {
-		return files
-	}
-
-	out := files[:0]
-	for _, file := range files {
-		if file.Agent != parser.AgentKiro ||
-			filepath.Base(file.Path) == "data.sqlite3" {
-			out = append(out, file)
-			continue
-		}
-		legacyID := parser.KiroSessionIDFromPath(file.Path)
-		if _, shadowed := currentIDs[legacyID]; shadowed {
-			continue
-		}
-		out = append(out, file)
-	}
-	return out
-}
-
-func hasLegacyKiroCandidates(files []parser.DiscoveredFile) bool {
-	for _, file := range files {
-		if file.Agent == parser.AgentKiro &&
-			filepath.Base(file.Path) != "data.sqlite3" {
-			return true
-		}
-	}
-	return false
-}
-
-func (e *Engine) isShadowedLegacyKiroPath(path string) bool {
-	if filepath.Base(path) == "data.sqlite3" {
-		return false
-	}
-	legacyID := parser.KiroSessionIDFromPath(path)
-	if legacyID == "" {
-		return false
-	}
-	for _, dir := range e.agentDirs[parser.AgentKiro] {
-		dbPath := parser.FindKiroSQLiteDBPath(dir)
-		if dbPath != "" &&
-			parser.KiroSQLiteSessionExists(dbPath, legacyID) {
-			return true
-		}
-	}
-	return false
-}
-
-func (e *Engine) kiroSQLitePendingSessionIDs(
-	metas []parser.KiroSQLiteSessionMeta,
-) []string {
-	var changed []string
-	for _, meta := range metas {
-		_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
-		if ok && storedMtime == meta.FileMtime &&
-			e.db.GetDataVersionByPath(meta.VirtualPath) >=
-				db.CurrentDataVersion() {
-			continue
-		}
-		changed = append(changed, meta.SessionID)
-	}
-	return changed
-}
-
-func (e *Engine) countOneKiroSQLiteSessions(dir string) int {
-	dbPath := parser.FindKiroSQLiteDBPath(dir)
-	if dbPath == "" {
-		return 0
-	}
-	store, err := parser.OpenKiroSQLiteStore(dbPath)
-	if err != nil {
-		log.Printf("sync kiro sqlite: %v", err)
-		return 0
-	}
-	defer store.Close()
-	metas, err := store.ListSessionMeta()
-	if err != nil {
-		log.Printf("sync kiro sqlite: %v", err)
-		return 0
-	}
-	return len(metas)
-}
-
-func (e *Engine) syncKiroSQLite(
-	ctx context.Context, scope *rootSyncScope,
-) []pendingWrite {
-	var allPending []pendingWrite
-	for _, dir := range e.agentDirs[parser.AgentKiro] {
-		if ctx.Err() != nil {
-			break
-		}
-		if dir == "" || !scope.includes(dir) {
-			continue
-		}
-		allPending = append(
-			allPending, e.syncOneKiroSQLite(ctx, dir)...,
-		)
-	}
-	return allPending
-}
-
-func (e *Engine) syncOneKiroSQLite(
-	ctx context.Context, dir string,
-) []pendingWrite {
-	dbPath := parser.FindKiroSQLiteDBPath(dir)
-	if dbPath == "" {
-		return nil
-	}
-	store, err := parser.OpenKiroSQLiteStore(dbPath)
-	if err != nil {
-		log.Printf("sync kiro sqlite: %v", err)
-		return nil
-	}
-	defer store.Close()
-	metas, err := store.ListSessionMeta()
-	if err != nil {
-		log.Printf("sync kiro sqlite: %v", err)
-		return nil
-	}
-	changed := e.kiroSQLitePendingSessionIDs(metas)
-	if len(changed) == 0 {
-		return nil
-	}
-
-	var pending []pendingWrite
-	for _, sid := range changed {
-		if ctx.Err() != nil {
-			break
-		}
-		sess, msgs, err := store.ParseSession(
-			sid, e.machine,
-		)
-		if err != nil {
-			log.Printf("kiro sqlite session %s: %v", sid, err)
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		pending = append(pending, pendingWrite{
-			sess: *sess,
-			msgs: msgs,
-		})
-	}
-	return pending
 }
 
 // startWorkers fans out file processing across a worker pool
@@ -3685,7 +3401,7 @@ func (e *Engine) processFile(
 			break
 		}
 		statPath := file.Path
-		if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
+		if dbPath, _, ok := parseKiroSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
 			statPath = dbPath
@@ -3769,10 +3485,6 @@ func (e *Engine) processFile(
 		res = e.processS3Session(ctx, file, info)
 	case parser.AgentReasonix:
 		res = e.processReasonix(file, info)
-	case parser.AgentKiro:
-		res = e.processKiro(file, info)
-	case parser.AgentKiroIDE:
-		res = e.processKiroIDE(file, info)
 	case parser.AgentAntigravity:
 		res = e.processAntigravity(file, info)
 	case parser.AgentAntigravityCLI:
@@ -4465,10 +4177,10 @@ func (e *Engine) shouldCacheSkip(
 	file parser.DiscoveredFile,
 ) bool {
 	if file.Agent == parser.AgentKiro {
-		if filepath.Base(file.Path) == "data.sqlite3" {
+		if filepath.Base(file.Path) == kiroSQLiteDBName {
 			return false
 		}
-		if _, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
+		if _, _, ok := parseKiroSQLiteVirtualPath(file.Path); ok {
 			return false
 		}
 	}
@@ -5770,138 +5482,6 @@ func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-func (e *Engine) processKiro(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if dbPath, sessionID, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
-		sess, msgs, err := parser.ParseKiroSQLiteSession(
-			dbPath, sessionID, e.machine,
-		)
-		if err != nil {
-			return processResult{err: err}
-		}
-		if sess == nil {
-			return processResult{}
-		}
-		return processResult{
-			results: []parser.ParseResult{
-				{Session: *sess, Messages: msgs},
-			},
-			forceReplace: true,
-		}
-	}
-	if filepath.Base(file.Path) == "data.sqlite3" {
-		store, err := parser.OpenKiroSQLiteStore(file.Path)
-		if err != nil {
-			return processResult{err: err}
-		}
-		defer store.Close()
-		metas, err := store.ListSessionMeta()
-		if err != nil {
-			return processResult{err: err}
-		}
-		var results []parser.ParseResult
-		var sessionErrs []sessionParseError
-		for _, meta := range metas {
-			_, storedMtime, ok := e.db.GetFileInfoByPath(
-				meta.VirtualPath,
-			)
-			// parse-diff: !e.forceParse disables the stored-state skip.
-			if !e.forceParse && ok && storedMtime == meta.FileMtime &&
-				e.db.GetDataVersionByPath(meta.VirtualPath) >=
-					db.CurrentDataVersion() {
-				continue
-			}
-			sess, msgs, err := store.ParseSession(
-				meta.SessionID, e.machine,
-			)
-			if err != nil {
-				if e.forceParse {
-					sessionErrs = append(sessionErrs, sessionParseError{
-						sessionID:   meta.SessionID,
-						virtualPath: meta.VirtualPath,
-						err:         err,
-					})
-				} else {
-					log.Printf(
-						"kiro sqlite watch session %s: %v",
-						meta.SessionID, err,
-					)
-				}
-				continue
-			}
-			if sess == nil {
-				continue
-			}
-			results = append(results, parser.ParseResult{
-				Session:  *sess,
-				Messages: msgs,
-			})
-		}
-		return processResult{
-			results:      results,
-			sessionErrs:  sessionErrs,
-			forceReplace: true,
-		}
-	}
-	if e.isShadowedLegacyKiroPath(file.Path) {
-		return processResult{skip: true}
-	}
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseKiroSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processKiroIDE(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseKiroIDESession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
 }
 
 // vibeEffectiveInfo returns size/mtime for a Vibe session that account
@@ -7951,7 +7531,7 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 	if def.Type == parser.AgentKiro {
 		for _, dir := range e.agentDirs[parser.AgentKiro] {
-			dbPath := parser.FindKiroSQLiteDBPath(dir)
+			dbPath := kiroSQLiteDBPath(dir)
 			if dbPath == "" ||
 				!parser.KiroSQLiteSessionExists(
 					dbPath, rawSessionID,
@@ -8180,7 +7760,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return mtime
 	}
 	if def.Type == parser.AgentKiro {
-		if _, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
+		if _, _, ok := parseKiroSQLiteVirtualPath(path); ok {
 			mtime, err := parser.KiroSQLiteSourceMtime(path)
 			if err != nil {
 				return 0
@@ -8335,15 +7915,7 @@ func (e *Engine) SyncSingleSessionContext(
 	// provider-authoritative: their SQLite virtual paths and storage
 	// sessions resync through the generic processFile path below, which
 	// routes to the provider facade.
-	if def.Type == parser.AgentKiro &&
-		isKiroSQLiteVirtualPath(path) {
-		err = e.syncSingleKiroSQLite(sessionID)
-		if errors.Is(err, errSessionPreserved) {
-			preserved = true
-			return nil
-		}
-		return err
-	}
+
 	agent := def.Type
 
 	// Clear skip cache so explicit re-sync always processes
@@ -8557,63 +8129,80 @@ func (e *Engine) applyWorktreeMappingToSingleSession(
 	return nil
 }
 
-func (e *Engine) syncSingleKiroSQLite(
-	sessionID string,
-) error {
-	rawID := strings.TrimPrefix(sessionID, "kiro:")
+// filterShadowedLegacyKiroFiles drops discovered legacy Kiro JSONL sources
+// whose logical session ID already exists in a current-store SQLite database
+// under any configured Kiro root. The Kiro provider performs the same
+// shadowing during its own Discover, but only across the roots it is
+// configured with; a scoped sync (e.g. SyncRootsSince over a single root)
+// configures the provider with that scope only, so the engine reapplies the
+// cross-root shadow here using every configured Kiro root. This keeps a legacy
+// file from being imported when its session lives in the SQLite store of a
+// different, out-of-scope root.
+func (e *Engine) filterShadowedLegacyKiroFiles(
+	files []parser.DiscoveredFile,
+) []parser.DiscoveredFile {
+	if !hasLegacyKiroCandidates(files) {
+		return files
+	}
 
-	var lastErr error
+	currentIDs := make(map[string]struct{})
 	for _, dir := range e.agentDirs[parser.AgentKiro] {
-		dbPath := parser.FindKiroSQLiteDBPath(dir)
-		if dbPath == "" {
-			continue
+		for id := range parser.KiroSQLiteSessionIDs(dir) {
+			currentIDs[id] = struct{}{}
 		}
-		store, err := parser.OpenKiroSQLiteStore(dbPath)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		sess, msgs, err := store.ParseSession(
-			rawID, e.machine,
-		)
-		if closeErr := store.Close(); closeErr != nil && err == nil {
-			lastErr = closeErr
-			continue
-		}
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		if err := e.writeSessionFull(
-			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil &&
-			!isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
-			return fmt.Errorf("write session %s: %w",
-				sess.ID, err)
-		} else if errors.Is(err, errSessionPreserved) {
-			return err
-		}
-		return nil
+	}
+	if len(currentIDs) == 0 {
+		return files
 	}
 
-	if len(e.agentDirs[parser.AgentKiro]) == 0 {
-		return fmt.Errorf("kiro dir not configured")
+	out := files[:0]
+	for _, file := range files {
+		if file.Agent != parser.AgentKiro ||
+			filepath.Base(file.Path) == kiroSQLiteDBName {
+			out = append(out, file)
+			continue
+		}
+		legacyID := parser.KiroSessionIDFromPath(file.Path)
+		if _, shadowed := currentIDs[legacyID]; shadowed {
+			continue
+		}
+		out = append(out, file)
 	}
-	if lastErr != nil {
-		return fmt.Errorf(
-			"kiro sqlite session %s: %w", sessionID, lastErr,
-		)
-	}
-	return fmt.Errorf("kiro sqlite session %s not found", sessionID)
+	return out
 }
 
-func isKiroSQLiteVirtualPath(path string) bool {
-	_, _, ok := parser.ParseKiroSQLiteVirtualPath(path)
-	return ok
+func hasLegacyKiroCandidates(files []parser.DiscoveredFile) bool {
+	for _, file := range files {
+		if file.Agent == parser.AgentKiro &&
+			filepath.Base(file.Path) != kiroSQLiteDBName {
+			return true
+		}
+	}
+	return false
+}
+
+// kiroSQLiteDBName is the filename of the current-store Kiro SQLite DB.
+const kiroSQLiteDBName = "data.sqlite3"
+
+// kiroSQLiteDBPath returns the current-store Kiro SQLite DB path when the
+// configured root contains one, or "" otherwise.
+func kiroSQLiteDBPath(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	path := filepath.Join(dir, kiroSQLiteDBName)
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return path
+}
+
+// parseKiroSQLiteVirtualPath splits a virtual Kiro SQLite source path back
+// into its database path and raw session ID using the provider-neutral
+// virtual-source-path resolver.
+func parseKiroSQLiteVirtualPath(path string) (string, string, bool) {
+	return parser.ParseVirtualSourcePathForBase(path, kiroSQLiteDBName)
 }
 
 func (e *Engine) warpPendingSessionIDs(dir string) []string {

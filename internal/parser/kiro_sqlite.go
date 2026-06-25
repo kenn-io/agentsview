@@ -58,9 +58,9 @@ func (s *KiroSQLiteStore) Close() error {
 	return s.db.Close()
 }
 
-// FindKiroSQLiteDBPath returns the current-store Kiro SQLite DB
-// when the configured root contains one.
-func FindKiroSQLiteDBPath(dir string) string {
+// kiroSQLiteDBPath returns the current-store Kiro SQLite DB when the
+// configured root contains one.
+func kiroSQLiteDBPath(dir string) string {
 	if dir == "" {
 		return ""
 	}
@@ -75,22 +75,13 @@ func FindKiroSQLiteDBPath(dir string) string {
 // KiroSQLiteVirtualPath gives each conversation inside the shared
 // Kiro DB a stable source identity for the AgentsView archive.
 func KiroSQLiteVirtualPath(dbPath, sessionID string) string {
-	return dbPath + "#" + sessionID
+	return VirtualSourcePath(dbPath, sessionID)
 }
 
-// ParseKiroSQLiteVirtualPath splits a virtual Kiro SQLite source
+// kiroSQLiteVirtualPathParts splits a virtual Kiro SQLite source
 // path back into its database path and raw session ID.
-func ParseKiroSQLiteVirtualPath(path string) (string, string, bool) {
-	idx := strings.LastIndex(path, "#")
-	if idx < 0 {
-		return "", "", false
-	}
-	dbPath, sessionID := path[:idx], path[idx+1:]
-	if filepath.Base(dbPath) != kiroSQLiteDBName ||
-		sessionID == "" {
-		return "", "", false
-	}
-	return dbPath, sessionID, true
+func kiroSQLiteVirtualPathParts(path string) (string, string, bool) {
+	return ParseVirtualSourcePathForBase(path, kiroSQLiteDBName)
 }
 
 // KiroSQLiteSessionExists reports whether the current Kiro DB has
@@ -189,7 +180,7 @@ func (s *KiroSQLiteStore) ListSessionMeta() ([]KiroSQLiteSessionMeta, error) {
 // KiroSQLiteSessionIDs returns the set of current-store logical
 // conversation IDs under dir.
 func KiroSQLiteSessionIDs(dir string) map[string]struct{} {
-	dbPath := FindKiroSQLiteDBPath(dir)
+	dbPath := kiroSQLiteDBPath(dir)
 	if dbPath == "" {
 		return nil
 	}
@@ -207,7 +198,7 @@ func KiroSQLiteSessionIDs(dir string) map[string]struct{} {
 // KiroSQLiteSourceMtime resolves the canonical per-session
 // updated_at timestamp for a virtual SQLite source path.
 func KiroSQLiteSourceMtime(path string) (int64, error) {
-	dbPath, sessionID, ok := ParseKiroSQLiteVirtualPath(path)
+	dbPath, sessionID, ok := kiroSQLiteVirtualPathParts(path)
 	if !ok {
 		return 0, fmt.Errorf("not a kiro sqlite virtual path: %s", path)
 	}
@@ -218,9 +209,9 @@ func KiroSQLiteSourceMtime(path string) (int64, error) {
 	return row.updatedAt * 1_000_000, nil
 }
 
-// ParseKiroSQLiteSession parses one current-store Kiro CLI
-// conversation into normal AgentsView session/message records.
-func ParseKiroSQLiteSession(
+// parseKiroSQLiteSession parses one current-store Kiro CLI conversation
+// into normal AgentsView session/message records.
+func parseKiroSQLiteSession(
 	dbPath, sessionID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	store, err := OpenKiroSQLiteStore(dbPath)

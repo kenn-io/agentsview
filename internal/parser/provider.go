@@ -380,6 +380,10 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newGeminiProviderFactory(def)
 	case AgentKimi:
 		return newKimiProviderFactory(def)
+	case AgentKiro:
+		return newKiroProviderFactory(def)
+	case AgentKiroIDE:
+		return newKiroIDEProviderFactory(def)
 	case AgentKilo:
 		return newKiloProviderFactory(def)
 	case AgentMiMoCode:

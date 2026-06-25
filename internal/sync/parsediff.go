@@ -356,17 +356,6 @@ func (e *Engine) parseDiffDatabaseSources(
 			continue
 		}
 		switch def.Type {
-		case parser.AgentKiro:
-			for _, dir := range e.agentDirs[def.Type] {
-				if dir == "" {
-					continue
-				}
-				if dbPath := parser.FindKiroSQLiteDBPath(dir); dbPath != "" {
-					extra = append(extra, parser.DiscoveredFile{
-						Path: dbPath, Agent: parser.AgentKiro,
-					})
-				}
-			}
 		case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode:
 			for _, dir := range e.agentDirs[def.Type] {
 				if dir == "" {
@@ -451,7 +440,7 @@ func stripVirtualSourceSuffix(path string) string {
 	if historyPath, _, ok := parser.ParseAiderVirtualPath(path); ok {
 		return historyPath
 	}
-	if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parseKiroSQLiteVirtualPath(path); ok {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "threads.db"); ok {
