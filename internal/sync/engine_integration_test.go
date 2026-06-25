@@ -3851,10 +3851,24 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 		time.Unix(0, sessionMtime),
 	)
 	require.NoError(t, err, "restore session mtime")
-	_, parsedMsgs, parseErr := parser.ParseOpenCodeFile(
-		sessionPath, "local",
+	ocProvider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+		Roots:   []string{env.opencodeDir},
+		Machine: "local",
+	})
+	require.True(t, ok, "opencode provider available")
+	ocSource, found, parseErr := ocProvider.FindSource(
+		context.Background(),
+		parser.FindSourceRequest{FullSessionID: "opencode:oc-storage-mtime"},
 	)
-	require.NoError(t, parseErr, "ParseOpenCodeFile after rewrite")
+	require.NoError(t, parseErr, "find opencode source after rewrite")
+	require.True(t, found, "opencode source found after rewrite")
+	ocOutcome, parseErr := ocProvider.Parse(context.Background(), parser.ParseRequest{
+		Source:  ocSource,
+		Machine: "local",
+	})
+	require.NoError(t, parseErr, "parse opencode source after rewrite")
+	require.Len(t, ocOutcome.Results, 1, "parsed results after rewrite")
+	parsedMsgs := ocOutcome.Results[0].Result.Messages
 	require.Len(t, parsedMsgs, 1, "parsed messages after rewrite = %#v, want updated reply", parsedMsgs)
 	require.Equal(t, "updated reply", parsedMsgs[0].Content,
 		"parsed messages after rewrite = %#v, want updated reply", parsedMsgs)
@@ -4121,8 +4135,8 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 // multi-root shadowing case: an early hybrid root with an
 // opencode.db that lacks the requested session must not shadow a
 // later pure-storage root that contains it. Without the
-// session-existence gate in FindOpenCodeSourceFile, the engine
-// would return a virtual SQLite path pointing at the wrong DB.
+// session-existence gate in the OpenCode-format source lookup, the
+// engine would return a virtual SQLite path pointing at the wrong DB.
 func TestFindSourceFileSkipsHybridRootMissingSession(t *testing.T) {
 	hybridRoot := t.TempDir()
 	storageRoot := t.TempDir()
@@ -4558,7 +4572,12 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 	assert.Equal(t, []string{"Gemini 3.5 Flash (High)"}, daily.Daily[0].ModelsUsed)
 }
 
-func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
+// TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently covers a
+// re-sync of an unchanged OpenCode storage session. OpenCode is
+// provider-authoritative, so a full SyncAll re-parses the source through
+// the provider facade rather than taking the legacy DB-mtime skip; the
+// re-parse must be idempotent and keep the same content.
+func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -4583,8 +4602,11 @@ func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
 	})
 
 	stats := env.engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Skipped, "SyncAll stats = %+v, want 1 skipped and 0 synced", stats)
-	require.Equal(t, 0, stats.Synced, "SyncAll stats = %+v, want 1 skipped and 0 synced", stats)
+	require.Equal(t, 1, stats.TotalSessions, "SyncAll stats = %+v", stats)
+	require.Equal(t, 0, stats.Failed, "SyncAll stats = %+v", stats)
+	assertMessageContent(
+		t, env.db, "opencode:oc-skip-unchanged", "stable reply",
+	)
 }
 
 func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {

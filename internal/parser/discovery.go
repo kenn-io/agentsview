@@ -309,22 +309,6 @@ func ResolveOpenCodeSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(openCodeFmt, root)
 }
 
-// DiscoverOpenCodeSessions finds all file-backed OpenCode session
-// JSON files under storage/session.
-func DiscoverOpenCodeSessions(root string) []DiscoveredFile {
-	return discoverOpenCodeFormatSessions(openCodeFmt, root)
-}
-
-// FindOpenCodeSourceFile locates a single OpenCode session source
-// path or SQLite backing file by raw session ID. Returns "" when
-// the session is not present under this root so the caller
-// (Engine.FindSourceFile) can continue searching later configured
-// roots — important when an early hybrid root with an unrelated
-// opencode.db could otherwise shadow a session in a later root.
-func FindOpenCodeSourceFile(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(openCodeFmt, root, sessionID)
-}
-
 // OpenCodeStorageSessionIDs returns the set of session IDs that
 // have a JSON file under storage/session/*/ in the given root.
 // Returns nil for non-storage roots. In hybrid roots (storage and
@@ -353,12 +337,6 @@ func OpenCodeSQLiteVirtualPath(
 	return dbPath + "#" + sessionID
 }
 
-func ParseOpenCodeSQLiteVirtualPath(
-	sourcePath string,
-) (dbPath, sessionID string, ok bool) {
-	return parseOpenCodeFormatVirtualPath(openCodeFmt.dbName, sourcePath)
-}
-
 func openCodeSessionProject(path string) string {
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -381,14 +359,6 @@ func ResolveKiloSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(kiloFmt, root)
 }
 
-func DiscoverKiloSessions(root string) []DiscoveredFile {
-	return discoverOpenCodeFormatSessions(kiloFmt, root)
-}
-
-func FindKiloSourceFile(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(kiloFmt, root, sessionID)
-}
-
 func KiloStorageSessionIDs(root string) map[string]struct{} {
 	return openCodeFormatStorageSessionIDs(kiloFmt, root)
 }
@@ -401,12 +371,8 @@ func KiloSQLiteVirtualPath(dbPath, sessionID string) string {
 	return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 }
 
-func ParseKiloSQLiteVirtualPath(
-	sourcePath string,
-) (dbPath, sessionID string, ok bool) {
-	return parseOpenCodeFormatVirtualPath(kiloFmt.dbName, sourcePath)
-}
-
+// ResolveIcodemateSource detects whether an Icodemate root is using
+// file-backed storage or legacy SQLite storage.
 func ResolveIcodemateSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(icodemateFmt, root)
 }
@@ -443,14 +409,6 @@ func ResolveMiMoCodeSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(mimoFmt, root)
 }
 
-func DiscoverMiMoCodeSessions(root string) []DiscoveredFile {
-	return discoverOpenCodeFormatSessions(mimoFmt, root)
-}
-
-func FindMiMoCodeSourceFile(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(mimoFmt, root, sessionID)
-}
-
 func MiMoCodeStorageSessionIDs(root string) map[string]struct{} {
 	return openCodeFormatStorageSessionIDs(mimoFmt, root)
 }
@@ -461,12 +419,6 @@ func ResolveMiMoCodeWatchRoots(root string) []string {
 
 func MiMoCodeSQLiteVirtualPath(dbPath, sessionID string) string {
 	return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
-}
-
-func ParseMiMoCodeSQLiteVirtualPath(
-	sourcePath string,
-) (dbPath, sessionID string, ok bool) {
-	return parseOpenCodeFormatVirtualPath(mimoFmt.dbName, sourcePath)
 }
 
 // ResolveCodexShallowWatchRoots returns directories that should be watched

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -8,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseMiMoCodeFileRelabelsOpenCodeSession(t *testing.T) {
+func TestMiMoCodeProviderParseRelabelsOpenCodeSession(t *testing.T) {
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session_diff", "global", "ses_mimo.json",
@@ -46,9 +47,25 @@ func TestParseMiMoCodeFileRelabelsOpenCodeSession(t *testing.T) {
 		},
 	})
 
-	sess, msgs, err := ParseMiMoCodeFile(sessionPath, "testmachine")
+	provider, ok := NewProvider(AgentMiMoCode, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "testmachine",
+	})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		FullSessionID: "mimocode:ses_mimo",
+	})
 	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.True(t, found)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:  source,
+		Machine: "testmachine",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	sess := outcome.Results[0].Result.Session
+	msgs := outcome.Results[0].Result.Messages
 	require.Len(t, msgs, 1)
 
 	assert.Equal(t, "mimocode:ses_mimo", sess.ID)
@@ -58,7 +75,7 @@ func TestParseMiMoCodeFileRelabelsOpenCodeSession(t *testing.T) {
 	assert.Equal(t, "Hello from MiMoCode", msgs[0].Content)
 }
 
-func TestDiscoverMiMoCodeSessions(t *testing.T) {
+func TestMiMoCodeProviderDiscoversSessions(t *testing.T) {
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session_diff", "global", "ses_mimo.json",
@@ -72,24 +89,28 @@ func TestDiscoverMiMoCodeSessions(t *testing.T) {
 		},
 	})
 
-	files := DiscoverMiMoCodeSessions(root)
-	require.Len(t, files, 1)
+	provider, ok := NewProvider(AgentMiMoCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
 
-	assert.Equal(t, sessionPath, files[0].Path)
-	assert.Equal(t, "mimoapp", files[0].Project)
-	assert.Equal(t, AgentMiMoCode, files[0].Agent)
+	assert.Equal(t, sessionPath, sources[0].DisplayPath)
+	assert.Equal(t, "mimoapp", sources[0].ProjectHint)
+	assert.Equal(t, AgentMiMoCode, sources[0].Provider)
 }
 
-func TestParseMiMoCodeSQLiteVirtualPath(t *testing.T) {
+func TestMiMoCodeSQLiteVirtualPathRoundTrips(t *testing.T) {
 	wantDBPath := filepath.Join(t.TempDir(), "mimocode.db")
-	virtual := wantDBPath + "#ses_mimo"
-	dbPath, sessionID, ok := ParseMiMoCodeSQLiteVirtualPath(virtual)
+	virtual := MiMoCodeSQLiteVirtualPath(wantDBPath, "ses_mimo")
+	dbPath, sessionID, ok := parseOpenCodeFormatVirtualPath(mimoFmt.dbName, virtual)
 	require.True(t, ok)
 	assert.Equal(t, wantDBPath, dbPath)
 	assert.Equal(t, "ses_mimo", sessionID)
 
-	_, _, ok = ParseMiMoCodeSQLiteVirtualPath(
-		filepath.Join(t.TempDir(), "opencode.db") + "#ses_mimo",
+	_, _, ok = parseOpenCodeFormatVirtualPath(
+		mimoFmt.dbName,
+		filepath.Join(t.TempDir(), "opencode.db")+"#ses_mimo",
 	)
 	assert.False(t, ok)
 }

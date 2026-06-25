@@ -173,8 +173,6 @@ var Registry = []AgentDef{
 			"storage/part",
 		},
 		FileBased:      true,
-		DiscoverFunc:   DiscoverMiMoCodeSessions,
-		FindSourceFunc: FindMiMoCodeSourceFile,
 		WatchRootsFunc: ResolveMiMoCodeWatchRoots,
 	},
 	{
@@ -190,8 +188,6 @@ var Registry = []AgentDef{
 			"storage/part",
 		},
 		FileBased:      true,
-		DiscoverFunc:   DiscoverOpenCodeSessions,
-		FindSourceFunc: FindOpenCodeSourceFile,
 		WatchRootsFunc: ResolveOpenCodeWatchRoots,
 	},
 	{
@@ -207,8 +203,6 @@ var Registry = []AgentDef{
 			"storage/part",
 		},
 		FileBased:      true,
-		DiscoverFunc:   DiscoverKiloSessions,
-		FindSourceFunc: FindKiloSourceFile,
 		WatchRootsFunc: ResolveKiloWatchRoots,
 	},
 	{

@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -923,32 +922,12 @@ func findContainingDir(dirs []string, path string) string {
 }
 
 // classifyContainerPath runs the container- and SQLite-style classifiers that
-// resolve a path whether or not it currently exists on disk (OpenCode-format
-// stores, Kiro, Zed, Shelley, and Vibe). Split out of classifyOnePath to keep
-// that function within NilAway's per-function CFG-block limit.
+// resolve a path whether or not it currently exists on disk (Kiro, Zed,
+// Shelley, and Vibe). Split out of classifyOnePath to keep that function
+// within NilAway's per-function CFG-block limit.
 func (e *Engine) classifyContainerPath(
 	path string, pathExists bool,
 ) (parser.DiscoveredFile, bool) {
-	if df, ok := e.classifyOpenCodeFormatPath(
-		parser.AgentOpenCode, path, pathExists,
-	); ok {
-		return df, true
-	}
-	if df, ok := e.classifyOpenCodeFormatPath(
-		parser.AgentKilo, path, pathExists,
-	); ok {
-		return df, true
-	}
-	if df, ok := e.classifyOpenCodeFormatPath(
-		parser.AgentMiMoCode, path, pathExists,
-	); ok {
-		return df, true
-	}
-	if df, ok := e.classifyOpenCodeFormatPath(
-		parser.AgentIcodemate, path, pathExists,
-	); ok {
-		return df, true
-	}
 	if df, ok := e.classifyKiroSQLitePath(path); ok {
 		return df, true
 	}
@@ -1586,138 +1565,6 @@ func (e *Engine) classifyAntigravityCLIBrainPath(
 	return nil
 }
 
-// classifyOpenCodeFormatPath classifies a path under an OpenCode-format
-// root (OpenCode, its Kilo fork, or MiMoCode), which share an on-disk
-// layout and differ only in the SQLite filename, the storage/<subdir>
-// holding session JSON, and the agent label. MiMoCode stores sessions
-// under storage/session_diff; the session subdir is taken from the
-// resolved source rather than assumed.
-//
-//	<dir>/storage/<sessionSubdir>/<project>/<session>.json
-//	<dir>/storage/message/<session>/<message>.json
-//	<dir>/storage/part/<message>/<part>.json
-func (e *Engine) classifyOpenCodeFormatPath(
-	agent parser.AgentType, path string, pathExists bool,
-) (parser.DiscoveredFile, bool) {
-	sep := string(filepath.Separator)
-	dbName := openCodeFormatDBName(agent)
-
-	for _, dir := range e.agentDirs[agent] {
-		if dir == "" {
-			continue
-		}
-		rel, ok := isUnder(dir, path)
-		if !ok {
-			continue
-		}
-		base := filepath.Base(rel)
-		if rel == dbName || strings.HasPrefix(base, dbName+"-") {
-			dbPath := filepath.Join(dir, dbName)
-			if info, err := os.Stat(dbPath); err == nil &&
-				!info.IsDir() {
-				return parser.DiscoveredFile{
-					Path:  dbPath,
-					Agent: agent,
-				}, true
-			}
-			continue
-		}
-		src := resolveOpenCodeFormatSource(agent, dir)
-		if src.Mode != parser.OpenCodeSourceStorage {
-			continue
-		}
-		sessionSubdir := filepath.Base(src.SessionRoot)
-		parts := strings.Split(rel, sep)
-		switch {
-		case pathExists &&
-			len(parts) == 4 &&
-			parts[0] == "storage" &&
-			parts[1] == sessionSubdir &&
-			strings.HasSuffix(parts[3], ".json"):
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: agent,
-			}, true
-		case len(parts) == 4 &&
-			parts[0] == "storage" &&
-			parts[1] == "message" &&
-			strings.HasSuffix(parts[3], ".json"):
-			sessionPath := findOpenCodeFormatSourceFile(
-				agent, dir, parts[2],
-			)
-			if sessionPath == "" {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  sessionPath,
-				Agent: agent,
-			}, true
-		case len(parts) == 4 &&
-			parts[0] == "storage" &&
-			parts[1] == "part" &&
-			strings.HasSuffix(parts[3], ".json"):
-			sessionID := ""
-			if pathExists {
-				sessionID = readOpenCodeStorageSessionID(path)
-			}
-			if sessionID == "" {
-				sessionID =
-					findOpenCodeStorageSessionIDByMessageID(
-						dir, parts[2],
-					)
-			}
-			if sessionID == "" {
-				continue
-			}
-			sessionPath := findOpenCodeFormatSourceFile(
-				agent, dir, sessionID,
-			)
-			if sessionPath == "" {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  sessionPath,
-				Agent: agent,
-			}, true
-		case !pathExists &&
-			len(parts) == 3 &&
-			parts[0] == "storage" &&
-			parts[1] == "message":
-			sessionPath := findOpenCodeFormatSourceFile(
-				agent, dir, parts[2],
-			)
-			if sessionPath == "" {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  sessionPath,
-				Agent: agent,
-			}, true
-		case !pathExists &&
-			len(parts) == 3 &&
-			parts[0] == "storage" &&
-			parts[1] == "part":
-			sessionID := findOpenCodeStorageSessionIDByMessageID(
-				dir, parts[2],
-			)
-			if sessionID == "" {
-				continue
-			}
-			sessionPath := findOpenCodeFormatSourceFile(
-				agent, dir, sessionID,
-			)
-			if sessionPath == "" {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  sessionPath,
-				Agent: agent,
-			}, true
-		}
-	}
-	return parser.DiscoveredFile{}, false
-}
-
 func (e *Engine) classifyKiroSQLitePath(
 	path string,
 ) (parser.DiscoveredFile, bool) {
@@ -2058,8 +1905,12 @@ func (e *Engine) resyncAllLocked(
 	// restores those rows immediately after the sync pass.
 	// A few permanent parse failures are tolerated since those
 	// files were broken in the old DB too.
-	emptyDiscovery := stats.filesDiscovered == 0 &&
-		stats.filesOK == 0 &&
+	// OpenCode-format storage is a self-preserving container store that
+	// now flows through file discovery, so it is excluded here just as it
+	// is subtracted from oldFileSessions above. Otherwise its discovery
+	// would mask the disappearance of plain file-backed sessions whose
+	// directories went empty.
+	emptyDiscovery := stats.nonContainerDiscovered == 0 &&
 		oldFileSessions > 0
 	preservedOnly := stats.Synced == 0 &&
 		stats.TotalSessions > 0 &&
@@ -2713,6 +2564,13 @@ func (e *Engine) syncAllLocked(
 		SessionsTotal: progressTotal,
 	})
 
+	nonContainerDiscovered := 0
+	for _, f := range all {
+		if !isOpenCodeFormatStorageAgent(f.Agent) {
+			nonContainerDiscovered++
+		}
+	}
+
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
 	stats = e.collectAndBatch(
@@ -2721,6 +2579,7 @@ func (e *Engine) syncAllLocked(
 	for range providerFailures {
 		stats.RecordFailed()
 	}
+	stats.nonContainerDiscovered = nonContainerDiscovered
 	if verbose {
 		log.Printf(
 			"file sync: %d synced, %d skipped in %s",
@@ -2820,46 +2679,10 @@ func (e *Engine) syncAllLocked(
 		return stats
 	}
 
-	// Sync OpenCode-format sessions (DB-backed, not file-based).
-	// Uses full replace because these messages can change in place
-	// (streaming updates, tool result pairing). Kilo is a fork of
-	// OpenCode and shares the same SQLite-backed sync.
-	if scope.includesAny(e.agentDirs[parser.AgentOpenCode]) {
-		if e.syncOpenCodeFormatAgent(
-			ctx, parser.AgentOpenCode, "opencode",
-			writeMode, verbose, scope, &stats, advanceDBProgress,
-		) {
-			stats.Aborted = true
-			return stats
-		}
-	}
-	if scope.includesAny(e.agentDirs[parser.AgentKilo]) {
-		if e.syncOpenCodeFormatAgent(
-			ctx, parser.AgentKilo, "kilo",
-			writeMode, verbose, scope, &stats, advanceDBProgress,
-		) {
-			stats.Aborted = true
-			return stats
-		}
-	}
-	if scope.includesAny(e.agentDirs[parser.AgentMiMoCode]) {
-		if e.syncOpenCodeFormatAgent(
-			ctx, parser.AgentMiMoCode, "mimocode",
-			writeMode, verbose, scope, &stats, advanceDBProgress,
-		) {
-			stats.Aborted = true
-			return stats
-		}
-	}
-	if scope.includesAny(e.agentDirs[parser.AgentIcodemate]) {
-		if e.syncOpenCodeFormatAgent(
-			ctx, parser.AgentIcodemate, "icodemate",
-			writeMode, verbose, scope, &stats, advanceDBProgress,
-		) {
-			stats.Aborted = true
-			return stats
-		}
-	}
+	// OpenCode-format sessions (OpenCode and its Kilo and MiMoCode
+	// forks) are provider-authoritative: discovery and parsing flow
+	// through the provider facade in the file-sync phase above, so no
+	// dedicated DB-backed sync pass is needed here.
 
 	// Sync Warp sessions (DB-backed, not file-based).
 	tWarp := time.Now()
@@ -3665,61 +3488,6 @@ func shelleyDBCompositeMtime(dbPath string) (int64, error) {
 	return maxMtime, nil
 }
 
-// openCodeFormatPendingSessionIDs returns the SQLite session IDs that
-// need re-parsing for an OpenCode-format agent. Uses per-session
-// time_updated to detect changes and skips IDs shadowed by a canonical
-// storage transcript.
-func (e *Engine) openCodeFormatPendingSessionIDs(
-	agent parser.AgentType, dir string,
-) []string {
-	dbPath := filepath.Join(dir, openCodeFormatDBName(agent))
-	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
-		return nil
-	}
-
-	metas, err := listOpenCodeFormatSessionMeta(agent, dbPath)
-	if err != nil {
-		log.Printf("sync %s: %v", agent, err)
-		return nil
-	}
-	storageIDs := openCodeFormatStorageSessionIDs(agent, dir)
-	var changed []string
-	for _, m := range metas {
-		if _, ok := storageIDs[m.SessionID]; ok {
-			continue
-		}
-		_, storedMtime, ok := e.db.GetFileInfoByPath(m.VirtualPath)
-		if ok && storedMtime == m.FileMtime &&
-			e.db.GetDataVersionByPath(m.VirtualPath) >= db.CurrentDataVersion() {
-			continue
-		}
-		changed = append(changed, m.SessionID)
-	}
-	return changed
-}
-
-func (e *Engine) countOneOpenCodeFormatSessions(
-	agent parser.AgentType, dir string,
-) int {
-	dbPath := filepath.Join(dir, openCodeFormatDBName(agent))
-	if info, err := os.Stat(dbPath); err != nil || info.IsDir() {
-		return 0
-	}
-	metas, err := listOpenCodeFormatSessionMeta(agent, dbPath)
-	if err != nil {
-		log.Printf("sync %s: %v", agent, err)
-		return 0
-	}
-	storageIDs := openCodeFormatStorageSessionIDs(agent, dir)
-	count := 0
-	for _, m := range metas {
-		if _, ok := storageIDs[m.SessionID]; !ok {
-			count++
-		}
-	}
-	return count
-}
-
 func (e *Engine) countDBBackedProgressTotal(
 	agent parser.AgentType, scope *rootSyncScope,
 ) int {
@@ -3731,8 +3499,6 @@ func (e *Engine) countDBBackedProgressTotal(
 		switch agent {
 		case parser.AgentKiro:
 			total += e.countOneKiroSQLiteSessions(dir)
-		case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
-			total += e.countOneOpenCodeFormatSessions(agent, dir)
 		case parser.AgentWarp:
 			total += e.countOneWarpSessions(dir)
 		case parser.AgentForge:
@@ -3753,10 +3519,6 @@ func (e *Engine) countDBBackedSessions(
 	total := 0
 	for _, agent := range []parser.AgentType{
 		parser.AgentKiro,
-		parser.AgentOpenCode,
-		parser.AgentKilo,
-		parser.AgentMiMoCode,
-		parser.AgentIcodemate,
 		parser.AgentWarp,
 		parser.AgentForge,
 		parser.AgentPiebald,
@@ -3924,125 +3686,6 @@ func (e *Engine) syncOneKiroSQLite(
 		})
 	}
 	return pending
-}
-
-// syncOpenCodeFormat syncs sessions from an OpenCode-format agent's
-// SQLite database (OpenCode or its Kilo fork). Uses per-session
-// time_updated to detect changes, so only modified sessions are fully
-// parsed. Returns pending writes.
-func (e *Engine) syncOpenCodeFormat(
-	ctx context.Context, agent parser.AgentType, scope *rootSyncScope,
-) []pendingWrite {
-	var allPending []pendingWrite
-	for _, dir := range e.agentDirs[agent] {
-		if ctx.Err() != nil {
-			break
-		}
-		if dir == "" || !scope.includes(dir) {
-			continue
-		}
-		allPending = append(
-			allPending, e.syncOneOpenCodeFormat(ctx, agent, dir)...,
-		)
-	}
-	return allPending
-}
-
-// syncOneOpenCodeFormat handles a single OpenCode-format directory.
-func (e *Engine) syncOneOpenCodeFormat(
-	ctx context.Context, agent parser.AgentType, dir string,
-) []pendingWrite {
-	dbPath := filepath.Join(dir, openCodeFormatDBName(agent))
-	changed := e.openCodeFormatPendingSessionIDs(agent, dir)
-	if len(changed) == 0 {
-		return nil
-	}
-
-	var pending []pendingWrite
-	for _, sid := range changed {
-		if ctx.Err() != nil {
-			break
-		}
-		sess, msgs, err := parseOpenCodeFormatSession(
-			agent, dbPath, sid, e.machine,
-		)
-		if err != nil {
-			log.Printf(
-				"%s session %s: %v", agent, sid, err,
-			)
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		pending = append(pending, pendingWrite{
-			sess: *sess,
-			msgs: msgs,
-		})
-	}
-
-	return pending
-}
-
-// syncOpenCodeFormatAgent collects, writes, and records pending
-// sessions for one OpenCode-format agent. It returns true when the
-// context was cancelled so the caller can mark the sync aborted.
-func (e *Engine) syncOpenCodeFormatAgent(
-	ctx context.Context, agent parser.AgentType, label string,
-	writeMode syncWriteMode, verbose bool, scope *rootSyncScope,
-	stats *SyncStats,
-	advanceDBProgress func(total int, pending []pendingWrite),
-) bool {
-	start := time.Now()
-	pending := e.syncOpenCodeFormat(ctx, agent, scope)
-	if len(pending) > 0 {
-		stats.TotalSessions += len(pending)
-		tWrite := time.Now()
-		var written int
-		if writeMode == syncWriteBulk {
-			var failedWrites int
-			written, _, failedWrites = e.writeBatch(
-				pending, writeMode, true,
-			)
-			for range failedWrites {
-				stats.RecordFailed()
-			}
-		} else {
-			resolveWorktreeProject := e.loadWorktreeProjectResolver()
-			for _, pw := range pending {
-				if ctx.Err() != nil {
-					break
-				}
-				switch err := e.writeSessionFullWithResolver(
-					pw, resolveWorktreeProject,
-				); {
-				case err == nil:
-					written++
-				case isIntentionalSessionSkip(err),
-					errors.Is(err, errSessionPreserved):
-					// Intentional skip, not a failure.
-				default:
-					stats.RecordFailed()
-				}
-			}
-		}
-		stats.RecordSynced(written)
-		if verbose {
-			log.Printf(
-				"%s write: %d sessions in %s",
-				label, len(pending),
-				time.Since(tWrite).Round(time.Millisecond),
-			)
-		}
-	}
-	if verbose {
-		log.Printf(
-			"%s sync: %s",
-			label, time.Since(start).Round(time.Millisecond),
-		)
-	}
-	advanceDBProgress(e.countDBBackedProgressTotal(agent, scope), pending)
-	return ctx.Err() != nil
 }
 
 // startWorkers fans out file processing across a worker pool
@@ -4374,10 +4017,6 @@ func (e *Engine) processFile(
 		statPath := file.Path
 		if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
-		} else if dbPath, _, ok := parser.ParseKiloSQLiteVirtualPath(file.Path); ok {
-			statPath = dbPath
-		} else if dbPath, _, ok := parser.ParseMiMoCodeSQLiteVirtualPath(file.Path); ok {
-			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
@@ -4472,8 +4111,6 @@ func (e *Engine) processFile(
 		res = e.processReasonix(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
-	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
-		res = e.processOpenCodeFormat(file.Agent, file, info)
 	case parser.AgentOpenHands:
 		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
@@ -5691,139 +5328,6 @@ func (e *Engine) processCodex(
 		},
 		forceReplace: forceReplace,
 	}
-}
-
-func (e *Engine) processOpenCodeFormat(
-	agent parser.AgentType,
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if dbPath, sessionID, ok := parseOpenCodeFormatSQLiteVirtualPath(
-		agent, file.Path,
-	); ok {
-		sess, msgs, err := parseOpenCodeFormatSession(
-			agent, dbPath, sessionID, e.machine,
-		)
-		if err != nil {
-			return processResult{err: err}
-		}
-		if sess == nil {
-			return processResult{}
-		}
-		return processResult{
-			results: []parser.ParseResult{
-				{Session: *sess, Messages: msgs},
-			},
-		}
-	}
-	if filepath.Base(file.Path) == openCodeFormatDBName(agent) {
-		metas, err := listOpenCodeFormatSessionMeta(agent, file.Path)
-		if err != nil {
-			return processResult{err: err}
-		}
-		storageIDs := openCodeFormatStorageSessionIDs(
-			agent, filepath.Dir(file.Path),
-		)
-		var results []parser.ParseResult
-		var sessionErrs []sessionParseError
-		for _, meta := range metas {
-			if _, ok := storageIDs[meta.SessionID]; ok {
-				continue
-			}
-			_, storedMtime, ok := e.db.GetFileInfoByPath(meta.VirtualPath)
-			// parse-diff: !e.forceParse disables the stored-state skip.
-			if !e.forceParse && ok && storedMtime == meta.FileMtime &&
-				e.db.GetDataVersionByPath(meta.VirtualPath) >=
-					db.CurrentDataVersion() {
-				continue
-			}
-			sess, msgs, err := parseOpenCodeFormatSession(
-				agent, file.Path, meta.SessionID, e.machine,
-			)
-			if err != nil {
-				if e.forceParse {
-					sessionErrs = append(sessionErrs, sessionParseError{
-						sessionID:   meta.SessionID,
-						virtualPath: meta.VirtualPath,
-						err:         err,
-					})
-				} else {
-					log.Printf(
-						"%s sqlite watch session %s: %v",
-						agent, meta.SessionID, err,
-					)
-				}
-				continue
-			}
-			if sess == nil {
-				continue
-			}
-			results = append(results, parser.ParseResult{
-				Session:  *sess,
-				Messages: msgs,
-			})
-		}
-		return processResult{
-			results:      results,
-			sessionErrs:  sessionErrs,
-			forceReplace: true,
-		}
-	}
-	if e.shouldSkipOpenCodeFormatByPath(agent, file.Path) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parseOpenCodeFormatFile(
-		agent, file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil && sess.File.Hash == "" {
-		sess.File.Hash = hash
-	}
-
-	sess.File.Inode, sess.File.Device = getFileIdentity(info)
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) shouldSkipOpenCodeFormatByPath(
-	agent parser.AgentType, path string,
-) bool {
-	if e.forceParse { // parse-diff: always re-parse
-		return false
-	}
-	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
-
-	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-	if !ok {
-		return false
-	}
-
-	sourceMtime, err := openCodeFormatSourceMtime(agent, path)
-	if err != nil || sourceMtime == 0 {
-		return false
-	}
-	if storedMtime != sourceMtime {
-		return false
-	}
-	if e.db.GetDataVersionByPath(lookupPath) <
-		db.CurrentDataVersion() {
-		return false
-	}
-	return true
 }
 
 func (e *Engine) processCopilot(
@@ -8415,98 +7919,10 @@ func isOpenCodeFormatSQLiteVirtualPath(
 	if !isOpenCodeFormatStorageAgent(agent) {
 		return false
 	}
-	_, _, ok := parseOpenCodeFormatSQLiteVirtualPath(agent, path)
+	_, _, ok := parser.ParseVirtualSourcePathForBase(
+		path, openCodeFormatDBName(agent),
+	)
 	return ok
-}
-
-func parseOpenCodeFormatSQLiteVirtualPath(
-	agent parser.AgentType, path string,
-) (dbPath, sessionID string, ok bool) {
-	switch agent {
-	case parser.AgentKilo:
-		return parser.ParseKiloSQLiteVirtualPath(path)
-	case parser.AgentMiMoCode:
-		return parser.ParseMiMoCodeSQLiteVirtualPath(path)
-	case parser.AgentIcodemate:
-		return parser.ParseIcodemateSQLiteVirtualPath(path)
-	default:
-		return parser.ParseOpenCodeSQLiteVirtualPath(path)
-	}
-}
-
-func listOpenCodeFormatSessionMeta(
-	agent parser.AgentType, dbPath string,
-) ([]parser.OpenCodeSessionMeta, error) {
-	switch agent {
-	case parser.AgentKilo:
-		return parser.ListKiloSessionMeta(dbPath)
-	case parser.AgentMiMoCode:
-		return parser.ListMiMoCodeSessionMeta(dbPath)
-	case parser.AgentIcodemate:
-		return parser.ListIcodemateSessionMeta(dbPath)
-	default:
-		return parser.ListOpenCodeSessionMeta(dbPath)
-	}
-}
-
-func openCodeFormatStorageSessionIDs(
-	agent parser.AgentType, dir string,
-) map[string]struct{} {
-	switch agent {
-	case parser.AgentKilo:
-		return parser.KiloStorageSessionIDs(dir)
-	case parser.AgentMiMoCode:
-		return parser.MiMoCodeStorageSessionIDs(dir)
-	case parser.AgentIcodemate:
-		return parser.IcodemateStorageSessionIDs(dir)
-	default:
-		return parser.OpenCodeStorageSessionIDs(dir)
-	}
-}
-
-func findOpenCodeFormatSourceFile(
-	agent parser.AgentType, dir, sessionID string,
-) string {
-	switch agent {
-	case parser.AgentKilo:
-		return parser.FindKiloSourceFile(dir, sessionID)
-	case parser.AgentMiMoCode:
-		return parser.FindMiMoCodeSourceFile(dir, sessionID)
-	case parser.AgentIcodemate:
-		return parser.FindIcodemateSourceFile(dir, sessionID)
-	default:
-		return parser.FindOpenCodeSourceFile(dir, sessionID)
-	}
-}
-
-func parseOpenCodeFormatSession(
-	agent parser.AgentType, dbPath, sessionID, machine string,
-) (*parser.ParsedSession, []parser.ParsedMessage, error) {
-	switch agent {
-	case parser.AgentKilo:
-		return parser.ParseKiloSession(dbPath, sessionID, machine)
-	case parser.AgentMiMoCode:
-		return parser.ParseMiMoCodeSession(dbPath, sessionID, machine)
-	case parser.AgentIcodemate:
-		return parser.ParseIcodemateSession(dbPath, sessionID, machine)
-	default:
-		return parser.ParseOpenCodeSession(dbPath, sessionID, machine)
-	}
-}
-
-func parseOpenCodeFormatFile(
-	agent parser.AgentType, path, machine string,
-) (*parser.ParsedSession, []parser.ParsedMessage, error) {
-	switch agent {
-	case parser.AgentKilo:
-		return parser.ParseKiloFile(path, machine)
-	case parser.AgentMiMoCode:
-		return parser.ParseMiMoCodeFile(path, machine)
-	case parser.AgentIcodemate:
-		return parser.ParseIcodemateFile(path, machine)
-	default:
-		return parser.ParseOpenCodeFile(path, machine)
-	}
 }
 
 func derefString(s *string) string {
@@ -9245,14 +8661,10 @@ func (e *Engine) SyncSingleSessionContext(
 		case parser.AgentPiebald:
 			return e.syncSinglePiebald(sessionID)
 		default:
-			err = e.syncSingleOpenCodeFormat(
-				sessionID, parser.AgentOpenCode,
+			return fmt.Errorf(
+				"cannot resync non-file-based session %s for agent %s",
+				sessionID, def.Type,
 			)
-			if errors.Is(err, errSessionPreserved) {
-				preserved = true
-				return nil
-			}
-			return err
 		}
 	}
 
@@ -9271,15 +8683,10 @@ func (e *Engine) SyncSingleSessionContext(
 			"source file not found for %s", sessionID,
 		)
 	}
-	if isOpenCodeFormatStorageAgent(def.Type) &&
-		isOpenCodeFormatSQLiteVirtualPath(def.Type, path) {
-		err = e.syncSingleOpenCodeFormat(sessionID, def.Type)
-		if errors.Is(err, errSessionPreserved) {
-			preserved = true
-			return nil
-		}
-		return err
-	}
+	// OpenCode-format agents (OpenCode, Kilo, MiMoCode) are
+	// provider-authoritative: their SQLite virtual paths and storage
+	// sessions resync through the generic processFile path below, which
+	// routes to the provider facade.
 	if def.Type == parser.AgentKiro &&
 		isKiroSQLiteVirtualPath(path) {
 		err = e.syncSingleKiroSQLite(sessionID)
@@ -9565,61 +8972,6 @@ func (e *Engine) applyWorktreeMappingToSingleSession(
 	return nil
 }
 
-// syncSingleOpenCodeFormat re-syncs a single SQLite-backed session for
-// an OpenCode-format agent (OpenCode or its Kilo fork).
-func (e *Engine) syncSingleOpenCodeFormat(
-	sessionID string, agent parser.AgentType,
-) error {
-	if !isOpenCodeFormatStorageAgent(agent) {
-		return fmt.Errorf("unknown OpenCode-format agent: %s", agent)
-	}
-	rawID := strings.TrimPrefix(sessionID, string(agent)+":")
-	dbName := openCodeFormatDBName(agent)
-
-	var lastErr error
-	for _, dir := range e.agentDirs[agent] {
-		if dir == "" {
-			continue
-		}
-		dbPath := filepath.Join(dir, dbName)
-		if info, err := os.Stat(dbPath); err != nil ||
-			info.IsDir() {
-			continue
-		}
-		sess, msgs, err := parseOpenCodeFormatSession(
-			agent, dbPath, rawID, e.machine,
-		)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if sess == nil {
-			continue
-		}
-		if err := e.writeSessionFull(
-			pendingWrite{sess: *sess, msgs: msgs},
-		); err != nil &&
-			!isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
-			return fmt.Errorf("write session %s: %w",
-				sess.ID, err)
-		} else if errors.Is(err, errSessionPreserved) {
-			return err
-		}
-		return nil
-	}
-
-	if len(e.agentDirs[agent]) == 0 {
-		return fmt.Errorf("%s dir not configured", agent)
-	}
-	if lastErr != nil {
-		return fmt.Errorf(
-			"%s session %s: %w", agent, sessionID, lastErr,
-		)
-	}
-	return fmt.Errorf("%s session %s not found", agent, sessionID)
-}
-
 func (e *Engine) syncSingleKiroSQLite(
 	sessionID string,
 ) error {
@@ -9727,45 +9079,6 @@ func (e *Engine) syncSingleZed(sessionID string) error {
 func isKiroSQLiteVirtualPath(path string) bool {
 	_, _, ok := parser.ParseKiroSQLiteVirtualPath(path)
 	return ok
-}
-
-func readOpenCodeStorageSessionID(path string) string {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var data struct {
-		SessionID string `json:"sessionID"`
-	}
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return ""
-	}
-	return data.SessionID
-}
-
-func findOpenCodeStorageSessionIDByMessageID(
-	openCodeDir, messageID string,
-) string {
-	messageRoot := filepath.Join(
-		openCodeDir, "storage", "message",
-	)
-	entries, err := os.ReadDir(messageRoot)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(
-			messageRoot, entry.Name(), messageID+".json",
-		)
-		if info, err := os.Stat(path); err == nil &&
-			!info.IsDir() {
-			return entry.Name()
-		}
-	}
-	return ""
 }
 
 func (e *Engine) warpPendingSessionIDs(dir string) []string {
