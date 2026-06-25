@@ -1466,43 +1466,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// Cortex: <cortexDir>/<uuid>.json
-	//     or: <cortexDir>/<uuid>.history.jsonl → remap to .json
-	for _, cortexDir := range e.agentDirs[parser.AgentCortex] {
-		if cortexDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(cortexDir, path); ok {
-			if strings.Count(rel, sep) != 0 {
-				continue
-			}
-			name := filepath.Base(rel)
-
-			// .history.jsonl companion → remap to .json metadata.
-			if stem, ok := strings.CutSuffix(
-				name, ".history.jsonl",
-			); ok {
-				jsonPath := filepath.Join(
-					cortexDir, stem+".json",
-				)
-				if parser.IsCortexSessionFile(stem + ".json") {
-					return parser.DiscoveredFile{
-						Path:  jsonPath,
-						Agent: parser.AgentCortex,
-					}, true
-				}
-				continue
-			}
-
-			if parser.IsCortexSessionFile(name) {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentCortex,
-				}, true
-			}
-		}
-	}
-
 	// Antigravity IDE: <root>/conversations/<uuid>.db (+ -wal, -shm).
 	// annotations/<uuid>.pbtxt and brain/<uuid>/* sidecar events are
 	// handled in classifyPaths via classifyAntigravitySidecarPath,
@@ -2887,7 +2850,7 @@ func (e *Engine) syncAllLocked(
 
 	if !since.IsZero() {
 		all = e.dedupeClaudeDiscoveredFiles(all)
-		all = e.filterFilesByMtime(all, since)
+		all = e.filterFilesByMtime(ctx, all, since)
 	}
 
 	all = dedupeDiscoveredFiles(all)
@@ -3428,13 +3391,15 @@ func (e *Engine) recordSyncFinished() {
 // dropped). The cost is one stat per file — acceptable for
 // polling use cases where most files will be skipped.
 func (e *Engine) filterFilesByMtime(
-	files []parser.DiscoveredFile, cutoff time.Time,
+	ctx context.Context,
+	files []parser.DiscoveredFile,
+	cutoff time.Time,
 ) []parser.DiscoveredFile {
 	cutoffNs := cutoff.UnixNano()
 	out := files[:0]
 	codexIndexRefresh := make(map[string][]parser.DiscoveredFile)
 	for _, f := range files {
-		mtime, err := discoveredFileMtime(f)
+		mtime, err := e.discoveredFileEffectiveMtime(ctx, f)
 		if err != nil {
 			out = append(out, f)
 			continue
@@ -3481,6 +3446,53 @@ func (e *Engine) filterFilesByMtime(
 		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
 	}
 	return out
+}
+
+func (e *Engine) discoveredFileEffectiveMtime(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+) (int64, error) {
+	if file.ProviderSource != nil && file.ProviderProcess {
+		if mtime, ok, err := e.providerFingerprintMtime(ctx, file); err != nil {
+			return 0, err
+		} else if ok {
+			return mtime, nil
+		}
+	}
+	return discoveredFileMtime(file)
+}
+
+func (e *Engine) providerFingerprintMtime(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+) (int64, bool, error) {
+	if file.ProviderSource == nil {
+		return 0, false, nil
+	}
+	factory, ok := e.providerFactories[file.Agent]
+	if !ok || factory == nil {
+		return 0, false, nil
+	}
+	source := *file.ProviderSource
+	if source.Provider != "" && source.Provider != file.Agent {
+		return 0, false, fmt.Errorf(
+			"provider source mismatch for %s: %s",
+			file.Agent,
+			source.Provider,
+		)
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[file.Agent],
+		Machine: e.machine,
+	})
+	fingerprint, err := provider.Fingerprint(ctx, source)
+	if err != nil {
+		return 0, false, err
+	}
+	if fingerprint.MTimeNS == 0 {
+		return 0, false, nil
+	}
+	return fingerprint.MTimeNS, true, nil
 }
 
 func discoveredFileMtime(
@@ -4658,8 +4670,6 @@ func (e *Engine) processFile(
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
-	case parser.AgentCortex:
-		res = e.processCortex(file, info)
 	case parser.AgentHermes:
 		res = e.processHermes(file, info)
 	case parser.AgentVibe:
@@ -6764,35 +6774,6 @@ func (e *Engine) processKiroIDE(
 	}
 }
 
-func (e *Engine) processCortex(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseCortexSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 func (e *Engine) processHermes(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -8395,6 +8376,7 @@ func shouldReplaceFullParseMessages(
 		pw.sess.Agent == parser.AgentAntigravity ||
 		pw.sess.Agent == parser.AgentAntigravityCLI ||
 		pw.sess.Agent == parser.AgentQwenPaw ||
+		pw.sess.Agent == parser.AgentCortex ||
 		// Vibe pairs later tool-result carrier records back to an
 		// earlier assistant tool call. An incremental append would
 		// only add the new ordinals and leave the existing tool call's
