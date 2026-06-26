@@ -29,6 +29,24 @@ var SystemMsgPrefixes = []string{
 	`<codex_internal_context source="goal">`,
 }
 
+// IsGoalContextPrefixed reports whether a user-role message is a legacy
+// Codex /goal continuation wrapper that may already be stored in older
+// archives or read-only stores.
+func IsGoalContextPrefixed(content, role string) bool {
+	if role != "user" {
+		return false
+	}
+	trimmed := strings.TrimLeft(content, systemPrefixTrimCutset)
+	if strings.HasPrefix(trimmed, "<goal_context>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<codex_internal_context") {
+		openTag, _, ok := strings.Cut(trimmed, ">")
+		return ok && strings.Contains(openTag, `source="goal"`)
+	}
+	return false
+}
+
 // SystemPrefixSQL returns a SQL clause that excludes user messages
 // matching any system prefix. The column alias for content must be
 // passed (e.g. "m.content" or "m2.content"). Uses case-sensitive

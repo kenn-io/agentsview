@@ -35,6 +35,30 @@ func TestIsSystemPrefixed(t *testing.T) {
 	}
 }
 
+func TestIsGoalContextPrefixed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		content string
+		role    string
+		want    bool
+	}{
+		{"legacy wrapper", "<goal_context>state</goal_context>", "user", true},
+		{"legacy wrapper with whitespace", "\n\t<goal_context>state", "user", true},
+		{"current wrapper", `<codex_internal_context source="goal">state`, "user", true},
+		{"current wrapper with extra attrs", `<codex_internal_context foo="bar" source="goal">state`, "user", true},
+		{"non goal internal context", `<codex_internal_context source="other">state`, "user", false},
+		{"non goal prefix", "This session is being continued from a previous run", "user", false},
+		{"assistant role ignored", "<goal_context>state</goal_context>", "assistant", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, IsGoalContextPrefixed(tc.content, tc.role))
+		})
+	}
+}
+
 func TestSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)

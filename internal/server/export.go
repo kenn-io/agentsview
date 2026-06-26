@@ -675,7 +675,7 @@ func generateExportHTML(
 func filterExportHTMLMessages(msgs []db.Message) []db.Message {
 	filtered := make([]db.Message, 0, len(msgs))
 	for _, m := range msgs {
-		if db.IsSystemPrefixed(m.Content, m.Role) {
+		if db.IsGoalContextPrefixed(m.Content, m.Role) {
 			continue
 		}
 		filtered = append(filtered, m)
@@ -765,7 +765,7 @@ func focusedExportOrdinals(msgs []db.Message) map[int]bool {
 			continue
 		}
 
-		if m.IsSystem || db.IsSystemPrefixed(m.Content, m.Role) ||
+		if m.IsSystem || db.IsGoalContextPrefixed(m.Content, m.Role) ||
 			isThinkingOnly(m.Content) {
 			continue
 		}
