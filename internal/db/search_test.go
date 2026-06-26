@@ -22,6 +22,8 @@ func TestIsSystemPrefixed(t *testing.T) {
 		{"task-notification prefix", "<task-notification>done</task-notification>", "user", true},
 		{"leading whitespace then prefix", "\n\t  <command-name>/foo", "user", true},
 		{"bom then prefix", "\uFEFF<command-message>x", "user", true},
+		{"legacy goal context prefix", "\n\t<goal_context>state</goal_context>", "user", true},
+		{"codex internal goal context prefix", `<codex_internal_context source="goal">state`, "user", true},
 		{"assistant role is never system-prefixed", SystemMsgPrefixes[0], "assistant", false},
 		{"prefix mid-content does not match", "see <task-notification> later", "user", false},
 	}

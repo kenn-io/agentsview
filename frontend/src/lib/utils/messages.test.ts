@@ -58,6 +58,11 @@ describe("isSystemMessage", () => {
     ["command-name", "<command-name>/commit</command-name>"],
     ["local-command", "<local-command-output>ok</local-command-output>"],
     ["stop hook", "Stop hook feedback: blocked"],
+    ["legacy goal context", "\n\t<goal_context>state</goal_context>"],
+    [
+      "codex internal goal context",
+      '  <codex_internal_context source="goal">state',
+    ],
   ])("detects prefix-based system message: %s", (_label, content) => {
     expect(isSystemMessage(msg({ content }))).toBe(true);
   });

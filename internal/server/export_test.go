@@ -498,6 +498,58 @@ func TestGenerateExportHTML_TranscriptModeControls(t *testing.T) {
 	})
 }
 
+func TestGenerateExportHTML_OmitsGoalContextRows(t *testing.T) {
+	t.Parallel()
+	session := testSession(func(s *db.Session) {
+		s.MessageCount = 4
+	})
+	currentGoal := "<codex_internal_context source=\"goal\">\n" +
+		"Continue working toward the active thread goal.\n" +
+		"</codex_internal_context>"
+	legacyGoal := "<goal_context>\n" +
+		"Continue working toward the active thread goal.\n" +
+		"</goal_context>"
+	msgs := []db.Message{
+		{
+			SessionID: "test-id", Ordinal: 0,
+			Role: "user", Content: "Actual user message",
+			Timestamp: "2025-01-15T10:00:00Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 1,
+			Role: "user", Content: "\n\t" + currentGoal,
+			Timestamp: "2025-01-15T10:00:01Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 2,
+			Role: "user", Content: "  " + legacyGoal,
+			Timestamp: "2025-01-15T10:00:02Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 3,
+			Role: "assistant", Content: "Assistant reply",
+			Timestamp: "2025-01-15T10:00:03Z",
+		},
+	}
+
+	html := generateExportHTML(session, msgs)
+
+	assertContainsAll(t, html, []string{
+		"2 messages",
+		`class="message user" data-ordinal="0"`,
+		`class="message assistant" data-ordinal="3"`,
+		"Actual user message",
+		"Assistant reply",
+	})
+	assertContainsNone(t, html, []string{
+		`data-ordinal="1"`,
+		`data-ordinal="2"`,
+		"<codex_internal_context",
+		"<goal_context>",
+		"Continue working toward the active thread goal.",
+	})
+}
+
 func TestFocusedExportOrdinals(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -582,6 +634,27 @@ func TestFocusedExportOrdinals(t *testing.T) {
 				exportUserMsg(4),
 			},
 			want: []int{0, 1, 4},
+		},
+		{
+			name: "ignores system-prefixed goal contexts",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportAssistantMsg(1, "draft"),
+				{
+					SessionID: "test-id",
+					Ordinal:   2,
+					Role:      "user",
+					Content:   `<codex_internal_context source="goal">state`,
+				},
+				{
+					SessionID: "test-id",
+					Ordinal:   3,
+					Role:      "user",
+					Content:   "\n\t<goal_context>state</goal_context>",
+				},
+				exportAssistantMsg(4, "final"),
+			},
+			want: []int{0, 4},
 		},
 		{
 			name: "keeps answer before compact boundary",

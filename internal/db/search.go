@@ -25,6 +25,8 @@ var SystemMsgPrefixes = []string{
 	"<command-name>",
 	"<local-command-",
 	"Stop hook feedback:",
+	"<goal_context>",
+	`<codex_internal_context source="goal">`,
 }
 
 // SystemPrefixSQL returns a SQL clause that excludes user messages

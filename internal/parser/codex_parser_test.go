@@ -1398,6 +1398,34 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 		assert.Equal(t, "Actual user message", msgs[0].Content)
 	})
 
+	t.Run("skips goal continuation context wrappers", func(t *testing.T) {
+		currentGoal := "<codex_internal_context source=\"goal\">\n" +
+			"Continue working toward the active thread goal.\n" +
+			"</codex_internal_context>"
+		legacyGoal := "<goal_context>\n" +
+			"Continue working toward the active thread goal.\n" +
+			"</goal_context>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "\n\t"+currentGoal, tsEarlyS1),
+			testjsonl.CodexMsgJSON("user", "Actual user message", "2024-01-01T10:00:02Z"),
+			testjsonl.CodexMsgJSON("assistant", "Assistant reply", "2024-01-01T10:00:03Z"),
+			testjsonl.CodexMsgJSON("user", "  "+legacyGoal, "2024-01-01T10:00:04Z"),
+			testjsonl.CodexMsgJSON("user", "Follow-up user message", "2024-01-01T10:00:05Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 3)
+		assert.Equal(t, "Actual user message", sess.FirstMessage)
+		assert.Equal(t, 2, sess.UserMessageCount)
+		assert.Equal(t, RoleUser, msgs[0].Role)
+		assert.Equal(t, "Actual user message", msgs[0].Content)
+		assert.Equal(t, RoleAssistant, msgs[1].Role)
+		assert.Equal(t, "Assistant reply", msgs[1].Content)
+		assert.Equal(t, RoleUser, msgs[2].Role)
+		assert.Equal(t, "Follow-up user message", msgs[2].Content)
+	})
+
 	// Codex injects skill template content as role=user JSONL
 	// entries when the model invokes a skill. These look like
 	// follow-up user turns to a naive count, which inflates
@@ -2139,6 +2167,41 @@ func TestParseCodexSessionFrom_SystemMessageDoesNotRequireFullParse(t *testing.T
 	newMsgs, endedAt, _, err := ParseCodexSessionFrom(path, offset, 1, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, len(newMsgs))
+	assert.False(t, endedAt.IsZero())
+}
+
+func TestParseCodexSessionFrom_GoalContextDoesNotRequireFullParse(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("inc-goal", "/tmp", "codex_cli_rs", tsEarly),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := createTestFile(t, "codex-goal-inc.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	currentGoal := "<codex_internal_context source=\"goal\">\n" +
+		"Continue working toward the active thread goal.\n" +
+		"</codex_internal_context>"
+	legacyGoal := "<goal_context>\n" +
+		"Continue working toward the active thread goal.\n" +
+		"</goal_context>"
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("user", currentGoal, tsEarlyS5),
+		testjsonl.CodexMsgJSON("user", "\n  "+legacyGoal, tsLate),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	newMsgs, endedAt, _, err := ParseCodexSessionFrom(path, offset, 1, false)
+	require.NoError(t, err)
+	assert.Empty(t, newMsgs)
 	assert.False(t, endedAt.IsZero())
 }
 

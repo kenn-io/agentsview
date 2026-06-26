@@ -8,6 +8,8 @@ const SYSTEM_MSG_PREFIXES = [
   "<command-name>",
   "<local-command-",
   "Stop hook feedback:",
+  "<goal_context>",
+  '<codex_internal_context source="goal">',
 ];
 
 // Subtypes the Claude parser promotes into visible system messages
