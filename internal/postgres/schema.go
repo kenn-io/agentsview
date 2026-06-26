@@ -1615,6 +1615,20 @@ func CheckSchemaCompat(
 	return nil
 }
 
+// pushSchemaCurrent reports whether the PG schema has everything a push
+// needs. CheckSchemaCompat covers the read paths but does not require
+// model_pricing (always queried by syncModelPricing) or
+// cursor_usage_events (written by syncCursorUsageEvents), so probe those
+// tables explicitly. When either is missing the caller must run
+// EnsureSchema so push migrates the schema instead of failing.
+func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
+	if err := CheckSchemaCompat(ctx, db); err != nil {
+		return false
+	}
+	return pgHasTable(ctx, db, "model_pricing") &&
+		pgHasTable(ctx, db, "cursor_usage_events")
+}
+
 // CheckDataVersionCompat rejects PG datasets containing rows written by a
 // newer agentsview parser. PG does not have SQLite's global user_version, so
 // the highest session data_version is the compatibility marker.
