@@ -430,15 +430,19 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	// One multi-turn root session (10 user msgs, 20 messages, ~100 min)
-	// and one one-shot subagent (1 user msg, 5 messages, ~8 min).
+	// One multi-turn root session (10 user msgs, 20 messages, ~100 min,
+	// 1000 output tokens) and one one-shot subagent (1 user msg, 5
+	// messages, ~8 min, 400 output tokens). Both agent "claude" so the
+	// agent-portfolio assertions reconcile against the totals.
 	insertSessionFixture(t, d, sessionFixture{
-		id: "root", userMsgs: 10, messageCount: 20,
+		id: "root", agent: "claude", userMsgs: 10, messageCount: 20,
 		startedAt: hoursAgo(5), durationMin: 100,
+		totalOutputTok: 1000, hasTotalOutputToks: true,
 	})
 	insertSessionFixture(t, d, sessionFixture{
-		id: "agent-x", userMsgs: 1, messageCount: 5,
+		id: "agent-x", agent: "claude", userMsgs: 1, messageCount: 5,
 		startedAt: hoursAgo(5), durationMin: 8,
+		totalOutputTok: 400, hasTotalOutputToks: true,
 		relationshipType: "subagent",
 	})
 
@@ -478,6 +482,34 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 	}
 	assert.Equal(t, 1, durN,
 		"duration distribution must exclude the subagent")
+
+	// Agent portfolio all-session maps count the subagent so they
+	// reconcile with the inclusive totals; the _human maps stay
+	// root-only (a subagent is not human).
+	ap := stats.AgentPortfolio
+	assert.Equal(t, 2, ap.BySessions["claude"], "by_sessions counts subagent")
+	assert.Equal(t, 25, ap.ByMessages["claude"], "by_messages counts subagent")
+	assert.Equal(t, int64(1400), ap.ByTokens["claude"],
+		"by_tokens counts subagent spend (1000 + 400)")
+	assert.Equal(t, 1, ap.BySessionsHuman["claude"],
+		"by_sessions_human stays root-only")
+	assert.Equal(t, int64(1000), ap.ByTokensHuman["claude"],
+		"by_tokens_human excludes the subagent")
+
+	// Reconciliation: the all-session agent-portfolio sums must equal
+	// the (subagent-inclusive) totals. These would have caught the
+	// per-panel undercount.
+	sumSessions, sumMessages := 0, 0
+	for _, v := range ap.BySessions {
+		sumSessions += v
+	}
+	for _, v := range ap.ByMessages {
+		sumMessages += v
+	}
+	assert.Equal(t, stats.Totals.SessionsAll, sumSessions,
+		"sum(by_sessions) must equal sessions_all")
+	assert.Equal(t, stats.Totals.MessagesTotal, sumMessages,
+		"sum(by_messages) must equal messages_total")
 }
 
 func Test_computeTotalsAndArchetypes_flagAuthority(t *testing.T) {

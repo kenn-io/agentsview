@@ -85,9 +85,17 @@ func (db *DB) GetSessionStats(
 	applySubagentInclusiveTotals(stats, rowsWithSubagents)
 	computeDistributions(stats, rows)
 
+	// Root-only IDs drive the distribution surfaces (velocity, temporal).
+	// The inclusive IDs drive the additive all-session aggregates
+	// (tool_mix, model_mix.by_tokens) so they count subagent spend and
+	// reconcile with the subagent-inclusive Totals.
 	sessionIDs := make([]string, 0, len(rows))
 	for _, r := range rows {
 		sessionIDs = append(sessionIDs, r.id)
+	}
+	sessionIDsAll := make([]string, 0, len(rowsWithSubagents))
+	for _, r := range rowsWithSubagents {
+		sessionIDsAll = append(sessionIDsAll, r.id)
 	}
 	accum, err := populateVelocityAccumulator(ctx, db, sessionIDs, tz)
 	if err != nil {
@@ -96,14 +104,14 @@ func (db *DB) GetSessionStats(
 	computeVelocity(stats, accum)
 
 	if err := db.computeToolAndModelMix(
-		ctx, stats, sessionIDs,
+		ctx, stats, sessionIDsAll,
 	); err != nil {
 		return nil, fmt.Errorf(
 			"computing tool/model mix: %w", err,
 		)
 	}
 
-	computeAgentPortfolio(stats, rows)
+	computeAgentPortfolio(stats, rowsWithSubagents, rows)
 
 	if err := db.computeCacheEconomics(ctx, stats, rows); err != nil {
 		return nil, fmt.Errorf(
@@ -846,14 +854,21 @@ func safeMean(sum float64, n int) float64 {
 // flag is set. Without that guard, agents whose token coverage is
 // missing (default 0) would be indistinguishable from agents that
 // truly produced no output tokens.
-func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
+//
+// The all-session maps (by_sessions/by_messages/by_tokens) are built
+// from rowsAll so they count subagent spend and reconcile with the
+// subagent-inclusive Totals. The _human maps are built from rowsRoot:
+// a subagent is not a human session, and (since subagents are also not
+// is_automated) folding them via the !isAutomated gate would wrongly
+// inflate the human variants. rowsRoot already excludes subagents, so
+// the human accumulation uses it directly.
+func computeAgentPortfolio(
+	s *SessionStats, rowsAll, rowsRoot []sessionStatsRow,
+) {
 	bySessions := map[string]int{}
 	byMessages := map[string]int{}
 	byTokens := map[string]int64{}
-	bySessionsHuman := map[string]int{}
-	byMessagesHuman := map[string]int{}
-	byTokensHuman := map[string]int64{}
-	for _, r := range rows {
+	for _, r := range rowsAll {
 		if r.agent == "" {
 			continue
 		}
@@ -862,12 +877,18 @@ func computeAgentPortfolio(s *SessionStats, rows []sessionStatsRow) {
 		if r.hasTotalOutputTokens {
 			byTokens[r.agent] += r.totalOutputTokens
 		}
-		if !r.isAutomated {
-			bySessionsHuman[r.agent]++
-			byMessagesHuman[r.agent] += r.messageCount
-			if r.hasTotalOutputTokens {
-				byTokensHuman[r.agent] += r.totalOutputTokens
-			}
+	}
+	bySessionsHuman := map[string]int{}
+	byMessagesHuman := map[string]int{}
+	byTokensHuman := map[string]int64{}
+	for _, r := range rowsRoot {
+		if r.agent == "" || r.isAutomated {
+			continue
+		}
+		bySessionsHuman[r.agent]++
+		byMessagesHuman[r.agent] += r.messageCount
+		if r.hasTotalOutputTokens {
+			byTokensHuman[r.agent] += r.totalOutputTokens
 		}
 	}
 	s.AgentPortfolio.BySessions = bySessions
