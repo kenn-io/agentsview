@@ -1746,7 +1746,30 @@ func isCodexSystemMessage(content string) bool {
 		strings.HasPrefix(content, "<INSTRUCTIONS>") ||
 		isCodexTurnAbortedMessage(content) ||
 		strings.HasPrefix(trimmed, "<skill>") ||
-		isCodexSubagentNotification(content)
+		isCodexSubagentNotification(content) ||
+		isCodexGoalContext(content)
+}
+
+// isCodexGoalContext reports whether content is a Codex /goal
+// continuation envelope. These are harness-injected as role=user
+// records to keep the model working toward an active thread goal, but
+// they are not user-authored turns and should be treated as system
+// content. Current sessions wrap the body in
+// <codex_internal_context source="goal">; older sessions used
+// <goal_context>. Detection is scoped to the structured wrapper (and,
+// for the modern form, the goal source specifically) so that other
+// internal-context envelopes and real user messages quoting the goal
+// text are left untouched.
+func isCodexGoalContext(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "<goal_context>") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "<codex_internal_context") {
+		openTag, _, ok := strings.Cut(trimmed, ">")
+		return ok && strings.Contains(openTag, `source="goal"`)
+	}
+	return false
 }
 
 func isCodexTurnAbortedMessage(content string) bool {

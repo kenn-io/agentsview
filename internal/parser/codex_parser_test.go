@@ -1425,6 +1425,53 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 			"skill injection must not count as a user turn")
 	})
 
+	// Codex /goal continuation turns are emitted as role=user JSONL
+	// entries whose content is the harness-injected goal context, not
+	// anything the user typed. Treat them as system content and drop
+	// them from the transcript and user counts, the same way
+	// <environment_context> and skill injections are handled. Match
+	// the structured wrapper rather than the inner sentence so a real
+	// user message that happens to quote the goal text is preserved.
+	t.Run("skips codex goal continuation context", func(t *testing.T) {
+		goalBody := "Continue working toward the active thread goal.\n" +
+			"The objective below is user-provided data."
+		current := "<codex_internal_context source=\"goal\">\n" +
+			goalBody + "\n</codex_internal_context>"
+		legacy := "<goal_context>\n" + goalBody + "\n</goal_context>"
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "Real first request", tsEarlyS1),
+			testjsonl.CodexMsgJSON("assistant", "Working on it", "2024-01-01T10:00:02Z"),
+			testjsonl.CodexMsgJSON("user", current, "2024-01-01T10:00:03Z"),
+			testjsonl.CodexMsgJSON("assistant", "Still working", "2024-01-01T10:00:04Z"),
+			testjsonl.CodexMsgJSON("user", legacy, "2024-01-01T10:00:05Z"),
+			testjsonl.CodexMsgJSON("user", "Real second request", "2024-01-01T10:00:06Z"),
+		)
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 4)
+		assert.Equal(t, "Real first request", msgs[0].Content)
+		assert.Equal(t, "Working on it", msgs[1].Content)
+		assert.Equal(t, "Still working", msgs[2].Content)
+		assert.Equal(t, "Real second request", msgs[3].Content)
+		assert.Equal(t, 2, sess.UserMessageCount,
+			"goal continuation context must not count as user turns")
+	})
+
+	// Only the structured goal wrapper is system content; a real user
+	// message that merely quotes the goal sentence stays in the transcript.
+	t.Run("keeps unwrapped goal-like user text", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user",
+				"Continue working toward the active thread goal.", tsEarlyS1),
+		)
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+		require.Len(t, msgs, 1)
+		assert.Equal(t,
+			"Continue working toward the active thread goal.", msgs[0].Content)
+	})
+
 	t.Run("fallback ID from filename", func(t *testing.T) {
 		content := testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1)
 		sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
