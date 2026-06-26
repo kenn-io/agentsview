@@ -16,7 +16,10 @@ ROUTES = [
     "/",
     "/quickstart/",
     "/usage/",
+    "/activity/",
+    "/recent-edits/",
     "/session-intelligence/",
+    "/mcp/",
     "/token-usage/",
     "/chat-import/",
     "/insights/",
@@ -196,6 +199,12 @@ def route_to_file(route: str) -> pathlib.Path:
     return SITE / route.strip("/") / "index.html"
 
 
+def route_to_markdown_file(route: str) -> pathlib.Path:
+    if route == "/":
+        return SITE / "index.md"
+    return SITE / f"{route.strip('/')}.md"
+
+
 def is_local_file_path(path: str) -> bool:
     return pathlib.PurePosixPath(path).suffix != ""
 
@@ -351,6 +360,9 @@ def main() -> None:
         path = route_to_file(route)
         if not path.exists():
             fail(f"missing route {route}: {path}")
+        markdown_path = route_to_markdown_file(route)
+        if not markdown_path.exists():
+            fail(f"missing route markdown {route}: {markdown_path}")
 
     if not (SITE / "404.html").exists():
         fail("missing 404.html")

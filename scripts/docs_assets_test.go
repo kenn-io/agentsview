@@ -189,6 +189,24 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 	assert.Contains(t, string(output), "rg not found")
 }
 
+func TestBuiltSiteCheckRequiresMarkdownCompanions(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := filepath.Join(tempDir, "repo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+
+	checkScript := installScript(t, repo, filepath.Join("docs", "scripts", "check_built_site.py"))
+	writeMinimalBuiltDocsSite(t, filepath.Join(repo, "docs", "site"))
+
+	pythonPath, err := exec.LookPath("python3")
+	require.NoError(t, err)
+	cmd := exec.Command(pythonPath, checkScript)
+	cmd.Dir = filepath.Join(repo, "docs")
+	output, err := cmd.CombinedOutput()
+
+	require.Error(t, err, string(output))
+	assert.Contains(t, string(output), "missing route markdown /")
+}
+
 func installScript(t *testing.T, repo, scriptRel string) string {
 	t.Helper()
 	script, err := os.ReadFile(filepath.Join("..", scriptRel))
@@ -197,6 +215,74 @@ func installScript(t *testing.T, repo, scriptRel string) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
 	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
 	return scriptPath
+}
+
+func writeMinimalBuiltDocsSite(t *testing.T, siteDir string) {
+	t.Helper()
+	routes := []string{
+		"/",
+		"/quickstart/",
+		"/usage/",
+		"/activity/",
+		"/recent-edits/",
+		"/session-intelligence/",
+		"/mcp/",
+		"/token-usage/",
+		"/chat-import/",
+		"/insights/",
+		"/commands/",
+		"/stats/",
+		"/session-api/",
+		"/configuration/",
+		"/remote-access/",
+		"/pg-sync/",
+		"/duckdb/",
+		"/changelog/",
+	}
+	for _, route := range routes {
+		path := filepath.Join(siteDir, strings.Trim(route, "/"), "index.html")
+		if route == "/" {
+			path = filepath.Join(siteDir, "index.html")
+		}
+		ids := []string{}
+		switch route {
+		case "/configuration/":
+			ids = append(ids, "session-discovery")
+		case "/token-usage/":
+			ids = append(ids, "how-it-compares-to-ccusage")
+		case "/session-api/":
+			ids = append(ids, "agentsview-session-usage")
+		}
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(minimalDocsHTML(ids)), 0o644))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(siteDir, "404.html"), []byte(minimalDocsHTML(nil)), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(siteDir, "sitemap.xml"),
+		[]byte("<urlset><url><loc>https://agentsview.io/</loc></url></urlset>\n"),
+		0o644,
+	))
+}
+
+func minimalDocsHTML(ids []string) string {
+	var b strings.Builder
+	b.WriteString(`<!doctype html><html><head>`)
+	b.WriteString(`<meta property="og:image" content="https://agentsview.io/assets/static/og-image.png">`)
+	b.WriteString(`<meta property="og:image:width" content="1200">`)
+	b.WriteString(`<meta property="og:image:height" content="630">`)
+	b.WriteString(`<meta property="og:type" content="website">`)
+	b.WriteString(`<meta property="og:site_name" content="AgentsView">`)
+	b.WriteString(`<meta name="twitter:card" content="summary_large_image">`)
+	b.WriteString(`<meta name="twitter:image" content="https://agentsview.io/assets/static/og-image.png">`)
+	b.WriteString(`</head><body>`)
+	b.WriteString(`<a class="agentsview-discord-link" aria-label="Join Discord" href="https://discord.gg/fDnmxB8Wkq">Discord</a>`)
+	for _, id := range ids {
+		b.WriteString(`<h2 id="`)
+		b.WriteString(id)
+		b.WriteString(`">Heading</h2>`)
+	}
+	b.WriteString(`</body></html>`)
+	return b.String()
 }
 
 func envWithout(names ...string) []string {

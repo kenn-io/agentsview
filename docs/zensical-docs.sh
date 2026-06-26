@@ -11,6 +11,12 @@ shift || true
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 docs_root="$script_dir"
 site_dir="${AGENTSVIEW_DOCS_SITE_DIR:-site}"
+site_output_dir="$docs_root/$site_dir"
+case "$site_dir" in
+  /*)
+    site_output_dir="$site_dir"
+    ;;
+esac
 
 if [[ -n "${VIRTUAL_ENV:-}" && -x "$VIRTUAL_ENV/bin/zensical" ]]; then
   zensical_bin="$VIRTUAL_ENV/bin/zensical"
@@ -89,6 +95,15 @@ tmp_config_base=""
     -cf - .
 ) | (cd "$tmp_docs" && tar -xf -)
 
+copy_route_markdown_pages() {
+  mkdir -p "$site_output_dir"
+  find "$site_output_dir" -maxdepth 1 -type f -name '*.md' -delete
+  find "$tmp_docs" -maxdepth 1 -type f -name '*.md' ! -name 'README.md' -print0 |
+    while IFS= read -r -d '' source; do
+      cp "$source" "$site_output_dir/$(basename "$source")"
+    done
+}
+
 awk -v docs_dir="$tmp_docs_name" -v site_dir="$site_dir" '
   $0 == "docs_dir = \"docs\"" {
     print "docs_dir = \"" docs_dir "\""
@@ -104,6 +119,7 @@ awk -v docs_dir="$tmp_docs_name" -v site_dir="$site_dir" '
 case "$command_name" in
   build)
     (cd "$docs_root" && "$zensical_bin" build --strict --config-file "$tmp_config_name" "$@")
+    copy_route_markdown_pages
     ;;
   serve)
     (cd "$docs_root" && "$zensical_bin" serve --config-file "$tmp_config_name" "$@")
