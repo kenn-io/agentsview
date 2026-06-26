@@ -123,7 +123,7 @@ func pgMessagesBranch(
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
 		sysPred = "m.is_system = FALSE AND " +
-			db.SystemPrefixSQL("m.content", "m.role")
+			db.PostgresSystemPrefixSQL("m.content", "m.role")
 	}
 
 	// Select the full content; the snippet is windowed and redacted in Go.
@@ -398,7 +398,7 @@ func pgMessagesCandidateBranch(
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
 		sysPred = "m.is_system = FALSE AND " +
-			db.SystemPrefixSQL("m.content", "m.role")
+			db.PostgresSystemPrefixSQL("m.content", "m.role")
 	}
 
 	return fmt.Sprintf(`

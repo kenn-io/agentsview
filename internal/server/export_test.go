@@ -503,7 +503,7 @@ func TestGenerateExportHTML_OmitsGoalContextRows(t *testing.T) {
 	session := testSession(func(s *db.Session) {
 		s.MessageCount = 4
 	})
-	currentGoal := "<codex_internal_context source=\"goal\">\n" +
+	currentGoal := "<codex_internal_context foo=\"bar\" source=\"goal\">\n" +
 		"Continue working toward the active thread goal.\n" +
 		"</codex_internal_context>"
 	legacyGoal := "<goal_context>\n" +
@@ -677,7 +677,7 @@ func TestFocusedExportOrdinals(t *testing.T) {
 					SessionID: "test-id",
 					Ordinal:   2,
 					Role:      "user",
-					Content:   `<codex_internal_context source="goal">state`,
+					Content:   `<codex_internal_context foo="bar" source="goal">state`,
 				},
 				{
 					SessionID: "test-id",

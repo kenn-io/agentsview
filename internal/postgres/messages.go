@@ -114,7 +114,7 @@ func (s *Store) SearchSession(
 			AND tc.message_ordinal = m.ordinal
 		WHERE m.session_id = $1
 			AND m.is_system = FALSE
-			AND `+db.SystemPrefixSQL("m.content", "m.role")+`
+			AND `+db.PostgresSystemPrefixSQL("m.content", "m.role")+`
 			AND (m.content ILIKE $2
 				OR tc.result_content ILIKE $2)
 		ORDER BY m.ordinal ASC`,
@@ -244,7 +244,7 @@ func (s *Store) Search(
 			WHERE %s
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
-				AND `+db.SystemPrefixSQL("m.content", "m.role")+`
+				AND `+db.PostgresSystemPrefixSQL("m.content", "m.role")+`
 				%s
 			ORDER BY m.session_id,
 				POSITION(LOWER($2) IN LOWER(m.content)) ASC,
@@ -274,7 +274,7 @@ func (s *Store) Search(
 					SELECT 1 FROM messages mx
 					WHERE mx.session_id = s.id
 					  AND mx.is_system = FALSE
-					  AND `+db.SystemPrefixSQL("mx.content", "mx.role")+`
+					  AND `+db.PostgresSystemPrefixSQL("mx.content", "mx.role")+`
 				)
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
 				%s

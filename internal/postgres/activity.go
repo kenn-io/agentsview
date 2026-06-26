@@ -25,7 +25,7 @@ func (s *Store) GetSessionActivity(
 
 	// 2. Visible-message filter (same as SQLite).
 	visFilter := "m.is_system = FALSE AND " +
-		db.SystemPrefixSQL("m.content", "m.role")
+		db.PostgresSystemPrefixSQL("m.content", "m.role")
 
 	// 3. Get min/max timestamps from visible messages.
 	// PG stores timestamp as TIMESTAMPTZ, so scan into *time.Time.

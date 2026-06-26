@@ -24,6 +24,10 @@ func TestIsSystemPrefixed(t *testing.T) {
 		{"bom then prefix", "\uFEFF<command-message>x", "user", true},
 		{"legacy goal context prefix", "\n\t<goal_context>state</goal_context>", "user", true},
 		{"codex internal goal context prefix", `<codex_internal_context source="goal">state`, "user", true},
+		{"codex goal context with attr before source", `<codex_internal_context foo="bar" source="goal">state`, "user", true},
+		{"codex goal context with attr after source", `<codex_internal_context source="goal" foo="bar">state`, "user", true},
+		{"codex non-goal internal context", `<codex_internal_context source="other">state`, "user", false},
+		{"codex data-source attr is not goal", `<codex_internal_context data-source="goal">state`, "user", false},
 		{"assistant role is never system-prefixed", SystemMsgPrefixes[0], "assistant", false},
 		{"prefix mid-content does not match", "see <task-notification> later", "user", false},
 	}
@@ -47,7 +51,11 @@ func TestIsGoalContextPrefixed(t *testing.T) {
 		{"legacy wrapper with whitespace", "\n\t<goal_context>state", "user", true},
 		{"current wrapper", `<codex_internal_context source="goal">state`, "user", true},
 		{"current wrapper with extra attrs", `<codex_internal_context foo="bar" source="goal">state`, "user", true},
+		{"current wrapper with attrs after source", `<codex_internal_context source="goal" foo="bar">state`, "user", true},
+		{"current wrapper with newline before source", "<codex_internal_context\nsource=\"goal\">state", "user", true},
 		{"non goal internal context", `<codex_internal_context source="other">state`, "user", false},
+		{"data-source attr is not goal", `<codex_internal_context data-source="goal">state`, "user", false},
+		{"missing closing tag delimiter", `<codex_internal_context source="goal" state`, "user", false},
 		{"non goal prefix", "This session is being continued from a previous run", "user", false},
 		{"assistant role ignored", "<goal_context>state</goal_context>", "assistant", false},
 	}
@@ -57,6 +65,46 @@ func TestIsGoalContextPrefixed(t *testing.T) {
 			assert.Equal(t, tc.want, IsGoalContextPrefixed(tc.content, tc.role))
 		})
 	}
+}
+
+func TestSystemPrefixSQL(t *testing.T) {
+	d := testDB(t)
+	rows, err := d.getReader().QueryContext(context.Background(), `
+		WITH candidates(label, role, content) AS (
+			VALUES
+				('normal', 'user', 'regular message'),
+				('assistant-goal', 'assistant', '<codex_internal_context source="goal">state'),
+				('legacy-goal', 'user', '<goal_context>state</goal_context>'),
+				('current-goal', 'user', '<codex_internal_context source="goal">state'),
+				('attr-before-source', 'user', '<codex_internal_context foo="bar" source="goal">state'),
+				('attr-after-source', 'user', '<codex_internal_context source="goal" foo="bar">state'),
+				('newline-before-source', 'user', '<codex_internal_context
+source="goal">state'),
+				('self-closing-goal', 'user', '<codex_internal_context source="goal"/>state'),
+				('non-goal-internal', 'user', '<codex_internal_context source="other">state'),
+				('data-source', 'user', '<codex_internal_context data-source="goal">state'),
+				('missing-close', 'user', '<codex_internal_context source="goal" state')
+		)
+		SELECT label FROM candidates
+		WHERE `+SystemPrefixSQL("content", "role")+`
+		ORDER BY label`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var got []string
+	for rows.Next() {
+		var label string
+		require.NoError(t, rows.Scan(&label))
+		got = append(got, label)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{
+		"assistant-goal",
+		"data-source",
+		"missing-close",
+		"non-goal-internal",
+		"normal",
+	}, got)
 }
 
 func TestSearch(t *testing.T) {

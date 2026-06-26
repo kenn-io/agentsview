@@ -45,7 +45,7 @@ func (s *Store) GetTrendsTerms(
 		WHERE ` + where + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = FALSE
-			AND ` + db.SystemPrefixSQL("m.content", "m.role")
+			AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role")
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
