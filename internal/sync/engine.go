@@ -2267,6 +2267,15 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	if file.Agent == parser.AgentCodex {
 		return discoveredFileMtime(file)
 	}
+	// S3 objects are discovered through the provider facade (so they carry a
+	// ProviderSource), but providers read local files and cannot Fingerprint an
+	// s3:// URI. Routing them through providerSourceMtime below would error, and
+	// filterFilesByMtime keeps any file whose mtime cannot be resolved, defeating
+	// the incremental cutoff and reprocessing every old S3 object on each sync.
+	// The threaded object metadata (or a HEAD stat) gives the timestamp directly.
+	if isS3SourcePath(file.Path) {
+		return discoveredFileMtime(file)
+	}
 	// Provider-authoritative sources resolve freshness through the provider
 	// Fingerprint so composite provider-owned source state participates in
 	// incremental-sync cutoff checks.

@@ -354,9 +354,10 @@ func (e *Engine) parseMaterializedS3Source(
 	if err != nil {
 		return processResult{}, err
 	}
-	if len(outcome.Results) == 0 {
-		return processResult{}, nil
-	}
+	// Do not short-circuit on an empty Results slice: a content-free source can
+	// still carry ExcludedSessionIDs (a Claude /usage probe parses to no live
+	// session but excludes its ID), and the caller needs those IDs to drop the
+	// previously-archived row on resync. ForceReplace must survive too.
 	return processResult{
 		results:            parseOutcomeResults(outcome.Results),
 		excludedSessionIDs: append([]string(nil), outcome.ExcludedSessionIDs...),
