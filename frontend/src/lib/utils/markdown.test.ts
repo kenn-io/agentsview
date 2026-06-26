@@ -385,6 +385,16 @@ describe("renderMarkdown", () => {
       expect(p!.innerHTML).toContain("&lt;/foo:bar&gt;");
       expect(p!.textContent).toContain("<foo:bar>keep tags</foo:bar>");
     });
+
+    it("keeps markdown links with custom-tag labels clickable", () => {
+      const dom = parseHTML(
+        renderMarkdown("[<policy>read</policy>](https://example.com)"),
+      );
+      const link = dom.querySelector("p > a");
+      expect(link).not.toBeNull();
+      expect(link!.getAttribute("href")).toBe("https://example.com");
+      expect(link!.textContent).toBe("<policy>read</policy>");
+    });
   });
 
   describe("Claude Code shell shortcuts", () => {

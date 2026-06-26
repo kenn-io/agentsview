@@ -253,8 +253,13 @@ function escapeTokenValue(value: unknown): unknown {
 }
 
 function escapeCustomXmlToken(token: MarkdownToken): MarkdownToken {
+  if (token.type === "html" && shouldEscapeCustomXmlLiteral(token.raw)) {
+    return toEscapedTextToken(token.raw!);
+  }
+
   if (
-    (token.type === "html" || token.type === "link") &&
+    token.type === "link" &&
+    token.raw?.startsWith("<") &&
     shouldEscapeCustomXmlLiteral(token.raw)
   ) {
     return toEscapedTextToken(token.raw!);
