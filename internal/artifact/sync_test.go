@@ -28,6 +28,28 @@ func TestEnsureOriginPersists(t *testing.T) {
 	assert.Equal(t, first, second)
 }
 
+func TestIsFolderTargetAcceptsWindowsDrivePaths(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{"windows backslash path", `C:\Users\runner\artifacts`, true},
+		{"windows slash path", `C:/Users/runner/artifacts`, true},
+		{"posix path", "/tmp/agentsview-artifacts", true},
+		{"relative path", "artifacts", true},
+		{"http peer", "https://peer.example.test/artifacts", false},
+		{"s3 target", "s3://bucket/artifacts", false},
+		{"host port", "localhost:8080", false},
+		{"empty", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsFolderTarget(tt.target))
+		})
+	}
+}
+
 func TestAdoptOriginPersistsConfigOrigin(t *testing.T) {
 	database := testDB(t)
 

@@ -1631,6 +1631,20 @@ func IsFolderTarget(target string) bool {
 	if target == "" || strings.Contains(target, "://") {
 		return false
 	}
+	if isWindowsDrivePath(target) {
+		return true
+	}
 	_, _, err := net.SplitHostPort(target)
 	return err != nil
+}
+
+func isWindowsDrivePath(target string) bool {
+	if len(target) < 3 || target[1] != ':' {
+		return false
+	}
+	c := target[0]
+	if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
+		return false
+	}
+	return target[2] == '\\' || target[2] == '/'
 }
