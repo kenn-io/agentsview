@@ -1235,8 +1235,13 @@ func TestResolveGitHubToken(t *testing.T) {
 	originalGhAuthTokenOutput := ghAuthTokenOutput
 	t.Cleanup(func() { ghAuthTokenOutput = originalGhAuthTokenOutput })
 
+	localCtx := context.WithValue(context.Background(), ctxKeyHumaRequestInfo,
+		requestInfo{RemoteAddr: "127.0.0.1:1234"})
+	remoteCtx := context.WithValue(context.Background(), ctxKeyHumaRequestInfo,
+		requestInfo{RemoteAddr: "127.0.0.1:1234", Forwarded: true})
 	tests := []struct {
 		name       string
+		ctx        context.Context
 		configured string
 		env        string
 		ghOutput   string
@@ -1245,6 +1250,7 @@ func TestResolveGitHubToken(t *testing.T) {
 	}{
 		{
 			name:       "ConfiguredTokenWins",
+			ctx:        localCtx,
 			configured: " saved-token ",
 			env:        "env-token",
 			ghOutput:   "gh-token\n",
@@ -1252,19 +1258,43 @@ func TestResolveGitHubToken(t *testing.T) {
 		},
 		{
 			name:     "EnvFallback",
+			ctx:      localCtx,
 			env:      " env-token ",
 			ghOutput: "gh-token\n",
 			want:     "env-token",
 		},
 		{
 			name:     "GitHubCLIFallback",
+			ctx:      localCtx,
 			ghOutput: "gh-token\n",
 			want:     "gh-token",
 		},
 		{
 			name:  "MissingSources",
+			ctx:   localCtx,
 			ghErr: errors.New("gh missing"),
 			want:  "",
+		},
+		{
+			name:       "ConfiguredTokenAllowedForRemoteContext",
+			ctx:        remoteCtx,
+			configured: " saved-token ",
+			env:        "env-token",
+			ghOutput:   "gh-token\n",
+			want:       "saved-token",
+		},
+		{
+			name:     "EnvFallbackDeniedForRemoteContext",
+			ctx:      remoteCtx,
+			env:      " env-token ",
+			ghOutput: "gh-token\n",
+			want:     "",
+		},
+		{
+			name:     "GitHubCLIFallbackDeniedForRemoteContext",
+			ctx:      remoteCtx,
+			ghOutput: "gh-token\n",
+			want:     "",
 		},
 	}
 
@@ -1278,7 +1308,7 @@ func TestResolveGitHubToken(t *testing.T) {
 				return []byte(tt.ghOutput), nil
 			}
 
-			got := resolveGitHubToken(context.Background(), tt.configured)
+			got := resolveGitHubToken(tt.ctx, tt.configured)
 
 			assert.Equal(t, tt.want, got)
 		})

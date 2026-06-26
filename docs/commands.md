@@ -894,7 +894,7 @@ agentsview help
 | `AGENTSVIEW_DUCKDB_URL` | | Remote Quack endpoint URL for `duckdb serve` |
 | `AGENTSVIEW_DUCKDB_TOKEN` | | Quack authentication token |
 | `AGENTSVIEW_DUCKDB_MACHINE` | | Machine name for DuckDB push |
-| `AGENTSVIEW_GITHUB_TOKEN` | | GitHub token used for Gist publishing and `agentsview stats` PR aggregation |
+| `AGENTSVIEW_GITHUB_TOKEN` | | GitHub token used for local Gist publishing fallback and `agentsview stats` PR aggregation |
 | `AGENTSVIEW_DISABLE_UPDATE_CHECK` | | Set to `1` to disable the update check |
 | `AGENTSVIEW_NO_DAEMON` | | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start |
 | `AGENTSVIEW_DAEMON_IDLE_TIMEOUT` | `20m` | Override idle self-shutdown duration for detached background daemons |

@@ -991,10 +991,15 @@ publishing. If no token is saved in AgentsView and
 uses that token to create the gist. Run `gh auth login` once if
 the GitHub CLI is not authenticated yet.
 
-If neither a saved token nor `gh auth token` is available, the
-publish modal prompts for a GitHub personal access token with the
-`gist` scope. That token is saved to your config file and reused
-for future publishes.
+For remote or proxied AgentsView access, save a GitHub token in
+AgentsView before publishing. Remote requests do not use the server
+process environment or GitHub CLI credential as a fallback.
+
+If neither a saved token, `AGENTSVIEW_GITHUB_TOKEN`, nor
+`gh auth token` is available for local publishing, the publish
+modal prompts for a GitHub personal access token with the `gist`
+scope. That token is saved to your config file and reused for
+future publishes.
 
 !!! warning
     Secret gists are unlisted, not access-controlled: they don't

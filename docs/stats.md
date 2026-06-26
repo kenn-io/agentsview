@@ -161,8 +161,8 @@ That includes:
 - lines added and removed
 - files changed
 
-Pull-request counts are optional and use the same fallback order as
-Gist publishing:
+Pull-request counts are optional and use CLI-oriented GitHub token
+sources:
 
 - If `AGENTSVIEW_GITHUB_TOKEN` is set, AgentsView uses it.
 - Otherwise it tries `gh auth token`.

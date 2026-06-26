@@ -828,6 +828,10 @@ func withRemoteAddr(addr string) requestOpt {
 	return func(r *http.Request) { r.RemoteAddr = addr }
 }
 
+func withHeader(name, value string) requestOpt {
+	return func(r *http.Request) { r.Header.Set(name, value) }
+}
+
 func withBearer(token string) requestOpt {
 	return func(r *http.Request) {
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -2865,6 +2869,29 @@ func TestGetGithubConfig_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 	assert.JSONEq(t, `{"configured":true}`, w.Body.String())
 }
 
+func TestGetGithubConfig_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+
+	w := te.wrappedRequest(http.MethodGet, "/api/v1/config/github",
+		withHeader("X-Forwarded-For", "203.0.113.10"))
+
+	assertStatus(t, w, http.StatusOK)
+	assert.JSONEq(t, `{"configured":false}`, w.Body.String())
+}
+
+func TestGetGithubConfig_UsesSavedGitHubTokenForForwardedRequest(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+	te.srv.SetGithubToken("saved-token")
+
+	w := te.wrappedRequest(http.MethodGet, "/api/v1/config/github",
+		withHeader("X-Forwarded-For", "203.0.113.10"))
+
+	assertStatus(t, w, http.StatusOK)
+	assert.JSONEq(t, `{"configured":true}`, w.Body.String())
+}
+
 func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 	useGitHubCLIAuthTokenStub(t)
 	te := setup(t)
@@ -2874,6 +2901,22 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[settingsConfigResponse](t, w)
 	assert.True(t, resp.GithubConfigured)
+}
+
+func TestPublishSession_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(t *testing.T) {
+	useGitHubCLIAuthTokenStub(t)
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 3)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/publish",
+		strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	assertStatus(t, w, http.StatusUnauthorized)
 }
 
 func useGitHubCLIAuthTokenStub(t *testing.T) {

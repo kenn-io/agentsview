@@ -286,6 +286,23 @@ func TestInsightPublish(t *testing.T) {
 		assertStatus(t, w, http.StatusUnauthorized)
 	})
 
+	t.Run("ForwardedRequestDoesNotUseGitHubCLIAuthTokenFallback", func(t *testing.T) {
+		useGitHubCLIAuthTokenStub(t)
+		te := setup(t)
+		id := te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
+
+		req := httptest.NewRequest(http.MethodPost,
+			fmt.Sprintf("/api/v1/insights/%d/publish", id),
+			strings.NewReader("{}"))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		req.Header.Set("X-Forwarded-For", "203.0.113.10")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+
+		assertStatus(t, w, http.StatusUnauthorized)
+	})
+
 	t.Run("NotFound", func(t *testing.T) {
 		te := setup(t)
 		te.srv.SetGithubToken("fake-token")

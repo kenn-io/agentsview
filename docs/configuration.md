@@ -68,12 +68,13 @@ cursor_admin_api_key = "key_xxxxx"
 | `[custom_model_pricing]` | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing) |
 
 The `cursor_secret` is generated automatically on first run.
-For Gist publishing, AgentsView first uses a saved `github_token`,
-then `AGENTSVIEW_GITHUB_TOKEN`, then `gh auth token` from the
-GitHub CLI. Local users usually only need to run `gh auth login`.
-The saved `github_token` can still be set via the web UI Settings
-page or the API endpoint `POST /api/v1/config/github` when you
-want AgentsView to use a specific token. Remote access fields can
+For Gist publishing, AgentsView first uses a saved `github_token`.
+For local browser requests, if no token is saved, it then tries
+`AGENTSVIEW_GITHUB_TOKEN` and then `gh auth token` from the GitHub
+CLI. Local users usually only need to run `gh auth login`. For
+remote or proxied access, save a `github_token` via the web UI
+Settings page or the API endpoint `POST /api/v1/config/github`
+when you want AgentsView to publish gists. Remote access fields can
 be configured via the Settings page or CLI flags — see
 [Remote Access](/remote-access/) for details.
 

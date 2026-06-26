@@ -111,6 +111,9 @@ func resolveGitHubToken(ctx context.Context, configured string) string {
 	if token := strings.TrimSpace(configured); token != "" {
 		return token
 	}
+	if !isLocalhostContext(ctx) {
+		return ""
+	}
 	if token := strings.TrimSpace(os.Getenv("AGENTSVIEW_GITHUB_TOKEN")); token != "" {
 		return token
 	}
