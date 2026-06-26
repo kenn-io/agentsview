@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1256,4 +1258,92 @@ func TestClaudeSourceMatchesStoredUsesS3Metadata(t *testing.T) {
 		SourceSize:  512,
 		SourceMtime: mtime,
 	}))
+}
+
+// TestParseMaterializedS3SourcePreservesExclusionsWithoutResults pins that the
+// S3 provider parse path keeps ExcludedSessionIDs even when no live session is
+// produced. A Claude /usage probe parses to zero kept sessions but one excluded
+// ID; the caller needs that ID to drop a previously-archived row on resync, so
+// an empty Results slice must not short-circuit the exclusion through.
+func TestParseMaterializedS3SourcePreservesExclusionsWithoutResults(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database, machine: "laptop"}
+
+	dir := t.TempDir()
+	usageCmd := "<command-name>/usage</command-name>\n" +
+		"            <command-message>usage</command-message>\n" +
+		"            <command-args></command-args>"
+	content := testjsonl.ClaudeUserJSON(usageCmd, "2026-06-24T00:00:00Z")
+	sessionID := "11111111-2222-3333-4444-555555555555"
+	tempPath := filepath.Join(dir, sessionID+".jsonl")
+	require.NoError(t, os.WriteFile(tempPath, []byte(content), 0o600))
+
+	file := parser.DiscoveredFile{
+		Agent:   parser.AgentClaude,
+		Path:    "s3://bucket/laptop/raw/claude/proj/" + sessionID + ".jsonl",
+		Project: "proj",
+		Machine: "laptop",
+	}
+	res, err := e.parseMaterializedS3Source(
+		context.Background(), file, dir, tempPath,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, res.results, "a /usage probe yields no live sessions")
+	require.Len(t, res.excludedSessionIDs, 1,
+		"the excluded probe ID must survive an empty Results slice")
+}
+
+// TestFilterFilesByMtimeAppliesCutoffToProviderDiscoveredClaudeS3 pins that a
+// provider-discovered Claude s3:// object (one carrying a ProviderSource, as
+// emitted by discoverProviderSources) is still subject to the incremental-sync
+// mtime cutoff. The Claude provider cannot Fingerprint an s3:// URI; without the
+// s3:// short-circuit in discoveredFileEffectiveMtime that error makes
+// filterFilesByMtime keep every old object, defeating the cutoff.
+func TestFilterFilesByMtimeAppliesCutoffToProviderDiscoveredClaudeS3(t *testing.T) {
+	database := openTestDB(t)
+	path := "s3://bucket/laptop/raw/claude/test-proj/old.jsonl"
+	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:        "laptop~old",
+		Project:   "test-proj",
+		Machine:   "laptop",
+		Agent:     "claude",
+		FilePath:  strPtr(path),
+		FileSize:  int64Ptr(512),
+		FileMtime: int64Ptr(mtime),
+		FileHash:  strPtr("s3:fingerprint:stable"),
+	}))
+
+	claudeFactory, ok := parser.ProviderFactoryByType(parser.AgentClaude)
+	require.True(t, ok, "claude provider factory must be registered")
+	e := &Engine{
+		db: database,
+		providerFactories: map[parser.AgentType]parser.ProviderFactory{
+			parser.AgentClaude: claudeFactory,
+		},
+	}
+
+	source := parser.SourceRef{
+		Provider:       parser.AgentClaude,
+		Key:            path,
+		DisplayPath:    path,
+		FingerprintKey: path,
+	}
+	// Cutoff is after the object's mtime and the object is unchanged, so it must
+	// be filtered out. A registered factory means discoveredFileEffectiveMtime
+	// would (pre-fix) route the s3:// source into provider Fingerprint and error.
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
+		Agent:             parser.AgentClaude,
+		Path:              path,
+		Project:           "test-proj",
+		Machine:           "laptop",
+		SourceSize:        512,
+		SourceMtime:       mtime,
+		SourceFingerprint: "s3:fingerprint:stable",
+		ProviderSource:    &source,
+		ProviderProcess:   true,
+	}}, time.Unix(0, mtime).Add(time.Hour))
+
+	assert.Empty(t, got,
+		"an unchanged old provider-discovered Claude S3 object must be cut off")
 }
