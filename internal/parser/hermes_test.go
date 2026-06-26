@@ -98,7 +98,10 @@ func createHermesStateDB(t *testing.T, root string) {
 	t.Helper()
 	db, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
+	// Close the setup handle when this helper returns rather than at test
+	// cleanup. Tests delete state.db mid-run to exercise deletion handling, and
+	// Windows refuses to remove a file still held open by this process.
+	defer func() { _ = db.Close() }()
 	_, err = db.Exec(`
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
