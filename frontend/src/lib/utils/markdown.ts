@@ -249,6 +249,15 @@ function escapeTokenValue(value: unknown): unknown {
   if (isMarkdownToken(value)) {
     return escapeCustomXmlToken(value);
   }
+  if (value && typeof value === "object") {
+    const next = {
+      ...(value as Record<string, unknown>),
+    };
+    for (const [key, entry] of Object.entries(next)) {
+      next[key] = escapeTokenValue(entry);
+    }
+    return next;
+  }
   return value;
 }
 

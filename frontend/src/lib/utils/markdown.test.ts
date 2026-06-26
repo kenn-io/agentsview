@@ -395,6 +395,17 @@ describe("renderMarkdown", () => {
       expect(link!.getAttribute("href")).toBe("https://example.com");
       expect(link!.textContent).toBe("<policy>read</policy>");
     });
+
+    it("preserves custom tags inside GFM table cells", () => {
+      const dom = parseHTML(
+        renderMarkdown("| A |\n| --- |\n| <policy>keep tags</policy> |"),
+      );
+      const cell = dom.querySelector("tbody td");
+      expect(cell).not.toBeNull();
+      expect(cell!.innerHTML).toContain("&lt;policy&gt;");
+      expect(cell!.innerHTML).toContain("&lt;/policy&gt;");
+      expect(cell!.textContent).toBe("<policy>keep tags</policy>");
+    });
   });
 
   describe("Claude Code shell shortcuts", () => {
