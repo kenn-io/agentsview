@@ -285,7 +285,7 @@ func (e *Engine) parseDiffDatabaseSources(
 					})
 				}
 			}
-		case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode:
+		case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
 			for _, dir := range e.agentDirs[def.Type] {
 				if dir == "" {
 					continue
@@ -366,6 +366,9 @@ func stripVirtualSourceSuffix(path string) string {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseMiMoCodeSQLiteVirtualPath(path); ok {
+		return dbPath
+	}
+	if dbPath, _, ok := parser.ParseIcodemateSQLiteVirtualPath(path); ok {
 		return dbPath
 	}
 	if dbPath, _, ok := parser.ParseShelleyVirtualPath(path); ok {
