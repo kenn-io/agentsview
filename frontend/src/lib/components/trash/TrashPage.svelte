@@ -1,16 +1,18 @@
 <script lang="ts">
-  import { m } from "../../i18n/index.js";
   import { TrashIcon } from "../../icons.js";
   import { onMount } from "svelte";
   import type { Session } from "../../api/types.js";
   import { SessionsService } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
+  import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   let trashedSessions: Session[] = $state([]);
   let loading = $state(true);
   let emptying = $state(false);
+  let confirmingDeleteId = $state<string | null>(null);
+  let deletingId = $state<string | null>(null);
 
   interface TrashResponse {
     sessions: Session[];
@@ -39,6 +41,7 @@
       configureGeneratedClient();
       await SessionsService.postApiV1SessionsIdRestore({ id });
       trashedSessions = trashedSessions.filter((s) => s.id !== id);
+      if (confirmingDeleteId === id) confirmingDeleteId = null;
       sessions.clearRecentlyDeleted(id);
       sessions.invalidateFilterCaches();
       sessions.load();
@@ -47,15 +50,27 @@
     }
   }
 
+  function requestPermanentDelete(id: string) {
+    confirmingDeleteId = id;
+  }
+
+  function cancelPermanentDelete(id: string) {
+    if (confirmingDeleteId === id) confirmingDeleteId = null;
+  }
+
   async function permanentDelete(id: string) {
+    deletingId = id;
     try {
       configureGeneratedClient();
       await SessionsService.deleteApiV1SessionsIdPermanent({ id });
       trashedSessions = trashedSessions.filter((s) => s.id !== id);
+      if (confirmingDeleteId === id) confirmingDeleteId = null;
       sessions.clearRecentlyDeleted(id);
       sessions.invalidateFilterCaches();
     } catch {
       // silently fail
+    } finally {
+      if (deletingId === id) deletingId = null;
     }
   }
 
@@ -81,6 +96,22 @@
 </script>
 
 <div class="trash-page">
+  <div class="trash-header">
+    <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
+    <h2>{m.trash_title()}</h2>
+    {#if trashedSessions.length > 0}
+      <span class="trash-count">{trashedSessions.length}</span>
+      <button
+        class="empty-all-btn"
+        onclick={emptyAll}
+        disabled={emptying}
+        title={m.trash_empty_local_title()}
+      >
+        {emptying ? m.trash_emptying() : m.trash_empty_local()}
+      </button>
+    {/if}
+  </div>
+
   {#if loading}
     <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
@@ -90,19 +121,6 @@
       <p class="empty-desc-text">{m.trash_empty_desc()}</p>
     </div>
   {:else}
-    <div class="trash-header">
-      <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
-      <h2>{m.trash_title()}</h2>
-      <span class="trash-count">{trashedSessions.length}</span>
-      <button
-        class="empty-all-btn"
-        onclick={emptyAll}
-        disabled={emptying}
-      >
-        {emptying ? m.trash_emptying() : m.trash_empty_trash()}
-      </button>
-    </div>
-
     <div class="trash-list">
       {#each trashedSessions as session (session.id)}
         <div class="trash-card">
@@ -111,9 +129,9 @@
             <div class="trash-card-meta">
               <span class="trash-agent">{session.agent}</span>
               <span class="trash-project">{session.project}</span>
-              <span class="trash-msgs">{m.trash_msgs({ count: session.user_message_count })}</span>
+              <span class="trash-msgs">{m.trash_messages({ count: String(session.user_message_count) })}</span>
               {#if session.deleted_at}
-                <span class="trash-deleted">{m.trash_deleted_ago({ time: formatRelativeTime(session.deleted_at) })}</span>
+                <span class="trash-deleted">{m.trash_deleted({ time: formatRelativeTime(session.deleted_at) })}</span>
               {/if}
             </div>
           </div>
@@ -125,13 +143,32 @@
             >
               {m.trash_restore()}
             </button>
-            <button
-              class="perm-delete-btn"
-              onclick={() => permanentDelete(session.id)}
-              title={m.trash_permanently_delete()}
-            >
-              {m.trash_delete_forever()}
-            </button>
+            {#if confirmingDeleteId === session.id}
+              <span class="delete-confirm-label">{m.trash_delete_everywhere_prompt()}</span>
+              <button
+                class="perm-delete-btn perm-delete-btn--confirm"
+                onclick={() => permanentDelete(session.id)}
+                title={m.trash_confirm_delete_everywhere()}
+                disabled={deletingId === session.id}
+              >
+                {deletingId === session.id ? m.trash_deleting() : m.trash_confirm()}
+              </button>
+              <button
+                class="cancel-delete-btn"
+                onclick={() => cancelPermanentDelete(session.id)}
+                disabled={deletingId === session.id}
+              >
+                {m.trash_cancel()}
+              </button>
+            {:else}
+              <button
+                class="perm-delete-btn"
+                onclick={() => requestPermanentDelete(session.id)}
+                title={m.trash_delete_everywhere_title()}
+              >
+                {m.trash_delete_everywhere()}
+              </button>
+            {/if}
           </div>
         </div>
       {/each}
@@ -288,6 +325,7 @@
 
   .trash-card-actions {
     display: flex;
+    align-items: center;
     gap: 6px;
     flex-shrink: 0;
   }
@@ -322,5 +360,39 @@
 
   .perm-delete-btn:hover {
     background: color-mix(in srgb, var(--accent-red, #e55) 8%, transparent);
+  }
+
+  .perm-delete-btn--confirm {
+    border-color: var(--accent-red, #e55);
+  }
+
+  .delete-confirm-label {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .cancel-delete-btn {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: none;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+
+  .cancel-delete-btn:hover:not(:disabled) {
+    color: var(--text-secondary);
+    background: var(--bg-surface-hover);
+  }
+
+  .perm-delete-btn:disabled,
+  .cancel-delete-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
 </style>

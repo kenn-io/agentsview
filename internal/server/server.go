@@ -18,6 +18,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
@@ -48,6 +49,7 @@ type Server struct {
 	onDemandEngine *sync.Engine
 	sessions       service.SessionService
 	broadcaster    *Broadcaster
+	metadata       *artifact.MetadataRecorder
 	mux            *http.ServeMux
 	api            huma.API
 	httpSrv        *http.Server
@@ -122,6 +124,12 @@ func New(
 		},
 		spaFS:      dist,
 		spaHandler: http.FileServerFS(dist),
+	}
+	if local, ok := database.(*db.DB); ok && engine != nil && cfg.DataDir != "" {
+		s.metadata = artifact.NewMetadataRecorder(local, artifact.MetadataRecorderOptions{
+			DataDir: cfg.DataDir,
+			Origin:  cfg.ArtifactOriginID,
+		})
 	}
 	for _, opt := range opts {
 		opt(s)

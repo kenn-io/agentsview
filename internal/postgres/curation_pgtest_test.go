@@ -69,9 +69,12 @@ func TestStoreStarsAndPins(t *testing.T) {
 	ok, err = store.StarSession("missing")
 	require.NoError(t, err, "StarSession missing")
 	assert.False(t, ok, "StarSession missing")
-	require.NoError(t, store.BulkStarSessions(
-		[]string{"cur-star-2", "missing"},
-	), "BulkStarSessions")
+	bulkStarred, err := store.BulkStarSessions([]string{"cur-star-2", "missing"})
+	require.NoError(t, err, "BulkStarSessions")
+	assert.Equal(t, []string{"cur-star-2"}, bulkStarred, "starred ids returned")
+	bulkStarred, err = store.BulkStarSessions([]string{"cur-star-1", "cur-star-2"})
+	require.NoError(t, err, "BulkStarSessions already starred")
+	assert.Empty(t, bulkStarred, "already-starred ids should not be returned")
 
 	ids, err := store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs")
@@ -83,7 +86,12 @@ func TestStoreStarsAndPins(t *testing.T) {
 	for _, id := range ids {
 		assert.True(t, wantStars[id], "unexpected starred id %q in %v", id, ids)
 	}
-	require.NoError(t, store.UnstarSession("cur-star-1"), "UnstarSession")
+	removed, err := store.UnstarSession("cur-star-1")
+	require.NoError(t, err, "UnstarSession")
+	require.True(t, removed, "UnstarSession")
+	removed, err = store.UnstarSession("cur-star-1")
+	require.NoError(t, err, "UnstarSession no-op")
+	require.False(t, removed, "UnstarSession no-op")
 	ids, err = store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs after unstar")
 	require.Len(t, ids, 1)

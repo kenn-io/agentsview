@@ -26,6 +26,7 @@ nav = [
   {"Session API" = "session-api.md"},
   {"Configuration" = "configuration.md"},
   {"Remote Access" = "remote-access.md"},
+  {"Artifact Sync" = "artifact-sync.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
   {"Changelog" = "changelog.md"},

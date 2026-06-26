@@ -1375,6 +1375,47 @@ func (db *DB) migrateColumns() error {
 		)
 	}
 
+	if _, err := w.Exec(`
+		CREATE TABLE IF NOT EXISTS metadata_applied_events (
+			origin        TEXT NOT NULL,
+			order_key     TEXT NOT NULL,
+			artifact_hash TEXT NOT NULL,
+			applied_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (origin, order_key)
+		);
+		CREATE TABLE IF NOT EXISTS metadata_replay_state (
+			session_gid   TEXT NOT NULL,
+			field         TEXT NOT NULL,
+			order_key     TEXT NOT NULL,
+			hlc           TEXT NOT NULL,
+			artifact_hash TEXT NOT NULL,
+			origin        TEXT NOT NULL,
+			op            TEXT NOT NULL,
+			value         TEXT NOT NULL DEFAULT '',
+			updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			PRIMARY KEY (session_gid, field)
+		);
+		CREATE TABLE IF NOT EXISTS metadata_conflicts (
+			id                INTEGER PRIMARY KEY,
+			session_gid       TEXT NOT NULL,
+			field             TEXT NOT NULL,
+			winning_order_key TEXT NOT NULL,
+			losing_order_key  TEXT NOT NULL,
+			winning_origin    TEXT NOT NULL,
+			losing_origin     TEXT NOT NULL,
+			winning_op        TEXT NOT NULL,
+			losing_op         TEXT NOT NULL,
+			winning_value     TEXT NOT NULL DEFAULT '',
+			losing_value      TEXT NOT NULL DEFAULT '',
+			created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			UNIQUE(session_gid, field, winning_order_key, losing_order_key)
+		);
+	`); err != nil {
+		return fmt.Errorf(
+			"creating metadata replay tables: %w", err,
+		)
+	}
+
 	if err := db.ensureUsageEventsSchemaLocked(w); err != nil {
 		return err
 	}

@@ -20,7 +20,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci test-minio postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -259,6 +259,11 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 test-postgres-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1
 
+# MinIO/S3 object-store integration test. testcontainers starts and tears down
+# the MinIO container automatically, so this just needs a working Docker daemon.
+test-minio: ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,miniotest" -v ./internal/artifact/... -run MinIO -count=1
+
 # Start test SSH container
 ssh-up:
 	docker compose -f docker-compose.test.yml up -d --build --wait sshd
@@ -279,8 +284,9 @@ test-ssh: pricing-snapshot ensure-embed-dir ssh-up
 test-ssh-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,sshtest" -v ./internal/ssh/... -count=1
 
-# Run Playwright E2E tests
-e2e:
+# Run artifact sync and Playwright E2E tests
+e2e: ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,e2e" ./internal/e2e -v -count=1
 	cd frontend && npx playwright test
 
 # Run focused Playwright smoke tests against duckdb serve.
@@ -441,6 +447,7 @@ help:
 	@echo "  test-short     - Run fast tests only"
 	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
+	@echo "  test-minio     - Run MinIO/S3 object-store integration test (needs Docker)"
 	@echo "  postgres-up    - Start test PostgreSQL container"
 	@echo "  postgres-down  - Stop test PostgreSQL container"
 	@echo "  test-ssh       - Run SSH integration tests"

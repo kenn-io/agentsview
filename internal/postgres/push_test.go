@@ -1,7 +1,10 @@
 package postgres
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -125,6 +128,125 @@ func TestPushMarkerIDUsesUnscopedStateAcrossNamedTargets(t *testing.T) {
 	}
 }
 
+// scriptedSink is a sessionBatchSink that records calls and writes every
+// session except those named in fail. It mirrors pushBatch semantics: a
+// multi-session batch containing a failing session rolls back as a unit
+// (ok=false) so the driver retries each session individually, and a failing
+// single-session batch returns ok=false. A session named in fatal makes the
+// batch containing it return a fatal error.
+type scriptedSink struct {
+	fail  map[string]bool
+	fatal string
+	calls [][]string
+}
+
+func (s *scriptedSink) writeBatch(
+	_ context.Context, batch []db.Session, pushed *[]db.Session,
+) (batchResult, error) {
+	ids := make([]string, len(batch))
+	for i, sess := range batch {
+		ids[i] = sess.ID
+	}
+	s.calls = append(s.calls, ids)
+	for _, sess := range batch {
+		if sess.ID == s.fatal {
+			return batchResult{}, errors.New("fatal sink error")
+		}
+		if s.fail[sess.ID] {
+			// Whole batch rolls back without writing.
+			return batchResult{ok: false}, nil
+		}
+	}
+	msgs := 0
+	for _, sess := range batch {
+		*pushed = append(*pushed, sess)
+		msgs += 2
+	}
+	return batchResult{ok: true, sessions: len(batch), messages: msgs}, nil
+}
+
+func sessionsWithIDs(ids ...string) []db.Session {
+	out := make([]db.Session, len(ids))
+	for i, id := range ids {
+		out[i] = db.Session{ID: id}
+	}
+	return out
+}
+
+func TestDrainSessionBatchesChunksAndReportsProgress(t *testing.T) {
+	var ids []string
+	for i := range 120 {
+		ids = append(ids, fmt.Sprintf("s%03d", i))
+	}
+	sessions := sessionsWithIDs(ids...)
+	sink := &scriptedSink{}
+
+	var result PushResult
+	var progress []PushProgress
+	pushed, err := drainSessionBatches(
+		context.Background(), sessions, sink, &result,
+		func(p PushProgress) { progress = append(progress, p) },
+	)
+	require.NoError(t, err)
+
+	// Batched in chunks of 50: 50 + 50 + 20.
+	require.Len(t, sink.calls, 3)
+	assert.Len(t, sink.calls[0], 50)
+	assert.Len(t, sink.calls[1], 50)
+	assert.Len(t, sink.calls[2], 20)
+
+	assert.Equal(t, 120, result.SessionsPushed)
+	assert.Equal(t, 240, result.MessagesPushed)
+	assert.Equal(t, 0, result.Errors)
+	assert.Len(t, pushed, 120)
+
+	require.Len(t, progress, 3)
+	assert.Equal(t, PushProgress{SessionsDone: 50, SessionsTotal: 120, MessagesDone: 100}, progress[0])
+	assert.Equal(t, PushProgress{SessionsDone: 100, SessionsTotal: 120, MessagesDone: 200}, progress[1])
+	assert.Equal(t, PushProgress{SessionsDone: 120, SessionsTotal: 120, MessagesDone: 240}, progress[2])
+}
+
+func TestDrainSessionBatchesRetriesFailedBatchIndividually(t *testing.T) {
+	sessions := sessionsWithIDs("a", "b", "c")
+	sink := &scriptedSink{fail: map[string]bool{"b": true}}
+
+	var result PushResult
+	pushed, err := drainSessionBatches(
+		context.Background(), sessions, sink, &result, nil,
+	)
+	require.NoError(t, err)
+
+	// First the whole batch (rolls back), then each session individually.
+	require.Len(t, sink.calls, 4)
+	assert.Equal(t, []string{"a", "b", "c"}, sink.calls[0])
+	assert.Equal(t, []string{"a"}, sink.calls[1])
+	assert.Equal(t, []string{"b"}, sink.calls[2])
+	assert.Equal(t, []string{"c"}, sink.calls[3])
+
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 4, result.MessagesPushed)
+	assert.Equal(t, 1, result.Errors)
+	pushedIDs := make([]string, len(pushed))
+	for i, sess := range pushed {
+		pushedIDs[i] = sess.ID
+	}
+	assert.Equal(t, []string{"a", "c"}, pushedIDs)
+}
+
+func TestDrainSessionBatchesFatalErrorAborts(t *testing.T) {
+	sessions := sessionsWithIDs("a", "b", "c")
+	sink := &scriptedSink{fatal: "b"}
+
+	var result PushResult
+	pushed, err := drainSessionBatches(
+		context.Background(), sessions, sink, &result, nil,
+	)
+	require.Error(t, err)
+	assert.Equal(t, 0, result.SessionsPushed)
+	assert.Equal(t, 0, result.Errors)
+	assert.Empty(t, pushed)
+}
+
 func TestReadPushBoundaryStateValidity(t *testing.T) {
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
@@ -203,7 +325,7 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 
-	fp1 := sessionPushFingerprint(base, base.Machine, "", "")
+	fp1 := sessionPushFingerprint(base, base.ID, base.Machine, "", "")
 
 	tests := []struct {
 		name   string
@@ -291,13 +413,14 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			modified := tc.modify(base)
-			fp2 := sessionPushFingerprint(modified, modified.Machine, "", "")
+			fp2 := sessionPushFingerprint(
+				modified, modified.ID, modified.Machine, "", "")
 			require.NotEqual(t, fp1, fp2,
 				"fingerprint should differ after %s", tc.name)
 		})
 	}
 
-	assert.Equal(t, fp1, sessionPushFingerprint(base, base.Machine, "", ""),
+	assert.Equal(t, fp1, sessionPushFingerprint(base, base.ID, base.Machine, "", ""),
 		"identical sessions should produce identical fingerprints")
 }
 
@@ -314,10 +437,27 @@ func TestSessionPushFingerprintIncludesUsageEventFingerprint(
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}
 
-	withoutUsage := sessionPushFingerprint(base, base.Machine, "", "")
-	withUsage := sessionPushFingerprint(base, base.Machine, "usage-fp", "")
+	withoutUsage := sessionPushFingerprint(base, base.ID, base.Machine, "", "")
+	withUsage := sessionPushFingerprint(base, base.ID, base.Machine, "usage-fp", "")
 	assert.NotEqual(t, withoutUsage, withUsage,
 		"usage event fingerprint should affect session fingerprint")
+}
+
+func TestSessionPushFingerprintTracksResolvedID(t *testing.T) {
+	base := db.Session{
+		ID:        "sess-001",
+		Project:   "proj",
+		Machine:   "laptop",
+		Agent:     "claude",
+		CreatedAt: "2026-03-11T12:00:00Z",
+	}
+
+	native := sessionPushFingerprint(base, base.ID, base.Machine, "", "")
+	prefixed := sessionPushFingerprint(
+		base, prefixedSessionID(base.Machine, base.ID), base.Machine, "", "",
+	)
+	assert.NotEqual(t, native, prefixed,
+		"resolved PG id must affect session fingerprint")
 }
 
 func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
@@ -329,9 +469,11 @@ func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	fpA := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-a"), "", "")
+		sentinel, sentinel.ID,
+		pushedSessionMachine(sentinel, "host-a"), "", "")
 	fpB := sessionPushFingerprint(
-		sentinel, pushedSessionMachine(sentinel, "host-b"), "", "")
+		sentinel, sentinel.ID,
+		pushedSessionMachine(sentinel, "host-b"), "", "")
 	assert.NotEqual(t, fpA, fpB,
 		"sentinel session fingerprint must change with the fallback machine")
 
@@ -343,9 +485,11 @@ func TestSessionPushFingerprintTracksResolvedMachine(t *testing.T) {
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	fp1 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-a"), "", "")
+		real, real.ID,
+		pushedSessionMachine(real, "host-a"), "", "")
 	fp2 := sessionPushFingerprint(
-		real, pushedSessionMachine(real, "host-b"), "", "")
+		real, real.ID,
+		pushedSessionMachine(real, "host-b"), "", "")
 	assert.Equal(t, fp1, fp2,
 		"a session with a real machine ignores the fallback")
 }
@@ -389,6 +533,46 @@ func TestPushedSessionMachine(t *testing.T) {
 	}
 }
 
+func TestPrefixedSessionID(t *testing.T) {
+	tests := []struct {
+		name    string
+		machine string
+		id      string
+		want    string
+	}{
+		{
+			name:    "prefixes native id",
+			machine: "host-a",
+			id:      "sess-001",
+			want:    "host-a~sess-001",
+		},
+		{
+			name:    "keeps already prefixed id",
+			machine: "host-a",
+			id:      "host-a~sess-001",
+			want:    "host-a~sess-001",
+		},
+		{
+			name:    "keeps empty machine",
+			machine: "",
+			id:      "sess-001",
+			want:    "sess-001",
+		},
+		{
+			name:    "keeps empty id",
+			machine: "host-a",
+			id:      "",
+			want:    "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, prefixedSessionID(tc.machine, tc.id))
+		})
+	}
+}
+
 func TestSessionPushFingerprintNoFieldCollisions(
 	t *testing.T,
 ) {
@@ -403,8 +587,8 @@ func TestSessionPushFingerprintNoFieldCollisions(
 		CreatedAt: "2026-03-11T12:00:00Z",
 	}
 	assert.NotEqual(t,
-		sessionPushFingerprint(s1, s1.Machine, "", ""),
-		sessionPushFingerprint(s2, s2.Machine, "", ""),
+		sessionPushFingerprint(s1, s1.ID, s1.Machine, "", ""),
+		sessionPushFingerprint(s2, s2.ID, s2.Machine, "", ""),
 		"length-prefixed fingerprints should not collide")
 }
 
@@ -565,7 +749,15 @@ func TestFinalizePushStateMergesPriorFingerprints(
 	require.NoError(t, finalizePushState(
 		store, cutoff, cycle2Sessions,
 		priorFingerprints,
-		map[string]string{"sess-002": sessionPushFingerprint(cycle2Sessions[0], cycle2Sessions[0].Machine, "", "")},
+		map[string]string{
+			"sess-002": sessionPushFingerprint(
+				cycle2Sessions[0],
+				cycle2Sessions[0].ID,
+				cycle2Sessions[0].Machine,
+				"",
+				"",
+			),
+		},
 	))
 
 	raw := store.values[lastPushBoundaryStateKey]
