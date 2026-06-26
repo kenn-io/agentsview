@@ -527,61 +527,6 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	return files
 }
 
-// DiscoverCodexSessions finds all Codex JSONL session files under
-// either the standard year/month/day layout or a flat archived dir.
-//
-// Local Codex discovery is owned by the Codex provider source set; this entry
-// is retained as the s3:// discovery path (via discoverCodexS3), which the
-// legacy S3 sync path consumes until S3 support folds into the source sets.
-func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
-	if strings.HasPrefix(sessionsDir, "s3://") {
-		return discoverCodexS3(sessionsDir)
-	}
-	var files []DiscoveredFile
-
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if !isCodexSessionFilename(entry.Name()) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(sessionsDir, entry.Name()),
-			Agent: AgentCodex,
-		})
-	}
-
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			if !isCodexSessionFilename(sf.Name()) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(dayPath, sf.Name()),
-				Agent: AgentCodex,
-			})
-		}
-		return true
-	})
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // claudeFindSourceFile finds the original JSONL file for a Claude
 // session ID by searching all project directories. It is the
 // provider-owned lookup body used by the Claude provider source set's
