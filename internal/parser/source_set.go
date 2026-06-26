@@ -17,6 +17,17 @@ import "context"
 // fallback for Parse -- live here so the SourceSet implementations stay focused
 // on agent-specific source logic.
 
+// MaterializedFileSource is the Opaque payload for a session whose bytes were
+// materialized to a local file outside any configured root -- an S3 object
+// fetched to a temp dir. A source set resolves it straight to its Path, so
+// provider.Parse can parse the file without re-deriving identity from a
+// configured-root layout (the materialized path may not match the provider's
+// on-disk convention). The caller supplies the project via SourceRef.ProjectHint
+// and applies any source-identity rewrite to the parsed results.
+type MaterializedFileSource struct {
+	Path string
+}
+
 // SourceSet is the source-resolution and parse core that a Provider delegates
 // to. It is the Provider interface minus the Definition/Capabilities/config
 // plumbing (supplied by SourceSetProvider) and minus ParseIncremental (which

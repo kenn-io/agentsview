@@ -4463,7 +4463,7 @@ func TestConvertToolCallsFilePathAndCallIndex(t *testing.T) {
 
 // codexRenameFixture is a seeded Codex session whose stored file_mtime is the
 // folded index-mtime watermark, used to exercise title-rename detection in
-// shouldSkipCodex.
+// codexIndexSessionNameChanged.
 type codexRenameFixture struct {
 	e              *Engine
 	path           string
@@ -4474,7 +4474,7 @@ type codexRenameFixture struct {
 }
 
 // writeCodexIndexForTest writes the session_index.jsonl mapping uuid -> title
-// at indexMtime, the file shouldSkipCodex's title check reads.
+// at indexMtime, the file codexIndexSessionNameChanged's title check reads.
 func writeCodexIndexForTest(
 	t *testing.T, root, uuid, title string, indexMtime time.Time,
 ) string {
@@ -4545,22 +4545,23 @@ func seedCodexRenameCase(t *testing.T, database *db.DB) codexRenameFixture {
 	}
 }
 
-// TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip pins the masking
-// fix: a title-only rename whose folded index mtime is at or below the stored
-// watermark used to be skipped by shouldSkipCodex's storedMtime==effectiveMtime
-// fast path, which never consulted the title. The direct title check must now
-// force a reparse while an unchanged session still hits the skip path.
-func TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip(t *testing.T) {
+// TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime pins the
+// masking fix: a title-only rename whose folded index mtime is at or below the
+// stored watermark is invisible to an mtime gate, so the skip decision instead
+// consults codexIndexSessionNameChanged, which compares the live index title to
+// the stored session_name directly. It must report a change for a renamed title
+// while staying quiet for an unchanged one.
+func TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime(t *testing.T) {
 	database := openTestDB(t)
 	f := seedCodexRenameCase(t, database)
 
-	// Control: nothing changed -> hot path still skips.
-	assert.True(t, f.e.shouldSkipCodex(f.path, f.info),
-		"unchanged transcript and title must still skip")
+	// Control: nothing changed -> no rename reported, so the caller may skip.
+	assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+		"unchanged title must not report a change")
 
 	// Title-only rename whose index mtime lands at or below the stored
-	// watermark. The transcript bytes are untouched, so the old mtime gate
-	// would skip; the mtime-independent title check must catch it.
+	// watermark. The transcript bytes are untouched, so the mtime gate would
+	// skip; the mtime-independent title check must catch the rename.
 	writeCodexIndexForTest(t, f.root, f.uuid, "Renamed Title",
 		time.Unix(0, f.effectiveMtime))
 	renamedEff := parser.CodexEffectiveMtime(f.path, f.info.ModTime().UnixNano())
@@ -4570,8 +4571,8 @@ func TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip(t *testing.T) {
 		parser.LookupCodexThreadName(f.path, f.uuid),
 		"live index must report the renamed title")
 
-	assert.False(t, f.e.shouldSkipCodex(f.path, f.info),
-		"title-only rename at or below stored watermark must not skip")
+	assert.True(t, f.e.codexIndexSessionNameChanged(f.path),
+		"title-only rename at or below stored watermark must report a change")
 }
 
 func TestEngine_ClassifyPathsProviderRemoveSkipsMissingGeminiSource(

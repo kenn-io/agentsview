@@ -482,6 +482,8 @@ func (s codexSourceSet) pathFromSource(source SourceRef) (string, bool) {
 		if src != nil && src.Path != "" {
 			return src.Path, true
 		}
+	case MaterializedFileSource:
+		return src.Path, src.Path != ""
 	}
 	for _, candidate := range []string{
 		source.DisplayPath,

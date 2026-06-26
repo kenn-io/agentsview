@@ -382,28 +382,6 @@ var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
 	"incremental parse: appended Claude lines require full parse",
 )
 
-// ParseClaudeSessionWithExclusions and ParseClaudeSessionFrom are the exported
-// seam used by the S3 sync path (internal/sync), which buffers an s3:// object
-// to a temp file and parses it through the legacy per-agent processor. The
-// Claude provider calls the unexported claudeParse* bodies directly; these thin
-// wrappers exist only so the cross-package S3 consumer can reach the same logic
-// without a provider file shimming a Parse* free function. They are removed once
-// S3 support folds into the JSONL source sets.
-func ParseClaudeSessionWithExclusions(
-	path, project, machine string,
-) ([]ParseResult, []string, error) {
-	return claudeParseWithExclusions(path, project, machine)
-}
-
-func ParseClaudeSessionFrom(
-	path string,
-	offset int64,
-	startOrdinal int,
-	lastEntryUUID string,
-) ([]ParsedMessage, time.Time, int64, error) {
-	return claudeParseSessionFrom(path, offset, startOrdinal, lastEntryUUID)
-}
-
 func claudeParseSessionFrom(
 	path string,
 	offset int64,
