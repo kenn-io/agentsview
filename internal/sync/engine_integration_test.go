@@ -8629,8 +8629,8 @@ func TestIncrementalSync_CodexLateTokenCountWithIndexRenameRewritesStoredMessage
 // rename whose mtime is <= that stored value cannot be detected by a
 // indexMtime > storedMtime gate, so the incremental path must compare the
 // session name directly and fall back to a full parse, otherwise
-// shouldSkipCodex's storedMtime==effectiveMtime fast path would strand the
-// stale title on every subsequent sync.
+// shouldSkipCodexFingerprint's storedMtime==effectiveMtime fast path would
+// strand the stale title on every subsequent sync.
 func TestIncrementalSync_CodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
