@@ -215,7 +215,7 @@ func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			return nil, err
 		}
 		for _, file := range ClaudeProjectSessionFiles(root) {
-			source, ok := s.sourceRef(root, file.Path)
+			source, ok := s.discoveredSourceRef(root, file)
 			if !ok {
 				continue
 			}
@@ -224,6 +224,21 @@ func (s claudeSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 	}
 	sortJSONLSources(sources)
 	return sources, nil
+}
+
+// discoveredSourceRef builds the SourceRef for one enumerated Claude session
+// file. Local files resolve through the regular file-backed source ref; s3://
+// objects (which ClaudeProjectSessionFiles enumerates via discoverClaudeS3)
+// carry their durable object metadata in the Opaque payload, because the
+// IsRegularFile gate that sourceRef applies to a local path would otherwise drop
+// every remote object.
+func (s claudeSourceSet) discoveredSourceRef(
+	root string, file DiscoveredFile,
+) (SourceRef, bool) {
+	if strings.HasPrefix(file.Path, "s3://") {
+		return s3SourceRefFromDiscoveredFile(file), true
+	}
+	return s.sourceRef(root, file.Path)
 }
 
 func (s claudeSourceSet) WatchPlan(context.Context) (WatchPlan, error) {

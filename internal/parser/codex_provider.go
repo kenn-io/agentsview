@@ -208,6 +208,21 @@ func (s codexSourceSet) discover(
 		if !includeRoot(root) {
 			continue
 		}
+		if strings.HasPrefix(root, "s3://") {
+			// s3:// roots have no local layout to walk: enumerate the objects
+			// directly and carry each one's durable metadata in the Opaque
+			// payload. Each object is its own session keyed by URI, so the
+			// live-over-archived preference (which inspects a local codexSource
+			// layout) does not apply here.
+			for _, file := range discoverCodexS3(root) {
+				source := s3SourceRefFromDiscoveredFile(file)
+				if _, ok := byKey[source.Key]; ok {
+					continue
+				}
+				byKey[source.Key] = source
+			}
+			continue
+		}
 		for _, path := range s.discoverSessionPaths(root) {
 			source, ok := s.sourceRef(root, path, true)
 			if !ok {

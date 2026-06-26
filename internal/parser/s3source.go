@@ -335,6 +335,45 @@ func combineS3Fingerprints(values ...string) string {
 	return prefix + strings.Join(entries, sep)
 }
 
+// S3DiscoveredSource is the Opaque payload an S3-aware source set attaches to a
+// discovered s3:// SourceRef. It carries the durable object metadata the sync
+// engine threads back into the DiscoveredFile so S3 freshness, dedup, mtime
+// cutoff, and machine-ID namespacing operate on a provider-discovered S3 source
+// exactly as they did when discovery emitted these fields directly. Providers
+// read local files, so an S3 source is never fingerprinted or parsed through the
+// provider feature path; the engine routes s3:// objects to the dedicated S3
+// sync path, which re-stats and fetches the object itself.
+type S3DiscoveredSource struct {
+	URI         string
+	Project     string
+	Machine     string
+	Size        int64
+	MtimeNS     int64
+	Fingerprint string
+}
+
+// s3SourceRefFromDiscoveredFile builds the SourceRef for an s3:// session object
+// enumerated by a source set's discovery. The s3 URI is the stable identity
+// across Key, DisplayPath, and FingerprintKey, and the durable object metadata
+// rides in the Opaque payload for the engine to thread into the DiscoveredFile.
+func s3SourceRefFromDiscoveredFile(file DiscoveredFile) SourceRef {
+	return SourceRef{
+		Provider:       file.Agent,
+		Key:            file.Path,
+		DisplayPath:    file.Path,
+		FingerprintKey: file.Path,
+		ProjectHint:    file.Project,
+		Opaque: S3DiscoveredSource{
+			URI:         file.Path,
+			Project:     file.Project,
+			Machine:     file.Machine,
+			Size:        file.SourceSize,
+			MtimeNS:     file.SourceMtime,
+			Fingerprint: file.SourceFingerprint,
+		},
+	}
+}
+
 // discoverClaudeS3 lists Claude session JSONL under an s3:// projects root,
 // mirroring DiscoverClaudeProjects' selection rules:
 //   - top-level <project>/<uuid>.jsonl   (skip names starting "agent-")
