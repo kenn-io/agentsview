@@ -95,7 +95,7 @@ func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	ctx := t.Context()
 	from := time.Now().Add(-24 * time.Hour)
 	to := time.Now().Add(1 * time.Hour)
-	rows, err := d.loadSessionsInWindow(ctx, StatsFilter{}, from, to)
+	rows, err := d.loadSessionsInWindow(ctx, StatsFilter{}, from, to, false)
 	require.NoError(t, err, "loadSessionsInWindow")
 	byID := map[string]bool{}
 	for _, r := range rows {
@@ -412,6 +412,60 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 		"filters.projects_excluded must be non-nil slice")
 
 	assert.NotEmpty(t, stats.GeneratedAt, "generated_at")
+}
+
+// TestGetSessionStats_SubagentTotals verifies the two-bucket split in
+// the stats pipeline: subagent sessions (e.g. workflow subagents) count
+// toward the additive token/session totals, but stay out of the
+// distribution and human-vs-automation breakdowns so their short,
+// signal-less shape does not skew those. The subagent here is one-shot
+// (userMsgs 1) and short, like a real workflow subagent.
+func TestGetSessionStats_SubagentTotals(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// One multi-turn root session (10 user msgs, 20 messages, ~100 min)
+	// and one one-shot subagent (1 user msg, 5 messages, ~8 min).
+	insertSessionFixture(t, d, sessionFixture{
+		id: "root", userMsgs: 10, messageCount: 20,
+		startedAt: hoursAgo(5), durationMin: 100,
+	})
+	insertSessionFixture(t, d, sessionFixture{
+		id: "agent-x", userMsgs: 1, messageCount: 5,
+		startedAt: hoursAgo(5), durationMin: 8,
+		relationshipType: "subagent",
+	})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	require.NoError(t, err, "GetSessionStats")
+
+	// Additive totals include the subagent.
+	assert.Equal(t, 2, stats.Totals.SessionsAll, "sessions_all")
+	assert.Equal(t, 25, stats.Totals.MessagesTotal, "messages_total")
+	assert.Equal(t, 11, stats.Totals.UserMessagesTotal,
+		"user_messages_total")
+
+	// SessionsHuman stays root-only: a subagent is not a human session.
+	assert.Equal(t, 1, stats.Totals.SessionsHuman, "sessions_human")
+	assert.Equal(t, 0, stats.Totals.SessionsAutomation,
+		"sessions_automation")
+
+	// Distributions stay root-only: only the root session is in the
+	// user-messages histogram, so its bucket counts sum to 1, not 2.
+	gotN := 0
+	for _, b := range stats.Distributions.UserMessages.ScopeAll.Buckets {
+		gotN += b.Count
+	}
+	assert.Equal(t, 1, gotN,
+		"user-messages distribution must exclude the subagent")
+
+	// Duration distribution likewise root-only (subagent's 8 min absent).
+	durN := 0
+	for _, b := range stats.Distributions.DurationMinutes.ScopeAll.Buckets {
+		durN += b.Count
+	}
+	assert.Equal(t, 1, durN,
+		"duration distribution must exclude the subagent")
 }
 
 func Test_computeTotalsAndArchetypes_flagAuthority(t *testing.T) {

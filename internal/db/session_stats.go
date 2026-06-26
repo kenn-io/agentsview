@@ -45,7 +45,17 @@ func (db *DB) GetSessionStats(
 		return nil, fmt.Errorf("resolving window: %w", err)
 	}
 
-	rows, err := db.loadSessionsInWindow(ctx, f, from, to)
+	// Root-only rows drive every consumer (distributions, velocity,
+	// timing, the human/automation split, archetypes, outcomes), so
+	// short signal-less subagents do not skew shape or per-session
+	// metrics. A second, subagent-inclusive load supplies the additive
+	// token/session totals, where subagent spend is real and belongs in
+	// the headline numbers.
+	rows, err := db.loadSessionsInWindow(ctx, f, from, to, false)
+	if err != nil {
+		return nil, err
+	}
+	rowsWithSubagents, err := db.loadSessionsInWindow(ctx, f, from, to, true)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +77,13 @@ func (db *DB) GetSessionStats(
 	}
 
 	computeTotalsAndArchetypes(stats, rows)
+	// Override the additive totals to count subagents. Archetypes and
+	// the human/automation split computed above stay root-only: a
+	// subagent is not a human or automation session and carries no
+	// shape signal. SessionsAll counts every row in the inclusive set;
+	// the message totals sum across it. SessionsHuman/SessionsAutomation
+	// are intentionally left as computeTotalsAndArchetypes set them.
+	applySubagentInclusiveTotals(stats, rowsWithSubagents)
 	computeDistributions(stats, rows)
 
 	sessionIDs := make([]string, 0, len(rows))
@@ -384,14 +401,25 @@ type sessionStatsRow struct {
 // by started_at within [from, to).
 func (db *DB) loadSessionsInWindow(
 	ctx context.Context, f StatsFilter, from, to time.Time,
+	includeSubagents bool,
 ) ([]sessionStatsRow, error) {
 	// Use the same COALESCE(NULLIF(started_at, ''), created_at)
 	// expression as the rest of the analytics code so sessions whose
 	// started_at is missing (parser couldn't infer a start time) are
 	// still attributed to the window via their created_at fallback.
+	//
+	// includeSubagents selects which row set this is: the root-only set
+	// (default, drives distributions/shape/velocity and the human vs
+	// automation split) or the subagent-inclusive set (drives the
+	// additive token/session totals). Fork rows stay excluded in both
+	// because their tokens overlap their root session.
+	relExclusion := "relationship_type NOT IN ('subagent', 'fork')"
+	if includeSubagents {
+		relExclusion = "relationship_type NOT IN ('fork')"
+	}
 	preds := []string{
 		"message_count > 0",
-		"relationship_type NOT IN ('subagent', 'fork')",
+		relExclusion,
 		"deleted_at IS NULL",
 		"COALESCE(NULLIF(started_at, ''), created_at) >= ?",
 		"COALESCE(NULLIF(started_at, ''), created_at) < ?",
@@ -587,6 +615,27 @@ func computeTotalsAndArchetypes(
 	s.Archetypes.PrimaryHuman = pickMaxLabel(humanMax, []string{
 		"marathon", "deep", "standard", "quick",
 	})
+}
+
+// applySubagentInclusiveTotals overrides the additive token/session
+// totals with sums over the subagent-inclusive row set. It is called
+// after computeTotalsAndArchetypes (which ran on the root-only rows) so
+// the archetypes and the human/automation split stay root-only while
+// the headline totals count subagent spend. Only the strictly additive
+// fields are overridden; SessionsHuman and SessionsAutomation are not,
+// since a subagent is neither.
+func applySubagentInclusiveTotals(
+	s *SessionStats, rows []sessionStatsRow,
+) {
+	var sessions, messages, userMessages int
+	for _, r := range rows {
+		sessions++
+		messages += r.messageCount
+		userMessages += r.userMessageCount
+	}
+	s.Totals.SessionsAll = sessions
+	s.Totals.MessagesTotal = messages
+	s.Totals.UserMessagesTotal = userMessages
 }
 
 // pickMaxLabel returns the key with the strictly highest count.
