@@ -695,9 +695,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionSanitizedMessageShape(t *testing.T) {
-	assert.Equal(t, 54, CurrentDataVersion(),
-		"Antigravity source_version backfill requires a data version bump")
+func TestCurrentDataVersionKimiUsageEvents(t *testing.T) {
+	assert.Equal(t, 55, CurrentDataVersion(),
+		"Kimi persisted usage events require a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

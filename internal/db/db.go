@@ -241,6 +241,10 @@ import (
 // classification, so historical skill usage is backfilled on
 // re-parse.)
 //
+// (55: Kimi session-level usage events and native step.end model
+// backfill. Re-parsing persists estimated usage events for existing
+// aggregate-only Kimi sessions and preserves explicit native event
+// model names instead of the proxy fallback.)
 // (54: Antigravity .db sessions record a schema-fingerprint
 // source_version. Re-parsing populates source_version on existing
 // Antigravity IDE and CLI rows so "which agy release produced this
@@ -254,7 +258,7 @@ import (
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 54
+const dataVersion = 55
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

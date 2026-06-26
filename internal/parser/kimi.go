@@ -527,7 +527,9 @@ func ParseKimiSession(
 					ordinal++
 
 				case "step.end":
-					if pendingModel == "" {
+					if model := event.Get("model").Str; model != "" {
+						pendingModel = model
+					} else if pendingModel == "" {
 						pendingModel = currentModel
 					}
 					pendingStopReason = event.Get("finishReason").Str

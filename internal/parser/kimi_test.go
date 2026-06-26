@@ -301,6 +301,23 @@ func TestParseKimiSession_PerMessageTokensSkipUsageEvent(t *testing.T) {
 	assert.Empty(t, sess.UsageEvents)
 }
 
+func TestParseKimiSession_StepEndModelOverridesDefault(t *testing.T) {
+	path := writeKimiWireJSONL(t,
+		"proj-native-model", "sess-native-model",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"type": "turn.prompt", "timestamp": 1704067200.0, "input": [{"type": "text", "text": "Hello"}]}`,
+			`{"type": "context.append_loop_event", "timestamp": 1704067201.0, "event": {"type": "content.part", "part": {"type": "text", "text": "Hi"}}}`,
+			`{"type": "context.append_loop_event", "timestamp": 1704067202.0, "event": {"type": "step.end", "model": "moonshot/kimi-k2", "finishReason": "stop", "usage": {"output": 42, "inputOther": 100}}}`,
+		},
+	)
+
+	_, msgs, err := ParseKimiSession(path, "testproj", "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "moonshot/kimi-k2", msgs[1].Model)
+}
+
 func TestParseKimiSession_ZeroValuedStatusUpdatePreservesCoverage(t *testing.T) {
 	path := writeKimiWireJSONL(t,
 		"proj-zero", "sess-zero",
