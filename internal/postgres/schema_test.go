@@ -314,8 +314,19 @@ func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 
 	require.NoError(t, syncer.EnsureSchema(context.Background()))
 
-	assert.Equal(t, 0, state.execCount(),
-		"compatible PG schema should use read-only probes only")
+	executed := strings.ToLower(state.executedSQL())
+	assert.NotContains(t, executed, "create index",
+		"compatible PG schema must skip index DDL")
+	assert.NotContains(t, executed, "alter index",
+		"compatible PG schema must skip index DDL")
+	assert.NotContains(t, executed, "create table",
+		"compatible PG schema must skip table DDL")
+	assert.NotContains(t, executed, "create schema",
+		"compatible PG schema must skip schema DDL")
+	assert.Equal(t, 0, state.alterTableExecCount(),
+		"compatible PG schema must not run column migrations")
+	assert.Contains(t, executed, "insert into sync_metadata",
+		"compatible PG schema must still run row-level data repairs")
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {

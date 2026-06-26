@@ -952,6 +952,28 @@ func backfillIsAutomatedPG(
 	return nil
 }
 
+// runSchemaDataRepairsPG runs the non-DDL correctness repairs that
+// EnsureSchema performs: it recomputes is_automated and backfills
+// token-coverage flags. These issue only row-level writes, so the
+// compatible-schema fast path can run them without the index and
+// column DDL that can block concurrent pg serve reads (issue #887).
+func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
+	if err := backfillIsAutomatedPG(ctx, db); err != nil {
+		return err
+	}
+	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)
+	if err != nil {
+		return err
+	}
+	if !runRepair {
+		return nil
+	}
+	if err := backfillTokenCoverageFlags(ctx, db); err != nil {
+		return err
+	}
+	return markTokenCoverageRepairDone(ctx, db)
+}
+
 func batchUpdateAutomatedPG(
 	ctx context.Context, pg *sql.DB,
 	ids []string, val bool,

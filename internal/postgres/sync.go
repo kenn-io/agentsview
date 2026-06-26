@@ -281,6 +281,14 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		return err
 	}
 	if err := CheckSchemaCompat(ctx, s.pg); err == nil {
+		// Schema DDL is current, so skip the index and column
+		// maintenance that can lock against concurrent pg serve
+		// reads (issue #887). Still run the row-level data repairs
+		// so is_automated and token-coverage flags stay correct on
+		// existing rows.
+		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
+			return err
+		}
 		s.schemaDone = true
 		return nil
 	}
