@@ -10,7 +10,6 @@ import (
 type ProviderMigrationMode string
 
 const (
-	ProviderMigrationShadowCompare         ProviderMigrationMode = "shadow-compare"
 	ProviderMigrationProviderAuthoritative ProviderMigrationMode = "provider-authoritative"
 	ProviderMigrationImportOnly            ProviderMigrationMode = "import-only"
 )
@@ -103,7 +102,7 @@ func validateProviderMigrationMode(
 ) error {
 	def := factory.Definition()
 	switch mode {
-	case ProviderMigrationShadowCompare, ProviderMigrationProviderAuthoritative:
+	case ProviderMigrationProviderAuthoritative:
 		caps := factory.Capabilities().Source
 		if caps.DiscoverSources != CapabilitySupported {
 			return fmt.Errorf(
