@@ -99,6 +99,10 @@ var (
 		agent: AgentMiMoCode, dbName: "mimocode.db",
 		sessionSubdir: "session_diff",
 	}
+	icodemateFmt = openCodeFormat{
+		agent: AgentIcodemate, dbName: "icodemate.db",
+		sessionSubdir: "session_diff",
+	}
 )
 
 func resolveOpenCodeFormatSource(
@@ -398,6 +402,36 @@ func ParseKiloSQLiteVirtualPath(
 	sourcePath string,
 ) (dbPath, sessionID string, ok bool) {
 	return parseOpenCodeFormatVirtualPath(kiloFmt.dbName, sourcePath)
+}
+
+func ResolveIcodemateSource(root string) OpenCodeSource {
+	return resolveOpenCodeFormatSource(icodemateFmt, root)
+}
+
+func DiscoverIcodemateSessions(root string) []DiscoveredFile {
+	return discoverOpenCodeFormatSessions(icodemateFmt, root)
+}
+
+func FindIcodemateSourceFile(root, sessionID string) string {
+	return findOpenCodeFormatSourceFile(icodemateFmt, root, sessionID)
+}
+
+func IcodemateStorageSessionIDs(root string) map[string]struct{} {
+	return openCodeFormatStorageSessionIDs(icodemateFmt, root)
+}
+
+func ResolveIcodemateWatchRoots(root string) []string {
+	return resolveOpenCodeFormatWatchRoots(icodemateFmt, root)
+}
+
+func IcodemateSQLiteVirtualPath(dbPath, sessionID string) string {
+	return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
+}
+
+func ParseIcodemateSQLiteVirtualPath(
+	sourcePath string,
+) (dbPath, sessionID string, ok bool) {
+	return parseOpenCodeFormatVirtualPath(icodemateFmt.dbName, sourcePath)
 }
 
 // ResolveMiMoCodeSource detects whether a MiMoCode root is using

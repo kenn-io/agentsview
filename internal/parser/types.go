@@ -53,6 +53,7 @@ const (
 	AgentShelley        AgentType = "shelley"
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
+	AgentIcodemate      AgentType = "icodemate"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -654,6 +655,19 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverReasonixSessions,
 		FindSourceFunc: FindReasonixSourceFile,
+	},
+	{
+		Type:           AgentIcodemate,
+		DisplayName:    "IcodeMate",
+		EnvVar:         "ICODEMATE_DIR",
+		ConfigKey:      "icodemate_dirs",
+		DefaultDirs:    []string{".local/share/icodemate"},
+		IDPrefix:       "icodemate:",
+		WatchSubdirs:   []string{"storage/session_diff"},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverIcodemateSessions,
+		FindSourceFunc: FindIcodemateSourceFile,
+		WatchRootsFunc: ResolveIcodemateWatchRoots,
 	},
 }
 

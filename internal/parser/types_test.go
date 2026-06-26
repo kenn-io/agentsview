@@ -343,6 +343,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentAntigravity,
 		AgentAntigravityCLI,
 		AgentIflow,
+		AgentIcodemate,
 		AgentWorkBuddy,
 		AgentZencoder,
 		AgentGptme,
