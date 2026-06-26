@@ -348,6 +348,32 @@ describe("renderMarkdown", () => {
       expect(img).not.toBeNull();
       expect(img!.hasAttribute("onerror")).toBe(false);
     });
+
+    it("does not escape custom tags inside inline code spans", () => {
+      const dom = parseHTML(
+        renderMarkdown("`<policy>keep tags</policy>`"),
+      );
+      const code = dom.querySelector("p > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("<policy>keep tags</policy>");
+    });
+
+    it("does not escape custom tags inside fenced code blocks", () => {
+      const dom = parseHTML(
+        renderMarkdown("```\n<policy>keep tags</policy>\n```"),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
+    });
+
+    it("keeps markdown angle autolinks intact", () => {
+      const dom = parseHTML(renderMarkdown("<https://example.com>"));
+      const link = dom.querySelector("p > a");
+      expect(link).not.toBeNull();
+      expect(link!.textContent).toBe("https://example.com");
+      expect(link!.getAttribute("href")).toBe("https://example.com");
+    });
   });
 
   describe("Claude Code shell shortcuts", () => {
@@ -487,6 +513,17 @@ describe("renderMarkdown", () => {
       expect(code!.textContent).toMatch(
         /^\n\nbody\n/,
       );
+    });
+
+    it("leaves custom tags inside bash output literal", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<bash-stdout><policy>keep tags</policy></bash-stdout>",
+        ),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
     });
   });
 

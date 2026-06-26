@@ -118,6 +118,18 @@ const KNOWN_HTML_TAGS = new Set([
 ]);
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
+const BASH_WRAPPER_BLOCK_RE =
+  /<bash-(input|stdout|stderr)>[\s\S]*?<\/bash-\1>/g;
+const FENCED_CODE_BLOCK_RE =
+  /(^|\n)(?: {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n(?: {0,3})\2[ \t]*(?=\n|$)/g;
+const INLINE_CODE_SPAN_RE = /(`+)([\s\S]*?)\1/g;
+const AUTOLINK_RE =
+  /<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]+|[^\s<>@]+@[^\s<>]+)>/g;
+
+type ProtectedRange = {
+  start: number;
+  end: number;
+};
 
 /** Build a marked tokenizer extension that consumes a Claude Code
  *  shell-shortcut wrapper tag and emits a `code` token directly.
@@ -191,7 +203,7 @@ function resolveAssetURLs(text: string): string {
   );
 }
 
-function escapeCustomXmlTags(text: string): string {
+function escapeCustomXmlTagsSegment(text: string): string {
   return text.replace(XML_TAG_ESCAPE_RE, (tag, rawName: string) => {
     const name = rawName.toLowerCase();
     if (
@@ -204,6 +216,77 @@ function escapeCustomXmlTags(text: string): string {
     }
     return tag.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   });
+}
+
+function collectProtectedRanges(
+  text: string,
+  patterns: RegExp[],
+): ProtectedRange[] {
+  const matches: ProtectedRange[] = [];
+
+  for (const pattern of patterns) {
+    const re = new RegExp(pattern.source, pattern.flags);
+    let match: RegExpExecArray | null;
+    while ((match = re.exec(text)) !== null) {
+      const raw = match[0];
+      if (!raw) {
+        re.lastIndex += 1;
+        continue;
+      }
+      matches.push({
+        start: match.index,
+        end: match.index + raw.length,
+      });
+    }
+  }
+
+  matches.sort((a, b) => a.start - b.start || b.end - a.end);
+
+  const merged: ProtectedRange[] = [];
+  for (const match of matches) {
+    const last = merged[merged.length - 1];
+    if (!last || match.start >= last.end) {
+      merged.push(match);
+      continue;
+    }
+    if (match.end > last.end) {
+      last.end = match.end;
+    }
+  }
+
+  return merged;
+}
+
+function escapeCustomXmlTags(text: string): string {
+  const protectedRanges = collectProtectedRanges(text, [
+    BASH_WRAPPER_BLOCK_RE,
+    FENCED_CODE_BLOCK_RE,
+    INLINE_CODE_SPAN_RE,
+    AUTOLINK_RE,
+  ]);
+
+  if (protectedRanges.length === 0) {
+    return escapeCustomXmlTagsSegment(text);
+  }
+
+  let cursor = 0;
+  let result = "";
+
+  for (const range of protectedRanges) {
+    if (cursor < range.start) {
+      result += escapeCustomXmlTagsSegment(
+        text.slice(cursor, range.start),
+      );
+    }
+    result += text.slice(range.start, range.end);
+    cursor = range.end;
+  }
+
+  if (cursor < text.length) {
+    result += escapeCustomXmlTagsSegment(text.slice(cursor));
+  }
+
+  return result;
 }
 
 export function renderMarkdown(text: string): string {
