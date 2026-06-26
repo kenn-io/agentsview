@@ -187,7 +187,7 @@ machine_name = "workbox"
 url = "postgres://archive"
 `)
 
-	err := runPGStatus("archive", false)
+	err := runPGStatus("archive", PGStatusConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
 	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
@@ -213,7 +213,7 @@ url = "postgres://archive"
 		0o600,
 	))
 
-	err := runPGStatus("archive", false)
+	err := runPGStatus("archive", PGStatusConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
 	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
@@ -266,7 +266,7 @@ machine_name = "workbox"
 url = "postgres://archive"
 `)
 
-	err := runPGStatus("", true)
+	err := runPGStatus("", PGStatusConfig{AllTargets: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "2 pg target(s) failed")
 	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")

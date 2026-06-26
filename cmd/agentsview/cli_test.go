@@ -85,6 +85,18 @@ func TestDuckDBPushHelpShowsProjectFlags(t *testing.T) {
 	}
 }
 
+func TestPGStatusHelpShowsProjectFlags(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "pg", "status", "--help")
+	require.NoError(t, err, "Execute")
+	for _, want := range []string{
+		"--projects",
+		"--exclude-projects",
+		"--all-projects",
+	} {
+		assert.Contains(t, help, want)
+	}
+}
+
 func TestDuckDBQuackServeHelpShowsSafetyFlags(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "duckdb", "quack", "serve", "--help")
 	require.NoError(t, err, "Execute")

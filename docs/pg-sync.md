@@ -232,13 +232,18 @@ filter).
 Show the current sync state.
 
 ```bash
-agentsview pg status [target]
+agentsview pg status [target] [flags]
 agentsview pg status --all
+agentsview pg status --projects alpha,beta
 ```
 
 Without a target name, `pg status` uses the effective default target.
 Pass one named target explicitly to inspect that destination, or use
 `--all` to print every configured target sequentially.
+
+Use the same `--projects`, `--exclude-projects`, or `--all-projects`
+filter flags as `pg push` to inspect the matching filtered or
+unfiltered watermark.
 
 Output:
 

@@ -30,6 +30,13 @@ type PGPushConfig struct {
 	Interval        time.Duration
 }
 
+type PGStatusConfig struct {
+	AllTargets      bool
+	ProjectsFlag    string
+	ExcludeProjects string
+	AllProjects     bool
+}
+
 type pgTargetSelection struct {
 	Name                   string
 	PG                     config.PGConfig
@@ -209,10 +216,7 @@ func writePGPushSummary(w io.Writer, result postgres.PushResult) {
 	)
 }
 
-func runPGStatus(
-	targetName string,
-	allTargets bool,
-) error {
+func runPGStatus(targetName string, cfg PGStatusConfig) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -223,7 +227,7 @@ func runPGStatus(
 	setupLogFile(appCfg.DataDir)
 
 	targets, err := resolvePGTargetSelections(
-		appCfg, targetName, allTargets,
+		appCfg, targetName, cfg.AllTargets,
 	)
 	if err != nil {
 		return err
@@ -250,7 +254,7 @@ func runPGStatus(
 			}
 			fmt.Printf("Target: %s\n", target.label())
 		}
-		if err := runPGStatusTarget(database, appCfg, target); err != nil {
+		if err := runPGStatusTarget(database, appCfg, target, cfg); err != nil {
 			if len(targets) == 1 {
 				return err
 			}
@@ -279,6 +283,7 @@ func runPGStatusTarget(
 	database *db.DB,
 	appCfg config.Config,
 	target pgTargetSelection,
+	cfg PGStatusConfig,
 ) error {
 	target, err := resolvePGTargetConfig(appCfg, target)
 	if err != nil {
@@ -286,6 +291,17 @@ func runPGStatusTarget(
 	}
 	if target.PG.URL == "" {
 		return fmt.Errorf("url not configured")
+	}
+	projects, excludeProjects, err := resolvePushProjects(
+		target.PG,
+		PGPushConfig{
+			ProjectsFlag:    cfg.ProjectsFlag,
+			ExcludeProjects: cfg.ExcludeProjects,
+			AllProjects:     cfg.AllProjects,
+		},
+	)
+	if err != nil {
+		return err
 	}
 
 	ctx, stop := signal.NotifyContext(
@@ -298,8 +314,8 @@ func runPGStatusTarget(
 		lastPush, err = postgres.ReadLastPushAt(
 			database,
 			target.SyncStateTarget,
-			target.PG.Projects,
-			target.PG.ExcludeProjects,
+			projects,
+			excludeProjects,
 			target.MigrateLegacySyncState,
 		)
 		if err != nil {

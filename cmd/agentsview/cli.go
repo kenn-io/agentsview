@@ -578,7 +578,7 @@ func newPGPushCommand() *cobra.Command {
 }
 
 func newPGStatusCommand() *cobra.Command {
-	var allTargets bool
+	var cfg PGStatusConfig
 	cmd := &cobra.Command{
 		Use:          "status [target]",
 		Short:        "Show PG sync status",
@@ -589,13 +589,16 @@ func newPGStatusCommand() *cobra.Command {
 			if len(args) == 1 {
 				targetName = args[0]
 			}
-			if err := runPGStatus(targetName, allTargets); err != nil {
+			if err := runPGStatus(targetName, cfg); err != nil {
 				return fmt.Errorf("pg status: %w", err)
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&allTargets, "all", false, "Show status for every configured PG target")
+	cmd.Flags().BoolVar(&cfg.AllTargets, "all", false, "Show status for every configured PG target")
+	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects whose push status to show")
+	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of excluded projects whose push status to show")
+	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this status")
 	return cmd
 }
 
