@@ -118,24 +118,19 @@ const KNOWN_HTML_TAGS = new Set([
 ]);
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
-const BASH_WRAPPER_BLOCK_RE =
-  /<bash-(input|stdout|stderr)>[\s\S]*?<\/bash-\1>/g;
-const FENCED_CODE_BLOCK_RE =
-  /(^|\n)(?: {0,3})(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n(?: {0,3})\2[ \t]*(?=\n|$)/g;
-const INLINE_CODE_SPAN_RE = /(`+)([\s\S]*?)\1/g;
-const AUTOLINK_RE =
-  /<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]+|[^\s<>@]+@[^\s<>]+)>/g;
 
-type ProtectedRange = {
-  start: number;
-  end: number;
+type MarkdownToken = {
+  type: string;
+  raw?: string;
+  text?: string;
+  escaped?: boolean;
+  [key: string]: unknown;
 };
 
 /** Build a marked tokenizer extension that consumes a Claude Code
  *  shell-shortcut wrapper tag and emits a `code` token directly.
  *  Because this runs at the lexer level, occurrences of the tag
- *  inside a fenced code block are never reached — marked has
- *  already consumed those characters as a `code` token. */
+ *  inside markdown code blocks never reach the extension. */
 function bashWrapperExtension(
   name: string,
   tag: string,
@@ -156,12 +151,8 @@ function bashWrapperExtension(
       if (!m) return undefined;
       const captured = m[1] ?? "";
       if (!captured.trim()) {
-        // Drop empty wrappers entirely (common for stdout/stderr).
         return { type: "space", raw: m[0] };
       }
-      // Preserve the captured whitespace verbatim — code blocks
-      // are expected to render shell output exactly, including
-      // indentation and trailing blank lines.
       return {
         type: "code",
         raw: m[0],
@@ -203,90 +194,93 @@ function resolveAssetURLs(text: string): string {
   );
 }
 
-function escapeCustomXmlTagsSegment(text: string): string {
-  return text.replace(XML_TAG_ESCAPE_RE, (tag, rawName: string) => {
-    const name = rawName.toLowerCase();
-    if (
-      KNOWN_HTML_TAGS.has(name) ||
-      name === "bash-input" ||
-      name === "bash-stdout" ||
-      name === "bash-stderr"
-    ) {
-      return tag;
-    }
-    return tag.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  });
+function isPreservedHtmlTag(name: string): boolean {
+  return (
+    KNOWN_HTML_TAGS.has(name) ||
+    name === "bash-input" ||
+    name === "bash-stdout" ||
+    name === "bash-stderr"
+  );
 }
 
-function collectProtectedRanges(
-  text: string,
-  patterns: RegExp[],
-): ProtectedRange[] {
-  const matches: ProtectedRange[] = [];
-
-  for (const pattern of patterns) {
-    const re = new RegExp(pattern.source, pattern.flags);
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(text)) !== null) {
-      const raw = match[0];
-      if (!raw) {
-        re.lastIndex += 1;
-        continue;
-      }
-      matches.push({
-        start: match.index,
-        end: match.index + raw.length,
-      });
-    }
-  }
-
-  matches.sort((a, b) => a.start - b.start || b.end - a.end);
-
-  const merged: ProtectedRange[] = [];
-  for (const match of matches) {
-    const last = merged[merged.length - 1];
-    if (!last || match.start >= last.end) {
-      merged.push(match);
-      continue;
-    }
-    if (match.end > last.end) {
-      last.end = match.end;
-    }
-  }
-
-  return merged;
+function escapeTagBrackets(text: string): string {
+  return text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function escapeCustomXmlTags(text: string): string {
-  const protectedRanges = collectProtectedRanges(text, [
-    BASH_WRAPPER_BLOCK_RE,
-    FENCED_CODE_BLOCK_RE,
-    INLINE_CODE_SPAN_RE,
-    AUTOLINK_RE,
-  ]);
+function isProtectedAutolink(raw: string): boolean {
+  const inner = raw.slice(1, -1);
+  return (
+    /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(inner) ||
+    /^mailto:/i.test(inner) ||
+    /^[^\s<>@]+@[^\s<>]+$/.test(inner)
+  );
+}
 
-  if (protectedRanges.length === 0) {
-    return escapeCustomXmlTagsSegment(text);
+function shouldEscapeCustomXmlLiteral(raw: string | undefined): boolean {
+  if (!raw || isProtectedAutolink(raw)) {
+    return false;
   }
 
-  let cursor = 0;
-  let result = "";
-
-  for (const range of protectedRanges) {
-    if (cursor < range.start) {
-      result += escapeCustomXmlTagsSegment(
-        text.slice(cursor, range.start),
-      );
-    }
-    result += text.slice(range.start, range.end);
-    cursor = range.end;
+  const match = XML_TAG_ESCAPE_RE.exec(raw);
+  XML_TAG_ESCAPE_RE.lastIndex = 0;
+  if (!match) {
+    return false;
   }
 
-  if (cursor < text.length) {
-    result += escapeCustomXmlTagsSegment(text.slice(cursor));
+  const name = match[1]?.toLowerCase() ?? "";
+  return !isPreservedHtmlTag(name);
+}
+
+function toEscapedTextToken(raw: string): MarkdownToken {
+  return {
+    type: "text",
+    raw,
+    text: escapeTagBrackets(raw),
+    escaped: true,
+  };
+}
+
+function isMarkdownToken(value: unknown): value is MarkdownToken {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      "type" in (value as Record<string, unknown>),
+  );
+}
+
+function escapeTokenValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => escapeTokenValue(entry));
+  }
+  if (isMarkdownToken(value)) {
+    return escapeCustomXmlToken(value);
+  }
+  return value;
+}
+
+function escapeCustomXmlToken(token: MarkdownToken): MarkdownToken {
+  if (
+    (token.type === "html" || token.type === "link") &&
+    shouldEscapeCustomXmlLiteral(token.raw)
+  ) {
+    return toEscapedTextToken(token.raw!);
   }
 
-  return result;
+  const next: MarkdownToken = { ...token };
+  for (const [key, value] of Object.entries(next)) {
+    next[key] = escapeTokenValue(value);
+  }
+
+  return next;
+}
+
+function escapeCustomXmlTokens(tokens: MarkdownToken[]): MarkdownToken[] {
+  return tokens.map((token) => escapeCustomXmlToken(token));
+}
+
+function escapeCustomXmlTags(text: string): MarkdownToken[] {
+  const tokens = parser.lexer(text.trimEnd()) as MarkdownToken[];
+  return escapeCustomXmlTokens(tokens);
 }
 
 export function renderMarkdown(text: string): string {
@@ -296,10 +290,7 @@ export function renderMarkdown(text: string): string {
   if (cached !== undefined) return cached;
 
   const resolved = escapeCustomXmlTags(resolveAssetURLs(text));
-
-  // Trim trailing whitespace — with breaks:true, trailing
-  // newlines become <br> tags that add invisible height.
-  const html = parser.parse(resolved.trimEnd()) as string;
+  const html = parser.parser(resolved) as string;
   const safe = DOMPurify.sanitize(html);
 
   cache.set(text, safe);

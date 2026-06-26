@@ -374,6 +374,17 @@ describe("renderMarkdown", () => {
       expect(link!.textContent).toBe("https://example.com");
       expect(link!.getAttribute("href")).toBe("https://example.com");
     });
+
+    it("preserves namespaced prompt tags as literal text", () => {
+      const dom = parseHTML(
+        renderMarkdown("<foo:bar>keep tags</foo:bar>"),
+      );
+      const p = dom.querySelector("p");
+      expect(p).not.toBeNull();
+      expect(p!.innerHTML).toContain("&lt;foo:bar&gt;");
+      expect(p!.innerHTML).toContain("&lt;/foo:bar&gt;");
+      expect(p!.textContent).toContain("<foo:bar>keep tags</foo:bar>");
+    });
   });
 
   describe("Claude Code shell shortcuts", () => {
@@ -473,6 +484,35 @@ describe("renderMarkdown", () => {
       expect(code!.textContent).toBe(
         "<bash-input>echo hi</bash-input>\n",
       );
+    });
+
+    it("leaves wrappers inside indented code blocks alone", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "    <bash-input>echo hi</bash-input>",
+        ),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("<bash-input>echo hi</bash-input>\n");
+    });
+
+    it("leaves custom tags inside longer-closing fences alone", () => {
+      const dom = parseHTML(
+        renderMarkdown("~~~\n<policy>keep tags</policy>\n~~~~"),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
+    });
+
+    it("leaves custom tags inside unclosed fences alone", () => {
+      const dom = parseHTML(
+        renderMarkdown("~~~\n<policy>keep tags</policy>"),
+      );
+      const code = dom.querySelector("pre > code");
+      expect(code).not.toBeNull();
+      expect(code!.textContent).toBe("<policy>keep tags</policy>\n");
     });
 
     it("tags the input block with language-shell", () => {
