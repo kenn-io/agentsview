@@ -4497,8 +4497,9 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	case "duration":
 		orderExpr = `(julianday(ended_at) -
 			julianday(started_at)) * 1440 DESC, id ASC`
-		where += " AND started_at IS NOT NULL" +
-			" AND ended_at IS NOT NULL"
+		where += " AND NULLIF(started_at, '') IS NOT NULL" +
+			" AND NULLIF(ended_at, '') IS NOT NULL" +
+			" AND julianday(ended_at) >= julianday(started_at)"
 	default:
 		metric = "messages"
 		orderExpr = "message_count DESC, id ASC"

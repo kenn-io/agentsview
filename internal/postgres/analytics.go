@@ -2206,7 +2206,8 @@ func (s *Store) GetAnalyticsTopSessions(
 		orderExpr = "total_output_tokens DESC, id ASC"
 	case "duration":
 		where += " AND started_at IS NOT NULL" +
-			" AND ended_at IS NOT NULL"
+			" AND ended_at IS NOT NULL" +
+			" AND ended_at >= started_at"
 	default:
 		metric = "messages"
 	}

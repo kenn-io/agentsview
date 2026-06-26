@@ -2128,6 +2128,120 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 		assert.Equal(t, 10.0, resp.Sessions[0].ActiveDurationMin, "fallback clamped active duration")
 	})
 
+	t.Run("ByDurationExcludesReversedAndEmptyTimestamps", func(t *testing.T) {
+		// A reversed (ended < started) or empty-timestamp session can
+		// still accumulate positive message-gap active duration, so
+		// without an eligibility guard it would rank into the duration
+		// list. The SQL path must reject both, matching DuckDB and the Go
+		// fallback.
+		insertSession(t, d, "elig-valid", "project-elig-sql", func(s *Session) {
+			s.StartedAt = Ptr("2024-07-01T09:00:00Z")
+			s.EndedAt = Ptr("2024-07-01T09:30:00Z")
+			s.MessageCount = 2
+		})
+		insertMessages(
+			t, d,
+			userMsgAt("elig-valid", 0, "start", "2024-07-01T09:00:00Z"),
+			asstMsgAt("elig-valid", 1, "work", "2024-07-01T09:03:00Z"),
+		)
+
+		insertSession(t, d, "elig-reversed", "project-elig-sql", func(s *Session) {
+			s.StartedAt = Ptr("2024-07-01T10:00:00Z")
+			s.EndedAt = Ptr("2024-07-01T09:00:00Z")
+			s.MessageCount = 2
+		})
+		insertMessages(
+			t, d,
+			userMsgAt("elig-reversed", 0, "start", "2024-07-01T09:00:00Z"),
+			asstMsgAt("elig-reversed", 1, "work", "2024-07-01T09:04:00Z"),
+		)
+
+		insertSession(t, d, "elig-empty", "project-elig-sql", func(s *Session) {
+			s.StartedAt = Ptr("")
+			s.EndedAt = Ptr("")
+			s.MessageCount = 2
+		})
+		insertMessages(
+			t, d,
+			userMsgAt("elig-empty", 0, "start", "2024-07-01T09:00:00Z"),
+			asstMsgAt("elig-empty", 1, "work", "2024-07-01T09:04:00Z"),
+		)
+
+		resp, err := d.GetAnalyticsTopSessions(
+			ctx, AnalyticsFilter{Project: "project-elig-sql"}, "duration",
+		)
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		var ids []string
+		for _, s := range resp.Sessions {
+			ids = append(ids, s.ID)
+		}
+		assert.Equal(t, []string{"elig-valid"}, ids,
+			"reversed and empty duration rows must be excluded")
+	})
+
+	t.Run("ByDurationExcludesReversedAndEmptyTimestampsInGoFallback", func(t *testing.T) {
+		// Same eligibility guard as the SQL path, but the timezone filter
+		// forces the Go fallback ranking path. Parity matters because the
+		// ranking is by message-gap active duration, which stays positive
+		// regardless of reversed or missing wall-clock timestamps.
+		insertSession(t, d, "elig-fb-valid", "project-elig-fb", func(s *Session) {
+			s.StartedAt = Ptr("2026-03-12T09:00:00Z")
+			s.EndedAt = Ptr("2026-03-12T09:30:00Z")
+			s.MessageCount = 2
+		})
+		insertMessages(
+			t, d,
+			userMsgAt("elig-fb-valid", 0, "start", "2026-03-12T09:00:00Z"),
+			asstMsgAt("elig-fb-valid", 1, "work", "2026-03-12T09:03:00Z"),
+		)
+
+		insertSession(t, d, "elig-fb-reversed", "project-elig-fb", func(s *Session) {
+			s.StartedAt = Ptr("2026-03-12T10:00:00Z")
+			s.EndedAt = Ptr("2026-03-12T09:00:00Z")
+			s.MessageCount = 2
+		})
+		insertMessages(
+			t, d,
+			userMsgAt("elig-fb-reversed", 0, "start", "2026-03-12T09:00:00Z"),
+			asstMsgAt("elig-fb-reversed", 1, "work", "2026-03-12T09:04:00Z"),
+		)
+
+		insertSession(t, d, "elig-fb-empty", "project-elig-fb", func(s *Session) {
+			s.StartedAt = Ptr("")
+			s.EndedAt = Ptr("")
+			s.MessageCount = 2
+		})
+		insertMessages(
+			t, d,
+			userMsgAt("elig-fb-empty", 0, "start", "2026-03-12T09:00:00Z"),
+			asstMsgAt("elig-fb-empty", 1, "work", "2026-03-12T09:04:00Z"),
+		)
+		// created_at is not bound by UpsertSession and otherwise defaults
+		// to insertion time, which the date filter would drop before the
+		// eligibility guard is reached. Pin it into the filter window so
+		// this row genuinely exercises the empty-timestamp NULLIF guard
+		// rather than being excluded by the date range.
+		_, err := d.getWriter().Exec(
+			"UPDATE sessions SET created_at = ? WHERE id = ?",
+			"2026-03-12T00:00:00Z", "elig-fb-empty",
+		)
+		require.NoError(t, err, "pin elig-fb-empty created_at")
+
+		resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
+			Project:  "project-elig-fb",
+			From:     "2026-03-01",
+			To:       "2026-03-31",
+			Timezone: "America/New_York",
+		}, "duration")
+		require.NoError(t, err, "GetAnalyticsTopSessions")
+		var ids []string
+		for _, s := range resp.Sessions {
+			ids = append(ids, s.ID)
+		}
+		assert.Equal(t, []string{"elig-fb-valid"}, ids,
+			"reversed and empty duration rows must be excluded in fallback")
+	})
+
 	t.Run("DefaultMetric", func(t *testing.T) {
 		resp, err := d.GetAnalyticsTopSessions(
 			ctx, baseFilter(), "",
