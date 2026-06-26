@@ -1463,6 +1463,18 @@ func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
 	return err == nil && n == 1
 }
 
+// pgHasIndex reports whether an index of the given name exists in the
+// current schema.
+func pgHasIndex(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM pg_indexes
+		 WHERE schemaname = current_schema() AND indexname = $1`,
+		name,
+	).Scan(&n)
+	return err == nil && n == 1
+}
+
 // required by query paths. This is a read-only probe that works
 // against any PG role. Returns nil if compatible, or an error
 // describing what is missing.
@@ -1619,14 +1631,23 @@ func CheckSchemaCompat(
 // needs. CheckSchemaCompat covers the read paths but does not require
 // model_pricing (always queried by syncModelPricing) or
 // cursor_usage_events (written by syncCursorUsageEvents), so probe those
-// tables explicitly. When either is missing the caller must run
-// EnsureSchema so push migrates the schema instead of failing.
+// tables explicitly. It also requires the cursor dedup index, which the
+// cursor usage insert relies on for ON CONFLICT dedup. When any of these
+// is missing the caller must run EnsureSchema so push migrates the schema
+// instead of failing or duplicating rows.
 func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	if err := CheckSchemaCompat(ctx, db); err != nil {
 		return false
 	}
-	return pgHasTable(ctx, db, "model_pricing") &&
-		pgHasTable(ctx, db, "cursor_usage_events")
+	if !pgHasTable(ctx, db, "model_pricing") ||
+		!pgHasTable(ctx, db, "cursor_usage_events") {
+		return false
+	}
+	// bulkInsertCursorUsageEvents dedups via a targetless ON CONFLICT
+	// DO NOTHING, which only suppresses duplicates when this partial
+	// unique index exists. Fall back to EnsureSchema when it is missing
+	// so repeated pushes cannot duplicate cursor usage rows.
+	return pgHasIndex(ctx, db, "idx_cursor_usage_events_dedup")
 }
 
 // CheckDataVersionCompat rejects PG datasets containing rows written by a

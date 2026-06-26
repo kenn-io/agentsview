@@ -40,6 +40,7 @@ type schemaProbeState struct {
 	currentSchema       string
 	existingColumnNames map[string][]string
 	existingTables      map[string]bool
+	existingIndexes     map[string]bool
 	maxDataVersion      int
 	maxDataVersionErr   error
 	queryErrors         []schemaProbeQueryError
@@ -139,6 +140,20 @@ func (c *schemaProbeConn) QueryContext(
 			}
 		}
 		if c.state.existingTables[name] {
+			return &schemaProbeRows{
+				columns: []string{"exists"},
+				values:  [][]driver.Value{{int64(1)}},
+			}, nil
+		}
+		return &schemaProbeRows{columns: []string{"exists"}}, nil
+	case strings.Contains(normalized, "pg_indexes"):
+		name := ""
+		if len(args) > 0 {
+			if v, ok := args[0].Value.(string); ok {
+				name = v
+			}
+		}
+		if c.state.existingIndexes[name] {
 			return &schemaProbeRows{
 				columns: []string{"exists"},
 				values:  [][]driver.Value{{int64(1)}},
@@ -329,6 +344,9 @@ func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 		"model_pricing":       true,
 		"cursor_usage_events": true,
 	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup": true,
+	}
 	syncer := &Sync{pg: pg, schema: "agentsview"}
 
 	require.NoError(t, syncer.EnsureSchema(context.Background()))
@@ -372,6 +390,35 @@ func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
 	assert.Contains(t, strings.ToLower(state.executedSQL()),
 		"create table",
 		"fallback must create missing push tables")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenDedupIndexMissing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	// Tables present but the cursor dedup unique index is absent, so the
+	// read probe passes yet ON CONFLICT DO NOTHING would not dedup cursor
+	// usage rows. The fast path must fall back to EnsureSchema.
+	state.existingTables = map[string]bool{
+		"model_pricing":       true,
+		"cursor_usage_events": true,
+	}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"missing dedup index must fall back to migration DDL")
+	assert.Contains(t, strings.ToLower(state.executedSQL()),
+		"idx_cursor_usage_events_dedup",
+		"fallback must recreate the cursor dedup index")
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {
