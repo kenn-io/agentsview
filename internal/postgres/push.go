@@ -285,19 +285,13 @@ func (s *Sync) Push(
 
 	if len(sessions) == 0 {
 		if s.isFiltered() {
-			// Filtered pushes must not advance the global
-			// watermark but should still update fingerprints
-			// so repeated filtered runs stay incremental.
-			// Use cutoff as the boundary key when lastPush
-			// is empty (--full/PG reset) so that the next
-			// filtered run can match fingerprints.
-			boundaryKey := lastPush
-			if boundaryKey == "" {
-				boundaryKey = cutoff
-			}
-			if err := writePushBoundaryState(
-				state, boundaryKey, sessions,
+			// Filtered pushes use filter-scoped sync state, so
+			// they can advance their own watermark without
+			// moving the unfiltered/global cursor.
+			if err := finalizeFilteredPushState(
+				state, lastPush, cutoff, sessions,
 				priorFingerprints, sessionFingerprints,
+				result.Errors,
 			); err != nil {
 				return result, err
 			}
@@ -373,21 +367,13 @@ func (s *Sync) Push(
 	}
 
 	if s.isFiltered() {
-		// Filtered pushes update fingerprints for pushed
-		// sessions so subsequent filtered runs stay
-		// incremental, but do not advance the global
-		// watermark past sessions from other projects.
-		// Use cutoff as the boundary key when lastPush is
-		// empty (--full/PG reset) so the next filtered
-		// run can match fingerprints instead of
-		// re-pushing everything.
-		boundaryKey := lastPush
-		if boundaryKey == "" {
-			boundaryKey = cutoff
-		}
-		if err := writePushBoundaryState(
-			state, boundaryKey, pushed,
+		// Filtered pushes use filter-scoped sync state, so
+		// they can advance their own watermark without moving
+		// the unfiltered/global cursor.
+		if err := finalizeFilteredPushState(
+			state, lastPush, cutoff, pushed,
 			priorFingerprints, sessionFingerprints,
+			result.Errors,
 		); err != nil {
 			return result, err
 		}
@@ -783,11 +769,28 @@ func finalizePushState(
 	)
 }
 
-// clearPushState resets the watermark and boundary state so that
-// the next push starts from scratch. Used when a filtered push
-// runs --full or detects a PG reset, to avoid leaving stale
-// state that would cause the next unfiltered push to skip
-// sessions.
+func finalizeFilteredPushState(
+	local syncStateStore,
+	lastPush, cutoff string,
+	sessions []db.Session,
+	priorFingerprints map[string]string,
+	sessionFingerprints map[string]string,
+	errors int,
+) error {
+	finalizeCutoff := cutoff
+	var mergedFingerprints map[string]string
+	if errors > 0 {
+		finalizeCutoff = lastPush
+		mergedFingerprints = priorFingerprints
+	}
+	return finalizePushState(
+		local, finalizeCutoff, sessions,
+		mergedFingerprints, sessionFingerprints,
+	)
+}
+
+// clearPushState resets the active watermark and boundary state so
+// that the next push for this sync-state scope starts from scratch.
 func clearPushState(local syncStateStore) error {
 	if err := local.SetSyncState(
 		lastPushBoundaryStateKey, "",

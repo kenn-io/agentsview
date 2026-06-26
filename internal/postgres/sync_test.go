@@ -904,9 +904,15 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 
 	lastPush, err := local.GetSyncState("last_push_at")
 	require.NoError(t, err, "reading filtered watermark")
-	assert.Empty(t, lastPush, "filtered push should keep last_push_at empty")
+	assert.Empty(t, lastPush,
+		"filtered push should keep global last_push_at empty")
 
-	boundaryState, err := local.GetSyncState(lastPushBoundaryStateKey)
+	scopedLastPush, err := filteredA.effectiveSyncState().GetSyncState("last_push_at")
+	require.NoError(t, err, "reading filtered scoped watermark")
+	assert.NotEmpty(t, scopedLastPush,
+		"filtered push should advance scoped last_push_at")
+
+	boundaryState, err := filteredA.effectiveSyncState().GetSyncState(lastPushBoundaryStateKey)
 	require.NoError(t, err, "reading filtered boundary state")
 	require.NotEmpty(t, boundaryState,
 		"filtered push should persist boundary fingerprints")
@@ -1340,10 +1346,12 @@ func TestPushFilteredFullIsIncremental(t *testing.T) {
 	require.NoError(t, err, "reading watermark")
 	assert.Empty(t, wm, "watermark after filtered --full")
 
+	scopedWM, err := ps.effectiveSyncState().GetSyncState("last_push_at")
+	require.NoError(t, err, "reading scoped watermark")
+	assert.NotEmpty(t, scopedWM, "scoped watermark after filtered --full")
+
 	// Boundary fingerprints must have been written.
-	bs, err := local.GetSyncState(
-		"last_push_boundary_state",
-	)
+	bs, err := ps.effectiveSyncState().GetSyncState(lastPushBoundaryStateKey)
 	require.NoError(t, err, "reading boundary state")
 	require.NotEmpty(t, bs, "boundary state empty after filtered --full")
 

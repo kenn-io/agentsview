@@ -215,9 +215,15 @@ func readServiceLastPush(
 		return "", err
 	}
 	target := targets[0]
+	target, err = resolvePGTargetConfig(appCfg, target)
+	if err != nil {
+		return "", err
+	}
 	return postgres.ReadLastPushAt(
 		database,
 		target.SyncStateTarget,
+		target.PG.Projects,
+		target.PG.ExcludeProjects,
 		target.MigrateLegacySyncState,
 	)
 }

@@ -464,6 +464,50 @@ func TestFinalizePushStatePersistsEmptyBoundary(
 	assert.Empty(t, state.Fingerprints)
 }
 
+func TestFinalizeFilteredPushStateAdvancesScopedWatermark(
+	t *testing.T,
+) {
+	const cutoff = "2026-03-11T12:34:56.123Z"
+
+	store := &syncStateStoreStub{}
+	require.NoError(t, finalizeFilteredPushState(
+		store, "", cutoff, nil, nil, map[string]string{}, 0,
+	))
+	assert.Equal(t, cutoff, store.values["last_push_at"])
+
+	raw := store.values[lastPushBoundaryStateKey]
+	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+
+	var state pushBoundaryState
+	require.NoError(t, json.Unmarshal([]byte(raw), &state))
+	assert.Equal(t, cutoff, state.Cutoff)
+	assert.Empty(t, state.Fingerprints)
+}
+
+func TestFinalizeFilteredPushStateKeepsWatermarkOnErrors(
+	t *testing.T,
+) {
+	const lastPush = "2026-03-11T12:00:00.000Z"
+	const cutoff = "2026-03-11T12:34:56.123Z"
+
+	store := &syncStateStoreStub{}
+	require.NoError(t, finalizeFilteredPushState(
+		store, lastPush, cutoff, nil,
+		map[string]string{"sess-001": "fp-001"},
+		map[string]string{},
+		1,
+	))
+	assert.Equal(t, lastPush, store.values["last_push_at"])
+
+	raw := store.values[lastPushBoundaryStateKey]
+	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+
+	var state pushBoundaryState
+	require.NoError(t, json.Unmarshal([]byte(raw), &state))
+	assert.Equal(t, lastPush, state.Cutoff)
+	assert.Equal(t, "fp-001", state.Fingerprints["sess-001"])
+}
+
 func TestPushTargetState(t *testing.T) {
 	tests := []struct {
 		name       string

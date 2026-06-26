@@ -298,6 +298,8 @@ func runPGStatusTarget(
 		lastPush, err = postgres.ReadLastPushAt(
 			database,
 			target.SyncStateTarget,
+			target.PG.Projects,
+			target.PG.ExcludeProjects,
 			target.MigrateLegacySyncState,
 		)
 		if err != nil {
