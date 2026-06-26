@@ -244,7 +244,7 @@ func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 	}))
 
 	e := &Engine{db: database}
-	got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
 		Agent:             parser.AgentClaude,
 		Path:              path,
 		Project:           "test-proj",
@@ -273,7 +273,7 @@ func TestFilterFilesByMtimeKeepsS3ChangedSize(t *testing.T) {
 	}))
 
 	e := &Engine{db: database}
-	got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -360,7 +360,7 @@ func TestFilterFilesByMtimeKeepsOnlyS3CodexChangedIndexTitle(t *testing.T) {
 	}
 
 	e := &Engine{db: database}
-	got := e.filterFilesByMtime([]parser.DiscoveredFile{
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{
 		{
 			Agent:             parser.AgentCodex,
 			Path:              renamedPath,
@@ -435,7 +435,7 @@ func TestFilterFilesByMtimeDoesNotFetchOldS3CodexIndex(t *testing.T) {
 	}
 
 	e := &Engine{db: database}
-	got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
 		Agent:             parser.AgentCodex,
 		Path:              path,
 		Machine:           "laptop",
@@ -497,7 +497,7 @@ func TestFilterFilesByMtimeKeepsS3CodexIndexFetchError(t *testing.T) {
 	}
 
 	e := &Engine{db: database}
-	got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
 		Agent:             parser.AgentCodex,
 		Path:              path,
 		Machine:           "laptop",
@@ -570,7 +570,7 @@ func TestFilterFilesByMtimeKeepsS3CodexClearedIndexTitle(t *testing.T) {
 			}
 
 			e := &Engine{db: database}
-			got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+			got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
 				Agent:             parser.AgentCodex,
 				Path:              path,
 				Machine:           "laptop",
@@ -626,7 +626,7 @@ func TestFilterFilesByMtimeKeepsS3CodexMissingIndexWhenTitleStored(t *testing.T)
 	}
 
 	e := &Engine{db: database}
-	got := e.filterFilesByMtime([]parser.DiscoveredFile{{
+	got := e.filterFilesByMtime(context.Background(), []parser.DiscoveredFile{{
 		Agent:             parser.AgentCodex,
 		Path:              path,
 		Machine:           "laptop",
