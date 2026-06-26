@@ -710,6 +710,11 @@ func (s JSONLSourceSet) sourceRefFromPath(
 	if err != nil {
 		return SourceRef{}, false
 	}
+	// RelPath is a forward-slash key by convention, matching how the rest of
+	// the parser builds source keys and display paths. filepath.Rel returns
+	// OS-native separators, so normalize here; this is a no-op on Unix and
+	// keeps RelPath stable for Windows callers and tests.
+	rel = filepath.ToSlash(rel)
 	displayPath := firstNonEmptyJSONLString(
 		callPathFunc(s.options.DisplayPath, root, path),
 		path,
