@@ -1,4 +1,4 @@
-import { Marked, type TokenizerExtension } from "marked";
+import { Marked, type Token, type TokenizerExtension } from "marked";
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
 
@@ -119,13 +119,7 @@ const KNOWN_HTML_TAGS = new Set([
 
 const XML_TAG_ESCAPE_RE = /<\/?([A-Za-z][A-Za-z0-9:_-]*)(?:"[^"]*"|'[^']*'|[^"'<>])*?>/g;
 
-type MarkdownToken = {
-  type: string;
-  raw?: string;
-  text?: string;
-  escaped?: boolean;
-  [key: string]: unknown;
-};
+type MarkdownToken = Token & Record<string, unknown>;
 
 /** Build a marked tokenizer extension that consumes a Claude Code
  *  shell-shortcut wrapper tag and emits a `code` token directly.
