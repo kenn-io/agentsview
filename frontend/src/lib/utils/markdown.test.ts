@@ -324,6 +324,32 @@ describe("renderMarkdown", () => {
     );
   });
 
+  describe("custom XML-style prompt tags", () => {
+    it("preserves non-HTML prompt tags as literal text", () => {
+      const dom = parseHTML(
+        renderMarkdown(
+          "<policy><rule importance=\"high\">keep tags</rule></policy>",
+        ),
+      );
+      const p = dom.querySelector("p");
+      expect(p).not.toBeNull();
+      expect(p!.innerHTML).toContain("&lt;policy&gt;");
+      expect(p!.innerHTML).toContain("&lt;rule importance=\"high\"&gt;");
+      expect(p!.innerHTML).toContain("&lt;/rule&gt;");
+      expect(p!.innerHTML).toContain("&lt;/policy&gt;");
+      expect(p!.textContent).toContain(
+        "<policy><rule importance=\"high\">keep tags</rule></policy>",
+      );
+    });
+
+    it("keeps standard HTML on the sanitize path", () => {
+      const dom = parseHTML(renderMarkdown("<img src=x onerror=\"alert(1)\">"));
+      const img = dom.querySelector("img");
+      expect(img).not.toBeNull();
+      expect(img!.hasAttribute("onerror")).toBe(false);
+    });
+  });
+
   describe("Claude Code shell shortcuts", () => {
     it("renders <bash-input> as a shell code block with ! prefix", () => {
       const dom = parseHTML(
