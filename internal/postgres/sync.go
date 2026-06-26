@@ -270,7 +270,18 @@ func (s *Sync) Close() error {
 func (s *Sync) EnsureSchema(ctx context.Context) error {
 	s.schemaMu.Lock()
 	defer s.schemaMu.Unlock()
+	return s.ensureSchemaLocked(ctx)
+}
+
+func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if s.schemaDone {
+		return nil
+	}
+	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
+		return err
+	}
+	if err := CheckSchemaCompat(ctx, s.pg); err == nil {
+		s.schemaDone = true
 		return nil
 	}
 	if err := EnsureSchema(ctx, s.pg, s.schema); err != nil {

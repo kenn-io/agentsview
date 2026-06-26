@@ -2682,13 +2682,8 @@ func (s *Sync) normalizeSyncTimestamps(
 ) error {
 	s.schemaMu.Lock()
 	defer s.schemaMu.Unlock()
-	if !s.schemaDone {
-		if err := EnsureSchema(
-			ctx, s.pg, s.schema,
-		); err != nil {
-			return err
-		}
-		s.schemaDone = true
+	if err := s.ensureSchemaLocked(ctx); err != nil {
+		return err
 	}
 	return NormalizeLocalSyncStateTimestamps(s.effectiveSyncState())
 }

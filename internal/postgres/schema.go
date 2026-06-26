@@ -1448,9 +1448,17 @@ func CheckSchemaCompat(
 	ctx context.Context, db *sql.DB,
 ) error {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id, created_at, deleted_at, updated_at,
-			termination_status, secret_leak_count, secrets_rules_version,
-			session_name
+		`SELECT key, value FROM sync_metadata LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sync_metadata table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT owner_marker, updated_at, `+pgSessionCols+`
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -1471,8 +1479,15 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT is_system, model, token_usage, context_tokens,
-			output_tokens, has_context_tokens, has_output_tokens
+		`SELECT session_id, ordinal, role, content, thinking_text,
+			timestamp, has_thinking, has_tool_use,
+			content_length, is_system, model, token_usage,
+			context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens,
+			claude_message_id, claude_request_id,
+			source_type, source_subtype, source_uuid,
+			source_parent_uuid, is_sidechain,
+			is_compact_boundary
 		 FROM messages LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

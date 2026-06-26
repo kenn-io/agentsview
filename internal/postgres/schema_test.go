@@ -27,6 +27,11 @@ type schemaProbeRows struct {
 	next    int
 }
 
+type schemaProbeQueryError struct {
+	contains string
+	err      error
+}
+
 type schemaProbeState struct {
 	mu                  sync.Mutex
 	informationQueries  int
@@ -36,6 +41,7 @@ type schemaProbeState struct {
 	existingColumnNames map[string][]string
 	maxDataVersion      int
 	maxDataVersionErr   error
+	queryErrors         []schemaProbeQueryError
 }
 
 var (
@@ -115,6 +121,14 @@ func (c *schemaProbeConn) QueryContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
+	for _, queryErr := range c.state.queryErrors {
+		if strings.Contains(
+			normalized,
+			strings.ToLower(queryErr.contains),
+		) {
+			return nil, queryErr.err
+		}
+	}
 	switch {
 	case strings.Contains(normalized, "information_schema.columns"):
 		c.state.mu.Lock()
@@ -292,6 +306,41 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 		"expected too-new data version error")
 	assert.Equal(t, 0, state.execCount(),
 		"EnsureSchema must not mutate PG before data-version refusal")
+}
+
+func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Equal(t, 0, state.execCount(),
+		"compatible PG schema should use read-only probes only")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenSchemaIncompatible(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "data_version",
+		err: errors.New(
+			`ERROR: column "data_version" does not exist (SQLSTATE 42703)`,
+		),
+	}}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"incompatible PG schema should fall back to migration DDL")
 }
 
 func TestEnsureSchemaCreatesAnalyticsCoveringIndexes(t *testing.T) {
