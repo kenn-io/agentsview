@@ -1739,23 +1739,15 @@ func IsIncrementalFullParseFallback(err error) bool {
 		errors.Is(err, ErrClaudeIncrementalNeedsFullParse)
 }
 
-var codexSystemMessagePrefixes = []string{
-	"# AGENTS.md",
-	"<environment_context>",
-	"<INSTRUCTIONS>",
-	"<skill>",
-}
-
 func isCodexSystemMessage(content string) bool {
 	trimmed := strings.TrimSpace(content)
-	for _, prefix := range codexSystemMessagePrefixes {
-		if strings.HasPrefix(trimmed, prefix) {
-			return true
-		}
-	}
-	return isCodexTurnAbortedMessage(trimmed) ||
-		isCodexSubagentNotification(trimmed) ||
-		isCodexGoalContext(trimmed)
+	return strings.HasPrefix(content, "# AGENTS.md") ||
+		strings.HasPrefix(content, "<environment_context>") ||
+		strings.HasPrefix(content, "<INSTRUCTIONS>") ||
+		isCodexTurnAbortedMessage(content) ||
+		strings.HasPrefix(trimmed, "<skill>") ||
+		isCodexSubagentNotification(content) ||
+		isCodexGoalContext(content)
 }
 
 // isCodexGoalContext reports whether content is a Codex /goal
