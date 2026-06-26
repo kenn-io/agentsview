@@ -339,11 +339,37 @@ func (p *legacyProvider) Parse(context.Context, ParseRequest) (ParseOutcome, err
 func ProviderFactories() []ProviderFactory {
 	factories := make([]ProviderFactory, 0, len(Registry))
 	for _, def := range Registry {
-		factories = append(factories, legacyProviderFactory{
-			def: cloneAgentDef(def),
-		})
+		factories = append(factories, providerFactoryForDef(def))
 	}
 	return factories
+}
+
+func providerFactoryForDef(def AgentDef) ProviderFactory {
+	def = cloneAgentDef(def)
+	switch def.Type {
+	case AgentAmp:
+		return newAmpProviderFactory(def)
+	case AgentCommandCode:
+		return newCommandCodeProviderFactory(def)
+	case AgentCortex:
+		return newCortexProviderFactory(def)
+	case AgentDeepSeekTUI:
+		return newDeepSeekTUIProviderFactory(def)
+	case AgentIflow:
+		return newIflowProviderFactory(def)
+	case AgentGptme:
+		return newGptmeProviderFactory(def)
+	case AgentKimi:
+		return newKimiProviderFactory(def)
+	case AgentOMP, AgentPi:
+		return newPiProviderFactory(def)
+	case AgentWorkBuddy:
+		return newWorkBuddyProviderFactory(def)
+	case AgentZencoder:
+		return newZencoderProviderFactory(def)
+	default:
+		return legacyProviderFactory{def: def}
+	}
 }
 
 // ProviderFactoryByType returns the factory for an agent type.

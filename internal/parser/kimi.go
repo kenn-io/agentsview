@@ -5,149 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
-
-// DiscoverKimiSessions finds all wire.jsonl files under the Kimi
-// sessions directory. It supports two layouts:
-//
-// Legacy (".kimi/sessions"):
-//
-//	<sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl
-//
-// New (".kimi-code/sessions"):
-//
-//	<sessionsDir>/<workdir>_<hash>/session_<uuid>/agents/<agent>/wire.jsonl
-func DiscoverKimiSessions(sessionsDir string) []DiscoveredFile {
-	if sessionsDir == "" {
-		return nil
-	}
-
-	projDirs, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, projEntry := range projDirs {
-		if !isDirOrSymlink(projEntry, sessionsDir) {
-			continue
-		}
-
-		projDir := filepath.Join(sessionsDir, projEntry.Name())
-		sessionDirs, err := os.ReadDir(projDir)
-		if err != nil {
-			continue
-		}
-
-		for _, sessEntry := range sessionDirs {
-			if !isDirOrSymlink(sessEntry, projDir) {
-				continue
-			}
-
-			sessDir := filepath.Join(projDir, sessEntry.Name())
-
-			// Legacy layout.
-			wirePath := filepath.Join(sessDir, "wire.jsonl")
-			if _, err := os.Stat(wirePath); err == nil {
-				// The project and session names become ':'-delimited
-				// session-ID components; skip sessions whose names
-				// cannot round-trip through FindKimiSourceFile.
-				if kimiIDComponentsValid(
-					projEntry.Name(), sessEntry.Name(),
-				) {
-					files = append(files, DiscoveredFile{
-						Path:    wirePath,
-						Project: DecodeKimiProjectDir(projEntry.Name()),
-						Agent:   AgentKimi,
-					})
-				}
-				continue
-			}
-
-			// New .kimi-code layout.
-			agentsDir := filepath.Join(sessDir, "agents")
-			agentEntries, err := os.ReadDir(agentsDir)
-			if err != nil {
-				continue
-			}
-			for _, agentEntry := range agentEntries {
-				if !isDirOrSymlink(agentEntry, agentsDir) {
-					continue
-				}
-				wirePath = filepath.Join(
-					agentsDir, agentEntry.Name(), "wire.jsonl",
-				)
-				if _, err := os.Stat(wirePath); err == nil &&
-					kimiIDComponentsValid(
-						projEntry.Name(),
-						sessEntry.Name(),
-						agentEntry.Name(),
-					) {
-					files = append(files, DiscoveredFile{
-						Path:    wirePath,
-						Project: DecodeKimiProjectDir(projEntry.Name()),
-						Agent:   AgentKimi,
-					})
-				}
-			}
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindKimiSourceFile locates a Kimi session file by its raw
-// session ID (without the "kimi:" prefix). Supported raw ID formats:
-//
-// Legacy:
-//
-//	<project-hash>:<session-uuid>
-//	  → <sessionsDir>/<project-hash>/<session-uuid>/wire.jsonl
-//
-// New (.kimi-code):
-//
-//	<workdir>_<hash>:<agent>:<session-uuid>
-//	  → <sessionsDir>/<workdir>_<hash>/<session-uuid>/agents/<agent>/wire.jsonl
-func FindKimiSourceFile(sessionsDir, rawID string) string {
-	if sessionsDir == "" {
-		return ""
-	}
-
-	parts := strings.Split(rawID, ":")
-	for _, p := range parts {
-		if !IsValidSessionID(p) {
-			return ""
-		}
-	}
-
-	switch len(parts) {
-	case 2:
-		// Legacy layout.
-		candidate := filepath.Join(
-			sessionsDir, parts[0], parts[1], "wire.jsonl",
-		)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	case 3:
-		// New .kimi-code layout.
-		candidate := filepath.Join(
-			sessionsDir, parts[0], parts[2], "agents", parts[1], "wire.jsonl",
-		)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
-}
 
 // kimiSessionIDFromPath extracts the raw Kimi session ID from its
 // wire.jsonl path. Legacy paths yield "<project>:<session>"; .kimi-code
@@ -208,7 +70,7 @@ func isKimiHash(s string) bool {
 }
 
 // kimiIDComponentsValid reports whether the given path-derived
-// components can form a session ID that FindKimiSourceFile can
+// components can form a session ID that provider raw-ID lookup can
 // round-trip back to the source file. Each component must itself be a
 // valid session ID (alphanumeric, '-', '_'); a ':' or any other
 // character outside that set would break the ':'-delimited ID split
@@ -223,11 +85,11 @@ func kimiIDComponentsValid(components ...string) bool {
 	return true
 }
 
-// ParseKimiSession parses a Kimi wire.jsonl file. Legacy Kimi CLI
+// parseSession parses a Kimi wire.jsonl file. Legacy Kimi CLI
 // sessions store nested message.type records (TurnBegin, ContentPart,
 // ToolCall, ToolResult, StatusUpdate, TurnEnd). Kimi Code sessions store
 // top-level records (turn.prompt, context.append_loop_event, usage.record).
-func ParseKimiSession(
+func parseKimiSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

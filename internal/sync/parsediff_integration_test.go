@@ -40,6 +40,7 @@ func newParseDiffEngine(env *testEnv) *sync.Engine {
 			parser.AgentIflow:          {env.iflowDir},
 			parser.AgentAmp:            {env.ampDir},
 			parser.AgentPi:             {env.piDir},
+			parser.AgentOMP:            {env.ompDir},
 			parser.AgentKiro:           {env.kiroDir},
 			parser.AgentKilo:           {env.kiloDir},
 			parser.AgentShelley:        {env.shelleyDir},
@@ -805,6 +806,34 @@ func TestParseDiffAgentScope(t *testing.T) {
 	)
 	require.Error(t, err,
 		"ParseDiff must reject database-backed agents")
+}
+
+func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {
+	env := setupTestEnv(t)
+	env.writeSession(
+		t,
+		env.piDir,
+		filepath.Join("encoded-cwd", "pd-pi.jsonl"),
+		piLikeProviderFixture("pd-pi", "/Users/alice/code/pi-app"),
+	)
+	env.writeSession(
+		t,
+		env.ompDir,
+		filepath.Join("encoded-cwd", "pd-omp.jsonl"),
+		piLikeProviderFixture("pd-omp", "/Users/alice/code/omp-app"),
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
+	})
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentPi, parser.AgentOMP},
+	})
+	assert.Equal(t, []string{"pi", "omp"}, report.Agents)
+	assert.Equal(t, 2, report.FilesExamined)
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 2, Identical: 2,
+	}, report.Totals)
 }
 
 // TestParseDiffCoversKiroSQLite proves that Kiro's shared data.sqlite3

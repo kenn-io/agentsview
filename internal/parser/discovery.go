@@ -1329,52 +1329,6 @@ func ResolveGeminiProject(
 	return NormalizeName(dirName)
 }
 
-// DiscoverAmpSessions finds all thread JSON files under
-// the Amp threads directory (~/.local/share/amp/threads/T-*.json).
-func DiscoverAmpSessions(threadsDir string) []DiscoveredFile {
-	if threadsDir == "" {
-		return nil
-	}
-
-	entries, err := os.ReadDir(threadsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !IsAmpThreadFileName(name) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(threadsDir, name),
-			Agent: AgentAmp,
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindAmpSourceFile locates an Amp thread file by its raw
-// thread ID (without the "amp:" prefix).
-func FindAmpSourceFile(threadsDir, threadID string) string {
-	if threadsDir == "" || !isValidAmpThreadID(threadID) {
-		return ""
-	}
-	candidate := filepath.Join(threadsDir, threadID+".json")
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
-	return ""
-}
-
 // DiscoverCopilotSessions finds all JSONL files under
 // <copilotDir>/session-state/. Supports both bare format
 // (<uuid>.jsonl) and directory format (<uuid>/events.jsonl).
@@ -1481,100 +1435,6 @@ func IsPiSessionFile(path string) bool {
 		return gjson.Get(line, "type").Str == "session"
 	}
 	return false
-}
-
-// DiscoverPiSessions finds JSONL files under piDir that are
-// valid pi sessions. Pi sessions live in
-// <piDir>/<encoded-cwd>/<session-id>.jsonl; the encoded-cwd
-// format is ambiguous between pi versions, so discovery
-// validates by reading the session header rather than parsing
-// the directory name. Project is left empty so ParsePiSession
-// can derive it from the header cwd field.
-func DiscoverPiSessions(piDir string) []DiscoveredFile {
-	return discoverPiLikeSessions(piDir, AgentPi)
-}
-
-// DiscoverOMPSessions finds JSONL files under an OhMyPi session root.
-// OMP uses the same layout and file format as Pi, rooted by default at
-// ~/.omp/agent/sessions.
-func DiscoverOMPSessions(ompDir string) []DiscoveredFile {
-	return discoverPiLikeSessions(ompDir, AgentOMP)
-}
-
-func discoverPiLikeSessions(piDir string, agent AgentType) []DiscoveredFile {
-	if piDir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(piDir)
-	if err != nil {
-		return nil
-	}
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, piDir) {
-			continue
-		}
-		cwdDir := filepath.Join(piDir, entry.Name())
-		sessionFiles, err := os.ReadDir(cwdDir)
-		if err != nil {
-			continue
-		}
-		for _, sf := range sessionFiles {
-			if sf.IsDir() {
-				continue
-			}
-			if !strings.HasSuffix(sf.Name(), ".jsonl") {
-				continue
-			}
-			path := filepath.Join(cwdDir, sf.Name())
-			if !IsPiSessionFile(path) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  path,
-				Agent: agent,
-				// Project intentionally empty; ParsePiSession
-				// derives project from the header cwd field.
-			})
-		}
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindPiSourceFile finds the original JSONL file for a pi
-// session ID by searching all encoded-cwd subdirectories
-// under piDir for a file named <sessionID>.jsonl.
-func FindPiSourceFile(piDir, sessionID string) string {
-	return findPiLikeSourceFile(piDir, sessionID)
-}
-
-// FindOMPSourceFile finds the original JSONL file for an OMP session ID.
-func FindOMPSourceFile(ompDir, sessionID string) string {
-	return findPiLikeSourceFile(ompDir, sessionID)
-}
-
-func findPiLikeSourceFile(piDir, sessionID string) string {
-	if piDir == "" || !IsValidSessionID(sessionID) {
-		return ""
-	}
-	entries, err := os.ReadDir(piDir)
-	if err != nil {
-		return ""
-	}
-	target := sessionID + ".jsonl"
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, piDir) {
-			continue
-		}
-		candidate := filepath.Join(piDir, entry.Name(), target)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
 }
 
 // isRegularFile returns true if path exists and is a regular
@@ -2320,49 +2180,6 @@ func FindQClawSourceFile(agentsDir, rawID string) string {
 	return ""
 }
 
-// DiscoverIflowProjects finds all project directories under the
-// iFlow projects dir and returns their JSONL session files.
-// iFlow stores sessions in .iflow/projects/<project>/session-<uuid>.jsonl
-func DiscoverIflowProjects(projectsDir string) []DiscoveredFile {
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-
-		projDir := filepath.Join(projectsDir, entry.Name())
-		sessionFiles, err := os.ReadDir(projDir)
-		if err != nil {
-			continue
-		}
-
-		for _, sf := range sessionFiles {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !strings.HasPrefix(name, "session-") || !strings.HasSuffix(name, ".jsonl") {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(projDir, name),
-				Project: entry.Name(),
-				Agent:   AgentIflow,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // extractIflowBaseSessionID extracts the base session ID from an iFlow
 // session ID. Fork IDs are formatted as <baseUUID>-<childUUID>, so we
 // remove the child UUID suffix to get the base session ID for file lookup.
@@ -2388,39 +2205,6 @@ func extractIflowBaseSessionID(sessionID string) string {
 
 	// If we didn't find 5 hyphens, this is not a fork ID
 	return sessionID
-}
-
-// FindIflowSourceFile finds the original JSONL file for an iFlow
-// session ID by searching all project directories.
-func FindIflowSourceFile(
-	projectsDir, sessionID string,
-) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	// For fork IDs, extract the base session ID to find the source file
-	baseID := extractIflowBaseSessionID(sessionID)
-
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-
-	target := "session-" + strings.TrimPrefix(baseID, "iflow:") + ".jsonl"
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-		candidate := filepath.Join(
-			projectsDir, entry.Name(), target,
-		)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	return ""
 }
 
 // DiscoverVibeSessions finds all Vibe session files under the given root directory.

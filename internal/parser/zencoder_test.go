@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +17,43 @@ func runZencoderParserTest(
 ) (*ParsedSession, []ParsedMessage, error) {
 	t.Helper()
 	path := createTestFile(t, "test-uuid.jsonl", content)
-	return ParseZencoderSession(path, "local")
+	return parseZencoderTestSession(t, path, "local")
 }
 
-func TestParseZencoderSession_Basic(t *testing.T) {
+func parseZencoderTestSession(
+	t *testing.T,
+	path string,
+	machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+
+	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
+		Roots:   []string{filepath.Dir(path)},
+		Machine: machine,
+	})
+	require.True(t, ok)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: SourceRef{
+			Provider:       AgentZencoder,
+			Key:            path,
+			DisplayPath:    path,
+			FingerprintKey: path,
+			Opaque: JSONLSource{
+				Root: filepath.Dir(path),
+				Path: path,
+			},
+		},
+		Machine: machine,
+	})
+	if err != nil || len(outcome.Results) == 0 {
+		return nil, nil, err
+	}
+	result := outcome.Results[0].Result
+	return &result.Session, result.Messages, nil
+}
+
+func TestZencoderProviderParsesBasic(t *testing.T) {
 	header := `{"id":"abc-123","chatId":"chat-1","modelId":"model-1","parentId":"","creationReason":"newChat","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z","version":"1"}`
 	system := `{"role":"system","content":"You are an AI assistant.\n\n# Environment\n\nWorking directory: /home/user/myproject\n\nOS: linux"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Fix the bug.","tag":"user-input"}]}`
@@ -70,7 +104,7 @@ func TestParseZencoderSession_Basic(t *testing.T) {
 	assert.Equal(t, RelNone, sess.RelationshipType)
 }
 
-func TestParseZencoderSession_ToolCallAndReasoning(t *testing.T) {
+func TestZencoderProviderParsesToolCallAndReasoning(t *testing.T) {
 	header := `{"id":"tc-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Read the file."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -105,7 +139,7 @@ func TestParseZencoderSession_ToolCallAndReasoning(t *testing.T) {
 	assert.Equal(t, "tc1", msgs[1].ToolCalls[0].ToolUseID)
 }
 
-func TestParseZencoderSession_ToolResults(t *testing.T) {
+func TestZencoderProviderParsesToolResults(t *testing.T) {
 	header := `{"id":"tr-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Read it."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -139,7 +173,7 @@ func TestParseZencoderSession_ToolResults(t *testing.T) {
 		"package main")
 }
 
-func TestParseZencoderSession_UserInputTagFiltering(t *testing.T) {
+func TestZencoderProviderParsesUserInputTagFiltering(t *testing.T) {
 	header := `{"id":"tag-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[` +
 		`{"type":"text","text":"system instructions","tag":"instructions"},` +
@@ -177,7 +211,7 @@ func TestParseZencoderSession_UserInputTagFiltering(t *testing.T) {
 	assert.Equal(t, "actual user input", sess.FirstMessage)
 }
 
-func TestParseZencoderSession_DirectContinuation(t *testing.T) {
+func TestZencoderProviderParsesDirectContinuation(t *testing.T) {
 	header := `{"id":"child-123","parentId":"parent-456","creationReason":"directContinuation","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Continue."}]}`
 	assistant := `{"role":"assistant","content":[{"type":"text","text":"Continuing."}]}`
@@ -194,7 +228,7 @@ func TestParseZencoderSession_DirectContinuation(t *testing.T) {
 	assert.Equal(t, RelContinuation, sess.RelationshipType)
 }
 
-func TestParseZencoderSession_SummarizedContinuation(t *testing.T) {
+func TestZencoderProviderParsesSummarizedContinuation(t *testing.T) {
 	header := `{"id":"child-789","parentId":"parent-012","creationReason":"summarizedContinuation","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Continue."}]}`
 	assistant := `{"role":"assistant","content":[{"type":"text","text":"OK."}]}`
@@ -211,7 +245,7 @@ func TestParseZencoderSession_SummarizedContinuation(t *testing.T) {
 	assert.Equal(t, RelContinuation, sess.RelationshipType)
 }
 
-func TestParseZencoderSession_ProjectExtraction(t *testing.T) {
+func TestZencoderProviderParsesProjectExtraction(t *testing.T) {
 	header := `{"id":"proj-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	system := `{"role":"system","content":"You are helpful.\n\nWorking directory: /home/user/workspace/coolproject\n"}`
 	user := `{"role":"user","content":[{"type":"text","text":"hello"}]}`
@@ -232,7 +266,7 @@ func TestParseZencoderSession_ProjectExtraction(t *testing.T) {
 	assert.False(t, msgs[1].IsSystem)
 }
 
-func TestParseZencoderSession_EmptySession(t *testing.T) {
+func TestZencoderProviderParsesEmptySession(t *testing.T) {
 	// Header only, no messages.
 	header := `{"id":"empty-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 
@@ -242,7 +276,7 @@ func TestParseZencoderSession_EmptySession(t *testing.T) {
 	assert.Nil(t, msgs)
 }
 
-func TestParseZencoderSession_PermissionSkippedFinishStored(t *testing.T) {
+func TestZencoderProviderParsesPermissionSkippedFinishStored(t *testing.T) {
 	header := `{"id":"skip-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Do it."}]}`
 	permission := `{"role":"permission","data":{"allowed":true}}`
@@ -268,7 +302,7 @@ func TestParseZencoderSession_PermissionSkippedFinishStored(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
-func TestParseZencoderSession_FirstMessageTruncation(t *testing.T) {
+func TestZencoderProviderParsesFirstMessageTruncation(t *testing.T) {
 	header := `{"id":"trunc-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	longText := strings.Repeat("a", 400)
 	user := `{"role":"user","content":[{"type":"text","text":"` + longText + `"}]}`
@@ -282,16 +316,14 @@ func TestParseZencoderSession_FirstMessageTruncation(t *testing.T) {
 	assert.Equal(t, 303, len(sess.FirstMessage))
 }
 
-func TestParseZencoderSession_MissingFile(t *testing.T) {
-	sess, msgs, err := ParseZencoderSession(
-		"/nonexistent/test.jsonl", "local",
-	)
+func TestZencoderProviderParsesMissingFile(t *testing.T) {
+	sess, msgs, err := parseZencoderTestSession(t, "/nonexistent/test.jsonl", "local")
 	require.NoError(t, err)
 	assert.Nil(t, sess)
 	assert.Nil(t, msgs)
 }
 
-func TestParseZencoderSession_FallbackSessionID(t *testing.T) {
+func TestZencoderProviderParsesFallbackSessionID(t *testing.T) {
 	// Header with no id field -> falls back to filename.
 	header := `{"createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"hello"}]}`
@@ -305,7 +337,7 @@ func TestParseZencoderSession_FallbackSessionID(t *testing.T) {
 	assert.Equal(t, "zencoder:test-uuid", sess.ID)
 }
 
-func TestDiscoverZencoderSessions(t *testing.T) {
+func TestZencoderProviderDiscoversSessions(t *testing.T) {
 	dir := t.TempDir()
 
 	// Create some session files.
@@ -324,39 +356,74 @@ func TestDiscoverZencoderSessions(t *testing.T) {
 		filepath.Join(dir, "subdir"), 0o755,
 	))
 
-	files := DiscoverZencoderSessions(dir)
+	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
+		Roots:   []string{dir},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	files, err := provider.Discover(context.Background())
+	require.NoError(t, err)
 	assert.Equal(t, 2, len(files))
 	for _, f := range files {
-		assert.Equal(t, AgentZencoder, f.Agent)
-		assert.True(t, strings.HasSuffix(f.Path, ".jsonl"))
+		assert.Equal(t, AgentZencoder, f.Provider)
+		assert.True(t, strings.HasSuffix(f.DisplayPath, ".jsonl"))
 	}
 }
 
-func TestDiscoverZencoderSessions_EmptyDir(t *testing.T) {
-	files := DiscoverZencoderSessions("")
-	assert.Nil(t, files)
+func TestZencoderProviderDiscoversEmptyDir(t *testing.T) {
+	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
+		Roots:   []string{""},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	files, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, files)
 }
 
-func TestFindZencoderSourceFile(t *testing.T) {
+func TestZencoderProviderFindsSourceFile(t *testing.T) {
 	dir := t.TempDir()
 	name := "abc-def-123.jsonl"
 	f, err := os.Create(filepath.Join(dir, name))
 	require.NoError(t, err)
 	f.Close()
 
-	result := FindZencoderSourceFile(dir, "abc-def-123")
-	assert.Equal(t, filepath.Join(dir, name), result)
+	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
+		Roots:   []string{dir},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	found, ok, err := provider.FindSource(
+		context.Background(),
+		FindSourceRequest{RawSessionID: "abc-def-123"},
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, filepath.Join(dir, name), found.DisplayPath)
 
 	// Non-existent ID.
-	result = FindZencoderSourceFile(dir, "nonexistent")
-	assert.Empty(t, result)
+	_, ok, err = provider.FindSource(
+		context.Background(),
+		FindSourceRequest{RawSessionID: "nonexistent"},
+	)
+	require.NoError(t, err)
+	assert.False(t, ok)
 
 	// Empty dir.
-	result = FindZencoderSourceFile("", "abc-def-123")
-	assert.Empty(t, result)
+	emptyProvider, ok := NewProvider(AgentZencoder, ProviderConfig{
+		Roots:   []string{""},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	_, ok, err = emptyProvider.FindSource(
+		context.Background(),
+		FindSourceRequest{RawSessionID: "abc-def-123"},
+	)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
-func TestParseZencoderSession_UserContentWithoutTag(t *testing.T) {
+func TestZencoderProviderParsesUserContentWithoutTag(t *testing.T) {
 	header := `{"id":"notag-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"no tag input"}]}`
 	assistant := `{"role":"assistant","content":[{"type":"text","text":"OK."}]}`
@@ -373,7 +440,7 @@ func TestParseZencoderSession_UserContentWithoutTag(t *testing.T) {
 	assert.Equal(t, "no tag input", msgs[0].Content)
 }
 
-func TestParseZencoderSession_NewChatNoRelationship(t *testing.T) {
+func TestZencoderProviderParsesNewChatNoRelationship(t *testing.T) {
 	header := `{"id":"new-123","parentId":"some-parent","creationReason":"newChat","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"hello"}]}`
 
@@ -388,7 +455,7 @@ func TestParseZencoderSession_NewChatNoRelationship(t *testing.T) {
 	assert.Equal(t, RelNone, sess.RelationshipType)
 }
 
-func TestParseZencoderSession_SubagentSessionID(t *testing.T) {
+func TestZencoderProviderParsesSubagentSessionID(t *testing.T) {
 	header := `{"id":"parent-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Use subagent."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -415,7 +482,7 @@ func TestParseZencoderSession_SubagentSessionID(t *testing.T) {
 	)
 }
 
-func TestParseZencoderSession_SubagentMultiple(t *testing.T) {
+func TestZencoderProviderParsesSubagentMultiple(t *testing.T) {
 	header := `{"id":"parent-456","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Use subagents."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -447,7 +514,7 @@ func TestParseZencoderSession_SubagentMultiple(t *testing.T) {
 	)
 }
 
-func TestParseZencoderSession_NoSessionIDTag(t *testing.T) {
+func TestZencoderProviderParsesNoSessionIDTag(t *testing.T) {
 	header := `{"id":"parent-789","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Read file."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -469,7 +536,7 @@ func TestParseZencoderSession_NoSessionIDTag(t *testing.T) {
 	assert.Empty(t, msgs[1].ToolCalls[0].SubagentSessionID)
 }
 
-func TestParseZencoderSession_SkillBlocks(t *testing.T) {
+func TestZencoderProviderParsesSkillBlocks(t *testing.T) {
 	header := `{"id":"skill-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[` +
 		`{"type":"text","text":"Do the thing.","tag":"user-input"},` +
@@ -505,7 +572,7 @@ func TestParseZencoderSession_SkillBlocks(t *testing.T) {
 	assert.Equal(t, "Do the thing.", sess.FirstMessage)
 }
 
-func TestParseZencoderSession_ToolResultSystemTags(t *testing.T) {
+func TestZencoderProviderParsesToolResultSystemTags(t *testing.T) {
 	header := `{"id":"trsys-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Run it."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -544,7 +611,7 @@ func TestParseZencoderSession_ToolResultSystemTags(t *testing.T) {
 	assert.Contains(t, msgs[3].Content, "Extra context")
 }
 
-func TestParseZencoderSession_ToolResultTaggedBlocksFilteredFromContentRaw(t *testing.T) {
+func TestZencoderProviderParsesToolResultTaggedBlocksFilteredFromContentRaw(t *testing.T) {
 	// Verify that tagged text blocks in tool-result content are
 	// stripped from ContentRaw (to avoid double-rendering) and
 	// emitted as a separate system message instead.
@@ -663,7 +730,7 @@ func TestParseZencoderSession_ToolResultTaggedBlocksFilteredFromContentRaw(t *te
 	}
 }
 
-func TestParseZencoderSession_SystemOnlySession(t *testing.T) {
+func TestZencoderProviderParsesSystemOnlySession(t *testing.T) {
 	// A session with only a header and a system message (e.g.
 	// environment banner) should be filtered out as empty.
 	header := `{"id":"sysonly-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
@@ -677,7 +744,7 @@ func TestParseZencoderSession_SystemOnlySession(t *testing.T) {
 	assert.Nil(t, msgs, "system-only session should produce no messages")
 }
 
-func TestParseZencoderSession_SystemAndFinishOnlySession(t *testing.T) {
+func TestZencoderProviderParsesSystemAndFinishOnlySession(t *testing.T) {
 	// A session with system + finish but no real user/assistant
 	// messages should also be filtered out.
 	header := `{"id":"sysfin-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
@@ -692,7 +759,7 @@ func TestParseZencoderSession_SystemAndFinishOnlySession(t *testing.T) {
 	assert.Nil(t, msgs)
 }
 
-func TestParseZencoderSession_TimestampBoundsFromMessages(t *testing.T) {
+func TestZencoderProviderParsesTimestampBoundsFromMessages(t *testing.T) {
 	// When header timestamps are missing, session bounds should
 	// be derived from per-message timestamps.
 	header := `{"id":"bounds-123"}`
@@ -714,7 +781,7 @@ func TestParseZencoderSession_TimestampBoundsFromMessages(t *testing.T) {
 	assertTimestamp(t, sess.EndedAt, wantEnd)
 }
 
-func TestParseZencoderSession_TimestampBoundsStaleHeader(t *testing.T) {
+func TestZencoderProviderParsesTimestampBoundsStaleHeader(t *testing.T) {
 	// When header has timestamps but messages have more
 	// recent ones, endedAt should be updated.
 	header := `{"id":"stale-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
@@ -738,7 +805,7 @@ func TestParseZencoderSession_TimestampBoundsStaleHeader(t *testing.T) {
 	assertTimestamp(t, sess.EndedAt, wantEnd)
 }
 
-func TestParseZencoderSession_MessageTimestamps(t *testing.T) {
+func TestZencoderProviderParsesMessageTimestamps(t *testing.T) {
 	header := `{"id":"ts-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:05:00Z"}`
 	system := `{"role":"system","content":"You are an AI.\n\nWorking directory: /home/user/proj","createdAt":"2024-01-01T00:00:01Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Hello."}],"createdAt":"2024-01-01T00:00:02Z"}`
@@ -777,7 +844,7 @@ func TestParseZencoderSession_MessageTimestamps(t *testing.T) {
 	assert.Equal(t, wantFinish, msgs[4].Timestamp)
 }
 
-func TestParseZencoderSession_MessageTimestamps_Missing(t *testing.T) {
+func TestZencoderProviderParsesMessageTimestamps_Missing(t *testing.T) {
 	header := `{"id":"ts-miss-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	// Lines without createdAt field.
 	user := `{"role":"user","content":[{"type":"text","text":"No timestamp."}]}`

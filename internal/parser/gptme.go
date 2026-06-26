@@ -5,62 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
 
-// DiscoverGptmeSessions finds gptme session files under the
-// given logs directory. Each session is a subdirectory containing
-// a conversation.jsonl file (e.g. ~/.local/share/gptme/logs/).
-func DiscoverGptmeSessions(logsDir string) []DiscoveredFile {
-	if logsDir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(logsDir)
-	if err != nil {
-		return nil
-	}
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, logsDir) {
-			continue
-		}
-		convPath := filepath.Join(logsDir, entry.Name(), "conversation.jsonl")
-		if _, err := os.Stat(convPath); err != nil {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  convPath,
-			Agent: AgentGptme,
-		})
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindGptmeSourceFile locates a gptme session by its raw session ID
-// (the directory name, without the "gptme:" prefix).
-func FindGptmeSourceFile(logsDir, rawID string) string {
-	if logsDir == "" || rawID == "" {
-		return ""
-	}
-	candidate := filepath.Join(logsDir, rawID, "conversation.jsonl")
-	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-		return candidate
-	}
-	return ""
-}
-
-// ParseGptmeSession parses a gptme conversation.jsonl file.
-// gptme stores one message per line with role/content/timestamp
-// fields. Assistant messages carry an optional metadata object
-// with model and usage sub-fields.
-func ParseGptmeSession(
+// parseSession parses a gptme conversation.jsonl file. gptme stores one
+// message per line with role/content/timestamp fields. Assistant messages
+// carry an optional metadata object with model and usage sub-fields.
+func (p *gptmeProvider) parseSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

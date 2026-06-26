@@ -1211,61 +1211,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// iFlow: <iflowDir>/<project>/session-<uuid>.jsonl
-	for _, iflowDir := range e.agentDirs[parser.AgentIflow] {
-		if iflowDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(iflowDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 {
-				continue
-			}
-			if !strings.HasPrefix(parts[1], "session-") || !strings.HasSuffix(parts[1], ".jsonl") {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parts[0],
-				Agent:   parser.AgentIflow,
-			}, true
-		}
-	}
-
-	// Kimi: <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
-	//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
-	// Components that cannot round-trip through the ':'-delimited
-	// session ID (per IsValidSessionID) are left unclassified so they
-	// are never imported in a non-resyncable state.
-	for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
-		if kimiDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(kimiDir, path); ok {
-			parts := strings.Split(rel, sep)
-			switch {
-			case len(parts) == 3 && parts[2] == "wire.jsonl" &&
-				parser.IsValidSessionID(parts[0]) &&
-				parser.IsValidSessionID(parts[1]):
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parser.DecodeKimiProjectDir(parts[0]),
-					Agent:   parser.AgentKimi,
-				}, true
-			case len(parts) == 5 && parts[2] == "agents" &&
-				parts[4] == "wire.jsonl" &&
-				parser.IsValidSessionID(parts[0]) &&
-				parser.IsValidSessionID(parts[1]) &&
-				parser.IsValidSessionID(parts[3]):
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parser.DecodeKimiProjectDir(parts[0]),
-					Agent:   parser.AgentKimi,
-				}, true
-			}
-		}
-	}
-
 	// QwenPaw: <qwenpawDir>/<workspace>/sessions/<name>.json
 	//       or <qwenpawDir>/<workspace>/sessions/<subdir>/<name>.json
 	for _, qwenpawDir := range e.agentDirs[parser.AgentQwenPaw] {
@@ -1301,94 +1246,6 @@ func (e *Engine) classifyOnePath(
 				Project: parts[0],
 				Agent:   parser.AgentQwenPaw,
 			}, true
-		}
-	}
-
-	// WorkBuddy: <workbuddyDir>/<project>/<session>.jsonl
-	//     or: <workbuddyDir>/<project>/<session>/subagents/*.jsonl
-	for _, workBuddyDir := range e.agentDirs[parser.AgentWorkBuddy] {
-		if workBuddyDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(workBuddyDir, path); ok {
-			if !strings.HasSuffix(path, ".jsonl") {
-				continue
-			}
-			parts := strings.Split(rel, sep)
-			if len(parts) == 2 {
-				stem := strings.TrimSuffix(parts[1], ".jsonl")
-				if !parser.IsValidSessionID(stem) {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentWorkBuddy,
-				}, true
-			}
-			if len(parts) == 4 && parts[2] == "subagents" {
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentWorkBuddy,
-				}, true
-			}
-		}
-	}
-
-	// Amp: <ampDir>/T-*.json
-	for _, ampDir := range e.agentDirs[parser.AgentAmp] {
-		if ampDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(ampDir, path); ok {
-			if strings.Count(rel, sep) == 0 &&
-				parser.IsAmpThreadFileName(filepath.Base(rel)) {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentAmp,
-				}, true
-			}
-		}
-	}
-
-	// DeepSeek TUI / CodeWhale: <sessionsDir>/<session>.json
-	for _, dsDir := range e.agentDirs[parser.AgentDeepSeekTUI] {
-		if dsDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(dsDir, path); ok {
-			if strings.Count(rel, sep) != 0 {
-				continue
-			}
-			name := filepath.Base(rel)
-			if name == "latest.json" || name == "offline_queue.json" {
-				continue
-			}
-			sessionID, ok := strings.CutSuffix(name, ".json")
-			if !ok || !parser.IsValidSessionID(sessionID) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentDeepSeekTUI,
-			}, true
-		}
-	}
-
-	// Zencoder: <zencoderDir>/<uuid>.jsonl
-	for _, zenDir := range e.agentDirs[parser.AgentZencoder] {
-		if zenDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(zenDir, path); ok {
-			if strings.Count(rel, sep) == 0 &&
-				parser.IsZencoderSessionFileName(filepath.Base(rel)) {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentZencoder,
-				}, true
-			}
 		}
 	}
 
@@ -1446,32 +1303,6 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Pi/OMP: <sessionsDir>/<encoded-cwd>/<session>.jsonl
-	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMP} {
-		for _, piDir := range e.agentDirs[agent] {
-			if piDir == "" {
-				continue
-			}
-			if rel, ok := isUnder(piDir, path); ok {
-				parts := strings.Split(rel, sep)
-				if len(parts) != 2 {
-					continue
-				}
-				if !strings.HasSuffix(parts[1], ".jsonl") {
-					continue
-				}
-				if !parser.IsPiSessionFile(path) {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: agent,
-					// Project left empty; parser derives from header cwd.
-				}, true
-			}
-		}
-	}
-
 	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
 	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
 		if qwenDir == "" {
@@ -1494,65 +1325,8 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// gptme: <logsDir>/<session-dir>/conversation.jsonl
-	for _, gptmeDir := range e.agentDirs[parser.AgentGptme] {
-		if gptmeDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(gptmeDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 || parts[1] != "conversation.jsonl" {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentGptme,
-			}, true
-		}
-	}
-
 	if df, ok := e.classifyAiderPath(path); ok {
 		return df, true
-	}
-
-	// Command Code: <projectsDir>/<slugified-cwd>/<session>.jsonl
-	for _, commandCodeDir := range e.agentDirs[parser.AgentCommandCode] {
-		if commandCodeDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(commandCodeDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 {
-				continue
-			}
-			if sessionID, ok := strings.CutSuffix(parts[1], ".meta.json"); ok {
-				if !parser.IsValidSessionID(sessionID) {
-					continue
-				}
-				jsonlPath := filepath.Join(commandCodeDir, parts[0], sessionID+".jsonl")
-				if _, err := os.Stat(jsonlPath); err != nil {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    jsonlPath,
-					Project: parser.NormalizeName(parts[0]),
-					Agent:   parser.AgentCommandCode,
-				}, true
-			}
-			if strings.HasSuffix(parts[1], ".checkpoints.jsonl") ||
-				strings.HasSuffix(parts[1], ".prompts.jsonl") {
-				continue
-			}
-			sessionID, ok := strings.CutSuffix(parts[1], ".jsonl")
-			if !ok || !parser.IsValidSessionID(sessionID) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parser.NormalizeName(parts[0]),
-				Agent:   parser.AgentCommandCode,
-			}, true
-		}
 	}
 
 	// OpenClaw: <openclawDir>/<agentId>/sessions/<sessionId>.jsonl
@@ -1650,43 +1424,6 @@ func (e *Engine) classifyOnePath(
 				Path:  path,
 				Agent: parser.AgentQClaw,
 			}, true
-		}
-	}
-
-	// Cortex: <cortexDir>/<uuid>.json
-	//     or: <cortexDir>/<uuid>.history.jsonl → remap to .json
-	for _, cortexDir := range e.agentDirs[parser.AgentCortex] {
-		if cortexDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(cortexDir, path); ok {
-			if strings.Count(rel, sep) != 0 {
-				continue
-			}
-			name := filepath.Base(rel)
-
-			// .history.jsonl companion → remap to .json metadata.
-			if stem, ok := strings.CutSuffix(
-				name, ".history.jsonl",
-			); ok {
-				jsonPath := filepath.Join(
-					cortexDir, stem+".json",
-				)
-				if parser.IsCortexSessionFile(stem + ".json") {
-					return parser.DiscoveredFile{
-						Path:  jsonPath,
-						Agent: parser.AgentCortex,
-					}, true
-				}
-				continue
-			}
-
-			if parser.IsCortexSessionFile(name) {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentCortex,
-				}, true
-			}
 		}
 	}
 
@@ -3071,7 +2808,7 @@ func (e *Engine) syncAllLocked(
 
 	if !since.IsZero() {
 		all = e.dedupeClaudeDiscoveredFiles(all)
-		all = e.filterFilesByMtime(all, since)
+		all = e.filterFilesByMtime(ctx, all, since)
 	}
 
 	all = dedupeDiscoveredFiles(all)
@@ -3584,13 +3321,15 @@ func (e *Engine) recordSyncFinished() {
 // dropped). The cost is one stat per file — acceptable for
 // polling use cases where most files will be skipped.
 func (e *Engine) filterFilesByMtime(
-	files []parser.DiscoveredFile, cutoff time.Time,
+	ctx context.Context,
+	files []parser.DiscoveredFile,
+	cutoff time.Time,
 ) []parser.DiscoveredFile {
 	cutoffNs := cutoff.UnixNano()
 	out := files[:0]
 	codexIndexRefresh := make(map[string][]parser.DiscoveredFile)
 	for _, f := range files {
-		mtime, err := discoveredFileMtime(f)
+		mtime, err := e.discoveredFileEffectiveMtime(ctx, f)
 		if err != nil {
 			out = append(out, f)
 			continue
@@ -3637,6 +3376,53 @@ func (e *Engine) filterFilesByMtime(
 		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
 	}
 	return out
+}
+
+func (e *Engine) discoveredFileEffectiveMtime(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+) (int64, error) {
+	if file.ProviderSource != nil && file.ProviderProcess {
+		if mtime, ok, err := e.providerFingerprintMtime(ctx, file); err != nil {
+			return 0, err
+		} else if ok {
+			return mtime, nil
+		}
+	}
+	return discoveredFileMtime(file)
+}
+
+func (e *Engine) providerFingerprintMtime(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+) (int64, bool, error) {
+	if file.ProviderSource == nil {
+		return 0, false, nil
+	}
+	factory, ok := e.providerFactories[file.Agent]
+	if !ok || factory == nil {
+		return 0, false, nil
+	}
+	source := *file.ProviderSource
+	if source.Provider != "" && source.Provider != file.Agent {
+		return 0, false, fmt.Errorf(
+			"provider source mismatch for %s: %s",
+			file.Agent,
+			source.Provider,
+		)
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[file.Agent],
+		Machine: e.machine,
+	})
+	fingerprint, err := provider.Fingerprint(ctx, source)
+	if err != nil {
+		return 0, false, err
+	}
+	if fingerprint.MTimeNS == 0 {
+		return 0, false, nil
+	}
+	return fingerprint.MTimeNS, true, nil
 }
 
 func discoveredFileMtime(
@@ -4797,40 +4583,22 @@ func (e *Engine) processFile(
 		res = e.processOpenHands(file, info)
 	case parser.AgentCursor:
 		res = e.processCursor(file, info)
-	case parser.AgentIflow:
-		res = e.processIflow(ctx, file, info)
-	case parser.AgentAmp:
-		res = e.processAmp(file, info)
-	case parser.AgentDeepSeekTUI:
-		res = e.processDeepSeekTUI(file, info)
-	case parser.AgentZencoder:
-		res = e.processZencoder(file, info)
 	case parser.AgentVSCodeCopilot:
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
 		res = e.processVisualStudioCopilot(file, info)
-	case parser.AgentPi, parser.AgentOMP:
-		res = e.processPi(file, info)
 	case parser.AgentQwen:
 		res = e.processQwen(file, info)
-	case parser.AgentCommandCode:
-		res = e.processCommandCode(file, info)
 	case parser.AgentOpenClaw:
 		res = e.processOpenClaw(file, info)
 	case parser.AgentQClaw:
 		res = e.processQClaw(file, info)
-	case parser.AgentKimi:
-		res = e.processKimi(file, info)
 	case parser.AgentKiro:
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
-	case parser.AgentCortex:
-		res = e.processCortex(file, info)
 	case parser.AgentHermes:
 		res = e.processHermes(file, info)
-	case parser.AgentWorkBuddy:
-		res = e.processWorkBuddy(file, info)
 	case parser.AgentVibe:
 		res = e.processVibe(file, info)
 	case parser.AgentPositron:
@@ -4845,8 +4613,6 @@ func (e *Engine) processFile(
 		res = e.processAntigravityCLI(file, info)
 	case parser.AgentQwenPaw:
 		res = e.processQwenPaw(file, info)
-	case parser.AgentGptme:
-		res = e.processGptme(file, info)
 	case parser.AgentAider:
 		res = e.processAider(file, info)
 	default:
@@ -6421,97 +6187,6 @@ func (e *Engine) processGemini(
 	}
 }
 
-func (e *Engine) processAmp(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Fast path: skip by file_path + mtime before parsing.
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseAmpSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processDeepSeekTUI(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseDeepSeekTUISession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-	inode, device := getFileIdentity(info)
-	sess.File.Inode = inode
-	sess.File.Device = device
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processZencoder(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseZencoderSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 func (e *Engine) processVSCodeCopilot(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -6673,35 +6348,6 @@ func (e *Engine) processVisualStudioCopilot(
 	return processResult{
 		results:      results,
 		forceReplace: true,
-	}
-}
-
-func (e *Engine) processKimi(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseKimiSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
 	}
 }
 
@@ -7026,35 +6672,6 @@ func (e *Engine) processKiroIDE(
 	}
 }
 
-func (e *Engine) processCortex(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseCortexSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 func (e *Engine) processHermes(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -7073,35 +6690,6 @@ func (e *Engine) processHermes(
 	}
 
 	sess, msgs, err := parser.ParseHermesSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processWorkBuddy(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseWorkBuddySession(
 		file.Path, file.Project, e.machine,
 	)
 	if err != nil {
@@ -7243,35 +6831,6 @@ func (e *Engine) processPositron(
 
 	sess, msgs, err := parser.ParsePositronSession(
 		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processGptme(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseGptmeSession(
-		file.Path, e.machine,
 	)
 	if err != nil {
 		return processResult{err: err}
@@ -7564,45 +7123,6 @@ func (e *Engine) processCursor(
 	}
 }
 
-// processPi parses a pi session file and returns the result
-// for batching. Modeled on processClaude.
-func (e *Engine) processPi(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	var (
-		sess *parser.ParsedSession
-		msgs []parser.ParsedMessage
-		err  error
-	)
-	if file.Agent == parser.AgentOMP {
-		sess, msgs, err = parser.ParseOMPSession(file.Path, file.Project, e.machine)
-	} else {
-		sess, msgs, err = parser.ParsePiSession(file.Path, file.Project, e.machine)
-	}
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{{
-			Session:  *sess,
-			Messages: msgs,
-		}},
-	}
-}
-
 func (e *Engine) processQwen(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -7624,39 +7144,6 @@ func (e *Engine) processQwen(
 	if err == nil {
 		sess.File.Hash = hash
 	}
-
-	return processResult{
-		results: []parser.ParseResult{{
-			Session:  *sess,
-			Messages: msgs,
-		}},
-	}
-}
-
-func (e *Engine) processCommandCode(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	effectiveInfo := commandCodeEffectiveInfo(file.Path, info)
-	if e.shouldSkipByPath(file.Path, effectiveInfo) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseCommandCodeSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-	sess.File.Size = effectiveInfo.Size()
-	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
 
 	return processResult{
 		results: []parser.ParseResult{{
@@ -7702,56 +7189,6 @@ func validateCursorContainment(
 		)
 	}
 	return nil
-}
-
-func (e *Engine) processIflow(
-	ctx context.Context,
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Extract session ID from filename: session-<uuid>.jsonl
-	sessionID := "iflow:" + strings.TrimPrefix(strings.TrimSuffix(info.Name(), ".jsonl"), "session-")
-
-	if e.shouldSkipFile(sessionID, info) {
-		sess, _ := e.db.GetSession(
-			ctx, e.idPrefix+sessionID,
-		)
-		if sess != nil &&
-			sess.Project != "" &&
-			!parser.NeedsProjectReparse(sess.Project) {
-			return processResult{skip: true}
-		}
-	}
-
-	// Determine project name from cwd if possible
-	project := parser.GetProjectName(file.Project)
-	cwd, gitBranch := parser.ExtractIflowProjectHints(
-		file.Path,
-	)
-	if cwd != "" {
-		if p := parser.ExtractProjectFromCwdWithBranchContext(
-			ctx, cwd, gitBranch,
-		); p != "" {
-			project = p
-		}
-	}
-
-	results, err := parser.ParseIflowSession(
-		file.Path, project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		for i := range results {
-			results[i].Session.File.Hash = hash
-		}
-	}
-
-	parser.InferRelationshipTypes(results)
-
-	return processResult{results: results}
 }
 
 // computeFinalStreak counts trailing consecutive failures
@@ -8837,6 +8274,7 @@ func shouldReplaceFullParseMessages(
 		pw.sess.Agent == parser.AgentAntigravity ||
 		pw.sess.Agent == parser.AgentAntigravityCLI ||
 		pw.sess.Agent == parser.AgentQwenPaw ||
+		pw.sess.Agent == parser.AgentCortex ||
 		// Vibe pairs later tool-result carrier records back to an
 		// earlier assistant tool call. An incremental append would
 		// only add the new ordinals and leave the existing tool call's
@@ -10152,26 +9590,6 @@ func (e *Engine) SyncSingleSessionContext(
 		} else {
 			file.Project = filepath.Base(filepath.Dir(path))
 		}
-	case parser.AgentKimi:
-		// path is <kimiDir>/<project>/<session>/wire.jsonl              (legacy)
-		//    or <kimiDir>/<project>/<session>/agents/<agent>/wire.jsonl (.kimi-code)
-		// In both layouts the project is the first path segment relative
-		// to the sessions dir. Deriving two levels up (the old approach)
-		// mis-resolves to "agents" under the .kimi-code layout.
-		for _, kimiDir := range e.agentDirs[parser.AgentKimi] {
-			rel, ok := isUnder(kimiDir, path)
-			if !ok {
-				continue
-			}
-			parts := strings.Split(rel, string(filepath.Separator))
-			if len(parts) > 0 {
-				file.Project = parser.DecodeKimiProjectDir(parts[0])
-			}
-			break
-		}
-		if file.Project == "" {
-			file.Project = "kimi"
-		}
 	case parser.AgentQwenPaw:
 		// path is <qwenpawDir>/<workspace>/sessions/<name>.json or
 		//               <qwenpawDir>/<workspace>/sessions/<subdir>/<name>.json
@@ -10226,18 +9644,6 @@ func (e *Engine) SyncSingleSessionContext(
 		file.Project = parser.GetProjectName(
 			filepath.Base(filepath.Dir(filepath.Dir(path))),
 		)
-	case parser.AgentWorkBuddy:
-		for _, workBuddyDir := range e.agentDirs[parser.AgentWorkBuddy] {
-			rel, ok := isUnder(workBuddyDir, path)
-			if !ok {
-				continue
-			}
-			parts := strings.Split(rel, string(filepath.Separator))
-			if len(parts) == 2 || len(parts) == 4 && parts[2] == "subagents" {
-				file.Project = parts[0]
-				break
-			}
-		}
 	}
 
 	res := e.processFile(ctx, file)

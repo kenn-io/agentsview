@@ -558,8 +558,11 @@ func TestCommandCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentCommandCode)
 	require.True(t, ok, "AgentCommandCode missing from Registry")
 	require.True(t, def.FileBased, "Command Code FileBased")
-	require.NotNil(t, def.DiscoverFunc, "Command Code DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "Command Code FindSourceFunc")
+	// Command Code is a migrated, provider-authoritative agent: source
+	// discovery and lookup live on the concrete provider, not on legacy
+	// AgentDef hooks.
+	require.Nil(t, def.DiscoverFunc, "Command Code DiscoverFunc")
+	require.Nil(t, def.FindSourceFunc, "Command Code FindSourceFunc")
 	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
 	assert.Equal(t, "commandcode:", def.IDPrefix)
 }
@@ -568,8 +571,8 @@ func TestDeepSeekTUIRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentDeepSeekTUI)
 	require.True(t, ok, "AgentDeepSeekTUI missing from Registry")
 	require.True(t, def.FileBased, "DeepSeek TUI FileBased")
-	require.NotNil(t, def.DiscoverFunc, "DeepSeek TUI DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "DeepSeek TUI FindSourceFunc")
+	assert.Nil(t, def.DiscoverFunc, "DeepSeek TUI DiscoverFunc")
+	assert.Nil(t, def.FindSourceFunc, "DeepSeek TUI FindSourceFunc")
 	assert.Equal(t, "DeepSeek TUI", def.DisplayName)
 	assert.Equal(t, "DEEPSEEK_TUI_SESSIONS_DIR", def.EnvVar)
 	assert.Equal(t, "deepseek_tui_sessions_dirs", def.ConfigKey)
