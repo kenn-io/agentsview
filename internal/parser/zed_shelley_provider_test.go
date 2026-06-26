@@ -541,6 +541,9 @@ func TestShelleyProviderClassifiesDeletedVirtualPath(t *testing.T) {
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 	virtualPath := ShelleyVirtualPath(dbPath, "cMAIN1")
+	// Close the setup handle before deleting; Windows will not unlink a file
+	// this process still holds open.
+	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
@@ -557,6 +560,9 @@ func TestShelleyProviderClassifiesDeletedVirtualPath(t *testing.T) {
 func TestShelleyProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
+	// Close the setup handle before deleting; Windows will not unlink a file
+	// this process still holds open.
+	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})

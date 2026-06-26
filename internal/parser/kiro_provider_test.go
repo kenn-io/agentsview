@@ -147,6 +147,9 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 	assert.Equal(t, "kiro:legacy-session", legacyOutcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "legacy-hash", legacyOutcome.Results[0].Result.Session.File.Hash)
 
+	// Close the setup handle before deleting; Windows will not unlink a file
+	// this process still holds open.
+	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
 	missingOutcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
