@@ -113,18 +113,12 @@ func duckBuildAnalyticsWhere(
 	includeTime bool,
 ) (string, []any) {
 	q := func(col string) string { return tablePrefix + col }
-	relExclusion := f.RelationshipExclusionSQL()
-	if tablePrefix != "" {
-		// RelationshipExclusionSQL returns an unqualified column; qualify
-		// it to match the other predicates' table prefix.
-		relExclusion = q("relationship_type") +
-			strings.TrimPrefix(relExclusion, "relationship_type")
-	}
 	preds := []string{
 		q("message_count") + " > 0",
 		// Mirror the SQLite analytics filter: count subagents only on
-		// opt-in sum/count surfaces; fork rows stay excluded always.
-		relExclusion,
+		// opt-in sum/count surfaces; fork rows stay excluded always. The
+		// shared helper qualifies the column with tablePrefix directly.
+		db.RelationshipExclusionSQL(f.IncludeSubagents, tablePrefix),
 		q("deleted_at") + " IS NULL",
 	}
 	var args []any

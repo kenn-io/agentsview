@@ -204,6 +204,32 @@ func TestGetAnalyticsSummary(t *testing.T) {
 	})
 }
 
+// TestRelationshipExclusionSQL covers the shared predicate helper that
+// the analytics builders and the stats pipeline both use, including the
+// column qualifier the DuckDB builder relies on.
+func TestRelationshipExclusionSQL(t *testing.T) {
+	cases := []struct {
+		includeSubagents bool
+		colPrefix        string
+		want             string
+	}{
+		{false, "", "relationship_type NOT IN ('subagent', 'fork')"},
+		{true, "", "relationship_type NOT IN ('fork')"},
+		{false, "s.", "s.relationship_type NOT IN ('subagent', 'fork')"},
+		{true, "s.", "s.relationship_type NOT IN ('fork')"},
+	}
+	for _, c := range cases {
+		got := RelationshipExclusionSQL(c.includeSubagents, c.colPrefix)
+		assert.Equal(t, c.want, got,
+			"includeSubagents=%v colPrefix=%q", c.includeSubagents, c.colPrefix)
+	}
+	// The method form delegates to the unqualified helper.
+	assert.Equal(t,
+		RelationshipExclusionSQL(true, ""),
+		AnalyticsFilter{IncludeSubagents: true}.RelationshipExclusionSQL(),
+		"method must match the free function")
+}
+
 // TestAnalyticsSubagentScope verifies the two-bucket rule for subagent
 // sessions (e.g. workflow subagents):
 //   - Sum/count surfaces (summary) COUNT subagents: their output tokens

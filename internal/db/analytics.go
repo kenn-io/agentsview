@@ -87,10 +87,21 @@ type AnalyticsFilter struct {
 // double-counting tokens that overlap their root session. Exported so
 // the PostgreSQL and DuckDB analytics builders apply the same rule.
 func (f AnalyticsFilter) RelationshipExclusionSQL() string {
-	if f.IncludeSubagents {
-		return "relationship_type NOT IN ('fork')"
+	return RelationshipExclusionSQL(f.IncludeSubagents, "")
+}
+
+// RelationshipExclusionSQL is the single source of truth for the
+// relationship_type analytics predicate, shared by the analytics
+// builders (AnalyticsFilter) and the stats pipeline (StatsFilter).
+// colPrefix qualifies the column for callers that alias the sessions
+// table (e.g. "s."); pass "" for an unqualified column. fork rows are
+// always excluded; subagents are excluded unless includeSubagents.
+func RelationshipExclusionSQL(includeSubagents bool, colPrefix string) string {
+	col := colPrefix + "relationship_type"
+	if includeSubagents {
+		return col + " NOT IN ('fork')"
 	}
-	return "relationship_type NOT IN ('subagent', 'fork')"
+	return col + " NOT IN ('subagent', 'fork')"
 }
 
 // OneShotExclusionSQL wraps the one-shot exclusion predicate so it does

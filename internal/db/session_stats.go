@@ -412,14 +412,12 @@ func (db *DB) loadSessionsInWindow(
 	// (default, drives distributions/shape/velocity and the human vs
 	// automation split) or the subagent-inclusive set (drives the
 	// additive token/session totals). Fork rows stay excluded in both
-	// because their tokens overlap their root session.
-	relExclusion := "relationship_type NOT IN ('subagent', 'fork')"
-	if includeSubagents {
-		relExclusion = "relationship_type NOT IN ('fork')"
-	}
+	// because their tokens overlap their root session. The predicate is
+	// the same one the analytics builders use, via the shared helper, so
+	// the two paths can't drift.
 	preds := []string{
 		"message_count > 0",
-		relExclusion,
+		RelationshipExclusionSQL(includeSubagents, ""),
 		"deleted_at IS NULL",
 		"COALESCE(NULLIF(started_at, ''), created_at) >= ?",
 		"COALESCE(NULLIF(started_at, ''), created_at) < ?",
