@@ -501,7 +501,7 @@ func stripVirtualSourceSuffix(path string) string {
 // Detecting either makes the source unreliable, so the caller skips the raced
 // guard entirely. This never masks genuine drift for those agents, while plain
 // file-based agents reading a literal file still get the real race protection.
-func parseDiffSourceReliableForRaced(
+func (e *Engine) parseDiffSourceReliableForRaced(
 	agent parser.AgentType, sourcePath string,
 ) bool {
 	// A virtual path carries a recognized "#..." suffix; stripping changes
@@ -510,15 +510,16 @@ func parseDiffSourceReliableForRaced(
 	if stripVirtualSourceSuffix(sourcePath) != sourcePath {
 		return false
 	}
-	// Only plain file-based agents (FileBased with a DiscoverFunc, the same
-	// on-disk-source condition resolveParseDiffAgents uses) read a literal
-	// file whose mtime populated file_mtime. An unknown or DB-backed agent has
-	// no such basis.
+	// Only agents with a literal on-disk source -- the same discoverability
+	// condition resolveParseDiffAgents uses -- read a file whose mtime
+	// populated file_mtime. parseDiffAgentDiscoverable gates out DB-backed
+	// (FileBased == false, e.g. Forge) and non-authoritative agents, so an
+	// unknown or DB-backed agent has no such basis.
 	def, ok := parser.AgentByType(agent)
 	if !ok {
 		return false
 	}
-	return def.FileBased && def.DiscoverFunc != nil
+	return e.parseDiffAgentDiscoverable(def)
 }
 
 // parseDiffLiveMtime resolves a session's live source mtime for the raced
@@ -725,7 +726,7 @@ func (e *Engine) parseDiffCollectFile(
 		raced := false
 		if realDiffs > 0 && compare &&
 			sourceSessionCount[pw.sess.File.Path] == 1 &&
-			parseDiffSourceReliableForRaced(pw.sess.Agent, pw.sess.File.Path) {
+			e.parseDiffSourceReliableForRaced(pw.sess.Agent, pw.sess.File.Path) {
 			var storedMtime *int64
 			if stored != nil {
 				storedMtime = stored.FileMtime

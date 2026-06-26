@@ -1747,9 +1747,10 @@ func TestParseDiffSourceReliableForRaced(t *testing.T) {
 			want:  false,
 		},
 	}
+	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseDiffSourceReliableForRaced(tt.agent, tt.path)
+			got := engine.parseDiffSourceReliableForRaced(tt.agent, tt.path)
 			assert.Equal(t, tt.want, got)
 		})
 	}
