@@ -4370,6 +4370,32 @@ const (
 	ActiveGapCapMs  = 300_000
 )
 
+// sqliteActiveDurationExpr builds the correlated-subquery SQL that computes a
+// session's active duration in minutes: the sum of consecutive inter-message
+// gaps with each gap capped at ActiveGapCapMs. sessionIDCol is the outer
+// reference to correlate on (for example "sessions.id"). Shared by the in-SQL
+// and timezone-aware Go fallback Top Sessions paths so the two cannot drift.
+func sqliteActiveDurationExpr(sessionIDCol string) string {
+	return fmt.Sprintf(`
+		(
+			SELECT COALESCE(SUM(
+				CASE
+					WHEN inner2.delta_ms <= 0 THEN 0
+					WHEN inner2.delta_ms > %[1]d THEN %[1]d
+					ELSE inner2.delta_ms
+				END), 0) / 60000.0
+			FROM (
+				SELECT CAST(
+				  ROUND(
+					(julianday(LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal))
+					  - julianday(m2.timestamp)) * 86400000
+					) AS INTEGER
+				) AS delta_ms
+			FROM messages m2
+				WHERE m2.session_id = %[2]s
+			) inner2)`, ActiveGapCapMs, sessionIDCol)
+}
+
 // GetAnalyticsTopSessions returns the top 10 sessions by the
 // given metric ("messages", "duration", or "output_tokens")
 // within the filter.
@@ -4387,26 +4413,9 @@ func (db *DB) GetAnalyticsTopSessions(
 
 	durationExpr := `ROUND((julianday(ended_at) -
 		julianday(started_at)) * 1440, 1)`
-	activeDurationExpr := fmt.Sprintf(`
-		(
-			SELECT COALESCE(SUM(
-				CASE
-					WHEN inner2.delta_ms <= 0 THEN 0
-					WHEN inner2.delta_ms > %[1]d THEN %[1]d
-					ELSE inner2.delta_ms
-				END), 0) / 60000.0
-			FROM (
-				SELECT CAST(
-				  ROUND(
-					(julianday(LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal))
-					  - julianday(m2.timestamp)) * 86400000
-					) AS INTEGER
-				) AS delta_ms
-			FROM messages m2
-				WHERE m2.session_id = sessions.id
-			) inner2)`, ActiveGapCapMs)
 	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
-	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
+	activeDurationSelectExpr := "COALESCE(" +
+		sqliteActiveDurationExpr("sessions.id") + ", 0)"
 	needsGoSort := metric == "duration"
 	var orderExpr string
 	switch metric {
@@ -4500,10 +4509,23 @@ func (db *DB) getAnalyticsTopSessionsGo(
 		limitClause = ""
 	}
 
+	// Active duration is only consumed for the duration metric. Compute it
+	// in the outer query (matching the in-SQL path) rather than issuing a
+	// per-row follow-up query: the per-row form held the outer rows iterator
+	// open while acquiring a second reader connection for each row, an
+	// unbounded N+1 that could exhaust the capped reader pool and deadlock
+	// under concurrent requests.
+	activeDurationSelectExpr := "0.0"
+	if needsGoSort {
+		activeDurationSelectExpr = "COALESCE(" +
+			sqliteActiveDurationExpr("sessions.id") + ", 0)"
+	}
+
 	query := `SELECT id, ` + dateCol + `, project,
 		first_message,
 		COALESCE(display_name, session_name) AS display_name,
 		message_count, total_output_tokens,
+		` + activeDurationSelectExpr + ` AS active_duration_min,
 		started_at, ended_at, termination_status
 		FROM sessions WHERE ` + where +
 		` ORDER BY ` + orderExpr + limitClause
@@ -4521,24 +4543,15 @@ func (db *DB) getAnalyticsTopSessionsGo(
 		var firstMsg, displayName, startedAt, endedAt *string
 		var termStatus *string
 		var mc, outputTokens int
+		var activeDurationMin float64
 		if err := rows.Scan(
 			&id, &ts, &project, &firstMsg,
 			&displayName, &mc, &outputTokens,
+			&activeDurationMin,
 			&startedAt, &endedAt, &termStatus,
 		); err != nil {
 			return TopSessionsResponse{},
 				fmt.Errorf("scanning top session: %w", err)
-		}
-		var activeDurationMin float64
-		if metric == "duration" {
-			var err error
-			activeDurationMin, err = db.activeDurationMinForSession(
-				ctx, id,
-			)
-			if err != nil {
-				return TopSessionsResponse{},
-					fmt.Errorf("querying top session active duration: %w", err)
-			}
 		}
 		date := localDate(ts, loc)
 		if !inDateRange(date, f.From, f.To) {
