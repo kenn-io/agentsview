@@ -72,10 +72,11 @@ type AnalyticsFilter struct {
 	Termination        string // "", "clean", or "unclean"
 	// IncludeSubagents counts subagent sessions (including workflow
 	// subagents) in token/session aggregates. It is opt-in and set only
-	// on sum/count surfaces (summary, per-project breakdown, window
-	// stats). Distribution surfaces (session-shape, velocity, timing)
-	// leave it false so short subagent sessions do not skew them. Fork
-	// rows stay excluded regardless because their tokens overlap a root.
+	// on the sum/count surfaces GetAnalyticsSummary and
+	// GetAnalyticsProjects. Distribution surfaces (session-shape,
+	// velocity, timing) leave it false so short subagent sessions do not
+	// skew them. Fork rows stay excluded regardless because their tokens
+	// overlap a root.
 	IncludeSubagents bool
 }
 

@@ -390,6 +390,14 @@ func contractAnalyticsTrendsAndUsage(
 	// one-shot subagent child must still be counted (workflow subagents
 	// are inherently one-shot) while one-shot root sessions drop. This
 	// exercises OneShotExclusionSQL on every backend, including PG.
+	//
+	// Kept rows: alpha (3 user msgs, 320 tok), gamma (2 user, 60 tok),
+	// automated (roborev, kept via is_automated, 0 tok), and the subagent
+	// child (1 user, 70 tok, kept via the subagent exemption). Dropped:
+	// beta and old (one-shot roots). Exact totals are asserted so a
+	// regression that re-excludes the subagent — which would give 3
+	// sessions / 380 tokens — fails loudly rather than passing a looser
+	// bound that the surviving root sessions already satisfy.
 	oneShotExcluded, err := store.GetAnalyticsSummary(ctx, AnalyticsFilter{
 		From:           "2026-01-09",
 		To:             "2026-01-12",
@@ -397,12 +405,11 @@ func contractAnalyticsTrendsAndUsage(
 		ExcludeOneShot: true,
 	})
 	require.NoError(t, err)
-	require.Contains(t, oneShotExcluded.Agents, "claude")
-	// The one-shot subagent child keeps its 70 output tokens in the
-	// total even though one-shot roots are excluded.
-	require.GreaterOrEqual(t, oneShotExcluded.TotalOutputTokens, 70)
-	require.Less(t, oneShotExcluded.TotalSessions, summary.TotalSessions,
-		"one-shot roots drop but the subagent child stays")
+	require.Equal(t, 4, oneShotExcluded.TotalSessions,
+		"one-shot roots drop; subagent child stays")
+	require.Equal(t, 450, oneShotExcluded.TotalOutputTokens,
+		"includes the subagent child's 70 tokens (380 would mean dropped)")
+	require.Equal(t, 3, oneShotExcluded.TokenReportingSessions)
 
 	// Distribution surfaces stay root-only: the subagent child must NOT
 	// be counted in session-shape, so its short duration cannot skew the
