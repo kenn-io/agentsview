@@ -73,16 +73,19 @@ func TestIflowProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 	root := t.TempDir()
 	realProjectDir := filepath.Join(t.TempDir(), "real-project")
 	linkProjectDir := filepath.Join(root, "linked-project")
-	if err := os.Symlink(realProjectDir, linkProjectDir); err != nil {
-		t.Skipf("symlink not supported: %v", err)
-	}
 	rawID := "5de701fc-7454-4858-a249-95cac4fd3b51"
-	sourcePath := filepath.Join(linkProjectDir, "session-"+rawID+".jsonl")
+	// Populate the target directory before symlinking so Windows records a
+	// directory symlink. Symlinking a not-yet-existent target yields a file
+	// symlink there, which discovery cannot descend into.
 	copyFixtureFile(
 		t,
 		"testdata/iflow/session-"+rawID+".jsonl",
 		filepath.Join(realProjectDir, "session-"+rawID+".jsonl"),
 	)
+	if err := os.Symlink(realProjectDir, linkProjectDir); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	sourcePath := filepath.Join(linkProjectDir, "session-"+rawID+".jsonl")
 
 	provider, ok := NewProvider(AgentIflow, ProviderConfig{
 		Roots:   []string{root},

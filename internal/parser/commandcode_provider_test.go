@@ -74,11 +74,14 @@ func TestCommandCodeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 	root := t.TempDir()
 	realProjectDir := filepath.Join(t.TempDir(), "real-project")
 	linkProjectDir := filepath.Join(root, "linked-project")
+	// Populate the target directory before symlinking so Windows records a
+	// directory symlink. Symlinking a not-yet-existent target yields a file
+	// symlink there, which discovery cannot descend into.
+	writeSourceFile(t, filepath.Join(realProjectDir, "sess_123.jsonl"), commandCodeProviderFixture())
 	if err := os.Symlink(realProjectDir, linkProjectDir); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
 	sourcePath := filepath.Join(linkProjectDir, "sess_123.jsonl")
-	writeSourceFile(t, filepath.Join(realProjectDir, "sess_123.jsonl"), commandCodeProviderFixture())
 
 	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{
 		Roots:   []string{root},
