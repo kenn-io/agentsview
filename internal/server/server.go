@@ -801,6 +801,27 @@ func localInterfaceIPs() map[string]bool {
 // ListenAndServe starts the HTTP server.
 func (s *Server) ListenAndServe() error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
+	listenCtx := context.Background()
+	if s.baseCtx != nil {
+		listenCtx = s.baseCtx
+	}
+	ln, err := daemon.Listen(
+		listenCtx,
+		daemon.Endpoint{
+			Network: daemon.NetworkTCP,
+			Address: addr,
+		},
+		daemon.WithRuntimeStore(daemon.RuntimeStore{Dir: s.dataDir}),
+	)
+	if err != nil {
+		return err
+	}
+	return s.Serve(ln)
+}
+
+// Serve starts the HTTP server on an existing listener.
+func (s *Server) Serve(ln net.Listener) error {
+	addr := ln.Addr().String()
 	srv := &http.Server{
 		Addr:        addr,
 		Handler:     s.Handler(),
@@ -817,22 +838,6 @@ func (s *Server) ListenAndServe() error {
 	s.httpSrv = srv
 	s.mu.Unlock()
 	log.Printf("Starting server at http://%s", addr)
-
-	listenCtx := context.Background()
-	if s.baseCtx != nil {
-		listenCtx = s.baseCtx
-	}
-	ln, err := daemon.Listen(
-		listenCtx,
-		daemon.Endpoint{
-			Network: daemon.NetworkTCP,
-			Address: addr,
-		},
-		daemon.WithRuntimeStore(daemon.RuntimeStore{Dir: s.dataDir}),
-	)
-	if err != nil {
-		return err
-	}
 	return srv.Serve(ln)
 }
 

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	stdlibsync "sync"
 	"testing"
@@ -345,13 +346,15 @@ func hostLiteral(host string) string {
 // base URL. The server is shut down when the test finishes.
 func (te *testEnv) listenAndServe(t *testing.T) string {
 	t.Helper()
-	port := server.FindAvailablePort("127.0.0.1", 40000)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
 	te.srv.SetPort(port)
 
 	var serveErr error
 	done := make(chan struct{})
 	go func() {
-		serveErr = te.srv.ListenAndServe()
+		serveErr = te.srv.Serve(ln)
 		close(done)
 	}()
 
@@ -389,6 +392,49 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 	})
 
 	return fmt.Sprintf("http://127.0.0.1:%d", port)
+}
+
+func TestListenAndServeUsesAvailablePortOutsideFixedRange(t *testing.T) {
+	listeners := make([]net.Listener, 0, 100)
+	for port := 40000; port < 40100; port++ {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			listeners = append(listeners, ln)
+			continue
+		}
+
+		conn, dialErr := net.DialTimeout(
+			"tcp", addr, 50*time.Millisecond,
+		)
+		if dialErr != nil {
+			for _, ln := range listeners {
+				require.NoError(t, ln.Close())
+			}
+			t.Skipf("port %d is neither bindable nor reachable: %v", port, err)
+		}
+		require.NoError(t, conn.Close())
+	}
+	t.Cleanup(func() {
+		for _, ln := range listeners {
+			require.NoError(t, ln.Close())
+		}
+	})
+
+	te := setup(t)
+	baseURL := te.listenAndServe(t)
+	parsedBaseURL, err := url.Parse(baseURL)
+	require.NoError(t, err)
+	_, portText, err := net.SplitHostPort(parsedBaseURL.Host)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	require.False(t, port >= 40000 && port < 40100)
+
+	resp, err := http.Get(baseURL + "/api/v1/version")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
 func (te *testEnv) seedSession(
