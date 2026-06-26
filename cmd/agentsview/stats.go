@@ -245,10 +245,12 @@ func printHeader(w io.Writer, s *service.SessionStats) {
 
 func printTotals(w io.Writer, s *service.SessionStats) {
 	fmt.Fprintln(w, "Totals")
-	fmt.Fprintf(w, "  Sessions:              %s (human %s, automation %s)\n",
+	fmt.Fprintf(w,
+		"  Sessions:              %s (human %s, automation %s, subagent %s)\n",
 		fmtInt(s.Totals.SessionsAll),
 		fmtInt(s.Totals.SessionsHuman),
-		fmtInt(s.Totals.SessionsAutomation))
+		fmtInt(s.Totals.SessionsAutomation),
+		fmtInt(s.Totals.SessionsSubagent))
 	fmt.Fprintf(w, "  Messages:              %s (user %s)\n",
 		fmtInt(s.Totals.MessagesTotal),
 		fmtInt(s.Totals.UserMessagesTotal))

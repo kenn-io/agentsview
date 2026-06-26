@@ -636,6 +636,12 @@ func applySubagentInclusiveTotals(
 	s.Totals.SessionsAll = sessions
 	s.Totals.MessagesTotal = messages
 	s.Totals.UserMessagesTotal = userMessages
+	// SessionsHuman and SessionsAutomation were set from the root-only
+	// rows and exclude subagents. The remainder is the subagent count,
+	// which keeps the partition sessions_all == human + automation +
+	// subagent intact.
+	s.Totals.SessionsSubagent =
+		sessions - s.Totals.SessionsHuman - s.Totals.SessionsAutomation
 }
 
 // pickMaxLabel returns the key with the strictly highest count.

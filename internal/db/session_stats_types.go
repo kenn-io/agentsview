@@ -48,8 +48,15 @@ type StatsTotals struct {
 	SessionsAll        int `json:"sessions_all"`
 	SessionsHuman      int `json:"sessions_human"`
 	SessionsAutomation int `json:"sessions_automation"`
-	MessagesTotal      int `json:"messages_total"`
-	UserMessagesTotal  int `json:"user_messages_total"`
+	// SessionsSubagent is the count of subagent sessions folded into
+	// SessionsAll. Human, automation, and subagent partition
+	// SessionsAll: sessions_all == sessions_human + sessions_automation
+	// + sessions_subagent. Subagents are kept out of the human and
+	// automation buckets (a subagent is neither) but counted in the
+	// total, so the breakdown stays decomposable.
+	SessionsSubagent  int `json:"sessions_subagent"`
+	MessagesTotal     int `json:"messages_total"`
+	UserMessagesTotal int `json:"user_messages_total"`
 }
 
 type DistributionBucketV1 struct {

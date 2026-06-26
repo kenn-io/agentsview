@@ -368,12 +368,18 @@ func TestGetSessionStats_TotalsAndArchetypes(t *testing.T) {
 	assert.Equal(t, 2, stats.Totals.SessionsAutomation,
 		"sessions_automation")
 	assert.Equal(t, 3, stats.Totals.SessionsHuman, "sessions_human")
-	// Invariant: human + automation must equal all.
+	// Invariant: human + automation + subagent must equal all. This
+	// fixture has no subagents, so subagent is 0 and the partition still
+	// reduces to human + automation.
+	assert.Equal(t, 0, stats.Totals.SessionsSubagent,
+		"sessions_subagent (no subagents seeded)")
 	assert.Equal(t, stats.Totals.SessionsAll,
-		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation,
-		"invariant: human (%d) + automation (%d) != all (%d)",
+		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation+
+			stats.Totals.SessionsSubagent,
+		"invariant: human (%d) + automation (%d) + subagent (%d) != all (%d)",
 		stats.Totals.SessionsHuman,
 		stats.Totals.SessionsAutomation,
+		stats.Totals.SessionsSubagent,
 		stats.Totals.SessionsAll)
 	assert.Equal(t, 161, stats.Totals.UserMessagesTotal,
 		"user_messages_total")
@@ -449,6 +455,12 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 	assert.Equal(t, 1, stats.Totals.SessionsHuman, "sessions_human")
 	assert.Equal(t, 0, stats.Totals.SessionsAutomation,
 		"sessions_automation")
+	// The subagent lands in its own bucket so the partition holds.
+	assert.Equal(t, 1, stats.Totals.SessionsSubagent, "sessions_subagent")
+	assert.Equal(t, stats.Totals.SessionsAll,
+		stats.Totals.SessionsHuman+stats.Totals.SessionsAutomation+
+			stats.Totals.SessionsSubagent,
+		"invariant: all == human + automation + subagent")
 
 	// Distributions stay root-only: only the root session is in the
 	// user-messages histogram, so its bucket counts sum to 1, not 2.

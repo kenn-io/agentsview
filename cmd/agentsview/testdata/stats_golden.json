@@ -575,6 +575,7 @@
     "sessions_all": 11,
     "sessions_automation": 0,
     "sessions_human": 11,
+    "sessions_subagent": 0,
     "user_messages_total": 174
   },
   "velocity": {
