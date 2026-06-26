@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { TrashIcon } from "../../icons.js";
   import { onMount } from "svelte";
   import type { Session } from "../../api/types.js";
@@ -81,24 +82,24 @@
 
 <div class="trash-page">
   {#if loading}
-    <div class="loading-state">Loading trash...</div>
+    <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
     <div class="empty-state">
       <TrashIcon size="40" strokeWidth="1.6" class="empty-icon" aria-hidden="true" />
-      <p class="empty-title">Trash is empty</p>
-      <p class="empty-desc-text">Deleted sessions will appear here.</p>
+      <p class="empty-title">{m.trash_empty()}</p>
+      <p class="empty-desc-text">{m.trash_empty_desc()}</p>
     </div>
   {:else}
     <div class="trash-header">
       <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
-      <h2>Trash</h2>
+      <h2>{m.trash_title()}</h2>
       <span class="trash-count">{trashedSessions.length}</span>
       <button
         class="empty-all-btn"
         onclick={emptyAll}
         disabled={emptying}
       >
-        {emptying ? "Emptying..." : "Empty Trash"}
+        {emptying ? m.trash_emptying() : m.trash_empty_trash()}
       </button>
     </div>
 
@@ -110,9 +111,9 @@
             <div class="trash-card-meta">
               <span class="trash-agent">{session.agent}</span>
               <span class="trash-project">{session.project}</span>
-              <span class="trash-msgs">{session.user_message_count} msgs</span>
+              <span class="trash-msgs">{m.trash_msgs({ count: session.user_message_count })}</span>
               {#if session.deleted_at}
-                <span class="trash-deleted">deleted {formatRelativeTime(session.deleted_at)}</span>
+                <span class="trash-deleted">{m.trash_deleted_ago({ time: formatRelativeTime(session.deleted_at) })}</span>
               {/if}
             </div>
           </div>
@@ -120,16 +121,16 @@
             <button
               class="restore-btn"
               onclick={() => restoreSession(session.id)}
-              title="Restore session"
+              title={m.trash_restore_session()}
             >
-              Restore
+              {m.trash_restore()}
             </button>
             <button
               class="perm-delete-btn"
               onclick={() => permanentDelete(session.id)}
-              title="Permanently delete"
+              title={m.trash_permanently_delete()}
             >
-              Delete Forever
+              {m.trash_delete_forever()}
             </button>
           </div>
         </div>

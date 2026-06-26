@@ -555,6 +555,15 @@ func TestParseDiffBypassesSkipLayers(t *testing.T) {
 		Examined: 1, Identical: 1,
 	}, report.Totals, "totals before append")
 
+	// Capture the original mtime so the append can be replayed without
+	// tripping the live-write skew guard: appending advances the file
+	// mtime past the stored snapshot, which would (correctly) classify
+	// the diff as raced. Restoring the mtime keeps this test focused on
+	// the skip-layer bypass and the message_count CHANGE detection; the
+	// raced path has dedicated coverage in TestParseDiffRacedSourceSkew.
+	origInfo, err := os.Stat(path)
+	require.NoError(t, err, "stat source before append")
+
 	// Append one more message without syncing. The incremental
 	// append path would normally absorb this; a full re-parse must
 	// surface it as a message count change instead.
@@ -566,6 +575,9 @@ func TestParseDiffBypassesSkipLayers(t *testing.T) {
 	) + "\n")
 	require.NoError(t, err, "append message line")
 	require.NoError(t, f.Close(), "close session file")
+	require.NoError(t,
+		os.Chtimes(path, origInfo.ModTime(), origInfo.ModTime()),
+		"restore source mtime so the change is not classified raced")
 
 	report = runParseDiff(t, env, sync.ParseDiffOptions{})
 	assert.Equal(t, 1, report.FilesExamined, "files examined")
@@ -1141,6 +1153,791 @@ func TestParseDiffKiloSQLitePerSessionError(t *testing.T) {
 	assert.Contains(t, errEntry.FilePath, "kilo.db#bad-session",
 		"error attributed to the per-session virtual path")
 	assert.True(t, report.HasFailures(), "HasFailures")
+}
+
+// TestParseDiffRacedSourceSkew is the end-to-end live-write skew guard:
+// a stored row that drifted from its source is normally DiffChanged, but
+// when the on-disk source advances past the snapshot file_mtime mid-run
+// (simulating a daemon or active session rewriting the file after the
+// snapshot) the change is inconclusive and must be reclassified DiffRaced
+// without tripping --fail-on-change. A control session whose source was
+// not touched stays a real DiffChanged so a genuine regression is never
+// masked.
+func TestParseDiffRacedSourceSkew(t *testing.T) {
+	env := setupTestEnv(t)
+
+	racedPath := env.writeClaudeSession(t, "test-proj", "pd-raced.jsonl",
+		parseDiffClaudeContent("raced prompt", "raced reply"))
+	env.writeClaudeSession(t, "test-proj", "pd-control.jsonl",
+		parseDiffClaudeContent("control prompt", "control reply"))
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
+	})
+
+	// Drift the stored rows so a re-parse of the unchanged source content
+	// would report a real first_message change for both.
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "pd-raced")
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "pd-control")
+
+	// Simulate a mid-run write to pd-raced's source only: push its mtime
+	// well past the stored snapshot file_mtime. The content is unchanged,
+	// so the comparison still detects the seeded drift, but the advanced
+	// mtime marks the comparison as a torn read. pd-control is left
+	// untouched, so its drift stays a genuine change.
+	future := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(racedPath, future, future),
+		"advance raced source mtime")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 2, Changed: 1, Raced: 1,
+	}, report.Totals, "totals")
+	// Only the untouched-source change is counted as drift; the raced
+	// session's masked field diff is excluded from FieldCounts.
+	assert.Equal(t, map[string]int{sync.FieldFirstMessage: 1},
+		report.FieldCounts,
+		"only the genuine change contributes to FieldCounts")
+
+	raced := findSessionDiff(report, "pd-raced")
+	require.NotNil(t, raced, "raced session not listed")
+	assert.Equal(t, sync.DiffRaced, raced.Class, "raced class")
+	assert.NotEmpty(t, raced.Reason, "raced reason")
+	// The would-be change is attached for drill-down even though it is
+	// not counted, so an operator can see what the skew masked.
+	assert.Contains(t, sessionDiffFieldNames(raced, true),
+		sync.FieldFirstMessage,
+		"raced field diff attached for drill-down")
+
+	changed := findSessionDiff(report, "pd-control")
+	require.NotNil(t, changed, "control session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class,
+		"untouched-source drift stays changed")
+	assert.Contains(t, sessionDiffFieldNames(changed, false),
+		sync.FieldFirstMessage, "control change field")
+
+	// The run fails because of the genuine change, not the raced one.
+	assert.True(t, report.HasFailures(),
+		"the untouched-source change must still trip --fail-on-change")
+}
+
+// TestParseDiffRacedAloneDoesNotFail isolates the gate contract: a run
+// whose only drift is masked by a live-write skew classifies raced and
+// must NOT trip --fail-on-change, so a concurrent daemon write can never
+// turn a vet run red on its own.
+func TestParseDiffRacedAloneDoesNotFail(t *testing.T) {
+	env := setupTestEnv(t)
+
+	racedPath := env.writeClaudeSession(t, "test-proj", "pd-solo.jsonl",
+		parseDiffClaudeContent("solo prompt", "solo reply"))
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "pd-solo")
+	future := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(racedPath, future, future),
+		"advance raced source mtime")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Raced: 1,
+	}, report.Totals, "totals")
+	assert.Empty(t, report.FieldCounts,
+		"raced field diffs must be excluded from FieldCounts")
+	assert.False(t, report.HasFailures(),
+		"a raced session alone must not trip --fail-on-change")
+}
+
+// TestParseDiffRacedDoesNotMaskCleanRun proves the skew guard never
+// invents a raced session out of an identical comparison: advancing the
+// source mtime of a session whose stored rows still match the parse
+// leaves it identical, not raced (the raced reclass only applies when
+// there is a real change to mask).
+func TestParseDiffRacedDoesNotMaskCleanRun(t *testing.T) {
+	env := setupTestEnv(t)
+
+	path := env.writeClaudeSession(t, "test-proj", "pd-clean.jsonl",
+		parseDiffClaudeContent("clean prompt", "clean reply"))
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	// Advance the mtime without changing content: the comparison is still
+	// identical, so the session must remain identical despite the skew.
+	future := time.Now().Add(72 * time.Hour)
+	require.NoError(t, os.Chtimes(path, future, future), "advance mtime")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1,
+	}, report.Totals, "an unchanged session must stay identical, not raced")
+	assert.False(t, report.HasFailures(), "clean run")
+}
+
+// TestParseDiffDBBackedSourceNotMaskedAsRaced pins the reliability gate for
+// composite, DB-backed sources. Many Kiro sessions share ONE data.sqlite3, and
+// the live mtime the skew guard could observe (a composite db stat or per-row
+// updated_at) is NOT a basis-matching stat of a literal file whose mtime
+// populated file_mtime. Because that comparison is unreliable, the raced
+// reclassification must NOT apply to these sources at all -- even when a
+// session's row updated_at advanced past its snapshot, a detected drift stays a
+// genuine DiffChanged rather than being masked as DiffRaced. This fails CLOSED:
+// real parser regressions on DB-backed agents are never hidden from
+// --fail-on-change.
+func TestParseDiffDBBackedSourceNotMaskedAsRaced(t *testing.T) {
+	env := setupTestEnv(t)
+	ks := createKiroSQLiteDB(t, env.kiroDir)
+	const (
+		advancedID  = "kiro-advanced"
+		quiescentID = "kiro-quiescent"
+	)
+	// Both sessions share the same payload content and the same initial
+	// updated_at, so each is stored with the same per-session snapshot
+	// file_mtime (updated_at * 1e6).
+	payload := readKiroSQLiteFixture(t, "standard_payload.json")
+	const initialUpdatedAt = int64(1779012030000)
+	ks.addSession(
+		t, "/home/user/code/kiro-app", advancedID,
+		payload, 1779012000000, initialUpdatedAt,
+	)
+	ks.addSession(
+		t, "/home/user/code/kiro-app", quiescentID,
+		payload, 1779012000000, initialUpdatedAt,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
+	})
+
+	// Seed real parser drift in the archive for BOTH sessions so a
+	// re-parse of the unchanged payload detects a first_message change.
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "kiro:"+advancedID)
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "kiro:"+quiescentID)
+
+	// Advance ONLY one session's row updated_at past its snapshot. Under the
+	// old per-session raced check this would have masked the advanced session
+	// as DiffRaced; the reliability gate now skips the raced check for this
+	// DB-backed (virtual-path) source entirely, so the drift stays genuine.
+	ks.updateSession(t, advancedID, payload, initialUpdatedAt+60000)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentKiro},
+	})
+
+	// Neither session is masked as raced: a DB-backed source has no
+	// basis-matching live mtime, so both genuine drifts are reported as
+	// changes and --fail-on-change fires.
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 2, Changed: 2,
+	}, report.Totals, "DB-backed drift must not be masked as raced")
+	// Both seeded first_message drifts are counted; the advanced session's
+	// updated_at bump additionally surfaces its ended_at change. Under the old
+	// raced reclassification the advanced session (and all its field diffs)
+	// would have been masked, hiding genuine drift from --fail-on-change.
+	assert.Equal(t, map[string]int{
+		sync.FieldFirstMessage: 2,
+		sync.FieldEndedAt:      1,
+	}, report.FieldCounts,
+		"genuine drift on DB-backed sources is no longer masked")
+
+	advanced := findSessionDiff(report, "kiro:"+advancedID)
+	require.NotNil(t, advanced, "advanced session not listed")
+	assert.Equal(t, sync.DiffChanged, advanced.Class,
+		"advanced DB-backed drift stays changed, not raced")
+	assert.Contains(t, sessionDiffFieldNames(advanced, false),
+		sync.FieldFirstMessage, "advanced field")
+
+	quiescent := findSessionDiff(report, "kiro:"+quiescentID)
+	require.NotNil(t, quiescent, "quiescent session not listed")
+	assert.Equal(t, sync.DiffChanged, quiescent.Class,
+		"untouched-source drift stays changed")
+	assert.Contains(t, sessionDiffFieldNames(quiescent, false),
+		sync.FieldFirstMessage, "quiescent field")
+
+	assert.True(t, report.HasFailures(),
+		"genuine DB-backed drift must trip --fail-on-change")
+}
+
+// TestParseDiffCodexIndexSkewDoesNotMaskTranscriptDrift pins that Codex's
+// shared session_index.jsonl mtime is not a per-session raced signal for
+// transcript-derived diffs. Advancing ONLY the index past the snapshot leaves
+// the transcript untouched; seeded first_message drift must stay DiffChanged
+// so --fail-on-change cannot pass because some unrelated title/index write
+// advanced the global index.
+func TestParseDiffCodexIndexSkewDoesNotMaskTranscriptDrift(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Add tests").
+		AddCodexMessage(tsEarlyS5, "assistant", "Adding coverage.").
+		String()
+	sessionPath := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", content,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Codex title",`+
+			`"updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+	), 0o644))
+	// Pin both files to one past instant so the stored snapshot file_mtime
+	// (max of transcript and index) is that instant for both.
+	base := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(sessionPath, base, base), "chtimes session")
+	require.NoError(t, os.Chtimes(indexPath, base, base), "chtimes index")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	// Seed real parser drift in the archive so a re-parse of the unchanged
+	// transcript reports a first_message change to reclassify.
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	// Advance ONLY the index past the snapshot; the transcript is untouched.
+	// CodexEffectiveMtime folds the index in, but that global index mtime is
+	// not evidence that this session's transcript-derived first_message diff
+	// raced with a live write.
+	future := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(indexPath, future, future),
+		"advance index mtime")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "index-only skew must not mask transcript drift")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must remain counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"transcript drift must trip --fail-on-change")
+}
+
+// TestParseDiffCodexTranscriptSkewUsesTranscriptStoredMtime pins the other
+// Codex mtime basis: the raced guard must compare the transcript-only live
+// mtime against the transcript-only stored mtime. Stored file_mtime still folds
+// in session_index.jsonl for normal sync invalidation, and that index mtime can
+// be newer than both transcript mtimes; it must not prevent a later transcript
+// write from being classified DiffRaced.
+func TestParseDiffCodexTranscriptSkewUsesTranscriptStoredMtime(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e2"
+	original := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Add tests").
+		AddCodexMessage(tsEarlyS5, "assistant", "Adding coverage.").
+		String()
+	sessionPath := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", original,
+	)
+
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Codex title",`+
+			`"updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+	), 0o644))
+	transcriptSnapshot := time.Now().Add(-4 * time.Hour)
+	transcriptWrite := time.Now().Add(-3 * time.Hour)
+	indexSnapshot := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(
+		sessionPath, transcriptSnapshot, transcriptSnapshot,
+	), "chtimes session snapshot")
+	require.NoError(t, os.Chtimes(indexPath, indexSnapshot, indexSnapshot),
+		"chtimes index snapshot")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	stored, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, stored, "stored Codex session")
+	require.NotNil(t, stored.FileMtime, "stored file_mtime")
+	assert.Equal(t, indexSnapshot.UnixNano(), *stored.FileMtime,
+		"stored file_mtime should be index-folded")
+
+	changed := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Changed prompt").
+		AddCodexMessage(tsEarlyS5, "assistant", "Adding coverage.").
+		String()
+	require.NoError(t, os.WriteFile(sessionPath, []byte(changed), 0o644),
+		"rewrite transcript")
+	require.NoError(t, os.Chtimes(sessionPath, transcriptWrite, transcriptWrite),
+		"advance transcript below index-folded stored mtime")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Raced: 1},
+		report.Totals, "transcript write should be raced")
+	assert.Empty(t, report.FieldCounts,
+		"raced field diffs must not count as parser drift")
+	raced := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, raced, "codex session not listed")
+	assert.Equal(t, sync.DiffRaced, raced.Class, "raced class")
+	assert.False(t, report.HasFailures(),
+		"transcript write skew must not trip --fail-on-change")
+}
+
+// TestParseDiffCodexIncrementalAppendDoesNotLookRaced covers the stable-source
+// side of the Codex transcript fingerprint fallback. A Codex incremental append
+// advances the stored source snapshot, so later parser drift against that
+// unchanged transcript must remain DiffChanged rather than being hidden as a
+// stale-fingerprint race.
+func TestParseDiffCodexIncrementalAppendDoesNotLookRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e3"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", initial,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "world", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, f.Close(), "close after append")
+	require.NoError(t, err, "append")
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "unchanged-source drift must stay changed")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must be counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"stable-source parser drift must trip --fail-on-change")
+}
+
+func TestParseDiffCodexLegacyStaleIncrementalHashDoesNotLookRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", initial,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	beforeAppend, err := env.db.GetSessionFull(
+		context.Background(), "codex:"+uuid,
+	)
+	require.NoError(t, err, "GetSessionFull before append")
+	require.NotNil(t, beforeAppend, "session before append")
+	require.NotNil(t, beforeAppend.FileHash, "file_hash before append")
+	staleHash := *beforeAppend.FileHash
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "world", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, f.Close(), "close after append")
+	require.NoError(t, err, "append")
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+
+	// Simulate a current data-version archive written by the legacy
+	// incremental path: size/mtime advanced, but file_hash stayed on the
+	// previous full-parse snapshot.
+	mutateDB(t, env,
+		"UPDATE sessions SET file_hash = ? WHERE id = ?",
+		staleHash, "codex:"+uuid)
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "legacy stale hash drift must stay changed")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must be counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"stable-source parser drift must trip --fail-on-change")
+}
+
+func TestParseDiffCodexFullParsePartialTailDoesNotLookRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e6"
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	) + `{"timestamp":"2024-01-01T10:00:10Z"`
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", content,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
+
+	stored, err := env.db.GetSessionFull(
+		context.Background(), "codex:"+uuid,
+	)
+	require.NoError(t, err, "GetSessionFull after full parse")
+	require.NotNil(t, stored, "stored session after full parse")
+	require.NotNil(t, stored.FileSize, "stored file_size")
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat transcript")
+	assert.Equal(t, info.Size(), *stored.FileSize,
+		"full Codex parse stores raw file size including ignored tail")
+
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "unchanged full-parse partial tail drift must stay changed")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must be counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"stable-source parser drift must trip --fail-on-change")
+}
+
+func TestParseDiffCodexIncrementalPartialTailDoesNotLookRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e4"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl", initial,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	appended := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("assistant", "world", tsEarlyS5),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append complete message")
+	_, err = f.WriteString(`{"timestamp":"2024-01-01T10:00:10Z"`)
+	require.NoError(t, err, "append partial trailing JSON")
+	require.NoError(t, f.Close(), "close after append")
+	env.engine.SyncPaths([]string{path})
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "codex:"+uuid)
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentCodex},
+	})
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 1, Changed: 1},
+		report.Totals, "unchanged consumed prefix drift must stay changed")
+	assert.Equal(t, 1, report.FieldCounts[sync.FieldFirstMessage],
+		"first_message drift must be counted")
+	changed := findSessionDiff(report, "codex:"+uuid)
+	require.NotNil(t, changed, "codex session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class, "changed class")
+	assert.True(t, report.HasFailures(),
+		"stable-source parser drift must trip --fail-on-change")
+}
+
+// writeHermesFanoutStateDB writes a Hermes state.db at <root>/state.db holding
+// two sessions (each one user message) and no sibling transcripts, so both
+// sessions resolve to the SAME shared state.db File.Path -- the literal-path
+// fan-out shape.
+func writeHermesFanoutStateDB(t *testing.T, root string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
+	require.NoError(t, err, "open hermes state.db")
+	defer conn.Close()
+	_, err = conn.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY, source TEXT NOT NULL, user_id TEXT,
+			model TEXT, model_config TEXT, system_prompt TEXT,
+			parent_session_id TEXT, started_at REAL NOT NULL, ended_at REAL,
+			end_reason TEXT, message_count INTEGER DEFAULT 0,
+			tool_call_count INTEGER DEFAULT 0, input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0, cache_read_tokens INTEGER DEFAULT 0,
+			cache_write_tokens INTEGER DEFAULT 0, reasoning_tokens INTEGER DEFAULT 0,
+			billing_provider TEXT, billing_base_url TEXT, billing_mode TEXT,
+			estimated_cost_usd REAL, actual_cost_usd REAL, cost_status TEXT,
+			cost_source TEXT, pricing_version TEXT, title TEXT,
+			api_call_count INTEGER DEFAULT 0
+		);
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+			role TEXT NOT NULL, content TEXT, tool_call_id TEXT, tool_calls TEXT,
+			tool_name TEXT, timestamp REAL NOT NULL, token_count INTEGER,
+			finish_reason TEXT, reasoning TEXT, reasoning_content TEXT,
+			reasoning_details TEXT, codex_reasoning_items TEXT,
+			codex_message_items TEXT
+		);
+		INSERT INTO sessions (id, source, model, started_at, ended_at, message_count, title)
+			VALUES ('alpha', 'discord', 'gpt-5.5', 1778767200.0, 1778767800.0, 1, 'Alpha');
+		INSERT INTO sessions (id, source, model, started_at, ended_at, message_count, title)
+			VALUES ('beta', 'discord', 'gpt-5.5', 1778768200.0, 1778768800.0, 1, 'Beta');
+		INSERT INTO messages (session_id, role, content, timestamp)
+			VALUES ('alpha', 'user', 'alpha prompt', 1778767210.0);
+		INSERT INTO messages (session_id, role, content, timestamp)
+			VALUES ('beta', 'user', 'beta prompt', 1778768210.0);
+	`)
+	require.NoError(t, err, "seed hermes state.db")
+}
+
+// TestParseDiffHermesSharedStateDBNotMaskedAsRaced pins the literal-path
+// fan-out gate. Many Hermes sessions resolve to one shared state.db File.Path,
+// so its mtime is not a per-session signal: a write that advances state.db for
+// any session would, without the fan-out guard, race-mask genuine drift on
+// every sibling. Both sessions must therefore stay DiffChanged (fail closed),
+// not DiffRaced, even though the shared source mtime advanced past the snapshot.
+func TestParseDiffHermesSharedStateDBNotMaskedAsRaced(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	writeHermesFanoutStateDB(t, root)
+
+	database := dbtest.OpenTestDB(t)
+	cfg := sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsDir},
+		},
+		Machine: "local",
+	}
+	engine := sync.NewEngine(database, cfg)
+	stats := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 2, stats.Synced, "expected both Hermes sessions synced")
+
+	// Seed real parser drift in the archive for BOTH sessions so a re-parse
+	// of the unchanged state.db reports a first_message change.
+	for _, id := range []string{"hermes:alpha", "hermes:beta"} {
+		require.NoError(t, database.Update(func(tx *sql.Tx) error {
+			_, err := tx.Exec(
+				"UPDATE sessions SET first_message = ? WHERE id = ?",
+				"drifted first message", id,
+			)
+			return err
+		}), "drift %s", id)
+	}
+
+	// Advance the shared state.db mtime well past the stored snapshot, as a
+	// concurrent write to any session would.
+	future := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(
+		filepath.Join(root, "state.db"), future, future,
+	), "advance state.db mtime")
+
+	report, err := sync.NewDiffEngine(database, cfg).ParseDiff(
+		context.Background(),
+		sync.ParseDiffOptions{Agents: []parser.AgentType{parser.AgentHermes}},
+	)
+	require.NoError(t, err, "ParseDiff")
+	require.NotNil(t, report)
+
+	assert.Equal(t, sync.ParseDiffTotals{Examined: 2, Changed: 2},
+		report.Totals, "shared-source drift must not be masked as raced")
+	for _, id := range []string{"hermes:alpha", "hermes:beta"} {
+		sd := findSessionDiff(report, id)
+		require.NotNil(t, sd, "%s not listed", id)
+		assert.Equal(t, sync.DiffChanged, sd.Class,
+			"%s stays changed, not raced", id)
+	}
+	assert.True(t, report.HasFailures(),
+		"genuine shared-source drift must trip --fail-on-change")
+}
+
+// TestParseDiffEngineRefusesWrites proves sub-item (4): the report-only
+// engine NewDiffEngine returns must refuse the write entrypoints
+// (SyncAll/ResyncAll and friends) so a forceParse engine can never be
+// driven into rewriting the archive. The refusal is a no-op (zero stats,
+// nil error) and persists nothing.
+func TestParseDiffEngineRefusesWrites(t *testing.T) {
+	env := setupTestEnv(t)
+
+	path := env.writeClaudeSession(t, "test-proj", "pd-guard.jsonl",
+		parseDiffClaudeContent(
+			"guard prompt with AKIA7QHWN2DKR4FYPLJM",
+			"guard reply",
+		))
+
+	diffEngine := newParseDiffEngine(env)
+	ctx := context.Background()
+
+	assert.Equal(t, sync.SyncStats{}, diffEngine.SyncAll(ctx, nil),
+		"SyncAll on a report-only engine must be a no-op")
+	assert.Equal(t, sync.SyncStats{}, diffEngine.ResyncAll(ctx, nil),
+		"ResyncAll on a report-only engine must be a no-op")
+	assert.Equal(t, sync.SyncStats{},
+		diffEngine.SyncAllSince(ctx, time.Time{}, nil),
+		"SyncAllSince on a report-only engine must be a no-op")
+	assert.Equal(t, sync.SyncStats{},
+		diffEngine.SyncRootsSince(ctx, nil, time.Time{}, nil),
+		"SyncRootsSince on a report-only engine must be a no-op")
+	stats, err := diffEngine.SyncThenRun(
+		ctx, false, nil, func(forceFull bool) error {
+			return env.db.UpsertSession(db.Session{
+				ID: "sync-then-run-wrote",
+			})
+		},
+	)
+	require.NoError(t, err,
+		"SyncThenRun on a report-only engine should refuse cleanly")
+	assert.Equal(t, sync.SyncStats{}, stats,
+		"SyncThenRun on a report-only engine must be a no-op")
+	require.Error(t, diffEngine.RunExclusive(func() error {
+		return env.db.UpsertSession(db.Session{
+			ID: "run-exclusive-wrote",
+		})
+	}), "RunExclusive on a report-only engine must error")
+	require.Error(t, diffEngine.SyncSingleSession("claude:pd-guard"),
+		"SyncSingleSession on a report-only engine must error")
+
+	// Nothing was written despite a discoverable source on disk.
+	require.FileExists(t, path)
+	all, err := env.db.ListSessionsModifiedBetween(ctx, "", "", nil, nil)
+	require.NoError(t, err, "list sessions")
+	assert.Empty(t, all,
+		"refused writes must not persist any session rows")
+
+	// The real sync engine (forceParse off) still syncs the same source,
+	// proving the guard is scoped to report-only engines only.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	const sessionID = "pd-guard"
+	mutateDB(t, env,
+		"UPDATE sessions SET secret_leak_count = 0, "+
+			"secrets_rules_version = '', quality_signal_version = 0"+
+			" WHERE id = ?", sessionID)
+	mutateDB(t, env,
+		"DELETE FROM secret_findings WHERE session_id = ?", sessionID)
+	require.Error(t, diffEngine.RecomputeSignals(ctx, sessionID),
+		"RecomputeSignals on a report-only engine must error")
+	mutateDB(t, env,
+		"UPDATE sessions SET secret_leak_count = 0, "+
+			"secrets_rules_version = '', quality_signal_version = 0"+
+			" WHERE id = ?", sessionID)
+	mutateDB(t, env,
+		"DELETE FROM secret_findings WHERE session_id = ?", sessionID)
+	_, err = diffEngine.ScanSecrets(
+		ctx, sync.SecretScanInput{Backfill: true}, nil,
+	)
+	require.Error(t, err,
+		"ScanSecrets on a report-only engine must error")
+	stored, err := env.db.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err, "GetSessionFull after refused scans")
+	require.NotNil(t, stored, "stored session after refused scans")
+	assert.Zero(t, stored.SecretLeakCount,
+		"refused scans must not update secret_leak_count")
+	assert.Empty(t, stored.SecretsRulesVersion,
+		"refused scans must not update secrets_rules_version")
+	assert.Nil(t, stored.StoredQualitySignals(),
+		"refused recompute must not update quality signals")
+	findings, err := env.db.SessionSecretFindings(ctx, sessionID)
+	require.NoError(t, err, "SessionSecretFindings after refused scans")
+	assert.Empty(t, findings,
+		"refused scans must not persist secret findings")
 }
 
 func TestParseDiffPresenceSweep(t *testing.T) {

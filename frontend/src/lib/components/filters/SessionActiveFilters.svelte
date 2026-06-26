@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
   import {
     agentColor,
     agentLabel,
@@ -39,8 +42,26 @@
     !!sessions.filters.project ||
       sessions.hasActiveFilters ||
       projectFilters.length > 0 ||
-      modelFilters.length > 0,
+    modelFilters.length > 0,
   );
+
+  function removeMachineTitle(machine: string): string {
+    return m.shared_active_filters_remove_machine({ machine });
+  }
+
+  function removeAgentTitle(agent: string): string {
+    return m.shared_active_filters_remove_agent({
+      agent: agentLabel(agent),
+    });
+  }
+
+  function removeProjectTitle(project: string): string {
+    return m.shared_active_filters_remove_project({ project });
+  }
+
+  function removeModelTitle(model: string): string {
+    return m.shared_active_filters_remove_model({ model });
+  }
 
   function clearProject() {
     sessions.filters.project = "";
@@ -58,7 +79,12 @@
 
   function clearAll() {
     sessions.filters.project = "";
-    sessions.clearSessionFilters();
+    sessions.clearSessionFilters({
+      clearDateYoke: hasSessionRouteDateIntent(
+        router.route,
+        router.params,
+      ),
+    });
     onClearProjects?.();
     onClearModels?.();
   }
@@ -66,13 +92,13 @@
 
 {#if hasFilters}
   <div class="active-filters">
-    <span class="filters-label">Filters:</span>
+    <span class="filters-label">{m.shared_active_filters_label()}</span>
 
     {#if sessions.filters.project}
       <button
         class="filter-chip"
         onclick={clearProject}
-        title="Clear project filter"
+        title={m.shared_active_filters_clear_project()}
       >
         {sessions.filters.project}
         <span class="chip-x">
@@ -85,7 +111,7 @@
       <button
         class="filter-chip"
         onclick={() => removeMachine(machine)}
-        title="Remove {machine} filter"
+        title={removeMachineTitle(machine)}
       >
         {machine}
         <span class="chip-x">
@@ -98,7 +124,7 @@
       <button
         class="filter-chip"
         onclick={() => removeAgent(agent)}
-        title="Remove {agentLabel(agent)} filter"
+        title={removeAgentTitle(agent)}
       >
         <span
           class="agent-chip-dot"
@@ -115,9 +141,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setMinUserMessagesFilter(0)}
-        title="Clear min prompts filter"
+        title={m.shared_active_filters_clear_min_prompts()}
       >
-        &ge;{sessions.filters.minUserMessages} prompts
+        {m.shared_active_filters_min_prompts({ count: sessions.filters.minUserMessages })}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -128,9 +154,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setRecentlyActiveFilter(false)}
-        title="Clear recently active filter"
+        title={m.shared_active_filters_clear_recently_active()}
       >
-        Active 24h
+        {m.shared_active_filters_active24h()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -141,9 +167,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setHideUnknownProjectFilter(false)}
-        title="Clear hidden unknown project filter"
+        title={m.shared_active_filters_clear_hidden_unknown()}
       >
-        Unknown hidden
+        {m.shared_active_filters_unknown_hidden()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -154,7 +180,7 @@
       <button
         class="filter-chip"
         onclick={() => onRemoveProject?.(project)}
-        title="Remove {project} project filter"
+        title={removeProjectTitle(project)}
       >
         {project}
         <span class="chip-x">
@@ -167,9 +193,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setIncludeOneShotFilter(true)}
-        title="Clear single-turn filter"
+        title={m.shared_active_filters_clear_single_turn()}
       >
-        Single-turn hidden
+        {m.shared_active_filters_single_turn_hidden()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -180,9 +206,9 @@
       <button
         class="filter-chip"
         onclick={() => sessions.setIncludeAutomatedFilter(false)}
-        title="Clear automated filter"
+        title={m.shared_active_filters_clear_automated()}
       >
-        Automated included
+        {m.shared_active_filters_automated_included()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -193,7 +219,7 @@
       <button
         class="filter-chip"
         onclick={() => onRemoveModel?.(model)}
-        title="Remove {model} model filter"
+        title={removeModelTitle(model)}
       >
         {model}
         <span class="chip-x">
@@ -205,9 +231,9 @@
     <button
       class="clear-all"
       onclick={clearAll}
-      title="Clear all filters"
+      title={m.shared_active_filters_clear_all()}
     >
-      Clear all
+      {m.shared_active_filters_clear_all_label()}
     </button>
   </div>
 {/if}

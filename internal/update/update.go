@@ -787,7 +787,9 @@ func IsDevBuildVersion(v string) bool {
 	return gitDescribePattern.MatchString(v)
 }
 
-func isNewer(v1, v2 string) bool {
+// IsNewer reports whether v1 is a semver release newer than v2. Dev builds
+// and non-semver strings are not considered newer.
+func IsNewer(v1, v2 string) bool {
 	base1 := extractBaseSemver(v1)
 	base2 := extractBaseSemver(v2)
 	if base1 == "" || base2 == "" {
@@ -796,6 +798,10 @@ func isNewer(v1, v2 string) bool {
 	sv1 := normalizeSemver(v1)
 	sv2 := normalizeSemver(v2)
 	return semver.Compare(sv1, sv2) > 0
+}
+
+func isNewer(v1, v2 string) bool {
+	return IsNewer(v1, v2)
 }
 
 var prereleaseNumericPattern = regexp.MustCompile(

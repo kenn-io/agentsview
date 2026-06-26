@@ -391,10 +391,12 @@ func ParseClaudeSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,
+	lastEntryUUID string,
 ) ([]ParsedMessage, time.Time, int64, error) {
 	var (
 		entries        []dagEntry
 		queuedCommands []claudeQueuedCommand
+		subagentMap    = make(map[string]string)
 		lineIndex      = startOrdinal
 		// Track latest timestamp from all lines, including
 		// non-message events (progress, queue-operation) so
@@ -424,6 +426,37 @@ func ParseClaudeSessionFrom(
 			if entryType == "attachment" {
 				if qc, ok := extractQueuedCommand(line); ok {
 					queuedCommands = append(queuedCommands, qc)
+				}
+				return
+			}
+			if entryType == "queue-operation" {
+				if gjson.Get(line, "operation").Str == "enqueue" {
+					contentStr := gjson.Get(line, "content").Str
+					if contentStr != "" {
+						tuid := gjson.Get(contentStr, "tool_use_id").Str
+						taskID := gjson.Get(contentStr, "task_id").Str
+						if tuid == "" || taskID == "" {
+							if m := xmlTaskIDRe.FindStringSubmatch(contentStr); m != nil {
+								taskID = m[1]
+							}
+							if m := xmlToolUseRe.FindStringSubmatch(contentStr); m != nil {
+								tuid = m[1]
+							}
+						}
+						if tuid != "" && taskID != "" {
+							subagentMap[tuid] = "agent-" + taskID
+						}
+					}
+				}
+				return
+			}
+			if entryType == "progress" {
+				if gjson.Get(line, "data.type").Str == "agent_progress" {
+					tuid := gjson.Get(line, "parentToolUseID").Str
+					agentID := gjson.Get(line, "data.agentId").Str
+					if tuid != "" && agentID != "" {
+						subagentMap[tuid] = "agent-" + agentID
+					}
 				}
 				return
 			}
@@ -457,6 +490,13 @@ func ParseClaudeSessionFrom(
 		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
+	// Queue/progress events can repair subagent linkage on an already-stored
+	// tool call. If the mapped tool_use_id is not introduced in this append,
+	// incremental parsing would advance file_size without updating that row.
+	if needsClaudeFullParseForSubagentMap(entries, subagentMap) {
+		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
+
 	if len(entries) == 0 && len(queuedCommands) == 0 {
 		return nil, latestTS, consumed, nil
 	}
@@ -464,7 +504,7 @@ func ParseClaudeSessionFrom(
 	// Detect forks: if any entry's parentUuid doesn't
 	// match the previous entry's uuid, the appended data
 	// contains a branch that requires full DAG processing.
-	if hasDAGFork(entries) {
+	if hasDAGFork(entries, lastEntryUUID) {
 		return nil, time.Time{}, 0, ErrDAGDetected
 	}
 
@@ -480,6 +520,7 @@ func ParseClaudeSessionFrom(
 	msgs, _, endedAt := extractMessagesFrom(
 		entries, startOrdinal,
 	)
+	annotateSubagentSessions(msgs, subagentMap)
 	if len(queuedCommands) > 0 {
 		msgs = mergeQueuedCommands(
 			msgs, queuedCommands, startOrdinal,
@@ -505,17 +546,51 @@ func ParseClaudeSessionFrom(
 // same-message.id assistant run (whose chunks the full parser
 // merges into one message). Both cases require a full re-parse.
 func needsClaudeFullParse(entries []dagEntry) bool {
+	toolUseIDs := make(map[string]struct{})
 	var prevAssistantMID string
 	for _, e := range entries {
 		if e.entryType == "user" {
 			if gjson.Get(e.line, "toolUseResult.agentId").Str != "" {
 				return true
 			}
+			content := gjson.Get(e.line, "message.content")
+			if content.IsArray() {
+				unmatched := false
+				content.ForEach(func(_, part gjson.Result) bool {
+					if part.Get("type").Str != "tool_result" {
+						return true
+					}
+					toolUseID := part.Get("tool_use_id").Str
+					if toolUseID == "" {
+						return true
+					}
+					if _, ok := toolUseIDs[toolUseID]; !ok {
+						unmatched = true
+						return false
+					}
+					return true
+				})
+				if unmatched {
+					return true
+				}
+			}
 		}
 		if e.entryType == "assistant" {
 			mid := gjson.Get(e.line, "message.id").Str
 			if mid != "" && mid == prevAssistantMID {
 				return true
+			}
+			content := gjson.Get(e.line, "message.content")
+			if content.IsArray() {
+				content.ForEach(func(_, part gjson.Result) bool {
+					if part.Get("type").Str != "tool_use" {
+						return true
+					}
+					if toolUseID := part.Get("id").Str; toolUseID != "" {
+						toolUseIDs[toolUseID] = struct{}{}
+					}
+					return true
+				})
 			}
 			prevAssistantMID = mid
 			continue
@@ -525,13 +600,48 @@ func needsClaudeFullParse(entries []dagEntry) bool {
 	return false
 }
 
+func needsClaudeFullParseForSubagentMap(
+	entries []dagEntry, subagentMap map[string]string,
+) bool {
+	if len(subagentMap) == 0 {
+		return false
+	}
+
+	appendedToolUseIDs := make(map[string]struct{})
+	for _, e := range entries {
+		if e.entryType != "assistant" {
+			continue
+		}
+		content := gjson.Get(e.line, "message.content")
+		if !content.IsArray() {
+			continue
+		}
+		content.ForEach(func(_, part gjson.Result) bool {
+			if part.Get("type").Str != "tool_use" {
+				return true
+			}
+			if toolUseID := part.Get("id").Str; toolUseID != "" {
+				appendedToolUseIDs[toolUseID] = struct{}{}
+			}
+			return true
+		})
+	}
+
+	for toolUseID := range subagentMap {
+		if _, ok := appendedToolUseIDs[toolUseID]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
 // hasDAGFork returns true if the entries contain a fork —
 // i.e. any entry whose parentUuid doesn't point to the
 // immediately preceding entry's uuid. Linear UUID chains
 // (each entry parenting the next) are safe for incremental
 // parsing; forks require full DAG processing.
-func hasDAGFork(entries []dagEntry) bool {
-	var lastUUID string
+func hasDAGFork(entries []dagEntry, lastEntryUUID string) bool {
+	lastUUID := lastEntryUUID
 	for _, e := range entries {
 		if e.uuid == "" {
 			continue // non-UUID entries are always linear

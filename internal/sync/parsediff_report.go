@@ -39,6 +39,21 @@ const (
 	// trashed, import-only agent, database-backed agent, not sampled
 	// (--limit), or not discovered.
 	DiffSkipped DiffClass = "skipped"
+	// DiffRaced: the comparison detected a non-informational change, but
+	// the on-disk source file's mtime advanced past the snapshot's stored
+	// file_mtime, so the file was written after the last sync recorded it.
+	// The "change" is therefore a torn comparison against live content (a
+	// concurrent daemon or active session), not a parser regression, and
+	// is inconclusive. Raced sessions are reported but never counted as a
+	// failure: --fail-on-change must not trip on them. Classification is
+	// deliberately conservative -- when the mtime relationship is
+	// ambiguous (missing stored mtime, unreadable source) a would-be
+	// change is treated as raced rather than risk a false regression --
+	// but a change is only ever reclassified when the file was not
+	// demonstrably untouched. Scope: the guard reclassifies the per-file
+	// compare path only; the presence sweep (a stored ID a clean parse no
+	// longer emits) is a separate signal and is not yet skew-guarded.
+	DiffRaced DiffClass = "raced"
 )
 
 // Compared-field names. Used as FieldDiff.Field values and
@@ -141,6 +156,10 @@ type ParseDiffTotals struct {
 	ExcludedByParser int `json:"excluded_by_parser"`
 	NeedsRetry       int `json:"transient_needs_retry"`
 	Skipped          int `json:"skipped"`
+	// Raced counts sessions whose would-be change was reclassified
+	// because the on-disk source advanced past the snapshot mtime. They
+	// are inconclusive (live-write skew), so HasFailures excludes them.
+	Raced int `json:"raced"`
 	// InformationalOnly counts sessions classified identical whose only
 	// diffs are informational. Included in Identical.
 	InformationalOnly int `json:"informational_only"`
@@ -171,6 +190,9 @@ type ParseDiffReport struct {
 
 // HasFailures reports whether --fail-on-change should exit non-zero:
 // real per-session changes or files the current binary cannot parse.
+// Raced sessions are deliberately excluded -- a change masked by a
+// live-write skew is inconclusive, not a parser regression, so it must
+// not trip the gate.
 func (r *ParseDiffReport) HasFailures() bool {
 	return r.Totals.Changed > 0 || r.Totals.ParseErrors > 0
 }

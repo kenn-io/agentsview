@@ -90,6 +90,41 @@ func TestPushMarkerIDReturnsInsertWinner(t *testing.T) {
 	assert.Equal(t, "winner-marker", stored)
 }
 
+func TestPushMarkerIDUsesUnscopedStateAcrossNamedTargets(t *testing.T) {
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer local.Close()
+
+	workSync := &Sync{
+		local:     local,
+		syncState: newScopedSyncStateStore(local, "work", true),
+	}
+	archiveSync := &Sync{
+		local:     local,
+		syncState: newScopedSyncStateStore(local, "archive", false),
+	}
+
+	workMarker, err := workSync.pushMarkerID()
+	require.NoError(t, err, "work pushMarkerID")
+	archiveMarker, err := archiveSync.pushMarkerID()
+	require.NoError(t, err, "archive pushMarkerID")
+
+	assert.Equal(t, workMarker, archiveMarker)
+
+	stored, err := local.GetSyncState(pushMarkerIDStateKey)
+	require.NoError(t, err, "GetSyncState")
+	assert.Equal(t, workMarker, stored)
+
+	for _, key := range []string{
+		pushMarkerIDStateKey + ":work",
+		pushMarkerIDStateKey + ":archive",
+	} {
+		value, err := local.GetSyncState(key)
+		require.NoError(t, err, "GetSyncState %s", key)
+		assert.Empty(t, value)
+	}
+}
+
 func TestReadPushBoundaryStateValidity(t *testing.T) {
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
@@ -225,6 +260,29 @@ func TestSessionPushFingerprintDiffers(t *testing.T) {
 			name: "automated classification change",
 			modify: func(s db.Session) db.Session {
 				s.IsAutomated = true
+				return s
+			},
+		},
+		{
+			name: "quality signal version change",
+			modify: func(s db.Session) db.Session {
+				s.QualitySignalVersion = db.CurrentQualitySignalVersion
+				return s
+			},
+		},
+		{
+			name: "quality signal count change",
+			modify: func(s db.Session) db.Session {
+				s.QualitySignalVersion = db.CurrentQualitySignalVersion
+				s.DuplicatePromptCount = 1
+				return s
+			},
+		},
+		{
+			name: "quality signal boolean change",
+			modify: func(s db.Session) db.Session {
+				s.QualitySignalVersion = db.CurrentQualitySignalVersion
+				s.UnstructuredStart = true
 				return s
 			},
 		},
@@ -406,6 +464,86 @@ func TestFinalizePushStatePersistsEmptyBoundary(
 	assert.Empty(t, state.Fingerprints)
 }
 
+func TestPushTargetState(t *testing.T) {
+	tests := []struct {
+		name       string
+		lastPush   string
+		boundary   string
+		stored     string
+		current    string
+		wantReset  bool
+		wantReason string
+	}{
+		{
+			name:      "first push has no reset",
+			stored:    "",
+			current:   "v1:new",
+			wantReset: false,
+		},
+		{
+			name:      "missing runtime fingerprint skips reset",
+			lastPush:  "2026-03-11T12:34:56.123Z",
+			stored:    "v1:old",
+			current:   "",
+			wantReset: false,
+		},
+		{
+			name:       "legacy watermark without fingerprint resets",
+			lastPush:   "2026-03-11T12:34:56.123Z",
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "local push state exists without a stored PG target fingerprint",
+		},
+		{
+			name:       "legacy filtered boundary without fingerprint resets",
+			boundary:   `{"cutoff":"2026-03-11T12:34:56.123Z","fingerprints":{"sess-001":"fp"}}`,
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "local push state exists without a stored PG target fingerprint",
+		},
+		{
+			name:       "changed target resets",
+			lastPush:   "2026-03-11T12:34:56.123Z",
+			stored:     "v1:old",
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "PG target fingerprint changed",
+		},
+		{
+			name:      "same target keeps watermark",
+			lastPush:  "2026-03-11T12:34:56.123Z",
+			stored:    "v1:same",
+			current:   "v1:same",
+			wantReset: false,
+		},
+		{
+			name:      "filtered boundary keeps same target state",
+			boundary:  `{"cutoff":"2026-03-11T12:34:56.123Z","fingerprints":{"sess-001":"fp"}}`,
+			stored:    "v1:same",
+			current:   "v1:same",
+			wantReset: false,
+		},
+		{
+			name:       "filtered boundary resets on target change",
+			boundary:   `{"cutoff":"2026-03-11T12:34:56.123Z","fingerprints":{"sess-001":"fp"}}`,
+			stored:     "v1:old",
+			current:    "v1:new",
+			wantReset:  true,
+			wantReason: "PG target fingerprint changed",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotReset, gotReason := pushTargetState(
+				tc.lastPush, tc.boundary, tc.stored, tc.current,
+			)
+			assert.Equal(t, tc.wantReset, gotReset)
+			assert.Equal(t, tc.wantReason, gotReason)
+		})
+	}
+}
+
 func TestFinalizePushStateMergesPriorFingerprints(
 	t *testing.T,
 ) {
@@ -515,4 +653,65 @@ func TestNilStrSanitizes(t *testing.T) {
 	// should return nil.
 	nul := "\x00"
 	assert.Nil(t, nilStr(&nul), "nilStr(\"\\x00\") should be nil")
+}
+
+func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
+	const sessionID = "sess-batched"
+	baseComparisons := &pushMessageComparison{
+		MessageAggregates: map[string]pushMessageAggregate{
+			sessionID: {Count: 2, Sum: 12, Max: 6, Min: 1},
+		},
+		MessageContentHash: map[string]string{
+			sessionID: "abc",
+		},
+		MessageRoleTime: map[string]string{
+			sessionID: "role-time",
+		},
+		MessageFlags: map[string]string{
+			sessionID: "flags",
+		},
+		MessageSystemOrdinals: map[string]string{
+			sessionID: "0,1",
+		},
+		MessageTokenFingerprint: map[string]string{
+			sessionID: "tokens",
+		},
+		ToolCallAggregates: map[string]pushToolCallAggregate{
+			sessionID: {Count: 1, Sum: 99},
+		},
+		ToolCallFingerprint: map[string]string{
+			sessionID: "toolcalls",
+		},
+		UsageEventFingerprint: map[string]string{
+			sessionID: "usage",
+		},
+	}
+	unchangedFP := pushLocalMessageFingerprint{
+		Sum:           12,
+		Max:           6,
+		Min:           1,
+		ContentHashFP: "abc",
+		RoleTimeFP:    "role-time",
+		FlagsFP:       "flags",
+		SystemFP:      "0,1",
+		ToolCallCount: 1,
+		ToolCallSum:   99,
+		ToolCallFP:    "toolcalls",
+		TokenFP:       "tokens",
+		UsageEventFP:  "usage",
+	}
+
+	assert.True(t, shouldSkipSessionMessages(
+		sessionID, 2, unchangedFP, false, baseComparisons,
+	), "unchanged sessions should be skipped as unchanged")
+
+	changedFP := unchangedFP
+	changedFP.ToolCallSum = 100
+	assert.False(t, shouldSkipSessionMessages(
+		sessionID, 2, changedFP, false, baseComparisons,
+	), "tool-call sum mismatch should force push")
+
+	assert.False(t, shouldSkipSessionMessages(
+		sessionID, 2, unchangedFP, true, baseComparisons,
+	), "full mode should not skip by fingerprint check")
 }

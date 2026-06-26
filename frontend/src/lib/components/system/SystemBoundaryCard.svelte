@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { formatTimestamp } from "../../utils/format.js";
 
   interface Props {
@@ -8,13 +9,13 @@
   }
   let { subtype, content, timestamp }: Props = $props();
 
-  const LABELS: Record<string, string> = {
-    continuation: "Session continuation",
-    resume: "Session resume",
-    interrupted: "Request interrupted",
-    task_notification: "Task notification",
-    stop_hook: "Stop hook feedback",
-  };
+  const LABELS: Record<string, string> = $derived({
+    continuation: m.system_boundary_continuation(),
+    resume: m.system_boundary_resume(),
+    interrupted: m.system_boundary_interrupted(),
+    task_notification: m.system_boundary_task_notification(),
+    stop_hook: m.system_boundary_stop_hook(),
+  });
 
   let label = $derived(LABELS[subtype] ?? subtype);
   let preview = $derived.by(() => {
@@ -29,7 +30,7 @@
 
 <div
   class="system-boundary"
-  title="System boundary: {subtype}"
+  title={m.system_boundary_title({ subtype })}
 >
   <span class="label">{label}</span>
   {#if timestamp}
@@ -39,7 +40,7 @@
   {/if}
   {#if preview}
     <details class="details">
-      <summary>Show content</summary>
+      <summary>{m.system_boundary_show_content()}</summary>
       <pre>{content}</pre>
     </details>
   {/if}

@@ -1,9 +1,13 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
+  import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import { hasSessionRouteDateIntent } from "../../stores/sessionRouteParams.js";
   import { starred } from "../../stores/starred.svelte.js";
   import {
     agentColor,
+    agentForeground,
     agentLabel,
   } from "../../utils/agents.js";
   import type { GroupMode } from "../sidebar/session-list-utils.js";
@@ -111,11 +115,15 @@
   function clearFilters() {
     onClearGroupMode?.();
     onClearExtra?.();
+    const clearDateYoke = hasSessionRouteDateIntent(
+      router.route,
+      router.params,
+    );
     if (sessions.hasActiveFilters && starred.filterOnly) {
       if (showStarred) starred.filterOnly = false;
-      sessions.clearSessionFilters();
+      sessions.clearSessionFilters({ clearDateYoke });
     } else if (sessions.hasActiveFilters) {
-      sessions.clearSessionFilters();
+      sessions.clearSessionFilters({ clearDateYoke });
     } else if (showStarred && starred.filterOnly) {
       starred.filterOnly = false;
       sessions.load();
@@ -132,8 +140,8 @@
   class="filter-btn"
   bind:this={filterBtnRef}
   onclick={() => (open = !open)}
-  title="Filter sessions"
-  aria-label="Filters"
+  title={m.sidebar_filters_filter_sessions()}
+  aria-label={m.sidebar_filters_filters()}
   aria-expanded={open}
 >
   <FunnelIcon size="14" strokeWidth="2" aria-hidden="true" />
@@ -150,7 +158,7 @@
   >
     {#if showDisplay}
       <div class="filter-section">
-        <div class="filter-section-label">Display</div>
+        <div class="filter-section-label">{m.sidebar_filters_display()}</div>
         <button
           class="filter-toggle"
           class:active={groupMode === "agent"}
@@ -160,7 +168,7 @@
             class="toggle-check"
             class:on={groupMode === "agent"}
           ></span>
-          Group by agent
+          {m.sidebar_filters_group_by_agent()}
         </button>
         <button
           class="filter-toggle"
@@ -171,13 +179,13 @@
             class="toggle-check"
             class:on={groupMode === "project"}
           ></span>
-          Group by project
+          {m.sidebar_filters_group_by_project()}
         </button>
       </div>
     {/if}
     {#if showStarred}
       <div class="filter-section">
-        <div class="filter-section-label">Starred</div>
+        <div class="filter-section-label">{m.sidebar_filters_starred()}</div>
         <button
           class="filter-toggle"
           class:active={starred.filterOnly}
@@ -187,7 +195,7 @@
             class="toggle-check"
             class:on={starred.filterOnly}
           ></span>
-          Starred only
+          {m.sidebar_filters_starred_only()}
           {#if starred.count > 0}
             <span class="starred-count">{starred.count}</span>
           {/if}
@@ -195,7 +203,7 @@
       </div>
     {/if}
     <div class="filter-section">
-      <div class="filter-section-label">Activity</div>
+      <div class="filter-section-label">{m.sidebar_filters_activity()}</div>
       <button
         class="filter-toggle"
         class:active={isRecentlyActiveOn}
@@ -208,12 +216,12 @@
           class="toggle-check"
           class:on={isRecentlyActiveOn}
         ></span>
-        Recently Active
+        {m.sidebar_filters_recently_active()}
       </button>
     </div>
     <div class="filter-section">
       <div class="filter-section-label">
-        Session Type
+        {m.sidebar_filters_session_type()}
       </div>
       <button
         class="filter-toggle"
@@ -227,7 +235,7 @@
           class="toggle-check"
           class:on={isHideSingleTurnOn}
         ></span>
-        Hide single-turn
+        {m.sidebar_filters_hide_single_turn()}
       </button>
       <button
         class="filter-toggle"
@@ -241,11 +249,11 @@
           class="toggle-check"
           class:on={isIncludeAutomatedOn}
         ></span>
-        Include automated sessions
+        {m.sidebar_filters_include_automated()}
       </button>
     </div>
     <div class="filter-section">
-      <div class="filter-section-label">Project</div>
+      <div class="filter-section-label">{m.sidebar_filters_project()}</div>
       <button
         class="filter-toggle"
         class:active={isHideUnknownOn}
@@ -258,16 +266,16 @@
           class="toggle-check"
           class:on={isHideUnknownOn}
         ></span>
-        Hide unknown
+        {m.sidebar_filters_hide_unknown()}
       </button>
     </div>
     <div class="filter-section">
-      <div class="filter-section-label">Agent</div>
+      <div class="filter-section-label">{m.sidebar_filters_agent()}</div>
       {#if sessions.agents.length > 5}
         <input
           class="agent-search"
           type="text"
-          placeholder="Search agents..."
+          placeholder={m.sidebar_filters_search_agents()}
           bind:value={agentSearch}
         />
       {/if}
@@ -276,6 +284,7 @@
           class="agent-select-row"
           class:selected={!sessions.filters.agent}
           style:--agent-color={"var(--accent-blue)"}
+          style:--agent-foreground={"var(--accent-blue-foreground)"}
           onclick={() => sessions.setAgentFilter("")}
         >
           <span
@@ -286,7 +295,7 @@
               <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
             {/if}
           </span>
-          <span class="agent-select-name">All agents</span>
+          <span class="agent-select-name">{m.sidebar_filters_all_agents()}</span>
         </button>
         {#each sortedAgents as agent (agent.name)}
           {@const selected =
@@ -295,6 +304,7 @@
             class="agent-select-row"
             class:selected
             style:--agent-color={agentColor(agent.name)}
+            style:--agent-foreground={agentForeground(agent.name)}
             onclick={() =>
               sessions.toggleAgentFilter(agent.name)}
           >
@@ -319,19 +329,19 @@
           </button>
         {:else}
           <span class="agent-select-empty">
-            {agentSearch ? "No match" : "No agents"}
+            {agentSearch ? m.sidebar_filters_no_match() : m.sidebar_filters_no_agents()}
           </span>
         {/each}
       </div>
     </div>
     {#if sessions.machines.length > 0}
       <div class="filter-section">
-        <div class="filter-section-label">Machine</div>
+        <div class="filter-section-label">{m.sidebar_filters_machine()}</div>
         {#if sessions.machines.length > 5}
           <input
             class="agent-search"
             type="text"
-            placeholder="Search machines..."
+            placeholder={m.sidebar_filters_search_machines()}
             bind:value={machineSearch}
           />
         {/if}
@@ -343,6 +353,7 @@
               class="agent-select-row"
               class:selected
               style:--agent-color={"var(--accent-blue)"}
+              style:--agent-foreground={"var(--accent-blue-foreground)"}
               onclick={() =>
                 sessions.toggleMachineFilter(machine)}
             >
@@ -360,14 +371,14 @@
             </button>
           {:else}
             <span class="agent-select-empty">
-              {machineSearch ? "No match" : "No machines"}
+              {machineSearch ? m.sidebar_filters_no_match() : m.sidebar_filters_no_machines()}
             </span>
           {/each}
         </div>
       </div>
     {/if}
     <div class="filter-section">
-      <div class="filter-section-label">Min Prompts</div>
+      <div class="filter-section-label">{m.sidebar_filters_min_prompts()}</div>
       <div class="pill-buttons">
         {#each [2, 3, 5, 10] as n}
           <button
@@ -389,7 +400,7 @@
         class="clear-filters-btn"
         onclick={clearFilters}
       >
-        Clear filters
+        {m.sidebar_filters_clear_filters()}
       </button>
     {/if}
   </div>
@@ -585,7 +596,7 @@
     border: 1.5px solid var(--border-default);
     flex-shrink: 0;
     transition: background 0.1s, border-color 0.1s;
-    color: white;
+    color: var(--agent-foreground, var(--accent-blue-foreground));
     display: flex;
     align-items: center;
     justify-content: center;
@@ -594,6 +605,7 @@
   .agent-check.on {
     background: var(--agent-color, var(--accent-blue));
     border-color: var(--agent-color, var(--accent-blue));
+    color: var(--agent-foreground, var(--accent-blue-foreground));
   }
 
   .agent-dot-mini {

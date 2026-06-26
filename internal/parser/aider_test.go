@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -560,16 +561,16 @@ func TestListAiderRunMetas(t *testing.T) {
 	assert.False(t, metas[2].HasMessages, "header-only run produces no session")
 }
 
-// TestAiderRegistryUsesShallowWatch pins the watcher fix: aider's
-// DefaultDirs [""] resolves to $HOME, so a recursive live watch there
-// would inotify-register the entire home tree (the watcher walk ignores
-// the discovery skip-set and depth cap). ShallowWatch must stay true so
-// the watcher registers only the root and relies on the periodic sync.
-func TestAiderRegistryUsesShallowWatch(t *testing.T) {
+// TestAiderRegistryOptInDiscovery pins that Aider is not discovered by
+// default. Aider has no central store; a rootless home scan can trigger macOS
+// privacy prompts and is not trustworthy for always-on sync. Users must
+// opt in with AIDER_DIR or aider_dirs.
+func TestAiderRegistryOptInDiscovery(t *testing.T) {
 	def, ok := AgentByType(AgentAider)
 	require.True(t, ok, "AgentAider missing from Registry")
+	assert.Empty(t, def.DefaultDirs)
 	assert.True(t, def.ShallowWatch,
-		"aider must watch the home root shallowly, not recurse all of $HOME")
+		"aider must not recursively watch a broad opt-in root")
 	// The shallow-watch contract relies on no static subdir or custom
 	// watch-roots wiring overriding it.
 	assert.Empty(t, def.WatchSubdirs)
@@ -603,6 +604,88 @@ func TestDiscoverAiderSessions(t *testing.T) {
 
 	// Empty root is tolerated.
 	assert.Empty(t, DiscoverAiderSessions(""))
+}
+
+func TestAiderShouldSkipProtectedHomeDirsOnlyOnDarwinHomeRoot(t *testing.T) {
+	home := filepath.Join(string(os.PathSeparator), "home", "user")
+
+	assert.True(t, aiderShouldSkipProtectedHomeDirs(home, home, "darwin"))
+	assert.False(t, aiderShouldSkipProtectedHomeDirs(home, home, "linux"))
+	assert.False(t, aiderShouldSkipProtectedHomeDirs(home, home, "windows"))
+	assert.False(t,
+		aiderShouldSkipProtectedHomeDirs(filepath.Join(home, "Documents"), home, "darwin"),
+		"explicit protected roots are user-scoped opt-ins")
+}
+
+func TestAiderProtectedHomeDirsCoversMacOSTCCPrompts(t *testing.T) {
+	for _, name := range []string{
+		"Desktop",
+		"Documents",
+		"Downloads",
+		"Movies",
+		"Music",
+		"Photos",
+		"Pictures",
+	} {
+		_, ok := aiderProtectedHomeDirs[name]
+		assert.True(t, ok, "%s should be pruned from broad home discovery", name)
+	}
+}
+
+func TestAiderBroadHomeWalkRootsExcludeMacOSProtectedDirs(t *testing.T) {
+	home := t.TempDir()
+	for _, name := range []string{"Code", "Documents", "Downloads"} {
+		require.NoError(t, os.Mkdir(filepath.Join(home, name), 0o755))
+	}
+
+	roots := aiderDiscoveryWalkRoots(home, home, "darwin")
+
+	assert.Contains(t, roots, filepath.Join(home, "Code"))
+	assert.NotContains(t, roots, home,
+		"broad Aider home discovery must not recursively walk $HOME on macOS")
+	assert.NotContains(t, roots, filepath.Join(home, "Documents"))
+	assert.NotContains(t, roots, filepath.Join(home, "Downloads"))
+}
+
+func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS TCC protected-directory pruning is Darwin-only")
+	}
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	for _, name := range []string{
+		"Desktop",
+		"Documents",
+		"Downloads",
+		"Movies",
+		"Music",
+		"Photos",
+		"Pictures",
+	} {
+		protectedRepo := filepath.Join(root, name, "proj")
+		require.NoError(t, os.MkdirAll(protectedRepo, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(protectedRepo, ".aider.chat.history.md"),
+			[]byte("# aider chat started at 2026-06-09 14:01:00\n"), 0o644))
+	}
+
+	files := DiscoverAiderSessions(root)
+	assert.Empty(t, files, "broad home discovery must not enter macOS TCC-protected folders")
+}
+
+func TestDiscoverAiderSessionsAllowsExplicitProtectedRoot(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	documentsRoot := filepath.Join(home, "Documents")
+	repo := filepath.Join(documentsRoot, "proj")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, ".aider.chat.history.md"),
+		[]byte("# aider chat started at 2026-06-09 14:01:00\n"), 0o644))
+
+	files := DiscoverAiderSessions(documentsRoot)
+	require.Len(t, files, 1, "explicit Aider roots should still be scanned")
+	assert.Equal(t, filepath.Join(repo, ".aider.chat.history.md"), files[0].Path)
 }
 
 // TestAiderWalkBudget documents the wall-clock budget (MUST-FIX 3,

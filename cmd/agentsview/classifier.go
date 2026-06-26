@@ -39,14 +39,16 @@ func newClassifierCommand() *cobra.Command {
 }
 
 func newClassifierRebuildCommand() *cobra.Command {
-	return &cobra.Command{
+	var includePG bool
+	cmd := &cobra.Command{
 		Use:   "rebuild",
 		Short: "Force is_automated re-backfill on next open",
 		Long: "Clears the stored classifier hash so the next " +
 			"db.Open runs a full is_automated backfill. " +
 			"Use after editing [automated] prefixes in " +
 			"config.toml or after a downgrade-then-upgrade " +
-			"cycle that left flags stale.",
+			"cycle that left flags stale. Pass --pg to also " +
+			"clear the configured PostgreSQL sync store.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -63,10 +65,15 @@ func newClassifierRebuildCommand() *cobra.Command {
 				return err
 			}
 			return runClassifierRebuild(
-				cmd.Context(), cfg, cmd.OutOrStdout(),
+				cmd.Context(), cfg, cmd.OutOrStdout(), includePG,
 			)
 		},
 	}
+	cmd.Flags().BoolVar(
+		&includePG, "pg", false,
+		"also clear the configured PostgreSQL sync store",
+	)
+	return cmd
 }
 
 // guardClassifierRebuild rejects when the SQLite write lock
@@ -81,21 +88,24 @@ func guardClassifierRebuild(tr transport) error {
 		)
 	}
 	if tr.Mode == transportDirect && tr.DirectReadOnly {
+		reason := tr.DirectReason
+		if reason == "" {
+			reason = "local daemon owns the SQLite archive but is not responding"
+		}
 		return errors.New(
-			"local daemon owns the SQLite archive but is not responding; " +
-				"refusing to rebuild to avoid competing for write ownership; " +
+			reason + "; refusing to rebuild to avoid competing for write ownership; " +
 				"stop the daemon first",
 		)
 	}
 	return nil
 }
 
-// runClassifierRebuild prints the loaded user-prefix list,
-// deletes the classifier hash from SQLite stats, and (if PG
-// is configured) deletes it from PG sync_metadata. Returns
-// an error on PG delete failure when PG is configured.
+// runClassifierRebuild prints the loaded user-prefix list, deletes the
+// classifier hash from SQLite stats, and optionally deletes it from PG
+// sync_metadata. Returns an error on PG delete failure when PG cleanup is
+// explicitly requested.
 func runClassifierRebuild(
-	ctx context.Context, cfg config.Config, out io.Writer,
+	ctx context.Context, cfg config.Config, out io.Writer, includePG bool,
 ) error {
 	prefixes := db.UserAutomationPrefixes()
 	fmt.Fprintf(out,
@@ -106,15 +116,30 @@ func runClassifierRebuild(
 		fmt.Fprintf(out, "  - %s\n", p)
 	}
 
+	if err := rejectLiveWritableDaemonBeforeDirectWrite(cfg); err != nil {
+		return fmt.Errorf("checking SQLite write ownership: %w", err)
+	}
+
+	writeLock, err := acquireWriteOwnerLock(ctx, writeLockDataDir(cfg))
+	if err != nil {
+		return fmt.Errorf("acquiring SQLite write-owner lock: %w", err)
+	}
+	defer func() { _ = writeLock.Close() }()
+
 	if err := clearSQLiteClassifierHash(cfg.DBPath); err != nil {
 		return fmt.Errorf("clearing SQLite hash: %w", err)
 	}
 
-	pgCfg, err := cfg.ResolvePG()
-	if err != nil {
-		return fmt.Errorf("resolving pg config: %w", err)
-	}
-	if pgCfg.URL != "" {
+	if includePG {
+		pgCfg, err := cfg.ResolvePG()
+		if err != nil {
+			return fmt.Errorf("resolving pg config: %w", err)
+		}
+		if pgCfg.URL == "" {
+			return errors.New(
+				"pg url not configured; set AGENTSVIEW_PG_URL, use a legacy [pg].url, or configure default_pg with named [pg.NAME] targets",
+			)
+		}
 		if err := clearPGClassifierHash(ctx, cfg, pgCfg); err != nil {
 			return fmt.Errorf(
 				"clearing PG hash: %w (SQLite was cleared "+

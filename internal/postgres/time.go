@@ -99,6 +99,7 @@ func PreviousLocalSyncTimestamp(
 type SyncStateStore interface {
 	GetSyncState(key string) (string, error)
 	SetSyncState(key, value string) error
+	GetOrCreateSyncState(key, defaultValue string) (string, error)
 }
 
 // NormalizeLocalSyncStateTimestamps normalizes the last_push_at

@@ -1,0 +1,74 @@
+[
+  {
+    "name": "prompt quality penalties explain score delta",
+    "input": {
+      "Outcome": "completed",
+      "OutcomeConfidence": "high",
+      "Heuristics": {
+        "ShortPromptCount": 1,
+        "UnstructuredStart": true,
+        "MissingSuccessCriteriaCount": 1,
+        "MissingVerificationCount": 1,
+        "NoCodeContextCount": 1
+      }
+    },
+    "want_baseline_score": 100,
+    "want_score": 94,
+    "want_delta": -6,
+    "want_grade": "A",
+    "want_basis": [
+      "outcome",
+      "prompt_quality",
+      "context_quality"
+    ],
+    "want_penalties": {
+      "constraintless_first_prompt": 1,
+      "missing_success_criteria": 1,
+      "code_task_without_context": 4
+    }
+  },
+  {
+    "name": "repeated prompts cap low confidence score delta",
+    "input": {
+      "Outcome": "unknown",
+      "OutcomeConfidence": "low",
+      "Heuristics": {
+        "DuplicatePromptCount": 8
+      }
+    },
+    "want_baseline_score": null,
+    "want_score": 100,
+    "want_delta": null,
+    "want_grade": "A",
+    "want_basis": [
+      "outcome",
+      "prompt_quality"
+    ],
+    "want_penalties": null
+  },
+  {
+    "name": "workflow loop penalty adds workflow basis",
+    "input": {
+      "Outcome": "completed",
+      "OutcomeConfidence": "high",
+      "HasToolCalls": true,
+      "RetryCount": 2,
+      "Heuristics": {
+        "RunawayToolLoopCount": 4
+      }
+    },
+    "want_baseline_score": 90,
+    "want_score": 85,
+    "want_delta": -5,
+    "want_grade": "B",
+    "want_basis": [
+      "outcome",
+      "tool_health",
+      "workflow_quality"
+    ],
+    "want_penalties": {
+      "tool_retries": 10,
+      "repeated_failing_tool_cycles": 5
+    }
+  }
+]

@@ -73,7 +73,9 @@ type GenerateStreamFunc func(
 
 // AgentConfig holds insight generation overrides for one agent.
 type AgentConfig struct {
-	Binary string
+	Binary      string
+	Sandbox     string
+	AllowUnsafe bool
 }
 
 // GenerateOptions holds optional insight generation overrides.
@@ -125,7 +127,9 @@ func GenerateStreamWithOptions(
 	case "copilot":
 		return generateCopilot(ctx, path, prompt, onLog)
 	case "gemini":
-		return generateGemini(ctx, path, prompt, onLog)
+		return generateGemini(
+			ctx, path, prompt, onLog, opts.Agents[agent],
+		)
 	case "kiro":
 		return generateKiro(ctx, path, prompt, onLog)
 	default:
@@ -571,14 +575,22 @@ func generateCopilot(
 // and parses the JSONL stream for result/assistant messages.
 func generateGemini(
 	ctx context.Context, path, prompt string, onLog LogFunc,
+	cfg AgentConfig,
 ) (Result, error) {
+	if strings.TrimSpace(cfg.Sandbox) == "" && !cfg.AllowUnsafe {
+		return Result{}, fmt.Errorf(
+			"gemini insights require an explicit sandbox or unsafe opt-in; set [agent.gemini].sandbox to a Gemini sandbox provider or [agent.gemini].allow_unsafe = true",
+		)
+	}
 	cmd := exec.CommandContext(
 		ctx, path,
 		"--model", geminiInsightModel,
 		"--output-format", "stream-json",
-		"--sandbox",
 	)
 	cmd.Env = agentEnv()
+	if sandbox := strings.TrimSpace(cfg.Sandbox); sandbox != "" {
+		cmd.Env = append(cmd.Env, "GEMINI_SANDBOX="+sandbox)
+	}
 	cmd.Stdin = strings.NewReader(prompt)
 
 	stdoutPipe, err := cmd.StdoutPipe()

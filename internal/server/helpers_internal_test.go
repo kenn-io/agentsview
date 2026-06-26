@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -115,6 +116,36 @@ func newTestRequest(
 	}
 	return httptest.NewRecorder(),
 		httptest.NewRequest(http.MethodGet, target, nil)
+}
+
+// newRoutedTestServerWithStore creates a lightweight Server
+// backed by the given Store with routes registered. Use this for
+// internal handler tests that drive requests through s.mux
+// without a real database or sync engine.
+func newRoutedTestServerWithStore(
+	t *testing.T, store db.Store,
+) *Server {
+	t.Helper()
+	s := &Server{
+		cfg:      config.Config{Host: "127.0.0.1"},
+		db:       store,
+		sessions: service.NewReadOnlyBackend(store),
+		mux:      http.NewServeMux(),
+	}
+	s.routes()
+	return s
+}
+
+// serveGet issues a GET request for path through the server's
+// mux and returns the recorder.
+func serveGet(
+	t *testing.T, s *Server, path string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	w := httptest.NewRecorder()
+	s.mux.ServeHTTP(w, req)
+	return w
 }
 
 // assertRecorderStatus checks that the recorder has the

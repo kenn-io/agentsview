@@ -50,3 +50,58 @@ func TestActivityRangeSummaryUsesRequestTimezone(t *testing.T) {
 	assert.Equal(t, 0, utc.Sessions,
 		"UTC June-15 window ends at June 16 00:00Z, before the instant")
 }
+
+// TestActivityRangeSummaryAppliesAutomatedScope confirms the insight activity
+// summary honors the request's automated scope rather than always excluding
+// automated sessions, so an automated_scope=all request attaches a summary that
+// covers the same sessions BuildPrompt's list does. Before the fix the summary
+// hard-coded ExcludeAutomated, so "all" and "automated" requests undercounted.
+func TestActivityRangeSummaryAppliesAutomatedScope(t *testing.T) {
+	srv := testServer(t, 0)
+	ctx := context.Background()
+	ts := "2026-06-15T12:00:00Z"
+
+	// Interactive session: multi-turn, ordinary prompt.
+	require.NoError(t, srv.db.UpsertSession(db.Session{
+		ID: "human", Project: "proj", Machine: "test", Agent: "claude",
+		StartedAt: &ts, EndedAt: &ts, MessageCount: 4, UserMessageCount: 2,
+		RelationshipType: "root", DataVersion: 1,
+	}))
+	require.NoError(t, srv.db.ReplaceSessionMessages("human", []db.Message{{
+		SessionID: "human", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp: ts, Model: "m1",
+	}}))
+
+	// Automated session: a single-turn review prompt sets is_automated.
+	reviewPrompt := "You are a code reviewer. Review the code."
+	require.NoError(t, srv.db.UpsertSession(db.Session{
+		ID: "auto", Project: "proj", Machine: "test", Agent: "claude",
+		StartedAt: &ts, EndedAt: &ts, MessageCount: 3, UserMessageCount: 1,
+		FirstMessage: &reviewPrompt, RelationshipType: "root", DataVersion: 1,
+	}))
+	require.NoError(t, srv.db.ReplaceSessionMessages("auto", []db.Message{{
+		SessionID: "auto", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp: ts, Model: "m1",
+	}}))
+
+	base := generateInsightRequest{
+		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-15",
+		Timezone: "UTC",
+	}
+
+	human := base
+	human.AutomatedScope = "human"
+	humanSummary, err := srv.activityRangeSummary(ctx, human)
+	require.NoError(t, err)
+	require.NotNil(t, humanSummary)
+	assert.Equal(t, 1, humanSummary.Sessions,
+		"human scope counts only the interactive session")
+
+	all := base
+	all.AutomatedScope = "all"
+	allSummary, err := srv.activityRangeSummary(ctx, all)
+	require.NoError(t, err)
+	require.NotNil(t, allSummary)
+	assert.Equal(t, 2, allSummary.Sessions,
+		"all scope counts interactive and automated sessions")
+}

@@ -276,6 +276,49 @@ func parseGeminiMessage(
 	}, true
 }
 
+func applyGeminiCumulativeDeltas(messages []ParsedMessage) {
+	var prevInput, prevCached int
+	for i := range messages {
+		if !messages[i].HasContextTokens {
+			continue
+		}
+
+		var usage struct {
+			Input  int `json:"input_tokens"`
+			Output int `json:"output_tokens"`
+			Cached int `json:"cache_read_input_tokens"`
+		}
+		if messages[i].TokenUsage != nil {
+			_ = json.Unmarshal(messages[i].TokenUsage, &usage)
+		}
+
+		inputDelta := usage.Input - prevInput
+		cachedDelta := usage.Cached - prevCached
+		if inputDelta < 0 {
+			inputDelta = usage.Input
+		}
+		if cachedDelta < 0 {
+			cachedDelta = usage.Cached
+		}
+
+		messages[i].ContextTokens = inputDelta + cachedDelta
+
+		if messages[i].TokenUsage != nil {
+			payload := map[string]int{
+				"input_tokens":            inputDelta,
+				"output_tokens":           usage.Output,
+				"cache_read_input_tokens": cachedDelta,
+			}
+			if raw, err := json.Marshal(payload); err == nil {
+				messages[i].TokenUsage = raw
+			}
+		}
+
+		prevInput = usage.Input
+		prevCached = usage.Cached
+	}
+}
+
 func buildGeminiSession(
 	path, project, machine string,
 	info os.FileInfo,
@@ -284,6 +327,7 @@ func buildGeminiSession(
 	firstMessage string,
 	messages []ParsedMessage,
 ) *ParsedSession {
+	applyGeminiCumulativeDeltas(messages)
 	var userCount int
 	for _, m := range messages {
 		if m.Role == RoleUser && m.Content != "" {

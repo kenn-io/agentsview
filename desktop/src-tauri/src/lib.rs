@@ -23,11 +23,15 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_updater::UpdaterExt;
 
 const HOST: &str = "127.0.0.1";
-const PREFERRED_PORT: u16 = 8080;
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
+const STATUS_POLL_MAX_INTERVAL: Duration = Duration::from_secs(1);
+const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
+const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
 const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -48,6 +52,7 @@ struct SidecarState {
     terminated_generation: Mutex<u64>,
     termination: Condvar,
     next_generation: AtomicU64,
+    background_status_poll_generation: AtomicU64,
 }
 
 struct SidecarProcess {
@@ -83,9 +88,39 @@ pub fn run() {
         .plugin(init_navigation_guard_plugin())
         .manage(SidecarState::default())
         .setup(|app| {
-            launch_backend(app)?;
             setup_menu(app)?;
-            schedule_auto_update_check(app.handle().clone());
+            match tauri::async_runtime::block_on(run_data_version_preflight(app.handle())) {
+                Ok(()) => {
+                    launch_backend(app)?;
+                    schedule_auto_update_check(app.handle().clone());
+                }
+                Err(DataVersionPreflightError::TooNew(message)) => {
+                    eprintln!("[agentsview] data version preflight rejected archive: {message}");
+                    let window = main_window(app)?;
+                    spawn_preflight_error_render(
+                        window,
+                        "AgentsView needs an update",
+                        too_new_archive_status_message(message.as_str()).as_str(),
+                        too_new_archive_footer_message(),
+                    );
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        check_for_updates(&handle, false).await;
+                    });
+                }
+                Err(DataVersionPreflightError::Failed(message)) => {
+                    let window = main_window(app)?;
+                    spawn_preflight_error_render(
+                        window,
+                        "AgentsView could not verify the archive",
+                        format!(
+                            "Database compatibility check failed: {message}. The backend was not started."
+                        )
+                        .as_str(),
+                        "Close and reopen AgentsView after fixing the issue.",
+                    );
+                }
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -103,9 +138,6 @@ pub fn run() {
                         check_for_updates(&handle, false).await;
                     });
                 }
-            }
-            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
-                stop_backend(app_handle);
             }
         });
 }
@@ -147,23 +179,115 @@ fn launch_backend_from_handle(handle: &AppHandle) -> Result<(), DynError> {
 }
 
 fn spawn_sidecar(app: &AppHandle) -> Result<(CommandRx, CommandChild), DynError> {
-    let port_arg = PREFERRED_PORT.to_string();
+    spawn_sidecar_with_args(app, sidecar_args())
+}
+
+fn spawn_sidecar_with_args(
+    app: &AppHandle,
+    args: Vec<String>,
+) -> Result<(CommandRx, CommandChild), DynError> {
     let mut command = app.shell().sidecar("agentsview")?;
     for (key, value) in sidecar_env() {
         command = command.env(key, value);
     }
 
-    Ok(command.args(sidecar_args(port_arg.as_str())).spawn()?)
+    Ok(command.args(args).spawn()?)
 }
 
-fn sidecar_args(port: &str) -> Vec<String> {
+fn sidecar_args() -> Vec<String> {
     vec![
         "serve".to_string(),
+        "--background".to_string(),
         "--host".to_string(),
         HOST.to_string(),
-        "--port".to_string(),
-        port.to_string(),
     ]
+}
+
+fn sidecar_stop_args() -> Vec<String> {
+    vec!["serve".to_string(), "stop".to_string()]
+}
+
+fn sidecar_status_args() -> Vec<String> {
+    vec!["serve".to_string(), "status".to_string()]
+}
+
+fn data_version_preflight_args() -> Vec<String> {
+    vec!["serve".to_string(), "--check-data-version".to_string()]
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum DataVersionPreflightError {
+    TooNew(String),
+    Failed(String),
+}
+
+async fn run_data_version_preflight(app: &AppHandle) -> Result<(), DataVersionPreflightError> {
+    let mut command = app
+        .shell()
+        .sidecar("agentsview")
+        .map_err(|err| DataVersionPreflightError::Failed(err.to_string()))?;
+    for (key, value) in sidecar_env() {
+        command = command.env(key, value);
+    }
+
+    let (mut rx, _child) = command
+        .args(data_version_preflight_args())
+        .spawn()
+        .map_err(|err| DataVersionPreflightError::Failed(err.to_string()))?;
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            CommandEvent::Stdout(bytes) => {
+                stdout.push_str(String::from_utf8_lossy(&bytes).as_ref());
+            }
+            CommandEvent::Stderr(bytes) => {
+                stderr.push_str(String::from_utf8_lossy(&bytes).as_ref());
+            }
+            CommandEvent::Terminated(payload) => {
+                return classify_data_version_preflight_exit(payload.code, &stdout, &stderr);
+            }
+            CommandEvent::Error(err) => {
+                stderr.push_str(err.as_str());
+                stderr.push('\n');
+            }
+            _ => {}
+        }
+    }
+
+    Err(DataVersionPreflightError::Failed(
+        "data version preflight ended without an exit status".to_string(),
+    ))
+}
+
+fn classify_data_version_preflight_exit(
+    code: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> Result<(), DataVersionPreflightError> {
+    if code == Some(0) {
+        return Ok(());
+    }
+
+    let message = combined_preflight_output(stdout, stderr)
+        .unwrap_or_else(|| format!("data version preflight exited with code {code:?}"));
+    if code == Some(DATA_VERSION_TOO_NEW_EXIT_CODE) {
+        return Err(DataVersionPreflightError::TooNew(message));
+    }
+    Err(DataVersionPreflightError::Failed(message))
+}
+
+fn combined_preflight_output(stdout: &str, stderr: &str) -> Option<String> {
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        return Some(stderr.to_string());
+    }
+    let stdout = stdout.trim();
+    if !stdout.is_empty() {
+        return Some(stdout.to_string());
+    }
+    None
 }
 
 fn init_navigation_guard_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
@@ -600,6 +724,14 @@ fn handle_sidecar_terminated(
     !startup_handled.swap(true, Ordering::SeqCst)
 }
 
+fn handle_launcher_terminated_after_startup(state: &SidecarState, generation: u64) {
+    let _ = mark_sidecar_inactive_if_current(state, generation);
+    clear_sidecar_child_if_current(state, generation);
+    clear_stopping_generation_if_current(state, generation);
+    clear_restart_after_stop_timeout_if_current(state, generation);
+    record_sidecar_terminated(state, generation);
+}
+
 fn mark_sidecar_inactive_if_current(state: &SidecarState, generation: u64) -> bool {
     let Ok(mut guard) = state.active_generation.lock() else {
         return false;
@@ -812,6 +944,20 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     );
                     let handle = window.app_handle().clone();
                     let state = handle.state::<SidecarState>();
+                    if startup_handled.load(Ordering::SeqCst) {
+                        handle_launcher_terminated_after_startup(&state, generation);
+                        break;
+                    }
+                    if payload.code == Some(0) {
+                        startup_handled.store(true, Ordering::SeqCst);
+                        handle_launcher_terminated_after_startup(&state, generation);
+                        let _ = window.eval(
+                            "window.__setStatus(\
+                             'Waiting for background daemon to become ready...');",
+                        );
+                        poll_background_status_after_launcher_exit(window.clone(), generation);
+                        break;
+                    }
                     if handle_sidecar_terminated(&state, startup_handled.as_ref(), generation) {
                         let _ = window.eval(
                             "window.__setStatus(\
@@ -843,6 +989,62 @@ fn main_window_from_handle(handle: &AppHandle) -> Result<WebviewWindow, DynError
     handle
         .get_webview_window("main")
         .ok_or_else(|| io::Error::other("missing main window").into())
+}
+
+fn spawn_preflight_error_render(window: WebviewWindow, title: &str, message: &str, footer: &str) {
+    let title = title.to_string();
+    let message = message.to_string();
+    let footer = footer.to_string();
+    thread::spawn(move || {
+        let script = preflight_error_script(title.as_str(), message.as_str(), footer.as_str());
+        let deadline = Instant::now() + READY_TIMEOUT;
+        while Instant::now() < deadline {
+            if window.eval(script.as_str()).is_ok() {
+                return;
+            }
+            thread::sleep(READY_POLL_INTERVAL);
+        }
+        eprintln!("[agentsview] timed out waiting to render data-version preflight error");
+    });
+}
+
+fn preflight_error_script(title: &str, message: &str, footer: &str) -> String {
+    let title = js_string_literal(title);
+    let message = js_string_literal(message);
+    let footer = js_string_literal(footer);
+    let retry_ms = READY_POLL_INTERVAL.as_millis();
+    format!(
+        "(function renderPreflightError() {{\
+            var h = document.querySelector('h1');\
+            var status = document.getElementById('status');\
+            if (!h || !status) {{\
+                window.setTimeout(renderPreflightError, {retry_ms});\
+                return;\
+            }}\
+            if (h) h.textContent = {title};\
+            if (status) status.textContent = {message};\
+            var meter = document.querySelector('.meter');\
+            if (meter) meter.style.display = 'none';\
+            var stages = document.querySelector('.stage-list');\
+            if (stages) stages.style.display = 'none';\
+            var foot = document.querySelector('.foot');\
+            if (foot) foot.textContent = {footer};\
+        }})()"
+    )
+}
+
+fn too_new_archive_status_message(_detail: &str) -> String {
+    "This session archive was updated by a newer version of AgentsView. \
+     Update the app before opening it so your data is not read or synced by an older version."
+        .to_string()
+}
+
+fn too_new_archive_footer_message() -> &'static str {
+    "AgentsView is checking for updates now. If no update appears, use Check for Updates from the AgentsView menu or install the latest release manually."
+}
+
+fn js_string_literal(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 fn desktop_redirect_url(port: u16) -> String {
@@ -920,6 +1122,104 @@ fn redirect_when_ready(window: WebviewWindow, port: u16) {
              'AgentsView backend did not start within 30 seconds.';",
         );
     });
+}
+
+fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation: u64) {
+    let handle = window.app_handle().clone();
+    handle
+        .state::<SidecarState>()
+        .background_status_poll_generation
+        .store(generation, Ordering::SeqCst);
+    tauri::async_runtime::spawn(async move {
+        let deadline = Instant::now() + DAEMON_STARTUP_TIMEOUT;
+        let mut failed_status_probes = 0;
+        while Instant::now() < deadline {
+            if !background_status_poll_is_current(&handle, generation) {
+                return;
+            }
+            if let Some(port) = probe_backend_status(&handle).await {
+                if !background_status_poll_is_current(&handle, generation) {
+                    return;
+                }
+                save_sidecar_port(&handle, port);
+                let _ = window.eval(
+                    "window.__setStage(2); \
+                     window.__setStatus('Connecting to interface...');",
+                );
+                redirect_when_ready(window.clone(), port);
+                return;
+            }
+            failed_status_probes += 1;
+            if failed_status_probes == STATUS_PROBE_FAILURE_NOTICE_AFTER {
+                let _ = window.eval(
+                    "window.__setStatus(\
+                     'Waiting for background daemon status. Check serve.log if this persists.');",
+                );
+            }
+            tokio::time::sleep(background_status_poll_interval(failed_status_probes)).await;
+        }
+        if !background_status_poll_is_current(&handle, generation) {
+            return;
+        }
+        let _ = window.eval(
+            "window.__setStatus('AgentsView backend did not become ready after several minutes.');",
+        );
+    });
+}
+
+fn background_status_poll_is_current(handle: &AppHandle, generation: u64) -> bool {
+    handle
+        .state::<SidecarState>()
+        .background_status_poll_generation
+        .load(Ordering::SeqCst)
+        == generation
+}
+
+fn background_status_poll_interval(failed_status_probes: u32) -> Duration {
+    let multiplier = match failed_status_probes {
+        0..=8 => 1,
+        9..=16 => 2,
+        17..=24 => 4,
+        _ => 8,
+    };
+    READY_POLL_INTERVAL
+        .saturating_mul(multiplier)
+        .min(STATUS_POLL_MAX_INTERVAL)
+}
+
+async fn probe_backend_status(handle: &AppHandle) -> Option<u16> {
+    let mut command = handle.shell().sidecar("agentsview").ok()?;
+    for (key, value) in sidecar_env() {
+        command = command.env(key, value);
+    }
+    let (mut rx, child) = command.args(sidecar_status_args()).spawn().ok()?;
+    let mut stdout_buffer = String::new();
+    let status = tokio::time::timeout(STATUS_PROBE_TIMEOUT, async {
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) => {
+                    stdout_buffer.push_str(String::from_utf8_lossy(&bytes).as_ref());
+                }
+                CommandEvent::Terminated(_) => {
+                    return Ok(parse_writable_listening_port_from_status(&stdout_buffer));
+                }
+                CommandEvent::Error(err) => {
+                    eprintln!("[agentsview:error] {err}");
+                    return Err(());
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
+    })
+    .await;
+    match status {
+        Ok(Ok(port)) => port,
+        Ok(Err(())) | Err(_) => {
+            let _ = child.kill();
+            None
+        }
+    }
 }
 
 /// Fall back to the system browser when the Linux WebView fails to render.
@@ -1005,16 +1305,27 @@ fn extract_startup_status(chunk: &str) -> Option<String> {
         .find(|s| !s.is_empty())?;
     // Only forward lines that look like sync output, not
     // arbitrary log noise.
-    if segment.contains("sessions") || segment.contains("ync") || segment.contains("atching") {
+    if segment.contains("sessions")
+        || segment.contains("ync")
+        || segment.contains("atching")
+        || segment.contains("search index")
+        || segment.contains("database")
+    {
         return Some(segment.to_string());
     }
     None
 }
 
 fn parse_listening_port(line: &str) -> Option<u16> {
-    let marker = format!("listening at http://{HOST}:");
-    let idx = line.find(marker.as_str())?;
-    let after = &line[(idx + marker.len())..];
+    let markers = [
+        format!("listening at http://{HOST}:"),
+        format!("running at http://{HOST}:"),
+        format!("backend at http://{HOST}:"),
+    ];
+    let after = markers.iter().find_map(|marker| {
+        line.find(marker.as_str())
+            .map(|idx| &line[(idx + marker.len())..])
+    })?;
     let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
     if digits.is_empty() {
         return None;
@@ -1040,6 +1351,29 @@ fn parse_listening_port_from_stdout_buffer(buffer: &mut String, chunk: &str) -> 
     }
 
     None
+}
+
+fn parse_listening_port_from_stdout_tail(buffer: &str) -> Option<u16> {
+    for line in buffer.lines().rev() {
+        if let Some(port) = parse_listening_port(line.trim_end_matches('\r')) {
+            return Some(port);
+        }
+    }
+    None
+}
+
+fn status_output_is_read_only(buffer: &str) -> bool {
+    buffer.lines().any(|line| {
+        let line = line.trim();
+        line.starts_with("mode:") && line.contains("read-only")
+    })
+}
+
+fn parse_writable_listening_port_from_status(buffer: &str) -> Option<u16> {
+    if status_output_is_read_only(buffer) {
+        return None;
+    }
+    parse_listening_port_from_stdout_tail(buffer)
 }
 
 fn setup_menu(app: &mut App) -> Result<(), DynError> {
@@ -1213,17 +1547,13 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         }
     };
 
-    let windows_backend_stopped = if cfg!(target_os = "windows") {
-        // Windows locks the bundled sidecar executable while it is running.
-        Some(stop_backend_and_wait(handle.clone(), UPDATE_SIDECAR_STOP_TIMEOUT).await)
-    } else {
-        None
-    };
-    let backend_stopped_for_update = windows_backend_stopped == Some(true);
+    let backend_stopped =
+        Some(stop_backend_and_wait(handle.clone(), UPDATE_SIDECAR_STOP_TIMEOUT).await);
+    let backend_stopped_for_update = backend_stopped == Some(true);
 
     if let Err(err) = install_downloaded_update(
         update_bytes,
-        windows_backend_stopped,
+        backend_stopped,
         || restart_backend_after_update(handle.clone()),
         |bytes| update.install(bytes),
     ) {
@@ -1280,7 +1610,7 @@ impl<E: std::fmt::Debug + std::fmt::Display> Error for InstallDownloadedUpdateEr
 
 fn install_downloaded_update<R, I, E>(
     update_bytes: Vec<u8>,
-    windows_backend_stopped: Option<bool>,
+    backend_stopped: Option<bool>,
     restart_backend: R,
     install: I,
 ) -> Result<(), InstallDownloadedUpdateError<E>>
@@ -1288,13 +1618,13 @@ where
     R: FnOnce(),
     I: FnOnce(Vec<u8>) -> Result<(), E>,
 {
-    if windows_backend_stopped == Some(false) {
+    if backend_stopped == Some(false) {
         return Err(InstallDownloadedUpdateError::BackendStopTimedOut);
     }
     match install(update_bytes) {
         Ok(()) => Ok(()),
         Err(err) => {
-            if windows_backend_stopped.is_some() {
+            if backend_stopped.is_some() {
                 restart_backend();
             }
             Err(InstallDownloadedUpdateError::Install(err))
@@ -1336,10 +1666,6 @@ async fn dialog_confirm(handle: &AppHandle, title: &str, message: &str) -> bool 
     rx.await.unwrap_or(false)
 }
 
-fn stop_backend(app: &AppHandle) {
-    let _ = stop_backend_inner(app, None);
-}
-
 async fn stop_backend_and_wait(app: AppHandle, timeout: Duration) -> bool {
     tauri::async_runtime::spawn_blocking(move || stop_backend_inner(&app, Some(timeout)))
         .await
@@ -1351,6 +1677,7 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
     if let Some(timeout) = wait_timeout {
         begin_update_stop_wait(&state);
         let mut waited_generation = None;
+        let detached_port = current_backend_port(app);
         let active_generation = {
             let Ok(guard) = state.child.lock() else {
                 end_update_stop_wait(&state);
@@ -1367,23 +1694,26 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
         };
         let stopped = if let Some(generation) = active_generation {
             waited_generation = Some(generation);
-            finish_backend_stop_wait(
+            let launcher_stopped = finish_backend_stop_wait(
                 app,
                 &state,
                 generation,
                 wait_for_sidecar_termination(&state, generation, timeout),
-            )
+            );
+            launcher_stopped
+                && stop_detached_backend_for_update_with_port(app, timeout, detached_port)
         } else if let Some(generation) = current_stopping_generation(&state) {
             waited_generation = Some(generation);
-            finish_backend_stop_wait(
+            let launcher_stopped = finish_backend_stop_wait(
                 app,
                 &state,
                 generation,
                 wait_for_sidecar_termination(&state, generation, timeout),
-            )
+            );
+            launcher_stopped
+                && stop_detached_backend_for_update_with_port(app, timeout, detached_port)
         } else {
-            clear_sidecar_port(app);
-            true
+            stop_detached_backend_for_update(app, timeout)
         };
         end_update_stop_wait(&state);
         if let Some(generation) = waited_generation {
@@ -1413,6 +1743,86 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
     }
     clear_sidecar_port(app);
     true
+}
+
+fn current_backend_port(app: &AppHandle) -> Option<u16> {
+    app.state::<SidecarState>()
+        .backend_port
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
+fn stop_detached_backend_for_update(app: &AppHandle, timeout: Duration) -> bool {
+    stop_detached_backend_for_update_with_port(app, timeout, current_backend_port(app))
+}
+
+fn stop_detached_backend_for_update_with_port(
+    app: &AppHandle,
+    timeout: Duration,
+    port: Option<u16>,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    let (mut rx, child) = match spawn_sidecar_with_args(app, sidecar_stop_args()) {
+        Ok(spawned) => spawned,
+        Err(err) => {
+            eprintln!("[agentsview] failed to run serve stop before update install: {err}");
+            return false;
+        }
+    };
+    if !wait_for_stop_launcher(&mut rx, remaining_timeout(deadline)) {
+        let _ = child.kill();
+        if port.is_none() {
+            eprintln!(
+                "[agentsview] serve stop did not report success, but no detached daemon port is known"
+            );
+        }
+        return false;
+    }
+    if let Some(port) = port {
+        if !wait_for_server_stopped(port, remaining_timeout(deadline)) {
+            eprintln!(
+                "[agentsview] timed out waiting for detached daemon to stop before update install"
+            );
+            return false;
+        }
+    }
+    clear_sidecar_port(app);
+    true
+}
+
+fn remaining_timeout(deadline: Instant) -> Duration {
+    deadline
+        .checked_duration_since(Instant::now())
+        .unwrap_or_default()
+}
+
+fn wait_for_stop_launcher(rx: &mut CommandRx, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match rx.try_recv() {
+            Ok(CommandEvent::Terminated(payload)) => return payload.code.unwrap_or(1) == 0,
+            Ok(CommandEvent::Stdout(bytes)) => {
+                let line = String::from_utf8_lossy(&bytes);
+                eprintln!("[agentsview] {}", line.trim_end());
+            }
+            Ok(CommandEvent::Stderr(bytes)) => {
+                let line = String::from_utf8_lossy(&bytes);
+                eprintln!("[agentsview:stderr] {}", line.trim_end());
+            }
+            Ok(CommandEvent::Error(err)) => {
+                eprintln!("[agentsview:error] {err}");
+            }
+            Ok(_) => {}
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
+        }
+        if Instant::now() >= deadline {
+            eprintln!("[agentsview] timed out waiting for serve stop before update install");
+            return false;
+        }
+        thread::sleep(READY_POLL_INTERVAL);
+    }
 }
 
 fn finish_backend_stop_wait(
@@ -1496,6 +1906,17 @@ fn wait_for_server(port: u16, timeout: Duration) -> bool {
     false
 }
 
+fn wait_for_server_stopped(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if !backend_endpoint_ready(port) {
+            return true;
+        }
+        thread::sleep(READY_POLL_INTERVAL);
+    }
+    !backend_endpoint_ready(port)
+}
+
 fn backend_endpoint_ready(port: u16) -> bool {
     let request =
         format!("GET /api/v1/version HTTP/1.1\r\nHost: {HOST}:{port}\r\nConnection: close\r\n\r\n");
@@ -1542,12 +1963,17 @@ fn version_response_looks_valid(response: &[u8]) -> bool {
         return false;
     };
     let body = String::from_utf8_lossy(body);
-    body.contains("\"version\"") && body.contains("\"commit\"") && body.contains("\"build_date\"")
+    body.contains("\"version\"")
+        && body.contains("\"commit\"")
+        && body.contains("\"build_date\"")
+        && body.contains("\"api_version\"")
+        && body.contains("\"data_version\"")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use std::collections::HashMap;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
@@ -1559,21 +1985,163 @@ mod tests {
     #[test]
     fn sidecar_args_use_cobra_long_flags() {
         assert_eq!(
-            sidecar_args("18080"),
+            sidecar_args(),
             vec![
                 "serve".to_string(),
+                "--background".to_string(),
                 "--host".to_string(),
                 HOST.to_string(),
-                "--port".to_string(),
-                "18080".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn sidecar_stop_args_use_serve_stop() {
+        assert_eq!(
+            sidecar_stop_args(),
+            vec!["serve".to_string(), "stop".to_string()]
+        );
+    }
+
+    #[test]
+    fn sidecar_status_args_use_serve_status() {
+        assert_eq!(
+            sidecar_status_args(),
+            vec!["serve".to_string(), "status".to_string()]
+        );
+    }
+
+    #[test]
+    fn background_status_poll_interval_backs_off_after_initial_probes() {
+        assert_eq!(
+            background_status_poll_interval(1),
+            Duration::from_millis(125)
+        );
+        assert_eq!(
+            background_status_poll_interval(8),
+            Duration::from_millis(125)
+        );
+        assert_eq!(
+            background_status_poll_interval(9),
+            Duration::from_millis(250)
+        );
+        assert_eq!(
+            background_status_poll_interval(17),
+            Duration::from_millis(500)
+        );
+        assert_eq!(background_status_poll_interval(25), Duration::from_secs(1));
+        assert_eq!(
+            background_status_poll_interval(u32::MAX),
+            Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn data_version_preflight_args_use_serve_check() {
+        assert_eq!(
+            data_version_preflight_args(),
+            vec!["serve".to_string(), "--check-data-version".to_string()]
+        );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_accepts_success() {
+        assert_eq!(
+            classify_data_version_preflight_exit(Some(0), "", ""),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_detects_too_new_database() {
+        let err = classify_data_version_preflight_exit(
+            Some(DATA_VERSION_TOO_NEW_EXIT_CODE),
+            "",
+            "fatal: archive is too new",
+        )
+        .expect_err("expected too-new error");
+
+        assert_eq!(
+            err,
+            DataVersionPreflightError::TooNew("fatal: archive is too new".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_keeps_generic_failures_separate() {
+        let err =
+            classify_data_version_preflight_exit(Some(1), "", "fatal: loading config: bad toml")
+                .expect_err("expected preflight failure");
+
+        assert_eq!(
+            err,
+            DataVersionPreflightError::Failed("fatal: loading config: bad toml".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_data_version_preflight_exit_does_not_parse_error_prose() {
+        let err = classify_data_version_preflight_exit(
+            Some(1),
+            "",
+            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+        )
+        .expect_err("expected generic failure");
+
+        assert_eq!(
+            err,
+            DataVersionPreflightError::Failed(
+                "fatal: database data version 59 is newer than this agentsview binary's data version 49"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn too_new_archive_status_message_is_user_facing() {
+        let message = too_new_archive_status_message(
+            "fatal: database data version 59 is newer than this agentsview binary's data version 49",
+        );
+        let footer = too_new_archive_footer_message();
+
+        assert!(message.contains("updated by a newer version of AgentsView"));
+        assert!(!message.contains("database data version"));
+        assert!(!message.contains("bundled backend"));
+        assert!(footer.contains("checking for updates now"));
+        assert!(footer.contains("Check for Updates"));
+    }
+
+    #[test]
+    fn preflight_error_script_updates_dom_directly() {
+        let script = preflight_error_script("Needs update", "Archive is too new", "Footer");
+
+        assert!(script.contains("document.querySelector('h1')"));
+        assert!(script.contains("document.getElementById('status')"));
+        assert!(script.contains("querySelector('.foot')"));
+        assert!(!script.contains("window.__setStatus"));
+    }
+
+    #[test]
+    fn preflight_error_script_polls_until_loading_dom_exists() {
+        let script = preflight_error_script("Needs update", "Archive is too new", "Footer");
+
+        assert!(script.contains("function renderPreflightError"));
+        assert!(script.contains("setTimeout(renderPreflightError"));
+        assert!(script.contains("if (!h || !status)"));
     }
 
     #[test]
     fn parse_listening_port_extracts_backend_port() {
         let line = "agentsview dev listening at http://127.0.0.1:18080 (started in 1.2s)";
         assert_eq!(parse_listening_port(line), Some(18080));
+        assert_eq!(
+            parse_listening_port("agentsview running at http://127.0.0.1:19090 (pid 123)"),
+            Some(19090)
+        );
+        assert_eq!(
+            parse_listening_port("agentsview already running at http://127.0.0.1:19091 (pid 123)"),
+            Some(19091)
+        );
         assert_eq!(parse_listening_port("unrelated line"), None);
     }
 
@@ -1596,6 +2164,43 @@ mod tests {
         assert_eq!(
             parse_listening_port_from_stdout_buffer(&mut buf, "080 (started in 1.2s)\n"),
             Some(18080)
+        );
+    }
+
+    #[test]
+    fn parse_listening_port_from_stdout_tail_handles_final_partial_line() {
+        assert_eq!(
+            parse_listening_port_from_stdout_tail("agentsview running at http://127.0.0.1:18081"),
+            Some(18081)
+        );
+    }
+
+    #[test]
+    fn parse_listening_port_from_stdout_tail_prefers_latest_line() {
+        let output = "\
+agentsview running at http://127.0.0.1:18080 (pid 123)
+agentsview running at http://127.0.0.1:18081 (pid 124)";
+        assert_eq!(parse_listening_port_from_stdout_tail(output), Some(18081));
+    }
+
+    #[test]
+    fn parse_writable_listening_port_from_status_ignores_read_only_daemon() {
+        let output = "\
+agentsview running at http://127.0.0.1:18081 (pid 123)
+mode:    read-only
+";
+        assert_eq!(parse_writable_listening_port_from_status(output), None);
+    }
+
+    #[test]
+    fn parse_writable_listening_port_from_status_accepts_writable_daemon() {
+        let output = "\
+agentsview running at http://127.0.0.1:18082 (pid 123)
+mode:    writable
+";
+        assert_eq!(
+            parse_writable_listening_port_from_status(output),
+            Some(18082)
         );
     }
 
@@ -1627,6 +2232,19 @@ mod tests {
         assert_eq!(
             extract_startup_status("Watching 50 directories for changes (12ms)\n"),
             Some("Watching 50 directories for changes (12ms)".to_string())
+        );
+        assert_eq!(
+            extract_startup_status(
+                "\r  Rebuilding search index - Rebuilding the search index may take a while on large archives."
+            ),
+            Some(
+                "Rebuilding search index - Rebuilding the search index may take a while on large archives."
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            extract_startup_status("\r  Swapping rebuilt database into place"),
+            Some("Swapping rebuilt database into place".to_string())
         );
 
         // Unrelated output is ignored
@@ -1672,6 +2290,24 @@ mod tests {
         let localhost_name =
             Url::parse("http://localhost:18080/").expect("valid localhost-name url");
         assert!(!is_allowed_navigation_url(&localhost_name, Some(18080)));
+    }
+
+    #[test]
+    fn default_capability_grants_zoom_to_the_sidecar_origin() {
+        let capability: Value = serde_json::from_str(include_str!("../capabilities/default.json"))
+            .expect("capability json parses");
+
+        assert_eq!(capability["windows"], serde_json::json!(["main"]));
+        assert_eq!(
+            capability["remote"]["urls"],
+            serde_json::json!(["http://127.0.0.1:*"])
+        );
+        assert!(capability["permissions"]
+            .as_array()
+            .expect("permissions array")
+            .contains(&Value::String(
+                "core:webview:allow-set-webview-zoom".to_string()
+            )));
     }
 
     #[test]
@@ -1751,6 +2387,36 @@ mod tests {
     }
 
     #[test]
+    fn launcher_terminated_after_startup_preserves_port() {
+        let state = SidecarState::default();
+        set_sidecar_port(&state, Some(18080));
+        *state
+            .active_generation
+            .lock()
+            .expect("lock active_generation") = Some(1);
+
+        handle_launcher_terminated_after_startup(&state, 1);
+
+        assert_eq!(
+            state
+                .backend_port
+                .lock()
+                .expect("lock backend_port after launcher terminated")
+                .to_owned(),
+            Some(18080)
+        );
+        assert_eq!(
+            state
+                .active_generation
+                .lock()
+                .expect("lock active_generation after launcher terminated")
+                .to_owned(),
+            None
+        );
+        assert!(sidecar_generation_terminated(&state, 1));
+    }
+
+    #[test]
     fn restart_after_stop_timeout_is_consumed_for_matching_generation() {
         let state = SidecarState::default();
 
@@ -1780,7 +2446,7 @@ mod tests {
     }
 
     #[test]
-    fn install_downloaded_update_installs_after_windows_backend_stop() {
+    fn install_downloaded_update_installs_after_backend_stop() {
         let events = Mutex::new(Vec::new());
 
         let result = install_downloaded_update(
@@ -1799,7 +2465,7 @@ mod tests {
     }
 
     #[test]
-    fn install_downloaded_update_installs_without_backend_stop_on_non_windows() {
+    fn install_downloaded_update_can_install_without_backend_stop_result() {
         let events = Mutex::new(Vec::new());
 
         let result = install_downloaded_update(
@@ -1818,7 +2484,7 @@ mod tests {
     }
 
     #[test]
-    fn install_downloaded_update_does_not_restart_after_windows_stop_timeout() {
+    fn install_downloaded_update_does_not_restart_after_stop_timeout() {
         let events = Mutex::new(Vec::new());
 
         let result = install_downloaded_update(
@@ -1839,7 +2505,7 @@ mod tests {
     }
 
     #[test]
-    fn install_downloaded_update_restarts_backend_after_windows_install_failure() {
+    fn install_downloaded_update_restarts_backend_after_install_failure() {
         let events = Mutex::new(Vec::new());
 
         let result = install_downloaded_update(
@@ -1864,7 +2530,7 @@ mod tests {
     }
 
     #[test]
-    fn finish_successful_update_restarts_backend_when_windows_restart_is_declined() {
+    fn finish_successful_update_restarts_backend_when_restart_is_declined() {
         let events = Mutex::new(Vec::new());
 
         finish_successful_update(
@@ -1892,10 +2558,10 @@ mod tests {
 
     #[test]
     fn version_response_requires_identity_fields() {
-        let valid = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"version\":\"1.0.0\",\"commit\":\"abc\",\"build_date\":\"2026-01-01T00:00:00Z\"}";
+        let valid = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"version\":\"1.0.0\",\"commit\":\"abc\",\"build_date\":\"2026-01-01T00:00:00Z\",\"api_version\":1,\"data_version\":50}";
         assert!(version_response_looks_valid(valid));
 
-        let missing = b"HTTP/1.1 200 OK\r\n\r\n{\"version\":\"1.0.0\"}";
+        let missing = b"HTTP/1.1 200 OK\r\n\r\n{\"version\":\"1.0.0\",\"commit\":\"abc\",\"build_date\":\"2026-01-01T00:00:00Z\"}";
         assert!(!version_response_looks_valid(missing));
 
         let wrong_status = b"HTTP/1.1 404 Not Found\r\n\r\n{}";

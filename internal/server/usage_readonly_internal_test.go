@@ -3,12 +3,8 @@ package server
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -47,12 +43,7 @@ func (readOnlyUsageSpy) GetUsageSessionCounts(
 func TestUsageHandlers_ReturnNotImplementedOnReadOnlyStore(
 	t *testing.T,
 ) {
-	s := &Server{
-		cfg: config.Config{Host: "127.0.0.1"},
-		db:  readOnlyUsageSpy{},
-		mux: http.NewServeMux(),
-	}
-	s.routes()
+	s := newRoutedTestServerWithStore(t, readOnlyUsageSpy{})
 
 	cases := []struct {
 		name string
@@ -71,13 +62,8 @@ func TestUsageHandlers_ReturnNotImplementedOnReadOnlyStore(
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest(
-				http.MethodGet, tc.path, nil,
-			)
-			w := httptest.NewRecorder()
-			s.mux.ServeHTTP(w, req)
-			assert.Equal(t, http.StatusNotImplemented, w.Code,
-				"body=%s", w.Body.String())
+			w := serveGet(t, s, tc.path)
+			assertRecorderStatus(t, w, http.StatusNotImplemented)
 		})
 	}
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +21,7 @@ import (
 
 type PGPushConfig struct {
 	Full            bool
+	AllTargets      bool
 	ProjectsFlag    string
 	ExcludeProjects string
 	AllProjects     bool
@@ -30,101 +30,134 @@ type PGPushConfig struct {
 	Interval        time.Duration
 }
 
-func runPGPush(cfg PGPushConfig) {
+type pgTargetSelection struct {
+	Name                   string
+	PG                     config.PGConfig
+	IsDefault              bool
+	SyncStateTarget        string
+	MigrateLegacySyncState bool
+}
+
+func (s pgTargetSelection) label() string {
+	if s.Name == "" {
+		return "default"
+	}
+	if s.IsDefault {
+		return s.Name + " (default)"
+	}
+	return s.Name
+}
+
+func (s pgTargetSelection) syncOptions(
+	projects, excludeProjects []string,
+) postgres.SyncOptions {
+	return postgres.SyncOptions{
+		Projects:               projects,
+		ExcludeProjects:        excludeProjects,
+		SyncStateTarget:        s.SyncStateTarget,
+		MigrateLegacySyncState: s.MigrateLegacySyncState,
+	}
+}
+
+func runPGPush(
+	cfg PGPushConfig, targetName string,
+) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		return fmt.Errorf("creating data dir: %w", err)
 	}
 	setupLogFile(appCfg.DataDir)
 
-	pgCfg, err := appCfg.ResolvePG()
+	targets, err := resolvePGTargetSelections(
+		appCfg, targetName, cfg.AllTargets,
+	)
 	if err != nil {
-		fatal("pg push: %v", err)
-	}
-	if pgCfg.URL == "" {
-		fatal("pg push: url not configured")
-	}
-
-	projects, excludeProjects, err := resolvePushProjects(pgCfg, cfg)
-	if err != nil {
-		fatal("pg push: %v", err)
+		return err
 	}
 
 	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
-	if err != nil {
-		fatal("opening database: %v", err)
-	}
-	defer database.Close()
-
-	if appCfg.CursorSecret != "" {
-		secret, decErr := base64.StdEncoding.DecodeString(
-			appCfg.CursorSecret,
-		)
-		if decErr != nil {
-			fatal("invalid cursor secret: %v", decErr)
-		}
-		database.SetCursorSecret(secret)
-	}
-
-	// Run local sync first so newly discovered sessions
-	// are available for push. If a full resync was performed
-	// (e.g. due to data version change), force a full PG push
-	// since watermarks become stale after a local rebuild.
-	didResync := runLocalSync(appCfg, database, cfg.Full)
-	forceFull := cfg.Full || didResync
-
-	fmt.Println("Connecting to PostgreSQL...")
-	connectStart := time.Now()
-	ps, err := postgres.New(
-		pgCfg.URL, pgCfg.Schema, database,
-		pgCfg.MachineName, pgCfg.AllowInsecure,
-		postgres.SyncOptions{
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-		},
-	)
-	if err != nil {
-		fatal("pg push: %v", err)
-	}
-	defer ps.Close()
-	fmt.Printf(
-		"Connected to PostgreSQL in %s\n",
-		time.Since(connectStart).Round(time.Millisecond),
-	)
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt,
 	)
 	defer stop()
 
-	fmt.Println("Preparing PostgreSQL schema...")
-	schemaStart := time.Now()
-	if err := ps.EnsureSchema(ctx); err != nil {
-		fatal("pg push schema: %v", err)
-	}
-	fmt.Printf(
-		"PostgreSQL schema ready in %s\n",
-		time.Since(schemaStart).Round(time.Millisecond),
-	)
-	fmt.Println("Starting PostgreSQL push...")
-	result, err := ps.Push(ctx, forceFull,
-		func(p postgres.PushProgress) {
-			printPGPushProgress(p)
-		},
-	)
-	fmt.Print("\r\033[K") // clear progress line
+	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
 	if err != nil {
-		fatal("pg push: %v", err)
+		return fmt.Errorf("opening writer: %w", err)
+	}
+	defer cleanup()
+
+	var failures []string
+	for i, target := range targets {
+		if len(targets) > 1 || target.Name != "" {
+			if i > 0 {
+				fmt.Println()
+			}
+			fmt.Printf("Target: %s\n", target.label())
+		}
+		if err := runPGPushTarget(
+			ctx, backend, appCfg, cfg, target,
+		); err != nil {
+			if len(targets) == 1 {
+				return err
+			}
+			failures = append(
+				failures,
+				fmt.Sprintf("%s: %v", target.label(), err),
+			)
+			fmt.Fprintf(
+				os.Stderr,
+				"warning: pg push target %s failed: %v\n",
+				target.label(), err,
+			)
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf(
+			"%d pg target(s) failed: %s",
+			len(failures),
+			strings.Join(failures, "; "),
+		)
+	}
+	return nil
+}
+
+func runPGPushTarget(
+	ctx context.Context,
+	backend archiveWriteBackend,
+	appCfg config.Config,
+	cfg PGPushConfig,
+	target pgTargetSelection,
+) error {
+	target, err := resolvePGTargetConfig(appCfg, target)
+	if err != nil {
+		return err
+	}
+	if target.PG.URL == "" {
+		return fmt.Errorf("url not configured")
+	}
+
+	projects, excludeProjects, err := resolvePushProjects(
+		target.PG, cfg,
+	)
+	if err != nil {
+		return err
+	}
+
+	result, err := backend.PGPush(
+		ctx, target, cfg, projects, excludeProjects,
+	)
+	if err != nil {
+		return err
 	}
 	writePGPushSummary(os.Stdout, result)
 	if result.Errors > 0 {
-		fatal("pg push: %d session(s) failed",
-			result.Errors)
+		return fmt.Errorf("%d session(s) failed", result.Errors)
 	}
+	return nil
 }
 
 func printPGPushProgress(p postgres.PushProgress) {
@@ -144,14 +177,20 @@ func printPGPushProgress(p postgres.PushProgress) {
 }
 
 func writePGPushSummary(w io.Writer, result postgres.PushResult) {
+	dur := result.Duration.Round(time.Millisecond)
+	errSuffix := ""
+	if result.Errors > 0 {
+		errSuffix = fmt.Sprintf(", %d error(s)", result.Errors)
+	}
 	if result.SkippedConflicts > 0 {
 		fmt.Fprintf(
 			w,
-			"Pushed %d sessions, %d messages, skipped %d ownership conflict(s) in %s\n",
+			"Pushed %d sessions, %d messages, skipped %d ownership conflict(s)%s in %s\n",
 			result.SessionsPushed,
 			result.MessagesPushed,
 			result.SkippedConflicts,
-			result.Duration.Round(time.Millisecond),
+			errSuffix,
+			dur,
 		)
 		fmt.Fprintf(
 			w,
@@ -162,62 +201,129 @@ func writePGPushSummary(w io.Writer, result postgres.PushResult) {
 	}
 	fmt.Fprintf(
 		w,
-		"Pushed %d sessions, %d messages in %s\n",
+		"Pushed %d sessions, %d messages%s in %s\n",
 		result.SessionsPushed,
 		result.MessagesPushed,
-		result.Duration.Round(time.Millisecond),
+		errSuffix,
+		dur,
 	)
 }
 
-func runPGStatus() {
+func runPGStatus(
+	targetName string,
+	allTargets bool,
+) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		return fmt.Errorf("creating data dir: %w", err)
 	}
 	setupLogFile(appCfg.DataDir)
 
-	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
-	if err != nil {
-		fatal("opening database: %v", err)
-	}
-	defer database.Close()
-
-	pgCfg, err := appCfg.ResolvePG()
-	if err != nil {
-		fatal("pg status: %v", err)
-	}
-	if pgCfg.URL == "" {
-		fatal("pg status: url not configured")
-	}
-
-	ps, err := postgres.New(
-		pgCfg.URL, pgCfg.Schema, database,
-		pgCfg.MachineName, pgCfg.AllowInsecure,
-		postgres.SyncOptions{},
+	targets, err := resolvePGTargetSelections(
+		appCfg, targetName, allTargets,
 	)
 	if err != nil {
-		fatal("pg status: %v", err)
+		return err
 	}
-	defer ps.Close()
+
+	applyClassifierConfig(appCfg)
+	database, err := openReadOnlyDB(appCfg)
+	if err != nil {
+		log.Printf(
+			"warning: reading local pg status watermark: %v",
+			err,
+		)
+		database = nil
+	}
+	if database != nil {
+		defer database.Close()
+	}
+
+	var failures []string
+	for i, target := range targets {
+		if len(targets) > 1 || target.Name != "" {
+			if i > 0 {
+				fmt.Println()
+			}
+			fmt.Printf("Target: %s\n", target.label())
+		}
+		if err := runPGStatusTarget(database, appCfg, target); err != nil {
+			if len(targets) == 1 {
+				return err
+			}
+			failures = append(
+				failures,
+				fmt.Sprintf("%s: %v", target.label(), err),
+			)
+			fmt.Fprintf(
+				os.Stderr,
+				"warning: pg status target %s failed: %v\n",
+				target.label(), err,
+			)
+		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf(
+			"%d pg target(s) failed: %s",
+			len(failures),
+			strings.Join(failures, "; "),
+		)
+	}
+	return nil
+}
+
+func runPGStatusTarget(
+	database *db.DB,
+	appCfg config.Config,
+	target pgTargetSelection,
+) error {
+	target, err := resolvePGTargetConfig(appCfg, target)
+	if err != nil {
+		return err
+	}
+	if target.PG.URL == "" {
+		return fmt.Errorf("url not configured")
+	}
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt,
 	)
 	defer stop()
 
-	status, err := ps.Status(ctx)
+	lastPush := ""
+	if database != nil {
+		lastPush, err = postgres.ReadLastPushAt(
+			database,
+			target.SyncStateTarget,
+			target.MigrateLegacySyncState,
+		)
+		if err != nil {
+			log.Printf(
+				"warning: reading last_push_at: %v", err,
+			)
+			lastPush = ""
+		}
+	}
+	status, err := postgres.ReadStatus(
+		ctx,
+		target.PG.URL,
+		target.PG.Schema,
+		target.PG.MachineName,
+		target.PG.AllowInsecure,
+		lastPush,
+	)
 	if err != nil {
-		fatal("pg status: %v", err)
+		return err
 	}
 	fmt.Printf("Machine:     %s\n", status.Machine)
 	fmt.Printf("Last push:   %s\n",
 		valueOrNever(status.LastPushAt))
 	fmt.Printf("PG sessions: %d\n", status.PGSessions)
 	fmt.Printf("PG messages: %d\n", status.PGMessages)
+	return nil
 }
 
 func loadPGServeConfig(cmd *cobra.Command) (config.Config, string, error) {
@@ -237,7 +343,6 @@ func loadPGServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 
 func runPGServe(appCfg config.Config, basePath string) {
 	setupLogFile(appCfg.DataDir)
-	// Generate auth token when auth is explicitly required.
 	if appCfg.RequireAuth {
 		if err := appCfg.EnsureAuthToken(); err != nil {
 			fatal("pg serve: generating auth token: %v", err)
@@ -275,12 +380,6 @@ func runPGServe(appCfg config.Config, basePath string) {
 	)
 	defer stop()
 
-	// Attempt to apply any missing schema migrations before
-	// the compatibility check. This handles upgrades (e.g.
-	// new tables like tool_result_events) without requiring a
-	// manual schema drop. If the PG role is read-only the
-	// migration is skipped and the compat check reports what
-	// is missing.
 	if err := postgres.EnsureSchema(
 		ctx, store.DB(), pgCfg.Schema,
 	); err != nil {
@@ -295,6 +394,11 @@ func runPGServe(appCfg config.Config, basePath string) {
 		fatal("pg serve: schema incompatible: %v\n"+
 			"Drop and recreate the PG schema, then run "+
 			"'agentsview pg push --full' to repopulate.", err)
+	}
+	if err := postgres.CheckDataVersionCompat(
+		ctx, store.DB(),
+	); err != nil {
+		fatal("pg serve: %v", err)
 	}
 
 	rtOpts := serveRuntimeOptions{
@@ -337,8 +441,9 @@ func runPGServe(appCfg config.Config, basePath string) {
 	// Write the kit runtime record so CLI commands can discover this
 	// daemon. ReadOnly=true marks it as pg serve (read-only)
 	// so clients can select an appropriate transport.
-	if _, sfErr := WriteDaemonRuntime(
+	if _, sfErr := WriteDaemonRuntimeWithAuth(
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
+		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
 		log.Printf(
@@ -373,10 +478,6 @@ func runPGServe(appCfg config.Config, basePath string) {
 	}
 }
 
-// resolvePushProjects merges configured project filters with CLI
-// flag overrides. A CLI include or exclude flag fully replaces the
-// configured lists; --all-projects clears both. Include and exclude
-// are mutually exclusive.
 func resolvePushProjects(
 	pgCfg config.PGConfig, cfg PGPushConfig,
 ) (projects, exclude []string, err error) {
@@ -414,8 +515,81 @@ func resolvePushProjects(
 	return projects, exclude, nil
 }
 
-// splitProjectList splits a comma-separated string into trimmed,
-// non-empty project names.
+func resolvePGTargetSelections(
+	appCfg config.Config,
+	targetName string,
+	allTargets bool,
+) ([]pgTargetSelection, error) {
+	if allTargets && strings.TrimSpace(targetName) != "" {
+		return nil, fmt.Errorf(
+			"target name cannot be combined with --all",
+		)
+	}
+	if len(appCfg.PGTargets) == 0 {
+		if strings.TrimSpace(targetName) != "" {
+			return nil, fmt.Errorf(
+				"pg target %q is not configured; config uses a single legacy [pg] block",
+				targetName,
+			)
+		}
+		return []pgTargetSelection{{
+			IsDefault: true,
+		}}, nil
+	}
+	names, defaultName, err := appCfg.PGTargetNames()
+	if err != nil {
+		return nil, err
+	}
+	selections := make([]pgTargetSelection, 0, len(names))
+	for _, name := range names {
+		selection := pgTargetSelection{
+			Name:                   name,
+			IsDefault:              name == defaultName,
+			SyncStateTarget:        name,
+			MigrateLegacySyncState: name == defaultName,
+		}
+		selections = append(selections, selection)
+	}
+	if allTargets {
+		return selections, nil
+	}
+	normalizedTarget := strings.TrimSpace(
+		strings.ToLower(targetName),
+	)
+	if normalizedTarget == "" {
+		return selections[:1], nil
+	}
+	for _, target := range selections {
+		if target.Name == normalizedTarget {
+			return []pgTargetSelection{target}, nil
+		}
+	}
+	return nil, fmt.Errorf(
+		"pg target %q is not configured",
+		targetName,
+	)
+}
+
+func resolvePGTargetConfig(
+	appCfg config.Config,
+	target pgTargetSelection,
+) (pgTargetSelection, error) {
+	var (
+		pgCfg config.PGConfig
+		err   error
+	)
+	if target.Name == "" {
+		pgCfg, err = appCfg.ResolvePG()
+	} else {
+		pgCfg, err = appCfg.ResolvePGTarget(target.Name)
+	}
+	if err != nil {
+		return pgTargetSelection{}, err
+	}
+	target.PG = pgCfg
+	return target, nil
+}
+
 func splitProjectList(s string) []string {
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import { m } from "../../i18n/index.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
   import SessionItem from "./SessionItem.svelte";
@@ -11,6 +12,7 @@
     UserRoundIcon,
     UsersRoundIcon,
   } from "../../icons.js";
+  import { TrashIcon, CheckIcon } from "../../icons.js";
   import { formatNumber } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import {
@@ -312,6 +314,50 @@
     }
   });
 
+  let batchDeleting = $state(false);
+
+  let allVisibleSessionIds = $derived.by(() => {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const item of renderDisplayItems) {
+      const session = sessionForItem(item);
+      if (!session || seen.has(session.id)) continue;
+      seen.add(session.id);
+      ids.push(session.id);
+    }
+    return ids;
+  });
+
+  let allSelected = $derived(
+    allVisibleSessionIds.length > 0 &&
+    allVisibleSessionIds.every((id) => sessions.selectedIds.has(id)),
+  );
+  let visibleSelectedSessionIds = $derived(
+    allVisibleSessionIds.filter((id) => sessions.selectedIds.has(id)),
+  );
+
+  async function handleBatchDelete() {
+    if (batchDeleting) return;
+    const ids = visibleSelectedSessionIds;
+    if (ids.length === 0) return;
+    batchDeleting = true;
+    try {
+      await sessions.batchDeleteSessions(ids);
+    } catch {
+      // silently fail
+    } finally {
+      batchDeleting = false;
+    }
+  }
+
+  function handleSelectAllVisible() {
+    if (allSelected) {
+      sessions.clearSelection();
+    } else {
+      sessions.selectAll(allVisibleSessionIds);
+    }
+  }
+
   function handleScroll() {
     if (!containerRef) return;
     if (scrollRaf !== null) return;
@@ -411,16 +457,31 @@
       scrollRaf = null;
     }
   });
+
+  function groupToggleLabel(expanded: boolean, name: string): string {
+    return expanded
+      ? m.sidebar_collapse_group({ name })
+      : m.sidebar_expand_group({ name });
+  }
 </script>
 
 <div class="session-list-header">
   <span class="session-count">
-    {formatNumber(totalCount)} sessions
+    {m.sidebar_session_count({ count: formatNumber(totalCount) })}
   </span>
   <div class="header-actions">
     {#if sessions.loading}
-      <span class="loading-indicator">loading</span>
+      <span class="loading-indicator">{m.sidebar_loading()}</span>
     {/if}
+    <button
+      class="select-toggle-btn"
+      class:active={sessions.selectMode}
+      onclick={() => sessions.toggleSelectMode()}
+      title={sessions.selectMode ? "Exit multi-select" : "Multi-select"}
+      aria-label={sessions.selectMode ? "Exit multi-select" : "Multi-select"}
+    >
+      <CheckIcon size="12" strokeWidth="2" aria-hidden="true" />
+    </button>
     <SessionFilterControl
       {groupMode}
       onToggleGroupByAgent={toggleGroupByAgent}
@@ -432,37 +493,68 @@
     />
     {#snippet statusFilterSection()}
       <div class="filter-section">
-        <div class="filter-section-label">Status</div>
+        <div class="filter-section-label">{m.sidebar_status()}</div>
         <div class="pill-buttons">
           <button
             class="pill-btn pill-btn--status-active"
             class:active={sessions.hasTerminationStatus("active")}
             onclick={() => sessions.toggleTerminationStatus("active")}
-            title="Last activity within 10 minutes"
+            title={m.sidebar_active_title()}
           >
-            Active
+            {m.sidebar_active()}
           </button>
           <button
             class="pill-btn pill-btn--status-stale"
             class:active={sessions.hasTerminationStatus("stale")}
             onclick={() => sessions.toggleTerminationStatus("stale")}
-            title="Flagged session, idle 10 minutes to 1 hour"
+            title={m.sidebar_stale_title()}
           >
-            Stale
+            {m.sidebar_stale()}
           </button>
           <button
             class="pill-btn pill-btn--status-unclean"
             class:active={sessions.hasTerminationStatus("unclean")}
             onclick={() => sessions.toggleTerminationStatus("unclean")}
-            title="Terminated mid tool call (over 1 hour idle)"
+            title={m.sidebar_unclean_title()}
           >
-            Unclean
+            {m.sidebar_unclean()}
           </button>
         </div>
       </div>
     {/snippet}
   </div>
 </div>
+
+{#if sessions.selectMode}
+  <div class="batch-toolbar">
+    <button
+      class="batch-select-all-btn"
+      onclick={handleSelectAllVisible}
+      title={allSelected ? "Clear selection" : "Select all visible"}
+    >
+      {allSelected ? "Clear" : "All"}
+    </button>
+    <span class="batch-count">
+      {visibleSelectedSessionIds.length} selected
+    </span>
+    <button
+      class="batch-delete-btn"
+      onclick={handleBatchDelete}
+      disabled={visibleSelectedSessionIds.length === 0 || batchDeleting}
+      title="Move selected sessions to trash"
+    >
+      <TrashIcon size="11" strokeWidth="2" aria-hidden="true" />
+      {batchDeleting ? "Deleting..." : "Delete"}
+    </button>
+    <button
+      class="batch-cancel-btn"
+      onclick={() => sessions.toggleSelectMode()}
+      title="Exit multi-select"
+    >
+      Cancel
+    </button>
+  </div>
+{/if}
 
 <div
   class="session-list-scroll"
@@ -480,8 +572,8 @@
           <button
             class="group-header"
             onclick={() => toggleGroup(item.label)}
-            title="{collapsed.has(item.label) ? 'Expand' : 'Collapse'} {item.label} group"
-            aria-label="{collapsed.has(item.label) ? 'Expand' : 'Collapse'} {item.label} group"
+            title={groupToggleLabel(!collapsed.has(item.label), item.label)}
+            aria-label={groupToggleLabel(!collapsed.has(item.label), item.label)}
           >
             {#if collapsed.has(item.label)}
               <ChevronRightIcon class="chevron" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -506,8 +598,8 @@
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(subKey)}
-            title="{subExpanded ? 'Collapse' : 'Expand'} Subagents group"
-            aria-label="{subExpanded ? 'Collapse' : 'Expand'} Subagents group"
+            title={groupToggleLabel(subExpanded, m.sidebar_subagents())}
+            aria-label={groupToggleLabel(subExpanded, m.sidebar_subagents())}
           >
             {#if subExpanded}
               <ChevronDownIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -515,7 +607,7 @@
               <ChevronRightIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
             {/if}
             <UserRoundIcon class="sub-group-icon" size="10" strokeWidth="2" aria-hidden="true" />
-            <span class="sub-group-label">Subagents</span>
+            <span class="sub-group-label">{m.sidebar_subagents()}</span>
             <span class="sub-group-count">({item.count})</span>
           </button>
         {:else if item.type === "team-group" && item.group}
@@ -525,8 +617,8 @@
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
             onclick={() => toggleChainExpand(teamKey)}
-            title="{teamExpanded ? 'Collapse' : 'Expand'} Team group"
-            aria-label="{teamExpanded ? 'Collapse' : 'Expand'} Team group"
+            title={groupToggleLabel(teamExpanded, m.sidebar_team())}
+            aria-label={groupToggleLabel(teamExpanded, m.sidebar_team())}
           >
             {#if teamExpanded}
               <ChevronDownIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
@@ -534,7 +626,7 @@
               <ChevronRightIcon class="sub-group-arrow" size="10" strokeWidth="2.5" aria-hidden="true" />
             {/if}
             <UsersRoundIcon class="sub-group-icon" size="12" strokeWidth="2" aria-hidden="true" />
-            <span class="sub-group-label">Team</span>
+            <span class="sub-group-label">{m.sidebar_team()}</span>
             <span class="sub-group-count">({item.count})</span>
           </button>
         {:else if item.isChild && item.session}
@@ -546,6 +638,8 @@
             compact
             depth={item.depth ?? 1}
             isLastChild={item.isLastChild ?? false}
+            selectMode={sessions.selectMode}
+            selected={sessions.selectedIds.has(item.session.id)}
           />
         {:else if item.group}
           {@const primary = item.group.sessions.find(
@@ -573,6 +667,8 @@
               depth={0}
               hasSubagents={groupHasSubagents}
               hasTeammates={groupHasTeammates}
+              selectMode={sessions.selectMode}
+              selected={primary ? sessions.selectedIds.has(primary.id) : false}
             />
           {/if}
         {/if}
@@ -808,6 +904,101 @@
     font-size: 9px;
     color: var(--text-muted);
     font-weight: 500;
+  }
+
+  .select-toggle-btn {
+    all: unset;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.1s, background 0.1s;
+  }
+
+  .select-toggle-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-secondary);
+  }
+
+  .select-toggle-btn.active {
+    color: var(--accent-blue);
+    background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  }
+
+  .batch-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-muted);
+    background: color-mix(in srgb, var(--accent-blue) 5%, var(--bg-inset));
+    flex-shrink: 0;
+  }
+
+  .batch-select-all-btn {
+    all: unset;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .batch-select-all-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+  }
+
+  .batch-count {
+    flex: 1;
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .batch-delete-btn {
+    all: unset;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--bg-surface);
+    background: var(--accent-red, #d32f2f);
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .batch-delete-btn:hover:not(:disabled) {
+    opacity: 0.9;
+  }
+
+  .batch-delete-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .batch-cancel-btn {
+    all: unset;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+  }
+
+  .batch-cancel-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
   }
 
 </style>

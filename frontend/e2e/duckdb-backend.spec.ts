@@ -16,7 +16,7 @@ test.describe("DuckDB backend", () => {
 
     const sp = new SessionsPage(page);
     await sp.goto();
-    await expect(sp.sessionItems).toHaveCount(9);
-    await expect(sp.sessionListHeader).toContainText("9 sessions");
+    await expect(sp.sessionItems).toHaveCount(10);
+    await expect(sp.sessionListHeader).toContainText("10 sessions");
   });
 });

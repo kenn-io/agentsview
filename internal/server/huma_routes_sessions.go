@@ -44,6 +44,7 @@ func (s *Server) registerSessionRoutes() {
 	post(s, group, "/sessions/{id}/open", "Open session directory", s.humaOpenSession)
 	post(s, group, "/sessions/upload", "Upload a session export", s.humaUploadSession)
 	patch(s, group, "/sessions/{id}/rename", "Rename session", s.humaRenameSession)
+	post(s, group, "/sessions/batch-delete", "Batch delete sessions", s.humaBatchDeleteSessions)
 	deleteRoute(s, group, "/sessions/{id}", "Delete session", s.humaDeleteSession)
 	post(s, group, "/sessions/{id}/restore", "Restore session", s.humaRestoreSession)
 	deleteRoute(s, group, "/sessions/{id}/permanent", "Permanently delete session", s.humaPermanentDeleteSession)
@@ -54,10 +55,6 @@ func (s *Server) registerSessionRoutes() {
 type messageDirection string
 
 type markdownDepth string
-
-// sessionOrderBy is the allow-listed session-list sort field. The enum tag is
-// kept in sync with db.SortKeys() by TestSortKeysMatchHumaEnum.
-type sessionOrderBy string
 
 type sessionFilterInput struct {
 	Project          string            `query:"project" doc:"Filter by project"`
@@ -82,8 +79,8 @@ type sessionFilterInput struct {
 	MinToolFailures  optionalIntParam  `query:"min_tool_failures" minimum:"0" doc:"Minimum tool failure count"`
 	HasSecret        bool              `query:"has_secret" doc:"Filter sessions with secret findings"`
 	Starred          bool              `query:"starred" doc:"Filter sessions by starred status"`
-	OrderBy          sessionOrderBy    `query:"order_by" enum:"recent,started,messages,user-messages,output-tokens,peak-context,failures,retries,edit-churn,compactions,context-pressure,health,secrets,id" default:"recent" doc:"Sort field"`
-	Descending       optionalBoolParam `query:"descending" doc:"Sort descending; overrides the sort field's default direction"`
+	OrderBy          string            `query:"order_by" default:"recent" doc:"Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id."`
+	Descending       optionalBoolParam `query:"descending" doc:"Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix"`
 }
 
 type messageListInput struct {
@@ -101,6 +98,9 @@ type searchSessionInput struct {
 func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return service.ListFilter{}, err
+	}
+	if _, err := db.ParseSortSpec(in.OrderBy); err != nil {
+		return service.ListFilter{}, apiError(http.StatusBadRequest, "invalid order_by: "+err.Error())
 	}
 	limit := clampLimit(in.Limit, db.DefaultSessionLimit, db.MaxSessionLimit)
 	filter := service.ListFilter{
@@ -125,7 +125,7 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 		Termination:      in.Termination,
 		HasSecret:        in.HasSecret,
 		Starred:          in.Starred,
-		OrderBy:          string(in.OrderBy),
+		OrderBy:          in.OrderBy,
 		Descending:       optionalBoolValue(in.Descending),
 	}
 	if in.MinToolFailures.IsSet {
@@ -137,6 +137,12 @@ func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
 func (in *sessionFilterInput) dbFilter(includeChildren bool) (db.SessionFilter, error) {
 	if err := validateDateFilterValues(in.Date, in.DateFrom, in.DateTo, in.ActiveSince); err != nil {
 		return db.SessionFilter{}, err
+	}
+	// The order_by param is shared with the list route via this struct; reject
+	// malformed specs here too (the dropped enum used to guard every route),
+	// even though the sidebar index applies its own ordering and ignores it.
+	if _, err := db.ParseSortSpec(in.OrderBy); err != nil {
+		return db.SessionFilter{}, apiError(http.StatusBadRequest, "invalid order_by: "+err.Error())
 	}
 	limit := 0
 	if in.Limit > 0 {
@@ -498,7 +504,7 @@ func (s *Server) humaPublishSession(
 	ctx context.Context,
 	in *publishSessionInput,
 ) (*jsonOutput[publishResponse], error) {
-	token := s.githubToken()
+	token := s.githubToken(ctx)
 	if token == "" {
 		return nil, apiError(http.StatusUnauthorized, "GitHub token not configured")
 	}
@@ -587,6 +593,28 @@ func (s *Server) humaDeleteSession(
 			return nil, handled
 		}
 		return nil, internalError("soft delete session", err)
+	}
+	return &noContentOutput{Status: http.StatusNoContent}, nil
+}
+
+type batchDeleteInput struct {
+	Body struct {
+		SessionIDs []string `json:"session_ids" required:"true" doc:"Session IDs to soft-delete"`
+	}
+}
+
+func (s *Server) humaBatchDeleteSessions(
+	_ context.Context,
+	in *batchDeleteInput,
+) (*noContentOutput, error) {
+	if len(in.Body.SessionIDs) == 0 {
+		return &noContentOutput{Status: http.StatusNoContent}, nil
+	}
+	if _, err := s.db.SoftDeleteSessions(in.Body.SessionIDs); err != nil {
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("batch delete sessions", err)
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
@@ -783,7 +811,7 @@ func (s *Server) humaEvents(
 	_ context.Context,
 	_ *emptyInput,
 ) (*huma.StreamResponse, error) {
-	if s.engine == nil || s.broadcaster == nil {
+	if s.broadcaster == nil {
 		return nil, huma.ErrorWithHeaders(
 			apiError(http.StatusServiceUnavailable, "events not available in this mode"),
 			http.Header{"Retry-After": []string{"300"}},

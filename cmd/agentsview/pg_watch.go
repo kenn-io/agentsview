@@ -11,9 +11,7 @@ import (
 
 	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
-	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -112,21 +110,34 @@ func (p *pgPusher) reset() {
 // resolveWatchTargets validates PG config and resolves the project
 // filters for a watch run.
 func resolveWatchTargets(
-	appCfg config.Config, cfg PGPushConfig,
-) (pgCfg config.PGConfig, projects, exclude []string, err error) {
-	pgCfg, err = appCfg.ResolvePG()
+	appCfg config.Config,
+	cfg PGPushConfig,
+	targetName string,
+) (
+	target pgTargetSelection,
+	projects, exclude []string,
+	err error,
+) {
+	targets, err := resolvePGTargetSelections(
+		appCfg, targetName, false,
+	)
 	if err != nil {
-		return config.PGConfig{}, nil, nil, err
+		return pgTargetSelection{}, nil, nil, err
 	}
-	if pgCfg.URL == "" {
-		return config.PGConfig{}, nil, nil,
+	target = targets[0]
+	target, err = resolvePGTargetConfig(appCfg, target)
+	if err != nil {
+		return pgTargetSelection{}, nil, nil, err
+	}
+	if target.PG.URL == "" {
+		return pgTargetSelection{}, nil, nil,
 			fmt.Errorf("url not configured")
 	}
-	projects, exclude, err = resolvePushProjects(pgCfg, cfg)
+	projects, exclude, err = resolvePushProjects(target.PG, cfg)
 	if err != nil {
-		return config.PGConfig{}, nil, nil, err
+		return pgTargetSelection{}, nil, nil, err
 	}
-	return pgCfg, projects, exclude, nil
+	return target, projects, exclude, nil
 }
 
 const (
@@ -137,19 +148,24 @@ const (
 // runPGPushWatch runs the long-lived auto-push daemon: an initial
 // catch-up push, then pushes triggered by file changes (debounced)
 // and a periodic floor tick, until interrupted.
-func runPGPushWatch(cfg PGPushConfig) {
+func runPGPushWatch(
+	cfg PGPushConfig,
+	targetName string,
+) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		log.Fatalf("creating data dir: %v", err)
+		return fmt.Errorf("creating data dir: %w", err)
 	}
 	setupLogFileNamed(appCfg.DataDir, "pg-watch.log")
 
-	pgCfg, projects, exclude, err := resolveWatchTargets(appCfg, cfg)
+	target, projects, exclude, err := resolveWatchTargets(
+		appCfg, cfg, targetName,
+	)
 	if err != nil {
-		fatal("pg push --watch: %v", err)
+		return err
 	}
 
 	debounce := cfg.Debounce
@@ -167,15 +183,15 @@ func runPGPushWatch(cfg PGPushConfig) {
 		Prefix: "pg-watch",
 	}).LockPath()
 	if err != nil {
-		fatal("pg push --watch: %v", err)
+		return err
 	}
 	lock := flock.New(lockPath)
 	locked, err := lock.TryLock()
 	if err != nil {
-		fatal("pg push --watch: locking %s: %v", lockPath, err)
+		return fmt.Errorf("locking %s: %w", lockPath, err)
 	}
 	if !locked {
-		fatal("pg push --watch: already locked (%s)", lockPath)
+		return fmt.Errorf("already locked (%s)", lockPath)
 	}
 	defer func() {
 		if rerr := lock.Unlock(); rerr != nil {
@@ -183,102 +199,25 @@ func runPGPushWatch(cfg PGPushConfig) {
 		}
 	}()
 
-	applyClassifierConfig(appCfg)
-	database := mustOpenDB(appCfg)
-	defer database.Close()
-
-	for _, def := range parser.Registry {
-		if !appCfg.IsUserConfigured(def.Type) {
-			continue
-		}
-		warnMissingDirs(appCfg.ResolveDirs(def.Type), string(def.Type))
-	}
-	cleanResyncTemp(appCfg.DBPath)
-
 	ctx, stop := signal.NotifyContext(
 		context.Background(), os.Interrupt, syscall.SIGTERM,
 	)
 	defer stop()
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
-		AgentDirs:               appCfg.AgentDirs,
-		Machine:                 "local",
-		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
-	})
-
-	// Initial local sync. A data-version change forces a full push.
-	didResync := cfg.Full || database.NeedsResync()
-	if didResync {
-		engine.ResyncAll(ctx, nil)
-	} else {
-		engine.SyncAll(ctx, nil)
-	}
-	if ctx.Err() != nil {
-		return
-	}
-
-	pusher := &pgPusher{
-		localSync: func(c context.Context) error {
-			engine.SyncAll(c, nil)
-			return nil
-		},
-		connect: func() (pgTarget, error) {
-			// Repeated inside this closure (not only in the outer
-			// body) because TestEveryStoreOpenPathIsWired scans each
-			// function literal independently and requires a
-			// classifier-wiring call in the same body as postgres.New.
-			applyClassifierConfig(appCfg)
-			s, cErr := postgres.New(
-				pgCfg.URL, pgCfg.Schema, database,
-				pgCfg.MachineName, pgCfg.AllowInsecure,
-				postgres.SyncOptions{
-					Projects:        projects,
-					ExcludeProjects: exclude,
-				},
-			)
-			if cErr != nil {
-				return nil, cErr
-			}
-			return s, nil
-		},
-	}
-	defer pusher.reset()
-
 	log.Printf(
 		"pg watch: starting (machine=%q debounce=%s interval=%s)",
-		pgCfg.MachineName, debounce, interval,
-	)
-	fmt.Printf(
-		"agentsview pg watch: pushing to PostgreSQL as %q "+
-			"(debounce %s, floor %s)\n",
-		pgCfg.MachineName, debounce, interval,
+		target.PG.MachineName, debounce, interval,
 	)
 
-	// Initial catch-up push (full if a resync just happened).
-	if err := pusher.push(ctx, reasonStartup, didResync); err != nil {
-		log.Printf("pg watch: initial push failed: %v", err)
+	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
+	if err != nil {
+		return fmt.Errorf("opening writer: %w", err)
 	}
-
-	loop, ticker := newPushLoop(debounce, interval,
-		func(c context.Context, r pushReason) error {
-			return pusher.push(c, r, false)
-		},
-	)
-	defer ticker.Stop()
-
-	stopWatcher, unwatchedDirs := startFileWatcher(appCfg, engine,
-		func(paths []string) {
-			engine.SyncPaths(paths)
-			loop.NotifyDirty()
-		},
-	)
-	defer stopWatcher()
-	if len(unwatchedDirs) > 0 {
-		log.Printf(
-			"pg watch: %d root(s) not watched; relying on the %s floor for coverage",
-			len(unwatchedDirs), interval,
-		)
+	defer cleanup()
+	if err := backend.PGPushWatch(
+		ctx, target, cfg, projects, exclude, debounce, interval,
+	); err != nil {
+		return err
 	}
-
-	loop.Run(ctx)
+	return nil
 }

@@ -115,7 +115,8 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
 			COALESCE(tc.skill_name, ''), COALESCE(tc.result_content_length, 0),
 			COALESCE(tc.result_content, ''),
-			COALESCE(tc.subagent_session_id, '')
+			COALESCE(tc.subagent_session_id, ''),
+			COALESCE(tc.file_path, '')
 		FROM tool_calls tc
 		JOIN messages m ON m.session_id = tc.session_id
 			AND m.id = tc.message_id
@@ -133,10 +134,14 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 		if err := rows.Scan(&ordinal, &callIndex, &tc.ToolName,
 			&tc.Category, &tc.ToolUseID, &tc.InputJSON,
 			&tc.SkillName, &tc.ResultContentLength,
-			&tc.ResultContent, &tc.SubagentSessionID); err != nil {
+			&tc.ResultContent, &tc.SubagentSessionID, &tc.FilePath); err != nil {
 			return err
 		}
-		if i, ok := index[ordinal]; ok {
+		tc.CallIndex = callIndex
+		// A negative call_index (corrupt or malformed mirror row) would
+		// skip the grow loop and panic on the [callIndex] assignment, so
+		// guard it the same way the Postgres store does.
+		if i, ok := index[ordinal]; ok && callIndex >= 0 {
 			for len(msgs[i].ToolCalls) <= callIndex {
 				msgs[i].ToolCalls = append(msgs[i].ToolCalls, db.ToolCall{})
 			}
@@ -176,7 +181,7 @@ func (s *Store) attachToolResultEvents(
 			return err
 		}
 		ev.Timestamp = formatDBTime(ts)
-		if i, ok := index[ordinal]; ok && callIndex < len(msgs[i].ToolCalls) {
+		if i, ok := index[ordinal]; ok && callIndex >= 0 && callIndex < len(msgs[i].ToolCalls) {
 			msgs[i].ToolCalls[callIndex].ResultEvents = append(
 				msgs[i].ToolCalls[callIndex].ResultEvents, ev,
 			)

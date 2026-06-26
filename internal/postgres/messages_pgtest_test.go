@@ -657,6 +657,67 @@ func TestGetMessagesIsSystemField(t *testing.T) {
 	assert.True(t, all[1].IsSystem)
 }
 
+// TestGetMessagesToolCallFilePathAndCallIndex verifies the PG message
+// hydrator populates db.ToolCall.FilePath and CallIndex, mirroring the SQLite
+// round-trip coverage (db.TestResolveToolCallsDerivesPositionalCallIndex) so
+// GetMessages/GetAllMessages consumers see these fields at parity.
+func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_toolcall_fields_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	_, err = pg.Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('tc-fields-001', 'test-machine', 'test-project', 'claude',
+			 'tools', '2026-03-16T10:00:00Z'::timestamptz, 1, 0)`)
+	require.NoError(t, err, "insert session")
+	_, err = pg.Exec(`
+		INSERT INTO messages
+			(session_id, ordinal, role, content,
+			 timestamp, content_length, has_tool_use)
+		VALUES
+			('tc-fields-001', 0, 'assistant', 'tools',
+			 '2026-03-16T10:00:00Z'::timestamptz, 5, TRUE)`)
+	require.NoError(t, err, "insert message")
+	// Three tool calls on one message, call_index 0/1/2, distinct file_path.
+	_, err = pg.Exec(`
+		INSERT INTO tool_calls
+			(session_id, tool_name, category, call_index,
+			 message_ordinal, file_path)
+		VALUES
+			('tc-fields-001', 'Read', 'Read', 0, 0, 'a.go'),
+			('tc-fields-001', 'Edit', 'Edit', 1, 0, 'b.go'),
+			('tc-fields-001', 'Write', 'Write', 2, 0, 'c.go')`)
+	require.NoError(t, err, "insert tool_calls")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	all, err := store.GetAllMessages(ctx, "tc-fields-001")
+	require.NoError(t, err, "GetAllMessages")
+	require.Len(t, all, 1)
+	calls := all[0].ToolCalls
+	require.Len(t, calls, 3)
+	for i, tc := range calls {
+		assert.Equal(t, i, tc.CallIndex, "call %d index", i)
+	}
+	assert.Equal(t, "a.go", calls[0].FilePath)
+	assert.Equal(t, "b.go", calls[1].FilePath)
+	assert.Equal(t, "c.go", calls[2].FilePath)
+}
+
 // TestGetMessagesIDPopulated regresses #439: scanPGMessages must
 // populate db.Message.ID with a unique-within-session value that
 // matches int64(ordinal). The frontend keys {#each messages
@@ -750,4 +811,98 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 				"frontend turnByMessage join will drop this turn",
 			turn.MessageID)
 	}
+}
+
+// TestPGSearchOperatorTokenNoError mirrors the SQLite FTS 500 regression on the
+// PostgreSQL/ILIKE backend: a single token containing operator characters
+// (hyphen, colon), prepared the way the HTTP handler does, must match content
+// and not error. ILIKE has no FTS-operator hazard, but this pins parity.
+func TestPGSearchOperatorTokenNoError(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, false)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	_, err = pg.Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('optok-001', 'test-machine', 'test-project', 'claude',
+			 'first msg text',
+			 '2026-03-20T10:00:00Z'::timestamptz, 2, 2)
+		ON CONFLICT (id) DO NOTHING`)
+	require.NoError(t, err, "insert session")
+	_, err = pg.Exec(`
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp, content_length)
+		VALUES
+			('optok-001', 0, 'user', 'hit error-401 from the api',
+			 '2026-03-20T10:00:00Z'::timestamptz, 26),
+			('optok-001', 1, 'assistant', 'returned status:500 to client',
+			 '2026-03-20T10:00:01Z'::timestamptz, 30)
+		ON CONFLICT DO NOTHING`)
+	require.NoError(t, err, "insert messages")
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	for _, raw := range []string{"error-401", "status:500"} {
+		page, err := store.Search(context.Background(), db.SearchFilter{
+			Query: db.PrepareFTSQuery(raw), Limit: 10,
+		})
+		require.NoError(t, err, "Search(%q)", raw)
+		require.Len(t, page.Results, 1, "results for %q", raw)
+		assert.Equal(t, "optok-001", page.Results[0].SessionID, "session for %q", raw)
+	}
+}
+
+// TestPGSearchMultiTermAND verifies that a multi-term query matches a session
+// only when every term appears in its content (AND), matching SQLite FTS5's
+// implicit AND so the same user query behaves identically across backends.
+func TestPGSearchMultiTermAND(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, false)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	_, err = pg.Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, first_message,
+			 started_at, message_count, user_message_count)
+		VALUES
+			('andboth-001', 'test-machine', 'test-project', 'claude',
+			 'first msg text',
+			 '2026-03-21T10:00:00Z'::timestamptz, 2, 2),
+			('andone-001', 'test-machine', 'test-project', 'claude',
+			 'first msg text',
+			 '2026-03-21T11:00:00Z'::timestamptz, 2, 2)
+		ON CONFLICT (id) DO NOTHING`)
+	require.NoError(t, err, "insert sessions")
+	_, err = pg.Exec(`
+		INSERT INTO messages
+			(session_id, ordinal, role, content, timestamp, content_length)
+		VALUES
+			('andboth-001', 0, 'user', 'pgquickterm and pgfoxterm both here',
+			 '2026-03-21T10:00:00Z'::timestamptz, 35),
+			('andone-001', 0, 'user', 'only pgquickterm present',
+			 '2026-03-21T11:00:00Z'::timestamptz, 24)
+		ON CONFLICT DO NOTHING`)
+	require.NoError(t, err, "insert messages")
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	page, err := store.Search(context.Background(), db.SearchFilter{
+		Query: db.PrepareFTSQuery("pgquickterm pgfoxterm"), Limit: 10,
+	})
+	require.NoError(t, err, "Search")
+	require.Len(t, page.Results, 1, "only the session containing both terms")
+	assert.Equal(t, "andboth-001", page.Results[0].SessionID, "session")
 }

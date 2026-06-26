@@ -96,6 +96,55 @@ func TestDuckDBSort_SecretsVersioned(t *testing.T) {
 		"current-version session leads once the stale 9 is gated to 0")
 }
 
+func multiKeySeed(id string, msgs int, started string) db.SessionBatchWrite {
+	return db.SessionBatchWrite{
+		Session: db.Session{
+			ID:               id,
+			Project:          "mk",
+			Machine:          "test-machine",
+			Agent:            "claude",
+			StartedAt:        new(started),
+			MessageCount:     msgs,
+			UserMessageCount: 2,
+			RelationshipType: "root",
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}
+}
+
+// TestDuckDBSort_MultiKey mirrors the SQLite mixed-direction multi-key behavior
+// on DuckDB (CAST cursor placeholders, lexicographic OR-expansion): messages
+// ascending, then started descending, with the id tie-break following the last
+// term's direction. The paginated walk must equal the full-listing order.
+func TestDuckDBSort_MultiKey(t *testing.T) {
+	store := syncedStoreFromWrites(t, []db.SessionBatchWrite{
+		multiKeySeed("mk-a", 1, "2024-03-01T00:00:00Z"),
+		multiKeySeed("mk-b", 1, "2024-01-01T00:00:00Z"),
+		multiKeySeed("mk-c", 2, "2024-02-01T00:00:00Z"),
+		multiKeySeed("mk-d", 2, "2024-05-01T00:00:00Z"),
+		multiKeySeed("mk-e", 1, "2024-03-01T00:00:00Z"), // ties mk-a
+	})
+	asc, desc := false, true
+	sortKeys := []db.SortKey{
+		{Key: "messages", Descending: &asc},
+		{Key: "started", Descending: &desc},
+	}
+
+	full, err := store.ListSessions(context.Background(), db.SessionFilter{
+		Project: "mk", Sort: sortKeys, Limit: 100,
+	})
+	require.NoError(t, err)
+	want := make([]string, len(full.Sessions))
+	for i, s := range full.Sessions {
+		want[i] = s.ID
+	}
+	require.Equal(t, []string{"mk-e", "mk-a", "mk-b", "mk-d", "mk-c"}, want)
+
+	walked := duckWalk(t, store, db.SessionFilter{Project: "mk", Sort: sortKeys, Limit: 1})
+	require.Equal(t, want, walked, "paginated walk matches full listing")
+}
+
 // TestDuckDBSort_NullsLast mirrors the nullable-sort (health) behavior on
 // DuckDB: NULLs sort last and pagination crosses the sentinel boundary.
 func TestDuckDBSort_NullsLast(t *testing.T) {

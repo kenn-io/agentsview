@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { m } from "../../i18n/index.js";
+  import { onMount, untrack } from "svelte";
   import {
     activity,
     localDateStr,
@@ -7,9 +8,24 @@
   } from "../../stores/activity.svelte.js";
   import { events } from "../../stores/events.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { router } from "../../stores/router.svelte.js";
+  import {
+    yokedDates,
+    panelDateState,
+    rangeToActivityParams,
+    type PanelDateState,
+  } from "../../stores/yokedDates.svelte.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
-  import { ChevronDownIcon } from "../../icons.js";
+  import OptionTypeahead, {
+    type TypeaheadOption,
+  } from "../layout/OptionTypeahead.svelte";
+  import {
+    addDays,
+    endOfMonth,
+    startOfIsoWeek,
+    startOfMonth,
+  } from "../../utils/dates.js";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -35,6 +51,10 @@
       ? localDateStr(new Date(new Date(activity.report.range_end).getTime() - 1))
       : "",
   );
+  const activityPanelDate = $derived(currentActivityPanelDate());
+  const activityDateSignature = $derived(dateSignature(activityPanelDate));
+  let activityYokeReady = $state(false);
+  let lastActivityDateSignature = "";
 
   // Page-local drill-down: clicking a Concurrency bucket filters the sessions
   // table to the sessions active in that slot. Deliberately not URL-synced — it
@@ -54,28 +74,170 @@
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
   const today = $derived(localDateStr(new Date()));
+  const agentOptions = $derived.by((): TypeaheadOption[] => [
+    {
+      name: "",
+      label: m.activity_all_agents(),
+      displayLabel: m.activity_all_agents(),
+    },
+    ...activity.agents.map((agent) => ({
+      name: agent.name,
+      label: `${agent.name} (${agent.session_count})`,
+      displayLabel: agent.name,
+      count: agent.session_count,
+    })),
+  ]);
+  const machineOptions = $derived.by((): TypeaheadOption[] => [
+    {
+      name: "",
+      label: m.activity_all_machines(),
+      displayLabel: m.activity_all_machines(),
+    },
+    ...activity.machines.map((machine) => ({
+      name: machine,
+      label: machine,
+      displayLabel: machine,
+    })),
+  ]);
+  const automationOptions: TypeaheadOption[] = $derived([
+    {
+      name: "all",
+      label: m.activity_all_sessions(),
+      displayLabel: m.activity_all_sessions(),
+    },
+    {
+      name: "interactive",
+      label: m.activity_interactive(),
+      displayLabel: m.activity_interactive(),
+    },
+    {
+      name: "automated",
+      label: m.activity_automated(),
+      displayLabel: m.activity_automated(),
+    },
+  ]);
 
   // The activity store is the source of truth: day/week/month map to a calendar
   // period anchored on `date`; custom maps to from/to. Relative windows have no
-  // native equivalent here, so applyRange resolves them to a pinned custom range.
+  // native API equivalent here, so applyRange sends concrete dates while the
+  // URL keeps `window_days` to preserve rolling intent across reloads.
   const rangeSelection = $derived.by((): RangeSelection => {
     if (activity.preset === "custom") {
+      if (activity.rollingWindowDays !== null) {
+        return { mode: "relative", days: activity.rollingWindowDays };
+      }
       return { mode: "custom", from: activity.from, to: activity.to };
     }
     return { mode: "calendar", unit: activity.preset, anchor: activity.date };
   });
 
   function applyRange(sel: RangeSelection) {
+    let yokeState: PanelDateState | null = null;
     if (sel.mode === "calendar") {
       activity.setPreset(sel.unit);
       activity.setDate(sel.anchor);
     } else {
       const range = resolveRange(sel, earliestSession);
-      activity.setPreset("custom");
-      activity.setFrom(range.from);
-      activity.setTo(range.to);
+      yokeState = yokeStateForSelection(sel, range);
+      activity.setCustomRange(
+        range.from,
+        range.to,
+        yokeState?.mode === "rolling"
+          ? yokeState.windowDays ?? null
+          : null,
+      );
+    }
+    if (yokeState) {
+      yokedDates.updateFromPanel(yokeState);
+      lastActivityDateSignature = dateSignature(
+        currentActivityPanelDate(),
+      );
     }
     activity.load();
+  }
+
+  function yokeStateForSelection(
+    sel: RangeSelection,
+    range: { from: string; to: string },
+  ): PanelDateState | null {
+    if (sel.mode === "relative" && sel.days > 0) {
+      return panelDateState(range.from, range.to, {
+        mode: "rolling",
+        windowDays: sel.days,
+      });
+    }
+    return panelDateState(range.from, range.to, { mode: "fixed" });
+  }
+
+  function currentActivityPanelDate(): PanelDateState | null {
+    if (activity.preset === "custom") {
+      if (activity.rollingWindowDays !== null) {
+        return panelDateState(activity.from, activity.to, {
+          mode: "rolling",
+          windowDays: activity.rollingWindowDays,
+        });
+      }
+      return panelDateState(activity.from, activity.to, { mode: "fixed" });
+    }
+    if (activity.preset === "week") {
+      const from = startOfIsoWeek(activity.date);
+      return panelDateState(from, addDays(from, 6), {
+        mode: "fixed",
+      });
+    }
+    if (activity.preset === "month") {
+      const from = startOfMonth(activity.date);
+      return panelDateState(from, endOfMonth(from), {
+        mode: "fixed",
+      });
+    }
+    return panelDateState(activity.date, activity.date, { mode: "fixed" });
+  }
+
+  function dateSignature(state: PanelDateState | null): string {
+    if (!state) return "";
+    return [
+      state.mode ?? "fixed",
+      state.windowDays ?? "",
+      state.from,
+      state.to,
+    ].join(":");
+  }
+
+  function hasActivityDateParams(params: Record<string, string>): boolean {
+    return (
+      !!params.preset ||
+      !!params.date ||
+      !!params.from ||
+      !!params.to ||
+      !!params.window_days
+    );
+  }
+
+  function applyActivityPanelDate(state: PanelDateState): void {
+    activity.setCustomRange(
+      state.from,
+      state.to,
+      state.mode === "rolling" ? state.windowDays ?? null : null,
+    );
+  }
+
+  function seedActivityYoke(): void {
+    if (hasActivityDateParams(router.params)) {
+      const state = currentActivityPanelDate();
+      if (state) yokedDates.updateFromPanel(state);
+      return;
+    }
+
+    const seed = yokedDates.seedForPanel();
+    const params = seed ? rangeToActivityParams(seed) : {};
+    const state = panelDateState(params.from ?? "", params.to ?? "", {
+      mode: params.window_days ? "rolling" : "fixed",
+      windowDays: params.window_days
+        ? Number.parseInt(params.window_days, 10)
+        : undefined,
+    });
+    if (state) applyActivityPanelDate(state);
   }
 
   function onProjectSelect(value: string) {
@@ -83,20 +245,18 @@
     activity.load();
   }
 
-  function onAgentChange(e: Event) {
-    activity.setAgent((e.currentTarget as HTMLSelectElement).value);
+  function onAgentChange(value: string) {
+    activity.setAgent(value);
     activity.load();
   }
 
-  function onMachineChange(e: Event) {
-    activity.setMachine((e.currentTarget as HTMLSelectElement).value);
+  function onMachineChange(value: string) {
+    activity.setMachine(value);
     activity.load();
   }
 
-  function onAutomationChange(e: Event) {
-    activity.setAutomation(
-      (e.currentTarget as HTMLSelectElement).value as Automation,
-    );
+  function onAutomationChange(value: string) {
+    activity.setAutomation(value as Automation);
     activity.load();
   }
 
@@ -107,6 +267,9 @@
     // Idempotent; loads the activity filter option lists with one-shot
     // and automated sessions included, matching the activity report.
     activity.loadFilterOptions();
+    seedActivityYoke();
+    lastActivityDateSignature = dateSignature(currentActivityPanelDate());
+    activityYokeReady = true;
     // The page owns the initial load. attach() above ran hydrateFromUrl, so the
     // range/filters are set before this first load. RefreshControl handles the
     // periodic refresh after that.
@@ -120,6 +283,17 @@
       detach();
       unsubEvents();
     };
+  });
+
+  $effect(() => {
+    const state = activityPanelDate;
+    const signature = activityDateSignature;
+    untrack(() => {
+      if (!activityYokeReady || !state) return;
+      if (signature === lastActivityDateSignature) return;
+      lastActivityDateSignature = signature;
+      yokedDates.updateFromPanel(state);
+    });
   });
 </script>
 
@@ -139,62 +313,39 @@
       onselect={onProjectSelect}
     />
 
-    <div class="filter-select-wrap">
-      <select
-        class="filter-select"
+    <div class="toolbar-typeahead">
+      <OptionTypeahead
+        options={agentOptions}
         value={activity.agent}
-        onchange={onAgentChange}
-        aria-label="Filter by agent"
-      >
-        <option value="">All Agents</option>
-        {#each activity.agents as a}
-          <option value={a.name}>{a.name}</option>
-        {/each}
-      </select>
-      <ChevronDownIcon
-        class="filter-select-chevron"
-        size="12"
-        strokeWidth="2.2"
-        aria-hidden="true"
+        fallbackLabel={m.activity_all_agents()}
+        placeholder={m.activity_filter_agents_placeholder()}
+        title={m.activity_filter_by_agent()}
+        emptyLabel={m.activity_no_matching_agents()}
+        onselect={onAgentChange}
       />
     </div>
 
-    <div class="filter-select-wrap">
-      <select
-        class="filter-select"
+    <div class="toolbar-typeahead">
+      <OptionTypeahead
+        options={machineOptions}
         value={activity.machine}
-        onchange={onMachineChange}
-        aria-label="Filter by machine"
-      >
-        <option value="">All Machines</option>
-        {#each activity.machines as m}
-          <option value={m}>{m}</option>
-        {/each}
-      </select>
-      <ChevronDownIcon
-        class="filter-select-chevron"
-        size="12"
-        strokeWidth="2.2"
-        aria-hidden="true"
+        fallbackLabel={m.activity_all_machines()}
+        placeholder={m.activity_filter_machines_placeholder()}
+        title={m.activity_filter_by_machine()}
+        emptyLabel={m.activity_no_matching_machines()}
+        onselect={onMachineChange}
       />
     </div>
 
-    <div class="filter-select-wrap">
-      <select
-        class="filter-select"
+    <div class="toolbar-typeahead compact">
+      <OptionTypeahead
+        options={automationOptions}
         value={activity.automation}
-        onchange={onAutomationChange}
-        aria-label="Filter by automation"
-      >
-        <option value="all">All Sessions</option>
-        <option value="interactive">Interactive</option>
-        <option value="automated">Automated</option>
-      </select>
-      <ChevronDownIcon
-        class="filter-select-chevron"
-        size="12"
-        strokeWidth="2.2"
-        aria-hidden="true"
+        fallbackLabel={m.activity_all_sessions()}
+        placeholder={m.activity_filter_automation_placeholder()}
+        title={m.activity_filter_by_automation()}
+        emptyLabel={m.activity_no_automation_filters()}
+        onselect={onAutomationChange}
       />
     </div>
 
@@ -202,7 +353,7 @@
       lastUpdatedAt={activity.lastUpdatedAt}
       busy={activity.loading}
       onRefresh={() => activity.load({ background: true })}
-      label="Refresh activity"
+      label={m.activity_refresh()}
     />
   </div>
 
@@ -233,7 +384,7 @@
         <Breakdowns report={activity.report} />
       </div>
     {:else if activity.loading}
-      <div class="status">Loading activity report...</div>
+      <div class="status">{m.activity_loading_report()}</div>
     {:else if activity.error}
       <div class="status error">
         <span>{activity.error}</span>
@@ -282,45 +433,14 @@
     flex-shrink: 0;
   }
 
-  .filter-select-wrap {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    color: var(--text-secondary);
+  .toolbar-typeahead {
+    --typeahead-min-width: 132px;
+    --typeahead-max-width: 184px;
   }
 
-  .filter-select {
-    appearance: none;
-    -webkit-appearance: none;
-    height: 26px;
-    padding: 0 28px 0 8px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .filter-select:hover {
-    border-color: var(--border-default);
-  }
-
-  .filter-select:focus {
-    outline: none;
-    border-color: var(--accent-blue);
-  }
-
-  :global(.filter-select-chevron) {
-    position: absolute;
-    top: 50%;
-    right: 8px;
-    width: 12px;
-    height: 12px;
-    color: currentColor;
-    opacity: 0.72;
-    pointer-events: none;
-    transform: translateY(-50%);
+  .toolbar-typeahead.compact {
+    --typeahead-min-width: 118px;
+    --typeahead-max-width: 150px;
   }
 
   .activity-content {
@@ -366,6 +486,6 @@
 
   .retry-btn:hover {
     background: var(--accent-red);
-    color: #fff;
+    color: var(--accent-red-foreground);
   }
 </style>

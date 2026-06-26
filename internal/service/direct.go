@@ -79,11 +79,28 @@ func buildSessionDetail(s *db.Session) *SessionDetail {
 			CompactionCount:        s.CompactionCount,
 			MidTaskCompactionCount: s.MidTaskCompactionCount,
 			PressureMax:            s.ContextPressureMax,
+			Heuristics:             persistedHeuristics(s),
 		})
 		detail.HealthScoreBasis = result.Basis
 		detail.HealthPenalties = result.Penalties
 	}
 	return detail
+}
+
+func persistedHeuristics(s *db.Session) signals.HeuristicSignals {
+	qs := s.StoredQualitySignals()
+	if qs == nil {
+		return signals.HeuristicSignals{}
+	}
+	return signals.HeuristicSignals{
+		ShortPromptCount:            qs.ShortPromptCount,
+		UnstructuredStart:           qs.UnstructuredStart,
+		MissingSuccessCriteriaCount: qs.MissingSuccessCriteriaCount,
+		MissingVerificationCount:    qs.MissingVerificationCount,
+		DuplicatePromptCount:        qs.DuplicatePromptCount,
+		NoCodeContextCount:          qs.NoCodeContextCount,
+		RunawayToolLoopCount:        qs.RunawayToolLoopCount,
+	}
 }
 
 func (b *directBackend) List(
@@ -106,10 +123,10 @@ func (b *directBackend) List(
 			"list: invalid active_since %q: use RFC3339", f.ActiveSince,
 		)
 	}
-	if !db.ValidSortKey(f.OrderBy) {
+	if _, err := db.ParseSortSpec(f.OrderBy); err != nil {
 		return nil, fmt.Errorf(
-			"list: invalid sort %q: must be one of %s",
-			f.OrderBy, strings.Join(db.SortKeys(), ", "),
+			"list: invalid sort %q: %v (valid keys: %s)",
+			f.OrderBy, err, strings.Join(db.SortKeys(), ", "),
 		)
 	}
 	// Match the HTTP handler's clampLimit semantics: values over
@@ -159,9 +176,17 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		HasSecret:            f.HasSecret,
 		Starred:              f.Starred,
 		SecretsRulesVersions: secrets.ActiveRulesVersions(),
-		OrderBy:              f.OrderBy,
-		Descending:           f.Descending,
 	}
+	// Parse the public sort spec into the structured, per-key form. The spec is
+	// validated in List before this runs, so a parse error here is treated
+	// defensively as the default sort. The legacy Descending param fills the
+	// direction of any term that carries no explicit :asc/:desc suffix; it is
+	// also carried through so an empty order_by + descending still flips the
+	// implicit default recent key.
+	if keys, err := db.ParseSortSpec(f.OrderBy); err == nil {
+		filter.Sort = db.ApplyFallbackDirection(keys, f.Descending)
+	}
+	filter.Descending = f.Descending
 	if f.Outcome != "" {
 		filter.Outcome = strings.Split(f.Outcome, ",")
 	}
@@ -471,6 +496,71 @@ func (b *directBackend) Watch(
 		}
 	}()
 	return out, nil
+}
+
+// Search runs a full-text session search, mirroring the logic in
+// internal/server.humaSearch so both transports return identical
+// results: the raw query is normalized via db.PrepareFTSQuery, the
+// limit is clamped to [1, db.MaxSearchLimit] (defaulting to
+// db.DefaultSearchLimit), and a store without an FTS index yields
+// ErrSearchUnavailable rather than an opaque failure.
+func (b *directBackend) Search(
+	ctx context.Context, req SearchRequest,
+) (*SessionSearchResult, error) {
+	query := strings.TrimSpace(req.Query)
+	if query == "" {
+		return nil, &db.SearchInputError{Msg: "search: query required"}
+	}
+	if !b.db.HasFTS() {
+		return nil, ErrSearchUnavailable
+	}
+	// Match the HTTP handler's clampLimit semantics: <=0 -> default,
+	// over-max -> max. (db.Search would otherwise snap an over-max
+	// value to the default; pre-clamping keeps parity with the REST
+	// path, which clamps before calling the store.)
+	limit := req.Limit
+	if limit <= 0 {
+		limit = db.DefaultSearchLimit
+	} else if limit > db.MaxSearchLimit {
+		limit = db.MaxSearchLimit
+	}
+	page, err := b.db.Search(ctx, db.SearchFilter{
+		Query:   db.PrepareFTSQuery(query),
+		Project: req.Project,
+		Sort:    req.Sort,
+		Cursor:  req.Cursor,
+		Limit:   limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	results := page.Results
+	if results == nil {
+		results = []db.SearchResult{}
+	}
+	return &SessionSearchResult{
+		Results:    results,
+		NextCursor: page.NextCursor,
+	}, nil
+}
+
+// UsageSummary validates the request, runs the daily-usage query
+// through the store, and folds the per-day breakdowns into range-wide
+// totals. It works over SQLite and the PG read store because
+// db.GetDailyUsage is on db.Store; a read store that cannot serve usage
+// returns db.ErrReadOnly, which callers surface as 501.
+func (b *directBackend) UsageSummary(
+	ctx context.Context, req UsageRequest,
+) (*UsageSummaryResult, error) {
+	f, err := BuildUsageFilter(req)
+	if err != nil {
+		return nil, err
+	}
+	result, err := b.db.GetDailyUsage(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	return buildUsageSummary(f, result), nil
 }
 
 // SearchContent maps the transport-neutral request to a

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import type { ActivitySessionRow } from "../../api/generated/index";
   import { router } from "../../stores/router.svelte.js";
@@ -134,7 +135,7 @@
 
   function rowModel(row: ActivitySessionRow): string {
     const models = (row.models ?? []) as string[];
-    if (models.length > 1) return "mixed";
+    if (models.length > 1) return m.activity_mixed();
     return row.primary_model || "—";
   }
 
@@ -144,7 +145,7 @@
     if (!ts) return "";
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleTimeString([], {
+    return formatDateTime(d, {
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23",
@@ -166,13 +167,13 @@
     label: string;
   }
 
-  const sortColumns: Column[] = [
-    { key: "project", label: "Project" },
-    { key: "agent", label: "Agent" },
-    { key: "agent_minutes", label: "Agent-min" },
-    { key: "cost", label: "Cost" },
-    { key: "first_active", label: "Window" },
-  ];
+  const sortColumns: Column[] = $derived([
+    { key: "project", label: m.activity_project() },
+    { key: "agent", label: m.activity_agent() },
+    { key: "agent_minutes", label: m.activity_agent_min() },
+    { key: "cost", label: m.activity_cost() },
+    { key: "first_active", label: m.activity_window() },
+  ]);
 
   function ariaSort(key: SortKey): "ascending" | "descending" | "none" {
     if (sortKey !== key) return "none";
@@ -182,23 +183,23 @@
 
 <div class="sessions-table">
   <div class="sessions-header">
-    <h3 class="chart-title">Sessions</h3>
+    <h3 class="chart-title">{m.activity_sessions()}</h3>
     <div class="header-meta">
       {#if filterSet}
         <button
           type="button"
           class="filter-badge"
           onclick={() => onClearFilter?.()}
-          title="Clear time filter"
+          title={m.activity_clear_time_filter()}
         >
-          <span>Active: {filterLabel}</span>
+          <span>{m.activity_active_filter({ label: filterLabel })}</span>
           <span class="filter-badge-x">
             <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
           </span>
         </button>
       {/if}
       {#if rows.length > 0}
-        <span class="count">{rows.length} total</span>
+        <span class="count">{m.activity_total_count({ count: rows.length })}</span>
       {/if}
     </div>
   </div>
@@ -208,8 +209,8 @@
       <table class="table">
         <thead>
           <tr>
-            <th class="col-session" scope="col">Session</th>
-            <th class="col-model" scope="col">Model</th>
+            <th class="col-session" scope="col">{m.activity_session()}</th>
+            <th class="col-model" scope="col">{m.activity_model()}</th>
             {#each sortColumns as col}
               <th
                 class="col-sortable"
@@ -264,7 +265,7 @@
                     {row.title || row.session_id}
                   </a>
                   {#if row.is_automated}
-                    <span class="auto-badge" title="Automated session">Auto</span>
+                    <span class="auto-badge" title={m.activity_automated_session()}>{m.activity_auto()}</span>
                   {/if}
                 </div>
               </td>

@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_path   TEXT,
     file_size   INTEGER,
     file_mtime  INTEGER,
+    next_ordinal INTEGER NOT NULL DEFAULT 0,
+    last_entry_uuid TEXT,
     file_inode  INTEGER,
     file_device INTEGER,
     file_hash   TEXT,
@@ -41,6 +43,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     health_grade TEXT,
     has_tool_calls INTEGER NOT NULL DEFAULT 0,
     has_context_data INTEGER NOT NULL DEFAULT 0,
+    quality_signal_version INTEGER NOT NULL DEFAULT 0,
+    short_prompt_count INTEGER NOT NULL DEFAULT 0,
+    unstructured_start INTEGER NOT NULL DEFAULT 0,
+    missing_success_criteria_count INTEGER NOT NULL DEFAULT 0,
+    missing_verification_count INTEGER NOT NULL DEFAULT 0,
+    duplicate_prompt_count INTEGER NOT NULL DEFAULT 0,
+    no_code_context_count INTEGER NOT NULL DEFAULT 0,
+    runaway_tool_loop_count INTEGER NOT NULL DEFAULT 0,
     data_version INTEGER NOT NULL DEFAULT 0,
     cwd TEXT NOT NULL DEFAULT '',
     git_branch TEXT NOT NULL DEFAULT '',
@@ -172,6 +182,31 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events(occurred_at);
 
+CREATE TABLE IF NOT EXISTS cursor_usage_events (
+    id INTEGER PRIMARY KEY,
+    occurred_at TEXT NOT NULL,
+    model TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    charged_cents REAL NOT NULL DEFAULT 0,
+    cursor_token_fee REAL NOT NULL DEFAULT 0,
+    user_id TEXT NOT NULL DEFAULT '',
+    user_email TEXT NOT NULL DEFAULT '',
+    is_headless INTEGER NOT NULL DEFAULT 0,
+    dedup_key TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup
+    ON cursor_usage_events(dedup_key)
+    WHERE dedup_key != '';
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
+    ON cursor_usage_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
+    ON cursor_usage_events(model);
+
 -- Tool calls table
 CREATE TABLE IF NOT EXISTS tool_calls (
     id         INTEGER PRIMARY KEY,
@@ -186,7 +221,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     skill_name  TEXT,
     result_content_length INTEGER,
     result_content        TEXT,
-    subagent_session_id TEXT
+    subagent_session_id TEXT,
+    file_path  TEXT,
+    call_index INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session
@@ -248,6 +285,15 @@ CREATE TABLE IF NOT EXISTS insights (
     model       TEXT,
     prompt      TEXT,
     content     TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT '',
+    schema_version TEXT NOT NULL DEFAULT '',
+    template_id TEXT NOT NULL DEFAULT '',
+    template_version TEXT NOT NULL DEFAULT '',
+    aggregate_hash TEXT NOT NULL DEFAULT '',
+    cache_key   TEXT NOT NULL DEFAULT '',
+    cache_status TEXT NOT NULL DEFAULT '',
+    provenance_json TEXT NOT NULL DEFAULT '',
+    structured_json TEXT NOT NULL DEFAULT '',
     created_at  TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );

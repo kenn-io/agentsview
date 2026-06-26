@@ -38,6 +38,7 @@ var automatedPrefixes = []string{
 // longer prompts.
 var automatedSubstrings = []string{
 	"invoked by roborev to perform this review",
+	"You are a security code reviewer with an exploitability burden of proof. Review the code changes for concrete vulnerabilities",
 	"You are a conversation title generator",
 }
 

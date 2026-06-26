@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { XIcon } from "../../icons.js";
@@ -72,13 +73,13 @@
 >
   <div class="modal-panel resync-panel">
     <div class="modal-header">
-      <h3 class="modal-title">Full Resync</h3>
+      <h3 class="modal-title">{m.resync_title()}</h3>
       {#if view !== "progress"}
         <button
           class="modal-close"
           onclick={close}
-          title="Close resync dialog"
-          aria-label="Close resync dialog"
+          title={m.resync_close()}
+          aria-label={m.resync_close()}
         >
           <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
         </button>
@@ -88,20 +89,17 @@
     <div class="modal-body">
       {#if view === "confirm"}
         <p class="confirm-text">
-          Re-parse all session files from scratch. Existing
-          sessions will be updated in place &mdash; no data is
-          deleted. Use this after upgrading or when sessions
-          appear incorrect.
+          {m.resync_confirm_text()}
         </p>
         <div class="confirm-actions">
           <button class="modal-btn" onclick={close}>
-            Cancel
+            {m.resync_cancel()}
           </button>
           <button
             class="modal-btn modal-btn-primary"
             onclick={startResync}
           >
-            Start Full Resync
+            {m.resync_start()}
           </button>
         </div>
 
@@ -110,10 +108,9 @@
           <div class="modal-spinner"></div>
           <p class="progress-label">
             {#if sync.progress}
-              Syncing {sync.progress.sessions_done}
-              / {sync.progress.sessions_total} sessions...
+              {m.resync_syncing_progress({ done: sync.progress.sessions_done, total: sync.progress.sessions_total })}
             {:else}
-              Preparing...
+              {m.resync_preparing()}
             {/if}
           </p>
           <div class="progress-bar-track">
@@ -128,11 +125,11 @@
         <div class="done-view">
           {#if sync.lastSyncStats}
             <p class="done-summary">
-              Sessions synced: {sync.lastSyncStats.synced}
+              {m.resync_sessions_synced({ count: sync.lastSyncStats.synced })}
             </p>
             {#if sync.lastSyncStats.failed > 0}
               <p class="done-warning">
-                Failed: {sync.lastSyncStats.failed}
+                {m.resync_failed({ count: sync.lastSyncStats.failed })}
               </p>
             {/if}
           {/if}
@@ -141,7 +138,7 @@
               class="modal-btn modal-btn-primary"
               onclick={close}
             >
-              Close
+              {m.resync_close_btn()}
             </button>
           </div>
         </div>
@@ -154,10 +151,10 @@
               class="modal-btn modal-btn-primary"
               onclick={startResync}
             >
-              Retry
+              {m.resync_retry()}
             </button>
             <button class="modal-btn" onclick={close}>
-              Close
+              {m.resync_close_btn()}
             </button>
           </div>
         </div>

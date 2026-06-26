@@ -1,5 +1,7 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import { addDays, endOfMonth } from "../../utils/dates.js";
+  import { m } from "../../i18n/index.js";
 
   const BAR_HEIGHT = 120;
   const LABEL_HEIGHT = 20;
@@ -9,6 +11,12 @@
   const BAR_GAP = 2;
 
   type Metric = "messages" | "sessions";
+  interface Props {
+    onDateRangeChange?: (from: string, to: string) => void;
+  }
+
+  let { onDateRangeChange }: Props = $props();
+
   let metric = $state<Metric>("messages");
 
   let containerEl = $state<HTMLDivElement | null>(null);
@@ -112,10 +120,21 @@
       day: "numeric",
       year: "numeric",
     });
-    const lines = [`${label}: ${bar.value.toLocaleString()} ${metric}`];
+    const lines = [
+      m.analytics_activity_timeline_tooltip_value({
+        label,
+        value: bar.value.toLocaleString(),
+        metric: metric === "messages"
+          ? m.analytics_metric_messages()
+          : m.analytics_metric_sessions(),
+      }),
+    ];
     if (metric === "messages") {
       lines.push(
-        `user: ${bar.userMessages} / assistant: ${bar.assistantMessages}`,
+        m.analytics_activity_timeline_tooltip_messages({
+          user: bar.userMessages,
+          assistant: bar.assistantMessages,
+        }),
       );
     }
     tooltip = {
@@ -123,24 +142,6 @@
       y: rect.top - 4,
       text: lines.join(" | "),
     };
-  }
-
-  function addDays(dateStr: string, n: number): string {
-    const d = new Date(dateStr + "T00:00:00");
-    d.setDate(d.getDate() + n);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  }
-
-  function endOfMonth(dateStr: string): string {
-    const d = new Date(dateStr + "T00:00:00");
-    d.setMonth(d.getMonth() + 1, 0);
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
   }
 
   function handleBarClick(
@@ -151,10 +152,18 @@
     if (g === "day") {
       analytics.selectDate(bar.date);
     } else if (g === "week") {
-      analytics.setDateRange(bar.date, addDays(bar.date, 6));
+      commitDateRange(bar.date, addDays(bar.date, 6));
     } else if (g === "month") {
-      analytics.setDateRange(bar.date, endOfMonth(bar.date));
+      commitDateRange(bar.date, endOfMonth(bar.date));
     }
+  }
+
+  function commitDateRange(from: string, to: string) {
+    if (onDateRangeChange) {
+      onDateRangeChange(from, to);
+      return;
+    }
+    analytics.setDateRange(from, to);
   }
 
   function handleBarLeave() {
@@ -171,14 +180,14 @@
           class:active={metric === "messages"}
           onclick={() => (metric = "messages")}
         >
-          Messages
+          {m.analytics_metric_messages()}
         </button>
         <button
           class="toggle-btn"
           class:active={metric === "sessions"}
           onclick={() => (metric = "sessions")}
         >
-          Sessions
+          {m.analytics_metric_sessions()}
         </button>
       </div>
       <div class="granularity-toggle">
@@ -187,21 +196,21 @@
           class:active={analytics.granularity === "day"}
           onclick={() => analytics.setGranularity("day")}
         >
-          Day
+          {m.analytics_granularity_day()}
         </button>
         <button
           class="toggle-btn"
           class:active={analytics.granularity === "week"}
           onclick={() => analytics.setGranularity("week")}
         >
-          Week
+          {m.analytics_granularity_week()}
         </button>
         <button
           class="toggle-btn"
           class:active={analytics.granularity === "month"}
           onclick={() => analytics.setGranularity("month")}
         >
-          Month
+          {m.analytics_granularity_month()}
         </button>
       </div>
     </div>
@@ -214,7 +223,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchActivity()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if chart.bars.length > 0}
@@ -284,7 +293,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No activity data</div>
+    <div class="empty">{m.analytics_activity_empty()}</div>
   {/if}
 </div>
 

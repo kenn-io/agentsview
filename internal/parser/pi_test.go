@@ -3,6 +3,8 @@ package parser
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,6 +55,53 @@ func TestParsePiSession_SessionHeader(t *testing.T) {
 	assert.False(t, sess.StartedAt.IsZero(), "PRSR-01: StartedAt non-zero")
 
 	_ = msgs // not the focus of this sub-test
+}
+
+func TestOMPRegistryMetadata(t *testing.T) {
+	def, ok := AgentByType(AgentOMP)
+	require.True(t, ok)
+
+	assert.Equal(t, AgentOMP, def.Type)
+	assert.Equal(t, "OhMyPi", def.DisplayName)
+	assert.Equal(t, "OMP_DIR", def.EnvVar)
+	assert.Equal(t, "omp_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".omp/agent/sessions"}, def.DefaultDirs)
+	assert.Equal(t, "omp:", def.IDPrefix)
+	assert.True(t, def.FileBased)
+	require.NotNil(t, def.DiscoverFunc)
+	require.NotNil(t, def.FindSourceFunc)
+}
+
+func TestParseOMPSession_SessionIdentity(t *testing.T) {
+	fixturePath := createTestFile(
+		t, "omp-test-session-uuid.jsonl",
+		loadFixture(t, "pi/session.jsonl"),
+	)
+	sess, msgs, err := ParseOMPSession(fixturePath, "", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, "omp:pi-test-session-uuid", sess.ID)
+	assert.Equal(t, AgentOMP, sess.Agent)
+	assert.Equal(t, "omp:2025-01-01T09-00-00-000Z_parent-uuid", sess.ParentSessionID)
+	assert.Equal(t, "/Users/alice/code/my-project", sess.Cwd)
+	assert.Equal(t, "my_project", sess.Project)
+	require.NotEmpty(t, msgs)
+}
+
+func TestDiscoverOMPSessions(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "-Users-alice-code-my-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	path := filepath.Join(projectDir, "omp-test-session-uuid.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(loadFixture(t, "pi/session.jsonl")), 0o644))
+
+	files := DiscoverOMPSessions(root)
+	require.Len(t, files, 1)
+	assert.Equal(t, path, files[0].Path)
+	assert.Equal(t, AgentOMP, files[0].Agent)
+	assert.Empty(t, files[0].Project)
+	assert.Equal(t, path, FindOMPSourceFile(root, "omp-test-session-uuid"))
 }
 
 func TestParsePiSession_SessionInfoName(t *testing.T) {
@@ -242,8 +291,8 @@ func TestParsePiSession_ThinkingBlocks(t *testing.T) {
 	})
 }
 
-// TestParsePiSession_UserMessageCount verifies that model_change and
-// compaction entries are skipped entirely and do not inflate user counts.
+// TestParsePiSession_UserMessageCount verifies that metadata entries do
+// not inflate user counts even when compactions persist as system rows.
 func TestParsePiSession_UserMessageCount(t *testing.T) {
 	fixturePath := createTestFile(
 		t, "pi-session.jsonl",
@@ -252,8 +301,8 @@ func TestParsePiSession_UserMessageCount(t *testing.T) {
 	sess, _, err := ParsePiSession(fixturePath, "", "local")
 	require.NoError(t, err)
 
-	// The fixture has 2 real user messages. model_change and compaction
-	// entries are skipped entirely and never enter the messages slice.
+	// The fixture has 2 real user messages. Metadata rows must not count
+	// as user messages.
 	assert.Equal(t, 2, sess.UserMessageCount,
 		"UserMessageCount must only count real user messages")
 }
@@ -304,6 +353,26 @@ func TestParsePiSession_V1Session(t *testing.T) {
 	assert.Equal(t, "pi:v1-session", sess.ID, "PRSR-09: V1 session ID from filename")
 }
 
+func TestParsePiSession_V1MessageLineageStaysEmpty(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/v1-project"}`,
+		`{"type":"message","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"message","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":"ok"}}`,
+		"",
+	}, "\n")
+
+	path := createTestFile(t, "v1-lineage.jsonl", content)
+	sess, msgs, err := ParsePiSession(path, "v1_project", "local")
+	require.NoError(t, err)
+
+	assert.Equal(t, "pi:v1-lineage", sess.ID)
+	require.Len(t, msgs, 2)
+	for _, msg := range msgs {
+		assert.Empty(t, msg.SourceUUID)
+		assert.Empty(t, msg.SourceParentUUID)
+	}
+}
+
 // TestParsePiSession_BranchedFrom verifies the exact ParentSessionID value
 // extracted from the branchedFrom field (PRSR-10).
 func TestParsePiSession_BranchedFrom(t *testing.T) {
@@ -322,6 +391,56 @@ func TestParsePiSession_BranchedFrom(t *testing.T) {
 			"PRSR-10: basename of branchedFrom without .jsonl extension, prefixed",
 		)
 	})
+}
+
+func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session","version":3,"id":"tree-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,
+		`{"type":"message","id":"u1","parentId":null,"timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"root"}}`,
+		`{"type":"session_info","id":"info-1","parentId":"u1","timestamp":"2025-01-01T10:00:02Z","name":"Checkpoint"}`,
+		`{"type":"model_change","id":"mc-1","parentId":"info-1","timestamp":"2025-01-01T10:00:03Z","provider":"anthropic","modelId":"claude-opus-4-5"}`,
+		`{"type":"compaction","id":"cmp-1","parentId":"mc-1","timestamp":"2025-01-01T10:00:04Z","summary":"# compacted","firstKeptEntryIndex":0,"tokensBefore":5000}`,
+		`{"type":"message","id":"u2","parentId":"cmp-1","timestamp":"2025-01-01T10:00:05Z","message":{"role":"user","content":"after compaction"}}`,
+		`{"type":"message","id":"a2","parentId":"u2","timestamp":"2025-01-01T10:00:06Z","message":{"role":"assistant","content":"reply"}}`,
+		`{"type":"message","id":"t1","parentId":"a2","timestamp":"2025-01-01T10:00:07Z","message":{"role":"toolResult","toolCallId":"toolu_42","content":"tool output"}}`,
+		`{"type":"message","id":"a3","parentId":"t1","timestamp":"2025-01-01T10:00:08Z","message":{"role":"assistant","content":"after tool result"}}`,
+		"",
+	}, "\n")
+
+	sess, msgs := runPiParserTest(t, content)
+
+	assert.Equal(t, "Checkpoint", sess.SessionName)
+	require.Len(t, msgs, 6)
+
+	assert.Equal(t, "u1", msgs[0].SourceUUID)
+	assert.Empty(t, msgs[0].SourceParentUUID)
+	assert.Equal(t, "user", msgs[0].SourceType)
+
+	assert.Equal(t, "cmp-1", msgs[1].SourceUUID)
+	assert.Equal(t, "u1", msgs[1].SourceParentUUID)
+	assert.Equal(t, "system", msgs[1].SourceType)
+	assert.Equal(t, "compact_boundary", msgs[1].SourceSubtype)
+	assert.True(t, msgs[1].IsSystem)
+	assert.True(t, msgs[1].IsCompactBoundary)
+	assert.Equal(t, "# compacted", msgs[1].Content)
+
+	assert.Equal(t, "u2", msgs[2].SourceUUID)
+	assert.Equal(t, "cmp-1", msgs[2].SourceParentUUID)
+	assert.Equal(t, "user", msgs[2].SourceType)
+
+	assert.Equal(t, "a2", msgs[3].SourceUUID)
+	assert.Equal(t, "u2", msgs[3].SourceParentUUID)
+	assert.Equal(t, "assistant", msgs[3].SourceType)
+
+	assert.Equal(t, "t1", msgs[4].SourceUUID)
+	assert.Equal(t, "a2", msgs[4].SourceParentUUID)
+	assert.Equal(t, "toolResult", msgs[4].SourceType)
+	require.Len(t, msgs[4].ToolResults, 1)
+	assert.Equal(t, "toolu_42", msgs[4].ToolResults[0].ToolUseID)
+
+	assert.Equal(t, "a3", msgs[5].SourceUUID)
+	assert.Equal(t, "a2", msgs[5].SourceParentUUID)
+	assert.Equal(t, "assistant", msgs[5].SourceType)
 }
 
 // TestParsePiSession_IOError verifies that I/O errors encountered after the
@@ -580,7 +699,7 @@ func TestParsePiSession_TokenUsageFromFixture(t *testing.T) {
 
 	var assistants []ParsedMessage
 	for _, m := range msgs {
-		if m.Role == RoleAssistant {
+		if m.Role == RoleAssistant && m.SourceType == "assistant" {
 			assistants = append(assistants, m)
 		}
 	}

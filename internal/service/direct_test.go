@@ -62,6 +62,50 @@ func TestDirectBackend_Get_Roundtrip(t *testing.T) {
 	assert.Equal(t, sessionID, detail.ID)
 }
 
+func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(
+	t *testing.T,
+) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sessionID := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db,
+		dbtest.UserMsg(sessionID, 0,
+			"Fix the backend test failure in the codebase."),
+		dbtest.AsstMsg(sessionID, 1, "I'll inspect it."),
+		dbtest.UserMsg(sessionID, 2,
+			"Fix the backend test failure in the codebase."),
+	)
+	score := 90
+	grade := "A"
+	err := env.db.UpdateSessionSignals(
+		sessionID,
+		db.SessionSignalUpdate{
+			Outcome:           "completed",
+			OutcomeConfidence: "high",
+			EndedWithRole:     "assistant",
+			HealthScore:       &score,
+			HealthGrade:       &grade,
+			QualitySignals: db.QualitySignals{
+				Version:              db.CurrentQualitySignalVersion,
+				DuplicatePromptCount: 1,
+				NoCodeContextCount:   1,
+			},
+		},
+	)
+	require.NoError(t, err)
+
+	detail, err := svc.Get(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+
+	assert.Contains(t, detail.HealthScoreBasis, "prompt_quality")
+	assert.Contains(t, detail.HealthScoreBasis, "context_quality")
+	assert.NotContains(t, detail.HealthPenalties, "repeated_prompts")
+	assert.NotContains(t, detail.HealthPenalties, "stuck_repeated_prompts")
+	assert.Equal(t, 4,
+		detail.HealthPenalties["code_task_without_context"])
+}
+
 func TestDirectBackend_List_Empty(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
@@ -74,10 +118,8 @@ func TestDirectBackend_List_HidesStaleSecretIndicators(t *testing.T) {
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	for _, id := range []string{"current", "stale"} {
-		dbtest.SeedSession(t, env.db, id, "proj", func(s *db.Session) {
-			s.MessageCount = 2
-			s.UserMessageCount = 2
-		})
+		dbtest.SeedSession(t, env.db, id, "proj",
+			dbtest.WithMessageCounts(2, 2))
 	}
 	require.NoError(t, env.db.ReplaceSessionSecretFindings(
 		"current", nil, 2, secrets.RulesVersion()))
@@ -643,11 +685,7 @@ func TestDirectBackend_Messages_DescOmittedFrom(t *testing.T) {
 	sid := env.InsertSession(t)
 
 	// Seed 5 user messages, ordinals 0..4.
-	msgs := make([]db.Message, 0, 5)
-	for i := range 5 {
-		msgs = append(msgs, dbtest.UserMsg(sid, i, fmt.Sprintf("m%d", i)))
-	}
-	dbtest.SeedMessages(t, env.db, msgs...)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
 		Direction: "desc",
@@ -673,11 +711,7 @@ func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
 
-	msgs := make([]db.Message, 0, 5)
-	for i := range 5 {
-		msgs = append(msgs, dbtest.UserMsg(sid, i, fmt.Sprintf("m%d", i)))
-	}
-	dbtest.SeedMessages(t, env.db, msgs...)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	zero := 0
 	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{

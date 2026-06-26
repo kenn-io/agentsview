@@ -5,6 +5,7 @@
   import ToolBlock from "./ToolBlock.svelte";
   import { formatDuration } from "../../utils/duration.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
+  import { m } from "../../i18n/index.js";
 
   interface Props {
     toolCalls: ToolCall[];
@@ -27,17 +28,21 @@
   let upperBoundLabel = $derived.by(() => {
     if (isRunning) return null;
     if (turnDurationMs == null) return null;
-    return `≤ ${formatDuration(turnDurationMs)} each`;
+    return m.parallel_group_each_duration({
+      duration: formatDuration(turnDurationMs),
+    });
   });
 </script>
 
 <div class="parallel-group">
   <div class="pg-header">
-    <span class="pg-label">parallel</span>
-    <span class="pg-count">{toolCalls.length} calls</span>
+    <span class="pg-label">{m.parallel_group_label()}</span>
+    <span class="pg-count">{m.parallel_group_call_count({
+      count: toolCalls.length,
+    })}</span>
     <span class="pg-spacer"></span>
     {#if isRunning}
-      <span class="pg-running">running…</span>
+      <span class="pg-running">{m.parallel_group_running()}</span>
     {:else if upperBoundLabel}
       <span class="pg-upper">{upperBoundLabel}</span>
     {/if}

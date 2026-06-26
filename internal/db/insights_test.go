@@ -39,6 +39,45 @@ func TestInsights_InsertAndGet(t *testing.T) {
 	assert.NotEmpty(t, got.CreatedAt, "expected created_at to be set")
 }
 
+func TestInsights_CannedMetadataAndCacheLookup(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	id, err := d.InsertInsight(Insight{
+		Type:            "llm_canned",
+		DateFrom:        "2025-01-15",
+		DateTo:          "2025-01-15",
+		Agent:           "claude",
+		Model:           new("test-model"),
+		Content:         "generated recommendation",
+		Kind:            "prompt_maturity_review",
+		SchemaVersion:   "llm_insight.v1",
+		TemplateID:      "prompt_maturity_review",
+		TemplateVersion: "2026-05-26",
+		AggregateHash:   "abc123",
+		CacheKey:        "prompt_maturity_review:abc123",
+		CacheStatus:     "fresh",
+		ProvenanceJSON:  `{"template_id":"prompt_maturity_review"}`,
+		StructuredJSON:  `{"schema_version":"llm_insight.v1"}`,
+	})
+	if err != nil {
+		t.Fatalf("InsertInsight: %v", err)
+	}
+
+	got, err := d.GetCachedInsight(ctx, "prompt_maturity_review:abc123")
+	if err != nil {
+		t.Fatalf("GetCachedInsight: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected cached insight")
+	}
+	if got.ID != id || got.Kind != "prompt_maturity_review" ||
+		got.SchemaVersion != "llm_insight.v1" ||
+		got.ProvenanceJSON == "" || got.StructuredJSON == "" {
+		t.Fatalf("cached insight metadata mismatch: %+v", got)
+	}
+}
+
 func TestInsights_InsertDateRange(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

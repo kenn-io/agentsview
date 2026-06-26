@@ -46,9 +46,14 @@ func isDirOrSymlink(
 
 // DiscoveredFile holds a discovered session file.
 type DiscoveredFile struct {
-	Path    string
-	Project string    // pre-extracted project name
-	Agent   AgentType // which agent this file belongs to
+	Path        string
+	Project     string    // pre-extracted project name
+	Agent       AgentType // which agent this file belongs to
+	Machine     string    // source machine (set for s3:// sources; empty = host machine)
+	SourceSize  int64     // source object size for s3:// sources
+	SourceMtime int64     // source object mtime for s3:// sources, UnixNano
+	// SourceFingerprint is a durable object fingerprint for s3:// sources.
+	SourceFingerprint string
 }
 
 // OpenCodeSourceMode identifies the usable OpenCode storage
@@ -445,6 +450,9 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 // DiscoverClaudeProjects finds all project directories under the
 // Claude projects dir and returns their JSONL session files.
 func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {
+	if strings.HasPrefix(projectsDir, "s3://") {
+		return discoverClaudeS3(projectsDir)
+	}
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return nil
@@ -524,6 +532,9 @@ func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {
 // DiscoverCodexSessions finds all Codex JSONL session files under
 // either the standard year/month/day layout or a flat archived dir.
 func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
+	if strings.HasPrefix(sessionsDir, "s3://") {
+		return discoverCodexS3(sessionsDir)
+	}
 	var files []DiscoveredFile
 
 	entries, err := os.ReadDir(sessionsDir)
@@ -1477,6 +1488,17 @@ func IsPiSessionFile(path string) bool {
 // the directory name. Project is left empty so ParsePiSession
 // can derive it from the header cwd field.
 func DiscoverPiSessions(piDir string) []DiscoveredFile {
+	return discoverPiLikeSessions(piDir, AgentPi)
+}
+
+// DiscoverOMPSessions finds JSONL files under an OhMyPi session root.
+// OMP uses the same layout and file format as Pi, rooted by default at
+// ~/.omp/agent/sessions.
+func DiscoverOMPSessions(ompDir string) []DiscoveredFile {
+	return discoverPiLikeSessions(ompDir, AgentOMP)
+}
+
+func discoverPiLikeSessions(piDir string, agent AgentType) []DiscoveredFile {
 	if piDir == "" {
 		return nil
 	}
@@ -1507,7 +1529,7 @@ func DiscoverPiSessions(piDir string) []DiscoveredFile {
 			}
 			files = append(files, DiscoveredFile{
 				Path:  path,
-				Agent: AgentPi,
+				Agent: agent,
 				// Project intentionally empty; ParsePiSession
 				// derives project from the header cwd field.
 			})
@@ -1523,6 +1545,15 @@ func DiscoverPiSessions(piDir string) []DiscoveredFile {
 // session ID by searching all encoded-cwd subdirectories
 // under piDir for a file named <sessionID>.jsonl.
 func FindPiSourceFile(piDir, sessionID string) string {
+	return findPiLikeSourceFile(piDir, sessionID)
+}
+
+// FindOMPSourceFile finds the original JSONL file for an OMP session ID.
+func FindOMPSourceFile(ompDir, sessionID string) string {
+	return findPiLikeSourceFile(ompDir, sessionID)
+}
+
+func findPiLikeSourceFile(piDir, sessionID string) string {
 	if piDir == "" || !IsValidSessionID(sessionID) {
 		return ""
 	}

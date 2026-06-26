@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
@@ -28,6 +31,7 @@ func newSessionListCommand() *cobra.Command {
 		limit                                   int
 		sort                                    string
 		reverse                                 bool
+		resume, active                          bool
 	)
 	cmd := &cobra.Command{
 		Use:          "list",
@@ -61,17 +65,43 @@ func newSessionListCommand() *cobra.Command {
 				HasSecret:        hasSecret,
 				Cursor:           cursor,
 				Limit:            limit,
-				OrderBy:          sort,
 			}
 			if cmd.Flags().Changed("min-tool-failures") {
 				f.MinToolFailures = &minToolFailures
 			}
-			// --reverse flips the sort key's canonical direction; leave
-			// Descending nil otherwise so the default applies.
-			if cmd.Flags().Changed("reverse") {
-				d := db.SortDefaultDescending(sort) != reverse
-				f.Descending = &d
+			// --resume / --active surface only recently-active sessions for
+			// quick relaunch: push a now-15m active_since window to the
+			// service so the limit is applied after the filter, and let the
+			// default recent sort keep newest-first ordering. An explicit
+			// --active-since takes precedence so callers can widen or narrow
+			// the window.
+			now := time.Now()
+			if (resume || active) && !cmd.Flags().Changed("active-since") {
+				f.ActiveSince = now.Add(-resumeActiveWindow).
+					UTC().Format(time.RFC3339)
 			}
+			// Parse the multi-key sort spec; --reverse flips the natural
+			// direction of any term left without an explicit :asc/:desc, which
+			// is folded into the canonical spec string so the wire form fully
+			// captures the ordering.
+			keys, err := db.ParseSortSpec(sort)
+			if err != nil {
+				return fmt.Errorf("invalid sort %q: %w", sort, err)
+			}
+			// An empty spec means the implicit default; materialize it so
+			// --reverse has a term to flip instead of silently no-opping.
+			if len(keys) == 0 {
+				keys = []db.SortKey{{Key: db.DefaultSortKey()}}
+			}
+			if reverse {
+				for i := range keys {
+					if keys[i].Descending == nil {
+						d := !db.SortDefaultDescending(keys[i].Key)
+						keys[i].Descending = &d
+					}
+				}
+			}
+			f.OrderBy = db.FormatSortSpec(keys)
 
 			list, err := svc.List(cmd.Context(), f)
 			if err != nil {
@@ -80,7 +110,9 @@ func newSessionListCommand() *cobra.Command {
 			if outputFormat(cmd) == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(list)
 			}
-			return printSessionListHuman(cmd.OutOrStdout(), list)
+			home, _ := os.UserHomeDir()
+			return printSessionListHuman(
+				cmd.OutOrStdout(), list, now, home)
 		},
 	}
 
@@ -129,35 +161,64 @@ func newSessionListCommand() *cobra.Command {
 			db.DefaultSessionLimit, db.MaxSessionLimit,
 		))
 	flags.StringVar(&sort, "sort", "recent",
-		"Sort by: "+strings.Join(db.SortKeys(), ", "))
+		"Sort by a comma-separated list of keys, each optionally key:asc or "+
+			"key:desc (e.g. messages:desc,started:asc). Keys: "+
+			strings.Join(db.SortKeys(), ", "))
 	flags.BoolVarP(&reverse, "reverse", "r", false,
-		"Reverse the sort direction")
+		"Reverse the natural direction of sort keys that have no explicit "+
+			":asc/:desc suffix")
+	flags.BoolVar(&resume, "resume", false,
+		fmt.Sprintf("Show only sessions active within the last %d minutes, "+
+			"newest first, for quick resume",
+			int(resumeActiveWindow.Minutes())))
+	flags.BoolVar(&active, "active", false,
+		"Alias for --resume")
 
 	return cmd
 }
 
-// printSessionListHuman writes a compact columnar summary of the
-// session list, with a trailing hint when another page is
-// available. Prints "(no sessions)" for empty lists.
+// sessionNameWidth caps the NAME column so a long first message can't
+// push the trailing CWD column off the right edge of the terminal.
+const sessionNameWidth = 44
+
+// printSessionListHuman writes a resume-oriented table of the session
+// list: an in-flight marker for recently-active sessions, the full session
+// ID (the copyable handle for `session get`/`messages`/`usage`), the
+// humanized AGE since last activity, AGENT, PROJECT, BRANCH, MSGS, NAME,
+// and a ~-collapsed CWD. now and home are passed in so output is
+// deterministic under test. A trailing hint is printed when another page is
+// available. Prints "(no sessions)" for empty lists. Every session-derived
+// string is run through sanitizeTerminal so untrusted DB rows cannot drive
+// terminal escape sequences.
 func printSessionListHuman(
-	w io.Writer, list *service.SessionList,
+	w io.Writer, list *service.SessionList, now time.Time, home string,
 ) error {
 	if len(list.Sessions) == 0 {
 		fmt.Fprintln(w, "(no sessions)")
 		return nil
 	}
-	fmt.Fprintf(w, "%-40s  %-20s  %-15s  %s\n",
-		"ID", "PROJECT", "AGENT", "STARTED")
+	tw := tabwriter.NewWriter(w, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "\tID\tAGE\tAGENT\tPROJECT\tBRANCH\tMSGS\tNAME\tCWD")
 	for _, s := range list.Sessions {
-		started := "-"
-		if s.StartedAt != nil && len(*s.StartedAt) >= 16 {
-			started = (*s.StartedAt)[:16]
+		marker := ""
+		if isSessionRecentlyActive(s, now) {
+			marker = activeMarker
 		}
-		fmt.Fprintf(w, "%-40s  %-20s  %-15s  %s\n",
+		name := truncName(sessionDisplayName(s), sessionNameWidth)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
+			marker,
 			sanitizeTerminal(s.ID),
-			sanitizeTerminal(s.Project),
-			sanitizeTerminal(s.Agent),
-			sanitizeTerminal(started))
+			humanizeSessionAge(s, now),
+			sanitizeTerminal(orEmDash(s.Agent)),
+			sanitizeTerminal(orEmDash(s.Project)),
+			sanitizeTerminal(orEmDash(s.GitBranch)),
+			s.MessageCount,
+			sanitizeTerminal(name),
+			sanitizeTerminal(collapseHome(s.Cwd, home)),
+		)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
 	}
 	if list.NextCursor != "" {
 		// Cursor is an opaque server-minted string. Sanitize too

@@ -5,6 +5,7 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -891,13 +892,50 @@ func TestToDBUsageEventsStampsFinalSessionID(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := toDBUsageEvents(tt.sessionID, tt.events)
+			got, _ := toDBUsageEvents(tt.sessionID, tt.events)
 			require.Len(t, got, len(tt.wantIDs))
 			for i, ev := range got {
 				assert.Equal(t, tt.wantIDs[i], ev.SessionID)
 			}
 		})
 	}
+}
+
+func TestToDBUsageEventsPreservesSessionSummaryTokenUpperBounds(t *testing.T) {
+	rawInput := maxPlausibleTokens + 250_000
+	rawOutput := maxPlausibleTokens + 500_000
+	got, _ := toDBUsageEvents("hermes:summary", []parser.ParsedUsageEvent{
+		{
+			Source:                   "session",
+			Model:                    "gpt-5.4",
+			InputTokens:              rawInput,
+			OutputTokens:             rawOutput,
+			CacheCreationInputTokens: rawInput + 1,
+			CacheReadInputTokens:     rawInput + 2,
+			ReasoningTokens:          rawOutput + 3,
+		},
+		{
+			Source:                   "session",
+			Model:                    "gpt-5.4",
+			InputTokens:              -1,
+			OutputTokens:             -2,
+			CacheCreationInputTokens: -3,
+			CacheReadInputTokens:     -4,
+			ReasoningTokens:          -5,
+		},
+	})
+
+	require.Len(t, got, 2)
+	assert.Equal(t, rawInput, got[0].InputTokens)
+	assert.Equal(t, rawOutput, got[0].OutputTokens)
+	assert.Equal(t, rawInput+1, got[0].CacheCreationInputTokens)
+	assert.Equal(t, rawInput+2, got[0].CacheReadInputTokens)
+	assert.Equal(t, rawOutput+3, got[0].ReasoningTokens)
+	assert.Equal(t, 0, got[1].InputTokens)
+	assert.Equal(t, 0, got[1].OutputTokens)
+	assert.Equal(t, 0, got[1].CacheCreationInputTokens)
+	assert.Equal(t, 0, got[1].CacheReadInputTokens)
+	assert.Equal(t, 0, got[1].ReasoningTokens)
 }
 
 func TestWriteBatchRemoteIDPrefixUsageEvents(t *testing.T) {
@@ -1363,6 +1401,254 @@ func TestShouldSkipFileWithIDPrefix(t *testing.T) {
 	assert.False(t, got2, "shouldSkipFile without prefix should return false")
 }
 
+func TestShouldSkipCodexReparsesStaleProject(t *testing.T) {
+	database := openTestDB(t)
+	path := filepath.Join(t.TempDir(), "rollout-2026-06-21T18-59-38-abc.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+
+	sess := db.Session{
+		ID:        "host~codex:abc",
+		Project:   "roborev_ci_28293_3831737461",
+		Machine:   "host",
+		Agent:     "codex",
+		FilePath:  strPtr("host:" + path),
+		FileSize:  int64Ptr(info.Size()),
+		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	assert.False(t, e.shouldSkipCodex(path, info),
+		"stale generated roborev CI projects must be reparsed")
+}
+
+func TestProcessFileSkipCacheReparsesStaleCodexProject(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"abc",
+			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
+			"user",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+
+	sess := db.Session{
+		ID:        "host~codex:abc",
+		Project:   "roborev_ci_28293_3831737461",
+		Machine:   "host",
+		Agent:     "codex",
+		FilePath:  strPtr("host:" + path),
+		FileSize:  int64Ptr(info.Size()),
+		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	e := &Engine{
+		db:        database,
+		idPrefix:  "host~",
+		skipCache: map[string]int64{path: info.ModTime().UnixNano()},
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	res := e.processFile(context.Background(), parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  path,
+	})
+	require.NoError(t, res.err)
+	require.False(t, res.skip,
+		"remote skip cache must not hide stale generated roborev CI projects")
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "agentsview", res.results[0].Session.Project)
+}
+
+func TestProcessCodexAppendedStaleProjectDoesFullReparse(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"abc",
+			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
+			"user",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "review this", "2024-01-01T10:00:01Z"),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat initial codex fixture")
+
+	sess := db.Session{
+		ID:               "host~codex:abc",
+		Project:          "roborev_ci_28293_3831737461",
+		Machine:          "host",
+		Agent:            "codex",
+		FirstMessage:     strPtr("review this"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+		FilePath:         strPtr("host:" + path),
+		FileSize:         int64Ptr(info.Size()),
+		FileMtime:        int64Ptr(info.ModTime().UnixNano()),
+		NextOrdinal:      1,
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{
+			SessionID: "host~codex:abc",
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "review this",
+		},
+	}))
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err, "open codex fixture for append")
+	_, err = f.WriteString(testjsonl.CodexMsgJSON(
+		"assistant", "done", "2024-01-01T10:00:02Z",
+	) + "\n")
+	require.NoError(t, err, "append codex fixture")
+	require.NoError(t, f.Close(), "close codex fixture")
+	info, err = os.Stat(path)
+	require.NoError(t, err, "stat appended codex fixture")
+
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	res := e.processCodex(parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  path,
+	}, info)
+	require.NoError(t, res.err)
+	require.Nil(t, res.incremental,
+		"stale project metadata must force full parse even when file appended")
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "agentsview", res.results[0].Session.Project)
+}
+
+func TestProcessCodexAppendedStaleProjectCarriesForceReplace(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-06-21T18-59-38-abc.jsonl")
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"abc",
+			"/home/roborev/.roborev/ci-worktrees/agentsview/roborev-ci-28293-3831737461",
+			"user",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON("user", "run command", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command",
+			"call_cmd",
+			map[string]any{"cmd": "go test"},
+			"2024-01-01T10:00:02Z",
+		),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat initial codex fixture")
+
+	sess := db.Session{
+		ID:               "host~codex:abc",
+		Project:          "roborev_ci_28293_3831737461",
+		Machine:          "host",
+		Agent:            "codex",
+		FirstMessage:     strPtr("run command"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+		FilePath:         strPtr("host:" + path),
+		FileSize:         int64Ptr(info.Size()),
+		FileMtime:        int64Ptr(info.ModTime().UnixNano()),
+		NextOrdinal:      2,
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{
+			SessionID: "host~codex:abc",
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "run command",
+		},
+		{
+			SessionID: "host~codex:abc",
+			Ordinal:   1,
+			Role:      "assistant",
+			ToolCalls: []db.ToolCall{
+				{
+					ToolUseID: "call_cmd",
+					ToolName:  "exec_command",
+					InputJSON: `{"cmd":"go test"}`,
+				},
+			},
+		},
+	}))
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err, "open codex fixture for append")
+	_, err = f.WriteString(testjsonl.CodexFunctionCallOutputJSON(
+		"call_cmd", `{"status":"ok"}`, "2024-01-01T10:00:03Z",
+	) + "\n")
+	require.NoError(t, err, "append codex fixture")
+	require.NoError(t, f.Close(), "close codex fixture")
+	info, err = os.Stat(path)
+	require.NoError(t, err, "stat appended codex fixture")
+
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+		pathRewriter: func(path string) string {
+			return "host:" + path
+		},
+	}
+
+	res := e.processCodex(parser.DiscoveredFile{
+		Agent: parser.AgentCodex,
+		Path:  path,
+	}, info)
+	require.NoError(t, res.err)
+	require.Nil(t, res.incremental,
+		"stale project metadata must force full parse even when file appended")
+	require.Len(t, res.results, 1)
+	assert.Equal(t, "agentsview", res.results[0].Session.Project)
+	assert.True(t, res.forceReplace,
+		"fallback-triggering appended data must replace existing messages")
+}
+
 func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {
 	database := openTestDB(t)
 	ctx := context.Background()
@@ -1758,6 +2044,28 @@ func TestOpenCodeLegacyArchiveLooksIncomplete(t *testing.T) {
 		require.False(t, openCodeLegacyArchiveLooksIncomplete(parsed, stored),
 			"got incomplete archive detection, want false")
 	})
+
+	t.Run("stripped control bytes cannot pad parsed content", func(t *testing.T) {
+		stored := []db.Message{
+			{
+				Ordinal:       1,
+				Role:          "assistant",
+				Content:       "complete archived content",
+				ContentLength: len("complete archived content"),
+			},
+		}
+		parsed := []db.Message{
+			{
+				Ordinal:       1,
+				Role:          "assistant",
+				Content:       "short" + strings.Repeat("\x00", 20),
+				ContentLength: len("complete archived content"),
+			},
+		}
+
+		require.True(t, openCodeLegacyArchiveLooksIncomplete(parsed, stored),
+			"want sanitized parsed content to preserve complete archive")
+	})
 }
 
 func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *testing.T) {
@@ -1804,6 +2112,351 @@ func TestVisualStudioCopilotArchiveDecisionMergesNewRowsWithArchiveOnlyRows(t *t
 	for i, msg := range decision.merged {
 		assert.Equal(t, i, msg.Ordinal)
 	}
+}
+
+// TestPrepareSessionWriteReclampsMessageDerivedTokenTotals proves the full
+// write path does not strand a corrupt per-message token value in the session
+// aggregates. A message with an implausible OutputTokens/ContextTokens is
+// clamped to maxPlausibleTokens in its row, so the message-derived session
+// totals must be re-derived from the clamped rows -- while a legitimately
+// large sum over many messages (above the per-message bound) is preserved.
+func TestPrepareSessionWriteReclampsMessageDerivedTokenTotals(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts,
+			OutputTokens: 1_000_000, HasOutputTokens: true,
+			ContextTokens: 1_500_000, HasContextTokens: true,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "b",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+			OutputTokens: 1_500_000, HasOutputTokens: true,
+			ContextTokens: 1_000_000, HasContextTokens: true,
+		},
+		{
+			Ordinal: 2, Role: parser.RoleAssistant, Content: "c",
+			ContentLength: 1, Timestamp: ts.Add(2 * time.Second),
+			// Corrupt: both counts are far above maxPlausibleTokens and
+			// will be clamped to it in the stored row.
+			OutputTokens: 999_999_999, HasOutputTokens: true,
+			ContextTokens: 999_999_999, HasContextTokens: true,
+		},
+	}
+
+	newSess := func() parser.ParsedSession {
+		return parser.ParsedSession{
+			ID: "tok-session", Project: "proj", Machine: "test-machine",
+			Agent: parser.AgentClaude, StartedAt: ts,
+			EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+			File: parser.FileInfo{
+				Path: "/tmp/tok.jsonl", Size: 10, Mtime: ts.UnixNano(),
+			},
+		}
+	}
+
+	// Message-derived totals (the parser accumulated them via
+	// accumulateMessageTokenUsage): sum of output and peak context, raw.
+	sess := newSess()
+	sess.TotalOutputTokens = 1_000_000 + 1_500_000 + 999_999_999
+	sess.HasTotalOutputTokens = true
+	sess.PeakContextTokens = 999_999_999
+	sess.HasPeakContextTokens = true
+
+	prepared, dbMsgs, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs}, nil,
+	)
+	require.True(t, ok)
+	require.Len(t, dbMsgs, 3)
+
+	// The corrupt message row is clamped to the per-message bound.
+	assert.Equal(t, maxPlausibleTokens, dbMsgs[2].OutputTokens,
+		"corrupt message OutputTokens clamped")
+	assert.Equal(t, maxPlausibleTokens, dbMsgs[2].ContextTokens,
+		"corrupt message ContextTokens clamped")
+	// The session total is re-derived from the clamped rows: a legitimately
+	// large sum (above maxPlausibleTokens) survives, the corrupt value does
+	// not pollute it.
+	assert.Equal(t, 1_000_000+1_500_000+maxPlausibleTokens,
+		prepared.TotalOutputTokens,
+		"message-derived total re-derived from clamped rows")
+	assert.Equal(t, maxPlausibleTokens, prepared.PeakContextTokens,
+		"message-derived peak re-derived from clamped rows")
+
+	// Summary-derived totals (agents like Warp/Vibe set the session totals
+	// directly, not from per-message rows) must survive the per-message
+	// clamp untouched: they do not match the message-derived values.
+	const summaryTotal = 4_242_424
+	const summaryPeak = 3_333_333
+	summarySess := newSess()
+	summarySess.TotalOutputTokens = summaryTotal
+	summarySess.HasTotalOutputTokens = true
+	summarySess.PeakContextTokens = summaryPeak
+	summarySess.HasPeakContextTokens = true
+
+	preparedSummary, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: summarySess, msgs: msgs}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, summaryTotal, preparedSummary.TotalOutputTokens,
+		"summary-derived total left untouched by per-message clamp")
+	assert.Equal(t, summaryPeak, preparedSummary.PeakContextTokens,
+		"summary-derived peak left untouched by per-message clamp")
+}
+
+// TestPrepareSessionWriteReclampsEventDerivedTokenTotals covers the
+// usage-event-derived case (VS Code Copilot accumulates session totals from
+// per-turn usage events, not per-message rows). A corrupt usage event is
+// clamped in its usage_events row, so the event-derived session aggregates
+// must be re-derived from the clamped events rather than left at the raw
+// inflated value.
+func TestPrepareSessionWriteReclampsEventDerivedTokenTotals(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	// Per-message rows carry no tokens; the tokens live in usage events.
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	events := []parser.ParsedUsageEvent{
+		{OutputTokens: 1_000_000, InputTokens: 1_500_000},
+		{OutputTokens: 1_500_000, InputTokens: 1_000_000},
+		// Corrupt event: both counts are clamped in the usage_events row.
+		{OutputTokens: 999_999_999, InputTokens: 999_999_999},
+	}
+	sess := parser.ParsedSession{
+		ID: "evt-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentVSCodeCopilot, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/evt.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		// Event-derived aggregates, raw (as the parser accumulates them):
+		// sum of event output tokens, peak of event input tokens.
+		TotalOutputTokens:    1_000_000 + 1_500_000 + 999_999_999,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    999_999_999,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, 1_000_000+1_500_000+maxPlausibleTokens,
+		prepared.TotalOutputTokens,
+		"event-derived total re-derived from clamped usage events")
+	assert.Equal(t, maxPlausibleTokens, prepared.PeakContextTokens,
+		"event-derived peak re-derived from clamped usage events")
+}
+
+func TestPrepareSessionWritePreservesSummaryUsageEventTokenTotals(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	rawTotal := maxPlausibleTokens + 500_000
+	rawPeak := maxPlausibleTokens + 250_000
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	events := []parser.ParsedUsageEvent{{
+		Source:       "session",
+		Model:        "claude-sonnet-4",
+		InputTokens:  rawPeak,
+		OutputTokens: rawTotal,
+	}}
+	sess := parser.ParsedSession{
+		ID: "summary-event-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentHermes, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/summary.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		TotalOutputTokens:    rawTotal,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    rawPeak,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, rawTotal, prepared.TotalOutputTokens,
+		"session-summary usage event must not make the session aggregate event-derived")
+	assert.Equal(t, rawPeak, prepared.PeakContextTokens,
+		"summary-derived peak context must survive the per-row event clamp")
+}
+
+// TestPrepareSessionWriteReclampsEventDerivedCacheContext covers an
+// event-derived peak context that, like the parser-side rollup, sums input and
+// cache tokens. A corrupt cache value is clamped per-component in its
+// usage_events row, so the event-derived peak must be re-derived from the
+// clamped components rather than left at the raw inflated value.
+func TestPrepareSessionWriteReclampsEventDerivedCacheContext(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	// Per-event context = input + cache-creation + cache-read.
+	events := []parser.ParsedUsageEvent{
+		{OutputTokens: 100_000, InputTokens: 1_000_000, CacheReadInputTokens: 500_000},
+		{OutputTokens: 100_000, InputTokens: 800_000, CacheCreationInputTokens: 200_000},
+		// Corrupt event: each component is clamped to maxPlausibleTokens.
+		{
+			OutputTokens: 999_999_999, InputTokens: 999_999_999,
+			CacheReadInputTokens: 999_999_999,
+		},
+	}
+	rawTotal := 100_000 + 100_000 + 999_999_999
+	rawPeak := 999_999_999 + 999_999_999 // the corrupt event's input+cache
+	sess := parser.ParsedSession{
+		ID: "evt-cache-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentVSCodeCopilot, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/evtcache.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		TotalOutputTokens:    rawTotal,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    rawPeak,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	assert.Equal(t, 100_000+100_000+maxPlausibleTokens,
+		prepared.TotalOutputTokens,
+		"event-derived total re-derived from clamped output tokens")
+	// Peak = the corrupt event's input + cache-read, each clamped to the
+	// per-row bound: 2M + 2M. The sum is not clamped to the per-row bound.
+	assert.Equal(t, maxPlausibleTokens+maxPlausibleTokens,
+		prepared.PeakContextTokens,
+		"event-derived peak re-derived from clamped input+cache components")
+}
+
+// TestPrepareSessionWriteReclampsEventDerivedMixedSignTokens covers the
+// parser rollup semantics shared with parser.UsageEventTokenAggregate: only
+// positive output is summed and only positive context contributes to the peak.
+// A mix of a negative (corrupt) event and an over-bound event must still be
+// recognized as event-derived and re-derived from the clamped rows.
+func TestPrepareSessionWriteReclampsEventDerivedMixedSignTokens(t *testing.T) {
+	d := openTestDB(t)
+	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
+
+	msgs := []parser.ParsedMessage{
+		{
+			Ordinal: 0, Role: parser.RoleUser, Content: "q",
+			ContentLength: 1, Timestamp: ts,
+		},
+		{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "a",
+			ContentLength: 1, Timestamp: ts.Add(time.Second),
+		},
+	}
+	events := []parser.ParsedUsageEvent{
+		{OutputTokens: 1_000_000, InputTokens: 1_500_000},
+		// Corrupt negative event: excluded from the positive-only rollup.
+		{OutputTokens: -5, InputTokens: -10},
+		// Over-bound event: clamped to the per-row cap.
+		{OutputTokens: 999_999_999, InputTokens: 999_999_999},
+	}
+	// Raw rollup (positive-only): output 1M + 999,999,999; peak context
+	// max(1.5M, 999,999,999).
+	rawTotal := 1_000_000 + 999_999_999
+	rawPeak := 999_999_999
+	sess := parser.ParsedSession{
+		ID: "evt-mixed-session", Project: "proj", Machine: "test-machine",
+		Agent: parser.AgentVSCodeCopilot, StartedAt: ts,
+		EndedAt: ts.Add(time.Minute), MessageCount: len(msgs),
+		File: parser.FileInfo{
+			Path: "/tmp/evtmixed.json", Size: 10, Mtime: ts.UnixNano(),
+		},
+		TotalOutputTokens:    rawTotal,
+		HasTotalOutputTokens: true,
+		PeakContextTokens:    rawPeak,
+		HasPeakContextTokens: true,
+	}
+
+	prepared, _, ok := e.prepareSessionWrite(
+		pendingWrite{sess: sess, msgs: msgs, usageEvents: events}, nil,
+	)
+	require.True(t, ok)
+	// Negative output floors to 0 (dropped); over-bound output clamps to 2M.
+	assert.Equal(t, 1_000_000+maxPlausibleTokens, prepared.TotalOutputTokens,
+		"negative event excluded, over-bound event clamped in event total")
+	assert.Equal(t, maxPlausibleTokens, prepared.PeakContextTokens,
+		"event peak re-derived from clamped positive context")
+}
+
+// TestVisualStudioCopilotArchiveCompareUsesSanitizedParsed guards against a
+// truncated reparse padded with control bytes bypassing archive preservation.
+// Stored rows are sanitized and length-adjusted on write, so the reconcile must
+// measure the parsed side the same way rather than against its raw length.
+func TestVisualStudioCopilotArchiveCompareUsesSanitizedParsed(t *testing.T) {
+	stored := db.Message{
+		Role:          "assistant",
+		Content:       "complete answer",
+		ContentLength: len("complete answer"),
+	}
+	// Genuinely truncated content ("trunc"), padded with BEL control bytes so
+	// the RAW length (25) exceeds the stored length (15); sanitized it is 5.
+	raw := "trunc" + strings.Repeat("\x07", 20)
+	require.Greater(t, len(raw), stored.ContentLength,
+		"raw length must look long enough to expose the bug")
+	truncated := db.Message{Role: "assistant", Content: raw, ContentLength: len(raw)}
+
+	assert.True(t,
+		visualStudioCopilotMessageLooksIncomplete(truncated, stored),
+		"truncated reparse padded with control bytes must be incomplete")
+
+	// A reparse that differs only by stripped control bytes is neither
+	// incomplete nor an archive update: "complete\x07 answer" sanitizes to the
+	// stored "complete answer".
+	withControl := db.Message{
+		Role:          "assistant",
+		Content:       "complete\x07 answer",
+		ContentLength: len("complete\x07 answer"),
+	}
+	assert.False(t,
+		visualStudioCopilotMessageLooksIncomplete(withControl, stored),
+		"stripped-control reparse of equal text is not incomplete")
+	assert.False(t,
+		visualStudioCopilotMessageHasArchiveUpdate(withControl, stored),
+		"stripped-control reparse of equal text is not an archive update")
 }
 
 func TestVisualStudioCopilotArchiveDecisionMatchesTimestampShiftedToolCall(t *testing.T) {
@@ -2581,6 +3234,475 @@ func TestEngine_ClassifyPathsQClawArchivedSession(t *testing.T) {
 	assert.Equal(t, parser.AgentQClaw, files[0].Agent)
 }
 
+func TestEngine_ClassifyOnePathReasonixProjectBareMeta(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
+	)
+	metaPath := sessionPath + ".meta"
+	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
+	dbtest.WriteTestFile(t, metaPath, []byte(`{"model":"claude"}`))
+
+	got, ok := engine.classifyOnePath(metaPath, nil)
+	require.True(t, ok, "expected Reasonix sidecar to classify")
+	assert.Equal(t, sessionPath, got.Path)
+	assert.Equal(t, "proj", got.Project)
+	assert.Equal(t, parser.AgentReasonix, got.Agent)
+}
+
+func TestEngine_ClassifyOnePathReasonixDeletedMeta(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
+	)
+	metaPath := sessionPath + ".meta"
+	dbtest.WriteTestFile(t, sessionPath, []byte(`{"role":"user","content":"hi"}`))
+
+	got, ok := engine.classifyOnePath(metaPath, nil)
+	require.True(t, ok, "expected deleted Reasonix sidecar to classify")
+	assert.Equal(t, sessionPath, got.Path)
+	assert.Equal(t, "proj", got.Project)
+	assert.Equal(t, parser.AgentReasonix, got.Agent)
+}
+
+func TestEngine_ClassifyOnePathReasonixDeletedTranscriptIgnored(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "proj", "sessions", "session-123.jsonl",
+	)
+
+	_, ok := engine.classifyOnePath(sessionPath, nil)
+	assert.False(t, ok, "expected deleted Reasonix transcript to be ignored")
+}
+
+func TestEngine_SyncPathsReasonixMetadataOnlySessionFieldUpdate(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Initial title", *got.DisplayName)
+	assert.Equal(t, "Initial title", *got.SessionName)
+	assert.Equal(t, initialRoot, got.Cwd)
+	assert.Equal(t, "my_app", got.Project)
+
+	updatedRoot := filepath.Join("workspace", "renamed-app")
+	updatedMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Updated title",
+		"workspace_root": updatedRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, updatedMeta, 0o644))
+	future := time.Date(2026, time.June, 19, 2, 55, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(metaPath, future, future))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Updated title", *got.DisplayName)
+	assert.Equal(t, "Updated title", *got.SessionName)
+	assert.Equal(t, updatedRoot, got.Cwd)
+	assert.Equal(t, "renamed_app", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixDeletedMetadataClearsSessionFields(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	require.NoError(t, os.Remove(metaPath))
+	engine.SyncPaths([]string{metaPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.DisplayName)
+	assert.Nil(t, got.SessionName)
+	assert.Equal(t, "", got.Cwd)
+	assert.Equal(t, "", got.Project)
+}
+
+func TestEngine_SyncSingleSessionReasonixDeletedMetadataClearsProject(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "my_app", got.Project)
+
+	require.NoError(t, os.Remove(metaPath))
+	require.NoError(t, db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
+			"reasonix:session-123",
+		)
+		return err
+	}))
+
+	require.NoError(t, engine.SyncSingleSession("reasonix:session-123"))
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixMalformedMetadataPreservesSessionFields(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"topic_title":`), 0o644))
+	future := time.Date(2026, time.June, 19, 4, 15, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(metaPath, future, future))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Initial title", *got.DisplayName)
+	assert.Equal(t, "Initial title", *got.SessionName)
+	assert.Equal(t, initialRoot, got.Cwd)
+	assert.Equal(t, "my_app", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixMalformedMetadataRecoveryUpdatesSession(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "session-123.jsonl")
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialRoot := filepath.Join("workspace", "my-app")
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": initialRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	transcriptInfo, err := os.Stat(sessionPath)
+	require.NoError(t, err)
+	badMtime := transcriptInfo.ModTime().Add(time.Minute)
+	require.NoError(t, os.WriteFile(metaPath, []byte(`{"topic_title":`), 0o644))
+	require.NoError(t, os.Chtimes(metaPath, badMtime, badMtime))
+	engine.SyncPaths([]string{metaPath})
+
+	updatedRoot := filepath.Join("workspace", "renamed-app")
+	updatedMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Recovered title",
+		"workspace_root": updatedRoot,
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, updatedMeta, 0o644))
+	recoveredMtime := badMtime.Add(time.Minute)
+	require.NoError(t, os.Chtimes(metaPath, recoveredMtime, recoveredMtime))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	require.NotNil(t, got.SessionName)
+	assert.Equal(t, "Recovered title", *got.DisplayName)
+	assert.Equal(t, "Recovered title", *got.SessionName)
+	assert.Equal(t, updatedRoot, got.Cwd)
+	assert.Equal(t, "renamed_app", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixProjectLayoutMetadataProjectUpdate(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "layout-name", "sessions", "session-123", "session-123.jsonl",
+	)
+	metaPath := sessionPath + ".meta"
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	initialMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Initial title",
+		"workspace_root": filepath.Join("workspace", "my-app"),
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, initialMeta, 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "my_app", got.Project)
+
+	updatedMeta, err := json.Marshal(map[string]string{
+		"created_at":     "2026-06-12T10:42:35.2672024Z",
+		"updated_at":     "2026-06-12T10:58:03.6456434Z",
+		"topic_title":    "Updated title",
+		"workspace_root": filepath.Join("workspace", "renamed-app"),
+		"model":          "claude-opus-4",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(metaPath, updatedMeta, 0o644))
+	future := time.Date(2026, time.June, 19, 3, 30, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(metaPath, future, future))
+
+	engine.SyncPaths([]string{metaPath})
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "renamed_app", got.Project)
+}
+
+func TestEngine_SyncSingleSessionReasonixProjectLayoutPreservesProject(t *testing.T) {
+	db := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(db, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(
+		reasonixDir, "projects", "layout-name", "sessions",
+		"session-123", "session-123.jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"hi\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"hello\"}\n",
+	), 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	got, err := db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "layout-name", got.Project)
+
+	require.NoError(t, db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(
+			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
+			"reasonix:session-123",
+		)
+		return err
+	}))
+
+	require.NoError(t, engine.SyncSingleSession("reasonix:session-123"))
+
+	got, err = db.GetSessionFull(context.Background(), "reasonix:session-123")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "layout-name", got.Project)
+}
+
+func TestEngine_SyncPathsReasonixPersistsToolResultContent(t *testing.T) {
+	database := openTestDB(t)
+	reasonixDir := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentReasonix: {reasonixDir},
+		},
+		Machine: "local",
+	})
+
+	sessionPath := filepath.Join(reasonixDir, "sessions", "tool-result.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		"{\"role\":\"user\",\"content\":\"Read the file\"}\n"+
+			"{\"role\":\"assistant\",\"content\":\"I'll read it\","+
+			"\"tool_calls\":[{\"id\":\"call_1\",\"name\":\"read_file\","+
+			"\"arguments\":\"{\\\"path\\\":\\\"config.json\\\"}\"}]}\n"+
+			"{\"role\":\"tool\",\"content\":\"file contents here\","+
+			"\"tool_call_id\":\"call_1\"}\n",
+	), 0o644))
+
+	engine.SyncPaths([]string{sessionPath})
+
+	msgs, err := database.GetAllMessages(context.Background(), "reasonix:tool-result")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "file contents here", msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len("file contents here"), msgs[1].ToolCalls[0].ResultContentLength)
+}
+
 func TestEngine_SyncSingleSessionEmitsOnSuccess(t *testing.T) {
 	fx := newEngineFixture(t)
 	em := &fakeEmitter{}
@@ -2688,4 +3810,275 @@ func TestDiscoveredFileMtimeVisualStudioCopilotResolvesVirtualPath(t *testing.T)
 	require.NoError(t, err,
 		"virtual path must resolve to the physical trace for stat")
 	assert.Equal(t, info.ModTime().UnixNano(), mtime)
+}
+
+// TestWriteIncrementalBlanksImplausibleEndedAt verifies that the
+// incremental sync path runs the appended ended_at through the same
+// timestamp plausibility check the full path applies in sanitizeSession.
+// An out-of-window ended_at must not persist via incremental sync while a
+// full sync of the same file would blank it (an incremental-vs-full
+// parity divergence).
+func TestWriteIncrementalBlanksImplausibleEndedAt(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		endedAt time.Time
+	}{
+		{name: "far past", endedAt: time.Date(1850, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "far future", endedAt: time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			database := openTestDB(t)
+			e := &Engine{db: database}
+
+			plausibleEnd := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+			start := plausibleEnd.Add(-time.Hour)
+			pw := pendingWrite{
+				sess: parser.ParsedSession{
+					ID:           "inc-ts",
+					Project:      "proj",
+					Machine:      "host",
+					Agent:        parser.AgentClaude,
+					StartedAt:    start,
+					EndedAt:      plausibleEnd,
+					MessageCount: 1,
+				},
+				msgs: []parser.ParsedMessage{{
+					Role:      parser.RoleUser,
+					Content:   "hello",
+					Timestamp: start,
+				}},
+			}
+			_, _, failed := e.writeBatch(
+				[]pendingWrite{pw}, syncWriteDefault, false,
+			)
+			require.Equal(t, 0, failed, "initial session write must not fail")
+
+			before, err := database.GetSessionFull(context.Background(), "inc-ts")
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			require.NotNil(t, before.EndedAt, "baseline ended_at must be set")
+			wantEnd := *before.EndedAt
+
+			err = e.writeIncremental(&incrementalUpdate{
+				sessionID: "inc-ts",
+				msgs: []parser.ParsedMessage{{
+					Role:      parser.RoleAssistant,
+					Content:   "world",
+					Timestamp: plausibleEnd,
+					Ordinal:   1,
+				}},
+				endedAt:      tc.endedAt,
+				msgCount:     2,
+				userMsgCount: 1,
+				fileSize:     100,
+				fileMtime:    plausibleEnd.UnixNano(),
+			})
+			require.NoError(t, err, "writeIncremental")
+
+			after, err := database.GetSessionFull(context.Background(), "inc-ts")
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			require.NotNil(t, after.EndedAt,
+				"implausible ended_at must be blanked, leaving the prior value via COALESCE")
+			// The implausible appended timestamp must not have been
+			// stored. Because it is blanked to nil, COALESCE keeps the
+			// prior plausible value.
+			assert.Equal(t, wantEnd, *after.EndedAt,
+				"implausible ended_at must not overwrite the plausible value")
+			assert.NotContains(t, *after.EndedAt, "1850",
+				"far-past ended_at must not persist")
+			assert.NotContains(t, *after.EndedAt, "2999",
+				"far-future ended_at must not persist")
+		})
+	}
+}
+
+// TestWriteIncrementalKeepsPlausibleEndedAt is the positive control for
+// TestWriteIncrementalBlanksImplausibleEndedAt: a plausible appended
+// ended_at must still update the column.
+func TestWriteIncrementalKeepsPlausibleEndedAt(t *testing.T) {
+	database := openTestDB(t)
+	e := &Engine{db: database}
+
+	start := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
+	firstEnd := start.Add(time.Hour)
+	pw := pendingWrite{
+		sess: parser.ParsedSession{
+			ID:           "inc-ts-ok",
+			Project:      "proj",
+			Machine:      "host",
+			Agent:        parser.AgentClaude,
+			StartedAt:    start,
+			EndedAt:      firstEnd,
+			MessageCount: 1,
+		},
+		msgs: []parser.ParsedMessage{{
+			Role:      parser.RoleUser,
+			Content:   "hello",
+			Timestamp: start,
+		}},
+	}
+	_, _, failed := e.writeBatch(
+		[]pendingWrite{pw}, syncWriteDefault, false,
+	)
+	require.Equal(t, 0, failed, "initial session write must not fail")
+
+	newEnd := start.Add(2 * time.Hour)
+	err := e.writeIncremental(&incrementalUpdate{
+		sessionID: "inc-ts-ok",
+		msgs: []parser.ParsedMessage{{
+			Role:      parser.RoleAssistant,
+			Content:   "world",
+			Timestamp: newEnd,
+			Ordinal:   1,
+		}},
+		endedAt:      newEnd,
+		msgCount:     2,
+		userMsgCount: 1,
+		fileSize:     100,
+		fileMtime:    newEnd.UnixNano(),
+	})
+	require.NoError(t, err, "writeIncremental")
+
+	after, err := database.GetSessionFull(context.Background(), "inc-ts-ok")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.EndedAt)
+	gotEnd, ok := parseStoredTimestamp(*after.EndedAt)
+	require.True(t, ok, "stored ended_at must parse")
+	assert.True(t, gotEnd.Equal(newEnd),
+		"plausible appended ended_at must update the column: got %q want %s",
+		*after.EndedAt, newEnd.Format(time.RFC3339Nano))
+}
+
+func TestConvertToolCallsFilePathAndCallIndex(t *testing.T) {
+	parsed := []parser.ParsedToolCall{
+		{ToolName: "Edit", Category: "Edit", ToolUseID: "a",
+			InputJSON: `{"file_path":"/x.go"}`}, // resolved from JSON
+		{ToolName: "Write", Category: "Write", ToolUseID: "b",
+			InputJSON: "raw diff not json", FilePath: "/native.go"}, // native wins
+		{ToolName: "Bash", Category: "Bash", ToolUseID: "c",
+			InputJSON: `{"command":"ls"}`}, // no path
+	}
+	got := convertToolCalls("sess-1", parsed)
+	require.Len(t, got, 3)
+	assert.Equal(t, "/x.go", got[0].FilePath)
+	assert.Equal(t, 0, got[0].CallIndex)
+	assert.Equal(t, "/native.go", got[1].FilePath)
+	assert.Equal(t, 1, got[1].CallIndex)
+	assert.Equal(t, "", got[2].FilePath)
+	assert.Equal(t, 2, got[2].CallIndex)
+}
+
+// codexRenameFixture is a seeded Codex session whose stored file_mtime is the
+// folded index-mtime watermark, used to exercise title-rename detection in
+// shouldSkipCodex.
+type codexRenameFixture struct {
+	e              *Engine
+	path           string
+	info           os.FileInfo
+	effectiveMtime int64
+	root           string
+	uuid           string
+}
+
+// writeCodexIndexForTest writes the session_index.jsonl mapping uuid -> title
+// at indexMtime, the file shouldSkipCodex's title check reads.
+func writeCodexIndexForTest(
+	t *testing.T, root, uuid, title string, indexMtime time.Time,
+) string {
+	t.Helper()
+	idxPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	line := `{"id":"` + uuid + `","thread_name":"` + title + `"}` + "\n"
+	require.NoError(t, os.WriteFile(idxPath, []byte(line), 0o600))
+	require.NoError(t, os.Chtimes(idxPath, indexMtime, indexMtime))
+	return idxPath
+}
+
+// seedCodexRenameCase stores a Codex session whose file_mtime watermark is the
+// folded index mtime (the index is newer than the transcript). That is the
+// exact shape where a later title-only rename whose index mtime lands at or
+// below the watermark is invisible to an mtime comparison.
+func seedCodexRenameCase(t *testing.T, database *db.DB) codexRenameFixture {
+	t.Helper()
+	root := t.TempDir()
+	const uuid = "11111111-2222-3333-4444-555555555555"
+	sessDir := filepath.Join(root, "sessions", "2026", "06", "21")
+	require.NoError(t, os.MkdirAll(sessDir, 0o755))
+	path := filepath.Join(sessDir, "rollout-2026-06-21T18-59-38-"+uuid+".jsonl")
+
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/api", "user", "2026-06-21T18:59:38Z",
+		),
+		testjsonl.CodexMsgJSON("user", "review this", "2026-06-21T18:59:39Z"),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	transcriptMtime := time.Unix(1_700_000_000, 0)
+	require.NoError(t, os.Chtimes(path, transcriptMtime, transcriptMtime))
+	origIndexMtime := transcriptMtime.Add(time.Hour)
+	writeCodexIndexForTest(t, root, uuid, "Original Title", origIndexMtime)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat codex fixture")
+	effectiveMtime := parser.CodexEffectiveMtime(path, info.ModTime().UnixNano())
+	require.Equal(t, origIndexMtime.UnixNano(), effectiveMtime,
+		"folded watermark should be the index mtime")
+
+	sess := db.Session{
+		ID:          "host~codex:" + uuid,
+		Project:     "api",
+		Machine:     "host",
+		Agent:       "codex",
+		SessionName: strPtr("Original Title"),
+		FilePath:    strPtr("host:" + path),
+		FileSize:    int64Ptr(info.Size()),
+		FileMtime:   int64Ptr(effectiveMtime),
+	}
+	require.NoError(t, database.UpsertSession(sess))
+	require.NoError(t, database.SetSessionDataVersion(
+		sess.ID, db.CurrentDataVersion(),
+	))
+
+	e := &Engine{
+		db:       database,
+		idPrefix: "host~",
+		pathRewriter: func(p string) string {
+			return "host:" + p
+		},
+	}
+	return codexRenameFixture{
+		e: e, path: path, info: info,
+		effectiveMtime: effectiveMtime, root: root, uuid: uuid,
+	}
+}
+
+// TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip pins the masking
+// fix: a title-only rename whose folded index mtime is at or below the stored
+// watermark used to be skipped by shouldSkipCodex's storedMtime==effectiveMtime
+// fast path, which never consulted the title. The direct title check must now
+// force a reparse while an unchanged session still hits the skip path.
+func TestShouldSkipCodexTitleRenameBelowStoredMtimeDoesNotSkip(t *testing.T) {
+	database := openTestDB(t)
+	f := seedCodexRenameCase(t, database)
+
+	// Control: nothing changed -> hot path still skips.
+	assert.True(t, f.e.shouldSkipCodex(f.path, f.info),
+		"unchanged transcript and title must still skip")
+
+	// Title-only rename whose index mtime lands at or below the stored
+	// watermark. The transcript bytes are untouched, so the old mtime gate
+	// would skip; the mtime-independent title check must catch it.
+	writeCodexIndexForTest(t, f.root, f.uuid, "Renamed Title",
+		time.Unix(0, f.effectiveMtime))
+	renamedEff := parser.CodexEffectiveMtime(f.path, f.info.ModTime().UnixNano())
+	require.LessOrEqual(t, renamedEff, f.effectiveMtime,
+		"renamed index mtime must be at or below the stored watermark")
+	require.Equal(t, "Renamed Title",
+		parser.LookupCodexThreadName(f.path, f.uuid),
+		"live index must report the renamed title")
+
+	assert.False(t, f.e.shouldSkipCodex(f.path, f.info),
+		"title-only rename at or below stored watermark must not skip")
 }

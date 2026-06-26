@@ -530,6 +530,15 @@ func TestGetSessionStats_FilterByAgent(t *testing.T) {
 	assert.Equal(t, 1, onlyClaude.Totals.SessionsAll, "agent=claude")
 	assert.Equal(t, "claude", onlyClaude.Filters.Agent,
 		"agent filter echoed")
+
+	// Comma-separated agents with surrounding whitespace must match
+	// every listed agent; the CSV values are trimmed before filtering.
+	multi, err := d.GetSessionStats(
+		ctx, StatsFilter{Since: "28d", Agent: "claude, codex"},
+	)
+	require.NoError(t, err, "GetSessionStats multi-agent")
+	assert.Equal(t, 2, multi.Totals.SessionsAll,
+		"comma-separated agents with whitespace match both")
 }
 
 func TestGetSessionStats_FilterByProject(t *testing.T) {
@@ -1575,6 +1584,49 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 	wantSavings := wantWithoutCache - wantSpent
 	assert.InDelta(t, wantSavings, ce.DollarsSavedVsUncached, 1e-9,
 		"DollarsSavedVsUncached")
+}
+
+func TestGetSessionStats_CacheEconomicsClampsRawTokenUsage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	const maxTokens = MaxPlausibleTokens
+
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "claude-sonnet-4-6",
+		InputPerMTok:         1.0,
+		OutputPerMTok:        2.0,
+		CacheCreationPerMTok: 3.0,
+		CacheReadPerMTok:     4.0,
+	}}), "UpsertModelPricing")
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "ce-clamp", agent: "claude", userMsgs: 3,
+		startedAt: hoursAgo(2),
+	})
+	seedCacheEconomicsMessage(t, d, "ce-clamp", 1, "claude-sonnet-4-6",
+		cacheTokenBreakdown{
+			input:         9_999_999_999,
+			output:        9_999_999_999,
+			cacheCreation: 9_999_999_999,
+			cacheRead:     9_999_999_999,
+		})
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	require.NoError(t, err, "GetSessionStats")
+	ce := stats.CacheEconomics
+	require.NotNil(t, ce, "CacheEconomics: want populated")
+
+	assert.InDelta(t, 1.0/3.0, ce.CacheHitRatio.Overall, 1e-9,
+		"CacheHitRatio.Overall")
+	assert.Equal(t, 1, ce.CacheHitRatio.Buckets[1].Count,
+		"clamped ratio 1/3 should land in bucket [0.25,0.5)")
+	wantSpent := float64(maxTokens) * (1.0 + 2.0 + 3.0 + 4.0) / 1_000_000
+	assert.InDelta(t, wantSpent, ce.DollarsSpent, 1e-9, "DollarsSpent")
+	wantWithoutCache := float64(maxTokens) * (1.0 + 2.0 + 1.0 + 1.0) / 1_000_000
+	assert.InDelta(t, wantWithoutCache, ce.DollarsSavedVsUncached+ce.DollarsSpent,
+		1e-9, "DollarsWithoutCache")
+	assert.InDelta(t, wantWithoutCache-wantSpent, ce.DollarsSavedVsUncached,
+		1e-9, "DollarsSavedVsUncached")
 }
 
 // TestGetSessionStats_CacheEconomics_NoClaude verifies that the

@@ -9,6 +9,7 @@
     XIcon,
   } from "../../icons.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
+  import { m } from "../../i18n/index.js";
 
   const selectedAgents = $derived(
     analytics.agent
@@ -27,11 +28,18 @@
       : [],
   );
 
-  const STATUS_LABEL: Record<string, string> = {
-    active: "Active",
-    stale: "Stale",
-    unclean: "Unclean",
-  };
+  function statusLabel(status: string): string {
+    switch (status) {
+      case "active":
+        return m.analytics_status_active();
+      case "stale":
+        return m.analytics_status_stale();
+      case "unclean":
+        return m.analytics_status_unclean();
+      default:
+        return status;
+    }
+  }
 
   const DAY_LABELS = [
     "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun",
@@ -73,7 +81,7 @@
     selectedStatuses.length +
     (analytics.minUserMessages > 0 ? 1 : 0) +
     (!analytics.includeOneShot ? 1 : 0) +
-    (analytics.includeAutomated ? 1 : 0) +
+    (analytics.automatedScope !== "human" ? 1 : 0) +
     (analytics.recentlyActive ? 1 : 0) +
     (hasTime ? 1 : 0)
   );
@@ -81,13 +89,13 @@
 
 {#if analytics.hasActiveFilters}
   <div class="active-filters">
-    <span class="filters-label">Filters:</span>
+    <span class="filters-label">{m.shared_active_filters_label()}</span>
 
     {#if analytics.selectedDate}
       <button
         class="filter-chip"
         onclick={() => analytics.clearDate()}
-        title="Clear date filter"
+        title={m.analytics_filters_clear_date()}
       >
         <span class="chip-icon">
           <CalendarIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -103,7 +111,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearProject()}
-        title="Clear project filter"
+        title={m.shared_active_filters_clear_project()}
       >
         <span class="chip-icon">
           <FolderIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -119,7 +127,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.removeMachine(machine)}
-        title="Remove {machine} filter"
+        title={m.shared_active_filters_remove_machine({ machine })}
       >
         <span class="chip-icon">
           <MonitorIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -135,7 +143,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.toggleAgent(agent)}
-        title="Remove {agentLabel(agent)} filter"
+        title={m.shared_active_filters_remove_agent({ agent: agentLabel(agent) })}
       >
         <span
           class="agent-chip-dot"
@@ -152,12 +160,12 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearMinUserMessages()}
-        title="Clear min prompts filter"
+        title={m.shared_active_filters_clear_min_prompts()}
       >
         <span class="chip-icon">
           <MessageSquareTextIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
-        &ge;{analytics.minUserMessages} prompts
+        {m.shared_active_filters_min_prompts({ count: analytics.minUserMessages })}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -168,12 +176,12 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearRecentlyActive()}
-        title="Clear recently active filter"
+        title={m.shared_active_filters_clear_recently_active()}
       >
         <span class="chip-icon">
           <ClockIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
-        Active 24h
+        {m.shared_active_filters_active24h()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -184,9 +192,9 @@
       <button
         class="filter-chip"
         onclick={() => analytics.toggleTerminationStatus(status)}
-        title="Remove {STATUS_LABEL[status] ?? status} from status filter"
+        title={m.analytics_filters_remove_status({ status: statusLabel(status) })}
       >
-        Status: {STATUS_LABEL[status] ?? status}
+        {m.analytics_filters_status({ status: statusLabel(status) })}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -197,22 +205,24 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearIncludeOneShot()}
-        title="Clear single-turn filter"
+        title={m.shared_active_filters_clear_single_turn()}
       >
-        Single-turn hidden
+        {m.shared_active_filters_single_turn_hidden()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
       </button>
     {/if}
 
-    {#if analytics.includeAutomated}
+    {#if analytics.automatedScope !== "human"}
       <button
         class="filter-chip"
         onclick={() => analytics.clearIncludeAutomated()}
-        title="Clear automated filter"
+        title={m.shared_active_filters_clear_automated()}
       >
-        Automated included
+        {analytics.automatedScope === "automated"
+          ? m.analytics_filters_only_automated()
+          : m.shared_active_filters_automated_included()}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
@@ -223,7 +233,7 @@
       <button
         class="filter-chip"
         onclick={() => analytics.clearTimeFilter()}
-        title="Clear time filter"
+        title={m.analytics_filters_clear_time()}
       >
         <span class="chip-icon">
           <ClockIcon size="10" strokeWidth="1.8" aria-hidden="true" />
@@ -239,9 +249,9 @@
       <button
         class="clear-all"
         onclick={() => analytics.clearAllFilters()}
-        title="Clear all filters"
+        title={m.shared_active_filters_clear_all()}
       >
-        Clear all
+        {m.shared_active_filters_clear_all_label()}
       </button>
     {/if}
   </div>

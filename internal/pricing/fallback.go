@@ -1,164 +1,160 @@
 package pricing
 
-// FallbackVersion must be bumped whenever FallbackPricing
-// rates change so the startup seeder knows to re-upsert.
-const FallbackVersion = "2026-06-16.1"
+import (
+	"bytes"
+	"compress/gzip"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log"
+	"slices"
+	"strings"
+	"sync"
+)
 
-// FallbackPricing returns hardcoded pricing for key Claude
-// models. Used when the LiteLLM fetch fails.
-// Prices in USD per million tokens, current as of 2026-05.
+const fallbackVersionUnknown = "0"
+const litellmSnapshotPath = "snapshot/litellm_snapshot.json.gz"
+const maxFallbackSnapshotCompressedBytes = 1 << 20
+const maxFallbackSnapshotJSONBytes = 8 << 20
+const maxFallbackSnapshotModels = 100_000
+
+//go:generate go run ./cmd/litellm-snapshot -out snapshot/litellm_snapshot.json.gz
+
+//go:embed snapshot/litellm_snapshot.json.gz
+var litellmSnapshotFS embed.FS
+
+type litellmFallbackSnapshot struct {
+	Version string         `json:"version"`
+	Models  []ModelPricing `json:"models"`
+}
+
+var (
+	fallbackPricingErr  error
+	fallbackPricing     []ModelPricing
+	fallbackPricingOnce sync.Once
+)
+
+// FallbackVersion is derived from the embedded snapshot; regenerate litellm_snapshot.json.gz to change it.
+var FallbackVersion = fallbackVersionUnknown
+
+func init() {
+	fallbackPricingOnce.Do(initFallbackPricing)
+}
+
+// FallbackPricing returns offline pricing from the embedded LiteLLM snapshot.
+// Data is copied for caller safety and deterministic DB seeding.
 func FallbackPricing() []ModelPricing {
-	return []ModelPricing{
-		// Current model names (used by Claude Code / Codex)
-		{
-			ModelPattern:         "claude-sonnet-4-6",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
-		},
-		{
-			ModelPattern:         "claude-opus-4-6",
-			InputPerMTok:         5.0,
-			OutputPerMTok:        25.0,
-			CacheCreationPerMTok: 6.25,
-			CacheReadPerMTok:     0.50,
-		},
-		{
-			ModelPattern:         "claude-opus-4-7",
-			InputPerMTok:         5.0,
-			OutputPerMTok:        25.0,
-			CacheCreationPerMTok: 6.25,
-			CacheReadPerMTok:     0.50,
-		},
-		{
-			// Opus 4.8 launched at the Opus 4.6/4.7 rates and is
-			// not yet in the LiteLLM catalog, so it ships here so
-			// usage is priced until LiteLLM adds it.
-			ModelPattern:         "claude-opus-4-8",
-			InputPerMTok:         5.0,
-			OutputPerMTok:        25.0,
-			CacheCreationPerMTok: 6.25,
-			CacheReadPerMTok:     0.50,
-		},
-		{
-			// Fable 5 launched at double the Opus 4.8 rates and is
-			// not yet in the LiteLLM catalog, so it ships here so
-			// usage is priced until LiteLLM adds it.
-			ModelPattern:         "claude-fable-5",
-			InputPerMTok:         10.0,
-			OutputPerMTok:        50.0,
-			CacheCreationPerMTok: 12.50,
-			CacheReadPerMTok:     1.0,
-		},
-		{
-			ModelPattern:         "claude-haiku-4-5-20251001",
-			InputPerMTok:         1.0,
-			OutputPerMTok:        5.0,
-			CacheCreationPerMTok: 1.25,
-			CacheReadPerMTok:     0.10,
-		},
-		// Codex / OpenAI models
-		{
-			ModelPattern:     "gpt-5.5",
-			InputPerMTok:     5.0,
-			OutputPerMTok:    30.0,
-			CacheReadPerMTok: 0.50,
-		},
-		{
-			ModelPattern:  "gpt-5.4",
-			InputPerMTok:  2.50,
-			OutputPerMTok: 15.0,
-		},
-		{
-			ModelPattern:  "gpt-5.2-codex",
-			InputPerMTok:  1.75,
-			OutputPerMTok: 14.0,
-		},
-		{
-			ModelPattern:  "gpt-5.3-codex",
-			InputPerMTok:  1.75,
-			OutputPerMTok: 14.0,
-		},
-		{
-			ModelPattern:  "gpt-5.4-mini",
-			InputPerMTok:  0.75,
-			OutputPerMTok: 4.50,
-		},
-		{
-			ModelPattern:  "gpt-5.4-nano",
-			InputPerMTok:  0.20,
-			OutputPerMTok: 1.25,
-		},
-		{
-			ModelPattern:  "gpt-5.1-codex-max",
-			InputPerMTok:  1.25,
-			OutputPerMTok: 10.0,
-		},
-		// Older model names (still in some session logs)
-		{
-			ModelPattern:         "claude-sonnet-4-20250514",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
-		},
-		{
-			ModelPattern:         "claude-sonnet-4-5-20250514",
-			InputPerMTok:         3.0,
-			OutputPerMTok:        15.0,
-			CacheCreationPerMTok: 3.75,
-			CacheReadPerMTok:     0.30,
-		},
-		{
-			ModelPattern:         "claude-opus-4-20250514",
-			InputPerMTok:         15.0,
-			OutputPerMTok:        75.0,
-			CacheCreationPerMTok: 18.75,
-			CacheReadPerMTok:     1.50,
-		},
-		{
-			ModelPattern:         "claude-haiku-3-5-20241022",
-			InputPerMTok:         0.80,
-			OutputPerMTok:        4.0,
-			CacheCreationPerMTok: 1.0,
-			CacheReadPerMTok:     0.08,
-		},
-		// Free OpenRouter model
-		{
-			ModelPattern:  "openrouter/owl-alpha",
-			InputPerMTok:  0,
-			OutputPerMTok: 0,
-		},
-		// Mistral models (Mistral Vibe)
-		{
-			ModelPattern:  "mistral-medium",
-			InputPerMTok:  2.75,
-			OutputPerMTok: 2.75,
-		},
-		{
-			ModelPattern:  "mistral-medium-3",
-			InputPerMTok:  2.75,
-			OutputPerMTok: 2.75,
-		},
-		{
-			ModelPattern:         "mistral-medium-3.5",
-			InputPerMTok:         1.5,
-			OutputPerMTok:        7.5,
-			CacheCreationPerMTok: 1.5,
-			CacheReadPerMTok:     0.25,
-		},
-		{
-			ModelPattern:  "mistral-large",
-			InputPerMTok:  4.0,
-			OutputPerMTok: 4.0,
-		},
-		{
-			ModelPattern:         "mistral-large-3",
-			InputPerMTok:         4.0,
-			OutputPerMTok:        4.0,
-			CacheCreationPerMTok: 4.0,
-			CacheReadPerMTok:     0.30,
-		},
+	fallbackPricingOnce.Do(initFallbackPricing)
+	if fallbackPricingErr != nil {
+		panic(fallbackPricingErr)
 	}
+
+	pricing := make([]ModelPricing, len(fallbackPricing))
+	copy(pricing, fallbackPricing)
+	return pricing
+}
+
+func initFallbackPricing() {
+	snapshot, err := decodeFallbackSnapshot()
+	if err != nil {
+		fallbackPricingErr = fmt.Errorf("loading liteLLM snapshot: %w", err)
+		FallbackVersion = fallbackVersionUnknown
+		log.Panicf("pricing: %v", fallbackPricingErr)
+	}
+
+	fallbackPricing = slices.Clone(snapshot.Models)
+	FallbackVersion = snapshot.Version
+}
+
+func decodeFallbackSnapshot() (litellmFallbackSnapshot, error) {
+	return decodeFallbackSnapshotFromFS(litellmSnapshotFS)
+}
+
+func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
+	blob, err := fs.ReadFile(fsys, litellmSnapshotPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"embedded LiteLLM snapshot is missing; run make pricing-snapshot",
+		)
+	}
+	if err != nil {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"reading snapshot: %w", err,
+		)
+	}
+	if len(blob) == 0 {
+		return litellmFallbackSnapshot{}, fmt.Errorf("empty snapshot")
+	}
+	if len(blob) > maxFallbackSnapshotCompressedBytes {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"compressed snapshot exceeds %d bytes",
+			maxFallbackSnapshotCompressedBytes,
+		)
+	}
+
+	reader, err := gzip.NewReader(bytes.NewReader(blob))
+	if err != nil {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"creating reader: %w", err,
+		)
+	}
+	defer reader.Close()
+
+	raw, err := readLimitedSnapshot(reader, maxFallbackSnapshotJSONBytes)
+	if err != nil {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"decompressing snapshot: %w", err,
+		)
+	}
+
+	var snapshot litellmFallbackSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"parsing snapshot json: %w", err,
+		)
+	}
+	if snapshot.Version == "" {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"missing snapshot version",
+		)
+	}
+	if len(snapshot.Models) == 0 {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"missing snapshot models",
+		)
+	}
+	if len(snapshot.Models) > maxFallbackSnapshotModels {
+		return litellmFallbackSnapshot{}, fmt.Errorf(
+			"snapshot models exceed %d entries",
+			maxFallbackSnapshotModels,
+		)
+	}
+	for _, model := range snapshot.Models {
+		if strings.TrimSpace(model.ModelPattern) == "" {
+			return litellmFallbackSnapshot{}, fmt.Errorf(
+				"snapshot contains model with empty pattern",
+			)
+		}
+	}
+
+	slices.SortFunc(snapshot.Models, func(a, b ModelPricing) int {
+		return strings.Compare(a.ModelPattern, b.ModelPattern)
+	})
+
+	return snapshot, nil
+}
+
+func readLimitedSnapshot(reader io.Reader, limit int64) ([]byte, error) {
+	limited := io.LimitReader(reader, limit+1)
+	raw, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > limit {
+		return nil, fmt.Errorf("decompressed snapshot exceeds %d bytes", limit)
+	}
+	return raw, nil
 }

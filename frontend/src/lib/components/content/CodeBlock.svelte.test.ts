@@ -2,6 +2,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, unmount, tick } from "svelte";
 import CodeBlock from "./CodeBlock.svelte";
+import { setLocale } from "../../i18n/index.js";
 
 function marks(el: HTMLElement): string[] {
   return Array.from(el.querySelectorAll("mark.search-highlight")).map(
@@ -19,8 +20,27 @@ describe("CodeBlock syntax highlighting and search marks", () => {
   let component: ReturnType<typeof mount>;
 
   afterEach(() => {
+    setLocale("en");
     if (component) unmount(component);
     document.body.innerHTML = "";
+  });
+
+  it("renders copy labels in Simplified Chinese", async () => {
+    setLocale("zh-CN");
+    component = mount(CodeBlock, {
+      target: document.body,
+      props: {
+        content: "const answer = 42;",
+        language: "typescript",
+      },
+    });
+    await tick();
+
+    const copyButton = document.querySelector<HTMLButtonElement>(
+      "button.copy-btn",
+    );
+    expect(copyButton?.getAttribute("aria-label")).toBe("复制代码块");
+    expect(copyButton?.getAttribute("title")).toBe("复制代码");
   });
 
   it("marks survive Shiki swap", async () => {

@@ -111,6 +111,7 @@ type RemoteSync struct {
 	DB                      *db.DB
 	SSHOpts                 []string // extra args passed to ssh (e.g. -i keyfile)
 	BlockedResultCategories []string
+	Progress                sync.ProgressFunc
 }
 
 // Run executes the full remote sync flow: resolve dirs,
@@ -121,6 +122,7 @@ func (rs *RemoteSync) Run(
 ) (SyncStats, error) {
 	var stats SyncStats
 
+	rs.reportProgress("Resolving agent directories on " + rs.Host)
 	fmt.Printf(
 		"Resolving agent directories on %s...\n", rs.Host,
 	)
@@ -133,10 +135,15 @@ func (rs *RemoteSync) Run(
 		)
 	}
 	if len(dirs) == 0 {
+		rs.reportProgress("No agent directories found on " + rs.Host)
 		fmt.Printf("No agent directories found on %s\n", rs.Host)
 		return stats, nil
 	}
 
+	rs.reportProgress(fmt.Sprintf(
+		"Downloading session data from %s (%d agents)",
+		rs.Host, len(dirs),
+	))
 	fmt.Printf(
 		"Downloading session data from %s (%d agents)...\n",
 		rs.Host, len(dirs),
@@ -150,6 +157,7 @@ func (rs *RemoteSync) Run(
 		)
 	}
 	defer os.RemoveAll(tmpDir)
+	rs.reportProgress("Download complete")
 	fmt.Printf("Download complete.\n")
 
 	// Build engine AgentDirs pointing at temp dir equivalents
@@ -220,6 +228,12 @@ func (rs *RemoteSync) Run(
 	lastPrint := t0
 	var lastProgress sync.Progress
 	progress := func(p sync.Progress) {
+		if p.Detail == "" {
+			p.Detail = "Processing sessions from " + rs.Host
+		}
+		if rs.Progress != nil {
+			rs.Progress(p)
+		}
 		lastProgress = p
 		now := time.Now()
 		if now.Sub(lastPrint) < 500*time.Millisecond {
@@ -280,5 +294,24 @@ func (rs *RemoteSync) Run(
 		fmt.Printf(" (%d failed)", stats.Failed)
 	}
 	fmt.Println()
+	rs.reportProgress(remoteSyncSummary(rs.Host, stats))
 	return stats, nil
+}
+
+func (rs *RemoteSync) reportProgress(detail string) {
+	if rs.Progress == nil {
+		return
+	}
+	rs.Progress(sync.Progress{Detail: detail})
+}
+
+func remoteSyncSummary(host string, stats SyncStats) string {
+	summary := fmt.Sprintf("Synced %d sessions from %s", stats.SessionsSynced, host)
+	if stats.Skipped > 0 {
+		summary += fmt.Sprintf(" (%d unchanged)", stats.Skipped)
+	}
+	if stats.Failed > 0 {
+		summary += fmt.Sprintf(" (%d failed)", stats.Failed)
+	}
+	return summary
 }

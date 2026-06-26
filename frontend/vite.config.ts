@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { defineConfig } from "vite-plus";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { paraglideVitePlugin } from "@inlang/paraglide-js";
 
 function gitCommit(): string {
   try {
@@ -50,6 +51,19 @@ function requestOriginMatchesLoopbackDevServer(
   }
 }
 
+function isViteDevOrigin(
+  origin: string | undefined,
+  host: string | undefined,
+): boolean {
+  if (!origin || !host) return false;
+  try {
+    const u = new URL(origin);
+    return u.protocol === "http:" && u.host === host;
+  } catch {
+    return false;
+  }
+}
+
 export default defineConfig({
   fmt: {},
   lint: {
@@ -65,7 +79,16 @@ export default defineConfig({
     },
   },
   base: "/",
-  plugins: [svelte()],
+  plugins: [
+    svelte(),
+    paraglideVitePlugin({
+      project: "./project.inlang",
+      outdir: "./src/lib/paraglide",
+      emitTsDeclarations: true,
+      strategy: ["localStorage", "preferredLanguage", "baseLocale"],
+      localStorageKey: "agentsview-locale",
+    }),
+  ],
   define: {
     "import.meta.env.VITE_BUILD_COMMIT": JSON.stringify(
       gitCommit(),

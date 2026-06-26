@@ -79,6 +79,9 @@ func (db *DB) ListStarredSessionIDs(
 // BulkStarSessions stars multiple sessions in a single transaction.
 // Used for migrating localStorage stars to the database.
 func (db *DB) BulkStarSessions(sessionIDs []string) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
 	if len(sessionIDs) == 0 {
 		return nil
 	}

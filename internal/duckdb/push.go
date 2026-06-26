@@ -21,23 +21,73 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(prices) == 0 {
 		prices = duckFallbackPricingRows()
 	}
+	if len(prices) == 0 {
+		return nil
+	}
+	tx, err := s.duck.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb pricing sync: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	stmt, err := tx.PrepareContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(model_pattern) DO UPDATE SET
+			input_per_mtok = excluded.input_per_mtok,
+			output_per_mtok = excluded.output_per_mtok,
+			cache_creation_per_mtok = excluded.cache_creation_per_mtok,
+			cache_read_per_mtok = excluded.cache_read_per_mtok,
+			updated_at = excluded.updated_at`)
+	if err != nil {
+		return fmt.Errorf("preparing duckdb pricing sync: %w", err)
+	}
+	defer stmt.Close()
 	for _, p := range prices {
-		if _, err := s.duck.ExecContext(ctx, `
-			INSERT INTO model_pricing (
-				model_pattern, input_per_mtok, output_per_mtok,
-				cache_creation_per_mtok, cache_read_per_mtok, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(model_pattern) DO UPDATE SET
-				input_per_mtok = excluded.input_per_mtok,
-				output_per_mtok = excluded.output_per_mtok,
-				cache_creation_per_mtok = excluded.cache_creation_per_mtok,
-				cache_read_per_mtok = excluded.cache_read_per_mtok,
-				updated_at = excluded.updated_at`,
+		if _, err := stmt.ExecContext(ctx,
 			p.ModelPattern, p.InputPerMTok, p.OutputPerMTok,
 			p.CacheCreationPerMTok, p.CacheReadPerMTok, p.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("syncing model pricing %q: %w", p.ModelPattern, err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb pricing sync: %w", err)
+	}
+	return nil
+}
+
+func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
+	// Cursor admin rows are global and unattributed, so project-filtered pushes
+	// cannot sync them honestly.
+	if s.isFiltered() {
+		return nil
+	}
+
+	events, err := s.local.GetCursorUsageEvents(ctx)
+	if err != nil {
+		return fmt.Errorf("loading local cursor usage events: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
+	}
+
+	tx, err := s.duck.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb cursor usage sync: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	if err := bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb cursor usage sync: %w", err)
 	}
 	return nil
 }
@@ -246,14 +296,19 @@ func upsertSession(
 			ended_with_role, final_failure_streak, signals_pending_since,
 			compaction_count, mid_task_compaction_count,
 			context_pressure_max, health_score, health_grade,
-			has_tool_calls, has_context_data, data_version,
+			has_tool_calls, has_context_data,
+			quality_signal_version, short_prompt_count, unstructured_start,
+			missing_success_criteria_count, missing_verification_count,
+			duplicate_prompt_count, no_code_context_count,
+			runaway_tool_loop_count, data_version,
 			cwd, git_branch, source_session_id, source_version,
 			parser_malformed_lines, is_truncated, deleted_at, created_at,
 			termination_status, secret_leak_count, secrets_rules_version
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
@@ -296,6 +351,14 @@ func upsertSession(
 			health_grade = excluded.health_grade,
 			has_tool_calls = excluded.has_tool_calls,
 			has_context_data = excluded.has_context_data,
+			quality_signal_version = excluded.quality_signal_version,
+			short_prompt_count = excluded.short_prompt_count,
+			unstructured_start = excluded.unstructured_start,
+			missing_success_criteria_count = excluded.missing_success_criteria_count,
+			missing_verification_count = excluded.missing_verification_count,
+			duplicate_prompt_count = excluded.duplicate_prompt_count,
+			no_code_context_count = excluded.no_code_context_count,
+			runaway_tool_loop_count = excluded.runaway_tool_loop_count,
 			data_version = excluded.data_version,
 			cwd = excluded.cwd,
 			git_branch = excluded.git_branch,
@@ -327,7 +390,12 @@ func upsertSession(
 		sess.CompactionCount, sess.MidTaskCompactionCount,
 		sess.ContextPressureMax, sess.HealthScore,
 		nilString(sess.HealthGrade), sess.HasToolCalls,
-		sess.HasContextData, sess.DataVersion,
+		sess.HasContextData,
+		sess.QualitySignalVersion, sess.ShortPromptCount,
+		sess.UnstructuredStart, sess.MissingSuccessCriteriaCount,
+		sess.MissingVerificationCount, sess.DuplicatePromptCount,
+		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
+		sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
 		sess.SourceVersion, sess.ParserMalformedLines,
 		sess.IsTruncated, nilTime(sess.DeletedAt),
@@ -389,12 +457,13 @@ func upsertToolCalls(ctx context.Context, tx *sql.Tx, msgs []db.Message) ([]duck
 					tool_name = ?, category = ?, tool_use_id = ?,
 					input_json = ?, skill_name = ?,
 					result_content_length = ?, result_content = ?,
-					subagent_session_id = ?
+					subagent_session_id = ?, file_path = ?
 				WHERE session_id = ? AND message_id = ? AND call_index = ?`,
 				tc.ToolName, tc.Category, tc.ToolUseID,
 				nilEmpty(tc.InputJSON), nilEmpty(tc.SkillName),
 				nilZero(tc.ResultContentLength), nilEmpty(tc.ResultContent),
-				nilEmpty(tc.SubagentSessionID), m.SessionID, m.ID, i,
+				nilEmpty(tc.SubagentSessionID), nilEmpty(tc.FilePath),
+				m.SessionID, m.ID, i,
 			)
 			if err != nil {
 				return nil, fmt.Errorf("updating duckdb tool_call %s/%d/%d: %w",
@@ -409,12 +478,13 @@ func upsertToolCalls(ctx context.Context, tx *sql.Tx, msgs []db.Message) ([]duck
 					message_id, session_id, tool_name, category,
 					call_index, tool_use_id, input_json, skill_name,
 					result_content_length, result_content,
-					subagent_session_id
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					subagent_session_id, file_path
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				m.ID, m.SessionID, tc.ToolName, tc.Category,
 				i, tc.ToolUseID, nilEmpty(tc.InputJSON),
 				nilEmpty(tc.SkillName), nilZero(tc.ResultContentLength),
 				nilEmpty(tc.ResultContent), nilEmpty(tc.SubagentSessionID),
+				nilEmpty(tc.FilePath),
 			); err != nil {
 				return nil, fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",
 					m.SessionID, m.Ordinal, i, err)
@@ -591,6 +661,59 @@ func insertUsageEvent(ctx context.Context, tx *sql.Tx, ev db.UsageEvent) error {
 		ev.CostSource, occurredAt, ev.DedupKey,
 	); err != nil {
 		return err
+	}
+	return nil
+}
+
+func bulkInsertCursorUsageEvents(
+	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
+) error {
+	if len(events) == 0 {
+		return nil
+	}
+	const cursorBatch = 100
+	for i := 0; i < len(events); i += cursorBatch {
+		end := min(i+cursorBatch, len(events))
+		batch := events[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO cursor_usage_events (
+			occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		) VALUES `)
+		args := make([]any, 0, len(batch)*13)
+		for j, ev := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			occurredAt, ok := parseTimestamp(ev.OccurredAt)
+			if !ok {
+				return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
+			}
+			args = append(args,
+				occurredAt,
+				db.SanitizeUTF8(ev.Model),
+				db.SanitizeUTF8(ev.Kind),
+				ev.InputTokens,
+				ev.OutputTokens,
+				ev.CacheWriteTokens,
+				ev.CacheReadTokens,
+				ev.ChargedCents,
+				ev.CursorTokenFee,
+				db.SanitizeUTF8(ev.UserID),
+				db.SanitizeUTF8(ev.UserEmail),
+				ev.IsHeadless,
+				db.SanitizeUTF8(ev.DedupKey),
+			)
+		}
+		b.WriteString(` ON CONFLICT DO NOTHING`)
+		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+			return fmt.Errorf("bulk inserting duckdb cursor_usage_events: %w", err)
+		}
 	}
 	return nil
 }

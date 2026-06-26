@@ -88,13 +88,18 @@ type Engine struct {
 	mu                      gosync.RWMutex
 	lastSync                time.Time
 	lastSyncStats           SyncStats
+	currentProgress         *Progress
 	// skipCache tracks paths that should be skipped on
 	// subsequent syncs, keyed by path with the file mtime
 	// at time of caching. Covers parse errors and
 	// non-interactive sessions (nil result). The file is
-	// retried when its mtime changes.
-	skipMu    gosync.RWMutex
-	skipCache map[string]int64
+	// retried when its mtime changes. S3 entries also keep an
+	// in-memory source fingerprint when one is available.
+	skipMu            gosync.RWMutex
+	skipCache         map[string]int64
+	skipFingerprints  map[string]string
+	s3CodexIndexMu    gosync.Mutex
+	s3CodexIndexCache map[string]s3CodexIndexSnapshot
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
@@ -113,12 +118,42 @@ type Engine struct {
 	// write path. Exposed via PhaseStats() so a CLI driver can log the
 	// totals after a sync pass completes.
 	phaseStats PhaseStats
+
+	// anomalies accumulates per-run parser/sanitizer anomaly signals
+	// recorded at the write seam (prepareSessionWrite, writeIncremental,
+	// toDBUsageEvents). Reset at the start of each sync run and folded
+	// into the returned SyncStats before the run completes.
+	anomalies anomalyAccumulator
 }
 
 // PhaseStats returns the engine's phase counter. The values reflect only
 // the most recent sync pass; callers should read after SyncAll/ResyncAll
 // returns.
 func (e *Engine) PhaseStats() *PhaseStats { return &e.phaseStats }
+
+// refuseWriteInForceParse guards the public sync entrypoints against an
+// engine created by NewDiffEngine, whose forceParse mode exists purely
+// for report-only re-parsing. Such an engine is also Ephemeral, so a
+// write would persist nothing useful, but it would still rewrite or
+// re-derive archive rows -- exactly what the report-only contract
+// promises not to do. Rather than widen the read-only surface into a
+// separate interface (which would change NewDiffEngine's return type and
+// break ParseDiff callers), the write entrypoints refuse and log when
+// forceParse is set. A real sync engine never sets forceParse, so this
+// is a no-op for every production caller.
+//
+// It returns true when the caller must abort. op names the refused
+// entrypoint for the log line.
+func (e *Engine) refuseWriteInForceParse(op string) bool {
+	if !e.forceParse {
+		return false
+	}
+	log.Printf(
+		"sync: refusing %s on a report-only (parse-diff) engine; "+
+			"forceParse engines never write", op,
+	)
+	return true
+}
 
 // codexExecMigrationKey is the pg_sync_state flag that
 // records whether the one-time cleanup of legacy codex_exec
@@ -163,6 +198,8 @@ func NewEngine(
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
 		skipCache:               skipCache,
+		skipFingerprints:        make(map[string]string),
+		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
 		idPrefix:                cfg.IDPrefix,
 		pathRewriter:            cfg.PathRewriter,
@@ -346,6 +383,33 @@ func (e *Engine) LastSyncStats() SyncStats {
 	return e.lastSyncStats
 }
 
+// CurrentProgress returns the most recent in-flight sync progress.
+func (e *Engine) CurrentProgress() (Progress, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.currentProgress == nil {
+		return Progress{}, false
+	}
+	return *e.currentProgress, true
+}
+
+func (e *Engine) reportProgress(
+	onProgress ProgressFunc, p Progress,
+) {
+	e.mu.Lock()
+	e.currentProgress = &p
+	e.mu.Unlock()
+	if onProgress != nil {
+		onProgress(p)
+	}
+}
+
+func (e *Engine) clearCurrentProgress() {
+	e.mu.Lock()
+	e.currentProgress = nil
+	e.mu.Unlock()
+}
+
 // Machine returns the machine name this engine writes on sessions.
 func (e *Engine) Machine() string {
 	if e == nil {
@@ -364,6 +428,9 @@ type syncJob struct {
 // Paths that don't match known session file patterns are
 // silently ignored.
 func (e *Engine) SyncPaths(paths []string) {
+	if e.refuseWriteInForceParse("SyncPaths") {
+		return
+	}
 	files := e.classifyPaths(paths)
 	if len(files) == 0 {
 		return
@@ -381,12 +448,16 @@ func (e *Engine) SyncPaths(paths []string) {
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
+	e.resetS3CodexIndexCache()
 
+	e.anomalies.reset()
 	results := e.startWorkers(context.Background(), files)
 	stats = e.collectAndBatch(
 		context.Background(), results, len(files), len(files), nil,
 		syncWriteDefault,
 	)
+	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 
 	e.mu.Lock()
@@ -474,10 +545,18 @@ func dedupeDiscoveredFiles(
 func discoveredFileKey(file parser.DiscoveredFile) string {
 	if file.Agent == parser.AgentCodex {
 		if id := parser.CodexSessionUUIDFromFilename(filepath.Base(file.Path)); id != "" {
-			return string(file.Agent) + "\x00" + id
+			return string(file.Agent) + "\x00" +
+				discoveredFileIDPrefix(file) + "\x00" + id
 		}
 	}
 	return string(file.Agent) + "\x00" + file.Path
+}
+
+func discoveredFileIDPrefix(file parser.DiscoveredFile) string {
+	if isS3SourcePath(file.Path) {
+		return s3SessionIDPrefix(file.Machine)
+	}
+	return ""
 }
 
 func preferDiscoveredFile(
@@ -629,8 +708,19 @@ func (e *Engine) classifyOnePath(
 	if df, ok := e.classifyContainerPath(path, pathExists); ok {
 		return df, true
 	}
+	// Reasonix sidecar delete events arrive after .jsonl.meta no longer
+	// exists; classify them against the sibling transcript before the
+	// generic missing-path guard.
+	if strings.HasSuffix(path, ".jsonl.meta") {
+		if df, ok := e.classifyReasonixPath(path); ok {
+			return df, true
+		}
+	}
 	if !pathExists {
 		return parser.DiscoveredFile{}, false
+	}
+	if df, ok := e.classifyReasonixPath(path); ok {
+		return df, true
 	}
 
 	// Claude: <claudeDir>/<project>/<session>.jsonl
@@ -1090,27 +1180,29 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Pi: <piDir>/<encoded-cwd>/<session>.jsonl
-	for _, piDir := range e.agentDirs[parser.AgentPi] {
-		if piDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(piDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 2 {
+	// Pi/OMP: <sessionsDir>/<encoded-cwd>/<session>.jsonl
+	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMP} {
+		for _, piDir := range e.agentDirs[agent] {
+			if piDir == "" {
 				continue
 			}
-			if !strings.HasSuffix(parts[1], ".jsonl") {
-				continue
+			if rel, ok := isUnder(piDir, path); ok {
+				parts := strings.Split(rel, sep)
+				if len(parts) != 2 {
+					continue
+				}
+				if !strings.HasSuffix(parts[1], ".jsonl") {
+					continue
+				}
+				if !parser.IsPiSessionFile(path) {
+					continue
+				}
+				return parser.DiscoveredFile{
+					Path:  path,
+					Agent: agent,
+					// Project left empty; parser derives from header cwd.
+				}, true
 			}
-			if !parser.IsPiSessionFile(path) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentPi,
-				// Project left empty; parser derives from header cwd.
-			}, true
 		}
 	}
 
@@ -1153,20 +1245,8 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// aider: <aiderRoot>/.../.aider.chat.history.md (rootless; any depth
-	// under the configured root).
-	if filepath.Base(path) == parser.AiderHistoryFileName() {
-		for _, aiderDir := range e.agentDirs[parser.AgentAider] {
-			if aiderDir == "" {
-				continue
-			}
-			if _, ok := isUnder(aiderDir, path); ok {
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentAider,
-				}, true
-			}
-		}
+	if df, ok := e.classifyAiderPath(path); ok {
+		return df, true
 	}
 
 	// Command Code: <projectsDir>/<slugified-cwd>/<session>.jsonl
@@ -1457,6 +1537,31 @@ func (e *Engine) classifyVisualStudioCopilotPath(
 			Project: "visualstudio",
 			Agent:   parser.AgentVSCopilot,
 		}, true
+	}
+	return parser.DiscoveredFile{}, false
+}
+
+// classifyAiderPath handles Aider's rootless chat-history layout:
+//
+//	<aiderRoot>/.../.aider.chat.history.md
+//
+// extracted from classifyOnePath to stay within nilaway CFG limits.
+func (e *Engine) classifyAiderPath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	if filepath.Base(path) != parser.AiderHistoryFileName() {
+		return parser.DiscoveredFile{}, false
+	}
+	for _, aiderDir := range e.agentDirs[parser.AgentAider] {
+		if aiderDir == "" {
+			continue
+		}
+		if _, ok := isUnder(aiderDir, path); ok {
+			return parser.DiscoveredFile{
+				Path:  path,
+				Agent: parser.AgentAider,
+			}, true
+		}
 	}
 	return parser.DiscoveredFile{}, false
 }
@@ -1896,6 +2001,9 @@ const resyncTempSuffix = "-resync"
 func (e *Engine) ResyncAll(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats) {
+	if e.refuseWriteInForceParse("ResyncAll") {
+		return SyncStats{}
+	}
 	e.syncMu.Lock()
 	// Defers LIFO: Unlock runs before emit.
 	defer func() {
@@ -1904,10 +2012,37 @@ func (e *Engine) ResyncAll(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
+
+	return e.resyncAllLocked(ctx, onProgress)
+}
+
+func (e *Engine) resyncAllLocked(
+	ctx context.Context, onProgress ProgressFunc,
+) (stats SyncStats) {
+	reportResyncProgress := func(p Progress) {
+		p.Resync = true
+		if p.Phase == PhaseSyncing && p.Detail == "" {
+			p.Detail = "Syncing sessions into rebuilt database"
+		}
+		e.reportProgress(onProgress, p)
+	}
+	reportResyncPhase := func(phase Phase, detail, hint string) {
+		reportResyncProgress(Progress{
+			Phase:  phase,
+			Detail: detail,
+			Hint:   hint,
+		})
+	}
 
 	origDB := e.db
 	origPath := origDB.Path()
 	tempPath := origPath + resyncTempSuffix
+	reportResyncPhase(
+		PhasePreparingResync,
+		"Preparing full resync",
+		"",
+	)
 
 	// Snapshot old non-OpenCode-format file-backed session count
 	// to detect empty-discovery. OpenCode-format agents are
@@ -1955,6 +2090,11 @@ func (e *Engine) ResyncAll(
 	}
 
 	// 2. Open a fresh DB at the temp path.
+	reportResyncPhase(
+		PhasePreparingResync,
+		"Opening temporary database",
+		"",
+	)
 	newDB, err := db.Open(tempPath)
 	if err != nil {
 		log.Printf("resync: open temp db: %v", err)
@@ -1974,6 +2114,11 @@ func (e *Engine) ResyncAll(
 	// 2b. Copy excluded session IDs from the old DB so that
 	// UpsertSession skips permanently deleted sessions during
 	// the sync. This must happen before syncAllLocked.
+	reportResyncPhase(
+		PhasePreparingResync,
+		"Copying deletion state into temporary database",
+		"",
+	)
 	if err := newDB.CopyExcludedSessionsFrom(origPath); err != nil {
 		log.Printf("resync: pre-sync copy excluded sessions: %v", err)
 		// Non-fatal: worst case, deleted sessions reappear.
@@ -1993,6 +2138,11 @@ func (e *Engine) ResyncAll(
 	ftsDropped := false
 	if newDB.HasFTS() {
 		tFTS := time.Now()
+		reportResyncPhase(
+			PhasePreparingResync,
+			"Disabling temporary search index updates",
+			"",
+		)
 		if err := newDB.DropFTS(); err != nil {
 			log.Printf("resync: drop temp fts: %v", err)
 			newDB.Close()
@@ -2021,7 +2171,7 @@ func (e *Engine) ResyncAll(
 	e.openCodeArchiveStore = origDB
 	e.db = newDB
 	stats = e.syncAllLocked(
-		ctx, onProgress, time.Time{}, nil, syncWriteBulk, true,
+		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true,
 	)
 	e.db = origDB // restore immediately
 	e.openCodeArchiveStore = nil
@@ -2082,6 +2232,11 @@ func (e *Engine) ResyncAll(
 	// then copy insights into newDB (which is still open).
 	// This ensures no insight writes land in the old DB
 	// after the copy.
+	reportResyncPhase(
+		PhaseCopyingMetadata,
+		"Closing current database before final copy",
+		"",
+	)
 	if err := origDB.CloseConnections(); err != nil {
 		log.Printf("resync: close orig db: %v", err)
 		stats.Aborted = true
@@ -2107,6 +2262,11 @@ func (e *Engine) ResyncAll(
 	// the sync window (between the pre-sync copy and now).
 	// Also purge any sessions that were synced into newDB
 	// before the exclusion was recorded.
+	reportResyncPhase(
+		PhaseCopyingMetadata,
+		"Copying sync metadata",
+		"",
+	)
 	if err := newDB.CopyExcludedSessionsFrom(origPath); err != nil {
 		log.Printf("resync: post-sync copy excluded sessions: %v", err)
 	}
@@ -2133,6 +2293,11 @@ func (e *Engine) ResyncAll(
 
 	// Copy insights into newDB from the quiesced old DB file.
 	tInsights := time.Now()
+	reportResyncPhase(
+		PhaseCopyingMetadata,
+		"Copying cached insights",
+		"",
+	)
 	if err := newDB.CopyInsightsFrom(origPath); err != nil {
 		log.Printf("resync: copy insights: %v", err)
 		stats.Aborted = true
@@ -2159,6 +2324,11 @@ func (e *Engine) ResyncAll(
 	// Copy orphaned sessions (source files gone) from the
 	// old DB so archived data is preserved. Failure aborts
 	// the swap to avoid losing archived sessions.
+	reportResyncPhase(
+		PhaseCopyingOrphans,
+		"Copying archived sessions",
+		"",
+	)
 	orphaned, err := newDB.CopyOrphanedDataFromExcluding(
 		origPath, stats.parserExcludedIDs,
 	)
@@ -2185,6 +2355,11 @@ func (e *Engine) ResyncAll(
 	// Re-link subagent sessions after orphan copy so copied
 	// tool_calls.subagent_session_id references are resolved.
 	if orphaned > 0 {
+		reportResyncPhase(
+			PhaseCopyingOrphans,
+			"Relinking archived subagent sessions",
+			"",
+		)
 		if err := newDB.LinkSubagentSessions(); err != nil {
 			log.Printf("resync: relink subagent sessions: %v", err)
 		}
@@ -2193,6 +2368,11 @@ func (e *Engine) ResyncAll(
 	// Merge user-managed data (display_name, deleted_at,
 	// starred_sessions, pinned_messages) from the old DB
 	// so renames, soft-deletes, stars, and pins survive.
+	reportResyncPhase(
+		PhaseCopyingMetadata,
+		"Copying user-managed session metadata",
+		"",
+	)
 	if err := newDB.CopySessionMetadataFrom(origPath); err != nil {
 		log.Printf("resync: copy session metadata: %v", err)
 		// Non-fatal: worst case, renames/soft-deletes are lost.
@@ -2210,12 +2390,22 @@ func (e *Engine) ResyncAll(
 	// this pass those rows would be permanently stuck with stale
 	// flags. Non-fatal: worst case, some sessions keep their
 	// pre-resync classification until the next algorithm bump.
+	reportResyncPhase(
+		PhaseReclassifying,
+		"Reclassifying sessions",
+		"",
+	)
 	if err := newDB.ForceBackfillIsAutomated(); err != nil {
 		log.Printf("resync: reclassify is_automated: %v", err)
 	}
 
 	if ftsDropped {
 		tFTS := time.Now()
+		reportResyncPhase(
+			PhaseRebuildingSearch,
+			"Rebuilding search index",
+			"Rebuilding the search index may take a while on large archives.",
+		)
 		if err := newDB.RebuildFTS(); err != nil {
 			log.Printf("resync: rebuild fts: %v", err)
 			stats.Aborted = true
@@ -2241,6 +2431,11 @@ func (e *Engine) ResyncAll(
 	}
 
 	// 5. Close newDB and swap files, then reopen origDB.
+	reportResyncPhase(
+		PhaseSwappingDatabase,
+		"Swapping rebuilt database into place",
+		"",
+	)
 	newDB.Close()
 
 	removeWAL(origPath)
@@ -2269,11 +2464,14 @@ func (e *Engine) ResyncAll(
 		stats.Warnings = append(stats.Warnings,
 			"reopen after resync failed: "+err.Error(),
 		)
-	} else if err := origDB.CheckpointWALTruncateWithRetry(ctx); err != nil {
-		if errors.Is(err, db.ErrWALCheckpointBusy) {
-			log.Printf("resync: wal checkpoint busy")
-		} else {
-			log.Printf("resync: wal checkpoint: %v", err)
+	} else {
+		origDB.MarkDataCurrent()
+		if err := origDB.CheckpointWALTruncateWithRetry(ctx); err != nil {
+			if errors.Is(err, db.ErrWALCheckpointBusy) {
+				log.Printf("resync: wal checkpoint busy")
+			} else {
+				log.Printf("resync: wal checkpoint: %v", err)
+			}
 		}
 	}
 
@@ -2362,10 +2560,74 @@ func (e *Engine) LastSyncStartedAt() time.Time {
 	return t
 }
 
+// SyncThenRun runs the local sync/resync decision and invokes work while
+// syncMu is still held. Daemon-owned mirror pushes use this to keep local sync,
+// row scanning, and watermark writes serialized against watcher and periodic
+// sync passes.
+func (e *Engine) SyncThenRun(
+	ctx context.Context,
+	full bool,
+	onProgress ProgressFunc,
+	work func(forceFull bool) error,
+) (stats SyncStats, err error) {
+	if e.refuseWriteInForceParse("SyncThenRun") {
+		return SyncStats{}, nil
+	}
+	e.syncMu.Lock()
+	// Defers run LIFO: Unlock runs before emit.
+	defer func() {
+		if stats.Synced > 0 {
+			e.emit("sync")
+		}
+	}()
+	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
+
+	didResync := full || e.db.NeedsResync()
+	if didResync {
+		stats = e.resyncAllLocked(ctx, onProgress)
+		if stats.Aborted && ctx.Err() == nil {
+			stats = e.syncAllLocked(
+				ctx, onProgress, time.Time{}, nil,
+				syncWriteDefault, true,
+			)
+		}
+	} else {
+		stats = e.syncAllLocked(
+			ctx, onProgress, time.Time{}, nil,
+			syncWriteDefault, true,
+		)
+	}
+	if ctx.Err() != nil {
+		return stats, ctx.Err()
+	}
+	if err := work(full || didResync); err != nil {
+		return stats, err
+	}
+	return stats, nil
+}
+
+// RunExclusive runs DB-writing work while holding the same mutex used by local
+// sync and resync operations. Use this for daemon-owned maintenance operations
+// that must serialize with sync but should not force a local sync first.
+func (e *Engine) RunExclusive(work func() error) error {
+	if e.refuseWriteInForceParse("RunExclusive") {
+		return errors.New(
+			"RunExclusive refused on report-only parse-diff engine",
+		)
+	}
+	e.syncMu.Lock()
+	defer e.syncMu.Unlock()
+	return work()
+}
+
 // SyncAll discovers and syncs all session files from all agents.
 func (e *Engine) SyncAll(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats) {
+	if e.refuseWriteInForceParse("SyncAll") {
+		return SyncStats{}
+	}
 	e.syncMu.Lock()
 	// Defers run LIFO: Unlock runs before the emit closure so
 	// Emitter implementations cannot widen the syncMu critical
@@ -2376,6 +2638,7 @@ func (e *Engine) SyncAll(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
 	stats = e.syncAllLocked(
 		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
 	)
@@ -2392,6 +2655,9 @@ func (e *Engine) SyncAll(
 func (e *Engine) SyncAllSince(
 	ctx context.Context, since time.Time, onProgress ProgressFunc,
 ) (stats SyncStats) {
+	if e.refuseWriteInForceParse("SyncAllSince") {
+		return SyncStats{}
+	}
 	e.syncMu.Lock()
 	defer func() {
 		if stats.Synced > 0 {
@@ -2399,6 +2665,7 @@ func (e *Engine) SyncAllSince(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
 	stats = e.syncAllLocked(
 		ctx, onProgress, since, nil, syncWriteDefault, true,
 	)
@@ -2412,6 +2679,9 @@ func (e *Engine) SyncRootsSince(
 	ctx context.Context, roots []string, since time.Time,
 	onProgress ProgressFunc,
 ) (stats SyncStats) {
+	if e.refuseWriteInForceParse("SyncRootsSince") {
+		return SyncStats{}
+	}
 	e.syncMu.Lock()
 	defer func() {
 		if stats.Synced > 0 {
@@ -2419,6 +2689,7 @@ func (e *Engine) SyncRootsSince(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
 	scope := newRootSyncScope(roots)
 	stats = e.syncAllLocked(
 		ctx, onProgress, since, scope, syncWriteDefault, scope == nil,
@@ -2494,7 +2765,7 @@ func samePathOrDescendant(path, root string) bool {
 func (e *Engine) syncAllLocked(
 	ctx context.Context, onProgress ProgressFunc, since time.Time,
 	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
-) SyncStats {
+) (stats SyncStats) {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
 	}
@@ -2503,6 +2774,11 @@ func (e *Engine) syncAllLocked(
 		e.recordSyncStarted()
 	}
 	e.phaseStats.Reset()
+	e.resetS3CodexIndexCache()
+	e.anomalies.reset()
+	// Fold the per-run anomaly accumulator into the returned stats on
+	// every exit path so the CLI sync summary can surface them.
+	defer func() { e.anomalies.applyTo(&stats) }()
 
 	t0 := time.Now()
 
@@ -2535,7 +2811,7 @@ func (e *Engine) syncAllLocked(
 
 	if verbose {
 		log.Printf(
-			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d kiro, %d zed, %d vibe) in %s",
+			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d omp, %d kiro, %d zed, %d vibe) in %s",
 			len(all),
 			counts[parser.AgentClaude],
 			counts[parser.AgentCodex],
@@ -2548,6 +2824,7 @@ func (e *Engine) syncAllLocked(
 			counts[parser.AgentVSCodeCopilot],
 			counts[parser.AgentVSCopilot],
 			counts[parser.AgentPi],
+			counts[parser.AgentOMP],
 			counts[parser.AgentKiro],
 			counts[parser.AgentZed],
 			counts[parser.AgentVibe],
@@ -2556,17 +2833,15 @@ func (e *Engine) syncAllLocked(
 	}
 
 	progressTotal := len(all)
-	if onProgress != nil {
-		progressTotal += e.countDBBackedSessions(ctx, scope)
-		onProgress(Progress{
-			Phase:         PhaseSyncing,
-			SessionsTotal: progressTotal,
-		})
-	}
+	progressTotal += e.countDBBackedSessions(ctx, scope)
+	e.reportProgress(onProgress, Progress{
+		Phase:         PhaseSyncing,
+		SessionsTotal: progressTotal,
+	})
 
 	tWorkers := time.Now()
 	results := e.startWorkers(ctx, all)
-	stats := e.collectAndBatch(
+	stats = e.collectAndBatch(
 		ctx, results, len(all), progressTotal, onProgress, writeMode,
 	)
 	if verbose {
@@ -2596,7 +2871,7 @@ func (e *Engine) syncAllLocked(
 	}
 
 	advanceDBProgress := func(total int, pending []pendingWrite) {
-		if onProgress == nil || total == 0 {
+		if total == 0 {
 			return
 		}
 		dbProgress.SessionsDone += total
@@ -2604,7 +2879,7 @@ func (e *Engine) syncAllLocked(
 			dbProgress.MessagesIndexed += len(pw.msgs)
 		}
 		stats.messagesIndexed = dbProgress.MessagesIndexed
-		onProgress(dbProgress)
+		e.reportProgress(onProgress, dbProgress)
 	}
 
 	// Sync current Kiro CLI sessions (SQLite-backed).
@@ -2901,18 +3176,22 @@ func (e *Engine) syncAllLocked(
 		)
 	}
 
-	if onProgress != nil {
-		onProgress(Progress{
-			Phase:           PhaseDone,
-			SessionsTotal:   progressTotal,
-			SessionsDone:    progressTotal,
-			MessagesIndexed: stats.messagesIndexed,
-		})
-	}
+	e.reportProgress(onProgress, Progress{
+		Phase:           PhaseDone,
+		SessionsTotal:   progressTotal,
+		SessionsDone:    progressTotal,
+		MessagesIndexed: stats.messagesIndexed,
+	})
 
+	// Store the anomaly-folded stats so LastSyncStats (UI) matches the
+	// value returned to the CLI summary. The deferred applyTo only reads
+	// the accumulator, so folding a separate copy here does not
+	// double-count.
+	persisted := stats
+	e.anomalies.applyTo(&persisted)
 	e.mu.Lock()
 	e.lastSync = time.Now()
-	e.lastSyncStats = stats
+	e.lastSyncStats = persisted
 	e.mu.Unlock()
 
 	if recordSyncState {
@@ -2970,7 +3249,24 @@ func (e *Engine) filterFilesByMtime(
 			out = append(out, f)
 			continue
 		}
-		if f.Agent != parser.AgentCodex || !e.codexIndexNeedsRefreshSince(f.Path, cutoffNs) {
+		if isS3SourcePath(f.Path) && e.s3SourceMetadataChanged(f) {
+			out = append(out, f)
+			continue
+		}
+		if f.Agent != parser.AgentCodex {
+			continue
+		}
+		indexNeedsRefresh := false
+		if isS3SourcePath(f.Path) {
+			indexNeedsRefresh = e.s3CodexIndexNeedsRefreshSince(
+				f, cutoffNs,
+			)
+		} else {
+			indexNeedsRefresh = e.codexIndexNeedsRefreshSince(
+				f.Path, cutoffNs,
+			)
+		}
+		if !indexNeedsRefresh {
 			continue
 		}
 		key := discoveredFileKey(f)
@@ -2996,13 +3292,31 @@ func (e *Engine) filterFilesByMtime(
 func discoveredFileMtime(
 	file parser.DiscoveredFile,
 ) (int64, error) {
+	if strings.HasPrefix(file.Path, "s3://") {
+		if file.SourceMtime != 0 {
+			return file.SourceMtime, nil
+		}
+		stat := statS3Object
+		switch file.Agent {
+		case parser.AgentClaude:
+			stat = statClaudeS3Session
+		case parser.AgentCodex:
+			stat = statCodexS3Session
+		}
+		obj, err := stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return obj.LastModified.UnixNano(), nil
+	}
 	if file.Agent == parser.AgentKiro {
 		if _, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
 			return parser.KiroSQLiteSourceMtime(file.Path)
 		}
 	}
 	if isOpenCodeFormatStorageAgent(file.Agent) {
-		if isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) {
+		if isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) ||
+			isOpenCodeFormatStoragePath(file.Agent, file.Path) {
 			return openCodeFormatSourceMtime(
 				file.Agent, file.Path,
 			)
@@ -3069,6 +3383,13 @@ func discoveredFileMtime(
 		}
 		return vibeEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
 	}
+	if file.Agent == parser.AgentReasonix {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			return 0, err
+		}
+		return reasonixEffectiveInfo(file.Path, info).ModTime().UnixNano(), nil
+	}
 
 	info, err := os.Stat(file.Path)
 	if err != nil {
@@ -3085,7 +3406,8 @@ func discoveredFileMtime(
 func (e *Engine) dedupeClaudeDiscoveredFiles(
 	files []parser.DiscoveredFile,
 ) []parser.DiscoveredFile {
-	bySessionID := make(map[string][]parser.DiscoveredFile)
+	byKey := make(map[string][]parser.DiscoveredFile)
+	sessionIDByKey := make(map[string]string)
 	for _, file := range files {
 		if file.Agent != parser.AgentClaude {
 			continue
@@ -3094,16 +3416,18 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 		if sessionID == "" {
 			continue
 		}
-		bySessionID[sessionID] = append(bySessionID[sessionID], file)
+		key := claudeDiscoveredFileKey(file, sessionID)
+		byKey[key] = append(byKey[key], file)
+		sessionIDByKey[key] = sessionID
 	}
-	if len(bySessionID) == 0 {
+	if len(byKey) == 0 {
 		return files
 	}
 
-	preferred := make(map[string]parser.DiscoveredFile, len(bySessionID))
-	for sessionID, candidates := range bySessionID {
-		preferred[sessionID] = e.pickPreferredClaudeDiscoveredFile(
-			sessionID, candidates,
+	preferred := make(map[string]parser.DiscoveredFile, len(byKey))
+	for key, candidates := range byKey {
+		preferred[key] = e.pickPreferredClaudeDiscoveredFile(
+			sessionIDByKey[key], candidates,
 		)
 	}
 
@@ -3119,13 +3443,20 @@ func (e *Engine) dedupeClaudeDiscoveredFiles(
 			out = append(out, file)
 			continue
 		}
-		if _, ok := seen[sessionID]; ok {
+		key := claudeDiscoveredFileKey(file, sessionID)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[sessionID] = struct{}{}
-		out = append(out, preferred[sessionID])
+		seen[key] = struct{}{}
+		out = append(out, preferred[key])
 	}
 	return out
+}
+
+func claudeDiscoveredFileKey(
+	file parser.DiscoveredFile, sessionID string,
+) string {
+	return discoveredFileIDPrefix(file) + "\x00" + sessionID
 }
 
 func claudeSessionIDFromPath(path string) string {
@@ -3144,14 +3475,18 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 		return candidates[0]
 	}
 
-	fullID := e.idPrefix + sessionID
+	idPrefix := e.idPrefix
+	if isS3SourcePath(candidates[0].Path) {
+		idPrefix = s3SessionIDPrefix(candidates[0].Machine)
+	}
+	fullID := applyIDPrefixToID(idPrefix, sessionID)
 	storedPath := e.db.GetSessionFilePath(fullID)
 	if storedPath != "" {
 		for _, candidate := range candidates {
 			if e.effectiveSourcePath(candidate.Path) != storedPath {
 				continue
 			}
-			if e.claudeSourceMatchesStored(fullID, candidate.Path) {
+			if e.claudeSourceMatchesStored(fullID, candidate) {
 				best := candidate
 				for _, competing := range candidates {
 					if e.effectiveSourcePath(competing.Path) == storedPath ||
@@ -3177,19 +3512,24 @@ func (e *Engine) pickPreferredClaudeDiscoveredFile(
 }
 
 func (e *Engine) claudeSourceMatchesStored(
-	sessionID, path string,
+	sessionID string, file parser.DiscoveredFile,
 ) bool {
-	info, err := os.Stat(path)
-	if err != nil {
+	size, mtime, ok := claudeDiscoveredFileSourceInfo(file)
+	if !ok {
 		return false
 	}
 	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(sessionID)
 	if !ok {
 		return false
 	}
-	if storedSize != info.Size() ||
-		storedMtime != info.ModTime().UnixNano() {
+	if storedSize != size || storedMtime != mtime {
 		return false
+	}
+	if file.SourceFingerprint != "" {
+		storedHash, ok := e.db.GetSessionFileHash(sessionID)
+		if !ok || storedHash != file.SourceFingerprint {
+			return false
+		}
 	}
 	return e.db.GetSessionDataVersion(sessionID) >= db.CurrentDataVersion()
 }
@@ -3204,33 +3544,53 @@ func (e *Engine) effectiveSourcePath(path string) string {
 func claudeCandidateHasAppendProgress(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateInfo, candidateErr := os.Stat(candidate.Path)
-	currentInfo, currentErr := os.Stat(current.Path)
-	if candidateErr != nil || currentErr != nil {
+	candidateSize, _, candidateOK := claudeDiscoveredFileSourceInfo(candidate)
+	currentSize, _, currentOK := claudeDiscoveredFileSourceInfo(current)
+	if !candidateOK || !currentOK {
 		return false
 	}
-	return candidateInfo.Size() > currentInfo.Size()
+	return candidateSize > currentSize
 }
 
 func preferClaudeDiscoveredFile(
 	candidate, current parser.DiscoveredFile,
 ) bool {
-	candidateInfo, candidateErr := os.Stat(candidate.Path)
-	currentInfo, currentErr := os.Stat(current.Path)
+	candidateSize, candidateMtime, candidateOK := claudeDiscoveredFileSourceInfo(candidate)
+	currentSize, currentMtime, currentOK := claudeDiscoveredFileSourceInfo(current)
 	switch {
-	case candidateErr == nil && currentErr != nil:
+	case candidateOK && !currentOK:
 		return true
-	case candidateErr != nil && currentErr == nil:
+	case !candidateOK && currentOK:
 		return false
-	case candidateErr == nil && currentErr == nil:
-		if candidateInfo.Size() != currentInfo.Size() {
-			return candidateInfo.Size() > currentInfo.Size()
+	case candidateOK && currentOK:
+		if candidateSize != currentSize {
+			return candidateSize > currentSize
 		}
-		if !candidateInfo.ModTime().Equal(currentInfo.ModTime()) {
-			return candidateInfo.ModTime().After(currentInfo.ModTime())
+		if candidateMtime != currentMtime {
+			return candidateMtime > currentMtime
 		}
 	}
 	return candidate.Path < current.Path
+}
+
+func claudeDiscoveredFileSourceInfo(
+	file parser.DiscoveredFile,
+) (size, mtime int64, ok bool) {
+	if isS3SourcePath(file.Path) {
+		if file.SourceMtime != 0 {
+			return file.SourceSize, file.SourceMtime, true
+		}
+		obj, err := statClaudeS3Session(file.Path)
+		if err != nil {
+			return 0, 0, false
+		}
+		return obj.Size, obj.LastModified.UnixNano(), true
+	}
+	info, err := os.Stat(file.Path)
+	if err != nil {
+		return 0, 0, false
+	}
+	return info.Size(), info.ModTime().UnixNano(), true
 }
 
 // zedDBCompositeMtime returns the maximum mtime across the Zed
@@ -3745,7 +4105,9 @@ func (e *Engine) collectAndBatch(
 			}
 			stats.RecordFailed()
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
-				e.cacheSkip(r.path, r.mtime)
+				e.cacheSkip(
+					r.path, r.mtime, r.sourceFingerprint,
+				)
 			}
 			log.Printf("sync error: %v", r.err)
 			continue
@@ -3753,9 +4115,7 @@ func (e *Engine) collectAndBatch(
 		if r.skip {
 			stats.RecordSkip()
 			progress.SessionsDone++
-			if onProgress != nil {
-				onProgress(progress)
-			}
+			e.reportProgress(onProgress, progress)
 			continue
 		}
 		excludedSessionIDs := e.applyIDPrefixToSessionIDs(
@@ -3780,12 +4140,12 @@ func (e *Engine) collectAndBatch(
 				stats.parserExcludedFiles++
 			}
 			if r.cacheSkip {
-				e.cacheSkip(r.path, r.mtime)
+				e.cacheSkip(
+					r.path, r.mtime, r.sourceFingerprint,
+				)
 			}
 			progress.SessionsDone++
-			if onProgress != nil {
-				onProgress(progress)
-			}
+			e.reportProgress(onProgress, progress)
 			continue
 		}
 		if r.cacheSkip {
@@ -3829,9 +4189,7 @@ func (e *Engine) collectAndBatch(
 		}
 
 		progress.SessionsDone++
-		if onProgress != nil {
-			onProgress(progress)
-		}
+		e.reportProgress(onProgress, progress)
 	}
 
 flush:
@@ -3877,6 +4235,9 @@ type incrementalUpdate struct {
 	userMsgCount         int // total (old + new)
 	fileSize             int64
 	fileMtime            int64
+	fileHash             string
+	nextOrdinal          int
+	lastEntryUUID        string
 	totalOutputTokens    int // absolute (old + new)
 	peakContextTokens    int // absolute max(old, new)
 	hasTotalOutputTokens bool
@@ -3906,6 +4267,10 @@ type processResult struct {
 	err         error
 	incremental *incrementalUpdate
 	cacheSkip   bool
+	// sourceFingerprint carries S3 object fingerprints into
+	// skip-cache writes so same-mtime object rewrites do not stay
+	// hidden behind a cached parse failure or non-interactive result.
+	sourceFingerprint string
 	// noCacheSkip suppresses skip-cache recording for an errored
 	// result even when cacheSkip is set for the agent. Read/scan
 	// failures are transient: a permission or readability fix may
@@ -3927,7 +4292,6 @@ func (e *Engine) processFile(
 	ctx context.Context,
 	file parser.DiscoveredFile,
 ) processResult {
-
 	var info os.FileInfo
 	var err error
 	switch file.Agent {
@@ -3938,6 +4302,23 @@ func (e *Engine) processFile(
 		// the main .db, so skip checks need the composite stat.
 		info, err = parser.AntigravityFileInfo(file.Path)
 	default:
+		if strings.HasPrefix(file.Path, "s3://") {
+			if file.SourceMtime == 0 {
+				obj, err := statS3SourceObject(file)
+				if err != nil {
+					return processResult{
+						err: fmt.Errorf(
+							"stat %s: %w", file.Path, err,
+						),
+					}
+				}
+				file.SourceSize = obj.Size
+				file.SourceMtime = obj.LastModified.UnixNano()
+				file.SourceFingerprint = obj.Fingerprint
+			}
+			info, err = s3SourceFileInfo(file)
+			break
+		}
 		statPath := file.Path
 		if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(file.Path); ok {
 			statPath = dbPath
@@ -3985,7 +4366,14 @@ func (e *Engine) processFile(
 		// of staying skipped on the unchanged transcript mtime.
 		mtime = vibeEffectiveInfo(file.Path, info).ModTime().UnixNano()
 	}
+	if file.Agent == parser.AgentReasonix {
+		mtime = reasonixEffectiveInfo(file.Path, info).ModTime().UnixNano()
+	}
 	cacheSkip := e.shouldCacheSkip(file)
+	sourceFingerprint := ""
+	if isS3SourcePath(file.Path) {
+		sourceFingerprint = s3SourceFingerprint(file)
+	}
 
 	// Skip files cached from a previous sync (parse errors
 	// or non-interactive sessions) whose mtime is unchanged.
@@ -3995,14 +4383,15 @@ func (e *Engine) processFile(
 	// the skip cache as authoritative without per-file
 	// re-validation.
 	if cacheSkip && !e.forceParse { // parse-diff: ignore the skip cache
-		e.skipMu.RLock()
-		cachedMtime, cached := e.skipCache[file.Path]
-		e.skipMu.RUnlock()
-		if cached && cachedMtime == mtime {
-			return processResult{
-				skip:      true,
-				mtime:     mtime,
-				cacheSkip: true,
+		if e.shouldUseCachedSkip(file, mtime, sourceFingerprint) {
+			if e.pathNeedsProjectReparse(file.Path) {
+				e.clearSkip(file.Path)
+			} else {
+				return processResult{
+					skip:      true,
+					mtime:     mtime,
+					cacheSkip: true,
+				}
 			}
 		}
 	}
@@ -4010,13 +4399,23 @@ func (e *Engine) processFile(
 	var res processResult
 	switch file.Agent {
 	case parser.AgentClaude:
-		res = e.processClaude(ctx, file, info)
+		if strings.HasPrefix(file.Path, "s3://") {
+			res = e.processS3Session(ctx, file, info)
+		} else {
+			res = e.processClaude(ctx, file, info)
+		}
 	case parser.AgentCowork:
 		res = e.processCowork(file, info)
 	case parser.AgentCodex:
-		res = e.processCodex(file, info)
+		if strings.HasPrefix(file.Path, "s3://") {
+			res = e.processS3Session(ctx, file, info)
+		} else {
+			res = e.processCodex(file, info)
+		}
 	case parser.AgentCopilot:
 		res = e.processCopilot(file, info)
+	case parser.AgentReasonix:
+		res = e.processReasonix(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
 	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode:
@@ -4037,7 +4436,7 @@ func (e *Engine) processFile(
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
 		res = e.processVisualStudioCopilot(file, info)
-	case parser.AgentPi:
+	case parser.AgentPi, parser.AgentOMP:
 		res = e.processPi(file, info)
 	case parser.AgentQwen:
 		res = e.processQwen(file, info)
@@ -4086,7 +4485,39 @@ func (e *Engine) processFile(
 	}
 	res.cacheSkip = cacheSkip
 	res.mtime = mtime
+	res.sourceFingerprint = sourceFingerprint
 	return res
+}
+
+func (e *Engine) shouldUseCachedSkip(
+	file parser.DiscoveredFile, mtime int64, sourceFingerprint string,
+) bool {
+	e.skipMu.RLock()
+	cachedMtime, cached := e.skipCache[file.Path]
+	cachedFingerprint := ""
+	if e.skipFingerprints != nil {
+		cachedFingerprint = e.skipFingerprints[file.Path]
+	}
+	e.skipMu.RUnlock()
+	if !cached || cachedMtime != mtime {
+		return false
+	}
+	if isS3SourcePath(file.Path) && sourceFingerprint != "" {
+		return cachedFingerprint == sourceFingerprint
+	}
+	return true
+}
+
+func (e *Engine) pathNeedsProjectReparse(path string) bool {
+	if e == nil || e.db == nil {
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	project, ok := e.db.GetProjectByPath(lookupPath)
+	return ok && parser.NeedsProjectReparse(project)
 }
 
 func (e *Engine) shouldCacheSkip(
@@ -4169,9 +4600,21 @@ func (e *Engine) shouldCacheSkip(
 
 // cacheSkip records a file so it won't be retried until
 // its mtime changes.
-func (e *Engine) cacheSkip(path string, mtime int64) {
+func (e *Engine) cacheSkip(path string, mtime int64, sourceFingerprint ...string) {
 	e.skipMu.Lock()
 	e.skipCache[path] = mtime
+	fingerprint := ""
+	if len(sourceFingerprint) > 0 {
+		fingerprint = sourceFingerprint[0]
+	}
+	if fingerprint != "" {
+		if e.skipFingerprints == nil {
+			e.skipFingerprints = make(map[string]string)
+		}
+		e.skipFingerprints[path] = fingerprint
+	} else if e.skipFingerprints != nil {
+		delete(e.skipFingerprints, path)
+	}
 	e.skipMu.Unlock()
 }
 
@@ -4180,6 +4623,7 @@ func (e *Engine) cacheSkip(path string, mtime int64) {
 func (e *Engine) clearSkip(path string) {
 	e.skipMu.Lock()
 	delete(e.skipCache, path)
+	delete(e.skipFingerprints, path)
 	e.skipMu.Unlock()
 	_ = e.db.DeleteSkippedFile(path)
 }
@@ -4225,30 +4669,12 @@ func (e *Engine) persistSkipCache() int {
 // match what is already stored in the database (by session ID).
 // This relies on mtime changing on any write, which holds for
 // append-only session files under normal filesystem behavior.
-// The file hash is still computed and stored on successful sync
-// for integrity; mtime is purely a skip-check optimization.
+// S3 callers pass an object fingerprint to guard same-size,
+// same-timestamp rewrites on object stores with coarse mtimes.
 func (e *Engine) shouldSkipFile(
 	sessionID string, info os.FileInfo,
 ) bool {
-	if e.forceParse { // parse-diff: always re-parse
-		return false
-	}
-	fullID := e.idPrefix + sessionID
-	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(
-		fullID,
-	)
-	if !ok {
-		return false
-	}
-	if storedSize != info.Size() ||
-		storedMtime != info.ModTime().UnixNano() {
-		return false
-	}
-	if e.db.GetSessionDataVersion(fullID) <
-		db.CurrentDataVersion() {
-		return false
-	}
-	return true
+	return e.shouldSkipFileWithPrefix(e.idPrefix, sessionID, info)
 }
 
 // shouldSkipByPath checks file size and mtime against what is
@@ -4285,11 +4711,12 @@ func (e *Engine) shouldSkipByPath(
 // (nanoseconds) as os.FileInfo so that shouldSkipByPath can
 // be reused for OpenHands snapshot-based skip detection.
 type fakeSnapshotInfo struct {
+	fName  string
 	fSize  int64
 	fMtime int64
 }
 
-func (f fakeSnapshotInfo) Name() string      { return "" }
+func (f fakeSnapshotInfo) Name() string      { return f.fName }
 func (f fakeSnapshotInfo) Size() int64       { return f.fSize }
 func (f fakeSnapshotInfo) Mode() os.FileMode { return 0 }
 func (f fakeSnapshotInfo) ModTime() time.Time {
@@ -4302,10 +4729,17 @@ func (e *Engine) processClaude(
 	ctx context.Context,
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
+	return e.processClaudeWithStoredSkip(ctx, file, info, true)
+}
 
+func (e *Engine) processClaudeWithStoredSkip(
+	ctx context.Context,
+	file parser.DiscoveredFile, info os.FileInfo,
+	allowStoredSkip bool,
+) processResult {
 	sessionID := strings.TrimSuffix(info.Name(), ".jsonl")
 
-	if e.shouldSkipFile(sessionID, info) {
+	if allowStoredSkip && e.shouldSkipFile(sessionID, info) {
 		sess, _ := e.db.GetSession(
 			ctx, e.idPrefix+sessionID,
 		)
@@ -4343,8 +4777,12 @@ func (e *Engine) processClaude(
 		}
 	}
 
+	machine := e.machine
+	if file.Machine != "" {
+		machine = file.Machine // s3 source machine overrides the host
+	}
 	results, excludedIDs, err := parser.ParseClaudeSessionWithExclusions(
-		file.Path, project, e.machine,
+		file.Path, project, machine,
 	)
 	if err != nil {
 		return processResult{err: err}
@@ -4423,7 +4861,7 @@ func (e *Engine) processCowork(
 // error. The consumed count covers only complete, valid JSON
 // lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
-	path string, offset int64, startOrdinal int,
+	path string, offset int64, startOrdinal int, lastEntryUUID string,
 ) ([]parser.ParsedMessage, time.Time, int64, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
@@ -4478,6 +4916,14 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
+	// A prior sync that stored no message rows has no safe append
+	// boundary. Rewritten files can grow in place and keep the same
+	// identity, which makes a full-file replacement look like an
+	// append from the old file_size offset.
+	if inc.MsgCount == 0 {
+		return processResult{}, false
+	}
+
 	// If the file was replaced (different inode/device), fall
 	// back to a full parse so we don't append on top of stale
 	// state. Only check when both sides have a known identity
@@ -4499,13 +4945,22 @@ func (e *Engine) tryIncrementalJSONL(
 		}
 	}
 
-	maxOrd := e.db.MaxOrdinal(inc.ID)
-	if maxOrd < 0 {
-		return processResult{}, false
+	// Persist the same effective file_mtime a full parse would store. For
+	// Codex that folds in session_index.jsonl (parser.CodexEffectiveMtime),
+	// exactly as ParseCodexSession sets File.Mtime; a full sync of the same
+	// file stores that effective value. Keeping the incremental write on the
+	// same basis means parse-diff's raced guard -- which reads the freshly
+	// parsed effective File.Mtime -- compares against a matching stored
+	// file_mtime no matter whether the last write was incremental or full,
+	// and shouldSkipCodex's storedMtime==effectiveMtime fast path stays
+	// accurate. Plain JSONL agents (Claude/Gemini) keep the raw stat.
+	incMtime := info.ModTime().UnixNano()
+	if agent == parser.AgentCodex {
+		incMtime = parser.CodexEffectiveMtime(file.Path, incMtime)
 	}
 
 	newMsgs, endedAt, consumed, err := parseFn(
-		file.Path, inc.FileSize, maxOrd+1,
+		file.Path, inc.FileSize, inc.NextOrdinal, inc.LastEntryUUID,
 	)
 	if err != nil {
 		if parser.IsIncrementalFullParseFallback(err) {
@@ -4533,6 +4988,12 @@ func (e *Engine) tryIncrementalJSONL(
 	// info.Size(), so partial lines at EOF are retried on
 	// the next sync.
 	newOffset := inc.FileSize + consumed
+	var incHash string
+	if agent == parser.AgentCodex {
+		if hash, err := ComputeFileHashPrefix(file.Path, newOffset); err == nil {
+			incHash = hash
+		}
+	}
 
 	if len(newMsgs) == 0 {
 		// No new messages, but advance the offset past
@@ -4548,7 +5009,10 @@ func (e *Engine) tryIncrementalJSONL(
 					msgCount:             inc.MsgCount,
 					userMsgCount:         inc.UserMsgCount,
 					fileSize:             newOffset,
-					fileMtime:            info.ModTime().UnixNano(),
+					fileMtime:            incMtime,
+					fileHash:             incHash,
+					nextOrdinal:          inc.NextOrdinal,
+					lastEntryUUID:        inc.LastEntryUUID,
 					totalOutputTokens:    inc.TotalOutputTokens,
 					peakContextTokens:    inc.PeakContextTokens,
 					hasTotalOutputTokens: inc.HasTotalOutputTokens,
@@ -4586,6 +5050,8 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	newUserCount := countUserMsgs(newMsgs)
+	nextOrdinal := nextParsedOrdinal(inc.NextOrdinal, newMsgs)
+	lastEntryUUID := lastParsedSourceUUID(inc.LastEntryUUID, newMsgs)
 
 	log.Printf(
 		"incremental %s %s: %d new message(s) "+
@@ -4599,12 +5065,18 @@ func (e *Engine) tryIncrementalJSONL(
 	hasPeakCtx := inc.HasPeakContextTokens
 	for _, m := range newMsgs {
 		msgHasCtx, msgHasOut := m.TokenPresence()
+		// Accumulate from per-message values already bounded to the
+		// per-message clamp the central pass applies to the stored rows, so
+		// a corrupt new message cannot inflate the session aggregates past
+		// what the persisted rows justify (parity with the full path, which
+		// re-derives message-derived totals from the clamped rows).
 		if msgHasOut {
-			totalOut += m.OutputTokens
+			totalOut += clampedTokens(m.OutputTokens)
 			hasTotalOut = true
 		}
-		if msgHasCtx && (!hasPeakCtx || m.ContextTokens > peakCtx) {
-			peakCtx = m.ContextTokens
+		if ctx := clampedTokens(m.ContextTokens); msgHasCtx &&
+			(!hasPeakCtx || ctx > peakCtx) {
+			peakCtx = ctx
 			hasPeakCtx = true
 		}
 	}
@@ -4617,7 +5089,10 @@ func (e *Engine) tryIncrementalJSONL(
 			msgCount:             inc.MsgCount + len(newMsgs),
 			userMsgCount:         inc.UserMsgCount + newUserCount,
 			fileSize:             newOffset,
-			fileMtime:            info.ModTime().UnixNano(),
+			fileMtime:            incMtime,
+			fileHash:             incHash,
+			nextOrdinal:          nextOrdinal,
+			lastEntryUUID:        lastEntryUUID,
 			totalOutputTokens:    totalOut,
 			peakContextTokens:    peakCtx,
 			hasTotalOutputTokens: hasTotalOut,
@@ -4640,39 +5115,43 @@ func (e *Engine) shouldSkipCodex(
 	if !ok || storedSize != info.Size() {
 		return false
 	}
+	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
+		parser.NeedsProjectReparse(project) {
+		return false
+	}
 	if e.db.GetDataVersionByPath(lookupPath) <
 		db.CurrentDataVersion() {
 		return false
 	}
+	// A Codex title lives in session_index.jsonl, not the transcript, so a
+	// title-only rename can change the title with no transcript signal. Detect
+	// it directly rather than inferring it from an mtime inequality: the index
+	// mtime is folded into the stored watermark, so a later rename whose index
+	// mtime lands at or below that watermark is invisible to a mtime compare,
+	// and the old storedMtime==effectiveMtime fast path skipped without ever
+	// consulting the title. codexIndexSessionNameChanged reads the live title
+	// (cached per index file) and the stored name; a cheaper stored-name lookup
+	// to keep this fully off the hot skip path is a deferred follow-up.
+	if e.codexIndexSessionNameChanged(path) {
+		return false // title changed -> re-parse to refresh metadata
+	}
+	// Title verified unchanged: skip when the transcript itself is unchanged.
+	// Compare the bare file mtime, not the index-folded effective mtime -- the
+	// stored watermark may already include a folded index mtime, and a later
+	// bump of the shared session_index.jsonl (e.g. another session's rename)
+	// lifts every session's effective mtime; with the title confirmed
+	// unchanged, that rise must not force a needless reparse.
 	fileMtime := info.ModTime().UnixNano()
-	effectiveMtime := parser.CodexEffectiveMtime(path, fileMtime)
-	if storedMtime == effectiveMtime {
-		return true
-	}
-	return effectiveMtime > storedMtime &&
-		fileMtime <= storedMtime &&
-		!e.codexIndexSessionNameChanged(path)
+	return fileMtime <= storedMtime
 }
 
-// codexIndexMtimeChanged returns true when session_index.jsonl is newer
-// than the stored DB mtime, meaning a title rename happened since the
-// last parse, regardless of whether the session file itself also changed.
-func (e *Engine) codexIndexMtimeChanged(path string) bool {
-	indexMtime := parser.CodexEffectiveMtime(path, 0)
-	if indexMtime == 0 {
-		return false
-	}
-	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
-	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-	if !ok {
-		return false
-	}
-	return indexMtime > storedMtime && e.codexIndexSessionNameChanged(path)
-}
-
+// codexIndexNeedsRefreshSince reports whether a Codex session whose transcript
+// predates the cutoff still needs a refresh because its session_index.jsonl
+// title changed at or after the cutoff. It compares the index title to the
+// stored session_name directly rather than gating on indexMtime > storedMtime:
+// the incremental write folds the index mtime into the stored file_mtime, so a
+// title-only rename whose index mtime is <= that stored value would otherwise
+// be filtered out and the stale title would never resolve.
 func (e *Engine) codexIndexNeedsRefreshSince(
 	path string, cutoffNs int64,
 ) bool {
@@ -4684,11 +5163,10 @@ func (e *Engine) codexIndexNeedsRefreshSince(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
-	_, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-	if !ok {
+	if _, _, ok := e.db.GetFileInfoByPath(lookupPath); !ok {
 		return false
 	}
-	return indexMtime > storedMtime && e.codexIndexSessionNameChanged(path)
+	return e.codexIndexSessionNameChanged(path)
 }
 
 func (e *Engine) codexIndexSessionNameChanged(path string) bool {
@@ -4703,11 +5181,9 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 	if err != nil || stored == nil {
 		return true
 	}
-	storedName := ""
-	if stored.SessionName != nil {
-		storedName = strings.TrimSpace(*stored.SessionName)
-	}
-	return currentName != storedName
+	return e.codexStoredNameDiffersBySession(
+		stored, currentName,
+	)
 }
 
 // classifyCodexIndexPath maps a Codex session_index.jsonl change to the
@@ -4767,12 +5243,25 @@ func (e *Engine) classifyCodexIndexPath(
 // a brand-new session is synced through its own transcript event, not the
 // index, so the index path only refreshes renames of already-synced sessions.
 func (e *Engine) codexStoredNameDiffers(uuid, indexTitle string) bool {
-	stored, err := e.db.GetSessionFull(
-		context.Background(), e.idPrefix+"codex:"+uuid,
+	return e.codexStoredNameDiffersBySessionID(
+		e.idPrefix+"codex:"+uuid, indexTitle, false,
 	)
+}
+
+func (e *Engine) codexStoredNameDiffersBySessionID(
+	sessionID, indexTitle string,
+	missingDiffers bool,
+) bool {
+	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
 	if err != nil || stored == nil {
-		return false
+		return missingDiffers
 	}
+	return e.codexStoredNameDiffersBySession(stored, indexTitle)
+}
+
+func (e *Engine) codexStoredNameDiffersBySession(
+	stored *db.Session, indexTitle string,
+) bool {
 	storedName := ""
 	if stored.SessionName != nil {
 		storedName = strings.TrimSpace(*stored.SessionName)
@@ -4789,8 +5278,15 @@ func pickPreferredCodexDiscoveredFile(
 	if id := parser.CodexSessionUUIDFromFilename(
 		filepath.Base(candidates[0].Path),
 	); id != "" {
-		storedPath := filepath.Clean(database.GetSessionFilePath("codex:" + id))
-		if storedPath != "" {
+		sessionID := "codex:" + id
+		for _, candidate := range candidates {
+			storedPath := database.GetSessionFilePath(applyIDPrefixToID(
+				discoveredFileIDPrefix(candidate), sessionID,
+			))
+			if storedPath == "" {
+				continue
+			}
+			storedPath = filepath.Clean(storedPath)
 			for _, candidate := range candidates {
 				if filepath.Clean(candidate.Path) == storedPath {
 					return candidate
@@ -4816,11 +5312,11 @@ func (e *Engine) processCodex(
 		return processResult{skip: true}
 	}
 
-	indexMtimeChanged := e.codexIndexMtimeChanged(file.Path)
+	projectNeedsReparse := e.pathNeedsProjectReparse(file.Path)
 	forceReplace := false
 
 	codexParseFn := func(
-		path string, offset int64, startOrd int,
+		path string, offset int64, startOrd int, _ string,
 	) ([]parser.ParsedMessage, time.Time, int64, error) {
 		return parser.ParseCodexSessionFrom(
 			path, offset, startOrd, false,
@@ -4829,20 +5325,34 @@ func (e *Engine) processCodex(
 	if res, ok := e.tryIncrementalJSONL(
 		file, info, parser.AgentCodex, codexParseFn,
 	); ok {
-		if !indexMtimeChanged {
-			return res
+		if !projectNeedsReparse {
+			// Force a full parse whenever the index title differs from the
+			// stored session_name. A mtime gate (indexMtime > storedMtime) is
+			// not enough here: the incremental write folds the index mtime into
+			// the stored file_mtime, so a later rename whose index mtime is <=
+			// that stored value slips past the gate. shouldSkipCodex's
+			// storedMtime==effectiveMtime fast path would then skip the refresh
+			// forever, stranding the stale title. Comparing the name directly
+			// closes that window.
+			if !e.codexIndexSessionNameChanged(file.Path) {
+				return res
+			}
+			// The index title changed, so a full parse still needs to refresh
+			// session metadata. Keep any fallback signal discovered while probing
+			// appended bytes so existing rows rewritten by the full parse are not
+			// dropped by the append-only write path.
+			forceReplace = res.forceReplace
 		}
-		// The index title changed, so a full parse still needs to refresh
-		// session metadata. Keep any fallback signal discovered while probing
-		// appended bytes so existing rows rewritten by the full parse are not
-		// dropped by the append-only write path.
-		forceReplace = res.forceReplace
 	} else {
 		forceReplace = res.forceReplace
 	}
 
+	codexMachine := e.machine
+	if file.Machine != "" {
+		codexMachine = file.Machine // s3 source machine overrides the host
+	}
 	sess, msgs, err := parser.ParseCodexSession(
-		file.Path, e.machine, false,
+		file.Path, codexMachine, false,
 	)
 	if err != nil {
 		return processResult{err: err}
@@ -5054,6 +5564,139 @@ func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
 		}
 	}
 	return m
+}
+
+// classifyReasonixPath handles Reasonix session classification,
+// extracted from classifyOnePath to stay within nilaway limits.
+func (e *Engine) classifyReasonixPath(
+	path string,
+) (parser.DiscoveredFile, bool) {
+	sep := string(filepath.Separator)
+	for _, reasonixDir := range e.agentDirs[parser.AgentReasonix] {
+		if reasonixDir == "" {
+			continue
+		}
+		if rel, ok := isUnder(reasonixDir, path); ok {
+			// Map .jsonl.meta sidecar events to sibling .jsonl
+			if strings.HasSuffix(path, ".jsonl.meta") {
+				jsonlPath := strings.TrimSuffix(path, ".meta")
+				if _, err := os.Stat(jsonlPath); err != nil {
+					continue
+				}
+				path = jsonlPath
+				rel = strings.TrimSuffix(rel, ".meta")
+			}
+			if !strings.HasSuffix(path, ".jsonl") {
+				continue
+			}
+			parts := strings.Split(rel, sep)
+
+			// Project sessions: projects/{project}/sessions/{id}.jsonl
+			// or projects/{project}/sessions/{id}/{id}.jsonl
+			if len(parts) == 4 && parts[0] == "projects" &&
+				parts[2] == "sessions" &&
+				strings.HasSuffix(parts[3], ".jsonl") {
+				return parser.DiscoveredFile{
+					Path:    path,
+					Project: parts[1],
+					Agent:   parser.AgentReasonix,
+				}, true
+			}
+
+			// Project sessions: projects/{project}/sessions/{id}/{id}.jsonl
+			if len(parts) == 5 && parts[0] == "projects" &&
+				parts[2] == "sessions" {
+				base := strings.TrimSuffix(parts[4], ".jsonl")
+				if base != "" && parts[3] == base {
+					return parser.DiscoveredFile{
+						Path:    path,
+						Project: parts[1],
+						Agent:   parser.AgentReasonix,
+					}, true
+				}
+			}
+
+			// Global or archive sessions
+			if len(parts) == 2 {
+				if (parts[0] == "sessions" || parts[0] == "archive") &&
+					strings.HasSuffix(parts[1], ".jsonl") {
+					return parser.DiscoveredFile{
+						Path:  path,
+						Agent: parser.AgentReasonix,
+					}, true
+				}
+			}
+
+			// Nested global or subagent: sessions/{id}/{id}.jsonl or sessions/subagents/{id}.jsonl
+			if len(parts) == 3 {
+				base := strings.TrimSuffix(parts[2], ".jsonl")
+				if parts[0] == "sessions" &&
+					(parts[1] == "subagents" ||
+						parts[1] == base) {
+					if base != "" {
+						return parser.DiscoveredFile{
+							Path:  path,
+							Agent: parser.AgentReasonix,
+						}, true
+					}
+				}
+			}
+		}
+	}
+
+	return parser.DiscoveredFile{}, false
+}
+
+func (e *Engine) processReasonix(
+	file parser.DiscoveredFile, info os.FileInfo,
+) processResult {
+	effectiveInfo := reasonixEffectiveInfo(file.Path, info)
+	if e.shouldSkipByPath(file.Path, effectiveInfo) {
+		return processResult{skip: true}
+	}
+
+	sess, msgs, _, err := parser.ParseReasonixSession(
+		file.Path, e.machine,
+	)
+	if err != nil {
+		return processResult{err: err}
+	}
+	if sess == nil {
+		return processResult{}
+	}
+
+	// Use the discovered project only when metadata did not supply a
+	// project via workspace_root.
+	if file.Project != "" && sess.Project == "" {
+		sess.Project = file.Project
+	}
+
+	hash, err := ComputeFileHash(file.Path)
+	if err == nil {
+		sess.File.Hash = hash
+	}
+
+	sess.File.Size = effectiveInfo.Size()
+	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
+
+	return processResult{
+		results: []parser.ParseResult{
+			{Session: *sess, Messages: msgs},
+		},
+	}
+}
+
+func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
+	size := info.Size()
+	mtime := info.ModTime().UnixNano()
+	metaPath := path + ".meta"
+	if metaInfo, err := os.Stat(metaPath); err == nil {
+		size += metaInfo.Size()
+		if metaMtime := metaInfo.ModTime().UnixNano(); metaMtime > mtime {
+			mtime = metaMtime
+		}
+	}
+	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
 }
 
 // shouldSkipCopilot is like shouldSkipByPath but uses the
@@ -6266,9 +6909,16 @@ func (e *Engine) processPi(
 		return processResult{skip: true}
 	}
 
-	sess, msgs, err := parser.ParsePiSession(
-		file.Path, file.Project, e.machine,
+	var (
+		sess *parser.ParsedSession
+		msgs []parser.ParsedMessage
+		err  error
 	)
+	if file.Agent == parser.AgentOMP {
+		sess, msgs, err = parser.ParseOMPSession(file.Path, file.Project, e.machine)
+	} else {
+		sess, msgs, err = parser.ParsePiSession(file.Path, file.Project, e.machine)
+	}
 	if err != nil {
 		return processResult{err: err}
 	}
@@ -6463,6 +7113,11 @@ func computeFinalStreak(calls []signals.ToolCallRow) int {
 func (e *Engine) RecomputeSignals(
 	ctx context.Context, sessionID string,
 ) error {
+	if e.refuseWriteInForceParse("RecomputeSignals") {
+		return errors.New(
+			"RecomputeSignals refused on report-only parse-diff engine",
+		)
+	}
 	return e.recomputeSignalsFromDB(ctx, sessionID)
 }
 
@@ -6616,6 +7271,7 @@ func (e *Engine) writeBatch(
 					e.cacheSkip(
 						pw.sess.File.Path,
 						pw.sess.File.Mtime,
+						pw.sess.File.Hash,
 					)
 				}
 				continue
@@ -6646,7 +7302,7 @@ func (e *Engine) writeBatch(
 			continue
 		}
 		if err := e.db.ReplaceSessionUsageEvents(
-			s.ID, toDBUsageEvents(s.ID, pw.usageEvents),
+			s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
 		); err != nil {
 			log.Printf(
 				"write usage events for %s: %v",
@@ -6720,6 +7376,60 @@ func (e *Engine) prepareSessionWrite(
 		applySessionMessageDerivedFields(&s, msgs)
 		applySessionTokenTotalsFromMessages(&s, msgs)
 	}
+	// Snapshot, before sanitizing, whether the session's token aggregates
+	// are derived from the per-message rows or the per-usage-event rows, by
+	// matching the stored value against each source's raw sum/max. Aggregates
+	// set directly from a session-level usage summary -- agents like
+	// Warp/Vibe/Hermes/Zed -- must survive the per-row clamp untouched.
+	// Source=="session" usage events mirror those same summary totals, so
+	// exclude them from the event-derived detector and re-clamp path.
+	msgTotal, msgHasOut, msgPeak, msgHasCtx := messageTokenTotals(msgs)
+	evtTotal, evtHasOut, evtPeak, evtHasCtx := usageEventTokenTotals(
+		pw.usageEvents, false,
+	)
+	totalFromMsgs := s.HasTotalOutputTokens == msgHasOut &&
+		s.TotalOutputTokens == msgTotal
+	totalFromEvts := s.HasTotalOutputTokens == evtHasOut &&
+		s.TotalOutputTokens == evtTotal
+	peakFromMsgs := s.HasPeakContextTokens == msgHasCtx &&
+		s.PeakContextTokens == msgPeak
+	peakFromEvts := s.HasPeakContextTokens == evtHasCtx &&
+		s.PeakContextTokens == evtPeak
+
+	// Central validation/sanitization pass: every session write flows
+	// through here so all agents are covered uniformly. The returned fix
+	// counts and the parser malformed-line count are accumulated per
+	// agent for the sync summary's anomaly section.
+	vs := validateAndSanitize(&s, msgs, nil)
+	e.anomalies.recordSanitize(vs)
+	e.anomalies.recordMalformedLines(
+		s.Agent, pw.sess.File.Path, s.ParserMalformedLines,
+	)
+
+	// A per-row token clamp must not leave an inflated value stranded in a
+	// row-derived session total while the row that produced it was clamped.
+	// Re-derive a matched aggregate from its now-clamped source (messages
+	// clamped above; usage events clamped on the fly the same way
+	// toDBUsageEvents will store them). Summary-derived aggregates match
+	// neither source and are left as-is. The sum is re-summed from clamped
+	// rows rather than clamped to the per-row bound, so a legitimately large
+	// total over many rows is preserved. Re-deriving is a no-op when nothing
+	// was clamped, keeping the pass idempotent. Messages take precedence when
+	// both sources match (identical values).
+	if totalFromMsgs {
+		t, h, _, _ := messageTokenTotals(msgs)
+		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
+	} else if totalFromEvts {
+		t, h, _, _ := usageEventTokenTotals(pw.usageEvents, true)
+		s.TotalOutputTokens, s.HasTotalOutputTokens = t, h
+	}
+	if peakFromMsgs {
+		_, _, p, h := messageTokenTotals(msgs)
+		s.PeakContextTokens, s.HasPeakContextTokens = p, h
+	} else if peakFromEvts {
+		_, _, p, h := usageEventTokenTotals(pw.usageEvents, true)
+		s.PeakContextTokens, s.HasPeakContextTokens = p, h
+	}
 	return s, msgs, true
 }
 
@@ -6730,11 +7440,15 @@ func applySessionMessageDerivedFields(s *db.Session, msgs []db.Message) {
 	)
 }
 
-func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
-	totalOut := 0
-	hasOut := false
-	peakCtx := 0
-	hasCtx := false
+// messageTokenTotals computes the message-derived session token
+// aggregates: the sum of per-message output tokens and the peak
+// per-message context tokens, each with a presence flag. It is the
+// canonical derivation shared by applySessionTokenTotalsFromMessages and
+// the post-sanitize reconciliation that re-derives message-derived totals
+// from the clamped rows. Absent values return 0 with a false presence.
+func messageTokenTotals(
+	msgs []db.Message,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
 	for _, msg := range msgs {
 		if msg.HasOutputTokens {
 			hasOut = true
@@ -6747,20 +7461,47 @@ func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
 			}
 		}
 	}
-	if hasOut {
-		s.TotalOutputTokens = totalOut
-		s.HasTotalOutputTokens = true
-	} else {
-		s.TotalOutputTokens = 0
-		s.HasTotalOutputTokens = false
+	return totalOut, hasOut, peakCtx, hasCtx
+}
+
+func applySessionTokenTotalsFromMessages(s *db.Session, msgs []db.Message) {
+	totalOut, hasOut, peakCtx, hasCtx := messageTokenTotals(msgs)
+	s.TotalOutputTokens = totalOut
+	s.HasTotalOutputTokens = hasOut
+	s.PeakContextTokens = peakCtx
+	s.HasPeakContextTokens = hasCtx
+}
+
+// usageEventTokenTotals computes event-derived session token aggregates through
+// parser.UsageEventTokenAggregate -- the same rollup per-turn event parsers use
+// to populate stored session totals (positive output summed, peak full context
+// = input + cache-creation + cache-read where positive). Session-summary usage
+// events mirror parser summary totals rather than per-turn rows, so they are
+// excluded from this detector and re-clamp path. When clamp is true each
+// included event token field is first bounded to the per-row plausibility cap,
+// matching how sanitizeUsageEvent bounds the stored usage_event row.
+func usageEventTokenTotals(
+	events []parser.ParsedUsageEvent, clamp bool,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
+	rolled := make([]parser.ParsedUsageEvent, 0, len(events))
+	for _, ev := range events {
+		if ev.Source == "session" {
+			continue
+		}
+		rolled = append(rolled, ev)
 	}
-	if hasCtx {
-		s.PeakContextTokens = peakCtx
-		s.HasPeakContextTokens = true
-	} else {
-		s.PeakContextTokens = 0
-		s.HasPeakContextTokens = false
+	if clamp {
+		for i, ev := range rolled {
+			ev.InputTokens = clampedTokens(ev.InputTokens)
+			ev.OutputTokens = clampedTokens(ev.OutputTokens)
+			ev.CacheCreationInputTokens = clampedTokens(
+				ev.CacheCreationInputTokens,
+			)
+			ev.CacheReadInputTokens = clampedTokens(ev.CacheReadInputTokens)
+			rolled[i] = ev
+		}
 	}
+	return parser.UsageEventTokenAggregate(rolled)
 }
 
 func applyVisualStudioCopilotArchiveSessionFields(
@@ -7204,31 +7945,46 @@ func visualStudioCopilotMessageLooksIncomplete(
 	if parsed.Role != stored.Role {
 		return false
 	}
-	if parsed.ContentLength < stored.ContentLength {
+	// Stored rows are sanitized and length-adjusted on write; measure the
+	// parsed side the same way so a reparse that only stripped control bytes
+	// is not judged shorter and allowed to bypass archive preservation.
+	p := sanitizedForArchiveCompare(parsed)
+	if p.ContentLength < stored.ContentLength {
 		return true
 	}
-	if stored.HasThinking && !parsed.HasThinking {
+	if stored.HasThinking && !p.HasThinking {
 		return true
 	}
 	if stored.HasOutputTokens &&
-		(!parsed.HasOutputTokens ||
-			parsed.OutputTokens < stored.OutputTokens) {
+		(!p.HasOutputTokens ||
+			p.OutputTokens < stored.OutputTokens) {
 		return true
 	}
 	if stored.HasContextTokens &&
-		(!parsed.HasContextTokens ||
-			parsed.ContextTokens < stored.ContextTokens) {
+		(!p.HasContextTokens ||
+			p.ContextTokens < stored.ContextTokens) {
 		return true
 	}
-	if len(parsed.ToolCalls) < len(stored.ToolCalls) {
+	if len(p.ToolCalls) < len(stored.ToolCalls) {
 		return true
 	}
-	if countToolResultEvents(parsed.ToolCalls) <
+	if countToolResultEvents(p.ToolCalls) <
 		countToolResultEvents(stored.ToolCalls) {
 		return true
 	}
-	return countToolResultContentLength(parsed.ToolCalls) <
+	return countToolResultContentLength(p.ToolCalls) <
 		countToolResultContentLength(stored.ToolCalls)
+}
+
+// sanitizedForArchiveCompare returns a copy of m with the same
+// validation/sanitization stored rows receive on write (control runes
+// stripped, ContentLength delta-adjusted, tokens clamped), so the VS Copilot
+// archive reconcile compares freshly parsed messages against archived rows
+// like-for-like. The copy is shallow; sanitizeMessage only rewrites value
+// fields, leaving the shared ToolCalls slice untouched.
+func sanitizedForArchiveCompare(m db.Message) db.Message {
+	_ = sanitizeMessage(&m)
+	return m
 }
 
 func visualStudioCopilotMessageHasArchiveUpdate(
@@ -7237,33 +7993,38 @@ func visualStudioCopilotMessageHasArchiveUpdate(
 	if parsed.Role != stored.Role {
 		return false
 	}
-	if parsed.ContentLength > stored.ContentLength {
+	// Stored rows are sanitized and length-adjusted on write, but the parsed
+	// message still carries raw content here. Compare a sanitized copy so a
+	// reparse that differs only in stripped control bytes is not treated as
+	// an archive update, preserving idempotency.
+	p := sanitizedForArchiveCompare(parsed)
+	if p.ContentLength > stored.ContentLength {
 		return true
 	}
-	if parsed.ContentLength == stored.ContentLength &&
-		parsed.Content != stored.Content {
+	if p.ContentLength == stored.ContentLength &&
+		p.Content != stored.Content {
 		return true
 	}
-	if parsed.HasThinking && (!stored.HasThinking ||
-		parsed.ThinkingText != stored.ThinkingText) {
+	if p.HasThinking && (!stored.HasThinking ||
+		p.ThinkingText != stored.ThinkingText) {
 		return true
 	}
-	if parsed.HasOutputTokens &&
+	if p.HasOutputTokens &&
 		(!stored.HasOutputTokens ||
-			parsed.OutputTokens > stored.OutputTokens) {
+			p.OutputTokens > stored.OutputTokens) {
 		return true
 	}
-	if parsed.HasContextTokens &&
+	if p.HasContextTokens &&
 		(!stored.HasContextTokens ||
-			parsed.ContextTokens > stored.ContextTokens) {
+			p.ContextTokens > stored.ContextTokens) {
 		return true
 	}
-	if string(parsed.TokenUsage) != "" &&
-		string(parsed.TokenUsage) != string(stored.TokenUsage) {
+	if string(p.TokenUsage) != "" &&
+		string(p.TokenUsage) != string(stored.TokenUsage) {
 		return true
 	}
 	return visualStudioCopilotToolCallsHaveArchiveUpdate(
-		parsed.ToolCalls, stored.ToolCalls,
+		p.ToolCalls, stored.ToolCalls,
 	)
 }
 
@@ -7329,8 +8090,9 @@ func countToolResultContentLength(calls []db.ToolCall) int {
 }
 
 type batchSourceFile struct {
-	path  string
-	mtime int64
+	path        string
+	mtime       int64
+	fingerprint string
 }
 
 func (e *Engine) writeBatchBulk(
@@ -7358,7 +8120,7 @@ func (e *Engine) writeBatchBulk(
 		writes = append(writes, db.SessionBatchWrite{
 			Session:         s,
 			Messages:        msgs,
-			UsageEvents:     toDBUsageEvents(s.ID, pw.usageEvents),
+			UsageEvents:     e.usageEventsForWrite(s.ID, pw.usageEvents),
 			Signals:         update,
 			Findings:        findings,
 			DataVersion:     dataVersionForWrite(pw),
@@ -7366,8 +8128,9 @@ func (e *Engine) writeBatchBulk(
 		})
 		if pw.sess.File.Path != "" {
 			sources[s.ID] = batchSourceFile{
-				path:  pw.sess.File.Path,
-				mtime: pw.sess.File.Mtime,
+				path:        pw.sess.File.Path,
+				mtime:       pw.sess.File.Mtime,
+				fingerprint: pw.sess.File.Hash,
 			}
 		}
 	}
@@ -7387,7 +8150,9 @@ func (e *Engine) writeBatchBulk(
 	}
 	for _, id := range result.ExcludedIDs {
 		if source, ok := sources[id]; ok && source.path != "" {
-			e.cacheSkip(source.path, source.mtime)
+			e.cacheSkip(
+				source.path, source.mtime, source.fingerprint,
+			)
 		}
 	}
 	for _, err := range result.Errors {
@@ -7412,13 +8177,15 @@ func shouldReplaceFullParseMessages(
 		// earlier assistant tool call. An incremental append would
 		// only add the new ordinals and leave the existing tool call's
 		// result_content empty, so force a full replace.
-		pw.sess.Agent == parser.AgentVibe
+		pw.sess.Agent == parser.AgentVibe ||
+		pw.sess.Agent == parser.AgentReasonix
 }
 
 // writeIncremental appends new messages and partially updates
 // session metadata without overwriting columns that are not
-// recomputed during incremental parsing (e.g. file_hash,
-// parent_session_id, relationship_type).
+// recomputed during incremental parsing (e.g. parent_session_id,
+// relationship_type). Codex refreshes file_hash because parse-diff
+// uses it as the transcript fingerprint for raced-skew detection.
 func (e *Engine) writeIncremental(
 	inc *incrementalUpdate,
 ) error {
@@ -7429,6 +8196,27 @@ func (e *Engine) writeIncremental(
 		},
 		e.blockedResultCategories,
 	)
+	// The incremental append path bypasses prepareSessionWrite, so run
+	// the central validation/sanitization pass on the new message rows
+	// here to keep coverage uniform across write paths. The fix counts
+	// feed the sync summary's anomaly section.
+	//
+	// Deliberately only sanitize fixes are recorded here, not malformed-line
+	// counts. A malformed JSONL line appended to an actively-syncing file is
+	// skipped by the incremental reader, and incrementalParseFunc carries no
+	// malformed-line count, so surfacing it on this path would require
+	// threading a new return value through the incremental parser API across
+	// every append-only agent. That is intentionally out of scope for this
+	// best-effort, only-when-nonzero diagnostic: the value is still parsed and
+	// persisted, and the next full sync (the periodic pass, or any
+	// parser-version bump that forces a full resync) re-derives the
+	// malformed-line count for the file. The incremental path therefore
+	// under-reports a brand-new summary signal by at most one full-sync
+	// interval; it never loses stored data and is not a regression on any
+	// prior behavior (no malformed-line count was surfaced anywhere before
+	// this feature). Full malformed-line coverage on the incremental path is a
+	// deferred follow-up.
+	e.anomalies.recordSanitize(validateAndSanitize(nil, dbMsgs, nil))
 
 	// Adjust counts for blocked-category filtering.
 	newTotal, newUser := postFilterCounts(dbMsgs)
@@ -7442,27 +8230,40 @@ func (e *Engine) writeIncremental(
 		s := inc.endedAt.Format(time.RFC3339Nano)
 		endedAt = &s
 	}
+	// Run the appended ended_at through the same timestamp plausibility
+	// check the full path applies in sanitizeSession, so an implausible
+	// appended timestamp is blanked here instead of persisting via the
+	// incremental path while a full sync of the same file would blank it
+	// (an incremental-vs-full parity divergence). The session token
+	// aggregates (totalOutputTokens/peakContextTokens) are accumulated from
+	// per-message values already clamped to the per-message bound (see the
+	// clampedTokens calls feeding this update), so a corrupt new message
+	// cannot inflate them past what the stored rows justify -- parity with
+	// the full path, which re-derives message-derived totals from the
+	// clamped rows. The sum itself is not clamped to the per-message bound,
+	// since a long session legitimately exceeds it.
+	endedAt, _ = blankImplausibleTimestampPtr(endedAt)
 
-	// Write messages first — only advance file_size when
-	// the insert succeeds so a failure is retried.
-	if err := e.writeMessages(
-		inc.sessionID, dbMsgs,
+	if err := e.db.WriteSessionIncremental(
+		inc.sessionID,
+		dbMsgs,
+		db.IncrementalSessionUpdate{
+			EndedAt:              endedAt,
+			MsgCount:             msgCount,
+			UserMsgCount:         userMsgCount,
+			FileSize:             inc.fileSize,
+			FileMtime:            inc.fileMtime,
+			FileHash:             strPtr(inc.fileHash),
+			NextOrdinal:          inc.nextOrdinal,
+			LastEntryUUID:        inc.lastEntryUUID,
+			TotalOutputTokens:    inc.totalOutputTokens,
+			PeakContextTokens:    inc.peakContextTokens,
+			HasTotalOutputTokens: inc.hasTotalOutputTokens,
+			HasPeakContextTokens: inc.hasPeakContextTokens,
+		},
 	); err != nil {
 		return fmt.Errorf(
-			"incremental messages %s: %w",
-			inc.sessionID, err,
-		)
-	}
-
-	if err := e.db.UpdateSessionIncremental(
-		inc.sessionID, endedAt,
-		msgCount, userMsgCount,
-		inc.fileSize, inc.fileMtime,
-		inc.totalOutputTokens, inc.peakContextTokens,
-		inc.hasTotalOutputTokens, inc.hasPeakContextTokens,
-	); err != nil {
-		return fmt.Errorf(
-			"incremental update %s: %w",
+			"incremental write %s: %w",
 			inc.sessionID, err,
 		)
 	}
@@ -7552,7 +8353,11 @@ func (e *Engine) writeSessionFullWithResolver(
 	if err := e.db.UpsertSession(s); err != nil {
 		if isIntentionalSessionSkip(err) {
 			if pw.sess.File.Path != "" {
-				e.cacheSkip(pw.sess.File.Path, pw.sess.File.Mtime)
+				e.cacheSkip(
+					pw.sess.File.Path,
+					pw.sess.File.Mtime,
+					pw.sess.File.Hash,
+				)
 			}
 			return err
 		}
@@ -7568,7 +8373,7 @@ func (e *Engine) writeSessionFullWithResolver(
 		return err
 	}
 	if err := e.db.ReplaceSessionUsageEvents(
-		s.ID, toDBUsageEvents(s.ID, pw.usageEvents),
+		s.ID, e.usageEventsForWrite(s.ID, pw.usageEvents),
 	); err != nil {
 		log.Printf(
 			"replace usage events for %s: %v",
@@ -7861,7 +8666,8 @@ func openCodeMessageLooksIncomplete(
 		parsed.Role != stored.Role {
 		return false
 	}
-	if parsed.ContentLength < stored.ContentLength {
+	if sanitizedMessageContentLength(parsed) <
+		sanitizedMessageContentLength(stored) {
 		return true
 	}
 	if parsed.HasThinking != stored.HasThinking &&
@@ -7885,6 +8691,14 @@ func openCodeMessageLooksIncomplete(
 		countToolResultEvents(stored.ToolCalls)
 }
 
+func sanitizedMessageContentLength(msg db.Message) int {
+	sanitized := db.SanitizeUTF8(msg.Content)
+	if sanitized != msg.Content {
+		return len(sanitized)
+	}
+	return msg.ContentLength
+}
+
 func countToolResultEvents(calls []db.ToolCall) int {
 	total := 0
 	for _, call := range calls {
@@ -7894,18 +8708,7 @@ func countToolResultEvents(calls []db.ToolCall) int {
 }
 
 func (e *Engine) applyIDPrefixToSessionIDs(ids []string) []string {
-	if e.idPrefix == "" || len(ids) == 0 {
-		return ids
-	}
-	prefixed := make([]string, len(ids))
-	for i, id := range ids {
-		if id == "" || strings.HasPrefix(id, e.idPrefix) {
-			prefixed[i] = id
-			continue
-		}
-		prefixed[i] = e.idPrefix + id
-	}
-	return prefixed
+	return applyIDPrefixToIDs(e.idPrefix, ids)
 }
 
 // applyRemoteRewrites prefixes session IDs and rewrites
@@ -7916,9 +8719,9 @@ func (e *Engine) applyRemoteRewrites(
 	if e.idPrefix == "" {
 		return
 	}
-	s.ID = e.idPrefix + s.ID
+	s.ID = applyIDPrefixToID(e.idPrefix, s.ID)
 	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
-		p := e.idPrefix + *s.ParentSessionID
+		p := applyIDPrefixToID(e.idPrefix, *s.ParentSessionID)
 		s.ParentSessionID = &p
 	}
 	if e.pathRewriter != nil && s.FilePath != nil {
@@ -7931,13 +8734,19 @@ func (e *Engine) applyRemoteRewrites(
 			msgs[i].ToolCalls[j].SessionID = s.ID
 			if msgs[i].ToolCalls[j].SubagentSessionID != "" {
 				msgs[i].ToolCalls[j].SubagentSessionID =
-					e.idPrefix + msgs[i].ToolCalls[j].SubagentSessionID
+					applyIDPrefixToID(
+						e.idPrefix,
+						msgs[i].ToolCalls[j].SubagentSessionID,
+					)
 			}
 			for k := range msgs[i].ToolCalls[j].ResultEvents {
 				re := &msgs[i].ToolCalls[j].ResultEvents[k]
 				if re.SubagentSessionID != "" {
 					re.SubagentSessionID =
-						e.idPrefix + re.SubagentSessionID
+						applyIDPrefixToID(
+							e.idPrefix,
+							re.SubagentSessionID,
+						)
 				}
 			}
 		}
@@ -7972,12 +8781,14 @@ func toDBSession(pw pendingWrite) db.Session {
 		// not persist this field; the caller bumps it via
 		// SetSessionDataVersion only after the message
 		// rewrite succeeds.
-		FilePath:   strPtr(pw.sess.File.Path),
-		FileSize:   int64Ptr(pw.sess.File.Size),
-		FileMtime:  int64Ptr(pw.sess.File.Mtime),
-		FileInode:  int64Ptr(pw.sess.File.Inode),
-		FileDevice: int64Ptr(pw.sess.File.Device),
-		FileHash:   strPtr(pw.sess.File.Hash),
+		FilePath:      strPtr(pw.sess.File.Path),
+		FileSize:      int64Ptr(pw.sess.File.Size),
+		FileMtime:     int64Ptr(pw.sess.File.Mtime),
+		NextOrdinal:   nextParsedOrdinal(0, pw.msgs),
+		LastEntryUUID: strPtr(lastParsedSourceUUID("", pw.msgs)),
+		FileInode:     int64Ptr(pw.sess.File.Inode),
+		FileDevice:    int64Ptr(pw.sess.File.Device),
+		FileHash:      strPtr(pw.sess.File.Hash),
 	}
 	if pw.sess.FirstMessage != "" {
 		s.FirstMessage = &pw.sess.FirstMessage
@@ -8034,10 +8845,12 @@ func toDBMessages(pw pendingWrite, blocked map[string]bool) []db.Message {
 
 // toDBUsageEvents converts parser usage events for one session.
 // sessionID is the final ID after remote rewrites; parser-stamped
-// event session IDs predate the idPrefix and are ignored.
+// event session IDs predate the idPrefix and are ignored. It returns the
+// fix counts from the central validation/sanitization pass so write paths
+// can surface them in the sync summary; diagnostic callers may discard.
 func toDBUsageEvents(
 	sessionID string, events []parser.ParsedUsageEvent,
-) []db.UsageEvent {
+) ([]db.UsageEvent, validationStats) {
 	out := make([]db.UsageEvent, 0, len(events))
 	for _, ev := range events {
 		out = append(out, db.UsageEvent{
@@ -8057,6 +8870,20 @@ func toDBUsageEvents(
 			DedupKey:                 ev.DedupKey,
 		})
 	}
+	// Route usage events through the central validation/sanitization
+	// pass so they get the same treatment as messages and sessions at
+	// every call site.
+	return out, validateAndSanitize(nil, nil, out)
+}
+
+// usageEventsForWrite converts usage events for a session about to be
+// written and records the central-validation fix counts in the per-run
+// anomaly accumulator for the sync summary.
+func (e *Engine) usageEventsForWrite(
+	sessionID string, events []parser.ParsedUsageEvent,
+) []db.UsageEvent {
+	out, vs := toDBUsageEvents(sessionID, events)
+	e.anomalies.recordSanitize(vs)
 	return out
 }
 
@@ -8084,6 +8911,26 @@ func countUserMsgs(msgs []parser.ParsedMessage) int {
 	return n
 }
 
+func nextParsedOrdinal(
+	current int, msgs []parser.ParsedMessage,
+) int {
+	if len(msgs) == 0 {
+		return current
+	}
+	return msgs[len(msgs)-1].Ordinal + 1
+}
+
+func lastParsedSourceUUID(
+	current string, msgs []parser.ParsedMessage,
+) string {
+	for _, v := range slices.Backward(msgs) {
+		if v.SourceUUID != "" {
+			return v.SourceUUID
+		}
+	}
+	return current
+}
+
 // FindSourceFile locates the original source file for a
 // session ID. It first checks the stored file_path from the
 // database (handles cases where filename differs from session
@@ -8092,6 +8939,9 @@ func countUserMsgs(msgs []parser.ParsedMessage) int {
 func (e *Engine) FindSourceFile(sessionID string) string {
 	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
+		if fp := e.db.GetSessionFilePath(sessionID); isS3SourcePath(fp) {
+			return fp
+		}
 		// Remote sessions have no local source file.
 		return ""
 	}
@@ -8166,6 +9016,11 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	// return the stored path so downstream parsing stays scoped to
 	// the requested conversation rather than the whole trace file.
 	if fp := e.db.GetSessionFilePath(sessionID); fp != "" {
+		// s3:// sources have no local file to stat; the path is itself
+		// the authoritative source and processFile fetches it directly.
+		if strings.HasPrefix(fp, "s3://") {
+			return fp
+		}
 		if historyPath, idx, ok := parser.ParseAiderVirtualPath(fp); ok {
 			// aider's stored "<historyPath>#<idx>" is positional: an
 			// inserted or removed earlier run shifts the index onto a
@@ -8195,6 +9050,30 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 func (e *Engine) SourceMtime(sessionID string) int64 {
 	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
+		if fp := e.db.GetSessionFilePath(sessionID); isS3SourcePath(fp) {
+			stat := statS3Object
+			if def, ok := parser.AgentByPrefix(sessionID); ok &&
+				def.Type == parser.AgentClaude {
+				stat = statClaudeS3Session
+			} else if ok && def.Type == parser.AgentCodex {
+				stat = statCodexS3Session
+			}
+			if sess, err := e.db.GetSession(
+				context.Background(), sessionID,
+			); err == nil && sess != nil {
+				switch sess.Agent {
+				case string(parser.AgentClaude):
+					stat = statClaudeS3Session
+				case string(parser.AgentCodex):
+					stat = statCodexS3Session
+				}
+			}
+			obj, err := stat(fp)
+			if err != nil {
+				return 0
+			}
+			return obj.LastModified.UnixNano()
+		}
 		return 0
 	}
 
@@ -8276,6 +9155,20 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	if path == "" {
 		return 0
 	}
+	if isS3SourcePath(path) {
+		stat := statS3Object
+		switch def.Type {
+		case parser.AgentClaude:
+			stat = statClaudeS3Session
+		case parser.AgentCodex:
+			stat = statCodexS3Session
+		}
+		obj, err := stat(path)
+		if err != nil {
+			return 0
+		}
+		return obj.LastModified.UnixNano()
+	}
 
 	if isOpenCodeFormatStorageAgent(def.Type) {
 		mtime, err := openCodeFormatSourceMtime(def.Type, path)
@@ -8355,6 +9248,13 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		}
 		return vibeEffectiveInfo(path, info).ModTime().UnixNano()
 	}
+	if def.Type == parser.AgentReasonix {
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0
+		}
+		return reasonixEffectiveInfo(path, info).ModTime().UnixNano()
+	}
 
 	// FindSourceFile may return a virtual path (e.g. Visual Studio
 	// Copilot's <traceFile>#<conversationID>); resolve it to the
@@ -8377,6 +9277,12 @@ func (e *Engine) SyncSingleSession(sessionID string) (err error) {
 func (e *Engine) SyncSingleSessionContext(
 	ctx context.Context, sessionID string,
 ) (err error) {
+	if e.refuseWriteInForceParse("SyncSingleSession") {
+		return fmt.Errorf(
+			"cannot sync session %s on a report-only (parse-diff) engine",
+			sessionID,
+		)
+	}
 	e.syncMu.Lock()
 	preserved := false
 	// Defers run LIFO: unlock runs first (releasing syncMu), then
@@ -8388,9 +9294,10 @@ func (e *Engine) SyncSingleSessionContext(
 		}
 	}()
 	defer e.syncMu.Unlock()
+	e.resetS3CodexIndexCache()
 
 	host, _ := parser.StripHostPrefix(sessionID)
-	if host != "" {
+	if host != "" && !isS3SourcePath(e.db.GetSessionFilePath(sessionID)) {
 		return fmt.Errorf(
 			"cannot sync remote session %s locally", sessionID,
 		)
@@ -8479,6 +9386,7 @@ func (e *Engine) SyncSingleSessionContext(
 		Path:  path,
 		Agent: agent,
 	}
+	e.hydrateS3DiscoveredFile(ctx, sessionID, &file)
 	if e.shouldCacheSkip(file) {
 		e.clearSkip(path)
 	}
@@ -8592,6 +9500,16 @@ func (e *Engine) SyncSingleSessionContext(
 				file.Project = workspace
 			}
 		}
+	case parser.AgentReasonix:
+		if classified, ok := e.classifyReasonixPath(path); ok {
+			file.Project = classified.Project
+		} else {
+			if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+				sess.Project != "" &&
+				!parser.NeedsProjectReparse(sess.Project) {
+				file.Project = sess.Project
+			}
+		}
 	case parser.AgentQwen:
 		// path is <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
 		file.Project = parser.GetProjectName(
@@ -8614,7 +9532,7 @@ func (e *Engine) SyncSingleSessionContext(
 	res := e.processFile(ctx, file)
 	if res.err != nil {
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
-			e.cacheSkip(path, res.mtime)
+			e.cacheSkip(path, res.mtime, res.sourceFingerprint)
 		}
 		return res.err
 	}
@@ -9385,12 +10303,18 @@ func convertToolCalls(
 	}
 	calls := make([]db.ToolCall, len(parsed))
 	for i, tc := range parsed {
+		filePath := tc.FilePath
+		if filePath == "" {
+			filePath = parser.ResolveFilePathFromJSON(tc.InputJSON)
+		}
 		calls[i] = db.ToolCall{
 			SessionID:         sessionID,
 			ToolName:          tc.ToolName,
 			Category:          tc.Category,
 			ToolUseID:         tc.ToolUseID,
 			InputJSON:         tc.InputJSON,
+			FilePath:          filePath,
+			CallIndex:         i,
 			SkillName:         tc.SkillName,
 			SubagentSessionID: tc.SubagentSessionID,
 			ResultEvents:      convertToolResultEvents(tc.ResultEvents),
@@ -9610,6 +10534,11 @@ func (e *Engine) ScanSecrets(
 	ctx context.Context, in SecretScanInput,
 	progress func(SecretScanProgress),
 ) (SecretScanSummary, error) {
+	if e.refuseWriteInForceParse("ScanSecrets") {
+		return SecretScanSummary{}, errors.New(
+			"ScanSecrets refused on report-only parse-diff engine",
+		)
+	}
 	ver := secrets.RulesVersion()
 	ids, err := e.db.SecretScanCandidates(ctx, db.SecretScanCandidateFilter{
 		CurrentVersion: ver, OnlyStale: in.Backfill,

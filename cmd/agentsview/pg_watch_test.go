@@ -1,11 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"log"
+	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,35 +16,23 @@ import (
 	"go.kenn.io/agentsview/internal/postgres"
 )
 
-func pgConfigForTest(projects, exclude []string) config.PGConfig {
-	return config.PGConfig{Projects: projects, ExcludeProjects: exclude}
-}
-
 func TestResolvePushProjects(t *testing.T) {
-	tests := []struct {
-		name        string
-		pgProjects  []string
-		pgExclude   []string
-		cfg         PGPushConfig
-		wantInclude []string
-		wantExclude []string
-		wantErr     bool
-	}{
+	tests := []projectResolutionCase[PGPushConfig]{
 		{
 			name:        "config include used when no flags",
-			pgProjects:  []string{"a", "b"},
+			projects:    []string{"a", "b"},
 			wantInclude: []string{"a", "b"},
 		},
 		{
 			name:        "flag include overrides config exclude",
-			pgExclude:   []string{"x"},
+			exclude:     []string{"x"},
 			cfg:         PGPushConfig{ProjectsFlag: "a,b"},
 			wantInclude: []string{"a", "b"},
 		},
 		{
-			name:       "all-projects clears both",
-			pgProjects: []string{"a"},
-			cfg:        PGPushConfig{AllProjects: true},
+			name:     "all-projects clears both",
+			projects: []string{"a"},
+			cfg:      PGPushConfig{AllProjects: true},
 		},
 		{
 			name:    "both flags is an error",
@@ -54,10 +45,10 @@ func TestResolvePushProjects(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:       "config has both projects and exclude is an error",
-			pgProjects: []string{"a"},
-			pgExclude:  []string{"x"},
-			wantErr:    true,
+			name:     "config has both projects and exclude is an error",
+			projects: []string{"a"},
+			exclude:  []string{"x"},
+			wantErr:  true,
 		},
 		{
 			name:    "all-projects with exclude is an error",
@@ -65,39 +56,134 @@ func TestResolvePushProjects(t *testing.T) {
 			wantErr: true,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pg := pgConfigForTest(tt.pgProjects, tt.pgExclude)
-			inc, exc, err := resolvePushProjects(pg, tt.cfg)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if !equalStrings(inc, tt.wantInclude) {
-				t.Errorf("include = %v, want %v", inc, tt.wantInclude)
-			}
-			if !equalStrings(exc, tt.wantExclude) {
-				t.Errorf("exclude = %v, want %v", exc, tt.wantExclude)
-			}
-		})
-	}
+	runProjectResolutionCases(t, tests,
+		func(projects, exclude []string, cfg PGPushConfig) ([]string, []string, error) {
+			return resolvePushProjects(config.PGConfig{
+				Projects:        projects,
+				ExcludeProjects: exclude,
+			}, cfg)
+		},
+	)
 }
 
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+func TestArchiveWriteBackendPGPushPostsToDaemon(t *testing.T) {
+	var gotAuth string
+	ts := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		gotAuth = r.Header.Get("Authorization")
+		var req daemonPushRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.True(t, req.Full)
+		assert.Equal(t, []string{"a"}, req.Projects)
+		assert.Equal(t, []string{"b"}, req.ExcludeProjects)
+		require.NotNil(t, req.PG)
+		assert.Equal(t, "postgres://user:pass@host/db", req.PG.URL)
+		assert.Equal(t, "mirror", req.PG.Schema)
+		assert.Equal(t, "laptop", req.PG.MachineName)
+		assert.True(t, req.PG.AllowInsecure)
+		assert.Equal(t, "work", req.SyncStateTarget)
+		assert.True(t, req.MigrateLegacySyncState)
+		writeTestJSON(t, w, postgres.PushResult{
+			SessionsPushed: 2,
+			MessagesPushed: 3,
+			Duration:       time.Second,
+		})
+	})
+
+	backend := newDaemonArchiveWriteBackendForTest(
+		config.Config{AuthToken: "secret"}, ts.URL,
+	)
+	result, err := backend.PGPush(
+		context.Background(),
+		pgTargetSelection{
+			PG: config.PGConfig{
+				URL:           "postgres://user:pass@host/db",
+				Schema:        "mirror",
+				MachineName:   "laptop",
+				AllowInsecure: true,
+			},
+			SyncStateTarget:        "work",
+			MigrateLegacySyncState: true,
+		},
+		PGPushConfig{Full: true},
+		[]string{"a"},
+		[]string{"b"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer secret", gotAuth)
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
+}
+
+func TestResolveArchiveWriteBackendSkipsReadOnlyDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	called := false
+	ts := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		called = true
+		http.Error(w, "unexpected push", http.StatusInternalServerError)
+	})
+	registerTestRuntime(t, dataDir, ts.URL, true)
+
+	backend, cleanup, err := resolveArchiveWriteBackend(
+		context.Background(),
+		config.Config{
+			DataDir: dataDir,
+			DBPath:  filepath.Join(dataDir, "sessions.db"),
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	assert.IsType(t, &localArchiveWriteBackend{}, backend)
+	assert.False(t, called)
+}
+
+func TestArchiveWriteBackendPGPushWatchReResolvesDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	var startupPushes int
+	startup := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		startupPushes++
+		writeTestJSON(t, w, postgres.PushResult{SessionsPushed: 1})
+	})
+	var resolvedPushes int
+	resolved := pushRuntimeServer(t, "/api/v1/push/pg", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		resolvedPushes++
+		cancel()
+		writeTestJSON(t, w, postgres.PushResult{SessionsPushed: 1})
+	})
+	registerTestRuntime(t, dataDir, resolved.URL, false)
+
+	backend := newDaemonArchiveWriteBackendForTest(
+		config.Config{DataDir: dataDir}, startup.URL,
+	)
+	err := backend.PGPushWatch(
+		ctx,
+		pgTargetSelection{
+			PG: config.PGConfig{
+				URL: "postgres://user:pass@host/db",
+			},
+		},
+		PGPushConfig{},
+		nil,
+		nil,
+		time.Millisecond,
+		time.Millisecond,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, startupPushes)
+	assert.GreaterOrEqual(t, resolvedPushes, 1)
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
 // fakeTarget is a test double for pgTarget.
@@ -118,53 +204,52 @@ func (f *fakeTarget) Push(
 }
 func (f *fakeTarget) Close() error { f.closed++; return nil }
 
-func TestPgPusher_ConnectsOnceAndReuses(t *testing.T) {
-	target := &fakeTarget{}
-	connects := 0
+// pusherRecorder tracks how many times a test pgPusher dialed a connection.
+type pusherRecorder struct {
+	connects int
+}
+
+// newTestPgPusher builds a pgPusher whose localSync is a no-op and whose
+// connect hands out the supplied targets in order, recording each dial.
+func newTestPgPusher(targets ...*fakeTarget) (*pgPusher, *pusherRecorder) {
+	rec := &pusherRecorder{}
 	p := &pgPusher{
 		localSync: func(context.Context) error { return nil },
 		connect: func() (pgTarget, error) {
-			connects++
-			return target, nil
+			tgt := targets[rec.connects]
+			rec.connects++
+			return tgt, nil
 		},
 	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("push 1: %v", err)
-	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("push 2: %v", err)
-	}
-	if connects != 1 {
-		t.Fatalf("connects = %d, want 1 (connection reused)", connects)
-	}
-	if target.pushes != 2 {
-		t.Fatalf("pushes = %d, want 2", target.pushes)
-	}
+	return p, rec
+}
+
+// requireReconnectAfterTargetError verifies that a push failure on first closes
+// the target and the next push dials a fresh connection that succeeds.
+func requireReconnectAfterTargetError(t *testing.T, first *fakeTarget) {
+	t.Helper()
+	p, rec := newTestPgPusher(first, &fakeTarget{})
+	require.Error(t, p.push(context.Background(), reasonChange, false))
+	require.Equal(t, 1, first.closed, "errored target should have been closed")
+	require.NoError(t, p.push(context.Background(), reasonChange, false))
+	require.Equal(t, 2, rec.connects, "should reconnect after error")
+}
+
+func TestPgPusher_ConnectsOnceAndReuses(t *testing.T) {
+	target := &fakeTarget{}
+	p, rec := newTestPgPusher(target)
+	require.NoError(t, p.push(context.Background(), reasonChange, false))
+	require.NoError(t, p.push(context.Background(), reasonChange, false))
+	assert.Equal(t, 1, rec.connects, "connection should be reused")
+	assert.Equal(t, 2, target.pushes)
 }
 
 func TestPgPusher_ReconnectsAfterPushError(t *testing.T) {
-	connects := 0
-	targets := []*fakeTarget{{pushErr: errors.New("conn reset")}, {}}
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			t := targets[connects]
-			connects++
-			return t, nil
-		},
-	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected first push to error")
-	}
-	if targets[0].closed != 1 {
-		t.Fatal("errored target should have been closed")
-	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("second push should reconnect and succeed: %v", err)
-	}
-	if connects != 2 {
-		t.Fatalf("connects = %d, want 2 (reconnect after error)", connects)
-	}
+	requireReconnectAfterTargetError(t, &fakeTarget{pushErr: errors.New("conn reset")})
+}
+
+func TestPgPusher_ReconnectsAfterEnsureSchemaError(t *testing.T) {
+	requireReconnectAfterTargetError(t, &fakeTarget{ensureErr: errors.New("schema down")})
 }
 
 func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
@@ -174,9 +259,7 @@ func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
 			return nil, errors.New("dial timeout")
 		},
 	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected connect error to surface")
-	}
+	require.Error(t, p.push(context.Background(), reasonChange, false))
 }
 
 func TestPgPusher_LocalSyncErrorSkipsConnect(t *testing.T) {
@@ -188,37 +271,8 @@ func TestPgPusher_LocalSyncErrorSkipsConnect(t *testing.T) {
 			return &fakeTarget{}, nil
 		},
 	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected local sync error")
-	}
-	if connects != 0 {
-		t.Fatal("connect should not run when local sync fails")
-	}
-}
-
-func TestPgPusher_ReconnectsAfterEnsureSchemaError(t *testing.T) {
-	connects := 0
-	targets := []*fakeTarget{{ensureErr: errors.New("schema down")}, {}}
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			tgt := targets[connects]
-			connects++
-			return tgt, nil
-		},
-	}
-	if err := p.push(context.Background(), reasonChange, false); err == nil {
-		t.Fatal("expected first push to error on ensure schema")
-	}
-	if targets[0].closed != 1 {
-		t.Fatal("errored target should have been closed")
-	}
-	if err := p.push(context.Background(), reasonChange, false); err != nil {
-		t.Fatalf("second push should reconnect and succeed: %v", err)
-	}
-	if connects != 2 {
-		t.Fatalf("connects = %d, want 2 (reconnect after ensure schema error)", connects)
-	}
+	require.Error(t, p.push(context.Background(), reasonChange, false))
+	assert.Equal(t, 0, connects, "connect should not run when local sync fails")
 }
 
 func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
@@ -229,17 +283,9 @@ func TestPgPusher_LogsPartialPushErrors(t *testing.T) {
 			Errors:         2,
 		},
 	}
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(prev) })
+	logs := captureLogOutput(t)
 
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			return target, nil
-		},
-	}
+	p, _ := newTestPgPusher(target)
 	require.NoError(t, p.push(context.Background(), reasonChange, false))
 
 	got := logs.String()
@@ -256,17 +302,9 @@ func TestPgPusher_LogsSkippedConflicts(t *testing.T) {
 			SkippedConflicts: 2,
 		},
 	}
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(prev) })
+	logs := captureLogOutput(t)
 
-	p := &pgPusher{
-		localSync: func(context.Context) error { return nil },
-		connect: func() (pgTarget, error) {
-			return target, nil
-		},
-	}
+	p, _ := newTestPgPusher(target)
 	require.NoError(t, p.push(context.Background(), reasonChange, false))
 
 	got := logs.String()
@@ -279,10 +317,10 @@ func TestPgPusher_LogsSkippedConflicts(t *testing.T) {
 
 func TestResolveWatchTargets_ErrorsOnEmptyURL(t *testing.T) {
 	appCfg := config.Config{} // no PG URL
-	_, _, _, err := resolveWatchTargets(appCfg, PGPushConfig{})
-	if err == nil {
-		t.Fatal("expected error when url not configured")
-	}
+	_, _, _, err := resolveWatchTargets(
+		appCfg, PGPushConfig{}, "",
+	)
+	require.Error(t, err, "expected error when url not configured")
 }
 
 func TestResolveWatchTargets_ResolvesProjects(t *testing.T) {
@@ -292,16 +330,139 @@ func TestResolveWatchTargets_ResolvesProjects(t *testing.T) {
 			MachineName: "box1",
 		},
 	}
-	pg, inc, _, err := resolveWatchTargets(
-		appCfg, PGPushConfig{ProjectsFlag: "a,b"},
+	target, inc, _, err := resolveWatchTargets(
+		appCfg, PGPushConfig{ProjectsFlag: "a,b"}, "",
 	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	require.NoError(t, err)
+	assert.NotEmpty(t, target.PG.URL, "expected resolved URL")
+	assert.Equal(t, []string{"a", "b"}, inc)
+}
+
+func TestResolveWatchTargets_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {
+				URL:         "${BROKEN_WORK_TARGET}",
+				MachineName: "workbox",
+			},
+			"archive": {
+				URL:         "postgres://archive",
+				MachineName: "archivebox",
+			},
+		},
 	}
-	if pg.URL == "" {
-		t.Fatal("expected resolved URL")
+
+	target, _, _, err := resolveWatchTargets(
+		appCfg, PGPushConfig{}, "archive",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "archive", target.Name)
+	assert.Equal(t, "postgres://archive", target.PG.URL)
+}
+
+func TestResolvePGTargetSelections_DefaultAndAll(t *testing.T) {
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work":    {URL: "postgres://work", MachineName: "workbox"},
+			"archive": {URL: "postgres://archive", MachineName: "archivebox"},
+		},
 	}
-	if !equalStrings(inc, []string{"a", "b"}) {
-		t.Fatalf("include = %v, want [a b]", inc)
+
+	defaultTarget, err := resolvePGTargetSelections(
+		appCfg, "", false,
+	)
+	require.NoError(t, err)
+	require.Len(t, defaultTarget, 1)
+	assert.Equal(t, "work", defaultTarget[0].Name)
+	assert.True(t, defaultTarget[0].IsDefault)
+	assert.Equal(t, "work", defaultTarget[0].SyncStateTarget)
+	assert.True(t, defaultTarget[0].MigrateLegacySyncState)
+	assert.Empty(t, defaultTarget[0].PG.URL)
+
+	allTargets, err := resolvePGTargetSelections(
+		appCfg, "", true,
+	)
+	require.NoError(t, err)
+	require.Len(t, allTargets, 2)
+	assert.Equal(t, "work", allTargets[0].Name)
+	assert.Equal(t, "archive", allTargets[1].Name)
+}
+
+func TestResolvePGTargetConfig_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {
+				URL:         "${BROKEN_WORK_TARGET}",
+				MachineName: "workbox",
+			},
+			"archive": {
+				URL:         "postgres://archive",
+				MachineName: "archivebox",
+			},
+		},
 	}
+
+	target, err := resolvePGTargetConfig(
+		appCfg,
+		pgTargetSelection{Name: "archive"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://archive", target.PG.URL)
+}
+
+func restoreUnsetEnv(t *testing.T, name string) {
+	t.Helper()
+	oldValue, hadValue := os.LookupEnv(name)
+	require.NoError(t, os.Unsetenv(name))
+	t.Cleanup(func() {
+		if hadValue {
+			require.NoError(t, os.Setenv(name, oldValue))
+			return
+		}
+		require.NoError(t, os.Unsetenv(name))
+	})
+}
+
+func TestResolvePGTargetSelections_RejectsLegacyNamedLookup(t *testing.T) {
+	appCfg := config.Config{
+		PG: config.PGConfig{
+			URL:         "postgres://legacy",
+			MachineName: "legacybox",
+		},
+	}
+
+	_, err := resolvePGTargetSelections(
+		appCfg, "archive", false,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "single legacy [pg] block")
+}
+
+func TestResolvePGTargetSelections_RejectsTargetWithAll(t *testing.T) {
+	appCfg := config.Config{
+		DefaultPG: "work",
+		PGTargets: map[string]config.PGConfig{
+			"work": {URL: "postgres://work"},
+		},
+	}
+
+	_, err := resolvePGTargetSelections(
+		appCfg, "work", true,
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be combined with --all")
+}
+
+func TestNewPGPushCommandRejectsAllWatch(t *testing.T) {
+	cmd := newPGPushCommand()
+	cmd.SetArgs([]string{"--all", "--watch"})
+
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--all cannot be combined with --watch")
 }

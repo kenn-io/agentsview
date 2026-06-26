@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { SearchIcon } from "../../icons.js";
-  import { tick, onDestroy } from "svelte";
+  import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { searchStore } from "../../stores/search.svelte.js";
@@ -133,7 +134,7 @@
   $effect(() => {
     if (inputRef) {
       inputRef.focus();
-      if (inputValue) {
+      if (untrack(() => inputValue)) {
         inputRef.select();
       }
     }
@@ -163,7 +164,7 @@
         bind:this={inputRef}
         type="text"
         class="palette-input"
-        placeholder="Search sessions and messages..."
+        placeholder={m.command_palette_placeholder()}
         value={inputValue}
         oninput={handleInput}
       />
@@ -178,18 +179,18 @@
             class:active={searchStore.sort === "relevance"}
             onmousedown={(e: MouseEvent) => e.preventDefault()}
             onclick={() => { searchStore.setSort("relevance"); selectedIndex = 0; }}
-          >Relevance</button>
+          >{m.command_palette_relevance()}</button>
           <button
             class="sort-btn"
             class:active={searchStore.sort === "recency"}
             onmousedown={(e: MouseEvent) => e.preventDefault()}
             onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
-          >Recency</button>
+          >{m.command_palette_recency()}</button>
         </div>
         {#if searchStore.isSearching}
-          <div class="palette-empty">Searching...</div>
+          <div class="palette-empty">{m.command_palette_searching()}</div>
         {:else if searchStore.results.length === 0}
-          <div class="palette-empty">No results</div>
+          <div class="palette-empty">{m.command_palette_no_results()}</div>
         {:else}
           {#each searchStore.results as result, i}
             <button
@@ -219,7 +220,7 @@
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <span
                 class="item-id"
-                title="Copy session ID"
+                title={m.command_palette_copy_session_id()}
                 onclick={(e) => {
                   e.stopPropagation();
                   copyToClipboard(result.session_id);
@@ -229,7 +230,7 @@
           {/each}
         {/if}
       {:else}
-        <div class="palette-section-label">Recent Sessions</div>
+        <div class="palette-section-label">{m.command_palette_recent_sessions()}</div>
         {#each recentSessions as session, i}
           {@const preview = session.display_name ?? normalizeMessagePreview(session.first_message)}
           <button

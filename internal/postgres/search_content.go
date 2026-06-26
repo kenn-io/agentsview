@@ -18,8 +18,8 @@ const (
 )
 
 // SearchContent implements content search for the PostgreSQL read-only store.
-// The "fts" mode falls back to the substring path because PG uses ILIKE (no
-// FTS5 equivalent is wired up).
+// The "fts" mode falls back to ILIKE over message content, with one predicate
+// per prepared FTS term to preserve SQLite's implicit-AND semantics.
 func (s *Store) SearchContent(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
@@ -39,8 +39,10 @@ func (s *Store) SearchContent(
 		}
 	}
 	switch f.Mode {
-	case "", "substring", "fts":
-		// fts falls back to substring on PG.
+	case "", "substring":
+		return s.searchContentSubstringPG(ctx, f)
+	case "fts":
+		f.Sources = []string{"messages"}
 		return s.searchContentSubstringPG(ctx, f)
 	case "regex":
 		return s.searchContentRegexPG(ctx, f)
@@ -114,8 +116,9 @@ func (s *Store) searchContentSubstringPG(
 func pgMessagesBranch(
 	f db.ContentSearchFilter, escapedPat string, pb *paramBuilder,
 ) string {
-	ilikePat := "%" + escapedPat + "%"
-	ilikeParam := pb.add(ilikePat)
+	contentPred := pgContentSearchPredicate(
+		"m.content", f, escapedPat, pb,
+	)
 
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
@@ -133,9 +136,40 @@ func pgMessagesBranch(
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		JOIN scoped sc ON sc.id = m.session_id
-		WHERE m.content ILIKE '%%'||%s||'%%' ESCAPE E'\\'
+		WHERE %s
 		  AND %s`,
-		ilikeParam, sysPred)
+		contentPred, sysPred)
+}
+
+func pgContentSearchPredicate(
+	column string, f db.ContentSearchFilter, escapedPat string,
+	pb *paramBuilder,
+) string {
+	if f.Mode != "fts" {
+		ilikePat := "%" + escapedPat + "%"
+		ilikeParam := pb.add(ilikePat)
+		return fmt.Sprintf(
+			"%s ILIKE '%%'||%s||'%%' ESCAPE E'\\\\'",
+			column, ilikeParam,
+		)
+	}
+
+	terms := db.FTSTerms(db.PrepareFTSQuery(f.Pattern))
+	clauses := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if term == "" {
+			continue
+		}
+		termParam := pb.add(escapeLike(term))
+		clauses = append(clauses, fmt.Sprintf(
+			"%s ILIKE '%%'||%s||'%%' ESCAPE E'\\\\'",
+			column, termParam,
+		))
+	}
+	if len(clauses) == 0 {
+		return "FALSE"
+	}
+	return strings.Join(clauses, " AND ")
 }
 
 // pgToolInputBranch builds the tool_input source branch SQL.
@@ -478,6 +512,10 @@ func pgBuildSnippet(f db.ContentSearchFilter, body string, start, end int) strin
 // back to the start) and windows it. It uses db.CaseInsensitiveIndex so the
 // offset indexes body directly even when lowercasing would change byte length.
 func pgSubstringSnippet(f db.ContentSearchFilter, body string) string {
+	if f.Mode == "fts" {
+		start, end := db.FTSSnippetRange(f.Pattern, body)
+		return pgBuildSnippet(f, body, start, end)
+	}
 	off := max(db.CaseInsensitiveIndex(body, f.Pattern), 0)
 	return pgBuildSnippet(f, body, off, min(off+len(f.Pattern), len(body)))
 }

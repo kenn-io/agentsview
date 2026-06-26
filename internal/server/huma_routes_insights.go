@@ -21,6 +21,9 @@ func (s *Server) registerInsightsRoutes() {
 
 	get(s, group, "", "List insights", s.humaListInsights)
 	get(s, group, "/{id}", "Get insight", s.humaGetInsight)
+	raw(s, group, http.MethodGet, "/{id}/export", "Export insight as HTML", s.humaExportInsight)
+	raw(s, group, http.MethodGet, "/{id}/md", "Export insight as Markdown", s.humaMarkdownInsight)
+	post(s, group, "/{id}/publish", "Publish insight", s.humaPublishInsight)
 	deleteRoute(s, group, "/{id}", "Delete insight", s.humaDeleteInsight)
 	stream(s, group, http.MethodPost, "/generate", "Generate insight", s.humaGenerateInsight)
 }
@@ -28,7 +31,7 @@ func (s *Server) registerInsightsRoutes() {
 type insightType string
 
 type insightsInput struct {
-	Type     insightType `query:"type" enum:"daily_activity,agent_analysis" doc:"Insight type"`
+	Type     insightType `query:"type" enum:"daily_activity,agent_analysis,llm_canned" doc:"Insight type"`
 	Project  string      `query:"project" doc:"Filter by project"`
 	DateFrom string      `query:"date_from" format:"date" doc:"Filter date_from >= (YYYY-MM-DD)"`
 	DateTo   string      `query:"date_to" format:"date" doc:"Filter date_to <= (YYYY-MM-DD)"`
@@ -40,6 +43,11 @@ type insightsResponse struct {
 
 type generateInsightInput struct {
 	Body generateInsightRequest
+}
+
+type publishInsightInput struct {
+	ID     int64 `path:"id" required:"true" doc:"Insight ID"`
+	Secret bool  `query:"secret" doc:"Create a secret gist instead of a public one"`
 }
 
 func (s *Server) humaListInsights(
@@ -80,16 +88,82 @@ func (s *Server) humaGetInsight(
 	return &jsonOutput[*db.Insight]{Body: result}, nil
 }
 
+func (s *Server) insightByID(
+	ctx context.Context,
+	id int64,
+) (*db.Insight, error) {
+	result, err := s.db.GetInsight(ctx, id)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	if result == nil {
+		return nil, apiError(http.StatusNotFound, "insight not found")
+	}
+	return result, nil
+}
+
+func (s *Server) humaExportInsight(
+	ctx context.Context,
+	in *intIDPathInput,
+) (*bytesOutput, error) {
+	insight, err := s.insightByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &bytesOutput{
+		ContentType:        "text/html; charset=utf-8",
+		ContentDisposition: fmt.Sprintf(`attachment; filename="%s"`, insightExportHTMLFilename(insight)),
+		Body:               []byte(generateInsightExportHTML(insight)),
+	}, nil
+}
+
+func (s *Server) humaMarkdownInsight(
+	ctx context.Context,
+	in *intIDPathInput,
+) (*bytesOutput, error) {
+	insight, err := s.insightByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &bytesOutput{
+		ContentType:        "text/markdown; charset=utf-8",
+		ContentDisposition: fmt.Sprintf(`inline; filename="%s"`, insightExportMarkdownFilename(insight)),
+		Body:               []byte(insight.Content),
+	}, nil
+}
+
+func (s *Server) humaPublishInsight(
+	ctx context.Context,
+	in *publishInsightInput,
+) (*jsonOutput[publishResponse], error) {
+	token := s.githubToken(ctx)
+	if token == "" {
+		return nil, apiError(http.StatusUnauthorized, "GitHub token not configured")
+	}
+	insight, err := s.insightByID(ctx, in.ID)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := publishExportHTML(
+		ctx,
+		token,
+		insightExportHTMLFilename(insight),
+		insightPublishDescription(insight),
+		generateInsightExportHTML(insight),
+		!in.Secret,
+	)
+	if err != nil {
+		return nil, apiError(http.StatusBadGateway, err.Error())
+	}
+	return &jsonOutput[publishResponse]{Body: *resp}, nil
+}
+
 func (s *Server) humaDeleteInsight(
 	ctx context.Context,
 	in *intIDPathInput,
 ) (*noContentOutput, error) {
-	existing, err := s.db.GetInsight(ctx, in.ID)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	if existing == nil {
-		return nil, apiError(http.StatusNotFound, "insight not found")
+	if _, err := s.insightByID(ctx, in.ID); err != nil {
+		return nil, err
 	}
 	if err := s.db.DeleteInsight(in.ID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
@@ -111,7 +185,10 @@ func (s *Server) humaGenerateInsight(
 	req := in.Body
 	if !validInsightTypes[req.Type] {
 		return nil, apiError(http.StatusBadRequest,
-			"invalid type: must be daily_activity or agent_analysis")
+			"invalid type: must be daily_activity, agent_analysis, or llm_canned")
+	}
+	if req.Type == insight.CannedType {
+		return s.humaGenerateCannedInsight(req)
 	}
 	if !timeutil.IsValidDate(req.DateFrom) {
 		return nil, apiError(http.StatusBadRequest,
@@ -133,6 +210,12 @@ func (s *Server) humaGenerateInsight(
 			"invalid agent: must be one of "+
 				strings.Join(insight.ValidAgentNames, ", "))
 	}
+	scope, ok := normalizeInsightAutomatedScope(req.AutomatedScope)
+	if !ok {
+		return nil, apiError(http.StatusBadRequest,
+			"automated_scope must be human, all, or automated")
+	}
+	req.AutomatedScope = scope
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
@@ -150,11 +233,12 @@ func (s *Server) humaGenerateInsight(
 			return
 		}
 		genReq := insight.GenerateRequest{
-			Type:     req.Type,
-			DateFrom: req.DateFrom,
-			DateTo:   req.DateTo,
-			Project:  req.Project,
-			Prompt:   req.Prompt,
+			Type:           req.Type,
+			DateFrom:       req.DateFrom,
+			DateTo:         req.DateTo,
+			Project:        req.Project,
+			Prompt:         req.Prompt,
+			AutomatedScope: req.AutomatedScope,
 		}
 		// Attach the activity summary for any valid range, single day
 		// included: daily_activity insights are commonly one day and the
@@ -339,11 +423,11 @@ func (s *Server) humaGenerateInsight(
 // local days [DateFrom, DateTo] in req.Timezone (empty means UTC): the bounds
 // are that zone's midnights, matching the activity dashboard the dates were
 // derived from, so a non-UTC viewer's summary covers the window the dashboard
-// shows rather than a UTC-shifted one. It excludes automated sessions so the
-// summary reflects the same interactive-only work BuildPrompt's prompt focuses
-// on; the two otherwise select sessions differently (this uses the activity
-// report's half-open window with an ended_at fallback, BuildPrompt uses
-// ListSessions' calendar-date match on the start date), so the summary is a
+// shows rather than a UTC-shifted one. It applies the same automated-session
+// scope as BuildPrompt's session list so the summary reflects the same work the
+// prompt focuses on; the two otherwise select sessions differently (this uses
+// the activity report's half-open window with an ended_at fallback, BuildPrompt
+// uses ListSessions' calendar-date match on the start date), so the summary is a
 // range-level overview, not a row-for-row mirror of BuildPrompt's session list.
 func (s *Server) activityRangeSummary(
 	ctx context.Context, req generateInsightRequest,
@@ -378,9 +462,9 @@ func (s *Server) activityRangeSummary(
 		return nil, fmt.Errorf("resolving activity range: %w", err)
 	}
 	r, err := s.db.GetActivityReport(ctx, db.AnalyticsFilter{
-		Timezone:         tz,
-		Project:          req.Project,
-		ExcludeAutomated: true,
+		Timezone:       tz,
+		Project:        req.Project,
+		AutomatedScope: req.AutomatedScope,
 	}, q)
 	if err != nil {
 		return nil, fmt.Errorf("activity report: %w", err)

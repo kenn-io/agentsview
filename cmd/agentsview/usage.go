@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
+	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -29,24 +33,25 @@ const quickSyncMargin = 10 * time.Second
 // full history when users usually want recent spend.
 const defaultUsageDays = 30
 
-// resolveDefaultSince returns the effective --since value,
-// applying a 30-day lookback only when the caller gave no
-// explicit range at all. If --until is set we leave --since
-// empty so "everything up to --until" still works; otherwise
-// a bare --until would produce From > To and empty results.
-func resolveDefaultSince(
-	since, until string, all bool, now time.Time, tz string,
-) string {
-	if since != "" || until != "" || all {
-		return since
+// defaultUsageDateRange mirrors the HTTP usage route's default range:
+// fill a missing upper bound with today, then fill a missing lower
+// bound relative to that upper bound. Callers that intentionally want
+// an open-ended range must set NoDefaultRange instead of calling this.
+func defaultUsageDateRange(
+	from, to string, now time.Time,
+) (string, string) {
+	now = now.UTC()
+	if to == "" {
+		to = now.Format("2006-01-02")
 	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		loc = time.Local
+	if from == "" {
+		t, err := time.Parse("2006-01-02", to)
+		if err != nil {
+			t = now
+		}
+		from = t.AddDate(0, 0, -defaultUsageDays).Format("2006-01-02")
 	}
-	return now.In(loc).
-		AddDate(0, 0, -(defaultUsageDays - 1)).
-		Format("2006-01-02")
+	return from, to
 }
 
 type UsageDailyConfig struct {
@@ -62,31 +67,39 @@ type UsageDailyConfig struct {
 }
 
 func runUsageDaily(cfg UsageDailyConfig) {
-	database, appCfg := openUsageDB()
-	defer database.Close()
-
-	ensureFreshData(appCfg, database, cfg.NoSync)
-	ensurePricing(database, cfg.Offline)
-
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
 	}
 
-	effectiveSince := resolveDefaultSince(
-		cfg.Since, cfg.Until, cfg.All, time.Now(), tz,
-	)
-
 	filter := db.UsageFilter{
-		From:     effectiveSince,
+		From:     cfg.Since,
 		To:       cfg.Until,
 		Agent:    cfg.Agent,
 		Timezone: tz,
 	}
+	noDefaultRange := cfg.All || cfg.Since != "" || cfg.Until != ""
 
-	result, err := database.GetDailyUsage(
-		context.Background(), filter,
-	)
+	ctx := context.Background()
+	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Offline:              cfg.Offline,
+		NoSync:               cfg.NoSync,
+		AutoStart:            true,
+		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
+		DirectReadOnlyAction: "refresh usage directly",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeArchiveQueryBackend(cleanup)
+
+	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
+		Filter:         filter,
+		NoDefaultRange: noDefaultRange,
+		Breakdowns:     cfg.Breakdown,
+		SessionCounts:  cfg.JSON,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -112,12 +125,6 @@ type UsageStatuslineConfig struct {
 }
 
 func runUsageStatusline(cfg UsageStatuslineConfig) {
-	database, appCfg := openUsageDB()
-	defer database.Close()
-
-	ensureFreshData(appCfg, database, cfg.NoSync)
-	ensurePricing(database, cfg.Offline)
-
 	today := time.Now().Format("2006-01-02")
 	filter := db.UsageFilter{
 		From:     today,
@@ -126,17 +133,36 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		Timezone: localTimezone(),
 	}
 
-	result, err := database.GetDailyUsage(
-		context.Background(), filter,
-	)
+	ctx := context.Background()
+	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
+		Offline:              cfg.Offline,
+		NoSync:               cfg.NoSync,
+		AutoStart:            true,
+		ReadOnlyDaemon:       archiveQuerySkipReadOnlyDaemon,
+		DirectReadOnlyAction: "refresh usage directly",
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer closeArchiveQueryBackend(cleanup)
+
+	result, err := backend.DailyUsage(ctx, dailyUsageQuery{
+		Filter:         filter,
+		NoDefaultRange: true,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	if cfg.Agent != "" {
+	printUsageStatusline(result, cfg.Agent)
+}
+
+func printUsageStatusline(result db.DailyUsageResult, agent string) {
+	if agent != "" {
 		fmt.Printf("%s today (%s)\n",
-			fmtCost(result.Totals.TotalCost), cfg.Agent)
+			fmtCost(result.Totals.TotalCost), agent)
 	} else {
 		fmt.Printf("%s today\n",
 			fmtCost(result.Totals.TotalCost))
@@ -148,22 +174,6 @@ func applyCustomPricing(database *db.DB, cfg config.Config) {
 		return
 	}
 	database.SetCustomPricing(cfg.CustomModelPricing)
-}
-
-func openUsageDB() (*db.DB, config.Config) {
-	cfg, err := config.LoadMinimal()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	database, err := openDB(cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr,
-			"error opening database: %v\n", err)
-		os.Exit(1)
-	}
-	return database, cfg
 }
 
 // ensureFreshData makes sure the database reflects recent
@@ -182,13 +192,14 @@ func openUsageDB() (*db.DB, config.Config) {
 // Callers that need stale data (e.g. offline benchmarks) can
 // bypass via skip=true.
 func ensureFreshData(
-	appCfg config.Config, database *db.DB, skip bool,
+	ctx context.Context, appCfg config.Config, database *db.DB, skip bool,
 ) {
 	if skip {
 		return
 	}
-
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// Silence engine worker log.Printf lines (e.g. "db:
 	// InsertMessages (N msgs)") for both branches so --json and
@@ -206,7 +217,9 @@ func ensureFreshData(
 		fmt.Fprintln(os.Stderr,
 			"Data version changed, running full resync...")
 		t := time.Now()
-		stats := engine.ResyncAll(ctx, printSyncProgressStderr)
+		progress := newResyncProgressPrinter(os.Stderr, time.Now)
+		stats := engine.ResyncAll(ctx, progress.Print)
+		progress.Finish()
 		printSyncSummaryStderr(stats, t)
 		return
 	}
@@ -232,21 +245,8 @@ func ensureFreshData(
 	engine.SyncAllSince(ctx, since, func(sync.Progress) {})
 }
 
-// printSyncProgressStderr mirrors printSyncProgress but writes
-// to stderr so it does not pollute stdout-bound JSON or
-// statusline output from the usage commands.
-func printSyncProgressStderr(p sync.Progress) {
-	if p.SessionsTotal > 0 {
-		fmt.Fprintf(os.Stderr,
-			"\r  %d/%d sessions (%.0f%%) · %d messages",
-			p.SessionsDone, p.SessionsTotal,
-			p.Percent(), p.MessagesIndexed,
-		)
-	}
-}
-
 // printSyncSummaryStderr mirrors printSyncSummary but writes to
-// stderr, for the same reason as printSyncProgressStderr.
+// stderr so it does not pollute stdout-bound JSON or statusline output.
 func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 	summary := fmt.Sprintf(
 		"\nSync complete: %d sessions synced",
@@ -264,6 +264,7 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 	summary += fmt.Sprintf(
 		" in %s\n", time.Since(t).Round(time.Millisecond),
 	)
+	summary += formatAnomalySummary(stats.Anomalies)
 	fmt.Fprint(os.Stderr, summary)
 	for _, w := range stats.Warnings {
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
@@ -279,23 +280,27 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // every restart while still propagating corrected fallback
 // rates when the binary is upgraded.
 func seedPricing(database *db.DB) {
+	if err := seedFallbackPricing(database); err != nil {
+		log.Printf("pricing seed: %v", err)
+	}
+	go refreshPricingFromLiteLLM(database)
+}
+
+func seedFallbackPricing(database *db.DB) error {
 	const metaKey = "_fallback_version"
 	stored, err := database.GetPricingMeta(metaKey)
 	if err != nil {
-		log.Printf("pricing seed: %v", err)
+		return err
 	}
-	if stored != pricing.FallbackVersion {
-		if err := upsertPricing(
-			database, pricing.FallbackPricing(),
-		); err != nil {
-			log.Printf("pricing seed: %v", err)
-		} else if err := database.SetPricingMeta(
-			metaKey, pricing.FallbackVersion,
-		); err != nil {
-			log.Printf("pricing seed: %v", err)
-		}
+	if stored == pricing.FallbackVersion {
+		return nil
 	}
-	go refreshPricingFromLiteLLM(database)
+	if err := upsertPricing(
+		database, pricing.FallbackPricing(),
+	); err != nil {
+		return err
+	}
+	return database.SetPricingMeta(metaKey, pricing.FallbackVersion)
 }
 
 // refreshPricingFromLiteLLM fetches the upstream LiteLLM
@@ -371,25 +376,131 @@ func refreshPricingIfStale(
 }
 
 func ensurePricing(database *db.DB, offline bool) {
-	var prices []pricing.ModelPricing
+	if _, err := ensurePricingWithFetcher(
+		database, offline, pricing.FetchLiteLLMPricing, time.Now(),
+	); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"warning: pricing refresh failed: %v\n", err)
+	}
+}
 
-	if offline {
-		prices = pricing.FallbackPricing()
-	} else {
-		var err error
-		prices, err = pricing.FetchLiteLLMPricing()
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"warning: pricing fetch failed: %v"+
-					"; using fallback\n", err)
-			prices = pricing.FallbackPricing()
+func ensureUsagePricing(
+	database *db.DB, offline bool,
+	custom map[string]config.CustomModelRate,
+) {
+	if offline && database.ReadOnly() {
+		applyFallbackPricing(database, custom)
+		return
+	}
+	ensurePricing(database, offline)
+}
+
+func applyFallbackPricing(
+	database *db.DB, custom map[string]config.CustomModelRate,
+) {
+	rates := make(map[string]config.CustomModelRate)
+	for _, p := range pricing.FallbackPricing() {
+		// These keys are the same concrete model-pattern keys that the
+		// model_pricing table stores. SQLite usage lookups run the merged map
+		// through pricing.Resolve, so normalized/canonical aliases still match
+		// when this read-only path cannot seed model_pricing rows.
+		rates[p.ModelPattern] = config.CustomModelRate{
+			Input:         p.InputPerMTok,
+			Output:        p.OutputPerMTok,
+			CacheCreation: p.CacheCreationPerMTok,
+			CacheRead:     p.CacheReadPerMTok,
 		}
 	}
+	maps.Copy(rates, custom)
+	database.SetCustomPricing(rates)
+}
 
-	if err := upsertPricing(database, prices); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"warning: pricing upsert failed: %v\n", err)
+func ensurePricingWithFetcher(
+	database *db.DB, offline bool,
+	fetch func() ([]pricing.ModelPricing, error),
+	now time.Time,
+) (bool, error) {
+	if offline {
+		return false, upsertPricing(database, pricing.FallbackPricing())
 	}
+
+	if err := seedFallbackPricing(database); err != nil {
+		return false, err
+	}
+
+	return refreshPricingIfStale(
+		database, fetch, pricingRefreshCooldown, now,
+	)
+}
+
+func fetchHTTPDailyUsage(
+	ctx context.Context,
+	tr transport,
+	authToken string,
+	query dailyUsageQuery,
+) (db.DailyUsageResult, error) {
+	filter := query.Filter
+	q := url.Values{}
+	q.Set("no_default_range", strconv.FormatBool(query.NoDefaultRange))
+	q.Set("breakdowns", strconv.FormatBool(query.Breakdowns))
+	q.Set("session_counts", strconv.FormatBool(query.SessionCounts))
+	setIfNotEmpty := func(k, v string) {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	setIfNotEmpty("from", filter.From)
+	setIfNotEmpty("to", filter.To)
+	setIfNotEmpty("timezone", filter.Timezone)
+	setIfNotEmpty("agent", filter.Agent)
+	setIfNotEmpty("project", filter.Project)
+	setIfNotEmpty("machine", filter.Machine)
+	setIfNotEmpty("exclude_project", filter.ExcludeProject)
+	setIfNotEmpty("exclude_agent", filter.ExcludeAgent)
+	setIfNotEmpty("exclude_model", filter.ExcludeModel)
+	setIfNotEmpty("model", filter.Model)
+	setIfNotEmpty("active_since", filter.ActiveSince)
+	setIfNotEmpty("termination", filter.Termination)
+	if filter.MinUserMessages > 0 {
+		q.Set("min_user_messages", fmt.Sprint(filter.MinUserMessages))
+	}
+	q.Set("include_one_shot", strconv.FormatBool(!filter.ExcludeOneShot))
+	q.Set("include_automated", strconv.FormatBool(!filter.ExcludeAutomated))
+
+	endpoint := strings.TrimSuffix(tr.URL, "/") +
+		"/api/v1/usage/summary?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return db.DailyUsageResult{}, fmt.Errorf(
+			"usage summary: HTTP %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(body)),
+		)
+	}
+	var out struct {
+		Totals        db.UsageTotals        `json:"totals"`
+		Daily         []db.DailyUsageEntry  `json:"daily"`
+		SessionCounts db.UsageSessionCounts `json:"sessionCounts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	return db.DailyUsageResult{
+		Daily:         out.Daily,
+		Totals:        out.Totals,
+		SessionCounts: out.SessionCounts,
+	}, nil
 }
 
 // upsertPricing copies pricing rows into the db.ModelPricing
@@ -410,26 +521,6 @@ func upsertPricing(
 		}
 	}
 	return database.UpsertModelPricing(dbPrices)
-}
-
-// insertMissingPricing inserts fallback rows for models not already
-// priced, without overwriting existing rows. Used by the direct
-// usage path so a CLI-only data dir still prices fallback-catalog
-// models, while never clobbering richer LiteLLM rows.
-func insertMissingPricing(
-	database *db.DB, prices []pricing.ModelPricing,
-) error {
-	dbPrices := make([]db.ModelPricing, len(prices))
-	for i, p := range prices {
-		dbPrices[i] = db.ModelPricing{
-			ModelPattern:         p.ModelPattern,
-			InputPerMTok:         p.InputPerMTok,
-			OutputPerMTok:        p.OutputPerMTok,
-			CacheCreationPerMTok: p.CacheCreationPerMTok,
-			CacheReadPerMTok:     p.CacheReadPerMTok,
-		}
-	}
-	return database.InsertMissingModelPricing(dbPrices)
 }
 
 func printDailyTable(

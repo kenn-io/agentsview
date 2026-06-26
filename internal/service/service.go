@@ -5,10 +5,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 
 	"go.kenn.io/agentsview/internal/db"
 )
+
+// ErrSearchUnavailable is returned by Search when the backing store has
+// no full-text search index. Both transports surface it: the HTTP
+// backend maps a 501 response to it, and callers can errors.Is it
+// regardless of transport (the REST handler maps it back to HTTP 501).
+var ErrSearchUnavailable = errors.New("search not available")
 
 // SessionService is the canonical per-session operation interface.
 // Two implementations: directBackend (wraps *db.DB) and httpBackend
@@ -21,7 +29,9 @@ type SessionService interface {
 	Sync(ctx context.Context, in SyncInput) (*SessionDetail, error)
 	Watch(ctx context.Context, id string) (<-chan Event, error)
 	Stats(ctx context.Context, f StatsFilter) (*SessionStats, error)
+	Search(ctx context.Context, req SearchRequest) (*SessionSearchResult, error)
 	SearchContent(ctx context.Context, req ContentSearchRequest) (*ContentSearchResult, error)
+	UsageSummary(ctx context.Context, req UsageRequest) (*UsageSummaryResult, error)
 	ListSecrets(ctx context.Context, f SecretListFilter) (*SecretFindingList, error)
 	ScanSecrets(ctx context.Context, in SecretScanInput,
 		progress func(SecretScanProgress)) (*SecretScanSummary, error)
@@ -72,6 +82,24 @@ type SecretFindingList struct {
 	NextCursor int                   `json:"next_cursor,omitempty"`
 }
 
+// SearchRequest is the transport-neutral session-search (FTS) input.
+// It mirrors the GET /api/v1/search query parameters so both transports
+// produce identical results.
+type SearchRequest struct {
+	Query   string `json:"query"`
+	Project string `json:"project,omitempty"`
+	Sort    string `json:"sort,omitempty"` // "relevance" (default) or "recency"
+	Cursor  int    `json:"cursor,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+}
+
+// SessionSearchResult mirrors db.SearchPage for transport: ranked
+// session hits plus the next pagination cursor.
+type SessionSearchResult struct {
+	Results    []db.SearchResult `json:"results"`
+	NextCursor int               `json:"next_cursor,omitempty"`
+}
+
 // ContentSearchRequest is the transport-neutral content-search input.
 type ContentSearchRequest struct {
 	Pattern       string   `json:"pattern"`
@@ -102,6 +130,43 @@ type SessionDetail struct {
 	db.Session
 	HealthScoreBasis []string       `json:"health_score_basis,omitempty"`
 	HealthPenalties  map[string]int `json:"health_penalties,omitempty"`
+}
+
+// MarshalJSON preserves the grouped db.Session quality_signals field
+// while also exposing detail-only health explanation fields.
+func (d SessionDetail) MarshalJSON() ([]byte, error) {
+	type sessionAlias db.Session
+	return json.Marshal(struct {
+		sessionAlias
+		QualitySignals   *db.QualitySignals `json:"quality_signals,omitempty"`
+		HealthScoreBasis []string           `json:"health_score_basis,omitempty"`
+		HealthPenalties  map[string]int     `json:"health_penalties,omitempty"`
+	}{
+		sessionAlias:     sessionAlias(d.Session),
+		QualitySignals:   d.StoredQualitySignals(),
+		HealthScoreBasis: d.HealthScoreBasis,
+		HealthPenalties:  d.HealthPenalties,
+	})
+}
+
+// UnmarshalJSON preserves the grouped quality_signals object when
+// SessionDetail is decoded by the HTTP-backed service.
+func (d *SessionDetail) UnmarshalJSON(data []byte) error {
+	type sessionAlias db.Session
+	var v struct {
+		sessionAlias
+		QualitySignals   *db.QualitySignals `json:"quality_signals"`
+		HealthScoreBasis []string           `json:"health_score_basis"`
+		HealthPenalties  map[string]int     `json:"health_penalties"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	d.Session = db.Session(v.sessionAlias)
+	d.ApplyQualitySignals(v.QualitySignals)
+	d.HealthScoreBasis = v.HealthScoreBasis
+	d.HealthPenalties = v.HealthPenalties
+	return nil
 }
 
 // SessionList mirrors GET /api/v1/sessions.

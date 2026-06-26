@@ -22,3 +22,14 @@ https://viteplus.dev/guide/.
   `vp env doctor` and include its output when asking for help.
 
 <!--VITE PLUS END-->
+
+## Frontend UI Rules
+
+- Read the root `DESIGN.md` before adding or changing controls, styling, or
+  reusable components.
+- Before adding an interactive control, search `src/lib/components` for an
+  existing shared component.
+- Do not add new hand-styled native `<select>` controls. Use the shared
+  typeahead/combobox components for single-choice selectors unless the native
+  control is explicitly justified.
+- Existing native selects are legacy exceptions, not examples to copy.

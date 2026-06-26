@@ -383,7 +383,7 @@ func TestClaudeIncrementalRenameTriggersFullParse(t *testing.T) {
 	err := os.WriteFile(path, []byte(renameLine+"\n"), 0o644)
 	require.NoError(t, err)
 
-	_, _, _, parseErr := ParseClaudeSessionFrom(path, 0, 0)
+	_, _, _, parseErr := callParseClaudeSessionFrom(path, 0, 0, "")
 	require.Error(t, parseErr)
 	assert.True(t, IsIncrementalFullParseFallback(parseErr))
 }

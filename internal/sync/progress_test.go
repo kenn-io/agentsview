@@ -1,9 +1,11 @@
 package sync
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSyncStats_RecordSkip(t *testing.T) {
@@ -48,6 +50,154 @@ func TestSyncStats_RecordSynced(t *testing.T) {
 	}
 }
 
+func TestAnomalyStats_RecordMalformedLines(t *testing.T) {
+	tests := []struct {
+		name    string
+		records []struct {
+			agent string
+			n     int
+		}
+		wantByAgent map[string]int
+		wantTotal   int
+	}{
+		{
+			name:        "clean run records nothing",
+			wantByAgent: nil,
+			wantTotal:   0,
+		},
+		{
+			name: "zero and negative counts are ignored",
+			records: []struct {
+				agent string
+				n     int
+			}{
+				{"claude", 0},
+				{"codex", -3},
+			},
+			wantByAgent: nil,
+			wantTotal:   0,
+		},
+		{
+			name: "per-agent breakdown plus grand total",
+			records: []struct {
+				agent string
+				n     int
+			}{
+				{"claude", 2},
+				{"codex", 5},
+				{"claude", 3},
+			},
+			wantByAgent: map[string]int{"claude": 5, "codex": 5},
+			wantTotal:   10,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var a AnomalyStats
+			for _, r := range tt.records {
+				a.RecordMalformedLines(r.agent, r.n)
+			}
+			assert.Equal(t, tt.wantByAgent, a.MalformedLinesByAgent)
+			assert.Equal(t, tt.wantTotal, a.MalformedLinesTotal)
+		})
+	}
+}
+
+func TestAnomalyAccumulator_Aggregate(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.reset()
+
+	// Two sessions of one agent, one of another, plus sanitize fixes
+	// from messages and usage events across the run.
+	acc.recordMalformedLines("claude", "a.jsonl", 4)
+	acc.recordMalformedLines("codex", "b.jsonl", 1)
+	acc.recordMalformedLines("claude", "c.jsonl", 2)
+	acc.recordMalformedLines("gemini", "d.jsonl", 0) // ignored
+
+	acc.recordSanitize(validationStats{ControlCharsStripped: 3, RoleCoerced: 1})
+	acc.recordSanitize(validationStats{ModelClamped: 2, TokensClamped: 5})
+	acc.recordSanitize(validationStats{}) // no-op
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+
+	assert.Equal(t, 7, stats.Anomalies.MalformedLinesTotal)
+	assert.Equal(t, map[string]int{"claude": 6, "codex": 1},
+		stats.Anomalies.MalformedLinesByAgent)
+	assert.Equal(t, SanitizeStats{
+		ControlCharsStripped: 3,
+		ModelClamped:         2,
+		TokensClamped:        5,
+		RoleCoerced:          1,
+	}, stats.Anomalies.Sanitize)
+	assert.Equal(t, 11, stats.Anomalies.Sanitize.Total())
+	assert.False(t, stats.Anomalies.IsZero())
+}
+
+// TestAnomalyAccumulator_DedupesMalformedLinesPerSourceFile verifies a source
+// file that forks into several sessions counts its malformed lines once, while
+// distinct files and empty-path (DB-backed) sessions still accumulate.
+func TestAnomalyAccumulator_DedupesMalformedLinesPerSourceFile(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.reset()
+
+	// Three forked sessions of one Claude file all carry the same count.
+	acc.recordMalformedLines("claude", "fork.jsonl", 2)
+	acc.recordMalformedLines("claude", "fork.jsonl", 2)
+	acc.recordMalformedLines("claude", "fork.jsonl", 2)
+	// A different source file counts independently.
+	acc.recordMalformedLines("claude", "other.jsonl", 5)
+	// Empty path (DB-backed agent) is not deduped.
+	acc.recordMalformedLines("warp", "", 1)
+	acc.recordMalformedLines("warp", "", 1)
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+	assert.Equal(t, 2+5, stats.Anomalies.MalformedLinesByAgent["claude"],
+		"forked file counted once; distinct file added")
+	assert.Equal(t, 2, stats.Anomalies.MalformedLinesByAgent["warp"],
+		"empty-path sessions are not deduped")
+	assert.Equal(t, 9, stats.Anomalies.MalformedLinesTotal)
+}
+
+func TestAnomalyAccumulator_ResetClears(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.recordMalformedLines("claude", "x.jsonl", 9)
+	acc.recordSanitize(validationStats{TimestampsBlanked: 1})
+	acc.reset()
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+	assert.True(t, stats.Anomalies.IsZero())
+	assert.Zero(t, stats.Anomalies.MalformedLinesTotal)
+	assert.Nil(t, stats.Anomalies.MalformedLinesByAgent)
+}
+
+func TestAnomalyStats_IsZero(t *testing.T) {
+	tests := []struct {
+		name string
+		a    AnomalyStats
+		want bool
+	}{
+		{"empty", AnomalyStats{}, true},
+		{
+			name: "malformed only",
+			a:    AnomalyStats{MalformedLinesTotal: 1},
+			want: false,
+		},
+		{
+			name: "sanitize only",
+			a:    AnomalyStats{Sanitize: SanitizeStats{ModelClamped: 1}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.a.IsZero())
+		})
+	}
+}
+
 func TestProgress_Percent(t *testing.T) {
 	tests := []struct {
 		name string
@@ -81,4 +231,28 @@ func TestProgress_Percent(t *testing.T) {
 			assert.InDelta(t, tt.want, got, 1e-4)
 		})
 	}
+}
+
+// TestSyncStatsJSONOmitsZeroAnomalies verifies the anomaly JSON fields use
+// omitzero semantics: a clean run emits no "anomalies" object at all, and a
+// run with only malformed-line counts omits the empty nested "sanitize"
+// object. Plain omitempty cannot do this for struct-valued fields.
+func TestSyncStatsJSONOmitsZeroAnomalies(t *testing.T) {
+	clean, err := json.Marshal(SyncStats{Synced: 3})
+	require.NoError(t, err)
+	assert.NotContains(t, string(clean), "anomalies",
+		"a clean run must not emit an empty anomalies object")
+
+	malformedOnly, err := json.Marshal(SyncStats{
+		Anomalies: AnomalyStats{
+			MalformedLinesByAgent: map[string]int{"claude": 2},
+			MalformedLinesTotal:   2,
+		},
+	})
+	require.NoError(t, err)
+	got := string(malformedOnly)
+	assert.Contains(t, got, "malformed_lines_total",
+		"malformed counts must still serialize")
+	assert.NotContains(t, got, "sanitize",
+		"malformed-only run must not emit an empty sanitize object")
 }

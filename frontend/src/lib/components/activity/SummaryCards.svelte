@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
 
   let { report }: { report: Report } = $props();
@@ -18,12 +19,11 @@
     const parts: string[] = [];
     if (t.automated_sessions > 0) {
       parts.push(
-        `${fmtInt(t.interactive_sessions)} interactive / ` +
-          `${fmtInt(t.automated_sessions)} automated`,
+        m.activity_interactive_automated_split({ interactive: fmtInt(t.interactive_sessions), automated: fmtInt(t.automated_sessions) }),
       );
     }
     if (t.untimed_sessions > 0) {
-      parts.push(`${fmtInt(t.untimed_sessions)} untimed`);
+      parts.push(m.activity_untimed_count({ count: fmtInt(t.untimed_sessions) }));
     }
     return parts.join(", ");
   }
@@ -45,7 +45,7 @@
     if (!ts) return "";
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return "";
-    return d.toLocaleTimeString([], {
+    return formatDateTime(d, {
       hour: "2-digit",
       minute: "2-digit",
       hourCycle: "h23",
@@ -66,37 +66,37 @@
     const t = report.totals;
     return [
       {
-        label: "Peak Concurrency",
+        label: m.activity_peak_concurrency(),
         value: String(report.peak.agents),
-        sub: peakAt ? `at ${peakAt}` : "",
+        sub: peakAt ? m.activity_at_time({ time: peakAt }) : "",
         featured: true,
       },
       {
-        label: "Active",
+        label: m.activity_active(),
         value: fmtDuration(t.active_minutes),
-        sub: `${fmtDuration(t.idle_minutes)} idle`,
+        sub: m.activity_idle_duration({ duration: fmtDuration(t.idle_minutes) }),
       },
       {
-        label: "Agent-minutes",
+        label: m.activity_agent_minutes(),
         // Round to a whole minute so the card shows "134", not "134.226";
         // matches the Breakdowns rounding of the same metric.
         value: fmtInt(Math.round(t.agent_minutes)),
       },
       {
-        label: "Sessions",
+        label: m.activity_sessions(),
         value: fmtInt(t.sessions),
         sub: sessionsSub(t),
       },
       {
-        label: "Projects",
+        label: m.activity_projects(),
         value: fmtInt(t.distinct_projects),
       },
       {
-        label: "Models",
+        label: m.activity_models(),
         value: fmtInt(t.distinct_models),
       },
       {
-        label: "Total Cost",
+        label: m.activity_total_cost(),
         value: fmtCost(t.cost),
       },
     ];
@@ -116,7 +116,7 @@
 </div>
 
 {#if report.partial && asOf}
-  <div class="partial-note">In progress, as of {asOf}</div>
+  <div class="partial-note">{m.activity_in_progress_as_of({ time: asOf })}</div>
 {/if}
 
 <style>

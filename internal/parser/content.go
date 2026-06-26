@@ -354,9 +354,6 @@ func formatBash(input gjson.Result) string {
 func formatPatch(input gjson.Result) string {
 	path := resolveFilePath(input)
 	if path == "" {
-		path = input.Get("file").Str
-	}
-	if path == "" {
 		return "[Patch]"
 	}
 	return fmt.Sprintf("[Patch: %s]", path)
@@ -381,8 +378,8 @@ func formatTask(input gjson.Result) string {
 }
 
 // resolveFilePath extracts a file path from tool input, trying
-// file_path, path, and filePath in order. Covers Claude Code,
-// Amp, and Pi payload shapes.
+// file_path, path, filePath, and file in order. Covers Claude Code,
+// Amp, Pi, and Kiro IDE payload shapes.
 func resolveFilePath(input gjson.Result) string {
 	if p := input.Get("file_path").Str; p != "" {
 		return p
@@ -390,7 +387,20 @@ func resolveFilePath(input gjson.Result) string {
 	if p := input.Get("path").Str; p != "" {
 		return p
 	}
-	return input.Get("filePath").Str
+	if p := input.Get("filePath").Str; p != "" {
+		return p
+	}
+	return input.Get("file").Str
+}
+
+// ResolveFilePathFromJSON extracts a file path from a tool call's raw input
+// JSON, checking file_path, path, filePath, then file. It returns "" when the
+// input is not valid JSON (e.g. a raw diff string) or carries no path key.
+func ResolveFilePathFromJSON(inputJSON string) string {
+	if inputJSON == "" || !gjson.Valid(inputJSON) {
+		return ""
+	}
+	return resolveFilePath(gjson.Parse(inputJSON))
 }
 
 func orDefault(s, def string) string {

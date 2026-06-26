@@ -77,25 +77,17 @@ func buildResolveScript() string {
 		if !def.FileBased || def.DiscoverFunc == nil {
 			continue
 		}
-		for _, rel := range def.DefaultDirs {
-			// Aider's only default dir is "" (the bare home directory):
-			// it has no central store and discovers history files by a
-			// bounded, depth-capped walk of $HOME. The remote resolver emits
-			// tar targets, so emitting the "" default would archive the
-			// entire remote $HOME. Skip aider's bare-home default. When
-			// AIDER_DIR explicitly scopes discovery to a code root, emit only
-			// discovered .aider.chat.history.md files as tar targets instead
-			// of the whole source tree. Local sync is unaffected: it walks
-			// DefaultDirs via DiscoverFunc, not this script. The shell guard
-			// below also drops AIDER_DIR if it is set to literal "$HOME" (or
-			// "$HOME/"), so an unscoped override cannot reintroduce a
-			// whole-home scan or tar.
-			if def.Type == parser.AgentAider && rel == "" {
-				if def.EnvVar != "" {
-					b.WriteString(buildAiderResolveSnippet(def.EnvVar))
-				}
-				continue
+		if def.Type == parser.AgentAider {
+			// Aider has no safe default root: it writes one history file per
+			// repository. Remote sync still supports an explicit AIDER_DIR by
+			// emitting only discovered history files as tar targets instead of
+			// the configured code root or the remote home directory.
+			if def.EnvVar != "" {
+				b.WriteString(buildAiderResolveSnippet(def.EnvVar))
 			}
+			continue
+		}
+		for _, rel := range def.DefaultDirs {
 			defaultDir := "$HOME/" + rel
 			dirExpr := defaultDir
 			if def.EnvVar != "" {

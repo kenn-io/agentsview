@@ -2,8 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*"
+    ]
+  },
   "windows": ["main"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "core:webview:allow-set-webview-zoom"
   ]
 }

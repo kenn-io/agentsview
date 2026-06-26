@@ -24,6 +24,7 @@
   import InsightsPage from "./lib/components/insights/InsightsPage.svelte";
   import PinnedPage from "./lib/components/pinned/PinnedPage.svelte";
   import TrashPage from "./lib/components/trash/TrashPage.svelte";
+  import RecentEditsPage from "./lib/components/recentedits/RecentEditsPage.svelte";
   import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
   import { sessions, filtersToParams } from "./lib/stores/sessions.svelte.js";
   import { messages } from "./lib/stores/messages.svelte.js";
@@ -33,10 +34,19 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
+  import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
+  import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
+  import {
+    filterParamsEqual,
+    hasFilterParams,
+    sessionDateIntentCleared,
+    sessionRouteParamsForDetailExit,
+    sessionRouteParamsForFilters,
+  } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
 
@@ -222,15 +232,15 @@
     messageListRef?.scrollToOrdinal(ordinal);
   }
 
-  /** True when URL params contain session filter keys (deep-link). */
-  const SESSION_FILTER_KEYS = new Set([
-    "project", "machine", "agent", "date", "date_from", "date_to",
-    "active_since", "exclude_project", "min_messages", "max_messages",
-    "min_user_messages", "include_one_shot", "include_automated",
-  ]);
-  function hasFilterParams(params: Record<string, string>): boolean {
-    return Object.keys(params).some((k) => SESSION_FILTER_KEYS.has(k));
+  function clearYokeForClearedSessionDates(
+    nextParams: Record<string, string>,
+  ): void {
+    if (sessionDateIntentCleared(router.params, nextParams)) {
+      yokedDates.clear();
+    }
   }
+
+  let lastDetailFilterParamsSignature: string | null = $state(null);
 
   // React to route changes: reload sessions and apply URL params.
   // Only apply URL deep-link params (initFromParams) when the URL
@@ -299,28 +309,56 @@
   $effect(() => {
     const activeId = sessions.activeSessionId;
     const currentUrlSessionId = router.sessionId;
+    const filterParams = filtersToParams(sessions.filters);
+    const filterParamsSignature = JSON.stringify(filterParams);
     untrack(() => {
-      if (router.route !== "sessions") return;
-      if (activeId === currentUrlSessionId) return;
+      if (router.route !== "sessions") {
+        lastDetailFilterParamsSignature = null;
+        return;
+      }
       if (activeId) {
-        router.navigateToSession(activeId);
+        const nextParams = sessionRouteParamsForFilters(
+          filterParams,
+          router.params,
+        );
+        if (activeId === currentUrlSessionId) {
+          if (
+            lastDetailFilterParamsSignature !== null &&
+            lastDetailFilterParamsSignature !== filterParamsSignature &&
+            !filterParamsEqual(router.params, nextParams)
+          ) {
+            clearYokeForClearedSessionDates(nextParams);
+            router.replaceParams(nextParams);
+          }
+          lastDetailFilterParamsSignature = filterParamsSignature;
+          return;
+        }
+        clearYokeForClearedSessionDates(nextParams);
+        router.navigateToSession(activeId, nextParams);
+        lastDetailFilterParamsSignature = filterParamsSignature;
       } else {
-        router.navigateFromSession(filtersToParams(sessions.filters));
+        if (currentUrlSessionId === null) {
+          lastDetailFilterParamsSignature = null;
+          return;
+        }
+        const filterChangedOnDetail =
+          lastDetailFilterParamsSignature !== null &&
+          lastDetailFilterParamsSignature !== filterParamsSignature;
+        const nextParams = filterChangedOnDetail
+          ? sessionRouteParamsForFilters(
+              filterParams,
+              router.params,
+            )
+          : sessionRouteParamsForDetailExit(
+              filterParams,
+              router.params,
+            );
+        clearYokeForClearedSessionDates(nextParams);
+        router.navigateFromSession(nextParams);
+        lastDetailFilterParamsSignature = null;
       }
     });
   });
-
-  // Compare only filter keys so sticky params (e.g. desktop)
-  // don't cause spurious replaceParams calls.
-  function filterParamsEqual(
-    a: Record<string, string>,
-    b: Record<string, string>,
-  ): boolean {
-    for (const k of SESSION_FILTER_KEYS) {
-      if ((a[k] ?? "") !== (b[k] ?? "")) return false;
-    }
-    return true;
-  }
 
   // URL write-back: keep query string in sync with filter state
   // when on /sessions with no session selected, so users can
@@ -329,11 +367,15 @@
   // the URL with localStorage-restored filters.
   $effect(() => {
     const route = router.route;
-    const newParams = filtersToParams(sessions.filters);
+    const newParams = sessionRouteParamsForFilters(
+      filtersToParams(sessions.filters),
+      router.params,
+    );
     untrack(() => {
       if (route !== "sessions") return;
       if (router.sessionId) return;
       if (filterParamsEqual(router.params, newParams)) return;
+      clearYokeForClearedSessionDates(newParams);
       router.replaceParams(newParams);
     });
   });
@@ -373,16 +415,15 @@
 {#if settings.needsAuth && router.route !== "settings"}
   <div class="auth-overlay">
     <div class="auth-card">
-      <h2 class="auth-card-title">Authentication Required</h2>
+      <h2 class="auth-card-title">{m.app_auth_title()}</h2>
       <p class="auth-card-desc">
-        This server requires an auth token to access. Enter the token
-        shown on the server's console or settings page.
+        {m.app_auth_description()}
       </p>
       <div class="auth-card-field">
         <input
           class="auth-card-input"
           type="password"
-          placeholder="Paste auth token"
+          placeholder={m.app_auth_placeholder()}
           bind:value={globalAuthToken}
           onkeydown={(e) => { if (e.key === "Enter") handleGlobalAuth(); }}
         />
@@ -391,7 +432,7 @@
           disabled={!globalAuthToken.trim()}
           onclick={handleGlobalAuth}
         >
-          Authenticate
+          {m.app_auth_authenticate()}
         </button>
       </div>
       <button
@@ -403,7 +444,7 @@
           settings.load();
         }}
       >
-        Disconnect and reset
+        {m.app_auth_disconnect_reset()}
       </button>
     </div>
   </div>
@@ -434,6 +475,10 @@
 {:else if router.route === "trash"}
   <div class="page-scroll">
     <TrashPage />
+  </div>
+{:else if router.route === "recent-edits"}
+  <div class="page-scroll">
+    <RecentEditsPage />
   </div>
 {:else if router.route === "settings"}
   <div class="page-scroll">
@@ -501,7 +546,7 @@
 
 {#if sessions.recentlyDeleted.length > 0}
   <div class="undo-toast">
-    <span>Session deleted</span>
+    <span>{m.app_undo_session_deleted()}</span>
     <button
       class="undo-btn"
       onclick={async (e) => {
@@ -511,7 +556,7 @@
         if (!last) return;
         btn.disabled = true;
         try {
-          await sessions.restoreSession(last.id);
+          await sessions.restoreRecentlyDeleted(last);
         } catch {
           // restore failed — toast will remain
         } finally {
@@ -519,7 +564,7 @@
         }
       }}
     >
-      Undo
+      {m.app_undo_undo()}
     </button>
   </div>
 {/if}
@@ -636,7 +681,7 @@
     border-radius: 6px;
     font-size: 13px;
     font-weight: 500;
-    color: white;
+    color: var(--accent-blue-foreground);
     background: var(--accent-blue);
     border: none;
     cursor: pointer;

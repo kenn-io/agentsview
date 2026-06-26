@@ -4,6 +4,7 @@
     VelocityOverview,
     VelocityBreakdown,
   } from "../../api/types.js";
+  import { m } from "../../i18n/index.js";
 
   function formatDuration(sec: number): string {
     if (sec <= 0) return "-";
@@ -39,7 +40,7 @@
 
 <div class="velocity-container">
   <div class="velocity-header">
-    <h3 class="chart-title">Velocity</h3>
+    <h3 class="chart-title">{m.analytics_velocity_title()}</h3>
     <div class="tab-toggle">
       {#each (["overall", "agent", "complexity"] as const) as t}
         <button
@@ -48,10 +49,10 @@
           onclick={() => (activeTab = t)}
         >
           {t === "overall"
-            ? "Overview"
+            ? m.analytics_velocity_overview()
             : t === "agent"
-              ? "By Agent"
-              : "By Size"}
+              ? m.analytics_by_agent()
+              : m.analytics_velocity_by_size()}
         </button>
       {/each}
     </div>
@@ -64,7 +65,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchVelocity()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if velocity}
@@ -72,43 +73,43 @@
       {@const o = velocity.overall}
       <div class="metrics-grid">
         <div class="metric-card">
-          <div class="metric-label">Turn Cycle (p50)</div>
+          <div class="metric-label">{m.analytics_velocity_turn_cycle_p50()}</div>
           <div class="metric-value">
             {formatDuration(o.turn_cycle_sec.p50)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Turn Cycle (p90)</div>
+          <div class="metric-label">{m.analytics_velocity_turn_cycle_p90()}</div>
           <div class="metric-value">
             {formatDuration(o.turn_cycle_sec.p90)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">First Response (p50)</div>
+          <div class="metric-label">{m.analytics_velocity_first_response_p50()}</div>
           <div class="metric-value">
             {formatDuration(o.first_response_sec.p50)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">First Response (p90)</div>
+          <div class="metric-label">{m.analytics_velocity_first_response_p90()}</div>
           <div class="metric-value">
             {formatDuration(o.first_response_sec.p90)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Msgs / Active Min</div>
+          <div class="metric-label">{m.analytics_col_msgs_active_min()}</div>
           <div class="metric-value">
             {formatRate(o.msgs_per_active_min)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Chars / Active Min</div>
+          <div class="metric-label">{m.analytics_col_chars_active_min()}</div>
           <div class="metric-value">
             {formatRate(o.chars_per_active_min)}
           </div>
         </div>
         <div class="metric-card">
-          <div class="metric-label">Tools / Active Min</div>
+          <div class="metric-label">{m.analytics_col_tools_active_min()}</div>
           <div class="metric-value">
             {formatRate(o.tool_calls_per_active_min)}
           </div>
@@ -117,12 +118,12 @@
     {:else if breakdowns.length > 0}
       <div class="breakdown-table">
         <div class="breakdown-header">
-          <span class="col-label">Group</span>
-          <span class="col-num">Sessions</span>
-          <span class="col-num">Cycle p50</span>
-          <span class="col-num">Cycle p90</span>
-          <span class="col-num">Msgs/min</span>
-          <span class="col-num">Tools/min</span>
+          <span class="col-label">{m.analytics_col_group()}</span>
+          <span class="col-num">{m.analytics_col_sessions()}</span>
+          <span class="col-num">{m.analytics_col_cycle_p50()}</span>
+          <span class="col-num">{m.analytics_col_cycle_p90()}</span>
+          <span class="col-num">{m.analytics_col_msgs_min()}</span>
+          <span class="col-num">{m.analytics_col_tools_min()}</span>
         </div>
         {#each breakdowns as bd}
           <div class="breakdown-row">
@@ -144,10 +145,10 @@
         {/each}
       </div>
     {:else}
-      <div class="empty">No breakdown data</div>
+      <div class="empty">{m.analytics_velocity_no_breakdown()}</div>
     {/if}
   {:else}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{m.shared_no_data_for_period()}</div>
   {/if}
 </div>
 

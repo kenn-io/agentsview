@@ -11,6 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 // tokenUsageJSON is a valid token_usage blob for test messages.
@@ -27,7 +28,7 @@ func TestParseUsageFilterDefaults(t *testing.T) {
 	w := te.get(t, "/api/v1/usage/summary")
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	assert.NotEmpty(t, resp.From, "expected defaulted From")
 	assert.NotEmpty(t, resp.To, "expected defaulted To")
 	// from should be ~30 days before to.
@@ -48,7 +49,7 @@ func TestParseUsageFilterExplicit(t *testing.T) {
 		}))
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	assert.Equal(t, "2024-06-01", resp.From)
 	assert.Equal(t, "2024-06-15", resp.To)
 }
@@ -82,7 +83,7 @@ func TestParseUsageFilterDefaultsIncludeOneShot(t *testing.T) {
 		}))
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	require.Equal(t, 1, resp.SessionCounts.Total)
 }
 
@@ -155,11 +156,44 @@ func TestHandleUsageSummaryJSONShape(t *testing.T) {
 		assert.Contains(t, raw, key, "missing key in response")
 	}
 
-	resp := decode[server.UsageSummaryResponse](t, w)
+	resp := decode[service.UsageSummaryResult](t, w)
 	assert.NotEmpty(t, resp.Daily)
 	assert.NotEmpty(t, resp.ProjectTotals)
 	assert.NotEmpty(t, resp.ModelTotals)
 	assert.NotEmpty(t, resp.AgentTotals)
+}
+
+func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
+	te := setup(t)
+
+	require.NoError(t, te.db.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 0,
+		CacheReadTokens:  8901,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}))
+
+	w := te.get(t, buildPathURL("/api/v1/usage/summary",
+		map[string]string{
+			"from":     "2026-05-14",
+			"to":       "2026-05-14",
+			"timezone": "UTC",
+		}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[server.UsageSummaryResponse](t, w)
+	require.Len(t, resp.Daily, 1)
+	assert.InDelta(t, 0.1566, resp.Totals.TotalCost, 1e-9)
+	require.NotEmpty(t, resp.AgentTotals)
+	assert.Equal(t, "cursor", resp.AgentTotals[0].Agent)
 }
 
 func TestHandleUsageTopSessionsEmpty(t *testing.T) {

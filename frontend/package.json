@@ -9,8 +9,10 @@
   "scripts": {
     "dev": "vp dev",
     "build": "vp build",
+    "i18n:compile": "paraglide-js compile --project ./project.inlang --outdir ./src/lib/paraglide --strategy localStorage preferredLanguage baseLocale --emit-ts-declarations --silent",
     "generate:api": "node scripts/generate-api-client.mjs",
     "preview": "vp preview",
+    "precheck": "npm run i18n:compile",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vp test run",
     "e2e": "playwright test"
@@ -23,6 +25,9 @@
     "shiki": "4.2.0"
   },
   "devDependencies": {
+    "@inlang/paraglide-js": "^2.19.0",
+    "@inlang/plugin-m-function-matcher": "^2.2.9",
+    "@inlang/plugin-message-format": "^4.4.0",
     "@playwright/test": "1.60.0",
     "@sveltejs/vite-plugin-svelte": "7.1.2",
     "@testing-library/svelte": "^5.3.1",
@@ -33,8 +38,8 @@
     "svelte-check": "4.6.0",
     "typescript": "6.0.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.1.24",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.24",
-    "vite-plus": "0.1.24"
+    "vite-plus": "0.1.24",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.24"
   },
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@0.1.24",

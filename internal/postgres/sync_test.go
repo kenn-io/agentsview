@@ -16,14 +16,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func testDB(t *testing.T) *db.DB {
-	t.Helper()
-	d, err := db.Open(t.TempDir() + "/test.db")
-	require.NoError(t, err, "opening test db")
-	t.Cleanup(func() { d.Close() })
-	return d
-}
-
 func cleanPGSchema(t *testing.T, pgURL string) {
 	t.Helper()
 	pg, err := sql.Open("pgx", pgURL)
@@ -32,6 +24,16 @@ func cleanPGSchema(t *testing.T, pgURL string) {
 	_, _ = pg.Exec(
 		"DROP SCHEMA IF EXISTS agentsview CASCADE",
 	)
+}
+
+func cleanNamedPGSchema(t *testing.T, pgURL, schema string) {
+	t.Helper()
+	pg, err := sql.Open("pgx", pgURL)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+	quoted, err := quoteIdentifier(schema)
+	require.NoError(t, err, "quote schema")
+	_, _ = pg.Exec("DROP SCHEMA IF EXISTS " + quoted + " CASCADE")
 }
 
 func TestEnsureSchemaIdempotent(t *testing.T) {
@@ -60,6 +62,87 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	if err != nil && err != sql.ErrNoRows {
 		t.Fatalf("tool_result_events schema probe: %v", err)
 	}
+}
+
+func TestSyncEffectiveSyncStateFallsBackToLocalDB(t *testing.T) {
+	local := testDB(t)
+	require.NoError(t, local.SetSyncState(
+		"last_push_at",
+		"2026-03-11T12:34:56.123456789Z",
+	))
+
+	sync := &Sync{local: local}
+	require.NoError(t, NormalizeLocalSyncStateTimestamps(
+		sync.effectiveSyncState(),
+	))
+
+	got, err := sync.effectiveSyncState().GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
+}
+
+func TestSyncScopedStateUsesTargetKeys(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"test-machine", true,
+		SyncOptions{
+			SyncStateTarget:        "work",
+			MigrateLegacySyncState: true,
+		},
+	)
+	require.NoError(t, err, "creating sync")
+	defer ps.Close()
+
+	ctx := context.Background()
+	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
+
+	started := "2026-03-11T12:00:00Z"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:           "sess-scoped-001",
+		Project:      "test-project",
+		Machine:      "local",
+		Agent:        "claude",
+		StartedAt:    &started,
+		MessageCount: 1,
+	}), "upsert session")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: "sess-scoped-001",
+		Ordinal:   0,
+		Role:      "user",
+		Content:   "hello",
+	}}), "insert message")
+
+	_, err = ps.Push(ctx, false, nil)
+	require.NoError(t, err, "push")
+
+	scopedLastPush, err := local.GetSyncState("last_push_at:work")
+	require.NoError(t, err)
+	assert.NotEmpty(t, scopedLastPush)
+
+	legacyLastPush, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err)
+	assert.Empty(t, legacyLastPush)
+
+	scopedBoundary, err := local.GetSyncState(
+		lastPushBoundaryStateKey + ":work",
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, scopedBoundary)
+
+	scopedFingerprint, err := local.GetSyncState(
+		lastPushTargetFingerprintKey + ":work",
+	)
+	require.NoError(t, err)
+	assert.NotEmpty(t, scopedFingerprint)
+
+	status, err := ps.Status(ctx)
+	require.NoError(t, err, "status")
+	assert.Equal(t, scopedLastPush, status.LastPushAt)
 }
 
 func TestEnsureSchemaMigratesLegacySchema(t *testing.T) {
@@ -690,6 +773,155 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 	assert.Equal(t, 1, r2.SessionsPushed,
 		"should auto-detect schema reset")
 	assert.Equal(t, 1, r2.MessagesPushed)
+}
+
+func TestPushDetectsPGTargetChange(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, "agentsview_a")
+	cleanNamedPGSchema(t, pgURL, "agentsview_b")
+	t.Cleanup(func() {
+		cleanNamedPGSchema(t, pgURL, "agentsview_a")
+		cleanNamedPGSchema(t, pgURL, "agentsview_b")
+	})
+
+	local := testDB(t)
+	ctx := context.Background()
+
+	insertSession := func(id, createdAt string) {
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID:           id,
+			Project:      "target-change",
+			Machine:      "local",
+			Agent:        "claude",
+			CreatedAt:    createdAt,
+			MessageCount: 1,
+		}), "upsert session %s", id)
+		require.NoError(t, local.InsertMessages([]db.Message{{
+			SessionID:     id,
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "hello " + id,
+			ContentLength: len("hello " + id),
+			Timestamp:     createdAt,
+		}}), "insert message %s", id)
+	}
+
+	insertSession("sess-target-001", "2026-03-11T12:00:00Z")
+
+	syncA, err := New(
+		pgURL, "agentsview_a", local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating sync A")
+	defer syncA.Close()
+
+	syncB, err := New(
+		pgURL, "agentsview_b", local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating sync B")
+	defer syncB.Close()
+
+	r1, err := syncA.Push(ctx, false, nil)
+	require.NoError(t, err, "initial push to schema A")
+	require.Equal(t, 1, r1.SessionsPushed)
+
+	r2, err := syncB.Push(ctx, false, nil)
+	require.NoError(t, err, "initial push to schema B")
+	require.Equal(t, 1, r2.SessionsPushed)
+
+	insertSession("sess-target-002", "2026-03-11T12:10:00Z")
+
+	r3, err := syncA.Push(ctx, false, nil)
+	require.NoError(t, err, "incremental push back to schema A")
+	require.GreaterOrEqual(t, r3.SessionsPushed, 1)
+
+	r4, err := syncB.Push(ctx, false, nil)
+	require.NoError(t, err, "switch back to populated schema B")
+	require.Equal(t, 2, r4.SessionsPushed)
+
+	var count int
+	err = syncB.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE id = $1",
+		"sess-target-002",
+	).Scan(&count)
+	require.NoError(t, err, "counting repushed session")
+	assert.Equal(t, 1, count)
+}
+
+func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
+	cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
+	t.Cleanup(func() {
+		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_a")
+		cleanNamedPGSchema(t, pgURL, "agentsview_filtered_b")
+	})
+
+	local := testDB(t)
+	ctx := context.Background()
+
+	const project = "alpha"
+	const createdAt = "2026-03-11T12:00:00Z"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:           "sess-filtered-target-001",
+		Project:      project,
+		Machine:      "local",
+		Agent:        "claude",
+		CreatedAt:    createdAt,
+		MessageCount: 1,
+	}), "upsert session")
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID:     "sess-filtered-target-001",
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello filtered target",
+		ContentLength: len("hello filtered target"),
+		Timestamp:     createdAt,
+	}}), "insert message")
+
+	filteredA, err := New(
+		pgURL, "agentsview_filtered_a", local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{project}},
+	)
+	require.NoError(t, err, "creating filtered sync A")
+	defer filteredA.Close()
+
+	unfilteredB, err := New(
+		pgURL, "agentsview_filtered_b", local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating unfiltered sync B")
+	defer unfilteredB.Close()
+
+	r1, err := filteredA.Push(ctx, false, nil)
+	require.NoError(t, err, "filtered push to schema A")
+	require.Equal(t, 1, r1.SessionsPushed)
+
+	lastPush, err := local.GetSyncState("last_push_at")
+	require.NoError(t, err, "reading filtered watermark")
+	assert.Empty(t, lastPush, "filtered push should keep last_push_at empty")
+
+	boundaryState, err := local.GetSyncState(lastPushBoundaryStateKey)
+	require.NoError(t, err, "reading filtered boundary state")
+	require.NotEmpty(t, boundaryState,
+		"filtered push should persist boundary fingerprints")
+
+	r2, err := unfilteredB.Push(ctx, false, nil)
+	require.NoError(t, err, "push to schema B after filtered target change")
+	require.Equal(t, 1, r2.SessionsPushed)
+
+	var count int
+	err = unfilteredB.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE id = $1",
+		"sess-filtered-target-001",
+	).Scan(&count)
+	require.NoError(t, err, "counting session in schema B")
+	assert.Equal(t, 1, count)
 }
 
 func TestPushFullAfterSchemaDropRecreatesSchema(

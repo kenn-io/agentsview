@@ -253,40 +253,65 @@ func (d QueryDialect) timestampExpr(col string) string {
 	return col
 }
 
-// OrderByClause renders the session-list ordering for a resolved sort and
-// direction, with id as a same-direction tie-breaker so keyset pagination is
-// deterministic. The sort expression may add bind parameters (secrets sort), so
+// OrderByClause renders the session-list ordering for the resolved sort terms,
+// each in its own direction, with id appended as a unique same-direction
+// tie-breaker (unless id is already a sort term) so keyset pagination is
+// deterministic. Sort expressions may add bind parameters (the secrets sort), so
 // callers must render this at its textual position.
-func (b *QueryBuilder) OrderByClause(sp SessionSort, desc bool, f SessionFilter) string {
-	orderExpr := sp.orderExpr(b, desc, f)
-	dir := "ASC"
-	if desc {
-		dir = "DESC"
+func (b *QueryBuilder) OrderByClause(rs []ResolvedSort, f SessionFilter) string {
+	cols := appendIDTiebreaker(rs)
+	parts := make([]string, len(cols))
+	for i, c := range cols {
+		parts[i] = c.Sort.orderExpr(b, c.Desc, f) + " " + orderDirSQL(c.Desc)
 	}
-	if orderExpr == "id" {
-		return "ORDER BY id " + dir
-	}
-	return "ORDER BY " + orderExpr + " " + dir + ", id " + dir
+	return "ORDER BY " + strings.Join(parts, ", ")
 }
 
 // CursorPredicate renders the keyset pagination predicate matching an
-// OrderByClause built from the same sort and direction. The bound value is cast
-// per dialect for the column's kind; it must already be the Go type produced by
-// SessionSort.CursorPredicateValue.
+// OrderByClause built from the same sort terms. Because per-key directions may
+// differ, the predicate is the lexicographic expansion
+//
+//	(c1 OP1 v1) OR (c1 = v1 AND c2 OP2 v2) OR ...
+//
+// rather than a single row-value comparison (which is only valid when every
+// column shares one direction). Each value is bound and cast per dialect for its
+// column kind, and must already be the Go type produced by CursorPredicateValues
+// (one value per resolved term, in order). Sort expressions are re-rendered for
+// each clause they appear in so any bind parameters they add (the secrets sort)
+// stay positionally aligned across dialects.
 func (b *QueryBuilder) CursorPredicate(
-	sp SessionSort, desc bool, f SessionFilter, value any, id string,
+	rs []ResolvedSort, f SessionFilter, values []any, id string,
 ) string {
-	orderExpr := sp.orderExpr(b, desc, f)
-	op := ">"
+	cols := appendIDTiebreaker(rs)
+	vals := values
+	if len(cols) > len(rs) {
+		vals = append(append(make([]any, 0, len(cols)), values...), id)
+	}
+	clauses := make([]string, 0, len(cols))
+	for j := range cols {
+		parts := make([]string, 0, j+1)
+		for i := range j {
+			e := cols[i].Sort.orderExpr(b, cols[i].Desc, f)
+			vp := b.dialect.castCursor(b.Add(vals[i]), cols[i].Sort.kind)
+			parts = append(parts, e+" = "+vp)
+		}
+		op := ">"
+		if cols[j].Desc {
+			op = "<"
+		}
+		e := cols[j].Sort.orderExpr(b, cols[j].Desc, f)
+		vp := b.dialect.castCursor(b.Add(vals[j]), cols[j].Sort.kind)
+		parts = append(parts, e+" "+op+" "+vp)
+		clauses = append(clauses, "("+strings.Join(parts, " AND ")+")")
+	}
+	return "(" + strings.Join(clauses, " OR ") + ")"
+}
+
+func orderDirSQL(desc bool) string {
 	if desc {
-		op = "<"
+		return "DESC"
 	}
-	if orderExpr == "id" {
-		return "id " + op + " " + b.dialect.castCursor(b.Add(id), kindText)
-	}
-	vp := b.dialect.castCursor(b.Add(value), sp.kind)
-	ip := b.Add(id)
-	return "(" + orderExpr + ", id) " + op + " (" + vp + ", " + ip + ")"
+	return "ASC"
 }
 
 // LimitOffset renders a parameterized LIMIT/OFFSET clause.
@@ -494,10 +519,11 @@ func sessionFilterPredicates(
 		preds = append(preds, pred)
 	}
 
+	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	oneShotPred := ""
 	if f.ExcludeOneShot {
 		pred := q("user_message_count") + " > 1"
-		if !f.ExcludeAutomated {
+		if scope != "human" {
 			pred = "(" + q("user_message_count") + " > 1 OR " +
 				q("is_automated") + " = " +
 				b.dialect.trueLiteral + ")"
@@ -508,9 +534,13 @@ func sessionFilterPredicates(
 			preds = append(preds, pred)
 		}
 	}
-	if f.ExcludeAutomated {
+	switch scope {
+	case "human":
 		preds = append(preds, q("is_automated")+" = "+
 			b.dialect.falseLiteral)
+	case "automated":
+		preds = append(preds, q("is_automated")+" = "+
+			b.dialect.trueLiteral)
 	}
 	if len(f.Outcome) > 0 {
 		preds = append(preds,

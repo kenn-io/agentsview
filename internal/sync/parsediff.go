@@ -180,8 +180,13 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		report, storedSessions, resolvedSet,
 		len(opts.Agents) == 0, cutPaths, visited,
 	)
+	// Raced sessions were compared against a fresh parse just like the
+	// others, so they count toward Examined; they are simply not counted
+	// as drift. Keeping them in Examined also keeps VacuousResync honest:
+	// a run with comparable (raced) sessions is not "all pending resync".
 	report.Totals.Examined = report.Totals.Identical +
-		report.Totals.Changed + report.Totals.PendingResync
+		report.Totals.Changed + report.Totals.PendingResync +
+		report.Totals.Raced
 
 	sort.Slice(report.Sessions, func(i, j int) bool {
 		a, b := report.Sessions[i], report.Sessions[j]
@@ -369,6 +374,140 @@ func stripVirtualSourceSuffix(path string) string {
 	return path
 }
 
+// parseDiffSourceReliableForRaced reports whether a session's live source
+// mtime can be compared against the stored file_mtime on an apples-to-apples
+// basis, gating the live-write skew (raced) reclassification.
+//
+// The raced guard reclassifies a would-be DiffChanged as DiffRaced when the
+// live source mtime is newer than the stored per-session file_mtime. The live
+// mtime it consults is resolved by parseDiffLiveMtime at collect time, using
+// only mtime sources that are safe per-session race signals. For agents with
+// session-specific sibling files, it recomputes the same effective basis a real
+// sync would persist; for Codex, it deliberately uses the transcript mtime
+// instead of the global session_index.jsonl mtime so unrelated title/index
+// writes cannot mask transcript parser drift.
+//
+// Even so, two source shapes are deliberately held OUT of the raced guard so
+// it fails CLOSED rather than risk masking genuine parser drift:
+//
+//   - Virtual-path sources (Aider "#runIdx", Kiro/Zed/OpenCode/Kilo/MiMoCode
+//     "#rawID", Shelley, Visual Studio Copilot "#conversationID"). Many
+//     sessions fan out of ONE physical source, so the source mtime is NOT a
+//     per-session signal. A shared DB's rows can carry advanced updated_at
+//     values, and Aider's File.Mtime is the whole .aider.chat.history.md
+//     file's mtime shared by every run in it -- appending a new run bumps it
+//     for all runs -- so a newer mtime does not mean THIS session's parsed
+//     content was torn. Including them would mask genuine drift on untouched
+//     siblings; instead they keep their real changed/unchanged verdict (see
+//     TestParseDiffDBBackedSourceNotMaskedAsRaced).
+//   - Agents that are not plain file-based (no on-disk literal file at all).
+//
+// Detecting either makes the source unreliable, so the caller skips the raced
+// guard entirely. This never masks genuine drift for those agents, while plain
+// file-based agents reading a literal file still get the real race protection.
+func parseDiffSourceReliableForRaced(
+	agent parser.AgentType, sourcePath string,
+) bool {
+	// A virtual path carries a recognized "#..." suffix; stripping changes
+	// the string only for such paths. The stored file_mtime for these is a
+	// per-row/composite value, not trusted as a mid-run race signal.
+	if stripVirtualSourceSuffix(sourcePath) != sourcePath {
+		return false
+	}
+	// Only plain file-based agents (FileBased with a DiscoverFunc, the same
+	// on-disk-source condition resolveParseDiffAgents uses) read a literal
+	// file whose mtime populated file_mtime. An unknown or DB-backed agent has
+	// no such basis.
+	def, ok := parser.AgentByType(agent)
+	if !ok {
+		return false
+	}
+	return def.FileBased && def.DiscoverFunc != nil
+}
+
+// parseDiffLiveMtime resolves a session's live source mtime for the raced
+// guard, re-stat'd at collect time (after the worker finished reading) and
+// recomputing the agent-aware mtime that is safe to use as a per-session race
+// signal. Computing it now -- rather than trusting the parser's pre-read
+// File.Mtime -- catches a sibling-file write that landed after the parser's own
+// stat but before classification when that sibling is session-specific:
+//
+//   - Codex deliberately uses the transcript mtime only. Its
+//     session_index.jsonl is global to every Codex session, so an unrelated
+//     title/index write must not mask transcript-derived parser drift.
+//   - OpenHands folds base_state.json/TASKS.json/events/* (OpenHandsSnapshot).
+//   - Copilot folds workspace.yaml (copilotEffectiveMtime).
+//
+// Every other reliable agent is handled by discoveredFileMtime, which already
+// recomputes their effective mtime at stat time (Cowork/CommandCode/Vibe/
+// Reasonix/Antigravity/...). Only literal-file sources reach here -- virtual
+// and DB-backed sources are gated out by parseDiffSourceReliableForRaced -- so
+// the OpenCode-format storage children (virtual "#rawID" paths) never apply.
+func parseDiffLiveMtime(
+	agent parser.AgentType, path string,
+) (int64, error) {
+	switch agent {
+	case parser.AgentCodex:
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0, err
+		}
+		return info.ModTime().UnixNano(), nil
+	case parser.AgentOpenHands:
+		snapshot, err := parser.OpenHandsSnapshot(path)
+		if err != nil {
+			return 0, err
+		}
+		return snapshot.Mtime, nil
+	case parser.AgentCopilot:
+		info, err := os.Stat(path)
+		if err != nil {
+			return 0, err
+		}
+		return copilotEffectiveMtime(path, info), nil
+	}
+	return discoveredFileMtime(parser.DiscoveredFile{
+		Path: path, Agent: agent,
+	})
+}
+
+// parseDiffCodexTranscriptChangedSinceStored reports whether the Codex
+// transcript differs from the archived source snapshot on a size basis Codex
+// has historically stored. Full parses store the raw file size, while
+// incremental parses can store only the parser-consumed JSONL boundary when a
+// partial line trails the file. Codex rows persist file_mtime on an
+// index-folded basis so title changes can invalidate sync caches, but
+// parse-diff's raced guard uses transcript-only live mtimes to avoid letting the
+// global session_index.jsonl mask unrelated parser drift. When the index-folded
+// stored mtime is newer than a later transcript append, the mtime comparison
+// alone cannot prove the write; the live raw size or parser-consumed JSONL
+// boundary can.
+func parseDiffCodexTranscriptChangedSinceStored(
+	stored *db.Session, parsed parser.ParsedSession,
+) bool {
+	if stored == nil || parsed.Agent != parser.AgentCodex {
+		return false
+	}
+	if stored.FileSize == nil {
+		return false
+	}
+
+	storedSize := *stored.FileSize
+	info, err := os.Stat(parsed.File.Path)
+	if err != nil {
+		return true
+	}
+	if info.Size() == storedSize {
+		return false
+	}
+
+	consumedSize, err := parser.CodexTranscriptConsumedSize(parsed.File.Path)
+	if err != nil {
+		return true
+	}
+	return consumedSize != storedSize
+}
+
 // parseDiffCollectFile folds one worker result into the report.
 func (e *Engine) parseDiffCollectFile(
 	ctx context.Context,
@@ -410,6 +549,18 @@ func (e *Engine) parseDiffCollectFile(
 		return nil
 	}
 
+	// Count how many parsed sessions in this job map to each source path. A
+	// source shared by more than one session -- e.g. Hermes' state.db, which
+	// fans out to every session in the archive under one literal path -- has
+	// an mtime that is not a per-session signal: touching it for one session
+	// would race-mask genuine drift on its siblings. Those are skipped by the
+	// raced guard below (count > 1) and keep their real changed/unchanged
+	// verdict, failing closed the same way virtual fan-out sources do.
+	sourceSessionCount := make(map[string]int, len(job.results))
+	for _, pr := range job.results {
+		sourceSessionCount[pr.Session.File.Path]++
+	}
+
 	for _, pr := range job.results {
 		pw := pendingWrite{
 			sess:        pr.Session,
@@ -434,7 +585,7 @@ func (e *Engine) parseDiffCollectFile(
 		compare := ok && !pw.needsRetry &&
 			stored != nil && stored.DeletedAt == nil
 		if compare {
-			events := toDBUsageEvents(id, pw.usageEvents)
+			events, _ := toDBUsageEvents(id, pw.usageEvents)
 			var err error
 			fields, err = e.compareStoredSession(
 				ctx, stored, prepared, msgs, events,
@@ -450,6 +601,56 @@ func (e *Engine) parseDiffCollectFile(
 			}
 		}
 
+		// Only consult the skew guard when there is a real change to
+		// reclassify; an identical or pending-resync session is unaffected
+		// by a mid-run write. A nil stored row leaves storedMtime nil.
+		//
+		// The live mtime is parseDiffLiveMtime, re-computed NOW after
+		// the worker finished reading, using only mtimes that are safe
+		// per-session race signals. Re-stat'ing at collect time catches
+		// session-specific sibling-file writes such as OpenHands'
+		// events/*.json and Copilot's workspace.yaml that landed after
+		// the parser's own stat but before classification; Codex uses
+		// the transcript mtime only because its session_index.jsonl is a
+		// global file shared by every Codex session. For other agents,
+		// the value is floored by the parsed File.Mtime so a source
+		// rewritten with an older mtime mid-run still reads as raced;
+		// Codex skips that floor because the parsed File.Mtime also folds
+		// in the shared index. If that same index-folded stored mtime hides
+		// a newer transcript mtime, Codex falls back to the transcript
+		// hash/size fingerprint to prove the source file changed. The
+		// guard runs only for
+		// reliable, literal-file sources (see
+		// parseDiffSourceReliableForRaced); virtual and DB-backed sources
+		// are gated out and keep their real changed/unchanged verdict. A
+		// re-stat error -- the source was replaced/removed mid-run -- is
+		// treated as unreadable -> raced, matching the conservative
+		// re-stat policy.
+		raced := false
+		if realDiffs > 0 && compare &&
+			sourceSessionCount[pw.sess.File.Path] == 1 &&
+			parseDiffSourceReliableForRaced(pw.sess.Agent, pw.sess.File.Path) {
+			var storedMtime *int64
+			if stored != nil {
+				storedMtime = stored.FileMtime
+			}
+			liveMtime, err := parseDiffLiveMtime(
+				pw.sess.Agent, pw.sess.File.Path,
+			)
+			liveOK := err == nil
+			if liveOK && pw.sess.Agent != parser.AgentCodex &&
+				pw.sess.File.Mtime > liveMtime {
+				liveMtime = pw.sess.File.Mtime
+			}
+			raced = parseDiffSourceRaced(
+				storedMtime, liveMtime, liveOK,
+			)
+			if !raced && liveOK &&
+				parseDiffCodexTranscriptChangedSinceStored(stored, pw.sess) {
+				raced = true
+			}
+		}
+
 		class, reason := classifyParseDiffSession(
 			pw.needsRetry,
 			ok,
@@ -457,6 +658,7 @@ func (e *Engine) parseDiffCollectFile(
 			stored != nil && stored.DeletedAt != nil,
 			stored != nil && stored.DataVersion < db.CurrentDataVersion(),
 			realDiffs,
+			raced,
 		)
 
 		entry := SessionDiff{
@@ -493,6 +695,13 @@ func (e *Engine) parseDiffCollectFile(
 					report.FieldCounts[f.Field]++
 				}
 			}
+			report.Sessions = append(report.Sessions, entry)
+		case DiffRaced:
+			// Inconclusive (live-write skew): listed for visibility with
+			// its field diffs attached for drill-down, but excluded from
+			// FieldCounts and from HasFailures so --fail-on-change stays
+			// trustworthy.
+			report.Totals.Raced++
 			report.Sessions = append(report.Sessions, entry)
 		case DiffSkipped:
 			// A re-parsed but trashed session: counted with the rest

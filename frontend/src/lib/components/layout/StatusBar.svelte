@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { m } from "../../i18n/index.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { perf } from "../../stores/perf.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -19,16 +20,36 @@
   let progressText = $derived.by(() => {
     if (!sync.syncing || !sync.progress) return null;
     const p = sync.progress;
-    if (p.phase === "scan") {
-      return `Scanning ${p.current_project || ""}...`;
+    if (p.detail) {
+      if (p.sessions_total > 0) {
+        const pct = Math.round(
+          (p.sessions_done / p.sessions_total) * 100,
+        );
+        return `${p.detail}: ${pct}% (${p.sessions_done}/${p.sessions_total})`;
+      }
+      return p.detail;
     }
-    if (p.phase === "parse") {
+    if (p.phase === "discovering" || p.phase === "scan") {
+      return m.status_bar_scanning({
+        project: p.current_project || "",
+      });
+    }
+    if (p.phase === "syncing" || p.phase === "parse") {
       const pct = p.sessions_total > 0
         ? Math.round((p.sessions_done / p.sessions_total) * 100)
         : 0;
-      return `Syncing ${pct}% (${p.sessions_done}/${p.sessions_total})`;
+      return m.status_bar_syncing_percent({
+        percent: pct,
+        done: p.sessions_done,
+        total: p.sessions_total,
+      });
     }
-    return "Syncing...";
+    return m.status_bar_syncing();
+  });
+
+  let progressTitle = $derived.by(() => {
+    if (!sync.syncing || !sync.progress) return null;
+    return sync.progress.hint || sync.progress.detail || null;
   });
 
   let lastSyncText = $derived.by(() => {
@@ -54,11 +75,11 @@
 <footer class="status-bar">
   <div class="status-left">
     {#if sync.stats}
-      <span>{formatNumber(sync.stats.session_count)} sessions</span>
+      <span>{m.status_bar_sessions({ count: formatNumber(sync.stats.session_count) })}</span>
       <span class="sep">&middot;</span>
-      <span>{formatNumber(sync.stats.message_count)} messages</span>
+      <span>{m.status_bar_messages({ count: formatNumber(sync.stats.message_count) })}</span>
       <span class="sep">&middot;</span>
-      <span>{formatNumber(sync.stats.project_count)} projects</span>
+      <span>{m.status_bar_projects({ count: formatNumber(sync.stats.project_count) })}</span>
     {/if}
   </div>
 
@@ -67,20 +88,20 @@
       class="perf-toggle"
       class:active={perf.panelOpen}
       onclick={() => perf.togglePanel()}
-      title="Open performance debug"
-      aria-label="Open performance debug"
+      title={m.status_bar_open_performance_debug()}
+      aria-label={m.status_bar_open_performance_debug()}
     >
       <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span>Perf</span>
+      <span>{m.status_bar_perf()}</span>
     </button>
     <span class="sep">&middot;</span>
     {#if sync.remoteUnreachable}
       <button
         class="remote-warn"
         onclick={() => router.navigate("settings")}
-        title="Can't reach the remote server. Open settings to check the URL, token, or disconnect."
+        title={m.status_bar_remote_unreachable_title()}
       >
-        remote server unreachable
+        {m.status_bar_remote_unreachable()}
       </button>
       <span class="sep">&middot;</span>
     {/if}
@@ -88,9 +109,9 @@
       <button
         class="backend-warn"
         onclick={() => sync.loadStats()}
-        title={sync.backendDegradedMessage ?? "sync not ready"}
+        title={sync.backendDegradedMessage ?? m.status_bar_sync_not_ready()}
       >
-        sync not ready
+        {m.status_bar_sync_not_ready()}
       </button>
       <span class="sep">&middot;</span>
     {/if}
@@ -100,14 +121,14 @@
           class="zoom-btn"
           onclick={() => ui.zoomOut()}
           disabled={ui.zoomLevel <= 67}
-          title="Zoom out ({mod} -)"
+          title={m.status_bar_zoom_out({ shortcut: mod })}
         >
           &minus;
         </button>
         <button
           class="zoom-level"
           onclick={() => ui.resetZoom()}
-          title="Reset zoom ({mod} 0)"
+          title={m.status_bar_reset_zoom({ shortcut: mod })}
         >
           {ui.zoomLevel}%
         </button>
@@ -115,7 +136,7 @@
           class="zoom-btn"
           onclick={() => ui.zoomIn()}
           disabled={ui.zoomLevel >= 200}
-          title="Zoom in ({mod} +)"
+          title={m.status_bar_zoom_in({ shortcut: mod })}
         >
           +
         </button>
@@ -123,12 +144,13 @@
       <span class="sep">&middot;</span>
     {/if}
     {#if sync.updateAvailable && !sync.isDesktop}
+      {@const latestVersion = sync.latestVersion ?? ""}
       <button
         class="update-available"
         onclick={() => (ui.activeModal = "update")}
-        title="A new version is available: {sync.latestVersion}"
+        title={m.status_bar_update_available_title({ version: latestVersion })}
       >
-        update available
+        {m.status_bar_update_available()}
       </button>
       <span class="sep">&middot;</span>
     {/if}
@@ -136,18 +158,20 @@
       <button
         class="version-warn"
         onclick={() => window.location.reload()}
-        title="Frontend and backend versions differ. Click to reload."
+        title={m.status_bar_version_mismatch_title()}
       >
-        version mismatch - reload
+        {m.status_bar_version_mismatch()}
       </button>
     {/if}
     {#if progressText}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
-      <span class="sync-progress">{progressText}</span>
+      <span class="sync-progress" title={progressTitle ?? undefined}>
+        {progressText}
+      </span>
     {:else if lastSyncText}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
       <span title={lastSyncTimestamp ?? undefined}>
-        synced {lastSyncText}
+        {m.status_bar_synced_ago({ time: lastSyncText })}
       </span>
     {/if}
     {#if sync.serverVersion}
@@ -156,7 +180,7 @@
       {/if}
       <button
         class="version"
-        title="Build: {sync.serverVersion.commit}"
+        title={m.status_bar_build({ commit: sync.serverVersion.commit })}
         onclick={() => {
           if (ui.activeModal === "resync" && sync.syncing) return;
           ui.activeModal = "about";

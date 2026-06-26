@@ -546,7 +546,7 @@ func (db *DB) searchContentFTS(
 		WHERE messages_fts MATCH ? AND %s AND m.%s
 		ORDER BY rank ASC, m.ordinal ASC, m.id ASC
 		LIMIT ? OFFSET ?`, sysPred, scope)
-	args := []any{prepareFTSQueryDB(f.Pattern)}
+	args := []any{PrepareFTSQuery(f.Pattern)}
 	args = append(args, scopeArgs...)
 	args = append(args, f.Limit+1, f.Cursor)
 	page, err := db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, f.ftsSnippet)
@@ -564,27 +564,35 @@ func (db *DB) searchContentFTS(
 // approximation only affects snippet centering, not redaction, which scans the
 // full body.
 func (f ContentSearchFilter) ftsSnippet(body string) string {
-	if phrase := strings.Trim(f.Pattern, "\""); phrase != "" {
-		if off := CaseInsensitiveIndex(body, phrase); off >= 0 {
-			return f.buildSnippet(body, off, min(off+len(phrase), len(body)))
-		}
-	}
-	tok := firstToken(f.Pattern)
-	off := CaseInsensitiveIndex(body, tok)
-	if off < 0 {
-		return f.buildSnippet(body, 0, 0)
-	}
-	return f.buildSnippet(body, off, min(off+len(tok), len(body)))
+	start, end := FTSSnippetRange(f.Pattern, body)
+	return f.buildSnippet(body, start, end)
 }
 
-// firstToken returns the first whitespace-delimited token of an FTS query,
-// stripping the surrounding double quotes used for phrase matching.
-func firstToken(q string) string {
-	fields := strings.Fields(strings.Trim(q, "\""))
-	if len(fields) == 0 {
-		return ""
+// FTSSnippetRange returns the byte range around which FTS-like snippets should
+// be centered. It first tries the de-quoted raw phrase, then falls back to the
+// first parsed prepared-FTS term, and finally to the start of the body.
+func FTSSnippetRange(pattern, body string) (int, int) {
+	if phrase := strings.Trim(pattern, "\""); phrase != "" {
+		if off := CaseInsensitiveIndex(body, phrase); off >= 0 {
+			return off, min(off+len(phrase), len(body))
+		}
 	}
-	return fields[0]
+	for _, term := range FTSTerms(PrepareFTSQuery(pattern)) {
+		if term == "" {
+			continue
+		}
+		if off := CaseInsensitiveIndex(body, term); off >= 0 {
+			return off, min(off+len(term), len(body))
+		}
+		if fields := strings.Fields(term); len(fields) > 0 && fields[0] != term {
+			first := fields[0]
+			if off := CaseInsensitiveIndex(body, first); off >= 0 {
+				return off, min(off+len(first), len(body))
+			}
+		}
+		break
+	}
+	return 0, 0
 }
 
 // classifyFTSError maps a malformed FTS query into a SearchInputError so HTTP
@@ -601,13 +609,4 @@ func classifyFTSError(err error) error {
 		}
 	}
 	return err
-}
-
-// prepareFTSQueryDB wraps a multi-word query in quotes for FTS phrase
-// matching (mirrors the server's prepareFTSQuery so both layers agree).
-func prepareFTSQueryDB(raw string) string {
-	if strings.Contains(raw, " ") && !strings.HasPrefix(raw, "\"") {
-		return "\"" + raw + "\""
-	}
-	return raw
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { XIcon } from "../../icons.js";
@@ -32,12 +33,12 @@
 >
   <div class="modal-panel update-panel">
     <div class="modal-header">
-      <h3 class="modal-title">Software Update</h3>
+      <h3 class="modal-title">{m.update_title()}</h3>
       <button
         class="modal-close"
         onclick={close}
-        title="Close update dialog"
-        aria-label="Close update dialog"
+        title={m.update_close()}
+        aria-label={m.update_close()}
       >
         <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>
@@ -46,21 +47,17 @@
     <div class="modal-body">
       {#if sync.updateAvailable && sync.latestVersion}
         <p class="update-text">
-          A new version is available:
-          <strong>{sync.latestVersion}</strong>
+          {m.update_available({ version: sync.latestVersion })}
         </p>
         <p class="update-current">
-          You are running
-          {sync.serverVersion?.version ?? "unknown"}.
+          {m.update_current({ version: sync.serverVersion?.version ?? m.update_unknown() })}
         </p>
         <p class="update-instructions">
-          Run <code>agentsview update</code> on the command
-          line to install.
+          {m.update_instructions({ cmd: "agentsview update" })}
         </p>
       {:else}
         <p class="update-text">
-          You're running the latest version
-          ({sync.serverVersion?.version ?? "unknown"}).
+          {m.update_latest({ version: sync.serverVersion?.version ?? m.update_unknown() })}
         </p>
       {/if}
       <div class="update-actions">
@@ -68,7 +65,7 @@
           class="modal-btn modal-btn-primary"
           onclick={close}
         >
-          Close
+          {m.update_close_btn()}
         </button>
       </div>
     </div>
@@ -100,7 +97,7 @@
     margin-top: 8px;
   }
 
-  .update-instructions code {
+  .update-instructions :global(code) {
     font-family: var(--font-mono);
     background: var(--bg-inset);
     padding: 1px 4px;

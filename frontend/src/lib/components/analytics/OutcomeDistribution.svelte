@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getOutcomeColor } from "../../utils/grade.js";
+  import { m } from "../../i18n/index.js";
 
   interface Props {
     distribution: Record<string, number>;
@@ -19,7 +20,7 @@
 </script>
 
 <div class="outcome-dist">
-  <div class="chart-title">Outcome Distribution</div>
+  <div class="chart-title">{m.analytics_outcome_distribution_title()}</div>
   {#if total > 0}
     <div class="stacked-bar">
       {#each outcomes as outcome}
@@ -29,7 +30,7 @@
             class="segment"
             style:width="{(count / total) * 100}%"
             style:background={getOutcomeColor(outcome)}
-            title="{outcome}: {count}"
+            title={m.analytics_outcome_count({ outcome, count })}
           ></div>
         {/if}
       {/each}
@@ -51,7 +52,7 @@
       {/each}
     </div>
   {:else}
-    <div class="empty">No data</div>
+    <div class="empty">{m.shared_no_data()}</div>
   {/if}
 </div>
 

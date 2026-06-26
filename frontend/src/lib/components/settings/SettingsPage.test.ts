@@ -5,6 +5,7 @@ import { mount, tick, unmount } from "svelte";
 import SettingsPage from "./SettingsPage.svelte";
 import { SettingsService } from "../../api/generated/index";
 import { settings } from "../../stores/settings.svelte.js";
+import { initI18n, LOCALE_STORAGE_KEY } from "../../i18n/index.js";
 
 vi.mock("../../api/runtime.js", async (importOriginal) => {
   const orig =
@@ -38,6 +39,8 @@ const settingsService = SettingsService as unknown as {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  initI18n();
   settings.loading = false;
   settings.loaded = false;
   settings.needsAuth = false;
@@ -82,6 +85,55 @@ describe("SettingsPage", () => {
     expect(
       settingsService.getApiV1SettingsWorktreeMappings,
     ).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
+  it("persists the selected interface language for reload", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    settingsService.getApiV1SettingsWorktreeMappings.mockResolvedValue({
+      mappings: [],
+    });
+
+    const component = mount(SettingsPage, {
+      target: document.body,
+    });
+    await tick();
+    await tick();
+
+    expect(
+      document.body.querySelector('select[aria-label="Interface language"]'),
+    ).toBeNull();
+    expect(document.body.textContent).toContain("Settings");
+
+    const trigger = document.body.querySelector(
+      'button[title="Interface language"]',
+    ) as HTMLButtonElement | null;
+    expect(trigger).toBeTruthy();
+
+    trigger!.click();
+    await tick();
+
+    const option = Array.from(
+      document.body.querySelectorAll('[role="option"]'),
+    ).find((el) => el.textContent?.includes("Simplified Chinese"));
+    expect(option).toBeTruthy();
+
+    (option as HTMLElement).dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true }),
+    );
+    await tick();
+
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("zh-CN");
+    expect(document.body.textContent).toContain("Settings");
 
     unmount(component);
   });

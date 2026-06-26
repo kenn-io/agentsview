@@ -9,6 +9,7 @@
 # Frontend
 node_modules/
 frontend/dist/
+frontend/src/lib/paraglide/
 frontend/test-results/
 test-results/
 frontend/playwright-report/
@@ -45,6 +46,19 @@ __pycache__/
 .cache
 .gomodcache/
 .gopath/
+
+# Docs build and hydrated assets
+docs/.venv/
+docs/.zensical-build.*
+docs/zensical-public-docs.*
+docs/site/
+docs/assets/static/
+docs/assets/generated/
+docs/.gitignore
+docs/.vercel/
+docs/.env*.local
+.vercel
+.env*.local
 
 # SSH test key (extracted from Docker container)
 testdata/ssh/test_key

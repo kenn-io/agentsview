@@ -199,7 +199,13 @@ func createMockBinary(
 		bin = filepath.Join(dir, name+".cmd")
 		var script string
 		if writeArgs {
-			script = fmt.Sprintf("@echo %%* > %q\r\n@type %q\r\n@exit /b %d\r\n", argsFile, dataFile, exitCode)
+			script = fmt.Sprintf(
+				"@echo off\r\n@break > %q\r\n@:write_args\r\n@if \"%%~1\"==\"\" goto done_args\r\n@>> %q echo %%~1\r\n@shift\r\n@goto write_args\r\n@:done_args\r\n@type %q\r\n@exit /b %d\r\n",
+				argsFile,
+				argsFile,
+				dataFile,
+				exitCode,
+			)
 		} else {
 			script = fmt.Sprintf("@type %q\r\n@exit /b %d\r\n", dataFile, exitCode)
 		}
@@ -230,6 +236,21 @@ func fakeClaudeBin(
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func readArgLines(t *testing.T, argsFile string) []string {
+	t.Helper()
+	argsData, err := os.ReadFile(argsFile)
+	require.NoError(t, err, "reading args")
+	lines := strings.Split(strings.TrimSpace(string(argsData)), "\n")
+	args := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			args = append(args, line)
+		}
+	}
+	return args
 }
 
 func TestGenerateStreamWithOptions_UsesConfiguredBinary(t *testing.T) {
@@ -461,11 +482,43 @@ func fakeGeminiBin(
 	return createMockBinary(t, stdout, exitCode, true, "gemini")
 }
 
-func TestGenerateGemini_ModelFlag(t *testing.T) {
+func fakeGeminiBinWithEnvCapture(
+	t *testing.T, stdout string, exitCode int,
+) (bin, argsFile, envFile string) {
+	t.Helper()
+	dir := t.TempDir()
+	dataFile := filepath.Join(dir, "stdout.txt")
+	require.NoError(t, os.WriteFile(dataFile, []byte(stdout), 0o644))
+	argsFile = filepath.Join(dir, "args.txt")
+	envFile = filepath.Join(dir, "env.txt")
+
 	if runtime.GOOS == "windows" {
-		t.Skip("shell script test not supported on windows")
+		bin = filepath.Join(dir, "gemini.cmd")
+		script := fmt.Sprintf(
+			"@echo off\r\n@break > %q\r\n@:write_args\r\n@if \"%%~1\"==\"\" goto done_args\r\n@>> %q echo %%~1\r\n@shift\r\n@goto write_args\r\n@:done_args\r\n@echo %%GEMINI_SANDBOX%%> %q\r\n@type %q\r\n@exit /b %d\r\n",
+			argsFile,
+			argsFile,
+			envFile,
+			dataFile,
+			exitCode,
+		)
+		require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+		return bin, argsFile, envFile
 	}
 
+	bin = filepath.Join(dir, "gemini")
+	script := fmt.Sprintf(
+		"#!/bin/sh\nprintf '%%s\\n' \"$@\" > %s\nprintf '%%s' \"$GEMINI_SANDBOX\" > %s\ncat %s\nexit %d\n",
+		shellQuote(argsFile),
+		shellQuote(envFile),
+		shellQuote(dataFile),
+		exitCode,
+	)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+	return bin, argsFile, envFile
+}
+
+func TestGenerateGemini_ModelFlag(t *testing.T) {
 	streamJSON := `{"type":"message","role":"assistant","content":"Hello"}
 {"type":"result","result":"# Analysis"}
 `
@@ -474,6 +527,7 @@ func TestGenerateGemini_ModelFlag(t *testing.T) {
 
 	result, err := generateGemini(
 		context.Background(), bin, "test prompt", nil,
+		AgentConfig{AllowUnsafe: true},
 	)
 	require.NoError(t, err)
 
@@ -482,18 +536,45 @@ func TestGenerateGemini_ModelFlag(t *testing.T) {
 	assert.Equal(t, geminiInsightModel, result.Model)
 
 	// Verify the CLI was invoked with --model flag.
-	argsData, err := os.ReadFile(argsFile)
-	require.NoError(t, err, "reading args")
-	args := strings.Split(
-		strings.TrimSpace(string(argsData)), "\n",
-	)
+	args := readArgLines(t, argsFile)
 
 	wantArgs := []string{
 		"--model", geminiInsightModel,
 		"--output-format", "stream-json",
-		"--sandbox",
 	}
 	assert.Equal(t, wantArgs, args)
+}
+
+func TestGenerateGemini_RequiresSandboxOrUnsafeOptIn(t *testing.T) {
+	bin, _ := fakeGeminiBin(t, "", 0)
+
+	_, err := generateGemini(
+		context.Background(), bin, "test prompt", nil,
+		AgentConfig{},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "explicit sandbox or unsafe opt-in")
+}
+
+func TestGenerateGemini_SetsSandboxEnv(t *testing.T) {
+	streamJSON := `{"type":"result","result":"# Analysis"}`
+	bin, argsFile, envFile := fakeGeminiBinWithEnvCapture(
+		t, streamJSON, 0,
+	)
+
+	result, err := generateGemini(
+		context.Background(), bin, "test prompt", nil,
+		AgentConfig{Sandbox: "sandbox-exec"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "# Analysis", result.Content)
+	assert.Equal(t, []string{
+		"--model", geminiInsightModel,
+		"--output-format", "stream-json",
+	}, readArgLines(t, argsFile))
+	envData, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	assert.Equal(t, "sandbox-exec", strings.TrimSpace(string(envData)))
 }
 
 func TestGenerateClaude_CancelledContext(t *testing.T) {

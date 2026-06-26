@@ -235,8 +235,21 @@ func TestIncrementalUpdateReclassifiesOnPatternChange(t *testing.T) {
 	require.NoError(t, err, "force stale is_automated=0")
 
 	// Incremental update with umc still <= 1.
-	err = d.UpdateSessionIncremental(
-		"changelog-inc", nil, 2, 1, 1024, 100, 0, 0, false, false,
+	err = callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"changelog-inc",
+		nil,
+		2,
+		1,
+		1024,
+		100,
+		0,
+		"",
+		0,
+		0,
+		false,
+		false,
 	)
 	require.NoError(t, err, "incremental update")
 
@@ -266,8 +279,21 @@ func TestIncrementalUpdateClearsWhenCountGrows(t *testing.T) {
 		"precondition: expected is_automated=1 after upsert")
 
 	// Incremental update pushes umc > 1 — must clear.
-	err = d.UpdateSessionIncremental(
-		"grew-past-one", nil, 7, 3, 2048, 200, 0, 0, false, false,
+	err = callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"grew-past-one",
+		nil,
+		7,
+		3,
+		2048,
+		200,
+		0,
+		"",
+		0,
+		0,
+		false,
+		false,
 	)
 	require.NoError(t, err, "incremental update")
 
@@ -291,8 +317,21 @@ func TestIncrementalUpdateLeavesNonMatching(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 
-	err := d.UpdateSessionIncremental(
-		"normal-single", nil, 2, 1, 1024, 100, 0, 0, false, false,
+	err := callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"normal-single",
+		nil,
+		2,
+		1,
+		1024,
+		100,
+		0,
+		"",
+		0,
+		0,
+		false,
+		false,
 	)
 	require.NoError(t, err, "incremental update")
 
@@ -327,8 +366,21 @@ func TestIncrementalUpdateClearsTerminationStatus(t *testing.T) {
 	require.Equal(t, "tool_call_pending", *pre.TerminationStatus,
 		"precondition: expected tool_call_pending")
 
-	err = d.UpdateSessionIncremental(
-		"stale-term", nil, 4, 2, 2048, 200, 0, 0, false, false,
+	err = callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"stale-term",
+		nil,
+		4,
+		2,
+		2048,
+		200,
+		0,
+		"",
+		0,
+		0,
+		false,
+		false,
 	)
 	require.NoError(t, err, "incremental update")
 

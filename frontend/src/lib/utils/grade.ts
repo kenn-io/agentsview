@@ -59,7 +59,13 @@ const penaltyLabels: Record<string, string> = {
   compactions: "compactions",
   mid_task_compactions: "mid-task compactions",
   context_pressure_high: "context pressure",
-};
+  repeated_failing_tool_cycles: "repeated failing tool cycles",
+  runaway_loop: "repeated failing tool cycles",
+  constraintless_first_prompt: "unstructured task start",
+  missing_success_criteria: "missing success criteria",
+  stuck_repeated_prompts: "stuck repeated prompts",
+  repeated_prompts: "stuck repeated prompts",
+  };
 
 export function getPenaltyLabel(key: string): string {
   return penaltyLabels[key] ?? key;
@@ -69,6 +75,9 @@ const basisLabels: Record<string, string> = {
   outcome: "Outcome",
   tool_health: "Tool health",
   context_pressure: "Context pressure",
+  prompt_quality: "Prompt quality",
+  context_quality: "Context quality",
+  workflow_quality: "Workflow quality",
 };
 
 export function getBasisLabel(key: string): string {

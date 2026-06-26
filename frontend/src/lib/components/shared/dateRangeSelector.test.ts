@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  activePresetDays,
   allFromDate,
   isPresetActive,
   presetRange,
@@ -36,5 +37,33 @@ describe("date range selector presets", () => {
 
     expect(isPresetActive("2026-01-25", "2026-04-25", 90, null)).toBe(true);
     expect(isPresetActive("2026-01-26", "2026-04-25", 90, null)).toBe(false);
+  });
+
+  it("uses rolling state to avoid duplicate active presets", () => {
+    vi.setSystemTime(new Date("2026-04-25T12:00:00Z"));
+
+    expect(
+      activePresetDays(
+        "2026-04-18",
+        "2026-04-25",
+        "2026-04-18T00:00:00Z",
+        7,
+        false,
+      ),
+    ).toBe(7);
+  });
+
+  it("uses all-time when a pinned range matches all sessions", () => {
+    vi.setSystemTime(new Date("2026-04-25T12:00:00Z"));
+
+    expect(
+      activePresetDays(
+        "2026-04-18",
+        "2026-04-25",
+        "2026-04-18T00:00:00Z",
+        7,
+        true,
+      ),
+    ).toBe(0);
   });
 });

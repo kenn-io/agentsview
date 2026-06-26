@@ -16,8 +16,7 @@ import (
 )
 
 func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err, "open db")
@@ -43,8 +42,7 @@ func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
 }
 
 func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
 	database, err := db.Open(dbPath)
@@ -85,6 +83,35 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 	assert.Contains(t, out, "resync aborted: 0 synced, 3 failed")
 	assert.Contains(t, out,
 		"Likely cause: previous data-version resync likely aborted before completion")
+}
+
+func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+
+	database, err := db.Open(dbPath)
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.Close(), "close db")
+
+	futureVersion := db.CurrentDataVersion() + 10
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "raw sqlite open")
+	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
+	require.NoError(t, err, "set future user_version")
+	require.NoError(t, conn.Close(), "close raw sqlite")
+
+	out, err := executeCommand(newRootCommand(), "doctor", "sync")
+	require.NoError(t, err, "doctor sync")
+
+	assert.Contains(t, out,
+		fmt.Sprintf("SQLite user_version: %d", futureVersion))
+	assert.Contains(t, out,
+		fmt.Sprintf("Binary data version: %d", db.CurrentDataVersion()))
+	assert.Contains(t, out,
+		"Startup sync decision: refuse startup (database requires newer agentsview)")
+	assert.Contains(t, out,
+		"Likely cause: SQLite user_version is newer than this binary")
+	assert.Contains(t, out, `Run "agentsview update"`)
 }
 
 func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {

@@ -8,6 +8,7 @@
   import { formatTokenCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import StatusDot from "../common/StatusDot.svelte";
+  import { m } from "../../i18n/index.js";
 
   function truncate(text: string, max: number): string {
     if (text.length <= max) return text;
@@ -36,16 +37,32 @@
 
   function handleSessionClick(id: string) {
     let needInvalidate = false;
+    const params: Record<string, string> = {};
+    const clearParams: string[] = [];
     if (analytics.includeOneShot && !sessions.filters.includeOneShot) {
       sessions.filters.includeOneShot = true;
+      clearParams.push("include_one_shot");
       needInvalidate = true;
     }
-    if (analytics.includeAutomated && !sessions.filters.includeAutomated) {
+    if (
+      analytics.automatedScope !== "human" &&
+      !sessions.filters.includeAutomated
+    ) {
       sessions.filters.includeAutomated = true;
+      params.include_automated = "true";
+      clearParams.push("include_automated");
       needInvalidate = true;
     }
     if (needInvalidate) {
       sessions.invalidateFilterCaches();
+    }
+    if (clearParams.length > 0 || Object.keys(params).length > 0) {
+      router.navigateToSession(
+        id,
+        Object.keys(params).length > 0 ? params : undefined,
+        clearParams,
+      );
+      return;
     }
     router.navigateToSession(id);
   }
@@ -64,15 +81,17 @@
 
 <div class="top-sessions-container">
   <div class="top-header">
-    <h3 class="chart-title">Top Sessions</h3>
+    <h3 class="chart-title">{m.analytics_top_sessions_title()}</h3>
     <div class="header-controls">
       {#if uncleanCount > 0}
         <button
           class="status-count-pill"
           onclick={() => sessions.setTerminationFilter("unclean")}
-          title="Filter to unclean sessions"
+          title={m.analytics_top_sessions_filter_unclean()}
         >
-          {uncleanCount} unclean
+          {m.analytics_top_sessions_unclean_count({
+            countLabel: uncleanCount.toLocaleString(),
+          })}
         </button>
       {/if}
       <div class="metric-toggle">
@@ -81,14 +100,14 @@
           class:active={analytics.topMetric === "messages"}
           onclick={() => analytics.setTopMetric("messages")}
         >
-          By Messages
+          {m.analytics_top_sessions_by_messages()}
         </button>
         <button
           class="toggle-btn"
           class:active={analytics.topMetric === "duration"}
           onclick={() => analytics.setTopMetric("duration")}
         >
-          By Duration
+          {m.analytics_top_sessions_by_duration()}
         </button>
         {#if supportsOutputTokens}
           <button
@@ -96,7 +115,7 @@
             class:active={analytics.topMetric === "output_tokens"}
             onclick={() => analytics.setTopMetric("output_tokens")}
           >
-            By Output Tokens
+            {m.analytics_top_sessions_by_output_tokens()}
           </button>
         {/if}
       </div>
@@ -110,7 +129,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchTopSessions()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if analytics.topSessions && analytics.topSessions.sessions.length > 0}
@@ -146,7 +165,7 @@
       {/each}
     </div>
   {:else}
-    <div class="empty">No sessions in range</div>
+    <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>
 

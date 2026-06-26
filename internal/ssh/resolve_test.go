@@ -112,11 +112,9 @@ func TestResolveScriptSkipsMissingCodexIndex(t *testing.T) {
 }
 
 // TestResolveScriptSkipsAiderHomeDefault verifies the resolve script does
-// NOT emit aider's bare-$HOME default. Aider's only default dir is "" (the
-// home directory); the remote resolver tars every emitted dir wholesale, so
-// emitting it would archive the entire remote $HOME. With AIDER_DIR unset,
-// the script must produce no aider dir even when a history file exists at
-// home root. Runs the real script through sh against a temp HOME.
+// NOT infer a bare-$HOME Aider root. The remote resolver tars every emitted
+// target, so Aider must stay opt-in even when a history file exists at home
+// root. Runs the real script through sh against a temp HOME.
 func TestResolveScriptSkipsAiderHomeDefault(t *testing.T) {
 	home := t.TempDir()
 	require.NoError(t, os.WriteFile(

@@ -250,6 +250,7 @@ describe("UsageStore session filter params", () => {
     sessions.filters.project = "proj-a";
     sessions.filters.machine = "host-a,host-b";
     sessions.filters.agent = "claude,codex";
+    sessions.filters.termination = "abandoned";
     sessions.filters.minUserMessages = 5;
     sessions.filters.includeOneShot = false;
     sessions.filters.includeAutomated = true;
@@ -262,6 +263,7 @@ describe("UsageStore session filter params", () => {
         project: "proj-a",
         machine: "host-a,host-b",
         agent: "claude,codex",
+        termination: "abandoned",
         minUserMessages: 5,
         includeOneShot: false,
         includeAutomated: true,
@@ -275,6 +277,7 @@ describe("UsageStore session filter params", () => {
         project: "proj-a",
         machine: "host-a,host-b",
         agent: "claude,codex",
+        termination: "abandoned",
         minUserMessages: 5,
         includeOneShot: false,
         includeAutomated: true,
@@ -882,6 +885,51 @@ describe("mergeUsageAndSessionUrlParams", () => {
       exclude_project: "alpha,beta,unknown",
       model: "gpt-5.5",
       machine: "host-a",
+    });
+  });
+
+  it("omits hidden session date params from usage URLs", async () => {
+    const { mergeUsageAndSessionUrlParams } = await loadStore();
+
+    expect(
+      mergeUsageAndSessionUrlParams(
+        {
+          from: "2026-02-01",
+          to: "2026-02-07",
+        },
+        {
+          date: "2026-01-15",
+          date_from: "2026-01-01",
+          date_to: "2026-01-31",
+          project: "agentsview",
+        },
+      ),
+    ).toEqual({
+      from: "2026-02-01",
+      to: "2026-02-07",
+      project: "agentsview",
+    });
+  });
+
+  it("preserves supported termination params in usage URLs", async () => {
+    const { mergeUsageAndSessionUrlParams } = await loadStore();
+
+    expect(
+      mergeUsageAndSessionUrlParams(
+        {
+          from: "2026-02-01",
+          to: "2026-02-07",
+        },
+        {
+          termination: "unclean",
+          project: "agentsview",
+        },
+      ),
+    ).toEqual({
+      from: "2026-02-01",
+      to: "2026-02-07",
+      termination: "unclean",
+      project: "agentsview",
     });
   });
 });

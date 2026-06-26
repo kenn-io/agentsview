@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 )
 
@@ -24,9 +26,38 @@ func loadPGServeConfigForTest(t *testing.T, args ...string) (config.Config, stri
 	return loadPGServeConfig(cmd)
 }
 
+func restoreTestLogger(t *testing.T) {
+	t.Helper()
+	oldWriter := log.Writer()
+	t.Cleanup(func() {
+		if file, ok := log.Writer().(*os.File); ok && file != os.Stderr && file != os.Stdout {
+			_ = file.Close()
+		}
+		log.SetOutput(oldWriter)
+	})
+}
+
+func clearConfiguredAgentEnvVars(t *testing.T) {
+	t.Helper()
+	for _, def := range parser.Registry {
+		if def.EnvVar != "" {
+			t.Setenv(def.EnvVar, "")
+		}
+	}
+}
+
+func isolateDefaultAgentDirs(t *testing.T, root string) {
+	t.Helper()
+	t.Setenv("HOME", root)
+	t.Setenv("USERPROFILE", root)
+	t.Setenv("APPDATA", root)
+	t.Setenv("LOCALAPPDATA", root)
+	t.Setenv("HOMEDRIVE", filepath.VolumeName(root))
+	t.Setenv("HOMEPATH", `\`)
+}
+
 func TestLoadPGServeConfigDoesNotInheritServeProxySettings(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(`
 public_url = "https://viewer.example.test"
@@ -56,8 +87,7 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 }
 
 func TestLoadPGServeConfigIgnoresInvalidPersistedServeSettings(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 
 	err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(`
 public_url = "not a url"
@@ -78,7 +108,7 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 }
 
 func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
-	t.Setenv("AGENTSVIEW_DATA_DIR", t.TempDir())
+	testDataDir(t)
 
 	cfg, basePath, err := loadPGServeConfigForTest(t,
 		"--host", "127.0.0.1",
@@ -107,6 +137,184 @@ func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
 	assert.Equal(t, "10.0.0.0/16",
 		strings.Join(cfg.Proxy.AllowedSubnets, ","))
 	assert.Empty(t, basePath, "basePath should be empty")
+}
+
+func TestRunPGPush_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	var err error
+	out := captureStdout(t, func() {
+		err = runPGPush(PGPushConfig{}, "archive")
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
+	assert.Contains(t, out, "Target: archive")
+}
+
+func TestRunPGStatus_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	err := runPGStatus("archive", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
+}
+
+func TestRunPGStatus_IgnoresUnreadableLocalWatermark(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "sessions.db"),
+		nil,
+		0o600,
+	))
+
+	err := runPGStatus("archive", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(t, err.Error(), "opening database")
+	assert.NotContains(t, err.Error(), "sessions.db is empty")
+}
+
+func TestRunPGPushAll_AggregatesTargetFailures(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "work"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	err := runPGPush(PGPushConfig{AllTargets: true}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2 pg target(s) failed")
+	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
+	assert.Contains(t, err.Error(), "archive: pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+}
+
+func TestRunPGStatusAll_AggregatesTargetFailures(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
+	writeTestConfig(t, dataDir, `
+default_pg = "work"
+
+[pg.work]
+url = "${BROKEN_WORK_TARGET}"
+machine_name = "workbox"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	err := runPGStatus("", true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2 pg target(s) failed")
+	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
+	assert.Contains(t, err.Error(), "archive: pg connection to archive permits plaintext")
+	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+}
+
+func TestPGPushCommandPrefixesErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	_, err := executeCommand(newRootCommand(), "pg", "push", "archive")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg push: pg connection to archive permits plaintext")
+}
+
+func TestPGPushWatchCommandPrefixesErrors(t *testing.T) {
+	_, err := executeCommand(newRootCommand(), "pg", "push", "--watch", "--all")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg push --watch: --all cannot be combined with --watch")
+}
+
+func TestPGStatusCommandPrefixesErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	clearConfiguredAgentEnvVars(t)
+	isolateDefaultAgentDirs(t, dataDir)
+	restoreTestLogger(t)
+	writeTestConfig(t, dataDir, `
+default_pg = "archive"
+
+[pg.archive]
+url = "postgres://archive"
+`)
+
+	_, err := executeCommand(newRootCommand(), "pg", "status", "archive")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pg status: pg connection to archive permits plaintext")
 }
 
 func TestRunPGServeRejectsInvalidManagedCaddyConfigBeforePGSetup(t *testing.T) {
@@ -185,4 +393,75 @@ func TestWritePGPushSummaryIncludesSkippedConflicts(t *testing.T) {
 		"Pushed 3 sessions, 9 messages, skipped 2 ownership conflict(s) in 1.5s")
 	assert.Contains(t, got,
 		"Warning: skipped 2 session(s) owned by another PostgreSQL push marker")
+}
+
+func TestWritePGPushSummaryReportsErrorCount(t *testing.T) {
+	tests := []struct {
+		name        string
+		result      postgres.PushResult
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "conflicts with errors",
+			result: postgres.PushResult{
+				SessionsPushed:   3,
+				MessagesPushed:   9,
+				SkippedConflicts: 2,
+				Errors:           4,
+				Duration:         1500 * time.Millisecond,
+			},
+			wantContain: []string{
+				"Pushed 3 sessions, 9 messages, skipped 2 ownership conflict(s), 4 error(s) in 1.5s",
+				"Warning: skipped 2 session(s) owned by another PostgreSQL push marker",
+			},
+		},
+		{
+			name: "conflicts without errors omits error count",
+			result: postgres.PushResult{
+				SessionsPushed:   3,
+				MessagesPushed:   9,
+				SkippedConflicts: 2,
+				Duration:         1500 * time.Millisecond,
+			},
+			wantContain: []string{
+				"Pushed 3 sessions, 9 messages, skipped 2 ownership conflict(s) in 1.5s",
+			},
+			wantAbsent: []string{"error(s)"},
+		},
+		{
+			name: "errors without conflicts",
+			result: postgres.PushResult{
+				SessionsPushed: 5,
+				MessagesPushed: 12,
+				Errors:         1,
+				Duration:       2 * time.Second,
+			},
+			wantContain: []string{"Pushed 5 sessions, 12 messages, 1 error(s) in 2s"},
+			wantAbsent:  []string{"ownership conflict"},
+		},
+		{
+			name: "clean run omits error count",
+			result: postgres.PushResult{
+				SessionsPushed: 5,
+				MessagesPushed: 12,
+				Duration:       2 * time.Second,
+			},
+			wantContain: []string{"Pushed 5 sessions, 12 messages in 2s"},
+			wantAbsent:  []string{"error(s)", "ownership conflict"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			writePGPushSummary(&out, tt.result)
+			got := out.String()
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+			for _, absent := range tt.wantAbsent {
+				assert.NotContains(t, got, absent)
+			}
+		})
+	}
 }

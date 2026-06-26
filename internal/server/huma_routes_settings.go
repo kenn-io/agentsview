@@ -61,6 +61,7 @@ func (s *Server) humaGetSettings(
 	if tc.Mode == "" {
 		tc.Mode = string(terminalModeAuto)
 	}
+	githubToken := s.cfg.GithubToken
 	resp := settingsResponse{
 		AgentDirs: dirs,
 		Terminal: terminalResponse{
@@ -68,16 +69,16 @@ func (s *Server) humaGetSettings(
 			CustomBin:  tc.CustomBin,
 			CustomArgs: tc.CustomArgs,
 		},
-		GithubConfigured: s.cfg.GithubToken != "",
-		Host:             s.cfg.Host,
-		Port:             s.cfg.Port,
-		RequireAuth:      s.cfg.RequireAuth,
-		ReadOnly:         s.db.ReadOnly(),
+		Host:        s.cfg.Host,
+		Port:        s.cfg.Port,
+		RequireAuth: s.cfg.RequireAuth,
+		ReadOnly:    s.db.ReadOnly(),
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken
 	}
 	s.mu.RUnlock()
+	resp.GithubConfigured = resolveGitHubToken(ctx, githubToken) != ""
 	return &jsonOutput[settingsResponse]{Body: resp}, nil
 }
 

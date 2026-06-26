@@ -1,5 +1,6 @@
 <script lang="ts">
   import { usage } from "../../stores/usage.svelte.js";
+  import { m } from "../../i18n/index.js";
 
   function fmtCost(v: number): string {
     return `$${v.toFixed(2)}`;
@@ -71,7 +72,9 @@
     const c = usage.summary?.comparison;
     if (!c) return null;
     const sign = c.deltaPct >= 0 ? "+" : "";
-    return `${sign}${(c.deltaPct * 100).toFixed(0)}% vs prior`;
+    return m.usage_summary_vs_prior({
+      value: `${sign}${(c.deltaPct * 100).toFixed(0)}%`,
+    });
   });
 
   function fmtCredits(v: number): string {
@@ -79,7 +82,7 @@
   }
 
   interface Card {
-    label: string;
+    label: () => string;
     value: () => string;
     sub?: () => string;
     featured?: boolean;
@@ -88,7 +91,7 @@
   const cards = $derived.by(() => {
     const baseCards: Card[] = [
       {
-        label: "Total Cost",
+        label: () => m.usage_summary_total_cost(),
         value: () => fmtCost(usage.summary?.totals.totalCost ?? 0),
         sub: () => vsPrior ?? "",
         featured: true,
@@ -96,38 +99,42 @@
       ...(usage.summary?.totals.copilotAICredits
         ? [
             {
-              label: "Copilot AI Credits",
+              label: () => m.usage_summary_copilot_ai_credits(),
               value: () => fmtCredits(usage.summary?.totals.copilotAICredits ?? 0),
             },
           ]
         : []),
       {
-        label: "Input Tokens",
+        label: () => m.usage_summary_input_tokens(),
         value: () => fmtTokens(inputTokens),
         sub: () =>
-          cachedTokens > 0 ? `+${fmtTokens(cachedTokens)} cached` : "",
+          cachedTokens > 0
+            ? m.usage_summary_cached_tokens({
+                value: `+${fmtTokens(cachedTokens)}`,
+              })
+            : "",
       },
       {
-        label: "Output Tokens",
+        label: () => m.analytics_metric_output_tokens(),
         value: () => fmtTokens(outputTokens),
       },
       {
-        label: "Daily Burn",
+        label: () => m.usage_summary_daily_burn(),
         value: () => fmtCost(dailyBurn),
-        sub: () => "avg/day",
+        sub: () => m.usage_summary_avg_day(),
       },
       {
-        label: "Peak Day",
+        label: () => m.usage_summary_peak_day(),
         value: () => fmtCost(peak.cost),
         sub: () => peak.date,
       },
       {
-        label: "Cache Hit",
+        label: () => m.usage_summary_cache_hit(),
         value: () =>
           fmtPct(usage.summary?.cacheStats.hitRate ?? 0),
       },
       {
-        label: "Projects",
+        label: () => m.analytics_summary_projects(),
         value: () =>
           String(
             Object.keys(
@@ -136,12 +143,12 @@
           ),
       },
       {
-        label: "Models",
+        label: () => m.usage_models(),
         value: () =>
           String(usage.summary?.modelTotals.length ?? 0),
       },
       {
-        label: "Active Days",
+        label: () => m.analytics_summary_active_days(),
         value: () => String(activeDays),
       },
     ];
@@ -157,10 +164,10 @@
     >
       {#if usage.errors.summary}
         <span class="card-value error">--</span>
-        <span class="card-label">{card.label}</span>
+        <span class="card-label">{card.label()}</span>
       {:else}
         <span class="card-value">{card.value()}</span>
-        <span class="card-label">{card.label}</span>
+        <span class="card-label">{card.label()}</span>
         {#if card.sub}
           {@const subtext = card.sub()}
           {#if subtext}
@@ -179,7 +186,7 @@
       class="retry-btn"
       onclick={() => usage.fetchSummary()}
     >
-      Retry
+      {m.shared_retry()}
     </button>
   </div>
 {/if}
@@ -254,6 +261,6 @@
 
   .retry-btn:hover {
     background: var(--accent-red);
-    color: #fff;
+    color: var(--accent-red-foreground);
   }
 </style>

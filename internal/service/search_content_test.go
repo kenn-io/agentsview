@@ -20,17 +20,10 @@ func seedServiceSearchSession(
 	t *testing.T, d *db.DB, id, project, msgContent string,
 ) {
 	t.Helper()
-	dbtest.SeedSession(t, d, id, project, func(s *db.Session) {
-		s.MessageCount = 3
-		s.UserMessageCount = 2
-	})
-	msgs := []db.Message{
+	dbtest.SeedSessionWithMessages(t, d, id, project, []db.Message{
 		dbtest.UserMsg(id, 0, msgContent),
 		dbtest.AsstMsg(id, 1, "understood"),
-	}
-	if err := d.InsertMessages(msgs); err != nil {
-		t.Fatalf("seedServiceSearchSession: InsertMessages: %v", err)
-	}
+	}, dbtest.WithMessageCounts(3, 2))
 }
 
 func TestDirectSearchContentRedacts(t *testing.T) {

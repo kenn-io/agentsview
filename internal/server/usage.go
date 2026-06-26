@@ -1,10 +1,18 @@
 package server
 
 import (
-	"sort"
-
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
+
+// Comparison holds the prior-period cost comparison returned by
+// GET /api/v1/usage/comparison.
+type Comparison struct {
+	PriorFrom      string  `json:"priorFrom"`
+	PriorTo        string  `json:"priorTo"`
+	PriorTotalCost float64 `json:"priorTotalCost"`
+	DeltaPct       float64 `json:"deltaPct"`
+}
 
 // ProjectTotal holds range-wide token and cost totals per project.
 type ProjectTotal struct {
@@ -46,16 +54,9 @@ type CacheStats struct {
 	SavingsVsUncached   float64 `json:"savingsVsUncached"`
 }
 
-// Comparison holds the prior-period cost comparison.
-type Comparison struct {
-	PriorFrom      string  `json:"priorFrom"`
-	PriorTo        string  `json:"priorTo"`
-	PriorTotalCost float64 `json:"priorTotalCost"`
-	DeltaPct       float64 `json:"deltaPct"`
-}
-
-// UsageSummaryResponse is the JSON shape for
-// GET /api/v1/usage/summary.
+// UsageSummaryResponse preserves the public OpenAPI schema for
+// GET /api/v1/usage/summary while the handler delegates assembly to
+// the transport-neutral service layer.
 type UsageSummaryResponse struct {
 	From          string                `json:"from"`
 	To            string                `json:"to"`
@@ -69,127 +70,74 @@ type UsageSummaryResponse struct {
 	Comparison    *Comparison           `json:"comparison,omitempty"`
 }
 
-// foldProjectTotals sums daily project breakdowns into
-// range-wide totals sorted by cost descending.
-func foldProjectTotals(
-	daily []db.DailyUsageEntry,
-) []ProjectTotal {
-	m := make(map[string]*ProjectTotal)
-	for _, d := range daily {
-		for _, pb := range d.ProjectBreakdowns {
-			pt, ok := m[pb.Project]
-			if !ok {
-				pt = &ProjectTotal{Project: pb.Project}
-				m[pb.Project] = pt
-			}
-			pt.InputTokens += pb.InputTokens
-			pt.OutputTokens += pb.OutputTokens
-			pt.CacheCreationTokens += pb.CacheCreationTokens
-			pt.CacheReadTokens += pb.CacheReadTokens
-			pt.Cost += pb.Cost
-		}
+func usageSummaryResponseFromService(
+	res *service.UsageSummaryResult,
+) UsageSummaryResponse {
+	return UsageSummaryResponse{
+		From:          res.From,
+		To:            res.To,
+		Totals:        res.Totals,
+		Daily:         res.Daily,
+		ProjectTotals: projectTotalsFromService(res.ProjectTotals),
+		ModelTotals:   modelTotalsFromService(res.ModelTotals),
+		AgentTotals:   agentTotalsFromService(res.AgentTotals),
+		SessionCounts: res.SessionCounts,
+		CacheStats:    cacheStatsFromService(res.CacheStats),
 	}
-	out := make([]ProjectTotal, 0, len(m))
-	for _, v := range m {
-		out = append(out, *v)
+}
+
+func projectTotalsFromService(in []service.ProjectTotal) []ProjectTotal {
+	out := make([]ProjectTotal, 0, len(in))
+	for _, total := range in {
+		out = append(out, ProjectTotal{
+			Project:             total.Project,
+			InputTokens:         total.InputTokens,
+			OutputTokens:        total.OutputTokens,
+			CacheCreationTokens: total.CacheCreationTokens,
+			CacheReadTokens:     total.CacheReadTokens,
+			Cost:                total.Cost,
+		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
-		}
-		return out[i].Project < out[j].Project
-	})
 	return out
 }
 
-// foldModelTotals sums daily model breakdowns into range-wide
-// totals sorted by cost descending.
-func foldModelTotals(
-	daily []db.DailyUsageEntry,
-) []ModelTotal {
-	m := make(map[string]*ModelTotal)
-	for _, d := range daily {
-		for _, mb := range d.ModelBreakdowns {
-			mt, ok := m[mb.ModelName]
-			if !ok {
-				mt = &ModelTotal{Model: mb.ModelName}
-				m[mb.ModelName] = mt
-			}
-			mt.InputTokens += mb.InputTokens
-			mt.OutputTokens += mb.OutputTokens
-			mt.CacheCreationTokens += mb.CacheCreationTokens
-			mt.CacheReadTokens += mb.CacheReadTokens
-			mt.Cost += mb.Cost
-		}
+func modelTotalsFromService(in []service.ModelTotal) []ModelTotal {
+	out := make([]ModelTotal, 0, len(in))
+	for _, total := range in {
+		out = append(out, ModelTotal{
+			Model:               total.Model,
+			InputTokens:         total.InputTokens,
+			OutputTokens:        total.OutputTokens,
+			CacheCreationTokens: total.CacheCreationTokens,
+			CacheReadTokens:     total.CacheReadTokens,
+			Cost:                total.Cost,
+		})
 	}
-	out := make([]ModelTotal, 0, len(m))
-	for _, v := range m {
-		out = append(out, *v)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
-		}
-		return out[i].Model < out[j].Model
-	})
 	return out
 }
 
-// foldAgentTotals sums daily agent breakdowns into range-wide
-// totals sorted by cost descending.
-func foldAgentTotals(
-	daily []db.DailyUsageEntry,
-) []AgentTotal {
-	m := make(map[string]*AgentTotal)
-	for _, d := range daily {
-		for _, ab := range d.AgentBreakdowns {
-			at, ok := m[ab.Agent]
-			if !ok {
-				at = &AgentTotal{Agent: ab.Agent}
-				m[ab.Agent] = at
-			}
-			at.InputTokens += ab.InputTokens
-			at.OutputTokens += ab.OutputTokens
-			at.CacheCreationTokens += ab.CacheCreationTokens
-			at.CacheReadTokens += ab.CacheReadTokens
-			at.Cost += ab.Cost
-		}
+func agentTotalsFromService(in []service.AgentTotal) []AgentTotal {
+	out := make([]AgentTotal, 0, len(in))
+	for _, total := range in {
+		out = append(out, AgentTotal{
+			Agent:               total.Agent,
+			InputTokens:         total.InputTokens,
+			OutputTokens:        total.OutputTokens,
+			CacheCreationTokens: total.CacheCreationTokens,
+			CacheReadTokens:     total.CacheReadTokens,
+			Cost:                total.Cost,
+		})
 	}
-	out := make([]AgentTotal, 0, len(m))
-	for _, v := range m {
-		out = append(out, *v)
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Cost != out[j].Cost {
-			return out[i].Cost > out[j].Cost
-		}
-		return out[i].Agent < out[j].Agent
-	})
 	return out
 }
 
-// computeCacheStats derives cache hit/miss metrics from totals.
-// SavingsVsUncached passes through totals.CacheSavings, which
-// the DB layer computes per-message using each row's actual
-// per-model rates — so mixed-model periods (e.g. Opus + Sonnet)
-// report the right net delta instead of a single hard-coded
-// proxy rate.
-func computeCacheStats(t db.UsageTotals) CacheStats {
-	// Anthropic reports input_tokens as the NON-cached portion
-	// of the input (cache_read and cache_creation are separate
-	// fields), so UncachedInputTokens is just t.InputTokens
-	// directly — no subtraction.
-	cs := CacheStats{
-		CacheReadTokens:     t.CacheReadTokens,
-		CacheCreationTokens: t.CacheCreationTokens,
-		UncachedInputTokens: t.InputTokens,
-		OutputTokens:        t.OutputTokens,
-		SavingsVsUncached:   t.CacheSavings,
+func cacheStatsFromService(in service.CacheStats) CacheStats {
+	return CacheStats{
+		CacheReadTokens:     in.CacheReadTokens,
+		CacheCreationTokens: in.CacheCreationTokens,
+		UncachedInputTokens: in.UncachedInputTokens,
+		OutputTokens:        in.OutputTokens,
+		HitRate:             in.HitRate,
+		SavingsVsUncached:   in.SavingsVsUncached,
 	}
-	denominator := t.CacheReadTokens + t.InputTokens
-	if denominator > 0 {
-		cs.HitRate = float64(t.CacheReadTokens) /
-			float64(denominator)
-	}
-	return cs
 }

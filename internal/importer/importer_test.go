@@ -173,6 +173,57 @@ func TestImportChatGPT(t *testing.T) {
 	assert.Equal(t, "chatgpt.com", s.Project)
 }
 
+func TestImportChatGPTSanitizesParserRows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	longModel := strings.Repeat("m", db.MaxModelLen+16)
+	conv := `[{
+  "id":"cg-sanitize","conversation_id":"cg-sanitize",
+  "title":"Sanitize","create_time":7258118400.0,
+  "update_time":7258118460.0,"current_node":"n2",
+  "mapping":{
+    "r":{"id":"r","parent":null,"children":["n1"],"message":null},
+    "n1":{"id":"n1","parent":"r","children":["n2"],"message":{
+      "id":"m1","create_time":7258118400.0,
+      "author":{"role":"user","name":null,"metadata":{}},
+      "content":{"content_type":"text","parts":["Hello\u0000\u001b[31m"]},
+      "status":"finished_successfully","metadata":{}}},
+    "n2":{"id":"n2","parent":"n1","children":[],"message":{
+      "id":"m2","create_time":7258118401.0,
+      "author":{"role":"assistant","name":null,"metadata":{}},
+      "content":{"content_type":"text","parts":["Hi"]},
+      "status":"finished_successfully",
+      "metadata":{"model_slug":"` + longModel + `"}}}
+  }
+}]`
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(conv), 0o644,
+	))
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+
+	stats, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+
+	s, err := d.GetSession(ctx, "chatgpt:cg-sanitize")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	assert.Nil(t, s.StartedAt)
+	assert.Nil(t, s.EndedAt)
+
+	msgs, err := d.GetAllMessages(ctx, "chatgpt:cg-sanitize")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Hello[31m", msgs[0].Content)
+	assert.Empty(t, msgs[0].Timestamp)
+	assert.Empty(t, msgs[1].Timestamp)
+	assert.Len(t, msgs[1].Model, db.MaxModelLen)
+}
+
 func TestImportAdvancesLocalModifiedAt(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -287,6 +338,40 @@ func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
 	require.NotNil(t, s.DisplayName)
 	assert.Equal(t, "Renamed GPT Session", *s.DisplayName,
 		"session_name should be refreshed on ChatGPT re-import")
+}
+
+func TestImportChatGPTSanitizesSessionNameOnReimport(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(testChatGPTConv), 0o644,
+	))
+	assetsDir := filepath.Join(t.TempDir(), "assets")
+
+	_, err := ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	dirty := strings.ReplaceAll(
+		testChatGPTConv,
+		`"title":"Test"`,
+		`"title":"Renamed\u0000\u001b[31m"`,
+	)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "conversations-000.json"),
+		[]byte(dirty), 0o644,
+	))
+
+	_, err = ImportChatGPT(ctx, d, dir, assetsDir, nil)
+	require.NoError(t, err)
+
+	s, err := d.GetSession(ctx, "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	require.NotNil(t, s.DisplayName)
+	assert.Equal(t, "Renamed[31m", *s.DisplayName)
 }
 
 func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {

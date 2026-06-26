@@ -141,6 +141,27 @@ func TestParseCodexSession_MtimeIncludesSessionIndex(t *testing.T) {
 	assert.Equal(t, "Renamed", sess2.SessionName)
 }
 
+func TestEvictCodexSessionIndexCache(t *testing.T) {
+	root := t.TempDir()
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	index := `{"id":"abc-123","thread_name":"Cached title","updated_at":"2026-06-11T17:34:20Z"}` + "\n"
+	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
+
+	titles := CodexSessionIndexTitles(indexPath)
+	require.Equal(t, "Cached title", titles["abc-123"])
+	codexSessionIndexCache.mu.Lock()
+	_, cached := codexSessionIndexCache.entries[indexPath]
+	codexSessionIndexCache.mu.Unlock()
+	require.True(t, cached, "session index should be cached after read")
+
+	EvictCodexSessionIndex(indexPath)
+
+	codexSessionIndexCache.mu.Lock()
+	_, cached = codexSessionIndexCache.entries[indexPath]
+	codexSessionIndexCache.mu.Unlock()
+	assert.False(t, cached, "session index cache entry should be evicted")
+}
+
 func TestParseCodexSession_PreservesAssistantBlockquotes(t *testing.T) {
 	content := loadFixture(t, "codex/blockquotes_session.jsonl")
 	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
@@ -1708,6 +1729,41 @@ func TestParseCodexSessionFrom_LateTokenCountRequiresFullParse(t *testing.T) {
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
+func TestParseCodexSessionFrom_FunctionCallOutputRequiresFullParse(t *testing.T) {
+	t.Parallel()
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"inc-function-output", "/projects/api",
+			"codex_exec", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "run command", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"exec_command", "call_cmd",
+			map[string]any{"cmd": "sleep 1"}, tsEarlyS5,
+		),
+	)
+	path := createTestFile(t, "function-call-output.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	offset := info.Size()
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(testjsonl.JoinJSONL(
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_cmd", "done", tsLate,
+		),
+	))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	require.Error(t, err)
+	assert.True(t, IsIncrementalFullParseFallback(err))
+}
+
 // TestParseCodexSessionFrom_DedupsReemittedPrompt covers the
 // incremental-sync case of the re-emitted-prompt dedup: when Codex
 // appends a positive replay signal followed by a verbatim replay of
@@ -2069,7 +2125,7 @@ func TestParseCodexSessionFrom_RunningNotificationRequiresFullParse(t *testing.T
 	assert.Contains(t, err.Error(), "full parse")
 }
 
-func TestParseCodexSessionFrom_NonSubagentFunctionOutputDoesNotRequireFullParse(t *testing.T) {
+func TestParseCodexSessionFrom_NonSubagentFunctionOutputRequiresFullParse(t *testing.T) {
 	t.Parallel()
 
 	initial := testjsonl.JoinJSONL(
@@ -2090,10 +2146,9 @@ func TestParseCodexSessionFrom_NonSubagentFunctionOutputDoesNotRequireFullParse(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, endedAt, _, err := ParseCodexSessionFrom(path, offset, 1, false)
-	require.NoError(t, err)
-	assert.Equal(t, 0, len(newMsgs))
-	assert.False(t, endedAt.IsZero())
+	_, _, _, err = ParseCodexSessionFrom(path, offset, 1, false)
+	require.Error(t, err)
+	assert.True(t, IsIncrementalFullParseFallback(err))
 }
 
 func TestParseCodexSessionFrom_SeedsModelFromTurnContext(

@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { RemoteSyncRequest } from '../models/RemoteSyncRequest';
 import type { ServiceSessionDetail } from '../models/ServiceSessionDetail';
 import type { ServiceSyncInput } from '../models/ServiceSyncInput';
 import type { SyncStatusResponse } from '../models/SyncStatusResponse';
@@ -77,6 +78,36 @@ export class SyncService {
         403: `Forbidden`,
         404: `Not Found`,
         409: `Conflict`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Sync remote hosts
+   * @returns any OK
+   * @throws ApiError
+   */
+  public static postApiV1SyncRemotes({
+    requestBody,
+  }: {
+    requestBody: RemoteSyncRequest,
+  }): CancelablePromise<Record<string, any>> {
+    return __request(OpenAPI, {
+      method: 'POST',
+      url: '/api/v1/sync/remotes',
+      body: requestBody,
+      mediaType: 'application/json',
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
         500: `Internal Server Error`,
         501: `Not Implemented`,
         502: `Bad Gateway`,

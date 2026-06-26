@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { XIcon } from "../../icons.js";
@@ -8,34 +9,34 @@
   const escapeKey = isMac ? "⎋" : "Esc";
   const deleteKey = isMac ? "⌫" : "Del";
 
-  const baseShortcuts = [
-    { key: `${mod} K`, action: "Open command palette" },
-    { key: `${mod} F / /`, action: "Find in session" },
-    { key: escapeKey, action: "Close palette / modal / find" },
-    { key: "j / \u2193", action: "Next message" },
-    { key: "k / \u2191", action: "Previous message" },
-    { key: "]", action: "Next session" },
-    { key: "[", action: "Previous session" },
-    { key: "o", action: "Toggle sort order" },
-    { key: "l", action: "Cycle message layout" },
-    { key: "r", action: "Trigger sync" },
-    { key: "s", action: "Star / unstar session" },
-    { key: "e", action: "Export session" },
-    { key: "p", action: "Publish to Gist" },
-    { key: "c", action: "Copy resume command" },
-    { key: deleteKey, action: "Delete session" },
-    { key: "?", action: "Show this modal" },
-  ];
+  const baseShortcuts = $derived([
+    { key: `${mod} K`, action: m.shortcuts_open_command_palette() },
+    { key: `${mod} F / /`, action: m.shortcuts_find_in_session() },
+    { key: escapeKey, action: m.shortcuts_close_palette() },
+    { key: "j / \u2193", action: m.shortcuts_next_message() },
+    { key: "k / \u2191", action: m.shortcuts_prev_message() },
+    { key: "]", action: m.shortcuts_next_session() },
+    { key: "[", action: m.shortcuts_prev_session() },
+    { key: "o", action: m.shortcuts_toggle_sort() },
+    { key: "l", action: m.shortcuts_cycle_layout() },
+    { key: "r", action: m.shortcuts_trigger_sync() },
+    { key: "s", action: m.shortcuts_star_session() },
+    { key: "e", action: m.shortcuts_export_session() },
+    { key: "p", action: m.shortcuts_publish_gist() },
+    { key: "c", action: m.shortcuts_copy_resume() },
+    { key: deleteKey, action: m.shortcuts_delete_session() },
+    { key: "?", action: m.shortcuts_show_modal() },
+  ]);
 
-  const zoomShortcuts = [
-    { key: `${mod} +`, action: "Zoom in" },
-    { key: `${mod} -`, action: "Zoom out" },
-    { key: `${mod} 0`, action: "Reset zoom" },
-  ];
+  const zoomShortcuts = $derived([
+    { key: `${mod} +`, action: m.shortcuts_zoom_in() },
+    { key: `${mod} -`, action: m.shortcuts_zoom_out() },
+    { key: `${mod} 0`, action: m.shortcuts_reset_zoom() },
+  ]);
 
-  const shortcuts = sync.isDesktop
+  const shortcuts = $derived(sync.isDesktop
     ? [...baseShortcuts, ...zoomShortcuts]
-    : baseShortcuts;
+    : baseShortcuts);
 
   function handleOverlayClick(e: MouseEvent) {
     if (
@@ -58,12 +59,12 @@
 >
   <div class="shortcuts-modal">
     <div class="shortcuts-header">
-      <h3 class="shortcuts-title">Keyboard Shortcuts</h3>
+      <h3 class="shortcuts-title">{m.shortcuts_title()}</h3>
       <button
         class="close-btn"
         onclick={() => ui.activeModal = null}
-        title="Close shortcuts"
-        aria-label="Close shortcuts"
+        title={m.shortcuts_close()}
+        aria-label={m.shortcuts_close()}
       >
         <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
       </button>

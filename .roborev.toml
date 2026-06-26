@@ -85,8 +85,8 @@ Key assumptions reviewers MUST account for:
     depends on it.
 
 16. INSIGHT AGENT SANDBOXING: Not all agent CLIs offer equal
-    sandboxing. Claude (--tools ""), Codex (--sandbox read-only), and
-    Gemini (--sandbox) have verified no-tools/read-only modes.
+   sandboxing. Claude (--tools "") and Codex (--sandbox read-only)
+   have verified no-tools/read-only modes. Gemini currently does not.
     Copilot only supports --disable-builtin-mcps (blocks MCP tools
     but not all tool use). Kiro CLI uses --trust-tools= and
     --no-interactive (disables tool trust prompts but does not

@@ -49,8 +49,7 @@ func syntheticAWSAccessKey(seed string) string {
 // would make ScanSecrets return db.ErrReadOnly; instead the scan must run and
 // find the seeded secret.
 func TestSecretsScan_DirectMode_Scans(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
 
 	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
@@ -81,8 +80,7 @@ func TestSecretsScan_DirectMode_Scans(t *testing.T) {
 }
 
 func TestSecretsScan_DirectMode_DeniesAgentsviewFixtures(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "fixture", "proj")
 
 	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
@@ -115,8 +113,7 @@ func TestSecretsScan_DirectMode_DeniesAgentsviewFixtures(t *testing.T) {
 // TestSecretsScanHint_ShownOnCandidate verifies the hint is printed
 // when at least one candidate finding exists and output is not JSON.
 func TestSecretsScanHint_ShownOnCandidate(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
 	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	if err != nil {
@@ -148,8 +145,7 @@ func TestSecretsScanHint_ShownOnCandidate(t *testing.T) {
 // TestSecretsScanHint_SuppressedWhenDefiniteOnly verifies the hint is
 // NOT printed when only definite findings exist.
 func TestSecretsScanHint_SuppressedWhenDefiniteOnly(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
 	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	if err != nil {
@@ -178,8 +174,7 @@ func TestSecretsScanHint_SuppressedWhenDefiniteOnly(t *testing.T) {
 // TestSecretsScanHint_SuppressedInJSON verifies the hint is NOT printed
 // in JSON mode even when candidates exist.
 func TestSecretsScanHint_SuppressedInJSON(t *testing.T) {
-	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
 	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	if err != nil {

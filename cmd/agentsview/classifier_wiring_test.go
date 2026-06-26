@@ -32,6 +32,11 @@ var triggerCalls = map[string]struct{}{
 
 const wiringHelper = "applyClassifierConfig"
 
+var inheritedWiringFuncs = map[string]struct{}{
+	"runPGPushTarget":   {},
+	"runPGStatusTarget": {},
+}
+
 // TestEveryStoreOpenPathIsWired enforces the rule documented
 // in the design spec: every code path in cmd/agentsview that
 // opens or initializes a store must first call
@@ -81,6 +86,9 @@ func scanFile(
 		switch fn := n.(type) {
 		case *ast.FuncDecl:
 			if fn.Body == nil {
+				return true
+			}
+			if _, ok := inheritedWiringFuncs[fn.Name.Name]; ok {
 				return true
 			}
 			if v := checkBody(

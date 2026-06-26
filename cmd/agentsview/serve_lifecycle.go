@@ -17,6 +17,8 @@ import (
 // shutdown after signalling before escalating to a forced kill.
 const serveStopGraceTimeout = 10 * time.Second
 
+var stopDaemonRuntimeForUpgrade = stopDaemonRuntimeForUpgradeImpl
+
 // runServeStatus reports whether a server owns this data dir, and where to
 // reach it. It always exits zero; the output distinguishes the states.
 func runServeStatus(cfg config.Config) {
@@ -98,6 +100,60 @@ func runServeStop(cfg config.Config) {
 			"No agentsview server was stopped; runtime records may be stale.",
 		)
 	}
+}
+
+func stopDaemonRuntimeForUpgradeImpl(
+	cfg config.Config, rt *DaemonRuntime,
+) error {
+	if rt == nil {
+		return nil
+	}
+	if !stopTargetConfirmed(rt.Record, cfg.AuthToken) {
+		return fmt.Errorf(
+			"cannot confirm pid %d is the recorded agentsview daemon",
+			rt.Record.PID,
+		)
+	}
+	if err := stopDaemonProcess(rt.Record, serveStopGraceTimeout); err != nil {
+		return fmt.Errorf("stopping pid %d: %w", rt.Record.PID, err)
+	}
+	stopOrphanedCaddyChild(rt.Record)
+	return nil
+}
+
+func stopWritableDaemonsForUpdate(
+	cfg config.Config,
+) (updateDaemonStopResult, error) {
+	records := liveDaemonRecords(cfg.DataDir)
+	var result updateDaemonStopResult
+	for _, rec := range records {
+		rt := daemonRuntimeFromRecord(rec)
+		if rt.ReadOnly {
+			continue
+		}
+		// A data dir supports one writable daemon. If multiple live writable
+		// records somehow exist, stop every old writer before the update but
+		// restart one replacement using the first runtime's externally visible
+		// settings. Restarting multiple writers would recreate the invalid
+		// state this path is trying to collapse.
+		if !result.Stopped {
+			result.Host = rt.Host
+			result.Port = rt.Port
+			result.RequireAuth = rt.RequireAuth
+			result.RequireAuthKnown = rt.RequireAuthKnown
+			result.NoSync = rt.NoSync
+		}
+		if err := stopDaemonRuntimeForUpgrade(cfg, rt); err != nil {
+			return result, err
+		}
+		result.Stopped = true
+	}
+	if !result.Stopped && IsDaemonStarting(cfg.DataDir) {
+		return result, fmt.Errorf(
+			"agentsview server is starting; retry the update once it is ready",
+		)
+	}
+	return result, nil
 }
 
 // stopTargetConfirmed reports whether rec's live PID is safe to signal as the

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { m } from "../../i18n/index.js";
   import {
     CalendarIcon,
     ChevronDownIcon,
@@ -172,7 +173,7 @@
   </button>
 
   {#if open}
-    <div class="panel" class:align-right={align === "right"} role="dialog" aria-label="Select date range">
+    <div class="panel" class:align-right={align === "right"} role="dialog" aria-label={m.shared_range_select_date_range()}>
       <div class="tabs" role="tablist">
         {#each TABS as t (t.mode)}
           <button
@@ -188,7 +189,7 @@
       </div>
 
       {#if tab === "relative"}
-        <div class="pills" role="group" aria-label="Relative window">
+        <div class="pills" role="group" aria-label={m.shared_range_relative_window()}>
           {#each RELATIVE_PRESETS as preset (preset.days)}
             <button
               class="pill"
@@ -200,7 +201,7 @@
           {/each}
         </div>
       {:else if tab === "calendar"}
-        <div class="pills" role="group" aria-label="Calendar period">
+        <div class="pills" role="group" aria-label={m.shared_range_calendar_period()}>
           {#each CALENDAR_UNITS as u (u.unit)}
             <button
               class="pill"
@@ -215,7 +216,7 @@
           <button
             class="arrow"
             onclick={() => step(-1)}
-            aria-label="Previous period"
+            aria-label={m.shared_range_previous_period()}
           >
             <ChevronLeftIcon size="15" strokeWidth="2" aria-hidden="true" />
           </button>
@@ -224,7 +225,7 @@
             class="arrow"
             onclick={() => step(1)}
             disabled={nextDisabled}
-            aria-label="Next period"
+            aria-label={m.shared_range_next_period()}
           >
             <ChevronRightIcon size="15" strokeWidth="2" aria-hidden="true" />
           </button>
@@ -232,7 +233,7 @@
       {:else}
         <div class="fields">
           <label class="field">
-            <span>From</span>
+            <span>{m.shared_range_from()}</span>
             <input
               type="date"
               class="date-input"
@@ -241,7 +242,7 @@
             />
           </label>
           <label class="field">
-            <span>To</span>
+            <span>{m.shared_range_to()}</span>
             <input
               type="date"
               class="date-input"
@@ -403,7 +404,7 @@
 
   .pill.active {
     background: var(--accent-blue);
-    color: #fff;
+    color: var(--accent-blue-foreground);
   }
 
   .stepper {

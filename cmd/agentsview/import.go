@@ -24,12 +24,11 @@ func runImport(cfg ImportConfig) {
 		log.Fatalf("loading config: %v", err)
 	}
 
-	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
+	database, writeLock, err := openWriteDB(context.Background(), appCfg)
 	if err != nil {
 		log.Fatalf("Error opening database: %v", err)
 	}
-	defer database.Close()
+	defer closeWriteDB(database, writeLock)
 
 	ctx := context.Background()
 

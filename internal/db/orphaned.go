@@ -333,9 +333,6 @@ func (d *DB) CopySyncStateFrom(sourcePath string) error {
 		}
 		return fmt.Errorf("probing pg_sync_state table: %w", err)
 	}
-	if tableExists != 1 {
-		return nil
-	}
 
 	_, err = conn.ExecContext(ctx, `
 		INSERT OR REPLACE INTO main.pg_sync_state (key, value)
@@ -385,9 +382,6 @@ func (d *DB) CopyExcludedSessionsFrom(
 			return nil
 		}
 		return fmt.Errorf("probing excluded_sessions table: %w", err)
-	}
-	if tableExists != 1 {
-		return nil
 	}
 
 	_, err = conn.ExecContext(ctx, `
@@ -513,6 +507,31 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 	}
 
+	if oldDBHasTable(ctx, tx, "cursor_usage_events") {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM main.cursor_usage_events`); err != nil {
+			return fmt.Errorf("clearing cursor usage events: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.cursor_usage_events (
+				occurred_at, model, kind,
+				input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens,
+				charged_cents, cursor_token_fee,
+				user_id, user_email, is_headless, dedup_key
+			)
+			SELECT
+				occurred_at, model, kind,
+				input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens,
+				charged_cents, cursor_token_fee,
+				user_id, user_email, is_headless, dedup_key
+			FROM old_db.cursor_usage_events
+			ORDER BY occurred_at, id`); err != nil {
+			return fmt.Errorf("copying cursor usage events: %w", err)
+		}
+	}
+
 	// Copy persistent worktree project mappings. Omit id so
 	// primary-key values from old_db cannot shadow existing
 	// destination rows. ResyncAll may pre-copy mappings into
@@ -597,6 +616,12 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"context_pressure_max", "health_score",
 		"health_grade", "has_tool_calls",
 		"has_context_data", "data_version",
+		"quality_signal_version", "short_prompt_count",
+		"unstructured_start",
+		"missing_success_criteria_count",
+		"missing_verification_count",
+		"duplicate_prompt_count", "no_code_context_count",
+		"runaway_tool_loop_count",
 		"cwd", "git_branch", "source_session_id",
 		"source_version", "parser_malformed_lines",
 		"is_truncated",
@@ -678,6 +703,20 @@ func copySessionDataForIDs(
 	}
 	toolCallCols = append(toolCallCols, "subagent_session_id")
 	toolCallSelect = append(toolCallSelect, "otc.subagent_session_id")
+	if oldDBHasColumn(ctx, tx, "tool_calls", "file_path") {
+		toolCallCols = append(toolCallCols, "file_path")
+		toolCallSelect = append(toolCallSelect, "otc.file_path")
+	} else {
+		toolCallCols = append(toolCallCols, "file_path")
+		toolCallSelect = append(toolCallSelect, "NULL")
+	}
+	if oldDBHasColumn(ctx, tx, "tool_calls", "call_index") {
+		toolCallCols = append(toolCallCols, "call_index")
+		toolCallSelect = append(toolCallSelect, "otc.call_index")
+	} else {
+		toolCallCols = append(toolCallCols, "call_index")
+		toolCallSelect = append(toolCallSelect, "NULL")
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO tool_calls
 			(`+strings.Join(toolCallCols, ", ")+`)

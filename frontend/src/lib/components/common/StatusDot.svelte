@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import {
     getSessionStatus,
     type SessionStatusInput,
@@ -27,15 +28,15 @@
   let label = $derived.by(() => {
     switch (status) {
       case "working":
-        return "Working — last write within the last minute";
+        return m.status_dot_working();
       case "waiting":
-        return "Waiting on user input";
+        return m.status_dot_waiting();
       case "idle":
-        return "Recently active, currently idle";
+        return m.status_dot_idle();
       case "stale":
-        return "Flagged session, idle for 10–60 minutes";
+        return m.status_dot_stale();
       case "unclean":
-        return "Terminated mid tool call (or file truncated)";
+        return m.status_dot_unclean();
       case "quiet":
         return "";
     }

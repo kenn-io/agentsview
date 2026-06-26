@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { Message } from "../../api/types.js";
+import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import MessageContent from "./MessageContent.svelte";
 
@@ -79,11 +80,47 @@ function makeMessage(
 }
 
 afterEach(() => {
+  setLocale("en");
   document.body.innerHTML = "";
   vi.clearAllMocks();
 });
 
 describe("MessageContent", () => {
+  it("renders message controls in Simplified Chinese without translating content", async () => {
+    setLocale("zh-CN");
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          role: "user",
+          content: "Do not translate this prompt.",
+        }),
+      },
+    });
+
+    await tick();
+
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+      "用户",
+    );
+    expect(document.querySelector(".role-icon")?.getAttribute("style")).toContain(
+      "var(--accent-blue-foreground)",
+    );
+    const copyButton = document.querySelector<HTMLButtonElement>(
+      "button.copy-btn",
+    );
+    expect(copyButton?.getAttribute("aria-label")).toBe("复制消息");
+    expect(copyButton?.getAttribute("title")).toBe("复制消息");
+    expect(
+      document.querySelector<HTMLButtonElement>(".pin-btn")?.getAttribute(
+        "title",
+      ),
+    ).toBe("固定消息");
+    expect(document.body.textContent).toContain("Do not translate this prompt.");
+
+    unmount(component);
+  });
+
   it("renders compact token totals when both token metrics are reported", async () => {
     const component = mount(MessageContent, {
       target: document.body,
@@ -101,6 +138,23 @@ describe("MessageContent", () => {
     const tokenMeta = document.querySelector(".message-tokens");
     expect(tokenMeta?.textContent?.replace(/\s+/g, " ").trim()).toBe(
       "2.4k ctx / 180 out",
+    );
+
+    unmount(component);
+  });
+
+  it("uses the assistant accent foreground for assistant role icons", async () => {
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({ role: "assistant" }),
+      },
+    });
+
+    await tick();
+
+    expect(document.querySelector(".role-icon")?.getAttribute("style")).toContain(
+      "var(--accent-purple-foreground)",
     );
 
     unmount(component);

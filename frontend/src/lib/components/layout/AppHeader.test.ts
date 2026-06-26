@@ -28,6 +28,7 @@ vi.mock("../../utils/clipboard.js", () => ({
 import { sessions } from "../../stores/sessions.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { setLocale } from "../../i18n/index.js";
 import type { Session } from "../../api/types.js";
 
 // @ts-ignore
@@ -62,6 +63,7 @@ describe("AppHeader export actions", () => {
     sync.serverVersion = null;
     ui.isMobileViewport = false;
     ui.followLatest = false;
+    setLocale("en");
   });
 
   afterEach(() => {
@@ -208,5 +210,22 @@ describe("AppHeader export actions", () => {
     expect(
       refreshButton?.querySelector("svg.lucide-database-backup"),
     ).not.toBeNull();
+  });
+
+  it("renders translated shell navigation when locale is Simplified Chinese", async () => {
+    setLocale("zh-CN");
+
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector<HTMLButtonElement>('button[aria-label="会话"]'),
+    ).not.toBeNull();
+    expect(
+      document.querySelector<HTMLButtonElement>('button[aria-label="同步会话"]'),
+    ).not.toBeNull();
+    expect(document.body.textContent).toContain("会话");
+    expect(document.body.textContent).toContain("用量");
+    expect(document.body.textContent).toContain("活动");
   });
 });

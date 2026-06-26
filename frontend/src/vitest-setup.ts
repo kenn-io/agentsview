@@ -4,6 +4,7 @@
 // component tests using render() would otherwise leak mounted DOM between
 // cases. cleanup() is idempotent, so tests that unmount manually are unharmed.
 import "@testing-library/svelte/vitest";
+import { initI18n } from "./lib/i18n/index.js";
 
 type StorageName = "localStorage";
 
@@ -58,3 +59,4 @@ export function installFallbackStorage(name: StorageName): void {
 }
 
 installFallbackStorage("localStorage");
+initI18n();

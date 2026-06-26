@@ -12,12 +12,13 @@ const maxSessions = 50
 
 // GenerateRequest describes what insight to generate.
 type GenerateRequest struct {
-	Type     string
-	DateFrom string
-	DateTo   string
-	Project  string
-	Prompt   string
-	Summary  *RangeSummary // non-nil only for multi-day ranges
+	Type           string
+	DateFrom       string
+	DateTo         string
+	Project        string
+	Prompt         string
+	AutomatedScope string
+	Summary        *RangeSummary // non-nil only for multi-day ranges
 }
 
 // BuildPrompt queries sessions for the given date and assembles
@@ -27,11 +28,15 @@ func BuildPrompt(
 	database db.Store,
 	req GenerateRequest,
 ) (string, error) {
+	automatedScope := req.AutomatedScope
+	if automatedScope == "" {
+		automatedScope = "human"
+	}
 	filter := db.SessionFilter{
-		DateFrom:         req.DateFrom,
-		DateTo:           req.DateTo,
-		Limit:            maxSessions + 1,
-		ExcludeAutomated: true,
+		DateFrom:       req.DateFrom,
+		DateTo:         req.DateTo,
+		Limit:          maxSessions + 1,
+		AutomatedScope: automatedScope,
 	}
 	if req.Project != "" {
 		filter.Project = req.Project

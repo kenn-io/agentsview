@@ -4,16 +4,20 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/update"
 )
 
 type transportMode int
@@ -23,6 +27,20 @@ const (
 	transportHTTP
 )
 
+type transportIntent int
+
+const (
+	transportIntentRead transportIntent = iota
+	transportIntentArchiveWrite
+)
+
+var errLocalDaemonUnreachable = errors.New(
+	"local daemon owns the SQLite archive but is not responding",
+)
+
+var startBackgroundServeForTransport = ensureBackgroundServe
+var waitForDaemonStartupForTransport = WaitForDaemonStartupContext
+
 // transport captures how to reach the session-data layer from a
 // CLI subcommand. Either the HTTP daemon (URL set) or the local DB.
 type transport struct {
@@ -30,6 +48,8 @@ type transport struct {
 	URL            string
 	ReadOnly       bool // daemon runtime ReadOnly flag (true for pg serve)
 	DirectReadOnly bool // writable daemon owns DB but is not reachable
+	DirectReason   string
+	Runtime        *DaemonRuntime
 }
 
 type customPricingStore interface {
@@ -60,12 +80,22 @@ var openPGReadStore = func(
 func detectTransport(
 	dataDir string, authToken string, waitTimeout time.Duration,
 ) (transport, error) {
+	return detectTransportContext(
+		context.Background(), dataDir, authToken, waitTimeout,
+	)
+}
+
+func detectTransportContext(
+	ctx context.Context,
+	dataDir string,
+	authToken string,
+	waitTimeout time.Duration,
+) (transport, error) {
+	if err := ctx.Err(); err != nil {
+		return transport{}, err
+	}
 	if sf := FindDaemonRuntime(dataDir, authToken); sf != nil {
-		return transport{
-			Mode:     transportHTTP,
-			URL:      urlFromDaemonRuntime(sf),
-			ReadOnly: sf.ReadOnly,
-		}, nil
+		return transportFromRuntime(sf), nil
 	}
 	if IsDaemonStarting(dataDir) {
 		fmt.Fprintln(os.Stderr,
@@ -73,22 +103,179 @@ func detectTransport(
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
 		}
-		WaitForDaemonStartup(dataDir, waitTimeout, authToken)
+		waitForDaemonStartupForTransport(
+			ctx, dataDir, waitTimeout, authToken,
+		)
+		if err := ctx.Err(); err != nil {
+			return transport{}, err
+		}
 		if sf := FindDaemonRuntime(dataDir, authToken); sf != nil {
-			return transport{
-				Mode:     transportHTTP,
-				URL:      urlFromDaemonRuntime(sf),
-				ReadOnly: sf.ReadOnly,
-			}, nil
+			return transportFromRuntime(sf), nil
 		}
 	}
 	if IsLocalDaemonActive(dataDir, authToken) {
+		reason := errLocalDaemonUnreachable.Error()
+		if _, err := FindIncompatibleDaemonRuntime(dataDir, authToken); err != nil {
+			reason = err.Error()
+		}
 		return transport{
 			Mode:           transportDirect,
 			DirectReadOnly: true,
+			DirectReason:   reason,
 		}, nil
 	}
 	return transport{Mode: transportDirect}, nil
+}
+
+func ensureTransport(
+	cfg *config.Config,
+	intent transportIntent,
+	waitTimeout time.Duration,
+) (transport, error) {
+	return ensureTransportContext(
+		context.Background(), cfg, intent, waitTimeout,
+	)
+}
+
+func ensureTransportContext(
+	ctx context.Context,
+	cfg *config.Config,
+	intent transportIntent,
+	waitTimeout time.Duration,
+) (transport, error) {
+	if cfg == nil {
+		return transport{}, errors.New("nil config")
+	}
+	if err := ctx.Err(); err != nil {
+		return transport{}, err
+	}
+	if intent == transportIntentArchiveWrite && waitTimeout <= 0 {
+		waitTimeout = backgroundAutoStartReadyTimeout
+	}
+	tr, err := detectTransportContext(
+		ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+	)
+	if err != nil {
+		return transport{}, err
+	}
+	if tr.Mode == transportHTTP {
+		if intent == transportIntentArchiveWrite &&
+			shouldUpgradeDaemonRuntime(tr.Runtime, version) {
+			if daemonAutostartDisabled() {
+				return tr, nil
+			}
+			if err := guardDaemonAutoStartConfig(*cfg); err != nil {
+				return transport{}, err
+			}
+			cfg.NoSync = tr.Runtime.NoSync
+			rt, err := startBackgroundServeForTransport(
+				ctx, cfg, waitTimeout,
+			)
+			if err != nil {
+				return transport{}, err
+			}
+			return transportFromRuntime(rt), nil
+		}
+		return tr, nil
+	}
+	if intent == transportIntentArchiveWrite && !daemonAutostartDisabled() {
+		if rt, err := FindIncompatibleDaemonRuntime(
+			cfg.DataDir, cfg.AuthToken,
+		); err != nil && rt != nil &&
+			shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
+			if err := guardDaemonAutoStartConfig(*cfg); err != nil {
+				return transport{}, err
+			}
+			cfg.NoSync = rt.NoSync
+			rt, err := startBackgroundServeForTransport(
+				ctx, cfg, waitTimeout,
+			)
+			if err != nil {
+				return transport{}, err
+			}
+			return transportFromRuntime(rt), nil
+		}
+	}
+	if intent == transportIntentRead || daemonAutostartDisabled() {
+		return tr, nil
+	}
+	if tr.DirectReadOnly {
+		if tr.DirectReason != "" {
+			if tr.DirectReason == errLocalDaemonUnreachable.Error() {
+				return transport{}, errLocalDaemonUnreachable
+			}
+			return transport{}, errors.New(tr.DirectReason)
+		}
+		return transport{}, errLocalDaemonUnreachable
+	}
+	if err := guardDaemonAutoStartConfig(*cfg); err != nil {
+		return transport{}, err
+	}
+	rt, err := startBackgroundServeForTransport(ctx, cfg, waitTimeout)
+	if err != nil {
+		return transport{}, err
+	}
+	return transportFromRuntime(rt), nil
+}
+
+func shouldUpgradeDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
+	if rt == nil || rt.ReadOnly {
+		return false
+	}
+	if rt.Record.Version == "" {
+		return !update.IsDevBuildVersion(currentVersion)
+	}
+	return update.IsNewer(currentVersion, rt.Record.Version)
+}
+
+func shouldUpgradeIncompatibleDaemonRuntime(
+	rt *DaemonRuntime, currentVersion string,
+) bool {
+	if rt == nil {
+		return false
+	}
+	if !shouldUpgradeDaemonRuntime(rt, currentVersion) {
+		return false
+	}
+	if rt.API > daemonAPIVersion || rt.Data > db.CurrentDataVersion() {
+		return false
+	}
+	return true
+}
+
+func guardDaemonAutoStartConfig(cfg config.Config) error {
+	host := strings.TrimSpace(cfg.Host)
+	if host == "" || cfg.RequireAuth || isLoopbackHost(host) {
+		return nil
+	}
+	return fmt.Errorf(
+		"refusing to auto-start an unauthenticated daemon on non-loopback "+
+			"host %q; enable require_auth, bind serve to 127.0.0.1, "+
+			"start 'agentsview serve --background' explicitly, or set "+
+			"AGENTSVIEW_NO_DAEMON=1 for direct local writes",
+		host,
+	)
+}
+
+func daemonAutostartDisabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("AGENTSVIEW_NO_DAEMON")))
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// transportFromRuntime builds the HTTP transport a CLI client uses to reach a
+// resolved daemon runtime.
+func transportFromRuntime(rt *DaemonRuntime) transport {
+	return transport{
+		Mode:     transportHTTP,
+		URL:      urlFromDaemonRuntime(rt),
+		ReadOnly: rt.ReadOnly,
+		Runtime:  rt,
+	}
 }
 
 // urlFromDaemonRuntime returns the HTTP URL a CLI client should use
@@ -117,17 +304,13 @@ func newService(
 		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly),
 			func() {}, nil
 	default:
-		applyClassifierConfig(cfg)
-		d, err := db.Open(cfg.DBPath)
+		d, err := openReadOnlyDB(cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf(
 				"opening db: %w", err,
 			)
 		}
 		cleanup := func() { d.Close() }
-		if tr.DirectReadOnly {
-			return service.NewReadOnlyBackend(d), cleanup, nil
-		}
 		// engine is nil — CLI reads don't need it, and Sync
 		// is handled via the HTTP daemon when one is running.
 		return service.NewDirectBackend(d, nil), cleanup, nil

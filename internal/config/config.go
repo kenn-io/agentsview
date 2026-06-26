@@ -15,12 +15,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gofrs/flock"
 	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -65,6 +67,29 @@ type PGConfig struct {
 	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
+type pgEnvOverrides struct {
+	URL         string
+	Schema      string
+	MachineName string
+}
+
+// ResolvedPGTarget is one PostgreSQL target after target selection,
+// defaulting, and default-target env overrides are applied.
+type ResolvedPGTarget struct {
+	Name      string
+	Config    PGConfig
+	IsDefault bool
+}
+
+var pgConfigKeys = map[string]struct{}{
+	"url":              {},
+	"schema":           {},
+	"machine_name":     {},
+	"allow_insecure":   {},
+	"projects":         {},
+	"exclude_projects": {},
+}
+
 // DuckDBConfig holds DuckDB mirror and Quack connection settings.
 type DuckDBConfig struct {
 	Path            string   `toml:"path" json:"path"`
@@ -86,7 +111,9 @@ type AutomatedConfig struct {
 
 // AgentConfig holds per-agent runtime overrides.
 type AgentConfig struct {
-	Binary string `json:"binary,omitempty" toml:"binary"`
+	Binary      string `json:"binary,omitempty" toml:"binary"`
+	Sandbox     string `json:"sandbox,omitempty" toml:"sandbox"`
+	AllowUnsafe bool   `json:"allow_unsafe,omitempty" toml:"allow_unsafe"`
 }
 
 type CustomModelRate struct {
@@ -97,12 +124,14 @@ type CustomModelRate struct {
 }
 
 // RemoteHost describes one SSH target for config-driven
-// `agentsview sync` fan-out. Host is required; User and Port are
-// optional (Port 0 means the ssh default of 22).
+// `agentsview sync` fan-out. Host is required; User, Port, and
+// Interval are optional (Port 0 means the ssh default of 22;
+// zero/empty Interval disables periodic remote sync for this host).
 type RemoteHost struct {
-	Host string `toml:"host" json:"host"`
-	User string `toml:"user,omitempty" json:"user,omitempty"`
-	Port int    `toml:"port,omitempty" json:"port,omitempty"`
+	Host     string        `toml:"host" json:"host"`
+	User     string        `toml:"user,omitempty" json:"user,omitempty"`
+	Port     int           `toml:"port,omitempty" json:"port,omitempty"`
+	Interval time.Duration `toml:"interval,omitempty" json:"interval,omitempty"`
 }
 
 // Config holds all application configuration.
@@ -116,6 +145,9 @@ type Config struct {
 	Proxy                ProxyConfig            `json:"proxy,omitempty" toml:"proxy"`
 	WatchExcludePatterns []string               `json:"watch_exclude_patterns,omitempty" toml:"watch_exclude_patterns"`
 	CursorSecret         string                 `json:"cursor_secret" toml:"cursor_secret"`
+	CursorAdminAPIKey    string                 `json:"cursor_admin_api_key,omitempty" toml:"cursor_admin_api_key"`
+	CursorAdminEmail     string                 `json:"cursor_admin_email,omitempty" toml:"cursor_admin_email"`
+	CursorAdminUserID    string                 `json:"cursor_admin_user_id,omitempty" toml:"cursor_admin_user_id"`
 	GithubToken          string                 `json:"github_token,omitempty" toml:"github_token"`
 	Terminal             TerminalConfig         `json:"terminal,omitempty" toml:"terminal"`
 	AuthToken            string                 `json:"auth_token,omitempty" toml:"auth_token"`
@@ -124,6 +156,8 @@ type Config struct {
 	DisableUpdateCheck   bool                   `json:"disable_update_check" toml:"disable_update_check"`
 	NoSync               bool                   `json:"-" toml:"-"`
 	PG                   PGConfig               `json:"pg,omitempty" toml:"pg"`
+	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
+	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
@@ -159,6 +193,8 @@ type Config struct {
 	// Used to prevent auto-bind to 0.0.0.0 when the user
 	// explicitly requested a specific host.
 	HostExplicit bool `json:"-" toml:"-"`
+
+	pgEnvOverrides pgEnvOverrides
 }
 
 type dirSource int
@@ -199,10 +235,25 @@ func (c Config) ValidateRemoteHosts() error {
 			problems = append(problems,
 				fmt.Sprintf("entry %d: host is required", i+1))
 		}
+		if trimmed := strings.TrimSpace(h.Host); isSSHOptionShaped(h.Host) {
+			problems = append(problems,
+				fmt.Sprintf("entry %d: host must not begin with '-' (got %q)",
+					i+1, trimmed))
+		}
+		if trimmed := strings.TrimSpace(h.User); isSSHOptionShaped(h.User) {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%q): user must not begin with '-' (got %q)",
+					i+1, h.Host, trimmed))
+		}
 		if h.Port < 0 || h.Port > 65535 {
 			problems = append(problems,
 				fmt.Sprintf("entry %d (%q): invalid port %d",
 					i+1, h.Host, h.Port))
+		}
+		if h.Interval < 0 {
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%q): invalid interval %s",
+					i+1, h.Host, h.Interval))
 		}
 		// Remote sync namespaces sessions and the skip cache by
 		// host alone (see ssh.RemoteSync), so two entries sharing a
@@ -223,6 +274,10 @@ func (c Config) ValidateRemoteHosts() error {
 			strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+func isSSHOptionShaped(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), "-")
 }
 
 // Default returns a Config with default values.
@@ -416,36 +471,38 @@ func (c *Config) jsonConfigPath() string {
 // config.json exists and config.toml does not. The original
 // JSON file is renamed to config.json.bak.
 func (c *Config) migrateJSONToTOML() error {
-	jsonPath := c.jsonConfigPath()
-	tomlPath := c.configPath()
+	return c.withConfigLock(func() error {
+		jsonPath := c.jsonConfigPath()
+		tomlPath := c.configPath()
 
-	if _, err := os.Stat(tomlPath); err == nil {
-		return nil // TOML already exists
-	}
-	data, err := os.ReadFile(jsonPath)
-	if os.IsNotExist(err) {
-		return nil // no JSON to migrate
-	}
-	if err != nil {
-		return fmt.Errorf("reading config.json for migration: %w", err)
-	}
+		if _, err := os.Stat(tomlPath); err == nil {
+			return nil // TOML already exists
+		}
+		data, err := os.ReadFile(jsonPath)
+		if os.IsNotExist(err) {
+			return nil // no JSON to migrate
+		}
+		if err != nil {
+			return fmt.Errorf("reading config.json for migration: %w", err)
+		}
 
-	var m map[string]any
-	if err := json.Unmarshal(data, &m); err != nil {
-		return fmt.Errorf("parsing config.json for migration: %w", err)
-	}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return fmt.Errorf("parsing config.json for migration: %w", err)
+		}
 
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(m); err != nil {
-		return fmt.Errorf("encoding config.toml: %w", err)
-	}
-	if err := os.WriteFile(tomlPath, buf.Bytes(), 0o600); err != nil {
-		return fmt.Errorf("writing config.toml: %w", err)
-	}
-	if err := os.Rename(jsonPath, jsonPath+".bak"); err != nil {
-		return fmt.Errorf("renaming config.json to .bak: %w", err)
-	}
-	return nil
+		var buf bytes.Buffer
+		if err := toml.NewEncoder(&buf).Encode(m); err != nil {
+			return fmt.Errorf("encoding config.toml: %w", err)
+		}
+		if err := os.WriteFile(tomlPath, buf.Bytes(), 0o600); err != nil {
+			return fmt.Errorf("writing config.toml: %w", err)
+		}
+		if err := os.Rename(jsonPath, jsonPath+".bak"); err != nil {
+			return fmt.Errorf("renaming config.json to .bak: %w", err)
+		}
+		return nil
+	})
 }
 
 func (c *Config) loadFile() error {
@@ -505,6 +562,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	var file struct {
 		GithubToken                    string                     `toml:"github_token"`
 		CursorSecret                   string                     `toml:"cursor_secret"`
+		CursorAdminAPIKey              string                     `toml:"cursor_admin_api_key"`
+		CursorAdminEmail               string                     `toml:"cursor_admin_email"`
+		CursorAdminUserID              string                     `toml:"cursor_admin_user_id"`
 		PublicURL                      string                     `toml:"public_url"`
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
@@ -515,6 +575,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		RequireAuth                    bool                       `toml:"require_auth"`
 		RemoteAccess                   bool                       `toml:"remote_access"`
 		DisableUpdateCheck             bool                       `toml:"disable_update_check"`
+		DefaultPG                      string                     `toml:"default_pg"`
 		PG                             PGConfig                   `toml:"pg"`
 		DuckDB                         DuckDBConfig               `toml:"duckdb"`
 		Automated                      AutomatedConfig            `toml:"automated"`
@@ -527,11 +588,24 @@ func (c *Config) applyConfigTOML(data string) error {
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
 	}
+	var raw map[string]any
+	if _, err := toml.Decode(data, &raw); err != nil {
+		return fmt.Errorf("parsing config raw: %w", err)
+	}
 	if file.GithubToken != "" {
 		c.GithubToken = file.GithubToken
 	}
 	if file.CursorSecret != "" {
 		c.CursorSecret = file.CursorSecret
+	}
+	if file.CursorAdminAPIKey != "" && c.CursorAdminAPIKey == "" {
+		c.CursorAdminAPIKey = file.CursorAdminAPIKey
+	}
+	if file.CursorAdminEmail != "" && c.CursorAdminEmail == "" {
+		c.CursorAdminEmail = file.CursorAdminEmail
+	}
+	if file.CursorAdminUserID != "" && c.CursorAdminUserID == "" {
+		c.CursorAdminUserID = file.CursorAdminUserID
 	}
 	if file.PublicURL != "" {
 		c.PublicURL = file.PublicURL
@@ -559,25 +633,36 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	c.RequireAuth = file.RequireAuth || file.RemoteAccess
 	c.DisableUpdateCheck = file.DisableUpdateCheck
-	// Merge pg field-by-field so env vars override only
-	// the fields they set, preserving config-file settings.
-	if file.PG.URL != "" && c.PG.URL == "" {
-		c.PG.URL = file.PG.URL
+	if meta.IsDefined("default_pg") {
+		c.DefaultPG = normalizePGTargetName(file.DefaultPG)
 	}
-	if file.PG.Schema != "" && c.PG.Schema == "" {
-		c.PG.Schema = file.PG.Schema
+	legacyPG, namedPG, err := parsePGConfigSection(raw["pg"])
+	if err != nil {
+		return fmt.Errorf("pg: %w", err)
 	}
-	if file.PG.MachineName != "" && c.PG.MachineName == "" {
-		c.PG.MachineName = file.PG.MachineName
-	}
-	if file.PG.AllowInsecure {
-		c.PG.AllowInsecure = true
-	}
-	if file.PG.Projects != nil && c.PG.Projects == nil {
-		c.PG.Projects = file.PG.Projects
-	}
-	if file.PG.ExcludeProjects != nil && c.PG.ExcludeProjects == nil {
-		c.PG.ExcludeProjects = file.PG.ExcludeProjects
+	if len(namedPG) > 0 {
+		c.PG = PGConfig{}
+		c.PGTargets = namedPG
+	} else {
+		c.PGTargets = nil
+		if legacyPG.URL != "" {
+			c.PG.URL = legacyPG.URL
+		}
+		if legacyPG.Schema != "" {
+			c.PG.Schema = legacyPG.Schema
+		}
+		if legacyPG.MachineName != "" {
+			c.PG.MachineName = legacyPG.MachineName
+		}
+		if legacyPG.AllowInsecure {
+			c.PG.AllowInsecure = true
+		}
+		if legacyPG.Projects != nil {
+			c.PG.Projects = legacyPG.Projects
+		}
+		if legacyPG.ExcludeProjects != nil {
+			c.PG.ExcludeProjects = legacyPG.ExcludeProjects
+		}
 	}
 	// Merge duckdb field-by-field so env vars override only
 	// the fields they set, preserving config-file settings.
@@ -631,9 +716,10 @@ func (c *Config) applyConfigTOML(data string) error {
 		hosts := make([]RemoteHost, len(file.RemoteHosts))
 		for i, h := range file.RemoteHosts {
 			hosts[i] = RemoteHost{
-				Host: strings.TrimSpace(h.Host),
-				User: strings.TrimSpace(h.User),
-				Port: h.Port,
+				Host:     strings.TrimSpace(h.Host),
+				User:     strings.TrimSpace(h.User),
+				Port:     h.Port,
+				Interval: h.Interval,
 			}
 		}
 		c.RemoteHosts = hosts
@@ -641,10 +727,6 @@ func (c *Config) applyConfigTOML(data string) error {
 
 	// Parse config-file dir arrays for agents that have a
 	// ConfigKey. Only apply when not already set by env var.
-	var raw map[string]any
-	if _, err := toml.Decode(data, &raw); err != nil {
-		return fmt.Errorf("parsing config raw: %w", err)
-	}
 	for _, def := range parser.Registry {
 		if def.ConfigKey == "" {
 			continue
@@ -690,24 +772,28 @@ func (c *Config) ensureCursorSecret() error {
 		return nil
 	}
 
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Errorf("generating secret: %w", err)
-	}
-	secret := base64.StdEncoding.EncodeToString(b)
-	c.CursorSecret = secret
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if secret, ok := existing["cursor_secret"].(string); ok && secret != "" {
+			c.CursorSecret = secret
+			return nil
+		}
 
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
-
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return err
-	}
-
-	existing["cursor_secret"] = secret
-	return c.writeConfigMap(existing)
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return fmt.Errorf("generating secret: %w", err)
+		}
+		secret := base64.StdEncoding.EncodeToString(b)
+		existing["cursor_secret"] = secret
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.CursorSecret = secret
+		return nil
+	})
 }
 
 // readConfigMap reads the TOML config file into a map. Returns
@@ -739,6 +825,20 @@ func (c *Config) writeConfigMap(m map[string]any) error {
 	return nil
 }
 
+func (c *Config) withConfigLock(fn func() error) error {
+	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
+		return fmt.Errorf("creating data dir: %w", err)
+	}
+	lock := flock.New(c.configPath() + ".lock")
+	if err := lock.Lock(); err != nil {
+		return fmt.Errorf("locking config: %w", err)
+	}
+	defer func() {
+		_ = lock.Unlock()
+	}()
+	return fn()
+}
+
 // dataDirFromEnv returns the data directory from the environment, preferring
 // AGENTSVIEW_DATA_DIR and falling back to the legacy AGENT_VIEWER_DATA_DIR.
 // Returns "" when neither is set.
@@ -760,13 +860,31 @@ func (c *Config) loadEnv() {
 		c.DataDir = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
-		c.PG.URL = v
+		c.pgEnvOverrides.URL = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_SCHEMA"); v != "" {
-		c.PG.Schema = v
+		c.pgEnvOverrides.Schema = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_MACHINE"); v != "" {
-		c.PG.MachineName = v
+		c.pgEnvOverrides.MachineName = v
+	}
+	if v := firstEnv(
+		"AGENTSVIEW_CURSOR_ADMIN_API_KEY",
+		"CURSOR_ADMIN_API_KEY",
+	); v != "" {
+		c.CursorAdminAPIKey = v
+	}
+	if v := firstEnv(
+		"AGENTSVIEW_CURSOR_ADMIN_EMAIL",
+		"CURSOR_ADMIN_EMAIL",
+	); v != "" {
+		c.CursorAdminEmail = v
+	}
+	if v := firstEnv(
+		"AGENTSVIEW_CURSOR_ADMIN_USER_ID",
+		"CURSOR_ADMIN_USER_ID",
+	); v != "" {
+		c.CursorAdminUserID = v
 	}
 	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
 		c.DuckDB.Path = v
@@ -783,6 +901,15 @@ func (c *Config) loadEnv() {
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
 	}
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 type stringListFlag []string
@@ -1271,6 +1398,109 @@ func hostLiteral(host string) string {
 	return host
 }
 
+func normalizePGTargetName(name string) string {
+	return strings.TrimSpace(strings.ToLower(name))
+}
+
+func isReservedPGTargetName(name string) bool {
+	switch normalizePGTargetName(name) {
+	case "all", "local":
+		return true
+	default:
+		return false
+	}
+}
+
+func decodePGConfigMap(raw map[string]any) (PGConfig, error) {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(raw); err != nil {
+		return PGConfig{}, fmt.Errorf("encoding pg config: %w", err)
+	}
+	var cfg PGConfig
+	if _, err := toml.Decode(buf.String(), &cfg); err != nil {
+		return PGConfig{}, fmt.Errorf("decoding pg config: %w", err)
+	}
+	return cfg, nil
+}
+
+func parsePGConfigSection(value any) (PGConfig, map[string]PGConfig, error) {
+	if value == nil {
+		return PGConfig{}, nil, nil
+	}
+	section, ok := value.(map[string]any)
+	if !ok {
+		return PGConfig{}, nil, fmt.Errorf("expected [pg] to be a table")
+	}
+	hasLegacyFields := false
+	hasNamedTargets := false
+	legacyRaw := make(map[string]any)
+	namedTargets := make(map[string]PGConfig)
+	seenNames := make(map[string]string)
+	for rawName, rawValue := range section {
+		name := normalizePGTargetName(rawName)
+		if _, ok := pgConfigKeys[name]; ok {
+			if _, nested := rawValue.(map[string]any); nested {
+				return PGConfig{}, nil, fmt.Errorf(
+					"[pg].%s must be a scalar or array field, not a nested table",
+					rawName,
+				)
+			}
+			hasLegacyFields = true
+			legacyRaw[rawName] = rawValue
+			continue
+		}
+		targetRaw, ok := rawValue.(map[string]any)
+		if !ok {
+			return PGConfig{}, nil, fmt.Errorf(
+				"[pg].%s must be a named target table",
+				rawName,
+			)
+		}
+		hasNamedTargets = true
+		if name == "" {
+			return PGConfig{}, nil, fmt.Errorf(
+				"named PG targets must not be blank",
+			)
+		}
+		if isReservedPGTargetName(name) {
+			return PGConfig{}, nil, fmt.Errorf(
+				"named PG target %q is reserved",
+				name,
+			)
+		}
+		if prev, exists := seenNames[name]; exists {
+			return PGConfig{}, nil, fmt.Errorf(
+				"named PG targets %q and %q normalize to the same name %q",
+				prev, rawName, name,
+			)
+		}
+		seenNames[name] = rawName
+		targetCfg, err := decodePGConfigMap(targetRaw)
+		if err != nil {
+			return PGConfig{}, nil, fmt.Errorf(
+				"[pg].%s: %w", rawName, err,
+			)
+		}
+		namedTargets[name] = targetCfg
+	}
+	if hasLegacyFields && hasNamedTargets {
+		return PGConfig{}, nil, fmt.Errorf(
+			"cannot mix legacy [pg] fields with named [pg.NAME] targets",
+		)
+	}
+	if hasLegacyFields {
+		legacyCfg, err := decodePGConfigMap(legacyRaw)
+		if err != nil {
+			return PGConfig{}, nil, err
+		}
+		return legacyCfg, nil, nil
+	}
+	if hasNamedTargets {
+		return PGConfig{}, namedTargets, nil
+	}
+	return PGConfig{}, nil, nil
+}
+
 // ResolveDataDir returns the effective data directory by applying
 // defaults and environment overrides, without reading any files.
 // Use this to determine where migration should target before
@@ -1286,10 +1516,114 @@ func ResolveDataDir() (string, error) {
 	return cfg.DataDir, nil
 }
 
-// ResolvePG returns a copy of PG config with defaults applied
-// and environment variables expanded in URL.
-func (c *Config) ResolvePG() (PGConfig, error) {
-	pg := c.PG
+// DefaultPGTargetName returns the effective named PG target for this config.
+func (c *Config) DefaultPGTargetName() (string, error) {
+	if len(c.PGTargets) == 0 {
+		if c.DefaultPG != "" {
+			return "", fmt.Errorf(
+				"default_pg requires named [pg.NAME] targets",
+			)
+		}
+		return "", nil
+	}
+	if c.DefaultPG != "" {
+		if _, ok := c.PGTargets[c.DefaultPG]; !ok {
+			return "", fmt.Errorf(
+				"default_pg %q does not match any named [pg.NAME] target",
+				c.DefaultPG,
+			)
+		}
+		return c.DefaultPG, nil
+	}
+	if len(c.PGTargets) == 1 {
+		for name := range c.PGTargets {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"default_pg is required when more than one [pg.NAME] target is defined",
+	)
+}
+
+func (c *Config) validatePGTargets() error {
+	_, err := c.DefaultPGTargetName()
+	return err
+}
+
+func (c *Config) PGTargetNames() ([]string, string, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return nil, "", err
+	}
+	if len(c.PGTargets) == 0 {
+		return nil, "", nil
+	}
+	defaultName, err := c.DefaultPGTargetName()
+	if err != nil {
+		return nil, "", err
+	}
+	names := make([]string, 0, len(c.PGTargets))
+	for name := range c.PGTargets {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if names[i] == defaultName {
+			return true
+		}
+		if names[j] == defaultName {
+			return false
+		}
+		return names[i] < names[j]
+	})
+	return names, defaultName, nil
+}
+
+// RawPGTarget returns the configured PG target before env expansion and
+// default-field synthesis. An empty name selects the effective default target.
+func (c *Config) RawPGTarget(name string) (PGConfig, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return PGConfig{}, err
+	}
+	targetName := normalizePGTargetName(name)
+	if len(c.PGTargets) == 0 {
+		if targetName != "" {
+			return PGConfig{}, fmt.Errorf(
+				"pg target %q is not configured; config uses a single legacy [pg] block",
+				name,
+			)
+		}
+		return c.PG, nil
+	}
+	if targetName == "" {
+		var err error
+		targetName, err = c.DefaultPGTargetName()
+		if err != nil {
+			return PGConfig{}, err
+		}
+	}
+	targetCfg, ok := c.PGTargets[targetName]
+	if !ok {
+		return PGConfig{}, fmt.Errorf(
+			"pg target %q is not configured",
+			targetName,
+		)
+	}
+	return targetCfg, nil
+}
+
+func (c *Config) resolvePGConfig(
+	pg PGConfig, applyDefaultEnv bool,
+) (PGConfig, error) {
+	if applyDefaultEnv {
+		if c.pgEnvOverrides.URL != "" {
+			pg.URL = c.pgEnvOverrides.URL
+		}
+		if c.pgEnvOverrides.Schema != "" {
+			pg.Schema = c.pgEnvOverrides.Schema
+		}
+		if c.pgEnvOverrides.MachineName != "" {
+			pg.MachineName = c.pgEnvOverrides.MachineName
+		}
+	}
 	if pg.URL != "" {
 		expanded, err := expandBracedEnv(pg.URL)
 		if err != nil {
@@ -1308,6 +1642,83 @@ func (c *Config) ResolvePG() (PGConfig, error) {
 		pg.MachineName = h
 	}
 	return pg, nil
+}
+
+// ResolvePG returns the effective default PG target with defaults applied
+// and environment variables expanded in URL.
+func (c *Config) ResolvePG() (PGConfig, error) {
+	return c.ResolvePGTarget("")
+}
+
+// ResolvePGTarget resolves one named PG target, or the effective default
+// target when name is empty. In legacy single-target mode, only the empty
+// name is valid.
+func (c *Config) ResolvePGTarget(name string) (PGConfig, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return PGConfig{}, err
+	}
+	targetName := normalizePGTargetName(name)
+	if len(c.PGTargets) == 0 {
+		if targetName != "" {
+			return PGConfig{}, fmt.Errorf(
+				"pg target %q is not configured; config uses a single legacy [pg] block",
+				name,
+			)
+		}
+		return c.resolvePGConfig(c.PG, true)
+	}
+	defaultName, err := c.DefaultPGTargetName()
+	if err != nil {
+		return PGConfig{}, err
+	}
+	if targetName == "" {
+		targetName = defaultName
+	}
+	targetCfg, ok := c.PGTargets[targetName]
+	if !ok {
+		return PGConfig{}, fmt.Errorf(
+			"pg target %q is not configured",
+			targetName,
+		)
+	}
+	return c.resolvePGConfig(targetCfg, targetName == defaultName)
+}
+
+// ResolvePGTargets resolves every configured PG target. Legacy single-target
+// mode returns one unnamed default target.
+func (c *Config) ResolvePGTargets() ([]ResolvedPGTarget, error) {
+	if err := c.validatePGTargets(); err != nil {
+		return nil, err
+	}
+	if len(c.PGTargets) == 0 {
+		pg, err := c.resolvePGConfig(c.PG, true)
+		if err != nil {
+			return nil, err
+		}
+		return []ResolvedPGTarget{{
+			Config:    pg,
+			IsDefault: true,
+		}}, nil
+	}
+	names, defaultName, err := c.PGTargetNames()
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]ResolvedPGTarget, 0, len(names))
+	for _, name := range names {
+		targetCfg, err := c.resolvePGConfig(
+			c.PGTargets[name], name == defaultName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, ResolvedPGTarget{
+			Name:      name,
+			Config:    targetCfg,
+			IsDefault: name == defaultName,
+		})
+	}
+	return targets, nil
 }
 
 // ResolveDuckDB returns a copy of DuckDB config with defaults applied
@@ -1421,80 +1832,76 @@ func expandBracedEnv(s string) (string, error) {
 
 // SaveTerminalConfig persists terminal settings to the config file.
 func (c *Config) SaveTerminalConfig(tc TerminalConfig) error {
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return fmt.Errorf("reading config file: %w", err)
+		}
 
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
-	}
-
-	existing["terminal"] = tc
-	if err := c.writeConfigMap(existing); err != nil {
-		return err
-	}
-	c.Terminal = tc
-	return nil
+		existing["terminal"] = tc
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.Terminal = tc
+		return nil
+	})
 }
 
 // SaveSettings persists a partial settings update to the config file.
 // The patch map contains config keys mapped to their new values. Only
 // the keys present in patch are written; other config keys are preserved.
 func (c *Config) SaveSettings(patch map[string]any) error {
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return fmt.Errorf("reading config file: %w", err)
+		}
 
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
-	}
+		maps.Copy(existing, patch)
 
-	maps.Copy(existing, patch)
+		// When require_auth is written, remove the legacy
+		// remote_access key so it cannot override on next load.
+		if _, ok := patch["require_auth"]; ok {
+			delete(existing, "remote_access")
+		}
 
-	// When require_auth is written, remove the legacy
-	// remote_access key so it cannot override on next load.
-	if _, ok := patch["require_auth"]; ok {
-		delete(existing, "remote_access")
-	}
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
 
-	if err := c.writeConfigMap(existing); err != nil {
-		return err
-	}
-
-	// Update in-memory config for known keys.
-	if v, ok := patch["terminal"]; ok {
-		if tc, ok := v.(TerminalConfig); ok {
-			c.Terminal = tc
-		} else if m, ok := v.(map[string]any); ok {
-			if s, ok := m["mode"].(string); ok {
-				c.Terminal.Mode = s
-			}
-			if s, ok := m["custom_bin"].(string); ok {
-				c.Terminal.CustomBin = s
-			}
-			if s, ok := m["custom_args"].(string); ok {
-				c.Terminal.CustomArgs = s
+		// Update in-memory config for known keys.
+		if v, ok := patch["terminal"]; ok {
+			if tc, ok := v.(TerminalConfig); ok {
+				c.Terminal = tc
+			} else if m, ok := v.(map[string]any); ok {
+				if s, ok := m["mode"].(string); ok {
+					c.Terminal.Mode = s
+				}
+				if s, ok := m["custom_bin"].(string); ok {
+					c.Terminal.CustomBin = s
+				}
+				if s, ok := m["custom_args"].(string); ok {
+					c.Terminal.CustomArgs = s
+				}
 			}
 		}
-	}
-	if v, ok := patch["github_token"]; ok {
-		if s, ok := v.(string); ok {
-			c.GithubToken = s
+		if v, ok := patch["github_token"]; ok {
+			if s, ok := v.(string); ok {
+				c.GithubToken = s
+			}
 		}
-	}
-	if v, ok := patch["auth_token"]; ok {
-		if s, ok := v.(string); ok {
-			c.AuthToken = s
+		if v, ok := patch["auth_token"]; ok {
+			if s, ok := v.(string); ok {
+				c.AuthToken = s
+			}
 		}
-	}
-	if v, ok := patch["require_auth"]; ok {
-		if b, ok := v.(bool); ok {
-			c.RequireAuth = b
+		if v, ok := patch["require_auth"]; ok {
+			if b, ok := v.(bool); ok {
+				c.RequireAuth = b
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // EnsureAuthToken generates and persists an auth token if one does
@@ -1503,42 +1910,43 @@ func (c *Config) EnsureAuthToken() error {
 	if c.AuthToken != "" {
 		return nil
 	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if token, ok := existing["auth_token"].(string); ok && token != "" {
+			c.AuthToken = token
+			return nil
+		}
 
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Errorf("generating auth token: %w", err)
-	}
-	token := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(b)
-	c.AuthToken = token
-
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
-
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return err
-	}
-
-	existing["auth_token"] = token
-	return c.writeConfigMap(existing)
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return fmt.Errorf("generating auth token: %w", err)
+		}
+		token := base64.URLEncoding.WithPadding(base64.NoPadding).EncodeToString(b)
+		existing["auth_token"] = token
+		if err := c.writeConfigMap(existing); err != nil {
+			return err
+		}
+		c.AuthToken = token
+		return nil
+	})
 }
 
 // SaveGithubToken persists the GitHub token to the config file.
 func (c *Config) SaveGithubToken(token string) error {
-	if err := os.MkdirAll(c.DataDir, 0o700); err != nil {
-		return fmt.Errorf("creating data dir: %w", err)
-	}
+	return c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return fmt.Errorf("reading config file: %w", err)
+		}
 
-	existing, err := c.readConfigMap()
-	if err != nil {
-		return fmt.Errorf("reading config file: %w", err)
-	}
-
-	existing["github_token"] = token
-	if err := c.writeConfigMap(existing); err != nil {
-		return fmt.Errorf("writing config: %w", err)
-	}
-	c.GithubToken = token
-	return nil
+		existing["github_token"] = token
+		if err := c.writeConfigMap(existing); err != nil {
+			return fmt.Errorf("writing config: %w", err)
+		}
+		c.GithubToken = token
+		return nil
+	})
 }

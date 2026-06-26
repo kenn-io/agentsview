@@ -85,6 +85,7 @@ class SyncStore {
   private syncCompleteListeners: SyncCompleteListener[] = [];
   private statusHydrated = false;
   private pendingHydration = false;
+  private statusProgressActive = false;
 
   /** Register a callback invoked after any sync completes. */
   onSyncComplete(listener: SyncCompleteListener) {
@@ -150,11 +151,30 @@ class SyncStore {
         newLastSync !== null && newLastSync !== this.lastSync;
       this.lastSync = newLastSync;
       this.lastSyncStats = status.stats as unknown as SyncStats | null;
+      const statusProgress =
+        (status as unknown as { progress?: SyncProgress | null })
+          .progress ?? null;
+      let statusProgressCompleted = false;
+      if (statusProgress) {
+        this.statusProgressActive = true;
+        this.syncing = true;
+        this.progress = statusProgress;
+      } else if (this.statusProgressActive) {
+        this.statusProgressActive = false;
+        this.syncing = false;
+        this.progress = null;
+        statusProgressCompleted = true;
+      }
       const shouldRetryStats = this.backendDegraded;
       // Suppress notifications on initial hydration and
       // when a local sync just completed (pendingHydration).
       if (this.pendingHydration) {
         this.pendingHydration = false;
+      } else if (statusProgress) {
+        return;
+      } else if (statusProgressCompleted) {
+        await this.loadStats();
+        this.notifySyncComplete();
       } else if (changed && !isInitial) {
         await this.loadStats();
         this.notifySyncComplete();
@@ -281,6 +301,7 @@ class SyncStore {
     if (this.syncing) return false;
     this.syncing = true;
     this.progress = null;
+    this.statusProgressActive = false;
     try {
       this.pendingHydration = true;
       await Promise.all([this.loadStatus(), this.loadStats()]);
@@ -303,6 +324,7 @@ class SyncStore {
     if (this.syncing) return false;
     this.syncing = true;
     this.progress = null;
+    this.statusProgressActive = false;
 
     const finalizeSync = () => {
       this.syncing = false;

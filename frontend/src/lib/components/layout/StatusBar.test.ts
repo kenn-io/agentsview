@@ -113,4 +113,30 @@ describe("StatusBar", () => {
 
     unmount(component);
   });
+
+  it("renders detailed sync progress with a hint", async () => {
+    sync.syncing = true;
+    sync.progress = {
+      phase: "rebuilding_search",
+      detail: "Rebuilding search index",
+      hint: "Rebuilding the search index may take a while on large archives.",
+      resync: true,
+      projects_total: 0,
+      projects_done: 0,
+      sessions_total: 0,
+      sessions_done: 0,
+      messages_indexed: 0,
+    };
+
+    const component = mount(StatusBar, {
+      target: document.body,
+    });
+    await tick();
+
+    const progress = document.querySelector(".sync-progress");
+    expect(progress?.textContent).toContain("Rebuilding search index");
+    expect(progress?.getAttribute("title")).toContain("may take a while");
+
+    unmount(component);
+  });
 });

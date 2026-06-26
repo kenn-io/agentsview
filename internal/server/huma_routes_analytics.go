@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -23,6 +24,7 @@ func (s *Server) registerAnalyticsRoutes() {
 	get(s, group, "/skills", "Get skill analytics", s.humaAnalyticsSkills)
 	get(s, group, "/top-sessions", "Get top sessions", s.humaAnalyticsTopSessions)
 	get(s, group, "/signals", "Get signal analytics", s.humaAnalyticsSignals)
+	get(s, group, "/signal-sessions", "Get signal session examples", s.humaAnalyticsSignalSessions)
 }
 
 type analyticsGranularity string
@@ -42,6 +44,7 @@ type AnalyticsFilterInput struct {
 	Hour             optionalIntParam `query:"hour" minimum:"0" maximum:"23" doc:"Hour of day, 0 through 23"`
 	MinUserMessages  int              `query:"min_user_messages" minimum:"0" doc:"Minimum user message count"`
 	ActiveSince      string           `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
+	AutomatedScope   string           `query:"automated_scope" enum:"human,all,automated" doc:"Automation scope"`
 	IncludeOneShot   bool             `query:"include_one_shot" doc:"Include one-shot sessions"`
 	IncludeAutomated bool             `query:"include_automated" doc:"Include automated sessions"`
 	Termination      string           `query:"termination" doc:"Filter by termination reason"`
@@ -60,6 +63,12 @@ type analyticsHeatmapInput struct {
 type analyticsTopSessionsInput struct {
 	AnalyticsFilterInput
 	Metric topSessionMetric `query:"metric" enum:"messages,duration,output_tokens" default:"messages" doc:"Ranking metric"`
+}
+
+type analyticsSignalSessionsInput struct {
+	AnalyticsFilterInput
+	Signal string `query:"signal" required:"true" doc:"Signal name"`
+	Limit  int    `query:"limit" minimum:"0" maximum:"20" default:"10" doc:"Maximum number of session examples"`
 }
 
 func analyticsFilterFromInput(in AnalyticsFilterInput) (db.AnalyticsFilter, error) {
@@ -92,6 +101,7 @@ func analyticsFilterFromInput(in AnalyticsFilterInput) (db.AnalyticsFilter, erro
 		MinUserMessages:  in.MinUserMessages,
 		ExcludeOneShot:   !in.IncludeOneShot,
 		ExcludeAutomated: !in.IncludeAutomated,
+		AutomatedScope:   in.AutomatedScope,
 		ActiveSince:      in.ActiveSince,
 		Termination:      in.Termination,
 	}, nil
@@ -260,4 +270,25 @@ func (s *Server) humaAnalyticsSignals(
 		return nil, internalError("analytics signals error", err)
 	}
 	return &jsonOutput[db.SignalsAnalyticsResponse]{Body: result}, nil
+}
+
+func (s *Server) humaAnalyticsSignalSessions(
+	ctx context.Context,
+	in *analyticsSignalSessionsInput,
+) (*jsonOutput[db.SignalSessionsResponse], error) {
+	f, err := analyticsFilterFromInput(in.AnalyticsFilterInput)
+	if err != nil {
+		return nil, err
+	}
+	result, err := s.db.GetAnalyticsSignalSessions(
+		ctx, f, in.Signal, in.Limit,
+	)
+	if err != nil {
+		if errors.Is(err, db.ErrUnsupportedAnalyticsSignal) {
+			return nil, apiError(http.StatusBadRequest,
+				"unsupported signal")
+		}
+		return nil, internalError("analytics signal sessions error", err)
+	}
+	return &jsonOutput[db.SignalSessionsResponse]{Body: result}, nil
 }

@@ -12,6 +12,7 @@ import type { Message } from "../../api/types.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { setLocale } from "../../i18n/index.js";
 
 const virtualizerMock = vi.hoisted(() => ({
   options: { count: 0 },
@@ -95,6 +96,7 @@ describe("MessageList follow cancellation", () => {
   });
 
   afterEach(() => {
+    setLocale("en");
     if (component) {
       unmount(component);
       component = undefined;
@@ -104,6 +106,31 @@ describe("MessageList follow cancellation", () => {
     sessions.activeSessionId = null;
     ui.followLatest = false;
     document.body.innerHTML = "";
+  });
+
+  it("renders empty and loading states in Simplified Chinese", async () => {
+    setLocale("zh-CN");
+    sessions.activeSessionId = null;
+    messages.clear();
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("选择一个会话查看消息");
+
+    unmount(component);
+    component = undefined;
+    document.body.innerHTML = "";
+
+    sessions.activeSessionId = "s1";
+    messages.sessionId = "s1";
+    messages.messages = [];
+    messages.loading = true;
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.body.textContent).toContain("正在加载消息...");
   });
 
   it("keeps delayed ordinal navigation alive after follow latest is disabled", async () => {

@@ -5,6 +5,7 @@ import * as icons from "./icons.ts";
 
 const approvedIconNames = [
   "ActivityIcon",
+  "AlignJustifyIcon",
   "ArrowDownIcon",
   "ArrowDownWideNarrowIcon",
   "ArrowUpIcon",

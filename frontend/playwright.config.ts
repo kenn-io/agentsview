@@ -1,8 +1,10 @@
 import { defineConfig } from "@playwright/test";
 
+const isCI = process.env.CI === "true";
+
 export default defineConfig({
   testDir: "e2e",
-  timeout: 20_000,
+  timeout: isCI ? 45_000 : 20_000,
   retries: 0,
   use: {
     baseURL: "http://127.0.0.1:8090",

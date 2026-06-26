@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // valueKind classifies a sort column's value so the keyset cursor can bind it
@@ -87,52 +88,207 @@ func (sp SessionSort) ResolveDescending(descending *bool) bool {
 	return sp.defaultDescending
 }
 
-// NextCursor builds the pagination token for a page's last row under the
-// resolved sort and direction.
-func (sp SessionSort) NextCursor(last *Session, desc bool, total int, f SessionFilter) SessionCursor {
-	v := sp.cursorValue(last, desc, f)
-	cur := SessionCursor{
-		ID:    last.ID,
-		Total: total,
-		Sort:  sp.key,
-		Desc:  desc,
-		Value: v,
+// SortKey is one ordered sort term for a SessionFilter: a registry key with an
+// optional direction override. A nil Descending means the key's canonical
+// default direction applies (recent is descending; every other key ascending).
+type SortKey struct {
+	Key        string
+	Descending *bool
+}
+
+// ResolvedSort pairs a registered SessionSort with the concrete direction
+// resolved for one term, after applying any per-key override or fallback.
+type ResolvedSort struct {
+	Sort SessionSort
+	Desc bool
+}
+
+// ParseSortSpec parses the public sort specification used by --sort and
+// ?order_by: a comma-separated list of terms, each "key" or "key:asc"/"key:desc".
+// An empty spec yields no terms (callers apply the default). Unknown keys,
+// unknown direction tokens, duplicate keys, and empty terms are reported as
+// errors so the service layer can reject bad input with a clear message.
+func ParseSortSpec(spec string) ([]SortKey, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return nil, nil
 	}
-	if sp.key == defaultSortKey {
-		// Keep the legacy field populated so default-sort cursors remain
-		// decodable by older readers during a rollout.
-		cur.EndedAt = v
+	parts := strings.Split(spec, ",")
+	keys := make([]SortKey, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("empty sort term")
+		}
+		key := part
+		var dir *bool
+		if before, after, ok := strings.Cut(part, ":"); ok {
+			key = strings.TrimSpace(before)
+			switch strings.TrimSpace(after) {
+			case "asc":
+				d := false
+				dir = &d
+			case "desc":
+				d := true
+				dir = &d
+			default:
+				return nil, fmt.Errorf(
+					"invalid sort direction in %q: want asc or desc", part)
+			}
+		}
+		if _, ok := sessionSortByKey[key]; !ok {
+			return nil, fmt.Errorf("unknown sort key %q", key)
+		}
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate sort key %q", key)
+		}
+		seen[key] = true
+		keys = append(keys, SortKey{Key: key, Descending: dir})
+	}
+	return keys, nil
+}
+
+// FormatSortSpec renders sort terms back into the canonical --sort/?order_by
+// string. A term with an explicit direction renders "key:asc"/"key:desc"; a term
+// left at its canonical default renders the bare key.
+func FormatSortSpec(keys []SortKey) string {
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		switch {
+		case k.Descending == nil:
+			parts[i] = k.Key
+		case *k.Descending:
+			parts[i] = k.Key + ":desc"
+		default:
+			parts[i] = k.Key + ":asc"
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// ApplyFallbackDirection fills in the direction of any term left unspecified
+// (the legacy descending param / single-key default). Terms that carry an
+// explicit per-key direction are untouched. A nil fallback leaves every
+// unspecified term at its canonical default.
+func ApplyFallbackDirection(keys []SortKey, descending *bool) []SortKey {
+	if descending == nil {
+		return keys
+	}
+	out := make([]SortKey, len(keys))
+	for i, k := range keys {
+		if k.Descending == nil {
+			d := *descending
+			k.Descending = &d
+		}
+		out[i] = k
+	}
+	return out
+}
+
+// ResolveSort turns a filter's sort specification into the ordered list of
+// columns the query is sorted by. The structured Sort field wins; otherwise the
+// legacy OrderBy string (folded with Descending) is parsed. Unknown or duplicate
+// keys are dropped defensively so a store never panics on unvalidated input, and
+// an empty result falls back to the default recent sort. Callers that must
+// reject bad input (the service layer) should validate via ParseSortSpec first.
+func ResolveSort(f SessionFilter) []ResolvedSort {
+	terms := f.Sort
+	if len(terms) == 0 {
+		parsed, err := ParseSortSpec(f.OrderBy)
+		if err != nil {
+			parsed = nil
+		}
+		terms = ApplyFallbackDirection(parsed, f.Descending)
+	}
+	rs := make([]ResolvedSort, 0, len(terms))
+	seen := make(map[string]bool, len(terms))
+	for _, t := range terms {
+		sp, ok := sessionSortByKey[t.Key]
+		if !ok || seen[sp.key] {
+			continue
+		}
+		seen[sp.key] = true
+		rs = append(rs, ResolvedSort{Sort: sp, Desc: sp.ResolveDescending(t.Descending)})
+	}
+	if len(rs) == 0 {
+		sp := sessionSortByKey[defaultSortKey]
+		desc := sp.defaultDescending
+		// Preserve the single-key behavior where a legacy Descending override
+		// applies to the implicit default recent key (e.g. descending=false with
+		// no order_by means recent ascending).
+		if len(f.Sort) == 0 && f.Descending != nil {
+			desc = *f.Descending
+		}
+		rs = append(rs, ResolvedSort{Sort: sp, Desc: desc})
+	}
+	return rs
+}
+
+// appendIDTiebreaker ensures the ordered columns end with the unique id column
+// so keyset pagination is deterministic. When id is already an explicit sort
+// term the list is returned unchanged; otherwise id is appended in the last
+// term's direction (the tie-breaker behavior id has always had).
+func appendIDTiebreaker(rs []ResolvedSort) []ResolvedSort {
+	for _, r := range rs {
+		if r.Sort.key == "id" {
+			return rs
+		}
+	}
+	out := make([]ResolvedSort, len(rs), len(rs)+1)
+	copy(out, rs)
+	return append(out, ResolvedSort{Sort: sessionSortByKey["id"], Desc: rs[len(rs)-1].Desc})
+}
+
+// NextSessionCursor builds the pagination token for a page's last row under the
+// resolved multi-key sort. Each sort term contributes a typed keyset value. For
+// a single-key sort the legacy Sort/Desc/Value fields (and EndedAt for the
+// default recent sort) are also populated so cursors stay decodable by readers
+// from before multi-key sorting existed.
+func NextSessionCursor(last *Session, rs []ResolvedSort, total int, f SessionFilter) SessionCursor {
+	cur := SessionCursor{ID: last.ID, Total: total}
+	cur.Keys = make([]SessionCursorKey, len(rs))
+	for i, r := range rs {
+		cur.Keys[i] = SessionCursorKey{
+			Sort:  r.Sort.key,
+			Desc:  r.Desc,
+			Value: r.Sort.cursorValue(last, r.Desc, f),
+		}
+	}
+	if len(rs) == 1 {
+		k := cur.Keys[0]
+		cur.Sort = k.Sort
+		cur.Desc = k.Desc
+		cur.Value = k.Value
+		if k.Sort == defaultSortKey && k.Desc {
+			cur.EndedAt = k.Value
+		}
 	}
 	return cur
 }
 
-// CursorPredicateValue validates a decoded cursor against the resolved sort and
-// returns the typed value the keyset predicate must bind. A cursor minted under
-// a different sort/direction, or with an unparseable value, is rejected as an
-// invalid cursor rather than silently producing wrong pages.
-func (sp SessionSort) CursorPredicateValue(cur SessionCursor, desc bool) (any, error) {
-	if !sp.cursorMatches(cur, desc) {
+// CursorPredicateValues validates a decoded cursor against the resolved sort and
+// returns the typed keyset values, one per term, that the predicate must bind. A
+// cursor minted under a different sort (different keys, order, or directions), or
+// carrying an unparseable value, is rejected as an invalid cursor rather than
+// silently producing wrong pages.
+func CursorPredicateValues(cur SessionCursor, rs []ResolvedSort) ([]any, error) {
+	keys := cur.resolvedKeys()
+	if len(keys) != len(rs) {
 		return nil, fmt.Errorf("%w: sort mismatch", ErrInvalidCursor)
 	}
-	raw := cur.Value
-	if cur.Sort == "" {
-		raw = cur.EndedAt
+	vals := make([]any, len(rs))
+	for i, r := range rs {
+		if keys[i].Sort != r.Sort.key || keys[i].Desc != r.Desc {
+			return nil, fmt.Errorf("%w: sort mismatch", ErrInvalidCursor)
+		}
+		v, err := typedCursorValue(keys[i].Value, r.Sort.kind)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+		}
+		vals[i] = v
 	}
-	v, err := typedCursorValue(raw, sp.kind)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
-	}
-	return v, nil
-}
-
-// cursorMatches reports whether a decoded cursor was minted under the resolved
-// sort and direction. Legacy cursors (no Sort) are only valid for the default
-// recent-descending order they were always created under.
-func (sp SessionSort) cursorMatches(cur SessionCursor, desc bool) bool {
-	if cur.Sort == "" {
-		return sp.key == defaultSortKey && desc
-	}
-	return cur.Sort == sp.key && cur.Desc == desc
+	return vals, nil
 }
 
 func sentinelLiteral(kind valueKind, desc bool) string {
@@ -243,8 +399,8 @@ func secretsValue(s *Session, f SessionFilter) (string, bool) {
 }
 
 // sessionSorts is the allow-list of session-list sort keys, in display order.
-// The ordering is kept in sync with the huma `order_by` enum tag by
-// TestSortKeysMatchHumaEnum.
+// The keys here are kept documented on the huma order_by param by
+// TestSortKeysDocumented / TestSortKeysDocOmitsStaleKeys (internal/server).
 var sessionSorts = []SessionSort{
 	{key: "recent", kind: kindTimestamp, defaultDescending: true, expr: recentExpr, value: tsValue},
 	{key: "started", kind: kindTimestamp, expr: startedExpr, value: startedValue},
@@ -283,6 +439,11 @@ var sessionSortByKey = func() map[string]SessionSort {
 // defaultSortKey is the sort applied when OrderBy is empty; it preserves the
 // historical most-recent-activity-first behavior.
 const defaultSortKey = "recent"
+
+// DefaultSortKey returns the sort key applied when no sort is requested. The CLI
+// uses it to materialize the implicit default so --reverse can flip it even when
+// --sort is empty.
+func DefaultSortKey() string { return defaultSortKey }
 
 // SessionSortFor resolves a sort key (empty means the default). ok is false for
 // unknown keys; callers that have not pre-validated should treat that as the

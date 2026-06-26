@@ -20,6 +20,7 @@
     hasVisibleSegments,
   } from "../../utils/content-parser.js";
   import { isSystemMessage } from "../../utils/messages.js";
+  import { resolveMessageLayout } from "../../utils/message-layout.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
@@ -28,6 +29,7 @@
     getLatestDisplayIndex,
     type ScrollAlign,
   } from "./message-scroll.js";
+  import { m } from "../../i18n/index.js";
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let scrollRaf: number | null = null;
@@ -519,6 +521,10 @@
       ? inSessionSearch.query
       : "",
   );
+
+  let effectiveLayout = $derived(
+    resolveMessageLayout(ui.messageLayout, highlightQuery !== ""),
+  );
 </script>
 
 {#if !sessions.activeSessionId}
@@ -526,16 +532,16 @@
     <div class="empty-icon">
       <MessageSquareIcon size="36" strokeWidth="1.5" aria-hidden="true" />
     </div>
-    <p class="empty-text">Select a session to view messages</p>
+    <p class="empty-text">{m.message_list_empty()}</p>
   </div>
 {:else if messages.loading && messages.messages.length === 0}
   <div class="empty-state">
-    <p class="empty-text">Loading messages...</p>
+    <p class="empty-text">{m.message_list_loading()}</p>
   </div>
 {:else}
   <SessionFindBar />
   <div
-    class="message-list-scroll layout-{ui.messageLayout}"
+    class="message-list-scroll layout-{effectiveLayout}"
     bind:this={containerRef}
     data-session-id={sessions.activeSessionId}
     data-messages-session-id={messages.sessionId}
@@ -713,5 +719,63 @@
   .layout-stream :global(.text-content) {
     font-size: 14px;
     line-height: 1.75;
+  }
+
+  /* ── Skim layout ── */
+  .layout-skim {
+    padding: 0;
+  }
+
+  .layout-skim .virtual-row {
+    padding: 0;
+  }
+
+  .layout-skim :global(.message-header) {
+    display: none;
+  }
+
+  .layout-skim :global(.tool-block) {
+    border-left: none;
+    border-radius: 0;
+  }
+
+  .layout-skim :global(.tool-chevron) {
+    display: none;
+  }
+
+  /* Keep the one-line summary, but make the header non-interactive so a
+     click cannot silently toggle hidden collapse state (which would
+     surprise the user on switching back to a full layout). Row selection
+     still works via the virtual-row wrapper behind the header. */
+  .layout-skim :global(.tool-header) {
+    padding: 1px 12px;
+    pointer-events: none;
+  }
+
+  .layout-skim :global(.tool-meta),
+  .layout-skim :global(.tool-content),
+  .layout-skim :global(.diff-view),
+  .layout-skim :global(.output-header),
+  .layout-skim :global(.history-header),
+  .layout-skim :global(.result-history),
+  .layout-skim :global(.show-more-btn) {
+    display: none;
+  }
+
+  .layout-skim :global(.tool-group-header),
+  .layout-skim :global(.pg-header) {
+    display: none;
+  }
+
+  .layout-skim :global(.tool-group),
+  .layout-skim :global(.parallel-group) {
+    border: none;
+    margin: 0;
+    padding: 0;
+    background: transparent;
+  }
+
+  .layout-skim :global(.subagent-inline) {
+    display: none;
   }
 </style>

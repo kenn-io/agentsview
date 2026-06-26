@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,7 +165,7 @@ func TestStoreSearchesMessagesContentAndSecrets(t *testing.T) {
 	assert.Equal(t, "secret token sk-duckdb", source)
 }
 
-func TestSearchContentFTSFallsBackToSubstring(t *testing.T) {
+func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)
 
@@ -179,6 +180,61 @@ func TestSearchContentFTSFallsBackToSubstring(t *testing.T) {
 	require.NotEmpty(t, got.Matches)
 	assert.Equal(t, fixture.alphaID, got.Matches[0].SessionID)
 	assert.Equal(t, "message", got.Matches[0].Location)
+}
+
+func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	body := strings.Repeat("prefix ", 30) + "the quick brown fox jumps"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: syncSession(
+				"duck-fts-both", "alpha", "first",
+				"2026-03-22T10:00:00.000Z", 1,
+			),
+			Messages: []db.Message{syncMessage(
+				"duck-fts-both", 0, "user",
+				body,
+				"2026-03-22T10:00:00.000Z",
+			)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: syncSession(
+				"duck-fts-one", "alpha", "first",
+				"2026-03-22T11:00:00.000Z", 1,
+			),
+			Messages: []db.Message{syncMessage(
+				"duck-fts-one", 0, "user",
+				"the quick answer only",
+				"2026-03-22T11:00:00.000Z",
+			)},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t,
+		filepath.Join(t.TempDir(), "fts-content.duckdb"),
+		local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern:        "quick fox",
+		Mode:           "fts",
+		Sources:        []string{"messages"},
+		IncludeOneShot: true,
+		Limit:          10,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "duck-fts-both", got.Matches[0].SessionID)
+	assert.Contains(t, got.Matches[0].Snippet, "quick")
+	assert.Contains(t, got.Matches[0].Snippet, "fox")
 }
 
 func TestSearchContentInvalidModeReturnsInputError(t *testing.T) {
@@ -300,6 +356,78 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	assert.Equal(t, "duck-search-name", overridden.Results[0].SessionID)
 	assert.Equal(t, -1, overridden.Results[0].Ordinal)
 	assert.Equal(t, "needle override rename", overridden.Results[0].Snippet)
+}
+
+// TestSearchOperatorTokenNoError mirrors the SQLite FTS 500 regression on the
+// DuckDB/ILIKE backend: a single token containing operator characters (hyphen,
+// colon), prepared the way the HTTP handler does, must match content and not
+// error. ILIKE has no FTS-operator hazard, but this pins backend parity.
+func TestSearchOperatorTokenNoError(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	sessionID := "duck-optok-001"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(sessionID, "alpha", "first msg text", "2026-03-20T10:00:00.000Z", 2),
+		Messages: []db.Message{
+			syncMessage(sessionID, 0, "user", "hit error-401 from the api", "2026-03-20T10:00:00.000Z"),
+			syncMessage(sessionID, 1, "assistant", "returned status:500 to client", "2026-03-20T10:00:01.000Z"),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "optok.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	for _, raw := range []string{"error-401", "status:500"} {
+		page, err := store.Search(ctx, db.SearchFilter{
+			Query: db.PrepareFTSQuery(raw), Limit: 10,
+		})
+		require.NoError(t, err, "Search(%q)", raw)
+		require.Len(t, page.Results, 1, "results for %q", raw)
+		assert.Equal(t, sessionID, page.Results[0].SessionID, "session for %q", raw)
+	}
+}
+
+// TestSearchMultiTermAND verifies that a multi-term query matches a session only
+// when every term appears in its content (AND), matching SQLite FTS5's implicit
+// AND so the same user query behaves identically across backends. Before the
+// fix, DuckDB stripped only the outer quote pair from PrepareFTSQuery's
+// `"fix" "bug"` output and matched the literal substring `fix" "bug`, which
+// found nothing.
+func TestSearchMultiTermAND(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         syncSession("duck-andboth-001", "alpha", "first msg text", "2026-03-21T10:00:00.000Z", 1),
+			Messages:        []db.Message{syncMessage("duck-andboth-001", 0, "user", "duckfixterm and duckbugterm both here", "2026-03-21T10:00:00.000Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         syncSession("duck-andone-001", "alpha", "first msg text", "2026-03-21T11:00:00.000Z", 1),
+			Messages:        []db.Message{syncMessage("duck-andone-001", 0, "user", "only duckfixterm present", "2026-03-21T11:00:00.000Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "andterm.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	page, err := store.Search(ctx, db.SearchFilter{
+		Query: db.PrepareFTSQuery("duckfixterm duckbugterm"), Limit: 10,
+	})
+	require.NoError(t, err, "Search")
+	require.Len(t, page.Results, 1, "only the session containing both terms")
+	assert.Equal(t, "duck-andboth-001", page.Results[0].SessionID, "session")
 }
 
 func TestStoreCurationMethods(t *testing.T) {
@@ -1489,6 +1617,49 @@ func TestDailyUsageActiveSinceUsesSessionActivity(t *testing.T) {
 	assert.Equal(t, 2, got.Totals.OutputTokens)
 }
 
+func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	sessionID := "duck-usage-blank-ts"
+	session := syncSession(sessionID, "alpha", "blank timestamp usage", "", 2)
+	session.StartedAt = nil
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: session,
+		Messages: []db.Message{
+			{
+				SessionID:  sessionID,
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "",
+				Model:      "claude-test",
+				TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":50}`),
+			},
+			{
+				SessionID:  sessionID,
+				Ordinal:    1,
+				Role:       "assistant",
+				Timestamp:  "",
+				Model:      "claude-test",
+				TokenUsage: json.RawMessage(`{"input_tokens":200,"output_tokens":75}`),
+			},
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "usage-blank-ts.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.GetDailyUsage(ctx, db.UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Equal(t, 300, got.Totals.InputTokens)
+	assert.Equal(t, 125, got.Totals.OutputTokens)
+}
+
 func hourOfWeekMessages(cells []db.HourOfWeekCell, dow, hour int) int {
 	for _, cell := range cells {
 		if cell.DayOfWeek == dow && cell.Hour == hour {
@@ -1569,6 +1740,131 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
 }
 
+func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "claude-test",
+		InputPerMTok:  3,
+		OutputPerMTok: 15,
+	}}))
+
+	first := syncMessage("duck-usage-source-a", 0, "assistant", "shared usage", "2026-01-13T00:00:00.000Z")
+	first.ClaudeMessageID = "shared-message"
+	first.SourceUUID = "shared-source"
+	second := syncMessage("duck-usage-source-b", 0, "assistant", "replayed usage", "2026-01-13T00:01:00.000Z")
+	second.ClaudeMessageID = "shared-message"
+	second.SourceUUID = "shared-source"
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         syncSession("duck-usage-source-a", "alpha", "usage a", "2026-01-13T00:00:00.000Z", 1),
+			Messages:        []db.Message{first},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         syncSession("duck-usage-source-b", "beta", "usage b", "2026-01-13T00:01:00.000Z", 1),
+			Messages:        []db.Message{second},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "usage-source.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31"}
+
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, daily.Totals.InputTokens)
+	assert.Equal(t, 2, daily.Totals.OutputTokens)
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, "duck-usage-source-a", top[0].SessionID)
+
+	counts, err := store.GetUsageSessionCounts(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, counts.Total)
+	assert.Equal(t, 1, counts.ByProject["alpha"])
+	assert.NotContains(t, counts.ByProject, "beta")
+
+	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-source-b")
+	require.NoError(t, err)
+	require.NotNil(t, sessionUsage)
+	assert.True(t, sessionUsage.HasCost)
+	assert.InDelta(t, 0.000033, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
+}
+
+func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "summary-model",
+		InputPerMTok:  1,
+		OutputPerMTok: 2,
+	}}))
+
+	rawInput := db.MaxPlausibleTokens + 250_000
+	rawOutput := db.MaxPlausibleTokens + 500_000
+	sessionID := "duck-summary-usage"
+	sess := syncSession(sessionID, "alpha", "summary first", "2026-01-18T00:00:00.000Z", 0)
+	sess.Agent = "hermes"
+	sess.TotalOutputTokens = rawOutput
+	sess.PeakContextTokens = rawInput
+	sess.HasTotalOutputTokens = true
+	sess.HasPeakContextTokens = true
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: sess,
+		UsageEvents: []db.UsageEvent{{
+			Source:       "session",
+			Model:        "summary-model",
+			InputTokens:  rawInput,
+			OutputTokens: rawOutput,
+			OccurredAt:   "2026-01-18T00:01:00.000Z",
+			DedupKey:     "summary",
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "summary-usage.duckdb"), local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
+
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, rawInput, daily.Totals.InputTokens)
+	assert.Equal(t, rawOutput, daily.Totals.OutputTokens)
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.Equal(t, sessionID, top[0].SessionID)
+	assert.Equal(t, rawInput+rawOutput, top[0].TotalTokens)
+	wantCost := (float64(rawInput)*1 + float64(rawOutput)*2) / 1_000_000
+	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
+
+	sessionUsage, err := store.GetSessionUsage(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sessionUsage)
+	assert.Equal(t, rawOutput, sessionUsage.TotalOutputTokens)
+	assert.Equal(t, rawInput, sessionUsage.PeakContextTokens)
+	assert.True(t, sessionUsage.HasCost)
+	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
+	assert.Equal(t, []string{"summary-model"}, sessionUsage.Models)
+}
+
 func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -1615,6 +1911,50 @@ func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.Totals.InputTokens)
 	assert.Equal(t, 2, got.Totals.OutputTokens)
+}
+
+func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+		OccurredAt:       "2026-05-14T10:05:00Z",
+		Model:            "claude-4.6-opus-high-thinking",
+		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+		InputTokens:      1234,
+		OutputTokens:     567,
+		CacheWriteTokens: 12,
+		CacheReadTokens:  34,
+		ChargedCents:     15.66,
+		CursorTokenFee:   3.32,
+		UserID:           "152683922",
+		UserEmail:        "member@example.com",
+		IsHeadless:       false,
+	}}), "InsertCursorUsageEvents")
+
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "cursor-usage.duckdb"), local, SyncOptions{})
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assertDuckDBCount(t, syncer.DB(), "cursor_usage_events", 1)
+
+	store := NewStoreFromDB(syncer.DB())
+	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:       "2026-05-14",
+		To:         "2026-05-14",
+		Timezone:   "UTC",
+		Breakdowns: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 1234, result.Daily[0].InputTokens)
+	assert.Equal(t, 567, result.Daily[0].OutputTokens)
+	assert.Equal(t, 12, result.Daily[0].CacheCreationTokens)
+	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
+	assert.InDelta(t, 0.1566, result.Daily[0].TotalCost, 1e-9)
+	assert.Equal(t, 0, result.SessionCounts.Total)
+	assert.Empty(t, result.SessionCounts.ByAgent)
+	assert.Empty(t, result.SessionCounts.ByProject)
+	require.Len(t, result.Daily[0].AgentBreakdowns, 1)
+	assert.Equal(t, "cursor", result.Daily[0].AgentBreakdowns[0].Agent)
 }
 
 func TestTrendsTermsWordBoundaryAndOverlapParity(t *testing.T) {
@@ -1704,6 +2044,17 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	assert.Equal(t, "alpha", day.ProjectBreakdowns[0].Project)
 	assert.Equal(t, "claude", day.AgentBreakdowns[0].Agent)
 	assert.InDelta(t, 0.00001, got.Totals.CacheSavings, 0.000001)
+
+	noCounts, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:              "2026-01-01",
+		To:                "2026-01-31",
+		SkipSessionCounts: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, got.Totals.InputTokens, noCounts.Totals.InputTokens)
+	assert.Zero(t, noCounts.SessionCounts.Total)
+	assert.Nil(t, noCounts.SessionCounts.ByProject)
+	assert.Nil(t, noCounts.SessionCounts.ByAgent)
 }
 
 func TestGetChildSessionsOrderedByStartedAt(t *testing.T) {

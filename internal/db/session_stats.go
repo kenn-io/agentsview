@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db/git"
 )
 
@@ -428,11 +427,11 @@ func (db *DB) loadSessionsInWindow(
 	}
 
 	if f.Agent != "" {
-		agents := strings.Split(f.Agent, ",")
+		agents := csvFilterValues(f.Agent)
 		if len(agents) == 1 {
 			preds = append(preds, "agent = ?")
 			args = append(args, agents[0])
-		} else {
+		} else if len(agents) > 1 {
 			ph := make([]string, len(agents))
 			for i, a := range agents {
 				ph[i] = "?"
@@ -1073,20 +1072,17 @@ func addMessageToCacheTotals(
 	sessionID, model, tokenJSON string,
 	pricing map[string]modelRates,
 ) {
-	usage := gjson.Parse(tokenJSON)
-	inputTok := usage.Get("input_tokens").Int()
-	outputTok := usage.Get("output_tokens").Int()
-	cacheCrTok := usage.Get("cache_creation_input_tokens").Int()
-	cacheRdTok := usage.Get("cache_read_input_tokens").Int()
+	inputTok, outputTok, cacheCrTok, cacheRdTok :=
+		clampedUsageTokenCounters(tokenJSON)
 
 	totals, ok := perSession[sessionID]
 	if !ok {
 		totals = &sessionCacheTotals{}
 		perSession[sessionID] = totals
 	}
-	totals.inputTok += inputTok
-	totals.cacheCreateT += cacheCrTok
-	totals.cacheReadT += cacheRdTok
+	totals.inputTok += int64(inputTok)
+	totals.cacheCreateT += int64(cacheCrTok)
+	totals.cacheReadT += int64(cacheRdTok)
 
 	rates, _ := lookupModelRates(pricing, model)
 	totals.dollarsSpent += (float64(inputTok)*rates.input +
@@ -1462,7 +1458,12 @@ func (db *DB) computeOutcomeStats(
 	}
 	since := from.UTC().Format(time.RFC3339)
 	until := to.UTC().Format(time.RFC3339)
-	cache := git.NewCache(db.getWriter())
+	var cache *git.Cache
+	if db.ReadOnly() {
+		cache = git.NewReadOnlyCache(db.rawReader())
+	} else {
+		cache = git.NewCache(db.rawWriter())
+	}
 	out := &StatsOutcomeStats{}
 	contributed := false
 	for _, repo := range repos {

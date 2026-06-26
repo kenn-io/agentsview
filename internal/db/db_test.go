@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -23,6 +24,112 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func reflectedFieldValue(v any, name string) reflect.Value {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return reflect.Value{}
+		}
+		rv = rv.Elem()
+	}
+	if !rv.IsValid() || rv.Kind() != reflect.Struct {
+		return reflect.Value{}
+	}
+	return rv.FieldByName(name)
+}
+
+func reflectedIntField(v any, name string) int {
+	f := reflectedFieldValue(v, name)
+	if !f.IsValid() || f.Kind() != reflect.Int {
+		return 0
+	}
+	return int(f.Int())
+}
+
+func reflectedStringField(v any, name string) string {
+	f := reflectedFieldValue(v, name)
+	if !f.IsValid() {
+		return ""
+	}
+	switch f.Kind() {
+	case reflect.String:
+		return f.String()
+	case reflect.Pointer:
+		if !f.IsNil() && f.Elem().Kind() == reflect.String {
+			return f.Elem().String()
+		}
+	}
+	return ""
+}
+
+func callUpdateSessionIncrementalCompat(
+	t *testing.T,
+	d *DB,
+	id string,
+	endedAt *string,
+	msgCount, userMsgCount int,
+	fileSize, fileMtime int64,
+	nextOrdinal int,
+	lastEntryUUID string,
+	totalOutputTokens, peakContextTokens int,
+	hasTotalOutputTokens, hasPeakContextTokens bool,
+) error {
+	t.Helper()
+
+	updateMethod := reflect.ValueOf(d).MethodByName("UpdateSessionIncremental")
+	require.True(t, updateMethod.IsValid(), "UpdateSessionIncremental")
+	if updateMethod.Type().NumIn() == 2 &&
+		updateMethod.Type().In(1).Kind() == reflect.Struct {
+		update := reflect.New(updateMethod.Type().In(1)).Elem()
+		if f := update.FieldByName("EndedAt"); f.IsValid() {
+			if endedAt == nil {
+				f.Set(reflect.Zero(f.Type()))
+			} else {
+				f.Set(reflect.ValueOf(endedAt))
+			}
+		}
+		update.FieldByName("MsgCount").SetInt(int64(msgCount))
+		update.FieldByName("UserMsgCount").SetInt(int64(userMsgCount))
+		update.FieldByName("FileSize").SetInt(fileSize)
+		update.FieldByName("FileMtime").SetInt(fileMtime)
+		if f := update.FieldByName("NextOrdinal"); f.IsValid() {
+			f.SetInt(int64(nextOrdinal))
+		}
+		if f := update.FieldByName("LastEntryUUID"); f.IsValid() {
+			f.SetString(lastEntryUUID)
+		}
+		update.FieldByName("TotalOutputTokens").SetInt(int64(totalOutputTokens))
+		update.FieldByName("PeakContextTokens").SetInt(int64(peakContextTokens))
+		update.FieldByName("HasTotalOutputTokens").SetBool(hasTotalOutputTokens)
+		update.FieldByName("HasPeakContextTokens").SetBool(hasPeakContextTokens)
+		results := updateMethod.Call([]reflect.Value{
+			reflect.ValueOf(id),
+			update,
+		})
+		if results[0].IsNil() {
+			return nil
+		}
+		return results[0].Interface().(error)
+	}
+
+	results := updateMethod.Call([]reflect.Value{
+		reflect.ValueOf(id),
+		reflect.ValueOf(endedAt),
+		reflect.ValueOf(msgCount),
+		reflect.ValueOf(userMsgCount),
+		reflect.ValueOf(fileSize),
+		reflect.ValueOf(fileMtime),
+		reflect.ValueOf(totalOutputTokens),
+		reflect.ValueOf(peakContextTokens),
+		reflect.ValueOf(hasTotalOutputTokens),
+		reflect.ValueOf(hasPeakContextTokens),
+	})
+	if results[0].IsNil() {
+		return nil
+	}
+	return results[0].Interface().(error)
+}
 
 const blockingCloseDriverName = "agentsview-blocking-close"
 
@@ -588,9 +695,9 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionCodexOpenCodeCwd(t *testing.T) {
-	assert.Equal(t, 48, CurrentDataVersion(),
-		"Codex and OpenCode cwd parsing requires a data version bump")
+func TestCurrentDataVersionSanitizedMessageShape(t *testing.T) {
+	assert.Equal(t, 54, CurrentDataVersion(),
+		"Antigravity source_version backfill requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -684,7 +791,7 @@ func TestOpenPreservesDataAtCurrentVersion(t *testing.T) {
 	require.Len(t, page.Sessions, 1, "expected 1 session preserved, got")
 }
 
-func TestOpenDoesNotDowngradeUserVersion(t *testing.T) {
+func TestOpenRejectsNewerDataVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
@@ -701,20 +808,23 @@ func TestOpenDoesNotDowngradeUserVersion(t *testing.T) {
 	d.Close()
 
 	// Reopen with current (lower) dataVersion.
-	d2, err := Open(path)
-	requireNoError(t, err, "reopen")
-	defer d2.Close()
+	d2, openErr := Open(path)
+	require.Nil(t, d2, "newer database must not open")
+	require.Error(t, openErr, "newer database must be rejected")
 
 	var version int
-	err = d2.getWriter().QueryRow(
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "raw sqlite open")
+	defer conn.Close()
+	err = conn.QueryRow(
 		"PRAGMA user_version",
 	).Scan(&version)
 	requireNoError(t, err, "read version")
 
 	assert.Equal(t, futureVersion, version,
-		"user_version should not downgrade")
-	assert.False(t, d2.NeedsResync(),
-		"NeedsResync should be false for higher version")
+		"user_version should not be mutated")
+	assert.True(t, IsDataVersionTooNew(openErr),
+		"expected too-new data version error")
 }
 
 func TestOpenProbeErrorPropagates(t *testing.T) {
@@ -746,8 +856,8 @@ func TestOpenProbeErrorPropagates(t *testing.T) {
 		require.Error(t, err, "expected error")
 		assert.ErrorIs(t, err, fs.ErrPermission,
 			"expected permission error")
-		assert.Contains(t, err.Error(), "checking schema",
-			"expected 'checking schema' wrapper")
+		assert.Contains(t, err.Error(), "checking database",
+			"expected database compatibility wrapper")
 	})
 
 	t.Run("ProbeReadError", func(t *testing.T) {
@@ -768,8 +878,8 @@ func TestOpenProbeErrorPropagates(t *testing.T) {
 		_, err = Open(path)
 		require.Error(t, err, "expected error")
 		assert.True(t,
-			strings.Contains(err.Error(), "checking schema") ||
-				strings.Contains(err.Error(), "probing schema"),
+			strings.Contains(err.Error(), "checking database") ||
+				strings.Contains(err.Error(), "probing data version"),
 			"unexpected error: %v", err)
 	})
 }
@@ -3408,6 +3518,70 @@ func TestCopyInsightsFrom(t *testing.T) {
 	assert.Equal(t, "test insight content", insights[0].Content, "content")
 }
 
+func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err, "Open src")
+	require.NoError(t, srcDB.InsertCursorUsageEvents([]CursorUsageEvent{
+		{
+			OccurredAt:       "2026-05-14T10:05:00Z",
+			Model:            "claude-4.6-opus-high-thinking",
+			Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
+			InputTokens:      1234,
+			OutputTokens:     567,
+			CacheWriteTokens: 12,
+			CacheReadTokens:  34,
+			ChargedCents:     15.66,
+			CursorTokenFee:   3.32,
+			UserID:           "152683922",
+			UserEmail:        "member@example.com",
+			DedupKey:         "first",
+		},
+		{
+			OccurredAt:     "2026-05-15T11:15:00Z",
+			Model:          "gpt-5",
+			Kind:           "USAGE_EVENT_KIND_USAGE_BASED",
+			InputTokens:    80,
+			OutputTokens:   20,
+			ChargedCents:   1.25,
+			CursorTokenFee: 0.5,
+			UserID:         "777",
+			UserEmail:      "next@example.com",
+			IsHeadless:     true,
+			DedupKey:       "second",
+		},
+	}), "InsertCursorUsageEvents src")
+	wantFingerprint, err := srcDB.CursorUsageEventFingerprint()
+	require.NoError(t, err, "CursorUsageEventFingerprint src")
+	require.NoError(t, srcDB.CloseConnections(), "CloseConnections src")
+	defer srcDB.Close()
+
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "Open dst")
+	defer dstDB.Close()
+	require.NoError(t, dstDB.InsertCursorUsageEvents([]CursorUsageEvent{{
+		OccurredAt:   "2026-01-01T00:00:00Z",
+		Model:        "stale-model",
+		Kind:         "USAGE_EVENT_KIND_USAGE_BASED",
+		ChargedCents: 99,
+		DedupKey:     "stale",
+	}}), "InsertCursorUsageEvents dst")
+
+	require.NoError(t, dstDB.CopySessionMetadataFrom(srcPath), "CopySessionMetadataFrom")
+
+	gotEvents, err := dstDB.GetCursorUsageEvents(ctx)
+	require.NoError(t, err, "GetCursorUsageEvents")
+	require.Len(t, gotEvents, 2, "cursor usage events")
+	gotFingerprint, err := dstDB.CursorUsageEventFingerprint()
+	require.NoError(t, err, "CursorUsageEventFingerprint dst")
+	assert.Equal(t, wantFingerprint, gotFingerprint,
+		"final metadata copy should preserve cursor usage rows verbatim")
+}
+
 func TestCopyOrphanedDataFrom(t *testing.T) {
 	dir := t.TempDir()
 
@@ -4623,6 +4797,34 @@ func TestDeleteSessionIfTrashed(t *testing.T) {
 	assert.Equal(t, int64(0), n, "nonexistent: rows=")
 }
 
+func TestSoftDeleteSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "s1", "proj")
+	insertSession(t, d, "s2", "proj")
+	insertSession(t, d, "s3", "proj")
+
+	// Pre-trash s3 so we can verify it's not double-counted.
+	require.NoError(t, d.SoftDeleteSession("s3"), "pre-trash s3")
+
+	n, err := d.SoftDeleteSessions([]string{"s1", "s2", "s3", "nonexistent"})
+	require.NoError(t, err, "SoftDeleteSessions")
+	assert.Equal(t, 2, n, "should soft-delete 2 new sessions")
+
+	// All three should now be trashed.
+	for _, id := range []string{"s1", "s2", "s3"} {
+		s, err := d.GetSession(ctx, id)
+		require.NoError(t, err, "GetSession", id)
+		assert.Nil(t, s, "trashed session should not be visible:", id)
+	}
+
+	// Empty input is a no-op.
+	n, err = d.SoftDeleteSessions(nil)
+	require.NoError(t, err, "SoftDeleteSessions nil")
+	assert.Equal(t, 0, n, "empty: rows=")
+}
+
 func TestMetadataQueriesExcludeTrashed(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -5135,6 +5337,8 @@ func TestGetSessionForIncremental(t *testing.T) {
 		require.True(t, ok, "expected to find session")
 		assert.Equal(t, "codex:inc-test", info.ID, "ID")
 		assert.Equal(t, int64(4096), info.FileSize, "FileSize")
+		assert.Equal(t, 0, reflectedIntField(info, "NextOrdinal"), "NextOrdinal")
+		assert.Equal(t, "", reflectedStringField(info, "LastEntryUUID"), "LastEntryUUID")
 		assert.Equal(t, 5, info.MsgCount, "MsgCount")
 		assert.Equal(t, 2, info.UserMsgCount, "UserMsgCount")
 		assert.Equal(t, 500, info.TotalOutputTokens, "TotalOutputTokens")
@@ -5185,17 +5389,29 @@ func TestGetSessionForIncremental(t *testing.T) {
 		assert.True(t, info.HasTotalOutputTokens, "HasTotalOutputTokens = false, want true")
 		assert.True(t, info.HasPeakContextTokens, "HasPeakContextTokens = false, want true")
 
-		err = d.UpdateSessionIncremental(
-			info.ID, nil, info.MsgCount+1, info.UserMsgCount,
-			info.FileSize+256, 200,
-			info.TotalOutputTokens+50, info.PeakContextTokens,
-			info.HasTotalOutputTokens, info.HasPeakContextTokens,
+		err = callUpdateSessionIncrementalCompat(
+			t,
+			d,
+			info.ID,
+			nil,
+			info.MsgCount+1,
+			info.UserMsgCount,
+			info.FileSize+256,
+			200,
+			3,
+			"entry-3",
+			info.TotalOutputTokens+50,
+			info.PeakContextTokens,
+			info.HasTotalOutputTokens,
+			info.HasPeakContextTokens,
 		)
 		requireNoError(t, err, "UpdateSessionIncremental legacy")
 
 		got, err := d.GetSessionFull(context.Background(), info.ID)
 		requireNoError(t, err, "GetSessionFull legacy")
 		require.NotNil(t, got, "legacy session missing after incremental")
+		assert.Equal(t, 3, reflectedIntField(got, "NextOrdinal"), "NextOrdinal")
+		assert.Equal(t, "entry-3", reflectedStringField(got, "LastEntryUUID"), "LastEntryUUID")
 		assert.True(t, got.HasTotalOutputTokens, "stored HasTotalOutputTokens = false, want true")
 		assert.True(t, got.HasPeakContextTokens, "stored HasPeakContextTokens = false, want true")
 	})
@@ -5229,8 +5445,21 @@ func TestUpdateSessionIncremental(t *testing.T) {
 
 	// Incremental update: bump counts and file metadata.
 	ended := "2024-01-15T10:30:00Z"
-	err := d.UpdateSessionIncremental(
-		"inc-update", &ended, 7, 3, 2048, 200, 500, 1600, true, true,
+	err := callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"inc-update",
+		&ended,
+		7,
+		3,
+		2048,
+		200,
+		9,
+		"uuid-9",
+		500,
+		1600,
+		true,
+		true,
 	)
 	requireNoError(t, err, "incremental update")
 
@@ -5245,6 +5474,8 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	assert.Equal(t, ended, *got.EndedAt, "EndedAt")
 	require.NotNil(t, got.FileSize, "FileSize nil")
 	assert.Equal(t, int64(2048), *got.FileSize, "FileSize")
+	assert.Equal(t, 9, reflectedIntField(got, "NextOrdinal"), "NextOrdinal")
+	assert.Equal(t, "uuid-9", reflectedStringField(got, "LastEntryUUID"), "LastEntryUUID")
 	assert.Equal(t, 500, got.TotalOutputTokens, "TotalOutputTokens")
 	assert.Equal(t, 1600, got.PeakContextTokens, "PeakContextTokens")
 	assert.True(t, got.HasTotalOutputTokens, "HasTotalOutputTokens = false, want true")
@@ -5261,6 +5492,74 @@ func TestUpdateSessionIncremental(t *testing.T) {
 		"RelationshipType cleared")
 	require.NotNil(t, got.FileHash, "FileHash cleared")
 	assert.Equal(t, "abc123", *got.FileHash, "FileHash")
+}
+
+func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "atomic-target", "proj")
+
+	_, err := d.getWriter().Exec(`
+		CREATE TRIGGER sessions_incremental_atomicity_abort
+		BEFORE UPDATE ON sessions
+		WHEN NEW.id = 'atomic-target'
+		BEGIN
+			SELECT RAISE(FAIL, 'atomicity proof trigger');
+		END;
+	`)
+	require.NoError(t, err, "create trigger")
+
+	msgsToWrite := []Message{asstMsg("atomic-target", 0, "should rollback")}
+	writeMethod := reflect.ValueOf(d).MethodByName("WriteSessionIncremental")
+	if writeMethod.IsValid() {
+		update := reflect.New(writeMethod.Type().In(2)).Elem()
+		update.FieldByName("MsgCount").SetInt(1)
+		update.FieldByName("UserMsgCount").SetInt(0)
+		update.FieldByName("FileSize").SetInt(128)
+		update.FieldByName("FileMtime").SetInt(10)
+		if f := update.FieldByName("NextOrdinal"); f.IsValid() {
+			f.SetInt(1)
+		}
+		results := writeMethod.Call([]reflect.Value{
+			reflect.ValueOf("atomic-target"),
+			reflect.ValueOf(msgsToWrite),
+			update,
+		})
+		if !results[0].IsNil() {
+			err = results[0].Interface().(error)
+		} else {
+			err = nil
+		}
+	} else {
+		err = d.InsertMessages(msgsToWrite)
+		require.NoError(t, err, "InsertMessages before non-atomic update")
+
+		updateMethod := reflect.ValueOf(d).MethodByName("UpdateSessionIncremental")
+		require.True(t, updateMethod.IsValid(), "UpdateSessionIncremental")
+		results := updateMethod.Call([]reflect.Value{
+			reflect.ValueOf("atomic-target"),
+			reflect.Zero(updateMethod.Type().In(1)),
+			reflect.ValueOf(1),
+			reflect.ValueOf(0),
+			reflect.ValueOf(int64(128)),
+			reflect.ValueOf(int64(10)),
+			reflect.ValueOf(0),
+			reflect.ValueOf(0),
+			reflect.ValueOf(false),
+			reflect.ValueOf(false),
+		})
+		if !results[0].IsNil() {
+			err = results[0].Interface().(error)
+		} else {
+			err = nil
+		}
+	}
+	require.Error(t, err, "expected session update trigger to fail")
+
+	msgs, getErr := d.GetMessages(
+		context.Background(), "atomic-target", 0, 10, true,
+	)
+	require.NoError(t, getErr, "GetMessages")
+	assert.Empty(t, msgs, "message rows should roll back with session metadata failure")
 }
 
 func TestSyncState_GetSetRoundtrip(t *testing.T) {
@@ -5499,6 +5798,104 @@ func TestToolCallFingerprintHandlesEmptyToolUseID(t *testing.T) {
 
 	assert.Contains(t, fp, "ApplyPatch")
 	assert.Contains(t, fp, "Edit")
+}
+
+func TestToolCallFingerprintIncludesFilePath(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"fp-nofile", "fp-file"} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "p", Machine: "local", Agent: "cursor",
+		}), "upsert %s", id)
+	}
+	base := ToolCall{ToolName: "Edit", Category: "Edit", ToolUseID: "toolu_1"}
+	withFile := base
+	withFile.FilePath = "internal/db/messages.go"
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "fp-nofile", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{base},
+		},
+		{
+			SessionID: "fp-file", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{withFile},
+		},
+	}), "insert")
+
+	noFileFP, err := d.ToolCallFingerprint("fp-nofile")
+	require.NoError(t, err, "no-file fingerprint")
+	fileFP, err := d.ToolCallFingerprint("fp-file")
+	require.NoError(t, err, "file fingerprint")
+
+	// A file_path-only difference must change the fingerprint so the PG/DuckDB
+	// push fast paths re-push a file_path backfill instead of skipping it.
+	assert.NotEqual(t, noFileFP, fileFP)
+	assert.Contains(t, fileFP, "internal/db/messages.go")
+}
+
+func TestResolveToolCallsDerivesPositionalCallIndex(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "ci", Project: "p", Machine: "local", Agent: "cursor",
+	}), "upsert")
+	// Three tool calls in one message with no explicit CallIndex, mirroring
+	// the importer write path. resolveToolCalls must number them by position.
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "ci", Ordinal: 0, Role: "assistant", Content: "tools",
+			HasToolUse: true,
+			ToolCalls: []ToolCall{
+				{ToolName: "Read", Category: "Read", FilePath: "a.go"},
+				{ToolName: "Edit", Category: "Edit", FilePath: "b.go"},
+				{ToolName: "Write", Category: "Write", FilePath: "c.go"},
+			},
+		},
+	}), "insert")
+
+	msgs, err := d.GetAllMessages(ctx, "ci")
+	require.NoError(t, err, "get all messages")
+	require.Len(t, msgs, 1)
+	calls := msgs[0].ToolCalls
+	require.Len(t, calls, 3)
+	for i, tc := range calls {
+		assert.Equal(t, i, tc.CallIndex, "call %d index", i)
+	}
+	// FilePath must survive the write path too (sync + importer parity).
+	assert.Equal(t, "a.go", calls[0].FilePath)
+	assert.Equal(t, "b.go", calls[1].FilePath)
+	assert.Equal(t, "c.go", calls[2].FilePath)
+}
+
+func TestToolCallParseDiffFingerprintIncludesFilePath(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"pd-nofile", "pd-file"} {
+		require.NoError(t, d.UpsertSession(Session{
+			ID: id, Project: "p", Machine: "local", Agent: "cursor",
+		}), "upsert %s", id)
+	}
+	base := ToolCall{ToolName: "Edit", Category: "Edit", ToolUseID: "t1"}
+	withFile := base
+	withFile.FilePath = "internal/db/messages.go"
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "pd-nofile", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{base},
+		},
+		{
+			SessionID: "pd-file", Ordinal: 0, Role: "assistant",
+			Content: "tool", ToolCalls: []ToolCall{withFile},
+		},
+	}), "insert")
+
+	noFileFP, err := d.ToolCallParseDiffFingerprint("pd-nofile")
+	require.NoError(t, err, "no-file parse-diff fingerprint")
+	fileFP, err := d.ToolCallParseDiffFingerprint("pd-file")
+	require.NoError(t, err, "file parse-diff fingerprint")
+
+	// A file_path-only difference must move the parse-diff fingerprint so a
+	// parser change that only alters extracted paths triggers a reparse.
+	assert.NotEqual(t, noFileFP, fileFP)
+	assert.Contains(t, fileFP, "internal/db/messages.go")
 }
 
 func TestListSessionsModifiedBetween_ProjectFilter(t *testing.T) {
@@ -5867,4 +6264,178 @@ func TestUpsertWithDisplayNameInsteadOfSessionNameDropsName(t *testing.T) {
 	// display_name was passed in but upsert never writes it — should be nil.
 	assert.Nil(t, s.DisplayName,
 		"upsert must not write display_name; only RenameSession should")
+}
+
+// seedSessionWithMessage inserts a session and one user message (ordinal 0)
+// into d. The inserted message gets the next auto-assigned integer id.
+func seedSessionWithMessage(t *testing.T, d *DB, sessionID string) {
+	t.Helper()
+	insertSession(t, d, sessionID, "proj")
+	insertMessages(t, d, userMsg(sessionID, 0, "hello"))
+}
+
+func TestCopyOrphanedDataFrom_PreservesFilePathAndCallIndex(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source DB: session s1 with a tool_call that has file_path + call_index.
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err, "open src")
+	insertSession(t, srcDB, "s1", "proj")
+	insertMessages(t, srcDB,
+		userMsg("s1", 0, "hello"),
+		asstMsg("s1", 1, "used a tool"),
+	)
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category,
+			 tool_use_id, input_json, file_path, call_index)
+		SELECT id, session_id, 'Edit', 'Edit',
+			'tu_fp1', '{"file_path":"/repo/main.go"}', '/repo/main.go', 0
+		FROM messages
+		WHERE session_id = 's1' AND ordinal = 1`)
+	require.NoError(t, err, "insert src tool_call")
+	srcDB.Close()
+
+	// Destination DB: empty.
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err, "open dst")
+	defer dstDB.Close()
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	require.NoError(t, err, "CopyOrphanedDataFrom")
+	require.Equal(t, 1, count, "orphaned session count")
+
+	var fp sql.NullString
+	var ci int
+	require.NoError(t, dstDB.getReader().QueryRow(`
+		SELECT file_path, call_index FROM tool_calls
+		WHERE session_id = 's1'`,
+	).Scan(&fp, &ci))
+	assert.True(t, fp.Valid, "file_path should be non-NULL after copy")
+	assert.Equal(t, "/repo/main.go", fp.String, "file_path value")
+	assert.Equal(t, 0, ci, "call_index value")
+}
+
+// clearToolCallFieldBackfillSentinel removes the one-time backfill marker so a
+// test can drive backfillToolCallFieldsLocked as a first run against rows it
+// inserts after Open.
+func clearToolCallFieldBackfillSentinel(t *testing.T, d *DB) {
+	t.Helper()
+	_, err := d.getWriter().Exec(
+		`DELETE FROM stats WHERE key = ?`, toolCallFieldBackfillStatsKey)
+	require.NoError(t, err, "clear tool_call backfill sentinel")
+}
+
+func TestBackfillToolCallFields(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedSessionWithMessage(t, d, "sess-bf") // message id = 1
+
+	var msgID int64
+	require.NoError(t, d.getReader().QueryRowContext(ctx,
+		`SELECT id FROM messages WHERE session_id = 'sess-bf' AND ordinal = 0`,
+	).Scan(&msgID))
+
+	w := d.getWriter()
+	_, err := w.Exec(`INSERT INTO tool_calls
+		(message_id, session_id, tool_name, category, tool_use_id, input_json,
+		 file_path, call_index)
+		VALUES
+		(?,?,?,?,?,?,NULL,NULL),
+		(?,?,?,?,?,?,NULL,NULL),
+		(?,?,?,?,?,?,NULL,NULL)`,
+		msgID, "sess-bf", "Edit", "Edit", "a", `{"file_path":"/x.go"}`,
+		msgID, "sess-bf", "Edit", "Edit", "b", "a raw diff not json",
+		msgID, "sess-bf", "Write", "Write", "c", `{"file":"/y.go"}`,
+	)
+	require.NoError(t, err, "insert legacy tool_calls")
+
+	// Open already ran the one-time backfill on the empty table during
+	// testDB setup; clear the sentinel so it runs against these legacy rows
+	// the way it would when columns are first added to a populated database.
+	clearToolCallFieldBackfillSentinel(t, d)
+	require.NoError(t, d.backfillToolCallFieldsLocked(w), "backfill")
+
+	type row struct {
+		fp sql.NullString
+		ci int
+	}
+	rows := map[string]row{}
+	r, err := w.QueryContext(ctx,
+		`SELECT tool_use_id, file_path, call_index FROM tool_calls`)
+	require.NoError(t, err)
+	defer r.Close()
+	for r.Next() {
+		var id string
+		var fp sql.NullString
+		var ci int
+		require.NoError(t, r.Scan(&id, &fp, &ci))
+		rows[id] = row{fp, ci}
+	}
+	require.NoError(t, r.Err())
+	assert.Equal(t, "/x.go", rows["a"].fp.String, "a file_path")
+	assert.False(t, rows["b"].fp.Valid, "b file_path should be NULL (raw diff)")
+	assert.Equal(t, "/y.go", rows["c"].fp.String, "c file_path")
+	assert.Equal(t, 0, rows["a"].ci, "a call_index")
+	assert.Equal(t, 1, rows["b"].ci, "b call_index")
+	assert.Equal(t, 2, rows["c"].ci, "c call_index")
+}
+
+func TestBackfillToolCallFieldsRunsOnce(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedSessionWithMessage(t, d, "sess-once")
+
+	var msgID int64
+	require.NoError(t, d.getReader().QueryRowContext(ctx,
+		`SELECT id FROM messages WHERE session_id = 'sess-once' AND ordinal = 0`,
+	).Scan(&msgID))
+
+	w := d.getWriter()
+	insertNullEdit := func(toolUseID, inputJSON string) {
+		t.Helper()
+		_, err := w.Exec(`INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category, tool_use_id,
+			 input_json, file_path, call_index)
+			VALUES (?,?,?,?,?,?,NULL,NULL)`,
+			msgID, "sess-once", "Edit", "Edit", toolUseID, inputJSON)
+		require.NoError(t, err, "insert %s", toolUseID)
+	}
+
+	// Open already ran (and sentineled) the backfill on the empty table;
+	// clear it so this first manual run does real work, as it would when
+	// columns are first added to a populated database.
+	clearToolCallFieldBackfillSentinel(t, d)
+
+	// First run backfills the legacy row and records the sentinel.
+	insertNullEdit("first", `{"file_path":"/first.go"}`)
+	require.NoError(t, d.backfillToolCallFieldsLocked(w), "first backfill")
+
+	should, err := d.shouldRunToolCallFieldBackfillLocked(w)
+	require.NoError(t, err, "probe sentinel")
+	assert.False(t, should, "sentinel should be set after first backfill")
+
+	// A row inserted after the sentinel is set must be left untouched: the
+	// gate skips the rerun instead of rescanning tool_calls. This is what
+	// distinguishes one-time gating from plain per-Open idempotency.
+	insertNullEdit("second", `{"file_path":"/second.go"}`)
+	require.NoError(t, d.backfillToolCallFieldsLocked(w), "second backfill")
+
+	fp := map[string]sql.NullString{}
+	r, err := w.QueryContext(ctx,
+		`SELECT tool_use_id, file_path FROM tool_calls`)
+	require.NoError(t, err)
+	defer r.Close()
+	for r.Next() {
+		var id string
+		var p sql.NullString
+		require.NoError(t, r.Scan(&id, &p))
+		fp[id] = p
+	}
+	require.NoError(t, r.Err())
+	assert.Equal(t, "/first.go", fp["first"].String, "first row backfilled")
+	assert.False(t, fp["second"].Valid,
+		"second row left NULL: one-time gate skipped the rerun")
 }

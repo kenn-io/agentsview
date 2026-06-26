@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { BatchDeleteInputBody } from '../models/BatchDeleteInputBody';
 import type { DbSession } from '../models/DbSession';
 import type { DbSessionActivityResponse } from '../models/DbSessionActivityResponse';
 import type { DbSessionTiming } from '../models/DbSessionTiming';
@@ -77,6 +78,8 @@ export class SessionsService {
     minToolFailures,
     hasSecret,
     starred,
+    orderBy = 'recent',
+    descending,
   }: {
     /**
      * Filter by project
@@ -166,6 +169,14 @@ export class SessionsService {
      * Filter sessions by starred status
      */
     starred?: boolean,
+    /**
+     * Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id.
+     */
+    orderBy?: string,
+    /**
+     * Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
+     */
+    descending?: boolean,
   }): CancelablePromise<ServiceSessionList> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -193,6 +204,8 @@ export class SessionsService {
         'min_tool_failures': minToolFailures,
         'has_secret': hasSecret,
         'starred': starred,
+        'order_by': orderBy,
+        'descending': descending,
       },
       errors: {
         400: `Bad Request`,
@@ -237,6 +250,8 @@ export class SessionsService {
     minToolFailures,
     hasSecret,
     starred,
+    orderBy = 'recent',
+    descending,
   }: {
     /**
      * Filter by project
@@ -326,6 +341,14 @@ export class SessionsService {
      * Filter sessions by starred status
      */
     starred?: boolean,
+    /**
+     * Sort order: a comma-separated list of keys, each optionally suffixed :asc or :desc (e.g. messages:desc,started:asc). A key with no suffix uses the descending param, then its natural direction. Valid keys: recent, started, messages, user-messages, output-tokens, peak-context, failures, retries, edit-churn, compactions, context-pressure, health, secrets, id.
+     */
+    orderBy?: string,
+    /**
+     * Default sort direction for keys in order_by that carry no explicit :asc/:desc suffix
+     */
+    descending?: boolean,
   }): CancelablePromise<DbSidebarSessionIndex> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -353,6 +376,8 @@ export class SessionsService {
         'min_tool_failures': minToolFailures,
         'has_secret': hasSecret,
         'starred': starred,
+        'order_by': orderBy,
+        'descending': descending,
       },
       errors: {
         400: `Bad Request`,
@@ -1155,6 +1180,36 @@ export class SessionsService {
         403: `Forbidden`,
         404: `Not Found`,
         409: `Conflict`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Batch delete sessions
+   * @returns void
+   * @throws ApiError
+   */
+  public static postApiV1SessionsBatchDelete({
+    requestBody,
+  }: {
+    requestBody: BatchDeleteInputBody,
+  }): CancelablePromise<void> {
+    return __request(OpenAPI, {
+      method: 'POST',
+      url: '/api/v1/sessions/batch-delete',
+      body: requestBody,
+      mediaType: 'application/json',
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
         500: `Internal Server Error`,
         501: `Not Implemented`,
         502: `Bad Gateway`,

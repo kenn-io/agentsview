@@ -44,3 +44,25 @@ func TestApplyUsage_DedupAndDayFilter(t *testing.T) {
 	assert.Equal(t, 100, r.Buckets[120].OutputTokens)
 	assert.InDelta(t, 1.0, r.Buckets[120].Cost, 1e-9)
 }
+
+func TestApplyUsage_DedupBySourceUUIDFallback(t *testing.T) {
+	p := baseParams(t, "2026-06-16", "UTC")
+	usage := []UsageRow{
+		{SessionID: "earlier", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			OutputTokens: 500, Cost: 5.0, Agent: "claude",
+			ClaudeMessageID: "dup-m", SourceUUID: "src-dup"},
+		{SessionID: "later", Model: "m1", Timestamp: "2026-06-16T10:01:00Z",
+			OutputTokens: 900, Cost: 9.0, Agent: "claude",
+			ClaudeMessageID: "dup-m", SourceUUID: "src-dup"},
+	}
+	start := mustStart(t, "2026-06-16T00:00:00Z")
+	end := mustStart(t, "2026-06-17T00:00:00Z")
+	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
+	require.NoError(t, err)
+	r := Report{Buckets: make([]Bucket, len(windows))}
+	applyUsage(&r, p, windows, start, end, usage, nil)
+	assert.Equal(t, 500, r.Totals.OutputTokens)
+	assert.InDelta(t, 5.0, r.Totals.Cost, 1e-9)
+	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
+	assert.InDelta(t, 5.0, r.Buckets[120].Cost, 1e-9)
+}

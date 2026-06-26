@@ -1546,8 +1546,21 @@ func TestIncrementalUpdateClearsAutomated(t *testing.T) {
 	require.True(t, s.IsAutomated, "should start as automated")
 
 	// Simulate a second user turn via incremental update.
-	err = d.UpdateSessionIncremental(
-		"s1", nil, 6, 2, 100, 12345, 0, 0, false, false,
+	err = callUpdateSessionIncrementalCompat(
+		t,
+		d,
+		"s1",
+		nil,
+		6,
+		2,
+		100,
+		12345,
+		0,
+		"",
+		0,
+		0,
+		false,
+		false,
 	)
 	require.NoError(t, err, "incremental update")
 

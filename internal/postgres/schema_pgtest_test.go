@@ -94,3 +94,32 @@ func TestSecretFindingsSchema(t *testing.T) {
 		assert.True(t, exists, "sessions.%s column missing", col)
 	}
 }
+
+// TestToolCallsFilePathIndex verifies EnsureSchema creates the partial
+// idx_tool_calls_file_path index that backs the cross-session Recent Edits
+// feed, mirroring SQLite's index so the query surface has parity on PG.
+func TestToolCallsFilePathIndex(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanSchemaTestPG(t, pgURL)
+	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+
+	pg, err := Open(pgURL, schemaTestSchema, true)
+	require.NoError(t, err, "connecting to pg")
+	defer pg.Close()
+
+	ctx := context.Background()
+	// Twice to confirm CREATE INDEX IF NOT EXISTS stays idempotent.
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema), "EnsureSchema (first)")
+	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema), "EnsureSchema (second)")
+
+	var exists bool
+	err = pg.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_indexes
+			WHERE schemaname = $1
+			  AND tablename = 'tool_calls'
+			  AND indexname = 'idx_tool_calls_file_path'
+		)`, schemaTestSchema).Scan(&exists)
+	require.NoError(t, err, "checking idx_tool_calls_file_path")
+	assert.True(t, exists, "idx_tool_calls_file_path index missing")
+}

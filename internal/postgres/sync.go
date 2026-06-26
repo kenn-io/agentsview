@@ -11,6 +11,115 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+type syncStateStore = SyncStateStore
+
+type scopedSyncStateStore struct {
+	base          syncStateStore
+	scope         string
+	migrateLegacy bool
+	migrateOnce   sync.Once
+	migrateErr    error
+}
+
+func newScopedSyncStateStore(
+	base syncStateStore,
+	scope string,
+	migrateLegacy bool,
+) *scopedSyncStateStore {
+	return &scopedSyncStateStore{
+		base:          base,
+		scope:         scope,
+		migrateLegacy: migrateLegacy,
+	}
+}
+
+func (s *scopedSyncStateStore) scopedKey(key string) string {
+	if s.scope == "" {
+		return key
+	}
+	return key + ":" + s.scope
+}
+
+func (s *scopedSyncStateStore) ensureMigration() error {
+	if s.scope == "" || !s.migrateLegacy {
+		return nil
+	}
+	s.migrateOnce.Do(func() {
+		for _, key := range []string{
+			"last_push_at",
+			lastPushBoundaryStateKey,
+			lastPushTargetFingerprintKey,
+		} {
+			scopedKey := s.scopedKey(key)
+			scopedValue, err := s.base.GetSyncState(scopedKey)
+			if err != nil {
+				s.migrateErr = fmt.Errorf(
+					"reading %s during PG sync-state migration: %w",
+					scopedKey, err,
+				)
+				return
+			}
+			legacyValue, err := s.base.GetSyncState(key)
+			if err != nil {
+				s.migrateErr = fmt.Errorf(
+					"reading legacy %s during PG sync-state migration: %w",
+					key, err,
+				)
+				return
+			}
+			if legacyValue == "" {
+				continue
+			}
+			if scopedValue == "" {
+				if err := s.base.SetSyncState(
+					scopedKey, legacyValue,
+				); err != nil {
+					s.migrateErr = fmt.Errorf(
+						"writing %s during PG sync-state migration: %w",
+						scopedKey, err,
+					)
+					return
+				}
+			}
+			if err := s.base.SetSyncState(key, ""); err != nil {
+				s.migrateErr = fmt.Errorf(
+					"clearing legacy %s during PG sync-state migration: %w",
+					key, err,
+				)
+				return
+			}
+		}
+	})
+	return s.migrateErr
+}
+
+func (s *scopedSyncStateStore) GetSyncState(key string) (string, error) {
+	if err := s.ensureMigration(); err != nil {
+		return "", err
+	}
+	return s.base.GetSyncState(s.scopedKey(key))
+}
+
+func (s *scopedSyncStateStore) SetSyncState(
+	key, value string,
+) error {
+	if err := s.ensureMigration(); err != nil {
+		return err
+	}
+	return s.base.SetSyncState(s.scopedKey(key), value)
+}
+
+func (s *scopedSyncStateStore) GetOrCreateSyncState(
+	key, defaultValue string,
+) (string, error) {
+	if err := s.ensureMigration(); err != nil {
+		return "", err
+	}
+	return s.base.GetOrCreateSyncState(
+		s.scopedKey(key), defaultValue,
+	)
+}
+
 // isUndefinedTable returns true when the error indicates the
 // queried relation does not exist (PG SQLSTATE 42P01). We match
 // only the SQLSTATE code to avoid false positives from other
@@ -22,13 +131,26 @@ func isUndefinedTable(err error) bool {
 	return strings.Contains(err.Error(), "42P01")
 }
 
+// isUndefinedColumn returns true when a query references a column
+// that does not exist (PG SQLSTATE 42703).
+func isUndefinedColumn(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "42703")
+}
+
 // Sync manages push-only sync from local SQLite to a remote
 // PostgreSQL database.
 type Sync struct {
-	pg      *sql.DB
-	local   *db.DB
-	machine string
-	schema  string
+	pg                     *sql.DB
+	local                  *db.DB
+	syncState              syncStateStore
+	machine                string
+	schema                 string
+	targetFingerprint      string
+	syncStateTarget        string
+	migrateLegacySyncState bool
 
 	// Project filtering for push scope.
 	projects        []string
@@ -41,6 +163,13 @@ type Sync struct {
 	schemaDone bool
 }
 
+func (s *Sync) effectiveSyncState() syncStateStore {
+	if s.syncState != nil {
+		return s.syncState
+	}
+	return s.local
+}
+
 // SyncOptions holds optional configuration for a Sync instance.
 type SyncOptions struct {
 	// Projects limits push scope to these project names.
@@ -49,6 +178,11 @@ type SyncOptions struct {
 	// ExcludeProjects excludes these project names from push.
 	// Mutually exclusive with Projects.
 	ExcludeProjects []string
+	// SyncStateTarget scopes per-target push watermarks and fingerprints.
+	SyncStateTarget string
+	// MigrateLegacySyncState moves unsuffixed legacy sync-state keys into the
+	// named default target the first time that target runs.
+	MigrateLegacySyncState bool
 }
 
 // New creates a Sync instance and verifies the PG connection.
@@ -84,14 +218,29 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	targetFingerprint, err := pgTargetFingerprint(pgURL, schema)
+	if err != nil {
+		pg.Close()
+		return nil, fmt.Errorf(
+			"computing pg target fingerprint: %w", err,
+		)
+	}
 
 	return &Sync{
-		pg:              pg,
-		local:           local,
-		machine:         machine,
-		schema:          schema,
-		projects:        opts.Projects,
-		excludeProjects: opts.ExcludeProjects,
+		pg:    pg,
+		local: local,
+		syncState: newScopedSyncStateStore(
+			local,
+			opts.SyncStateTarget,
+			opts.MigrateLegacySyncState,
+		),
+		machine:                machine,
+		schema:                 schema,
+		targetFingerprint:      targetFingerprint,
+		syncStateTarget:        opts.SyncStateTarget,
+		migrateLegacySyncState: opts.MigrateLegacySyncState,
+		projects:               opts.Projects,
+		excludeProjects:        opts.ExcludeProjects,
 	}, nil
 }
 
@@ -139,7 +288,9 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 func (s *Sync) Status(
 	ctx context.Context,
 ) (SyncStatus, error) {
-	lastPush, err := s.local.GetSyncState("last_push_at")
+	lastPush, err := ReadLastPushAt(
+		s.local, s.syncStateTarget, s.migrateLegacySyncState,
+	)
 	if err != nil {
 		log.Printf(
 			"warning: reading last_push_at: %v", err,
@@ -147,14 +298,51 @@ func (s *Sync) Status(
 		lastPush = ""
 	}
 
+	return readStatus(ctx, s.pg, s.machine, lastPush)
+}
+
+// ReadStatus reads PostgreSQL status without requiring a local SQLite sync
+// handle. Callers pass any local last-push watermark they want displayed.
+func ReadStatus(
+	ctx context.Context,
+	pgURL, schema, machine string,
+	allowInsecure bool,
+	lastPush string,
+) (SyncStatus, error) {
+	if machine == "" {
+		return SyncStatus{}, fmt.Errorf(
+			"machine name must not be empty",
+		)
+	}
+	if machine == "local" {
+		return SyncStatus{}, fmt.Errorf(
+			"machine name %q is reserved; "+
+				"choose a different pg.machine_name",
+			machine,
+		)
+	}
+	pg, err := Open(pgURL, schema, allowInsecure)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	defer pg.Close()
+	return readStatus(ctx, pg, machine, lastPush)
+}
+
+func readStatus(
+	ctx context.Context,
+	pg *sql.DB,
+	machine string,
+	lastPush string,
+) (SyncStatus, error) {
 	var pgSessions int
-	err = s.pg.QueryRowContext(ctx,
+	err := pg.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM sessions",
 	).Scan(&pgSessions)
 	if err != nil {
 		if isUndefinedTable(err) {
 			return SyncStatus{
-				Machine:    s.machine,
+				Machine:    machine,
 				LastPushAt: lastPush,
 			}, nil
 		}
@@ -164,13 +352,13 @@ func (s *Sync) Status(
 	}
 
 	var pgMessages int
-	err = s.pg.QueryRowContext(ctx,
+	err = pg.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM messages",
 	).Scan(&pgMessages)
 	if err != nil {
 		if isUndefinedTable(err) {
 			return SyncStatus{
-				Machine:    s.machine,
+				Machine:    machine,
 				LastPushAt: lastPush,
 				PGSessions: pgSessions,
 			}, nil
@@ -181,11 +369,37 @@ func (s *Sync) Status(
 	}
 
 	return SyncStatus{
-		Machine:    s.machine,
+		Machine:    machine,
 		LastPushAt: lastPush,
 		PGSessions: pgSessions,
 		PGMessages: pgMessages,
 	}, nil
+}
+
+func ReadLastPushAt(
+	local SyncStateStore,
+	target string,
+	migrateLegacy bool,
+) (string, error) {
+	if local == nil {
+		return "", fmt.Errorf("local sync state is required")
+	}
+	if target == "" {
+		return local.GetSyncState("last_push_at")
+	}
+	store := newScopedSyncStateStore(
+		local,
+		target,
+		false,
+	)
+	lastPush, err := store.GetSyncState("last_push_at")
+	if err != nil {
+		return "", err
+	}
+	if lastPush != "" || !migrateLegacy {
+		return lastPush, nil
+	}
+	return local.GetSyncState("last_push_at")
 }
 
 // SyncStatus holds summary information about the sync state.

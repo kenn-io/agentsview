@@ -8,6 +8,8 @@ const LOC = {
   row: ".virtual-row",
 } as const;
 
+const COLD_WEBKIT_TEST_TIMEOUT_MS = 30_000;
+
 const BETA_7 = {
   project: "project-beta",
   count: 3, // user_message_count shown in sidebar
@@ -41,7 +43,8 @@ async function selectSession(
   const item = getSessionItem(page, project, count);
   const sessionId = await item.getAttribute("data-session-id");
   expect(sessionId).toBeTruthy();
-  await item.click();
+  await expect(item).toBeVisible();
+  await item.click({ force: true });
   await expect(item).toHaveClass(/active/);
   return sessionId!;
 }
@@ -75,6 +78,8 @@ async function expectSessionLoaded(
 }
 
 test.describe("Mixed content rendering", () => {
+  test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
+
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
     await expect(

@@ -4,6 +4,9 @@ import { ActivityService, MetadataService } from "../api/generated/index";
 import { configureGeneratedClient } from "../api/runtime.js";
 import { sync } from "./sync.svelte.js";
 import { router } from "./router.svelte.js";
+import { localDateStr, rollingRange } from "../utils/dates.js";
+
+export { localDateStr };
 
 type Preset = "day" | "week" | "month" | "custom";
 
@@ -22,11 +25,13 @@ const AUTOMATIONS: ReadonlySet<string> = new Set<Automation>([
   "automated",
 ]);
 
-export function localDateStr(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+function parseWindowDays(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isInteger(n) || n <= 0 || String(n) !== raw) {
+    return null;
+  }
+  return n;
 }
 
 /**
@@ -45,6 +50,7 @@ class ActivityStore {
   date: string = $state(localDateStr(new Date()));
   from = $state("");
   to = $state("");
+  rollingWindowDays: number | null = $state(null);
   bucket = $state("");
   project: string = $state("");
   agent: string = $state("");
@@ -95,8 +101,24 @@ class ActivityStore {
     this.hasNewData = true;
   }
 
+  private materializeRollingWindow(): boolean {
+    if (this.preset !== "custom" || this.rollingWindowDays === null) {
+      return false;
+    }
+    const range = rollingRange(this.rollingWindowDays);
+    if (this.from === range.from && this.to === range.to) {
+      return false;
+    }
+    this.from = range.from;
+    this.to = range.to;
+    return true;
+  }
+
   async load({ background = false }: { background?: boolean } = {}) {
     const v = ++this.loadVersion;
+    if (this.materializeRollingWindow()) {
+      this.writeUrl();
+    }
     // A custom range needs both bounds. With only one present (a cleared date
     // input or a partial deep link) the backend rejects the request, so hold
     // the current view until both are set instead of flashing an error.
@@ -267,12 +289,23 @@ class ActivityStore {
    * This is the single hydration path, run on mount and on popstate.
    */
   hydrateFromUrl(params: Record<string, string>) {
-    this.preset = PRESETS.has(params.preset ?? "")
-      ? (params.preset as Preset)
-      : "day";
-    this.date = params.date || localDateStr(new Date());
-    this.from = params.from ?? "";
-    this.to = params.to ?? "";
+    const windowDays = parseWindowDays(params.window_days);
+    if (windowDays !== null) {
+      const range = rollingRange(windowDays);
+      this.preset = "custom";
+      this.date = range.to;
+      this.from = range.from;
+      this.to = range.to;
+      this.rollingWindowDays = windowDays;
+    } else {
+      this.preset = PRESETS.has(params.preset ?? "")
+        ? (params.preset as Preset)
+        : "day";
+      this.date = params.date || localDateStr(new Date());
+      this.from = params.from ?? "";
+      this.to = params.to ?? "";
+      this.rollingWindowDays = null;
+    }
     this.bucket = params.bucket ?? "";
     this.project = params.project ?? "";
     this.agent = params.agent ?? "";
@@ -295,6 +328,9 @@ class ActivityStore {
     if (this.preset === "custom") {
       if (this.from) p.from = this.from;
       if (this.to) p.to = this.to;
+      if (this.rollingWindowDays !== null) {
+        p.window_days = String(this.rollingWindowDays);
+      }
     } else {
       if (this.date) p.date = this.date;
     }
@@ -308,6 +344,9 @@ class ActivityStore {
 
   setPreset(p: Preset) {
     this.preset = p;
+    if (p !== "custom") {
+      this.rollingWindowDays = null;
+    }
     if (p === "custom") {
       // Seed a 1-day range from the current anchor so selecting Custom shows a
       // valid range immediately instead of erroring on empty from/to bounds.
@@ -319,16 +358,34 @@ class ActivityStore {
 
   setDate(date: string) {
     this.date = date;
+    if (this.preset !== "custom") {
+      this.rollingWindowDays = null;
+    }
     this.writeUrl();
   }
 
   setFrom(d: string) {
     this.from = d;
+    this.rollingWindowDays = null;
     this.writeUrl();
   }
 
   setTo(d: string) {
     this.to = d;
+    this.rollingWindowDays = null;
+    this.writeUrl();
+  }
+
+  setCustomRange(
+    from: string,
+    to: string,
+    rollingWindowDays: number | null = null,
+  ) {
+    this.preset = "custom";
+    this.date = from;
+    this.from = from;
+    this.to = to;
+    this.rollingWindowDays = rollingWindowDays;
     this.writeUrl();
   }
 

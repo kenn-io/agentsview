@@ -1,5 +1,6 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
+  import { m } from "../../i18n/index.js";
 
   const CELL_SIZE = 17;
   const CELL_GAP = 2;
@@ -116,7 +117,12 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${day} ${h}:00 - ${value.toLocaleString()} messages`,
+      text: m.analytics_hour_of_week_tooltip({
+        day,
+        hour: h,
+        count: value,
+        countLabel: value.toLocaleString(),
+      }),
     };
   }
 
@@ -157,7 +163,7 @@
         class="retry-btn"
         onclick={() => analytics.fetchHourOfWeek()}
       >
-        Retry
+        {m.shared_retry()}
       </button>
     </div>
   {:else if grid}
@@ -246,7 +252,7 @@
       </div>
     {/if}
   {:else}
-    <div class="empty">No data for this period</div>
+    <div class="empty">{m.shared_no_data_for_period()}</div>
   {/if}
 </div>
 

@@ -545,6 +545,111 @@ func TestParseKimiSession_NewLayoutSessionID(t *testing.T) {
 	assertMessage(t, msgs[1], RoleAssistant, "Hi there!")
 }
 
+func TestParseKimiSession_NativeKimiCodeEvents(t *testing.T) {
+	path := writeKimiCodeWireJSONL(t,
+		"wd_myproject_a1b2c3d4", "session_uuid-1234", "main",
+		[]string{
+			`{"type":"metadata","protocol_version":"1.4","created_at":1782012661212}`,
+			`{"type":"config.update","modelAlias":"kimi-code/kimi-for-coding","thinkingLevel":"high","time":1782012661213}`,
+			`{"type":"turn.prompt","input":[{"type":"text","text":"hello"}],"origin":{"kind":"user"},"time":1782012666987}`,
+			`{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"hello"}],"toolCalls":[],"origin":{"kind":"user"}},"time":1782012666987}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"667ba233-c6d8-4939-b777-a5035ecc4215","turnId":"0","step":1},"time":1782012666989}`,
+			`{"type":"context.append_loop_event","event":{"type":"content.part","uuid":"1160b8b3-c0a6-436f-91db-ef737cd736cd","turnId":"0","step":1,"stepUuid":"667ba233-c6d8-4939-b777-a5035ecc4215","part":{"type":"think","think":"The user said hello. This is a simple greeting."}},"time":1782012668557}`,
+			`{"type":"context.append_loop_event","event":{"type":"content.part","uuid":"c379acc8-aaad-41bb-af8a-b478829e38f7","turnId":"0","step":1,"stepUuid":"667ba233-c6d8-4939-b777-a5035ecc4215","part":{"type":"text","text":"Hello! How can I help you today?"}},"time":1782012668558}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.end","uuid":"667ba233-c6d8-4939-b777-a5035ecc4215","turnId":"0","step":1,"usage":{"inputOther":1598,"output":37,"inputCacheRead":14592,"inputCacheCreation":0},"finishReason":"end_turn","llmFirstTokenLatencyMs":1169,"llmStreamDurationMs":396},"time":1782012668558}`,
+			`{"type":"usage.record","model":"kimi-code/kimi-for-coding","usage":{"inputOther":1598,"output":37,"inputCacheRead":14592,"inputCacheCreation":0},"usageScope":"turn","time":1782012668558}`,
+		},
+	)
+
+	sess, msgs, err := ParseKimiSession(path, "myproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assertSessionMeta(t, sess,
+		"kimi:wd_myproject_a1b2c3d4:main:session_uuid-1234",
+		"myproject", AgentKimi,
+	)
+	assert.Equal(t, "hello", sess.FirstMessage)
+	assertMessageCount(t, sess.MessageCount, 2)
+	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(t, 37, sess.TotalOutputTokens)
+	assert.Equal(t, 16190, sess.PeakContextTokens)
+	assert.True(t, sess.HasTotalOutputTokens)
+	assert.True(t, sess.HasPeakContextTokens)
+
+	require.Len(t, msgs, 2)
+	assertMessage(t, msgs[0], RoleUser, "hello")
+	assertTimestamp(t, msgs[0].Timestamp,
+		time.UnixMilli(1782012666987))
+
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.True(t, msgs[1].HasThinking)
+	assert.Contains(t, msgs[1].Content, "[Thinking]")
+	assert.Contains(t, msgs[1].Content, "simple greeting")
+	assert.Contains(t, msgs[1].Content,
+		"Hello! How can I help you today?")
+	assert.Equal(t, "kimi-code/kimi-for-coding", msgs[1].Model)
+	assert.Equal(t, "end_turn", msgs[1].StopReason)
+	assert.True(t, msgs[1].HasOutputTokens)
+	assert.True(t, msgs[1].HasContextTokens)
+	assert.Equal(t, 37, msgs[1].OutputTokens)
+	assert.Equal(t, 16190, msgs[1].ContextTokens)
+	assert.JSONEq(t,
+		`{"input_tokens":1598,"output_tokens":37,"cache_read_input_tokens":14592,"cache_creation_input_tokens":0}`,
+		string(msgs[1].TokenUsage),
+	)
+	assertTimestamp(t, msgs[1].Timestamp,
+		time.UnixMilli(1782012668557))
+}
+
+func TestParseKimiSession_NativeKimiCodeToolCall(t *testing.T) {
+	path := writeKimiCodeWireJSONL(t,
+		"wd_myproject_a1b2c3d4", "session_uuid-tool", "main",
+		[]string{
+			`{"type":"metadata","protocol_version":"1.4","created_at":1782012661212}`,
+			`{"type":"config.update","modelAlias":"kimi-code/kimi-for-coding","time":1782012661213}`,
+			`{"type":"turn.prompt","input":[{"type":"text","text":"List files"}],"origin":{"kind":"user"},"time":1782012666987}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"step-1","turnId":"0","step":1},"time":1782012666989}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.call","uuid":"call-event","turnId":"0","step":1,"stepUuid":"step-1","toolCallId":"tool_1","name":"Bash","args":{"command":"ls","description":"List files"}},"time":1782012667000}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.end","uuid":"step-1","turnId":"0","step":1,"usage":{"inputOther":10,"output":3,"inputCacheRead":20,"inputCacheCreation":0},"finishReason":"tool_use"},"time":1782012667001}`,
+			`{"type":"context.append_loop_event","event":{"type":"tool.result","parentUuid":"call-event","toolCallId":"tool_1","result":{"output":"main.go\nREADME.md","isError":false}},"time":1782012667002}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.begin","uuid":"step-2","turnId":"0","step":2},"time":1782012667003}`,
+			`{"type":"context.append_loop_event","event":{"type":"content.part","uuid":"part-1","turnId":"0","step":2,"stepUuid":"step-2","part":{"type":"text","text":"Found the files."}},"time":1782012667004}`,
+			`{"type":"context.append_loop_event","event":{"type":"step.end","uuid":"step-2","turnId":"0","step":2,"usage":{"inputOther":30,"output":4,"inputCacheRead":40,"inputCacheCreation":5},"finishReason":"end_turn"},"time":1782012667005}`,
+		},
+	)
+
+	sess, msgs, err := ParseKimiSession(path, "myproject", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	assert.Equal(t, 7, sess.TotalOutputTokens)
+	assert.Equal(t, 75, sess.PeakContextTokens)
+
+	require.Len(t, msgs, 4)
+	assertMessage(t, msgs[0], RoleUser, "List files")
+	require.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.True(t, msgs[1].HasToolUse)
+	assert.Contains(t, msgs[1].Content, "[Bash: List files]")
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "tool_1", msgs[1].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "Bash", msgs[1].ToolCalls[0].ToolName)
+	assert.JSONEq(t, `{"command":"ls","description":"List files"}`,
+		msgs[1].ToolCalls[0].InputJSON)
+	assert.Equal(t, "tool_use", msgs[1].StopReason)
+
+	require.Equal(t, RoleUser, msgs[2].Role)
+	require.Len(t, msgs[2].ToolResults, 1)
+	assert.Equal(t, "tool_1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Equal(t, "main.go\nREADME.md",
+		DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+
+	assertMessage(t, msgs[3], RoleAssistant, "Found the files.")
+	assert.Equal(t, "end_turn", msgs[3].StopReason)
+	assert.Equal(t, 4, msgs[3].OutputTokens)
+	assert.Equal(t, 75, msgs[3].ContextTokens)
+}
+
 func TestParseKimiSession_NewLayout_AgentZero(t *testing.T) {
 	path := writeKimiCodeWireJSONL(t,
 		"wd_myproject_a1b2c3d4", "session_uuid-5678", "agent-0",

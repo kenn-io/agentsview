@@ -14,6 +14,13 @@
   },
   "packageRules": [
     {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions dependencies",
+      "groupSlug": "github-actions-dependencies",
+      "separateMajorMinor": false,
+      "separateMultipleMajor": false
+    },
+    {
       "matchManagers": ["gomod"],
       "groupName": "Go dependencies",
       "groupSlug": "go-dependencies",

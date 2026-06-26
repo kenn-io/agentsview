@@ -4,10 +4,12 @@
   import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, isRemoteConnection } from "../../api/runtime.js";
+  import { m } from "../../i18n/index.js";
   import AppearanceSettings from "./AppearanceSettings.svelte";
   import AgentDirSettings from "./AgentDirSettings.svelte";
   import TerminalSettings from "./TerminalSettings.svelte";
   import GithubSettings from "./GithubSettings.svelte";
+  import LanguageSettings from "./LanguageSettings.svelte";
   import RemoteSettings from "./RemoteSettings.svelte";
   import WorktreeMappingSettings from "./WorktreeMappingSettings.svelte";
 
@@ -28,11 +30,11 @@
 
 <div class="settings-page">
   <div class="settings-header">
-    <h2 class="settings-title">Settings</h2>
+    <h2 class="settings-title">{m.settings_title()}</h2>
   </div>
 
   {#if settings.loading || !settings.loaded}
-    <div class="settings-loading">Loading settings...</div>
+    <div class="settings-loading">{m.settings_loading()}</div>
   {:else if settings.needsAuth}
     <div class="auth-prompt">
       <h3 class="auth-title">Authentication Required</h3>
@@ -86,6 +88,7 @@
     </div>
   {:else}
     <div class="settings-sections">
+      <LanguageSettings />
       <AppearanceSettings />
       <AgentDirSettings />
       <TerminalSettings />
@@ -248,7 +251,7 @@
     border-radius: var(--radius-sm);
     font-size: 13px;
     font-weight: 500;
-    color: white;
+    color: var(--accent-blue-foreground);
     background: var(--accent-blue);
     border: none;
     cursor: pointer;

@@ -19,7 +19,10 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const lastPushBoundaryStateKey = "last_push_boundary_state"
+const (
+	lastPushBoundaryStateKey     = "last_push_boundary_state"
+	lastPushTargetFingerprintKey = "pg_target_fingerprint_v1"
+)
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
 // stable push-marker identifier. pushMarkerKeyPrefix prefixes that identifier
@@ -31,14 +34,6 @@ const (
 )
 
 var errSessionOwnershipConflict = errors.New("session ownership conflict")
-
-// syncStateStore abstracts sync state read/write operations on the
-// local database. Used by push boundary state helpers.
-type syncStateStore interface {
-	GetSyncState(key string) (string, error)
-	SetSyncState(key, value string) error
-	GetOrCreateSyncState(key, defaultValue string) (string, error)
-}
 
 type pushBoundaryState struct {
 	Cutoff       string            `json:"cutoff"`
@@ -72,16 +67,57 @@ func (s *Sync) Push(
 ) (PushResult, error) {
 	start := time.Now()
 	var result PushResult
+	state := s.effectiveSyncState()
+
+	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
+		return result, err
+	}
 
 	if err := s.normalizeSyncTimestamps(ctx); err != nil {
 		return result, err
 	}
 
-	lastPush, err := s.local.GetSyncState("last_push_at")
+	lastPush, err := state.GetSyncState("last_push_at")
 	if err != nil {
 		return result, fmt.Errorf(
 			"reading last_push_at: %w", err,
 		)
+	}
+	storedTargetFingerprint, err := state.GetSyncState(
+		lastPushTargetFingerprintKey,
+	)
+	if err != nil {
+		return result, fmt.Errorf(
+			"reading %s: %w",
+			lastPushTargetFingerprintKey, err,
+		)
+	}
+	boundaryState, err := state.GetSyncState(
+		lastPushBoundaryStateKey,
+	)
+	if err != nil {
+		return result, fmt.Errorf(
+			"reading %s: %w",
+			lastPushBoundaryStateKey, err,
+		)
+	}
+	pushStateCleared := false
+	if reset, reason := pushTargetState(
+		lastPush,
+		boundaryState,
+		storedTargetFingerprint,
+		s.targetFingerprint,
+	); reset {
+		log.Printf(
+			"pgsync: %s; clearing local push watermark state",
+			reason,
+		)
+		if err := clearPushState(state); err != nil {
+			return result, err
+		}
+		lastPush = ""
+		full = true
+		pushStateCleared = true
 	}
 	markerID, err := s.pushMarkerID()
 	if err != nil {
@@ -110,8 +146,8 @@ func (s *Sync) Push(
 		// When a filtered full push runs, clear persisted
 		// watermark and boundary state so the next
 		// unfiltered push also starts from scratch.
-		if s.isFiltered() {
-			if err := clearPushState(s.local); err != nil {
+		if s.isFiltered() && !pushStateCleared {
+			if err := clearPushState(state); err != nil {
 				return result, err
 			}
 		}
@@ -141,14 +177,17 @@ func (s *Sync) Push(
 			// Filtered push against a reset PG: clear
 			// watermark and boundary state so the next
 			// unfiltered push also starts from scratch.
-			if s.isFiltered() {
-				if err := clearPushState(s.local); err != nil {
+			if s.isFiltered() && !pushStateCleared {
+				if err := clearPushState(state); err != nil {
 					return result, err
 				}
 			}
 		}
 	}
 	if err := s.syncModelPricing(ctx); err != nil {
+		return result, err
+	}
+	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
 
@@ -175,7 +214,7 @@ func (s *Sync) Push(
 	if !full {
 		var bErr error
 		priorFingerprints, _, _, bErr = readBoundaryAndFingerprints(
-			s.local, lastPush,
+			state, lastPush,
 		)
 		if bErr != nil {
 			return result, bErr
@@ -257,18 +296,23 @@ func (s *Sync) Push(
 				boundaryKey = cutoff
 			}
 			if err := writePushBoundaryState(
-				s.local, boundaryKey, sessions,
+				state, boundaryKey, sessions,
 				priorFingerprints, sessionFingerprints,
 			); err != nil {
 				return result, err
 			}
 		} else {
 			if err := finalizePushState(
-				s.local, cutoff, sessions, nil,
+				state, cutoff, sessions, nil,
 				sessionFingerprints,
 			); err != nil {
 				return result, err
 			}
+		}
+		if err := persistPushTargetFingerprint(
+			state, s.targetFingerprint,
+		); err != nil {
+			return result, err
 		}
 		if err := s.writePushMarker(
 			ctx, markerID, markerMachine, markerMachineAliases,
@@ -286,7 +330,8 @@ func (s *Sync) Push(
 		batch := sessions[i:end]
 
 		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, legacyMarkerMachines, &pushed,
+			ctx, batch, full, markerID, legacyMarkerMachines,
+			usageFingerprints, &pushed,
 		)
 		if err != nil {
 			return result, err
@@ -301,7 +346,8 @@ func (s *Sync) Push(
 			for _, sess := range batch {
 				sr, retryErr := s.pushBatch(
 					ctx, []db.Session{sess},
-					full, markerID, legacyMarkerMachines, &pushed,
+					full, markerID, legacyMarkerMachines,
+					usageFingerprints, &pushed,
 				)
 				if retryErr != nil {
 					return result, retryErr
@@ -340,7 +386,7 @@ func (s *Sync) Push(
 			boundaryKey = cutoff
 		}
 		if err := writePushBoundaryState(
-			s.local, boundaryKey, pushed,
+			state, boundaryKey, pushed,
 			priorFingerprints, sessionFingerprints,
 		); err != nil {
 			return result, err
@@ -359,11 +405,16 @@ func (s *Sync) Push(
 			mergedFingerprints = priorFingerprints
 		}
 		if err := finalizePushState(
-			s.local, finalizeCutoff, pushed,
+			state, finalizeCutoff, pushed,
 			mergedFingerprints, sessionFingerprints,
 		); err != nil {
 			return result, err
 		}
+	}
+	if err := persistPushTargetFingerprint(
+		state, s.targetFingerprint,
+	); err != nil {
+		return result, err
 	}
 
 	// Write the push marker only after the push and local finalization
@@ -528,7 +579,11 @@ func normalizePushMarkerMachineAliases(
 // name, so a machine rename keeps the same marker, and unique per local DB, so
 // a different host pushing to the same PG cannot mask this host's reset.
 func (s *Sync) pushMarkerID() (string, error) {
-	id, err := s.local.GetSyncState(pushMarkerIDStateKey)
+	state := s.local
+	if state == nil {
+		return "", fmt.Errorf("local db is required")
+	}
+	id, err := state.GetSyncState(pushMarkerIDStateKey)
 	if err != nil {
 		return "", fmt.Errorf("reading push marker id: %w", err)
 	}
@@ -540,7 +595,9 @@ func (s *Sync) pushMarkerID() (string, error) {
 		return "", fmt.Errorf("generating push marker id: %w", err)
 	}
 	id = hex.EncodeToString(buf)
-	storedID, err := s.local.GetOrCreateSyncState(pushMarkerIDStateKey, id)
+	storedID, err := state.GetOrCreateSyncState(
+		pushMarkerIDStateKey, id,
+	)
 	if err != nil {
 		return "", fmt.Errorf("persisting push marker id: %w", err)
 	}
@@ -554,6 +611,10 @@ type batchResult struct {
 	skippedConflicts int
 }
 
+var errPushComparisonPreload = errors.New(
+	"push comparison preload failed",
+)
+
 // pushBatch pushes a slice of sessions within a single
 // transaction. On success it appends to pushed and returns
 // ok=true with session/message counts. On a session-level
@@ -566,7 +627,37 @@ func (s *Sync) pushBatch(
 	full bool,
 	markerID string,
 	legacyMarkerMachines []string,
+	sessionUsageFingerprints map[string]string,
 	pushed *[]db.Session,
+) (batchResult, error) {
+	preloadComparisons := len(batch) > 0 && !full
+	result, err := s.pushBatchAttempt(
+		ctx, batch, full, markerID, legacyMarkerMachines,
+		sessionUsageFingerprints, pushed, preloadComparisons,
+	)
+	if err == nil || !errors.Is(err, errPushComparisonPreload) {
+		return result, err
+	}
+	log.Printf(
+		"pgsync: preloading pg comparison fingerprints failed, "+
+			"retrying batch without preload: %v",
+		err,
+	)
+	return s.pushBatchAttempt(
+		ctx, batch, full, markerID, legacyMarkerMachines,
+		sessionUsageFingerprints, pushed, false,
+	)
+}
+
+func (s *Sync) pushBatchAttempt(
+	ctx context.Context,
+	batch []db.Session,
+	full bool,
+	markerID string,
+	legacyMarkerMachines []string,
+	sessionUsageFingerprints map[string]string,
+	pushed *[]db.Session,
+	preloadComparisons bool,
 ) (batchResult, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
@@ -578,6 +669,24 @@ func (s *Sync) pushBatch(
 	n := 0
 	msgs := 0
 	skippedConflicts := 0
+	sessionIDs := make([]string, 0, len(batch))
+	for _, sess := range batch {
+		sessionIDs = append(sessionIDs, sess.ID)
+	}
+	comparisons := (*pushMessageComparison)(nil)
+	if preloadComparisons && len(sessionIDs) > 0 {
+		comparisonsBatch, err := readPushSessionMessageComparisons(
+			ctx, tx, sessionIDs,
+		)
+		if err != nil {
+			_ = tx.Rollback()
+			return batchResult{}, fmt.Errorf(
+				"%w: %w", errPushComparisonPreload, err,
+			)
+		}
+		comparisons = comparisonsBatch
+	}
+
 	for _, sess := range batch {
 		if err := s.pushSession(
 			ctx, tx, sess, markerID, legacyMarkerMachines,
@@ -597,6 +706,7 @@ func (s *Sync) pushBatch(
 
 		msgCount, err := s.pushMessages(
 			ctx, tx, sess.ID, full,
+			sessionUsageFingerprints, comparisons,
 		)
 		if err != nil {
 			log.Printf(
@@ -694,6 +804,42 @@ func clearPushState(local syncStateStore) error {
 		)
 	}
 	return nil
+}
+
+func persistPushTargetFingerprint(
+	local syncStateStore,
+	fingerprint string,
+) error {
+	if err := local.SetSyncState(
+		lastPushTargetFingerprintKey,
+		fingerprint,
+	); err != nil {
+		return fmt.Errorf(
+			"updating %s: %w",
+			lastPushTargetFingerprintKey, err,
+		)
+	}
+	return nil
+}
+
+func pushTargetState(
+	lastPush, boundaryState,
+	storedTargetFingerprint, currentTargetFingerprint string,
+) (bool, string) {
+	if currentTargetFingerprint == "" {
+		return false, ""
+	}
+	if lastPush == "" && boundaryState == "" {
+		return false, ""
+	}
+	if storedTargetFingerprint == "" {
+		return true,
+			"local push state exists without a stored PG target fingerprint"
+	}
+	if storedTargetFingerprint != currentTargetFingerprint {
+		return true, "PG target fingerprint changed"
+	}
+	return false, ""
 }
 
 func readBoundaryAndFingerprints(
@@ -883,6 +1029,14 @@ func sessionPushFingerprint(
 		stringValue(sess.HealthGrade),
 		fmt.Sprintf("%t", sess.HasToolCalls),
 		fmt.Sprintf("%t", sess.HasContextData),
+		fmt.Sprintf("%d", sess.QualitySignalVersion),
+		fmt.Sprintf("%d", sess.ShortPromptCount),
+		fmt.Sprintf("%t", sess.UnstructuredStart),
+		fmt.Sprintf("%d", sess.MissingSuccessCriteriaCount),
+		fmt.Sprintf("%d", sess.MissingVerificationCount),
+		fmt.Sprintf("%d", sess.DuplicatePromptCount),
+		fmt.Sprintf("%d", sess.NoCodeContextCount),
+		fmt.Sprintf("%d", sess.RunawayToolLoopCount),
 		fmt.Sprintf("%d", sess.DataVersion),
 		sess.Cwd,
 		sess.GitBranch,
@@ -1050,6 +1204,11 @@ func (s *Sync) pushSession(
 			health_score, health_grade,
 			has_tool_calls, has_context_data,
 			secret_leak_count, secrets_rules_version,
+			quality_signal_version,
+			short_prompt_count, unstructured_start,
+			missing_success_criteria_count,
+			missing_verification_count, duplicate_prompt_count,
+			no_code_context_count, runaway_tool_loop_count,
 			updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
@@ -1065,6 +1224,7 @@ func (s *Sync) pushSession(
 			$41,
 			$42, $43, $44, $45,
 			$46, $47,
+			$48, $49, $50, $51, $52, $53, $54, $55,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
@@ -1114,6 +1274,14 @@ func (s *Sync) pushSession(
 			has_context_data = EXCLUDED.has_context_data,
 			secret_leak_count = EXCLUDED.secret_leak_count,
 			secrets_rules_version = EXCLUDED.secrets_rules_version,
+			quality_signal_version = EXCLUDED.quality_signal_version,
+			short_prompt_count = EXCLUDED.short_prompt_count,
+			unstructured_start = EXCLUDED.unstructured_start,
+			missing_success_criteria_count = EXCLUDED.missing_success_criteria_count,
+			missing_verification_count = EXCLUDED.missing_verification_count,
+			duplicate_prompt_count = EXCLUDED.duplicate_prompt_count,
+			no_code_context_count = EXCLUDED.no_code_context_count,
+			runaway_tool_loop_count = EXCLUDED.runaway_tool_loop_count,
 			updated_at = NOW()
 		WHERE ((
 				sessions.owner_marker = ''
@@ -1121,7 +1289,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($48::jsonb)
+						SELECT jsonb_array_elements_text($56::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1171,7 +1339,15 @@ func (s *Sync) pushSession(
 			OR sessions.has_tool_calls IS DISTINCT FROM EXCLUDED.has_tool_calls
 			OR sessions.has_context_data IS DISTINCT FROM EXCLUDED.has_context_data
 			OR sessions.secret_leak_count IS DISTINCT FROM EXCLUDED.secret_leak_count
-			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version)`,
+			OR sessions.secrets_rules_version IS DISTINCT FROM EXCLUDED.secrets_rules_version
+			OR sessions.quality_signal_version IS DISTINCT FROM EXCLUDED.quality_signal_version
+			OR sessions.short_prompt_count IS DISTINCT FROM EXCLUDED.short_prompt_count
+			OR sessions.unstructured_start IS DISTINCT FROM EXCLUDED.unstructured_start
+			OR sessions.missing_success_criteria_count IS DISTINCT FROM EXCLUDED.missing_success_criteria_count
+			OR sessions.missing_verification_count IS DISTINCT FROM EXCLUDED.missing_verification_count
+			OR sessions.duplicate_prompt_count IS DISTINCT FROM EXCLUDED.duplicate_prompt_count
+			OR sessions.no_code_context_count IS DISTINCT FROM EXCLUDED.no_code_context_count
+			OR sessions.runaway_tool_loop_count IS DISTINCT FROM EXCLUDED.runaway_tool_loop_count)`,
 		sess.ID, pushedMachine, markerID,
 		sanitizePG(sess.Project),
 		sess.Agent,
@@ -1203,28 +1379,39 @@ func (s *Sync) pushSession(
 		sess.HealthScore, nilStr(sess.HealthGrade),
 		sess.HasToolCalls, sess.HasContextData,
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
+		sess.QualitySignalVersion,
+		sess.ShortPromptCount, sess.UnstructuredStart,
+		sess.MissingSuccessCriteriaCount,
+		sess.MissingVerificationCount, sess.DuplicatePromptCount,
+		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {
 		return err
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
-		currentOwnerMarker := existingOwnerMarker.String
-		currentMachine := existingMachine.String
 		refreshErr := tx.QueryRowContext(ctx,
 			`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
 		).Scan(&existingMachine, &existingOwnerMarker)
-		if refreshErr == nil {
-			currentOwnerMarker = existingOwnerMarker.String
-			currentMachine = existingMachine.String
+		if refreshErr != nil {
+			// The guarded upsert changed no rows and we cannot
+			// re-read the current owner, so we cannot prove this
+			// pusher owns the session. Surface the error instead of
+			// reporting a blocked write as success, so the caller's
+			// retry path handles it rather than pushing messages for
+			// a row this pusher did not write.
+			return fmt.Errorf(
+				"re-reading session %s ownership after blocked upsert: %w",
+				sess.ID, refreshErr,
+			)
 		}
-		if refreshErr == nil && !sameSessionOwner(
-			currentOwnerMarker, currentMachine, markerID, pushedMachine,
-			legacyMarkerMachines,
+		if !sameSessionOwner(
+			existingOwnerMarker.String, existingMachine.String,
+			markerID, pushedMachine, legacyMarkerMachines,
 		) {
 			log.Printf(
 				"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
-				sess.ID, currentMachine, pushedMachine,
+				sess.ID, existingMachine.String, pushedMachine,
 			)
 			return errSessionOwnershipConflict
 		}
@@ -1241,6 +1428,8 @@ func (s *Sync) pushMessages(
 	tx *sql.Tx,
 	sessionID string,
 	full bool,
+	sessionUsageFingerprints map[string]string,
+	comparisons *pushMessageComparison,
 ) (int, error) {
 	localCount, err := s.local.MessageCount(sessionID)
 	if err != nil {
@@ -1289,70 +1478,67 @@ func (s *Sync) pushMessages(
 		return 0, nil
 	}
 
-	var pgCount int
-	var pgContentSum, pgContentMax, pgContentMin int64
-	// Exact string fingerprint for the system-message ordinal set:
-	// STRING_AGG produces e.g. "0,2,5" — impossible to collide for
-	// distinct ordinal sets (unlike SUM or SUM+SUM-of-squares).
-	var pgSystemFP sql.NullString
-	var pgToolCallCount int
-	var pgTCContentSum int64
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*),
-			COALESCE(SUM(content_length), 0),
-			COALESCE(MAX(content_length), 0),
-			COALESCE(MIN(content_length), 0),
-			STRING_AGG(ordinal::text, ',' ORDER BY ordinal)
-				FILTER (WHERE is_system)
-		 FROM messages
-		 WHERE session_id = $1`,
-		sessionID,
-	).Scan(
-		&pgCount, &pgContentSum,
-		&pgContentMax, &pgContentMin,
-		&pgSystemFP,
-	); err != nil {
-		return 0, fmt.Errorf(
-			"counting pg messages: %w", err,
-		)
-	}
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*),
-			COALESCE(SUM(result_content_length), 0)
-		 FROM tool_calls
-		 WHERE session_id = $1`,
-		sessionID,
-	).Scan(&pgToolCallCount, &pgTCContentSum); err != nil {
-		return 0, fmt.Errorf(
-			"counting pg tool_calls: %w", err,
-		)
+	pgAgg, pgToolAgg, hasPreloadedComparisons := comparisonAggregates(
+		sessionID, comparisons,
+	)
+	if !hasPreloadedComparisons {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*),
+				COALESCE(SUM(content_length), 0),
+				COALESCE(MAX(content_length), 0),
+				COALESCE(MIN(content_length), 0),
+				COALESCE(
+					STRING_AGG(ordinal::text, ',' ORDER BY ordinal)
+						FILTER (WHERE is_system),
+					''
+				)
+			 FROM messages
+			 WHERE session_id = $1`,
+			sessionID,
+		).Scan(
+			&pgAgg.Count, &pgAgg.Sum,
+			&pgAgg.Max, &pgAgg.Min,
+			&pgAgg.SysFP,
+		); err != nil {
+			return 0, fmt.Errorf(
+				"counting pg messages: %w", err,
+			)
+		}
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*),
+				COALESCE(SUM(result_content_length), 0)
+			 FROM tool_calls
+			 WHERE session_id = $1`,
+			sessionID,
+		).Scan(&pgToolAgg.Count, &pgToolAgg.Sum); err != nil {
+			return 0, fmt.Errorf(
+				"counting pg tool_calls: %w", err,
+			)
+		}
 	}
 
-	if !full && pgCount == localCount && pgCount > 0 {
-		localSum, localMax, localMin, err := s.local.MessageContentFingerprint(sessionID)
+	if !full && pgAgg.Count == localCount && pgAgg.Count > 0 {
+		localFP := pushLocalMessageFingerprint{}
+
+		localFP.Sum, localFP.Max, localFP.Min, err = s.local.MessageContentFingerprint(
+			sessionID,
+		)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local content fingerprint: %w",
 				err,
 			)
 		}
-		localContentHashFP, err := s.local.MessageContentHashFingerprint(sessionID)
+		localFP.ContentHashFP, err = s.local.MessageContentHashFingerprint(
+			sessionID,
+		)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local content hash fingerprint: %w",
 				err,
 			)
 		}
-		pgContentHashFP, err := pgMessageContentHashFingerprint(
-			ctx, tx, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg content hash fingerprint: %w",
-				err,
-			)
-		}
-		localRoleTimeFP, err := localMessageRoleTimePGFingerprint(
+		localFP.RoleTimeFP, err = localMessageRoleTimePGFingerprint(
 			s.local, sessionID,
 		)
 		if err != nil {
@@ -1361,96 +1547,129 @@ func (s *Sync) pushMessages(
 				err,
 			)
 		}
-		pgRoleTimeFP, err := pgMessageRoleTimeFingerprint(
-			ctx, tx, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg role/time fingerprint: %w",
-				err,
-			)
-		}
-		localFlagsFP, err := s.local.MessageFlagsFingerprint(sessionID)
+		localFP.FlagsFP, err = s.local.MessageFlagsFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local message flags fingerprint: %w",
 				err,
 			)
 		}
-		pgFlagsFP, err := pgMessageFlagsFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg message flags fingerprint: %w",
-				err,
-			)
-		}
-		localSysFP, err := s.local.SystemMessageFingerprint(sessionID)
+		localFP.SystemFP, err = s.local.SystemMessageFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local system message fingerprint: %w", err,
 			)
 		}
-		localTCCount, err := s.local.ToolCallCount(sessionID)
+		localFP.ToolCallCount, err = s.local.ToolCallCount(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"counting local tool_calls: %w", err,
 			)
 		}
-		localTCSum, err := s.local.ToolCallContentFingerprint(sessionID)
+		localFP.ToolCallSum, err = s.local.ToolCallContentFingerprint(
+			sessionID,
+		)
 		if err != nil {
 			return 0, fmt.Errorf(
-				"computing local tool_call content "+
-					"fingerprint: %w", err,
+				"computing local tool_call content fingerprint: %w",
+				err,
 			)
 		}
-		localTCFP, err := s.local.ToolCallFingerprint(sessionID)
+		localFP.ToolCallFP, err = s.local.ToolCallFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
 				"computing local tool_call fingerprint: %w", err,
 			)
 		}
-		localTokenFP, err := s.local.MessageTokenFingerprint(sessionID)
+		localFP.TokenFP, err = s.local.MessageTokenFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
-				"computing local token fingerprint: %w", err,
+				"computing local token fingerprint: %w",
+				err,
 			)
 		}
-		pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg token fingerprint: %w", err,
-			)
+
+		usageFromMap := false
+		if sessionUsageFingerprints != nil {
+			var ok bool
+			localFP.UsageEventFP, ok = sessionUsageFingerprints[sessionID]
+			usageFromMap = ok
 		}
-		pgTCFP, err := pgToolCallFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg tool_call fingerprint: %w", err,
-			)
+		if !usageFromMap {
+			localFP.UsageEventFP, err = s.local.UsageEventFingerprint(sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing local usage event fingerprint: %w",
+					err,
+				)
+			}
 		}
-		localUsageFP, err := s.local.UsageEventFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local usage event fingerprint: %w", err,
+
+		if comparisons == nil {
+			pgContentHashFP, err := pgMessageContentHashFingerprint(
+				ctx, tx, sessionID,
 			)
-		}
-		pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing pg usage event fingerprint: %w", err,
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg content hash fingerprint: %w",
+					err,
+				)
+			}
+			pgRoleTimeFP, err := pgMessageRoleTimeFingerprint(
+				ctx, tx, sessionID,
 			)
-		}
-		if localSum == pgContentSum &&
-			localMax == pgContentMax &&
-			localMin == pgContentMin &&
-			localContentHashFP == pgContentHashFP &&
-			localRoleTimeFP == pgRoleTimeFP &&
-			localFlagsFP == pgFlagsFP &&
-			localSysFP == pgSystemFP.String &&
-			localTCCount == pgToolCallCount &&
-			localTCSum == pgTCContentSum &&
-			localTCFP == pgTCFP &&
-			localTokenFP == pgTokenFP &&
-			localUsageFP == pgUsageFP {
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg role/time fingerprint: %w",
+					err,
+				)
+			}
+			pgFlagsFP, err := pgMessageFlagsFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg message flags fingerprint: %w",
+					err,
+				)
+			}
+			pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg token fingerprint: %w",
+					err,
+				)
+			}
+			pgTCFP, err := pgToolCallFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg tool_call fingerprint: %w",
+					err,
+				)
+			}
+			pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg usage event fingerprint: %w",
+					err,
+				)
+			}
+
+			if localFP.Sum == pgAgg.Sum &&
+				localFP.Max == pgAgg.Max &&
+				localFP.Min == pgAgg.Min &&
+				localFP.ContentHashFP == pgContentHashFP &&
+				localFP.RoleTimeFP == pgRoleTimeFP &&
+				localFP.FlagsFP == pgFlagsFP &&
+				localFP.SystemFP == pgAgg.SysFP &&
+				localFP.ToolCallCount == pgToolAgg.Count &&
+				localFP.ToolCallSum == pgToolAgg.Sum &&
+				localFP.ToolCallFP == pgTCFP &&
+				localFP.TokenFP == pgTokenFP &&
+				localFP.UsageEventFP == pgUsageFP {
+				return 0, nil
+			}
+		} else if shouldSkipSessionMessages(
+			sessionID, localCount, localFP, full, comparisons,
+		) {
 			return 0, nil
 		}
 	}
@@ -1915,7 +2134,8 @@ func pgToolCallFingerprint(
 			tool_use_id, COALESCE(input_json, ''),
 			COALESCE(skill_name, ''), COALESCE(subagent_session_id, ''),
 			COALESCE(result_content_length, 0),
-			COALESCE(result_content, '')
+			COALESCE(result_content, ''),
+			COALESCE(file_path, '')
 		 FROM tool_calls
 		 WHERE session_id = $1
 		 ORDER BY message_ordinal ASC, call_index ASC`,
@@ -1930,16 +2150,16 @@ func pgToolCallFingerprint(
 	for rows.Next() {
 		var messageOrdinal, callIndex, resultContentLength int
 		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent string
+		var skillName, subagentSessionID, resultContent, filePath string
 		if err := rows.Scan(
 			&messageOrdinal, &callIndex, &toolName, &category,
 			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
-			&resultContentLength, &resultContent,
+			&resultContentLength, &resultContent, &filePath,
 		); err != nil {
 			return "", err
 		}
 		fmt.Fprintf(&b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s;",
+			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
 			messageOrdinal, callIndex,
 			len(toolName), toolName,
 			len(category), category,
@@ -1949,6 +2169,7 @@ func pgToolCallFingerprint(
 			len(subagentSessionID), subagentSessionID,
 			resultContentLength,
 			len(resultContent), resultContent,
+			len(filePath), filePath,
 		)
 	}
 	return b.String(), rows.Err()
@@ -2167,6 +2388,64 @@ func bulkInsertUsageEvents(
 	return nil
 }
 
+func bulkInsertCursorUsageEvents(
+	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
+) error {
+	if len(events) == 0 {
+		return nil
+	}
+	const cursorBatch = 100
+	for i := 0; i < len(events); i += cursorBatch {
+		end := min(i+cursorBatch, len(events))
+		batch := events[i:end]
+
+		var b strings.Builder
+		b.WriteString(`INSERT INTO cursor_usage_events (
+			occurred_at, model, kind,
+			input_tokens, output_tokens,
+			cache_write_tokens, cache_read_tokens,
+			charged_cents, cursor_token_fee,
+			user_id, user_email, is_headless, dedup_key
+		) VALUES `)
+		args := make([]any, 0, len(batch)*13)
+		for j, ev := range batch {
+			if j > 0 {
+				b.WriteByte(',')
+			}
+			p := j*13 + 1
+			fmt.Fprintf(&b,
+				"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
+				p, p+1, p+2, p+3, p+4, p+5, p+6,
+				p+7, p+8, p+9, p+10, p+11, p+12,
+			)
+			occurredAt, ok := ParseSQLiteTimestamp(ev.OccurredAt)
+			if !ok {
+				return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
+			}
+			args = append(args,
+				occurredAt,
+				sanitizePG(ev.Model),
+				sanitizePG(ev.Kind),
+				ev.InputTokens,
+				ev.OutputTokens,
+				ev.CacheWriteTokens,
+				ev.CacheReadTokens,
+				ev.ChargedCents,
+				ev.CursorTokenFee,
+				sanitizePG(ev.UserID),
+				sanitizePG(ev.UserEmail),
+				ev.IsHeadless,
+				sanitizePG(ev.DedupKey),
+			)
+		}
+		b.WriteString(` ON CONFLICT DO NOTHING`)
+		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+			return fmt.Errorf("bulk inserting cursor_usage_events: %w", err)
+		}
+	}
+	return nil
+}
+
 // bulkInsertToolCalls inserts tool calls using multi-row VALUES.
 func bulkInsertToolCalls(
 	ctx context.Context, tx *sql.Tx,
@@ -2199,18 +2478,18 @@ func bulkInsertToolCalls(
 			call_index, tool_use_id, input_json,
 			skill_name, result_content_length,
 			result_content, subagent_session_id,
-			message_ordinal) VALUES `)
-		args := make([]any, 0, len(batch)*11)
+			message_ordinal, file_path) VALUES `)
+		args := make([]any, 0, len(batch)*12)
 		for j, r := range batch {
 			if j > 0 {
 				b.WriteByte(',')
 			}
-			p := j*11 + 1
+			p := j*12 + 1
 			fmt.Fprintf(&b,
 				"($%d,$%d,$%d,$%d,$%d,$%d,"+
-					"$%d,$%d,$%d,$%d,$%d)",
+					"$%d,$%d,$%d,$%d,$%d,$%d)",
 				p, p+1, p+2, p+3, p+4, p+5,
-				p+6, p+7, p+8, p+9, p+10,
+				p+6, p+7, p+8, p+9, p+10, p+11,
 			)
 			args = append(args,
 				sessionID,
@@ -2224,6 +2503,7 @@ func bulkInsertToolCalls(
 				nilIfEmpty(r.tc.ResultContent),
 				nilIfEmpty(r.tc.SubagentSessionID),
 				r.ordinal,
+				nilIfEmpty(r.tc.FilePath),
 			)
 		}
 		if _, err := tx.ExecContext(
@@ -2410,7 +2690,7 @@ func (s *Sync) normalizeSyncTimestamps(
 		}
 		s.schemaDone = true
 	}
-	return NormalizeLocalSyncStateTimestamps(s.local)
+	return NormalizeLocalSyncStateTimestamps(s.effectiveSyncState())
 }
 
 // sanitizePG strips null bytes and replaces invalid UTF-8
@@ -2435,4 +2715,34 @@ func nilIfZero(n int) any {
 		return nil
 	}
 	return n
+}
+
+func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
+	// Cursor admin rows are global and unattributed, so project-filtered pushes
+	// cannot sync them honestly.
+	if s.isFiltered() {
+		return nil
+	}
+
+	events, err := s.local.GetCursorUsageEvents(ctx)
+	if err != nil {
+		return fmt.Errorf("loading local cursor usage events: %w", err)
+	}
+	if len(events) == 0 {
+		return nil
+	}
+
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning cursor usage sync tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing pg cursor usage sync: %w", err)
+	}
+	return nil
 }

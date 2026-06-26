@@ -1,8 +1,16 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { onMount } from "svelte";
   import { trends } from "../../stores/trends.svelte.js";
   import { getBasePath } from "../../stores/router.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import {
+    yokedDates,
+    panelDateState,
+    rangeToPanelDate,
+    type PanelDateState,
+  } from "../../stores/yokedDates.svelte.js";
+  import { rollingRange } from "../../utils/dates.js";
   import type { TrendsGranularity } from "../../api/types.js";
   import { ChartColumnIcon, ChevronDownIcon } from "../../icons.js";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -28,8 +36,11 @@
     "var(--trend-indigo)",
     "var(--trend-black)",
   ] as const;
+  const TREND_WINDOW_PARAM = "window_days";
 
   let activeTerm: string | null = $state(null);
+  let trendsWindowDays: number | null = $state(null);
+  const trendsPanelDate = $derived(currentTrendsPanelDate());
 
   const GRANULARITIES: TrendsGranularity[] = ["day", "week", "month"];
   let groupByOpen = $state(false);
@@ -58,18 +69,37 @@
     return value === "day" || value === "week" || value === "month";
   }
 
-  function applyQueryParams() {
+  function parseTrendWindowDays(raw: string | null): number | null {
+    if (!raw) return null;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isInteger(n) || n <= 0 || String(n) !== raw) {
+      return null;
+    }
+    return n;
+  }
+
+  function applyQueryParams(): boolean {
     const q = new URLSearchParams(window.location.search);
     const from = q.get("from");
     const to = q.get("to");
+    const windowDays = parseTrendWindowDays(q.get(TREND_WINDOW_PARAM));
     const granularity = q.get("granularity");
     const normalized = q.get("normalized");
     const terms = q.getAll("term").map((s) => s.trim()).filter(Boolean);
-    if (from) trends.from = from;
-    if (to) trends.to = to;
+    if (windowDays !== null) {
+      const range = rollingRange(windowDays);
+      trends.from = range.from;
+      trends.to = range.to;
+      trendsWindowDays = windowDays;
+    } else {
+      if (from) trends.from = from;
+      if (to) trends.to = to;
+      trendsWindowDays = null;
+    }
     if (isGranularity(granularity)) trends.granularity = granularity;
     trends.normalized = normalized === "true";
     if (terms.length > 0) trends.termText = terms.join("\n");
+    return windowDays !== null || q.has("from") || q.has("to");
   }
 
   function writeUrl() {
@@ -80,6 +110,9 @@
     }
     q.set("from", trends.from);
     q.set("to", trends.to);
+    if (trendsWindowDays !== null) {
+      q.set(TREND_WINDOW_PARAM, String(trendsWindowDays));
+    }
     q.set("granularity", trends.granularity);
     if (trends.normalized) {
       q.set("normalized", "true");
@@ -93,22 +126,56 @@
     window.history.replaceState(null, "", url);
   }
 
+  function materializeRollingWindow(): void {
+    if (trendsWindowDays === null) return;
+    const range = rollingRange(trendsWindowDays);
+    if (trends.from === range.from && trends.to === range.to) return;
+    trends.from = range.from;
+    trends.to = range.to;
+    updateYokeFromTrends(panelDateState(range.from, range.to, {
+      mode: "rolling",
+      windowDays: trendsWindowDays,
+    }));
+  }
+
   async function refresh() {
+    materializeRollingWindow();
     writeUrl();
     await trends.fetchTerms();
   }
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
-  const rangeSelection = $derived(
-    selectionFromRange(trends.from, trends.to, earliestSession),
-  );
+  const rangeSelection = $derived.by((): RangeSelection => {
+    if (trendsWindowDays !== null) {
+      return { mode: "relative", days: trendsWindowDays };
+    }
+    return selectionFromRange(trends.from, trends.to, earliestSession);
+  });
 
   async function applyRange(sel: RangeSelection) {
     const range = resolveRange(sel, earliestSession);
     trends.from = range.from;
     trends.to = range.to;
+    const yokeState = yokeStateForSelection(sel, range);
+    trendsWindowDays = yokeState?.mode === "rolling"
+      ? yokeState.windowDays ?? null
+      : null;
+    updateYokeFromTrends(yokeState);
     await refresh();
+  }
+
+  function yokeStateForSelection(
+    sel: RangeSelection,
+    range: { from: string; to: string },
+  ): PanelDateState | null {
+    if (sel.mode === "relative" && sel.days > 0) {
+      return panelDateState(range.from, range.to, {
+        mode: "rolling",
+        windowDays: sel.days,
+      });
+    }
+    return panelDateState(range.from, range.to, { mode: "fixed" });
   }
 
   function setNormalized(event: Event) {
@@ -117,6 +184,8 @@
   }
 
   async function resetTerms() {
+    materializeRollingWindow();
+    writeUrl();
     await trends.resetTerms();
     writeUrl();
   }
@@ -126,8 +195,40 @@
     await refresh();
   }
 
+  function currentTrendsPanelDate(): PanelDateState | null {
+    if (trendsWindowDays !== null) {
+      return panelDateState(trends.from, trends.to, {
+        mode: "rolling",
+        windowDays: trendsWindowDays,
+      });
+    }
+    return panelDateState(trends.from, trends.to, { mode: "fixed" });
+  }
+
+  function updateYokeFromTrends(
+    state: PanelDateState | null = trendsPanelDate,
+  ): void {
+    if (state) yokedDates.updateFromPanel(state);
+  }
+
+  function seedTrendsYoke(): void {
+    const seed = yokedDates.seedForPanel();
+    const state = seed ? rangeToPanelDate(seed) : null;
+    if (!state) return;
+    trends.from = state.from;
+    trends.to = state.to;
+    trendsWindowDays = state.mode === "rolling"
+      ? state.windowDays ?? null
+      : null;
+  }
+
   onMount(() => {
-    applyQueryParams();
+    const hasDateParams = applyQueryParams();
+    if (hasDateParams) {
+      updateYokeFromTrends();
+    } else {
+      seedTrendsYoke();
+    }
     writeUrl();
     trends.fetchTerms();
     document.addEventListener("click", onGroupByDocClick);
@@ -142,13 +243,13 @@
 <section class="trends-page">
   <div class="page-head">
     <div>
-      <h1>Trends</h1>
-      <p>{trends.response?.from ?? trends.from} to {trends.response?.to ?? trends.to}</p>
+      <h1>{m.trends_title()}</h1>
+      <p>{m.trends_date_range({ from: trends.response?.from ?? trends.from, to: trends.response?.to ?? trends.to })}</p>
     </div>
     <div class="head-actions">
-      <button class="secondary" onclick={resetTerms}>Reset</button>
+      <button class="secondary" onclick={resetTerms}>{m.trends_reset()}</button>
       <button class="primary" onclick={refresh} disabled={trends.loading.terms}>
-        {trends.loading.terms ? "Refreshing" : "Refresh"}
+        {trends.loading.terms ? m.trends_refreshing() : m.trends_refresh()}
       </button>
     </div>
   </div>
@@ -165,8 +266,8 @@
   <div class="content-grid">
     <div class="query-panel">
       <label class="terms-label" for="trend-terms">
-        <span>Terms</span>
-        <span class="terms-hint">one per line</span>
+        <span>{m.trends_terms()}</span>
+        <span class="terms-hint">{m.trends_one_per_line()}</span>
       </label>
       <textarea
         id="trend-terms"
@@ -189,7 +290,7 @@
             aria-expanded={groupByOpen}
           >
             <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
-            Group by <span class="gval">{trends.granularity}</span>
+            {m.trends_group_by()} <span class="gval">{trends.granularity}</span>
             <ChevronDownIcon
               class={groupByOpen ? "g-chev open" : "g-chev"}
               size="11"
@@ -219,7 +320,7 @@
             bind:checked={trends.normalized}
             onchange={setNormalized}
           />
-          <span>Normalize by number of messages</span>
+          <span>{m.trends_normalize()}</span>
         </label>
       </div>
       <TrendsLineChart
@@ -233,7 +334,7 @@
       {#if trends.loading.terms}
         <div class="loading-overlay" role="status" aria-live="polite">
           <span class="loading-spinner" aria-hidden="true"></span>
-          <span>Computing trends...</span>
+          <span>{m.trends_computing()}</span>
         </div>
       {/if}
     </div>
@@ -349,7 +450,7 @@
   .primary {
     background: var(--accent-blue);
     border-color: var(--accent-blue);
-    color: white;
+    color: var(--accent-blue-foreground);
   }
 
   .primary:hover:not(:disabled) {

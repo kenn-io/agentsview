@@ -129,6 +129,11 @@ func ParseAntigravitySession(
 	}
 	defer db.Close()
 
+	// Schema-fingerprint label for the producing agy build. Computed from
+	// the open DB so IDE and CLI classify identically; empty when the
+	// schema cannot be read.
+	sourceVersion := antigravitySourceVersion(db)
+
 	messages, usageEvents, err := loadAntigravitySteps(db)
 	if err != nil {
 		return nil, nil, nil, err
@@ -200,6 +205,7 @@ func ParseAntigravitySession(
 		EndedAt:          endedAt,
 		MessageCount:     len(messages),
 		UserMessageCount: userCount,
+		SourceVersion:    sourceVersion,
 		File: FileInfo{
 			Path:  path,
 			Size:  size,
@@ -232,6 +238,11 @@ type antigravityStepLoadResult struct {
 	messages     []ParsedMessage
 	usageEvents  []ParsedUsageEvent
 	rawStepCount int
+	// sourceVersion is the schema-fingerprint label of the .db, set by the
+	// CLI loader while the DB is open. The IDE path computes it directly
+	// from its own handle via antigravitySourceVersion, so both classify
+	// identically.
+	sourceVersion string
 }
 
 type antigravityStepKind int

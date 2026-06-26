@@ -26,6 +26,7 @@ const (
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
+	AgentOMP            AgentType = "omp"
 	AgentQwen           AgentType = "qwen"
 	AgentCommandCode    AgentType = "commandcode"
 	AgentDeepSeekTUI    AgentType = "deepseek-tui"
@@ -51,6 +52,7 @@ const (
 	AgentGptme          AgentType = "gptme"
 	AgentShelley        AgentType = "shelley"
 	AgentAider          AgentType = "aider"
+	AgentReasonix       AgentType = "reasonix"
 )
 
 // AgentDef describes a supported coding agent's filesystem
@@ -318,6 +320,17 @@ var Registry = []AgentDef{
 		FileBased:      true,
 		DiscoverFunc:   DiscoverPiSessions,
 		FindSourceFunc: FindPiSourceFile,
+	},
+	{
+		Type:           AgentOMP,
+		DisplayName:    "OhMyPi",
+		EnvVar:         "OMP_DIR",
+		ConfigKey:      "omp_dirs",
+		DefaultDirs:    []string{".omp/agent/sessions"},
+		IDPrefix:       "omp:",
+		FileBased:      true,
+		DiscoverFunc:   DiscoverOMPSessions,
+		FindSourceFunc: FindOMPSourceFile,
 	},
 	{
 		Type:        AgentQwen,
@@ -611,28 +624,36 @@ var Registry = []AgentDef{
 	{
 		// Aider has no central session store. It writes one Markdown
 		// chat log per repo at <repo>/.aider.chat.history.md. There is
-		// no canonical home dir, so discovery defaults to a bounded,
-		// symlink-safe walk of $HOME (DefaultDirs below); point
-		// AIDER_DIR (or the aider_dirs config key) at a narrower code
-		// root to scope and speed up the scan. The walk is depth-capped,
-		// time-budgeted, and skips vendor/build/VCS directories by name.
+		// no safe canonical root: an always-on $HOME walk is prone to
+		// macOS privacy prompts and surprising background work. Users
+		// must opt in by setting AIDER_DIR or the aider_dirs config key
+		// to a code root they want scanned.
 		//
-		// ShallowWatch is true: DefaultDirs [""] resolves to $HOME, and a
-		// recursive live watch there would inotify-register the entire home
-		// tree (the watcher walk ignores the discovery skip-set and depth
-		// cap). Watch the root only and rely on the 15-minute periodic
-		// sync to pick up new repos' history files; aider history is
-		// append-mostly, so this is an acceptable latency tradeoff.
+		// ShallowWatch is true because users can still opt into broad
+		// roots. Watch those roots shallowly and rely on the 15-minute
+		// periodic sync to pick up new repos' history files; aider history
+		// is append-mostly, so this is an acceptable latency tradeoff.
 		Type:           AgentAider,
 		DisplayName:    "Aider",
 		EnvVar:         "AIDER_DIR",
 		ConfigKey:      "aider_dirs",
-		DefaultDirs:    []string{""},
 		IDPrefix:       "aider:",
 		FileBased:      true,
 		ShallowWatch:   true,
 		DiscoverFunc:   DiscoverAiderSessions,
 		FindSourceFunc: FindAiderSourceFile,
+	},
+	{
+		Type:           AgentReasonix,
+		DisplayName:    "Reasonix",
+		EnvVar:         "REASONIX_DIR",
+		ConfigKey:      "reasonix_dirs",
+		DefaultDirs:    []string{".reasonix", "AppData/Roaming/reasonix"},
+		IDPrefix:       "reasonix:",
+		WatchSubdirs:   []string{"sessions", "archive", "projects"},
+		FileBased:      true,
+		DiscoverFunc:   DiscoverReasonixSessions,
+		FindSourceFunc: FindReasonixSourceFile,
 	},
 }
 
@@ -709,7 +730,28 @@ type RoleType string
 const (
 	RoleUser      RoleType = "user"
 	RoleAssistant RoleType = "assistant"
+	// RoleSystem and RoleTool are emitted by several parsers (for
+	// system-injected notices and standalone tool-result records) and
+	// persist to the messages table, so they are part of the known
+	// role enum even though the user/assistant pair carries the common
+	// case.
+	RoleSystem RoleType = "system"
+	RoleTool   RoleType = "tool"
 )
+
+// ValidRole reports whether r is a recognized message role. It is the
+// authoritative enum check for the central output-validation pass,
+// which coerces out-of-enum roles rather than persisting garbage
+// strings. The empty role is treated as valid (absent) so a parser
+// that legitimately leaves the role unset is not flagged.
+func ValidRole(r RoleType) bool {
+	switch r {
+	case "", RoleUser, RoleAssistant, RoleSystem, RoleTool:
+		return true
+	default:
+		return false
+	}
+}
 
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
@@ -771,6 +813,7 @@ type ParsedToolCall struct {
 	ToolName          string // raw name from session data
 	Category          string // normalized: Read, Edit, Write, Bash, etc.
 	InputJSON         string // raw JSON of the input object
+	FilePath          string // resolved edit/write target path, when known natively
 	SkillName         string // skill name when ToolName is "Skill"
 	SubagentSessionID string // linked subagent session file (e.g. "agent-{task_id}")
 	ResultEvents      []ParsedToolResultEvent
@@ -905,25 +948,8 @@ func applyUsageEventTokenTotals(
 	sess *ParsedSession,
 	events []ParsedUsageEvent,
 ) {
-	totalOutput := 0
-	peakContext := 0
-	hasOutput := false
-	hasContext := false
-	for _, ev := range events {
-		if ev.OutputTokens > 0 {
-			hasOutput = true
-			totalOutput += ev.OutputTokens
-		}
-		context := ev.InputTokens +
-			ev.CacheCreationInputTokens +
-			ev.CacheReadInputTokens
-		if context > 0 {
-			hasContext = true
-			if context > peakContext {
-				peakContext = context
-			}
-		}
-	}
+	totalOutput, hasOutput, peakContext, hasContext :=
+		UsageEventTokenAggregate(events)
 	if hasOutput {
 		sess.HasTotalOutputTokens = true
 		sess.TotalOutputTokens = totalOutput
@@ -932,6 +958,35 @@ func applyUsageEventTokenTotals(
 		sess.HasPeakContextTokens = true
 		sess.PeakContextTokens = peakContext
 	}
+}
+
+// UsageEventTokenAggregate is the canonical event-derived token rollup:
+// the sum of POSITIVE per-event output tokens and the peak per-event full
+// context (input + cache-creation + cache-read) where that context is
+// positive, each with a presence flag. It is the single source of truth
+// shared by applyUsageEventTokenTotals (parser side) and the sync layer's
+// post-sanitize aggregate reconciliation, so the two never drift: a value
+// that did not contribute to the stored aggregate (zero or negative) is
+// excluded on both sides, before and after clamping.
+func UsageEventTokenAggregate(
+	events []ParsedUsageEvent,
+) (totalOut int, hasOut bool, peakCtx int, hasCtx bool) {
+	for _, ev := range events {
+		if ev.OutputTokens > 0 {
+			hasOut = true
+			totalOut += ev.OutputTokens
+		}
+		context := ev.InputTokens +
+			ev.CacheCreationInputTokens +
+			ev.CacheReadInputTokens
+		if context > 0 {
+			hasCtx = true
+			if context > peakCtx {
+				peakCtx = context
+			}
+		}
+	}
+	return totalOut, hasOut, peakCtx, hasCtx
 }
 
 // InferTokenPresence determines whether context/output tokens were

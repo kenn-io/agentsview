@@ -130,6 +130,7 @@ func (c *usageProbeConn) QueryContext(
 				"cost_usd",
 				"claude_message_id",
 				"claude_request_id",
+				"source_uuid",
 				"usage_dedup_key",
 				"project",
 				"agent",
@@ -160,6 +161,7 @@ func usageProbeUsageRow(
 		nil,
 		"msg-dup",
 		"req-dup",
+		"",
 		"",
 		project,
 		agent,
@@ -195,6 +197,54 @@ func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
 	assert.Equal(t, 1, result.SessionCounts.ByAgent["claude"])
 	assert.Zero(t, result.SessionCounts.ByProject["proj-b"])
 	assert.Zero(t, result.SessionCounts.ByAgent["codex"])
+}
+
+func TestPGUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+	got, ok := pgUsageDedupTokenForRow(
+		"message",
+		"claude-code",
+		"msg-dup",
+		"",
+		"source-dup",
+		"",
+	)
+	require.True(t, ok, "expected source_uuid fallback key")
+	assert.Equal(t, pgUsageDedupToken{
+		kind:  "source",
+		value: "claude-code:source-dup",
+	}, got)
+}
+
+func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
+	rawInput := db.MaxPlausibleTokens + 250_000
+	rawOutput := db.MaxPlausibleTokens + 500_000
+	rates := map[string]modelRates{
+		"gpt-5.4": {input: 1.0, output: 2.0},
+	}
+
+	inTok, outTok, _, _, cost, _ := pgDailyUsageAmounts(
+		pgDailyUsageScanRow{
+			usageSource:  "session",
+			model:        "gpt-5.4",
+			inputTokens:  rawInput,
+			outputTokens: rawOutput,
+		},
+		newModelRateResolver(rates),
+	)
+	assert.Equal(t, rawInput, inTok, "daily input")
+	assert.Equal(t, rawOutput, outTok, "daily output")
+	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
+	assert.InDelta(t, wantCost, cost, 1e-9, "daily cost")
+
+	cost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
+		usageSource:  "session",
+		model:        "gpt-5.4",
+		inputTokens:  rawInput,
+		outputTokens: rawOutput,
+	}, rates)
+	require.True(t, priced, "priced")
+	require.True(t, contributes, "contributes")
+	assert.InDelta(t, wantCost, cost, 1e-9, "session cost")
 }
 
 func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {

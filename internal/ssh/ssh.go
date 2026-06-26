@@ -29,12 +29,18 @@ const sshConnectTimeoutSecs = 10
 // value seen for each option).
 //
 // Returns ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=N",
-// "user@host", "--", "sh -c '<cmd>'"] (or "host" when user is
+// "--", "user@host", "sh -c '<cmd>'"] (or "host" when user is
 // empty). Port adds "-p N" when > 0; extra sshOpts (e.g. "-i
 // keyfile") are inserted before the defaults.
 func buildSSHArgs(
 	host, user string, port int, sshOpts []string, cmd string,
-) []string {
+) ([]string, error) {
+	if isOptionShapedTargetPart(host) {
+		return nil, fmt.Errorf("ssh target host must not begin with '-'")
+	}
+	if isOptionShapedTargetPart(user) {
+		return nil, fmt.Errorf("ssh target user must not begin with '-'")
+	}
 	target := host
 	if user != "" {
 		target = user + "@" + host
@@ -49,7 +55,11 @@ func buildSSHArgs(
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout="+strconv.Itoa(sshConnectTimeoutSecs),
 	)
-	return append(args, target, "--", remoteCmd)
+	return append(args, "--", target, remoteCmd), nil
+}
+
+func isOptionShapedTargetPart(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), "-")
 }
 
 // runSSH executes a command on the remote host and returns stdout.
@@ -59,7 +69,10 @@ func runSSH(
 	host, user string, port int, sshOpts []string,
 	cmd string,
 ) ([]byte, error) {
-	args := buildSSHArgs(host, user, port, sshOpts, cmd)
+	args, err := buildSSHArgs(host, user, port, sshOpts, cmd)
+	if err != nil {
+		return nil, err
+	}
 	c := exec.CommandContext(ctx, args[0], args[1:]...)
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
@@ -85,7 +98,10 @@ func runSSHStream(
 	host, user string, port int, sshOpts []string,
 	cmd string,
 ) (io.ReadCloser, func() error, error) {
-	args := buildSSHArgs(host, user, port, sshOpts, cmd)
+	args, err := buildSSHArgs(host, user, port, sshOpts, cmd)
+	if err != nil {
+		return nil, nil, err
+	}
 	c := exec.CommandContext(ctx, args[0], args[1:]...)
 	var stderr bytes.Buffer
 	c.Stderr = &stderr

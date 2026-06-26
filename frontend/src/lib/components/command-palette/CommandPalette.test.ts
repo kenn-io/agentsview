@@ -258,6 +258,40 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("does not reselect typed text after each keystroke (#795)", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+
+    function typeChar(char: string) {
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? input.value.length;
+      input.value =
+        input.value.slice(0, start) + char + input.value.slice(end);
+      input.setSelectionRange(start + 1, start + 1);
+      input.dispatchEvent(
+        new InputEvent("input", { bubbles: true, inputType: "insertText", data: char }),
+      );
+    }
+
+    typeChar("a");
+    await tick();
+
+    expect(input.value).toBe("a");
+    expect(input.selectionStart).toBe(1);
+    expect(input.selectionEnd).toBe(1);
+
+    typeChar("b");
+    await tick();
+
+    expect(input.value).toBe("ab");
+    expect(input.selectionStart).toBe(2);
+    expect(input.selectionEnd).toBe(2);
+
+    unmount(component);
+  });
+
   it("search result click navigates to the session route", async () => {
     mockSearchStore.results = [
       {

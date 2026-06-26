@@ -2,11 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/timeutil"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func (s *Server) registerUsageRoutes() {
@@ -30,8 +31,12 @@ type UsageFilterInput struct {
 	Model            string `query:"model" doc:"Filter by model"`
 	MinUserMessages  int    `query:"min_user_messages" minimum:"0" doc:"Minimum user message count"`
 	ActiveSince      string `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
+	Termination      string `query:"termination" doc:"Filter by termination status"`
 	IncludeOneShot   bool   `query:"include_one_shot" default:"true" doc:"Include one-shot sessions"`
 	IncludeAutomated bool   `query:"include_automated" doc:"Include automated sessions"`
+	NoDefaultRange   bool   `query:"no_default_range" doc:"Preserve omitted from/to without applying default range"`
+	Breakdowns       bool   `query:"breakdowns" default:"true" doc:"Include per-model, per-project, and per-agent breakdowns"`
+	SessionCounts    bool   `query:"session_counts" default:"true" doc:"Include distinct session counts"`
 }
 
 type usageTopSessionsInput struct {
@@ -44,27 +49,13 @@ type usageComparisonInput struct {
 	CurrentCost float64 `query:"current_cost" required:"true" doc:"Current period total cost"`
 }
 
-func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
-	tz := in.Timezone
-	if tz == "" {
-		tz = "UTC"
-	}
-	if _, err := time.LoadLocation(tz); err != nil {
-		return db.UsageFilter{}, apiError(http.StatusBadRequest, "invalid timezone: "+tz)
-	}
-	from, to := defaultDateRange(in.From, in.To)
-	if !timeutil.IsValidDate(from) || !timeutil.IsValidDate(to) {
-		return db.UsageFilter{}, apiError(http.StatusBadRequest, "invalid date format: use YYYY-MM-DD")
-	}
-	if from > to {
-		return db.UsageFilter{}, apiError(http.StatusBadRequest, "from must not be after to")
-	}
-	if in.ActiveSince != "" && !timeutil.IsValidTimestamp(in.ActiveSince) {
-		return db.UsageFilter{}, apiError(http.StatusBadRequest, "invalid active_since: use RFC3339 timestamp")
-	}
-	return db.UsageFilter{
-		From:             from,
-		To:               to,
+// usageRequestFromInput maps the HTTP query-param struct to the
+// transport-neutral service.UsageRequest.
+func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
+	return service.UsageRequest{
+		From:             in.From,
+		To:               in.To,
+		Timezone:         in.Timezone,
 		Agent:            in.Agent,
 		Project:          in.Project,
 		Machine:          in.Machine,
@@ -72,25 +63,42 @@ func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
 		ExcludeAgent:     in.ExcludeAgent,
 		ExcludeModel:     in.ExcludeModel,
 		Model:            in.Model,
-		Timezone:         tz,
 		MinUserMessages:  in.MinUserMessages,
-		ExcludeOneShot:   !in.IncludeOneShot,
-		ExcludeAutomated: !in.IncludeAutomated,
 		ActiveSince:      in.ActiveSince,
-		Breakdowns:       true,
-	}, nil
+		Termination:      in.Termination,
+		IncludeOneShot:   in.IncludeOneShot,
+		IncludeAutomated: in.IncludeAutomated,
+		NoDefaultRange:   in.NoDefaultRange,
+		Breakdowns:       &in.Breakdowns,
+		SessionCounts:    &in.SessionCounts,
+	}
+}
+
+// usageFilterFromInput validates and builds a db.UsageFilter via the
+// shared service validator (the single source of truth, also used by the
+// usage-summary seam method), mapping a validation failure to HTTP 400.
+func usageFilterFromInput(in UsageFilterInput) (db.UsageFilter, error) {
+	f, err := service.BuildUsageFilter(usageRequestFromInput(in))
+	if err != nil {
+		var ue *service.UsageInputError
+		if errors.As(err, &ue) {
+			return db.UsageFilter{}, apiError(http.StatusBadRequest, ue.Msg)
+		}
+		return db.UsageFilter{}, err
+	}
+	return f, nil
 }
 
 func (s *Server) humaUsageSummary(
 	ctx context.Context,
 	in *UsageFilterInput,
 ) (*jsonOutput[UsageSummaryResponse], error) {
-	f, err := usageFilterFromInput(*in)
+	res, err := s.sessions.UsageSummary(ctx, usageRequestFromInput(*in))
 	if err != nil {
-		return nil, err
-	}
-	result, err := s.db.GetDailyUsage(ctx, f)
-	if err != nil {
+		var ue *service.UsageInputError
+		if errors.As(err, &ue) {
+			return nil, apiError(http.StatusBadRequest, ue.Msg)
+		}
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
 		}
@@ -99,18 +107,9 @@ func (s *Server) humaUsageSummary(
 		}
 		return nil, internalError("usage summary error", err)
 	}
-	resp := UsageSummaryResponse{
-		From:          f.From,
-		To:            f.To,
-		Totals:        result.Totals,
-		Daily:         result.Daily,
-		ProjectTotals: foldProjectTotals(result.Daily),
-		ModelTotals:   foldModelTotals(result.Daily),
-		AgentTotals:   foldAgentTotals(result.Daily),
-		SessionCounts: result.SessionCounts,
-		CacheStats:    computeCacheStats(result.Totals),
-	}
-	return &jsonOutput[UsageSummaryResponse]{Body: resp}, nil
+	return &jsonOutput[UsageSummaryResponse]{
+		Body: usageSummaryResponseFromService(res),
+	}, nil
 }
 
 func (s *Server) humaUsageComparison(
@@ -120,6 +119,12 @@ func (s *Server) humaUsageComparison(
 	f, err := usageFilterFromInput(in.UsageFilterInput)
 	if err != nil {
 		return nil, err
+	}
+	if in.NoDefaultRange && (f.From == "" || f.To == "") {
+		return nil, apiError(
+			http.StatusBadRequest,
+			"usage comparison requires from and to when no_default_range is true",
+		)
 	}
 	comparison, err := s.computeUsageComparison(ctx, f, in.CurrentCost)
 	if err != nil {
@@ -165,6 +170,7 @@ func (s *Server) computeUsageComparison(
 		ExcludeOneShot:   f.ExcludeOneShot,
 		ExcludeAutomated: f.ExcludeAutomated,
 		ActiveSince:      f.ActiveSince,
+		Termination:      f.Termination,
 		Breakdowns:       false,
 	}
 	priorResult, err := s.db.GetDailyUsage(ctx, priorFilter)

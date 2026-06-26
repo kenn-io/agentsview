@@ -3,8 +3,6 @@ package main
 import (
 	"net"
 	"os"
-	"os/exec"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -23,8 +22,8 @@ func TestLiveDaemonRecordsFiltersDeadProcesses(t *testing.T) {
 	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
 	require.NoError(t, err)
 
-	// A record for a process that has already exited must be excluded.
-	dead := startReapedProcess(t)
+	// A record for a dead process must be excluded.
+	dead := deadPID(t)
 	_, err = writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
 		PID:     dead,
 		Network: daemon.NetworkTCP,
@@ -97,23 +96,70 @@ func TestServeCommandHasLifecycleSubcommands(t *testing.T) {
 	assert.True(t, names["stop"], "serve must expose a stop subcommand")
 }
 
-func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("graceful SIGTERM termination is POSIX-specific")
+func TestStopWritableDaemonsForUpdateStopsAllAndRestartsOne(t *testing.T) {
+	dir := runtimeTestDir(t)
+	secondPID := startSleepProcess(t)
+
+	now := time.Now()
+	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:       os.Getpid(),
+		Network:   daemon.NetworkTCP,
+		Address:   "127.0.0.1:18080",
+		Service:   daemonService,
+		Version:   "1.0.0",
+		StartedAt: now.Add(-time.Minute),
+		Metadata: map[string]string{
+			runtimeHost:        "127.0.0.1",
+			runtimePort:        "18080",
+			runtimeReadOnly:    "false",
+			runtimeRequireAuth: "true",
+			runtimeNoSync:      "true",
+		},
+	})
+	require.NoError(t, err)
+	_, err = writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:       secondPID,
+		Network:   daemon.NetworkTCP,
+		Address:   "127.0.0.1:18081",
+		Service:   daemonService,
+		Version:   "1.0.0",
+		StartedAt: now,
+		Metadata: map[string]string{
+			runtimeHost:        "127.0.0.1",
+			runtimePort:        "18081",
+			runtimeReadOnly:    "false",
+			runtimeRequireAuth: "false",
+			runtimeNoSync:      "false",
+		},
+	})
+	require.NoError(t, err)
+
+	oldStop := stopDaemonRuntimeForUpgrade
+	var stopped []int
+	stopDaemonRuntimeForUpgrade = func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		stopped = append(stopped, rt.Record.PID)
+		return nil
 	}
+	t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
+
+	result, err := stopWritableDaemonsForUpdate(config.Config{DataDir: dir})
+	require.NoError(t, err)
+	assert.True(t, result.Stopped)
+	assert.Equal(t, "127.0.0.1", result.Host)
+	assert.Equal(t, 18080, result.Port)
+	assert.True(t, result.RequireAuth)
+	assert.True(t, result.RequireAuthKnown)
+	assert.True(t, result.NoSync)
+	assert.ElementsMatch(t, []int{os.Getpid(), secondPID}, stopped)
+}
+
+func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
+	requirePOSIXSignals(t, "graceful SIGTERM termination is POSIX-specific")
 	dir := runtimeTestDir(t)
 
-	target := exec.Command("sleep", "60")
-	require.NoError(t, target.Start())
-	pid := target.Process.Pid
-	// Reap concurrently so the process leaves the zombie state once it
-	// exits; daemon.ProcessAlive treats an unreaped zombie as alive.
-	reaped := make(chan struct{})
-	go func() {
-		_ = target.Wait()
-		close(reaped)
-	}()
-	t.Cleanup(func() { _ = target.Process.Kill() })
+	pid, reaped := startReapedSleepProcess(t)
 
 	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
 		PID:     pid,
@@ -122,10 +168,7 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	records := liveDaemonRecords(dir)
-	require.Len(t, records, 1)
-
-	require.NoError(t, stopDaemonProcess(records[0], 5*time.Second))
+	require.NoError(t, stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 5*time.Second))
 	<-reaped
 	assert.False(t, daemon.ProcessAlive(pid))
 	assert.Empty(t, liveDaemonRecords(dir),
@@ -133,21 +176,13 @@ func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 }
 
 func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("relies on POSIX zombie semantics for ProcessAlive")
-	}
+	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
 	dir := runtimeTestDir(t)
 
-	target := exec.Command("sleep", "60")
-	require.NoError(t, target.Start())
-	pid := target.Process.Pid
-	// Deliberately do NOT reap until cleanup: once signalled, the child
-	// becomes a zombie, which daemon.ProcessAlive reports as still alive.
-	// That drives stopDaemonProcess down its "survived the kill" path.
-	t.Cleanup(func() {
-		_ = target.Process.Kill()
-		_ = target.Wait()
-	})
+	// startSleepProcess does not reap until cleanup: once signalled, the child
+	// becomes a zombie, which daemon.ProcessAlive reports as still alive. That
+	// drives stopDaemonProcess down its "survived the kill" path.
+	pid := startSleepProcess(t)
 
 	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
 		PID:     pid,
@@ -155,10 +190,8 @@ func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
 		Address: "127.0.0.1:1",
 	})
 	require.NoError(t, err)
-	records := liveDaemonRecords(dir)
-	require.Len(t, records, 1)
 
-	err = stopDaemonProcess(records[0], 100*time.Millisecond)
+	err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 100*time.Millisecond)
 	require.Error(t, err, "must report failure when the process does not exit")
 	assert.NotEmpty(t, liveDaemonRecords(dir),
 		"runtime record must be kept when the daemon is still alive")
@@ -186,18 +219,10 @@ func TestRecordedDaemonStillPresent(t *testing.T) {
 }
 
 func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("relies on POSIX zombie semantics for ProcessAlive")
-	}
+	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
 	dir := runtimeTestDir(t)
 
-	target := exec.Command("sleep", "60")
-	require.NoError(t, target.Start())
-	pid := target.Process.Pid
-	t.Cleanup(func() {
-		_ = target.Process.Kill()
-		_ = target.Wait()
-	})
+	pid := startSleepProcess(t)
 
 	// A create time that cannot match the live process models the daemon
 	// having exited with the PID reused by something unrelated. The record
@@ -210,10 +235,8 @@ func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
 		Metadata: map[string]string{runtimeCreateTime: "1"},
 	})
 	require.NoError(t, err)
-	records := liveDaemonRecords(dir)
-	require.Len(t, records, 1)
 
-	err = stopDaemonProcess(records[0], 100*time.Millisecond)
+	err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 100*time.Millisecond)
 	require.NoError(t, err,
 		"a reused PID means the daemon exited; stop should succeed")
 	assert.Empty(t, liveDaemonRecords(dir),
@@ -221,22 +244,14 @@ func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
 }
 
 func TestStopDaemonProcessSparesReusedPIDBeforeForceKill(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("relies on POSIX signal semantics")
-	}
+	requirePOSIXSignals(t, "relies on POSIX signal semantics")
 	dir := runtimeTestDir(t)
 
 	// A process that ignores SIGTERM stays alive through the grace wait,
 	// reaching the force-kill escalation. With a mismatched create time it
 	// stands in for a live process that reused the daemon's PID. The pre-kill
 	// identity check must spare it instead of escalating to SIGKILL.
-	target := exec.Command("sh", "-c", "trap '' TERM; sleep 60")
-	require.NoError(t, target.Start())
-	pid := target.Process.Pid
-	t.Cleanup(func() {
-		_ = target.Process.Kill()
-		_ = target.Wait()
-	})
+	pid := startTERMIgnoringProcess(t)
 
 	_, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
 		PID:      pid,
@@ -245,10 +260,8 @@ func TestStopDaemonProcessSparesReusedPIDBeforeForceKill(t *testing.T) {
 		Metadata: map[string]string{runtimeCreateTime: "1"},
 	})
 	require.NoError(t, err)
-	records := liveDaemonRecords(dir)
-	require.Len(t, records, 1)
 
-	err = stopDaemonProcess(records[0], 100*time.Millisecond)
+	err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 100*time.Millisecond)
 	require.NoError(t, err,
 		"a reused PID means the daemon exited; stop should succeed")
 	assert.Empty(t, liveDaemonRecords(dir),
@@ -264,47 +277,32 @@ func TestWriteDaemonRuntimePersistsCaddyMetadata(t *testing.T) {
 	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 65535, "test", false, os.Getpid())
 	require.NoError(t, err)
 
-	recs := liveDaemonRecords(dir)
-	require.Len(t, recs, 1)
-	assert.Equal(t, strconv.Itoa(os.Getpid()), recs[0].Metadata[runtimeCaddyPID])
+	rec := onlyLiveRuntimeRecord(t, dir)
+	assert.Equal(t, strconv.Itoa(os.Getpid()), rec.Metadata[runtimeCaddyPID])
 	ct, ok := processCreateTimeMillis(os.Getpid())
 	require.True(t, ok)
 	assert.Equal(t,
-		strconv.FormatInt(ct, 10), recs[0].Metadata[runtimeCaddyCreateTime])
+		strconv.FormatInt(ct, 10), rec.Metadata[runtimeCaddyCreateTime])
 }
 
 func TestWriteDaemonRuntimeOmitsCaddyMetadataWhenAbsent(t *testing.T) {
 	dir := runtimeTestDir(t)
 	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 65535, "test", false)
 	require.NoError(t, err)
-	recs := liveDaemonRecords(dir)
-	require.Len(t, recs, 1)
-	_, has := recs[0].Metadata[runtimeCaddyPID]
+	_, has := onlyLiveRuntimeRecord(t, dir).Metadata[runtimeCaddyPID]
 	assert.False(t, has, "no caddy pid means no caddy metadata")
 
 	// A zero caddy pid must also be omitted.
 	dir2 := runtimeTestDir(t)
 	_, err = WriteDaemonRuntime(dir2, "127.0.0.1", 65535, "test", false, 0)
 	require.NoError(t, err)
-	recs2 := liveDaemonRecords(dir2)
-	require.Len(t, recs2, 1)
-	_, has = recs2[0].Metadata[runtimeCaddyPID]
+	_, has = onlyLiveRuntimeRecord(t, dir2).Metadata[runtimeCaddyPID]
 	assert.False(t, has)
 }
 
 func TestStopOrphanedCaddyChildTerminatesConfirmed(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("graceful SIGTERM termination is POSIX-specific")
-	}
-	caddy := exec.Command("sleep", "60")
-	require.NoError(t, caddy.Start())
-	pid := caddy.Process.Pid
-	reaped := make(chan struct{})
-	go func() {
-		_ = caddy.Wait()
-		close(reaped)
-	}()
-	t.Cleanup(func() { _ = caddy.Process.Kill() })
+	requirePOSIXSignals(t, "graceful SIGTERM termination is POSIX-specific")
+	pid, reaped := startReapedSleepProcess(t)
 
 	ct, ok := processCreateTimeMillis(pid)
 	require.True(t, ok)
@@ -323,16 +321,8 @@ func TestStopOrphanedCaddyChildTerminatesConfirmed(t *testing.T) {
 }
 
 func TestStopOrphanedCaddyChildSkipsMismatchedCreateTime(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("graceful SIGTERM termination is POSIX-specific")
-	}
-	caddy := exec.Command("sleep", "60")
-	require.NoError(t, caddy.Start())
-	pid := caddy.Process.Pid
-	t.Cleanup(func() {
-		_ = caddy.Process.Kill()
-		_ = caddy.Wait()
-	})
+	requirePOSIXSignals(t, "graceful SIGTERM termination is POSIX-specific")
+	pid := startSleepProcess(t)
 
 	rec := daemon.RuntimeRecord{
 		PID: os.Getpid(),
@@ -404,16 +394,15 @@ func TestWriteDaemonRuntimePersistsCreateTimeForStop(t *testing.T) {
 	_, err := WriteDaemonRuntime(dir, "127.0.0.1", 65535, "test", false)
 	require.NoError(t, err)
 
-	recs := liveDaemonRecords(dir)
-	require.Len(t, recs, 1)
-	assert.NotEmpty(t, recs[0].Metadata[runtimeCreateTime],
+	rec := onlyLiveRuntimeRecord(t, dir)
+	assert.NotEmpty(t, rec.Metadata[runtimeCreateTime],
 		"WriteDaemonRuntime must persist the process create time")
 
 	// No server answers at that port, so ping confirmation fails; the
 	// persisted create time must still confirm the record belongs to this
 	// live process so a wedged daemon is stoppable.
-	assert.False(t, daemonRecordPingConfirmed(recs[0], ""))
-	assert.True(t, stopTargetConfirmed(recs[0], ""))
+	assert.False(t, daemonRecordPingConfirmed(rec, ""))
+	assert.True(t, stopTargetConfirmed(rec, ""))
 }
 
 func TestProcessIdentityConfirmed(t *testing.T) {
@@ -491,18 +480,4 @@ func TestStopTargetConfirmedRejectsReusedPID(t *testing.T) {
 		Address: "127.0.0.1:1",
 		Service: daemonService,
 	}, ""))
-}
-
-// startReapedProcess starts and fully reaps a short-lived process, returning a
-// PID that is guaranteed dead.
-func startReapedProcess(t *testing.T) int {
-	t.Helper()
-	cmd := exec.Command("true")
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", "exit")
-	}
-	require.NoError(t, cmd.Start())
-	pid := cmd.Process.Pid
-	require.NoError(t, cmd.Wait())
-	return pid
 }

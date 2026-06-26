@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { InsightsService } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
   import {
@@ -12,6 +13,9 @@
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { Insight, InsightsResponse, AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
+  import OptionTypeahead, {
+    type TypeaheadOption,
+  } from "../layout/OptionTypeahead.svelte";
 
   let {
     dateFrom,
@@ -57,11 +61,18 @@
   );
   const unavailableTitle = $derived(
     readOnly
-      ? "Unavailable in read-only remote mode"
+      ? m.activity_insight_unavailable_read_only()
       : sync.serverVersion === null
-        ? "Waiting for server version"
-        : "Generate insight",
+        ? m.activity_insight_waiting_server()
+        : m.activity_insight_generate_insight(),
   );
+  const agentOptions: TypeaheadOption[] = [
+    { name: "claude", label: "Claude", displayLabel: "Claude" },
+    { name: "codex", label: "Codex", displayLabel: "Codex" },
+    { name: "copilot", label: "Copilot", displayLabel: "Copilot" },
+    { name: "gemini", label: "Gemini", displayLabel: "Gemini" },
+    { name: "kiro", label: "Kiro", displayLabel: "Kiro" },
+  ];
 
   function abortGeneration() {
     handle?.abort();
@@ -111,8 +122,8 @@
 
   // The agent choice is shared with the standalone Insights page via the
   // insights store, so picking one here and there stays in sync.
-  function onAgentChange(e: Event) {
-    insights.setAgent((e.currentTarget as HTMLSelectElement).value as AgentName);
+  function onAgentChange(value: string) {
+    insights.setAgent(value as AgentName);
   }
 
   function handleGenerate() {
@@ -150,7 +161,7 @@
         if (e instanceof DOMException && e.name === "AbortError") {
           return;
         }
-        error = e instanceof Error ? e.message : "Generation failed";
+        error = e instanceof Error ? e.message : m.activity_insight_generation_failed();
         generating = false;
       });
   }
@@ -160,7 +171,7 @@
   <header class="panel-header">
     <span class="panel-title">
       <LightbulbIcon size="13" strokeWidth="1.8" aria-hidden="true" />
-      <span>Activity Insight</span>
+      <span>{m.activity_insight_title()}</span>
       {#if !loading && insight?.model}
         <span class="insight-model">{insight.model}</span>
       {/if}
@@ -170,33 +181,31 @@
       href={getBasePath() + "/insights"}
       onclick={openInsightsPage}
     >
-      Open in Insights page
+      {m.activity_insight_open_insights_page()}
     </a>
   </header>
 
   {#snippet agentPicker()}
-    <select
-      class="agent-select"
-      value={insights.agent}
-      onchange={onAgentChange}
-      disabled={generationUnavailable}
-      title="Agent CLI used to generate the insight"
-      aria-label="Insight agent"
-    >
-      <option value="claude">Claude</option>
-      <option value="codex">Codex</option>
-      <option value="copilot">Copilot</option>
-      <option value="gemini">Gemini</option>
-      <option value="kiro">Kiro</option>
-    </select>
+    <div class="agent-typeahead">
+      <OptionTypeahead
+        options={agentOptions}
+        value={insights.agent}
+        disabled={generationUnavailable}
+        title={m.activity_insight_agent_cli_title()}
+        fallbackLabel={insights.agent}
+        placeholder={m.activity_insight_insight_agent()}
+        emptyLabel={m.activity_insight_no_matching_agents()}
+        onselect={onAgentChange}
+      />
+    </div>
   {/snippet}
 
   {#if loading}
-    <div class="state muted">Loading insight…</div>
+    <div class="state muted">{m.activity_insight_loading()}</div>
   {:else if generating}
     <div class="state generating">
       <span class="spinner"></span>
-      <span>Generating… {phase}</span>
+      <span>{m.activity_insight_generating_phase({ phase })}</span>
     </div>
   {:else if error}
     <div class="state error">
@@ -209,7 +218,7 @@
           disabled={generationUnavailable}
           title={unavailableTitle}
         >
-          Retry
+          {m.activity_insight_retry()}
         </button>
       </div>
     </div>
@@ -223,8 +232,7 @@
   {:else}
     <div class="empty-state">
       <span class="empty-text">
-        No insight yet for this range. Generate one to summarize this
-        period's activity.
+        {m.activity_insight_empty_text()}
       </span>
       <div class="gen-row">
         {@render agentPicker()}
@@ -235,7 +243,7 @@
           title={unavailableTitle}
         >
           <PlusIcon size="12" strokeWidth="2.2" aria-hidden="true" />
-          Generate
+          {m.activity_insight_generate()}
         </button>
       </div>
     </div>
@@ -331,26 +339,11 @@
     gap: 8px;
   }
 
-  .agent-select {
-    height: 28px;
-    padding: 0 6px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: border-color 0.15s;
-  }
-
-  .agent-select:focus {
-    outline: none;
-    border-color: var(--accent-blue);
-  }
-
-  .agent-select:disabled {
-    opacity: 0.45;
-    cursor: default;
+  .agent-typeahead {
+    --typeahead-min-width: 96px;
+    --typeahead-max-width: 112px;
+    --typeahead-control-height: 28px;
+    --typeahead-control-padding: 0 6px;
   }
 
   .generate-btn {
@@ -363,7 +356,7 @@
     font-size: 11px;
     font-weight: 600;
     background: var(--accent-blue);
-    color: white;
+    color: var(--accent-blue-foreground);
     letter-spacing: 0.01em;
     transition: opacity 0.12s, transform 0.1s, box-shadow 0.12s;
     box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);

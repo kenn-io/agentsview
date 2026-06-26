@@ -124,6 +124,50 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.InDelta(t, 0.0105, r.Totals.Cost, 1e-9)
 }
 
+func TestDuckGetActivityReportPreservesSessionSummaryUsageEventTokens(t *testing.T) {
+	ctx := context.Background()
+	rawInput := db.MaxPlausibleTokens + 250_000
+	rawOutput := db.MaxPlausibleTokens + 500_000
+	sessionID := "summary-activity"
+	sess := syncSession(sessionID, "proj1", "first", "2026-06-14T10:30:00.000Z", 1)
+	sess.Agent = "hermes"
+	sess.TotalOutputTokens = rawOutput
+	sess.PeakContextTokens = rawInput
+	sess.HasTotalOutputTokens = true
+	sess.HasPeakContextTokens = true
+	msg := syncMessage(sessionID, 0, "user", "first", "2026-06-14T10:30:00.000Z")
+	msg.Model = ""
+	msg.TokenUsage = nil
+	writes := []db.SessionBatchWrite{{
+		Session:  sess,
+		Messages: []db.Message{msg},
+		UsageEvents: []db.UsageEvent{{
+			Source:       "session",
+			Model:        "summary-model",
+			InputTokens:  rawInput,
+			OutputTokens: rawOutput,
+			OccurredAt:   "2026-06-14T10:30:00.000Z",
+			DedupKey:     "summary",
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}}
+	pricing := []db.ModelPricing{{
+		ModelPattern:  "summary-model",
+		InputPerMTok:  1,
+		OutputPerMTok: 2,
+	}}
+	store := activityReportStore(t, writes, pricing)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, rawOutput, r.Totals.OutputTokens)
+	wantCost := (float64(rawInput)*1 + float64(rawOutput)*2) / 1_000_000
+	assert.InDelta(t, wantCost, r.Totals.Cost, 1e-9)
+}
+
 // TestDuckGetActivityReportExcludesIneligibleUsage confirms the DuckDB
 // usage union (the one backend that inlines its own usage CTE rather
 // than sharing dailyUsageRowsSQLWithWhere) applies the same eligibility
@@ -304,6 +348,48 @@ func TestDuckGetActivityReportUsageDedupSubSecondOrder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 500, r.Totals.OutputTokens,
 		"first-seen dedup keeps the chronologically earlier whole-second row")
+}
+
+func TestDuckGetActivityReportUsageDedupFallsBackToSourceUUID(t *testing.T) {
+	ctx := context.Background()
+	pricing := []db.ModelPricing{{
+		ModelPattern:  "claude-sonnet-4-20250514",
+		InputPerMTok:  3.0,
+		OutputPerMTok: 15.0,
+	}}
+
+	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00Z", 1)
+	earlier.Agent = "claude"
+	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00Z")
+	earlierMsg.Model = "claude-sonnet-4-20250514"
+	earlierMsg.ClaudeMessageID = "dup-m"
+	earlierMsg.SourceUUID = "src-dup"
+	earlierMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	earlierMsg.OutputTokens = 500
+
+	later := syncSession("later", "proj2", "first", "2026-06-14T10:30:01Z", 1)
+	later.Agent = "claude"
+	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:30:01Z")
+	laterMsg.Model = "claude-sonnet-4-20250514"
+	laterMsg.ClaudeMessageID = "dup-m"
+	laterMsg.SourceUUID = "src-dup"
+	laterMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":900}`)
+	laterMsg.OutputTokens = 900
+
+	writes := []db.SessionBatchWrite{
+		{Session: earlier, Messages: []db.Message{earlierMsg},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: later, Messages: []db.Message{laterMsg},
+			DataVersion: 1, ReplaceMessages: true},
+	}
+	store := activityReportStore(t, writes, pricing)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens,
+		"incomplete Claude pairs fall back to source_uuid dedup in activity reports")
 }
 
 // TestDuckGetActivityReportZeroCostKeepsPrimaryModel confirms a usage-only

@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,8 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/agentsview/internal/sync"
 )
 
 // Exit codes for the token-use subcommand.
@@ -190,177 +187,19 @@ func sessionUsageData(sessionID string) (*sessionUsageOutput, int, error) {
 			fmt.Errorf("creating data dir: %w", err)
 	}
 
-	serverActive := IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken)
-
-	// If a server is actively starting up (daemon start lock
-	// present), wait for it to finish so we read fresh data
-	// rather than returning stale results or "not found".
-	// We only wait when the start lock is the reason
-	// IsLocalDaemonActive returned true.
-	if serverActive &&
-		FindDaemonRuntime(appCfg.DataDir, appCfg.AuthToken) == nil {
-		if IsDaemonStarting(appCfg.DataDir) {
-			fmt.Fprintf(os.Stderr,
-				"server is starting up, waiting...\n")
-			if !WaitForDaemonStartup(
-				appCfg.DataDir, startupWaitTimeout, appCfg.AuthToken,
-			) {
-				if IsDaemonStarting(appCfg.DataDir) {
-					// Lock still live after timeout:
-					// the server is active (still
-					// syncing, or runtime record write
-					// failed). Don't compete — read
-					// the DB as-is.
-					fmt.Fprintf(os.Stderr,
-						"server still starting after "+
-							"%s, reading DB as-is\n",
-						startupWaitTimeout,
-					)
-				} else {
-					// Lock cleared. Re-check in case a
-					// runtime record was written just
-					// after the wait timed out.
-					serverActive = IsLocalDaemonActive(
-						appCfg.DataDir, appCfg.AuthToken,
-					)
-				}
-			}
-		} else if !IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken) {
-			// The server that was alive at the first check
-			// has since exited. Fall back to on-demand sync.
-			serverActive = false
-		}
-	}
-
-	applyClassifierConfig(appCfg)
-	database, err := db.Open(appCfg.DBPath)
-	if err != nil {
-		return nil, tokenUseExitErr,
-			fmt.Errorf("opening database: %w", err)
-	}
-	defer database.Close()
-
-	if appCfg.CursorSecret != "" {
-		secret, decErr := base64.StdEncoding.DecodeString(
-			appCfg.CursorSecret,
-		)
-		if decErr != nil {
-			return nil, tokenUseExitErr, fmt.Errorf(
-				"invalid cursor secret: %w", decErr,
-			)
-		}
-		database.SetCursorSecret(secret)
-	}
-
-	// Pricing setup for the direct path: db.Open (unlike openDB)
-	// neither applies custom rates nor seeds model_pricing. Custom
-	// rates are in-memory only (safe always). Fallback seeding is a
-	// DB write, so do it only when no writable local daemon owns the
-	// DB (same condition as the on-demand sync below); a running
-	// server already seeds pricing at startup.
-	applyCustomPricing(database, appCfg)
-	if !serverActive {
-		if perr := insertMissingPricing(
-			database, pricing.FallbackPricing(),
-		); perr != nil {
-			fmt.Fprintf(os.Stderr,
-				"warning: pricing seed failed: %v\n", perr)
-		}
-	}
-
 	ctx := context.Background()
-	resolvedID, known := resolveRawSessionID(
-		ctx, database, appCfg.AgentDirs, sessionID,
+	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
+		ctx,
+		appCfg,
+		archiveQueryPolicy{
+			AutoStart:            true,
+			ReadOnlyDaemon:       archiveQueryRejectReadOnlyDaemon,
+			DirectReadOnlyAction: "refresh session usage directly",
+		},
 	)
-
-	// If no server is managing the DB, do an on-demand sync
-	// for this session so the data is fresh. Re-check right
-	// before syncing to close the TOCTOU window where a
-	// server could have started since our initial probe.
-	// If the re-check detects a starting server, wait for
-	// it rather than reading potentially stale data.
-	if !serverActive {
-		serverActive = IsLocalDaemonActive(appCfg.DataDir, appCfg.AuthToken)
-		if serverActive &&
-			FindDaemonRuntime(appCfg.DataDir, appCfg.AuthToken) == nil &&
-			IsDaemonStarting(appCfg.DataDir) {
-			fmt.Fprintf(os.Stderr,
-				"server is starting up, waiting...\n")
-			if WaitForDaemonStartup(
-				appCfg.DataDir, startupWaitTimeout, appCfg.AuthToken,
-			) {
-				// Server is ready; read DB below.
-			} else if !IsDaemonStarting(
-				appCfg.DataDir,
-			) {
-				// Lock cleared. Re-check in case a
-				// runtime record was written just
-				// after the wait timed out.
-				serverActive = IsLocalDaemonActive(
-					appCfg.DataDir, appCfg.AuthToken,
-				)
-			}
-			// Lock still live after timeout: server is
-			// active but slow. Read DB as-is.
-		}
-	}
-	// Skip sync entirely when we have no evidence of the
-	// session (known=false) — SyncSingleSession would just
-	// log a misleading "source file not found" warning.
-	if !serverActive && known {
-		engine := sync.NewEngine(database, sync.EngineConfig{
-			AgentDirs:               appCfg.AgentDirs,
-			Machine:                 "local",
-			BlockedResultCategories: appCfg.ResultContentBlockedCategories,
-		})
-		if syncErr := engine.SyncSingleSessionContext(
-			ctx, resolvedID,
-		); syncErr != nil {
-			// Not fatal: session may already be in the DB
-			// from a previous sync, or may not exist at all.
-			fmt.Fprintf(os.Stderr,
-				"warning: sync failed: %v\n", syncErr)
-		}
-	}
-
-	u, err := database.GetSessionUsage(ctx, resolvedID)
 	if err != nil {
-		return nil, tokenUseExitErr,
-			fmt.Errorf("querying session usage: %w", err)
+		return nil, tokenUseExitErr, err
 	}
-	if u == nil {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-		return nil, tokenUseExitNotFound, nil
-	}
-	// If the session uses models the local pricing catalog
-	// doesn't know about, try a one-off LiteLLM refresh and
-	// re-query — newly released models often hit this until
-	// the user next runs `agentsview serve`. Skip when a
-	// server is active (it owns pricing writes) or the
-	// cooldown hasn't elapsed.
-	if len(u.UnpricedModels) > 0 && !serverActive {
-		refreshed, refErr := refreshPricingIfStale(
-			database, pricing.FetchLiteLLMPricing,
-			pricingRefreshCooldown, time.Now(),
-		)
-		if refErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"warning: pricing refresh failed: %v\n", refErr)
-		} else if refreshed {
-			if u2, e := database.GetSessionUsage(
-				ctx, resolvedID,
-			); e == nil && u2 != nil {
-				u = u2
-			}
-		}
-	}
-	if u.Agent == "" {
-		if def, ok := parser.AgentByPrefix(u.SessionID); ok {
-			u.Agent = string(def.Type)
-		}
-	}
-	return &sessionUsageOutput{
-		SessionUsage:  *u,
-		ServerRunning: serverActive,
-	}, usageExitCode(u), nil
+	defer closeArchiveQueryBackend(cleanup)
+	return backend.SessionUsage(ctx, sessionID)
 }

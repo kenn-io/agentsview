@@ -2,6 +2,7 @@ import { describe, it, expect } from "vite-plus/test";
 import {
   KNOWN_AGENTS,
   agentColor,
+  agentForeground,
   agentLabel,
 } from "./agents.js";
 
@@ -116,6 +117,33 @@ describe("agentColor", () => {
       "var(--accent-blue)",
     );
     expect(agentColor("")).toBe("var(--accent-blue)");
+  });
+});
+
+describe("agentForeground", () => {
+  it("returns the matching foreground token for every known agent fill", () => {
+    for (const agent of KNOWN_AGENTS) {
+      const color = agentColor(agent.name);
+      const token = color.match(/^var\(--accent-([a-z]+)\)$/)?.[1];
+      expect(token, `${agent.name} color token`).toBeTruthy();
+      expect(agentForeground(agent.name)).toBe(
+        `var(--accent-${token}-foreground)`,
+      );
+    }
+  });
+
+  it("uses the accent foreground for unknown fallback agents", () => {
+    expect(agentForeground("unknown")).toBe(
+      "var(--accent-blue-foreground)",
+    );
+    expect(agentForeground("")).toBe("var(--accent-blue-foreground)");
+  });
+
+  it("uses non-blue accent foregrounds for non-blue agent fills", () => {
+    expect(agentForeground("codex")).toBe("var(--accent-green-foreground)");
+    expect(agentForeground("opencode")).toBe(
+      "var(--accent-purple-foreground)",
+    );
   });
 });
 

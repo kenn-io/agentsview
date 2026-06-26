@@ -3,6 +3,7 @@
 package dbtest
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -100,6 +101,16 @@ func UserMsg(
 	}
 }
 
+// UserMessagesf builds count user messages for the session with
+// ordinals 0..count-1 and content formatted as fmt.Sprintf(format, i).
+func UserMessagesf(sid string, count int, format string) []db.Message {
+	msgs := make([]db.Message, 0, count)
+	for i := range count {
+		msgs = append(msgs, UserMsg(sid, i, fmt.Sprintf(format, i)))
+	}
+	return msgs
+}
+
 // AsstMsg creates an assistant message for the given session.
 func AsstMsg(
 	sid string, ordinal int, content string,
@@ -133,4 +144,33 @@ func SeedSession(
 	if err := d.UpsertSession(s); err != nil {
 		t.Fatalf("SeedSession %s: %v", id, err)
 	}
+}
+
+// WithMessageCount sets the session's total message count.
+func WithMessageCount(n int) func(*db.Session) {
+	return func(s *db.Session) { s.MessageCount = n }
+}
+
+// WithUserMessageCount sets the session's user message count.
+func WithUserMessageCount(n int) func(*db.Session) {
+	return func(s *db.Session) { s.UserMessageCount = n }
+}
+
+// WithMessageCounts sets the session's total and user message counts.
+func WithMessageCounts(total, user int) func(*db.Session) {
+	return func(s *db.Session) {
+		s.MessageCount = total
+		s.UserMessageCount = user
+	}
+}
+
+// SeedSessionWithMessages seeds a session and its messages in one call,
+// applying any session option functions before insert.
+func SeedSessionWithMessages(
+	t *testing.T, d *db.DB, id, project string,
+	msgs []db.Message, opts ...func(*db.Session),
+) {
+	t.Helper()
+	SeedSession(t, d, id, project, opts...)
+	SeedMessages(t, d, msgs...)
 }

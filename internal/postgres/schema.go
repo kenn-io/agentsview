@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     context_pressure_max      DOUBLE PRECISION,
     health_score              INT,
     health_grade              TEXT,
+    quality_signal_version    INT NOT NULL DEFAULT 0,
+    short_prompt_count        INT NOT NULL DEFAULT 0,
+    unstructured_start        BOOLEAN NOT NULL DEFAULT FALSE,
+    missing_success_criteria_count INT NOT NULL DEFAULT 0,
+    missing_verification_count INT NOT NULL DEFAULT 0,
+    duplicate_prompt_count    INT NOT NULL DEFAULT 0,
+    no_code_context_count     INT NOT NULL DEFAULT 0,
+    runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -139,6 +147,33 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_session
 CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
     ON usage_events (occurred_at);
 
+CREATE TABLE IF NOT EXISTS cursor_usage_events (
+    id BIGSERIAL PRIMARY KEY,
+    occurred_at TIMESTAMPTZ NOT NULL,
+    model TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT '',
+    input_tokens INT NOT NULL DEFAULT 0,
+    output_tokens INT NOT NULL DEFAULT 0,
+    cache_write_tokens INT NOT NULL DEFAULT 0,
+    cache_read_tokens INT NOT NULL DEFAULT 0,
+    charged_cents DOUBLE PRECISION NOT NULL DEFAULT 0,
+    cursor_token_fee DOUBLE PRECISION NOT NULL DEFAULT 0,
+    user_id TEXT NOT NULL DEFAULT '',
+    user_email TEXT NOT NULL DEFAULT '',
+    is_headless BOOLEAN NOT NULL DEFAULT FALSE,
+    dedup_key TEXT NOT NULL DEFAULT ''
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cursor_usage_events_dedup
+    ON cursor_usage_events (dedup_key)
+    WHERE dedup_key != '';
+
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_occurred
+    ON cursor_usage_events (occurred_at);
+
+CREATE INDEX IF NOT EXISTS idx_cursor_usage_events_model
+    ON cursor_usage_events (model);
+
 CREATE TABLE IF NOT EXISTS starred_sessions (
     session_id TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -191,6 +226,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     result_content        TEXT,
     subagent_session_id   TEXT,
     message_ordinal       INT NOT NULL,
+    file_path             TEXT,
     FOREIGN KEY (session_id)
         REFERENCES sessions(id) ON DELETE CASCADE
 );
@@ -271,6 +307,9 @@ func EnsureSchema(
 	quoted, err := quoteIdentifier(schema)
 	if err != nil {
 		return fmt.Errorf("invalid schema name: %w", err)
+	}
+	if err := CheckDataVersionCompat(ctx, db); err != nil {
+		return err
 	}
 	step := time.Now()
 	if _, err := db.ExecContext(ctx,
@@ -374,6 +413,11 @@ func EnsureSchema(
 			"adding tool_calls.call_index",
 		},
 		{
+			"tool_calls", "file_path",
+			`file_path TEXT`,
+			"adding tool_calls.file_path",
+		},
+		{
 			"sessions", "is_automated",
 			`is_automated BOOLEAN NOT NULL DEFAULT FALSE`,
 			"adding sessions.is_automated",
@@ -457,6 +501,46 @@ func EnsureSchema(
 			"sessions", "has_context_data",
 			`has_context_data BOOLEAN NOT NULL DEFAULT FALSE`,
 			"adding sessions.has_context_data",
+		},
+		{
+			"sessions", "quality_signal_version",
+			`quality_signal_version INT NOT NULL DEFAULT 0`,
+			"adding sessions.quality_signal_version",
+		},
+		{
+			"sessions", "short_prompt_count",
+			`short_prompt_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.short_prompt_count",
+		},
+		{
+			"sessions", "unstructured_start",
+			`unstructured_start BOOLEAN NOT NULL DEFAULT FALSE`,
+			"adding sessions.unstructured_start",
+		},
+		{
+			"sessions", "missing_success_criteria_count",
+			`missing_success_criteria_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.missing_success_criteria_count",
+		},
+		{
+			"sessions", "missing_verification_count",
+			`missing_verification_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.missing_verification_count",
+		},
+		{
+			"sessions", "duplicate_prompt_count",
+			`duplicate_prompt_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.duplicate_prompt_count",
+		},
+		{
+			"sessions", "no_code_context_count",
+			`no_code_context_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.no_code_context_count",
+		},
+		{
+			"sessions", "runaway_tool_loop_count",
+			`runaway_tool_loop_count INT NOT NULL DEFAULT 0`,
+			"adding sessions.runaway_tool_loop_count",
 		},
 		{
 			"sessions", "data_version",
@@ -674,6 +758,11 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		   AND model != '<synthetic>'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		// idx_tool_calls_file_path backs the cross-session Recent Edits feed.
+		// Created here, after the file_path column migration, mirroring the
+		// SQLite partial index so legacy schemas migrate cleanly.
+		`CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path
+		 ON tool_calls(file_path) WHERE file_path IS NOT NULL`,
 	}
 	for _, ddl := range indexes {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
@@ -1343,6 +1432,15 @@ func inferTokenCoverage(
 }
 
 // CheckSchemaCompat verifies that the PG schema has all columns
+func pgHasTable(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	err := db.QueryRowContext(ctx,
+		"SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = $1",
+		name,
+	).Scan(&n)
+	return err == nil && n == 1
+}
+
 // required by query paths. This is a read-only probe that works
 // against any PG role. Returns nil if compatible, or an error
 // describing what is missing.
@@ -1363,7 +1461,7 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT call_index FROM tool_calls LIMIT 0`)
+		`SELECT call_index, file_path FROM tool_calls LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"tool_calls table missing required columns: %w",
@@ -1417,6 +1515,20 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
+		`SELECT quality_signal_version, short_prompt_count,
+			unstructured_start, missing_success_criteria_count,
+			missing_verification_count, duplicate_prompt_count,
+			no_code_context_count, runaway_tool_loop_count
+		 FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing quality signal columns: %w",
+			err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
 		`SELECT event_index FROM tool_result_events LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -1436,6 +1548,23 @@ func CheckSchemaCompat(
 	}
 	rows.Close()
 
+	if pgHasTable(ctx, db, "cursor_usage_events") {
+		rows, err = db.QueryContext(ctx,
+			`SELECT id, occurred_at, model, kind,
+				input_tokens, output_tokens,
+				cache_write_tokens, cache_read_tokens,
+				charged_cents, cursor_token_fee,
+				user_id, user_email, is_headless, dedup_key
+			 FROM cursor_usage_events LIMIT 0`)
+		if err != nil {
+			return fmt.Errorf(
+				"cursor_usage_events table missing required columns: %w",
+				err,
+			)
+		}
+		rows.Close()
+	}
+
 	rows, err = db.QueryContext(ctx,
 		`SELECT id, session_id, rule_name, confidence, location_kind,
 			message_ordinal, call_index, event_index,
@@ -1446,6 +1575,29 @@ func CheckSchemaCompat(
 		return fmt.Errorf("secret_findings table missing required columns: %w", err)
 	}
 	rows.Close()
+	return nil
+}
+
+// CheckDataVersionCompat rejects PG datasets containing rows written by a
+// newer agentsview parser. PG does not have SQLite's global user_version, so
+// the highest session data_version is the compatibility marker.
+func CheckDataVersionCompat(ctx context.Context, pg *sql.DB) error {
+	var version int
+	err := pg.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`,
+	).Scan(&version)
+	if err != nil {
+		if isUndefinedTable(err) || isUndefinedColumn(err) {
+			return nil
+		}
+		return fmt.Errorf("checking PG data version: %w", err)
+	}
+	if version > db.CurrentDataVersion() {
+		return &db.DataVersionTooNewError{
+			DatabaseVersion: version,
+			BinaryVersion:   db.CurrentDataVersion(),
+		}
+	}
 	return nil
 }
 

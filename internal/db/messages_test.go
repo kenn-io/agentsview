@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +12,126 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const largeSessionPerfCeiling = 10 * time.Second
+const crossSessionNeighborCount = 40
+const crossSessionToolCallsPerNeighbor = 250
+const crossSessionToolCallTotal = crossSessionNeighborCount * crossSessionToolCallsPerNeighbor
+
+func largeSessionMessages(sessionID, blobToken string) []Message {
+	const n = 1000
+	msgs := make([]Message, 0, n)
+	for i := range n {
+		msgs = append(msgs, userMsg(sessionID, i, "small"))
+	}
+	big := strings.Repeat(blobToken+" ", 5*1024*1024/len(blobToken+" "))
+	msgs[n/2] = Message{
+		SessionID:     sessionID,
+		Ordinal:       n / 2,
+		Role:          "assistant",
+		Content:       big,
+		ContentLength: len(big),
+		Timestamp:     tsZero,
+	}
+	return msgs
+}
+
+func seedCrossSessionFKGrowth(t *testing.T, d *DB, sessionID string) {
+	t.Helper()
+
+	type neighborSeed struct {
+		sessionID string
+		messageID int64
+	}
+
+	seeds := make([]neighborSeed, 0, crossSessionNeighborCount)
+	for i := range crossSessionNeighborCount {
+		neighborID := sessionID + "-" + strconv.Itoa(i)
+		insertSession(t, d, neighborID, "proj")
+		insertMessages(t, d, userMsg(neighborID, 0, "neighbor"))
+		msgs, err := d.GetAllMessages(context.Background(), neighborID)
+		require.NoError(t, err, "GetAllMessages neighbor %s", neighborID)
+		require.Len(t, msgs, 1)
+		_, err = d.PinMessage(neighborID, msgs[0].ID, nil)
+		require.NoError(t, err, "PinMessage neighbor %s", neighborID)
+		seeds = append(seeds, neighborSeed{
+			sessionID: neighborID,
+			messageID: msgs[0].ID,
+		})
+	}
+
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		for _, seed := range seeds {
+			for i := range crossSessionToolCallsPerNeighbor {
+				if _, err := tx.Exec(
+					`INSERT INTO tool_calls
+					 (message_id, session_id, tool_name, category, tool_use_id)
+					 VALUES (?, ?, ?, ?, ?)`,
+					seed.messageID, seed.sessionID, "Read", "Read",
+					seed.sessionID+"-tool-"+strconv.Itoa(i),
+				); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}), "seed neighbor tool_calls")
+}
+
+func assertNoFTSLeak(t *testing.T, d *DB, token string) {
+	t.Helper()
+	var leaked int
+	err := d.getReader().QueryRow(
+		`SELECT count(*) FROM messages_fts
+		 WHERE messages_fts MATCH ?`,
+		token,
+	).Scan(&leaked)
+	require.NoError(t, err, "fts leak check")
+	assert.Zero(t, leaked, "FTS still contains rows matching %q", token)
+}
+
+func poisonMessagesDeleteTrigger(t *testing.T, d *DB) {
+	t.Helper()
+
+	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+		if _, err := tx.Exec("DROP TRIGGER IF EXISTS messages_ad"); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`
+			CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+				SELECT RAISE(FAIL, 'poison messages_ad fired');
+			END`)
+		return err
+	}), "poison messages_ad trigger")
+}
+
+func requireMessagesDeleteTriggerRestored(t *testing.T, d *DB) {
+	t.Helper()
+
+	var triggerSQL string
+	err := d.getReader().QueryRow(
+		`SELECT sql FROM sqlite_master
+		 WHERE type = 'trigger' AND name = 'messages_ad'`,
+	).Scan(&triggerSQL)
+	require.NoError(t, err, "read messages_ad trigger")
+	assert.NotContains(t, triggerSQL, "poison messages_ad fired",
+		"messages_ad trigger was not restored")
+	assert.Contains(t, triggerSQL, "INSERT INTO messages_fts",
+		"messages_ad trigger no longer matches the canonical FTS delete path")
+}
+
+func requireMessagesDeleteTriggerPoisoned(t *testing.T, d *DB) {
+	t.Helper()
+
+	var triggerSQL string
+	err := d.getReader().QueryRow(
+		`SELECT sql FROM sqlite_master
+		 WHERE type = 'trigger' AND name = 'messages_ad'`,
+	).Scan(&triggerSQL)
+	require.NoError(t, err, "read messages_ad trigger")
+	assert.Contains(t, triggerSQL, "poison messages_ad fired",
+		"fresh batch write should not touch the delete trigger")
+}
 
 func TestInsertAndGetMessage_ThinkingText(t *testing.T) {
 	t.Parallel()
@@ -282,25 +403,9 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	const sessionID = "perf-large"
+	const blobToken = "ftsreplxxx"
 	insertSession(t, d, sessionID, "proj")
-
-	const n = 1000
-	msgs := make([]Message, 0, n)
-	for i := range n {
-		msgs = append(msgs, userMsg(sessionID, i, "small"))
-	}
-	// One ~5MB content blob in the middle of the stream — the
-	// pathological case that blew up the per-row FTS delete path.
-	big := strings.Repeat("x ", 5*1024*1024/2)
-	msgs[n/2] = Message{
-		SessionID:     sessionID,
-		Ordinal:       n / 2,
-		Role:          "assistant",
-		Content:       big,
-		ContentLength: len(big),
-		Timestamp:     tsZero,
-	}
-	insertMessages(t, d, msgs...)
+	insertMessages(t, d, largeSessionMessages(sessionID, blobToken)...)
 
 	// Replace with a different small set so the delete path has to
 	// remove all 1000 rows including the 5MB blob.
@@ -312,7 +417,7 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionMessages(sessionID, repl),
 		"ReplaceSessionMessages")
 	elapsed := time.Since(start)
-	require.LessOrEqual(t, elapsed, 10*time.Second,
+	require.LessOrEqual(t, elapsed, largeSessionPerfCeiling,
 		"ReplaceSessionMessages took %s, want < 10s (per-row FTS trigger regression?)",
 		elapsed.Round(time.Millisecond))
 
@@ -325,14 +430,92 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	// session rows. Should be zero. If the messages_ad trigger
 	// restoration failed silently or the bulk-delete INSERT...SELECT
 	// got skipped, stale tokens would still resolve here.
-	var leaked int
+	assertNoFTSLeak(t, d, blobToken)
+}
+
+func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping perf test in -short mode")
+	}
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+
+	const targetID = "batch-large"
+	const blobToken = "ftsbatchyyy"
+	insertSession(t, d, targetID, "proj")
+	insertMessages(t, d, largeSessionMessages(targetID, blobToken)...)
+	seedCrossSessionFKGrowth(t, d, "batch-neighbor")
+	poisonMessagesDeleteTrigger(t, d)
+
+	repl := make([]Message, 0, 10)
+	for i := range 10 {
+		repl = append(repl, userMsg(targetID, i, "after"))
+	}
+	start := time.Now()
+	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
+		Session: Session{
+			ID:               targetID,
+			Project:          "proj",
+			Machine:          defaultMachine,
+			Agent:            defaultAgent,
+			MessageCount:     len(repl),
+			UserMessageCount: len(repl),
+		},
+		Messages:        repl,
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "WriteSessionBatch")
+	elapsed := time.Since(start)
+	require.Equal(t, 1, result.WrittenSessions, "WrittenSessions")
+	require.Equal(t, len(repl), result.WrittenMessages, "WrittenMessages")
+	require.LessOrEqual(t, elapsed, largeSessionPerfCeiling,
+		"WriteSessionBatch replace took %s, want < 10s (per-row FTS trigger regression?)",
+		elapsed.Round(time.Millisecond))
+
+	got, err := d.GetAllMessages(context.Background(), targetID)
+	require.NoError(t, err, "GetAllMessages after batch replace")
+	require.Len(t, got, len(repl), "after batch replace")
+	assertNoFTSLeak(t, d, blobToken)
+	requireMessagesDeleteTriggerRestored(t, d)
+
+	var neighborToolCalls int
 	err = d.getReader().QueryRow(
-		`SELECT count(*) FROM messages_fts
-		 WHERE messages_fts MATCH 'xxx'`,
-	).Scan(&leaked)
-	require.NoError(t, err, "fts leak check")
-	assert.Zero(t, leaked,
-		"FTS still contains rows matching 'xxx' from deleted blob")
+		"SELECT count(*) FROM tool_calls WHERE session_id LIKE ?",
+		"batch-neighbor-%",
+	).Scan(&neighborToolCalls)
+	require.NoError(t, err, "neighbor tool_calls count")
+	assert.Equal(t, crossSessionToolCallTotal, neighborToolCalls,
+		"neighbor tool_calls count")
+}
+
+func TestWriteSessionBatchFreshReplaceMessagesSkipsDeletePath(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	requireFTS(t, d)
+	poisonMessagesDeleteTrigger(t, d)
+
+	const sessionID = "batch-fresh"
+	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
+		Session: Session{
+			ID:               sessionID,
+			Project:          "proj",
+			Machine:          defaultMachine,
+			Agent:            defaultAgent,
+			MessageCount:     1,
+			UserMessageCount: 1,
+		},
+		Messages: []Message{
+			userMsg(sessionID, 0, "fresh"),
+		},
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "WriteSessionBatch")
+	assert.Equal(t, 1, result.WrittenSessions, "WrittenSessions")
+	assert.Equal(t, 1, result.WrittenMessages, "WrittenMessages")
+	requireMessagesDeleteTriggerPoisoned(t, d)
 }
 
 // TestMessageReadsTolerateNullTimestamp pins NULL-timestamp robustness
@@ -394,4 +577,46 @@ func TestMessageReadsTolerateNullTimestamp(t *testing.T) {
 	require.NotNil(t, m)
 	assert.Equal(t, "", m.Timestamp,
 		"NULL timestamp reads as empty string")
+}
+
+func TestToolCallFilePathCallIndexRoundTrip(t *testing.T) {
+	t.Parallel()
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "sess-1", "proj")
+	insertMessages(t, d, userMsg("sess-1", 0, "hello"))
+
+	// Fetch the message id assigned by the DB.
+	var msgID int64
+	require.NoError(t, d.getReader().QueryRowContext(ctx,
+		`SELECT id FROM messages WHERE session_id = 'sess-1' AND ordinal = 0`,
+	).Scan(&msgID))
+
+	tx, err := d.getWriter().Begin()
+	require.NoError(t, err, "begin tx")
+	err = insertToolCallsChunkTx(tx, []ToolCall{
+		{
+			MessageID: msgID, SessionID: "sess-1",
+			ToolName: "Edit", Category: "Edit",
+			ToolUseID: "tu1", InputJSON: `{"file_path":"/a/b.go"}`,
+			FilePath: "/a/b.go", CallIndex: 0,
+		},
+		{
+			MessageID: msgID, SessionID: "sess-1",
+			ToolName: "Write", Category: "Write",
+			ToolUseID: "tu2", InputJSON: `{"file":"/c/d.go"}`,
+			FilePath: "/c/d.go", CallIndex: 1,
+		},
+	})
+	require.NoError(t, err, "insertToolCallsChunkTx")
+	require.NoError(t, tx.Commit(), "commit")
+
+	var fp string
+	var ci int
+	require.NoError(t, d.getReader().QueryRowContext(ctx,
+		`SELECT file_path, call_index FROM tool_calls
+		 WHERE tool_use_id = 'tu2'`).Scan(&fp, &ci))
+	assert.Equal(t, "/c/d.go", fp)
+	assert.Equal(t, 1, ci)
 }
