@@ -338,9 +338,11 @@ func combineS3Fingerprints(values ...string) string {
 // engine threads back into the DiscoveredFile so S3 freshness, dedup, mtime
 // cutoff, and machine-ID namespacing operate on a provider-discovered S3 source
 // exactly as they did when discovery emitted these fields directly. Providers
-// read local files, so an S3 source is never fingerprinted or parsed through the
-// provider feature path; the engine routes s3:// objects to the dedicated S3
-// sync path, which re-stats and fetches the object itself.
+// read local files and cannot Fingerprint an s3:// URI, so the engine routes
+// s3:// objects to the dedicated S3 sync path: it re-stats and fetches the
+// object itself, then parses the fetched temp file through provider.Parse via a
+// MaterializedFileSource. The metadata threaded here is what lets the
+// incremental cutoff and skip checks run without performing that fetch.
 type S3DiscoveredSource struct {
 	URI         string
 	Project     string

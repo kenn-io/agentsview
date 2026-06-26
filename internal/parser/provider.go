@@ -176,11 +176,15 @@ type SourceRef struct {
 	FingerprintKey string
 	// ProjectHint is advisory metadata for UI grouping and may be empty.
 	ProjectHint string
-	// Opaque is provider-owned in-memory state. The engine must not persist,
-	// compare, inspect, or log it, and providers must not require it for lookup
-	// from persisted rows. Any source that needs to survive a process restart
-	// must be recoverable from Key, DisplayPath, FingerprintKey,
-	// FindSourceRequest, or discovery.
+	// Opaque is in-memory-only source state: never persisted and never required
+	// for lookup from persisted rows, so any source that must survive a restart
+	// has to be recoverable from Key, DisplayPath, FingerprintKey,
+	// FindSourceRequest, or discovery. It is normally provider-private, with one
+	// defined exception -- a few engine-recognized payload types that the engine
+	// may construct and type-assert to thread in-memory metadata across the
+	// discovery/sync/parse boundary: S3DiscoveredSource (discovery -> sync object
+	// metadata) and MaterializedFileSource (sync -> provider parse of a fetched
+	// S3 temp file). Providers must not depend on either for persisted-row lookup.
 	Opaque any
 }
 
