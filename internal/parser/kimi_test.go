@@ -250,6 +250,57 @@ func TestParseKimiSession_StatusUpdate(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 }
 
+func TestParseKimiSession_SessionLevelTokensEmitUsageEvent(t *testing.T) {
+	// StatusUpdate carries only session-level token aggregates; the
+	// individual assistant message gets no per-message token_usage.
+	// Without a usage event the cost engine would price 0 tokens and
+	// show $0, so the parser emits a session-level event defaulted to
+	// defaultKimiModel.
+	path := writeKimiWireJSONL(t,
+		"proj-usage", "sess-usage",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello"}]}}}`,
+			`{"timestamp": 1704067201.0, "message": {"type": "ContentPart", "payload": {"type": "text", "text": "Hi"}}}`,
+			`{"timestamp": 1704067201.5, "message": {"type": "StatusUpdate", "payload": {"context_tokens": 5000, "token_usage": {"output": 42}}}}`,
+			`{"timestamp": 1704067202.0, "message": {"type": "TurnEnd", "payload": {}}}`,
+		},
+	)
+
+	sess, _, err := ParseKimiSession(path, "testproj", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	require.Equal(t, 1, len(sess.UsageEvents))
+	ev := sess.UsageEvents[0]
+	assert.Equal(t, "kimi:proj-usage:sess-usage", ev.SessionID)
+	assert.Equal(t, "session", ev.Source)
+	assert.Equal(t, defaultKimiModel, ev.Model)
+	assert.Equal(t, 42, ev.OutputTokens)
+	assert.Equal(t, "kimi:session:proj-usage:sess-usage", ev.DedupKey)
+}
+
+func TestParseKimiSession_PerMessageTokensSkipUsageEvent(t *testing.T) {
+	// The native wire protocol (step.begin/step.end) attaches token
+	// usage to each assistant message, so the per-message path already
+	// prices the session. No session-level usage event is needed and
+	// emitting one would double-count tokens.
+	path := writeKimiWireJSONL(t,
+		"proj-native", "sess-native",
+		[]string{
+			`{"type": "metadata", "protocol_version": "1.3"}`,
+			`{"type": "turn.prompt", "timestamp": 1704067200.0, "input": [{"type": "text", "text": "Hello"}]}`,
+			`{"type": "context.append_loop_event", "timestamp": 1704067201.0, "event": {"type": "content.part", "part": {"type": "text", "text": "Hi"}}}`,
+			`{"type": "context.append_loop_event", "timestamp": 1704067202.0, "event": {"type": "step.end", "model": "moonshot/kimi-k2", "finishReason": "stop", "usage": {"output": 42, "inputOther": 100}}}`,
+		},
+	)
+
+	sess, _, err := ParseKimiSession(path, "testproj", "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.UsageEvents)
+}
+
 func TestParseKimiSession_ZeroValuedStatusUpdatePreservesCoverage(t *testing.T) {
 	path := writeKimiWireJSONL(t,
 		"proj-zero", "sess-zero",
