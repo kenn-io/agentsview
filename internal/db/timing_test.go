@@ -116,18 +116,14 @@ func TestGetSessionTiming_NoToolUseHasNoTurnDuration(t *testing.T) {
 	assert.Equal(t, 0, got.TurnCount, "TurnCount")
 }
 
-func TestActiveDurationMinFromTurnsKeepsRawMinutePrecision(t *testing.T) {
-	tenMinutesTwoPointFourSeconds := int64(602_400)
-	ignoredNegative := int64(-1_000)
-	turns := []TurnRow{
-		{HasToolUse: true, DurationMs: &tenMinutesTwoPointFourSeconds},
-		{HasToolUse: true, DurationMs: &ignoredNegative},
-		{HasToolUse: false, DurationMs: &tenMinutesTwoPointFourSeconds},
-	}
-
-	got := activeDurationMinFromTurns(turns)
-
-	assert.InDelta(t, 10.04, got, 0.000001)
+// TestActiveGapCapConstantsAgree guards the two spellings of the active
+// gap cap against drifting apart: the velocity metric uses the seconds
+// form and the active-duration SQL uses the milliseconds form.
+func TestActiveGapCapConstantsAgree(t *testing.T) {
+	assert.Equal(
+		t, ActiveGapCapMs, int(ActiveGapCapSec*1000),
+		"ActiveGapCapMs must equal ActiveGapCapSec in milliseconds",
+	)
 }
 
 func TestGetSessionTiming_MarshalsEmptyCollectionsAsArrays(t *testing.T) {

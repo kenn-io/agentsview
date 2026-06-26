@@ -2007,7 +2007,9 @@ func (s *Store) GetAnalyticsVelocity(
 	byComplexity := make(map[string]*velocityAccumulator)
 
 	const maxCycleSec = 1800.0
-	const maxGapSec = 300.0
+	// Shared with the Top Sessions "active duration" SQL so the two
+	// "active" definitions stay in lockstep.
+	const maxGapSec = db.ActiveGapCapSec
 
 	for _, sid := range sessionIDs {
 		info := sessionMap[sid]
@@ -2213,34 +2215,33 @@ func (s *Store) GetAnalyticsTopSessions(
 	if f.HasTimeFilter() || needsGoSort {
 		limitClause = ""
 	}
+	activeDurationSelectExpr := fmt.Sprintf(`COALESCE(
+		  (
+			SELECT COALESCE(SUM(
+				CASE
+					WHEN inner2.delta_ms <= 0 THEN 0
+					WHEN inner2.delta_ms > %[1]d THEN %[1]d
+					ELSE inner2.delta_ms
+				END), 0) / 60000.0
+			FROM (
+				SELECT CAST(
+					round(EXTRACT(EPOCH FROM (
+						LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal)
+						- m2.timestamp
+					)) * 1000)
+				AS BIGINT) AS delta_ms
+				FROM messages m2
+				WHERE m2.session_id = sessions.id
+			) inner2
+		), 0)`, db.ActiveGapCapMs)
+
 	query := `SELECT id, ` + pgDateCol + `, project,
 		first_message,
 		COALESCE(display_name, session_name) AS display_name,
 		message_count, total_output_tokens,
 		COALESCE(EXTRACT(EPOCH FROM ended_at - started_at), 0)
 			AS duration_sec,
-		COALESCE(
-		  (
-			SELECT COALESCE(SUM(
-				CASE
-					WHEN inner2.has_tool_use AND inner2.delta_ms > 0
-						THEN inner2.delta_ms
-					ELSE NULL
-				END), 0) / 60000.0
-			FROM (
-				SELECT CAST(
-					round(EXTRACT(EPOCH FROM (
-						COALESCE(
-							LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal),
-							sessions.ended_at
-						) - m2.timestamp
-					)) * 1000)
-				AS BIGINT) AS delta_ms,
-				m2.has_tool_use
-				FROM messages m2
-				WHERE m2.session_id = sessions.id
-			) inner2
-		), 0) AS active_duration_min,
+		` + activeDurationSelectExpr + ` AS active_duration_min,
 		started_at, ended_at,
 		termination_status
 		FROM sessions WHERE ` + where +

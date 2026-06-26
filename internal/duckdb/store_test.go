@@ -788,10 +788,13 @@ func TestAnalyticsTopSessionsDurationUsesActiveDuration(t *testing.T) {
 
 	assert.Equal(t, "duck-actively-working", resp.Sessions[0].ID)
 	assert.Equal(t, 20.0, resp.Sessions[0].DurationMin)
-	assert.Equal(t, 15.0, resp.Sessions[0].ActiveDurationMin)
+	// 5 min user->asst gap + a 15 min gap capped at the 5 min idle
+	// cap = 10.
+	assert.Equal(t, 10.0, resp.Sessions[0].ActiveDurationMin)
 	assert.Equal(t, "duck-wall-dominant", resp.Sessions[1].ID)
 	assert.Equal(t, 120.0, resp.Sessions[1].DurationMin)
-	assert.Equal(t, 1.0, resp.Sessions[1].ActiveDurationMin)
+	// 119 min idle gap capped to 5 + a 1 min gap = 6.
+	assert.Equal(t, 6.0, resp.Sessions[1].ActiveDurationMin)
 }
 
 func TestAnalyticsProjectsPopulateDailyTrendAndSortByMessages(t *testing.T) {

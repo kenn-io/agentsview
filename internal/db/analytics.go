@@ -2581,7 +2581,9 @@ func processSessionVelocity(
 	toolCount int,
 ) {
 	const maxCycleSec = 1800.0
-	const maxGapSec = 300.0
+	// Shared with the Top Sessions "active duration" SQL so the two
+	// "active" definitions stay in lockstep.
+	const maxGapSec = ActiveGapCapSec
 
 	for _, a := range accums {
 		a.sessions++
@@ -4356,6 +4358,18 @@ type TopSessionsResponse struct {
 	Sessions []TopSession `json:"sessions"`
 }
 
+// ActiveGapCapSec and ActiveGapCapMs bound how much a single
+// inter-message gap can contribute to "active" time: a gap below the cap
+// (5 minutes) counts in full -- model generation, tool execution, or a
+// quick human turnaround -- while anything longer is treated as idle
+// beyond the cap. Defined once and shared by the velocity "active
+// minutes" metric and the Top Sessions "active duration" SQL so the two
+// definitions cannot drift. timing_test.go asserts the two stay equal.
+const (
+	ActiveGapCapSec = 300.0
+	ActiveGapCapMs  = 300_000
+)
+
 // GetAnalyticsTopSessions returns the top 10 sessions by the
 // given metric ("messages", "duration", or "output_tokens")
 // within the filter.
@@ -4373,24 +4387,24 @@ func (db *DB) GetAnalyticsTopSessions(
 
 	durationExpr := `ROUND((julianday(ended_at) -
 		julianday(started_at)) * 1440, 1)`
-	activeDurationExpr := `
+	activeDurationExpr := fmt.Sprintf(`
 		(
 			SELECT COALESCE(SUM(
 				CASE
-					WHEN inner2.has_tool_use = 0 OR inner2.delta_ms <= 0 THEN NULL
+					WHEN inner2.delta_ms <= 0 THEN 0
+					WHEN inner2.delta_ms > %[1]d THEN %[1]d
 					ELSE inner2.delta_ms
 				END), 0) / 60000.0
 			FROM (
 				SELECT CAST(
 				  ROUND(
-					(julianday(COALESCE(LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal),
-					  sessions.ended_at)) - julianday(m2.timestamp)) * 86400000
+					(julianday(LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal))
+					  - julianday(m2.timestamp)) * 86400000
 					) AS INTEGER
-				) AS delta_ms,
-				m2.has_tool_use
+				) AS delta_ms
 			FROM messages m2
 				WHERE m2.session_id = sessions.id
-			) inner2)`
+			) inner2)`, ActiveGapCapMs)
 	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
 	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
 	needsGoSort := metric == "duration"

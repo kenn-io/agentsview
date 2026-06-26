@@ -1556,7 +1556,9 @@ func processDuckSessionVelocity(
 	toolCount int,
 ) {
 	const maxCycleSec = 1800.0
-	const maxGapSec = 300.0
+	// Shared with the Top Sessions "active duration" SQL so the two
+	// "active" definitions stay in lockstep.
+	const maxGapSec = db.ActiveGapCapSec
 
 	for _, acc := range accums {
 		acc.sessions++
@@ -1678,28 +1680,25 @@ func (s *Store) GetAnalyticsTopSessions(
 		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	durationExpr := "(epoch(s.ended_at) - epoch(s.started_at)) / 60.0"
 	durationSelectExpr := "COALESCE(" + durationExpr + ", 0)"
-	activeDurationExpr := `
+	activeDurationExpr := fmt.Sprintf(`
 		(
 			SELECT COALESCE(SUM(
 				CASE
-					WHEN inner2.has_tool_use AND inner2.delta_ms > 0
-						THEN inner2.delta_ms
-					ELSE NULL
+					WHEN inner2.delta_ms <= 0 THEN 0
+					WHEN inner2.delta_ms > %[1]d THEN %[1]d
+					ELSE inner2.delta_ms
 				END), 0) / 60000.0
 			FROM (
 				SELECT CAST(
 					ROUND(epoch(
-						COALESCE(
-							LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal),
-							s.ended_at
-						) - m2.timestamp
+						LEAD(m2.timestamp) OVER (ORDER BY m2.ordinal)
+						- m2.timestamp
 					) * 1000) AS BIGINT
-				) AS delta_ms,
-				m2.has_tool_use
+				) AS delta_ms
 				FROM messages m2
 				WHERE m2.session_id = s.id
 			) inner2
-		)`
+		)`, db.ActiveGapCapMs)
 	activeDurationSelectExpr := "COALESCE(" + activeDurationExpr + ", 0)"
 	orderExpr := "s.message_count DESC, s.id ASC"
 	switch metric {

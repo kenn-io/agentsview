@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -230,25 +231,36 @@ func (db *DB) queryCallRows(
 	return out, rows.Err()
 }
 
-func activeDurationMinFromTurns(turns []TurnRow) float64 {
-	var totalMs int64
-	for _, t := range turns {
-		if !t.HasToolUse || t.DurationMs == nil || *t.DurationMs <= 0 {
-			continue
-		}
-		totalMs += *t.DurationMs
-	}
-	return float64(totalMs) / 60000
-}
-
+// activeDurationMinForSession returns a session's active duration in
+// minutes: the sum of consecutive inter-message gaps with each gap
+// capped at ActiveGapCapMs. This mirrors the velocity "active minutes"
+// computation and the Top Sessions active-duration SQL expression, so
+// the timezone-aware Go fallback ranking path reports the same number as
+// the in-SQL path. A gap below the cap counts in full; longer stretches
+// are bounded as idle.
 func (db *DB) activeDurationMinForSession(
 	ctx context.Context, sessionID string,
 ) (float64, error) {
-	turns, err := db.queryTurnRows(ctx, sessionID)
-	if err != nil {
+	row := db.getReader().QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT COALESCE(SUM(
+			CASE
+				WHEN t.delta_ms <= 0 THEN 0
+				WHEN t.delta_ms > %[1]d THEN %[1]d
+				ELSE t.delta_ms
+			END), 0) / 60000.0
+		FROM (
+			SELECT CAST(ROUND(
+				(julianday(LEAD(m.timestamp) OVER (ORDER BY m.ordinal))
+				  - julianday(m.timestamp)) * 86400000
+			) AS INTEGER) AS delta_ms
+			FROM messages m
+			WHERE m.session_id = ?
+		) t`, ActiveGapCapMs), sessionID)
+	var v float64
+	if err := row.Scan(&v); err != nil {
 		return 0, err
 	}
-	return activeDurationMinFromTurns(turns), nil
+	return v, nil
 }
 
 // AssembleTiming stitches scanned per-turn and per-call rows plus
