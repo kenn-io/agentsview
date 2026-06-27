@@ -969,6 +969,43 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 	assert.Equal(t, 1, r2.SessionsPushed)
 }
 
+func TestScopedPushFullAfterSchemaDropRecreatesSchema(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_scoped_full_drop"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, schema, local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{"proj"}},
+	)
+	require.NoError(t, err, "creating sync")
+	ctx := context.Background()
+
+	sess := db.Session{
+		ID:        "sess-scoped-full-drop",
+		Project:   "proj",
+		Machine:   "test-machine",
+		Agent:     "claude",
+		CreatedAt: "2026-03-11T12:00:00.000Z",
+	}
+	require.NoError(t, local.UpsertSession(sess), "upsert session")
+
+	r1, err := ps.Push(ctx, false, nil)
+	require.NoError(t, err, "initial push")
+	require.Equal(t, 1, r1.SessionsPushed)
+
+	cleanNamedPGSchema(t, pgURL, schema)
+
+	r2, err := ps.Push(ctx, true, nil)
+	require.NoError(t, err, "scoped full push after drop")
+	assert.Equal(t, 1, r2.SessionsPushed)
+}
+
 func TestPushBatchesMultipleSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)

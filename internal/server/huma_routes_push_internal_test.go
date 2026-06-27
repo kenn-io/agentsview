@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -86,6 +87,24 @@ func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	assert.Equal(t, "postgres://user:pass@host/db", got.URL)
 	assert.Equal(t, "mirror", got.Schema)
 	assert.Equal(t, "laptop", got.MachineName)
+}
+
+func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
+	s := testServerWithConfig(config.Config{})
+
+	_, err := s.humaPGPush(context.Background(), &daemonPushInput{
+		Body: daemonPushRequest{
+			Projects:        []string{"alpha"},
+			ExcludeProjects: []string{"beta"},
+		},
+	})
+	require.Error(t, err)
+
+	var statusErr interface{ GetStatus() int }
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(t, err.Error(),
+		"projects and exclude_projects are mutually exclusive")
 }
 
 func TestDuckDBPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {

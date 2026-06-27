@@ -1396,6 +1396,9 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 		syncStateTarget: scope,
 		projects:        projects,
 	}
+	require.NoError(t, sync.effectiveSyncState().SetSyncState(
+		"last_push_at", "2025-12-31T00:00:00.000Z",
+	), "seed scoped local push state")
 
 	const sessID = "legacy-filtered-previous-machine-1"
 	require.NoError(t, localDB.UpsertSession(db.Session{
@@ -1426,7 +1429,7 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 	`, sessID, "host-a", "", "proj", "claude")
 	require.NoError(t, err, "seed ownerless legacy session")
 
-	res, err := sync.Push(ctx, true, nil)
+	res, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 	assert.Zero(t, res.Errors, "push should report no failed sessions")
 	assert.Zero(t, res.SkippedConflicts,

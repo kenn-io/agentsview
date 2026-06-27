@@ -76,6 +76,12 @@ func (s *Server) humaPGPush(
 	ctx context.Context,
 	in *daemonPushInput,
 ) (*pgPushOutput, error) {
+	if err := postgres.ValidateProjectFilters(
+		in.Body.Projects,
+		in.Body.ExcludeProjects,
+	); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
 	local, err := s.localPushTarget()
 	if err != nil {
 		return nil, err

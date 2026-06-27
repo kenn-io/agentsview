@@ -216,6 +216,12 @@ func New(
 	if local == nil {
 		return nil, fmt.Errorf("local db is required")
 	}
+	if err := ValidateProjectFilters(
+		opts.Projects,
+		opts.ExcludeProjects,
+	); err != nil {
+		return nil, err
+	}
 
 	pg, err := Open(pgURL, schema, allowInsecure)
 	if err != nil {
@@ -258,6 +264,16 @@ func hasProjectFilter(projects, excludeProjects []string) bool {
 	return len(projects) > 0 || len(excludeProjects) > 0
 }
 
+// ValidateProjectFilters rejects ambiguous include/exclude project filters.
+func ValidateProjectFilters(projects, excludeProjects []string) error {
+	if len(projects) > 0 && len(excludeProjects) > 0 {
+		return fmt.Errorf(
+			"projects and exclude_projects are mutually exclusive",
+		)
+	}
+	return nil
+}
+
 func pushSyncStateScope(
 	target string,
 	projects, excludeProjects []string,
@@ -266,19 +282,20 @@ func pushSyncStateScope(
 		return target
 	}
 
-	kind := "include"
-	values := normalizeProjectFilterValues(projects)
-	if len(projects) == 0 {
-		kind = "exclude"
-		values = normalizeProjectFilterValues(excludeProjects)
-	}
+	includeValues := normalizeProjectFilterValues(projects)
+	excludeValues := normalizeProjectFilterValues(excludeProjects)
 
 	sum := sha256.New()
 	writeSyncScopeField(sum, "target")
 	writeSyncScopeField(sum, target)
-	writeSyncScopeField(sum, "kind")
-	writeSyncScopeField(sum, kind)
-	for _, value := range values {
+	writeSyncScopeField(sum, "include")
+	writeSyncScopeField(sum, fmt.Sprintf("%d", len(includeValues)))
+	for _, value := range includeValues {
+		writeSyncScopeField(sum, value)
+	}
+	writeSyncScopeField(sum, "exclude")
+	writeSyncScopeField(sum, fmt.Sprintf("%d", len(excludeValues)))
+	for _, value := range excludeValues {
 		writeSyncScopeField(sum, value)
 	}
 	fingerprint := hex.EncodeToString(sum.Sum(nil)[:8])

@@ -161,6 +161,11 @@ func TestPushSyncStateScopeIncludesProjectFilters(t *testing.T) {
 		nil,
 		[]string{"alpha", "beta"},
 	)
+	includeAExcludeB := pushSyncStateScope(
+		"work",
+		[]string{"alpha"},
+		[]string{"beta"},
+	)
 	defaultIncludeAB := pushSyncStateScope(
 		"",
 		[]string{"alpha", "beta"},
@@ -171,7 +176,28 @@ func TestPushSyncStateScopeIncludesProjectFilters(t *testing.T) {
 	assert.NotEmpty(t, includeAB)
 	assert.NotEqual(t, "work", includeAB)
 	assert.NotEqual(t, includeAB, excludeAB)
+	assert.NotEqual(t, pushSyncStateScope("work", []string{"alpha"}, nil),
+		includeAExcludeB)
 	assert.NotEqual(t, includeAB, defaultIncludeAB)
+}
+
+func TestNewRejectsIncludeAndExcludeProjects(t *testing.T) {
+	local := testDB(t)
+
+	_, err := New(
+		"postgres://user:pass@127.0.0.1:1/db?sslmode=disable",
+		"agentsview",
+		local,
+		"test-machine",
+		true,
+		SyncOptions{
+			Projects:        []string{"alpha"},
+			ExcludeProjects: []string{"beta"},
+		},
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"projects and exclude_projects are mutually exclusive")
 }
 
 func TestReadLastPushAtUsesProjectFilterScope(t *testing.T) {

@@ -168,7 +168,9 @@ func (s *Sync) Push(
 			)
 			lastPush = ""
 			full = true
-			legacyMarkerMachines = nil
+			if len(legacyMarkerMachines) == 0 {
+				legacyMarkerMachines = nil
+			}
 			s.schemaMu.Lock()
 			s.schemaDone = false
 			s.schemaMu.Unlock()
@@ -512,6 +514,9 @@ func (s *Sync) pgPushMarkerMachineAliases(
 	).Scan(&raw)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if isUndefinedTable(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf(
