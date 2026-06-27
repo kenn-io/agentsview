@@ -13,10 +13,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// ParseOpenClawSession parses an OpenClaw JSONL session file.
+// parseSession parses an OpenClaw JSONL session file.
 // OpenClaw stores messages in a JSONL format with a session header
 // line, message entries, compaction summaries, and metadata events.
-func ParseOpenClawSession(
+func (p *openClawProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
