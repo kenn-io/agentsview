@@ -332,9 +332,7 @@ var Registry = []AgentDef{
 		// Sessions live under <projectsDir>/<encoded-project>/chats/<id>.jsonl,
 		// so the projects root must be watched recursively — pinning the
 		// watch to a "chats" subdir of the root catches no events.
-		FileBased:      true,
-		DiscoverFunc:   DiscoverQwenSessions,
-		FindSourceFunc: FindQwenSourceFile,
+		FileBased: true,
 	},
 	{
 		Type:        AgentCommandCode,
@@ -555,15 +553,13 @@ var Registry = []AgentDef{
 		FindSourceFunc: FindAntigravityCLISourceFile,
 	},
 	{
-		Type:           AgentQwenPaw,
-		DisplayName:    "QwenPaw",
-		EnvVar:         "QWENPAW_DIR",
-		ConfigKey:      "qwenpaw_dirs",
-		DefaultDirs:    []string{".copaw/workspaces"},
-		IDPrefix:       "qwenpaw:",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverQwenPawSessions,
-		FindSourceFunc: FindQwenPawSourceFile,
+		Type:        AgentQwenPaw,
+		DisplayName: "QwenPaw",
+		EnvVar:      "QWENPAW_DIR",
+		ConfigKey:   "qwenpaw_dirs",
+		DefaultDirs: []string{".copaw/workspaces"},
+		IDPrefix:    "qwenpaw:",
+		FileBased:   true,
 	},
 	{
 		Type:        AgentGptme,

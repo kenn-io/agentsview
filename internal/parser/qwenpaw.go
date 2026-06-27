@@ -7,189 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
-
-// DiscoverQwenPawSessions walks <root>/<workspace>/sessions/*.json and
-// <root>/<workspace>/sessions/console/*.json. Each QwenPaw runtime
-// hosts multiple agent workspaces (e.g. "default", "fund_manager")
-// and each workspace persists one JSON file per active session under
-// sessions/. Hidden subdirectories (e.g. ".weixin-legacy") and the
-// legacy dialog/*.jsonl layout are skipped.
-func DiscoverQwenPawSessions(root string) []DiscoveredFile {
-	if root == "" {
-		return nil
-	}
-	workspaceEntries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	var files []DiscoveredFile
-	for _, wsEntry := range workspaceEntries {
-		if !isDirOrSymlink(wsEntry, root) {
-			continue
-		}
-		workspace := wsEntry.Name()
-		if !IsValidQwenPawIDPart(workspace) {
-			continue
-		}
-		files = append(files,
-			discoverQwenPawSessionsDir(
-				filepath.Join(root, workspace, "sessions"),
-				workspace,
-			)...,
-		)
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// discoverQwenPawSessionsDir collects *.json from a sessions/ root
-// and one level of non-hidden subdirectories (e.g. console/).
-func discoverQwenPawSessionsDir(
-	sessionsDir, workspace string,
-) []DiscoveredFile {
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil
-	}
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if entry.IsDir() {
-			name := entry.Name()
-			if strings.HasPrefix(name, ".") || !IsValidQwenPawIDPart(name) {
-				continue
-			}
-			subDir := filepath.Join(sessionsDir, name)
-			files = append(files,
-				discoverQwenPawSessionsFiles(subDir, workspace)...,
-			)
-			continue
-		}
-		stem, ok := strings.CutSuffix(entry.Name(), ".json")
-		if !ok || !IsValidQwenPawIDPart(stem) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:    filepath.Join(sessionsDir, entry.Name()),
-			Project: workspace,
-			Agent:   AgentQwenPaw,
-		})
-	}
-	return files
-}
-
-// discoverQwenPawSessionsFiles collects *.json from a single
-// directory without recursing further.
-func discoverQwenPawSessionsFiles(
-	dir, workspace string,
-) []DiscoveredFile {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		stem, ok := strings.CutSuffix(entry.Name(), ".json")
-		if !ok || !IsValidQwenPawIDPart(stem) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:    filepath.Join(dir, entry.Name()),
-			Project: workspace,
-			Agent:   AgentQwenPaw,
-		})
-	}
-	return files
-}
-
-// FindQwenPawSourceFile resolves a rawID to a sessions JSON file.
-//
-// Raw ID shapes:
-//
-//   - qwenpaw:<workspace>:<stem>            -> <root>/<workspace>/sessions/<stem>.json
-//   - qwenpaw:<workspace>:<subdir>:<stem>   -> <root>/<workspace>/sessions/<subdir>/<stem>.json
-//
-// The subdir segment disambiguates the sessions/console/ layout
-// from the sessions/ root so two files with the same stem cannot
-// collide.
-//
-// Returns "" when the rawID is malformed, references a traversal
-// component (".", ".."), escapes the resolved sessions directory,
-// or the file does not exist.
-func FindQwenPawSourceFile(root, rawID string) string {
-	if root == "" {
-		return ""
-	}
-	workspace, rest, ok := strings.Cut(rawID, ":")
-	if !ok {
-		return ""
-	}
-	if !IsValidQwenPawIDPart(workspace) {
-		return ""
-	}
-	var candidate string
-	if subdir, stem, found := strings.Cut(rest, ":"); found {
-		if !IsValidQwenPawIDPart(subdir) ||
-			!IsValidQwenPawIDPart(stem) {
-			return ""
-		}
-		candidate = filepath.Join(
-			root, workspace, "sessions", subdir, stem+".json",
-		)
-	} else {
-		if !IsValidQwenPawIDPart(rest) {
-			return ""
-		}
-		candidate = filepath.Join(
-			root, workspace, "sessions", rest+".json",
-		)
-	}
-	if !isUnderQwenPawRoot(root, candidate) {
-		return ""
-	}
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
-	return ""
-}
-
-// isUnderQwenPawRoot reports whether candidate resolves to a path
-// inside <root>/<workspace>/sessions/. Both sides are cleaned and
-// converted to absolute form so that "." / ".." segments in the
-// candidate cannot escape the QwenPaw root.
-func isUnderQwenPawRoot(root, candidate string) bool {
-	absRoot, err := filepath.Abs(filepath.Clean(root))
-	if err != nil {
-		return false
-	}
-	absCand, err := filepath.Abs(filepath.Clean(candidate))
-	if err != nil {
-		return false
-	}
-	rel, err := filepath.Rel(absRoot, absCand)
-	if err != nil {
-		return false
-	}
-	rel = filepath.ToSlash(rel)
-	if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-		return false
-	}
-	parts := strings.Split(rel, "/")
-	if len(parts) < 2 || parts[1] != "sessions" {
-		return false
-	}
-	return true
-}
 
 // IsValidQwenPawIDPart accepts workspace names and session file
 // stems. QwenPaw emits channel-scoped filenames containing dots,
@@ -202,8 +24,8 @@ func isUnderQwenPawRoot(root, candidate string) bool {
 // part is joined into a session ID:
 //
 //   - ":" joins ID parts in qwenpawSessionID. A stem "foo:bar" would
-//     produce qwenpaw:<workspace>:foo:bar, which FindQwenPawSourceFile
-//     reparses as the sessions/foo/bar.json subdir layout.
+//     produce qwenpaw:<workspace>:foo:bar, which source lookup reparses
+//     as the sessions/foo/bar.json subdir layout.
 //   - "~" is the remote-host separator (see StripHostPrefix). A part
 //     containing it would be split off as a bogus host prefix.
 //   - "?", "#", and "%" are URL delimiters. Session IDs are
@@ -261,7 +83,7 @@ func qwenpawSessionID(path, project, stem string) (string, error) {
 	return "qwenpaw:" + project + ":" + parent + ":" + stem, nil
 }
 
-// ParseQwenPawSession parses a QwenPaw sessions/<name>.json file.
+// parseSession parses a QwenPaw sessions/<name>.json file.
 //
 // The on-disk shape is:
 //
@@ -286,7 +108,7 @@ func qwenpawSessionID(path, project, stem string) (string, error) {
 // of Anthropic's user-side tool_result). They map to RoleUser +
 // IsSystem so they remain distinguishable from real user turns
 // without inflating UserMessageCount.
-func ParseQwenPawSession(
+func parseQwenPawSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	raw, err := os.ReadFile(path)

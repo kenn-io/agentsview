@@ -1211,44 +1211,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	// QwenPaw: <qwenpawDir>/<workspace>/sessions/<name>.json
-	//       or <qwenpawDir>/<workspace>/sessions/<subdir>/<name>.json
-	for _, qwenpawDir := range e.agentDirs[parser.AgentQwenPaw] {
-		if qwenpawDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(qwenpawDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) < 3 || parts[1] != "sessions" {
-				continue
-			}
-			if !parser.IsValidQwenPawIDPart(parts[0]) {
-				continue
-			}
-			var stem string
-			switch {
-			case len(parts) == 3:
-				stem = parts[2]
-			case len(parts) == 4 && !strings.HasPrefix(parts[2], "."):
-				if !parser.IsValidQwenPawIDPart(parts[2]) {
-					continue
-				}
-				stem = parts[3]
-			default:
-				continue
-			}
-			sessionID, ok := strings.CutSuffix(stem, ".json")
-			if !ok || !parser.IsValidQwenPawIDPart(sessionID) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parts[0],
-				Agent:   parser.AgentQwenPaw,
-			}, true
-		}
-	}
-
 	// VSCode Copilot: <vscodeUserDir>/workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
 	//            or: <vscodeUserDir>/globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
 	for _, vscDir := range e.agentDirs[parser.AgentVSCodeCopilot] {
@@ -1301,28 +1263,6 @@ func (e *Engine) classifyOnePath(
 	// Visual Studio Copilot: <traces>/*_VSGitHubCopilot_traces.jsonl
 	if df, ok := e.classifyVisualStudioCopilotPath(path, sep); ok {
 		return df, true
-	}
-
-	// Qwen: <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
-	for _, qwenDir := range e.agentDirs[parser.AgentQwen] {
-		if qwenDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(qwenDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 3 || parts[1] != "chats" {
-				continue
-			}
-			sessionID, ok := strings.CutSuffix(parts[2], ".jsonl")
-			if !ok || !parser.IsValidSessionID(sessionID) {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parser.GetProjectName(parts[0]),
-				Agent:   parser.AgentQwen,
-			}, true
-		}
 	}
 
 	if df, ok := e.classifyAiderPath(path); ok {
@@ -4587,8 +4527,6 @@ func (e *Engine) processFile(
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
 		res = e.processVisualStudioCopilot(file, info)
-	case parser.AgentQwen:
-		res = e.processQwen(file, info)
 	case parser.AgentOpenClaw:
 		res = e.processOpenClaw(file, info)
 	case parser.AgentQClaw:
@@ -4611,8 +4549,6 @@ func (e *Engine) processFile(
 		res = e.processAntigravity(file, info)
 	case parser.AgentAntigravityCLI:
 		res = e.processAntigravityCLI(file, info)
-	case parser.AgentQwenPaw:
-		res = e.processQwenPaw(file, info)
 	case parser.AgentAider:
 		res = e.processAider(file, info)
 	default:
@@ -6351,43 +6287,6 @@ func (e *Engine) processVisualStudioCopilot(
 	}
 }
 
-func (e *Engine) processQwenPaw(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseQwenPawSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	// forceReplace: QwenPaw's _atomic_write_json rewrites the entire
-	// sessions/<name>.json on every save, and ParseQwenPawSession
-	// assigns Ordinal by position in agent.memory.content. If that
-	// array is compacted, summarized, or reordered — common in
-	// agent-memory frameworks — ordinals shift, and the append-only
-	// writeMessages path would silently keep stale rows. Treat every
-	// re-parse as a full rewrite, matching OpenCode / Antigravity.
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-		forceReplace: true,
-	}
-}
-
 func (e *Engine) processZed(
 	file parser.DiscoveredFile, info os.FileInfo,
 ) processResult {
@@ -7120,36 +7019,6 @@ func (e *Engine) processCursor(
 		results: []parser.ParseResult{
 			{Session: *sess, Messages: msgs},
 		},
-	}
-}
-
-func (e *Engine) processQwen(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseQwenSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{{
-			Session:  *sess,
-			Messages: msgs,
-		}},
 	}
 }
 
@@ -9609,7 +9478,6 @@ func (e *Engine) SyncSingleSessionContext(
 		// Fallback when the stored file_path points outside any
 		// currently configured QWENPAW_DIR (e.g. the root was
 		// removed, or the session was synced from a custom path).
-		// Without this, ParseQwenPawSession would build
 		// "qwenpaw::<stem>" and orphan the requested
 		// "qwenpaw:<workspace>:<stem>" row. Prefer the DB-stored
 		// Project as the authoritative record; parse the workspace
@@ -9639,11 +9507,6 @@ func (e *Engine) SyncSingleSessionContext(
 				file.Project = sess.Project
 			}
 		}
-	case parser.AgentQwen:
-		// path is <qwenProjectsDir>/<encoded-project>/chats/<session>.jsonl
-		file.Project = parser.GetProjectName(
-			filepath.Base(filepath.Dir(filepath.Dir(path))),
-		)
 	}
 
 	res := e.processFile(ctx, file)

@@ -57,7 +57,6 @@ var pendingShimProviderFiles = map[string]bool{
 	"opencode_provider.go":             true,
 	"openhands_provider.go":            true,
 	"positron_provider.go":             true,
-	"qwenpaw_provider.go":              true,
 	"shelley_provider.go":              true,
 	"vibe_provider.go":                 true,
 	"visualstudio_copilot_provider.go": true,
