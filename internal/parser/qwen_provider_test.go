@@ -142,6 +142,32 @@ func TestQwenProviderParse(t *testing.T) {
 	assert.Len(t, outcome.Results[0].Result.Messages, 2)
 }
 
+func TestQwenProviderFingerprintIncludesContentHash(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "-Users-alice-code-sample-project", "chats", "session-123.jsonl")
+	writeSourceFile(t, sourcePath, qwenProviderFixture("session-123"))
+
+	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	fp, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	// The legacy processQwen path persisted a full-file content hash; the
+	// migrated provider must too, or a resync clears the stored file_hash.
+	require.NotEmpty(t, fp.Hash)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      sources[0],
+		Fingerprint: fp,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
+}
+
 func qwenProviderFixture(sessionID string) string {
 	return strings.Join([]string{
 		`{"uuid":"u1","sessionId":"` + sessionID + `","timestamp":"2026-05-05T11:08:38.572Z","type":"user","cwd":"/Users/alice/code/sample-project","message":{"role":"user","parts":[{"text":"Calculate .089 * 7.85788"}]}}`,
