@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -26,12 +27,41 @@ func newQwenSourceSet(roots []string) JSONLSourceSet {
 		WithIncludePath(isQwenSourcePath),
 		WithProjectHint(qwenProjectHintFromPath),
 		WithSessionIDFromPath(qwenSessionIDFromPath),
+		WithStoredPathFallbackRoot(qwenStoredPathRoot),
 		WithParseFile(qwenParseFile),
 		// Qwen persisted a full-file content hash (file_hash) in the legacy
 		// processQwen path. Without this the provider fingerprint hash is empty
 		// and a resync clears the stored file_hash to NULL.
 		WithContentHashing(),
 	)
+}
+
+// qwenStoredPathRoot synthesizes the configured root for a stored Qwen source
+// path that is no longer under any configured QWEN_PROJECTS_DIR. The Qwen
+// layout is <root>/<encoded-project>/chats/<stem>.jsonl, so the root is the
+// grandparent of the chats/ directory. It validates the path is a real Qwen
+// source shape and still exists so a stale DB row does not resolve to a missing
+// file. This restores the legacy processQwen single-session resync, which
+// parsed the DB-stored file_path directly without a root-containment check; the
+// provider FindSource path otherwise fails such a resync with "provider source
+// not found". Mirrors qwenPawStoredPathRoot for the QwenPaw sibling.
+func qwenStoredPathRoot(storedPath string) (string, bool) {
+	path := filepath.Clean(storedPath)
+	chatsDir := filepath.Dir(path)
+	if filepath.Base(chatsDir) != "chats" {
+		return "", false
+	}
+	root := filepath.Dir(filepath.Dir(chatsDir))
+	if root == "" || root == "." {
+		return "", false
+	}
+	if !isQwenSourcePath(root, path) {
+		return "", false
+	}
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		return "", false
+	}
+	return root, true
 }
 
 func qwenParseFile(

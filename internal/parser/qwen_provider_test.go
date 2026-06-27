@@ -168,6 +168,52 @@ func TestQwenProviderFingerprintIncludesContentHash(t *testing.T) {
 	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
 }
 
+// TestQwenProviderFindSourceResolvesStoredPathOutsideRoots locks in single-
+// session resync parity with the legacy processQwen path: when the DB-stored
+// file_path points outside any configured QWEN_PROJECTS_DIR, FindSource must
+// still resolve it from the path's implicit <root>/<project>/chats/ layout and
+// recover the project as ProjectHint, so a reparse keeps the canonical
+// qwen:<stem> ID instead of failing with "provider source not found".
+func TestQwenProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
+	storedRoot := t.TempDir()
+	sourcePath := filepath.Join(
+		storedRoot, "-Users-alice-code-sample-project", "chats", "session-123.jsonl",
+	)
+	writeSourceFile(t, sourcePath, qwenProviderFixture("session-123"))
+
+	// Provider is configured with an unrelated root, so the in-root lookup
+	// cannot match the stored path.
+	provider, ok := NewProvider(AgentQwen, ProviderConfig{
+		Roots:   []string{t.TempDir()},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: sourcePath,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, sourcePath, found.DisplayPath)
+	assert.Equal(t, "sample_project", found.ProjectHint)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:  found,
+		Machine: "devbox",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "qwen:session-123", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "sample_project", outcome.Results[0].Result.Session.Project)
+
+	// A stored path that is not a valid Qwen source shape stays unresolved.
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: filepath.Join(storedRoot, "loose.jsonl"),
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
 func qwenProviderFixture(sessionID string) string {
 	return strings.Join([]string{
 		`{"uuid":"u1","sessionId":"` + sessionID + `","timestamp":"2026-05-05T11:08:38.572Z","type":"user","cwd":"/Users/alice/code/sample-project","message":{"role":"user","parts":[{"text":"Calculate .089 * 7.85788"}]}}`,
