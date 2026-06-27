@@ -240,13 +240,27 @@ func (e *Engine) parseDiffProviderSources(
 			agent = def.Type
 		}
 		sourceCopy := source
-		files = append(files, parser.DiscoveredFile{
+		discovered := parser.DiscoveredFile{
 			Path:            sourcePath,
 			Project:         source.ProjectHint,
 			Agent:           agent,
 			ProviderSource:  &sourceCopy,
 			ProviderProcess: true,
-		})
+		}
+		// Thread S3 discovery metadata onto the file exactly as the main sync
+		// discovery path does. Without this, s3:// sources carry a zero mtime
+		// and parse-diff ordering falls back to a network stat (or treats them
+		// as oldest if that stat fails), skewing --limit selection.
+		if s3, ok := source.Opaque.(parser.S3DiscoveredSource); ok {
+			discovered.Machine = s3.Machine
+			discovered.SourceSize = s3.Size
+			discovered.SourceMtime = s3.MtimeNS
+			discovered.SourceFingerprint = s3.Fingerprint
+			if discovered.Project == "" {
+				discovered.Project = s3.Project
+			}
+		}
+		files = append(files, discovered)
 	}
 	return files, nil
 }
