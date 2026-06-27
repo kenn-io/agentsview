@@ -1333,6 +1333,100 @@ func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) 
 	assert.Equal(t, 2, count)
 }
 
+func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_filtered_partial_reset"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local := testDB(t)
+	ctx := context.Background()
+
+	for _, s := range []db.Session{
+		{
+			ID: "partial-good", Project: "alpha",
+			Machine: "local", Agent: "claude",
+			CreatedAt:    "2026-03-11T12:00:00Z",
+			MessageCount: 1,
+		},
+		{
+			ID: "partial-bad", Project: "alpha",
+			Machine: "local", Agent: "claude",
+			CreatedAt:    "2026-03-11T12:05:00Z",
+			MessageCount: 1,
+		},
+	} {
+		require.NoError(t, local.UpsertSession(s), "upsert %s", s.ID)
+		require.NoError(t, local.InsertMessages([]db.Message{{
+			SessionID: s.ID,
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "msg " + s.ID,
+			Timestamp: s.CreatedAt,
+		}}), "insert message %s", s.ID)
+	}
+
+	filtered, err := New(
+		pgURL, schema, local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{"alpha"}},
+	)
+	require.NoError(t, err, "creating filtered sync")
+	defer filtered.Close()
+	require.NoError(t, filtered.EnsureSchema(ctx), "ensure schema")
+
+	quotedSchema, err := quoteIdentifier(schema)
+	require.NoError(t, err, "quote schema")
+	_, err = filtered.DB().ExecContext(ctx, fmt.Sprintf(`
+		CREATE OR REPLACE FUNCTION %[1]s.fail_partial_bad()
+		RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.id = 'partial-bad' THEN
+				RAISE EXCEPTION 'forced partial push failure';
+			END IF;
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER fail_partial_bad
+		BEFORE INSERT OR UPDATE ON %[1]s.sessions
+		FOR EACH ROW EXECUTE FUNCTION %[1]s.fail_partial_bad();
+	`, quotedSchema))
+	require.NoError(t, err, "install partial failure trigger")
+
+	r1, err := filtered.Push(ctx, false, nil)
+	require.NoError(t, err, "initial partial filtered push")
+	require.Equal(t, 1, r1.SessionsPushed)
+	require.Equal(t, 1, r1.Errors)
+
+	scopedLastPush, err := filtered.effectiveSyncState().GetSyncState("last_push_at")
+	require.NoError(t, err, "reading scoped watermark")
+	require.Empty(t, scopedLastPush)
+	boundaryState, err := filtered.effectiveSyncState().GetSyncState(lastPushBoundaryStateKey)
+	require.NoError(t, err, "reading scoped boundary state")
+	require.NotEmpty(t, boundaryState)
+
+	cleanNamedPGSchema(t, pgURL, schema)
+
+	filteredAfterReset, err := New(
+		pgURL, schema, local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{"alpha"}},
+	)
+	require.NoError(t, err, "creating filtered sync after reset")
+	defer filteredAfterReset.Close()
+
+	r2, err := filteredAfterReset.Push(ctx, false, nil)
+	require.NoError(t, err, "filtered push after reset")
+	require.Equal(t, 2, r2.SessionsPushed)
+
+	var count int
+	err = filteredAfterReset.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE project = 'alpha'",
+	).Scan(&count)
+	require.NoError(t, err, "counting restored filtered sessions")
+	assert.Equal(t, 2, count)
+}
+
 func TestPushExcludeProject(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)

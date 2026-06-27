@@ -153,14 +153,17 @@ func (s *Sync) Push(
 		}
 	}
 
-	// Coherence check: if the local watermark says we've pushed
-	// before but this host's push marker is gone from PG, the PG side
-	// was reset (schema dropped, DB recreated, etc.). Force a full
-	// push so all sessions are re-synced.
-	if lastPush != "" {
+	// Coherence check: if local push state says we've pushed before
+	// but this host's push marker is gone from PG, the PG side was
+	// reset (schema dropped, DB recreated, etc.). Force a full push
+	// so fingerprint-matched sessions are not skipped while missing
+	// from PG. Boundary state counts here too: a partial first push
+	// can leave last_push_at empty while still caching fingerprints
+	// for successfully pushed sessions.
+	if lastPush != "" || boundaryState != "" {
 		if !markerExists {
 			log.Printf(
-				"pgsync: local watermark set but PG push marker " +
+				"pgsync: local push state set but PG push marker " +
 					"missing; PG was reset, forcing full push",
 			)
 			lastPush = ""
