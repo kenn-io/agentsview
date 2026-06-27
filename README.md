@@ -359,6 +359,26 @@ Because the format is Markdown-derived, roles are reconstructed from line
 prefixes and there are no per-message timestamps; a run's start time comes from
 its `# aider chat started at ...` header (written in local time, assumed UTC).
 
+### JetBrains Copilot via exporter
+
+JetBrains IDEs store Copilot chat in a Nitrite database that agentsview does not read directly. The supported path today is to export those sessions to Copilot JSONL with [copilot-jetbrains-exporter](https://github.com/MCBoarder289/copilot-jetbrains-exporter), then point agentsview at that output directory.
+
+```bash
+# Export JetBrains Copilot sessions to JSONL
+copilot-jetbrains-exporter --output ~/.copilot/jetbrains-sessions
+
+# Tell agentsview to index the exported sessions
+export COPILOT_DIR=~/.copilot/jetbrains-sessions
+```
+
+Or in `~/.agentsview/config.toml`:
+
+```toml
+copilot_dirs = ["~/.copilot/jetbrains-sessions"]
+```
+
+Re-run the exporter after new JetBrains Copilot sessions if you want agentsview to pick up fresh conversations from that source.
+
 ### Antigravity CLI: high-resolution transcripts
 
 Antigravity CLI sessions now appear in two on-disk formats. Newer releases store

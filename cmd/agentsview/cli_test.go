@@ -72,6 +72,13 @@ func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
 	assert.NotContains(t, help, "env-token")
 }
 
+func TestRootHelpDocumentsCopilotExportDir(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "--help")
+	require.NoError(t, err, "Execute")
+	assert.Contains(t, help,
+		"COPILOT_DIR             Copilot sessions or exported JetBrains Copilot directory")
+}
+
 func TestDuckDBPushHelpShowsProjectFlags(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "duckdb", "push", "--help")
 	require.NoError(t, err, "Execute")
