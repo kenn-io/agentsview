@@ -154,7 +154,9 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 	missingOutcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	assert.True(t, missingOutcome.ResultSetComplete)
-	assert.True(t, missingOutcome.ForceReplace)
+	// The backing DB file was deleted; preserve the stored sessions by not
+	// force-replacing, which would delete them from the archive.
+	assert.False(t, missingOutcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, missingOutcome.SkipReason)
 }
 
@@ -346,7 +348,10 @@ func TestKiroProviderMissingSQLiteSourcesCanReachParse(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, physicalOutcome.ResultSetComplete)
-	assert.True(t, physicalOutcome.ForceReplace)
+	// The whole DB file was removed: preserve the stored sessions by not
+	// force-replacing. (The virtual case above keeps ForceReplace because the
+	// DB file is still present and only the row was deleted.)
+	assert.False(t, physicalOutcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, physicalOutcome.SkipReason)
 }
 

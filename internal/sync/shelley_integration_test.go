@@ -193,7 +193,7 @@ func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
 		database.GetSessionFilePath("shelley:cMAIN1"), "stored file path")
 }
 
-func TestSyncPathsShelleyDeletedPhysicalDBRemovesSessions(t *testing.T) {
+func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -207,9 +207,12 @@ func TestSyncPathsShelleyDeletedPhysicalDBRemovesSessions(t *testing.T) {
 
 	engine.SyncPaths([]string{dbPath})
 
+	// The SQLite store is a persistent archive: removing the backing DB file
+	// must not delete the already-synced session.
 	sess, err := database.GetSession(context.Background(), "shelley:cMAIN1")
 	require.NoError(t, err)
-	assert.Nil(t, sess)
+	require.NotNil(t, sess)
+	assert.Equal(t, "shelley:cMAIN1", sess.ID)
 }
 
 // TestSourceMtimeShelleyResolvesVirtualPath guards the live per-session
