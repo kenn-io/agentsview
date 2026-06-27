@@ -40,11 +40,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent              TEXT NOT NULL,
     first_message      TEXT,
     display_name       TEXT,
+    source_display_name TEXT,
     session_name       TEXT,
     created_at         TIMESTAMPTZ,
     started_at         TIMESTAMPTZ,
     ended_at           TIMESTAMPTZ,
     deleted_at         TIMESTAMPTZ,
+    source_deleted_at  TIMESTAMPTZ,
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
@@ -380,6 +382,16 @@ func EnsureSchema(
 			"sessions", "created_at",
 			`created_at TIMESTAMPTZ`,
 			"adding sessions.created_at",
+		},
+		{
+			"sessions", "source_display_name",
+			`source_display_name TEXT`,
+			"adding sessions.source_display_name",
+		},
+		{
+			"sessions", "source_deleted_at",
+			`source_deleted_at TIMESTAMPTZ`,
+			"adding sessions.source_deleted_at",
 		},
 		{
 			"sessions", "total_output_tokens",
@@ -1677,10 +1689,11 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT owner_marker FROM sessions LIMIT 0`)
+		`SELECT owner_marker, source_display_name, source_deleted_at
+		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
-			"sessions table missing owner_marker: %w", err)
+			"sessions table missing push curation columns: %w", err)
 	}
 	rows.Close()
 

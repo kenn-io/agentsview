@@ -98,9 +98,10 @@ func (s *Store) DetectInsightGenerationAvailability(
 func probeInsightGenerationAvailabilityTx(
 	ctx context.Context, tx *sql.Tx,
 ) (bool, error) {
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO insights (id) VALUES (-1)`,
-	); err != nil {
+	var id int64
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO insights DEFAULT VALUES RETURNING id`,
+	).Scan(&id); err != nil {
 		if IsReadOnlyError(err) {
 			return false, nil
 		}

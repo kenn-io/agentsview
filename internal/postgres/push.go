@@ -1302,8 +1302,9 @@ func (s *Sync) pushSession(
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, owner_marker, project, agent,
-			first_message, display_name, session_name,
-			created_at, started_at, ended_at, deleted_at,
+			first_message, display_name, source_display_name,
+			session_name, created_at, started_at, ended_at,
+			deleted_at, source_deleted_at,
 			message_count, user_message_count,
 			total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens,
@@ -1330,19 +1331,19 @@ func (s *Sync) pushSession(
 			updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10, $11, $12,
-			$13, $14, $15, $16,
-			$17, $18, $19, $20,
-			$21, $22, $23, $24, $25, $26, $27,
-			$28, $29,
-			$30, $31, $32, $33,
-			$34, $35, $36, $37,
-			$38,
-			$39, $40,
-			$41,
-			$42, $43, $44, $45,
-			$46, $47,
-			$48, $49, $50, $51, $52, $53, $54, $55,
+			$9, $10, $11, $12, $13, $14,
+			$15, $16, $17, $18,
+			$19, $20, $21, $22,
+			$23, $24, $25, $26, $27, $28, $29,
+			$30, $31,
+			$32, $33, $34, $35,
+			$36, $37, $38, $39,
+			$40,
+			$41, $42,
+			$43,
+			$44, $45, $46, $47,
+			$48, $49,
+			$50, $51, $52, $53, $54, $55, $56, $57,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
@@ -1351,18 +1352,22 @@ func (s *Sync) pushSession(
 			project = EXCLUDED.project,
 			agent = EXCLUDED.agent,
 			first_message = EXCLUDED.first_message,
-			display_name = COALESCE(
-				sessions.display_name,
-				EXCLUDED.display_name
-			),
+			display_name = CASE
+				WHEN sessions.display_name IS DISTINCT FROM
+					sessions.source_display_name THEN sessions.display_name
+				ELSE EXCLUDED.display_name
+			END,
+			source_display_name = EXCLUDED.display_name,
 			session_name = EXCLUDED.session_name,
 			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
 			ended_at = EXCLUDED.ended_at,
-			deleted_at = COALESCE(
-				sessions.deleted_at,
-				EXCLUDED.deleted_at
-			),
+			deleted_at = CASE
+				WHEN sessions.deleted_at IS DISTINCT FROM
+					sessions.source_deleted_at THEN sessions.deleted_at
+				ELSE EXCLUDED.deleted_at
+			END,
+			source_deleted_at = EXCLUDED.deleted_at,
 			message_count = EXCLUDED.message_count,
 			user_message_count = EXCLUDED.user_message_count,
 			total_output_tokens = EXCLUDED.total_output_tokens,
@@ -1413,7 +1418,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($56::jsonb)
+						SELECT jsonb_array_elements_text($58::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1423,18 +1428,12 @@ func (s *Sync) pushSession(
 			OR sessions.project IS DISTINCT FROM EXCLUDED.project
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
-			OR (
-				sessions.display_name IS NULL
-				AND sessions.display_name IS DISTINCT FROM EXCLUDED.display_name
-			)
+			OR sessions.source_display_name IS DISTINCT FROM EXCLUDED.display_name
 			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
 			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
 			OR sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
-			OR (
-				sessions.deleted_at IS NULL
-				AND sessions.deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
-			)
+			OR sessions.source_deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
 			OR sessions.message_count IS DISTINCT FROM EXCLUDED.message_count
 			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
 			OR sessions.total_output_tokens IS DISTINCT FROM EXCLUDED.total_output_tokens
@@ -1483,10 +1482,12 @@ func (s *Sync) pushSession(
 		sess.Agent,
 		nilStr(sess.FirstMessage),
 		nilStr(sess.DisplayName),
+		nilStr(sess.DisplayName),
 		nilStr(sess.SessionName),
 		createdAt,
 		nilStrTS(sess.StartedAt),
 		nilStrTS(sess.EndedAt),
+		nilStrTS(sess.DeletedAt),
 		nilStrTS(sess.DeletedAt),
 		sess.MessageCount, sess.UserMessageCount,
 		sess.TotalOutputTokens, sess.PeakContextTokens,
