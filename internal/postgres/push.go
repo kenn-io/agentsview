@@ -422,6 +422,11 @@ func (s *Sync) Push(
 // pgPushMarkerMachineState reports whether this host's push marker is present
 // in PG and returns the current machine plus legacy machine aliases stored with
 // the marker.
+//
+// Scoped marker keys are authoritative for reset detection. If a scoped marker
+// is missing, legacy unscoped marker metadata is still returned as alias
+// history so ownerless rows from older agentsview versions can be adopted after
+// a machine rename.
 // A missing marker while the local watermark is set means PG was reset (schema
 // dropped or recreated) since this host last pushed, so a full re-push is
 // needed. Counting rows by machine cannot detect this reliably: another host
@@ -432,36 +437,78 @@ func (s *Sync) Push(
 func (s *Sync) pgPushMarkerMachineState(
 	ctx context.Context, markerID string,
 ) (string, []string, bool, error) {
-	var machine string
-	err := s.pg.QueryRowContext(ctx,
-		`SELECT value FROM sync_metadata WHERE key = $1`,
-		s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID),
-	).Scan(&machine)
+	markerKey := s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID)
+	machine, markerExists, err := s.pgPushMarkerMetadataValue(
+		ctx, markerKey,
+	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", nil, false, nil
-		}
-		if isUndefinedTable(err) {
-			return "", nil, false, nil
-		}
 		return "", nil, false, fmt.Errorf(
 			"checking pg push marker: %w", err,
 		)
 	}
-	aliases, err := s.pgPushMarkerMachineAliases(ctx, markerID)
+	if markerExists {
+		aliases, err := s.pgPushMarkerMachineAliases(
+			ctx,
+			s.pushMarkerMetadataKey(
+				pushMarkerMachineAliasesKeyPrefix, markerID,
+			),
+		)
+		if err != nil {
+			return "", nil, false, err
+		}
+		return machine, aliases, true, nil
+	}
+	if s.syncStateTarget == "" {
+		return "", nil, false, nil
+	}
+
+	legacyMachine, legacyMarkerExists, err := s.pgPushMarkerMetadataValue(
+		ctx, pushMarkerKeyPrefix+markerID,
+	)
+	if err != nil {
+		return "", nil, false, fmt.Errorf(
+			"checking legacy pg push marker: %w", err,
+		)
+	}
+	aliases, err := s.pgPushMarkerMachineAliases(
+		ctx, pushMarkerMachineAliasesKeyPrefix+markerID,
+	)
 	if err != nil {
 		return "", nil, false, err
 	}
-	return machine, aliases, true, nil
+	if !legacyMarkerExists && len(aliases) == 0 {
+		return "", nil, false, nil
+	}
+	return legacyMachine, aliases, false, nil
+}
+
+func (s *Sync) pgPushMarkerMetadataValue(
+	ctx context.Context, key string,
+) (string, bool, error) {
+	var value string
+	err := s.pg.QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		key,
+	).Scan(&value)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		if isUndefinedTable(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return value, true, nil
 }
 
 func (s *Sync) pgPushMarkerMachineAliases(
-	ctx context.Context, markerID string,
+	ctx context.Context, key string,
 ) ([]string, error) {
 	var raw string
 	err := s.pg.QueryRowContext(ctx,
 		`SELECT value FROM sync_metadata WHERE key = $1`,
-		s.pushMarkerMetadataKey(pushMarkerMachineAliasesKeyPrefix, markerID),
+		key,
 	).Scan(&raw)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

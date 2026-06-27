@@ -1363,6 +1363,101 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 	assert.Equal(t, markerID, ownerMarker)
 }
 
+func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_filtered_legacy_marker_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	const markerID = "legacy-marker-filtered-1"
+	require.NoError(t, localDB.SetSyncState("pg_push_marker_id", markerID),
+		"seed local push marker")
+
+	projects := []string{"proj"}
+	scope := pushSyncStateScope("team-target", projects, nil)
+	sync := &Sync{
+		pg:              pg,
+		local:           localDB,
+		syncState:       newScopedSyncStateStore(localDB, scope, false),
+		machine:         "host-b",
+		schema:          schema,
+		schemaDone:      true,
+		syncStateTarget: scope,
+		projects:        projects,
+	}
+
+	const sessID = "legacy-filtered-previous-machine-1"
+	require.NoError(t, localDB.UpsertSession(db.Session{
+		ID:           sessID,
+		Project:      "proj",
+		Machine:      "host-b",
+		Agent:        "claude",
+		MessageCount: 1,
+		CreatedAt:    "2026-01-01T00:00:00Z",
+	}), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "hello",
+		ContentLength: 5,
+	}}), "InsertMessages")
+
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sync_metadata (key, value)
+		VALUES ($1, $2)
+	`, pushMarkerKeyPrefix+markerID, "host-a")
+	require.NoError(t, err, "seed legacy unscoped marker machine")
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, owner_marker, project, agent, created_at
+		) VALUES ($1, $2, $3, $4, $5, NOW())
+	`, sessID, "host-a", "", "proj", "claude")
+	require.NoError(t, err, "seed ownerless legacy session")
+
+	res, err := sync.Push(ctx, true, nil)
+	require.NoError(t, err, "Push")
+	assert.Zero(t, res.Errors, "push should report no failed sessions")
+	assert.Zero(t, res.SkippedConflicts,
+		"legacy unscoped marker machine should be used as an alias")
+	assert.Equal(t, 1, res.SessionsPushed,
+		"legacy row should be counted as pushed")
+
+	var machine, ownerMarker string
+	require.NoError(t, pg.QueryRow(
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sessID,
+	).Scan(&machine, &ownerMarker), "reading adopted row")
+	assert.Equal(t, "host-b", machine)
+	assert.Equal(t, markerID, ownerMarker)
+
+	var markerMachine string
+	require.NoError(t, pg.QueryRow(
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		sync.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID),
+	).Scan(&markerMachine), "reading scoped marker machine")
+	assert.Equal(t, "host-b", markerMachine)
+
+	var aliases string
+	require.NoError(t, pg.QueryRow(
+		`SELECT value FROM sync_metadata WHERE key = $1`,
+		sync.pushMarkerMetadataKey(
+			pushMarkerMachineAliasesKeyPrefix, markerID,
+		),
+	).Scan(&aliases), "reading scoped marker aliases")
+	assert.JSONEq(t, `["host-a"]`, aliases)
+}
+
 func TestPushReportsSkippedConflicts(t *testing.T) {
 	pgURL := testPGURL(t)
 
