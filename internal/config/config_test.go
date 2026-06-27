@@ -1334,7 +1334,7 @@ func TestResolveDuckDB_ErrorsOnMissingEnvVar(t *testing.T) {
 	requireErrorContains(t, err, "MISSING_DUCKDB_URL")
 }
 
-func TestAutomatedPrefixesRoundTrip(t *testing.T) {
+func TestAutomatedConfigRoundTrip(t *testing.T) {
 	cfg := loadPFlagsWithConfig(t, map[string]any{
 		"automated": map[string]any{
 			"prefixes": []string{
@@ -1343,22 +1343,46 @@ func TestAutomatedPrefixesRoundTrip(t *testing.T) {
 				"  ",                         // whitespace preserved here; normalization is db-side
 				"You are analyzing an essay", // duplicate preserved here too
 			},
+			"substrings": []string{
+				"invoked by roborev to perform this review",
+				"  embedded marker  ",
+				"invoked by roborev to perform this review",
+			},
+			"exact_matches": []string{
+				"Warmup",
+				"  Reply with exactly OK.  ",
+				"Warmup",
+			},
 		},
 	})
-	want := []string{
+	wantPrefixes := []string{
 		"You are analyzing an essay",
 		"You are grading quotes",
 		"  ",
 		"You are analyzing an essay",
 	}
-	assert.Equal(t, want, cfg.Automated.Prefixes)
+	wantSubstrings := []string{
+		"invoked by roborev to perform this review",
+		"  embedded marker  ",
+		"invoked by roborev to perform this review",
+	}
+	wantExactMatches := []string{
+		"Warmup",
+		"  Reply with exactly OK.  ",
+		"Warmup",
+	}
+	assert.Equal(t, wantPrefixes, cfg.Automated.Prefixes)
+	assert.Equal(t, wantSubstrings, cfg.Automated.Substrings)
+	assert.Equal(t, wantExactMatches, cfg.Automated.ExactMatches)
 }
 
-func TestAutomatedPrefixesAbsentIsNil(t *testing.T) {
+func TestAutomatedConfigAbsentIsNil(t *testing.T) {
 	cfg := loadPFlagsWithConfig(t, map[string]any{
 		"public_url": "http://example.com",
 	})
 	assert.Nil(t, cfg.Automated.Prefixes)
+	assert.Nil(t, cfg.Automated.Substrings)
+	assert.Nil(t, cfg.Automated.ExactMatches)
 }
 
 func TestLoadFile_CustomModelPricing(t *testing.T) {
