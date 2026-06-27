@@ -3726,7 +3726,11 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 	switch file.Agent {
 	case parser.AgentShelley:
 		compareHash = true
-	case parser.AgentZed:
+	case parser.AgentZed, parser.AgentKiro:
+		// Zed and Kiro fan one container DB out to a session per row and have no
+		// per-row content hash, so unchanged rows are detected by mtime plus
+		// data version, matching their legacy container sync. Without Kiro here
+		// every Kiro row is reparsed and rewritten on every full sync.
 	default:
 		return results
 	}
