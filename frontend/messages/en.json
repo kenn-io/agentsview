@@ -289,6 +289,28 @@
   "subagent_inline_failed_to_load": "Failed to load",
   "subagent_inline_loading": "Loading...",
   "subagent_inline_no_messages": "No messages",
+  "skill_block_label": "Skill: {name}",
+  "tool_block_output": "output",
+  "tool_block_history": "history",
+  "tool_block_status_label": "status:",
+  "tool_block_source_label": "source:",
+  "tool_block_agent_label": "agent:",
+  "tool_block_show_less": "show less",
+  "tool_block_show_all_lines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "show all {count} line",
+        "countPlural=other": "show all {count} lines"
+      }
+    }
+  ],
   "thinking_block_label": "Thinking",
   "compact_boundary_title": "Context window compacted at this point",
   "compact_boundary_label": "Context compacted",
@@ -394,6 +416,41 @@
   "shared_range_next_period": "Next period",
   "shared_range_from": "From",
   "shared_range_to": "To",
+  "shared_range_tab_relative": "Relative",
+  "shared_range_tab_calendar": "Calendar",
+  "shared_range_tab_custom": "Custom",
+  "shared_range_preset_all": "All",
+  "shared_range_preset_all_time": "All time",
+  "shared_range_preset_last_year": "Last year",
+  "shared_range_calendar_day": "Day",
+  "shared_range_calendar_week": "Week",
+  "shared_range_calendar_month": "Month",
+  "shared_range_week_of": "Week of {date}",
+  "shared_range_custom_range": "Custom range",
+  "shared_range_last_days": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "Last {count} day",
+        "countPlural=other": "Last {count} days"
+      }
+    }
+  ],
+  "shared_refresh_not_updated": "Not updated",
+  "shared_refresh_just_now": "Updated just now",
+  "shared_refresh_minutes_ago": "Updated {count}m ago",
+  "shared_refresh_hours_ago": "Updated {count}h ago",
+  "shared_refresh_days_ago": "Updated {count}d ago",
+  "shared_relative_just_now": "just now",
+  "shared_relative_minutes_ago": "{count}m ago",
+  "shared_relative_hours_ago": "{count}h ago",
+  "shared_relative_days_ago": "{count}d ago",
   "shared_retry": "Retry",
   "shared_refresh": "Refresh",
   "shared_no_data": "No data",
@@ -401,6 +458,7 @@
   "shared_no_sessions_in_range": "No sessions in range",
   "shared_none": "None",
   "shared_other": "Other",
+  "shared_unknown": "unknown",
   "analytics_refresh": "Refresh analytics",
   "analytics_export_csv": "Export CSV",
   "analytics_activity_by_day_hour": "Activity by Day and Hour",
@@ -1107,6 +1165,83 @@
   "insights_page_sessions_computed": "sessions computed",
   "insights_page_score_distribution": "Score distribution",
   "insights_page_pct_affected": "{pct}% affected",
+  "insights_pattern_recommendation_rationale": [
+    {
+      "declarations": [
+        "input affected",
+        "input total",
+        "local totalPlural = total: plural"
+      ],
+      "selectors": [
+        "totalPlural"
+      ],
+      "match": {
+        "totalPlural=one": "{affected} of {total} session has this deterministic pattern.",
+        "totalPlural=other": "{affected} of {total} sessions have this deterministic pattern."
+      }
+    }
+  ],
+  "insights_pattern_recommendation_fallback": "This recommendation is derived from fixed deterministic mappings.",
+  "insights_pattern_prompt_title": "Prompt maturity",
+  "insights_pattern_prompt_summary": "Task framing and acceptance evidence. Short prompts are context only.",
+  "insights_pattern_short_task_starts": "Short task starts",
+  "insights_pattern_unstructured_starts": "Unstructured starts",
+  "insights_pattern_missing_success_criteria": "Missing success criteria",
+  "insights_pattern_missing_verification_path": "Missing targeted verification path",
+  "insights_pattern_repeated_prompts": "Repeated prompts",
+  "insights_pattern_no_phase3": "No Phase 3 prompt-quality computations are available for this range.",
+  "insights_pattern_prompt_severity_description": "{severityDescription} Weak prompt-only markers do not set severity by themselves.",
+  "insights_pattern_score_pressure_proxy": "Score-pressure proxy",
+  "insights_pattern_comparison_groups": "Comparison groups",
+  "insights_pattern_prompt_action": "Open the linked examples before changing prompts; tune only signals with poor outcome lift.",
+  "insights_pattern_context_title": "Context health",
+  "insights_pattern_context_summary": "Code-context gaps, compactions, mid-task context loss, and high context pressure.",
+  "insights_pattern_sessions_with_compaction": "Sessions with compaction",
+  "insights_pattern_mid_task_compactions": "Mid-task compactions",
+  "insights_pattern_high_context_pressure": "High context pressure",
+  "insights_pattern_missing_code_context": "Missing code context",
+  "insights_pattern_context_action": "Split or summarize work before context pressure and mid-task compactions accumulate.",
+  "insights_pattern_workflow_title": "Workflow hygiene",
+  "insights_pattern_workflow_summary": "Errored, abandoned, frustrated, and repeated failing tool-cycle sessions.",
+  "insights_pattern_repeated_failing_tool_cycles": "Repeated failing tool cycles",
+  "insights_pattern_frustration_markers": "Frustration markers",
+  "insights_pattern_errored_outcomes": "Errored outcomes",
+  "insights_pattern_abandoned_outcomes": "Abandoned outcomes",
+  "insights_pattern_completed_outcomes": "Completed outcomes",
+  "insights_pattern_errored_or_abandoned_sessions": "errored or abandoned sessions",
+  "insights_pattern_interrupted_sessions": "Interrupted sessions",
+  "insights_pattern_workflow_action": "Review errored and abandoned workflows before tuning less severe prompt signals.",
+  "insights_pattern_tool_title": "Tool reliability",
+  "insights_pattern_tool_summary": "Tool failures, retries, and edit churn counted directly from session tool events.",
+  "insights_pattern_failure_signals": "Failure signals",
+  "insights_pattern_retries": "Retries",
+  "insights_pattern_edit_churn": "Edit churn",
+  "insights_pattern_average_failure_signals": "Average failure signals",
+  "insights_pattern_tool_action": "Inspect sessions with repeated failures or retries and fix brittle tool-use paths.",
+  "insights_pattern_no_computed": "No computed sessions for this pattern.",
+  "insights_pattern_none_fire": "No sessions currently fire this pattern.",
+  "insights_pattern_critical_description": "Critical means at least 35% of computed sessions fire the pattern.",
+  "insights_pattern_warning_description": "Warning means at least 18% of computed sessions fire the pattern.",
+  "insights_pattern_watch_description": "Watch means the pattern is present but below the warning threshold.",
+  "insights_pattern_points_below_average": "points below 100 average score",
+  "insights_pattern_unassigned_project": "Unassigned project",
+  "insights_pattern_example_detail": [
+    {
+      "declarations": [
+        "input count",
+        "input completedRate",
+        "input failureSignals",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=one": "{count} session, {completedRate}% completed, {failureSignals} avg failures",
+        "countPlural=other": "{count} sessions, {completedRate}% completed, {failureSignals} avg failures"
+      }
+    }
+  ],
   "insights_page_driver_sessions": [
     {
       "declarations": [
@@ -1224,6 +1359,9 @@
   "publish_open_in_browser": "Open in Browser",
   "publish_close_btn": "Close",
   "publish_retry": "Retry",
+  "publish_save_token_failed": "Failed to save token",
+  "publish_no_session_selected": "No session selected",
+  "publish_failed": "Publish failed",
   "resync_title": "Full Resync",
   "resync_close": "Close resync dialog",
   "resync_confirm_text": "Re-parse all session files from scratch. Existing sessions will be updated in place — no data is deleted. Use this after upgrading or when sessions appear incorrect.",

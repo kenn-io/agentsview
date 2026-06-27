@@ -1,11 +1,51 @@
-import { describe, it, expect, beforeEach } from "vite-plus/test";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
+import { setLocale } from "../i18n/index.js";
+import {
+  formatRelativeTime,
   sanitizeSnippet,
   _resetNonceCounter,
   formatCost,
   formatTokenCount,
   formatTokenUsage,
 } from "./format.js";
+
+describe("formatRelativeTime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setLocale("en");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    setLocale("en");
+  });
+
+  it.each([
+    ["2026-06-17T12:00:00Z", "just now"],
+    ["2026-06-17T11:58:00Z", "2m ago"],
+    ["2026-06-17T09:30:00Z", "2h ago"],
+    ["2026-06-15T12:00:00Z", "2d ago"],
+  ])("formats %s in English", (value, expected) => {
+    vi.setSystemTime(new Date("2026-06-17T12:00:20Z"));
+    expect(formatRelativeTime(value)).toBe(expected);
+  });
+
+  it("localizes relative time labels", () => {
+    setLocale("zh-CN");
+    vi.setSystemTime(new Date("2026-06-17T12:00:20Z"));
+
+    expect(formatRelativeTime("2026-06-17T12:00:00Z")).toBe("刚刚");
+    expect(formatRelativeTime("2026-06-17T11:58:00Z")).toBe("2 分钟前");
+    expect(formatRelativeTime("2026-06-15T12:00:00Z")).toBe("2 天前");
+  });
+});
 
 describe("formatCost", () => {
   it.each([

@@ -43,10 +43,10 @@
     block = false,
   }: Props = $props();
 
-  const TABS: { mode: RangeMode; label: string }[] = [
-    { mode: "relative", label: "Relative" },
-    { mode: "calendar", label: "Calendar" },
-    { mode: "custom", label: "Custom" },
+  const TABS: { mode: RangeMode; label: () => string }[] = [
+    { mode: "relative", label: m.shared_range_tab_relative },
+    { mode: "calendar", label: m.shared_range_tab_calendar },
+    { mode: "custom", label: m.shared_range_tab_custom },
   ];
 
   let open = $state(false);
@@ -183,7 +183,7 @@
             aria-selected={tab === t.mode}
             onclick={() => (tab = t.mode)}
           >
-            {t.label}
+            {t.label()}
           </button>
         {/each}
       </div>
@@ -196,7 +196,7 @@
               class:active={isRelativeActive(preset.days)}
               onclick={() => applyRelative(preset.days)}
             >
-              {preset.label}
+              {preset.label()}
             </button>
           {/each}
         </div>
@@ -208,7 +208,7 @@
               class:active={calUnit === u.unit}
               onclick={() => applyCalendar(u.unit, calAnchor)}
             >
-              {u.label}
+              {u.label()}
             </button>
           {/each}
         </div>

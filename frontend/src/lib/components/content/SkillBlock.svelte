@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { m } from "../../i18n/index.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { ChevronRightIcon } from "../../icons.js";
@@ -28,7 +29,9 @@
     <span class="skill-chevron" class:open={!collapsed}>
       <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
     </span>
-    <span class="skill-label">Skill: {name ?? "unknown"}</span>
+    <span class="skill-label">
+      {m.skill_block_label({ name: name ?? m.shared_unknown() })}
+    </span>
     {#if collapsed && previewLine}
       <span class="skill-preview">{previewLine}</span>
     {/if}

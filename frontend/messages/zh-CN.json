@@ -34,10 +34,10 @@
   "header_transcript_visibility": "Block 可见性",
   "header_transcript_show_all": "全部显示",
   "header_transcript_blocks_user": "用户消息",
-  "header_transcript_blocks_assistant": "Assistant 文本",
-  "header_transcript_blocks_thinking": "Thinking blocks",
-  "header_transcript_blocks_tool": "Tool calls",
-  "header_transcript_blocks_code": "Code blocks",
+  "header_transcript_blocks_assistant": "助手文本",
+  "header_transcript_blocks_thinking": "思考块",
+  "header_transcript_blocks_tool": "工具调用",
+  "header_transcript_blocks_code": "代码块",
   "header_actions_follow_latest": "跟随最新消息",
   "header_actions_toggle_sort": "切换排序 (o)",
   "header_actions_cycle_layout": "切换布局：{layout} (l)",
@@ -184,7 +184,7 @@
   "code_block_copied_code_block": "代码块已复制",
   "code_block_copy_code": "复制代码",
   "code_block_copied": "已复制！",
-  "message_content_role_assistant": "Assistant",
+  "message_content_role_assistant": "助手",
   "message_content_role_agent": "Agent",
   "message_content_role_teammate": "队友",
   "message_content_role_user": "用户",
@@ -281,7 +281,28 @@
   "subagent_inline_failed_to_load": "加载失败",
   "subagent_inline_loading": "正在加载...",
   "subagent_inline_no_messages": "无消息",
-  "thinking_block_label": "Thinking",
+  "skill_block_label": "技能：{name}",
+  "tool_block_output": "输出",
+  "tool_block_history": "历史",
+  "tool_block_status_label": "状态：",
+  "tool_block_source_label": "来源：",
+  "tool_block_agent_label": "agent：",
+  "tool_block_show_less": "收起",
+  "tool_block_show_all_lines": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "显示全部 {count} 行"
+      }
+    }
+  ],
+  "thinking_block_label": "思考",
   "compact_boundary_title": "上下文窗口在此处被压缩",
   "compact_boundary_label": "上下文已压缩",
   "compact_boundary_show_full_summary": "显示完整摘要",
@@ -385,6 +406,40 @@
   "shared_range_next_period": "下一个周期",
   "shared_range_from": "从",
   "shared_range_to": "到",
+  "shared_range_tab_relative": "相对",
+  "shared_range_tab_calendar": "日历",
+  "shared_range_tab_custom": "自定义",
+  "shared_range_preset_all": "全部",
+  "shared_range_preset_all_time": "全部时间",
+  "shared_range_preset_last_year": "最近一年",
+  "shared_range_calendar_day": "日",
+  "shared_range_calendar_week": "周",
+  "shared_range_calendar_month": "月",
+  "shared_range_week_of": "{date}所在周",
+  "shared_range_custom_range": "自定义范围",
+  "shared_range_last_days": [
+    {
+      "declarations": [
+        "input count",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "最近 {count} 天"
+      }
+    }
+  ],
+  "shared_refresh_not_updated": "未更新",
+  "shared_refresh_just_now": "刚刚更新",
+  "shared_refresh_minutes_ago": "{count} 分钟前更新",
+  "shared_refresh_hours_ago": "{count} 小时前更新",
+  "shared_refresh_days_ago": "{count} 天前更新",
+  "shared_relative_just_now": "刚刚",
+  "shared_relative_minutes_ago": "{count} 分钟前",
+  "shared_relative_hours_ago": "{count} 小时前",
+  "shared_relative_days_ago": "{count} 天前",
   "shared_retry": "重试",
   "shared_refresh": "刷新",
   "shared_no_data": "无数据",
@@ -392,6 +447,7 @@
   "shared_no_sessions_in_range": "此范围内无会话",
   "shared_none": "无",
   "shared_other": "其他",
+  "shared_unknown": "未知",
   "analytics_refresh": "刷新分析",
   "analytics_export_csv": "导出 CSV",
   "analytics_activity_by_day_hour": "按日期和小时查看活动",
@@ -1081,6 +1137,81 @@
   "insights_page_sessions_computed": "个已计算会话",
   "insights_page_score_distribution": "评分分布",
   "insights_page_pct_affected": "{pct}% 受影响",
+  "insights_pattern_recommendation_rationale": [
+    {
+      "declarations": [
+        "input affected",
+        "input total",
+        "local totalPlural = total: plural"
+      ],
+      "selectors": [
+        "totalPlural"
+      ],
+      "match": {
+        "totalPlural=other": "{total} 个会话中有 {affected} 个触发此确定性模式。"
+      }
+    }
+  ],
+  "insights_pattern_recommendation_fallback": "此建议来自固定的确定性映射。",
+  "insights_pattern_prompt_title": "提示词成熟度",
+  "insights_pattern_prompt_summary": "任务描述和验收证据。短提示词仅作为上下文参考。",
+  "insights_pattern_short_task_starts": "短任务开场",
+  "insights_pattern_unstructured_starts": "结构不清的开场",
+  "insights_pattern_missing_success_criteria": "缺少成功标准",
+  "insights_pattern_missing_verification_path": "缺少针对性验证路径",
+  "insights_pattern_repeated_prompts": "重复提示词",
+  "insights_pattern_no_phase3": "此范围内没有第 3 阶段提示词质量计算。",
+  "insights_pattern_prompt_severity_description": "{severityDescription} 弱提示词标记本身不会决定严重程度。",
+  "insights_pattern_score_pressure_proxy": "分数压力代理指标",
+  "insights_pattern_comparison_groups": "对比分组",
+  "insights_pattern_prompt_action": "修改提示词前先打开关联示例；只调整结果提升较差的信号。",
+  "insights_pattern_context_title": "上下文健康度",
+  "insights_pattern_context_summary": "代码上下文缺口、压缩、任务中途上下文丢失和高上下文压力。",
+  "insights_pattern_sessions_with_compaction": "包含压缩的会话",
+  "insights_pattern_mid_task_compactions": "任务中途压缩",
+  "insights_pattern_high_context_pressure": "上下文压力高",
+  "insights_pattern_missing_code_context": "缺少代码上下文",
+  "insights_pattern_context_action": "在上下文压力和任务中途压缩累积前，先拆分或总结工作。",
+  "insights_pattern_workflow_title": "工作流规范",
+  "insights_pattern_workflow_summary": "错误、放弃、受挫以及重复失败工具循环的会话。",
+  "insights_pattern_repeated_failing_tool_cycles": "重复失败的工具循环",
+  "insights_pattern_frustration_markers": "受挫标记",
+  "insights_pattern_errored_outcomes": "错误结果",
+  "insights_pattern_abandoned_outcomes": "放弃结果",
+  "insights_pattern_completed_outcomes": "完成结果",
+  "insights_pattern_errored_or_abandoned_sessions": "错误或放弃的会话",
+  "insights_pattern_interrupted_sessions": "中断会话",
+  "insights_pattern_workflow_action": "先检查错误和放弃的工作流，再调整较轻微的提示词信号。",
+  "insights_pattern_tool_title": "工具可靠性",
+  "insights_pattern_tool_summary": "直接从会话工具事件统计工具失败、重试和编辑返工。",
+  "insights_pattern_failure_signals": "失败信号",
+  "insights_pattern_retries": "重试",
+  "insights_pattern_edit_churn": "编辑返工",
+  "insights_pattern_average_failure_signals": "平均失败信号",
+  "insights_pattern_tool_action": "检查反复失败或重试的会话，并修复脆弱的工具使用路径。",
+  "insights_pattern_no_computed": "此模式没有已计算会话。",
+  "insights_pattern_none_fire": "当前没有会话触发此模式。",
+  "insights_pattern_critical_description": "严重表示至少 35% 的已计算会话触发此模式。",
+  "insights_pattern_warning_description": "警告表示至少 18% 的已计算会话触发此模式。",
+  "insights_pattern_watch_description": "关注表示此模式存在，但低于警告阈值。",
+  "insights_pattern_points_below_average": "低于 100 平均分的点数",
+  "insights_pattern_unassigned_project": "未分配项目",
+  "insights_pattern_example_detail": [
+    {
+      "declarations": [
+        "input count",
+        "input completedRate",
+        "input failureSignals",
+        "local countPlural = count: plural"
+      ],
+      "selectors": [
+        "countPlural"
+      ],
+      "match": {
+        "countPlural=other": "{count} 个会话，{completedRate}% 已完成，平均 {failureSignals} 个失败信号"
+      }
+    }
+  ],
   "insights_page_driver_sessions": [
     {
       "declarations": [
@@ -1197,6 +1328,9 @@
   "publish_open_in_browser": "在浏览器中打开",
   "publish_close_btn": "关闭",
   "publish_retry": "重试",
+  "publish_save_token_failed": "保存令牌失败",
+  "publish_no_session_selected": "未选择会话",
+  "publish_failed": "发布失败",
   "resync_title": "完整重新同步",
   "resync_close": "关闭重新同步对话框",
   "resync_confirm_text": "从头重新解析所有会话文件。现有会话将就地更新 —— 不会删除任何数据。在升级后或会话显示异常时使用。",

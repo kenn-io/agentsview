@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vite-plus/test";
+import { setLocale } from "../../i18n/index.js";
 
 import {
   calendarLabel,
@@ -90,14 +91,26 @@ describe("resolveRange", () => {
 
 describe("calendarLabel", () => {
   it("labels each unit", () => {
+    setLocale("en");
     expect(calendarLabel("day", "2026-06-17")).toBe("Jun 17, 2026");
     expect(calendarLabel("week", "2026-06-17")).toBe("Week of Jun 15");
     expect(calendarLabel("month", "2026-02-14")).toBe("February 2026");
+  });
+
+  it("localizes calendar labels", () => {
+    setLocale("zh-CN");
+
+    expect(calendarLabel("day", "2026-06-17")).toBe("2026年6月17日");
+    expect(calendarLabel("week", "2026-06-17")).toBe("6月15日所在周");
+    expect(calendarLabel("month", "2026-02-14")).toBe("2026年2月");
+
+    setLocale("en");
   });
 });
 
 describe("rangeLabel", () => {
   it("labels relative presets and an unknown day count", () => {
+    setLocale("en");
     expect(rangeLabel({ mode: "relative", days: 30 })).toBe("Last 30 days");
     expect(rangeLabel({ mode: "relative", days: 0 })).toBe("All time");
     expect(rangeLabel({ mode: "relative", days: 14 })).toBe("Last 14 days");
@@ -113,6 +126,25 @@ describe("rangeLabel", () => {
     expect(
       rangeLabel({ mode: "custom", from: "2026-06-19", to: "2026-06-19" }),
     ).toBe("Jun 19");
+  });
+
+  it("localizes relative and custom range labels", () => {
+    setLocale("zh-CN");
+
+    expect(rangeLabel({ mode: "relative", days: 30 })).toBe("最近 30 天");
+    expect(rangeLabel({ mode: "relative", days: 0 })).toBe("全部时间");
+    expect(rangeLabel({ mode: "relative", days: 14 })).toBe("最近 14 天");
+    expect(
+      rangeLabel({ mode: "calendar", unit: "week", anchor: "2026-06-17" }),
+    ).toBe("6月15日所在周");
+    expect(
+      rangeLabel({ mode: "custom", from: "", to: "" }),
+    ).toBe("自定义范围");
+    expect(
+      rangeLabel({ mode: "custom", from: "2026-05-20", to: "2026-06-19" }),
+    ).toBe("5月20日 - 6月19日");
+
+    setLocale("en");
   });
 });
 

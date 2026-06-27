@@ -3,6 +3,7 @@ import type {
   SignalsAnalyticsResponse,
   SignalsTrendBucket,
 } from "../../api/types.js";
+import { m } from "../../i18n/index.js";
 
 export type QualityPatternSeverity =
   | "clear"
@@ -146,8 +147,11 @@ export function buildRuleBasedRecommendations(
       label: pattern.action,
       rationale:
         pattern.affectedSessions > 0
-          ? `${pattern.affectedSessions} of ${pattern.totalSessions} sessions have this deterministic pattern.`
-          : "This recommendation is derived from fixed deterministic mappings.",
+          ? m.insights_pattern_recommendation_rationale({
+            affected: pattern.affectedSessions,
+            total: pattern.totalSessions,
+          })
+          : m.insights_pattern_recommendation_fallback(),
     }));
 }
 
@@ -162,35 +166,35 @@ function promptMaturityPattern(
   const drivers: QualityPatternDriver[] = [
     signalDriver(
       "short_prompt_count",
-      "Short task starts",
+      m.insights_pattern_short_task_starts(),
       totals,
       sessions,
       "weak",
     ),
     signalDriver(
       "unstructured_start",
-      "Unstructured starts",
+      m.insights_pattern_unstructured_starts(),
       totals,
       sessions,
       "contextual",
     ),
     signalDriver(
       "missing_success_criteria_count",
-      "Missing success criteria",
+      m.insights_pattern_missing_success_criteria(),
       totals,
       sessions,
       "contextual",
     ),
     signalDriver(
       "missing_verification_count",
-      "Missing targeted verification path",
+      m.insights_pattern_missing_verification_path(),
       totals,
       sessions,
       "weak",
     ),
     signalDriver(
       "duplicate_prompt_count",
-      "Repeated prompts",
+      m.insights_pattern_repeated_prompts(),
       totals,
       sessions,
       "contextual",
@@ -203,24 +207,24 @@ function promptMaturityPattern(
 
   return {
     id: "prompt_maturity",
-    title: "Prompt maturity",
-    summary:
-      "Task framing and acceptance evidence. Short prompts are context only.",
+    title: m.insights_pattern_prompt_title(),
+    summary: m.insights_pattern_prompt_summary(),
     severity: computed === 0
       ? "unavailable"
       : severityFromRatio(affected, computed),
     severityDescription: computed === 0
-      ? "No Phase 3 prompt-quality computations are available for this range."
-      : severityDescription(affected, computed) +
-        " Weak prompt-only markers do not set severity by themselves.",
+      ? m.insights_pattern_no_phase3()
+      : m.insights_pattern_prompt_severity_description({
+        severityDescription: severityDescription(affected, computed),
+      }),
     affectedSessions: affected,
     totalSessions: computed,
     drivers,
-    trendLabel: "Score-pressure proxy",
+    trendLabel: m.insights_pattern_score_pressure_proxy(),
     trend: scorePressureTrend(signals.trend),
     examples: topAgentExamples(signals),
-    examplesLabel: "Comparison groups",
-    action: "Open the linked examples before changing prompts; tune only signals with poor outcome lift.",
+    examplesLabel: m.insights_pattern_comparison_groups(),
+    action: m.insights_pattern_prompt_action(),
   };
 }
 
@@ -235,25 +239,25 @@ function contextHealthPattern(
   const drivers: QualityPatternDriver[] = [
     {
       id: "sessions_with_compaction",
-      label: "Sessions with compaction",
+      label: m.insights_pattern_sessions_with_compaction(),
       total: h.sessions_with_compaction,
       sessions: h.sessions_with_compaction,
     },
     {
       id: "mid_task_compaction_count",
-      label: "Mid-task compactions",
+      label: m.insights_pattern_mid_task_compactions(),
       total: h.mid_task_compaction_count,
       sessions: h.sessions_with_mid_task_compaction,
     },
     {
       id: "high_pressure_sessions",
-      label: "High context pressure",
+      label: m.insights_pattern_high_context_pressure(),
       total: h.high_pressure_sessions,
       sessions: h.high_pressure_sessions,
     },
     signalDriver(
       "no_code_context_count",
-      "Missing code context",
+      m.insights_pattern_missing_code_context(),
       totals,
       sessions,
     ),
@@ -262,19 +266,18 @@ function contextHealthPattern(
 
   return {
     id: "context_health",
-    title: "Context health",
-    summary:
-      "Code-context gaps, compactions, mid-task context loss, and high context pressure.",
+    title: m.insights_pattern_context_title(),
+    summary: m.insights_pattern_context_summary(),
     severity: severityFromRatio(affected, total),
     severityDescription: severityDescription(affected, total),
     affectedSessions: affected,
     totalSessions: total,
     drivers,
-    trendLabel: "Score-pressure proxy",
+    trendLabel: m.insights_pattern_score_pressure_proxy(),
     trend: scorePressureTrend(signals.trend),
     examples: topProjectExamples(signals),
-    examplesLabel: "Comparison groups",
-    action: "Split or summarize work before context pressure and mid-task compactions accumulate.",
+    examplesLabel: m.insights_pattern_comparison_groups(),
+    action: m.insights_pattern_context_action(),
   };
 }
 
@@ -291,14 +294,14 @@ function workflowHygienePattern(
   const interrupted = errored + abandoned;
   const runawayDriver = signalDriver(
     "runaway_tool_loop_count",
-    "Repeated failing tool cycles",
+    m.insights_pattern_repeated_failing_tool_cycles(),
     totals,
     sessions,
     "strong",
   );
   const frustrationDriver = signalDriver(
     "frustration_marker_count",
-    "Frustration markers",
+    m.insights_pattern_frustration_markers(),
     totals,
     sessions,
     "contextual",
@@ -311,9 +314,8 @@ function workflowHygienePattern(
 
   return {
     id: "workflow_hygiene",
-    title: "Workflow hygiene",
-    summary:
-      "Errored, abandoned, frustrated, and repeated failing tool-cycle sessions.",
+    title: m.insights_pattern_workflow_title(),
+    summary: m.insights_pattern_workflow_summary(),
     severity: severityFromRatio(affected, total),
     severityDescription: severityDescription(affected, total),
     affectedSessions: affected,
@@ -321,19 +323,19 @@ function workflowHygienePattern(
     drivers: [
       {
         id: "outcome_errored",
-        label: "Errored outcomes",
+        label: m.insights_pattern_errored_outcomes(),
         total: errored,
         sessions: errored,
       },
       {
         id: "outcome_abandoned",
-        label: "Abandoned outcomes",
+        label: m.insights_pattern_abandoned_outcomes(),
         total: abandoned,
         sessions: abandoned,
       },
       {
         id: "outcome_completed",
-        label: "Completed outcomes",
+        label: m.insights_pattern_completed_outcomes(),
         total: outcomes.completed ?? 0,
         sessions: outcomes.completed ?? 0,
       },
@@ -343,13 +345,13 @@ function workflowHygienePattern(
     trend: signals.trend.map((t) => ({
       date: t.date,
       value: t.errored + t.abandoned,
-      label: "errored or abandoned sessions",
+      label: m.insights_pattern_errored_or_abandoned_sessions(),
       score: t.avg_health_score,
     })),
-    trendLabel: "Interrupted sessions",
+    trendLabel: m.insights_pattern_interrupted_sessions(),
     examples: topAgentExamples(signals),
-    examplesLabel: "Comparison groups",
-    action: "Review errored and abandoned workflows before tuning less severe prompt signals.",
+    examplesLabel: m.insights_pattern_comparison_groups(),
+    action: m.insights_pattern_workflow_action(),
   };
 }
 
@@ -361,7 +363,7 @@ function toolReliabilityPattern(
   const drivers: QualityPatternDriver[] = [
     {
       id: "tool_failure_signals",
-      label: "Failure signals",
+      label: m.insights_pattern_failure_signals(),
       total: h.total_failure_signals,
       sessions: toolDriverSessions(
         signals,
@@ -371,7 +373,7 @@ function toolReliabilityPattern(
     },
     {
       id: "tool_retries",
-      label: "Retries",
+      label: m.insights_pattern_retries(),
       total: h.total_retries,
       sessions: toolDriverSessions(
         signals,
@@ -381,7 +383,7 @@ function toolReliabilityPattern(
     },
     {
       id: "edit_churn",
-      label: "Edit churn",
+      label: m.insights_pattern_edit_churn(),
       total: h.total_edit_churn,
       sessions: toolDriverSessions(
         signals,
@@ -394,9 +396,8 @@ function toolReliabilityPattern(
 
   return {
     id: "tool_reliability",
-    title: "Tool reliability",
-    summary:
-      "Tool failures, retries, and edit churn counted directly from session tool events.",
+    title: m.insights_pattern_tool_title(),
+    summary: m.insights_pattern_tool_summary(),
     severity: severityFromRatio(affected, total),
     severityDescription: severityDescription(affected, total),
     affectedSessions: affected,
@@ -405,13 +406,13 @@ function toolReliabilityPattern(
     trend: signals.trend.map((t) => ({
       date: t.date,
       value: t.avg_failure_signals,
-      label: "average failure signals",
+      label: m.insights_pattern_average_failure_signals(),
       score: t.avg_health_score,
     })),
-    trendLabel: "Average failure signals",
+    trendLabel: m.insights_pattern_average_failure_signals(),
     examples: topProjectExamples(signals),
-    examplesLabel: "Comparison groups",
-    action: "Inspect sessions with repeated failures or retries and fix brittle tool-use paths.",
+    examplesLabel: m.insights_pattern_comparison_groups(),
+    action: m.insights_pattern_tool_action(),
   };
 }
 
@@ -467,16 +468,16 @@ function severityFromRatio(
 }
 
 function severityDescription(affected: number, total: number): string {
-  if (total <= 0) return "No computed sessions for this pattern.";
+  if (total <= 0) return m.insights_pattern_no_computed();
   const ratio = affected / total;
-  if (ratio === 0) return "No sessions currently fire this pattern.";
+  if (ratio === 0) return m.insights_pattern_none_fire();
   if (ratio >= QUALITY_PATTERN_SEVERITY_THRESHOLDS.criticalRatio) {
-    return "Critical means at least 35% of computed sessions fire the pattern.";
+    return m.insights_pattern_critical_description();
   }
   if (ratio >= QUALITY_PATTERN_SEVERITY_THRESHOLDS.warningRatio) {
-    return "Warning means at least 18% of computed sessions fire the pattern.";
+    return m.insights_pattern_warning_description();
   }
-  return "Watch means the pattern is present but below the warning threshold.";
+  return m.insights_pattern_watch_description();
 }
 
 function scorePressureTrend(trend: SignalsTrendBucket[]) {
@@ -486,7 +487,7 @@ function scorePressureTrend(trend: SignalsTrendBucket[]) {
       t.avg_health_score == null
         ? 0
         : Math.max(0, Math.round(100 - t.avg_health_score)),
-    label: "points below 100 average score",
+    label: m.insights_pattern_points_below_average(),
     score: t.avg_health_score,
   }));
 }
@@ -503,8 +504,12 @@ function topProjectExamples(
     })
     .slice(0, 3)
     .map((row) => ({
-      label: row.project || "Unassigned project",
-      detail: `${row.session_count} sessions, ${Math.round(row.completed_rate)}% completed, ${row.avg_failure_signals.toFixed(1)} avg failures`,
+      label: row.project || m.insights_pattern_unassigned_project(),
+      detail: m.insights_pattern_example_detail({
+        count: row.session_count,
+        completedRate: Math.round(row.completed_rate),
+        failureSignals: row.avg_failure_signals.toFixed(1),
+      }),
       score: row.avg_health_score,
     }));
 }
@@ -522,7 +527,11 @@ function topAgentExamples(
     .slice(0, 3)
     .map((row) => ({
       label: row.agent,
-      detail: `${row.session_count} sessions, ${Math.round(row.completed_rate)}% completed, ${row.avg_failure_signals.toFixed(1)} avg failures`,
+      detail: m.insights_pattern_example_detail({
+        count: row.session_count,
+        completedRate: Math.round(row.completed_rate),
+        failureSignals: row.avg_failure_signals.toFixed(1),
+      }),
       score: row.avg_health_score,
     }));
 }

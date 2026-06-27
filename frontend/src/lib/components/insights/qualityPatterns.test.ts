@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setLocale } from "../../i18n/index.js";
 import type { SignalsAnalyticsResponse } from "../../api/types.js";
 import {
   buildQualityPatterns,
@@ -400,5 +401,28 @@ describe("quality pattern transforms", () => {
     expect(buildQualityPatterns(belowWarning)[0]?.severity).toBe("watch");
     expect(buildQualityPatterns(warning)[0]?.severity).toBe("warning");
     expect(buildQualityPatterns(critical)[0]?.severity).toBe("critical");
+  });
+
+  it("localizes quality pattern labels and descriptions", () => {
+    setLocale("zh-CN");
+
+    const patterns = buildQualityPatterns(makeSignals());
+    const prompt = patterns[0]!;
+    const context = patterns[1]!;
+    const workflow = patterns[2]!;
+    const tool = patterns[3]!;
+    const recommendation = buildRuleBasedRecommendations(patterns)[0]!;
+
+    expect(prompt.title).toBe("提示词成熟度");
+    expect(prompt.summary).toContain("任务描述");
+    expect(prompt.drivers.map((driver) => driver.label)).toContain("缺少成功标准");
+    expect(prompt.trendLabel).toBe("分数压力代理指标");
+    expect(prompt.trend[0]!.label).toBe("低于 100 平均分的点数");
+    expect(context.drivers.map((driver) => driver.label)).toContain("上下文压力高");
+    expect(workflow.drivers.map((driver) => driver.label)).toContain("错误结果");
+    expect(tool.trendLabel).toBe("平均失败信号");
+    expect(recommendation.rationale).toContain("确定性模式");
+
+    setLocale("en");
   });
 });
