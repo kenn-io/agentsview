@@ -7,6 +7,7 @@
     extractToolParamMeta,
     generateFallbackContent,
   } from "../../utils/tool-params.js";
+  import { m } from "../../i18n/index.js";
   import { applyHighlight, escapeHTML } from "../../utils/highlight.js";
   import { ChevronRightIcon } from "../../icons.js";
   import { summarizeToolCall } from "../../utils/tool-summary.js";
@@ -241,6 +242,12 @@
     }
     return { text: raw, isLong, totalLines: lines.length };
   });
+  let showAllLinesLabel = $derived.by(() => {
+    if (!displayContent.isLong) return "";
+    return m.tool_block_show_all_lines({
+      count: displayContent.totalLines ?? 0,
+    });
+  });
 
   let isDiff = $derived.by(() => {
     const text = fallbackContent ?? content ?? "";
@@ -315,7 +322,9 @@
             contentFullyExpanded = !contentFullyExpanded;
           }}
         >
-          {contentFullyExpanded ? "show less" : `show all ${displayContent.totalLines} lines`}
+          {contentFullyExpanded
+            ? m.tool_block_show_less()
+            : showAllLinesLabel}
         </button>
       {/if}
     {/if}
@@ -333,7 +342,7 @@
         <span class="tool-chevron" class:open={!outputCollapsed}>
           <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
         </span>
-        <span class="output-label">output</span>
+        <span class="output-label">{m.tool_block_output()}</span>
         {#if outputCollapsed && outputPreviewLine}
           <span class="tool-preview">{outputPreviewLine}</span>
         {/if}
@@ -356,7 +365,7 @@
         <span class="tool-chevron" class:open={!historyCollapsed}>
           <ChevronRightIcon size="10" strokeWidth="2.4" aria-hidden="true" />
         </span>
-        <span class="output-label">history</span>
+        <span class="output-label">{m.tool_block_history()}</span>
         {#if historyCollapsed && historyPreviewLine}
           <span class="tool-preview">{historyPreviewLine}</span>
         {/if}
@@ -367,16 +376,16 @@
             <div class="result-event">
               <div class="result-event-meta">
                 <span class="meta-tag">
-                  <span class="meta-label">status:</span>
+                  <span class="meta-label">{m.tool_block_status_label()}</span>
                   {event.status}
                 </span>
                 <span class="meta-tag">
-                  <span class="meta-label">source:</span>
+                  <span class="meta-label">{m.tool_block_source_label()}</span>
                   {event.source}
                 </span>
                 {#if event.agent_id}
                   <span class="meta-tag">
-                    <span class="meta-label">agent:</span>
+                    <span class="meta-label">{m.tool_block_agent_label()}</span>
                     {event.agent_id}
                   </span>
                 {/if}

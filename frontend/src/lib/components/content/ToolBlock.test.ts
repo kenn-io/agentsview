@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, afterEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import type { ToolCall } from "../../api/types.js";
+import { setLocale } from "../../i18n/index.js";
 
 vi.mock("./SubagentInline.svelte", () => ({
   default: {},
@@ -18,6 +19,7 @@ describe("ToolBlock output section", () => {
   afterEach(() => {
     if (component) unmount(component);
     document.body.innerHTML = "";
+    setLocale("en");
   });
 
   it("does not render output-header when toolCall has no result_content", async () => {
@@ -162,6 +164,69 @@ describe("ToolBlock output section", () => {
     await tick();
 
     expect(document.querySelector(".history-header")).not.toBeNull();
+  });
+
+  it("localizes output, history, and result event metadata labels", async () => {
+    setLocale("zh-CN");
+    const toolCall: ToolCall = {
+      tool_name: "wait",
+      category: "Other",
+      result_content: "latest summary",
+      result_events: [
+        {
+          source: "wait_output",
+          status: "completed",
+          content: "Finished successfully",
+          content_length: 21,
+          agent_id: "agent-1",
+          event_index: 0,
+        },
+      ],
+    };
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content: "some input", toolCall },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+    document.querySelector<HTMLButtonElement>(".history-header")!.click();
+    await tick();
+
+    expect(document.querySelector(".output-header .output-label")?.textContent)
+      .toBe("输出");
+    expect(document.querySelector(".history-header .output-label")?.textContent)
+      .toBe("历史");
+    expect(
+      Array.from(document.querySelectorAll(".meta-label"))
+        .map((node) => node.textContent),
+    ).toEqual(["状态：", "来源：", "agent："]);
+  });
+
+  it("localizes long content expansion controls", async () => {
+    setLocale("zh-CN");
+    const content = Array.from(
+      { length: 22 },
+      (_, i) => `line ${i + 1}`,
+    ).join("\n");
+    component = mount(ToolBlock, {
+      target: document.body,
+      props: { content },
+    });
+    await tick();
+
+    document.querySelector<HTMLButtonElement>(".tool-header")!.click();
+    await tick();
+
+    const showMore = document.querySelector<HTMLButtonElement>(".show-more-btn");
+    expect(showMore?.textContent?.trim()).toBe("显示全部 22 行");
+
+    showMore!.click();
+    await tick();
+
+    expect(document.querySelector(".show-more-btn")?.textContent?.trim())
+      .toBe("收起");
   });
 
   it("expands event history and shows chronological event content", async () => {

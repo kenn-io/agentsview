@@ -65,7 +65,7 @@
     } catch (err) {
       if (isClosed()) return;
       errorMessage =
-        err instanceof Error ? err.message : "Failed to save token";
+        err instanceof Error ? err.message : m.publish_save_token_failed();
       view = "error";
     }
   }
@@ -73,7 +73,7 @@
   async function doPublish() {
     if (isClosed()) return;
     if (!target) {
-      errorMessage = "No session selected";
+      errorMessage = m.publish_no_session_selected();
       view = "error";
       return;
     }
@@ -92,7 +92,7 @@
       } catch (err) {
         if (isClosed()) return;
         errorMessage =
-          err instanceof Error ? err.message : "Publish failed";
+          err instanceof Error ? err.message : m.publish_failed();
         view = "error";
       }
       return;
@@ -111,7 +111,7 @@
     } catch (err) {
       if (isClosed()) return;
       errorMessage =
-        err instanceof Error ? err.message : "Publish failed";
+        err instanceof Error ? err.message : m.publish_failed();
       view = "error";
     }
   }

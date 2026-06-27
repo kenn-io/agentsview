@@ -6,6 +6,7 @@ import {
   todayStr,
   type DateRange,
 } from "./dateRangeSelector.js";
+import { formatDateTime, m } from "../../i18n/index.js";
 
 /**
  * The three ways a user can pick a range with the unified RangePicker. Every
@@ -42,34 +43,25 @@ export type RangeSelection =
 
 export interface RelativePreset {
   /** Compact pill label. */
-  label: string;
+  label: () => string;
   /** Trigger-button label. */
-  longLabel: string;
+  longLabel: () => string;
   /** Days back from today; 0 means all-time. */
   days: number;
 }
 
 export const RELATIVE_PRESETS: RelativePreset[] = [
-  { label: "7d", longLabel: "Last 7 days", days: 7 },
-  { label: "30d", longLabel: "Last 30 days", days: 30 },
-  { label: "90d", longLabel: "Last 90 days", days: 90 },
-  { label: "1y", longLabel: "Last year", days: 365 },
-  { label: "All", longLabel: "All time", days: 0 },
+  { label: () => "7d", longLabel: () => m.shared_range_last_days({ count: 7 }), days: 7 },
+  { label: () => "30d", longLabel: () => m.shared_range_last_days({ count: 30 }), days: 30 },
+  { label: () => "90d", longLabel: () => m.shared_range_last_days({ count: 90 }), days: 90 },
+  { label: () => "1y", longLabel: m.shared_range_preset_last_year, days: 365 },
+  { label: m.shared_range_preset_all, longLabel: m.shared_range_preset_all_time, days: 0 },
 ];
 
-export const CALENDAR_UNITS: { unit: CalendarUnit; label: string }[] = [
-  { unit: "day", label: "Day" },
-  { unit: "week", label: "Week" },
-  { unit: "month", label: "Month" },
-];
-
-const MONTHS_SHORT = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const MONTHS_LONG = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
+export const CALENDAR_UNITS: { unit: CalendarUnit; label: () => string }[] = [
+  { unit: "day", label: m.shared_range_calendar_day },
+  { unit: "week", label: m.shared_range_calendar_week },
+  { unit: "month", label: m.shared_range_calendar_month },
 ];
 
 /** Parse a YYYY-MM-DD date string as local midnight. */
@@ -149,33 +141,48 @@ export function resolveRange(
 export function calendarLabel(unit: CalendarUnit, anchor: string): string {
   const d = parseLocal(anchor);
   if (unit === "day") {
-    return `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    return formatDateTime(d, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
   }
   if (unit === "month") {
-    return `${MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
+    return formatDateTime(d, {
+      year: "numeric",
+      month: "long",
+    });
   }
   const start = parseLocal(periodBounds("week", anchor).from);
-  return `Week of ${MONTHS_SHORT[start.getMonth()]} ${start.getDate()}`;
+  return m.shared_range_week_of({
+    date: formatDateTime(start, {
+      month: "short",
+      day: "numeric",
+    }),
+  });
 }
 
 /** Short label for the trigger button reflecting the current selection. */
 export function rangeLabel(sel: RangeSelection): string {
   if (sel.mode === "relative") {
     const preset = RELATIVE_PRESETS.find((p) => p.days === sel.days);
-    return preset ? preset.longLabel : `Last ${sel.days} days`;
+    return preset ? preset.longLabel() : m.shared_range_last_days({ count: sel.days });
   }
   if (sel.mode === "calendar") {
     return calendarLabel(sel.unit, sel.anchor);
   }
-  if (!sel.from || !sel.to) return "Custom range";
+  if (!sel.from || !sel.to) return m.shared_range_custom_range();
   const from = parseLocal(sel.from);
   const to = parseLocal(sel.to);
   if (sel.from === sel.to) {
-    return `${MONTHS_SHORT[from.getMonth()]} ${from.getDate()}`;
+    return formatDateTime(from, {
+      month: "short",
+      day: "numeric",
+    });
   }
   return (
-    `${MONTHS_SHORT[from.getMonth()]} ${from.getDate()} - ` +
-    `${MONTHS_SHORT[to.getMonth()]} ${to.getDate()}`
+    `${formatDateTime(from, { month: "short", day: "numeric" })} - ` +
+    `${formatDateTime(to, { month: "short", day: "numeric" })}`
   );
 }
 

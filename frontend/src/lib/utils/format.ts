@@ -1,3 +1,5 @@
+import { formatDateTime, m } from "../i18n/index.js";
+
 const MINUTE = 60;
 const HOUR = 3600;
 const DAY = 86400;
@@ -12,12 +14,24 @@ export function formatRelativeTime(
   const date = new Date(isoString);
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
 
-  if (diffSec < MINUTE) return "just now";
-  if (diffSec < HOUR) return `${Math.floor(diffSec / MINUTE)}m ago`;
-  if (diffSec < DAY) return `${Math.floor(diffSec / HOUR)}h ago`;
-  if (diffSec < WEEK) return `${Math.floor(diffSec / DAY)}d ago`;
+  if (diffSec < MINUTE) return m.shared_relative_just_now();
+  if (diffSec < HOUR) {
+    return m.shared_relative_minutes_ago({
+      count: Math.floor(diffSec / MINUTE),
+    });
+  }
+  if (diffSec < DAY) {
+    return m.shared_relative_hours_ago({
+      count: Math.floor(diffSec / HOUR),
+    });
+  }
+  if (diffSec < WEEK) {
+    return m.shared_relative_days_ago({
+      count: Math.floor(diffSec / DAY),
+    });
+  }
 
-  return date.toLocaleDateString(undefined, {
+  return formatDateTime(date, {
     month: "short",
     day: "numeric",
   });
@@ -29,7 +43,7 @@ export function formatTimestamp(
 ): string {
   if (!isoString) return "—";
   const d = new Date(isoString);
-  return d.toLocaleString(undefined, {
+  return formatDateTime(d, {
     month: "short",
     day: "numeric",
     hour: "2-digit",

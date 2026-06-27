@@ -121,6 +121,35 @@ describe("MessageContent", () => {
     unmount(component);
   });
 
+  it("localizes assistant role and thinking block labels", async () => {
+    setLocale("zh-CN");
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          id: 2,
+          role: "assistant",
+          content: "[Thinking]\nInternal reasoning.\n[/Thinking]\n\nVisible response.",
+          content_length: 61,
+          has_thinking: true,
+          thinking_text: "Internal reasoning.",
+        }),
+      },
+    });
+
+    await tick();
+
+    expect(document.querySelector(".role-label")?.textContent?.trim()).toBe(
+      "助手",
+    );
+    expect(document.querySelector(".thinking-label")?.textContent?.trim()).toBe(
+      "思考",
+    );
+    expect(document.body.textContent).toContain("Visible response.");
+
+    unmount(component);
+  });
+
   it("renders compact token totals when both token metrics are reported", async () => {
     const component = mount(MessageContent, {
       target: document.body,
