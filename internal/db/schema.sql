@@ -378,6 +378,48 @@ CREATE TABLE IF NOT EXISTS pg_sync_state (
     value TEXT NOT NULL
 );
 
+-- Metadata replay: durable record of handled artifact events. This lets
+-- import scan the small append-only feed repeatedly without replaying
+-- duplicates or relying on an unsafe max-HLC watermark.
+CREATE TABLE IF NOT EXISTS metadata_applied_events (
+    origin        TEXT NOT NULL,
+    order_key     TEXT NOT NULL,
+    artifact_hash TEXT NOT NULL,
+    applied_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (origin, order_key)
+);
+
+-- Per-field LWW winners for metadata replay.
+CREATE TABLE IF NOT EXISTS metadata_replay_state (
+    session_gid   TEXT NOT NULL,
+    field         TEXT NOT NULL,
+    order_key     TEXT NOT NULL,
+    hlc           TEXT NOT NULL,
+    artifact_hash TEXT NOT NULL,
+    origin        TEXT NOT NULL,
+    op            TEXT NOT NULL,
+    value         TEXT NOT NULL DEFAULT '',
+    updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (session_gid, field)
+);
+
+-- Losing metadata values that were overridden by deterministic LWW replay.
+CREATE TABLE IF NOT EXISTS metadata_conflicts (
+    id                INTEGER PRIMARY KEY,
+    session_gid       TEXT NOT NULL,
+    field             TEXT NOT NULL,
+    winning_order_key TEXT NOT NULL,
+    losing_order_key  TEXT NOT NULL,
+    winning_origin    TEXT NOT NULL,
+    losing_origin     TEXT NOT NULL,
+    winning_op        TEXT NOT NULL,
+    losing_op         TEXT NOT NULL,
+    winning_value     TEXT NOT NULL DEFAULT '',
+    losing_value      TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(session_gid, field, winning_order_key, losing_order_key)
+);
+
 -- Model pricing for cost calculation
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_pattern    TEXT PRIMARY KEY,

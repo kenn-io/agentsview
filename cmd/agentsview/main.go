@@ -18,6 +18,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -224,6 +225,23 @@ func runServe(cfg config.Config) {
 		fatal("%v", prepErr)
 	}
 	cfg = preparedCfg
+
+	// Establish a single authoritative artifact origin before the server can
+	// record metadata events. Without this, an empty config origin makes the
+	// metadata recorder fall back to a DB-generated origin while CLI folder
+	// sync uses the config.toml origin, so the two diverge and peers cannot
+	// replay metadata events. Persist the config origin and reconcile the DB
+	// sync state to it so every origin lookup (recorder, peer import, folder
+	// sync) agrees.
+	if engine != nil {
+		origin, err := (&cfg).EnsureArtifactOriginID()
+		if err != nil {
+			fatal("ensure artifact origin id: %v", err)
+		}
+		if err := artifact.AdoptOrigin(database, origin); err != nil {
+			fatal("reconcile artifact origin id: %v", err)
+		}
+	}
 
 	srv := server.New(cfg, database, engine,
 		server.WithVersion(server.VersionInfo{

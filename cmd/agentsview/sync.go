@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -25,10 +26,21 @@ import (
 
 // SyncConfig holds parsed CLI options for the sync command.
 type SyncConfig struct {
-	Full bool
-	Host string
-	User string
-	Port int
+	Full           bool
+	Init           bool
+	Watch          bool
+	Debounce       time.Duration
+	Interval       time.Duration
+	Host           string
+	User           string
+	Port           int
+	ArtifactFolder string
+	// Token is the bearer token used for an http(s):// artifact peer target.
+	Token string
+	// GCGrace is the minimum age before superseded artifacts are auto-collected
+	// after a folder sync. NoGC disables that automatic collection.
+	GCGrace time.Duration
+	NoGC    bool
 	// CPUProfile, MemProfile, and Trace are hidden flags that capture a
 	// pprof CPU profile, allocation snapshot, and runtime trace for the
 	// sync pass. Empty strings disable each independently.
@@ -37,17 +49,54 @@ type SyncConfig struct {
 	Trace      string
 }
 
+func applySyncArtifactTarget(cfg *SyncConfig, args []string, flagChanged bool) error {
+	if len(args) == 0 {
+		return nil
+	}
+	if flagChanged {
+		return errors.New("artifact folder target cannot be provided both as an argument and --artifact-folder")
+	}
+	cfg.ArtifactFolder = args[0]
+	return nil
+}
+
+func validateSyncConfig(cfg SyncConfig) error {
+	if cfg.Init && cfg.Host != "" {
+		return errors.New("--init cannot be combined with --host")
+	}
+	if cfg.Init && cfg.ArtifactFolder == "" {
+		return errors.New(
+			"--init requires an artifact folder target",
+		)
+	}
+	if cfg.Watch && cfg.Host != "" {
+		return errors.New("--watch cannot be combined with --host")
+	}
+	if cfg.Watch && cfg.ArtifactFolder == "" {
+		return errors.New("--watch requires an artifact folder target")
+	}
+	if cfg.Host != "" && cfg.ArtifactFolder != "" {
+		// SSH remote sync (--host) returns before artifact sync runs, so a
+		// combined invocation would silently ignore the artifact target.
+		return errors.New("--host cannot be combined with an artifact target")
+	}
+	return nil
+}
+
 func runSync(cfg SyncConfig) {
-	if doSync(cfg) {
+	hadRemoteFailures, err := doSync(cfg)
+	if err != nil {
+		fatal("sync: %v", err)
+	}
+	if hadRemoteFailures {
 		os.Exit(1)
 	}
 }
 
-// doSync performs the sync run and reports whether any configured
-// remote host failed. It owns the deferred cleanup (profile stop,
-// db close) so runSync can translate the result into a non-zero
-// exit code without skipping that cleanup.
-func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
+// doSync performs the sync run and reports whether any configured remote host
+// failed. It owns the deferred cleanup (profile stop, db close) so runSync can
+// translate the result into a non-zero exit code without skipping that cleanup.
+func doSync(cfg SyncConfig) (hadRemoteFailures bool, err error) {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		log.Fatalf("loading config: %v", err)
@@ -81,14 +130,18 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	}
 
 	if includeLocal || len(remoteHosts) > 0 {
-		tr, err := ensureTransport(
-			&appCfg, transportIntentArchiveWrite, 0,
-		)
+		tr, err := syncTransport(&appCfg, cfg)
 		if err != nil {
 			fatal("detecting daemon: %v", err)
 		}
 		if tr.Mode == transportHTTP {
 			useDaemon := useDaemonForSync(tr)
+			if useDaemon && cfg.ArtifactFolder != "" {
+				return false, fmt.Errorf(
+					"artifact sync cannot run while a writable daemon owns the SQLite archive; " +
+						"run `agentsview serve stop` and retry",
+				)
+			}
 			if useDaemon && len(remoteHosts) > 0 {
 				fmt.Println("Running sync with remotes via daemon...")
 				onProgress, finishProgress := daemonProgressPrinter()
@@ -101,7 +154,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 					fatal("daemon remote sync: %v", err)
 				}
 				reportRemoteFailures(failures)
-				return len(failures) > 0
+				return len(failures) > 0, nil
 			}
 			if useDaemon {
 				start := time.Now()
@@ -126,7 +179,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 					fatal("daemon sync: %v", err)
 				}
 				printSyncSummary(stats, start)
-				return false
+				return false, nil
 			}
 			// Read-only mirror daemons do not own the local SQLite
 			// archive. Remote sync can still proceed through the direct
@@ -149,7 +202,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 
 	if cfg.Host != "" {
 		runRemoteSync(appCfg, database, cfg)
-		return false
+		return false, nil
 	}
 
 	failures := syncLocalAndRemotes(
@@ -163,8 +216,18 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			return runRemoteSyncOnce(appCfg, database, rh, full)
 		},
 	)
+	if cfg.ArtifactFolder != "" {
+		runArtifactFolderSync(appCfg, database, cfg.ArtifactFolder, cfg)
+	}
 	reportRemoteFailures(failures)
-	return len(failures) > 0
+	return len(failures) > 0, nil
+}
+
+func syncTransport(appCfg *config.Config, cfg SyncConfig) (transport, error) {
+	if cfg.ArtifactFolder != "" {
+		return detectTransport(appCfg.DataDir, appCfg.AuthToken, 0)
+	}
+	return ensureTransport(appCfg, transportIntentArchiveWrite, 0)
 }
 
 func useDaemonForSync(tr transport) bool {
@@ -212,6 +275,68 @@ func daemonProgressPrinter() (sync.ProgressFunc, func()) {
 		}
 	}
 	return onProgress, finish
+}
+
+func runArtifactFolderSync(
+	appCfg config.Config, database *db.DB, target string, cfg SyncConfig,
+) {
+	origin, err := appCfg.EnsureArtifactOriginID()
+	if err != nil {
+		fatal("artifact sync origin: %v", err)
+	}
+	ctx := context.Background()
+	res, err := syncArtifactFolder(
+		ctx, appCfg, database, target, origin, artifactPeerToken(cfg), nil,
+	)
+	if err != nil {
+		fatal("artifact sync: %v", err)
+	}
+	printArtifactSyncSummary(res, cfg.Init)
+	if !cfg.NoGC {
+		autoGCAfterFolderSync(ctx, appCfg.DataDir, target, cfg.GCGrace)
+	}
+}
+
+// artifactPeerToken resolves the bearer token for an HTTP peer target. Tokens
+// are never inferred from local server auth because an explicit peer URL may
+// point at an untrusted endpoint.
+func artifactPeerToken(cfg SyncConfig) string {
+	return cfg.Token
+}
+
+func syncArtifactFolder(
+	ctx context.Context,
+	appCfg config.Config,
+	database *db.DB,
+	target string,
+	origin string,
+	token string,
+	onDataChanged func(),
+) (artifact.SyncResult, error) {
+	if !artifact.IsFolderTarget(target) && !artifact.IsHTTPTarget(target) && !artifact.IsObjectTarget(target) {
+		return artifact.SyncResult{}, fmt.Errorf(
+			"artifact sync supports local folder, http(s) peer, or s3:// object-store targets: %s",
+			target,
+		)
+	}
+	return artifact.Sync(ctx, database, artifact.SyncOptions{
+		DataDir:       appCfg.DataDir,
+		Target:        target,
+		Origin:        origin,
+		Token:         token,
+		OnDataChanged: onDataChanged,
+	})
+}
+
+func printArtifactSyncSummary(res artifact.SyncResult, init bool) {
+	label := "Artifact sync"
+	if init {
+		label = "Artifact sync initialized"
+	}
+	fmt.Printf(
+		"%s (%s): exported %d sessions, imported %d sessions / %d messages / %d metadata events\n",
+		label, res.Origin, res.ExportedSessions, res.ImportedSessions, res.ImportedMessages, res.ImportedMetadata,
+	)
 }
 
 // syncLocalAndRemotes runs the local sync, then the configured

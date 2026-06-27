@@ -14,4 +14,3 @@ export type DbTopSession = {
   started_at?: string;
   termination_status?: string;
 };
-

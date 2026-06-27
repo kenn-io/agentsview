@@ -211,6 +211,7 @@ func (s *Sync) Push(
 
 	var priorFingerprints map[string]string
 	sessionFingerprints := make(map[string]string, len(sessionByID))
+	sessionIdentities := make(map[string]pushedSessionIdentity, len(sessionByID))
 	if !full {
 		var bErr error
 		priorFingerprints, _, _, bErr = readBoundaryAndFingerprints(
@@ -261,14 +262,56 @@ func (s *Sync) Push(
 		)
 	}
 	for id, sess := range sessionByID {
+		identity, err := s.resolvePushedSessionIdentity(
+			ctx, sess, markerID, legacyMarkerMachines,
+		)
+		if err != nil {
+			return result, err
+		}
+		sessionIdentities[id] = identity
+	}
+	if err := s.markRelationshipConflicts(
+		ctx, sessionByID, sessionIdentities, markerID, legacyMarkerMachines,
+	); err != nil {
+		return result, err
+	}
+	// Resolve relationship ids (source/parent) to the ids their target
+	// sessions are stored under in PG once every identity is known, so the
+	// fingerprint and the written row agree and child rows link correctly
+	// even when a target was pushed under a collision-avoidance prefix.
+	for id, sess := range sessionByID {
+		identity := sessionIdentities[id]
+		if identity.Conflict {
+			continue
+		}
+		if sess.SourceSessionID != "" || sess.ParentSessionID != nil {
+			resolver := s.newRelationshipResolver(
+				sessionIdentities, identity.Machine,
+				markerID, legacyMarkerMachines,
+			)
+			resolvedSource, err := resolver.resolve(ctx, sess.SourceSessionID)
+			if err != nil {
+				return result, err
+			}
+			sess.SourceSessionID = resolvedSource
+			resolvedParent, err := resolver.resolvePtr(ctx, sess.ParentSessionID)
+			if err != nil {
+				return result, err
+			}
+			sess.ParentSessionID = resolvedParent
+			sessionByID[id] = sess
+		}
 		sessionFingerprints[id] = sessionPushFingerprint(
-			sess, pushedSessionMachine(sess, s.machine),
+			sess, identity.ID, identity.Machine,
 			usageFingerprints[id], markerID,
 		)
 	}
 
 	if len(priorFingerprints) > 0 {
 		for id := range sessionByID {
+			if sessionIdentities[id].Conflict {
+				continue
+			}
 			if priorFingerprints[id] == sessionFingerprints[id] {
 				delete(sessionByID, id)
 			}
@@ -323,53 +366,19 @@ func (s *Sync) Push(
 		return result, nil
 	}
 
-	var pushed []db.Session
-	const batchSize = 50
-	for i := 0; i < len(sessions); i += batchSize {
-		end := min(i+batchSize, len(sessions))
-		batch := sessions[i:end]
-
-		batchResult, err := s.pushBatch(
-			ctx, batch, full, markerID, legacyMarkerMachines,
-			usageFingerprints, &pushed,
-		)
-		if err != nil {
-			return result, err
-		}
-		if batchResult.ok {
-			result.SessionsPushed += batchResult.sessions
-			result.MessagesPushed += batchResult.messages
-			result.SkippedConflicts += batchResult.skippedConflicts
-		} else {
-			// Batch failed — retry each session individually
-			// so one bad session doesn't block the rest.
-			for _, sess := range batch {
-				sr, retryErr := s.pushBatch(
-					ctx, []db.Session{sess},
-					full, markerID, legacyMarkerMachines,
-					usageFingerprints, &pushed,
-				)
-				if retryErr != nil {
-					return result, retryErr
-				}
-				if sr.ok {
-					result.SessionsPushed += sr.sessions
-					result.MessagesPushed += sr.messages
-					result.SkippedConflicts += sr.skippedConflicts
-				} else {
-					result.Errors++
-				}
-			}
-		}
-		if onProgress != nil {
-			onProgress(PushProgress{
-				SessionsDone:     end,
-				SessionsTotal:    len(sessions),
-				MessagesDone:     result.MessagesPushed,
-				SkippedConflicts: result.SkippedConflicts,
-				Errors:           result.Errors,
-			})
-		}
+	sink := pgSessionSink{
+		sync:                     s,
+		full:                     full,
+		markerID:                 markerID,
+		legacyMarkerMachines:     legacyMarkerMachines,
+		sessionUsageFingerprints: usageFingerprints,
+		identities:               sessionIdentities,
+	}
+	pushed, err := drainSessionBatches(
+		ctx, sessions, sink, &result, onProgress,
+	)
+	if err != nil {
+		return result, err
 	}
 
 	if s.isFiltered() {
@@ -428,6 +437,99 @@ func (s *Sync) Push(
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// sessionBatchSink persists batches of sessions to a target during a push.
+// Extracting this seam keeps the batch/retry/progress orchestration
+// (drainSessionBatches) free of any SQL: PostgreSQL is one sink today, and the
+// artifact exporter can become another without duplicating the loop.
+type sessionBatchSink interface {
+	// writeBatch persists batch atomically and appends successfully written
+	// sessions to *pushed. It returns ok=false (and no error) when the batch
+	// failed for a reason the caller should recover from by retrying each
+	// session individually. A non-nil error is fatal and aborts the push.
+	writeBatch(
+		ctx context.Context, batch []db.Session, pushed *[]db.Session,
+	) (batchResult, error)
+}
+
+// pgSessionSink writes batches to PostgreSQL via Sync.pushBatch. It binds the
+// per-push parameters (full mode, push marker identity) so the orchestration
+// does not need to thread them through.
+type pgSessionSink struct {
+	sync                     *Sync
+	full                     bool
+	markerID                 string
+	legacyMarkerMachines     []string
+	sessionUsageFingerprints map[string]string
+	identities               map[string]pushedSessionIdentity
+}
+
+func (p pgSessionSink) writeBatch(
+	ctx context.Context, batch []db.Session, pushed *[]db.Session,
+) (batchResult, error) {
+	return p.sync.pushBatch(
+		ctx, batch, p.full, p.markerID, p.legacyMarkerMachines,
+		p.sessionUsageFingerprints, pushed, p.identities,
+	)
+}
+
+// drainSessionBatches pushes sessions through sink in fixed-size batches,
+// accumulating counts into result and reporting progress after each batch.
+// When a batch fails (ok=false) it retries each session individually so one
+// bad session does not block the rest; sessions that still fail are counted as
+// errors. It returns the sessions successfully written, in push order.
+func drainSessionBatches(
+	ctx context.Context,
+	sessions []db.Session,
+	sink sessionBatchSink,
+	result *PushResult,
+	onProgress func(PushProgress),
+) ([]db.Session, error) {
+	var pushed []db.Session
+	const batchSize = 50
+	for i := 0; i < len(sessions); i += batchSize {
+		end := min(i+batchSize, len(sessions))
+		batch := sessions[i:end]
+
+		batchResult, err := sink.writeBatch(ctx, batch, &pushed)
+		if err != nil {
+			return pushed, err
+		}
+		if batchResult.ok {
+			result.SessionsPushed += batchResult.sessions
+			result.MessagesPushed += batchResult.messages
+			result.SkippedConflicts += batchResult.skippedConflicts
+		} else {
+			// Batch failed — retry each session individually
+			// so one bad session doesn't block the rest.
+			for _, sess := range batch {
+				sr, retryErr := sink.writeBatch(
+					ctx, []db.Session{sess}, &pushed,
+				)
+				if retryErr != nil {
+					return pushed, retryErr
+				}
+				if sr.ok {
+					result.SessionsPushed += sr.sessions
+					result.MessagesPushed += sr.messages
+					result.SkippedConflicts += sr.skippedConflicts
+				} else {
+					result.Errors++
+				}
+			}
+		}
+		if onProgress != nil {
+			onProgress(PushProgress{
+				SessionsDone:     end,
+				SessionsTotal:    len(sessions),
+				MessagesDone:     result.MessagesPushed,
+				SkippedConflicts: result.SkippedConflicts,
+				Errors:           result.Errors,
+			})
+		}
+	}
+	return pushed, nil
 }
 
 // pgPushMarkerMachineState reports whether this host's push marker is present
@@ -629,11 +731,12 @@ func (s *Sync) pushBatch(
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
 	pushed *[]db.Session,
+	identities map[string]pushedSessionIdentity,
 ) (batchResult, error) {
 	preloadComparisons := len(batch) > 0 && !full
 	result, err := s.pushBatchAttempt(
 		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, preloadComparisons,
+		sessionUsageFingerprints, pushed, identities, preloadComparisons,
 	)
 	if err == nil || !errors.Is(err, errPushComparisonPreload) {
 		return result, err
@@ -645,7 +748,7 @@ func (s *Sync) pushBatch(
 	)
 	return s.pushBatchAttempt(
 		ctx, batch, full, markerID, legacyMarkerMachines,
-		sessionUsageFingerprints, pushed, false,
+		sessionUsageFingerprints, pushed, identities, false,
 	)
 }
 
@@ -657,6 +760,7 @@ func (s *Sync) pushBatchAttempt(
 	legacyMarkerMachines []string,
 	sessionUsageFingerprints map[string]string,
 	pushed *[]db.Session,
+	identities map[string]pushedSessionIdentity,
 	preloadComparisons bool,
 ) (batchResult, error) {
 	tx, err := s.pg.BeginTx(ctx, nil)
@@ -671,7 +775,17 @@ func (s *Sync) pushBatchAttempt(
 	skippedConflicts := 0
 	sessionIDs := make([]string, 0, len(batch))
 	for _, sess := range batch {
-		sessionIDs = append(sessionIDs, sess.ID)
+		identity := identities[sess.ID]
+		if identity.Conflict {
+			continue
+		}
+		if identity.ID == "" {
+			identity = pushedSessionIdentity{
+				ID:      sess.ID,
+				Machine: pushedSessionMachine(sess, s.machine),
+			}
+		}
+		sessionIDs = append(sessionIDs, identity.ID)
 	}
 	comparisons := (*pushMessageComparison)(nil)
 	if preloadComparisons && len(sessionIDs) > 0 {
@@ -688,8 +802,19 @@ func (s *Sync) pushBatchAttempt(
 	}
 
 	for _, sess := range batch {
+		identity := identities[sess.ID]
+		if identity.Conflict {
+			skippedConflicts++
+			continue
+		}
+		if identity.ID == "" {
+			identity = pushedSessionIdentity{
+				ID:      sess.ID,
+				Machine: pushedSessionMachine(sess, s.machine),
+			}
+		}
 		if err := s.pushSession(
-			ctx, tx, sess, markerID, legacyMarkerMachines,
+			ctx, tx, sess, identity, markerID, legacyMarkerMachines,
 		); err != nil {
 			if errors.Is(err, errSessionOwnershipConflict) {
 				skippedConflicts++
@@ -704,8 +829,11 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
+		resolver := s.newRelationshipResolver(
+			identities, identity.Machine, markerID, legacyMarkerMachines,
+		)
 		msgCount, err := s.pushMessages(
-			ctx, tx, sess.ID, full,
+			ctx, tx, sess.ID, identity.ID, resolver, full,
 			sessionUsageFingerprints, comparisons,
 		)
 		if err != nil {
@@ -718,7 +846,9 @@ func (s *Sync) pushBatchAttempt(
 			return batchResult{}, nil
 		}
 
-		findingsChanged, err := s.pushSecretFindings(ctx, tx, sess.ID)
+		findingsChanged, err := s.pushSecretFindings(
+			ctx, tx, sess.ID, identity.ID,
+		)
 		if err != nil {
 			log.Printf(
 				"pgsync: secret findings %s: %v",
@@ -738,11 +868,11 @@ func (s *Sync) pushBatchAttempt(
 				UPDATE sessions
 				SET updated_at = NOW()
 				WHERE id = $1`,
-				sess.ID,
+				identity.ID,
 			); err != nil {
 				log.Printf(
 					"pgsync: bumping updated_at %s: %v",
-					sess.ID, err,
+					identity.ID, err,
 				)
 				_ = tx.Rollback()
 				*pushed = (*pushed)[:len(*pushed)-n]
@@ -980,16 +1110,17 @@ func localSessionSyncMarker(sess db.Session) string {
 }
 
 // sessionPushFingerprint builds the change-detection fingerprint for a
-// session. pushedMachine is the value pushSession actually writes to PG
-// (pushedSessionMachine), not the raw sess.Machine: a "local"/empty sentinel
-// row is written under the fallback machine, so the fingerprint must track the
-// fallback to force a re-push when s.machine changes.
+// session. pushedID and pushedMachine are the values pushSession actually
+// writes to PG. They may differ from sess.ID/sess.Machine when a native
+// session ID collides across machines or a "local"/empty sentinel row is
+// written under the fallback machine, so the fingerprint must track them to
+// force a re-push when the resolved PG identity changes.
 func sessionPushFingerprint(
-	sess db.Session, pushedMachine,
+	sess db.Session, pushedID, pushedMachine,
 	usageEventFingerprint, ownerMarker string,
 ) string {
 	fields := []string{
-		sess.ID,
+		pushedID,
 		sess.Project,
 		pushedMachine,
 		ownerMarker,
@@ -1064,6 +1195,347 @@ func pushedSessionMachine(sess db.Session, fallbackMachine string) string {
 		return sess.Machine
 	}
 	return fallbackMachine
+}
+
+type pushedSessionIdentity struct {
+	ID       string
+	Machine  string
+	Conflict bool
+}
+
+func (s *Sync) markRelationshipConflicts(
+	ctx context.Context,
+	sessionByID map[string]db.Session,
+	identities map[string]pushedSessionIdentity,
+	markerID string,
+	legacyMarkerMachines []string,
+) error {
+	changed := true
+	for changed {
+		changed = false
+		for id, sess := range sessionByID {
+			identity := identities[id]
+			if identity.Conflict {
+				continue
+			}
+			resolver := s.newRelationshipResolver(
+				identities, identity.Machine, markerID, legacyMarkerMachines,
+			)
+			if sess.SourceSessionID != "" {
+				if _, err := resolver.resolve(ctx, sess.SourceSessionID); err != nil {
+					if errors.Is(err, errSessionOwnershipConflict) {
+						identity.Conflict = true
+						identities[id] = identity
+						changed = true
+						continue
+					}
+					return err
+				}
+			}
+			if sess.ParentSessionID != nil && *sess.ParentSessionID != "" {
+				if _, err := resolver.resolve(ctx, *sess.ParentSessionID); err != nil {
+					if errors.Is(err, errSessionOwnershipConflict) {
+						identity.Conflict = true
+						identities[id] = identity
+						changed = true
+						continue
+					}
+					return err
+				}
+			}
+			if _, err := resolver.sessionNeedsSubagentRewrite(ctx, id); err != nil {
+				if errors.Is(err, errSessionOwnershipConflict) {
+					identity.Conflict = true
+					identities[id] = identity
+					changed = true
+					continue
+				}
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// resolvePushedSessionIdentity decides the PG id a local session is stored
+// under. A session this sync owns -- by matching push marker, or an adoptable
+// legacy/ownerless row (see sameSessionOwner) -- is updated in place: an
+// existing row under the current or any prior machine prefix is reused, so
+// machine renames and marker adoption keep updating the same row instead of
+// creating a duplicate. Only a bare id already held by a different owner
+// collides; that session is stored under the current machine prefix so both
+// rows coexist instead of ping-ponging (issue 655). A collision is not rejected
+// here: pushSession skips the conflicting row, so one conflicting session never
+// fails the whole push.
+func (s *Sync) resolvePushedSessionIdentity(
+	ctx context.Context,
+	sess db.Session,
+	markerID string,
+	legacyMarkerMachines []string,
+) (pushedSessionIdentity, error) {
+	machine := pushedSessionMachine(sess, s.machine)
+	id, err := s.resolveOwnedPushID(
+		ctx, sess.ID, machine, markerID, legacyMarkerMachines,
+	)
+	if err != nil {
+		if errors.Is(err, errSessionOwnershipConflict) {
+			return pushedSessionIdentity{Machine: machine, Conflict: true}, nil
+		}
+		return pushedSessionIdentity{}, err
+	}
+	return pushedSessionIdentity{ID: id, Machine: machine}, nil
+}
+
+// resolveOwnedPushID resolves the PG id a local session id is stored under for
+// this owner, consulting committed PG state. It first reuses a row already
+// owned under the current or any legacy machine prefix, so a machine rename
+// keeps updating the same prefixed row instead of duplicating it. Absent an
+// owned prefixed row it keeps the bare id, unless that id is held by another
+// owner, in which case it returns the current machine prefix (the bare-id
+// collision case). If the current prefixed id is also held by another owner,
+// or localID is already that current-prefixed id, there is no safe target id
+// for this session and a per-session ownership conflict is returned so the
+// caller can skip it without publishing the foreign row as a relationship
+// target.
+func (s *Sync) resolveOwnedPushID(
+	ctx context.Context,
+	localID, machine, markerID string,
+	legacyMarkerMachines []string,
+) (string, error) {
+	currentPrefixedID := prefixedSessionID(machine, localID)
+	currentPrefixConflict := false
+	for _, candidate := range pushIDMachinePrefixes(machine, legacyMarkerMachines) {
+		prefixedID := prefixedSessionID(candidate, localID)
+		if prefixedID == localID {
+			continue
+		}
+		existingMachine, ownerMarker, ok, err := s.pgSessionOwner(ctx, prefixedID)
+		if err != nil {
+			return "", err
+		}
+		if ok && sameSessionOwner(
+			ownerMarker, existingMachine, markerID, machine, legacyMarkerMachines,
+		) {
+			return prefixedID, nil
+		}
+		if ok && prefixedID == currentPrefixedID {
+			currentPrefixConflict = true
+		}
+	}
+	existingMachine, ownerMarker, ok, err := s.pgSessionOwner(ctx, localID)
+	if err != nil {
+		return "", err
+	}
+	if ok && !sameSessionOwner(
+		ownerMarker, existingMachine, markerID, machine, legacyMarkerMachines,
+	) {
+		if localID == currentPrefixedID || currentPrefixConflict {
+			return "", errSessionOwnershipConflict
+		}
+		return prefixedSessionID(machine, localID), nil
+	}
+	return localID, nil
+}
+
+// pushIDMachinePrefixes lists the machine names whose id prefixes identify rows
+// this owner may already hold: the current machine first, then prior machine
+// names (legacy marker machines) the same marker pushed under before a rename.
+// The current machine is not repeated when it also appears in the legacy set.
+func pushIDMachinePrefixes(machine string, legacyMarkerMachines []string) []string {
+	prefixes := make([]string, 0, len(legacyMarkerMachines)+1)
+	if machine != "" {
+		prefixes = append(prefixes, machine)
+	}
+	for _, m := range legacyMarkerMachines {
+		if m == machine || m == "" {
+			continue
+		}
+		prefixes = append(prefixes, m)
+	}
+	return prefixes
+}
+
+// pgSessionOwner returns the machine and owner_marker of a PG session row, and
+// whether it exists. owner_marker is empty for legacy rows pushed before the
+// marker model.
+func (s *Sync) pgSessionOwner(
+	ctx context.Context,
+	id string,
+) (string, string, bool, error) {
+	var machine string
+	var ownerMarker sql.NullString
+	err := s.pg.QueryRowContext(ctx,
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`,
+		id,
+	).Scan(&machine, &ownerMarker)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", false, nil
+		}
+		return "", "", false, fmt.Errorf(
+			"reading pg session owner for %s: %w",
+			id, err,
+		)
+	}
+	return machine, ownerMarker.String, true, nil
+}
+
+func prefixedSessionID(machine, id string) string {
+	if machine == "" || id == "" {
+		return id
+	}
+	prefix := machine + "~"
+	if strings.HasPrefix(id, prefix) {
+		return id
+	}
+	return prefix + id
+}
+
+// relationshipResolver maps the local session ids that appear in a session's
+// relationship fields (source/parent) and in tool-call subagent links to the
+// ids those target sessions are stored under in PG. When a target session was
+// pushed under a collision-avoidance prefix (machine~id), the unprefixed local
+// id would dangle or point at a different machine's session; resolving keeps
+// child and subagent rows linked to the correct PG row.
+//
+// A child session and the sessions it references (parent, source, subagents)
+// originate on the same machine, so the resolver is scoped to one machine and
+// mirrors resolvePushedSessionIdentity's ownership rule.
+type relationshipResolver struct {
+	sync                 *Sync
+	identities           map[string]pushedSessionIdentity
+	machine              string
+	markerID             string
+	legacyMarkerMachines []string
+	cache                map[string]string
+}
+
+func (s *Sync) newRelationshipResolver(
+	identities map[string]pushedSessionIdentity,
+	machine, markerID string,
+	legacyMarkerMachines []string,
+) relationshipResolver {
+	return relationshipResolver{
+		sync:                 s,
+		identities:           identities,
+		machine:              machine,
+		markerID:             markerID,
+		legacyMarkerMachines: legacyMarkerMachines,
+		cache:                make(map[string]string),
+	}
+}
+
+// resolve maps a local session id to the id it is stored under in PG. It
+// prefers the in-run identity map (which already reflects collision prefixing
+// for every session in this push) and falls back to committed PG state for
+// targets outside the push window.
+func (r relationshipResolver) resolve(
+	ctx context.Context, localID string,
+) (string, error) {
+	if localID == "" {
+		return "", nil
+	}
+	if identity, ok := r.identities[localID]; ok {
+		if identity.Conflict {
+			return "", errSessionOwnershipConflict
+		}
+		if identity.ID != "" {
+			return identity.ID, nil
+		}
+	}
+	if resolved, ok := r.cache[localID]; ok {
+		return resolved, nil
+	}
+	resolved, err := r.lookup(ctx, localID)
+	if err != nil {
+		return "", err
+	}
+	r.cache[localID] = resolved
+	return resolved, nil
+}
+
+// resolvePtr resolves a relationship id held behind a pointer, preserving nil
+// and returning the original pointer when the value is unchanged.
+func (r relationshipResolver) resolvePtr(
+	ctx context.Context, localID *string,
+) (*string, error) {
+	if localID == nil || *localID == "" {
+		return localID, nil
+	}
+	resolved, err := r.resolve(ctx, *localID)
+	if err != nil {
+		return nil, err
+	}
+	if resolved == *localID {
+		return localID, nil
+	}
+	return &resolved, nil
+}
+
+// lookup resolves an id absent from the in-run identity map by consulting
+// committed PG state, sharing resolveOwnedPushID with identity resolution: it
+// reuses a row owned under the current or any legacy machine prefix (so a target
+// pushed before a rename still resolves), returns the current prefix when the
+// bare id is held by another owner, and otherwise keeps the bare id.
+func (r relationshipResolver) lookup(
+	ctx context.Context, localID string,
+) (string, error) {
+	return r.sync.resolveOwnedPushID(
+		ctx, localID, r.machine, r.markerID, r.legacyMarkerMachines,
+	)
+}
+
+// rewriteSubagentIDs resolves the subagent session link on each tool call and
+// result event in msgs in place so they reference the PG ids of the subagent
+// sessions rather than their unprefixed local ids.
+func (r relationshipResolver) rewriteSubagentIDs(
+	ctx context.Context, msgs []db.Message,
+) error {
+	for i := range msgs {
+		for j := range msgs[i].ToolCalls {
+			tc := &msgs[i].ToolCalls[j]
+			resolved, err := r.resolve(ctx, tc.SubagentSessionID)
+			if err != nil {
+				return err
+			}
+			tc.SubagentSessionID = resolved
+			for k := range tc.ResultEvents {
+				ev := &tc.ResultEvents[k]
+				resolvedEv, err := r.resolve(ctx, ev.SubagentSessionID)
+				if err != nil {
+					return err
+				}
+				ev.SubagentSessionID = resolvedEv
+			}
+		}
+	}
+	return nil
+}
+
+// sessionNeedsSubagentRewrite reports whether any subagent link in the local
+// session resolves to a different PG id than its stored local value. The push
+// fast path compares local and PG fingerprints built from the unprefixed local
+// ids, so a row already in PG with a stale unprefixed subagent id would match
+// and skip the rewrite; this check forces message replacement in that case.
+func (r relationshipResolver) sessionNeedsSubagentRewrite(
+	ctx context.Context, localSessionID string,
+) (bool, error) {
+	ids, err := r.sync.local.SessionSubagentSessionIDs(localSessionID)
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading subagent session ids for %s: %w", localSessionID, err,
+		)
+	}
+	for _, id := range ids {
+		resolved, err := r.resolve(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		if resolved != id {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func sameSessionOwner(
@@ -1146,31 +1618,34 @@ func nilStrTS(s *string) any {
 // local-only and used solely by the sync engine to detect
 // re-parsed sessions.
 func (s *Sync) pushSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, markerID string,
+	ctx context.Context, tx *sql.Tx, sess db.Session,
+	identity pushedSessionIdentity, markerID string,
 	legacyMarkerMachines []string,
 ) error {
 	createdAt, _ := ParseSQLiteTimestamp(sess.CreatedAt)
 	isAutomated := sess.IsAutomated
-	pushedMachine := pushedSessionMachine(sess, s.machine)
 	var existingMachine sql.NullString
 	var existingOwnerMarker sql.NullString
 	checkErr := tx.QueryRowContext(ctx,
-		`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
+		`SELECT machine, owner_marker FROM sessions WHERE id = $1`,
+		identity.ID,
 	).Scan(&existingMachine, &existingOwnerMarker)
 	if checkErr != nil && !errors.Is(checkErr, sql.ErrNoRows) {
-		return fmt.Errorf("checking session ownership %s: %w", sess.ID, checkErr)
+		return fmt.Errorf(
+			"checking session ownership %s: %w", identity.ID, checkErr,
+		)
 	}
 	if checkErr == nil && !sameSessionOwner(
 		existingOwnerMarker.String,
 		existingMachine.String,
 		markerID,
-		pushedMachine,
+		identity.Machine,
 		legacyMarkerMachines,
 	) {
 		log.Printf(
 			"pgsync: session %s: skipping — already owned by machine %q, "+
 				"this pusher is %q; sync from the origin machine to update",
-			sess.ID, existingMachine.String, pushedMachine,
+			identity.ID, existingMachine.String, identity.Machine,
 		)
 		return errSessionOwnershipConflict
 	}
@@ -1348,7 +1823,7 @@ func (s *Sync) pushSession(
 			OR sessions.duplicate_prompt_count IS DISTINCT FROM EXCLUDED.duplicate_prompt_count
 			OR sessions.no_code_context_count IS DISTINCT FROM EXCLUDED.no_code_context_count
 			OR sessions.runaway_tool_loop_count IS DISTINCT FROM EXCLUDED.runaway_tool_loop_count)`,
-		sess.ID, pushedMachine, markerID,
+		identity.ID, identity.Machine, markerID,
 		sanitizePG(sess.Project),
 		sess.Agent,
 		nilStr(sess.FirstMessage),
@@ -1391,7 +1866,8 @@ func (s *Sync) pushSession(
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
 		refreshErr := tx.QueryRowContext(ctx,
-			`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
+			`SELECT machine, owner_marker FROM sessions WHERE id = $1`,
+			identity.ID,
 		).Scan(&existingMachine, &existingOwnerMarker)
 		if refreshErr != nil {
 			// The guarded upsert changed no rows and we cannot
@@ -1407,11 +1883,11 @@ func (s *Sync) pushSession(
 		}
 		if !sameSessionOwner(
 			existingOwnerMarker.String, existingMachine.String,
-			markerID, pushedMachine, legacyMarkerMachines,
+			markerID, identity.Machine, legacyMarkerMachines,
 		) {
 			log.Printf(
 				"pgsync: session %s: skipping — already owned by machine %q, this pusher is %q; sync from the origin machine to update",
-				sess.ID, existingMachine.String, pushedMachine,
+				identity.ID, existingMachine.String, identity.Machine,
 			)
 			return errSessionOwnershipConflict
 		}
@@ -1426,12 +1902,14 @@ func (s *Sync) pushSession(
 func (s *Sync) pushMessages(
 	ctx context.Context,
 	tx *sql.Tx,
-	sessionID string,
+	localSessionID string,
+	pgSessionID string,
+	resolver relationshipResolver,
 	full bool,
 	sessionUsageFingerprints map[string]string,
 	comparisons *pushMessageComparison,
 ) (int, error) {
-	localCount, err := s.local.MessageCount(sessionID)
+	localCount, err := s.local.MessageCount(localSessionID)
 	if err != nil {
 		return 0, fmt.Errorf(
 			"counting local messages: %w", err,
@@ -1440,7 +1918,7 @@ func (s *Sync) pushMessages(
 	if localCount == 0 {
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM tool_result_events WHERE session_id = $1`,
-			sessionID,
+			pgSessionID,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"deleting stale pg tool_result_events: %w", err,
@@ -1448,7 +1926,7 @@ func (s *Sync) pushMessages(
 		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM tool_calls WHERE session_id = $1`,
-			sessionID,
+			pgSessionID,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"deleting stale pg tool_calls: %w", err,
@@ -1456,7 +1934,7 @@ func (s *Sync) pushMessages(
 		}
 		if _, err := tx.ExecContext(ctx,
 			`DELETE FROM messages WHERE session_id = $1`,
-			sessionID,
+			pgSessionID,
 		); err != nil {
 			return 0, fmt.Errorf(
 				"deleting stale pg messages: %w", err,
@@ -1467,11 +1945,13 @@ func (s *Sync) pushMessages(
 		// state.db-only session) with zero messages. Sync them here
 		// too so their cost reaches PG instead of being dropped with
 		// the rest of the message-replace path below.
-		if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
+		if err := s.replaceUsageEvents(
+			ctx, tx, localSessionID, pgSessionID,
+		); err != nil {
 			return 0, err
 		}
 		if err := reconcilePinnedMessages(
-			ctx, tx, sessionID,
+			ctx, tx, pgSessionID,
 		); err != nil {
 			return 0, err
 		}
@@ -1479,7 +1959,7 @@ func (s *Sync) pushMessages(
 	}
 
 	pgAgg, pgToolAgg, hasPreloadedComparisons := comparisonAggregates(
-		sessionID, comparisons,
+		pgSessionID, comparisons,
 	)
 	if !hasPreloadedComparisons {
 		if err := tx.QueryRowContext(ctx,
@@ -1494,7 +1974,7 @@ func (s *Sync) pushMessages(
 				)
 			 FROM messages
 			 WHERE session_id = $1`,
-			sessionID,
+			pgSessionID,
 		).Scan(
 			&pgAgg.Count, &pgAgg.Sum,
 			&pgAgg.Max, &pgAgg.Min,
@@ -1509,7 +1989,7 @@ func (s *Sync) pushMessages(
 				COALESCE(SUM(result_content_length), 0)
 			 FROM tool_calls
 			 WHERE session_id = $1`,
-			sessionID,
+			pgSessionID,
 		).Scan(&pgToolAgg.Count, &pgToolAgg.Sum); err != nil {
 			return 0, fmt.Errorf(
 				"counting pg tool_calls: %w", err,
@@ -1518,166 +1998,178 @@ func (s *Sync) pushMessages(
 	}
 
 	if !full && pgAgg.Count == localCount && pgAgg.Count > 0 {
-		localFP := pushLocalMessageFingerprint{}
+		// A row already in PG with a stale unprefixed subagent id matches the
+		// local fingerprint (both unprefixed), so the skip below would never
+		// repair it. Force replacement when any subagent link now resolves to a
+		// different pushed id.
+		subagentRewrite, err := resolver.sessionNeedsSubagentRewrite(
+			ctx, localSessionID,
+		)
+		if err != nil {
+			return 0, err
+		}
+		if !subagentRewrite {
+			localFP := pushLocalMessageFingerprint{}
 
-		localFP.Sum, localFP.Max, localFP.Min, err = s.local.MessageContentFingerprint(
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local content fingerprint: %w",
-				err,
+			localFP.Sum, localFP.Max, localFP.Min, err = s.local.MessageContentFingerprint(
+				localSessionID,
 			)
-		}
-		localFP.ContentHashFP, err = s.local.MessageContentHashFingerprint(
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local content hash fingerprint: %w",
-				err,
-			)
-		}
-		localFP.RoleTimeFP, err = localMessageRoleTimePGFingerprint(
-			s.local, sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local role/time fingerprint: %w",
-				err,
-			)
-		}
-		localFP.FlagsFP, err = s.local.MessageFlagsFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local message flags fingerprint: %w",
-				err,
-			)
-		}
-		localFP.SystemFP, err = s.local.SystemMessageFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local system message fingerprint: %w", err,
-			)
-		}
-		localFP.ToolCallCount, err = s.local.ToolCallCount(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"counting local tool_calls: %w", err,
-			)
-		}
-		localFP.ToolCallSum, err = s.local.ToolCallContentFingerprint(
-			sessionID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_call content fingerprint: %w",
-				err,
-			)
-		}
-		localFP.ToolCallFP, err = s.local.ToolCallFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local tool_call fingerprint: %w", err,
-			)
-		}
-		localFP.TokenFP, err = s.local.MessageTokenFingerprint(sessionID)
-		if err != nil {
-			return 0, fmt.Errorf(
-				"computing local token fingerprint: %w",
-				err,
-			)
-		}
-
-		usageFromMap := false
-		if sessionUsageFingerprints != nil {
-			var ok bool
-			localFP.UsageEventFP, ok = sessionUsageFingerprints[sessionID]
-			usageFromMap = ok
-		}
-		if !usageFromMap {
-			localFP.UsageEventFP, err = s.local.UsageEventFingerprint(sessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
-					"computing local usage event fingerprint: %w",
+					"computing local content fingerprint: %w",
 					err,
 				)
 			}
-		}
-
-		if comparisons == nil {
-			pgContentHashFP, err := pgMessageContentHashFingerprint(
-				ctx, tx, sessionID,
+			localFP.ContentHashFP, err = s.local.MessageContentHashFingerprint(
+				localSessionID,
 			)
 			if err != nil {
 				return 0, fmt.Errorf(
-					"computing pg content hash fingerprint: %w",
+					"computing local content hash fingerprint: %w",
 					err,
 				)
 			}
-			pgRoleTimeFP, err := pgMessageRoleTimeFingerprint(
-				ctx, tx, sessionID,
+			localFP.RoleTimeFP, err = localMessageRoleTimePGFingerprint(
+				s.local, localSessionID,
 			)
 			if err != nil {
 				return 0, fmt.Errorf(
-					"computing pg role/time fingerprint: %w",
+					"computing local role/time fingerprint: %w",
 					err,
 				)
 			}
-			pgFlagsFP, err := pgMessageFlagsFingerprint(ctx, tx, sessionID)
+			localFP.FlagsFP, err = s.local.MessageFlagsFingerprint(localSessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
-					"computing pg message flags fingerprint: %w",
+					"computing local message flags fingerprint: %w",
 					err,
 				)
 			}
-			pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, sessionID)
+			localFP.SystemFP, err = s.local.SystemMessageFingerprint(localSessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
-					"computing pg token fingerprint: %w",
+					"computing local system message fingerprint: %w", err,
+				)
+			}
+			localFP.ToolCallCount, err = s.local.ToolCallCount(localSessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"counting local tool_calls: %w", err,
+				)
+			}
+			localFP.ToolCallSum, err = s.local.ToolCallContentFingerprint(
+				localSessionID,
+			)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing local tool_call content fingerprint: %w",
 					err,
 				)
 			}
-			pgTCFP, err := pgToolCallFingerprint(ctx, tx, sessionID)
+			localFP.ToolCallFP, err = s.local.ToolCallFingerprint(localSessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
-					"computing pg tool_call fingerprint: %w",
-					err,
+					"computing local tool_call fingerprint: %w", err,
 				)
 			}
-			pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, sessionID)
+			localFP.TokenFP, err = s.local.MessageTokenFingerprint(localSessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
-					"computing pg usage event fingerprint: %w",
+					"computing local token fingerprint: %w",
 					err,
 				)
 			}
 
-			if localFP.Sum == pgAgg.Sum &&
-				localFP.Max == pgAgg.Max &&
-				localFP.Min == pgAgg.Min &&
-				localFP.ContentHashFP == pgContentHashFP &&
-				localFP.RoleTimeFP == pgRoleTimeFP &&
-				localFP.FlagsFP == pgFlagsFP &&
-				localFP.SystemFP == pgAgg.SysFP &&
-				localFP.ToolCallCount == pgToolAgg.Count &&
-				localFP.ToolCallSum == pgToolAgg.Sum &&
-				localFP.ToolCallFP == pgTCFP &&
-				localFP.TokenFP == pgTokenFP &&
-				localFP.UsageEventFP == pgUsageFP {
+			usageFromMap := false
+			if sessionUsageFingerprints != nil {
+				var ok bool
+				localFP.UsageEventFP, ok = sessionUsageFingerprints[localSessionID]
+				usageFromMap = ok
+			}
+			if !usageFromMap {
+				localFP.UsageEventFP, err = s.local.UsageEventFingerprint(localSessionID)
+				if err != nil {
+					return 0, fmt.Errorf(
+						"computing local usage event fingerprint: %w",
+						err,
+					)
+				}
+			}
+
+			if comparisons == nil {
+				pgContentHashFP, err := pgMessageContentHashFingerprint(
+					ctx, tx, pgSessionID,
+				)
+				if err != nil {
+					return 0, fmt.Errorf(
+						"computing pg content hash fingerprint: %w",
+						err,
+					)
+				}
+				pgRoleTimeFP, err := pgMessageRoleTimeFingerprint(
+					ctx, tx, pgSessionID,
+				)
+				if err != nil {
+					return 0, fmt.Errorf(
+						"computing pg role/time fingerprint: %w",
+						err,
+					)
+				}
+				pgFlagsFP, err := pgMessageFlagsFingerprint(ctx, tx, pgSessionID)
+				if err != nil {
+					return 0, fmt.Errorf(
+						"computing pg message flags fingerprint: %w",
+						err,
+					)
+				}
+				pgTokenFP, err := pgMessageTokenFingerprint(ctx, tx, pgSessionID)
+				if err != nil {
+					return 0, fmt.Errorf(
+						"computing pg token fingerprint: %w",
+						err,
+					)
+				}
+				pgTCFP, err := pgToolCallFingerprint(ctx, tx, pgSessionID)
+				if err != nil {
+					return 0, fmt.Errorf(
+						"computing pg tool_call fingerprint: %w",
+						err,
+					)
+				}
+				pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, pgSessionID)
+				if err != nil {
+					return 0, fmt.Errorf(
+						"computing pg usage event fingerprint: %w",
+						err,
+					)
+				}
+
+				if localFP.Sum == pgAgg.Sum &&
+					localFP.Max == pgAgg.Max &&
+					localFP.Min == pgAgg.Min &&
+					localFP.ContentHashFP == pgContentHashFP &&
+					localFP.RoleTimeFP == pgRoleTimeFP &&
+					localFP.FlagsFP == pgFlagsFP &&
+					localFP.SystemFP == pgAgg.SysFP &&
+					localFP.ToolCallCount == pgToolAgg.Count &&
+					localFP.ToolCallSum == pgToolAgg.Sum &&
+					localFP.ToolCallFP == pgTCFP &&
+					localFP.TokenFP == pgTokenFP &&
+					localFP.UsageEventFP == pgUsageFP {
+					return 0, nil
+				}
+			} else if shouldSkipSessionMessages(
+				pgSessionID, localCount, localFP, full, comparisons,
+			) {
 				return 0, nil
 			}
-		} else if shouldSkipSessionMessages(
-			sessionID, localCount, localFP, full, comparisons,
-		) {
-			return 0, nil
 		}
 	}
 
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM tool_result_events
 		WHERE session_id = $1
-	`, sessionID); err != nil {
+	`, pgSessionID); err != nil {
 		return 0, fmt.Errorf(
 			"deleting pg tool_result_events: %w", err,
 		)
@@ -1685,7 +2177,7 @@ func (s *Sync) pushMessages(
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM tool_calls
 		WHERE session_id = $1
-	`, sessionID); err != nil {
+	`, pgSessionID); err != nil {
 		return 0, fmt.Errorf(
 			"deleting pg tool_calls: %w", err,
 		)
@@ -1693,12 +2185,14 @@ func (s *Sync) pushMessages(
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM messages
 		WHERE session_id = $1
-	`, sessionID); err != nil {
+	`, pgSessionID); err != nil {
 		return 0, fmt.Errorf(
 			"deleting pg messages: %w", err,
 		)
 	}
-	if err := s.replaceUsageEvents(ctx, tx, sessionID); err != nil {
+	if err := s.replaceUsageEvents(
+		ctx, tx, localSessionID, pgSessionID,
+	); err != nil {
 		return 0, err
 	}
 
@@ -1706,7 +2200,7 @@ func (s *Sync) pushMessages(
 	startOrdinal := 0
 	for {
 		msgs, err := s.local.GetMessages(
-			ctx, sessionID, startOrdinal,
+			ctx, localSessionID, startOrdinal,
 			db.MaxMessageLimit, true,
 		)
 		if err != nil {
@@ -1723,23 +2217,29 @@ func (s *Sync) pushMessages(
 			return count, fmt.Errorf(
 				"pushMessages %s: ordinal did not "+
 					"advance (start=%d, last=%d)",
-				sessionID, startOrdinal,
+				localSessionID, startOrdinal,
 				msgs[len(msgs)-1].Ordinal,
 			)
 		}
 
+		if err := resolver.rewriteSubagentIDs(ctx, msgs); err != nil {
+			return count, fmt.Errorf(
+				"resolving subagent session ids: %w", err,
+			)
+		}
+
 		if err := bulkInsertMessages(
-			ctx, tx, sessionID, msgs,
+			ctx, tx, pgSessionID, msgs,
 		); err != nil {
 			return count, err
 		}
 		if err := bulkInsertToolCalls(
-			ctx, tx, sessionID, msgs,
+			ctx, tx, pgSessionID, msgs,
 		); err != nil {
 			return count, err
 		}
 		if err := bulkInsertToolResultEvents(
-			ctx, tx, sessionID, msgs,
+			ctx, tx, pgSessionID, msgs,
 		); err != nil {
 			return count, err
 		}
@@ -1747,7 +2247,7 @@ func (s *Sync) pushMessages(
 		startOrdinal = nextOrdinal
 	}
 
-	if err := reconcilePinnedMessages(ctx, tx, sessionID); err != nil {
+	if err := reconcilePinnedMessages(ctx, tx, pgSessionID); err != nil {
 		return count, err
 	}
 
@@ -1761,19 +2261,22 @@ func (s *Sync) pushMessages(
 // zero-message and the normal message-replace paths in pushMessages call
 // this so a session's cost always reaches PG.
 func (s *Sync) replaceUsageEvents(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx *sql.Tx,
+	localSessionID string, pgSessionID string,
 ) error {
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM usage_events
 		WHERE session_id = $1
-	`, sessionID); err != nil {
+	`, pgSessionID); err != nil {
 		return fmt.Errorf("deleting pg usage_events: %w", err)
 	}
-	usageEvents, err := s.local.GetUsageEvents(ctx, sessionID)
+	usageEvents, err := s.local.GetUsageEvents(ctx, localSessionID)
 	if err != nil {
 		return fmt.Errorf("reading local usage events: %w", err)
 	}
-	if err := bulkInsertUsageEvents(ctx, tx, usageEvents); err != nil {
+	if err := bulkInsertUsageEvents(
+		ctx, tx, pgSessionID, usageEvents,
+	); err != nil {
 		return err
 	}
 	return nil
@@ -2320,7 +2823,8 @@ func bulkInsertMessages(
 }
 
 func bulkInsertUsageEvents(
-	ctx context.Context, tx *sql.Tx, events []db.UsageEvent,
+	ctx context.Context, tx *sql.Tx,
+	sessionID string, events []db.UsageEvent,
 ) error {
 	if len(events) == 0 {
 		return nil
@@ -2363,7 +2867,7 @@ func bulkInsertUsageEvents(
 				cost = *ev.CostUSD
 			}
 			args = append(args,
-				ev.SessionID,
+				sessionID,
 				ordinal,
 				sanitizePG(ev.Source),
 				sanitizePG(ev.Model),
@@ -2599,31 +3103,32 @@ func bulkInsertToolResultEvents(
 // sessions.secrets_rules_version is pushed by pushSession alongside
 // the rest of the session columns.
 func (s *Sync) pushSecretFindings(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, tx *sql.Tx,
+	localSessionID string, pgSessionID string,
 ) (bool, error) {
 	res, err := tx.ExecContext(ctx,
 		`DELETE FROM secret_findings WHERE session_id = $1`,
-		sessionID,
+		pgSessionID,
 	)
 	if err != nil {
 		return false, fmt.Errorf(
 			"deleting pg secret_findings for %s: %w",
-			sessionID, err,
+			pgSessionID, err,
 		)
 	}
 	deleted, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf(
 			"counting deleted secret_findings for %s: %w",
-			sessionID, err,
+			pgSessionID, err,
 		)
 	}
 
-	findings, err := s.local.SessionSecretFindings(ctx, sessionID)
+	findings, err := s.local.SessionSecretFindings(ctx, localSessionID)
 	if err != nil {
 		return false, fmt.Errorf(
 			"reading local secret_findings for %s: %w",
-			sessionID, err,
+			localSessionID, err,
 		)
 	}
 	if len(findings) == 0 {
@@ -2656,7 +3161,7 @@ func (s *Sync) pushSecretFindings(
 				p+5, p+6, p+7, p+8, p+9, p+10, p+11,
 			)
 			args = append(args,
-				f.SessionID, f.RuleName, f.Confidence,
+				pgSessionID, f.RuleName, f.Confidence,
 				f.LocationKind, f.MessageOrdinal,
 				f.CallIndex, f.EventIndex,
 				f.MatchStart, f.MatchEnd, f.MatchIndex,
@@ -2668,7 +3173,7 @@ func (s *Sync) pushSecretFindings(
 		); err != nil {
 			return false, fmt.Errorf(
 				"bulk inserting secret_findings for %s: %w",
-				sessionID, err,
+				pgSessionID, err,
 			)
 		}
 	}
