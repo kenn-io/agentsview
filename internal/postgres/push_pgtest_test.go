@@ -694,7 +694,7 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 		Project:          "test-proj",
 		Machine:          "test-machine",
 		Agent:            "claude",
-		DisplayName:      &sourceNameOne,
+		SessionName:      &sourceNameOne,
 		MessageCount:     1,
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
@@ -732,7 +732,7 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push initial source curation")
 
-	renamed.DisplayName = &sourceNameTwo
+	renamed.SessionName = &sourceNameTwo
 	require.NoError(t, localDB.UpsertSession(renamed),
 		"UpsertSession renamed source update")
 	restoredCount, err := localDB.RestoreSession(restoredID)
@@ -791,7 +791,7 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 		Project:          "test-proj",
 		Machine:          "test-machine",
 		Agent:            "claude",
-		DisplayName:      &sourceNameOne,
+		SessionName:      &sourceNameOne,
 		MessageCount:     1,
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
@@ -846,7 +846,7 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 	)
 	require.NoError(t, err, "simulate legacy PG trash")
 
-	renamed.DisplayName = &sourceNameTwo
+	renamed.SessionName = &sourceNameTwo
 	require.NoError(t, localDB.UpsertSession(renamed),
 		"UpsertSession renamed source update")
 
