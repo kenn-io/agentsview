@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,6 +301,19 @@ func (s openCodeFormatSourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		}
 		dbSources, err := s.sqliteSources(ctx, root, src.DBPath, storageIDs)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, err
+			}
+			// The SQLite DB is optional alongside filesystem storage. A
+			// corrupt or unreadable DB must not abort discovery of the valid
+			// storage-backed sessions in this root; scope the failure to the DB
+			// portion, matching the legacy independent discovery paths. A
+			// SQLite-only root has nothing to fall back to, so keep failing.
+			if src.Mode == OpenCodeSourceStorage {
+				log.Printf("sync %s: skipping unreadable %s: %v",
+					s.spec.agent, src.DBPath, err)
+				continue
+			}
 			return nil, err
 		}
 		for _, source := range dbSources {
