@@ -2,6 +2,7 @@ package db
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -603,4 +604,41 @@ func TestUserAutomationExactMatchesReturnsCopy(t *testing.T) {
 		assert.Equal(t, "alpha", again[0],
 			"singleton mutated through returned slice")
 	}
+}
+
+func TestUserAutomationGettersConcurrentWithSetters(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+
+	const workers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for i := 0; i < workers; i++ {
+		wg.Add(2)
+
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				SetUserAutomationPrefixes([]string{"alpha", "beta"})
+				SetUserAutomationSubstrings([]string{"gamma"})
+				SetUserAutomationExactMatches([]string{"delta"})
+				return
+			}
+			SetUserAutomationPrefixes([]string{"epsilon"})
+			SetUserAutomationSubstrings([]string{"zeta", "eta"})
+			SetUserAutomationExactMatches([]string{"theta"})
+		}(i)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = UserAutomationPrefixes()
+			_ = UserAutomationSubstrings()
+			_ = UserAutomationExactMatches()
+		}()
+	}
+
+	close(start)
+	wg.Wait()
 }

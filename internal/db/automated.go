@@ -92,19 +92,19 @@ func SetUserAutomationExactMatches(matches []string) {
 // user-prefix slice. Used by ClassifierHash and tests; the
 // copy prevents callers from mutating singleton state.
 func UserAutomationPrefixes() []string {
-	return copyUserAutomationPatterns(userPrefixes)
+	return copyUserAutomationPatterns(&userPrefixes)
 }
 
 // UserAutomationSubstrings returns a copy of the current
 // user-substring slice.
 func UserAutomationSubstrings() []string {
-	return copyUserAutomationPatterns(userSubstrings)
+	return copyUserAutomationPatterns(&userSubstrings)
 }
 
 // UserAutomationExactMatches returns a copy of the current
 // user exact-match slice.
 func UserAutomationExactMatches() []string {
-	return copyUserAutomationPatterns(userExactMatches)
+	return copyUserAutomationPatterns(&userExactMatches)
 }
 
 func setUserAutomationPatterns(dst *[]string, in []string, builtIns []string) {
@@ -114,10 +114,10 @@ func setUserAutomationPatterns(dst *[]string, in []string, builtIns []string) {
 	*dst = cleaned
 }
 
-func copyUserAutomationPatterns(src []string) []string {
+func copyUserAutomationPatterns(src *[]string) []string {
 	userPatternsMu.RLock()
 	defer userPatternsMu.RUnlock()
-	return append([]string(nil), src...)
+	return append([]string(nil), (*src)...)
 }
 
 func snapshotUserAutomationPatterns() (
