@@ -46,15 +46,7 @@ var providerNeutralEntrypoints = map[string]bool{
 // functions and remove the file from this list on the same branch. The stack
 // tip (the zero-legacy gate) asserts this list is empty, so a provider cannot
 // remain a permanent shim.
-var pendingShimProviderFiles = map[string]bool{
-	"antigravity_cli_provider.go": true,
-	"antigravity_provider.go":     true,
-	"db_backed_provider.go":       true,
-	"kiro_ide_provider.go":        true,
-	"kiro_provider.go":            true,
-	"shelley_provider.go":         true,
-	"zed_provider.go":             true,
-}
+var pendingShimProviderFiles = map[string]bool{}
 
 // collectLegacyFreeFuncs returns the set of package-level free functions in the
 // parser package whose names match the legacy entrypoint pattern, excluding the

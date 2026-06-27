@@ -1,5 +1,29 @@
 # Provider Facade Design
 
+## Current Stack Status
+
+This document describes both the target provider facade and the staged migration
+history used by the stacked PRs. On the `provider-explicit-registry` stack tip,
+the provider registry no longer has a legacy fallback factory, concrete
+parse-capable providers are expected to be `provider-authoritative`, and
+Claude.ai / ChatGPT are explicitly `import-only`.
+
+The earlier `legacy-only -> shadow-compare -> provider-authoritative` flow is
+historical guidance for the lower migration branches in the stack. The final tip
+must not reintroduce `ProviderMigrationLegacyOnly`; the literal `"legacy-only"`
+value is rejected as an invalid migration mode. `ProviderMigrationShadowCompare`
+has also been removed from the current stack tip: future staged migrations need
+to add an explicit temporary comparison mode on the branch that needs it rather
+than relying on a dormant runtime path. Tip runtime code requires every
+parse-capable, non-import provider to be authoritative.
+
+`provider-authoritative` currently makes the provider registry, migration
+manifest, sync-engine `processFile` dispatch, full-sync source discovery, and
+source lookup authoritative for parse-capable providers. Kata issue `n489` is
+closed at the stack tip: the dead legacy parser wrappers and old `AgentDef`
+source callback surface have been removed, and the tip no longer falls back to
+the provider-by-provider legacy `processFile` switch.
+
 ## Purpose
 
 agentsview supports many agent formats, but parser integration is currently
@@ -14,7 +38,36 @@ means implementing one contract. The facade keeps provider source shape
 internal, while the sync engine consumes normalized source identities,
 fingerprints, and `ParseResult` values.
 
-## Goals
+## Current Tip Invariants
+
+- Keep `ParsedSession`, `ParsedMessage`, `ParsedToolCall`, `ParsedToolResult`,
+  `ParsedUsageEvent`, and `ParseResult` as the normalized output contract.
+- Keep every parse-capable provider except explicit import-only providers in
+  `provider-authoritative` mode.
+- Keep `sync.Engine.processFile` provider-owned; the provider-by-provider legacy
+  dispatch switch and runtime shadow hook must not be restored at the tip.
+- Make source discovery, source lookup, watch planning, fingerprinting, parsing,
+  and optional incremental parsing provider-owned.
+- Keep provider-authoritative `AgentDef` entries free of `DiscoverFunc` and
+  `FindSourceFunc`. Runtime callers should reach provider discovery and lookup
+  through the provider registry, not through per-agent callback shims.
+- Disallow exported provider-specific facade functions named like `Discover*`,
+  `Find*`, `Parse*Session(s)`, `Parse*DB`, `Process*`, or `Classify*`.
+  Package-local parser mechanics and provider-neutral path parsers such as
+  `ParseVirtualSourcePath`, `ParseAiderVirtualPath`, and
+  `ParseCursorTranscriptRelPath` are allowed because they are not runtime
+  dispatch facades.
+- Provide reusable provider helpers for common source layouts, especially JSONL
+  file discovery.
+- Make optional parsed features auditable through a concrete `Capabilities`
+  struct.
+- Preserve current SQLite schema, parse-diff semantics, skip-cache behavior, and
+  parser output parity.
+
+## Historical Migration Goals
+
+These goals describe how the stacked PRs got to the tip and remain useful when a
+future provider migration starts on a lower branch:
 
 - Migrate every existing provider to the facade, not only future providers.
 - Keep both runtime shapes available at the root of the stack so legacy parsing
@@ -23,19 +76,9 @@ fingerprints, and `ParseResult` values.
 - Make every provider PR an actual migration step: adding a provider
   implementation must also opt that provider into the shared migration
   manifest and provider-vs-legacy parity tests.
-- Keep `ParsedSession`, `ParsedMessage`, `ParsedToolCall`, `ParsedToolResult`,
-  `ParsedUsageEvent`, and `ParseResult` as the normalized output contract.
 - Remove the provider-by-provider `sync.Engine.processFile` dispatch switch only
   at the tip of the stack, after every parse-capable provider has passed the
   shadow comparison path.
-- Make source discovery, source lookup, watch planning, fingerprinting, parsing,
-  and optional incremental parsing provider-owned.
-- Provide reusable provider helpers for common source layouts, especially JSONL
-  file discovery.
-- Make optional parsed features auditable through a concrete `Capabilities`
-  struct.
-- Preserve current SQLite schema, parse-diff semantics, skip-cache behavior, and
-  parser output parity.
 
 ## Non-Goals
 
@@ -64,7 +107,7 @@ The provider facade must respect these constraints:
   marshal methods from one enum definition.
 - All existing providers migrate to the new layer before the old sync dispatch
   is considered removed.
-- During the stacked migration, legacy dispatch remains the writer. Provider
+- On lower migration branches, legacy dispatch remains the writer. Provider
   dispatch is run through the same root-level harness for opted-in providers
   and compared against legacy output, but it must not mutate persisted session
   state until the stack tip switches authority.
@@ -279,8 +322,15 @@ func (p *CodexProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,
 ) (ParseOutcome, error) {
+	sourcePath, ok := p.sources.pathFromSource(req.Source)
+	if !ok {
+		return ParseOutcome{}, fmt.Errorf(
+			"codex source missing file path: %s",
+			req.Source.Key,
+		)
+	}
 	sess, msgs, err := ParseCodexSession(
-		req.Source.DisplayPath,
+		sourcePath,
 		req.Machine,
 		false,
 	)
@@ -385,6 +435,12 @@ Rules:
 - `Opaque` is never persisted or logged, must be immutable for engine callers,
   and must remain usable when `SourceRef` is queued across goroutines for the
   lifetime of the provider instance.
+- When `FindSource` receives a raw/full session ID for a source file that can
+  contain multiple logical sessions, it must return a `SourceRef` scoped to
+  that logical session. For example, Visual Studio Copilot must return the
+  `<traceFile>#<conversationID>` virtual path instead of the physical trace
+  file so raw export and single-session sync cannot accidentally process
+  unrelated conversations.
 
 Backwards compatibility:
 
@@ -408,12 +464,20 @@ type WatchPlan struct {
 	Roots []WatchRoot
 }
 
+type StoredSourcePathHintMode string
+
+const (
+	StoredSourcePathsNone         StoredSourcePathHintMode = ""
+	StoredSourcePathsProviderRoot StoredSourcePathHintMode = "provider-root"
+)
+
 type WatchRoot struct {
-	Path         string
-	Recursive    bool
-	IncludeGlobs []string
-	ExcludeGlobs []string
-	DebounceKey  string
+	Path                  string
+	Recursive             bool
+	IncludeGlobs          []string
+	ExcludeGlobs          []string
+	DebounceKey           string
+	StoredSourcePathHints StoredSourcePathHintMode
 }
 
 type ChangedPathRequest struct {
@@ -434,6 +498,54 @@ them. `StoredSourcePaths` is the persisted `sessions.file_path` hint set scoped
 to the matched watch root and provider. Providers with virtual, database-backed,
 or multi-file sources use it to classify deletion and tombstone events that no
 longer have a regular source file on disk.
+
+`StoredSourcePathHints` is zero-valued for providers that do not need persisted
+source-path hints. SQLite fan-out providers that need tombstone recovery declare
+`StoredSourcePathsProviderRoot` on the narrow watch root that owns the shared
+source. That declaration is the engine's only signal to load stored source
+paths; it must not infer the need from provider names, virtual path syntax, or
+capability combinations. A provider must not request stored-source hints from a
+broad recursive root unless the root is already narrow enough for an indexed
+provider/root lookup.
+
+`StoredSourcePaths` contains optional, already-persisted session `file_path`
+values for the matched provider and watch root. It exists for providers that
+model a shared physical source as virtual per-session sources, such as SQLite
+fan-out providers. The engine supplies these paths from a session-store API that
+queries by exact provider plus watched-root path prefix, using an index on
+`(agent, file_path)` or equivalent. The lookup must not scan all sessions, and
+the returned list must be sorted and de-duplicated before it is passed to the
+provider. Provider-only migration slices may cover the behavior with explicit
+provider tests until that caller exists. Providers use the hints only to recover
+tombstone sources for rows or DB files that can no longer be rediscovered from
+current metadata. Providers must still filter by the concrete changed DB/path
+before returning any source.
+
+For this lookup, the provider key is the persisted `sessions.agent` value and
+must equal `string(SourceRef.Provider)` / `string(AgentDef.Type)` for every
+migrated provider. The watched-root match is an exact root-or-descendant check
+against persisted `sessions.file_path` values after cleaning absolute paths and
+normalizing path separators with the platform `filepath` rules already used by
+the sync engine. Implementations must use `filepath.Rel` or an equivalent
+boundary-aware check; raw string prefix matching is not valid because `/data/db`
+must not match `/data/db2` or `/data/db-backup`. The lookup does not resolve
+symlinks or inspect provider virtual suffixes. Today the DB-backed virtual shape
+is `<clean-db-path>#<session-id>`, so a watch root that is the DB directory
+matches those paths by ordinary descendant semantics; if a future provider
+persists a virtual format that does not preserve a cleaned root prefix, it
+cannot use `StoredSourcePathsProviderRoot` until it also adds a different
+explicit hint mode and store query contract. Duplicate suppression happens after
+the same cleaning step used for root matching. The API must not silently cap
+results; if an implementation needs batching, it must stream or accumulate all
+matching paths before classification, or return an error and let the caller fall
+back to the provider's full discovery path.
+
+Persisted source paths are compatibility keys. Providers that request stored
+hints must continue to understand their previously persisted virtual path
+formats, or require a documented full resync for a format change. Malformed or
+obsolete stored paths are ignored for tombstone recovery and may be logged as
+debug provider diagnostics; they are not parse diagnostics, are not user-visible
+session errors, and must not make the whole changed-path classification fail.
 
 The provider owns the final changed-path decision. The engine may use
 `IncludeGlobs` and `ExcludeGlobs` as coarse prefilters because the provider
@@ -600,24 +712,22 @@ Runtime behavior:
   be current while another result from the same source needs retry, and a
   retryable `SourceError` affects only the failed session unless the provider
   reports a whole-source `error`.
-- Data-version writes are per result, and successful unchanged-source freshness
-  remains DB metadata driven through source identity, file size, effective
-  mtime, and parser data version. `skipped_files` must not become a clean
-  successful-parse cache unless it also stores data-version-aware freshness
-  state; with the current no-schema-change migration it remains a
-  retry/failure and explicit skip cache.
-- `ResultSetComplete` means the provider has accounted for the complete logical
-  session set represented by the `SourceRef`/`FingerprintKey`: returned
-  results, explicit exclusions, and clean replacements cover every retained
-  session for that source. The engine may use that proof to avoid stale rows
-  and to clear retry/failure cache entries, but not to persist a
-  data-version-blind clean source skip.
+- Data-version writes are per result, but clean skip-cache persistence remains
+  source/fingerprint scoped. `ResultSetComplete` means the provider has
+  accounted for the complete logical session set represented by the
+  `SourceRef`/`FingerprintKey`: returned results, explicit exclusions, and
+  clean replacements cover every retained session for that source. The engine
+  may write a clean skip-cache entry only when `ResultSetComplete` is true,
+  every returned result is `DataVersionCurrent`, there are no `SourceErrors`,
+  and any previously persisted rows for that `FingerprintKey` are either
+  returned, listed in `ExcludedSessionIDs`, or covered by a clean
+  `ForceReplace`.
 - Any `DataVersionNeedsRetry` result, retryable per-session error, non-retryable
-  per-session error, or incomplete result set prevents the provider outcome
-  from being treated as a clean complete source. Non-retryable errors may be
-  recorded as diagnostics or failure-cache entries, but they do not prove the
-  source is clean because a future parser version or source change may still
-  need to revisit the same logical session set.
+  per-session error, or incomplete result set suppresses the clean skip-cache
+  entry for the whole `FingerprintKey`. Non-retryable errors may be recorded
+  as diagnostics or failure-cache entries, but they do not prove the source is
+  clean because a future parser version or source change may still need to
+  revisit the same logical session set.
 - During a partial multi-session parse, existing persisted rows that are absent
   from `Results` are retained unless their IDs are listed in
   `ExcludedSessionIDs` or the provider completes a clean `ForceReplace` parse
@@ -871,7 +981,10 @@ metadata/title/index files.
 
 Creates one or many `SourceRef` values from a shared SQLite source while keeping
 table and row details provider-owned. It supports providers where one database
-file represents many logical sessions.
+file represents many logical sessions. SQLite fan-out providers must define
+their deletion contract explicitly: live metadata produces normal virtual
+sources, while persisted source-path hints allow row or DB deletion events to
+emit tombstone sources that parse as `SkipNoSession`.
 
 ### VirtualPath Helpers
 
@@ -881,31 +994,38 @@ owned and resolved through provider methods rather than hard-coded in sync.
 
 ## Sync Engine Flow
 
-The root of the stack supports both execution shapes:
+Historically, the root of the migration stack supported both execution shapes:
 
 - the legacy `DiscoveredFile` and `processFile` shape, which remains
-  authoritative during migration;
+  authoritative on lower migration branches;
 - the provider `SourceRef` shape, which can process the same logical source
-  without writing session state while the stack is in shadow-compare mode.
+  without writing session state while a lower branch is in shadow-compare
+  mode.
 
-The root-level migration harness owns the comparison. It exposes an explicit
+On the current stack tip, the legacy runtime path and shadow recorder have been
+removed from `processFile`; this section documents lower-stack migration
+semantics and the completed provider-authoritative target. The root-level
+migration harness owns the comparison on lower branches. It exposes an explicit
 provider runtime manifest keyed by `parser.AgentType`. Family helpers may build
 entries for related providers, but tests must expand the family to every
 concrete `AgentType`; a family-level entry is not enough to mark an individual
 parse-capable provider migrated.
 
-- legacy-only: only the existing sync path runs and writes. This is the normal
-  mode for legacy adapter providers. A concrete provider may move back to this
-  mode only as a documented rollback with an open follow-up task.
-- shadow-compare: legacy runs and writes; provider runs through the new generic
-  path and produces normalized in-memory planned effects. Tests compare those
-  effects against the legacy outcome. Runtime mismatches are developer
-  diagnostics only; they must not persist user-visible parse diagnostics or
-  change SSE-visible state.
-- provider-authoritative: provider dispatch writes, returns the caller result,
-  and the old provider-specific legacy path is absent. This is reserved for
-  the stack-tip cleanup after every parse-capable provider has passed shadow
-  comparison.
+- legacy-only: historical lower-stack mode where only the existing sync path
+  runs and writes. This is the normal mode for legacy adapter providers. A
+  concrete provider may move back to this mode only as a documented rollback
+  with an open follow-up task. The stack tip removes this mode for
+  parse-capable providers and rejects it as invalid.
+- shadow-compare: historical transitional lower-stack mode where legacy runs and
+  writes; provider runs through the new generic path and produces normalized
+  in-memory planned effects. Tests compare those effects against the legacy
+  outcome. Runtime mismatches are developer diagnostics only; they must not
+  persist user-visible parse diagnostics or change SSE-visible state. This
+  mode is not a live runtime option on the current stack tip.
+- provider-authoritative: the provider registry and migration manifest are
+  authoritative for provider construction. On the current stack tip, provider
+  dispatch also writes, returns the caller result, and the old
+  provider-specific legacy path is absent.
 - import-only: the provider exists for non-filesystem import/export metadata and
   is intentionally excluded from parse shadow comparison.
 
@@ -939,9 +1059,12 @@ Changed-path live sync becomes:
 
 1. The watcher reports a changed path.
 1. The engine finds providers whose `WatchPlan` roots match the changed path.
+1. If the matched `WatchRoot` declares `StoredSourcePathHints`, the engine loads
+   persisted source paths through the scoped session-store API for that
+   provider and root.
 1. Each matched provider classifies it through `SourcesForChangedPath` with a
-   `ChangedPathRequest` that includes the changed path, event kind, and
-   matched watch root.
+   `ChangedPathRequest` that includes the changed path, event kind, matched
+   watch root, and any scoped persisted source paths.
 1. The engine processes the returned `SourceRef` values generically.
 
 Source lookup becomes:
@@ -959,7 +1082,12 @@ providers expose virtual paths or logical sessions inside a shared source.
 `FindSourceRequest.RawSessionID` is lookup input only; returned parse outcomes,
 source errors, and exclusions still use persisted full session IDs.
 
-### Transitional Shadow Comparison
+### Historical Transitional Shadow Comparison
+
+This section documents the lower-stack migration harness. It is not a supported
+runtime path on the `provider-explicit-registry` stack tip, where provider
+processing is authoritative and the runtime shadow recorder/hook has been
+removed.
 
 The root harness has two comparison surfaces:
 
@@ -1077,9 +1205,12 @@ must prove the generic hook contract for its source shape:
   tests for the provider's source family before the old legacy dispatch for
   that provider is removed.
 
-If a provider that moved to shadow-compare proves flaky, its manifest entry can
-return to legacy-only with a reason and an open kata task or review note. The
-tip cleanup cannot proceed while any parse-capable provider is legacy-only or
+If a provider that moved to shadow-compare proves flaky on a lower migration
+branch, its manifest entry can return to that branch's legacy-only mode with a
+reason and an open kata task or review note. After the explicit-registry tip,
+legacy-only is no longer a valid code state; regressions should instead be
+handled by reverting or repairing the affected provider branch before the stack
+is resubmitted. The tip cleanup cannot proceed while any parse-capable provider
 has known shadow mismatches.
 
 ## Registry
@@ -1200,7 +1331,9 @@ adds these blocking tasks:
 - `djyy`: move lookup, watch, export, and usage callers into the dual-run
   harness.
 - `cff5`: move parse-diff and diagnostics into the dual-run harness.
-- `n489`: remove legacy parser dispatch at the stack tip only.
+- `n489`: completed stack-tip legacy cleanup. The `processFile` dispatch, dead
+  `processX` wrappers, old `AgentDef` source callbacks, and stale runtime
+  fallback paths are removed at the current tip.
 
 ## Testing
 
@@ -1275,7 +1408,12 @@ Required tests:
   virtual paths, and title/metadata refreshes.
 - Caller migration tests for full sync, changed-path sync, `SyncSingleSession`,
   session watch flows, export/source lookup, token usage raw-source probing,
-  source mtime, and parse diagnostics.
+  source mtime, and parse diagnostics. Changed-path caller tests must include
+  provider/root-scoped `StoredSourcePaths` collection, index-backed lookup
+  with unrelated large tables, batching/no-truncation behavior, path
+  normalization, sibling-prefix exclusion, malformed stale source-path
+  tolerance in provider tests, plus DB row deletion and DB file deletion
+  tombstone flows for SQLite fan-out providers.
 - Generated tooling check for `enumer` output.
 - Adding-provider checklist test that fails until registry, capabilities,
   fixtures, source behavior, migration-mode wiring, parity coverage, and docs

@@ -136,12 +136,26 @@ func seedPiebaldSubagentToolPart(t *testing.T, dbPath string, partID, msgID int6
 		 VALUES (?, 'toolu_sub', 'LaunchSubagent', '{"prompt":"research"}', 'done', 'completed', ?)`, partID, subAgentChatID)
 }
 
-func TestFindPiebaldDBPath(t *testing.T) {
+func TestPiebaldDBPath(t *testing.T) {
 	dir := t.TempDir()
-	assert.Empty(t, FindPiebaldDBPath(dir), "empty dir path")
+	assert.Empty(t, piebaldDBPath(dir), "empty dir path")
 	dbPath := filepath.Join(dir, "app.db")
 	execPiebaldTestSQL(t, dbPath, `CREATE TABLE x (id INTEGER)`)
-	assert.Equal(t, dbPath, FindPiebaldDBPath(dir))
+	assert.Equal(t, dbPath, piebaldDBPath(dir))
+}
+
+// parsePiebaldOneSession parses a single Piebald chat through the per-session
+// entrypoint the provider uses (parsePiebaldSessionResults) and returns the
+// primary session, mirroring the behavior tests relied on before the
+// ParsePiebaldSession wrapper was folded onto the provider.
+func parsePiebaldOneSession(
+	t *testing.T, dbPath, chatID, machine string,
+) (*ParsedSession, []ParsedMessage) {
+	t.Helper()
+	results, err := parsePiebaldSessionResults(dbPath, chatID, machine)
+	require.NoError(t, err, "parsePiebaldSessionResults")
+	require.NotEmpty(t, results, "expected at least one parsed session")
+	return &results[0].Session, results[0].Messages
 }
 
 func TestParsePiebaldSessionBasic(t *testing.T) {
@@ -163,8 +177,7 @@ func TestParsePiebaldSessionBasic(t *testing.T) {
 		 VALUES (101, 42, 'assistant', 'claude-test', '2026-05-01T10:00:02Z', '2026-05-01T10:00:03Z', 10, 20, 5, 'completed', 'end_turn')`)
 	seedPiebaldTextPart(t, dbPath, 201, 101, 0, "I fixed it", false)
 
-	sess, msgs, err := ParsePiebaldSession(dbPath, "42", "machine")
-	require.NoError(t, err, "ParsePiebaldSession")
+	sess, msgs := parsePiebaldOneSession(t, dbPath, "42", "machine")
 	require.NotNil(t, sess, "expected session")
 	assert.Equal(t, "piebald:42", sess.ID)
 	assert.Equal(t, AgentPiebald, sess.Agent)
@@ -198,8 +211,7 @@ func TestParsePiebaldSessionToolCall(t *testing.T) {
 		 VALUES (70, 7, 'assistant', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed')`)
 	seedPiebaldToolPart(t, dbPath, 700, 70, 0)
 
-	sess, msgs, err := ParsePiebaldSession(dbPath, "7", "machine")
-	require.NoError(t, err, "ParsePiebaldSession")
+	sess, msgs := parsePiebaldOneSession(t, dbPath, "7", "machine")
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 1)
 	require.Len(t, msgs[0].ToolCalls, 1)
@@ -222,8 +234,7 @@ func TestParsePiebaldSessionSubagentToolCall(t *testing.T) {
 		 VALUES (70, 7, 'assistant', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed')`)
 	seedPiebaldSubagentToolPart(t, dbPath, 700, 70, 0, 99)
 
-	sess, msgs, err := ParsePiebaldSession(dbPath, "7", "machine")
-	require.NoError(t, err, "ParsePiebaldSession")
+	sess, msgs := parsePiebaldOneSession(t, dbPath, "7", "machine")
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 1)
 	require.Len(t, msgs[0].ToolCalls, 1)
@@ -253,8 +264,8 @@ func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
 	seedPiebaldTextPart(t, dbPath, 2000, 200, 0, "fork question", false)
 	seedPiebaldTextPart(t, dbPath, 2001, 201, 0, "fork answer", false)
 
-	results, err := ParsePiebaldSessionResults(dbPath, "42", "machine")
-	require.NoError(t, err, "ParsePiebaldSessionResults")
+	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
+	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.Len(t, results, 2)
 	main := results[0]
 	assert.Equal(t, "piebald:42", main.Session.ID)
@@ -310,8 +321,8 @@ func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
 	seedPiebaldTextPart(t, dbPath, 1300, 300, 0, "nested fork question", false)
 	seedPiebaldTextPart(t, dbPath, 1301, 301, 0, "nested fork answer", false)
 
-	results, err := ParsePiebaldSessionResults(dbPath, "42", "machine")
-	require.NoError(t, err, "ParsePiebaldSessionResults")
+	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
+	require.NoError(t, err, "parsePiebaldSessionResults")
 	require.Len(t, results, 3, "main + outer fork + nested fork")
 
 	byID := make(map[string]ParseResult, len(results))

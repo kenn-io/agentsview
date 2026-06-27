@@ -1168,10 +1168,16 @@ func TestSyncSingleSession_QwenPawPreservesWorkspaceFromDB(t *testing.T) {
 // the sidecar set or the session never reparses.
 func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 	database := openTestDB(t)
-	e := &Engine{db: database}
 	ctx := context.Background()
 
 	root := t.TempDir()
+	e := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravity: {root},
+		},
+		Machine: "local",
+	})
+
 	convDir := filepath.Join(root, "conversations")
 	require.NoError(t, os.MkdirAll(convDir, 0o755))
 	dbPath := filepath.Join(
@@ -1186,10 +1192,13 @@ func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Close())
 
+	// The Antigravity provider is provider-authoritative, so processFile
+	// routes through processProviderFile. The provider resolves the source,
+	// fingerprints (folding the WAL/SHM and sidecar set into the freshness
+	// identity), and parses.
 	file := parser.DiscoveredFile{
-		Agent:   parser.AgentAntigravity,
-		Path:    dbPath,
-		Project: "proj",
+		Agent: parser.AgentAntigravity,
+		Path:  dbPath,
 	}
 
 	res := e.processFile(ctx, file)
@@ -1198,15 +1207,21 @@ func TestProcessAntigravityWALOnlyUpdateNotSkipped(t *testing.T) {
 	require.Len(t, res.results, 1)
 
 	pw := pendingWrite{
-		sess:        res.results[0].Session,
-		msgs:        res.results[0].Messages,
-		usageEvents: res.results[0].UsageEvents,
+		sess:         res.results[0].Session,
+		msgs:         res.results[0].Messages,
+		usageEvents:  res.results[0].UsageEvents,
+		forceReplace: res.forceReplace,
 	}
 	written, _, failed := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteDefault, false,
 	)
 	require.Equal(t, 0, failed)
 	require.Equal(t, 1, written)
+	// Record the skip-cache entry the collectAndBatch flow would write so the
+	// next unchanged processFile sees a cached, current fingerprint.
+	if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
+		e.cacheSkip(res.skipCacheKey(file.Path), res.mtime)
+	}
 
 	res = e.processFile(ctx, file)
 	require.True(t, res.skip, "unchanged session should skip")
@@ -1284,10 +1299,16 @@ func TestProcessVibeMetaOnlyUpdateNotSkipped(t *testing.T) {
 
 func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 	database := openTestDB(t)
-	e := &Engine{db: database}
 	ctx := context.Background()
 
 	root := t.TempDir()
+	e := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravity: {root},
+		},
+		Machine: "local",
+	})
+
 	convDir := filepath.Join(root, "conversations")
 	require.NoError(t, os.MkdirAll(convDir, 0o755))
 	id := "abcdabcd-1111-2222-3333-444455557777"
@@ -1301,10 +1322,12 @@ func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Close())
 
+	// Provider-authoritative: the provider Fingerprint folds the brain
+	// artifacts into the freshness identity, so a brain-only change busts the
+	// skip cache and triggers a reparse.
 	file := parser.DiscoveredFile{
-		Agent:   parser.AgentAntigravity,
-		Path:    dbPath,
-		Project: "proj",
+		Agent: parser.AgentAntigravity,
+		Path:  dbPath,
 	}
 
 	res := e.processFile(ctx, file)
@@ -1313,15 +1336,19 @@ func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 	require.Len(t, res.results, 1)
 
 	pw := pendingWrite{
-		sess:        res.results[0].Session,
-		msgs:        res.results[0].Messages,
-		usageEvents: res.results[0].UsageEvents,
+		sess:         res.results[0].Session,
+		msgs:         res.results[0].Messages,
+		usageEvents:  res.results[0].UsageEvents,
+		forceReplace: res.forceReplace,
 	}
 	written, _, failed := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteDefault, false,
 	)
 	require.Equal(t, 0, failed)
 	require.Equal(t, 1, written)
+	if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
+		e.cacheSkip(res.skipCacheKey(file.Path), res.mtime)
+	}
 
 	res = e.processFile(ctx, file)
 	require.True(t, res.skip, "unchanged session should skip")
@@ -3181,6 +3208,101 @@ func TestEngine_ClassifyPathsOpenCodeFamilyRemovedSessionFile(
 
 			files := engine.classifyPaths([]string{sessionPath})
 			assert.Empty(t, files)
+		})
+	}
+}
+
+func TestEngine_ClassifyPathsProviderRemoveKeepsDeletedSQLiteSources(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		agent parser.AgentType
+		path  func(string) string
+	}{
+		{
+			name:  "zed",
+			agent: parser.AgentZed,
+			path: func(root string) string {
+				return filepath.Join(root, "threads", "threads.db")
+			},
+		},
+		{
+			name:  "shelley",
+			agent: parser.AgentShelley,
+			path: func(root string) string {
+				return filepath.Join(root, shelleyDBFile)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			root := t.TempDir()
+			engine := NewEngine(db, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					tt.agent: {root},
+				},
+				Machine: "local",
+			})
+			dbPath := tt.path(root)
+			require.NoFileExists(t, dbPath)
+
+			files := engine.classifyPaths([]string{dbPath})
+			require.Len(t, files, 1)
+			assert.Equal(t, dbPath, files[0].Path)
+			assert.Equal(t, tt.agent, files[0].Agent)
+			assert.True(t, files[0].ForceParse)
+		})
+	}
+}
+
+func TestEngine_ProcessFileProviderDeletedSQLiteSourcesDoNotFail(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		agent parser.AgentType
+		path  func(string) string
+	}{
+		{
+			name:  "zed",
+			agent: parser.AgentZed,
+			path: func(root string) string {
+				return filepath.Join(root, "threads", "threads.db")
+			},
+		},
+		{
+			name:  "shelley",
+			agent: parser.AgentShelley,
+			path: func(root string) string {
+				return filepath.Join(root, shelleyDBFile)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := openTestDB(t)
+			root := t.TempDir()
+			engine := NewEngine(db, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					tt.agent: {root},
+				},
+				Machine: "local",
+			})
+			dbPath := tt.path(root)
+			require.NoFileExists(t, dbPath)
+
+			res := engine.processFile(context.Background(), parser.DiscoveredFile{
+				Path:       dbPath,
+				Agent:      tt.agent,
+				ForceParse: true,
+			})
+			require.NoError(t, res.err)
+			assert.Empty(t, res.results)
+			assert.True(t, res.forceReplace)
 		})
 	}
 }

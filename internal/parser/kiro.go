@@ -28,10 +28,10 @@ type kiroMeta struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
-// DiscoverKiroSessions finds all .jsonl session files under the
-// Kiro CLI sessions directory. Layout:
+// discoverLegacyJSONL finds all .jsonl session files under a Kiro
+// CLI sessions directory. Layout:
 // <sessionsDir>/<uuid>.jsonl  (with companion <uuid>.json)
-func DiscoverKiroSessions(sessionsDir string) []DiscoveredFile {
+func (s kiroSourceSet) discoverLegacyJSONL(sessionsDir string) []DiscoveredFile {
 	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		return nil
@@ -58,9 +58,9 @@ func DiscoverKiroSessions(sessionsDir string) []DiscoveredFile {
 	return files
 }
 
-// FindKiroSourceFile locates a Kiro session file by its raw
+// legacySourceFile locates a legacy Kiro JSONL session file by its raw
 // session ID (without the "kiro:" prefix).
-func FindKiroSourceFile(sessionsDir, rawID string) string {
+func (s kiroSourceSet) legacySourceFile(sessionsDir, rawID string) string {
 	if sessionsDir == "" || !IsValidSessionID(rawID) {
 		return ""
 	}
@@ -100,10 +100,10 @@ func loadKiroMeta(jsonlPath string) *kiroMeta {
 	return &m
 }
 
-// ParseKiroSession parses a Kiro CLI session from its JSONL file.
+// parseLegacySession parses a Kiro CLI session from its JSONL file.
 // Returns (nil, nil, nil) if the file doesn't exist or contains
 // no user/assistant messages.
-func ParseKiroSession(
+func (p *kiroProvider) parseLegacySession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

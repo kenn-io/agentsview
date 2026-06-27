@@ -228,6 +228,28 @@ func TestSyncEngineKiroSQLiteCurrentStore(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 2)
 }
 
+func TestSyncEngineKiroSQLiteUnchangedRowSkippedOnResync(t *testing.T) {
+	env := setupTestEnv(t)
+	ks := createKiroSQLiteDB(t, env.kiroDir)
+	ks.addSession(
+		t, "/home/user/code/kiro-app", "sqlite-session",
+		readKiroSQLiteFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1, Skipped: 0,
+	})
+
+	// A second full sync with the Kiro DB unchanged must not rewrite the row
+	// (Synced stays 0). Kiro fans data.sqlite3 out to one session per row, so
+	// without Kiro in the unchanged-result filter the row is reparsed and
+	// rewritten on every sync (Synced would be 1).
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 0, Skipped: 0,
+	})
+}
+
 func TestSyncEngineKiroSQLiteWatchReplacesMessages(t *testing.T) {
 	env := setupTestEnv(t)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
@@ -316,8 +338,12 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 	})
 	assertSessionProject(t, env.db, "kiro:overlap-session", "current_kiro")
 
+	// Kiro is provider-authoritative: the current-store database is
+	// rediscovered and re-parsed on every full sync, but an unchanged row is
+	// dropped from the write batch (Synced stays 0) instead of being rewritten
+	// and recounted. The legacy file stays shadowed throughout.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 0, Synced: 0, Skipped: 0,
+		TotalSessions: 1, Synced: 0, Skipped: 0,
 	})
 	sess, err := env.db.GetSessionFull(
 		context.Background(), "kiro:overlap-session",
@@ -392,8 +418,12 @@ func TestSyncEngineKiroSQLiteMalformedUpdatePreservesArchive(t *testing.T) {
 		readKiroSQLiteFixture(t, "malformed_payload.txt"),
 		1779012040000,
 	)
+	// Kiro is provider-authoritative: the database is rediscovered and
+	// re-parsed (TotalSessions counts the source), but the malformed payload
+	// yields no parseable session, so nothing is written and the previously
+	// archived session is preserved.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 0, Synced: 0, Skipped: 0,
+		TotalSessions: 1, Synced: 0, Skipped: 0,
 	})
 	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 4)
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -17,33 +16,6 @@ const (
 	ZedThreadsDBRelPath = "threads/threads.db"
 	zedThreadsDBRelPath = ZedThreadsDBRelPath
 )
-
-// DiscoverZedSessions discovers Zed's thread database under the
-// configured data directory.
-func DiscoverZedSessions(root string) []DiscoveredFile {
-	if root == "" {
-		return nil
-	}
-	path := filepath.Join(root, zedThreadsDBRelPath)
-	if !IsRegularFile(path) {
-		return nil
-	}
-	return []DiscoveredFile{{Path: path, Agent: AgentZed}}
-}
-
-// FindZedSourceFile locates Zed's shared thread database for a raw
-// session ID. Zed stores all threads in one SQLite DB, so the ID is
-// validated only to reject path-like input.
-func FindZedSourceFile(root, rawID string) string {
-	if root == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-	path := filepath.Join(root, zedThreadsDBRelPath)
-	if ZedSQLiteSessionExists(path, rawID) {
-		return ZedSQLiteVirtualPath(path, rawID)
-	}
-	return ""
-}
 
 // ZedSQLiteSessionExists reports whether a top-level Zed thread row
 // with the given ID exists in threads.db.
@@ -72,67 +44,10 @@ func ZedSQLiteSessionExists(dbPath, sessionID string) bool {
 	return err == nil
 }
 
-// ParseZedSessions parses all top-level Zed threads from a
-// threads.db file.
-func ParseZedSessions(dbPath, machine string) ([]ParseResult, error) {
-	info, err := os.Stat(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("stat %s: %w", dbPath, err)
-	}
-
-	db, err := openZedDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	rows, err := db.Query(`
-		SELECT id,
-		       COALESCE(summary, ''),
-		       COALESCE(updated_at, ''),
-		       COALESCE(data_type, ''),
-		       data,
-		       COALESCE(folder_paths, ''),
-		       COALESCE(created_at, '')
-		FROM threads
-		WHERE COALESCE(parent_id, '') = ''
-		ORDER BY updated_at, id
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("listing zed threads: %w", err)
-	}
-	defer rows.Close()
-
-	var results []ParseResult
-	for rows.Next() {
-		var row zedThreadRow
-		if err := rows.Scan(
-			&row.id,
-			&row.summary,
-			&row.updatedAt,
-			&row.dataType,
-			&row.data,
-			&row.folderPaths,
-			&row.createdAt,
-		); err != nil {
-			return nil, fmt.Errorf("scanning zed thread: %w", err)
-		}
-
-		result, ok := buildZedParseResult(row, dbPath, info, machine)
-		if ok {
-			results = append(results, result)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating zed threads: %w", err)
-	}
-	return results, nil
-}
-
 // ZedSQLiteSourceMtime resolves the per-thread updated_at timestamp
 // for a virtual Zed SQLite source path.
 func ZedSQLiteSourceMtime(path string) (int64, error) {
-	dbPath, sessionID, ok := ParseZedSQLiteVirtualPath(path)
+	dbPath, sessionID, ok := parseZedVirtualPath(path)
 	if !ok {
 		return 0, fmt.Errorf("not a zed sqlite virtual path: %s", path)
 	}
@@ -166,9 +81,9 @@ type ZedThreadMeta struct {
 }
 
 // ListZedThreadMetas queries thread IDs and updated_at timestamps using an
-// already-open connection. Used by the sync engine to check per-session mtimes
-// before deciding whether to parse, sharing the same connection as the
-// subsequent ParseZedThreadFromDB loop to avoid a second DB open.
+// already-open connection. Used by the Zed provider to check per-session
+// mtimes before deciding whether to parse, sharing the same connection as the
+// subsequent parseZedThreadFromDB loop to avoid a second DB open.
 func ListZedThreadMetas(conn *sql.DB, dbPath string) ([]ZedThreadMeta, error) {
 	rows, err := conn.Query(
 		`SELECT id, COALESCE(updated_at, '')
@@ -197,22 +112,6 @@ func ListZedThreadMetas(conn *sql.DB, dbPath string) ([]ZedThreadMeta, error) {
 		})
 	}
 	return metas, rows.Err()
-}
-
-// ParseZedThreadDirect parses a single top-level thread by ID without scanning
-// all rows. dbInfo must be the os.FileInfo of the threads.db file itself.
-func ParseZedThreadDirect(
-	dbPath, rawID, machine string, dbInfo os.FileInfo,
-) (*ParseResult, error) {
-	if !IsValidSessionID(rawID) {
-		return nil, fmt.Errorf("invalid Zed session ID: %s", rawID)
-	}
-	conn, err := openZedDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	return parseZedThreadFromDB(conn, dbPath, rawID, machine, dbInfo)
 }
 
 // parseZedThreadFromDB queries and parses one thread using an already-open
@@ -261,14 +160,6 @@ func openZedDB(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("opening zed db %s: %w", dbPath, err)
 	}
 	return db, nil
-}
-
-// ParseZedThreadFromDB is the exported variant of parseZedThreadFromDB for use
-// by callers that open the DB once and parse multiple threads in a loop.
-func ParseZedThreadFromDB(
-	conn *sql.DB, dbPath, rawID, machine string, dbInfo os.FileInfo,
-) (*ParseResult, error) {
-	return parseZedThreadFromDB(conn, dbPath, rawID, machine, dbInfo)
 }
 
 type zedThreadRow struct {

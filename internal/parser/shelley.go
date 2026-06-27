@@ -8,7 +8,6 @@ import (
 	"hash"
 	"hash/fnv"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -100,63 +99,6 @@ type shelleyUsage struct {
 // stable source identity for the AgentsView archive.
 func ShelleyVirtualPath(dbPath, conversationID string) string {
 	return dbPath + "#" + conversationID
-}
-
-// ParseShelleyVirtualPath splits a virtual Shelley source path back into
-// its database path and raw conversation ID.
-func ParseShelleyVirtualPath(path string) (string, string, bool) {
-	idx := strings.LastIndex(path, "#")
-	if idx < 0 {
-		return "", "", false
-	}
-	dbPath, conversationID := path[:idx], path[idx+1:]
-	if filepath.Base(dbPath) != shelleyDBName || conversationID == "" {
-		return "", "", false
-	}
-	return dbPath, conversationID, true
-}
-
-// FindShelleyDBPath returns the shelley.db under the configured root, or
-// "" when the root holds no Shelley database.
-func FindShelleyDBPath(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	path := filepath.Join(dir, shelleyDBName)
-	if !IsRegularFile(path) {
-		return ""
-	}
-	return path
-}
-
-// DiscoverShelleySessions discovers Shelley's conversation database under
-// the configured data directory. Like Zed, it returns a single entry for
-// the shared DB; the sync engine fans it out to one session per
-// conversation.
-func DiscoverShelleySessions(root string) []DiscoveredFile {
-	dbPath := FindShelleyDBPath(root)
-	if dbPath == "" {
-		return nil
-	}
-	return []DiscoveredFile{{Path: dbPath, Agent: AgentShelley}}
-}
-
-// FindShelleySourceFile locates Shelley's shared conversation database
-// for a raw conversation ID. All conversations live in one SQLite DB, so
-// the ID is validated only to reject path-like input and is resolved to
-// a virtual path when the conversation exists under this root.
-func FindShelleySourceFile(root, rawID string) string {
-	if root == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-	dbPath := FindShelleyDBPath(root)
-	if dbPath == "" {
-		return ""
-	}
-	if ShelleyConversationExists(dbPath, rawID) {
-		return ShelleyVirtualPath(dbPath, rawID)
-	}
-	return ""
 }
 
 // ShelleyConversationExists reports whether the Shelley DB has a
@@ -347,7 +289,7 @@ func ListShelleyConversationMetas(
 // This value is watcher-only and never written to file_mtime or
 // range-filtered, so the sub-second term is harmless here.
 func ShelleySourceMtime(path string) (int64, error) {
-	dbPath, conversationID, ok := ParseShelleyVirtualPath(path)
+	dbPath, conversationID, ok := parseShelleyVirtualPath(path)
 	if !ok {
 		return 0, fmt.Errorf("not a shelley virtual path: %s", path)
 	}
@@ -413,27 +355,10 @@ func openShelleyDB(dbPath string) (*sql.DB, error) {
 	return db, nil
 }
 
-// ParseShelleyConversationDirect parses a single conversation by ID,
-// opening and closing its own connection. dbInfo must be the os.FileInfo
-// of the shelley.db file itself.
-func ParseShelleyConversationDirect(
-	dbPath, rawID, machine string, dbInfo os.FileInfo,
-) (*ParseResult, error) {
-	if !IsValidSessionID(rawID) {
-		return nil, fmt.Errorf("invalid Shelley session ID: %s", rawID)
-	}
-	conn, err := openShelleyDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	return ParseShelleyConversationFromDB(conn, dbPath, rawID, machine, dbInfo)
-}
-
-// ParseShelleyConversationFromDB parses one conversation using an
+// parseShelleyConversationFromDB parses one conversation using an
 // already-open connection. Callers parsing multiple conversations should
 // open the DB once and call this in a loop.
-func ParseShelleyConversationFromDB(
+func parseShelleyConversationFromDB(
 	conn *sql.DB, dbPath, rawID, machine string, dbInfo os.FileInfo,
 ) (*ParseResult, error) {
 	conv, err := loadShelleyConversation(conn, rawID)

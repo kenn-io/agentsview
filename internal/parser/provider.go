@@ -352,6 +352,10 @@ func ProviderFactories() []ProviderFactory {
 func providerFactoryForDef(def AgentDef) ProviderFactory {
 	def = cloneAgentDef(def)
 	switch def.Type {
+	case AgentAntigravity:
+		return newAntigravityProviderFactory(def)
+	case AgentAntigravityCLI:
+		return newAntigravityCLIProviderFactory(def)
 	case AgentAmp:
 		return newAmpProviderFactory(def)
 	case AgentClaude:
@@ -370,6 +374,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCursorProviderFactory(def)
 	case AgentDeepSeekTUI:
 		return newDeepSeekTUIProviderFactory(def)
+	case AgentForge:
+		return newForgeProviderFactory(def)
 	case AgentHermes:
 		return newHermesProviderFactory(def)
 	case AgentIflow:
@@ -380,6 +386,10 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newGeminiProviderFactory(def)
 	case AgentKimi:
 		return newKimiProviderFactory(def)
+	case AgentKiro:
+		return newKiroProviderFactory(def)
+	case AgentKiroIDE:
+		return newKiroIDEProviderFactory(def)
 	case AgentKilo:
 		return newKiloProviderFactory(def)
 	case AgentMiMoCode:
@@ -390,7 +400,11 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newOpenHandsProviderFactory(def)
 	case AgentOpenClaw:
 		return newOpenClawProviderFactory(def)
-	case AgentOMP, AgentPi:
+	case AgentOMP:
+		return newPiProviderFactory(def)
+	case AgentPiebald:
+		return newPiebaldProviderFactory(def)
+	case AgentPi:
 		return newPiProviderFactory(def)
 	case AgentPositron:
 		return newPositronProviderFactory(def)
@@ -400,16 +414,22 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newQwenProviderFactory(def)
 	case AgentQwenPaw:
 		return newQwenPawProviderFactory(def)
+	case AgentShelley:
+		return newShelleyProviderFactory(def)
 	case AgentVSCopilot:
 		return newVisualStudioCopilotProviderFactory(def)
 	case AgentVSCodeCopilot:
 		return newVSCodeCopilotProviderFactory(def)
 	case AgentVibe:
 		return newVibeProviderFactory(def)
+	case AgentWarp:
+		return newWarpProviderFactory(def)
 	case AgentWorkBuddy:
 		return newWorkBuddyProviderFactory(def)
 	case AgentZencoder:
 		return newZencoderProviderFactory(def)
+	case AgentZed:
+		return newZedProviderFactory(def)
 	default:
 		return legacyProviderFactory{def: def}
 	}

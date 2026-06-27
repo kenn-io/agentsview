@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -98,126 +97,6 @@ type kiroIDEActionOutput struct {
 	Message string `json:"message"`
 }
 
-// DiscoverKiroIDESessions finds all session files under the
-// Kiro IDE globalStorage directory. It scans both:
-//   - <dir>/<workspace-hash>/<execution-hash>.chat  (old format)
-//   - <dir>/workspace-sessions/<b64-path>/<uuid>.json (new format)
-func DiscoverKiroIDESessions(dir string) []DiscoveredFile {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-
-	for _, wsEntry := range entries {
-		if !wsEntry.IsDir() {
-			continue
-		}
-		name := wsEntry.Name()
-		if name == "default" || name == "dev_data" ||
-			name == "index" || name == "workspace-sessions" ||
-			strings.HasPrefix(name, ".") {
-			continue
-		}
-
-		wsDir := filepath.Join(dir, name)
-		chatFiles, err := os.ReadDir(wsDir)
-		if err != nil {
-			continue
-		}
-		for _, cf := range chatFiles {
-			if cf.IsDir() ||
-				!strings.HasSuffix(cf.Name(), ".chat") {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(wsDir, cf.Name()),
-				Agent: AgentKiroIDE,
-			})
-		}
-	}
-
-	// Scan workspace-sessions for new-format session JSONs.
-	wsSessionsDir := filepath.Join(dir, "workspace-sessions")
-	wsDirs, err := os.ReadDir(wsSessionsDir)
-	if err == nil {
-		for _, wsEntry := range wsDirs {
-			if !wsEntry.IsDir() {
-				continue
-			}
-			wsDir := filepath.Join(wsSessionsDir, wsEntry.Name())
-			jsonFiles, err := os.ReadDir(wsDir)
-			if err != nil {
-				continue
-			}
-			for _, jf := range jsonFiles {
-				name := jf.Name()
-				if name == "sessions.json" ||
-					!strings.HasSuffix(name, ".json") {
-					continue
-				}
-				files = append(files, DiscoveredFile{
-					Path:  filepath.Join(wsDir, name),
-					Agent: AgentKiroIDE,
-				})
-			}
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindKiroIDESourceFile locates a Kiro IDE session file by
-// raw session ID. Supports both formats:
-//   - Old: "<workspace-hash>:<filename-hash>" → .chat file
-//   - New: "<uuid>" → workspace-sessions/*/<uuid>.json
-func FindKiroIDESourceFile(dir, rawID string) string {
-	cleanDir := filepath.Clean(dir)
-
-	// Old format: <workspace-hash>:<filename-hash>
-	wsHash, fileHash, ok := strings.Cut(rawID, ":")
-	if ok && IsValidSessionID(wsHash) && IsValidSessionID(fileHash) {
-		candidate := filepath.Join(dir, wsHash, fileHash+".chat")
-		if abs, err := filepath.Abs(candidate); err == nil &&
-			strings.HasPrefix(abs, cleanDir) {
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-		}
-	}
-
-	// New format: rawID is a UUID, file is at
-	// workspace-sessions/<b64-path>/<uuid>.json
-	if !IsValidSessionID(rawID) {
-		return ""
-	}
-	wsSessionsDir := filepath.Join(dir, "workspace-sessions")
-	wsDirs, err := os.ReadDir(wsSessionsDir)
-	if err != nil {
-		return ""
-	}
-	for _, wsEntry := range wsDirs {
-		if !wsEntry.IsDir() {
-			continue
-		}
-		candidate := filepath.Join(
-			wsSessionsDir, wsEntry.Name(), rawID+".json",
-		)
-		abs, err := filepath.Abs(candidate)
-		if err != nil || !strings.HasPrefix(abs, cleanDir) {
-			continue
-		}
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
-}
-
 // isKiroIDESystemMessage returns true for system prompt and
 // rules messages that should not be shown as user content.
 func isKiroIDESystemMessage(content string) bool {
@@ -228,11 +107,11 @@ func isKiroIDESystemMessage(content string) bool {
 		strings.HasPrefix(content, "You are operating in a workspace")
 }
 
-// ParseKiroIDESession parses a Kiro IDE session file.
+// parseSession parses a Kiro IDE session file.
 // Supports both old (.chat) and new (.json) formats.
 // Returns (nil, nil, nil) if the file doesn't exist or
 // contains no meaningful messages.
-func ParseKiroIDESession(
+func parseKiroIDESession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	if strings.HasSuffix(path, ".json") {

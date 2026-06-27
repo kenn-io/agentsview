@@ -4,18 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
 
-// WarpSession bundles a parsed session with its messages.
-type WarpSession struct {
-	Session  ParsedSession
-	Messages []ParsedMessage
-}
+const warpDBFilename = "warp.sqlite"
 
 // WarpSessionMeta is lightweight metadata for a session,
 // used to detect changes without parsing messages.
@@ -73,53 +68,9 @@ func ListWarpSessionMeta(
 	return metas, rows.Err()
 }
 
-// ParseWarpDB opens the Warp SQLite database read-only and
-// returns all conversations with messages.
-func ParseWarpDB(
-	dbPath, machine string,
-) ([]WarpSession, error) {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	db, err := openWarpDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	convos, err := loadWarpConversations(db)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"loading warp conversations: %w", err,
-		)
-	}
-
-	var results []WarpSession
-	for _, c := range convos {
-		parsed, msgs, err := buildWarpSession(
-			db, c, dbPath, machine,
-		)
-		if err != nil {
-			log.Printf(
-				"warp conversation %s: %v", c.id, err,
-			)
-			continue
-		}
-		if parsed == nil {
-			continue
-		}
-		results = append(results, WarpSession{
-			Session:  *parsed,
-			Messages: msgs,
-		})
-	}
-	return results, nil
-}
-
-// ParseWarpSession parses a single conversation by ID from
+// parseWarpSession parses a single conversation by ID from
 // the Warp database.
-func ParseWarpSession(
+func parseWarpSession(
 	dbPath, conversationID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -162,34 +113,6 @@ type warpConversationRow struct {
 	id               string
 	conversationData string
 	lastModifiedAt   string
-}
-
-func loadWarpConversations(
-	db *sql.DB,
-) ([]warpConversationRow, error) {
-	rows, err := db.Query(`
-		SELECT conversation_id,
-		       COALESCE(conversation_data, '{}'),
-		       last_modified_at
-		FROM agent_conversations
-		ORDER BY last_modified_at
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var convos []warpConversationRow
-	for rows.Next() {
-		var c warpConversationRow
-		if err := rows.Scan(
-			&c.id, &c.conversationData, &c.lastModifiedAt,
-		); err != nil {
-			return nil, err
-		}
-		convos = append(convos, c)
-	}
-	return convos, rows.Err()
 }
 
 func loadOneWarpConversation(
@@ -560,10 +483,10 @@ func parseWarpTimestamp(s string) time.Time {
 	return time.Time{}
 }
 
-// FindWarpDBPath returns the path to warp.sqlite inside the
+// warpDBPath returns the path to warp.sqlite inside the
 // given directory, or "" if it doesn't exist.
-func FindWarpDBPath(dir string) string {
-	candidate := filepath.Join(dir, "warp.sqlite")
+func warpDBPath(dir string) string {
+	candidate := filepath.Join(dir, warpDBFilename)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
 	}
