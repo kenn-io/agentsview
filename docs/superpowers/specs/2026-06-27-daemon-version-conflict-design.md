@@ -114,9 +114,17 @@ auth-token generation, but before opening the write DB. This minimizes the
 stop-then-fail window while still stopping late enough to avoid racing the
 existing daemon's write lock.
 
+Foreground replacement should use the current invocation's resolved config and
+flags for the new server. Replacing a daemon is permission to stop the old
+writer; it is not a request to inherit the old daemon's host, port, auth, or
+sync settings.
+
 Background `serve` should replace its current scattered compatible and
 incompatible checks with the shared classifier. Its existing launch lock remains
-the concurrency boundary for stop/start replacement.
+the concurrency boundary for stop/start replacement. It should keep the current
+background behavior that preserves the replaced daemon's `no_sync` setting when
+the replacement command did not explicitly enable sync, but otherwise use the
+new invocation's config and flags.
 
 `serve status` should first look for a compatible daemon with
 `FindDaemonRuntime`. If none is found, it should call
