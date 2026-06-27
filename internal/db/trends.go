@@ -68,15 +68,20 @@ func (db *DB) GetTrendsTerms(
 	sessionFilter.To = ""
 	sessionFilter.DayOfWeek = nil
 	sessionFilter.Hour = nil
-	where, args := sessionFilter.buildWhereWithoutDate()
-	query := `SELECT m.content, COALESCE(m.timestamp, ''),
+	sessionFilter.Model = ""
+	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
+	flt := f.messageScopeFilter()
+	modelFiltering := len(flt.Models) > 0
+	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
+			COALESCE(m.model, ''), m.content, COALESCE(m.timestamp, ''),
 			COALESCE(s.started_at, ''), s.created_at
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
 		WHERE ` + where + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = 0
-			AND ` + SystemPrefixSQL("m.content", "m.role")
+			AND ` + SystemPrefixSQL("m.content", "m.role") + `
+		ORDER BY m.session_id, m.ordinal`
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -84,35 +89,85 @@ func (db *DB) GetTrendsTerms(
 	}
 	defer rows.Close()
 
-	for rows.Next() {
-		var content, msgTS, startedAt, createdAt string
-		if err := rows.Scan(
-			&content, &msgTS, &startedAt, &createdAt,
-		); err != nil {
-			return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
-		}
-		msgTime, ok := trendMessageLocalTime(msgTS, startedAt, createdAt, loc)
+	type trendRow struct {
+		sessionID string
+		role      string
+		isSystem  bool
+		model     string
+		content   string
+		msgTS     string
+		startedAt string
+		createdAt string
+	}
+	processRow := func(row trendRow) {
+		msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
 		if !ok {
-			continue
-		}
-		if f.HasTimeFilter() && !f.matchesTimeFilter(msgTime) {
-			continue
+			return
 		}
 		msgDate := msgTime.Format("2006-01-02")
 		if !inDateRange(msgDate, f.From, f.To) {
-			continue
+			return
 		}
 		bucketDate := trendBucketDate(msgTime, loc, granularity)
 		bucket, ok := bucketIndex[bucketDate]
 		if !ok {
-			continue
+			return
 		}
 		messageCounts[bucket]++
 		for i, term := range terms {
-			count := countTrendOccurrences(content, term)
+			count := countTrendOccurrences(row.content, term)
 			if count > 0 {
 				counts[i][bucket] += count
 			}
+		}
+	}
+	rowStartedAt := make(map[string]string)
+	rowCreatedAt := make(map[string]string)
+	emit := func(m ScopedMessage) {
+		processRow(trendRow{
+			sessionID: m.SessionID,
+			role:      m.Role,
+			isSystem:  m.IsSystem,
+			content:   m.Content,
+			msgTS:     m.Timestamp,
+			startedAt: rowStartedAt[m.SessionID],
+			createdAt: rowCreatedAt[m.SessionID],
+		})
+	}
+	reducer := NewScopeReducer(flt, emit)
+
+	for rows.Next() {
+		var row trendRow
+		var ordinal int
+		if err := rows.Scan(
+			&row.sessionID, &ordinal, &row.role, &row.isSystem,
+			&row.model, &row.content, &row.msgTS, &row.startedAt,
+			&row.createdAt,
+		); err != nil {
+			return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
+		}
+		if !modelFiltering {
+			msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
+			if ok && flt.MatchesDayHour(msgTime, true) {
+				processRow(row)
+			}
+			continue
+		}
+		rowStartedAt[row.sessionID] = row.startedAt
+		rowCreatedAt[row.sessionID] = row.createdAt
+		msgTime, has := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
+		if err := reducer.Push(MessageInput{
+			SessionID:    row.sessionID,
+			Ordinal:      ordinal,
+			Role:         row.role,
+			Model:        row.model,
+			IsSystem:     row.isSystem,
+			Timestamp:    row.msgTS,
+			LocalTime:    msgTime,
+			HasLocalTime: has,
+			Content:      row.content,
+		}); err != nil {
+			return TrendsTermsResponse{}, err
 		}
 	}
 	if err := rows.Err(); err != nil {

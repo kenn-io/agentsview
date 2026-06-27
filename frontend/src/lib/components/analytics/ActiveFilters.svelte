@@ -3,6 +3,7 @@
   import {
     CalendarIcon,
     ClockIcon,
+    CodeIcon,
     FolderIcon,
     MessageSquareTextIcon,
     MonitorIcon,
@@ -14,6 +15,11 @@
   const selectedAgents = $derived(
     analytics.agent
       ? analytics.agent.split(",")
+      : [],
+  );
+  const selectedModels = $derived(
+    analytics.model
+      ? analytics.model.split(",").filter((model) => model.length > 0)
       : [],
   );
   const selectedMachines = $derived(
@@ -78,6 +84,7 @@
     (analytics.project !== "" ? 1 : 0) +
     selectedMachines.length +
     selectedAgents.length +
+    selectedModels.length +
     selectedStatuses.length +
     (analytics.minUserMessages > 0 ? 1 : 0) +
     (!analytics.includeOneShot ? 1 : 0) +
@@ -153,6 +160,20 @@
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>
+      </button>
+    {/each}
+
+    {#each selectedModels as model (model)}
+      <button
+        class="filter-chip"
+        onclick={() => analytics.toggleModel(model)}
+        title="Remove {model} filter"
+      >
+        <span class="chip-icon">
+          <CodeIcon size="10" strokeWidth="1.8" aria-hidden="true" />
+        </span>
+        {model}
+        <span class="chip-x">&times;</span>
       </button>
     {/each}
 
