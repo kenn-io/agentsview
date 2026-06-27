@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -98,17 +99,78 @@ func (c *schemaProbeConn) Begin() (driver.Tx, error) {
 func (c *schemaProbeConn) ExecContext(
 	_ context.Context, query string, _ []driver.NamedValue,
 ) (driver.Result, error) {
+	normalized := strings.ToLower(query)
+	if strings.Contains(normalized, "idx_pinned_source_uuid") &&
+		c.state.hasColumn("pinned_messages", "session_id") &&
+		!c.state.hasColumn("pinned_messages", "source_uuid") {
+		return nil, errors.New(`ERROR: column "source_uuid" does not exist (SQLSTATE 42703)`)
+	}
 	c.state.mu.Lock()
 	c.state.execs = append(c.state.execs, query)
 	c.state.mu.Unlock()
-	if strings.Contains(strings.ToLower(query), "alter table") {
-		c.state.mu.Lock()
-		c.state.alterTableExecs = append(
-			c.state.alterTableExecs, query,
-		)
-		c.state.mu.Unlock()
+	if strings.Contains(normalized, "alter table") {
+		c.state.recordAlterTable(query)
 	}
 	return driver.RowsAffected(0), nil
+}
+
+func (s *schemaProbeState) hasColumn(table, column string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Contains(s.existingColumnNames[table], column)
+}
+
+func (s *schemaProbeState) recordAlterTable(query string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.alterTableExecs = append(s.alterTableExecs, query)
+
+	table, ok := alterTableName(query)
+	if !ok {
+		return
+	}
+	if s.existingColumnNames == nil {
+		s.existingColumnNames = map[string][]string{}
+	}
+	for _, column := range alterTableColumns(query) {
+		exists := slices.Contains(s.existingColumnNames[table], column)
+		if !exists {
+			s.existingColumnNames[table] = append(
+				s.existingColumnNames[table], column,
+			)
+		}
+	}
+}
+
+func alterTableName(query string) (string, bool) {
+	const prefix = `ALTER TABLE "`
+	_, after, ok := strings.Cut(query, prefix)
+	if !ok {
+		return "", false
+	}
+	rest := after
+	before0, _, ok0 := strings.Cut(rest, `"`)
+	if !ok0 {
+		return "", false
+	}
+	return before0, true
+}
+
+func alterTableColumns(query string) []string {
+	const marker = "ADD COLUMN IF NOT EXISTS "
+	parts := strings.Split(query, marker)
+	if len(parts) < 2 {
+		return nil
+	}
+	columns := make([]string, 0, len(parts)-1)
+	for _, part := range parts[1:] {
+		fields := strings.Fields(part)
+		if len(fields) == 0 {
+			continue
+		}
+		columns = append(columns, strings.Trim(fields[0], `",`))
+	}
+	return columns
 }
 
 func (c *schemaProbeConn) QueryContext(

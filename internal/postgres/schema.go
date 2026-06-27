@@ -200,10 +200,6 @@ CREATE INDEX IF NOT EXISTS idx_pinned_session
 CREATE INDEX IF NOT EXISTS idx_pinned_created
     ON pinned_messages (created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_pinned_source_uuid
-    ON pinned_messages (session_id, source_uuid)
-    WHERE source_uuid <> '';
-
 CREATE TABLE IF NOT EXISTS model_pricing (
     model_pattern TEXT PRIMARY KEY,
     input_per_mtok DOUBLE PRECISION NOT NULL DEFAULT 0,
@@ -755,6 +751,9 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		 ON messages(session_id) WHERE is_sidechain = TRUE`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_source_uuid
 		 ON messages(source_uuid) WHERE source_uuid != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_pinned_source_uuid
+		 ON pinned_messages(session_id, source_uuid)
+		 WHERE source_uuid <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_usage_covering
 		 ON messages(timestamp, session_id, ordinal, model,
 		             claude_message_id, claude_request_id)
