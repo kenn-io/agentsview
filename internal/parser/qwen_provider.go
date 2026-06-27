@@ -27,6 +27,10 @@ func newQwenSourceSet(roots []string) JSONLSourceSet {
 		WithProjectHint(qwenProjectHintFromPath),
 		WithSessionIDFromPath(qwenSessionIDFromPath),
 		WithParseFile(qwenParseFile),
+		// Qwen persisted a full-file content hash (file_hash) in the legacy
+		// processQwen path. Without this the provider fingerprint hash is empty
+		// and a resync clears the stored file_hash to NULL.
+		WithContentHashing(),
 	)
 }
 
