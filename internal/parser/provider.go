@@ -279,6 +279,11 @@ type IncrementalRequest struct {
 	Offset       int64
 	StartOrdinal int
 	Machine      string
+	// LastEntryUUID is the UUID of the last entry stored for this
+	// session, used by DAG-aware parsers (Claude) to detect when an
+	// appended tail forks away from the stored tip and must trigger a
+	// full reparse instead of a naive append.
+	LastEntryUUID string
 }
 
 // IncrementalOutcome is the append-only parse output.
@@ -349,12 +354,20 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 	switch def.Type {
 	case AgentAmp:
 		return newAmpProviderFactory(def)
+	case AgentClaude:
+		return newClaudeProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
+	case AgentCowork:
+		return newCoworkProviderFactory(def)
 	case AgentCortex:
 		return newCortexProviderFactory(def)
+	case AgentCursor:
+		return newCursorProviderFactory(def)
 	case AgentDeepSeekTUI:
 		return newDeepSeekTUIProviderFactory(def)
+	case AgentHermes:
+		return newHermesProviderFactory(def)
 	case AgentIflow:
 		return newIflowProviderFactory(def)
 	case AgentGptme:
@@ -367,6 +380,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newMiMoCodeProviderFactory(def)
 	case AgentOpenCode:
 		return newOpenCodeProviderFactory(def)
+	case AgentOpenHands:
+		return newOpenHandsProviderFactory(def)
 	case AgentOpenClaw:
 		return newOpenClawProviderFactory(def)
 	case AgentOMP, AgentPi:
@@ -375,6 +390,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newQwenPawProviderFactory(def)
 	case AgentQClaw:
 		return newQClawProviderFactory(def)
+	case AgentVibe:
+		return newVibeProviderFactory(def)
 	case AgentWorkBuddy:
 		return newWorkBuddyProviderFactory(def)
 	case AgentQwen:

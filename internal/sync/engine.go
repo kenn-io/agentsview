@@ -859,7 +859,7 @@ func (e *Engine) expandClaudeDuplicateCandidates(
 
 	out := files
 	for _, claudeDir := range e.agentDirs[parser.AgentClaude] {
-		for _, candidate := range parser.DiscoverClaudeProjects(claudeDir) {
+		for _, candidate := range parser.ClaudeProjectSessionFiles(claudeDir) {
 			sessionID := claudeSessionIDFromPath(candidate.Path)
 			if _, ok := sessionIDs[sessionID]; !ok {
 				continue
@@ -907,20 +907,6 @@ func isUnder(dir, path string) (string, bool) {
 	return rel, true
 }
 
-// findContainingDir returns the first dir from dirs that is a
-// parent of path, or "" if none match.
-func findContainingDir(dirs []string, path string) string {
-	for _, d := range dirs {
-		if d == "" {
-			continue
-		}
-		if _, ok := isUnder(d, path); ok {
-			return d
-		}
-	}
-	return ""
-}
-
 // classifyContainerPath runs the container- and SQLite-style classifiers that
 // resolve a path whether or not it currently exists on disk (Kiro, Zed,
 // Shelley, and Vibe). Split out of classifyOnePath to keep that function
@@ -935,9 +921,6 @@ func (e *Engine) classifyContainerPath(
 		return df, true
 	}
 	if df, ok := e.classifyShelleySQLitePath(path); ok {
-		return df, true
-	}
-	if df, ok := e.classifyVibePath(path); ok {
 		return df, true
 	}
 	return parser.DiscoveredFile{}, false
@@ -973,66 +956,12 @@ func (e *Engine) classifyOnePath(
 		return df, true
 	}
 
-	// Claude: <claudeDir>/<project>/<session>.jsonl
-	//     or: <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
-	for _, claudeDir := range e.agentDirs[parser.AgentClaude] {
-		if claudeDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(claudeDir, path); ok {
-			if !strings.HasSuffix(path, ".jsonl") {
-				continue
-			}
-			parts := strings.Split(rel, sep)
-
-			// Standard session: project/session.jsonl
-			if len(parts) == 2 {
-				stem := strings.TrimSuffix(
-					filepath.Base(path), ".jsonl",
-				)
-				if strings.HasPrefix(stem, "agent-") {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentClaude,
-				}, true
-			}
-
-			// Subagent: project/session/subagents/**/agent-*.jsonl
-			if len(parts) >= 4 && parts[2] == "subagents" {
-				stem := strings.TrimSuffix(
-					parts[len(parts)-1], ".jsonl",
-				)
-				if !strings.HasPrefix(stem, "agent-") {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: parts[0],
-					Agent:   parser.AgentClaude,
-				}, true
-			}
-		}
-	}
-
-	// Cowork: <coworkDir>/<orgId>/<workspaceId>/local_<uuid>/.claude/
-	//   projects/<enc>/<cliSessionId>.jsonl (transcript), or the sibling
-	//   local_<uuid>.json metadata file (resolves to its transcript).
-	for _, coworkDir := range e.agentDirs[parser.AgentCowork] {
-		if coworkDir == "" {
-			continue
-		}
-		if transcript, ok := parser.ClassifyCoworkPath(
-			coworkDir, path,
-		); ok {
-			return parser.DiscoveredFile{
-				Path:  transcript,
-				Agent: parser.AgentCowork,
-			}, true
-		}
-	}
+	// Claude change-path classification is provider-authoritative; the
+	// Claude provider's SourcesForChangedPath reproduces the
+	// <claudeDir>/<project>/<session>.jsonl and
+	// <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
+	// shapes, so the legacy block was removed when Claude was folded
+	// onto its provider.
 
 	// Codex: either <codexDir>/<year>/<month>/<day>/<file>.jsonl
 	// or <codexDir>/<file>.jsonl for archived sessions.
@@ -1135,62 +1064,6 @@ func (e *Engine) classifyOnePath(
 				Path:    path,
 				Project: project,
 				Agent:   parser.AgentGemini,
-			}, true
-		}
-	}
-
-	// OpenHands CLI:
-	//   <openhandsDir>/<conversation-id>/base_state.json
-	//   <openhandsDir>/<conversation-id>/TASKS.json
-	//   <openhandsDir>/<conversation-id>/events/*.json
-	for _, openHandsDir := range e.agentDirs[parser.AgentOpenHands] {
-		if openHandsDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(openHandsDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) < 2 || !parser.IsValidSessionID(parts[0]) {
-				continue
-			}
-			switch {
-			case len(parts) == 2 &&
-				(parts[1] == "base_state.json" ||
-					parts[1] == "TASKS.json"):
-			case len(parts) == 3 &&
-				parts[1] == "events" &&
-				strings.HasSuffix(parts[2], ".json"):
-			default:
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path: filepath.Join(
-					openHandsDir, parts[0],
-				),
-				Agent: parser.AgentOpenHands,
-			}, true
-		}
-	}
-
-	// Cursor:
-	//   <cursorDir>/<project>/agent-transcripts/<uuid>.{txt,jsonl}
-	//   <cursorDir>/<project>/agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
-	for _, cursorDir := range e.agentDirs[parser.AgentCursor] {
-		if cursorDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(cursorDir, path); ok {
-			projectDir, ok := parser.ParseCursorTranscriptRelPath(rel)
-			if !ok {
-				continue
-			}
-			project := parser.DecodeCursorProjectDir(projectDir)
-			if project == "" {
-				project = "unknown"
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: project,
-				Agent:   parser.AgentCursor,
 			}, true
 		}
 	}
@@ -1406,55 +1279,6 @@ func (e *Engine) classifyAiderPath(
 				Path:  path,
 				Agent: parser.AgentAider,
 			}, true
-		}
-	}
-	return parser.DiscoveredFile{}, false
-}
-
-// classifyVibePath handles Vibe's session directory layout:
-//
-//	<vibeDir>/session_<timestamp>_<uuid>/messages.jsonl
-//	<vibeDir>/session_<timestamp>_<uuid>/meta.json
-//
-// meta.json changes route back to messages.jsonl because title, model,
-// timestamps, and usage stats are sourced from the sidecar metadata file.
-func (e *Engine) classifyVibePath(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	sep := string(filepath.Separator)
-	for _, vibeDir := range e.agentDirs[parser.AgentVibe] {
-		if vibeDir == "" {
-			continue
-		}
-		rel, ok := isUnder(vibeDir, path)
-		if !ok {
-			continue
-		}
-		parts := strings.Split(rel, sep)
-		if len(parts) != 2 || !strings.HasPrefix(parts[0], "session_") {
-			continue
-		}
-		switch parts[1] {
-		case "messages.jsonl":
-			if _, err := os.Stat(path); err != nil {
-				continue
-			}
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: parts[0],
-				Agent:   parser.AgentVibe,
-			}, true
-		case "meta.json":
-			messagesPath := filepath.Join(
-				vibeDir, parts[0], "messages.jsonl",
-			)
-			if _, err := os.Stat(messagesPath); err == nil {
-				return parser.DiscoveredFile{
-					Path:    messagesPath,
-					Project: parts[0],
-					Agent:   parser.AgentVibe,
-				}, true
-			}
 		}
 	}
 	return parser.DiscoveredFile{}, false
@@ -4017,13 +3841,6 @@ func (e *Engine) processFile(
 	// Capture mtime once from the initial stat so all
 	// downstream cache operations use a consistent value.
 	mtime := info.ModTime().UnixNano()
-	if file.Agent == parser.AgentOpenHands {
-		snapshot, err := parser.OpenHandsSnapshot(file.Path)
-		if err != nil {
-			return processResult{err: err}
-		}
-		mtime = snapshot.Mtime
-	}
 	if file.Agent == parser.AgentCowork {
 		mtime = parser.CoworkSessionMtime(file.Path, mtime)
 	}
@@ -4070,13 +3887,10 @@ func (e *Engine) processFile(
 	var res processResult
 	switch file.Agent {
 	case parser.AgentClaude:
-		if strings.HasPrefix(file.Path, "s3://") {
-			res = e.processS3Session(ctx, file, info)
-		} else {
-			res = e.processClaude(ctx, file, info)
-		}
-	case parser.AgentCowork:
-		res = e.processCowork(file, info)
+		// Non-S3 Claude is provider-authoritative and handled earlier by
+		// processProviderFile; only s3:// Claude sources fall through to the
+		// legacy dispatch, via the S3 sync path.
+		res = e.processS3Session(ctx, file, info)
 	case parser.AgentCodex:
 		if strings.HasPrefix(file.Path, "s3://") {
 			res = e.processS3Session(ctx, file, info)
@@ -4089,10 +3903,6 @@ func (e *Engine) processFile(
 		res = e.processReasonix(file, info)
 	case parser.AgentGemini:
 		res = e.processGemini(file, info)
-	case parser.AgentOpenHands:
-		res = e.processOpenHands(file, info)
-	case parser.AgentCursor:
-		res = e.processCursor(file, info)
 	case parser.AgentVSCodeCopilot:
 		res = e.processVSCodeCopilot(file, info)
 	case parser.AgentVSCopilot:
@@ -4101,10 +3911,6 @@ func (e *Engine) processFile(
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
-	case parser.AgentHermes:
-		res = e.processHermes(file, info)
-	case parser.AgentVibe:
-		res = e.processVibe(file, info)
 	case parser.AgentPositron:
 		res = e.processPositron(file, info)
 	case parser.AgentZed:
@@ -4170,6 +3976,12 @@ func (e *Engine) processProviderFile(
 	if mode != parser.ProviderMigrationProviderAuthoritative {
 		return processResult{}, false
 	}
+	// S3 sources are not provider-owned: the provider source sets read local
+	// files, so s3:// paths use the legacy S3 sync path (processS3Session),
+	// which handles object fetch, fingerprinting, and per-agent skip logic.
+	if strings.HasPrefix(file.Path, "s3://") {
+		return processResult{}, false
+	}
 	if file.ProviderSource != nil && !file.ProviderProcess {
 		return processResult{}, false
 	}
@@ -4199,6 +4011,36 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 
+	// SyncSingleSession resolves a single session by ID and carries the
+	// caller-preferred project (typically the DB-preserved value, so a
+	// user override is not reverted) on file.Project without an explicit
+	// ProviderSource. Provider FindSource re-derives ProjectHint from the
+	// path, so honor the caller's project as the hint in that case. Full
+	// discovery and changed-path classification always supply
+	// file.ProviderSource, whose ProjectHint stays authoritative.
+	if file.ProviderSource == nil && file.Project != "" {
+		source.ProjectHint = file.Project
+	}
+
+	// DB-freshness skip for single-session JSONL providers (Claude):
+	// when the stored session's size, mtime, and data version already
+	// match the source and its project does not need reparse, skip the
+	// parse entirely. This reproduces the legacy process arm's
+	// shouldSkipFile gate so an unchanged session is not re-parsed on
+	// every full sync.
+	if mtime, fresh := e.providerSingleSessionFresh(ctx, provider, source, file); fresh {
+		return processResult{
+			skip:  true,
+			mtime: mtime,
+		}, true
+	}
+	if freshMtime, fresh := e.providerCoworkSourceFresh(source, file); fresh {
+		return processResult{
+			skip:  true,
+			mtime: freshMtime,
+		}, true
+	}
+
 	fingerprint, err := provider.Fingerprint(ctx, source)
 	if err != nil {
 		return processResult{err: err}, true
@@ -4218,6 +4060,21 @@ func (e *Engine) processProviderFile(
 			}, true
 		}
 	}
+
+	// Append-only incremental parse for already-synced JSONL files.
+	// When the incremental path declines but signals forceReplace,
+	// carry the flag onto the full parse so the write path replaces
+	// stored messages instead of appending on top of stale rows.
+	incRes, incOK := e.tryProviderIncrementalAppend(
+		ctx, provider, source, file, fingerprint,
+	)
+	if incOK {
+		incRes.mtime = fingerprint.MTimeNS
+		incRes.cacheSkip = cacheSkip
+		incRes.cacheKey = cacheKey
+		return incRes, true
+	}
+	incForceReplace := incRes.forceReplace
 
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
 		Source:      source,
@@ -4266,9 +4123,15 @@ func (e *Engine) processProviderFile(
 		cacheSkip:             cacheSkip,
 		cacheKey:              cacheKey,
 		noCacheSkip:           !cleanCache,
-		forceReplace:          outcome.ForceReplace,
+		forceReplace:          outcome.ForceReplace || incForceReplace,
 		suppressPresenceSweep: !outcome.ResultSetComplete,
 	}
+	// Incremental-append providers (Claude) need the stored file
+	// identity so a later sync can detect an atomic file replacement
+	// (new inode/device) and fall back to a full parse instead of
+	// appending on top of stale state. Match the legacy process arm,
+	// which stamped inode/device from the source file stat.
+	e.stampProviderFileIdentity(provider, source, res.results)
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			if res.retrySessionIDs == nil {
@@ -4286,7 +4149,124 @@ func (e *Engine) processProviderFile(
 			})
 		}
 	}
+	e.applyProviderFilePathPolicies(provider, file.Agent, &res)
 	return res, true
+}
+
+// applyProviderFilePathPolicies reproduces the DB-aware, file-path-scoped
+// session bookkeeping that a provider cannot do on its own (it has no database
+// handle). It runs only for single-session-per-file providers whose canonical
+// ID can change while the source path is unchanged (e.g. Vibe, whose ID flips
+// between the meta.json session_id and the directory-name fallback as meta.json
+// appears or is removed). Multi-session sources are skipped, where several
+// distinct sessions legitimately share one path; for stable-ID providers it is
+// a no-op because the stored ID always matches the freshly parsed one.
+//
+// Two policies are applied per result, keyed by the (path-rewritten) file_path:
+//
+//  1. Resurrection guard: if the user removed the session occupying this path —
+//     a trashed row at the same path, or an alternate identity for the path
+//     (the provider's excluded fallback ID, or a stale stored ID) that is now
+//     trashed or permanently excluded — the freshly parsed row must not be
+//     written under its new ID. The result is dropped and its ID is excluded.
+//  2. Stale-row cleanup: any other live stored ID at the same path that the
+//     current parse no longer emits is added to the exclusion list so the
+//     superseded row is deleted.
+func (e *Engine) applyProviderFilePathPolicies(
+	provider parser.Provider,
+	agent parser.AgentType,
+	res *processResult,
+) {
+	if provider.Capabilities().Source.MultiSessionSource == parser.CapabilitySupported {
+		return
+	}
+	if len(res.results) == 0 {
+		return
+	}
+
+	excluded := make(map[string]struct{}, len(res.excludedSessionIDs))
+	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+		excluded[id] = struct{}{}
+	}
+	addExclusion := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, ok := excluded[id]; ok {
+			return
+		}
+		excluded[id] = struct{}{}
+		res.excludedSessionIDs = append(res.excludedSessionIDs, id)
+	}
+
+	kept := res.results[:0]
+	for _, result := range res.results {
+		path := result.Session.File.Path
+		if path == "" {
+			kept = append(kept, result)
+			continue
+		}
+		lookupPath := path
+		if e.pathRewriter != nil {
+			lookupPath = e.pathRewriter(path)
+		}
+		currentID := result.Session.ID
+		currentPrefixedID := e.idPrefix + result.Session.ID
+
+		existingIDs, err := e.db.ListSessionIDsByFilePath(lookupPath, string(agent))
+		if err != nil {
+			log.Printf("list session IDs by file path: %v", err)
+			kept = append(kept, result)
+			continue
+		}
+
+		// Resurrection guard. The path's identity is removed when a trashed row
+		// shares it, or when any alternate identity for the path (the
+		// provider's excluded fallback IDs or a stale stored ID) is trashed or
+		// permanently excluded. In that case the new row must not be written.
+		suppress := e.db.HasTrashedSessionByFilePath(lookupPath, string(agent))
+		if !suppress {
+			for id := range excluded {
+				if id == currentID || id == currentPrefixedID {
+					continue
+				}
+				if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
+					suppress = true
+					break
+				}
+			}
+		}
+		if !suppress {
+			for _, id := range existingIDs {
+				if id == currentID || id == currentPrefixedID {
+					continue
+				}
+				if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
+					suppress = true
+					break
+				}
+			}
+		}
+		if suppress {
+			// Keep a trashed current ID trashed rather than converting it to a
+			// parser deletion; the upsert's trash guard already hides it.
+			if (currentPrefixedID == "" || !e.db.IsSessionTrashed(currentPrefixedID)) &&
+				!e.db.IsSessionTrashed(currentID) {
+				addExclusion(currentID)
+			}
+			continue
+		}
+
+		// Stale-row cleanup for live siblings the current parse supersedes.
+		for _, id := range existingIDs {
+			if id == currentID || id == currentPrefixedID {
+				continue
+			}
+			addExclusion(id)
+		}
+		kept = append(kept, result)
+	}
+	res.results = kept
 }
 
 func providerOutcomeAllowsCleanSkipCache(outcome parser.ParseOutcome) bool {
@@ -4657,13 +4637,10 @@ func (f fakeSnapshotInfo) ModTime() time.Time {
 func (f fakeSnapshotInfo) IsDir() bool { return false }
 func (f fakeSnapshotInfo) Sys() any    { return nil }
 
-func (e *Engine) processClaude(
-	ctx context.Context,
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	return e.processClaudeWithStoredSkip(ctx, file, info, true)
-}
-
+// processClaudeWithStoredSkip parses a Claude Code JSONL session from a local
+// file. Non-S3 Claude sources are provider-authoritative and never reach here;
+// this remains the parse path for s3:// Claude sources, which the S3 sync path
+// fetches to a local file and feeds in with allowStoredSkip=false.
 func (e *Engine) processClaudeWithStoredSkip(
 	ctx context.Context,
 	file parser.DiscoveredFile, info os.FileInfo,
@@ -4742,48 +4719,204 @@ func (e *Engine) processClaudeWithStoredSkip(
 	}
 }
 
-// processCowork parses a Claude Desktop "cowork" (local agent mode)
-// session. The transcript is a standard Claude Code JSONL file nested
-// inside the cowork session directory, so the work is delegated to the
-// Claude parser and rewritten into the cowork namespace by
-// parser.ParseCoworkSession. Cowork session IDs are "cowork:"-prefixed, so
-// the skip check keys off file_path rather than the bare filename stem.
-func (e *Engine) processCowork(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-
-	// The session title lives in the sibling metadata file, so a rename
-	// changes only that file. Skip on the composite (transcript+metadata)
-	// mtime so renames are re-parsed instead of skipped as unchanged.
-	compositeMtime := parser.CoworkSessionMtime(
-		file.Path, info.ModTime().UnixNano(),
-	)
-	fi := fakeSnapshotInfo{fSize: info.Size(), fMtime: compositeMtime}
-	if e.shouldSkipByPath(file.Path, fi) {
-		return processResult{skip: true}
+// providerSingleSessionFresh reports whether a single-session JSONL
+// provider's source (Claude) maps to a stored session that is already
+// up to date: the source size and mtime match what is stored, the row
+// is at the current parser data version, and its project does not need
+// reparse. It reproduces the legacy Claude process arm's shouldSkipFile
+// gate so an unchanged session is skipped instead of re-parsed every
+// full sync. Providers without incremental append, multi-session
+// sources, or sources that are not a single physical file are never
+// considered fresh here and always fall through to the full parse.
+func (e *Engine) providerSingleSessionFresh(
+	ctx context.Context,
+	provider parser.Provider,
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+) (int64, bool) {
+	// Match the legacy shouldSkipFile gate, which keyed off the
+	// engine-wide forceParse (parse-diff) flag only. A per-file
+	// ForceParse (set by SyncSingleSession to bypass the error skip
+	// cache) must not defeat the DB-freshness skip: an unchanged session
+	// is still skipped so a single-session resync does not, for example,
+	// reapply a worktree project mapping to a file that has not changed.
+	if e.forceParse {
+		return 0, false
 	}
-
-	results, excludedIDs, err := parser.ParseCoworkSession(
-		file.Path, e.machine,
-	)
+	// Claude is the single-physical-file provider that takes the
+	// append-only incremental path. Its source stem is the session ID,
+	// so DB freshness can be checked by that ID even though a DAG fork
+	// can later split the file into several sessions.
+	if provider.Capabilities().Source.IncrementalAppend !=
+		parser.CapabilitySupported {
+		return 0, false
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		return 0, false
+	}
+	sessionID := claudeSessionIDFromPath(path)
+	if sessionID == "" {
+		return 0, false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	info, err := os.Stat(lookupPath)
 	if err != nil {
-		return processResult{err: err}
+		info, err = os.Stat(path)
+		if err != nil {
+			return 0, false
+		}
 	}
+	if !e.shouldSkipFile(sessionID, info) {
+		return 0, false
+	}
+	sess, _ := e.db.GetSession(ctx, e.idPrefix+sessionID)
+	return info.ModTime().UnixNano(), sess != nil &&
+		sess.Project != "" &&
+		!parser.NeedsProjectReparse(sess.Project)
+}
 
+func (e *Engine) providerCoworkSourceFresh(
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+) (int64, bool) {
+	if e.forceParse || file.ForceParse || file.Agent != parser.AgentCowork {
+		return 0, false
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		return 0, false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	info, err := os.Stat(lookupPath)
+	if err != nil {
+		info, err = os.Stat(path)
+		if err != nil {
+			return 0, false
+		}
+	}
+	mtime := parser.CoworkSessionMtime(path, info.ModTime().UnixNano())
+	effectiveInfo := fakeSnapshotInfo{
+		fSize:  info.Size(),
+		fMtime: mtime,
+	}
+	if !e.shouldSkipByPath(path, effectiveInfo) {
+		return 0, false
+	}
+	return mtime, true
+}
+
+// stampProviderFileIdentity copies the source file's inode and device onto
+// every parsed result for an incremental-append provider (Claude). The
+// legacy process arm stamped this identity from the source stat so the
+// incremental path can later detect an atomic file replacement and fall
+// back to a full parse. Providers whose source is not a single physical
+// file, or that do not support incremental append, are left untouched.
+func (e *Engine) stampProviderFileIdentity(
+	provider parser.Provider,
+	source parser.SourceRef,
+	results []parser.ParseResult,
+) {
+	if provider.Capabilities().Source.IncrementalAppend !=
+		parser.CapabilitySupported {
+		return
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
 	inode, device := getFileIdentity(info)
-	hash, hashErr := ComputeFileHash(file.Path)
 	for i := range results {
 		results[i].Session.File.Inode = inode
 		results[i].Session.File.Device = device
-		if hashErr == nil {
-			results[i].Session.File.Hash = hash
+	}
+}
+
+// tryProviderIncrementalAppend reproduces the legacy incremental-append
+// sync path for a provider-authoritative agent that supports append-only
+// incremental parsing (Claude). The provider owns the byte-offset parse
+// via ParseIncremental, but the engine still owns the DB-aware
+// bookkeeping (session lookup, data-version and identity guards, ordinal
+// resume, cross-sync split detection, and cumulative counters), so this
+// drives the shared tryIncrementalJSONL with an adapter that calls the
+// provider. Returns (result, true) when the incremental path produced a
+// terminal result, or (result, false) to fall through to the full
+// provider parse (carrying any forceReplace signal).
+func (e *Engine) tryProviderIncrementalAppend(
+	ctx context.Context,
+	provider parser.Provider,
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+	fingerprint parser.SourceFingerprint,
+) (processResult, bool) {
+	// Match the legacy tryIncrementalJSONL gate, which suppressed append
+	// deltas only under the engine-wide forceParse (parse-diff) flag. A
+	// per-file ForceParse does not disable incremental append.
+	if e.forceParse {
+		return processResult{}, false
+	}
+	if provider.Capabilities().Source.IncrementalAppend !=
+		parser.CapabilitySupported {
+		return processResult{}, false
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		return processResult{}, false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return processResult{}, false
+	}
+
+	parseFn := func(
+		_ string, offset int64, startOrdinal int, lastEntryUUID string,
+	) ([]parser.ParsedMessage, time.Time, int64, error) {
+		outcome, status, perr := provider.ParseIncremental(
+			ctx,
+			parser.IncrementalRequest{
+				Source:        source,
+				Fingerprint:   fingerprint,
+				SessionID:     e.idPrefix + claudeSessionIDFromPath(path),
+				Offset:        offset,
+				StartOrdinal:  startOrdinal,
+				Machine:       e.machine,
+				LastEntryUUID: lastEntryUUID,
+			},
+		)
+		if perr != nil {
+			return nil, time.Time{}, 0, perr
+		}
+		switch status {
+		case parser.IncrementalNeedsFullParse:
+			if outcome.ForceReplace {
+				// Signal the shared helper to fall back to a
+				// full parse that replaces stored messages.
+				return nil, time.Time{}, 0,
+					parser.ErrClaudeIncrementalNeedsFullParse
+			}
+			// A plain full-parse fallback (e.g. DAG detected):
+			// return a non-fallback error so the helper runs a
+			// normal full parse without forceReplace.
+			return nil, time.Time{}, 0, parser.ErrDAGDetected
+		case parser.IncrementalNoNewData:
+			return nil, time.Time{}, 0, nil
+		default:
+			return outcome.Messages, outcome.EndedAt,
+				outcome.ConsumedBytes, nil
 		}
 	}
 
-	return processResult{
-		results:            results,
-		excludedSessionIDs: excludedIDs,
-	}
+	return e.tryIncrementalJSONL(file, info, file.Agent, parseFn)
 }
 
 // incrementalParseFunc reads new JSONL lines from a file
@@ -4844,9 +4977,6 @@ func (e *Engine) tryIncrementalJSONL(
 	}
 
 	currentSize := info.Size()
-	if currentSize <= inc.FileSize {
-		return processResult{}, false
-	}
 
 	// A prior sync that stored no message rows has no safe append
 	// boundary. Rewritten files can grow in place and keep the same
@@ -4873,8 +5003,22 @@ func (e *Engine) tryIncrementalJSONL(
 				inc.FileInode, curInode,
 				inc.FileDevice, curDevice,
 			)
-			return processResult{}, false
+			return processResult{forceReplace: true}, false
 		}
+	}
+	if currentSize < inc.FileSize {
+		log.Printf(
+			"incremental %s %s: file truncated from %d to %d, full parse",
+			agent, file.Path, inc.FileSize, currentSize,
+		)
+		return processResult{forceReplace: true}, false
+	}
+	if currentSize == inc.FileSize {
+		log.Printf(
+			"incremental %s %s: file size unchanged at %d but changed since last sync, full parse",
+			agent, file.Path, currentSize,
+		)
+		return processResult{forceReplace: true}, false
 	}
 
 	// Persist the same effective file_mtime a full parse would store. For
@@ -5946,139 +6090,6 @@ func (e *Engine) processKiroIDE(
 	}
 }
 
-func (e *Engine) processHermes(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	if filepath.Base(file.Path) == "state.db" {
-		results, err := parser.ParseHermesArchive(
-			file.Path, file.Project, e.machine,
-		)
-		if err != nil {
-			return processResult{err: err}
-		}
-		return processResult{results: results, forceReplace: true}
-	}
-
-	sess, msgs, err := parser.ParseHermesSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processVibe(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Title/model/usage stats come from the sibling meta.json, so the
-	// skip check and stored file info must account for it too, or a
-	// meta.json-only update never refreshes those fields.
-	effectiveInfo := vibeEffectiveInfo(file.Path, info)
-	if e.shouldSkipByPath(file.Path, effectiveInfo) {
-		return processResult{skip: true}
-	}
-
-	// Pass an empty project so the parser-derived project (from the
-	// session's working directory) is kept. file.Project holds the
-	// cryptic session directory name, which must not become the project.
-	sess, msgs, usageEvents, err := parser.ParseVibeSessionWrapper(
-		file.Path, "", e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-	sess.File.Size = effectiveInfo.Size()
-	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	var excludedIDs []string
-	lookupPath := file.Path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(file.Path)
-	}
-	existingIDs, err := e.db.ListSessionIDsByFilePath(
-		lookupPath, string(parser.AgentVibe),
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	currentID := sess.ID
-	currentPrefixedID := e.idPrefix + sess.ID
-	fallbackID := "vibe:" + filepath.Base(filepath.Dir(file.Path))
-	for _, id := range existingIDs {
-		if id != currentID && id != currentPrefixedID {
-			excludedIDs = append(excludedIDs, id)
-		}
-	}
-
-	currentFallbackTrashed := sess.ID == fallbackID && e.isSessionTrashed(fallbackID)
-	if e.isSessionBlocked(fallbackID) ||
-		(sess.ID == fallbackID &&
-			e.db.HasTrashedSessionByFilePath(lookupPath, string(parser.AgentVibe))) {
-		if !currentFallbackTrashed && !slices.Contains(excludedIDs, sess.ID) {
-			excludedIDs = append(excludedIDs, sess.ID)
-		}
-		return processResult{excludedSessionIDs: excludedIDs}
-	}
-
-	// Sessions parsed before meta.json existed (or was parseable) are stored
-	// under the directory-name fallback ID. Keep excluding that legacy row even
-	// if it predates file_path metadata and did not appear in the path lookup.
-	if sess.ID != fallbackID && !slices.Contains(excludedIDs, fallbackID) {
-		excludedIDs = append(excludedIDs, fallbackID)
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
-		},
-		excludedSessionIDs: excludedIDs,
-	}
-}
-
-func (e *Engine) isSessionBlocked(id string) bool {
-	if e.idPrefix != "" && !strings.HasPrefix(id, e.idPrefix) {
-		prefixed := e.idPrefix + id
-		return e.db.IsSessionExcluded(prefixed) || e.db.IsSessionTrashed(prefixed)
-	}
-	if e.db.IsSessionExcluded(id) || e.db.IsSessionTrashed(id) {
-		return true
-	}
-	return false
-}
-
-func (e *Engine) isSessionTrashed(id string) bool {
-	if e.idPrefix != "" && !strings.HasPrefix(id, e.idPrefix) {
-		return e.db.IsSessionTrashed(e.idPrefix + id)
-	}
-	return e.db.IsSessionTrashed(id)
-}
-
 // vibeEffectiveInfo returns size/mtime for a Vibe session that account
 // for the sibling meta.json file: size is the sum of both files, and
 // mtime is the larger of the two. Returns info unchanged when meta.json
@@ -6310,93 +6321,6 @@ func (e *Engine) processAntigravityCLI(
 	}
 }
 
-func (e *Engine) processOpenHands(
-	file parser.DiscoveredFile, _ os.FileInfo,
-) processResult {
-	snapshot, err := parser.OpenHandsSnapshot(file.Path)
-	if err != nil {
-		return processResult{err: err}
-	}
-
-	fi := fakeSnapshotInfo{
-		fSize: snapshot.Size, fMtime: snapshot.Mtime,
-	}
-	if e.shouldSkipByPath(file.Path, fi) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseOpenHandsSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processCursor(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Skip .txt if a sibling .jsonl exists — .jsonl is the
-	// richer format and takes precedence.
-	if stem, ok := strings.CutSuffix(file.Path, ".txt"); ok {
-		if parser.IsRegularFile(stem + ".jsonl") {
-			return processResult{skip: true}
-		}
-	}
-
-	sessionID := parser.CursorSessionID(file.Path)
-
-	if e.shouldSkipFile(sessionID, info) {
-		return processResult{skip: true}
-	}
-
-	// Re-validate containment immediately before parsing to
-	// close the TOCTOU window between discovery and read.
-	// The parser opens with O_NOFOLLOW (rejecting symlinked
-	// final components), and this check catches parent
-	// directory swaps.
-	if root := findContainingDir(
-		e.agentDirs[parser.AgentCursor], file.Path,
-	); root != "" {
-		if err := validateCursorContainment(
-			root, file.Path,
-		); err != nil {
-			return processResult{
-				err: fmt.Errorf(
-					"containment check: %w", err,
-				),
-			}
-		}
-	}
-
-	sess, msgs, err := parser.ParseCursorSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	// Hash is computed inside ParseCursorSession from the
-	// already-read data to avoid re-opening the file by path.
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	size := info.Size()
 	mtime := info.ModTime().UnixNano()
@@ -6408,31 +6332,6 @@ func commandCodeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-// validateCursorContainment re-resolves both root and path
-// to verify the file still resides within the cursor projects
-// directory. Returns an error if containment fails.
-func validateCursorContainment(
-	cursorDir, path string,
-) error {
-	resolvedRoot, err := filepath.EvalSymlinks(cursorDir)
-	if err != nil {
-		return fmt.Errorf("resolve root: %w", err)
-	}
-	resolvedPath, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return fmt.Errorf("resolve path: %w", err)
-	}
-	rel, err := filepath.Rel(resolvedRoot, resolvedPath)
-	sep := string(filepath.Separator)
-	if err != nil || rel == ".." ||
-		strings.HasPrefix(rel, ".."+sep) {
-		return fmt.Errorf(
-			"%s escapes %s", path, cursorDir,
-		)
-	}
-	return nil
 }
 
 // computeFinalStreak counts trailing consecutive failures
@@ -8667,23 +8566,6 @@ func (e *Engine) SyncSingleSessionContext(
 		}
 		return err
 	}
-	if def.Type == parser.AgentHermes {
-		hermesProject := ""
-		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
-			sess.Project != "" && !parser.NeedsProjectReparse(sess.Project) {
-			hermesProject = sess.Project
-		}
-		ok, err := e.syncSingleHermesArchive(
-			sessionID, path, hermesProject,
-		)
-		if err != nil {
-			return err
-		}
-		if ok {
-			return nil
-		}
-	}
-
 	agent := def.Type
 
 	// Clear skip cache so explicit re-sync always processes
@@ -8870,52 +8752,6 @@ func (e *Engine) SyncSingleSessionContext(
 	}
 
 	return nil
-}
-
-func (e *Engine) syncSingleHermesArchive(
-	sessionID, path, project string,
-) (bool, error) {
-	stateDB := ""
-	if filepath.Base(path) == "state.db" {
-		stateDB = path
-	} else if filepath.Base(filepath.Dir(path)) == "sessions" {
-		candidate := filepath.Join(
-			filepath.Dir(filepath.Dir(path)), "state.db",
-		)
-		if parser.IsRegularFile(candidate) {
-			stateDB = candidate
-		}
-	}
-	if stateDB == "" {
-		return false, nil
-	}
-
-	results, err := parser.ParseHermesArchive(
-		stateDB, project, e.machine,
-	)
-	if err != nil {
-		return true, err
-	}
-	for _, pr := range results {
-		if pr.Session.ID != sessionID {
-			continue
-		}
-		if err := e.writeSessionFull(pendingWrite{
-			sess:        pr.Session,
-			msgs:        pr.Messages,
-			usageEvents: pr.UsageEvents,
-		}); err != nil && !isIntentionalSessionSkip(err) &&
-			!errors.Is(err, errSessionPreserved) {
-			return true, fmt.Errorf(
-				"write session %s: %w", pr.Session.ID, err,
-			)
-		}
-		return true, nil
-	}
-	return true, fmt.Errorf(
-		"session %s not found in Hermes archive %s",
-		sessionID, stateDB,
-	)
 }
 
 func (e *Engine) applyWorktreeMappingToSingleSession(

@@ -400,9 +400,13 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 	return []string{parent}
 }
 
-// DiscoverClaudeProjects finds all project directories under the
-// Claude projects dir and returns their JSONL session files.
-func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {
+// ClaudeProjectSessionFiles finds all project directories under the
+// Claude projects dir and returns their JSONL session files. It is the
+// provider-owned enumeration body shared by the Claude provider source
+// set (full-sync discovery) and the engine's duplicate-candidate
+// expansion. The name carries no legacy entrypoint verb so the
+// provider can call it without shimming a Discover* free function.
+func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	if strings.HasPrefix(projectsDir, "s3://") {
 		return discoverClaudeS3(projectsDir)
 	}
@@ -533,9 +537,12 @@ func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
 	return files
 }
 
-// FindClaudeSourceFile finds the original JSONL file for a Claude
-// session ID by searching all project directories.
-func FindClaudeSourceFile(
+// claudeFindSourceFile finds the original JSONL file for a Claude
+// session ID by searching all project directories. It is the
+// provider-owned lookup body used by the Claude provider source set's
+// FindSource. The name carries no legacy entrypoint verb so the
+// provider can call it without shimming a Find* free function.
+func claudeFindSourceFile(
 	projectsDir, sessionID string,
 ) string {
 	if !IsValidSessionID(sessionID) {
@@ -564,7 +571,7 @@ func FindClaudeSourceFile(
 	// <project>/<session>/subagents/**/agent-<id>.jsonl
 	if strings.HasPrefix(sessionID, "agent-") {
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			if !isDirOrSymlink(entry, projectsDir) {
 				continue
 			}
 			projDir := filepath.Join(
@@ -949,219 +956,6 @@ func confirmGeminiSessionID(
 		return false
 	}
 	return GeminiSessionID(data) == sessionID
-}
-
-// DiscoverCursorSessions finds all agent transcript files under
-// the Cursor projects dir (<projectsDir>/<project>/agent-transcripts/<uuid>.txt).
-// All discovered paths are validated to resolve within the
-// canonical projectsDir, preventing symlink escapes.
-// cursorAddSeen inserts a transcript path into the seen map,
-// preferring .jsonl over .txt when both exist for the same stem.
-func cursorAddSeen(
-	seen map[string]string, name, fullPath string,
-) {
-	stem := strings.TrimSuffix(name, filepath.Ext(name))
-	if prev, ok := seen[stem]; ok {
-		if strings.HasSuffix(prev, ".txt") &&
-			strings.HasSuffix(name, ".jsonl") {
-			seen[stem] = fullPath
-		}
-		return
-	}
-	seen[stem] = fullPath
-}
-
-func DiscoverCursorSessions(
-	projectsDir string,
-) []DiscoveredFile {
-	if projectsDir == "" {
-		return nil
-	}
-
-	// Canonicalize root once for containment checks.
-	resolvedRoot, err := filepath.EvalSymlinks(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Reject symlinked project directory entries.
-		if entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-
-		transcriptsDir := filepath.Join(
-			projectsDir, entry.Name(), "agent-transcripts",
-		)
-
-		// Verify the transcripts directory resolves within
-		// the canonical root.
-		resolvedDir, err := filepath.EvalSymlinks(
-			transcriptsDir,
-		)
-		if err != nil {
-			continue
-		}
-		if !isContainedIn(resolvedDir, resolvedRoot) {
-			continue
-		}
-
-		transcripts, err := os.ReadDir(transcriptsDir)
-		if err != nil {
-			continue
-		}
-
-		project := DecodeCursorProjectDir(entry.Name())
-		if project == "" {
-			project = "unknown"
-		}
-
-		// Collect valid transcripts, deduping by basename
-		// stem. When both .jsonl and .txt exist for the
-		// same session, prefer .jsonl.
-		//
-		// Cursor uses two layouts:
-		//   flat:   agent-transcripts/<uuid>.{txt,jsonl}
-		//   nested: agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
-		seen := make(map[string]string) // stem -> path
-		for _, sf := range transcripts {
-			if !sf.IsDir() {
-				// Flat layout: file directly in
-				// agent-transcripts/.
-				name := sf.Name()
-				if !IsCursorTranscriptExt(name) {
-					continue
-				}
-				fullPath := filepath.Join(
-					transcriptsDir, name,
-				)
-				if !IsRegularFile(fullPath) {
-					continue
-				}
-				cursorAddSeen(seen, name, fullPath)
-				continue
-			}
-
-			// Nested layout: agent-transcripts/<uuid>/
-			// containing <uuid>.{txt,jsonl}.
-			subDir := filepath.Join(
-				transcriptsDir, sf.Name(),
-			)
-			subEntries, err := os.ReadDir(subDir)
-			if err != nil {
-				continue
-			}
-			dirName := sf.Name()
-			for _, sub := range subEntries {
-				if sub.IsDir() {
-					continue
-				}
-				name := sub.Name()
-				if !IsCursorTranscriptExt(name) {
-					continue
-				}
-				// Only accept files whose stem matches
-				// the parent directory name, e.g.
-				// <uuid>/<uuid>.jsonl.
-				stem := strings.TrimSuffix(
-					name, filepath.Ext(name),
-				)
-				if stem != dirName {
-					continue
-				}
-				fullPath := filepath.Join(
-					subDir, name,
-				)
-				if !IsRegularFile(fullPath) {
-					continue
-				}
-				cursorAddSeen(seen, name, fullPath)
-			}
-		}
-		for _, path := range seen {
-			files = append(files, DiscoveredFile{
-				Path:    path,
-				Project: project,
-				Agent:   AgentCursor,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindCursorSourceFile finds a Cursor transcript file by
-// session UUID. Prefers .jsonl over .txt.
-func FindCursorSourceFile(
-	projectsDir, sessionID string,
-) string {
-	if projectsDir == "" || !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-
-	resolvedRoot, err := filepath.EvalSymlinks(projectsDir)
-	if err != nil {
-		return ""
-	}
-
-	for _, ext := range []string{".jsonl", ".txt"} {
-		target := sessionID + ext
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			// Nested layout first (matches discovery
-			// precedence), then flat layout.
-			candidates := []string{
-				filepath.Join(
-					projectsDir, entry.Name(),
-					"agent-transcripts", sessionID, target,
-				),
-				filepath.Join(
-					projectsDir, entry.Name(),
-					"agent-transcripts", target,
-				),
-			}
-			for _, candidate := range candidates {
-				if !IsRegularFile(candidate) {
-					continue
-				}
-				resolved, err := filepath.EvalSymlinks(
-					candidate,
-				)
-				if err != nil {
-					continue
-				}
-				rel, err := filepath.Rel(
-					resolvedRoot, resolved,
-				)
-				sep := string(filepath.Separator)
-				if err != nil || rel == ".." ||
-					strings.HasPrefix(rel, ".."+sep) {
-					continue
-				}
-				return candidate
-			}
-		}
-	}
-	return ""
 }
 
 // geminiProjectsFile holds the structure of
@@ -1747,82 +1541,4 @@ func extractIflowBaseSessionID(sessionID string) string {
 
 	// If we didn't find 5 hyphens, this is not a fork ID
 	return sessionID
-}
-
-// DiscoverVibeSessions finds all Vibe session files under the given root directory.
-// Vibe stores sessions in: ~/.vibe/logs/session/session_YYYYMMDD_HHMMSS_uuid/
-// Each session directory contains messages.jsonl
-func DiscoverVibeSessions(root string) []DiscoveredFile {
-	var results []DiscoveredFile
-
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return results
-	}
-
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, root) {
-			continue
-		}
-
-		// Vibe session directories match pattern: session_YYYYMMDD_HHMMSS_uuid
-		// The uuid part can contain hyphens
-		if !strings.HasPrefix(entry.Name(), "session_") || !strings.Contains(entry.Name(), "_") {
-			continue
-		}
-
-		sessionDir := filepath.Join(root, entry.Name())
-		messagesPath := filepath.Join(sessionDir, "messages.jsonl")
-
-		if info, err := os.Stat(messagesPath); err == nil && !info.IsDir() {
-			results = append(results, DiscoveredFile{
-				Path:    messagesPath,
-				Agent:   AgentVibe,
-				Project: entry.Name(),
-			})
-		}
-	}
-
-	return results
-}
-
-// FindVibeSourceFile locates a specific Vibe session file by ID. The ID is the
-// session_id recorded in meta.json (a uuid), which usually differs from the
-// session directory name. Sessions without meta.json fall back to the directory
-// name, so a direct path is tried first before scanning meta.json files.
-func FindVibeSourceFile(root, sessionID string) string {
-	// Fast path: sessionID is the directory name (no-meta fallback).
-	if messagesPath := filepath.Join(root, sessionID, "messages.jsonl"); isVibeMessagesFile(messagesPath) {
-		return messagesPath
-	}
-
-	// Otherwise sessionID is a meta.json session_id; scan session
-	// directories and match on their recorded session_id.
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, root) || !strings.HasPrefix(entry.Name(), "session_") {
-			continue
-		}
-		messagesPath := filepath.Join(root, entry.Name(), "messages.jsonl")
-		if !isVibeMessagesFile(messagesPath) {
-			continue
-		}
-		metaPath := filepath.Join(root, entry.Name(), "meta.json")
-		if meta, err := parseVibeMetadata(metaPath); err == nil && meta.SessionID == sessionID {
-			return messagesPath
-		}
-	}
-	return ""
-}
-
-// isVibeMessagesFile reports whether path is an existing regular file.
-func isVibeMessagesFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info == nil {
-		return false
-	}
-	return !info.IsDir()
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -19,82 +18,6 @@ const (
 	openHandsActionEvent      = "ActionEvent"
 	openHandsObservationEvent = "ObservationEvent"
 )
-
-// DiscoverOpenHandsSessions finds OpenHands CLI conversation
-// directories under ~/.openhands/conversations.
-func DiscoverOpenHandsSessions(
-	conversationsDir string,
-) []DiscoveredFile {
-	entries, err := os.ReadDir(conversationsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !entry.IsDir() || !IsValidSessionID(entry.Name()) {
-			continue
-		}
-		sessionDir := filepath.Join(
-			conversationsDir, entry.Name(),
-		)
-		if !isOpenHandsSessionDir(sessionDir) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  sessionDir,
-			Agent: AgentOpenHands,
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindOpenHandsSourceFile locates an OpenHands conversation
-// directory by its raw session ID.
-func FindOpenHandsSourceFile(
-	conversationsDir, rawID string,
-) string {
-	if conversationsDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	candidates := []string{rawID}
-	stripped := strings.ReplaceAll(rawID, "-", "")
-	if stripped != rawID {
-		candidates = append(candidates, stripped)
-	}
-
-	for _, cand := range candidates {
-		sessionDir := filepath.Join(conversationsDir, cand)
-		if isOpenHandsSessionDir(sessionDir) {
-			return sessionDir
-		}
-	}
-
-	entries, err := os.ReadDir(conversationsDir)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		sessionDir := filepath.Join(
-			conversationsDir, entry.Name(),
-		)
-		if !isOpenHandsSessionDir(sessionDir) {
-			continue
-		}
-		if normalizeOpenHandsSessionID(entry.Name()) == normalizeOpenHandsSessionID(rawID) {
-			return sessionDir
-		}
-	}
-	return ""
-}
 
 // OpenHandsSnapshot computes synthetic file metadata for an
 // OpenHands conversation directory by hashing the relevant
@@ -184,9 +107,9 @@ func OpenHandsSnapshot(path string) (FileInfo, error) {
 	}, nil
 }
 
-// ParseOpenHandsSession parses a single OpenHands CLI
-// conversation directory into a session and messages.
-func ParseOpenHandsSession(
+// parseSession parses a single OpenHands CLI conversation
+// directory into a session and messages.
+func (p *openHandsProvider) parseSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	sessionDir, err := normalizeOpenHandsSessionPath(path)

@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,55 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newVibeTestProvider builds a Vibe provider for the given roots so package
+// tests can exercise discovery through the Provider interface.
+func newVibeTestProvider(t *testing.T, roots ...string) Provider {
+	t.Helper()
+	provider, ok := NewProvider(AgentVibe, ProviderConfig{
+		Roots:   roots,
+		Machine: "local",
+	})
+	require.True(t, ok)
+	return provider
+}
+
+// parseVibeTestSession parses a Vibe messages.jsonl file at path into a
+// ParseResult through the folded free function, replacing the removed
+// package-level ParseVibeSession entrypoint.
+func parseVibeTestSession(t *testing.T, path string, fileInfo FileInfo) (ParseResult, error) {
+	t.Helper()
+	return parseVibeResultFile(path, fileInfo)
+}
+
+// discoverVibeTestSessions discovers Vibe sessions under root through the
+// provider, returning the legacy DiscoveredFile shape (path + project) the
+// tests assert against.
+func discoverVibeTestSessions(t *testing.T, root string) []DiscoveredFile {
+	t.Helper()
+	provider := newVibeTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	if len(sources) == 0 {
+		return nil
+	}
+	files := make([]DiscoveredFile, 0, len(sources))
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{
+			Path:    source.DisplayPath,
+			Project: source.ProjectHint,
+			Agent:   AgentVibe,
+		})
+	}
+	return files
+}
+
+// findVibeTestSourceFile resolves a Vibe session ID to a messages.jsonl path,
+// replacing the removed FindVibeSourceFile.
+func findVibeTestSourceFile(t *testing.T, root, sessionID string) string {
+	t.Helper()
+	return findVibeSourceFile(root, sessionID)
+}
 
 func TestDiscoverVibeSessions(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -29,7 +79,7 @@ func TestDiscoverVibeSessions(t *testing.T) {
 	require.NoError(t, os.MkdirAll(otherDir, 0755))
 
 	// Run discovery
-	discovered := DiscoverVibeSessions(tmpDir)
+	discovered := discoverVibeTestSessions(t, tmpDir)
 
 	// Verify results
 	require.Len(t, discovered, 1)
@@ -53,7 +103,7 @@ func TestDiscoverVibeSessionsMultiple(t *testing.T) {
 	require.NoError(t, os.MkdirAll(invalidDir, 0755))
 
 	// Run discovery
-	discovered := DiscoverVibeSessions(tmpDir)
+	discovered := discoverVibeTestSessions(t, tmpDir)
 
 	// Verify results - should find only 3 valid sessions
 	require.Len(t, discovered, 3)
@@ -69,7 +119,7 @@ func TestDiscoverVibeSessionsEmptyDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Run discovery on empty directory
-	files := DiscoverVibeSessions(tmpDir)
+	files := discoverVibeTestSessions(t, tmpDir)
 
 	// Should return empty slice
 	assert.Len(t, files, 0)
@@ -77,7 +127,7 @@ func TestDiscoverVibeSessionsEmptyDir(t *testing.T) {
 
 func TestDiscoverVibeSessionsNonExistentDir(t *testing.T) {
 	// Run discovery on non-existent directory
-	files := DiscoverVibeSessions("/nonexistent/path")
+	files := discoverVibeTestSessions(t, "/nonexistent/path")
 
 	// Should return empty slice without error
 	assert.Len(t, files, 0)
@@ -92,7 +142,7 @@ func TestFindVibeSourceFile(t *testing.T) {
 
 	// When the ID matches the directory name (no meta.json), the file is
 	// resolved directly.
-	result := FindVibeSourceFile(root, sessionID)
+	result := findVibeTestSourceFile(t, root, sessionID)
 	expected := filepath.Join(root, sessionID, "messages.jsonl")
 	assert.Equal(t, expected, result)
 }
@@ -104,7 +154,7 @@ func TestFindVibeSourceFileWithSpecialChars(t *testing.T) {
 		filepath.Join(sessionID, "messages.jsonl"): "test",
 	})
 
-	result := FindVibeSourceFile(root, sessionID)
+	result := findVibeTestSourceFile(t, root, sessionID)
 	expected := filepath.Join(root, sessionID, "messages.jsonl")
 	assert.Equal(t, expected, result)
 }
@@ -119,12 +169,12 @@ func TestFindVibeSourceFileByMetaSessionID(t *testing.T) {
 
 	// The canonical ID is the meta.json session_id, which differs from the
 	// directory name; the lookup must scan meta.json to resolve it.
-	result := FindVibeSourceFile(root, "uuid-1234")
+	result := findVibeTestSourceFile(t, root, "uuid-1234")
 	expected := filepath.Join(root, dirName, "messages.jsonl")
 	assert.Equal(t, expected, result)
 
 	// An unknown ID resolves to nothing.
-	assert.Empty(t, FindVibeSourceFile(root, "does-not-exist"))
+	assert.Empty(t, findVibeTestSourceFile(t, root, "does-not-exist"))
 }
 
 func TestParseVibeSession(t *testing.T) {
@@ -134,7 +184,7 @@ func TestParseVibeSession(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	// Verify session metadata
@@ -192,7 +242,7 @@ func TestParseVibeSessionWithTools(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	// Verify messages
@@ -254,7 +304,7 @@ func TestParseVibeSessionEmpty(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	// Empty file should have no messages
@@ -281,7 +331,7 @@ func TestParseVibeSessionMalformedLines(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	// Should have parsed 2 valid messages and counted 1 malformed line
@@ -307,7 +357,7 @@ func TestParseVibeSessionWithoutMeta(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	// Should have parsed messages but no metadata from meta.json. The ID
@@ -358,7 +408,7 @@ func TestParseVibeSessionEmptyStats(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	// Should have parsed messages and metadata but no usage events due to empty stats
@@ -406,7 +456,7 @@ func TestParseVibeSessionModelFromMessages(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	// Should have parsed messages and metadata
@@ -460,7 +510,7 @@ func TestParseVibeSessionModelFromConfig(t *testing.T) {
 	path := filepath.Join(tmpDir, "session_test", "messages.jsonl")
 	fileInfo := FileInfo{Path: path, Mtime: time.Now().UnixNano()}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	require.Len(t, result.UsageEvents, 1)
@@ -488,7 +538,7 @@ func TestParseVibeSessionInjectedUserExcluded(t *testing.T) {
 	path := filepath.Join(tmpDir, "session_test", "messages.jsonl")
 	fileInfo := FileInfo{Path: path, Mtime: time.Now().UnixNano()}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	require.Len(t, result.Messages, 3)
@@ -507,7 +557,7 @@ func TestParseVibeSessionToolResultNotCountedAsUser(t *testing.T) {
 	path := "testdata/vibe/session_with_tools/messages.jsonl"
 	fileInfo := FileInfo{Path: path, Mtime: time.Now().UnixNano()}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, result.Session.UserMessageCount)
@@ -533,7 +583,7 @@ func TestParseVibeSessionMalformedMetaRecoversID(t *testing.T) {
 	path := filepath.Join(tmpDir, "session_dir", "messages.jsonl")
 	fileInfo := FileInfo{Path: path, Mtime: time.Now().UnixNano()}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeTestSession(t, path, fileInfo)
 	require.NoError(t, err)
 
 	assert.Equal(t, "vibe:uuid-canonical-1", result.Session.ID)
@@ -560,7 +610,7 @@ func TestParseVibeSessionCorruptMetaReturnsError(t *testing.T) {
 	path := filepath.Join(tmpDir, "session_dir", "messages.jsonl")
 	fileInfo := FileInfo{Path: path, Mtime: time.Now().UnixNano()}
 
-	_, err := ParseVibeSession(path, fileInfo)
+	_, err := parseVibeTestSession(t, path, fileInfo)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "meta.json")
 }
@@ -575,8 +625,10 @@ func TestVibeAgentByType(t *testing.T) {
 	assert.Equal(t, "vibe_session_dirs", def.ConfigKey)
 	assert.Equal(t, "vibe:", def.IDPrefix)
 	assert.True(t, def.FileBased)
-	assert.NotNil(t, def.DiscoverFunc)
-	assert.NotNil(t, def.FindSourceFunc)
+	// Vibe is provider-authoritative: discovery and source lookup live on the
+	// vibeProvider, not on legacy AgentDef hooks.
+	assert.Nil(t, def.DiscoverFunc)
+	assert.Nil(t, def.FindSourceFunc)
 }
 
 func TestVibeAgentByPrefix(t *testing.T) {
@@ -642,7 +694,7 @@ func TestParseRealVibeSession(t *testing.T) {
 		Mtime: time.Now().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(messagesPath, fileInfo)
+	result, err := parseVibeTestSession(t, messagesPath, fileInfo)
 	require.NoError(t, err)
 
 	// Verify basic session metadata

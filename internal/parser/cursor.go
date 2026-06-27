@@ -17,10 +17,10 @@ import (
 // under 500 KB; 10 MB provides generous headroom.
 const maxCursorTranscriptSize = 10 << 20
 
-// ParseCursorSession parses a Cursor agent transcript file.
-// Transcripts are plain text with "user:" and "assistant:" role
-// markers, tool calls, and thinking blocks.
-func ParseCursorSession(
+// parseSession parses a Cursor agent transcript file. Transcripts are plain
+// text with "user:" and "assistant:" role markers, tool calls, and thinking
+// blocks.
+func (p *cursorProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	// Open with O_NOFOLLOW (Unix) to reject symlinks at the
