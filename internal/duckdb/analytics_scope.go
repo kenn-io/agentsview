@@ -5,19 +5,18 @@ import (
 	"fmt"
 	"strings"
 
-	"go.kenn.io/agentsview/internal/analyticscope"
 	"go.kenn.io/agentsview/internal/db"
 )
 
 // messageScopeFilter adapts the model/day/hour parts of an AnalyticsFilter into
-// the pure analyticscope.Filter. It is a free function because AnalyticsFilter
+// the pure db.ScopeFilter. It is a free function because AnalyticsFilter
 // is defined in package db.
-func messageScopeFilter(f db.AnalyticsFilter) analyticscope.Filter {
+func messageScopeFilter(f db.AnalyticsFilter) db.ScopeFilter {
 	models := make(map[string]struct{})
 	for _, m := range duckAnalyticsCSVValues(f.Model) {
 		models[m] = struct{}{}
 	}
-	return analyticscope.Filter{
+	return db.ScopeFilter{
 		Models:    models,
 		DayOfWeek: f.DayOfWeek,
 		Hour:      f.Hour,
@@ -29,7 +28,7 @@ func messageScopeFilter(f db.AnalyticsFilter) analyticscope.Filter {
 // resolution. Its consumers are message stats, velocity timing, and signal
 // evidence (which reads message content), mirroring the SQLite/Postgres scopes.
 type messageScope struct {
-	bySession map[string][]analyticscope.ScopedMessage
+	bySession map[string][]db.ScopedMessage
 }
 
 // resolveAnalyticsMessageScope streams candidate messages for sessionIDs and
@@ -57,8 +56,8 @@ func (s *Store) resolveAnalyticsMessageScope(
 
 	flt := messageScopeFilter(f)
 	loc := analyticsLocation(f.Timezone)
-	bySession := make(map[string][]analyticscope.ScopedMessage, len(unique))
-	emit := func(m analyticscope.ScopedMessage) {
+	bySession := make(map[string][]db.ScopedMessage, len(unique))
+	emit := func(m db.ScopedMessage) {
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
 	}
 
@@ -68,7 +67,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 	}
 
 	if err := duckQueryChunked(unique, func(chunk []string) error {
-		reducer := analyticscope.NewReducer(flt, emit)
+		reducer := db.NewScopeReducer(flt, emit)
 		ph, args := duckInPlaceholders(chunk)
 		rows, err := s.duck.QueryContext(ctx, `
 			SELECT session_id, ordinal, role, is_system, COALESCE(model, ''),
@@ -100,7 +99,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 			}
 			tsStr := formatDBTime(ts)
 			parsed, has := duckLocalTime(tsStr, loc)
-			if err := reducer.Push(analyticscope.MessageInput{
+			if err := reducer.Push(db.MessageInput{
 				SessionID:       sessionID,
 				Ordinal:         ordinal,
 				Role:            role,
@@ -131,24 +130,24 @@ func (s *Store) resolveAnalyticsMessageScope(
 }
 
 // MessagesBySession returns the matched rows per session.
-func (s *messageScope) MessagesBySession() map[string][]analyticscope.ScopedMessage {
+func (s *messageScope) MessagesBySession() map[string][]db.ScopedMessage {
 	return s.bySession
 }
 
 // StatsBySession aggregates matched rows per session.
-func (s *messageScope) StatsBySession() map[string]analyticscope.MessageStats {
-	out := make(map[string]analyticscope.MessageStats, len(s.bySession))
+func (s *messageScope) StatsBySession() map[string]db.MessageStats {
+	out := make(map[string]db.MessageStats, len(s.bySession))
 	for id, rows := range s.bySession {
-		out[id] = analyticscope.Stats(rows)
+		out[id] = db.ScopeStats(rows)
 	}
 	return out
 }
 
 // TimingBySession projects matched rows into the velocity timing view.
-func (s *messageScope) TimingBySession() map[string][]analyticscope.TimingMessage {
-	out := make(map[string][]analyticscope.TimingMessage, len(s.bySession))
+func (s *messageScope) TimingBySession() map[string][]db.TimingMessage {
+	out := make(map[string][]db.TimingMessage, len(s.bySession))
 	for id, rows := range s.bySession {
-		out[id] = analyticscope.Timing(rows)
+		out[id] = db.ScopeTiming(rows)
 	}
 	return out
 }

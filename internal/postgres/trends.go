@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/analyticscope"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -96,7 +95,7 @@ func (s *Store) GetTrendsTerms(
 	}
 	rowStartedAt := make(map[string]string)
 	rowCreatedAt := make(map[string]string)
-	emit := func(m analyticscope.ScopedMessage) {
+	emit := func(m db.ScopedMessage) {
 		processRow(trendRow{
 			sessionID: m.SessionID,
 			role:      m.Role,
@@ -107,7 +106,7 @@ func (s *Store) GetTrendsTerms(
 			createdAt: rowCreatedAt[m.SessionID],
 		})
 	}
-	reducer := analyticscope.NewReducer(flt, emit)
+	reducer := db.NewScopeReducer(flt, emit)
 
 	for rows.Next() {
 		var row trendRow
@@ -128,7 +127,7 @@ func (s *Store) GetTrendsTerms(
 		rowStartedAt[row.sessionID] = row.startedAt
 		rowCreatedAt[row.sessionID] = row.createdAt
 		msgTime, has := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-		if err := reducer.Push(analyticscope.MessageInput{
+		if err := reducer.Push(db.MessageInput{
 			SessionID:    row.sessionID,
 			Ordinal:      ordinal,
 			Role:         row.role,

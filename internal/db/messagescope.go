@@ -1,16 +1,20 @@
-// Package analyticscope holds the backend-agnostic core of model-scoped
-// analytics: the matched-message reducer and its projections. It is pure (no
-// database, SQL, timezone, or db.AnalyticsFilter dependency) so the user-turn
-// pairing semantics live in one place and are unit-tested without a database.
-package analyticscope
+package db
 
 import "time"
 
-// Filter is the message-grain predicate, adapted by each backend from
-// db.AnalyticsFilter. Models holds the already-split model CSV. DayOfWeek and
-// Hour are the day/hour match targets (nil = unconstrained); DayOfWeek uses ISO
+// Model-scoped analytics core. The matched-message reducer
+// (messagescope_reducer.go) and these projections turn a backend's candidate
+// message rows into per-session stats and timing. The user-turn pairing
+// semantics live here so analytics and trends across the SQLite, PostgreSQL,
+// and DuckDB backends share one implementation instead of duplicating it per
+// panel. This code is pure (no SQL, timezone, or AnalyticsFilter dependency)
+// and is unit-tested without a database in messagescope_test.go.
+
+// ScopeFilter is the message-grain predicate, adapted by each backend from
+// AnalyticsFilter. Models holds the already-split model CSV. DayOfWeek and Hour
+// are the day/hour match targets (nil = unconstrained); DayOfWeek uses ISO
 // numbering Monday=0..Sunday=6.
-type Filter struct {
+type ScopeFilter struct {
 	Models    map[string]struct{}
 	DayOfWeek *int
 	Hour      *int
@@ -19,7 +23,8 @@ type Filter struct {
 // MessageInput is one candidate row, already filtered by the backend's
 // panel-specific predicate and already time-localized. Rows MUST be pushed
 // grouped by SessionID (each session contiguous) with non-decreasing Ordinal
-// within each session; cross-session order is unconstrained. See Reducer.Push.
+// within each session; cross-session order is unconstrained. See
+// ScopeReducer.Push.
 type MessageInput struct {
 	SessionID       string
 	Ordinal         int
@@ -78,7 +83,7 @@ type TimingMessage struct {
 // MatchesDayHour reports whether a localized time satisfies the day/hour
 // filter. With no constraint it always matches (even when the time is
 // unparsed); with a constraint, an unparsed time never matches.
-func (f Filter) MatchesDayHour(t time.Time, has bool) bool {
+func (f ScopeFilter) MatchesDayHour(t time.Time, has bool) bool {
 	if f.DayOfWeek == nil && f.Hour == nil {
 		return true
 	}
@@ -92,4 +97,47 @@ func (f Filter) MatchesDayHour(t time.Time, has bool) bool {
 		return false
 	}
 	return true
+}
+
+// ScopeStats aggregates matched rows into MessageStats. The caller groups rows
+// by session before calling.
+func ScopeStats(rows []ScopedMessage) MessageStats {
+	var s MessageStats
+	for _, row := range rows {
+		s.Messages++
+		switch row.Role {
+		case "user":
+			if !row.IsSystem {
+				s.UserMessages++
+			}
+		case "assistant":
+			s.AssistantMessages++
+			if row.HasToolUse {
+				s.ToolUseMessages++
+			}
+		}
+		if row.HasThinking {
+			s.ThinkingMessages++
+		}
+		if row.HasOutputTokens {
+			s.OutputTokens += row.OutputTokens
+			s.HasOutputTokens = true
+		}
+	}
+	return s
+}
+
+// ScopeTiming projects matched rows into the velocity timing view, preserving
+// order.
+func ScopeTiming(rows []ScopedMessage) []TimingMessage {
+	out := make([]TimingMessage, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, TimingMessage{
+			Role:          row.Role,
+			Time:          row.LocalTime,
+			Valid:         row.HasLocalTime,
+			ContentLength: row.ContentLength,
+		})
+	}
+	return out
 }

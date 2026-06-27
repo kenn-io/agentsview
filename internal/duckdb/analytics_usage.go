@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/analyticscope"
 	"go.kenn.io/agentsview/internal/db"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/signals"
@@ -570,13 +569,13 @@ func (s *Store) getAnalyticsFilteredMessageStats(
 	ctx context.Context,
 	sessionIDs []string,
 	f db.AnalyticsFilter,
-) (map[string]analyticscope.MessageStats, error) {
+) (map[string]db.MessageStats, error) {
 	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
 	if err != nil {
 		return nil, err
 	}
 	if scope == nil {
-		return map[string]analyticscope.MessageStats{}, nil
+		return map[string]db.MessageStats{}, nil
 	}
 	return scope.StatsBySession(), nil
 }
@@ -2701,13 +2700,13 @@ func (s *Store) GetTrendsTerms(
 			counts[i][pos] += db.CountTrendOccurrences(content, term)
 		}
 	}
-	emit := func(m analyticscope.ScopedMessage) {
+	emit := func(m db.ScopedMessage) {
 		if !m.HasLocalTime {
 			return
 		}
 		processRow(m.SessionID, m.Content, m.LocalTime)
 	}
-	reducer := analyticscope.NewReducer(flt, emit)
+	reducer := db.NewScopeReducer(flt, emit)
 	for rows.Next() {
 		var row trendRow
 		var ordinal int
@@ -2721,7 +2720,7 @@ func (s *Store) GetTrendsTerms(
 			}
 			continue
 		}
-		if err := reducer.Push(analyticscope.MessageInput{
+		if err := reducer.Push(db.MessageInput{
 			SessionID:    row.sessionID,
 			Ordinal:      ordinal,
 			Role:         row.role,

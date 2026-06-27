@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"go.kenn.io/agentsview/internal/analyticscope"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -267,13 +266,13 @@ func (s *Store) getAnalyticsModelScopedMessages(
 	ctx context.Context,
 	sessionIDs []string,
 	f db.AnalyticsFilter,
-) (map[string][]analyticscope.ScopedMessage, error) {
+) (map[string][]db.ScopedMessage, error) {
 	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, true)
 	if err != nil {
 		return nil, err
 	}
 	if scope == nil {
-		return map[string][]analyticscope.ScopedMessage{}, nil
+		return map[string][]db.ScopedMessage{}, nil
 	}
 	return scope.MessagesBySession(), nil
 }
@@ -282,13 +281,13 @@ func (s *Store) getAnalyticsFilteredMessageStats(
 	ctx context.Context,
 	sessionIDs []string,
 	f db.AnalyticsFilter,
-) (map[string]analyticscope.MessageStats, error) {
+) (map[string]db.MessageStats, error) {
 	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
 	if err != nil {
 		return nil, err
 	}
 	if scope == nil {
-		return map[string]analyticscope.MessageStats{}, nil
+		return map[string]db.MessageStats{}, nil
 	}
 	return scope.StatsBySession(), nil
 }
