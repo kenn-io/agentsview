@@ -852,6 +852,13 @@ func cleanJSONLRoots(roots []string) []string {
 		if root == "" {
 			continue
 		}
+		// Preserve s3:// roots verbatim: filepath.Clean collapses the "//" in the
+		// scheme to "s3:/", which breaks the s3:// prefix checks that route
+		// discovery to the object store instead of the local filesystem.
+		if strings.HasPrefix(root, "s3://") {
+			cleaned = append(cleaned, root)
+			continue
+		}
 		cleaned = append(cleaned, filepath.Clean(root))
 	}
 	return cleaned

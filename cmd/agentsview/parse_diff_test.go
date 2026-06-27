@@ -163,6 +163,28 @@ func TestParseDiffAgentTypes(t *testing.T) {
 	}
 }
 
+func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.T) {
+	supported := parseDiffSupportedAgents()
+	modes := parser.ProviderMigrationModes()
+	// Build the expected set from the registry so the contract covers every
+	// current file-based, provider-authoritative agent and stays correct as
+	// the migration manifest changes, rather than a hand-maintained subset.
+	checked := 0
+	for _, def := range parser.Registry {
+		if !def.FileBased ||
+			modes[def.Type] != parser.ProviderMigrationProviderAuthoritative {
+			continue
+		}
+		checked++
+		assert.True(t, parseDiffAgentSupported(def),
+			"parse-diff support must include provider-authoritative %s", def.Type)
+		assert.Contains(t, supported, string(def.Type),
+			"parse-diff supported list must include %s", def.Type)
+	}
+	require.Positive(t, checked,
+		"expected at least one file-based provider-authoritative agent")
+}
+
 func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {
 	isolateParseDiffEnv(t)
 

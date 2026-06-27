@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -236,14 +237,22 @@ func (s hermesSourceSet) FindSource(
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
 			IsValidSessionID(req.RawSessionID) {
 			found, err := hermesStateDBHasSession(stateDB, req.RawSessionID)
-			if err != nil {
-				return SourceRef{}, false, err
-			}
-			if !found {
+			switch {
+			case err != nil:
+				// Mirror parseArchive: an unreadable or schema-incompatible
+				// state.db falls back to transcripts rather than aborting the
+				// lookup, so a valid transcript session next to a bad state.db
+				// stays resolvable for resync.
+				log.Printf(
+					"hermes: state db lookup failed for %s: %v; "+
+						"falling back to transcripts", stateDB, err,
+				)
+			case !found:
 				continue
-			}
-			if source, ok := s.sourceRef(root, stateDB); ok {
-				return source, true, nil
+			default:
+				if source, ok := s.sourceRef(root, stateDB); ok {
+					return source, true, nil
+				}
 			}
 		}
 		transcriptRoot := hermesTranscriptRoot(root)

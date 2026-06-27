@@ -1235,6 +1235,16 @@ consumer uses providers.
 
 ## Migration Plan
 
+> **Historical (lower-branch) sequence.** The dual-run / shadow-compare steps
+> below describe how providers were migrated on the lower branches of the
+> original stack. They are kept as a record of how the migration was carried
+> out. They are **not** current guidance: `ProviderMigrationShadowCompare` and
+> `legacy-only` no longer exist at the stack tip (see the note near the top of
+> this document), so a future staged migration must add its own explicit,
+> temporary comparison mode on the branch that needs it rather than opting a
+> provider into `shadow-compare`. Read every "opt the provider into
+> shadow-compare" instruction below as belonging to that retired flow.
+
 The implementation should migrate all providers through a stacked dual-run
 sequence:
 

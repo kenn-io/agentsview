@@ -268,9 +268,6 @@ func parseDiffAgentSupported(def parser.AgentDef) bool {
 	if !def.FileBased {
 		return false
 	}
-	if def.DiscoverFunc != nil {
-		return true
-	}
 	switch parser.ProviderMigrationModes()[def.Type] {
 	case parser.ProviderMigrationProviderAuthoritative:
 		_, ok := parser.ProviderFactoryByType(def.Type)

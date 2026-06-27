@@ -491,61 +491,6 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	return files
 }
 
-// DiscoverCodexSessions finds all Codex JSONL session files under
-// either the standard year/month/day layout or a flat archived dir.
-//
-// Local Codex discovery is owned by the Codex provider source set; this entry
-// is retained as the s3:// discovery path (via discoverCodexS3), which the
-// legacy S3 sync path consumes until S3 support folds into the source sets.
-func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
-	if strings.HasPrefix(sessionsDir, "s3://") {
-		return discoverCodexS3(sessionsDir)
-	}
-	var files []DiscoveredFile
-
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if !isCodexSessionFilename(entry.Name()) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(sessionsDir, entry.Name()),
-			Agent: AgentCodex,
-		})
-	}
-
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			if !isCodexSessionFilename(sf.Name()) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(dayPath, sf.Name()),
-				Agent: AgentCodex,
-			})
-		}
-		return true
-	})
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // claudeFindSourceFile finds the original JSONL file for a Claude
 // session ID by searching all project directories. It is the
 // provider-owned lookup body used by the Claude provider source set's
@@ -1026,19 +971,14 @@ func discoverVSCodeSessionFiles(
 func discoverVisualStudioCopilotSessionFiles(
 	dir string, entries []os.DirEntry,
 ) []DiscoveredFile {
-	type candidate struct {
-		path  string
-		mtime time.Time
-	}
-	bestByConversation := map[string]candidate{}
+	bestByConversation := map[string]visualStudioCopilotCandidate{}
 	var unreadable []DiscoveredFile
 	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") ||
-			!strings.Contains(name, "_VSGitHubCopilot_traces") {
+		if entry.IsDir() ||
+			!isVisualStudioCopilotTraceFileName(entry.Name()) {
 			continue
 		}
-		path := filepath.Join(dir, name)
+		path := filepath.Join(dir, entry.Name())
 		mtime := time.Time{}
 		if info, err := entry.Info(); err == nil {
 			mtime = info.ModTime()
@@ -1056,10 +996,11 @@ func discoverVisualStudioCopilotSessionFiles(
 			continue
 		}
 		for _, id := range ids {
-			current, ok := bestByConversation[id]
-			if !ok || mtime.After(current.mtime) ||
-				(mtime.Equal(current.mtime) && path > current.path) {
-				bestByConversation[id] = candidate{path: path, mtime: mtime}
+			current := bestByConversation[id]
+			if visualStudioCopilotCandidateWins(path, mtime, current) {
+				bestByConversation[id] = visualStudioCopilotCandidate{
+					path: path, mtime: mtime,
+				}
 			}
 		}
 	}
@@ -1084,27 +1025,65 @@ func findVisualStudioCopilotTraceSourceFile(
 	}
 	needle := `"gen_ai.conversation.id"`
 	valueNeedle := `"stringValue":"` + rawID + `"`
-	var matches []string
+	var best visualStudioCopilotCandidate
 	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") ||
-			!strings.Contains(name, "_VSGitHubCopilot_traces") {
+		if entry.IsDir() ||
+			!isVisualStudioCopilotTraceFileName(entry.Name()) {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		if visualStudioCopilotTraceContains(path, needle, valueNeedle) {
-			matches = append(matches, path)
+		path := filepath.Join(dir, entry.Name())
+		if !visualStudioCopilotTraceContains(path, needle, valueNeedle) {
+			continue
+		}
+		mtime := time.Time{}
+		if info, err := entry.Info(); err == nil {
+			mtime = info.ModTime()
+		}
+		// Select the same canonical trace discovery would (newest mtime, then
+		// greater path) so a single-session resync resolves the conversation to
+		// the identical virtual path discovery stored, even when filename order
+		// and mtime order disagree.
+		if visualStudioCopilotCandidateWins(path, mtime, best) {
+			best = visualStudioCopilotCandidate{path: path, mtime: mtime}
 		}
 	}
-	if len(matches) == 0 {
+	if best.path == "" {
 		return ""
 	}
-	sort.Strings(matches)
 	// Return a conversation-scoped virtual path. The stored file_path is a
 	// <traceFile>#<conversationID> key, and returning the bare trace file would
 	// let a single-session resync enumerate and rewrite every conversation in
 	// that trace rather than only the requested one.
-	return VisualStudioCopilotVirtualPath(matches[len(matches)-1], rawID)
+	return VisualStudioCopilotVirtualPath(best.path, rawID)
+}
+
+// visualStudioCopilotCandidate is one trace file considered as the canonical
+// home for a conversation: its path and mtime.
+type visualStudioCopilotCandidate struct {
+	path  string
+	mtime time.Time
+}
+
+// isVisualStudioCopilotTraceFileName reports whether name is a Visual Studio
+// Copilot trace file.
+func isVisualStudioCopilotTraceFileName(name string) bool {
+	return strings.HasSuffix(name, ".jsonl") &&
+		strings.Contains(name, "_VSGitHubCopilot_traces")
+}
+
+// visualStudioCopilotCandidateWins reports whether the trace at (path, mtime)
+// should replace the current best candidate. The canonical rule, shared by
+// discovery and single-session lookup, is newest mtime first, then the
+// lexicographically greater path as a deterministic tie-breaker. A zero-value
+// best (empty path) means no candidate has been chosen yet.
+func visualStudioCopilotCandidateWins(
+	path string, mtime time.Time, best visualStudioCopilotCandidate,
+) bool {
+	if best.path == "" {
+		return true
+	}
+	return mtime.After(best.mtime) ||
+		(mtime.Equal(best.mtime) && path > best.path)
 }
 
 func visualStudioCopilotTraceContains(

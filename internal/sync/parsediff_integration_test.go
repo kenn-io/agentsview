@@ -837,8 +837,8 @@ func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {
 }
 
 // TestParseDiffCoversKiroSQLite proves that Kiro's shared data.sqlite3
-// store — which DiscoverFunc never emits and which normal sync reaches
-// through a dedicated phase — is actually re-parsed by parse-diff. A
+// store, which the provider discovers and fans out to one session per
+// row, is actually re-parsed by parse-diff. A
 // regressed force-parse guard or missing synthesized discovery would
 // surface here as the session being skipped/"not discovered" with
 // Examined 0 rather than compared.
@@ -995,8 +995,8 @@ func TestParseDiffCoversMixedKiloRoot(t *testing.T) {
 }
 
 // TestParseDiffCoversShelley proves Shelley's shared shelley.db — which
-// DiscoverFunc emits as a single file and which normal sync fans out to
-// one session per conversation — is re-parsed and compared by parse-diff.
+// the provider discovers as a single source and which normal sync fans
+// out to one session per conversation — is re-parsed and compared by parse-diff.
 // Examined:1/Identical:1 means the stored conversation was matched and
 // vetted, not bucketed as skipped/"not discovered".
 func TestParseDiffCoversShelley(t *testing.T) {

@@ -1226,11 +1226,7 @@ func TestHermesRegistryEntry(t *testing.T) {
 	assert.Equal(t, "hermes:", found.IDPrefix)
 	assert.True(t, found.FileBased)
 	assert.Contains(t, found.DefaultDirs, ".hermes/sessions")
-	// Hermes is provider-authoritative: discovery and source lookup live on the
-	// hermesProvider, not on legacy AgentDef hooks. The watch-root resolvers
-	// stay because they are provider-owned and consumed by watcher setup.
-	assert.Nil(t, found.DiscoverFunc)
-	assert.Nil(t, found.FindSourceFunc)
+	// The watch-root resolvers are provider-owned and consumed by watcher setup.
 	assert.NotNil(t, found.WatchRootsFunc)
 	assert.NotNil(t, found.ShallowWatchRootsFunc)
 }

@@ -625,10 +625,6 @@ func TestVibeAgentByType(t *testing.T) {
 	assert.Equal(t, "vibe_session_dirs", def.ConfigKey)
 	assert.Equal(t, "vibe:", def.IDPrefix)
 	assert.True(t, def.FileBased)
-	// Vibe is provider-authoritative: discovery and source lookup live on the
-	// vibeProvider, not on legacy AgentDef hooks.
-	assert.Nil(t, def.DiscoverFunc)
-	assert.Nil(t, def.FindSourceFunc)
 }
 
 func TestVibeAgentByPrefix(t *testing.T) {

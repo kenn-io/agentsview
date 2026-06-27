@@ -1,5 +1,22 @@
 # Provider Dual-Run Harness Implementation Plan
 
+> **Status:** Superseded for the `provider-explicit-registry` stack tip. This
+> plan records the historical root-harness slice that was implemented on the
+> lower `provider-facade-core` branch. Do not execute these steps against the
+> final stack tip: both `ProviderMigrationLegacyOnly` and the transitional
+> `ProviderMigrationShadowCompare` modes have been removed there (the
+> `provider_shadow` runtime was deleted once every provider became
+> authoritative, so a lingering `shadow-compare` mode would validate but run no
+> comparison), concrete parse-capable providers are expected to be
+> `provider-authoritative`, and Claude.ai / ChatGPT are `import-only`. The
+> stack-tip legacy cleanup in kata issue `n489` is complete; remaining
+> provider-facade tracking lives in the caller and provider-group tasks listed
+> in the provider facade design spec.
+>
+> The `legacy-only` and `shadow-compare` modes described below are historical:
+> the current `internal/parser/provider_migration.go` contract accepts only
+> `provider-authoritative` and `import-only`, and rejects every other value.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use

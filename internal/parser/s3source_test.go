@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -26,17 +27,19 @@ func TestParseS3URI(t *testing.T) {
 
 func TestS3MachineFromRoot(t *testing.T) {
 	cases := []struct {
-		root, want string
+		root, provider, want string
 	}{
-		{"s3://bkt/harvest/laptop/raw/claude", "laptop"},
-		{"s3://bkt/x/y/coder-gpu1/raw/codex", "coder-gpu1"},
-		{"s3://bkt/archive/raw/laptop/raw/claude", "laptop"},
-		{"s3://bkt/raw/claude", ""},      // nothing before "raw"
-		{"s3://bkt/sessions/claude", ""}, // no "raw" segment
-		{"s3://bkt", ""},
+		{"s3://bkt/harvest/laptop/raw/claude", "claude", "laptop"},
+		{"s3://bkt/x/y/coder-gpu1/raw/codex", "codex", "coder-gpu1"},
+		{"s3://bkt/archive/raw/laptop/raw/claude", "claude", "laptop"},
+		{"s3://bkt/host/raw/qwen", "qwen", "host"}, // generalizes beyond claude/codex
+		{"s3://bkt/host/raw/qwen", "codex", ""},    // provider segment must match
+		{"s3://bkt/raw/claude", "claude", ""},      // nothing before "raw"
+		{"s3://bkt/sessions/claude", "claude", ""}, // no "raw" segment
+		{"s3://bkt", "claude", ""},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, s3MachineFromRoot(c.root), c.root)
+		assert.Equal(t, c.want, s3MachineFromRoot(c.root, c.provider), c.root)
 	}
 }
 
@@ -85,6 +88,44 @@ func TestS3ClientAllowsExplicitUnsafeHTTPEndpoint(t *testing.T) {
 	_, err := s3Client()
 
 	require.NoError(t, err)
+}
+
+// TestS3PrefixScanGeneralizesByScanner exercises the shared scan with an
+// arbitrary provider and a caller-supplied Keep/Project, demonstrating that S3
+// discovery over the .../<machine>/raw/<provider> layout is general-purpose and
+// not limited to the Claude/Codex configurations.
+func TestS3PrefixScanGeneralizesByScanner(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	root := "s3://bucket/host/raw/qwen"
+	keepURI := root + "/proj/keep.jsonl"
+	mtime := time.Unix(100, 0)
+	listS3Objects = func(got string) ([]S3Object, error) {
+		require.Equal(t, root, got)
+		return []S3Object{
+			{URI: keepURI, Size: 7, LastModified: mtime, Fingerprint: "s3-meta:keep"},
+			{URI: root + "/proj/skip.txt", Size: 9, LastModified: mtime},
+		}, nil
+	}
+
+	got := s3PrefixScan(root, s3SessionScanner{
+		Agent: AgentQwen,
+		Keep: func(rel string, _ []string) bool {
+			return strings.HasSuffix(rel, ".jsonl")
+		},
+		Project: func(_ string, segs []string) string { return segs[0] },
+	})
+
+	require.Len(t, got, 1)
+	assert.Equal(t, keepURI, got[0].Path)
+	assert.Equal(t, AgentQwen, got[0].Agent)
+	// Machine is derived from the layout for an arbitrary provider segment.
+	assert.Equal(t, "host", got[0].Machine)
+	assert.Equal(t, "proj", got[0].Project)
+	assert.Equal(t, int64(7), got[0].SourceSize)
+	assert.Equal(t, mtime.UnixNano(), got[0].SourceMtime)
+	assert.Contains(t, got[0].SourceFingerprint, "keep")
 }
 
 func TestDiscoverCodexS3RequiresFullRootPrefix(t *testing.T) {
