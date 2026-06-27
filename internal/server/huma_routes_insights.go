@@ -178,10 +178,6 @@ func (s *Server) humaGenerateInsight(
 	ctx context.Context,
 	in *generateInsightInput,
 ) (*huma.StreamResponse, error) {
-	if s.db.ReadOnly() {
-		return nil, apiError(http.StatusNotImplemented,
-			"insight generation is not available in read-only mode")
-	}
 	req := in.Body
 	if !validInsightTypes[req.Type] {
 		return nil, apiError(http.StatusBadRequest,

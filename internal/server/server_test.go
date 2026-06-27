@@ -2949,6 +2949,27 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 	assert.True(t, resp.GithubConfigured)
 }
 
+func TestSettingsRemainLockedInPGMode(t *testing.T) {
+	te := setupPGMode(t)
+
+	w := te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	type readOnlySettingsResponse struct {
+		ReadOnly bool `json:"read_only"`
+	}
+	resp := decode[readOnlySettingsResponse](t, w)
+	assert.True(t, resp.ReadOnly)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		strings.NewReader(`{"require_auth":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	w = httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusNotImplemented)
+	assertBodyContains(t, w, "settings cannot be modified")
+}
+
 func TestPublishSession_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(t *testing.T) {
 	useGitHubCLIAuthTokenStub(t)
 	te := setup(t)

@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -13,7 +15,7 @@ import (
 var _ db.Store = (*Store)(nil)
 
 // NewStore opens a PostgreSQL connection using the shared Open()
-// helper and returns a read-only Store.
+// helper and returns a Store.
 // When allowInsecure is true, non-loopback connections without
 // TLS produce a warning instead of failing.
 func NewStore(
@@ -49,9 +51,9 @@ func (s *Store) SetCursorSecret(secret []byte) {
 	s.cursorSecret = append([]byte(nil), secret...)
 }
 
-// ReadOnly returns true because PG serve does not mutate synced
-// session content. Small dashboard-owned curation metadata (stars
-// and pins) is writable through dedicated methods.
+// ReadOnly returns true because PG serve still treats the remote
+// session store as remote; local file, upload, and batch-ingest
+// paths stay blocked while dashboard curation uses dedicated methods.
 func (s *Store) ReadOnly() bool { return true }
 
 // GetSessionVersion returns the message count and a compact version
@@ -76,81 +78,331 @@ func (s *Store) GetSessionVersion(
 // Unsupported write stubs (return db.ErrReadOnly)
 // ------------------------------------------------------------
 
-// InsertInsight is not supported in read-only mode.
-func (s *Store) InsertInsight(
-	_ db.Insight,
-) (int64, error) {
-	return 0, db.ErrReadOnly
+const maxPGInsights = 500
+
+type pgInsightRowScanner interface {
+	Scan(...any) error
 }
 
-// DeleteInsight is not supported in read-only mode.
-func (s *Store) DeleteInsight(_ int64) error {
-	return db.ErrReadOnly
+func scanPGInsight(rs pgInsightRowScanner) (db.Insight, error) {
+	var s db.Insight
+	var project, model, prompt sql.NullString
+	var createdAt time.Time
+	err := rs.Scan(
+		&s.ID, &s.Type, &s.DateFrom, &s.DateTo,
+		&project, &s.Agent, &model, &prompt, &s.Content,
+		&s.Kind, &s.SchemaVersion, &s.TemplateID,
+		&s.TemplateVersion, &s.AggregateHash, &s.CacheKey,
+		&s.CacheStatus, &s.ProvenanceJSON, &s.StructuredJSON,
+		&createdAt,
+	)
+	if err != nil {
+		return s, err
+	}
+	if project.Valid {
+		s.Project = &project.String
+	}
+	if model.Valid {
+		s.Model = &model.String
+	}
+	if prompt.Valid {
+		s.Prompt = &prompt.String
+	}
+	s.CreatedAt = FormatISO8601(createdAt)
+	return s, nil
 }
 
-// ListInsights returns an empty slice. Saved insights, including
-// llm_canned structured metadata, are local SQLite artifacts; remote
-// PG serve mode does not expose partial insight rows.
+func buildPGInsightFilter(
+	f db.InsightFilter, pb *paramBuilder,
+) string {
+	var preds []string
+	add := func(expr string, val any) {
+		preds = append(preds, expr+" = "+pb.add(val))
+	}
+	if f.Type != "" {
+		add("type", f.Type)
+	}
+	if f.GlobalOnly {
+		preds = append(preds, "project IS NULL")
+	} else if f.Project != "" {
+		add("project", f.Project)
+	}
+	if f.DateFrom != "" {
+		preds = append(preds, "date_from >= "+pb.add(f.DateFrom))
+	}
+	if f.DateTo != "" {
+		preds = append(preds, "date_to <= "+pb.add(f.DateTo))
+	}
+	if len(preds) == 0 {
+		return "TRUE"
+	}
+	return strings.Join(preds, " AND ")
+}
+
+// InsertInsight stores a dashboard insight in PG.
+func (s *Store) InsertInsight(insight db.Insight) (int64, error) {
+	var id int64
+	err := s.pg.QueryRow(
+		`INSERT INTO insights (
+			type, date_from, date_to, project,
+			agent, model, prompt, content,
+			kind, schema_version, template_id,
+			template_version, aggregate_hash, cache_key,
+			cache_status, provenance_json, structured_json
+		) VALUES (
+			$1, $2, $3, $4,
+			$5, $6, $7, $8,
+			$9, $10, $11,
+			$12, $13, $14,
+			$15, $16, $17
+		) RETURNING id`,
+		insight.Type, insight.DateFrom, insight.DateTo, insight.Project,
+		insight.Agent, insight.Model, insight.Prompt, insight.Content,
+		insight.Kind, insight.SchemaVersion, insight.TemplateID,
+		insight.TemplateVersion, insight.AggregateHash, insight.CacheKey,
+		insight.CacheStatus, insight.ProvenanceJSON, insight.StructuredJSON,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("inserting insight: %w", err)
+	}
+	return id, nil
+}
+
+// DeleteInsight removes a dashboard insight from PG.
+func (s *Store) DeleteInsight(id int64) error {
+	_, err := s.pg.Exec(
+		"DELETE FROM insights WHERE id = $1",
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("deleting insight %d: %w", id, err)
+	}
+	return nil
+}
+
+// ListInsights returns dashboard insights in created_at order.
 func (s *Store) ListInsights(
-	_ context.Context, _ db.InsightFilter,
+	ctx context.Context, f db.InsightFilter,
 ) ([]db.Insight, error) {
-	return []db.Insight{}, nil
+	pb := &paramBuilder{}
+	where := buildPGInsightFilter(f, pb)
+	rows, err := s.pg.QueryContext(ctx,
+		`SELECT id, type, date_from, date_to,
+			project, agent, model, prompt, content,
+			kind, schema_version, template_id,
+			template_version, aggregate_hash, cache_key,
+			cache_status, provenance_json, structured_json,
+			created_at
+		 FROM insights
+		 WHERE `+where+`
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT `+fmt.Sprintf("%d", maxPGInsights),
+		pb.args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying insights: %w", err)
+	}
+	defer rows.Close()
+
+	insights := make([]db.Insight, 0)
+	for rows.Next() {
+		row, err := scanPGInsight(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning insight: %w", err)
+		}
+		insights = append(insights, row)
+	}
+	return insights, rows.Err()
 }
 
-// GetInsight returns nil because insights are local-only in PG serve mode.
+// GetInsight returns a single insight by ID.
 func (s *Store) GetInsight(
-	_ context.Context, _ int64,
+	ctx context.Context, id int64,
 ) (*db.Insight, error) {
-	return nil, nil
+	row := s.pg.QueryRowContext(ctx,
+		`SELECT id, type, date_from, date_to,
+			project, agent, model, prompt, content,
+			kind, schema_version, template_id,
+			template_version, aggregate_hash, cache_key,
+			cache_status, provenance_json, structured_json,
+			created_at
+		 FROM insights
+		 WHERE id = $1`,
+		id,
+	)
+	insight, err := scanPGInsight(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting insight %d: %w", id, err)
+	}
+	return &insight, nil
 }
 
-// GetCachedInsight returns nil in read-only remote mode; this avoids
-// returning incomplete cache/provenance metadata from PG-backed stores.
+// GetCachedInsight returns the newest insight with the cache key.
 func (s *Store) GetCachedInsight(
-	_ context.Context, _ string,
+	ctx context.Context, cacheKey string,
 ) (*db.Insight, error) {
-	return nil, nil
+	if strings.TrimSpace(cacheKey) == "" {
+		return nil, nil
+	}
+	row := s.pg.QueryRowContext(ctx,
+		`SELECT id, type, date_from, date_to,
+			project, agent, model, prompt, content,
+			kind, schema_version, template_id,
+			template_version, aggregate_hash, cache_key,
+			cache_status, provenance_json, structured_json,
+			created_at
+		 FROM insights
+		 WHERE cache_key = $1
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`,
+		cacheKey,
+	)
+	insight, err := scanPGInsight(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("getting cached insight: %w", err)
+	}
+	return &insight, nil
 }
 
-// RenameSession is not supported in read-only mode.
+// RenameSession updates the visible session name in PG.
 func (s *Store) RenameSession(
-	_ string, _ *string,
+	id string, displayName *string,
 ) error {
-	return db.ErrReadOnly
+	_, err := s.pg.Exec(
+		`UPDATE sessions
+		 SET display_name = $2,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id, displayName,
+	)
+	if err != nil {
+		return fmt.Errorf("renaming session %s: %w", id, err)
+	}
+	return nil
 }
 
-// SoftDeleteSession is not supported in read-only mode.
-func (s *Store) SoftDeleteSession(_ string) error {
-	return db.ErrReadOnly
+// SoftDeleteSession moves a session to the trash.
+func (s *Store) SoftDeleteSession(id string) error {
+	_, err := s.pg.Exec(
+		`UPDATE sessions
+		 SET deleted_at = NOW(),
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NULL`,
+		id,
+	)
+	if err != nil {
+		return fmt.Errorf("soft deleting session %s: %w", id, err)
+	}
+	return nil
 }
 
-// SoftDeleteSessions is not supported in read-only mode.
-func (s *Store) SoftDeleteSessions(_ []string) (int, error) {
-	return 0, db.ErrReadOnly
+// SoftDeleteSessions moves multiple sessions to the trash.
+func (s *Store) SoftDeleteSessions(ids []string) (int, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	total := 0
+	const batchSize = 500
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		pb := &paramBuilder{}
+		placeholders := make([]string, 0, end-start)
+		for _, id := range ids[start:end] {
+			placeholders = append(placeholders, pb.add(id))
+		}
+		res, err := s.pg.Exec(
+			`UPDATE sessions
+			 SET deleted_at = NOW(),
+			     updated_at = NOW()
+			 WHERE id IN (`+strings.Join(placeholders, ",")+
+				`) AND deleted_at IS NULL`,
+			pb.args...,
+		)
+		if err != nil {
+			return total, fmt.Errorf("soft deleting sessions: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, fmt.Errorf("counting soft deleted sessions: %w", err)
+		}
+		total += int(n)
+	}
+	return total, nil
 }
 
-// RestoreSession is not supported in read-only mode.
-func (s *Store) RestoreSession(_ string) (int64, error) {
-	return 0, db.ErrReadOnly
+// RestoreSession restores a trashed session.
+func (s *Store) RestoreSession(id string) (int64, error) {
+	res, err := s.pg.Exec(
+		`UPDATE sessions
+		 SET deleted_at = NULL,
+		     updated_at = NOW()
+		 WHERE id = $1 AND deleted_at IS NOT NULL`,
+		id,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("restoring session %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting restored session %s: %w", id, err)
+	}
+	return n, nil
 }
 
-// DeleteSessionIfTrashed is not supported in read-only mode.
+// DeleteSessionIfTrashed permanently deletes a trashed session.
 func (s *Store) DeleteSessionIfTrashed(
-	_ string,
+	id string,
 ) (int64, error) {
-	return 0, db.ErrReadOnly
+	res, err := s.pg.Exec(
+		`DELETE FROM sessions
+		 WHERE id = $1 AND deleted_at IS NOT NULL`,
+		id,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("deleting trashed session %s: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting deleted trashed session %s: %w", id, err)
+	}
+	return n, nil
 }
 
-// ListTrashedSessions returns an empty slice.
+// ListTrashedSessions returns trashed sessions in most-recent order.
 func (s *Store) ListTrashedSessions(
-	_ context.Context,
+	ctx context.Context,
 ) ([]db.Session, error) {
-	return []db.Session{}, nil
+	rows, err := s.pg.QueryContext(ctx,
+		"SELECT "+pgSessionCols+
+			" FROM sessions WHERE deleted_at IS NOT NULL"+
+			" ORDER BY deleted_at DESC LIMIT 500",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying trashed sessions: %w", err)
+	}
+	defer rows.Close()
+	return scanPGSessionRows(rows)
 }
 
-// EmptyTrash is not supported in read-only mode.
+// EmptyTrash permanently deletes every trashed session.
 func (s *Store) EmptyTrash() (int, error) {
-	return 0, db.ErrReadOnly
+	res, err := s.pg.Exec(
+		"DELETE FROM sessions WHERE deleted_at IS NOT NULL",
+	)
+	if err != nil {
+		return 0, fmt.Errorf("emptying trash: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting emptied trash rows: %w", err)
+	}
+	return int(n), nil
 }
 
 // UpsertSession is not supported in read-only mode.

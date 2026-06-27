@@ -292,6 +292,35 @@ CREATE INDEX IF NOT EXISTS idx_secret_findings_session
 
 CREATE INDEX IF NOT EXISTS idx_secret_findings_rule
     ON secret_findings (rule_name);
+
+CREATE TABLE IF NOT EXISTS insights (
+    id               BIGSERIAL PRIMARY KEY,
+    type             TEXT NOT NULL DEFAULT '',
+    date_from        TEXT NOT NULL DEFAULT '',
+    date_to          TEXT NOT NULL DEFAULT '',
+    project          TEXT,
+    agent            TEXT NOT NULL DEFAULT '',
+    model            TEXT,
+    prompt           TEXT,
+    content          TEXT NOT NULL DEFAULT '',
+    kind             TEXT NOT NULL DEFAULT '',
+    schema_version   TEXT NOT NULL DEFAULT '',
+    template_id      TEXT NOT NULL DEFAULT '',
+    template_version TEXT NOT NULL DEFAULT '',
+    aggregate_hash   TEXT NOT NULL DEFAULT '',
+    cache_key        TEXT NOT NULL DEFAULT '',
+    cache_status     TEXT NOT NULL DEFAULT '',
+    provenance_json  TEXT NOT NULL DEFAULT '',
+    structured_json  TEXT NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_insights_lookup
+    ON insights (type, date_from, date_to, project);
+
+CREATE INDEX IF NOT EXISTS idx_insights_cache
+    ON insights (cache_key, created_at DESC)
+    WHERE cache_key <> '';
 `
 
 // EnsureSchema creates the schema (if needed), then runs
@@ -1584,6 +1613,18 @@ func CheckSchemaCompat(
 			"usage_events table missing required columns: %w",
 			err,
 		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT id, type, date_from, date_to, project, agent,
+			model, prompt, content, kind, schema_version,
+			template_id, template_version, aggregate_hash,
+			cache_key, cache_status, provenance_json,
+			structured_json, created_at
+		 FROM insights LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf("insights table missing required columns: %w", err)
 	}
 	rows.Close()
 
