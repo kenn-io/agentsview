@@ -649,55 +649,6 @@ func TestProcessFileProviderAuthoritativeSkipsFreshCoworkBeforeFingerprint(t *te
 	assert.Empty(t, provider.calls)
 }
 
-func TestProcessFileProviderAuthoritativeSkipsFreshGeminiBeforeFingerprint(t *testing.T) {
-	root := t.TempDir()
-	sourcePath := filepath.Join(
-		root, "tmp", "alias", "chats", "session-001.json",
-	)
-	sourceMtime := writeFreshProviderDBSession(
-		t, sourcePath, nil,
-	)
-	provider := &shadowCallerProvider{
-		shadowTestProvider: shadowTestProvider{
-			ProviderBase: parser.ProviderBase{
-				Def: parser.AgentDef{
-					Type:        parser.AgentGemini,
-					DisplayName: "Gemini CLI",
-				},
-			},
-		},
-		source: parser.SourceRef{
-			Provider:       parser.AgentGemini,
-			Key:            sourcePath,
-			DisplayPath:    sourcePath,
-			FingerprintKey: sourcePath,
-		},
-	}
-	engine := NewEngine(dbtest.OpenTestDB(t), EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentGemini: {root},
-		},
-		Machine: "devbox",
-		ProviderFactories: []parser.ProviderFactory{
-			shadowCallerFactory{provider: provider},
-		},
-		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
-			parser.AgentGemini: parser.ProviderMigrationProviderAuthoritative,
-		},
-	})
-	requireFreshProviderSession(t, engine.db, parser.AgentGemini, sourcePath, sourceMtime)
-
-	result := engine.processFile(context.Background(), parser.DiscoveredFile{
-		Path:  sourcePath,
-		Agent: parser.AgentGemini,
-	})
-
-	require.NoError(t, result.err)
-	assert.True(t, result.skip)
-	assert.Equal(t, sourceMtime, result.mtime)
-	assert.Empty(t, provider.calls)
-}
-
 func TestProcessFileProviderAuthoritativeForceParseBypassesFreshCoworkSkip(t *testing.T) {
 	root := t.TempDir()
 	database := dbtest.OpenTestDB(t)

@@ -4843,10 +4843,12 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 		if e.shouldSkipByPath(path, effectiveInfo) {
 			return mtime, true
 		}
-	case parser.AgentGemini:
-		if e.shouldSkipByPath(path, info) {
-			return info.ModTime().UnixNano(), true
-		}
+	// Gemini is deliberately absent here. Its fingerprint is composite (the
+	// session file plus projects.json and trustedFolders.json), so a
+	// pre-fingerprint skip keyed only on the session file's size and mtime
+	// would skip a session whose project metadata changed while the transcript
+	// did not, leaving a stale project on scheduled syncs. Gemini relies on the
+	// post-fingerprint skip cache instead, whose mtime folds in the composite.
 	case parser.AgentCopilot:
 		mtime := copilotEffectiveMtime(path, info)
 		effectiveInfo := fakeSnapshotInfo{

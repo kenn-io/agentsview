@@ -2219,6 +2219,59 @@ func TestSyncPathsGeminiProjectMetadataEventRefreshesProject(t *testing.T) {
 	)
 }
 
+// TestSyncAllGeminiProjectMetadataChangeReparsesProject guards that a scheduled
+// SyncAll is not fooled by the pre-fingerprint fast skip when only Gemini's
+// projects.json changed. The session transcript's own size and mtime are left
+// untouched, so the removed AgentGemini fast skip (which compared just the
+// session stat) would have kept the stale project; the composite fingerprint,
+// which folds in projects.json, must drive a reparse on the periodic full sync.
+func TestSyncAllGeminiProjectMetadataChangeReparsesProject(t *testing.T) {
+	env := setupTestEnv(t)
+
+	sessionID := "gem-syncall-refresh"
+	projectsPath := filepath.Join(env.geminiDir, "projects.json")
+	writeProject := func(name string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(
+			projectsPath,
+			fmt.Appendf(nil,
+				`{"projects":{"/Users/alice/code/%s":"alias"}}`,
+				name,
+			),
+			0o644,
+		), "write projects")
+	}
+	writeProject("one")
+	env.writeGeminiSession(
+		t,
+		filepath.Join("tmp", "alias", "chats", "session-001.json"),
+		testjsonl.GeminiSessionJSON(
+			sessionID, "alias", tsEarly, tsEarlyS5,
+			[]map[string]any{
+				testjsonl.GeminiUserMsg("m1", tsEarly, "Hello Gemini"),
+				testjsonl.GeminiAssistantMsg("m2", tsEarlyS5, "Hi there!", nil),
+			},
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionState(t, env.db, "gemini:"+sessionID, func(sess *db.Session) {
+		assert.Equal(t, "one", sess.Project)
+	})
+
+	// Change only the project metadata, then advance its mtime so the composite
+	// fingerprint moves forward. The session transcript is left untouched, so a
+	// fast skip keyed on the transcript stat alone would keep the stale "one".
+	writeProject("two")
+	later := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(projectsPath, later, later), "bump projects mtime")
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionState(t, env.db, "gemini:"+sessionID, func(sess *db.Session) {
+		assert.Equal(t, "two", sess.Project)
+	})
+}
+
 func TestSyncPathsCodexAcceptsFlatArchived(t *testing.T) {
 	env := setupTestEnv(t)
 
