@@ -430,10 +430,11 @@ func runPGServe(appCfg config.Config, basePath string) {
 
 	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{
-			Version:   version,
-			Commit:    commit,
-			BuildDate: buildDate,
-			ReadOnly:  true,
+			Version:                    version,
+			Commit:                     commit,
+			BuildDate:                  buildDate,
+			ReadOnly:                   true,
+			InsightGenerationAvailable: true,
 		}),
 		server.WithDataDir(appCfg.DataDir),
 		server.WithBaseContext(ctx),

@@ -13,13 +13,20 @@ const mocks = vi.hoisted(() => ({
   setAgent: vi.fn(),
   navigate: vi.fn(),
   agent: "claude" as string,
-  serverVersion: { read_only: false } as { read_only: boolean } | null,
+  serverVersion: {
+    read_only: false,
+  } as {
+    read_only: boolean;
+    insight_generation_available?: boolean;
+  } | null,
 }));
 vi.mock("../../api/generated/index", () => ({
   InsightsService: { getApiV1Insights: mocks.getInsights },
 }));
 vi.mock("../../api/runtime.js", () => ({ configureGeneratedClient: vi.fn() }));
-vi.mock("../../api/client.js", () => ({ generateInsight: mocks.generateInsight }));
+vi.mock("../../api/client.js", () => ({
+  generateInsight: mocks.generateInsight,
+}));
 vi.mock("../../stores/sync.svelte.js", () => ({
   sync: {
     get serverVersion() {
@@ -93,7 +100,10 @@ describe("ActivityInsight", () => {
   });
 
   it("generates for the current range", async () => {
-    mocks.generateInsight.mockReturnValue({ abort: vi.fn(), done: new Promise(() => {}) });
+    mocks.generateInsight.mockReturnValue({
+      abort: vi.fn(),
+      done: new Promise(() => {}),
+    });
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
     await fireEvent.click(screen.getByRole("button", { name: /generate/i }));
@@ -178,7 +188,9 @@ describe("ActivityInsight", () => {
   it("prefills the Insights page range and navigates", async () => {
     render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
     await settle();
-    const link = screen.getByRole("link", { name: /insights page|open in insights/i });
+    const link = screen.getByRole("link", {
+      name: /insights page|open in insights/i,
+    });
     await fireEvent.click(link);
     expect(mocks.setType).toHaveBeenCalledWith("daily_activity");
     expect(mocks.setDateFrom).toHaveBeenCalledWith("2026-06-15");
@@ -193,6 +205,17 @@ describe("ActivityInsight", () => {
     await settle();
     const btn = screen.getByRole("button", { name: /generate/i });
     expect(btn.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("allows Generate in read-only mode when insight generation is advertised", async () => {
+    mocks.serverVersion = {
+      read_only: true,
+      insight_generation_available: true,
+    };
+    render(ActivityInsight, { dateFrom: "2026-06-15", dateTo: "2026-06-21" });
+    await settle();
+    const btn = screen.getByRole("button", { name: /generate/i });
+    expect(btn.hasAttribute("disabled")).toBe(false);
   });
 
   it("selects the exact-range insight over a newer nested one", async () => {

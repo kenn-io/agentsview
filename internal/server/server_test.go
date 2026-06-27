@@ -4011,9 +4011,10 @@ func TestHandleWatchSession_UnknownID_Returns404(t *testing.T) {
 
 func TestGetVersion(t *testing.T) {
 	v := server.VersionInfo{
-		Version:   "v1.2.3",
-		Commit:    "abc1234",
-		BuildDate: "2025-01-15T00:00:00Z",
+		Version:                    "v1.2.3",
+		Commit:                     "abc1234",
+		BuildDate:                  "2025-01-15T00:00:00Z",
+		InsightGenerationAvailable: true,
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithVersion(v),
@@ -4035,6 +4036,7 @@ func TestGetVersion(t *testing.T) {
 			resp.BuildDate,
 		)
 	}
+	assert.True(t, resp.InsightGenerationAvailable)
 	assert.Equal(t, 1, resp.APIVersion)
 	assert.Equal(t, db.CurrentDataVersion(), resp.DataVersion)
 }

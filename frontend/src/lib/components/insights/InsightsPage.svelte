@@ -81,11 +81,12 @@
   );
   const loading = $derived(analytics.loading.signals);
   const error = $derived(analytics.errors.signals);
-  const readOnly = $derived(
-    sync.serverVersion?.read_only === true,
+  const insightGenerationAvailable = $derived(
+    sync.serverVersion?.insight_generation_available === true ||
+      sync.serverVersion?.read_only !== true,
   );
   const generationUnavailable = $derived(
-    sync.serverVersion === null || readOnly,
+    sync.serverVersion === null || !insightGenerationAvailable,
   );
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
   const rangeSelection = $derived(
@@ -1093,7 +1094,7 @@
         <button
           class="generate-action"
           disabled={generationUnavailable}
-          title={readOnly
+          title={sync.serverVersion !== null && !insightGenerationAvailable
             ? m.insights_page_generate_disabled()
             : m.insights_page_generate_title()}
           onclick={handleGenerateCanned}
