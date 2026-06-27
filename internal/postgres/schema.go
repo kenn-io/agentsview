@@ -1482,17 +1482,7 @@ func CheckSchemaCompat(
 	ctx context.Context, db *sql.DB,
 ) error {
 	rows, err := db.QueryContext(ctx,
-		`SELECT key, value FROM sync_metadata LIMIT 0`)
-	if err != nil {
-		return fmt.Errorf(
-			"sync_metadata table missing required columns: %w",
-			err,
-		)
-	}
-	rows.Close()
-
-	rows, err = db.QueryContext(ctx,
-		`SELECT owner_marker, updated_at, `+pgSessionCols+`
+		`SELECT updated_at, `+pgSessionCols+`
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -1627,16 +1617,43 @@ func CheckSchemaCompat(
 	return nil
 }
 
+// checkPushSchemaCompat verifies schema elements that only push needs:
+// the sync_metadata table and sessions.owner_marker. pg serve never reads
+// these, so they live outside CheckSchemaCompat (which gates read-only
+// serve startup) and are checked only on the push fast path.
+func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx,
+		`SELECT key, value FROM sync_metadata LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sync_metadata table missing required columns: %w", err)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT owner_marker FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing owner_marker: %w", err)
+	}
+	rows.Close()
+	return nil
+}
+
 // pushSchemaCurrent reports whether the PG schema has everything a push
-// needs. CheckSchemaCompat covers the read paths but does not require
-// model_pricing (always queried by syncModelPricing) or
-// cursor_usage_events (written by syncCursorUsageEvents), so probe those
-// tables explicitly. It also requires the cursor dedup index, which the
-// cursor usage insert relies on for ON CONFLICT dedup. When any of these
-// is missing the caller must run EnsureSchema so push migrates the schema
-// instead of failing or duplicating rows.
+// needs. CheckSchemaCompat covers the read paths but does not require the
+// push-only sync_metadata table or sessions.owner_marker (verified by
+// checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
+// or cursor_usage_events (written by syncCursorUsageEvents), so probe those
+// explicitly. It also requires the cursor dedup index, which the cursor usage
+// insert relies on for ON CONFLICT dedup. When any of these is missing the
+// caller must run EnsureSchema so push migrates the schema instead of failing
+// or duplicating rows.
 func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 	if err := CheckSchemaCompat(ctx, db); err != nil {
+		return false
+	}
+	if err := checkPushSchemaCompat(ctx, db); err != nil {
 		return false
 	}
 	if !pgHasTable(ctx, db, "model_pricing") ||

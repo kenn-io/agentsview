@@ -364,6 +364,53 @@ func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 		"compatible PG schema must still run row-level data repairs")
 }
 
+func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{
+		{contains: "owner_marker", err: errors.New(
+			`ERROR: column "owner_marker" does not exist (SQLSTATE 42703)`)},
+		{contains: "from sync_metadata", err: errors.New(
+			`ERROR: relation "sync_metadata" does not exist (SQLSTATE 42P01)`)},
+	}
+
+	require.NoError(t, CheckSchemaCompat(context.Background(), pg),
+		"read compatibility must not require push-only schema")
+}
+
+func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	})
+	state.existingTables = map[string]bool{
+		"model_pricing":       true,
+		"cursor_usage_events": true,
+	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup": true,
+	}
+	// Read-compatible with tables and index present, but the push-only
+	// owner_marker column is absent, so the push fast path must fall back
+	// to EnsureSchema.
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "owner_marker",
+		err: errors.New(
+			`ERROR: column "owner_marker" does not exist (SQLSTATE 42703)`),
+	}}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	assert.Greater(t, state.execCount(), 0,
+		"missing push-only column must fall back to migration DDL")
+}
+
 func TestSyncEnsureSchemaRunsDDLWhenPushTableMissing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {
