@@ -1300,12 +1300,18 @@ func (s *Sync) pushSession(
 			project = EXCLUDED.project,
 			agent = EXCLUDED.agent,
 			first_message = EXCLUDED.first_message,
-			display_name = EXCLUDED.display_name,
+			display_name = COALESCE(
+				sessions.display_name,
+				EXCLUDED.display_name
+			),
 			session_name = EXCLUDED.session_name,
 			created_at = EXCLUDED.created_at,
 			started_at = EXCLUDED.started_at,
 			ended_at = EXCLUDED.ended_at,
-			deleted_at = EXCLUDED.deleted_at,
+			deleted_at = COALESCE(
+				sessions.deleted_at,
+				EXCLUDED.deleted_at
+			),
 			message_count = EXCLUDED.message_count,
 			user_message_count = EXCLUDED.user_message_count,
 			total_output_tokens = EXCLUDED.total_output_tokens,
@@ -1366,12 +1372,18 @@ func (s *Sync) pushSession(
 			OR sessions.project IS DISTINCT FROM EXCLUDED.project
 			OR sessions.agent IS DISTINCT FROM EXCLUDED.agent
 			OR sessions.first_message IS DISTINCT FROM EXCLUDED.first_message
-			OR sessions.display_name IS DISTINCT FROM EXCLUDED.display_name
+			OR (
+				sessions.display_name IS NULL
+				AND sessions.display_name IS DISTINCT FROM EXCLUDED.display_name
+			)
 			OR sessions.session_name IS DISTINCT FROM EXCLUDED.session_name
 			OR sessions.created_at IS DISTINCT FROM EXCLUDED.created_at
 			OR sessions.started_at IS DISTINCT FROM EXCLUDED.started_at
 			OR sessions.ended_at IS DISTINCT FROM EXCLUDED.ended_at
-			OR sessions.deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
+			OR (
+				sessions.deleted_at IS NULL
+				AND sessions.deleted_at IS DISTINCT FROM EXCLUDED.deleted_at
+			)
 			OR sessions.message_count IS DISTINCT FROM EXCLUDED.message_count
 			OR sessions.user_message_count IS DISTINCT FROM EXCLUDED.user_message_count
 			OR sessions.total_output_tokens IS DISTINCT FROM EXCLUDED.total_output_tokens

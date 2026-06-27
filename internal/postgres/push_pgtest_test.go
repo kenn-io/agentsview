@@ -450,6 +450,94 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 	assert.Equal(t, "remote-host", got)
 }
 
+func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_preserve_pg_curation_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "pg-curation-preserve-001"
+	firstMessage := "source before"
+	sess := db.Session{
+		ID:               sessID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		FirstMessage:     &firstMessage,
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       firstMessage,
+		ContentLength: len(firstMessage),
+	}}), "InsertMessages")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push before local PG curation")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	renamed := "Renamed in PG serve"
+	require.NoError(t, store.RenameSession(sessID, &renamed),
+		"RenameSession")
+	require.NoError(t, store.SoftDeleteSession(sessID),
+		"SoftDeleteSession")
+
+	updatedFirstMessage := "source after"
+	sess.FirstMessage = &updatedFirstMessage
+	require.NoError(t, localDB.UpsertSession(sess),
+		"UpsertSession updated source row")
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		"clearing boundary state")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push after local PG curation")
+
+	var gotDisplayName sql.NullString
+	var gotDeleted bool
+	var gotFirstMessage sql.NullString
+	require.NoError(t, pg.QueryRow(
+		`SELECT display_name, deleted_at IS NOT NULL, first_message
+		 FROM sessions WHERE id = $1`,
+		sessID,
+	).Scan(&gotDisplayName, &gotDeleted, &gotFirstMessage),
+		"reading pushed curation row")
+	require.True(t, gotDisplayName.Valid, "display_name should persist")
+	assert.Equal(t, renamed, gotDisplayName.String)
+	assert.True(t, gotDeleted, "PG-local trash state should persist")
+	require.True(t, gotFirstMessage.Valid, "first_message should remain visible")
+	assert.Equal(t, updatedFirstMessage, gotFirstMessage.String,
+		"source-owned fields should still update")
+}
+
 // TestPushSyncsUsageEventsForZeroMessageSession verifies that a session
 // carrying token/cost accounting as a usage_event but no transcript
 // messages still has its usage_event pushed to PG. This is the shape of a
