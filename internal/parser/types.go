@@ -59,15 +59,16 @@ const (
 // AgentDef describes a supported coding agent's filesystem
 // layout, configuration keys, and session ID conventions.
 type AgentDef struct {
-	Type         AgentType
-	DisplayName  string   // "Claude Code", "Codex", etc.
-	EnvVar       string   // env var for dir override
-	ConfigKey    string   // TOML key in config.toml ("" = none)
-	DefaultDirs  []string // paths relative to $HOME
-	IDPrefix     string   // session ID prefix ("" for Claude)
-	WatchSubdirs []string // subdirs to watch (nil = watch root)
-	ShallowWatch bool     // true = watch root only, rely on periodic sync for subdirs
-	FileBased    bool     // false for DB-backed agents
+	Type              AgentType
+	DisplayName       string   // "Claude Code", "Codex", etc.
+	EnvVar            string   // env var for dir override
+	DefaultRootEnvVar string   // env var that re-roots DefaultDirs before $HOME fallback
+	ConfigKey         string   // TOML key in config.toml ("" = none)
+	DefaultDirs       []string // paths relative to $HOME
+	IDPrefix          string   // session ID prefix ("" for Claude)
+	WatchSubdirs      []string // subdirs to watch (nil = watch root)
+	ShallowWatch      bool     // true = watch root only, rely on periodic sync for subdirs
+	FileBased         bool     // false for DB-backed agents
 
 	// DiscoverFunc finds session files under a root directory.
 	// Nil for non-file-based agents.
@@ -97,15 +98,16 @@ type AgentDef struct {
 // used for iteration in config, sync, and watcher setup.
 var Registry = []AgentDef{
 	{
-		Type:           AgentClaude,
-		DisplayName:    "Claude Code",
-		EnvVar:         "CLAUDE_PROJECTS_DIR",
-		ConfigKey:      "claude_project_dirs",
-		DefaultDirs:    []string{".claude/projects"},
-		IDPrefix:       "",
-		FileBased:      true,
-		DiscoverFunc:   DiscoverClaudeProjects,
-		FindSourceFunc: FindClaudeSourceFile,
+		Type:              AgentClaude,
+		DisplayName:       "Claude Code",
+		EnvVar:            "CLAUDE_PROJECTS_DIR",
+		DefaultRootEnvVar: "CLAUDE_CONFIG_DIR",
+		ConfigKey:         "claude_project_dirs",
+		DefaultDirs:       []string{".claude/projects"},
+		IDPrefix:          "",
+		FileBased:         true,
+		DiscoverFunc:      DiscoverClaudeProjects,
+		FindSourceFunc:    FindClaudeSourceFile,
 	},
 	{
 		Type:           AgentCowork,
