@@ -294,7 +294,15 @@ func Default() (Config, error) {
 	agentDirSource := make(map[parser.AgentType]dirSource)
 	for _, def := range parser.Registry {
 		dirs := make([]string, len(def.DefaultDirs))
+		root := ""
+		if def.DefaultRootEnvVar != "" {
+			root = os.Getenv(def.DefaultRootEnvVar)
+		}
 		for i, rel := range def.DefaultDirs {
+			if root != "" {
+				dirs[i] = reRootDefaultDir(root, rel)
+				continue
+			}
 			dirs[i] = filepath.Join(home, rel)
 		}
 		agentDirs[def.Type] = dirs
@@ -314,6 +322,14 @@ func Default() (Config, error) {
 		EventsCoalesceInterval:         10 * time.Second,
 		Agent:                          map[string]AgentConfig{},
 	}, nil
+}
+
+func reRootDefaultDir(root, rel string) string {
+	rel = filepath.Clean(rel)
+	if _, tail, ok := strings.Cut(rel, string(filepath.Separator)); ok && tail != "" {
+		return filepath.Join(root, tail)
+	}
+	return root
 }
 
 // Load builds a Config by layering: defaults < config file < env < flags.

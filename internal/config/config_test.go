@@ -665,6 +665,7 @@ func TestResolveDirs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := setupTestEnv(t)
 			writeConfig(t, dir, tt.config)
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
 			if tt.envValue != "" {
 				t.Setenv("CLAUDE_PROJECTS_DIR", tt.envValue)
 			}
@@ -684,6 +685,53 @@ func TestResolveDirs(t *testing.T) {
 			assert.Equal(t, tt.wantUserConfig, cfg.IsUserConfigured(parser.AgentClaude))
 		})
 	}
+}
+
+func TestResolveDirs_ClaudeConfigDirRootEnvVar(t *testing.T) {
+	t.Run("root env re-roots implicit default", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", root)
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{filepath.Join(root, "projects")},
+			cfg.ResolveDirs(parser.AgentClaude))
+		assert.False(t, cfg.IsUserConfigured(parser.AgentClaude))
+	})
+
+	t.Run("projects env beats root env", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", root)
+		t.Setenv("CLAUDE_PROJECTS_DIR", "/env/override")
+		writeConfig(t, dir, map[string]any{})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"/env/override"},
+			cfg.ResolveDirs(parser.AgentClaude))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentClaude))
+	})
+
+	t.Run("config file beats root env", func(t *testing.T) {
+		dir := setupTestEnv(t)
+		root := t.TempDir()
+		t.Setenv("CLAUDE_CONFIG_DIR", root)
+		writeConfig(t, dir, map[string]any{
+			"claude_project_dirs": []string{"/from/config"},
+		})
+
+		cfg, err := LoadMinimal()
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{"/from/config"},
+			cfg.ResolveDirs(parser.AgentClaude))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentClaude))
+	})
 }
 
 func TestResolveDataDir_DefaultAndEnvOverride(t *testing.T) {
@@ -738,6 +786,7 @@ func TestEnvOverridesConfigFile(t *testing.T) {
 
 func TestLoadFile_MalformedDirValueLogsWarning(t *testing.T) {
 	f := newConfigFixture(t)
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	// Write a config where claude_project_dirs is a string
 	// instead of a string array.
