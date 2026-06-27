@@ -206,6 +206,43 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 	assert.Empty(t, removed, "removed sqlite DBs have no stateless virtual source list")
 }
 
+// TestOpenCodeProviderSQLiteDiscoversAllListedSessions guards the refactor that
+// builds SourceRefs directly from the listed SQLite metadata instead of
+// reopening the DB per row via OpenCodeSQLiteSessionExists. Every row read from
+// the DB must surface as a discoverable source with its dbPath#id virtual path.
+func TestOpenCodeProviderSQLiteDiscoversAllListedSessions(t *testing.T) {
+	root := t.TempDir()
+	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
+	defer db.Close()
+	seeder.AddProject("prj_1", "/home/user/code/sqlite-app")
+	ids := []string{"ses_a", "ses_b", "ses_c"}
+	for i, id := range ids {
+		start := int64(1700000000000 + i*1000)
+		seeder.AddSession(id, "prj_1", "", "Session "+id, start, start+60000)
+	}
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, len(ids))
+
+	want := make([]string, len(ids))
+	for i, id := range ids {
+		want[i] = OpenCodeSQLiteVirtualPath(dbPath, id)
+	}
+	got := make([]string, len(discovered))
+	for i, src := range discovered {
+		got[i] = src.DisplayPath
+		assert.Equal(t, src.DisplayPath, src.FingerprintKey)
+	}
+	assert.ElementsMatch(t, want, got)
+}
+
 func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {
 	root := t.TempDir()
 	storagePath := writeOpenCodeProviderStorageSession(

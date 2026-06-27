@@ -500,13 +500,39 @@ func (s openCodeFormatSourceSet) sqliteSources(
 		if _, exists := storageIDs[meta.SessionID]; exists {
 			continue
 		}
-		source, ok := s.sourceRef(root, meta.VirtualPath, false)
+		// meta was just read from this DB, so the session row is known to
+		// exist. Build the SourceRef directly instead of routing through
+		// sourceRef, which reopens the same SQLite DB once per row via
+		// OpenCodeSQLiteSessionExists (O(n) opens for n sessions, and it would
+		// silently drop a row whose redundant probe failed).
+		source, ok := s.sqliteSourceRefFromMeta(root, meta.VirtualPath)
 		if !ok {
 			continue
 		}
 		sources = append(sources, source)
 	}
 	return sources, nil
+}
+
+// sqliteSourceRefFromMeta builds a SourceRef for a session row already listed
+// from the SQLite DB at root. It validates the virtual path parses and that its
+// DB lives under root, but unlike sourceRef it skips the per-row
+// OpenCodeSQLiteSessionExists probe because the caller read the row from that
+// same DB moments earlier.
+func (s openCodeFormatSourceSet) sqliteSourceRefFromMeta(
+	root string,
+	virtualPath string,
+) (SourceRef, bool) {
+	root = filepath.Clean(root)
+	path := filepath.Clean(virtualPath)
+	dbPath, _, ok := s.spec.parseVirtual(path)
+	if !ok {
+		return SourceRef{}, false
+	}
+	if _, under := relUnder(root, dbPath); !under {
+		return SourceRef{}, false
+	}
+	return s.newSourceRef(root, path, ""), true
 }
 
 func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
