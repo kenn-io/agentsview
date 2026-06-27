@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,6 +124,42 @@ func TestNewStore(t *testing.T) {
 
 	assert.True(t, store.ReadOnly())
 	assert.True(t, store.HasFTS())
+}
+
+func TestDetectInsightGenerationAvailability(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	require.NoError(t, store.DetectInsightGenerationAvailability(
+		context.Background(),
+	), "DetectInsightGenerationAvailability")
+	assert.True(t, store.InsightGenerationAvailable())
+}
+
+func TestProbeInsightGenerationAvailabilityTx_ReadOnly(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	tx, err := pg.BeginTx(
+		context.Background(),
+		&sql.TxOptions{ReadOnly: true},
+	)
+	require.NoError(t, err, "BeginTx")
+	defer func() { _ = tx.Rollback() }()
+
+	available, err := probeInsightGenerationAvailabilityTx(
+		context.Background(), tx,
+	)
+	require.NoError(t, err, "probeInsightGenerationAvailabilityTx")
+	assert.False(t, available)
 }
 
 func TestStoreListSessions(t *testing.T) {

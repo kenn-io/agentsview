@@ -23,6 +23,9 @@ type Store struct {
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
+	insightCapabilityMu        sync.RWMutex
+	insightGenerationAvailable bool
+
 	pricingMu     sync.Mutex
 	pricingLoadMu sync.Mutex
 	pricingLoad   *pricingLoad

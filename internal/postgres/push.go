@@ -257,6 +257,16 @@ func (s *Sync) Push(
 		}
 	}
 
+	excludedIDs, err := readPGExcludedSessionIDs(
+		ctx, s.pg, mapKeys(sessionByID),
+	)
+	if err != nil {
+		return result, err
+	}
+	for id := range excludedIDs {
+		delete(sessionByID, id)
+	}
+
 	usageFingerprints, err := s.local.UsageEventFingerprints(
 		mapKeys(sessionByID),
 	)
@@ -1044,6 +1054,47 @@ func localSessionSyncMarker(sess db.Session) string {
 		marker = sess.CreatedAt
 	}
 	return marker
+}
+
+func readPGExcludedSessionIDs(
+	ctx context.Context, pg *sql.DB, ids []string,
+) (map[string]struct{}, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	pb := &paramBuilder{}
+	placeholders := make([]string, 0, len(ids))
+	for _, id := range ids {
+		placeholders = append(placeholders, pb.add(id))
+	}
+	rows, err := pg.QueryContext(ctx,
+		`SELECT id FROM excluded_sessions
+		 WHERE id IN (`+strings.Join(placeholders, ",")+`)`,
+		pb.args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"reading pg excluded sessions: %w", err,
+		)
+	}
+	defer rows.Close()
+
+	excluded := make(map[string]struct{})
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf(
+				"scanning pg excluded session id: %w", err,
+			)
+		}
+		excluded[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf(
+			"iterating pg excluded sessions: %w", err,
+		)
+	}
+	return excluded, nil
 }
 
 // sessionPushFingerprint builds the change-detection fingerprint for a

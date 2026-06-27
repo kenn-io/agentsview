@@ -56,9 +56,60 @@ func (s *Store) SetCursorSecret(secret []byte) {
 // paths stay blocked while dashboard curation uses dedicated methods.
 func (s *Store) ReadOnly() bool { return true }
 
-// InsightGenerationAvailable reports that PG serve can persist generated
-// insights even though the broader store stays read-only for ingestion.
-func (s *Store) InsightGenerationAvailable() bool { return true }
+// InsightGenerationAvailable reports whether startup proved this PG role can
+// persist generated insights.
+func (s *Store) InsightGenerationAvailable() bool {
+	s.insightCapabilityMu.RLock()
+	defer s.insightCapabilityMu.RUnlock()
+	return s.insightGenerationAvailable
+}
+
+func (s *Store) setInsightGenerationAvailable(available bool) {
+	s.insightCapabilityMu.Lock()
+	defer s.insightCapabilityMu.Unlock()
+	s.insightGenerationAvailable = available
+}
+
+// DetectInsightGenerationAvailability probes whether this PG connection can
+// insert into insights. PG serve uses it to expose generate routes only when
+// the configured role can actually persist the result.
+func (s *Store) DetectInsightGenerationAvailability(
+	ctx context.Context,
+) error {
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf(
+			"beginning insight generation capability probe: %w",
+			err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	available, err := probeInsightGenerationAvailabilityTx(
+		ctx, tx,
+	)
+	if err != nil {
+		return err
+	}
+	s.setInsightGenerationAvailable(available)
+	return nil
+}
+
+func probeInsightGenerationAvailabilityTx(
+	ctx context.Context, tx *sql.Tx,
+) (bool, error) {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO insights (id) VALUES (-1)`,
+	); err != nil {
+		if IsReadOnlyError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf(
+			"probing insight generation capability: %w", err,
+		)
+	}
+	return true, nil
+}
 
 // GetSessionVersion returns the message count and a compact version
 // marker for SSE change detection.
@@ -363,7 +414,49 @@ func (s *Store) RestoreSession(id string) (int64, error) {
 func (s *Store) DeleteSessionIfTrashed(
 	id string,
 ) (int64, error) {
-	res, err := s.pg.Exec(
+	ctx := context.Background()
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"begin delete-if-trashed tx for %s: %w", id, err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE sessions
+		 SET deleted_at = deleted_at
+		 WHERE id = $1 AND deleted_at IS NOT NULL`,
+		id,
+	)
+	if err != nil {
+		return 0, fmt.Errorf(
+			"locking trashed session %s: %w", id, err,
+		)
+	}
+	locked, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf(
+			"counting locked trashed session %s: %w", id, err,
+		)
+	}
+	if locked == 0 {
+		return 0, nil
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO excluded_sessions (id)
+		 SELECT id FROM sessions
+		 WHERE id = $1 AND deleted_at IS NOT NULL
+		 ON CONFLICT (id) DO NOTHING`,
+		id,
+	); err != nil {
+		return 0, fmt.Errorf(
+			"recording excluded trashed session %s: %w", id, err,
+		)
+	}
+
+	res, err = tx.ExecContext(ctx,
 		`DELETE FROM sessions
 		 WHERE id = $1 AND deleted_at IS NOT NULL`,
 		id,
@@ -374,6 +467,11 @@ func (s *Store) DeleteSessionIfTrashed(
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("counting deleted trashed session %s: %w", id, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf(
+			"commit delete-if-trashed %s: %w", id, err,
+		)
 	}
 	return n, nil
 }
@@ -396,7 +494,29 @@ func (s *Store) ListTrashedSessions(
 
 // EmptyTrash permanently deletes every trashed session.
 func (s *Store) EmptyTrash() (int, error) {
-	res, err := s.pg.Exec(
+	ctx := context.Background()
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin empty-trash tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions
+		 SET deleted_at = deleted_at
+		 WHERE deleted_at IS NOT NULL`,
+	); err != nil {
+		return 0, fmt.Errorf("locking trashed sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO excluded_sessions (id)
+		 SELECT id FROM sessions WHERE deleted_at IS NOT NULL
+		 ON CONFLICT (id) DO NOTHING`,
+	); err != nil {
+		return 0, fmt.Errorf("recording excluded trashed sessions: %w", err)
+	}
+
+	res, err := tx.ExecContext(ctx,
 		"DELETE FROM sessions WHERE deleted_at IS NOT NULL",
 	)
 	if err != nil {
@@ -405,6 +525,9 @@ func (s *Store) EmptyTrash() (int, error) {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("counting emptied trash rows: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit empty-trash: %w", err)
 	}
 	return int(n), nil
 }

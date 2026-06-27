@@ -181,6 +181,11 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
         REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS excluded_sessions (
+    id         TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          BIGSERIAL PRIMARY KEY,
     session_id  TEXT NOT NULL,
@@ -1676,6 +1681,14 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf(
 			"sessions table missing owner_marker: %w", err)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT id FROM excluded_sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"excluded_sessions table missing required columns: %w", err)
 	}
 	rows.Close()
 	return nil

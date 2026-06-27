@@ -538,6 +538,129 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 		"source-owned fields should still update")
 }
 
+func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_preserve_pg_deletes_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const deleteIfTrashedID = "pg-delete-preserve-001"
+	const emptyTrashID = "pg-delete-preserve-002"
+	sourceRows := []db.Session{
+		{
+			ID:               deleteIfTrashedID,
+			Project:          "test-proj",
+			Machine:          "test-machine",
+			Agent:            "claude",
+			MessageCount:     1,
+			UserMessageCount: 1,
+			CreatedAt:        "2026-01-01T00:00:00Z",
+		},
+		{
+			ID:               emptyTrashID,
+			Project:          "test-proj",
+			Machine:          "test-machine",
+			Agent:            "claude",
+			MessageCount:     1,
+			UserMessageCount: 1,
+			CreatedAt:        "2026-01-01T00:00:01Z",
+		},
+	}
+	for _, sess := range sourceRows {
+		require.NoError(t, localDB.UpsertSession(sess),
+			"UpsertSession "+sess.ID)
+		require.NoError(t, localDB.InsertMessages([]db.Message{{
+			SessionID:     sess.ID,
+			Ordinal:       0,
+			Role:          "user",
+			Content:       sess.ID,
+			ContentLength: len(sess.ID),
+		}}), "InsertMessages "+sess.ID)
+	}
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push before PG permanent deletes")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	require.NoError(t, store.SoftDeleteSession(deleteIfTrashedID),
+		"SoftDeleteSession deleteIfTrashedID")
+	deleted, err := store.DeleteSessionIfTrashed(deleteIfTrashedID)
+	require.NoError(t, err, "DeleteSessionIfTrashed")
+	assert.EqualValues(t, 1, deleted)
+
+	deletedCount, err := store.SoftDeleteSessions([]string{emptyTrashID})
+	require.NoError(t, err, "SoftDeleteSessions")
+	assert.Equal(t, 1, deletedCount)
+	emptied, err := store.EmptyTrash()
+	require.NoError(t, err, "EmptyTrash")
+	assert.Equal(t, 1, emptied)
+
+	for _, sess := range sourceRows {
+		updated := sess
+		updated.MessageCount = 2
+		require.NoError(t, localDB.UpsertSession(updated),
+			"UpsertSession updated "+sess.ID)
+		require.NoError(t, localDB.ReplaceSessionMessages(sess.ID, []db.Message{
+			{
+				SessionID:     sess.ID,
+				Ordinal:       0,
+				Role:          "user",
+				Content:       sess.ID + "-updated",
+				ContentLength: len(sess.ID + "-updated"),
+			},
+			{
+				SessionID:     sess.ID,
+				Ordinal:       1,
+				Role:          "assistant",
+				Content:       "reply",
+				ContentLength: len("reply"),
+			},
+		}), "ReplaceSessionMessages "+sess.ID)
+	}
+
+	_, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full Push after PG permanent deletes")
+
+	for _, sessionID := range []string{deleteIfTrashedID, emptyTrashID} {
+		var count int
+		require.NoError(t, pg.QueryRow(
+			`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+			sessionID,
+		).Scan(&count), "count deleted session "+sessionID)
+		assert.Zero(t, count, "permanently deleted session should stay absent")
+	}
+
+	var excludedCount int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM excluded_sessions
+		 WHERE id IN ($1, $2)`,
+		deleteIfTrashedID, emptyTrashID,
+	).Scan(&excludedCount), "count pg excluded sessions")
+	assert.Equal(t, 2, excludedCount)
+}
+
 // TestPushSyncsUsageEventsForZeroMessageSession verifies that a session
 // carrying token/cost accounting as a usage_event but no transcript
 // messages still has its usage_event pushed to PG. This is the shape of a
