@@ -238,6 +238,26 @@ func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {
 	assert.Equal(t, storagePath, found.DisplayPath)
 }
 
+func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
+	root := t.TempDir()
+	storagePath := writeOpenCodeProviderStorageSession(
+		t, root, "session", "ses_valid", "storage-app", "Valid Session",
+	)
+	// A present-but-corrupt optional DB must not abort discovery of the valid
+	// storage-backed session that lives in the same root.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "opencode.db"), []byte("not a sqlite database"), 0o644,
+	))
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, storagePath, discovered[0].DisplayPath)
+}
+
 func TestOpenCodeFamilyProviderRelabelsForks(t *testing.T) {
 	for _, tc := range []struct {
 		agent         AgentType
