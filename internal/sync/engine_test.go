@@ -2857,6 +2857,10 @@ func TestEngine_ClassifyPathsOpenCodeRemovedMessageDir(
 	assert.Equal(t, sessionPath, files[0].Path)
 }
 
+// TestEngine_ClassifyPathsOpenCodeSQLiteWALFile covers a WAL-file change on
+// a pure-SQLite OpenCode root. OpenCode is provider-authoritative, so the
+// provider facade classifies the change into the per-session SQLite virtual
+// paths it would re-parse rather than the raw opencode.db path.
 func TestEngine_ClassifyPathsOpenCodeSQLiteWALFile(
 	t *testing.T,
 ) {
@@ -2870,13 +2874,61 @@ func TestEngine_ClassifyPathsOpenCodeSQLiteWALFile(
 	})
 
 	dbPath := filepath.Join(opencodeDir, "opencode.db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644), "WriteFile(%q)", dbPath)
+	seedOpenCodeSQLiteSession(t, dbPath, "ses_wal")
 	walPath := filepath.Join(opencodeDir, "opencode.db-wal")
 	require.NoError(t, os.WriteFile(walPath, []byte("wal"), 0o644), "WriteFile(%q)", walPath)
 
 	files := engine.classifyPaths([]string{walPath})
 	require.Len(t, files, 1)
-	assert.Equal(t, dbPath, files[0].Path)
+	assert.Equal(t,
+		parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_wal"),
+		files[0].Path,
+	)
+	assert.Equal(t, parser.AgentOpenCode, files[0].Agent)
+}
+
+// seedOpenCodeSQLiteSession creates a minimal OpenCode-shaped SQLite database
+// with a single session row so changed-path classification can enumerate it.
+func seedOpenCodeSQLiteSession(t *testing.T, dbPath, sessionID string) {
+	t.Helper()
+	d, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "open opencode db")
+	t.Cleanup(func() { d.Close() })
+	_, err = d.Exec(`
+		CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL);
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			parent_id TEXT,
+			title TEXT,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL
+		);
+		CREATE TABLE message (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			data TEXT NOT NULL,
+			time_created INTEGER NOT NULL
+		);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			message_id TEXT NOT NULL,
+			data TEXT NOT NULL,
+			time_created INTEGER NOT NULL
+		);
+	`)
+	require.NoError(t, err, "create opencode schema")
+	_, err = d.Exec(
+		"INSERT INTO project (id, worktree) VALUES ('prj_1', '/home/user/code/app')",
+	)
+	require.NoError(t, err, "insert project")
+	_, err = d.Exec(
+		`INSERT INTO session (id, project_id, time_created, time_updated)
+		 VALUES (?, 'prj_1', 1, 2)`,
+		sessionID,
+	)
+	require.NoError(t, err, "insert session")
 }
 
 func TestEngine_ClassifyPathsOpenCodeRemovedMessageFile(
@@ -2912,6 +2964,58 @@ func TestEngine_ClassifyPathsOpenCodeRemovedMessageFile(
 	files := engine.classifyPaths([]string{messagePath})
 	require.Len(t, files, 1)
 	assert.Equal(t, sessionPath, files[0].Path)
+}
+
+// TestEngine_ClassifyPathsOpenCodeFamilyRemovedSessionFile covers a removed
+// storage session file for the provider-authoritative OpenCode-format agents.
+// A delete event yields no reparse classification: there is no source to
+// re-read, and the deletion is reconciled by the presence sweep rather than
+// changed-path classification.
+func TestEngine_ClassifyPathsOpenCodeFamilyRemovedSessionFile(
+	t *testing.T,
+) {
+	for _, tc := range []struct {
+		name          string
+		agent         parser.AgentType
+		sessionSubdir string
+	}{
+		{name: "opencode", agent: parser.AgentOpenCode, sessionSubdir: "session"},
+		{name: "kilo", agent: parser.AgentKilo, sessionSubdir: "session"},
+		{name: "mimocode", agent: parser.AgentMiMoCode, sessionSubdir: "session_diff"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openTestDB(t)
+			root := t.TempDir()
+			engine := NewEngine(db, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					tc.agent: {root},
+				},
+				Machine: "local",
+			})
+
+			sessionPath := filepath.Join(
+				root, "storage", tc.sessionSubdir, "global",
+				"ses_removed.json",
+			)
+			require.NoError(
+				t, os.MkdirAll(filepath.Dir(sessionPath), 0o755),
+				"MkdirAll(%q)", sessionPath,
+			)
+			require.NoError(
+				t,
+				os.WriteFile(
+					sessionPath,
+					[]byte(`{"id":"ses_removed","directory":"/tmp/proj","time":{"created":1,"updated":2}}`),
+					0o644,
+				),
+				"WriteFile(%q)", sessionPath,
+			)
+			require.NoError(t, os.Remove(sessionPath), "Remove(%q)", sessionPath)
+
+			files := engine.classifyPaths([]string{sessionPath})
+			assert.Empty(t, files)
+		})
+	}
 }
 
 func TestEngine_ClassifyPathsOpenCodeRemovedPartDir(

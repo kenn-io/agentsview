@@ -382,10 +382,10 @@ func resolveResumeDir(session *db.Session) string {
 }
 
 func isVirtualSessionPath(path string) bool {
-	if _, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
+	if _, _, ok := parser.ParseVirtualSourcePathForBase(path, "data.sqlite3"); ok {
 		return true
 	}
-	if _, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+	if _, _, ok := parser.ParseVirtualSourcePathForBase(path, "opencode.db"); ok {
 		return true
 	}
 	return false

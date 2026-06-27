@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,12 +17,6 @@ import (
 
 const openCodeStorageFingerprintPrefix = "opencode-storage:v1:"
 
-// OpenCodeSession bundles a parsed session with its messages.
-type OpenCodeSession struct {
-	Session  ParsedSession
-	Messages []ParsedMessage
-}
-
 // OpenCodeSessionMeta is lightweight metadata for a session,
 // used to detect changes without parsing messages or parts.
 type OpenCodeSessionMeta struct {
@@ -35,8 +28,9 @@ type OpenCodeSessionMeta struct {
 // OpenCodeSQLiteSessionExists reports whether a session row with
 // the given ID is present in the OpenCode SQLite database at
 // dbPath. Returns false when the file is missing, the schema is
-// unexpected, or no row matches. Used by FindOpenCodeSourceFile
-// so callers can distinguish "this DB has the session" from
+// unexpected, or no row matches. Used by the OpenCode-format
+// provider's source lookup so callers can distinguish "this DB has
+// the session" from
 // "this DB exists but doesn't have it" — the latter must let
 // resolution continue to other configured roots.
 func OpenCodeSQLiteSessionExists(dbPath, sessionID string) bool {
@@ -106,61 +100,10 @@ func ListOpenCodeSessionMeta(
 	return metas, rows.Err()
 }
 
-// ParseOpenCodeDB opens the OpenCode SQLite database read-only
-// and returns all sessions with messages.
-func ParseOpenCodeDB(
-	dbPath, machine string,
-) ([]OpenCodeSession, error) {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	db, err := openOpenCodeDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	projects, err := loadOpenCodeProjects(db)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"loading opencode projects: %w", err,
-		)
-	}
-
-	sessions, err := loadOpenCodeSessions(db)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"loading opencode sessions: %w", err,
-		)
-	}
-
-	var results []OpenCodeSession
-	for _, s := range sessions {
-		worktree := projects[s.projectID]
-		parsed, msgs, err := buildOpenCodeSession(
-			db, s, worktree, dbPath, machine,
-		)
-		if err != nil {
-			log.Printf(
-				"opencode session %s: %v", s.id, err,
-			)
-			continue
-		}
-		if parsed == nil {
-			continue
-		}
-		results = append(results, OpenCodeSession{
-			Session:  *parsed,
-			Messages: msgs,
-		})
-	}
-	return results, nil
-}
-
-// ParseOpenCodeSession parses a single session by ID from the
-// OpenCode database.
-func ParseOpenCodeSession(
+// parseOpenCodeDBSession parses a single session by ID from the
+// OpenCode SQLite database. The OpenCode-format provider owns this
+// path; Kilo and MiMoCode reuse it and relabel the result.
+func parseOpenCodeDBSession(
 	dbPath, sessionID, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -196,9 +139,11 @@ func ParseOpenCodeSession(
 	)
 }
 
-// ParseOpenCodeFile parses a file-backed OpenCode storage session
-// rooted at storage/session/<project>/<session>.json.
-func ParseOpenCodeFile(
+// parseOpenCodeStorageFile parses a file-backed OpenCode storage
+// session rooted at storage/session/<project>/<session>.json. The
+// OpenCode-format provider owns this path; Kilo and MiMoCode reuse it
+// and relabel the result.
+func parseOpenCodeStorageFile(
 	sessionPath, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	raw, err := os.ReadFile(sessionPath)
@@ -315,36 +260,6 @@ type openCodeSessionRow struct {
 	title       string
 	timeCreated int64
 	timeUpdated int64
-}
-
-func loadOpenCodeSessions(
-	db *sql.DB,
-) ([]openCodeSessionRow, error) {
-	rows, err := db.Query(`
-		SELECT s.id, s.project_id,
-		       COALESCE(s.parent_id, ''),
-		       COALESCE(s.title, ''),
-		       s.time_created, s.time_updated
-		FROM session s
-		ORDER BY s.time_created
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var sessions []openCodeSessionRow
-	for rows.Next() {
-		var s openCodeSessionRow
-		if err := rows.Scan(
-			&s.id, &s.projectID, &s.parentID,
-			&s.title, &s.timeCreated, &s.timeUpdated,
-		); err != nil {
-			return nil, err
-		}
-		sessions = append(sessions, s)
-	}
-	return sessions, rows.Err()
 }
 
 func loadOneOpenCodeSession(
@@ -1043,7 +958,9 @@ func OpenCodeSourceMtime(sourcePath string) (int64, error) {
 	if sourcePath == "" {
 		return 0, nil
 	}
-	if dbPath, sessionID, ok := ParseOpenCodeSQLiteVirtualPath(sourcePath); ok {
+	if dbPath, sessionID, ok := parseOpenCodeFormatVirtualPath(
+		openCodeFmt.dbName, sourcePath,
+	); ok {
 		return openCodeSQLiteSessionMtime(dbPath, sessionID)
 	}
 	return openCodeStorageSessionMtime(sourcePath)

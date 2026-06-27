@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1899,6 +1900,149 @@ func TestParseDiffPresenceSweepSkipsIncompleteProviderResults(t *testing.T) {
 
 	assert.Equal(t, 0, report.Totals.Changed)
 	assert.Empty(t, report.Sessions)
+}
+
+func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
+	dbPath := "/tmp/opencode.db"
+	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")
+	secondPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_two")
+	first := &db.Session{
+		ID:          "opencode:ses_one",
+		Agent:       string(parser.AgentOpenCode),
+		Machine:     "devbox",
+		Project:     "project",
+		FilePath:    &firstPath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	second := &db.Session{
+		ID:          "opencode:ses_two",
+		Agent:       string(parser.AgentOpenCode),
+		Machine:     "devbox",
+		Project:     "project",
+		FilePath:    &secondPath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	storedByPath := map[string][]*db.Session{
+		parseDiffSourceKey(firstPath):  {first},
+		parseDiffSourceKey(secondPath): {second},
+	}
+	job := syncJob{
+		path: firstPath,
+		processResult: processResult{
+			err: errors.New("bad virtual session"),
+		},
+	}
+	engine := &Engine{db: dbtest.OpenTestDB(t)}
+	report := &ParseDiffReport{FieldCounts: map[string]int{}}
+	visited := map[string]bool{}
+	var presencePaths []string
+
+	err := engine.parseDiffCollectFile(
+		context.Background(),
+		report,
+		job,
+		map[string]parser.AgentType{firstPath: parser.AgentOpenCode},
+		map[string]*db.Session{
+			first.ID:  first,
+			second.ID: second,
+		},
+		storedByPath,
+		visited,
+		engine.loadWorktreeProjectResolver(),
+		&presencePaths,
+	)
+	require.NoError(t, err)
+
+	require.Len(t, report.Sessions, 1)
+	assert.Equal(t, first.ID, report.Sessions[0].SessionID)
+	assert.Equal(t, DiffParseError, report.Sessions[0].Class)
+	assert.True(t, visited[first.ID])
+	assert.False(t, visited[second.ID])
+	assert.Empty(t, presencePaths)
+	assert.Equal(t, ParseDiffTotals{ParseErrors: 1}, report.Totals)
+}
+
+func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
+	dbPath := "/tmp/opencode.db"
+	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")
+	secondPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_two")
+	first := &db.Session{
+		ID:          "opencode:ses_one",
+		Agent:       string(parser.AgentOpenCode),
+		Machine:     "devbox",
+		Project:     "project",
+		FilePath:    &firstPath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	second := &db.Session{
+		ID:          "opencode:ses_two",
+		Agent:       string(parser.AgentOpenCode),
+		Machine:     "devbox",
+		Project:     "project",
+		FilePath:    &secondPath,
+		DataVersion: db.CurrentDataVersion(),
+	}
+	storedByPath := map[string][]*db.Session{
+		parseDiffSourceKey(firstPath):  {first},
+		parseDiffSourceKey(secondPath): {second},
+	}
+	job := syncJob{path: firstPath}
+	engine := &Engine{db: dbtest.OpenTestDB(t)}
+	report := &ParseDiffReport{FieldCounts: map[string]int{}}
+	visited := map[string]bool{}
+	var presencePaths []string
+
+	err := engine.parseDiffCollectFile(
+		context.Background(),
+		report,
+		job,
+		map[string]parser.AgentType{firstPath: parser.AgentOpenCode},
+		map[string]*db.Session{
+			first.ID:  first,
+			second.ID: second,
+		},
+		storedByPath,
+		visited,
+		engine.loadWorktreeProjectResolver(),
+		&presencePaths,
+	)
+	require.NoError(t, err)
+	engine.parseDiffPresenceSweep(
+		report,
+		presencePaths,
+		storedByPath,
+		visited,
+	)
+
+	require.Len(t, report.Sessions, 1)
+	assert.Equal(t, first.ID, report.Sessions[0].SessionID)
+	assert.Equal(t, DiffChanged, report.Sessions[0].Class)
+	assert.True(t, visited[first.ID])
+	assert.False(t, visited[second.ID])
+	assert.Equal(t, ParseDiffTotals{Changed: 1}, report.Totals)
+}
+
+func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
+	dbPath := "/tmp/opencode.db"
+	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")
+	secondPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_two")
+	_, cutPaths, limited := sortAndLimitParseDiffFiles(
+		[]parser.DiscoveredFile{
+			{Path: firstPath, Agent: parser.AgentOpenCode},
+			{Path: secondPath, Agent: parser.AgentOpenCode},
+		},
+		1,
+	)
+
+	require.True(t, limited)
+	assert.Len(t, cutPaths, 1)
+	assert.False(t, cutPaths[dbPath])
+	for path := range cutPaths {
+		assert.True(t,
+			path == firstPath || path == secondPath,
+			"cut path %q must be one exact virtual source", path,
+		)
+	}
 }
 
 func TestParseDiffReportHasFailures(t *testing.T) {

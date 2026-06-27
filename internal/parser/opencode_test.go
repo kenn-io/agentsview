@@ -12,6 +12,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// parseOpenCodeAll parses every session in an OpenCode SQLite database using
+// the same per-session primitives the provider uses (ListOpenCodeSessionMeta +
+// parseOpenCodeDBSession), reproducing the deleted ParseOpenCodeDB
+// whole-database free function for the retained parse tests.
+func parseOpenCodeAll(dbPath, machine string) ([]ParseResult, error) {
+	metas, err := ListOpenCodeSessionMeta(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	var out []ParseResult
+	for _, m := range metas {
+		sess, msgs, err := parseOpenCodeDBSession(dbPath, m.SessionID, machine)
+		if err != nil {
+			return nil, err
+		}
+		if sess == nil {
+			continue
+		}
+		out = append(out, ParseResult{Session: *sess, Messages: msgs})
+	}
+	return out, nil
+}
+
 // openCodeSchema matches the real OpenCode database schema.
 // Role and part type live inside the JSON data columns.
 const openCodeSchema = `
@@ -113,7 +136,7 @@ func newTestDB(t *testing.T) (string, *OpenCodeSeeder, *sql.DB) {
 
 // seedHybridSQLiteDB creates an OpenCode-shaped SQLite DB at
 // dbPath containing a single session row with the given ID. Used
-// by tests that exercise FindOpenCodeSourceFile in hybrid and
+// by tests that exercise OpenCode-format source lookup in hybrid and
 // pure-SQLite roots, where a real DB file (not just a marker) is
 // required.
 func seedHybridSQLiteDB(t *testing.T, dbPath, sessionID string) {
@@ -166,7 +189,7 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	defer db.Close()
 	seedStandardSession(t, seeder)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "testmachine")
+	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
 	require.NoError(t, err, "ParseOpenCodeDB")
 
 	assertEq(t, "sessions len", len(sessions), 1)
@@ -278,10 +301,10 @@ func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 		},
 	})
 
-	sess, msgs, err := ParseOpenCodeFile(
+	sess, msgs, err := parseOpenCodeStorageFile(
 		sessionPath, "testmachine",
 	)
-	require.NoError(t, err, "ParseOpenCodeFile")
+	require.NoError(t, err, "parseOpenCodeStorageFile")
 	require.NotNil(t, sess, "expected non-nil session")
 
 	assertEq(t, "ID", sess.ID, "opencode:ses_storage")
@@ -363,10 +386,10 @@ func TestParseOpenCodeFile_StorageSessionInvalidChildFails(
 		root, "storage", "part", "msg_1", "prt_bad.json",
 	), []byte(`{"id":"prt_bad"`), 0o644), "write invalid part")
 
-	sess, msgs, err := ParseOpenCodeFile(
+	sess, msgs, err := parseOpenCodeStorageFile(
 		sessionPath, "testmachine",
 	)
-	require.Error(t, err, "expected ParseOpenCodeFile error")
+	require.Error(t, err, "expected parseOpenCodeStorageFile error")
 	assert.Nil(t, sess, "session, want nil")
 	assert.Nil(t, msgs, "msgs, want nil")
 }
@@ -397,10 +420,10 @@ func TestParseOpenCodeFile_MissingPartDirAllowed(t *testing.T) {
 		},
 	})
 
-	sess, msgs, err := ParseOpenCodeFile(
+	sess, msgs, err := parseOpenCodeStorageFile(
 		sessionPath, "testmachine",
 	)
-	require.NoError(t, err, "ParseOpenCodeFile")
+	require.NoError(t, err, "parseOpenCodeStorageFile")
 	assert.Nil(t, sess, "session, want nil")
 	assert.Nil(t, msgs, "msgs, want nil")
 }
@@ -429,10 +452,10 @@ func TestParseOpenCodeFile_StorageMessageMissingIDFails(t *testing.T) {
 		},
 	})
 
-	sess, msgs, err := ParseOpenCodeFile(
+	sess, msgs, err := parseOpenCodeStorageFile(
 		sessionPath, "testmachine",
 	)
-	require.Error(t, err, "expected ParseOpenCodeFile error")
+	require.Error(t, err, "expected parseOpenCodeStorageFile error")
 	assert.Nil(t, sess, "session, want nil")
 	assert.Nil(t, msgs, "msgs, want nil")
 }
@@ -472,10 +495,10 @@ func TestParseOpenCodeFile_StoragePartMissingIDFails(t *testing.T) {
 		},
 	})
 
-	sess, msgs, err := ParseOpenCodeFile(
+	sess, msgs, err := parseOpenCodeStorageFile(
 		sessionPath, "testmachine",
 	)
-	require.Error(t, err, "expected ParseOpenCodeFile error")
+	require.Error(t, err, "expected parseOpenCodeStorageFile error")
 	assert.Nil(t, sess, "session, want nil")
 	assert.Nil(t, msgs, "msgs, want nil")
 }
@@ -531,8 +554,8 @@ func TestParseOpenCodeFile_StoragePartOrderingUsesStartTime(
 		},
 	})
 
-	_, msgs, err := ParseOpenCodeFile(sessionPath, "testmachine")
-	require.NoError(t, err, "ParseOpenCodeFile")
+	_, msgs, err := parseOpenCodeStorageFile(sessionPath, "testmachine")
+	require.NoError(t, err, "parseOpenCodeStorageFile")
 	require.Len(t, msgs, 1, "messages len")
 	assertEq(t, "msg[0].Content", msgs[0].Content, "first\nsecond")
 }
@@ -590,8 +613,8 @@ func TestParseOpenCodeFile_StoragePartOrderingPrefersStartOverCreated(
 		},
 	})
 
-	_, msgs, err := ParseOpenCodeFile(sessionPath, "testmachine")
-	require.NoError(t, err, "ParseOpenCodeFile")
+	_, msgs, err := parseOpenCodeStorageFile(sessionPath, "testmachine")
+	require.NoError(t, err, "parseOpenCodeStorageFile")
 	require.Len(t, msgs, 1, "messages len")
 	assertEq(t, "msg[0].Content", msgs[0].Content, "first\nsecond")
 }
@@ -653,8 +676,8 @@ func TestParseOpenCodeFile_StorageStepFinishTokens(t *testing.T) {
 		},
 	})
 
-	sess, msgs, err := ParseOpenCodeFile(sessionPath, "testmachine")
-	require.NoError(t, err, "ParseOpenCodeFile")
+	sess, msgs, err := parseOpenCodeStorageFile(sessionPath, "testmachine")
+	require.NoError(t, err, "parseOpenCodeStorageFile")
 	require.NotNil(t, sess, "want one parsed session")
 	require.Len(t, msgs, 1, "messages")
 
@@ -700,7 +723,7 @@ func TestParseOpenCodeDB_TitleFallback(t *testing.T) {
 		1700000020000, 1700000020000,
 		`{"type":"text","text":"Refactor the auth module"}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 	assertEq(t, "sessions len", len(sessions), 2)
 
@@ -733,7 +756,7 @@ func TestParseOpenCodeDB_ToolParts(t *testing.T) {
 	seeder.AddPart("prt_t", "msg_a", "ses_tools", 1700000011000, 1700000011000, `{"type":"tool","tool":"read","callID":"call_1","state":{"input":{"file_path":"main.go"}}}`)
 	seeder.AddPart("prt_txt", "msg_a", "ses_tools", 1700000012000, 1700000012000, `{"type":"text","text":"Here is the file content."}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 
 	assertEq(t, "sessions len", len(sessions), 1)
@@ -760,7 +783,7 @@ func TestParseOpenCodeDB_EmptySession(t *testing.T) {
 	seeder.AddProject("prj_1", "/tmp/proj")
 	seeder.AddSession("ses_empty", "prj_1", "", "", 1700000000000, 1700000000000)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 
 	assertEq(t, "sessions len", len(sessions), 0)
@@ -769,7 +792,7 @@ func TestParseOpenCodeDB_EmptySession(t *testing.T) {
 func TestParseOpenCodeDB_NonexistentDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "nonexistent.db")
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "expected nil error")
 	assert.Nil(t, sessions, "expected nil sessions")
 }
@@ -788,7 +811,7 @@ func TestParseOpenCodeDB_ProjectFromWorktree(t *testing.T) {
 	seeder.AddMessage("msg_1", "ses_git", 1700000000000, 1700000000000, `{"role":"user"}`)
 	seeder.AddPart("prt_1", "msg_1", "ses_git", 1700000000000, 1700000000000, `{"type":"text","text":"hello"}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 	assertEq(t, "sessions len", len(sessions), 1)
 
@@ -800,8 +823,8 @@ func TestParseOpenCodeSession_SingleSession(t *testing.T) {
 	defer db.Close()
 	seedStandardSession(t, seeder)
 
-	sess, msgs, err := ParseOpenCodeSession(dbPath, "ses_abc", "testmachine")
-	require.NoError(t, err, "ParseOpenCodeSession")
+	sess, msgs, err := parseOpenCodeDBSession(dbPath, "ses_abc", "testmachine")
+	require.NoError(t, err, "parseOpenCodeDBSession")
 	require.NotNil(t, sess, "expected non-nil session")
 
 	assertEq(t, "ID", sess.ID, "opencode:ses_abc")
@@ -835,7 +858,7 @@ func TestParseOpenCodeDB_OrdinalContinuity(t *testing.T) {
 	seeder.AddMessage("msg_5", "ses_ord", 1700000040000, 1700000040000, `{"role":"user"}`)
 	seeder.AddPart("prt_5", "msg_5", "ses_ord", 1700000040000, 1700000040000, `{"type":"text","text":"follow up"}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 	assertEq(t, "sessions len", len(sessions), 1)
 
@@ -866,10 +889,10 @@ func TestParseOpenCodeDB_ParentSession(t *testing.T) {
 	seeder.AddMessage("msg_c", "ses_child", 1700000020000, 1700000020000, `{"role":"user"}`)
 	seeder.AddPart("prt_c", "msg_c", "ses_child", 1700000020000, 1700000020000, `{"type":"text","text":"child msg"}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 
-	var child *OpenCodeSession
+	var child *ParseResult
 	for i := range sessions {
 		if sessions[i].Session.ID == "opencode:ses_child" {
 			child = &sessions[i]
@@ -951,7 +974,7 @@ func TestParseOpenCodeDB_TokenUsage(t *testing.T) {
 		1700000020000, 1700000020000,
 		`{"type":"text","text":"answer2"}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "testmachine")
+	sessions, err := parseOpenCodeAll(dbPath, "testmachine")
 	require.NoError(t, err, "ParseOpenCodeDB")
 	require.Len(t, sessions, 1, "sessions len")
 	s := sessions[0]
@@ -1046,7 +1069,7 @@ func TestParseOpenCodeDB_UnknownTokensShape(t *testing.T) {
 				1700000005000, 1700000005000,
 				`{"type":"text","text":"answer"}`)
 
-			sessions, err := ParseOpenCodeDB(dbPath, "m")
+			sessions, err := parseOpenCodeAll(dbPath, "m")
 			require.NoError(t, err, "ParseOpenCodeDB")
 			require.Len(t, sessions, 1, "sessions len")
 
@@ -1103,7 +1126,7 @@ func TestParseOpenCodeDB_ZeroTokens(t *testing.T) {
 		1700000005000, 1700000005000,
 		`{"type":"text","text":"sorry, request failed"}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 	require.Len(t, sessions, 1, "sessions len")
 
@@ -1156,7 +1179,7 @@ func TestParseOpenCodeDB_NoTokenUsage(t *testing.T) {
 		1700000005000, 1700000005000,
 		`{"type":"text","text":"oops"}`)
 
-	sessions, err := ParseOpenCodeDB(dbPath, "m")
+	sessions, err := parseOpenCodeAll(dbPath, "m")
 	require.NoError(t, err, "ParseOpenCodeDB")
 	require.Len(t, sessions, 1, "sessions len")
 
