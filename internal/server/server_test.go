@@ -2173,7 +2173,7 @@ func TestCORSAllowsMutatingFromKnownOrigin(t *testing.T) {
 }
 
 func TestSyncEndpointLocalNoSyncDaemonUsesOnDemandEngine(t *testing.T) {
-	te := setupPGMode(t)
+	te := setupNoSyncMode(t)
 
 	w := te.post(t, "/api/v1/sync", "{}")
 
@@ -2182,7 +2182,7 @@ func TestSyncEndpointLocalNoSyncDaemonUsesOnDemandEngine(t *testing.T) {
 }
 
 func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
-	te := setupPGMode(t)
+	te := setupNoSyncMode(t)
 
 	w := te.post(t, "/api/v1/push/pg", `{"full":false}`)
 
