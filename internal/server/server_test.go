@@ -66,6 +66,12 @@ func withWriteTimeout(d time.Duration) setupOption {
 	return func(c *config.Config) { c.WriteTimeout = d }
 }
 
+type readOnlyTestStore struct {
+	db.Store
+}
+
+func (readOnlyTestStore) ReadOnly() bool { return true }
+
 func withPublicOrigins(origins ...string) setupOption {
 	return func(c *config.Config) {
 		c.PublicOrigins = append([]string(nil), origins...)
@@ -200,7 +206,7 @@ func setupPGMode(t *testing.T) *testEnv {
 		DBPath:       dbPath,
 		WriteTimeout: 30 * time.Second,
 	}
-	srv := server.New(cfg, database, nil)
+	srv := server.New(cfg, readOnlyTestStore{Store: database}, nil)
 
 	return &testEnv{
 		srv:         srv,
@@ -2968,6 +2974,29 @@ func TestSettingsRemainLockedInPGMode(t *testing.T) {
 	te.handler.ServeHTTP(w, req)
 	assertStatus(t, w, http.StatusNotImplemented)
 	assertBodyContains(t, w, "settings cannot be modified")
+}
+
+func TestSettingsRemainWritableInLocalNoSyncMode(t *testing.T) {
+	te := setupNoSyncMode(t)
+
+	w := te.get(t, "/api/v1/settings")
+	assertStatus(t, w, http.StatusOK)
+	type readOnlySettingsResponse struct {
+		ReadOnly bool `json:"read_only"`
+	}
+	resp := decode[readOnlySettingsResponse](t, w)
+	assert.False(t, resp.ReadOnly)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		strings.NewReader(`{"require_auth":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	w = httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+	assertStatus(t, w, http.StatusOK)
+
+	resp = decode[readOnlySettingsResponse](t, w)
+	assert.False(t, resp.ReadOnly)
 }
 
 func TestPublishSession_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(t *testing.T) {

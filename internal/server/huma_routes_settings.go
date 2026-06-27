@@ -72,7 +72,7 @@ func (s *Server) humaGetSettings(
 		Host:        s.cfg.Host,
 		Port:        s.cfg.Port,
 		RequireAuth: s.cfg.RequireAuth,
-		ReadOnly:    s.engine == nil,
+		ReadOnly:    s.db.ReadOnly(),
 	}
 	if isLocalhostContext(ctx) {
 		resp.AuthToken = s.cfg.AuthToken
@@ -86,7 +86,7 @@ func (s *Server) humaUpdateSettings(
 	ctx context.Context,
 	in *settingsInput,
 ) (*jsonOutput[settingsResponse], error) {
-	if s.engine == nil {
+	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented,
 			"settings cannot be modified in read-only mode")
 	}
