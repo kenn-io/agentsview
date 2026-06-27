@@ -694,12 +694,13 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 		Project:          "test-proj",
 		Machine:          "test-machine",
 		Agent:            "claude",
-		SessionName:      &sourceNameOne,
 		MessageCount:     1,
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
 	require.NoError(t, localDB.UpsertSession(renamed), "UpsertSession renamed")
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameOne),
+		"RenameSession renamed initial source name")
 	require.NoError(t, localDB.InsertMessages([]db.Message{{
 		SessionID:     renamedID,
 		Ordinal:       0,
@@ -732,9 +733,8 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push initial source curation")
 
-	renamed.SessionName = &sourceNameTwo
-	require.NoError(t, localDB.UpsertSession(renamed),
-		"UpsertSession renamed source update")
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameTwo),
+		"RenameSession renamed source update")
 	restoredCount, err := localDB.RestoreSession(restoredID)
 	require.NoError(t, err, "RestoreSession restoredID")
 	assert.EqualValues(t, 1, restoredCount)
@@ -791,12 +791,13 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 		Project:          "test-proj",
 		Machine:          "test-machine",
 		Agent:            "claude",
-		SessionName:      &sourceNameOne,
 		MessageCount:     1,
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}
 	require.NoError(t, localDB.UpsertSession(renamed), "UpsertSession renamed")
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameOne),
+		"RenameSession renamed initial source name")
 	require.NoError(t, localDB.InsertMessages([]db.Message{{
 		SessionID:     renamedID,
 		Ordinal:       0,
@@ -846,9 +847,8 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 	)
 	require.NoError(t, err, "simulate legacy PG trash")
 
-	renamed.SessionName = &sourceNameTwo
-	require.NoError(t, localDB.UpsertSession(renamed),
-		"UpsertSession renamed source update")
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameTwo),
+		"RenameSession renamed source update")
 
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push legacy source curation update")
