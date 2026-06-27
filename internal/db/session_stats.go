@@ -6,13 +6,13 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db/git"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 // StatsFilter mirrors the service-layer StatsFilter but lives in db
@@ -1139,9 +1139,9 @@ func addMessageToCacheTotals(
 // the JSON output emits "hourly_utc": [] rather than null.
 //
 // ReporterTimezone reflects f.Timezone when set (honouring the CLI
-// --timezone flag), the TZ env var when present, or time.Local's name
-// otherwise. This is a best-effort IANA name; tooling that needs a
-// strict tzdata lookup should pass --timezone explicitly.
+// --timezone flag), otherwise the best-effort local IANA name. When
+// the env/local fallback cannot be resolved safely, the field stays
+// empty so downstream fallback logic can take over.
 func (db *DB) computeTemporal(
 	ctx context.Context, stats *SessionStats, f StatsFilter,
 	from, to time.Time, sessionIDs []string,
@@ -1255,20 +1255,14 @@ func (db *DB) accumulateHourlyUTC(
 // SessionStats.Temporal.ReporterTimezone. Precedence:
 //
 //  1. f.Timezone when non-empty — echoes the --timezone flag.
-//  2. TZ environment variable — what most Unix tools respect.
-//  3. time.Local.String() — may be "Local" on systems without /etc/localtime.
-//
-// This function is intentionally simple: it does not attempt tzdata
-// lookups or validate the result. Consumers that need a strict zone
-// pass --timezone explicitly and get the validated name back.
+//  2. Valid IANA names from TZ or the current local location.
+//  3. Empty string when the fallback name is only a sentinel or
+//     otherwise cannot be resolved safely.
 func reporterTimezone(f StatsFilter) string {
 	if f.Timezone != "" {
 		return f.Timezone
 	}
-	if tz := os.Getenv("TZ"); tz != "" {
-		return tz
-	}
-	return time.Local.String()
+	return timeutil.BestEffortLocalTimezone()
 }
 
 // computeOutcomes populates stats.Outcomes from the Claude-agent subset

@@ -103,3 +103,55 @@ func TestIsValidTimestamp(t *testing.T) {
 		})
 	}
 }
+
+func TestBestEffortLocalTimezone(t *testing.T) {
+	la, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+	berlin, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		envTZ string
+		loc   *time.Location
+		want  string
+	}{
+		{
+			name:  "valid env wins over local",
+			envTZ: "Europe/Berlin",
+			loc:   la,
+			want:  "Europe/Berlin",
+		},
+		{
+			name:  "invalid env falls back to local",
+			envTZ: "not/a-zone",
+			loc:   la,
+			want:  "America/Los_Angeles",
+		},
+		{
+			name:  "local sentinel is blank",
+			envTZ: "",
+			loc:   time.FixedZone("Local", 0),
+			want:  "",
+		},
+		{
+			name:  "invalid local name is blank",
+			envTZ: "",
+			loc:   time.FixedZone("DuckLocal", 0),
+			want:  "",
+		},
+		{
+			name:  "valid local IANA name passes through",
+			envTZ: "",
+			loc:   berlin,
+			want:  "Europe/Berlin",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				bestEffortLocalTimezone(tt.envTZ, tt.loc))
+		})
+	}
+}

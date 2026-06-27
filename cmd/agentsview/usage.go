@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/timeutil"
 )
 
 // quickSyncMargin pads the mtime cutoff backward from the
@@ -575,9 +576,9 @@ func printDailyTable(
 	w.Flush()
 }
 
-// localTimezone returns the IANA name of the system's local timezone.
+// localTimezone returns a best-effort IANA name for the system's local timezone.
 func localTimezone() string {
-	return time.Now().Location().String()
+	return timeutil.BestEffortLocalTimezone()
 }
 
 // fmtCost formats a dollar amount with two decimal places,

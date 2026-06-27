@@ -89,6 +89,28 @@ func TestDefaultUsageDateRange(t *testing.T) {
 	}
 }
 
+func TestLocalTimezone(t *testing.T) {
+	prev, hadTZ := os.LookupEnv("TZ")
+	t.Cleanup(func() {
+		if hadTZ {
+			_ = os.Setenv("TZ", prev)
+		} else {
+			_ = os.Unsetenv("TZ")
+		}
+	})
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	require.NoError(t, os.Setenv("TZ", "Europe/Berlin"))
+	assert.Equal(t, "Europe/Berlin", localTimezone(),
+		"valid TZ should win")
+
+	require.NoError(t, os.Unsetenv("TZ"))
+	time.Local = time.FixedZone("Local", 0)
+	assert.Equal(t, "", localTimezone(),
+		"Local sentinel should be suppressed")
+}
+
 func TestFetchHTTPDailyUsage(t *testing.T) {
 	var gotAuth string
 	ts := httptest.NewServer(http.HandlerFunc(func(

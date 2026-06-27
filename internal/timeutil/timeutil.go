@@ -1,6 +1,9 @@
 package timeutil
 
-import "time"
+import (
+	"os"
+	"time"
+)
 
 // Ptr formats a time.Time to an RFC3339Nano string pointer
 // for DB storage. Returns nil for zero time.
@@ -35,4 +38,31 @@ func IsValidTimestamp(s string) bool {
 	}
 	_, err := time.Parse(time.RFC3339Nano, s)
 	return err == nil
+}
+
+func BestEffortLocalTimezone() string {
+	return bestEffortLocalTimezone(
+		os.Getenv("TZ"),
+		time.Now().Location(),
+	)
+}
+
+func bestEffortLocalTimezone(envTZ string, loc *time.Location) string {
+	if name := validatedTimezoneName(envTZ); name != "" {
+		return name
+	}
+	if loc == nil {
+		return ""
+	}
+	return validatedTimezoneName(loc.String())
+}
+
+func validatedTimezoneName(name string) string {
+	if name == "" || name == "Local" {
+		return ""
+	}
+	if _, err := time.LoadLocation(name); err != nil {
+		return ""
+	}
+	return name
 }

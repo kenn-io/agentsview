@@ -2033,6 +2033,8 @@ func TestReporterTimezone_Precedence(t *testing.T) {
 			_ = os.Unsetenv("TZ")
 		}
 	})
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
 
 	// Filter wins over env.
 	err := os.Setenv("TZ", "Europe/Berlin")
@@ -2045,12 +2047,18 @@ func TestReporterTimezone_Precedence(t *testing.T) {
 	assert.Equal(t, "Europe/Berlin",
 		reporterTimezone(StatsFilter{}), "env wins")
 
-	// No filter, no env → time.Local fallback.
+	// No filter, no env, valid local name → local wins.
 	err = os.Unsetenv("TZ")
 	require.NoError(t, err, "unset TZ")
-	got := reporterTimezone(StatsFilter{})
-	assert.NotEmpty(t, got, "time.Local fallback: got empty string")
-	assert.Equal(t, time.Local.String(), got, "time.Local fallback")
+	time.Local = time.FixedZone("America/New_York", -5*60*60)
+	assert.Equal(t, "America/New_York",
+		reporterTimezone(StatsFilter{}),
+		"valid local name should pass through")
+
+	// No filter, no env, Local sentinel → emit empty fallback.
+	time.Local = time.FixedZone("Local", 0)
+	assert.Equal(t, "", reporterTimezone(StatsFilter{}),
+		"Local sentinel should not be published")
 }
 
 func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
