@@ -359,7 +359,7 @@ func TestDBBackedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 	assert.Equal(t, virtualPath, source.DisplayPath)
 }
 
-func TestDBBackedProviderMissingDBFingerprintsTombstoneAndSkips(t *testing.T) {
+func TestDBBackedProviderMissingDBSkipsAndPreservesSessions(t *testing.T) {
 	dbPath, seeder, db := newForgeTestDB(t)
 	seedForgeConversation(t, seeder)
 	root := filepath.Dir(dbPath)
@@ -399,7 +399,10 @@ func TestDBBackedProviderMissingDBFingerprintsTombstoneAndSkips(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
-	assert.True(t, outcome.ForceReplace)
+	// The backing DB file is gone, so the outcome must NOT force-replace: the
+	// persistent archive preserves sessions whose source file no longer exists
+	// on disk rather than letting the engine delete them.
+	assert.False(t, outcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 	assert.Empty(t, outcome.Results)
 }

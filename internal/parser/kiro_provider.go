@@ -104,9 +104,12 @@ func (p *kiroProvider) parseSQLiteDB(
 ) (ParseOutcome, error) {
 	if _, err := os.Stat(src.DBPath); err != nil {
 		if os.IsNotExist(err) {
+			// The entire backing DB file is gone. Preserve the container's
+			// stored sessions (the SQLite store is a persistent archive) by
+			// skipping without ForceReplace, which would otherwise delete every
+			// stored session discovered from this DB.
 			return ParseOutcome{
 				ResultSetComplete: true,
-				ForceReplace:      true,
 				SkipReason:        SkipNoSession,
 			}, nil
 		}
@@ -171,9 +174,13 @@ func (p *kiroProvider) parseSQLiteSession(
 ) (ParseOutcome, error) {
 	if _, err := os.Stat(src.DBPath); err != nil {
 		if os.IsNotExist(err) {
+			// The entire backing DB file is gone. Preserve the stored sessions
+			// (the SQLite store is a persistent archive) by skipping without
+			// ForceReplace, which would otherwise delete every stored session
+			// for this source. The sql.ErrNoRows case below keeps ForceReplace
+			// because the DB is present and the row was genuinely removed.
 			return ParseOutcome{
 				ResultSetComplete: true,
-				ForceReplace:      true,
 				SkipReason:        SkipNoSession,
 			}, nil
 		}

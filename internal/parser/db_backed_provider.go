@@ -104,9 +104,14 @@ func (p *dbBackedProvider) Parse(
 	}
 	if _, err := os.Stat(src.DBPath); err != nil {
 		if os.IsNotExist(err) {
+			// The entire backing DB file is gone. The SQLite store is a
+			// persistent archive: sessions must be preserved even when their
+			// source file no longer exists on disk. Skip without ForceReplace
+			// so the engine keeps the stored sessions instead of deleting them.
+			// The sql.ErrNoRows / empty-results cases below keep ForceReplace
+			// because the DB is still present and the row was genuinely removed.
 			return ParseOutcome{
 				ResultSetComplete: true,
-				ForceReplace:      true,
 				SkipReason:        SkipNoSession,
 			}, nil
 		}

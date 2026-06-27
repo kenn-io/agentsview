@@ -310,7 +310,7 @@ func (s multiSessionContainerSourceSet) parse(
 			return ParseOutcome{}, err
 		}
 		if result == nil {
-			return multiSessionSkipOutcome(), nil
+			return s.skipOutcome(src), nil
 		}
 		if fingerprintHash != "" {
 			result.Session.File.Hash = fingerprintHash
@@ -330,7 +330,7 @@ func (s multiSessionContainerSourceSet) parse(
 		return ParseOutcome{}, err
 	}
 	if len(results) == 0 {
-		return multiSessionSkipOutcome(), nil
+		return s.skipOutcome(src), nil
 	}
 	out := make([]ParseResultOutcome, 0, len(results))
 	for i := range results {
@@ -349,7 +349,19 @@ func (s multiSessionContainerSourceSet) parse(
 	}, nil
 }
 
-func multiSessionSkipOutcome() ParseOutcome {
+// skipOutcome builds the "no session" outcome for a container/member that
+// produced no results. When the backing container file is gone, the stored
+// sessions must be preserved (the archive survives a vanished source file), so
+// it skips without ForceReplace, which would delete them. When the container is
+// still present, the member row or contents were genuinely removed, so it
+// force-replaces to drop the now-absent stored sessions.
+func (s multiSessionContainerSourceSet) skipOutcome(src multiSessionSource) ParseOutcome {
+	if src.Container != "" && !IsRegularFile(src.Container) {
+		return ParseOutcome{
+			ResultSetComplete: true,
+			SkipReason:        SkipNoSession,
+		}
+	}
 	return ParseOutcome{
 		ResultSetComplete: true,
 		ForceReplace:      true,

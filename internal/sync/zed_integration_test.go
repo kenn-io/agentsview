@@ -95,7 +95,7 @@ func TestSyncSingleSessionZedForceRewritesUnchangedSession(t *testing.T) {
 	assert.Equal(t, dbPath+"#exists", database.GetSessionFilePath("zed:exists"))
 }
 
-func TestSyncPathsZedDeletedPhysicalDBRemovesSessions(t *testing.T) {
+func TestSyncPathsZedDeletedPhysicalDBPreservesSessions(t *testing.T) {
 	zedDir := t.TempDir()
 	dbPath := filepath.Join(zedDir, "threads", "threads.db")
 	createZedThreadsDB(t, dbPath, []zedThreadFixture{{
@@ -119,9 +119,12 @@ func TestSyncPathsZedDeletedPhysicalDBRemovesSessions(t *testing.T) {
 
 	engine.SyncPaths([]string{dbPath})
 
+	// The SQLite store is a persistent archive: removing the backing DB file
+	// must not delete the already-synced session.
 	sess, err := database.GetSession(t.Context(), "zed:exists")
 	require.NoError(t, err)
-	assert.Nil(t, sess)
+	require.NotNil(t, sess)
+	assert.Equal(t, "zed:exists", sess.ID)
 }
 
 func TestSyncSingleSessionZedMissingThreadReturnsNotFound(t *testing.T) {

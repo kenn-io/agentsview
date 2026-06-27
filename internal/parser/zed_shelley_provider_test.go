@@ -266,7 +266,9 @@ func TestZedProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: changed[0]})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
-	assert.True(t, outcome.ForceReplace)
+	// The backing DB file is gone, so the outcome must not force-replace: the
+	// persistent archive preserves sessions whose source file no longer exists.
+	assert.False(t, outcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 	assert.Empty(t, outcome.Results)
 }
@@ -578,7 +580,9 @@ func TestShelleyProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: changed[0]})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
-	assert.True(t, outcome.ForceReplace)
+	// The backing DB file is gone, so the outcome must not force-replace: the
+	// persistent archive preserves sessions whose source file no longer exists.
+	assert.False(t, outcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 	assert.Empty(t, outcome.Results)
 }
