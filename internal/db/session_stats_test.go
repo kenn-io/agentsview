@@ -2001,10 +2001,13 @@ func TestGetSessionStats_Temporal_EmptyWindowEmptySlice(t *testing.T) {
 	assert.NotNil(t, stats.Temporal.HourlyUTC,
 		"hourly_utc must be a non-nil empty slice, got nil")
 	assert.Len(t, stats.Temporal.HourlyUTC, 0, "hourly_utc: got len")
-	// Reporter timezone should still be populated (claim in the spec).
-	assert.NotEmpty(t, stats.Temporal.ReporterTimezone,
-		"reporter_timezone must be populated even when "+
-			"hourly_utc is empty")
+	// Reporter timezone may now be empty when the host only exposes the
+	// Local sentinel; otherwise it must still be a loadable IANA name.
+	if stats.Temporal.ReporterTimezone != "" {
+		_, tzErr := time.LoadLocation(stats.Temporal.ReporterTimezone)
+		assert.NoError(t, tzErr,
+			"reporter_timezone must stay loadable when populated")
+	}
 	// JSON encoding must emit [] not null.
 	raw, err := json.Marshal(stats.Temporal.HourlyUTC)
 	require.NoError(t, err, "json.Marshal")
