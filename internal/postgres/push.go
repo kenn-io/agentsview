@@ -25,8 +25,8 @@ const (
 )
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
-// stable push-marker identifier. pushMarkerKeyPrefix prefixes that identifier
-// to form the PG sync_metadata key under which the marker row is stored.
+// stable push-marker identifier. The push-marker prefixes form PG
+// sync_metadata keys for reset-detection marker rows.
 const (
 	pushMarkerIDStateKey              = "pg_push_marker_id"
 	pushMarkerKeyPrefix               = "push_marker:"
@@ -432,7 +432,7 @@ func (s *Sync) pgPushMarkerMachineState(
 	var machine string
 	err := s.pg.QueryRowContext(ctx,
 		`SELECT value FROM sync_metadata WHERE key = $1`,
-		pushMarkerKeyPrefix+markerID,
+		s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID),
 	).Scan(&machine)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -458,7 +458,7 @@ func (s *Sync) pgPushMarkerMachineAliases(
 	var raw string
 	err := s.pg.QueryRowContext(ctx,
 		`SELECT value FROM sync_metadata WHERE key = $1`,
-		pushMarkerMachineAliasesKeyPrefix+markerID,
+		s.pushMarkerMetadataKey(pushMarkerMachineAliasesKeyPrefix, markerID),
 	).Scan(&raw)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -503,7 +503,7 @@ func (s *Sync) writePushMarker(
 		`INSERT INTO sync_metadata (key, value)
 		 VALUES ($1, $2)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-		pushMarkerKeyPrefix+markerID, s.machine,
+		s.pushMarkerMetadataKey(pushMarkerKeyPrefix, markerID), s.machine,
 	); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("writing pg push marker: %w", err)
@@ -512,7 +512,8 @@ func (s *Sync) writePushMarker(
 		`INSERT INTO sync_metadata (key, value)
 		 VALUES ($1, $2)
 		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-		pushMarkerMachineAliasesKeyPrefix+markerID, string(aliasesJSON),
+		s.pushMarkerMetadataKey(pushMarkerMachineAliasesKeyPrefix, markerID),
+		string(aliasesJSON),
 	); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("writing pg push marker machine aliases: %w", err)
@@ -521,6 +522,14 @@ func (s *Sync) writePushMarker(
 		return fmt.Errorf("committing pg push marker: %w", err)
 	}
 	return nil
+}
+
+func (s *Sync) pushMarkerMetadataKey(prefix, markerID string) string {
+	if s.syncStateTarget == "" {
+		return prefix + markerID
+	}
+	sum := sha256.Sum256([]byte(s.syncStateTarget))
+	return prefix + markerID + ":scope:" + hex.EncodeToString(sum[:8])
 }
 
 func pushMarkerLegacyMachines(machine string, aliases []string) []string {

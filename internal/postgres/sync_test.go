@@ -1255,6 +1255,84 @@ func TestPushFilteredByProject(t *testing.T) {
 	assert.Equal(t, 0, r3.SessionsPushed)
 }
 
+func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_filtered_reset_marker"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+
+	local := testDB(t)
+	ctx := context.Background()
+
+	for _, s := range []db.Session{
+		{
+			ID: "reset-alpha", Project: "alpha",
+			Machine: "local", Agent: "claude",
+			CreatedAt:    "2026-03-11T12:00:00Z",
+			MessageCount: 1,
+		},
+		{
+			ID: "reset-beta", Project: "beta",
+			Machine: "local", Agent: "claude",
+			CreatedAt:    "2026-03-11T12:05:00Z",
+			MessageCount: 1,
+		},
+	} {
+		require.NoError(t, local.UpsertSession(s), "upsert %s", s.ID)
+		require.NoError(t, local.InsertMessages([]db.Message{{
+			SessionID: s.ID,
+			Ordinal:   0,
+			Role:      "user",
+			Content:   "msg " + s.ID,
+			Timestamp: s.CreatedAt,
+		}}), "insert message %s", s.ID)
+	}
+
+	unfiltered, err := New(
+		pgURL, schema, local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating unfiltered sync")
+	defer unfiltered.Close()
+
+	r1, err := unfiltered.Push(ctx, false, nil)
+	require.NoError(t, err, "initial unfiltered push")
+	require.Equal(t, 2, r1.SessionsPushed)
+
+	cleanNamedPGSchema(t, pgURL, schema)
+
+	filtered, err := New(
+		pgURL, schema, local,
+		"test-machine", true,
+		SyncOptions{Projects: []string{"alpha"}},
+	)
+	require.NoError(t, err, "creating filtered sync")
+	defer filtered.Close()
+
+	r2, err := filtered.Push(ctx, false, nil)
+	require.NoError(t, err, "filtered push after reset")
+	require.Equal(t, 1, r2.SessionsPushed)
+
+	unfilteredAfterReset, err := New(
+		pgURL, schema, local,
+		"test-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "creating unfiltered sync after reset")
+	defer unfilteredAfterReset.Close()
+
+	_, err = unfilteredAfterReset.Push(ctx, false, nil)
+	require.NoError(t, err, "unfiltered push after filtered reset")
+
+	var count int
+	err = unfilteredAfterReset.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM sessions WHERE project IN ('alpha', 'beta')",
+	).Scan(&count)
+	require.NoError(t, err, "counting restored sessions")
+	assert.Equal(t, 2, count)
+}
+
 func TestPushExcludeProject(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
