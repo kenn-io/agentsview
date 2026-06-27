@@ -145,9 +145,13 @@ func shelleyFingerprintSource(src multiSessionSource) (SourceFingerprint, error)
 		fingerprint.Hash = meta.Fingerprint
 		return fingerprint, nil
 	}
-	return SourceFingerprint{}, fmt.Errorf(
-		"shelley conversation not found: %s", src.MemberID,
-	)
+	// The conversation row is gone but the database file is still present.
+	// Return a keyed-empty fingerprint without error (matching the db-backed
+	// and Kiro tombstone behavior) so the engine proceeds to Parse rather than
+	// aborting on the fingerprint. Parse then force-replaces the deleted
+	// conversation out of the archive; erroring here would strand the stale
+	// session because the engine fingerprints before parsing.
+	return SourceFingerprint{}, nil
 }
 
 func shelleyMemberPresent(src multiSessionSource) bool {

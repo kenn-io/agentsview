@@ -330,11 +330,58 @@ func (s kiroSourceSet) SourcesForChangedPath(
 			continue
 		}
 		source, ok := s.sourceRefForChangedPath(root, req.Path)
-		if ok {
-			return []SourceRef{source}, nil
+		if !ok {
+			continue
 		}
+		sources := []SourceRef{source}
+		sources = append(
+			sources,
+			s.changedPathTombstones(root, source, req.StoredSourcePaths)...,
+		)
+		return sources, nil
 	}
 	return nil, nil
+}
+
+// changedPathTombstones emits a per-session source for every stored Kiro SQLite
+// member whose row is gone from a still-present database. The whole-DB source
+// re-writes the surviving rows; these let a row deleted from a present database
+// be force-replaced out of the archive, matching the db-backed providers.
+// A vanished database file yields no tombstones, preserving the stored sessions
+// (per the persistent-archive rule).
+func (s kiroSourceSet) changedPathTombstones(
+	root string,
+	changed SourceRef,
+	storedPaths []string,
+) []SourceRef {
+	src, ok := s.sourceFromRef(changed)
+	if !ok || src.Kind != kiroSourceSQLiteDB || !IsRegularFile(src.DBPath) {
+		return nil
+	}
+	var tombstones []SourceRef
+	seen := make(map[string]struct{})
+	for _, stored := range storedPaths {
+		ref, ok := s.sourceRef(root, stored, true)
+		if !ok {
+			continue
+		}
+		member, ok := ref.Opaque.(kiroSource)
+		if !ok || member.Kind != kiroSourceSQLiteSession {
+			continue
+		}
+		if !samePath(member.DBPath, src.DBPath) {
+			continue
+		}
+		if KiroSQLiteSessionExists(member.DBPath, member.SessionID) {
+			continue
+		}
+		if _, dup := seen[member.Path]; dup {
+			continue
+		}
+		seen[member.Path] = struct{}{}
+		tombstones = append(tombstones, ref)
+	}
+	return tombstones
 }
 
 func (s kiroSourceSet) FindSource(

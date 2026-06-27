@@ -325,6 +325,97 @@ func TestZedProviderStoredVirtualPathFreshness(t *testing.T) {
 	assert.Empty(t, outcome.Results)
 }
 
+// TestZedProviderChangedPathTombstonesDeletedThread verifies the changed-path
+// classifier emits a tombstone for a stored Zed thread deleted from a
+// still-present database, so the engine force-replaces it out of the archive.
+// The surviving thread is left to the whole-DB fan-out; a vanished database
+// emits no tombstone (stored sessions preserved per the persistent-archive
+// rule).
+func TestZedProviderChangedPathTombstonesDeletedThread(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, zedThreadsDBRelPath)
+	threadsDir := filepath.Join(root, "threads")
+	survivingID := "10431c84-c47b-4e6c-b2df-f9f3b9ad025b"
+	deletedID := "20431c84-c47b-4e6c-b2df-f9f3b9ad025b"
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	createZedThreadsDBAt(t, dbPath, []zedTestThread{
+		{
+			id: survivingID, summary: "Surviving thread",
+			updatedAt: "2026-06-08T09:14:10Z", dataType: "json",
+			data: []byte(`{"messages":[{"User":{"content":[{"Text":"Hello"}]}}]}`),
+		},
+		{
+			id: deletedID, summary: "Doomed thread",
+			updatedAt: "2026-06-08T09:15:10Z", dataType: "json",
+			data: []byte(`{"messages":[{"User":{"content":[{"Text":"Bye"}]}}]}`),
+		},
+	})
+
+	provider, ok := NewProvider(AgentZed, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	survivingPath := ZedSQLiteVirtualPath(dbPath, survivingID)
+	deletedPath := ZedSQLiteVirtualPath(dbPath, deletedID)
+
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM threads WHERE id = ?`, deletedID)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "write",
+			WatchRoot:         threadsDir,
+			StoredSourcePaths: []string{survivingPath, deletedPath},
+		},
+	)
+	require.NoError(t, err)
+	gotPaths := make([]string, len(changed))
+	for i, src := range changed {
+		gotPaths[i] = src.DisplayPath
+	}
+	assert.ElementsMatch(t, []string{dbPath, deletedPath}, gotPaths,
+		"whole-DB source plus a tombstone for the deleted thread only")
+
+	var tombstone SourceRef
+	for _, src := range changed {
+		if src.DisplayPath == deletedPath {
+			tombstone = src
+		}
+	}
+	require.NotEmpty(t, tombstone.DisplayPath, "deleted-thread tombstone source")
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: tombstone})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace,
+		"a thread deleted from a present DB is force-replaced out of the archive")
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+
+	require.NoError(t, os.Remove(dbPath))
+	gone, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "remove",
+			WatchRoot:         threadsDir,
+			StoredSourcePaths: []string{survivingPath, deletedPath},
+		},
+	)
+	require.NoError(t, err)
+	for _, src := range gone {
+		assert.NotEqual(t, deletedPath, src.DisplayPath,
+			"a vanished database must not tombstone stored sessions")
+		assert.NotEqual(t, survivingPath, src.DisplayPath)
+	}
+}
+
 func TestZedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 	root := t.TempDir()
 	dbPath := filepath.Join(root, zedThreadsDBRelPath)
@@ -585,6 +676,100 @@ func TestShelleyProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	assert.False(t, outcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 	assert.Empty(t, outcome.Results)
+}
+
+// TestShelleyProviderChangedPathTombstonesDeletedConversation verifies the
+// changed-path classifier emits a tombstone for a stored Shelley conversation
+// deleted from a still-present database, and that the tombstone's fingerprint
+// no longer errors (it previously aborted before Parse and stranded the stale
+// session). The surviving conversation is left to the whole-DB fan-out; a
+// vanished database emits no tombstone.
+func TestShelleyProviderChangedPathTombstonesDeletedConversation(t *testing.T) {
+	root, dbPath, db := newShelleyTestDB(t)
+	seedShelleyMainConversation(t, db) // cMAIN1 survives
+	seedShelleyConversation(
+		t, db, "cDEL1", "Doomed conversation",
+		"/home/user/dev/myapp", "claude-sonnet-4-6", "", true,
+		"2026-06-15T11:00:00Z", "2026-06-15T11:05:00Z",
+	)
+	seedShelleyMessage(t, db, "cDEL1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":2,"Text":"hi"}]}`, "", "",
+		"2026-06-15T11:00:00Z")
+
+	provider, ok := NewProvider(AgentShelley, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	survivingPath := ShelleyVirtualPath(dbPath, "cMAIN1")
+	deletedPath := ShelleyVirtualPath(dbPath, "cDEL1")
+
+	_, err := db.Exec(`DELETE FROM messages WHERE conversation_id = ?`, "cDEL1")
+	require.NoError(t, err)
+	_, err = db.Exec(`DELETE FROM conversations WHERE conversation_id = ?`, "cDEL1")
+	require.NoError(t, err)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "write",
+			WatchRoot:         root,
+			StoredSourcePaths: []string{survivingPath, deletedPath},
+		},
+	)
+	require.NoError(t, err)
+	gotPaths := make([]string, len(changed))
+	for i, src := range changed {
+		gotPaths[i] = src.DisplayPath
+	}
+	assert.ElementsMatch(t, []string{dbPath, deletedPath}, gotPaths,
+		"whole-DB source plus a tombstone for the deleted conversation only")
+
+	var tombstone SourceRef
+	for _, src := range changed {
+		if src.DisplayPath == deletedPath {
+			tombstone = src
+		}
+	}
+	require.NotEmpty(t, tombstone.DisplayPath, "deleted-conversation tombstone source")
+
+	// The fingerprint of a deleted-but-present-DB member must not error, or the
+	// engine aborts before Parse and the stale session is never dropped.
+	fingerprint, err := provider.Fingerprint(context.Background(), tombstone)
+	require.NoError(t, err, "missing-member fingerprint must not error")
+	assert.Equal(t, tombstone.FingerprintKey, fingerprint.Key)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      tombstone,
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace,
+		"a conversation deleted from a present DB is force-replaced out of the archive")
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+
+	// A vanished database file emits no tombstone (stored sessions preserved).
+	require.NoError(t, db.Close())
+	require.NoError(t, os.Remove(dbPath))
+	gone, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "remove",
+			WatchRoot:         root,
+			StoredSourcePaths: []string{survivingPath, deletedPath},
+		},
+	)
+	require.NoError(t, err)
+	for _, src := range gone {
+		assert.NotEqual(t, deletedPath, src.DisplayPath,
+			"a vanished database must not tombstone stored sessions")
+		assert.NotEqual(t, survivingPath, src.DisplayPath)
+	}
 }
 
 func TestShelleyProviderStoredVirtualPathFreshness(t *testing.T) {

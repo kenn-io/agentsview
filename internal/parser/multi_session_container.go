@@ -228,11 +228,59 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 		return nil, err
 	}
 	for _, root := range s.roots {
-		if match, ok := s.cfg.classifyPath(root, req.Path, true); ok {
-			return []SourceRef{s.sourceRef(root, match)}, nil
+		match, ok := s.cfg.classifyPath(root, req.Path, true)
+		if !ok {
+			continue
 		}
+		sources := []SourceRef{s.sourceRef(root, match)}
+		sources = append(
+			sources,
+			s.changedPathTombstones(root, match, req.StoredSourcePaths)...,
+		)
+		return sources, nil
 	}
 	return nil, nil
+}
+
+// changedPathTombstones emits a per-member source for every stored member that
+// belongs to the changed container, is no longer present, yet whose container
+// file still exists. The whole-container source re-writes the surviving
+// members; without these, a member row deleted from a still-present container
+// is never force-replaced and a stale session lingers, diverging from the
+// db-backed providers that drop it. A vanished container yields no tombstones,
+// preserving the archive when the whole source file disappears (per the
+// persistent-archive rule).
+func (s multiSessionContainerSourceSet) changedPathTombstones(
+	root string,
+	changed multiSessionMatch,
+	storedPaths []string,
+) []SourceRef {
+	if changed.MemberID != "" || changed.Container == "" {
+		return nil
+	}
+	if !IsRegularFile(changed.Container) {
+		return nil
+	}
+	var tombstones []SourceRef
+	seen := make(map[string]struct{})
+	for _, stored := range storedPaths {
+		match, ok := s.cfg.classifyPath(root, stored, true)
+		if !ok || match.MemberID == "" {
+			continue
+		}
+		if !samePath(match.Container, changed.Container) {
+			continue
+		}
+		if s.memberPresent(match.toSource(root)) {
+			continue
+		}
+		if _, dup := seen[match.Path]; dup {
+			continue
+		}
+		seen[match.Path] = struct{}{}
+		tombstones = append(tombstones, s.sourceRef(root, match))
+	}
+	return tombstones
 }
 
 func (s multiSessionContainerSourceSet) FindSource(

@@ -355,6 +355,97 @@ func TestKiroProviderMissingSQLiteSourcesCanReachParse(t *testing.T) {
 	assert.Equal(t, SkipNoSession, physicalOutcome.SkipReason)
 }
 
+// TestKiroProviderChangedPathTombstonesDeletedRow verifies the changed-path
+// classifier emits a per-session tombstone for a stored Kiro SQLite member
+// whose row was deleted from a still-present database, so the engine can
+// force-replace it out of the archive. The surviving member is left to the
+// whole-DB fan-out, and a vanished database emits no tombstone (the stored
+// sessions are preserved per the persistent-archive rule).
+func TestKiroProviderChangedPathTombstonesDeletedRow(t *testing.T) {
+	root := t.TempDir()
+	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
+	seedKiroSQLiteSession(
+		t, db, "/home/user/code/kiro-app", "surviving",
+		readKiroFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+	seedKiroSQLiteSession(
+		t, db, "/home/user/code/kiro-app", "deleted",
+		readKiroFixture(t, "standard_payload.json"),
+		1779012000000, 1779012040000,
+	)
+
+	provider, ok := NewProvider(AgentKiro, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	survivingPath := KiroSQLiteVirtualPath(dbPath, "surviving")
+	deletedPath := KiroSQLiteVirtualPath(dbPath, "deleted")
+
+	// Delete one row while the database file stays present.
+	_, err := db.Exec(`DELETE FROM conversations_v2 WHERE conversation_id = ?`, "deleted")
+	require.NoError(t, err)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "write",
+			WatchRoot:         root,
+			StoredSourcePaths: []string{survivingPath, deletedPath},
+		},
+	)
+	require.NoError(t, err)
+	gotPaths := make([]string, len(changed))
+	for i, src := range changed {
+		gotPaths[i] = src.DisplayPath
+	}
+	assert.ElementsMatch(t, []string{dbPath, deletedPath}, gotPaths,
+		"whole-DB source plus a tombstone for the deleted row only")
+
+	var tombstone SourceRef
+	for _, src := range changed {
+		if src.DisplayPath == deletedPath {
+			tombstone = src
+		}
+	}
+	require.NotEmpty(t, tombstone.DisplayPath, "deleted-row tombstone source")
+	fingerprint, err := provider.Fingerprint(context.Background(), tombstone)
+	require.NoError(t, err)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      tombstone,
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace,
+		"a row deleted from a present DB is force-replaced out of the archive")
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+
+	// When the whole database file is gone, no tombstone is emitted so the
+	// stored sessions are preserved.
+	require.NoError(t, db.Close())
+	require.NoError(t, os.Remove(dbPath))
+	gone, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              dbPath,
+			EventKind:         "remove",
+			WatchRoot:         root,
+			StoredSourcePaths: []string{survivingPath, deletedPath},
+		},
+	)
+	require.NoError(t, err)
+	for _, src := range gone {
+		assert.NotEqual(t, deletedPath, src.DisplayPath,
+			"a vanished database must not tombstone stored sessions")
+		assert.NotEqual(t, survivingPath, src.DisplayPath)
+	}
+}
+
 func TestKiroProviderRejectsInvalidStoredSQLitePaths(t *testing.T) {
 	root := t.TempDir()
 	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
