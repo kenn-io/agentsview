@@ -176,6 +176,7 @@ func TestSetEnvVarsAffectingService(t *testing.T) {
 	// must never appear here even when set.
 	env := map[string]string{
 		"AGENTSVIEW_PG_SCHEMA":  "staging",
+		"CLAUDE_CONFIG_DIR":     "/tmp/claude-root",
 		"CLAUDE_PROJECTS_DIR":   "/tmp/claude",
 		"AGENTSVIEW_PG_URL":     "postgres://from-env",
 		"AGENTSVIEW_PG_MACHINE": "", // set-but-empty should be ignored
@@ -186,6 +187,7 @@ func TestSetEnvVarsAffectingService(t *testing.T) {
 	}
 	got := setEnvVarsAffectingService(lookup)
 	assert.Contains(t, got, "AGENTSVIEW_PG_SCHEMA")
+	assert.Contains(t, got, "CLAUDE_CONFIG_DIR")
 	assert.Contains(t, got, "CLAUDE_PROJECTS_DIR")
 	assert.NotContains(t, got, "AGENTSVIEW_PG_URL")
 	assert.NotContains(t, got, "AGENTSVIEW_PG_MACHINE",
@@ -204,10 +206,15 @@ func TestWarnUninheritedServiceEnv(t *testing.T) {
 	assert.Empty(t, buf.String(), "no warning when nothing is set")
 
 	buf.Reset()
-	warnUninheritedServiceEnv(&buf, []string{"AGENTSVIEW_PG_SCHEMA", "CLAUDE_PROJECTS_DIR"})
+	warnUninheritedServiceEnv(&buf, []string{
+		"AGENTSVIEW_PG_SCHEMA",
+		"CLAUDE_CONFIG_DIR",
+		"CLAUDE_PROJECTS_DIR",
+	})
 	out := buf.String()
 	assert.Contains(t, out, "WARNING")
 	assert.Contains(t, out, "AGENTSVIEW_PG_SCHEMA")
+	assert.Contains(t, out, "CLAUDE_CONFIG_DIR")
 	assert.Contains(t, out, "CLAUDE_PROJECTS_DIR")
 	assert.Contains(t, out, "config.toml")
 }

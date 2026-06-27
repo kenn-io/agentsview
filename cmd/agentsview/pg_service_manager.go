@@ -59,6 +59,9 @@ func serviceRuntimeEnvVars() []string {
 		if def.EnvVar != "" {
 			vars = append(vars, def.EnvVar)
 		}
+		if def.DefaultRootEnvVar != "" {
+			vars = append(vars, def.DefaultRootEnvVar)
+		}
 	}
 	return vars
 }

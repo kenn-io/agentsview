@@ -18,6 +18,7 @@ func TestBuildResolveScript(t *testing.T) {
 
 	// Claude has CLAUDE_PROJECTS_DIR env var — must be referenced.
 	assert.Contains(t, script, "CLAUDE_PROJECTS_DIR")
+	assert.Contains(t, script, "CLAUDE_CONFIG_DIR")
 
 	// Non-file-based agents must not appear.
 	for _, def := range parser.Registry {
@@ -38,6 +39,26 @@ func TestBuildResolveScript(t *testing.T) {
 		assert.Contains(t, script, marker,
 			"file-based agent %s missing from script", def.Type)
 	}
+}
+
+func TestResolveScriptHonorsClaudeConfigDirRoot(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".claude-personal")
+	projectsDir := filepath.Join(root, "projects")
+	require.NoError(t, os.MkdirAll(projectsDir, 0o755), "mkdir projects")
+
+	script := buildResolveScript()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{
+		"HOME=" + home,
+		"CLAUDE_CONFIG_DIR=" + root,
+	}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	dirs, _ := parseResolvedDirs(string(out))
+	assert.Contains(t, dirs[parser.AgentClaude], root+"/projects")
+	assert.NotContains(t, dirs[parser.AgentClaude], home+"/.claude/projects")
 }
 
 func TestResolveScriptExitsZero(t *testing.T) {

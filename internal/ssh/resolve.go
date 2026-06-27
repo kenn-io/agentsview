@@ -89,16 +89,41 @@ func buildResolveScript() string {
 		}
 		for _, rel := range def.DefaultDirs {
 			defaultDir := "$HOME/" + rel
-			dirExpr := defaultDir
-			if def.EnvVar != "" {
-				// env var overrides default
-				dirExpr = fmt.Sprintf("${%s:-%s}", def.EnvVar, defaultDir)
+			if def.DefaultRootEnvVar != "" {
+				rootTail := remoteDefaultRootTail(rel)
+				fmt.Fprintf(&b, "dir=\"")
+				if def.EnvVar != "" {
+					fmt.Fprintf(&b, "${%s:-}", def.EnvVar)
+				}
+				fmt.Fprintf(&b, "\"; ")
+				fmt.Fprintf(&b, "root=\"${%s:-}\"; ", def.DefaultRootEnvVar)
+				if rootTail != "" {
+					fmt.Fprintf(&b,
+						"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root/%s\"; ",
+						rootTail,
+					)
+				} else {
+					fmt.Fprintf(&b,
+						"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root\"; ",
+					)
+				}
+				fmt.Fprintf(&b,
+					"[ -n \"$dir\" ] || dir=\"%s\"; [ -d \"$dir\" ] && "+
+						"printf '%%s\\000' \"%s:$dir\"\n",
+					defaultDir, string(def.Type),
+				)
+			} else {
+				dirExpr := defaultDir
+				if def.EnvVar != "" {
+					// env var overrides default
+					dirExpr = fmt.Sprintf("${%s:-%s}", def.EnvVar, defaultDir)
+				}
+				fmt.Fprintf(&b,
+					"dir=\"%s\"; [ -d \"$dir\" ] && "+
+						"printf '%%s\\000' \"%s:$dir\"\n",
+					dirExpr, string(def.Type),
+				)
 			}
-			fmt.Fprintf(&b,
-				"dir=\"%s\"; [ -d \"$dir\" ] && "+
-					"printf '%%s\\000' \"%s:$dir\"\n",
-				dirExpr, string(def.Type),
-			)
 			// Codex stores renameable session titles in
 			// session_index.jsonl, which sits beside (not inside)
 			// sessions/ and archived_sessions/. Emit it so renames
@@ -118,6 +143,14 @@ func buildResolveScript() string {
 	// path doesn't exist, which would make sh exit non-zero.
 	b.WriteString("true\n")
 	return b.String()
+}
+
+func remoteDefaultRootTail(rel string) string {
+	cleaned := path.Clean(rel)
+	if _, tail, ok := strings.Cut(cleaned, "/"); ok && tail != "" {
+		return tail
+	}
+	return ""
 }
 
 // parseResolvedDirs parses script output into a map of agent type to transfer
