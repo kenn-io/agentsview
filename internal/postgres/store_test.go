@@ -1436,9 +1436,11 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	require.NoError(t, err, "GetSessionFull after permanent delete")
 	assert.Nil(t, sess)
 
-	require.NoError(t, store.SoftDeleteSessions([]string{
+	deletedCount, err := store.SoftDeleteSessions([]string{
 		emptyTrashID, batchTrashID,
-	}), "SoftDeleteSessions")
+	})
+	require.NoError(t, err, "SoftDeleteSessions")
+	assert.Equal(t, 2, deletedCount)
 	count, err := store.EmptyTrash()
 	require.NoError(t, err, "EmptyTrash")
 	assert.Equal(t, 2, count)

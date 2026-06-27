@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/server"
@@ -40,6 +42,20 @@ func (f roundTripFunc) RoundTrip(
 	req *http.Request,
 ) (*http.Response, error) {
 	return f(req)
+}
+
+type readOnlyInsightPersistStore struct {
+	db.Store
+	insertCalls int
+}
+
+func (s *readOnlyInsightPersistStore) ReadOnly() bool { return true }
+
+func (s *readOnlyInsightPersistStore) InsertInsight(
+	insight db.Insight,
+) (int64, error) {
+	s.insertCalls++
+	return s.Store.InsertInsight(insight)
 }
 
 func newFailFirstWriteRecorder() *failFirstWriteRecorder {
@@ -356,6 +372,62 @@ func TestGenerateInsight_DefaultAgent(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	assertBodyContains(t, w, "event: error")
 	assertBodyContains(t, w, "stub: no CLI")
+}
+
+func TestGenerateInsight_PersistsWithReadOnlyStore(t *testing.T) {
+	dir := tempDirWithRetryCleanup(t)
+	dbPath := filepath.Join(dir, "test.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err, "opening db")
+	t.Cleanup(func() { database.Close() })
+
+	store := &readOnlyInsightPersistStore{Store: database}
+	cfg := config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dir,
+		DBPath:       dbPath,
+		WriteTimeout: 30 * time.Second,
+	}
+	srv := server.New(cfg, store, nil, server.WithGenerateFunc(func(
+		_ context.Context, agent, _ string,
+	) (insight.Result, error) {
+		assert.Equal(t, "claude", agent)
+		return insight.Result{
+			Agent:   "claude",
+			Content: "persisted from read-only wrapper",
+		}, nil
+	}))
+	te := &testEnv{
+		srv:         srv,
+		handler:     wrapTestHandler(cfg, srv.Handler()),
+		db:          database,
+		engine:      nil,
+		broadcaster: nil,
+		dataDir:     dir,
+	}
+
+	assert.True(t, store.ReadOnly())
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	events := parseSSE(w.Body.String())
+	require.NotEmpty(t, events)
+	require.Equal(t, "done", events[len(events)-1].Event)
+	assert.Equal(t, 1, store.insertCalls)
+
+	var saved db.Insight
+	require.NoError(t, json.Unmarshal([]byte(events[len(events)-1].Data), &saved))
+	assert.Equal(t, "persisted from read-only wrapper", saved.Content)
+	assert.Equal(t, "claude", saved.Agent)
+
+	stored, err := database.GetInsight(context.Background(), saved.ID)
+	require.NoError(t, err, "GetInsight after generate")
+	require.NotNil(t, stored)
+	assert.Equal(t, saved.ID, stored.ID)
+	assert.Equal(t, saved.Content, stored.Content)
 }
 
 func TestGenerateCannedInsight_RequiresExplicitOptIn(t *testing.T) {
