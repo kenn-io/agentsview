@@ -185,10 +185,8 @@ func IsAutomatedSession(firstMessage string) bool {
 	if slices.Contains(automatedExactMatches, trimmed) {
 		return true
 	}
-	for _, exact := range exactMatches {
-		if trimmed == exact {
-			return true
-		}
+	if slices.Contains(exactMatches, trimmed) {
+		return true
 	}
 	return false
 }
