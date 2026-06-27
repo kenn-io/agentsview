@@ -696,8 +696,13 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionKimiUsageEvents(t *testing.T) {
-	assert.Equal(t, 55, CurrentDataVersion(),
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 55,
 		"Kimi persisted usage events require a data version bump")
+}
+
+func TestCurrentDataVersionGoalContextFiltering(t *testing.T) {
+	assert.Equal(t, 56, CurrentDataVersion(),
+		"Codex goal-context filtering requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {

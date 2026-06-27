@@ -602,7 +602,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			WHERE `+msgTermPredicate+`
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
-				AND `+db.SystemPrefixSQL("m.content", "m.role")+`
+				AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
 				`+project+`
 		),
 		msg_matches AS (
@@ -632,7 +632,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 					SELECT 1 FROM messages mx
 					WHERE mx.session_id = s.id
 						AND mx.is_system = FALSE
-						AND `+db.SystemPrefixSQL("mx.content", "mx.role")+`
+						AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
 				)
 				AND s.id NOT IN (SELECT session_id FROM msg_matches)
 				`+nameProject+`
@@ -690,7 +690,7 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 			AND tre.call_index = tc.call_index
 		WHERE m.session_id = ?
 			AND m.is_system = FALSE
-			AND `+db.SystemPrefixSQL("m.content", "m.role")+`
+			AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
 			AND (m.content ILIKE ? ESCAPE '\'
 				OR tc.result_content ILIKE ? ESCAPE '\'
 				OR tre.content ILIKE ? ESCAPE '\')
@@ -811,7 +811,7 @@ func (s *Store) collectContentSubstringMatches(
 		case "messages":
 			sysPred := "TRUE"
 			if f.ExcludeSystem {
-				sysPred = "m.is_system = FALSE AND " + db.SystemPrefixSQL("m.content", "m.role")
+				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 			}
 			contentPred := addSearchArgs("m.content")
 			branches = append(branches, `
@@ -1049,7 +1049,7 @@ func (s *Store) collectContentSource(
 			args = append(args, pattern)
 		}
 		if f.ExcludeSystem {
-			query += " AND m.is_system = FALSE AND " + db.SystemPrefixSQL("m.content", "m.role")
+			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
 		}
 		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
 	case "tool_input":

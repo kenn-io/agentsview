@@ -58,6 +58,19 @@ describe("isSystemMessage", () => {
     ["command-name", "<command-name>/commit</command-name>"],
     ["local-command", "<local-command-output>ok</local-command-output>"],
     ["stop hook", "Stop hook feedback: blocked"],
+    ["legacy goal context", "\n\t<goal_context>state</goal_context>"],
+    [
+      "codex internal goal context",
+      '  <codex_internal_context source="goal">state',
+    ],
+    [
+      "codex internal goal context with attr before source",
+      '<codex_internal_context foo="bar" source="goal">state',
+    ],
+    [
+      "codex internal goal context with attr after source",
+      '<codex_internal_context source="goal" foo="bar">state',
+    ],
   ])("detects prefix-based system message: %s", (_label, content) => {
     expect(isSystemMessage(msg({ content }))).toBe(true);
   });
@@ -66,6 +79,23 @@ describe("isSystemMessage", () => {
     expect(
       isSystemMessage(msg({ content: "This session is great" })),
     ).toBe(false);
+  });
+
+  it.each([
+    [
+      "non-goal internal context",
+      '<codex_internal_context source="other">state',
+    ],
+    [
+      "data-source attribute",
+      '<codex_internal_context data-source="goal">state',
+    ],
+    [
+      "missing closing tag delimiter",
+      '<codex_internal_context source="goal" state',
+    ],
+  ])("does not detect non-goal codex context: %s", (_label, content) => {
+    expect(isSystemMessage(msg({ content }))).toBe(false);
   });
 
   it.each([

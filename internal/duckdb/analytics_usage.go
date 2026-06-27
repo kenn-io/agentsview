@@ -1954,7 +1954,7 @@ func (s *Store) GetTrendsTerms(
 		WHERE s.deleted_at IS NULL
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = FALSE
-			AND `+db.SystemPrefixSQL("m.content", "m.role"))
+			AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role"))
 	if err != nil {
 		return db.TrendsTermsResponse{}, err
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -390,14 +389,5 @@ func timingMillis(start, end string) (int64, bool) {
 }
 
 func hasSystemPrefix(msg db.Message) bool {
-	if msg.Role != "user" {
-		return false
-	}
-	content := strings.TrimSpace(msg.Content)
-	for _, prefix := range db.SystemMsgPrefixes {
-		if strings.HasPrefix(content, prefix) {
-			return true
-		}
-	}
-	return false
+	return db.IsSystemPrefixed(msg.Content, msg.Role)
 }
