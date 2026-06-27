@@ -309,10 +309,18 @@ func (s clawSourceSet) Fingerprint(
 	if info.IsDir() {
 		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
 	}
+	// Legacy processOpenClaw/processQClaw persisted a full-file content hash
+	// (file_hash). Without it here the parse outcome leaves Session.File.Hash
+	// empty and a resync clears the stored hash to NULL.
+	hash, err := hashJSONLSourceFile(path)
+	if err != nil {
+		return SourceFingerprint{}, err
+	}
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size:    info.Size(),
 		MTimeNS: info.ModTime().UnixNano(),
+		Hash:    hash,
 	}, nil
 }
 
