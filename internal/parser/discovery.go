@@ -23,6 +23,11 @@ var uuidRe = regexp.MustCompile(
 		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
 
+const (
+	copilotStateDir = "session-state"
+	geminiChatsDir  = "chats"
+)
+
 // isDirOrSymlink reports whether the entry is a directory or a
 // symlink that resolves to a directory. parentDir is needed to
 // build the full path for symlink resolution.
@@ -488,6 +493,10 @@ func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 
 // DiscoverCodexSessions finds all Codex JSONL session files under
 // either the standard year/month/day layout or a flat archived dir.
+//
+// Local Codex discovery is owned by the Codex provider source set; this entry
+// is retained as the s3:// discovery path (via discoverCodexS3), which the
+// legacy S3 sync path consumes until S3 support folds into the source sets.
 func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
 	if strings.HasPrefix(sessionsDir, "s3://") {
 		return discoverCodexS3(sessionsDir)
@@ -607,62 +616,6 @@ func claudeFindSourceFile(
 	}
 
 	return ""
-}
-
-// FindCodexSourceFile finds a Codex session file by UUID.
-// Prefers the standard year/month/day live path when present,
-// then falls back to a flat archived dir entry.
-func FindCodexSourceFile(sessionsDir, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	var archived string
-	entries, err := os.ReadDir(sessionsDir)
-	if err == nil {
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				archived = filepath.Join(sessionsDir, name)
-				break
-			}
-		}
-	}
-
-	var live string
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if live != "" {
-			return false
-		}
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				live = filepath.Join(dayPath, name)
-				return false
-			}
-		}
-		return true
-	})
-	if live != "" {
-		return live
-	}
-	return archived
 }
 
 func isCodexSessionFilename(name string) bool {
@@ -847,117 +800,6 @@ func isGeminiSessionFilename(name string) bool {
 			strings.HasSuffix(name, ".jsonl"))
 }
 
-// DiscoverGeminiSessions finds all Gemini session files under
-// the Gemini directory (~/.gemini/tmp/*/chats/session-*).
-func DiscoverGeminiSessions(
-	geminiDir string,
-) []DiscoveredFile {
-	if geminiDir == "" {
-		return nil
-	}
-
-	tmpDir := filepath.Join(geminiDir, "tmp")
-	hashDirs, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return nil
-	}
-
-	projectMap := BuildGeminiProjectMap(geminiDir)
-
-	var files []DiscoveredFile
-	for _, hd := range hashDirs {
-		if !isDirOrSymlink(hd, tmpDir) {
-			continue
-		}
-		hash := hd.Name()
-		chatsDir := filepath.Join(tmpDir, hash, "chats")
-		entries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-
-		project := ResolveGeminiProject(hash, projectMap)
-
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !isGeminiSessionFilename(name) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(chatsDir, name),
-				Project: project,
-				Agent:   AgentGemini,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindGeminiSourceFile locates a Gemini session file by its
-// session UUID. Searches all project hash directories.
-func FindGeminiSourceFile(
-	geminiDir, sessionID string,
-) string {
-	if geminiDir == "" || !IsValidSessionID(sessionID) ||
-		len(sessionID) < 8 {
-		return ""
-	}
-
-	tmpDir := filepath.Join(geminiDir, "tmp")
-	hashDirs, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return ""
-	}
-
-	for _, hd := range hashDirs {
-		if !isDirOrSymlink(hd, tmpDir) {
-			continue
-		}
-		chatsDir := filepath.Join(tmpDir, hd.Name(), "chats")
-		entries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !isGeminiSessionFilename(name) {
-				continue
-			}
-			if strings.Contains(name, sessionID[:8]) {
-				path := filepath.Join(chatsDir, name)
-				if confirmGeminiSessionID(
-					path, sessionID,
-				) {
-					return path
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// confirmGeminiSessionID reads the sessionId field from a
-// Gemini file to confirm it matches the expected ID.
-func confirmGeminiSessionID(
-	path, sessionID string,
-) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return GeminiSessionID(data) == sessionID
-}
-
 // geminiProjectsFile holds the structure of
 // ~/.gemini/projects.json.
 type geminiProjectsFile struct {
@@ -1073,92 +915,6 @@ func ResolveGeminiProject(
 	return NormalizeName(dirName)
 }
 
-// DiscoverCopilotSessions finds all JSONL files under
-// <copilotDir>/session-state/. Supports both bare format
-// (<uuid>.jsonl) and directory format (<uuid>/events.jsonl).
-func DiscoverCopilotSessions(
-	copilotDir string,
-) []DiscoveredFile {
-	if copilotDir == "" {
-		return nil
-	}
-
-	stateDir := filepath.Join(copilotDir, "session-state")
-	entries, err := os.ReadDir(stateDir)
-	if err != nil {
-		return nil
-	}
-
-	dirs := make(map[string]struct{})
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		eventsPath := filepath.Join(
-			stateDir, entry.Name(), "events.jsonl",
-		)
-		if _, err := os.Stat(eventsPath); err == nil {
-			dirs[entry.Name()] = struct{}{}
-		}
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() {
-			candidate := filepath.Join(
-				stateDir, name, "events.jsonl",
-			)
-			if _, err := os.Stat(candidate); err == nil {
-				files = append(files, DiscoveredFile{
-					Path:  candidate,
-					Agent: AgentCopilot,
-				})
-			}
-			continue
-		}
-		if stem, ok := strings.CutSuffix(name, ".jsonl"); ok {
-			if _, dup := dirs[stem]; dup {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(stateDir, name),
-				Agent: AgentCopilot,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindCopilotSourceFile locates a Copilot session file by
-// UUID. Checks both bare (<uuid>.jsonl) and directory
-// (<uuid>/events.jsonl) layouts.
-func FindCopilotSourceFile(
-	copilotDir, rawID string,
-) string {
-	if copilotDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	stateDir := filepath.Join(copilotDir, "session-state")
-
-	dirFmt := filepath.Join(stateDir, rawID, "events.jsonl")
-	if _, err := os.Stat(dirFmt); err == nil {
-		return dirFmt
-	}
-
-	bare := filepath.Join(stateDir, rawID+".jsonl")
-	if _, err := os.Stat(bare); err == nil {
-		return bare
-	}
-
-	return ""
-}
-
 // IsPiSessionFile reads the first non-blank line of path and returns true
 // when the JSON type field equals "session". The scanner buffer grows up to
 // 64 MiB to match parser.maxLineSize. Leading blank lines are skipped to
@@ -1213,82 +969,11 @@ func isContainedIn(child, root string) bool {
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// DiscoverVSCodeCopilotSessions traverses the VSCode
-// workspaceStorage directory to find chatSessions/*.json
-// and *.jsonl files. When both formats exist for the same
-// session UUID, the .jsonl file takes priority.
-// It also checks globalStorage/emptyWindowChatSessions.
-// The vscodeUserDir should point to e.g.
-//
-//	~/Library/Application Support/Code/User (macOS)
-//	~/.config/Code/User (Linux)
-func DiscoverVSCodeCopilotSessions(
-	vscodeUserDir string,
-) []DiscoveredFile {
-	if vscodeUserDir == "" {
-		return nil
-	}
-
-	var files []DiscoveredFile
-
-	// 1. Scan workspaceStorage/<hash>/chatSessions/*.{json,jsonl}
-	wsDir := filepath.Join(vscodeUserDir, "workspaceStorage")
-	hashDirs, err := os.ReadDir(wsDir)
-	if err == nil {
-		for _, entry := range hashDirs {
-			if !entry.IsDir() {
-				continue
-			}
-
-			hashPath := filepath.Join(wsDir, entry.Name())
-			chatDir := filepath.Join(hashPath, "chatSessions")
-			sessionFiles, err := os.ReadDir(chatDir)
-			if err != nil {
-				continue
-			}
-
-			// Read workspace.json to get project name
-			project := ReadVSCodeWorkspaceManifest(hashPath)
-			if project == "" {
-				project = "unknown"
-			}
-
-			files = append(files,
-				discoverVSCodeSessionFiles(
-					chatDir, sessionFiles, project,
-				)...,
-			)
-		}
-	}
-
-	// 2. Scan globalStorage/emptyWindowChatSessions/*.{json,jsonl}
-	for _, subdir := range []string{
-		"globalStorage/emptyWindowChatSessions",
-		"globalStorage/transferredChatSessions",
-	} {
-		globalDir := filepath.Join(vscodeUserDir, subdir)
-		globalFiles, err := os.ReadDir(globalDir)
-		if err != nil {
-			continue
-		}
-		files = append(files,
-			discoverVSCodeSessionFiles(
-				globalDir, globalFiles, "empty-window",
-			)...,
-		)
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // discoverVSCodeSessionFiles collects .json and .jsonl
 // session files from a directory, preferring .jsonl when
 // both exist for the same UUID.
 func discoverVSCodeSessionFiles(
-	dir string, entries []os.DirEntry, project string,
+	dir string, entries []os.DirEntry, project string, agent AgentType,
 ) []DiscoveredFile {
 	// Collect UUIDs that have .jsonl files
 	hasJSONL := make(map[string]bool)
@@ -1314,7 +999,7 @@ func discoverVSCodeSessionFiles(
 			files = append(files, DiscoveredFile{
 				Path:    filepath.Join(dir, name),
 				Project: project,
-				Agent:   AgentVSCodeCopilot,
+				Agent:   agent,
 			})
 		} else if uuid, ok := strings.CutSuffix(name, ".json"); ok {
 			// Skip .json if a .jsonl exists for the same UUID
@@ -1324,74 +1009,10 @@ func discoverVSCodeSessionFiles(
 			files = append(files, DiscoveredFile{
 				Path:    filepath.Join(dir, name),
 				Project: project,
-				Agent:   AgentVSCodeCopilot,
+				Agent:   agent,
 			})
 		}
 	}
-	return files
-}
-
-// FindVSCodeCopilotSourceFile locates a VSCode Copilot
-// session file by UUID (.jsonl preferred over .json).
-func FindVSCodeCopilotSourceFile(
-	vscodeUserDir, rawID string,
-) string {
-	if vscodeUserDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	// Search through workspaceStorage
-	wsDir := filepath.Join(vscodeUserDir, "workspaceStorage")
-	hashDirs, err := os.ReadDir(wsDir)
-	if err == nil {
-		for _, entry := range hashDirs {
-			if !entry.IsDir() {
-				continue
-			}
-			base := filepath.Join(
-				wsDir, entry.Name(), "chatSessions",
-			)
-			// Prefer .jsonl
-			for _, ext := range []string{".jsonl", ".json"} {
-				candidate := filepath.Join(
-					base, rawID+ext,
-				)
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate
-				}
-			}
-		}
-	}
-
-	// Check global dirs
-	for _, subdir := range []string{
-		"globalStorage/emptyWindowChatSessions",
-		"globalStorage/transferredChatSessions",
-	} {
-		base := filepath.Join(vscodeUserDir, subdir)
-		for _, ext := range []string{".jsonl", ".json"} {
-			candidate := filepath.Join(base, rawID+ext)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-		}
-	}
-
-	return ""
-}
-
-// DiscoverVisualStudioCopilotSessions finds Visual Studio Copilot
-// trace files under the configured traces directory.
-func DiscoverVisualStudioCopilotSessions(vsRoot string) []DiscoveredFile {
-	if vsRoot == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(vsRoot)
-	if err != nil {
-		return nil
-	}
-	files := discoverVisualStudioCopilotSessionFiles(vsRoot, entries)
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }
 
@@ -1452,15 +1073,6 @@ func discoverVisualStudioCopilotSessionFiles(
 	}
 	files = append(files, unreadable...)
 	return files
-}
-
-// FindVisualStudioCopilotSourceFile locates a Visual Studio Copilot
-// trace file by conversation UUID.
-func FindVisualStudioCopilotSourceFile(vsRoot, rawID string) string {
-	if vsRoot == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-	return findVisualStudioCopilotTraceSourceFile(vsRoot, rawID)
 }
 
 func findVisualStudioCopilotTraceSourceFile(

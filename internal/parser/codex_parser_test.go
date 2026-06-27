@@ -19,9 +19,72 @@ func runCodexParserTest(t *testing.T, fileName, content string, includeExec bool
 		fileName = "test.jsonl"
 	}
 	path := createTestFile(t, fileName, content)
-	sess, msgs, err := ParseCodexSession(path, "local", includeExec)
+	sess, msgs, err := parseCodexTestSession(t, path, "local", includeExec)
 	require.NoError(t, err)
 	return sess, msgs
+}
+
+// newCodexTestProvider builds a concrete codexProvider so package tests can
+// exercise the folded parse, discovery, and source-lookup behavior directly
+// through provider methods now that the package-level ParseCodexSession,
+// ParseCodexSessionFrom, DiscoverCodexSessions, and FindCodexSourceFile free
+// functions are gone.
+func newCodexTestProvider(t *testing.T, roots ...string) *codexProvider {
+	t.Helper()
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{
+		Roots:   roots,
+		Machine: "local",
+	})
+	require.True(t, ok)
+	cp, ok := provider.(*codexProvider)
+	require.True(t, ok)
+	return cp
+}
+
+// parseCodexTestSession parses a Codex session through the provider-owned
+// parseSession method, replacing the removed package-level ParseCodexSession.
+func parseCodexTestSession(
+	t *testing.T, path, machine string, includeExec bool,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	return newCodexTestProvider(t).parseSession(path, machine, includeExec)
+}
+
+// parseCodexTestSessionFrom parses appended Codex lines through the
+// provider-owned parseSessionFrom method, replacing the removed package-level
+// ParseCodexSessionFrom.
+func parseCodexTestSessionFrom(
+	t *testing.T, path string, offset int64, startOrdinal int, includeExec bool,
+) ([]ParsedMessage, time.Time, int64, error) {
+	t.Helper()
+	return newCodexTestProvider(t).parseSessionFrom(path, offset, startOrdinal, includeExec)
+}
+
+// discoverCodexTestSessions discovers Codex session paths under root through
+// the provider source set, returning the legacy DiscoveredFile shape the tests
+// assert against, replacing the removed DiscoverCodexSessions.
+func discoverCodexTestSessions(t *testing.T, root string) []DiscoveredFile {
+	t.Helper()
+	provider := newCodexTestProvider(t, root)
+	paths := provider.sources.discoverSessionPaths(root)
+	if len(paths) == 0 {
+		return nil
+	}
+	files := make([]DiscoveredFile, 0, len(paths))
+	for _, path := range paths {
+		files = append(files, DiscoveredFile{
+			Path:  path,
+			Agent: AgentCodex,
+		})
+	}
+	return files
+}
+
+// findCodexTestSourceFile resolves a Codex session UUID to a transcript path
+// through the provider source set, replacing the removed FindCodexSourceFile.
+func findCodexTestSourceFile(t *testing.T, root, sessionID string) string {
+	t.Helper()
+	return newCodexTestProvider(t, root).sources.findSourceFile(root, sessionID)
 }
 
 func assertToolResultEvents(
@@ -65,7 +128,7 @@ func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
 	index := `{"id":"abc-123","thread_name":"Renamed from Codex","updated_at":"2026-06-11T17:34:20.3755243Z"}` + "\n"
 	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
 
-	sess, msgs, err := ParseCodexSession(sessionPath, "local", false)
+	sess, msgs, err := parseCodexTestSession(t, sessionPath, "local", false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "Renamed from Codex", sess.SessionName)
@@ -86,7 +149,7 @@ func TestParseCodexSession_LeavesSessionNameEmptyWithoutThreadName(t *testing.T)
 	index := `{"id":"abc-123","updated_at":"2026-06-11T17:34:20.3755243Z"}` + "\n"
 	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
 
-	sess, _, err := ParseCodexSession(sessionPath, "local", false)
+	sess, _, err := parseCodexTestSession(t, sessionPath, "local", false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, sess.SessionName)
@@ -106,7 +169,7 @@ func TestParseCodexSession_UsesThreadNameFromArchivedSessions(t *testing.T) {
 	index := `{"id":"abc-123","thread_name":"Archived title","updated_at":"2026-06-11T17:34:20.3755243Z"}` + "\n"
 	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
 
-	sess, _, err := ParseCodexSession(sessionPath, "local", false)
+	sess, _, err := parseCodexTestSession(t, sessionPath, "local", false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "Archived title", sess.SessionName)
@@ -125,7 +188,7 @@ func TestParseCodexSession_MtimeIncludesSessionIndex(t *testing.T) {
 	index := `{"id":"abc-123","thread_name":"Original","updated_at":"2026-06-11T17:34:20Z"}` + "\n"
 	require.NoError(t, os.WriteFile(indexPath, []byte(index), 0o644))
 
-	sess1, _, err := ParseCodexSession(sessionPath, "local", false)
+	sess1, _, err := parseCodexTestSession(t, sessionPath, "local", false)
 	require.NoError(t, err)
 	mtime1 := sess1.File.Mtime
 
@@ -135,7 +198,7 @@ func TestParseCodexSession_MtimeIncludesSessionIndex(t *testing.T) {
 	require.NoError(t, os.WriteFile(indexPath, []byte(renamed), 0o644))
 	require.NoError(t, os.Chtimes(indexPath, future, future))
 
-	sess2, _, err := ParseCodexSession(sessionPath, "local", false)
+	sess2, _, err := parseCodexTestSession(t, sessionPath, "local", false)
 	require.NoError(t, err)
 	assert.Greater(t, sess2.File.Mtime, mtime1, "mtime must advance when session_index.jsonl is updated")
 	assert.Equal(t, "Renamed", sess2.SessionName)
@@ -1345,7 +1408,7 @@ func TestParseCodexSessionFrom_ForkReplaySpansOffset(t *testing.T) {
 	)
 	path := createTestFile(t, "fork-incremental.jsonl", initial)
 
-	sess, msgs, err := ParseCodexSession(path, "local", false)
+	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "codex:"+forkID, sess.ID)
@@ -1371,7 +1434,7 @@ func TestParseCodexSessionFrom_ForkReplaySpansOffset(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseCodexSessionFrom(path, offset, 0, false)
+	newMsgs, _, _, err := parseCodexTestSessionFrom(t, path, offset, 0, false)
 	require.NoError(t, err)
 
 	// Only the genuine turn survives; the replayed assistant answer
@@ -1642,7 +1705,7 @@ func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 	path := createTestFile(t, "incremental.jsonl", initial)
 
 	// Full parse to get baseline.
-	sess, msgs, err := ParseCodexSession(path, "local", false)
+	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "codex:inc-1", sess.ID)
@@ -1672,7 +1735,7 @@ func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	// Incremental parse from the offset.
-	newMsgs, endedAt, _, err := ParseCodexSessionFrom(
+	newMsgs, endedAt, _, err := parseCodexTestSessionFrom(t,
 		path, offset, 1, false,
 	)
 	require.NoError(t, err)
@@ -1724,7 +1787,7 @@ func TestParseCodexSessionFrom_LateTokenCountRequiresFullParse(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 2, false)
 	require.Error(t, err)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -1759,7 +1822,7 @@ func TestParseCodexSessionFrom_FunctionCallOutputRequiresFullParse(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 2, false)
 	require.Error(t, err)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -1789,7 +1852,7 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "looking", tsEarlyS5),
 		)
 		path := createTestFile(t, "incremental.jsonl", initial)
-		sess, msgs, err := ParseCodexSession(path, "local", false)
+		sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 		require.NoError(t, err)
 		require.Equal(t, 1, sess.UserMessageCount)
 		require.Len(t, msgs, 2)
@@ -1803,7 +1866,7 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "No issues found.", tsLateS5),
 		))
 
-		newMsgs, _, _, err := ParseCodexSessionFrom(path, offset, len(msgs), false)
+		newMsgs, _, _, err := parseCodexTestSessionFrom(t, path, offset, len(msgs), false)
 		require.NoError(t, err)
 		require.Len(t, newMsgs, 2)
 		assert.Equal(t, RoleUser, newMsgs[0].Role)
@@ -1818,7 +1881,7 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "looking", tsEarlyS5),
 		)
 		path := createTestFile(t, "incremental.jsonl", initial)
-		sess, msgs, err := ParseCodexSession(path, "local", false)
+		sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 		require.NoError(t, err)
 		require.Equal(t, 1, sess.UserMessageCount)
 		require.Len(t, msgs, 2)
@@ -1833,7 +1896,7 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "No issues found.", tsLateS5),
 		))
 
-		newMsgs, _, _, err := ParseCodexSessionFrom(path, offset, len(msgs), false)
+		newMsgs, _, _, err := parseCodexTestSessionFrom(t, path, offset, len(msgs), false)
 		require.NoError(t, err)
 		require.Len(t, newMsgs, 1)
 		assert.Equal(t, RoleAssistant, newMsgs[0].Role)
@@ -1850,7 +1913,7 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 			testjsonl.CodexMsgJSON("user", "something else entirely", "2024-01-01T10:00:03Z"),
 		)
 		path := createTestFile(t, "incremental.jsonl", initial)
-		sess, msgs, err := ParseCodexSession(path, "local", false)
+		sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 		require.NoError(t, err)
 		require.Equal(t, 2, sess.UserMessageCount)
 
@@ -1860,7 +1923,7 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 
 		appendLines(t, path, testjsonl.CodexMsgJSON("user", prompt, tsLate))
 
-		newMsgs, _, _, err := ParseCodexSessionFrom(path, offset, len(msgs), false)
+		newMsgs, _, _, err := parseCodexTestSessionFrom(t, path, offset, len(msgs), false)
 		require.NoError(t, err)
 		require.Len(t, newMsgs, 1)
 		assert.Equal(t, RoleUser, newMsgs[0].Role)
@@ -1899,7 +1962,7 @@ func TestParseCodexSessionFrom_SkipsSessionMeta(t *testing.T) {
 	f.WriteString(extra)
 	f.Close()
 
-	newMsgs, _, _, err := ParseCodexSessionFrom(
+	newMsgs, _, _, err := parseCodexTestSessionFrom(t,
 		path, offset, 5, false,
 	)
 	require.NoError(t, err)
@@ -1923,7 +1986,7 @@ func TestParseCodexSessionFrom_NoNewData(t *testing.T) {
 	offset := info.Size()
 
 	// Parse from end of file — no new data.
-	newMsgs, endedAt, _, err := ParseCodexSessionFrom(
+	newMsgs, endedAt, _, err := parseCodexTestSessionFrom(t,
 		path, offset, 10, false,
 	)
 	require.NoError(t, err)
@@ -1956,7 +2019,7 @@ func TestParseCodexSessionFrom_SubagentOutputRequiresFullParse(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 2, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full parse")
 }
@@ -1987,7 +2050,7 @@ func TestParseCodexSessionFrom_CollabAgentSpawnEndRequiresFullParse(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 2, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 2, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full parse")
 }
@@ -2025,7 +2088,7 @@ func TestParseCodexSessionFrom_WaitCallRequiresFullParse(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 4, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 4, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full parse")
 }
@@ -2063,7 +2126,7 @@ func TestParseCodexSessionFrom_WaitAgentCallRequiresFullParse(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 4, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 4, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full parse")
 }
@@ -2089,7 +2152,7 @@ func TestParseCodexSessionFrom_SystemMessageDoesNotRequireFullParse(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, endedAt, _, err := ParseCodexSessionFrom(path, offset, 1, false)
+	newMsgs, endedAt, _, err := parseCodexTestSessionFrom(t, path, offset, 1, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, len(newMsgs))
 	assert.False(t, endedAt.IsZero())
@@ -2120,7 +2183,7 @@ func TestParseCodexSessionFrom_RunningNotificationRequiresFullParse(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 1, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 1, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "full parse")
 }
@@ -2146,7 +2209,7 @@ func TestParseCodexSessionFrom_NonSubagentFunctionOutputRequiresFullParse(t *tes
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = ParseCodexSessionFrom(path, offset, 1, false)
+	_, _, _, err = parseCodexTestSessionFrom(t, path, offset, 1, false)
 	require.Error(t, err)
 	assert.True(t, IsIncrementalFullParseFallback(err))
 }
@@ -2187,7 +2250,7 @@ func TestParseCodexSessionFrom_SeedsModelFromTurnContext(
 	require.NoError(t, err)
 	require.NoError(t, f2.Close())
 
-	newMsgs2, _, _, err := ParseCodexSessionFrom(
+	newMsgs2, _, _, err := parseCodexTestSessionFrom(t,
 		path, offset, 2, false,
 	)
 	require.NoError(t, err)
@@ -2234,7 +2297,7 @@ func TestParseCodexSessionFrom_SeedsBoundaryAfterTurnContext(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseCodexSessionFrom(
+	newMsgs, _, _, err := parseCodexTestSessionFrom(t,
 		path, offset, 0, false,
 	)
 	require.NoError(t, err)
@@ -2283,7 +2346,7 @@ func TestParseCodexSessionFrom_EmptyModelReset(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	newMsgs, _, _, err := ParseCodexSessionFrom(
+	newMsgs, _, _, err := parseCodexTestSessionFrom(t,
 		path, offset, 2, false,
 	)
 	require.NoError(t, err)

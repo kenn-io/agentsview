@@ -358,6 +358,10 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newClaudeProviderFactory(def)
 	case AgentCommandCode:
 		return newCommandCodeProviderFactory(def)
+	case AgentCodex:
+		return newCodexProviderFactory(def)
+	case AgentCopilot:
+		return newCopilotProviderFactory(def)
 	case AgentCowork:
 		return newCoworkProviderFactory(def)
 	case AgentCortex:
@@ -372,6 +376,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newIflowProviderFactory(def)
 	case AgentGptme:
 		return newGptmeProviderFactory(def)
+	case AgentGemini:
+		return newGeminiProviderFactory(def)
 	case AgentKimi:
 		return newKimiProviderFactory(def)
 	case AgentKilo:
@@ -386,16 +392,22 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newOpenClawProviderFactory(def)
 	case AgentOMP, AgentPi:
 		return newPiProviderFactory(def)
-	case AgentQwenPaw:
-		return newQwenPawProviderFactory(def)
+	case AgentPositron:
+		return newPositronProviderFactory(def)
 	case AgentQClaw:
 		return newQClawProviderFactory(def)
+	case AgentQwen:
+		return newQwenProviderFactory(def)
+	case AgentQwenPaw:
+		return newQwenPawProviderFactory(def)
+	case AgentVSCopilot:
+		return newVisualStudioCopilotProviderFactory(def)
+	case AgentVSCodeCopilot:
+		return newVSCodeCopilotProviderFactory(def)
 	case AgentVibe:
 		return newVibeProviderFactory(def)
 	case AgentWorkBuddy:
 		return newWorkBuddyProviderFactory(def)
-	case AgentQwen:
-		return newQwenProviderFactory(def)
 	case AgentZencoder:
 		return newZencoderProviderFactory(def)
 	default:

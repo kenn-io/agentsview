@@ -333,10 +333,12 @@ func readCopilotWorkspaceName(eventsPath string) string {
 	return ""
 }
 
-// ParseCopilotSession parses a Copilot JSONL session file.
-// Returns (nil, nil, nil, nil) if the file doesn't exist or
-// contains no user/assistant messages.
-func ParseCopilotSession(
+// parseSession parses a Copilot JSONL session file into the session, messages,
+// and usage events the provider consumes. Returns (nil, nil, nil, nil) if the
+// file doesn't exist or contains no user/assistant messages. This is the
+// provider-owned parse entrypoint; the package-level free function was folded
+// onto the provider.
+func (p *copilotProvider) parseSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)

@@ -67,7 +67,6 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 			parser.AgentAntigravityCLI: {dir},
 		},
 	}
-	geminiMap := make(map[string]map[string]string)
 
 	tests := []struct {
 		name    string
@@ -131,7 +130,7 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := eng.classifyOnePath(tt.path, geminiMap)
+			got, ok := eng.classifyOnePath(tt.path)
 			assert.Equal(t, tt.want, ok)
 			if ok {
 				assert.Equal(t, parser.AgentAntigravityCLI, got.Agent)
@@ -146,7 +145,7 @@ func TestClassifyOnePath_AntigravityCLI(t *testing.T) {
 		orphanTraj := filepath.Join(convDir, orphanUUID+".trajectory.json")
 		require.NoError(t, os.WriteFile(orphanTraj, []byte("orphan"), 0o644))
 
-		_, ok := eng.classifyOnePath(orphanTraj, geminiMap)
+		_, ok := eng.classifyOnePath(orphanTraj)
 		assert.False(t, ok, "should not classify sidecar when pb file does not exist")
 	})
 

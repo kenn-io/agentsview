@@ -3,7 +3,6 @@ package sync
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -80,7 +79,11 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 			}
 			continue
 		}
-		files = append(files, e.parseDiffProviderSources(ctx, def.Type)...)
+		providerFiles, err := e.parseDiffProviderSources(ctx, def.Type)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, providerFiles...)
 	}
 	// DiscoverFunc does not emit the shared-SQLite source for Kiro
 	// (data.sqlite3) or db-mode OpenCode (opencode.db) — normal sync
@@ -215,14 +218,14 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 func (e *Engine) parseDiffProviderSources(
 	ctx context.Context,
 	agentType parser.AgentType,
-) []parser.DiscoveredFile {
+) ([]parser.DiscoveredFile, error) {
 	factory, ok := e.providerFactories[agentType]
 	if !ok || factory == nil {
-		return nil
+		return nil, nil
 	}
 	roots := e.agentDirs[agentType]
 	if len(roots) == 0 {
-		return nil
+		return nil, nil
 	}
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots:   roots,
@@ -230,8 +233,10 @@ func (e *Engine) parseDiffProviderSources(
 	})
 	sources, err := provider.Discover(ctx)
 	if err != nil {
-		log.Printf("parse-diff %s provider discovery: %v", agentType, err)
-		return nil
+		return nil, fmt.Errorf(
+			"parse-diff %s provider discovery: %w",
+			agentType, err,
+		)
 	}
 	def := provider.Definition()
 	var files []parser.DiscoveredFile
@@ -253,7 +258,7 @@ func (e *Engine) parseDiffProviderSources(
 			ProviderProcess: true,
 		})
 	}
-	return files
+	return files, nil
 }
 
 func (e *Engine) parseDiffAgentDiscoverable(def parser.AgentDef) bool {
@@ -440,7 +445,7 @@ func isOpenCodeFamilyProviderVirtualSource(path string) bool {
 // shared trace file, and the "#runIdx" suffix aider appends to its shared
 // history file.
 func stripVirtualSourceSuffix(path string) string {
-	if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(path); ok {
+	if tracePath, _, ok := parser.SplitVisualStudioCopilotVirtualPath(path); ok {
 		return tracePath
 	}
 	if historyPath, _, ok := parser.ParseAiderVirtualPath(path); ok {

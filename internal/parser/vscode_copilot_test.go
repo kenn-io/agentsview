@@ -127,7 +127,7 @@ func TestParseVSCodeCopilotSession(t *testing.T) {
 				path, []byte(tt.json), 0644,
 			))
 
-			sess, msgs, err := ParseVSCodeCopilotSession(
+			sess, msgs, err := parseVSCodeCopilotTestSession(t,
 				path, "testproject", "local",
 			)
 			require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestParseVSCodeCopilotSession(t *testing.T) {
 }
 
 func TestParseVSCodeCopilotSession_NonExistent(t *testing.T) {
-	sess, msgs, err := ParseVSCodeCopilotSession(
+	sess, msgs, err := parseVSCodeCopilotTestSession(t,
 		"/nonexistent/path.json", "proj", "local",
 	)
 	require.NoError(t, err, "expected nil error")
@@ -196,7 +196,7 @@ func TestParseVSCodeCopilotSession_MixedTextAndTools(t *testing.T) {
 	path := filepath.Join(dir, "test.json")
 	require.NoError(t, os.WriteFile(path, []byte(data), 0644))
 
-	_, msgs, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	_, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 
 	// Find assistant message
@@ -242,7 +242,7 @@ func TestParseVSCodeCopilotSession_TerminalToolData(t *testing.T) {
 	path := filepath.Join(dir, "test.json")
 	require.NoError(t, os.WriteFile(path, []byte(data), 0644))
 
-	_, msgs, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	_, msgs, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 
 	var assistant *ParsedMessage
@@ -328,7 +328,7 @@ func TestDiscoverVSCodeCopilotSessions(t *testing.T) {
 	globalPath := filepath.Join(globalDir, "global-sess.json")
 	require.NoError(t, os.WriteFile(globalPath, []byte(sessionJSON), 0644))
 
-	files := DiscoverVSCodeCopilotSessions(root)
+	files := discoverVSCodeCopilotTestSessions(t, root)
 
 	require.Len(t, files, 2)
 
@@ -518,7 +518,7 @@ func TestParseVSCodeCopilotSession_JSONL(t *testing.T) {
 				path, []byte(content), 0644,
 			))
 
-			sess, msgs, err := ParseVSCodeCopilotSession(
+			sess, msgs, err := parseVSCodeCopilotTestSession(t,
 				path, "testproject", "local",
 			)
 			require.NoError(t, err)
@@ -722,7 +722,7 @@ func TestDiscoverVSCodeCopilot_JSONLDedup(t *testing.T) {
 		[]byte(sessionJSON), 0644,
 	))
 
-	files := DiscoverVSCodeCopilotSessions(root)
+	files := discoverVSCodeCopilotTestSessions(t, root)
 
 	// Should get 3 files: dup1.jsonl, only-jsonl.jsonl, only-json.json
 	if !assert.Len(t, files, 3, "expected 3 files") {
@@ -767,7 +767,7 @@ func TestFindVSCodeCopilotSourceFile(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FindVSCodeCopilotSourceFile(
+			got := findVSCodeCopilotTestSourceFile(t,
 				tt.dir, tt.id,
 			)
 			assert.Equal(t, tt.want, got)
@@ -823,7 +823,7 @@ func TestParseVSCodeCopilotSession_TokenUsage(t *testing.T) {
 	path := filepath.Join(dir, "usage.json")
 	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0644))
 
-	sess, _, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	sess, _, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -871,7 +871,7 @@ func TestParseVSCodeCopilotSession_TokenUsageModelFallback(t *testing.T) {
 	path := filepath.Join(dir, "usage2.json")
 	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0644))
 
-	sess, _, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	sess, _, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -898,7 +898,7 @@ func TestParseVSCodeCopilotSession_NoTokenUsage(t *testing.T) {
 	path := filepath.Join(dir, "nousage.json")
 	require.NoError(t, os.WriteFile(path, []byte(sessionJSON), 0644))
 
-	sess, _, err := ParseVSCodeCopilotSession(path, "proj", "local")
+	sess, _, err := parseVSCodeCopilotTestSession(t, path, "proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 

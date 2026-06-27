@@ -380,7 +380,7 @@ func IsVisualStudioCopilotSkipPath(path string) bool {
 	if parser.IsVisualStudioCopilotTraceFile(path) {
 		return true
 	}
-	_, _, ok := parser.ParseVisualStudioCopilotVirtualPath(path)
+	_, _, ok := parser.SplitVisualStudioCopilotVirtualPath(path)
 	return ok
 }
 
@@ -523,7 +523,6 @@ func (e *Engine) SyncPaths(paths []string) {
 func (e *Engine) classifyPaths(
 	paths []string,
 ) []parser.DiscoveredFile {
-	geminiProjectsByDir := make(map[string]map[string]string)
 	seen := make(map[string]int, len(paths))
 	files := make([]parser.DiscoveredFile, 0, len(paths))
 	for _, p := range paths {
@@ -535,9 +534,7 @@ func (e *Engine) classifyPaths(
 			dfs = e.classifyCodexIndexPath(p)
 		}
 		if len(dfs) == 0 {
-			if df, ok := e.classifyOnePath(
-				p, geminiProjectsByDir,
-			); ok {
+			if df, ok := e.classifyOnePath(p); ok {
 				dfs = []parser.DiscoveredFile{df}
 			}
 		}
@@ -594,6 +591,17 @@ func (e *Engine) classifyProviderChangedPath(
 		case parser.ProviderMigrationShadowCompare,
 			parser.ProviderMigrationProviderAuthoritative:
 		default:
+			continue
+		}
+		// Codex index (session_index.jsonl) events are owned by the engine's
+		// DB-aware classifyCodexIndexPath, which fans out only to sessions whose
+		// stored title changed and resolves a UUID's live/archived duplicate to
+		// the path the DB already tracks. The provider's broad index fan-out
+		// would re-add every sibling and prefer the live-over-archived layout,
+		// resurrecting a stale duplicate over the stored copy, so suppress it
+		// here and let the engine method classify the index event.
+		if agentType == parser.AgentCodex &&
+			filepath.Base(path) == parser.CodexSessionIndexFilename {
 			continue
 		}
 		roots := e.agentDirs[agentType]
@@ -778,6 +786,19 @@ func providerDeletedPhysicalSQLiteSource(
 func dedupeDiscoveredFiles(
 	files []parser.DiscoveredFile,
 ) []parser.DiscoveredFile {
+	return dedupeDiscoveredFilesByPreference(files, preferDiscoveredFile)
+}
+
+func dedupeDiscoveredFilesPreferNewestCodex(
+	files []parser.DiscoveredFile,
+) []parser.DiscoveredFile {
+	return dedupeDiscoveredFilesByPreference(files, preferNewestCodexDiscoveredFile)
+}
+
+func dedupeDiscoveredFilesByPreference(
+	files []parser.DiscoveredFile,
+	prefer func(candidate, current parser.DiscoveredFile) bool,
+) []parser.DiscoveredFile {
 	if len(files) < 2 {
 		return files
 	}
@@ -786,7 +807,7 @@ func dedupeDiscoveredFiles(
 	for _, file := range files {
 		key := discoveredFileKey(file)
 		if current, ok := bestByKey[key]; ok {
-			if preferDiscoveredFile(file, current) {
+			if prefer(file, current) {
 				bestByKey[key] = file
 			}
 			continue
@@ -835,6 +856,27 @@ func preferDiscoveredFile(
 		}
 	}
 	return false
+}
+
+func preferNewestCodexDiscoveredFile(
+	candidate, current parser.DiscoveredFile,
+) bool {
+	if candidate.Agent == parser.AgentCodex && current.Agent == parser.AgentCodex {
+		candMTime, candOK := discoveredFileMTime(candidate.Path)
+		currMTime, currOK := discoveredFileMTime(current.Path)
+		if candOK && currOK && candMTime != currMTime {
+			return candMTime > currMTime
+		}
+	}
+	return preferDiscoveredFile(candidate, current)
+}
+
+func discoveredFileMTime(path string) (int64, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, false
+	}
+	return info.ModTime().UnixNano(), true
 }
 
 func (e *Engine) expandClaudeDuplicateCandidates(
@@ -928,7 +970,6 @@ func (e *Engine) classifyContainerPath(
 
 func (e *Engine) classifyOnePath(
 	path string,
-	geminiProjectsByDir map[string]map[string]string,
 ) (parser.DiscoveredFile, bool) {
 	sep := string(filepath.Separator)
 	pathExists := true
@@ -962,165 +1003,6 @@ func (e *Engine) classifyOnePath(
 	// <claudeDir>/<project>/<session>/subagents/**/agent-<id>.jsonl
 	// shapes, so the legacy block was removed when Claude was folded
 	// onto its provider.
-
-	// Codex: either <codexDir>/<year>/<month>/<day>/<file>.jsonl
-	// or <codexDir>/<file>.jsonl for archived sessions.
-	for _, codexDir := range e.agentDirs[parser.AgentCodex] {
-		if codexDir == "" {
-			continue
-		}
-		if _, _, ok := parser.CodexSessionPathInfo(codexDir, path); ok {
-			return parser.DiscoveredFile{
-				Path:  path,
-				Agent: parser.AgentCodex,
-			}, true
-		}
-	}
-
-	// Copilot: <copilotDir>/session-state/<uuid>.jsonl
-	//      or: <copilotDir>/session-state/<uuid>/events.jsonl
-	for _, copilotDir := range e.agentDirs[parser.AgentCopilot] {
-		if copilotDir == "" {
-			continue
-		}
-		stateDir := filepath.Join(
-			copilotDir, "session-state",
-		)
-		if rel, ok := isUnder(stateDir, path); ok {
-			parts := strings.Split(rel, sep)
-			switch len(parts) {
-			case 1:
-				stem, ok := strings.CutSuffix(
-					parts[0], ".jsonl",
-				)
-				if !ok {
-					continue
-				}
-				dirEvents := filepath.Join(
-					stateDir, stem, "events.jsonl",
-				)
-				if _, err := os.Stat(dirEvents); err == nil {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:  path,
-					Agent: parser.AgentCopilot,
-				}, true
-			case 2:
-				if parts[1] == "events.jsonl" {
-					return parser.DiscoveredFile{
-						Path:  path,
-						Agent: parser.AgentCopilot,
-					}, true
-				}
-				// workspace.yaml changes should trigger a re-parse
-				// of the sibling events.jsonl.
-				if parts[1] == "workspace.yaml" {
-					eventsPath := filepath.Join(
-						stateDir, parts[0], "events.jsonl",
-					)
-					if _, err := os.Stat(eventsPath); err == nil {
-						return parser.DiscoveredFile{
-							Path:  eventsPath,
-							Agent: parser.AgentCopilot,
-						}, true
-					}
-				}
-				continue
-			default:
-				continue
-			}
-		}
-	}
-
-	// Gemini: <geminiDir>/tmp/<dir>/chats/session-*.json(.l)
-	// <dir> is either a SHA-256 hash (old) or project name (new).
-	for _, geminiDir := range e.agentDirs[parser.AgentGemini] {
-		if geminiDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(geminiDir, path); ok {
-			parts := strings.Split(rel, sep)
-			if len(parts) != 4 ||
-				parts[0] != "tmp" ||
-				parts[2] != "chats" {
-				continue
-			}
-			name := parts[3]
-			if !strings.HasPrefix(name, "session-") ||
-				(!strings.HasSuffix(name, ".json") &&
-					!strings.HasSuffix(name, ".jsonl")) {
-				continue
-			}
-			dirName := parts[1]
-			if _, ok := geminiProjectsByDir[geminiDir]; !ok {
-				geminiProjectsByDir[geminiDir] =
-					parser.BuildGeminiProjectMap(geminiDir)
-			}
-			project := parser.ResolveGeminiProject(
-				dirName, geminiProjectsByDir[geminiDir],
-			)
-			return parser.DiscoveredFile{
-				Path:    path,
-				Project: project,
-				Agent:   parser.AgentGemini,
-			}, true
-		}
-	}
-
-	// VSCode Copilot: <vscodeUserDir>/workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
-	//            or: <vscodeUserDir>/globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
-	for _, vscDir := range e.agentDirs[parser.AgentVSCodeCopilot] {
-		if vscDir == "" {
-			continue
-		}
-		if rel, ok := isUnder(vscDir, path); ok {
-			parts := strings.Split(rel, sep)
-			// workspaceStorage/<hash>/chatSessions/<uuid>.{json,jsonl}
-			if len(parts) == 4 &&
-				parts[0] == "workspaceStorage" &&
-				parts[2] == "chatSessions" &&
-				(strings.HasSuffix(parts[3], ".json") ||
-					strings.HasSuffix(parts[3], ".jsonl")) {
-				if vscodeJSONLSiblingExists(path) {
-					continue
-				}
-				hashDir := filepath.Join(
-					vscDir, "workspaceStorage", parts[1],
-				)
-				project := parser.ReadVSCodeWorkspaceManifest(hashDir)
-				if project == "" {
-					project = "unknown"
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: project,
-					Agent:   parser.AgentVSCodeCopilot,
-				}, true
-			}
-			// globalStorage/emptyWindowChatSessions/<uuid>.{json,jsonl}
-			// globalStorage/transferredChatSessions/<uuid>.{json,jsonl}
-			if len(parts) == 3 &&
-				parts[0] == "globalStorage" &&
-				(parts[1] == "emptyWindowChatSessions" || parts[1] == "transferredChatSessions") &&
-				(strings.HasSuffix(parts[2], ".json") ||
-					strings.HasSuffix(parts[2], ".jsonl")) {
-				if vscodeJSONLSiblingExists(path) {
-					continue
-				}
-				return parser.DiscoveredFile{
-					Path:    path,
-					Project: "empty-window",
-					Agent:   parser.AgentVSCodeCopilot,
-				}, true
-			}
-		}
-	}
-
-	// Visual Studio Copilot: <traces>/*_VSGitHubCopilot_traces.jsonl
-	if df, ok := e.classifyVisualStudioCopilotPath(path, sep); ok {
-		return df, true
-	}
 
 	if df, ok := e.classifyAiderPath(path); ok {
 		return df, true
@@ -1225,37 +1107,6 @@ func (e *Engine) classifyOnePath(
 		}
 	}
 
-	return parser.DiscoveredFile{}, false
-}
-
-// classifyVisualStudioCopilotPath matches a top-level Visual Studio Copilot
-// trace file (<traces>/*_VSGitHubCopilot_traces.jsonl) under a configured
-// trace directory. Trace files live directly in the directory, so nested
-// paths are rejected. Split out of classifyOnePath to keep that function
-// within NilAway's per-function size limit.
-func (e *Engine) classifyVisualStudioCopilotPath(
-	path, sep string,
-) (parser.DiscoveredFile, bool) {
-	if !parser.IsVisualStudioCopilotTraceFile(path) {
-		return parser.DiscoveredFile{}, false
-	}
-	for _, vsDir := range e.agentDirs[parser.AgentVSCopilot] {
-		if vsDir == "" {
-			continue
-		}
-		rel, ok := isUnder(vsDir, path)
-		if !ok {
-			continue
-		}
-		if strings.Contains(rel, sep) {
-			continue
-		}
-		return parser.DiscoveredFile{
-			Path:    path,
-			Project: "visualstudio",
-			Agent:   parser.AgentVSCopilot,
-		}, true
-	}
 	return parser.DiscoveredFile{}, false
 }
 
@@ -1512,18 +1363,6 @@ func (e *Engine) classifyShelleySQLitePath(
 		}
 	}
 	return parser.DiscoveredFile{}, false
-}
-
-// vscodeJSONLSiblingExists returns true when path is a .json
-// file and a .jsonl sibling exists for the same UUID. This
-// mirrors the dedup logic in DiscoverVSCodeCopilotSessions.
-func vscodeJSONLSiblingExists(path string) bool {
-	base, ok := strings.CutSuffix(path, ".json")
-	if !ok {
-		return false
-	}
-	_, err := os.Stat(base + ".jsonl")
-	return err == nil
 }
 
 // resyncTempSuffix is appended to the original DB path to
@@ -2344,12 +2183,27 @@ func (e *Engine) syncAllLocked(
 	}
 	all = append(all, providerFound...)
 
-	if !since.IsZero() {
+	quickSyncCutoff := !since.IsZero()
+	if quickSyncCutoff {
 		all = e.dedupeClaudeDiscoveredFiles(all)
+		// A Codex UUID can exist as both a live dated transcript and a flat
+		// archived copy. The provider's discovery deduplicates them to the
+		// preferred (live) layout, but the mtime cutoff filter runs before the
+		// engine's own dedup, so a changed archived copy that is newer than the
+		// cutoff would be lost behind an older live copy that the cutoff drops.
+		// Re-expand to every on-disk duplicate before filtering so the cutoff
+		// sees each copy's real mtime; the quick-sync dedupe below then keeps
+		// the newest surviving duplicate before falling back to normal layout
+		// preference.
+		all = e.expandCodexProviderDuplicates(all, scope)
 		all = e.filterFilesByMtime(ctx, all, since)
 	}
 
-	all = dedupeDiscoveredFiles(all)
+	if quickSyncCutoff {
+		all = dedupeDiscoveredFilesPreferNewestCodex(all)
+	} else {
+		all = dedupeDiscoveredFiles(all)
+	}
 	all = e.dedupeClaudeDiscoveredFiles(all)
 	all = e.filterShadowedLegacyKiroFiles(all)
 
@@ -2808,6 +2662,85 @@ func (e *Engine) discoverProviderSources(
 	return files, failures
 }
 
+// expandCodexProviderDuplicates re-adds the on-disk duplicate paths of each
+// discovered Codex source. The provider deduplicates a UUID's live and archived
+// copies to the preferred layout at discovery time; this restores the dropped
+// duplicates (scoped to the configured roots) so an mtime cutoff filter can
+// judge each copy on its own mtime, matching the legacy discover-then-filter
+// order. Non-Codex files and Codex files without a UUID-shaped name pass through
+// unchanged. Duplicates are keyed by path so nothing is added twice.
+func (e *Engine) expandCodexProviderDuplicates(
+	files []parser.DiscoveredFile, scope *rootSyncScope,
+) []parser.DiscoveredFile {
+	pather := e.codexUUIDPathLister(scope)
+	if pather == nil {
+		return files
+	}
+	seen := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		seen[string(f.Agent)+"\x00"+filepath.Clean(f.Path)] = struct{}{}
+	}
+	out := files
+	for _, f := range files {
+		if f.Agent != parser.AgentCodex {
+			continue
+		}
+		uuid := parser.CodexSessionUUIDFromFilename(filepath.Base(f.Path))
+		if uuid == "" {
+			continue
+		}
+		for _, dup := range pather(uuid) {
+			key := string(parser.AgentCodex) + "\x00" + filepath.Clean(dup)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, parser.DiscoveredFile{
+				Path:            dup,
+				Agent:           parser.AgentCodex,
+				ProviderProcess: true,
+				ProviderSource:  e.codexPinnedProviderSource(dup),
+			})
+		}
+	}
+	return out
+}
+
+// codexUUIDPathLister returns a function that lists every on-disk Codex
+// transcript path for a UUID under the in-scope roots, or nil when the Codex
+// provider is unavailable. It scopes a single provider to the in-scope roots so
+// the returned paths cover both the live dated and flat archived copies of a
+// duplicated UUID, including duplicates that share one root.
+func (e *Engine) codexUUIDPathLister(
+	scope *rootSyncScope,
+) func(string) []string {
+	factory, ok := e.providerFactories[parser.AgentCodex]
+	if !ok || factory == nil {
+		return nil
+	}
+	roots := make([]string, 0, len(e.agentDirs[parser.AgentCodex]))
+	for _, root := range e.agentDirs[parser.AgentCodex] {
+		if root == "" || !scope.includes(root) {
+			continue
+		}
+		roots = append(roots, root)
+	}
+	if len(roots) == 0 {
+		return nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   roots,
+		Machine: e.machine,
+	})
+	lister, ok := provider.(interface {
+		AllSourcePathsForUUID(string) []string
+	})
+	if !ok {
+		return nil
+	}
+	return lister.AllSourcePathsForUUID
+}
+
 // recordSyncStarted persists the start time of a sync run
 // into pg_sync_state. Callers use this to compute mtime
 // cutoffs for future quick incremental syncs.
@@ -2897,12 +2830,33 @@ func (e *Engine) filterFilesByMtime(
 	return out
 }
 
+// discoveredFileEffectiveMtime returns the freshness timestamp used to filter a
+// discovered file against an incremental-sync cutoff. For provider-sourced
+// files it consults the provider's Fingerprint so composite/sibling-file
+// freshness (for example a Positron session whose workspace.json changed while
+// the chat transcript did not) is honored without a per-agent legacy helper.
+// Files without a provider source fall back to the legacy mtime computation.
 func (e *Engine) discoveredFileEffectiveMtime(
-	ctx context.Context,
-	file parser.DiscoveredFile,
+	ctx context.Context, file parser.DiscoveredFile,
 ) (int64, error) {
+	// Codex is excluded from the provider-Fingerprint path on purpose. Its
+	// Fingerprint folds the shared session_index.jsonl mtime into every
+	// session's freshness (see CodexEffectiveMtime). That shared signal is
+	// correct for the skip cache but wrong for the incremental-sync cutoff:
+	// when the index changes, both the live and archived copies of a UUID
+	// would look fresh, defeating the per-copy mtime discrimination that
+	// expandCodexProviderDuplicates relies on to preserve a changed archived
+	// duplicate. Index refreshes are handled separately by the codexIndexRefresh
+	// pass in filterFilesByMtime, so codex uses its raw per-file mtime here.
+	if file.Agent == parser.AgentCodex {
+		return discoveredFileMtime(file)
+	}
+	// Only provider-authoritative sources resolve freshness through the
+	// provider Fingerprint. Shadow-compare files keep the legacy mtime path so
+	// agent-specific incremental-sync behavior (for example the Codex index
+	// refresh below) is unchanged while a provider is still shadowed.
 	if file.ProviderSource != nil && file.ProviderProcess {
-		if mtime, ok, err := e.providerFingerprintMtime(ctx, file); err != nil {
+		if mtime, ok, err := e.providerSourceMtime(ctx, file); err != nil {
 			return 0, err
 		} else if ok {
 			return mtime, nil
@@ -2911,9 +2865,12 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	return discoveredFileMtime(file)
 }
 
-func (e *Engine) providerFingerprintMtime(
-	ctx context.Context,
-	file parser.DiscoveredFile,
+// providerSourceMtime resolves a provider-sourced file's effective mtime through
+// the owning provider's Fingerprint. The boolean reports whether the provider
+// runtime produced a usable timestamp; a false result tells the caller to fall
+// back to the legacy mtime path.
+func (e *Engine) providerSourceMtime(
+	ctx context.Context, file parser.DiscoveredFile,
 ) (int64, bool, error) {
 	if file.ProviderSource == nil {
 		return 0, false, nil
@@ -3823,8 +3780,6 @@ func (e *Engine) processFile(
 			statPath = dbPath
 		} else if dbPath, _, ok := parser.ParseShelleyVirtualPath(file.Path); ok {
 			statPath = dbPath
-		} else if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
-			statPath = tracePath
 		} else if historyPath, _, ok := parser.ParseAiderVirtualPath(file.Path); ok {
 			// aider stores "<historyFile>#<runIdx>"; stat the physical file
 			// so SyncSingleSession (live watcher / on-demand re-sync) works.
@@ -3870,7 +3825,7 @@ func (e *Engine) processFile(
 	// re-validation.
 	if cacheSkip && !e.forceParse && !file.ForceParse { // parse-diff: ignore the skip cache
 		if e.shouldUseCachedSkip(file, mtime, sourceFingerprint) {
-			if e.pathNeedsProjectReparse(file.Path) {
+			if e.pathNeedsCachedSkipBypass(file.Path) {
 				e.clearSkip(file.Path)
 			} else {
 				res := processResult{
@@ -3892,27 +3847,16 @@ func (e *Engine) processFile(
 		// legacy dispatch, via the S3 sync path.
 		res = e.processS3Session(ctx, file, info)
 	case parser.AgentCodex:
-		if strings.HasPrefix(file.Path, "s3://") {
-			res = e.processS3Session(ctx, file, info)
-		} else {
-			res = e.processCodex(file, info)
-		}
-	case parser.AgentCopilot:
-		res = e.processCopilot(file, info)
+		// Non-S3 Codex is provider-authoritative and handled earlier by
+		// processProviderFile; only s3:// Codex sources fall through to the
+		// legacy dispatch, via the S3 sync path.
+		res = e.processS3Session(ctx, file, info)
 	case parser.AgentReasonix:
 		res = e.processReasonix(file, info)
-	case parser.AgentGemini:
-		res = e.processGemini(file, info)
-	case parser.AgentVSCodeCopilot:
-		res = e.processVSCodeCopilot(file, info)
-	case parser.AgentVSCopilot:
-		res = e.processVisualStudioCopilot(file, info)
 	case parser.AgentKiro:
 		res = e.processKiro(file, info)
 	case parser.AgentKiroIDE:
 		res = e.processKiroIDE(file, info)
-	case parser.AgentPositron:
-		res = e.processPositron(file, info)
 	case parser.AgentZed:
 		res = e.processZed(file, info)
 	case parser.AgentShelley:
@@ -3966,6 +3910,25 @@ func (e *Engine) pathNeedsProjectReparse(path string) bool {
 	}
 	project, ok := e.db.GetProjectByPath(lookupPath)
 	return ok && parser.NeedsProjectReparse(project)
+}
+
+func (e *Engine) pathNeedsCachedSkipBypass(path string) bool {
+	return e.pathNeedsProjectReparse(path) ||
+		e.pathNeedsDataVersionReparse(path)
+}
+
+func (e *Engine) pathNeedsDataVersionReparse(path string) bool {
+	if e == nil || e.db == nil {
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	if _, _, ok := e.db.GetFileInfoByPath(lookupPath); !ok {
+		return false
+	}
+	return e.db.GetDataVersionByPath(lookupPath) < db.CurrentDataVersion()
 }
 
 func (e *Engine) processProviderFile(
@@ -4034,7 +3997,7 @@ func (e *Engine) processProviderFile(
 			mtime: mtime,
 		}, true
 	}
-	if freshMtime, fresh := e.providerCoworkSourceFresh(source, file); fresh {
+	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(source, file); fresh {
 		return processResult{
 			skip:  true,
 			mtime: freshMtime,
@@ -4052,12 +4015,20 @@ func (e *Engine) processProviderFile(
 		cachedMtime, cached := e.skipCache[cacheKey]
 		e.skipMu.RUnlock()
 		if cached && cachedMtime == fingerprint.MTimeNS {
-			return processResult{
-				skip:      true,
-				mtime:     fingerprint.MTimeNS,
-				cacheSkip: true,
-				cacheKey:  cacheKey,
-			}, true
+			// A cached skip must not hide a session whose stored row needs
+			// self-healing (e.g. a parser data-version bump or generated
+			// roborev CI worktree project): clear the entry and fall through
+			// to a full reparse, mirroring the legacy process arm.
+			if e.pathNeedsCachedSkipBypass(file.Path) {
+				e.clearSkip(cacheKey)
+			} else {
+				return processResult{
+					skip:      true,
+					mtime:     fingerprint.MTimeNS,
+					cacheSkip: true,
+					cacheKey:  cacheKey,
+				}, true
+			}
 		}
 	}
 
@@ -4075,6 +4046,25 @@ func (e *Engine) processProviderFile(
 		return incRes, true
 	}
 	incForceReplace := incRes.forceReplace
+
+	// DB-stored fingerprint skip. The provider has no database handle, so the
+	// engine reproduces the legacy DB-aware skip that single-session JSONL
+	// providers relied on: an unchanged source whose stored size and effective
+	// mtime already match is not reparsed, even when the in-memory skip cache
+	// was cleared (e.g. by SyncSingleSession) or never populated (a fresh
+	// engine). For Codex this also folds in the session_index.jsonl sidecar:
+	// a shared index mtime bump that did not change this session's title must
+	// not trigger a reparse.
+	if !e.forceParse && !file.ForceParse &&
+		e.shouldSkipProviderSourceByDB(file, fingerprint) {
+		return processResult{
+			skip:        true,
+			mtime:       fingerprint.MTimeNS,
+			cacheSkip:   cacheSkip,
+			cacheKey:    cacheKey,
+			noCacheSkip: true,
+		}, true
+	}
 
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
 		Source:      source,
@@ -4469,7 +4459,7 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok :=
-			parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
+			parser.SplitVisualStudioCopilotVirtualPath(file.Path); ok {
 			return false
 		}
 	}
@@ -4779,11 +4769,11 @@ func (e *Engine) providerSingleSessionFresh(
 		!parser.NeedsProjectReparse(sess.Project)
 }
 
-func (e *Engine) providerCoworkSourceFresh(
+func (e *Engine) providerSourceFreshBeforeFingerprint(
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
 ) (int64, bool) {
-	if e.forceParse || file.ForceParse || file.Agent != parser.AgentCowork {
+	if e.forceParse || file.ForceParse {
 		return 0, false
 	}
 	path := providerDiscoveredPath(source)
@@ -4801,15 +4791,31 @@ func (e *Engine) providerCoworkSourceFresh(
 			return 0, false
 		}
 	}
-	mtime := parser.CoworkSessionMtime(path, info.ModTime().UnixNano())
-	effectiveInfo := fakeSnapshotInfo{
-		fSize:  info.Size(),
-		fMtime: mtime,
+	switch file.Agent {
+	case parser.AgentCowork:
+		mtime := parser.CoworkSessionMtime(path, info.ModTime().UnixNano())
+		effectiveInfo := fakeSnapshotInfo{
+			fSize:  info.Size(),
+			fMtime: mtime,
+		}
+		if e.shouldSkipByPath(path, effectiveInfo) {
+			return mtime, true
+		}
+	case parser.AgentGemini:
+		if e.shouldSkipByPath(path, info) {
+			return info.ModTime().UnixNano(), true
+		}
+	case parser.AgentCopilot:
+		mtime := copilotEffectiveMtime(path, info)
+		effectiveInfo := fakeSnapshotInfo{
+			fSize:  info.Size(),
+			fMtime: mtime,
+		}
+		if e.shouldSkipByPath(path, effectiveInfo) {
+			return mtime, true
+		}
 	}
-	if !e.shouldSkipByPath(path, effectiveInfo) {
-		return 0, false
-	}
-	return mtime, true
+	return 0, false
 }
 
 // stampProviderFileIdentity copies the source file's inode and device onto
@@ -5177,18 +5183,41 @@ func (e *Engine) tryIncrementalJSONL(
 	}, true
 }
 
-func (e *Engine) shouldSkipCodex(
-	path string, info os.FileInfo,
+// shouldSkipProviderSourceByDB reports whether a provider-dispatched source is
+// already stored at the parsed fingerprint and can be skipped without a reparse.
+// It is the engine-side replacement for the DB-aware skip the legacy
+// single-session JSONL processors performed, since a provider has no database
+// handle. It is scoped to Codex: Codex's effective mtime folds in the shared
+// session_index.jsonl sidecar, so a size-and-effective-mtime match plus a
+// per-session title check preserves the legacy "skip when only the global index
+// advanced but this session's name did not" semantics. Other providers keep
+// their existing in-memory skip-cache behavior unchanged.
+func (e *Engine) shouldSkipProviderSourceByDB(
+	file parser.DiscoveredFile, fingerprint parser.SourceFingerprint,
 ) bool {
-	if e.forceParse { // parse-diff: always re-parse
+	if file.Agent != parser.AgentCodex {
 		return false
 	}
+	return e.shouldSkipCodexFingerprint(file.Path, fingerprint)
+}
+
+// shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
+// terms of a provider SourceFingerprint. The fingerprint MTimeNS already folds
+// in session_index.jsonl via CodexEffectiveMtime, so:
+//   - a stored size mismatch or stale data version forces a reparse;
+//   - an exact effective-mtime match skips;
+//   - an effective mtime ahead of the stored mtime driven only by the index
+//     (the raw transcript mtime is still at or below the stored mtime) skips
+//     unless this session's stored title differs from the current index title.
+func (e *Engine) shouldSkipCodexFingerprint(
+	path string, fingerprint parser.SourceFingerprint,
+) bool {
 	lookupPath := path
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
 	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-	if !ok || storedSize != info.Size() {
+	if !ok || storedSize != fingerprint.Size {
 		return false
 	}
 	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
@@ -5199,26 +5228,17 @@ func (e *Engine) shouldSkipCodex(
 		db.CurrentDataVersion() {
 		return false
 	}
-	// A Codex title lives in session_index.jsonl, not the transcript, so a
-	// title-only rename can change the title with no transcript signal. Detect
-	// it directly rather than inferring it from an mtime inequality: the index
-	// mtime is folded into the stored watermark, so a later rename whose index
-	// mtime lands at or below that watermark is invisible to a mtime compare,
-	// and the old storedMtime==effectiveMtime fast path skipped without ever
-	// consulting the title. codexIndexSessionNameChanged reads the live title
-	// (cached per index file) and the stored name; a cheaper stored-name lookup
-	// to keep this fully off the hot skip path is a deferred follow-up.
-	if e.codexIndexSessionNameChanged(path) {
-		return false // title changed -> re-parse to refresh metadata
+	effectiveMtime := fingerprint.MTimeNS
+	if storedMtime == effectiveMtime {
+		return true
 	}
-	// Title verified unchanged: skip when the transcript itself is unchanged.
-	// Compare the bare file mtime, not the index-folded effective mtime -- the
-	// stored watermark may already include a folded index mtime, and a later
-	// bump of the shared session_index.jsonl (e.g. another session's rename)
-	// lifts every session's effective mtime; with the title confirmed
-	// unchanged, that rise must not force a needless reparse.
-	fileMtime := info.ModTime().UnixNano()
-	return fileMtime <= storedMtime
+	fileMtime := effectiveMtime
+	if info, err := os.Stat(path); err == nil {
+		fileMtime = info.ModTime().UnixNano()
+	}
+	return effectiveMtime > storedMtime &&
+		fileMtime <= storedMtime &&
+		!e.codexIndexSessionNameChanged(path)
 }
 
 // codexIndexNeedsRefreshSince reports whether a Codex session whose transcript
@@ -5296,7 +5316,7 @@ func (e *Engine) classifyCodexIndexPath(
 		}
 		var candidates []parser.DiscoveredFile
 		for _, root := range sessionRoots {
-			if src := parser.FindCodexSourceFile(root, uuid); src != "" {
+			if src := e.codexSourceFileForUUID(root, uuid); src != "" {
 				candidates = append(candidates, parser.DiscoveredFile{
 					Path:  src,
 					Agent: parser.AgentCodex,
@@ -5309,9 +5329,70 @@ func (e *Engine) classifyCodexIndexPath(
 		// A UUID can exist in both sessions/ and archived_sessions/.
 		// Prefer the path the DB already tracks so a title rename does
 		// not reparse a stale duplicate over the stored copy.
-		out = append(out, pickPreferredCodexDiscoveredFile(e.db, candidates))
+		chosen := pickPreferredCodexDiscoveredFile(e.db, candidates)
+		// Pin the provider source to the chosen path and route it through the
+		// provider so processProviderFile parses exactly this copy instead of
+		// re-canonicalizing the UUID to the preferred dated layout, which would
+		// undo the DB-aware selection above.
+		chosen.ProviderProcess = true
+		chosen.ProviderSource = e.codexPinnedProviderSource(chosen.Path)
+		out = append(out, chosen)
 	}
 	return out
+}
+
+// codexSourceFileForUUID resolves a Codex session UUID to its on-disk
+// transcript path under a single sessions root, preferring the live dated
+// layout over a flat archived entry. It scopes a Codex provider to that one
+// root so the provider's cross-root live-over-archived canonicalization does
+// not collapse a per-root duplicate; classifyCodexIndexPath then applies its
+// own DB-aware preference across the per-root candidates. Returns "" when the
+// provider, source lookup, or path resolution fails.
+func (e *Engine) codexSourceFileForUUID(root, uuid string) string {
+	factory, ok := e.providerFactories[parser.AgentCodex]
+	if !ok || factory == nil {
+		return ""
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   []string{root},
+		Machine: e.machine,
+	})
+	source, found, err := provider.FindSource(
+		context.Background(),
+		parser.FindSourceRequest{RawSessionID: uuid},
+	)
+	if err != nil || !found {
+		return ""
+	}
+	return providerDiscoveredPath(source)
+}
+
+// codexPinnedProviderSource builds a Codex provider SourceRef pinned to the
+// exact path, bypassing the provider's live-over-archived canonicalization. It
+// is used when the engine's DB-aware or mtime-aware logic has already chosen
+// which on-disk copy of a duplicated UUID to parse, so processProviderFile
+// parses that copy instead of the provider's preferred dated layout. Returns
+// nil when the Codex provider or the path's source shape is unavailable.
+func (e *Engine) codexPinnedProviderSource(path string) *parser.SourceRef {
+	factory, ok := e.providerFactories[parser.AgentCodex]
+	if !ok || factory == nil {
+		return nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   e.agentDirs[parser.AgentCodex],
+		Machine: e.machine,
+	})
+	pinner, ok := provider.(interface {
+		SourceRefForPath(string) (parser.SourceRef, bool)
+	})
+	if !ok {
+		return nil
+	}
+	source, ok := pinner.SourceRefForPath(path)
+	if !ok {
+		return nil
+	}
+	return &source
 }
 
 // codexStoredNameDiffers reports whether the stored session_name for a Codex
@@ -5377,6 +5458,54 @@ func pickPreferredCodexDiscoveredFile(
 		}
 	}
 	return chosen
+}
+
+// shouldSkipCodex is the legacy file_path + effective-mtime skip check used by
+// the S3 Codex sync path (processCodex). Non-S3 Codex is provider-authoritative
+// and uses shouldSkipCodexFingerprint; this remains for s3:// Codex sources,
+// which the S3 sync path buffers to a temp file and feeds through processCodex.
+func (e *Engine) shouldSkipCodex(
+	path string, info os.FileInfo,
+) bool {
+	if e.forceParse { // parse-diff: always re-parse
+		return false
+	}
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok || storedSize != info.Size() {
+		return false
+	}
+	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
+		parser.NeedsProjectReparse(project) {
+		return false
+	}
+	if e.db.GetDataVersionByPath(lookupPath) <
+		db.CurrentDataVersion() {
+		return false
+	}
+	// A Codex title lives in session_index.jsonl, not the transcript, so a
+	// title-only rename can change the title with no transcript signal. Detect
+	// it directly rather than inferring it from an mtime inequality: the index
+	// mtime is folded into the stored watermark, so a later rename whose index
+	// mtime lands at or below that watermark is invisible to a mtime compare,
+	// and the old storedMtime==effectiveMtime fast path skipped without ever
+	// consulting the title. codexIndexSessionNameChanged reads the live title
+	// (cached per index file) and the stored name; a cheaper stored-name lookup
+	// to keep this fully off the hot skip path is a deferred follow-up.
+	if e.codexIndexSessionNameChanged(path) {
+		return false // title changed -> re-parse to refresh metadata
+	}
+	// Title verified unchanged: skip when the transcript itself is unchanged.
+	// Compare the bare file mtime, not the index-folded effective mtime -- the
+	// stored watermark may already include a folded index mtime, and a later
+	// bump of the shared session_index.jsonl (e.g. another session's rename)
+	// lifts every session's effective mtime; with the title confirmed
+	// unchanged, that rise must not force a needless reparse.
+	fileMtime := info.ModTime().UnixNano()
+	return fileMtime <= storedMtime
 }
 
 func (e *Engine) processCodex(
@@ -5449,44 +5578,6 @@ func (e *Engine) processCodex(
 			{Session: *sess, Messages: msgs},
 		},
 		forceReplace: forceReplace,
-	}
-}
-
-func (e *Engine) processCopilot(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Use effective mtime = max(events.jsonl, workspace.yaml) so
-	// that a new or updated workspace.yaml triggers a re-parse and
-	// the stored mtime stays consistent with what we compare against
-	// on subsequent syncs (preventing oscillation).
-	effectiveMtime := copilotEffectiveMtime(file.Path, info)
-	if e.shouldSkipCopilot(file.Path, info, effectiveMtime) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, usageEvents, err := parser.ParseCopilotSession(
-		file.Path, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	if effectiveMtime > sess.File.Mtime {
-		sess.File.Mtime = effectiveMtime
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs, UsageEvents: usageEvents},
-		},
 	}
 }
 
@@ -5640,170 +5731,6 @@ func reasonixEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 		}
 	}
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
-}
-
-// shouldSkipCopilot is like shouldSkipByPath but uses the
-// pre-computed effectiveMtime (max of events.jsonl and
-// workspace.yaml) for the mtime comparison, keeping the stored
-// value consistent with what we compare against on next sync.
-func (e *Engine) shouldSkipCopilot(
-	path string, info os.FileInfo, effectiveMtime int64,
-) bool {
-	if e.forceParse { // parse-diff: always re-parse
-		return false
-	}
-	lookupPath := path
-	if e.pathRewriter != nil {
-		lookupPath = e.pathRewriter(path)
-	}
-	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
-	if !ok {
-		return false
-	}
-	if storedSize != info.Size() || storedMtime != effectiveMtime {
-		return false
-	}
-	if e.db.GetDataVersionByPath(lookupPath) <
-		db.CurrentDataVersion() {
-		return false
-	}
-	return true
-}
-
-func (e *Engine) processGemini(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	// Fast path: skip by file_path + mtime before parsing.
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseGeminiSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
-func (e *Engine) processVSCodeCopilot(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParseVSCodeCopilotSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{
-				Session:     *sess,
-				Messages:    msgs,
-				UsageEvents: sess.UsageEvents,
-			},
-		},
-	}
-}
-
-func (e *Engine) processVisualStudioCopilot(
-	file parser.DiscoveredFile, _ os.FileInfo,
-) processResult {
-	// Resolve the physical trace path first. Discovery emits one
-	// <traceFile>#<conversationID> work item per conversation; a watcher event
-	// or single-session resync may instead pass a real trace file, which can
-	// hold spans for several conversations.
-	tracePath := file.Path
-	var conversationIDs []string
-	if resolved, conversationID, ok :=
-		parser.ParseVisualStudioCopilotVirtualPath(file.Path); ok {
-		tracePath = resolved
-		conversationIDs = []string{conversationID}
-	}
-
-	// Skip on a fingerprint spanning every sibling trace file: a
-	// conversation's transcript is rebuilt from all of them, so a change to any
-	// sibling must defeat the skip even when the representative trace file is
-	// unchanged. The primary-file stat alone would let a single-session resync
-	// or watch fallback leave a session stale.
-	size, mtime, err := parser.VisualStudioCopilotTraceFingerprintStrict(
-		tracePath,
-	)
-	if err != nil {
-		return processResult{err: err, noCacheSkip: true}
-	}
-	if e.shouldSkipByPath(
-		file.Path, fakeSnapshotInfo{fSize: size, fMtime: mtime},
-	) {
-		return processResult{skip: true}
-	}
-
-	// A real trace file can hold spans for several conversations, so enumerate
-	// them and emit each independently.
-	if conversationIDs == nil {
-		ids, err := parser.VisualStudioCopilotFileConversationIDs(file.Path)
-		if err != nil {
-			return processResult{err: err, noCacheSkip: true}
-		}
-		conversationIDs = ids
-	}
-
-	hash, hashErr := ComputeFileHash(tracePath)
-
-	var results []parser.ParseResult
-	for _, conversationID := range conversationIDs {
-		sess, msgs, err := parser.ParseVisualStudioCopilotConversation(
-			tracePath, conversationID, file.Project, e.machine,
-		)
-		if err != nil {
-			return processResult{err: err, noCacheSkip: true}
-		}
-		if sess == nil {
-			continue
-		}
-		if hashErr == nil {
-			sess.File.Hash = hash
-		}
-		results = append(results, parser.ParseResult{
-			Session: *sess, Messages: msgs,
-		})
-	}
-
-	// forceReplace mirrors the other multi-session-per-source agents
-	// (Zed, Kiro): each conversation's messages are fully re-derived from
-	// all of its spans on every parse, so existing rows must be replaced
-	// rather than appended.
-	return processResult{
-		results:      results,
-		forceReplace: true,
-	}
 }
 
 func (e *Engine) processZed(
@@ -6107,35 +6034,6 @@ func vibeEffectiveInfo(path string, info os.FileInfo) os.FileInfo {
 	return fakeSnapshotInfo{fSize: size, fMtime: mtime}
 }
 
-func (e *Engine) processPositron(
-	file parser.DiscoveredFile, info os.FileInfo,
-) processResult {
-	if e.shouldSkipByPath(file.Path, info) {
-		return processResult{skip: true}
-	}
-
-	sess, msgs, err := parser.ParsePositronSession(
-		file.Path, file.Project, e.machine,
-	)
-	if err != nil {
-		return processResult{err: err}
-	}
-	if sess == nil {
-		return processResult{}
-	}
-
-	hash, err := ComputeFileHash(file.Path)
-	if err == nil {
-		sess.File.Hash = hash
-	}
-
-	return processResult{
-		results: []parser.ParseResult{
-			{Session: *sess, Messages: msgs},
-		},
-	}
-}
-
 // aiderFileUnchanged reports whether a physical aider history file is
 // unchanged since the last sync. Aider sessions are stored under virtual
 // "<history>#<idx>" paths, so the generic shouldSkipByPath (which looks the
@@ -6303,6 +6201,8 @@ func (e *Engine) processAntigravityCLI(
 	if sess == nil {
 		return processResult{}
 	}
+	sess.File.Size = effectiveInfo.Size()
+	sess.File.Mtime = effectiveInfo.ModTime().UnixNano()
 
 	hash, err := ComputeFileHash(file.Path)
 	if err == nil {

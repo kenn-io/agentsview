@@ -16,60 +16,24 @@ import (
 	"time"
 )
 
-// ParseVisualStudioCopilotSession parses a single Visual Studio Copilot
-// conversation from an OpenTelemetry trace JSONL file. The path may be a real
-// trace file or a <traceFile>#<conversationID> virtual path emitted by
-// discovery. A real trace file resolves to the conversation it contains; when
-// a file carries spans for more than one conversation, discovery emits one
-// virtual-path work item per conversation, so production does not rely on this
-// entry point to choose among several.
-func ParseVisualStudioCopilotSession(
-	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	if tracePath, conversationID, ok :=
-		ParseVisualStudioCopilotVirtualPath(path); ok {
-		return ParseVisualStudioCopilotConversation(
-			tracePath, conversationID, project, machine,
-		)
-	}
-	if !IsVisualStudioCopilotTraceFile(path) {
-		return nil, nil, nil
-	}
-	ids, err := VisualStudioCopilotFileConversationIDs(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(ids) == 0 {
-		return nil, nil, nil
-	}
-	return ParseVisualStudioCopilotConversation(
-		path, ids[0], project, machine,
-	)
-}
-
 // VisualStudioCopilotVirtualPath pairs a trace file with one conversation ID.
 // A single physical trace file can hold spans for multiple conversations, so
 // each conversation is tracked as its own work item under this virtual path.
 func VisualStudioCopilotVirtualPath(tracePath, conversationID string) string {
-	return tracePath + "#" + conversationID
+	return VirtualSourcePath(tracePath, conversationID)
 }
 
-// ParseVisualStudioCopilotVirtualPath splits a <traceFile>#<conversationID>
-// virtual path. It returns ok=false for a plain trace-file path.
-func ParseVisualStudioCopilotVirtualPath(
+// SplitVisualStudioCopilotVirtualPath splits a <traceFile>#<conversationID>
+// virtual source path into its physical trace file and conversation ID. It
+// builds on the provider-neutral ParseVirtualSourcePath splitter and adds the
+// Visual Studio Copilot validation that the container names a trace file and
+// the source ID is a valid conversation ID. It returns ok=false for a plain
+// trace-file path. Callers outside the parser package use it to detect and
+// resolve the virtual paths Visual Studio Copilot stores for its sessions.
+func SplitVisualStudioCopilotVirtualPath(
 	sourcePath string,
 ) (tracePath, conversationID string, ok bool) {
-	idx := strings.LastIndex(sourcePath, "#")
-	if idx <= 0 || idx >= len(sourcePath)-1 {
-		return "", "", false
-	}
-	tracePath = sourcePath[:idx]
-	conversationID = sourcePath[idx+1:]
-	if !IsVisualStudioCopilotTraceFile(tracePath) ||
-		!IsValidSessionID(conversationID) {
-		return "", "", false
-	}
-	return tracePath, conversationID, true
+	return splitVisualStudioCopilotVirtualPath(sourcePath)
 }
 
 // IsVisualStudioCopilotTraceFile reports whether path names a Visual Studio
@@ -89,7 +53,7 @@ func IsVisualStudioCopilotTraceFile(path string) bool {
 // path whose runs share one physical history file; both resolve to the
 // physical file. Every other agent stores a real path, returned unchanged.
 func ResolveSourceFilePath(storedPath string) string {
-	if tracePath, _, ok := ParseVisualStudioCopilotVirtualPath(storedPath); ok {
+	if tracePath, _, ok := splitVisualStudioCopilotVirtualPath(storedPath); ok {
 		return tracePath
 	}
 	if historyPath, _, ok := ParseAiderVirtualPath(storedPath); ok {
@@ -133,11 +97,11 @@ type vsCopilotTraceValue struct {
 	BoolValue   bool   `json:"boolValue"`
 }
 
-// ParseVisualStudioCopilotConversation parses one conversation, gathering its
-// spans from the given trace file and every sibling trace file in the same
-// directory. File metadata is recorded against the conversation's virtual path
-// so that each conversation in a shared trace file is tracked independently.
-func ParseVisualStudioCopilotConversation(
+// parseConversation parses one conversation, gathering its spans from the given
+// trace file and every sibling trace file in the same directory. File metadata
+// is recorded against the conversation's virtual path so that each conversation
+// in a shared trace file is tracked independently.
+func parseVisualStudioCopilotConversation(
 	tracePath, conversationID, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	if conversationID == "" {
