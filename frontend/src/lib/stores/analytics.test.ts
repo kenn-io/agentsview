@@ -66,6 +66,7 @@ function makeSummary(): AnalyticsSummary {
     total_messages: 100,
     total_output_tokens: 42000,
     token_reporting_sessions: 8,
+    models: [],
     active_projects: 3,
     active_days: 5,
     avg_messages: 10,
@@ -243,6 +244,7 @@ function resetStore() {
   analytics.agent = "";
   analytics.includeAutomated = false;
   analytics.automatedScope = "human";
+  analytics.model = "";
   analytics.from = "2024-01-01";
   analytics.to = "2024-01-31";
   analytics.isPinned = false;
@@ -652,6 +654,41 @@ describe("AnalyticsStore automated scope params", () => {
     expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
       expect.objectContaining({ automatedScope: "automated" }),
     );
+  });
+});
+
+describe("AnalyticsStore model filter", () => {
+  it.each([
+    { name: "summary", fn: () => analyticsService.getApiV1AnalyticsSummary },
+    { name: "activity", fn: () => analyticsService.getApiV1AnalyticsActivity },
+    { name: "heatmap", fn: () => analyticsService.getApiV1AnalyticsHeatmap },
+    { name: "projects", fn: () => analyticsService.getApiV1AnalyticsProjects },
+    { name: "hourOfWeek", fn: () => analyticsService.getApiV1AnalyticsHourOfWeek },
+    { name: "sessionShape", fn: () => analyticsService.getApiV1AnalyticsSessions },
+    { name: "velocity", fn: () => analyticsService.getApiV1AnalyticsVelocity },
+    { name: "tools", fn: () => analyticsService.getApiV1AnalyticsTools },
+    { name: "skills", fn: () => analyticsService.getApiV1AnalyticsSkills },
+    { name: "topSessions", fn: () => analyticsService.getApiV1AnalyticsTopSessions },
+    { name: "signals", fn: () => analyticsService.getApiV1AnalyticsSignals },
+  ])("should include model in $name params", ({ fn }) => {
+    analytics.toggleModel("gpt-4o");
+
+    const mock = vi.mocked(fn());
+    expect(mock).toHaveBeenCalled();
+    const params = mock.mock.lastCall?.[0];
+    expect(params?.model).toBe("gpt-4o");
+  });
+
+  it("should clear model from subsequent requests", () => {
+    analytics.toggleModel("gpt-4o");
+    vi.clearAllMocks();
+
+    analytics.clearModel();
+
+    expect(analytics.model).toBe("");
+    const params =
+      vi.mocked(analyticsService.getApiV1AnalyticsSummary).mock.lastCall?.[0];
+    expect(params?.model).toBeUndefined();
   });
 });
 

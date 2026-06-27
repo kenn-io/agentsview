@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/analyticscope"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -98,7 +99,9 @@ func buildAnalyticsWhere(
 	dateCol string,
 	pb *paramBuilder,
 ) string {
-	return buildAnalyticsWhereWithDate(f, dateCol, pb, true)
+	return buildAnalyticsWhereWithDate(
+		f, dateCol, pb, true, "id",
+	)
 }
 
 // buildAnalyticsWhereWithoutDate returns common analytics
@@ -109,7 +112,9 @@ func buildAnalyticsWhereWithoutDate(
 	f db.AnalyticsFilter,
 	pb *paramBuilder,
 ) string {
-	return buildAnalyticsWhereWithDate(f, "", pb, false)
+	return buildAnalyticsWhereWithDate(
+		f, "", pb, false, "id",
+	)
 }
 
 func buildAnalyticsWhereWithDate(
@@ -117,7 +122,11 @@ func buildAnalyticsWhereWithDate(
 	dateCol string,
 	pb *paramBuilder,
 	includeDate bool,
+	sessionIDExpr string,
 ) string {
+	if sessionIDExpr == "" {
+		sessionIDExpr = "id"
+	}
 	preds := []string{
 		"message_count > 0",
 		// Mirror the SQLite analytics filter: count subagents only on
@@ -143,6 +152,26 @@ func buildAnalyticsWhereWithDate(
 	if f.Agent != "" {
 		preds = appendPGAnalyticsCSVFilter(
 			preds, "agent", f.Agent, pb)
+	}
+	if f.Model != "" {
+		models := csvFilterValues(f.Model)
+		if len(models) == 1 {
+			preds = append(preds,
+				"EXISTS (SELECT 1 FROM messages m WHERE "+
+					"m.session_id = "+sessionIDExpr+
+					" AND m.model = "+pb.add(models[0])+")")
+		} else if len(models) > 1 {
+			phs := make([]string, len(models))
+			for i, model := range models {
+				phs[i] = pb.add(model)
+			}
+			preds = append(preds,
+				"EXISTS (SELECT 1 FROM messages m WHERE "+
+					"m.session_id = "+sessionIDExpr+
+					" AND m.model IN ("+
+					strings.Join(phs, ",")+
+					"))")
+		}
 	}
 	if f.MinUserMessages > 0 {
 		preds = append(preds,
@@ -201,6 +230,10 @@ func appendPGAnalyticsCSVFilter(
 }
 
 func pgAnalyticsCSVValues(raw string) []string {
+	return csvFilterValues(raw)
+}
+
+func csvFilterValues(raw string) []string {
 	values := strings.Split(raw, ",")
 	out := values[:0]
 	for _, value := range values {
@@ -210,6 +243,54 @@ func pgAnalyticsCSVValues(raw string) []string {
 		}
 	}
 	return out
+}
+
+func (s *Store) getAnalyticsFilteredMessageCounts(
+	ctx context.Context,
+	sessionIDs []string,
+	f db.AnalyticsFilter,
+) (map[string]int, error) {
+	stats, err := s.getAnalyticsFilteredMessageStats(
+		ctx, sessionIDs, f,
+	)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int, len(stats))
+	for sessionID, stat := range stats {
+		counts[sessionID] = stat.Messages
+	}
+	return counts, nil
+}
+
+func (s *Store) getAnalyticsModelScopedMessages(
+	ctx context.Context,
+	sessionIDs []string,
+	f db.AnalyticsFilter,
+) (map[string][]analyticscope.ScopedMessage, error) {
+	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, true)
+	if err != nil {
+		return nil, err
+	}
+	if scope == nil {
+		return map[string][]analyticscope.ScopedMessage{}, nil
+	}
+	return scope.MessagesBySession(), nil
+}
+
+func (s *Store) getAnalyticsFilteredMessageStats(
+	ctx context.Context,
+	sessionIDs []string,
+	f db.AnalyticsFilter,
+) (map[string]analyticscope.MessageStats, error) {
+	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
+	if err != nil {
+		return nil, err
+	}
+	if scope == nil {
+		return map[string]analyticscope.MessageStats{}, nil
+	}
+	return scope.StatsBySession(), nil
 }
 
 // localTime parses a UTC timestamp string and converts it to
@@ -326,14 +407,23 @@ func (s *Store) filteredSessionIDs(
 ) (map[string]bool, error) {
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateColS, pb)
+	where := buildAnalyticsWhereWithDate(
+		f, pgDateColS, pb, true, "s.id",
+	)
+	preds := []string{
+		where,
+		"m.timestamp IS NOT NULL",
+	}
+	preds = appendPGAnalyticsCSVFilter(
+		preds, "m.model", f.Model, pb,
+	)
 
 	query := `SELECT s.id,
 		TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
 			'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
-		WHERE ` + where + ` AND m.timestamp IS NOT NULL`
+		WHERE ` + strings.Join(preds, " AND ")
 
 	rows, err := s.pg.QueryContext(
 		ctx, query, pb.args...,
@@ -393,6 +483,170 @@ func bucketDate(date string, granularity string) string {
 	}
 }
 
+func (s *Store) getModelScopedToolCallCounts(
+	ctx context.Context,
+	sessionIDs []string,
+	f db.AnalyticsFilter,
+) (map[string]int, error) {
+	counts := make(map[string]int, len(sessionIDs))
+	if len(sessionIDs) == 0 || strings.TrimSpace(f.Model) == "" {
+		return counts, nil
+	}
+
+	flt := messageScopeFilter(f)
+	loc := analyticsLocation(f)
+	if err := pgQueryChunked(sessionIDs, func(chunk []string) error {
+		pb := &paramBuilder{}
+		placeholders := pgInPlaceholders(chunk, pb)
+		rows, err := s.pg.QueryContext(ctx, `
+			SELECT tc.session_id, m.model,
+				COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
+					'YYYY-MM-DD"T"HH24:MI:SS"Z"'), ''),
+				COUNT(*)
+			FROM tool_calls tc
+			JOIN messages m
+				ON m.session_id = tc.session_id
+				AND m.ordinal = tc.message_ordinal
+			WHERE tc.session_id IN `+placeholders+`
+			GROUP BY tc.session_id, m.model,
+				COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
+					'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')`,
+			pb.args...,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"querying filtered analytics tool calls: %w",
+				err,
+			)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var sessionID, model, ts string
+			var count int
+			if err := rows.Scan(&sessionID, &model, &ts, &count); err != nil {
+				return fmt.Errorf(
+					"scanning filtered analytics tool calls: %w",
+					err,
+				)
+			}
+			if _, ok := flt.Models[model]; !ok {
+				continue
+			}
+			parsed, has := localTime(ts, loc)
+			if !flt.MatchesDayHour(parsed, has) {
+				continue
+			}
+			counts[sessionID] += count
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+
+	return counts, nil
+}
+
+func (s *Store) getAnalyticsActivityFilteredByModelTime(
+	ctx context.Context,
+	f db.AnalyticsFilter,
+	granularity string,
+) (db.ActivityResponse, error) {
+	loc := analyticsLocation(f)
+	pb := &paramBuilder{}
+	where := buildAnalyticsWhere(f, pgDateCol, pb)
+	var timeIDs map[string]bool
+	if f.HasTimeFilter() {
+		var err error
+		timeIDs, err = s.filteredSessionIDs(ctx, f)
+		if err != nil {
+			return db.ActivityResponse{}, err
+		}
+	}
+
+	rows, err := s.pg.QueryContext(ctx, `SELECT id, `+pgDateCol+`, agent
+		FROM sessions
+		WHERE `+where, pb.args...)
+	if err != nil {
+		return db.ActivityResponse{},
+			fmt.Errorf("querying analytics activity sessions: %w", err)
+	}
+	defer rows.Close()
+
+	type sessionRow struct {
+		id, date, agent string
+	}
+	sessions := make([]sessionRow, 0)
+	sessionIDs := make([]string, 0)
+	for rows.Next() {
+		var id, agent string
+		var ts *time.Time
+		if err := rows.Scan(&id, &ts, &agent); err != nil {
+			return db.ActivityResponse{},
+				fmt.Errorf("scanning analytics activity session: %w", err)
+		}
+		date := localDate(scanDateCol(ts), loc)
+		if !inDateRange(date, f.From, f.To) {
+			continue
+		}
+		if timeIDs != nil && !timeIDs[id] {
+			continue
+		}
+		sessions = append(sessions, sessionRow{id: id, date: date, agent: agent})
+		sessionIDs = append(sessionIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return db.ActivityResponse{},
+			fmt.Errorf("iterating analytics activity sessions: %w", err)
+	}
+
+	messageStats, err := s.getAnalyticsFilteredMessageStats(
+		ctx, sessionIDs, f,
+	)
+	if err != nil {
+		return db.ActivityResponse{}, err
+	}
+	toolCounts, err := s.getModelScopedToolCallCounts(
+		ctx, sessionIDs, f,
+	)
+	if err != nil {
+		return db.ActivityResponse{}, err
+	}
+
+	buckets := make(map[string]*db.ActivityEntry)
+	for _, session := range sessions {
+		bucket := bucketDate(session.date, granularity)
+		entry := buckets[bucket]
+		if entry == nil {
+			entry = &db.ActivityEntry{
+				Date:    bucket,
+				ByAgent: make(map[string]int),
+			}
+			buckets[bucket] = entry
+		}
+		entry.Sessions++
+		stat := messageStats[session.id]
+		entry.Messages += stat.Messages
+		entry.UserMessages += stat.UserMessages
+		entry.AssistantMessages += stat.AssistantMessages
+		entry.ThinkingMessages += stat.ThinkingMessages
+		entry.ToolCalls += toolCounts[session.id]
+		entry.ByAgent[session.agent] += stat.Messages
+	}
+
+	series := make([]db.ActivityEntry, 0, len(buckets))
+	for _, entry := range buckets {
+		series = append(series, *entry)
+	}
+	sort.Slice(series, func(i, j int) bool {
+		return series[i].Date < series[j].Date
+	})
+	return db.ActivityResponse{
+		Granularity: granularity,
+		Series:      series,
+	}, nil
+}
+
 // scanDateCol scans a TIMESTAMPTZ column and returns it as
 // an ISO-8601 string for client-side date processing.
 func scanDateCol(t *time.Time) string {
@@ -400,6 +654,137 @@ func scanDateCol(t *time.Time) string {
 		return ""
 	}
 	return FormatISO8601(*t)
+}
+
+func (s *Store) getAnalyticsModelsForSessionIDs(
+	ctx context.Context,
+	sessionIDs []string,
+) ([]string, error) {
+	if len(sessionIDs) == 0 {
+		return []string{}, nil
+	}
+	seen := make(map[string]struct{}, len(sessionIDs))
+	unique := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		unique = append(unique, sessionID)
+	}
+
+	modelSet := make(map[string]struct{})
+	models := make([]string, 0)
+	if err := pgQueryChunked(unique, func(chunk []string) error {
+		pb := &paramBuilder{}
+		placeholders := pgInPlaceholders(chunk, pb)
+		rows, err := s.pg.QueryContext(ctx, `
+			SELECT DISTINCT model
+			FROM messages
+			WHERE session_id IN `+placeholders+`
+			AND COALESCE(model, '') <> ''
+			ORDER BY model`,
+			pb.args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying analytics models: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var model string
+			if err := rows.Scan(&model); err != nil {
+				return fmt.Errorf("scanning analytics model: %w", err)
+			}
+			if _, ok := modelSet[model]; ok {
+				continue
+			}
+			modelSet[model] = struct{}{}
+			models = append(models, model)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterating analytics models: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
+	ctx context.Context,
+	sessionIDs []string,
+	f db.AnalyticsFilter,
+) ([]string, error) {
+	if len(sessionIDs) == 0 {
+		return []string{}, nil
+	}
+	seen := make(map[string]struct{}, len(sessionIDs))
+	unique := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		unique = append(unique, sessionID)
+	}
+
+	filterModels := csvFilterValues(f.Model)
+	allowedModels := make(map[string]struct{}, len(filterModels))
+	for _, model := range filterModels {
+		allowedModels[model] = struct{}{}
+	}
+	loc := analyticsLocation(f)
+	modelSet := make(map[string]struct{})
+	models := make([]string, 0)
+	if err := pgQueryChunked(unique, func(chunk []string) error {
+		pb := &paramBuilder{}
+		placeholders := pgInPlaceholders(chunk, pb)
+		rows, err := s.pg.QueryContext(ctx, `
+			SELECT model,
+				COALESCE(TO_CHAR(timestamp AT TIME ZONE 'UTC',
+					'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')
+			FROM messages
+			WHERE session_id IN `+placeholders+`
+			AND COALESCE(model, '') <> ''`,
+			pb.args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying filtered analytics models: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var model, ts string
+			if err := rows.Scan(&model, &ts); err != nil {
+				return fmt.Errorf("scanning filtered analytics model: %w", err)
+			}
+			if len(allowedModels) > 0 {
+				if _, ok := allowedModels[model]; !ok {
+					continue
+				}
+			}
+			if f.HasTimeFilter() {
+				t, ok := localTime(ts, loc)
+				if !ok || !matchesTimeFilter(f, t) {
+					continue
+				}
+			}
+			if _, ok := modelSet[model]; ok {
+				continue
+			}
+			modelSet[model] = struct{}{}
+			models = append(models, model)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterating filtered analytics models: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(models)
+	return models, nil
 }
 
 // --- Summary ---
@@ -441,6 +826,7 @@ func (s *Store) GetAnalyticsSummary(
 	defer rows.Close()
 
 	type sessionRow struct {
+		id           string
 		date         string
 		messages     int
 		agent        string
@@ -474,6 +860,7 @@ func (s *Store) GetAnalyticsSummary(
 			continue
 		}
 		all = append(all, sessionRow{
+			id:           id,
 			date:         date,
 			messages:     mc,
 			agent:        agent,
@@ -491,14 +878,35 @@ func (s *Store) GetAnalyticsSummary(
 
 	var summary db.AnalyticsSummary
 	summary.Agents = make(map[string]*db.AgentSummary)
+	summary.Models = []string{}
 
 	if len(all) == 0 {
 		return summary, nil
 	}
 
+	if f.Model != "" {
+		sessionIDs := make([]string, 0, len(all))
+		for _, r := range all {
+			sessionIDs = append(sessionIDs, r.id)
+		}
+		stats, err := s.getAnalyticsFilteredMessageStats(
+			ctx, sessionIDs, f,
+		)
+		if err != nil {
+			return db.AnalyticsSummary{}, err
+		}
+		for i := range all {
+			stat := stats[all[i].id]
+			all[i].messages = stat.Messages
+			all[i].outputTokens = stat.OutputTokens
+			all[i].hasTokens = stat.HasOutputTokens
+		}
+	}
+
 	days := make(map[string]bool)
 	projects := make(map[string]int)
 	msgCounts := make([]int, 0, len(all))
+	sessionIDs := make([]string, 0, len(all))
 
 	for _, r := range all {
 		summary.TotalSessions++
@@ -510,6 +918,7 @@ func (s *Store) GetAnalyticsSummary(
 		days[r.date] = true
 		projects[r.project] += r.messages
 		msgCounts = append(msgCounts, r.messages)
+		sessionIDs = append(sessionIDs, r.id)
 
 		if summary.Agents[r.agent] == nil {
 			summary.Agents[r.agent] = &db.AgentSummary{}
@@ -517,6 +926,19 @@ func (s *Store) GetAnalyticsSummary(
 		summary.Agents[r.agent].Sessions++
 		summary.Agents[r.agent].Messages += r.messages
 	}
+
+	var models []string
+	if strings.TrimSpace(f.Model) != "" || f.HasTimeFilter() {
+		models, err = s.getAnalyticsModelsForSessionIDsFiltered(
+			ctx, sessionIDs, f,
+		)
+	} else {
+		models, err = s.getAnalyticsModelsForSessionIDs(ctx, sessionIDs)
+	}
+	if err != nil {
+		return db.AnalyticsSummary{}, err
+	}
+	summary.Models = models
 
 	summary.ActiveProjects = len(projects)
 	summary.ActiveDays = len(days)
@@ -579,9 +1001,19 @@ func (s *Store) GetAnalyticsActivity(
 	if granularity == "" {
 		granularity = "day"
 	}
+	if strings.TrimSpace(f.Model) != "" {
+		return s.getAnalyticsActivityFilteredByModelTime(
+			ctx, f, granularity,
+		)
+	}
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateColS, pb)
+	where := buildAnalyticsWhereWithDate(
+		f, pgDateColS, pb, true, "s.id",
+	)
+	preds := appendPGAnalyticsCSVFilter(
+		[]string{where}, "m.model", f.Model, pb,
+	)
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -596,7 +1028,7 @@ func (s *Store) GetAnalyticsActivity(
 		m.role, m.has_thinking, COUNT(*)
 		FROM sessions s
 		LEFT JOIN messages m ON m.session_id = s.id
-		WHERE ` + where + `
+		WHERE ` + strings.Join(preds, " AND ") + `
 		GROUP BY s.id, ` + pgDateColS +
 		`, s.agent, m.role, m.has_thinking`
 
@@ -680,7 +1112,7 @@ func (s *Store) GetAnalyticsActivity(
 		err = pgQueryChunked(sessionIDs,
 			func(chunk []string) error {
 				return s.mergeActivityToolCalls(
-					ctx, chunk, sessionSeen, buckets,
+					ctx, chunk, sessionSeen, buckets, f.Model,
 				)
 			})
 		if err != nil {
@@ -710,13 +1142,25 @@ func (s *Store) mergeActivityToolCalls(
 	chunk []string,
 	sessionBucket map[string]string,
 	buckets map[string]*db.ActivityEntry,
+	model string,
 ) error {
 	pb := &paramBuilder{}
 	ph := pgInPlaceholders(chunk, pb)
-	q := `SELECT session_id, COUNT(*)
-		FROM tool_calls
-		WHERE session_id IN ` + ph + `
-		GROUP BY session_id`
+	preds := []string{"tc.session_id IN " + ph}
+	preds = appendPGAnalyticsCSVFilter(
+		preds, "m.model", model, pb,
+	)
+	q := `SELECT tc.session_id, COUNT(*)
+		FROM tool_calls tc`
+	if model != "" {
+		q += `
+		JOIN messages m
+			ON m.session_id = tc.session_id
+			AND m.ordinal = tc.message_ordinal`
+	}
+	q += `
+		WHERE ` + strings.Join(preds, " AND ") + `
+		GROUP BY tc.session_id`
 	rows, err := s.pg.QueryContext(ctx, q, pb.args...)
 	if err != nil {
 		return fmt.Errorf(
@@ -868,6 +1312,15 @@ func (s *Store) GetAnalyticsHeatmap(
 	}
 	defer rows.Close()
 
+	type heatmapRow struct {
+		id           string
+		date         string
+		messages     int
+		outputTokens int
+		hasTokens    bool
+	}
+
+	var heatmapRows []heatmapRow
 	dayCounts := make(map[string]int)
 	daySessions := make(map[string]int)
 	dayOutputTokens := make(map[string]int)
@@ -892,17 +1345,44 @@ func (s *Store) GetAnalyticsHeatmap(
 		if timeIDs != nil && !timeIDs[id] {
 			continue
 		}
-		dayCounts[date] += mc
-		daySessions[date]++
-		if hasTokens {
-			dayOutputTokens[date] += outputTokens
-		}
+		heatmapRows = append(heatmapRows, heatmapRow{
+			id:           id,
+			date:         date,
+			messages:     mc,
+			outputTokens: outputTokens,
+			hasTokens:    hasTokens,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return db.HeatmapResponse{},
 			fmt.Errorf(
 				"iterating heatmap rows: %w", err,
 			)
+	}
+
+	if f.Model != "" && (metric == "messages" || metric == "output_tokens") {
+		ids := make([]string, 0, len(heatmapRows))
+		for _, row := range heatmapRows {
+			ids = append(ids, row.id)
+		}
+		stats, err := s.getAnalyticsFilteredMessageStats(ctx, ids, f)
+		if err != nil {
+			return db.HeatmapResponse{}, err
+		}
+		for i := range heatmapRows {
+			stat := stats[heatmapRows[i].id]
+			heatmapRows[i].messages = stat.Messages
+			heatmapRows[i].outputTokens = stat.OutputTokens
+			heatmapRows[i].hasTokens = stat.HasOutputTokens
+		}
+	}
+
+	for _, row := range heatmapRows {
+		dayCounts[row.date] += row.messages
+		daySessions[row.date]++
+		if row.hasTokens {
+			dayOutputTokens[row.date] += row.outputTokens
+		}
 	}
 
 	source := dayCounts
@@ -997,6 +1477,14 @@ func (s *Store) GetAnalyticsProjects(
 
 	projectMap := make(map[string]*projectData)
 	var projectOrder []string
+	type projectRow struct {
+		id       string
+		project  string
+		date     string
+		messages int
+		agent    string
+	}
+	var projectRows []projectRow
 
 	for rows.Next() {
 		var id, project, agent string
@@ -1018,37 +1506,61 @@ func (s *Store) GetAnalyticsProjects(
 			continue
 		}
 
-		pd, ok := projectMap[project]
-		if !ok {
-			pd = &projectData{
-				name:   project,
-				agents: make(map[string]int),
-				days:   make(map[string]int),
-			}
-			projectMap[project] = pd
-			projectOrder = append(
-				projectOrder, project,
-			)
-		}
-
-		pd.sessions++
-		pd.messages += mc
-		pd.counts = append(pd.counts, mc)
-		pd.agents[agent]++
-		pd.days[date] += mc
-
-		if pd.first == "" || date < pd.first {
-			pd.first = date
-		}
-		if date > pd.last {
-			pd.last = date
-		}
+		projectRows = append(projectRows, projectRow{
+			id:       id,
+			project:  project,
+			date:     date,
+			messages: mc,
+			agent:    agent,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return db.ProjectsAnalyticsResponse{},
 			fmt.Errorf(
 				"iterating project rows: %w", err,
 			)
+	}
+
+	if f.Model != "" {
+		ids := make([]string, 0, len(projectRows))
+		for _, row := range projectRows {
+			ids = append(ids, row.id)
+		}
+		counts, err := s.getAnalyticsFilteredMessageCounts(
+			ctx, ids, f,
+		)
+		if err != nil {
+			return db.ProjectsAnalyticsResponse{}, err
+		}
+		for i := range projectRows {
+			projectRows[i].messages = counts[projectRows[i].id]
+		}
+	}
+
+	for _, row := range projectRows {
+		pd, ok := projectMap[row.project]
+		if !ok {
+			pd = &projectData{
+				name:   row.project,
+				agents: make(map[string]int),
+				days:   make(map[string]int),
+			}
+			projectMap[row.project] = pd
+			projectOrder = append(projectOrder, row.project)
+		}
+
+		pd.sessions++
+		pd.messages += row.messages
+		pd.counts = append(pd.counts, row.messages)
+		pd.agents[row.agent]++
+		pd.days[row.date] += row.messages
+
+		if pd.first == "" || row.date < pd.first {
+			pd.first = row.date
+		}
+		if row.date > pd.last {
+			pd.last = row.date
+		}
 	}
 
 	projects := make(
@@ -1108,14 +1620,22 @@ func (s *Store) GetAnalyticsHourOfWeek(
 ) (db.HourOfWeekResponse, error) {
 	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateColS, pb)
+	where := buildAnalyticsWhereWithDate(
+		f, pgDateColS, pb, true, "s.id",
+	)
+	preds := appendPGAnalyticsCSVFilter(
+		[]string{where, "m.timestamp IS NOT NULL"},
+		"m.model",
+		f.Model,
+		pb,
+	)
 
 	query := `SELECT ` + pgDateColS + `,
 		TO_CHAR(m.timestamp AT TIME ZONE 'UTC',
 			'YYYY-MM-DD"T"HH24:MI:SS"Z"')
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
-		WHERE ` + where + ` AND m.timestamp IS NOT NULL`
+		WHERE ` + strings.Join(preds, " AND ")
 
 	rows, err := s.pg.QueryContext(
 		ctx, query, pb.args...,
@@ -1278,6 +1798,7 @@ func (s *Store) GetAnalyticsSessionShape(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SessionShapeResponse, error) {
 	loc := analyticsLocation(f)
+	modelFilter := strings.TrimSpace(f.Model) != ""
 	pb := &paramBuilder{}
 	where := buildAnalyticsWhere(f, pgDateCol, pb)
 
@@ -1334,7 +1855,9 @@ func (s *Store) GetAnalyticsSessionShape(
 		}
 
 		totalCount++
-		lengthCounts[lengthBucket(mc)]++
+		if !modelFilter {
+			lengthCounts[lengthBucket(mc)]++
+		}
 		sessionIDs = append(sessionIDs, id)
 
 		if durationSec != nil && *durationSec >= 0 {
@@ -1351,7 +1874,29 @@ func (s *Store) GetAnalyticsSessionShape(
 	}
 
 	autonomyCounts := make(map[string]int)
-	if len(sessionIDs) > 0 {
+	if modelFilter && len(sessionIDs) > 0 {
+		stats, err := s.getAnalyticsFilteredMessageStats(
+			ctx, sessionIDs, f,
+		)
+		if err != nil {
+			return db.SessionShapeResponse{}, err
+		}
+		lengthCounts = make(map[string]int)
+		seen := make(map[string]struct{}, len(sessionIDs))
+		for _, sessionID := range sessionIDs {
+			if _, ok := seen[sessionID]; ok {
+				continue
+			}
+			seen[sessionID] = struct{}{}
+			stat := stats[sessionID]
+			lengthCounts[lengthBucket(stat.Messages)]++
+			if stat.UserMessages > 0 {
+				ratio := float64(stat.ToolUseMessages) /
+					float64(stat.UserMessages)
+				autonomyCounts[autonomyBucket(ratio)]++
+			}
+		}
+	} else if len(sessionIDs) > 0 {
 		err := pgQueryChunked(sessionIDs,
 			func(chunk []string) error {
 				return s.queryAutonomyChunk(
@@ -1426,18 +1971,8 @@ func (s *Store) queryAutonomyChunk(
 func (s *Store) GetAnalyticsTools(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.ToolsAnalyticsResponse, error) {
-	loc := analyticsLocation(f)
 	pb := &paramBuilder{}
-	where := buildAnalyticsWhere(f, pgDateCol, pb)
-
-	var timeIDs map[string]bool
-	if f.HasTimeFilter() {
-		var err error
-		timeIDs, err = s.filteredSessionIDs(ctx, f)
-		if err != nil {
-			return db.ToolsAnalyticsResponse{}, err
-		}
-	}
+	where := buildAnalyticsWhereWithoutDate(f, pb)
 
 	sessQ := `SELECT id, ` + pgDateCol + `, agent
 		FROM sessions WHERE ` + where
@@ -1454,7 +1989,7 @@ func (s *Store) GetAnalyticsTools(
 	defer sessRows.Close()
 
 	type sessInfo struct {
-		date  string
+		ts    string
 		agent string
 	}
 	sessionMap := make(map[string]sessInfo)
@@ -1471,15 +2006,8 @@ func (s *Store) GetAnalyticsTools(
 					"scanning tool session: %w", err,
 				)
 		}
-		date := localDate(scanDateCol(ts), loc)
-		if !inDateRange(date, f.From, f.To) {
-			continue
-		}
-		if timeIDs != nil && !timeIDs[id] {
-			continue
-		}
 		sessionMap[id] = sessInfo{
-			date: date, agent: agent,
+			ts: scanDateCol(ts), agent: agent,
 		}
 		sessionIDs = append(sessionIDs, id)
 	}
@@ -1504,6 +2032,7 @@ func (s *Store) GetAnalyticsTools(
 		sessionID string
 		category  string
 		count     int
+		date      string
 	}
 	var toolRows []toolRow
 
@@ -1511,10 +2040,21 @@ func (s *Store) GetAnalyticsTools(
 		func(chunk []string) error {
 			chunkPB := &paramBuilder{}
 			ph := pgInPlaceholders(chunk, chunkPB)
-			q := `SELECT session_id, category, COUNT(*)
-				FROM tool_calls
-				WHERE session_id IN ` + ph + `
-				GROUP BY session_id, category`
+			preds := []string{"tc.session_id IN " + ph}
+			preds = appendPGAnalyticsCSVFilter(
+				preds, "m.model", f.Model, chunkPB,
+			)
+			msgTSExpr := `COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC', ` +
+				`'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')`
+			q := `SELECT tc.session_id, tc.category, COUNT(*),
+				` + msgTSExpr + `
+				FROM tool_calls tc
+				LEFT JOIN messages m
+					ON m.session_id = tc.session_id
+					AND m.ordinal = tc.message_ordinal`
+			q += `
+				WHERE ` + strings.Join(preds, " AND ") + `
+				GROUP BY tc.session_id, tc.category, ` + msgTSExpr
 			rows, qErr := s.pg.QueryContext(
 				ctx, q, chunkPB.args...,
 			)
@@ -1525,19 +2065,30 @@ func (s *Store) GetAnalyticsTools(
 			}
 			defer rows.Close()
 			for rows.Next() {
-				var sid, cat string
+				var sid, cat, ts string
 				var count int
 				if err := rows.Scan(
-					&sid, &cat, &count,
+					&sid, &cat, &count, &ts,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning tool_call: %w", err,
 					)
 				}
+				info, ok := sessionMap[sid]
+				if !ok {
+					continue
+				}
+				_, date, keep := f.ResolveSkillRowTime(
+					ts, info.ts,
+				)
+				if !keep {
+					continue
+				}
 				toolRows = append(toolRows, toolRow{
 					sessionID: sid,
 					category:  cat,
 					count:     count,
+					date:      date,
 				})
 			}
 			return rows.Err()
@@ -1563,7 +2114,7 @@ func (s *Store) GetAnalyticsTools(
 		}
 		agentCats[info.agent][tr.category] += tr.count
 
-		week := bucketDate(info.date, "week")
+		week := bucketDate(tr.date, "week")
 		if trendBuckets[week] == nil {
 			trendBuckets[week] = make(map[string]int)
 		}
@@ -1706,6 +2257,13 @@ func (s *Store) GetAnalyticsSkills(
 		func(chunk []string) error {
 			chunkPB := &paramBuilder{}
 			ph := pgInPlaceholders(chunk, chunkPB)
+			preds := []string{
+				"tc.session_id IN " + ph,
+				"TRIM(COALESCE(tc.skill_name, '')) != ''",
+			}
+			preds = appendPGAnalyticsCSVFilter(
+				preds, "m.model", f.Model, chunkPB,
+			)
 			q := `SELECT tc.session_id,
 					TRIM(COALESCE(tc.skill_name, '')),
 					COUNT(*),
@@ -1714,8 +2272,7 @@ func (s *Store) GetAnalyticsSkills(
 				LEFT JOIN messages m
 					ON m.session_id = tc.session_id
 					AND m.ordinal = tc.message_ordinal
-				WHERE tc.session_id IN ` + ph + `
-					AND TRIM(COALESCE(tc.skill_name, '')) != ''
+				WHERE ` + strings.Join(preds, " AND ") + `
 				GROUP BY tc.session_id,
 					TRIM(COALESCE(tc.skill_name, '')),
 					m.timestamp`
@@ -1826,6 +2383,42 @@ func (s *Store) queryVelocityMsgs(
 			})
 	}
 	return rows.Err()
+}
+
+func (s *Store) getAnalyticsVelocityMessages(
+	ctx context.Context,
+	sessionIDs []string,
+	f db.AnalyticsFilter,
+) (map[string][]velocityMsg, error) {
+	sessionMsgs := make(map[string][]velocityMsg, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return sessionMsgs, nil
+	}
+
+	loc := analyticsLocation(f)
+	if strings.TrimSpace(f.Model) == "" {
+		err := pgQueryChunked(sessionIDs, func(chunk []string) error {
+			return s.queryVelocityMsgs(ctx, chunk, loc, sessionMsgs)
+		})
+		return sessionMsgs, err
+	}
+
+	scope, err := s.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
+	if err != nil {
+		return nil, err
+	}
+	if scope != nil {
+		for sid, timings := range scope.TimingBySession() {
+			for _, t := range timings {
+				sessionMsgs[sid] = append(sessionMsgs[sid], velocityMsg{
+					role: t.Role, ts: t.Time, valid: t.Valid,
+					contentLength: t.ContentLength,
+				})
+			}
+		}
+	}
+
+	return sessionMsgs, nil
 }
 
 // complexityBucket returns the complexity label.
@@ -1960,54 +2553,73 @@ func (s *Store) GetAnalyticsVelocity(
 			ByComplexity: []db.VelocityBreakdown{},
 		}, nil
 	}
+	if strings.TrimSpace(f.Model) != "" {
+		stats, err := s.getAnalyticsFilteredMessageStats(
+			ctx, sessionIDs, f,
+		)
+		if err != nil {
+			return db.VelocityResponse{}, err
+		}
+		for _, sid := range sessionIDs {
+			info := sessionMap[sid]
+			info.mc = stats[sid].Messages
+			sessionMap[sid] = info
+		}
+	}
 
-	sessionMsgs := make(map[string][]velocityMsg)
-	err = pgQueryChunked(sessionIDs,
-		func(chunk []string) error {
-			return s.queryVelocityMsgs(
-				ctx, chunk, loc, sessionMsgs,
-			)
-		})
+	sessionMsgs, err := s.getAnalyticsVelocityMessages(
+		ctx, sessionIDs, f,
+	)
 	if err != nil {
 		return db.VelocityResponse{}, err
 	}
 
-	toolCountMap := make(map[string]int)
-	err = pgQueryChunked(sessionIDs,
-		func(chunk []string) error {
-			chunkPB := &paramBuilder{}
-			ph := pgInPlaceholders(chunk, chunkPB)
-			q := `SELECT session_id, COUNT(*)
-				FROM tool_calls
-				WHERE session_id IN ` + ph + `
-				GROUP BY session_id`
-			rows, qErr := s.pg.QueryContext(
-				ctx, q, chunkPB.args...,
-			)
-			if qErr != nil {
-				return fmt.Errorf(
-					"querying velocity tool_calls: %w",
-					qErr,
+	var toolCountMap map[string]int
+	if strings.TrimSpace(f.Model) != "" {
+		toolCountMap, err = s.getModelScopedToolCallCounts(
+			ctx, sessionIDs, f,
+		)
+		if err != nil {
+			return db.VelocityResponse{}, err
+		}
+	} else {
+		toolCountMap = make(map[string]int)
+		err = pgQueryChunked(sessionIDs,
+			func(chunk []string) error {
+				chunkPB := &paramBuilder{}
+				ph := pgInPlaceholders(chunk, chunkPB)
+				q := `SELECT session_id, COUNT(*)
+					FROM tool_calls
+					WHERE session_id IN ` + ph + `
+					GROUP BY session_id`
+				rows, qErr := s.pg.QueryContext(
+					ctx, q, chunkPB.args...,
 				)
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var sid string
-				var count int
-				if err := rows.Scan(
-					&sid, &count,
-				); err != nil {
+				if qErr != nil {
 					return fmt.Errorf(
-						"scanning velocity tool_call: %w",
-						err,
+						"querying velocity tool_calls: %w",
+						qErr,
 					)
 				}
-				toolCountMap[sid] = count
-			}
-			return rows.Err()
-		})
-	if err != nil {
-		return db.VelocityResponse{}, err
+				defer rows.Close()
+				for rows.Next() {
+					var sid string
+					var count int
+					if err := rows.Scan(
+						&sid, &count,
+					); err != nil {
+						return fmt.Errorf(
+							"scanning velocity tool_call: %w",
+							err,
+						)
+					}
+					toolCountMap[sid] = count
+				}
+				return rows.Err()
+			})
+		if err != nil {
+			return db.VelocityResponse{}, err
+		}
 	}
 
 	overall := &velocityAccumulator{}
@@ -2205,10 +2817,14 @@ func (s *Store) GetAnalyticsTopSessions(
 	}
 
 	needsGoSort := metric == "duration"
+	needsFilteredMessageSort := strings.TrimSpace(f.Model) != "" &&
+		(metric == "messages" || metric == "output_tokens")
 	orderExpr := "message_count DESC, id ASC"
 	switch metric {
 	case "output_tokens":
-		where += " AND has_total_output_tokens = TRUE"
+		if strings.TrimSpace(f.Model) == "" {
+			where += " AND has_total_output_tokens = TRUE"
+		}
 		orderExpr = "total_output_tokens DESC, id ASC"
 	case "duration":
 		where += " AND started_at IS NOT NULL" +
@@ -2218,7 +2834,7 @@ func (s *Store) GetAnalyticsTopSessions(
 	}
 
 	limitClause := " LIMIT 1000"
-	if f.HasTimeFilter() || needsGoSort {
+	if f.HasTimeFilter() || needsGoSort || needsFilteredMessageSort {
 		limitClause = ""
 	}
 	query := `SELECT id, ` + pgDateCol + `, project,
@@ -2302,6 +2918,40 @@ func (s *Store) GetAnalyticsTopSessions(
 			fmt.Errorf(
 				"iterating top sessions: %w", err,
 			)
+	}
+
+	if needsFilteredMessageSort {
+		sessionIDs := make([]string, 0, len(sessions))
+		for _, session := range sessions {
+			sessionIDs = append(sessionIDs, session.ID)
+		}
+		stats, err := s.getAnalyticsFilteredMessageStats(ctx, sessionIDs, f)
+		if err != nil {
+			return db.TopSessionsResponse{}, err
+		}
+		filtered := sessions[:0]
+		for i := range sessions {
+			stat := stats[sessions[i].ID]
+			sessions[i].MessageCount = stat.Messages
+			sessions[i].OutputTokens = stat.OutputTokens
+			if metric == "output_tokens" && !stat.HasOutputTokens {
+				continue
+			}
+			filtered = append(filtered, sessions[i])
+		}
+		sessions = filtered
+		sort.SliceStable(sessions, func(i, j int) bool {
+			if metric == "output_tokens" {
+				if sessions[i].OutputTokens != sessions[j].OutputTokens {
+					return sessions[i].OutputTokens >
+						sessions[j].OutputTokens
+				}
+			} else if sessions[i].MessageCount != sessions[j].MessageCount {
+				return sessions[i].MessageCount >
+					sessions[j].MessageCount
+			}
+			return sessions[i].ID < sessions[j].ID
+		})
 	}
 
 	sessions = rankTopSessions(sessions, needsGoSort)
@@ -2424,7 +3074,7 @@ func (s *Store) GetAnalyticsSignalSessions(
 		return db.SignalSessionsResponse{}, err
 	}
 	candidates := db.SignalCandidates(rows, signal, limit)
-	messages, err := s.signalMessages(ctx, candidates)
+	messages, err := s.signalMessages(ctx, candidates, f)
 	if err != nil {
 		return db.SignalSessionsResponse{}, err
 	}
@@ -2527,6 +3177,7 @@ func scanPGSignalRow(
 func (s *Store) signalMessages(
 	ctx context.Context,
 	rows []db.SignalRow,
+	f db.AnalyticsFilter,
 ) (map[string][]db.SignalMessage, error) {
 	out := make(map[string][]db.SignalMessage, len(rows))
 	if len(rows) == 0 {
@@ -2536,6 +3187,27 @@ func (s *Store) signalMessages(
 	for _, r := range rows {
 		ids = append(ids, r.ID)
 	}
+	if strings.TrimSpace(f.Model) != "" {
+		rowsBySession, err := s.getAnalyticsModelScopedMessages(ctx, ids, f)
+		if err != nil {
+			return nil, err
+		}
+		for sessionID, scopedRows := range rowsBySession {
+			for _, row := range scopedRows {
+				out[sessionID] = append(out[sessionID], db.SignalMessage{
+					SessionID:  row.SessionID,
+					Ordinal:    row.Ordinal,
+					Role:       row.Role,
+					Content:    row.Content,
+					Timestamp:  row.Timestamp,
+					IsSystem:   row.IsSystem,
+					HasToolUse: row.HasToolUse,
+				})
+			}
+		}
+		return out, nil
+	}
+	filterModels := csvFilterValues(f.Model)
 	err := pgQueryChunked(ids, func(chunk []string) error {
 		pb := &paramBuilder{}
 		placeholders := make([]string, 0, len(chunk))
@@ -2547,7 +3219,20 @@ func (s *Store) signalMessages(
 						'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), ''),
 					is_system, has_tool_use
 				FROM messages
-				WHERE session_id IN (` + strings.Join(placeholders, ",") + `)
+				WHERE session_id IN (` + strings.Join(placeholders, ",") + `)`
+		if len(filterModels) == 1 {
+			q += ` AND model = ` + pb.add(filterModels[0])
+		} else if len(filterModels) > 1 {
+			modelPlaceholders := make([]string, 0, len(filterModels))
+			for _, model := range filterModels {
+				modelPlaceholders = append(
+					modelPlaceholders,
+					pb.add(model),
+				)
+			}
+			q += ` AND model IN (` + strings.Join(modelPlaceholders, ",") + `)`
+		}
+		q += `
 				ORDER BY session_id, ordinal`
 		msgRows, err := s.pg.QueryContext(ctx, q, pb.args...)
 		if err != nil {

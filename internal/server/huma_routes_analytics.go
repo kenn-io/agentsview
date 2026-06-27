@@ -40,6 +40,7 @@ type AnalyticsFilterInput struct {
 	Machine          string           `query:"machine" doc:"Filter by machine"`
 	Project          string           `query:"project" doc:"Filter by project"`
 	Agent            string           `query:"agent" doc:"Filter by agent"`
+	Model            string           `query:"model" doc:"Comma-separated model filter"`
 	DayOfWeek        optionalIntParam `query:"dow" minimum:"0" maximum:"6" doc:"Day of week, Monday=0 through Sunday=6"`
 	Hour             optionalIntParam `query:"hour" minimum:"0" maximum:"23" doc:"Hour of day, 0 through 23"`
 	MinUserMessages  int              `query:"min_user_messages" minimum:"0" doc:"Minimum user message count"`
@@ -95,6 +96,7 @@ func analyticsFilterFromInput(in AnalyticsFilterInput) (db.AnalyticsFilter, erro
 		Machine:          in.Machine,
 		Project:          in.Project,
 		Agent:            in.Agent,
+		Model:            in.Model,
 		Timezone:         tz,
 		DayOfWeek:        optionalIntValue(in.DayOfWeek),
 		Hour:             optionalIntValue(in.Hour),

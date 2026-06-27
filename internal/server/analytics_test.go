@@ -35,13 +35,13 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 	t.Helper()
 
 	type entry struct {
-		id, project, agent, started string
-		msgs                        int
+		id, project, agent, started, model string
+		msgs                               int
 	}
 	entries := []entry{
-		{"a1", "alpha", "claude", "2024-06-01T09:00:00Z", 10},
-		{"a2", "alpha", "codex", "2024-06-01T14:00:00Z", 20},
-		{"b1", "beta", "claude", "2024-06-02T10:00:00Z", 30},
+		{"a1", "alpha", "claude", "2024-06-01T09:00:00Z", "claude-3-5-sonnet", 10},
+		{"a2", "alpha", "codex", "2024-06-01T14:00:00Z", "gpt-4o", 20},
+		{"b1", "beta", "claude", "2024-06-02T10:00:00Z", "claude-3-5-sonnet", 30},
 	}
 
 	stats := seedStats{
@@ -74,6 +74,7 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 				// Skill analytics now buckets and filters by message
 				// timestamp, so align messages with the session window.
 				m.Timestamp = started
+				m.Model = s.model
 				// Add tool calls on every other assistant msg
 				if m.Role == "assistant" && i%4 == 1 {
 					m.HasToolUse = true
@@ -194,6 +195,23 @@ func TestAnalyticsSummary(t *testing.T) {
 		assert.Equal(t, stats.TotalMessages, resp.TotalMessages)
 		assert.Equal(t, stats.ActiveProjects, resp.ActiveProjects)
 		assert.Equal(t, stats.ActiveDays, resp.ActiveDays)
+		assert.Equal(t,
+			[]string{"claude-3-5-sonnet", "gpt-4o"},
+			resp.Models,
+		)
+	})
+
+	t.Run("ModelFilter", func(t *testing.T) {
+		w := te.get(t, buildURLWithRange("summary", map[string]string{
+			"timezone": "UTC",
+			"model":    "gpt-4o",
+		}))
+		assertStatus(t, w, http.StatusOK)
+
+		resp := decode[db.AnalyticsSummary](t, w)
+		assert.Equal(t, 1, resp.TotalSessions)
+		assert.Equal(t, 20, resp.TotalMessages)
+		assert.Equal(t, []string{"gpt-4o"}, resp.Models)
 	})
 
 	t.Run("NonUTCTimezone", func(t *testing.T) {

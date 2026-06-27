@@ -62,6 +62,7 @@ class AnalyticsStore {
   project: string = $state("");
   machine: string = $state("");
   agent: string = $state("");
+  model: string = $state("");
   termination: string = $state("");
   minUserMessages: number = $state(0);
   includeOneShot: boolean = $state(true);
@@ -154,6 +155,7 @@ class AnalyticsStore {
       this.project !== "" ||
       this.machine !== "" ||
       this.agent !== "" ||
+      this.model !== "" ||
       this.termination !== "" ||
       this.minUserMessages > 0 ||
       !this.includeOneShot ||
@@ -184,6 +186,7 @@ class AnalyticsStore {
     this.project = "";
     this.machine = "";
     this.agent = "";
+    this.model = "";
     this.termination = "";
     this.minUserMessages = 0;
     this.includeOneShot = true;
@@ -214,6 +217,11 @@ class AnalyticsStore {
     this.fetchAll();
   }
 
+  clearModel() {
+    this.model = "";
+    this.fetchAll();
+  }
+
   toggleAgent(agent: string) {
     const current = this.agent ? this.agent.split(",") : [];
     const idx = current.indexOf(agent);
@@ -226,6 +234,19 @@ class AnalyticsStore {
     sessions.filters.agent = this.agent;
     sessions.activeSessionId = null;
     sessions.load();
+    this.fetchAll();
+  }
+
+  toggleModel(model: string) {
+    const current = new Set(
+      this.model.split(",").filter((value) => value.length > 0),
+    );
+    if (current.has(model)) {
+      current.delete(model);
+    } else {
+      current.add(model);
+    }
+    this.model = [...current].join(",");
     this.fetchAll();
   }
 
@@ -362,6 +383,7 @@ class AnalyticsStore {
     }
     if (this.machine) p.machine = this.machine;
     if (this.agent) p.agent = this.agent;
+    if (this.model) p.model = this.model;
     if (this.termination) p.termination = this.termination;
     if (this.minUserMessages > 0) {
       p.minUserMessages = this.minUserMessages;
@@ -403,6 +425,7 @@ class AnalyticsStore {
       }
       if (this.machine) p.machine = this.machine;
       if (this.agent) p.agent = this.agent;
+      if (this.model) p.model = this.model;
       if (this.termination) p.termination = this.termination;
       if (this.minUserMessages > 0) {
         p.minUserMessages = this.minUserMessages;
