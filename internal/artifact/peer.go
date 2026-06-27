@@ -524,6 +524,9 @@ func validateCheckpointData(data []byte, origin, filename string) error {
 				ErrArtifactInvalid, seq, cp.Sequence,
 			)
 		}
+		if err := validateCheckpointReferences(&cp, origin); err != nil {
+			return fmt.Errorf("%w: %v", ErrArtifactInvalid, err)
+		}
 		return nil
 	}
 	if err := validateCheckpoint(&cp, origin); err != nil {
@@ -571,6 +574,9 @@ func validateManifestArtifactData(data []byte, origin, hash string) error {
 	}
 	if len(m.Segments) == 0 {
 		return fmt.Errorf("%w: manifest has no message segments", ErrArtifactInvalid)
+	}
+	if err := validateManifestReferences(m); err != nil {
+		return fmt.Errorf("%w: %v", ErrArtifactInvalid, err)
 	}
 	return nil
 }

@@ -380,6 +380,9 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 		"tool_calls": {
 			"call_index", "file_path",
 		},
+		"pinned_messages": {
+			"source_uuid",
+		},
 	})
 
 	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
@@ -390,4 +393,26 @@ func TestEnsureSchemaGroupsMissingColumnMigrationsByTable(t *testing.T) {
 	// lists all its migration columns (call_index, file_path) as present, so
 	// it contributes no ALTER.
 	assert.Equal(t, 2, state.alterTableExecCount(), "ALTER TABLE execs")
+}
+
+func TestEnsureSchemaMigratesPinnedMessageSourceUUID(t *testing.T) {
+	db, state := newSchemaProbeDB(t, map[string][]string{
+		"sessions": {
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+		"pinned_messages": {
+			"id", "session_id", "message_id", "ordinal",
+			"note", "created_at",
+		},
+	})
+
+	require.NoError(t, EnsureSchema(context.Background(), db, "agentsview"))
+
+	assert.Contains(t, state.executedSQL(),
+		"ALTER TABLE \"pinned_messages\" ADD COLUMN IF NOT EXISTS source_uuid TEXT NOT NULL DEFAULT ''")
 }

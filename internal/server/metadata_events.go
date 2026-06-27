@@ -29,6 +29,28 @@ func (s *Server) repairLocalMetadataEvent(
 	return s.metadata.RepairLocalSessionMetadata(ctx, input.SessionID, input.Op)
 }
 
+func (s *Server) ensureLocalMetadataEvent(
+	ctx context.Context,
+	input artifact.MetadataEventInput,
+	field string,
+	wantOp string,
+) error {
+	if s.metadata == nil {
+		return nil
+	}
+	if _, err := s.repairLocalMetadataEvent(ctx, input); err != nil {
+		return err
+	}
+	op, ok, err := s.metadataReplayStateOp(ctx, input.SessionID, field)
+	if err != nil {
+		return err
+	}
+	if ok && op == wantOp {
+		return nil
+	}
+	return s.appendMetadataEvent(ctx, input)
+}
+
 type metadataReplayStateStore interface {
 	MetadataReplayStateOp(ctx context.Context, sessionGID string, field string) (string, bool, error)
 }

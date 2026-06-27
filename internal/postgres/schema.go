@@ -613,6 +613,11 @@ func EnsureSchema(
 			"adding messages.thinking_text",
 		},
 		{
+			"pinned_messages", "source_uuid",
+			`source_uuid TEXT NOT NULL DEFAULT ''`,
+			"adding pinned_messages.source_uuid",
+		},
+		{
 			"sessions", "termination_status",
 			`termination_status TEXT`,
 			"adding sessions.termination_status",

@@ -188,6 +188,67 @@ func TestSyncFolderRoundTripPreservesSessionName(t *testing.T) {
 	assert.Equal(t, sessionName, *got.SessionName)
 }
 
+func TestSyncFolderImportClearsSourceFileState(t *testing.T) {
+	ctx := context.Background()
+	share := t.TempDir()
+	aData := t.TempDir()
+	bData := t.TempDir()
+	aDB := testDB(t)
+	bDB := testDB(t)
+	sourcePath := filepath.Join(t.TempDir(), "shared-session.jsonl")
+	peerHash := strings64("a")
+	localHash := strings64("b")
+	lastEntryUUID := "entry-99"
+
+	require.NoError(t, aDB.SetSyncState(originStateKey, "laptop-a1b2c3"))
+	require.NoError(t, bDB.SetSyncState(originStateKey, "desktop-d4e5f6"))
+	seedSession(t, aDB, "sess-1", "alpha", func(s *db.Session) {
+		s.FilePath = &sourcePath
+		s.FileSize = new(int64)
+		*s.FileSize = 4096
+		s.FileMtime = new(int64)
+		*s.FileMtime = 200
+		s.NextOrdinal = 99
+		s.LastEntryUUID = &lastEntryUUID
+		s.FileInode = new(int64)
+		*s.FileInode = 12345
+		s.FileDevice = new(int64)
+		*s.FileDevice = 67890
+		s.FileHash = &peerHash
+	})
+	seedSession(t, bDB, "local-sess", "alpha", func(s *db.Session) {
+		s.FilePath = &sourcePath
+		s.FileMtime = new(int64)
+		*s.FileMtime = 100
+		s.FileHash = &localHash
+	})
+
+	_, err := SyncFolder(ctx, aDB, SyncOptions{DataDir: aData, Target: share})
+	require.NoError(t, err)
+	res, err := SyncFolder(ctx, bDB, SyncOptions{DataDir: bData, Target: share})
+	require.NoError(t, err)
+	require.Equal(t, 1, res.ImportedSessions)
+
+	imported, err := bDB.GetSessionFull(ctx, "laptop-a1b2c3~sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, imported)
+	assert.Nil(t, imported.FilePath)
+	assert.Nil(t, imported.FileSize)
+	assert.Nil(t, imported.FileMtime)
+	assert.Zero(t, imported.NextOrdinal)
+	assert.Nil(t, imported.LastEntryUUID)
+	assert.Nil(t, imported.FileInode)
+	assert.Nil(t, imported.FileDevice)
+	assert.Nil(t, imported.FileHash)
+
+	ids, err := bDB.ListSessionIDsByFilePath(sourcePath, "claude")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"local-sess"}, ids)
+	gotHash, ok := bDB.GetFileHashByPath(sourcePath)
+	require.True(t, ok)
+	assert.Equal(t, localHash, gotHash)
+}
+
 func TestSyncFolderRoundTripPreservesSessionSignals(t *testing.T) {
 	ctx := context.Background()
 	share := t.TempDir()
@@ -817,6 +878,29 @@ func TestImportRejectsCorruptManifestHash(t *testing.T) {
 	assert.Zero(t, messages)
 }
 
+func TestImportRejectsInvalidCheckpointManifestReference(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	origin := "laptop-a1b2c3"
+	importDB := testDB(t)
+	originRoot := filepath.Join(root, origin)
+	writeCheckpoint(t, originRoot, checkpoint{
+		Version:  formatVersion,
+		Origin:   origin,
+		Sequence: 1,
+		Sessions: map[string]string{
+			origin + "~sess-1": "../outside",
+		},
+	})
+
+	imported, messages, err := Import(ctx, importDB, root, "desktop-d4e5f6")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrArtifactInvalid)
+	assert.Contains(t, err.Error(), "invalid artifact hash")
+	assert.Zero(t, imported)
+	assert.Zero(t, messages)
+}
+
 func TestImportRejectsCorruptSegmentHash(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -845,6 +929,46 @@ func TestImportRejectsCorruptSegmentHash(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "segment")
 	assert.Contains(t, err.Error(), "hash mismatch")
+	assert.Zero(t, imported)
+	assert.Zero(t, messages)
+}
+
+func TestImportRejectsInvalidManifestSegmentReference(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	origin := "laptop-a1b2c3"
+	importDB := testDB(t)
+	originRoot := filepath.Join(root, origin)
+	m := manifest{
+		Version:         formatVersion,
+		Origin:          origin,
+		NativeSessionID: "sess-1",
+		Session: db.Session{
+			ID:        "sess-1",
+			Machine:   origin,
+			Agent:     "claude",
+			Project:   "alpha",
+			CreatedAt: "2026-06-14T01:02:03Z",
+		},
+		Segments: []string{"../outside"},
+	}
+	data, err := canonicalJSON(m)
+	require.NoError(t, err)
+	manifestHash := hashHex(data)
+	require.NoError(t, writeCompressed(filepath.Join(originRoot, "manifests", manifestHash+manifestExtension), data))
+	writeCheckpoint(t, originRoot, checkpoint{
+		Version:  formatVersion,
+		Origin:   origin,
+		Sequence: 1,
+		Sessions: map[string]string{
+			origin + "~sess-1": manifestHash,
+		},
+	})
+
+	imported, messages, err := Import(ctx, importDB, root, "desktop-d4e5f6")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrArtifactInvalid)
+	assert.Contains(t, err.Error(), "invalid artifact hash")
 	assert.Zero(t, imported)
 	assert.Zero(t, messages)
 }

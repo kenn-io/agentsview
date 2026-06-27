@@ -123,14 +123,43 @@ func (s *Server) humaBulkStar(
 		}
 		return nil, internalError("bulk star", err)
 	}
+	newlyStarred := make(map[string]struct{}, len(starred))
 	// Emit one star event per session actually starred so localStorage star
 	// migration converges through artifact sync, matching single-session star.
 	for _, id := range starred {
+		newlyStarred[id] = struct{}{}
 		if err := s.appendMetadataEvent(ctx, artifact.MetadataEventInput{
 			SessionID: id,
 			Op:        artifact.MetadataOpStar,
 		}); err != nil {
 			return nil, internalError("bulk star metadata event", err)
+		}
+	}
+	starredIDs, err := s.db.ListStarredSessionIDs(ctx)
+	if err != nil {
+		return nil, internalError("bulk star metadata repair", err)
+	}
+	starredNow := make(map[string]struct{}, len(starredIDs))
+	for _, id := range starredIDs {
+		starredNow[id] = struct{}{}
+	}
+	seenRetry := map[string]struct{}{}
+	for _, id := range in.Body.SessionIDs {
+		if _, ok := newlyStarred[id]; ok {
+			continue
+		}
+		if _, ok := starredNow[id]; !ok {
+			continue
+		}
+		if _, ok := seenRetry[id]; ok {
+			continue
+		}
+		seenRetry[id] = struct{}{}
+		if err := s.ensureLocalMetadataEvent(ctx, artifact.MetadataEventInput{
+			SessionID: id,
+			Op:        artifact.MetadataOpStar,
+		}, "starred", artifact.MetadataOpStar); err != nil {
+			return nil, internalError("bulk star metadata repair", err)
 		}
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil

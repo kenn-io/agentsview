@@ -736,6 +736,10 @@ func validateCheckpoint(cp *checkpoint, origin string) error {
 			origin, cp.Origin,
 		)
 	}
+	return validateCheckpointReferences(cp, origin)
+}
+
+func validateCheckpointReferences(cp *checkpoint, origin string) error {
 	for gid, manifestHash := range cp.Sessions {
 		if gid == "" {
 			return fmt.Errorf("checkpoint for %s contains empty session id", origin)
@@ -748,6 +752,9 @@ func validateCheckpoint(cp *checkpoint, origin string) error {
 		}
 		if strings.TrimSpace(manifestHash) == "" {
 			return fmt.Errorf("checkpoint session %s has empty manifest hash", gid)
+		}
+		if err := validateHashHex(manifestHash); err != nil {
+			return fmt.Errorf("checkpoint session %s has invalid manifest hash: %w", gid, err)
 		}
 	}
 	return nil
@@ -797,6 +804,23 @@ func validateManifest(m manifest, origin, gid string) error {
 	if len(m.Segments) == 0 {
 		return fmt.Errorf("manifest %s has no message segments", gid)
 	}
+	if err := validateManifestReferences(m); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateManifestReferences(m manifest) error {
+	for _, segmentHash := range m.Segments {
+		if err := validateHashHex(segmentHash); err != nil {
+			return fmt.Errorf("manifest segment has invalid hash: %w", err)
+		}
+	}
+	if m.RawSource != nil && m.RawSource.Hash != "" {
+		if err := validateHashHex(m.RawSource.Hash); err != nil {
+			return fmt.Errorf("manifest raw source has invalid hash: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -806,6 +830,7 @@ func rewriteForImport(m manifest, msgs []db.Message) db.SessionBatchWrite {
 	sess.ID = importedID
 	sess.Machine = m.Origin
 	sess.SessionName = m.SessionName
+	clearImportedSessionSourceState(&sess)
 	// Restore signal state dropped from the Session JSON; signalsFromSession
 	// reads these fields below to persist the imported session's signal columns.
 	sess.HasToolCalls = m.SessionHasToolCalls
@@ -850,6 +875,17 @@ func rewriteForImport(m manifest, msgs []db.Message) db.SessionBatchWrite {
 		DataVersion:     m.DataVersion,
 		ReplaceMessages: true,
 	}
+}
+
+func clearImportedSessionSourceState(sess *db.Session) {
+	sess.FilePath = nil
+	sess.FileSize = nil
+	sess.FileMtime = nil
+	sess.NextOrdinal = 0
+	sess.LastEntryUUID = nil
+	sess.FileInode = nil
+	sess.FileDevice = nil
+	sess.FileHash = nil
 }
 
 func prefixImportedSessionID(origin, id string) string {
@@ -933,6 +969,9 @@ func readLatestCompatibleCheckpoint(originRoot, origin string) (*checkpoint, err
 }
 
 func readManifest(originRoot, hash string) (manifest, error) {
+	if err := validateHashHex(hash); err != nil {
+		return manifest{}, err
+	}
 	data, err := readCompressed(filepath.Join(originRoot, "manifests", hash+manifestExtension))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -953,6 +992,9 @@ func readManifest(originRoot, hash string) (manifest, error) {
 func readManifestMessages(originRoot string, m manifest) ([]db.Message, error) {
 	var msgs []db.Message
 	for _, segmentHash := range m.Segments {
+		if err := validateHashHex(segmentHash); err != nil {
+			return nil, fmt.Errorf("manifest segment has invalid hash: %w", err)
+		}
 		data, err := readCompressed(filepath.Join(originRoot, "segments", segmentHash+segmentExtension))
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {

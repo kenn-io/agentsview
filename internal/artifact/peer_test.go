@@ -93,6 +93,41 @@ func TestPeerArtifactCheckpointDuplicateAndConflict(t *testing.T) {
 	assert.ErrorIs(t, err, ErrArtifactConflict)
 }
 
+func TestPeerArtifactRejectsInvalidReferences(t *testing.T) {
+	root := t.TempDir()
+	origin := "peer-a1b2c3"
+
+	checkpointData := []byte(`{"origin":"peer-a1b2c3","seq":1,"sessions":{"peer-a1b2c3~sess-1":"../outside"},"v":1}` + "\n")
+	_, err := WriteArtifact(root, origin, KindCheckpoints, "cp-0000000001", checkpointData)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrArtifactInvalid)
+
+	manifestData, err := canonicalJSON(manifest{
+		Version:         formatVersion,
+		Origin:          origin,
+		NativeSessionID: "sess-1",
+		Session: db.Session{
+			ID:        "sess-1",
+			Machine:   origin,
+			Agent:     "claude",
+			Project:   "alpha",
+			CreatedAt: "2026-06-14T01:02:03Z",
+		},
+		Segments: []string{"../outside"},
+	})
+	require.NoError(t, err)
+	manifestHash := hashHex(manifestData)
+	_, err = WriteArtifact(
+		root,
+		origin,
+		KindManifests,
+		manifestHash,
+		compressPeerTestData(t, manifestData),
+	)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrArtifactInvalid)
+}
+
 func TestPeerArtifactMetadataMustMatchOrigin(t *testing.T) {
 	root := t.TempDir()
 	origin := "peer-a1b2c3"
