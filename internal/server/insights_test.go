@@ -51,6 +51,10 @@ type readOnlyInsightPersistStore struct {
 
 func (s *readOnlyInsightPersistStore) ReadOnly() bool { return true }
 
+func (s *readOnlyInsightPersistStore) InsightGenerationAvailable() bool {
+	return true
+}
+
 func (s *readOnlyInsightPersistStore) InsertInsight(
 	insight db.Insight,
 ) (int64, error) {
@@ -428,6 +432,43 @@ func TestGenerateInsight_PersistsWithReadOnlyStore(t *testing.T) {
 	require.NotNil(t, stored)
 	assert.Equal(t, saved.ID, stored.ID)
 	assert.Equal(t, saved.Content, stored.Content)
+}
+
+func TestGenerateInsight_StaysBlockedForReadOnlyStoreWithoutInsightWrites(t *testing.T) {
+	dir := tempDirWithRetryCleanup(t)
+	dbPath := filepath.Join(dir, "test.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err, "opening db")
+	t.Cleanup(func() { database.Close() })
+
+	var called bool
+	cfg := config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dir,
+		DBPath:       dbPath,
+		WriteTimeout: 30 * time.Second,
+	}
+	srv := server.New(cfg, readOnlyTestStore{Store: database}, nil, server.WithGenerateFunc(func(
+		_ context.Context, _ string, _ string,
+	) (insight.Result, error) {
+		called = true
+		return insight.Result{Agent: "claude", Content: "should not run"}, nil
+	}))
+	te := &testEnv{
+		srv:         srv,
+		handler:     wrapTestHandler(cfg, srv.Handler()),
+		db:          database,
+		engine:      nil,
+		broadcaster: nil,
+		dataDir:     dir,
+	}
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"daily_activity","date_from":"2025-01-15","date_to":"2025-01-15"}`)
+	assertStatus(t, w, http.StatusNotImplemented)
+	assertBodyContains(t, w, "read-only mode")
+	assert.False(t, called)
 }
 
 func TestGenerateCannedInsight_RequiresExplicitOptIn(t *testing.T) {

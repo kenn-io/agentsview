@@ -56,6 +56,10 @@ func (s *Store) SetCursorSecret(secret []byte) {
 // paths stay blocked while dashboard curation uses dedicated methods.
 func (s *Store) ReadOnly() bool { return true }
 
+// InsightGenerationAvailable reports that PG serve can persist generated
+// insights even though the broader store stays read-only for ingestion.
+func (s *Store) InsightGenerationAvailable() bool { return true }
+
 // GetSessionVersion returns the message count and a compact version
 // marker for SSE change detection.
 func (s *Store) GetSessionVersion(

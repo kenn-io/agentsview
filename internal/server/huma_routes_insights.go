@@ -50,6 +50,21 @@ type publishInsightInput struct {
 	Secret bool  `query:"secret" doc:"Create a secret gist instead of a public one"`
 }
 
+type insightGenerationCapableStore interface {
+	InsightGenerationAvailable() bool
+}
+
+func supportsInsightGeneration(store db.Store) bool {
+	if store == nil {
+		return false
+	}
+	if !store.ReadOnly() {
+		return true
+	}
+	capable, ok := store.(insightGenerationCapableStore)
+	return ok && capable.InsightGenerationAvailable()
+}
+
 func (s *Server) humaListInsights(
 	ctx context.Context,
 	in *insightsInput,
@@ -178,6 +193,10 @@ func (s *Server) humaGenerateInsight(
 	ctx context.Context,
 	in *generateInsightInput,
 ) (*huma.StreamResponse, error) {
+	if !supportsInsightGeneration(s.db) {
+		return nil, apiError(http.StatusNotImplemented,
+			"insight generation is not available in read-only mode")
+	}
 	req := in.Body
 	if !validInsightTypes[req.Type] {
 		return nil, apiError(http.StatusBadRequest,
