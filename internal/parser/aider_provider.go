@@ -41,6 +41,15 @@ func newAiderProviderFactory(def AgentDef) ProviderFactory {
 						return aiderStoredPathFallback(root, path, identity)
 					},
 				),
+				// Aider run paths are positional ("<history>#<idx>"), so a
+				// RequireFreshSource resync must confirm the index still hashes to
+				// the requested run before trusting the stored path; otherwise an
+				// inserted or removed earlier run silently resyncs the wrong run.
+				WithFreshStoredMember(
+					func(src multiSessionSource, rawID string) bool {
+						return aiderStoredMemberMatchesRawID(src, rawID, identity)
+					},
+				),
 				WithFingerprint(aiderFingerprintSource),
 				WithContainerParse(
 					func(src multiSessionSource, req ParseRequest) ([]ParseResult, error) {
@@ -201,6 +210,47 @@ func aiderVirtualPathForRawIDWithID(
 		}
 	}
 	return "", false
+}
+
+// aiderStoredMemberMatchesRawID reports whether the run at the stored positional
+// index still hashes to the requested raw session ID. Aider run paths are
+// positional ("<history>#<idx>"), so an inserted or removed earlier run shifts
+// the index onto a different run; without this a RequireFreshSource lookup would
+// return the stale path and resync the wrong session. Any mismatch (an
+// unreadable file, an out-of-range index, or a remote identity that does not
+// reproduce the stored hash) returns false so the base re-resolves by raw ID.
+func aiderStoredMemberMatchesRawID(
+	src multiSessionSource, rawID string, identity func(string) string,
+) bool {
+	if rawID == "" {
+		return false
+	}
+	idx, err := strconv.Atoi(src.MemberID)
+	if err != nil {
+		return false
+	}
+	idPath := aiderIdentityForPath(src.Container, identity)
+	got, ok := aiderRawIDAtWithID(src.Container, idPath, idx)
+	return ok && got == rawID
+}
+
+// aiderRawIDAtWithID recomputes the raw session ID of the run at positional
+// index idx, honoring the canonical identity path used during remote sync. It
+// mirrors AiderRawIDAt but threads idPath so the hash matches the stored ID for
+// both local (idPath == "") and rewritten remote history files.
+func aiderRawIDAtWithID(historyPath, idPath string, idx int) (string, bool) {
+	data, err := os.ReadFile(historyPath)
+	if err != nil {
+		return "", false
+	}
+	runs := splitAiderRuns(string(data))
+	if idx < 0 || idx >= len(runs) {
+		return "", false
+	}
+	ordinals := aiderEqualHeaderOrdinals(runs)
+	return aiderRawID(
+		aiderIdentityPath(historyPath, idPath), runs[idx].rawHeader, ordinals[idx],
+	), true
 }
 
 func aiderFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {

@@ -70,6 +70,12 @@ type multiSessionConfig struct {
 	// memberPresent reports whether a source still exists for RequireFreshSource
 	// lookups. Optional; the default treats every source as present.
 	memberPresent func(src multiSessionSource) bool
+	// freshStoredMember reports whether a stored member source still resolves to
+	// the requested raw session ID under RequireFreshSource. Providers with
+	// positional member IDs (Aider's run index) set this so a stored path whose
+	// index now points at a different run is rejected and re-resolved by raw ID.
+	// Optional; when nil only memberPresent gates freshness.
+	freshStoredMember func(src multiSessionSource, rawID string) bool
 	// stampContainerHash stamps the request fingerprint hash onto every fanned
 	// out container result (used when all members share the container's content
 	// hash). Member parses are always stamped.
@@ -130,6 +136,12 @@ func WithMemberParse(
 
 func WithMemberPresence(fn func(src multiSessionSource) bool) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.memberPresent = fn }
+}
+
+func WithFreshStoredMember(
+	fn func(src multiSessionSource, rawID string) bool,
+) MultiSessionOption {
+	return func(c *multiSessionConfig) { c.freshStoredMember = fn }
 }
 
 func WithContainerHashStamping() MultiSessionOption {
@@ -299,15 +311,21 @@ func (s multiSessionContainerSourceSet) FindSource(
 			if !ok {
 				continue
 			}
-			source := s.sourceRef(root, match)
-			if req.RequireFreshSource && !s.memberPresent(match.toSource(root)) {
+			memberSrc := match.toSource(root)
+			if req.RequireFreshSource && !s.memberPresent(memberSrc) {
 				continue
 			}
-			return source, true, nil
+			if s.staleStoredMember(memberSrc, req) {
+				continue
+			}
+			return s.sourceRef(root, match), true, nil
 		}
 		if s.cfg.storedPathFallback != nil {
 			for _, root := range s.roots {
 				if match, ok := s.cfg.storedPathFallback(root, path); ok {
+					if s.staleStoredMember(match.toSource(root), req) {
+						continue
+					}
 					return s.sourceRef(root, match), true, nil
 				}
 			}
@@ -422,6 +440,22 @@ func (s multiSessionContainerSourceSet) memberPresent(src multiSessionSource) bo
 		return true
 	}
 	return s.cfg.memberPresent(src)
+}
+
+// staleStoredMember reports whether a RequireFreshSource lookup must reject a
+// stored member source because it no longer resolves to the requested raw
+// session ID. It only fires when the provider supplies freshStoredMember and a
+// raw ID is available, so providers with stable member IDs are unaffected.
+func (s multiSessionContainerSourceSet) staleStoredMember(
+	src multiSessionSource, req FindSourceRequest,
+) bool {
+	if !req.RequireFreshSource || req.RawSessionID == "" {
+		return false
+	}
+	if s.cfg.freshStoredMember == nil {
+		return false
+	}
+	return !s.cfg.freshStoredMember(src, req.RawSessionID)
 }
 
 func (s multiSessionContainerSourceSet) sourceRef(

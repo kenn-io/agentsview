@@ -270,6 +270,64 @@ func writeAiderProviderHistory(t *testing.T, repo string) string {
 	return path
 }
 
+// TestAiderProviderFindSourceRejectsStalePositionalPath verifies that a
+// RequireFreshSource lookup does not trust a stored "<history>#<idx>" path whose
+// index now points at a different run after an earlier run was inserted. It must
+// re-resolve the requested run by raw session ID, so a single-session resync
+// updates the requested session rather than whichever run currently sits at the
+// stale positional index.
+func TestAiderProviderFindSourceRejectsStalePositionalPath(t *testing.T) {
+	dir := t.TempDir()
+	repo := filepath.Join(dir, "myrepo")
+	require.NoError(t, os.MkdirAll(repo, 0o755))
+	path := filepath.Join(repo, AiderHistoryFileName())
+
+	runA := "# aider chat started at 2026-06-09 14:01:00\n#### alpha\nansA\n"
+	runB := "# aider chat started at 2026-06-09 15:30:00\n#### bravo\nansB\n"
+	runC := "# aider chat started at 2026-06-09 16:45:00\n#### charlie\nansC\n"
+	require.NoError(t, os.WriteFile(path, []byte(runA+runB+runC), 0o644))
+
+	// runB is stored under the positional path "<path>#1".
+	rawB, ok := AiderRawIDAt(path, 1)
+	require.True(t, ok)
+	storedPath := AiderVirtualPath(path, 1)
+
+	provider, ok := NewProvider(AgentAider, ProviderConfig{
+		Roots:   []string{dir},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	// Without a freshness requirement the stored positional path is honored.
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath: storedPath,
+		RawSessionID:   rawB,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, storedPath, found.DisplayPath)
+
+	// Insert a new run at the front: runB shifts from index 1 to index 2, so the
+	// stored "<path>#1" now points at runA.
+	runX := "# aider chat started at 2026-06-09 13:00:00\n#### xray\nansX\n"
+	require.NoError(t, os.WriteFile(path, []byte(runX+runA+runB+runC), 0o644))
+	shifted, ok := AiderVirtualPathForRawID(path, rawB)
+	require.True(t, ok)
+	require.Equal(t, AiderVirtualPath(path, 2), shifted, "runB is now at index 2")
+
+	// A fresh lookup must reject the stale index and re-resolve runB by raw ID.
+	fresh, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		StoredFilePath:     storedPath,
+		RawSessionID:       rawB,
+		RequireFreshSource: true,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, AiderVirtualPath(path, 2), fresh.DisplayPath,
+		"stale positional path must re-resolve to runB's current index")
+	assert.NotEqual(t, storedPath, fresh.DisplayPath)
+}
+
 func TestAiderProviderDiscoverAndFanOut(t *testing.T) {
 	root := t.TempDir()
 	historyPath := writeAiderProviderHistory(t, filepath.Join(root, "myrepo"))
