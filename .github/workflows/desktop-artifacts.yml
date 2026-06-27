@@ -2,7 +2,20 @@ name: Desktop Artifacts
 
 on:
   workflow_dispatch:
+  # Only build the expensive desktop/tauri bundles on the main branch and on
+  # pull requests targeting main, and only when desktop-relevant files change.
+  # Stacked PRs that target another feature branch run the test suite via ci.yml
+  # but skip these multi-platform bundle builds until they reach main.
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'frontend/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/desktop-*.yml'
   pull_request:
+    branches: [main]
     paths:
       - 'desktop/**'
       - 'frontend/**'
