@@ -220,6 +220,17 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	assert.Equal(t, activePath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
 	assert.Positive(t, fingerprint.MTimeNS)
+	// The legacy processOpenClaw/processQClaw path persisted a content hash;
+	// the provider fingerprint must too, or a resync clears stored file_hash.
+	assert.NotEmpty(t, fingerprint.Hash)
+
+	parsed, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      found,
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, parsed.Results, 1)
+	assert.Equal(t, fingerprint.Hash, parsed.Results[0].Result.Session.File.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
 		context.Background(),
